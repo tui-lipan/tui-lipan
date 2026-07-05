@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check tag matches crate versions
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          grep -q "^version = \"$VERSION\"" Cargo.toml \
+            || { echo "Cargo.toml version does not match tag $GITHUB_REF_NAME"; exit 1; }
+          grep -q "^version = \"$VERSION\"" tui-lipan-macro/Cargo.toml \
+            || { echo "tui-lipan-macro/Cargo.toml version does not match tag $GITHUB_REF_NAME"; exit 1; }
+          grep -q "version = \"$VERSION\"" <(grep 'tui-lipan-macro = ' Cargo.toml) \
+            || { echo "tui-lipan-macro dependency version in Cargo.toml does not match tag"; exit 1; }
+
+      - name: Check changelog has this version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          grep -q "^## \[$VERSION\]" CHANGELOG.md \
+            || { echo "CHANGELOG.md has no section for $VERSION"; exit 1; }
+
+      - name: Run cargo tests
+        run: cargo test --workspace --all-features
+
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    needs: verify
+    environment: release
+    permissions:
+      contents: read
+      # Required for crates.io Trusted Publishing (OIDC).
+      id-token: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Authenticate with crates.io (Trusted Publishing)
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      - name: Publish tui-lipan-macro
+        run: cargo publish -p tui-lipan-macro
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+      - name: Publish tui-lipan
+        # `cargo publish` blocks until the macro crate is visible in the
+        # index, so publishing sequentially in one job is safe.
+        run: cargo publish -p tui-lipan
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

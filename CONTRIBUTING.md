@@ -106,13 +106,13 @@ After implementation:
 2. Bump `version` in both `Cargo.toml` files (root and `tui-lipan-macro/`).
 3. Update the dependency line `tui-lipan-macro = { ..., version = "X.Y.Z" }`.
 4. Update the comparison links at the bottom of `CHANGELOG.md`.
-5. Commit with message `release: vX.Y.Z`, tag `vX.Y.Z`, push.
-6. Publish:
-   ```bash
-   cargo publish -p tui-lipan-macro
-   # wait ~30s for the crates.io index to update
-   cargo publish -p tui-lipan
-   ```
+5. Commit with message `release: vX.Y.Z`, tag `vX.Y.Z`, push the tag.
+6. Pushing the tag triggers `.github/workflows/release.yml`, which verifies
+   the tag against both crate versions and the changelog, runs the test
+   suite, and publishes `tui-lipan-macro` then `tui-lipan` to crates.io via
+   crates.io Trusted Publishing - no API token needed. Manual fallback:
+   `cargo publish -p tui-lipan-macro`, wait ~30s for the index, then
+   `cargo publish -p tui-lipan`.
 7. Create a GitHub release referencing the changelog section.
 
 ## Filing issues
