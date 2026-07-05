@@ -1,0 +1,53 @@
+[graph]
+all-features = true
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "Zlib",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unlicense",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "NCSA",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+
+[advisories]
+version = 2
+yanked = "warn"
+ignore = [
+    # Unmaintained transitive deps. We don't pull these directly; upstream
+    # crates (syntect, image) need to migrate before we can drop them.
+    # Revisit on each `cargo update`.
+    { id = "RUSTSEC-2025-0141", reason = "bincode 1.x - pulled by syntect for theme cache; no safe upgrade until syntect migrates." },
+    { id = "RUSTSEC-2024-0320", reason = "yaml-rust - pulled by syntect for theme parsing; will be removed when syntect bumps to yaml-rust2." },
+    { id = "RUSTSEC-2024-0436", reason = "paste - pulled deep through image → ravif → rav1e (proc-macro only)." },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained - pulled by fontdue/fontdb for PNG snapshot font rendering; parses bundled and system fonts, not untrusted input. Revisit when fontdue/fontdb migrate." },
+
+    # quick-xml DoS vectors (quadratic attribute checking, unbounded
+    # namespace declarations). Patched in quick-xml 0.41.0, but both
+    # dependents pin older lines: plist (via syntect, parses app-provided
+    # .tmTheme files, not untrusted network XML) and wayland-scanner (a
+    # proc-macro that parses Wayland protocol XML at build time only).
+    # Neither path exposes attacker-controlled XML at runtime through
+    # tui-lipan's API. Revisit when plist and wayland-scanner bump.
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml attr DoS - only build-time / app-provided XML, not reachable with untrusted input." },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml NsReader DoS - only build-time / app-provided XML, not reachable with untrusted input." },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

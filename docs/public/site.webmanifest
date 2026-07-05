@@ -1,0 +1,21 @@
+{
+  "name": "tui-lipan",
+  "short_name": "tui-lipan",
+  "icons": [
+    {
+      "src": "/web-app-manifest-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/web-app-manifest-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "theme_color": "#cca1ef",
+  "background_color": "#cca1ef",
+  "display": "standalone"
+}

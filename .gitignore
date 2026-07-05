@@ -1,0 +1,44 @@
+# Rust
+target/
+Cargo.lock
+
+# Node / wasm-pack (examples/web/*)
+node_modules/
+examples/web/*/pkg/
+
+# Docs builds
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+docs/node_modules/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+.opencode/
+.zed/
+.cursor/
+
+# Tool caches
+.ruff_cache/
+
+# Agent / planning artifacts
+.claude/
+plans/
+vendor/
+athena-plans/
+.agents/**/__pycache__/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.worktrees/
+
+# Profiling artifacts
+/flamegraph.svg
+/perf.data
+/perf.data.*
+/test

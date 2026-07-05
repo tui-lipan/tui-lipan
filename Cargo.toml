@@ -1,0 +1,264 @@
+[package]
+name = "tui-lipan"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MPL-2.0"
+description = "Opinionated, component-based TUI framework for Rust - declarative components, reconciliation, layout engine, focus, overlays, and rich widgets on top of ratatui."
+repository = "https://github.com/tui-lipan/tui-lipan"
+homepage = "https://github.com/tui-lipan/tui-lipan"
+documentation = "https://docs.rs/tui-lipan"
+readme = "README.md"
+keywords = ["tui", "terminal", "ratatui", "ui", "framework"]
+categories = ["command-line-interface", "gui"]
+authors = ["Adam Mikołajczyk <adam@tui-lipan.dev>"]
+exclude = [
+    ".agents/",
+    ".claude/",
+    ".zed/",
+    ".github/",
+    "plans/",
+    "vendor/",
+    "scripts/",
+    "benches/",
+    "tests/",
+    "docs/.vitepress/",
+    "docs/node_modules/",
+    "docs/package.json",
+    "docs/package-lock.json",
+    "docs/public/",
+    "assets/",
+    "AGENTS.md",
+]
+
+# Build API docs with every feature-gated widget visible.
+[package.metadata.docs.rs]
+all-features = true
+
+[workspace]
+members = ["tui-lipan-macro"]
+
+[profile.dev]
+debug = 0
+
+[profile.release]
+debug = 0
+
+# Smaller shipping binaries. This profile trades compile time and some runtime
+# throughput for size, and is intended for app/example release artifacts.
+[profile.release-size]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+# Faster runtime without paying full release-build costs.
+# Use with:
+#   cargo run --profile dev-fast --example scroll_view_opencode_repro --features "markdown diff-view syntax-syntect"
+[profile.dev-fast]
+inherits = "dev"
+opt-level = 2
+debug-assertions = false
+overflow-checks = false
+incremental = true
+codegen-units = 16
+
+# ─── Required ────────────────────────────────────────────────────────────────
+
+[dependencies]
+ratatui-image = { version = "10.0.5", default-features = false, features = ["crossterm"], optional = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"], optional = true }
+
+arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"], optional = true }
+
+unicode-width = "0.2"
+unicode-segmentation = "1.10"
+undo = { version = "0.52", default-features = false, features = ["alloc"] }
+web-time = "1.1"
+
+nucleo = "0.5.0"
+
+rustc-hash = "2"
+
+smallvec = "1"
+
+base64 = "0.22.1"
+
+thiserror = "2"
+tracing = { version = "0.1", optional = true }
+chrono = { version = "0.4", optional = true, default-features = false, features = ["clock", "std"] }
+serde = { version = "1", optional = true, features = ["derive"] }
+serde_json = { version = "1", optional = true }
+toml = { version = "0.8", optional = true }
+notify = { version = "6", optional = true }
+
+wasm-bindgen = { version = "0.2.100", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+js-sys = { version = "0.3.77", optional = true }
+web-sys = { version = "0.3.77", optional = true, features = [
+    "console",
+    "Window",
+    "Navigator",
+    "Clipboard",
+    "Document",
+    "Element",
+    "Event",
+    "EventTarget",
+    "KeyboardEvent",
+    "MouseEvent",
+    "WheelEvent",
+    "DomRect",
+    "CssStyleDeclaration",
+] }
+console_error_panic_hook = { version = "0.1.7", optional = true }
+
+tui-lipan-macro = { path = "tui-lipan-macro", version = "0.1.0" }
+
+figlet-rs = { version = "1.0.0", optional = true }
+font8x8 = { version = "0.3.1", optional = true }
+fontdb = { version = "0.23", optional = true }
+fontdue = { version = "0.9", optional = true }
+similar = { version = "2.5", optional = true }
+syntect = { version = "5.2", optional = true }
+pulldown-cmark = { version = "0.13", optional = true, default-features = false }
+portable-pty = { version = "0.9", optional = true }
+alacritty_terminal = { version = "0.25.1", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "scrolling-regions", "layout-cache", "underline-color"] }
+crossterm = "0.29"
+crokey = "1.4.0"
+libc = "0.2"
+open = "5"
+ignore = "0.4"
+
+[target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
+wl-clipboard-rs = { version = "0.9.3", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ratatui = { version = "0.30", default-features = false, features = ["layout-cache", "underline-color"] }
+
+# ─── Features ────────────────────────────────────────────────────────────────
+
+[features]
+default = ["clipboard"]
+clipboard = ["dep:arboard"]
+devtools = ["dep:chrono"]
+big-text      = ["dep:figlet-rs", "dep:font8x8"]
+diff-view     = ["dep:similar"]
+clipboard-images = ["dep:image", "dep:wl-clipboard-rs", "arboard?/image-data"]
+image            = ["clipboard-images", "dep:ratatui-image"]
+image-full-formats = ["image?/default-formats", "ratatui-image?/image-defaults"]
+syntax-syntect = ["dep:syntect"]
+markdown       = ["dep:pulldown-cmark"]
+terminal      = ["dep:portable-pty", "dep:alacritty_terminal"]
+terminal-serde = ["terminal", "dep:serde"]
+profiling-tracing = ["dep:tracing"]
+theme-reload = ["dep:serde", "dep:toml", "dep:notify"]
+ui-snapshot-json = ["dep:serde", "dep:serde_json"]
+ui-snapshot-png = ["dep:image", "dep:font8x8", "dep:fontdb", "dep:fontdue"]
+web = [
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:js-sys",
+    "dep:web-sys",
+    "dep:console_error_panic_hook",
+]
+
+[dev-dependencies]
+criterion = "0.8"
+serde_json = "1"
+
+# ─── Examples ────────────────────────────────────────────────────────────────
+
+[[example]]
+name = "big_text"
+required-features = ["big-text"]
+
+[[example]]
+name = "figlet_editor"
+required-features = ["big-text"]
+
+[[example]]
+name = "terminal_filetree_devtools"
+required-features = ["terminal"]
+
+[[example]]
+name = "devtools"
+required-features = ["devtools"]
+
+[[example]]
+name = "diff_hub"
+required-features = ["diff-view"]
+
+[[example]]
+name = "diff_hunk_navigation"
+required-features = ["diff-view"]
+
+[[example]]
+name = "image"
+required-features = ["image"]
+
+[[example]]
+name = "image_modes"
+required-features = ["image"]
+
+[[example]]
+name = "messenger"
+required-features = ["image"]
+
+[[example]]
+name = "burst_effects"
+required-features = ["big-text"]
+
+[[example]]
+name = "effect_scope_dot_field"
+
+[[example]]
+name = "markdown_hub"
+required-features = ["markdown"]
+
+[[example]]
+name = "scroll_view_stress"
+required-features = ["markdown"]
+
+[[example]]
+name = "scroll_view_opencode_repro"
+required-features = ["markdown", "diff-view"]
+
+[[example]]
+name = "markdown_editor_sync"
+required-features = ["markdown", "syntax-syntect"]
+
+[[example]]
+name = "syntax_theme_compare"
+required-features = ["syntax-syntect"]
+
+[[example]]
+name = "theme_hot_reload"
+required-features = ["theme-reload"]
+
+[[bench]]
+name = "document_view_markdown"
+harness = false
+required-features = ["markdown"]
+
+[[bench]]
+name = "text_area_reconcile"
+harness = false
+
+[[bench]]
+name = "document_view_wrap"
+harness = false
+required-features = ["markdown"]
+
+[[bench]]
+name = "scroll_view_rich_children"
+harness = false
+required-features = ["markdown"]
+
+[[bench]]
+name = "scroll_reorder_reconcile"
+harness = false

@@ -1,0 +1,9 @@
+[alias]
+rsx-fmt = "run -p tui-lipan-macro --bin rsx-fmt --"
+ui-fmt = "run -p tui-lipan-macro --bin ui-fmt --"
+dev-check = "check --all-features"
+dev-build = "build --all-features"
+dev-test = "test --all-features"
+# Built-in `cargo clippy` cannot be wrapped here (name shadows `cargo-clippy` and recurses). Use `lint` for CI-style clippy.
+lint = "clippy --all-targets --all-features -- -D warnings"
+dev-clippy = "clippy --all-targets --all-features -- -D warnings"

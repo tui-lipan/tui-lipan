@@ -1,0 +1,139 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Fetch dependencies
+        run: cargo fetch
+
+      - name: Check widget variant parity
+        run: python3 scripts/check-widget-variant-parity.py
+
+      - name: Check generated NodeKind delegation
+        run: python3 scripts/generate-node-kind-delegate-arms.py
+
+      - name: Check widget style slots
+        run: python3 scripts/check-widget-style-slots.py
+
+      - name: Check macro and rust formatting
+        shell: bash
+        run: |
+          find src tests benches examples tui-lipan-macro -name '*.rs' -print0 \
+            | xargs -0 -r ./scripts/format-rust-with-macros --check
+
+      - name: Check documented feature tables
+        run: python3 scripts/check-feature-tables.py
+
+      - name: Check workspace formatting
+        run: cargo fmt --all -- --check
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Fetch dependencies
+        run: cargo fetch
+
+      - name: Run cargo check
+        run: cargo check --workspace --all-targets --all-features
+
+      - name: Run cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run cargo doc
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Fetch dependencies
+        run: cargo fetch
+
+      - name: Run cargo tests
+        run: cargo test --workspace --all-features
+
+  web-examples:
+    name: Web examples
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check web hello example
+        run: cargo check --manifest-path examples/web/hello/Cargo.toml --target wasm32-unknown-unknown
+
+      - name: Check web search palette example
+        run: cargo check --manifest-path examples/web/search_palette/Cargo.toml --target wasm32-unknown-unknown
+
+  licenses:
+    name: Licenses & Advisories
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses sources advisories bans

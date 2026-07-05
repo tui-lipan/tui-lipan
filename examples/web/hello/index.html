@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>tui-lipan web hello</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/css/xterm.css"
+    />
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #111;
+      }
+      #term {
+        height: 100%;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 8px;
+        user-select: none;
+      }
+      #term canvas {
+        user-select: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="term"></div>
+    <script type="module">
+      import { Terminal } from "https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/+esm";
+      import { FitAddon } from "https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.11.0/+esm";
+      import { parseSgrMouse } from "../shared/sgr_mouse.js";
+      import init, { WebHelloHandle } from "./pkg/tui_lipan_web_hello.js";
+
+      await init();
+      const el = document.getElementById("term");
+      const term = new Terminal({
+        fontFamily: "monospace",
+        theme: { background: "#1e1e1e" },
+      });
+      const fit = new FitAddon();
+      term.loadAddon(fit);
+      term.open(el);
+      fit.fit();
+
+      const cols = term.cols;
+      const rows = term.rows;
+      const app = new WebHelloHandle(term, cols, rows);
+
+      function isPasteShortcut(ev) {
+        const key = ev.key;
+        return (
+          (ev.ctrlKey && (key === "v" || key === "V")) ||
+          (ev.shiftKey && key === "Insert")
+        );
+      }
+
+      term.onKey(async (ev) => {
+        if (isPasteShortcut(ev.domEvent) && navigator.clipboard?.readText) {
+          try {
+            app.prime_clipboard_text(await navigator.clipboard.readText());
+          } catch {}
+        }
+        app.on_key_down(ev.domEvent);
+      });
+
+      term.onData((data) => {
+        const parsed = parseSgrMouse(data);
+        if (!parsed) {
+          return;
+        }
+        app.on_mouse(
+          parsed.x,
+          parsed.y,
+          parsed.button,
+          parsed.phase,
+          parsed.isWheel,
+          parsed.shift,
+          parsed.alt,
+          parsed.ctrl,
+        );
+      });
+
+      let resizeRaf = 0;
+      let mutLast = { c: term.cols, r: term.rows };
+      window.addEventListener("resize", () => {
+        if (resizeRaf) cancelAnimationFrame(resizeRaf);
+        resizeRaf = requestAnimationFrame(() => {
+          resizeRaf = 0;
+          fit.fit();
+          const c = term.cols;
+          const r = term.rows;
+          if (c === mutLast.c && r === mutLast.r) return;
+          mutLast = { c, r };
+          app.resize(c, r);
+        });
+      });
+    </script>
+  </body>
+</html>

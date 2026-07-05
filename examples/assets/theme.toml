@@ -1,0 +1,35 @@
+# Theme hot-reload starter.
+#
+# Save this file while `theme_hot_reload` is running and the app will
+# automatically pick up changes.
+
+extends = "dracula"
+
+# Base text/background style used by most widgets.
+[primary]
+fg = "#E6EDF3"
+bg = "#20252E"
+# Paint-capable style fields may use alpha if desired:
+# bg = "#20252ECC"
+# bg = "rgba(32, 37, 46, 0.8)"
+
+# Accent drives button emphasis, active states, and other highlights.
+[accent]
+fg = "#ff00e614"
+bg = "#ff00e6"
+# Alpha foregrounds in this file blend against the terminal background queried
+# by the `theme_hot_reload` example.
+
+# Semantic status colors used by StatusBar, labels, and examples.
+[status]
+success = "#34D399"
+warning = "#FBBF24"
+error = "#FB7185"
+info = "#60A5FA"
+
+# Optional: tweak git badge colors used by FileTree and demos.
+[git_status]
+modified = "#F59E0B"
+added = "#86EFAC"
+deleted = "#FB7185"
+untracked = "#C4B5FD"

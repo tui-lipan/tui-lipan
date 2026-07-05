@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <title>tui-lipan wasm + xterm (reference host)</title>
+        <link
+            rel="stylesheet"
+            href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css"
+        />
+    </head>
+    <body>
+        <p style="font-family: system-ui; font-size: 14px; margin: 8px">
+            Reference only: wire your wasm-pack output where marked
+            <code>WASM</code>. Keys the app does not consume should reach the
+            browser (e.g. find, F12) only if the browser delivers them to the
+            page - many tab/window shortcuts never do.
+        </p>
+        <div id="term" style="width: 100%; height: 85vh"></div>
+        <script type="module">
+            import { Terminal } from "https://cdn.jsdelivr.net/npm/xterm@5.3.0/+esm";
+            import { FitAddon } from "https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/+esm";
+
+            const term = new Terminal({
+                disableStdin: true,
+                fontFamily: "monospace",
+                theme: { background: "#1e1e1e", foreground: "#d4d4d4" },
+            });
+            const fit = new FitAddon();
+            term.loadAddon(fit);
+            term.open(document.getElementById("term"));
+            fit.fit();
+            const termEl = document.getElementById("term");
+            let roRaf = 0;
+            let lastCr = { c: term.cols, r: term.rows };
+            new ResizeObserver(() => {
+                if (roRaf) cancelAnimationFrame(roRaf);
+                roRaf = requestAnimationFrame(() => {
+                    roRaf = 0;
+                    fit.fit();
+                    const c = term.cols;
+                    const r = term.rows;
+                    if (c === lastCr.c && r === lastCr.r) return;
+                    lastCr = { c, r };
+                    // WASM: wasmApp.set_viewport(c, r) when wired
+                });
+            }).observe(termEl);
+
+            let wasmApp = null;
+            async function initWasm() {
+                // WASM: replace with your wasm-pack --target web bootstrap, e.g.:
+                // const wasm = await import("./pkg/your_crate.js");
+                // await wasm.default();
+                // wasmApp = wasm.WebTerminal.new(...);
+                wasmApp = {
+                    dispatch_key_event(ev) {
+                        console.warn("stub dispatch_key_event", ev.key, ev);
+                        return false;
+                    },
+                    set_viewport(cols, rows) {},
+                };
+            }
+            await initWasm();
+
+            term.attachCustomKeyEventHandler((ev) => {
+                if (ev.type !== "keydown") {
+                    return true;
+                }
+                let handled = false;
+                try {
+                    handled = wasmApp.dispatch_key_event(ev);
+                } catch (e) {
+                    console.error(e);
+                }
+                if (handled) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                }
+                return false;
+            });
+        </script>
+    </body>
+</html>

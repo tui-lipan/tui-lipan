@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+check=0
+stdin_mode=0
+files=()
+
+for arg in "$@"; do
+    case "$arg" in
+        --check)
+            check=1
+            ;;
+        --stdin)
+            stdin_mode=1
+            ;;
+        -h|--help)
+            cat <<'EOF'
+Usage: scripts/format-rust-with-macros [--check] [files...]
+       scripts/format-rust-with-macros --stdin
+
+Formats Rust files with `cargo ui-fmt`, then `cargo rsx-fmt`, then `rustfmt`.
+When no files are provided, all project Rust files are formatted.
+EOF
+            exit 0
+            ;;
+        -* )
+            printf 'format-rust-with-macros: unknown flag `%s`\n' "$arg" >&2
+            exit 1
+            ;;
+        *)
+            files+=("$arg")
+            ;;
+    esac
+done
+
+if [[ "$stdin_mode" -eq 1 ]]; then
+    if [[ "$#" -ne 1 ]]; then
+        printf 'format-rust-with-macros: `--stdin` cannot be combined with other args\n' >&2
+        exit 1
+    fi
+
+    cargo ui-fmt --stdin | cargo rsx-fmt --stdin | rustfmt --emit stdout --edition 2024
+    exit 0
+fi
+
+if [[ "${#files[@]}" -eq 0 ]]; then
+    mapfile -t files < <(rg --files --hidden -g '*.rs' -g '!target/**' -g '!.git/**' -g '!.*/**')
+
+    if [[ "${#files[@]}" -eq 0 ]]; then
+        printf 'format-rust-with-macros: no Rust files found in the current directory\n' >&2
+        exit 1
+    fi
+fi
+
+if [[ "$check" -eq 1 ]]; then
+    cargo ui-fmt --check "${files[@]}"
+    cargo rsx-fmt --check "${files[@]}"
+    rustfmt --check --edition 2024 "${files[@]}"
+else
+    cargo ui-fmt "${files[@]}"
+    cargo rsx-fmt "${files[@]}"
+    rustfmt --edition 2024 "${files[@]}"
+fi

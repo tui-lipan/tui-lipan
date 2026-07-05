@@ -1,0 +1,8 @@
+[package]
+name = "tui-lipan-web-shared"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+tui-lipan = { path = "../../..", default-features = false, features = ["web"] }

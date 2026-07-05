@@ -1,0 +1,248 @@
+{
+  "ui! macro": {
+    "prefix": "ui!",
+    "body": [
+      "ui! {",
+      "\t${1:VStack::new()}${2: => {",
+      "\t\t$0",
+      "\t\\}}",
+      "}"
+    ],
+    "description": "Autocomplete-friendly ui! macro with builder chains"
+  },
+  "rsx! macro": {
+    "prefix": "rsx!",
+    "body": [
+      "rsx! {",
+      "\t${1:VStack} {",
+      "\t\t$0",
+      "\t}",
+      "}"
+    ],
+    "description": "rsx! macro with struct-literal syntax"
+  },
+
+  "VStack (ui!)": {
+    "prefix": ["uivstack", "ui-vstack"],
+    "body": "VStack::new()${1:.gap(${2:1})}${3:.padding(${4:1})}${5:.border(${6:true})}",
+    "description": "VStack builder chain"
+  },
+  "HStack (ui!)": {
+    "prefix": ["uihstack", "ui-hstack"],
+    "body": "HStack::new()${1:.gap(${2:1})}${3:.padding(${4:1})}${5:.border(${6:true})}",
+    "description": "HStack builder chain"
+  },
+  "ZStack (ui!)": {
+    "prefix": ["uizstack", "ui-zstack"],
+    "body": "ZStack::new()${1:.style(${2:Style::new()})}",
+    "description": "ZStack builder chain"
+  },
+  "Frame (ui!)": {
+    "prefix": ["uiframe", "ui-frame"],
+    "body": "Frame::new()${1:.title(\"${2:Title}\")}${3:.border(${4:true})}${5:.padding(${6:1})}",
+    "description": "Frame builder chain"
+  },
+  "Text (ui!)": {
+    "prefix": ["uitext", "ui-text"],
+    "body": "Text::new(\"${1:content}\")${2:.style(${3:Style::new()})}",
+    "description": "Text builder chain"
+  },
+  "Button (ui!)": {
+    "prefix": ["uibutton", "ui-button"],
+    "body": "Button::new(\"${1:label}\")${2:.on_click(ctx.link().callback(|_| ${3:Msg::Click}))}${4:.style(${5:Style::new()})}",
+    "description": "Button builder chain"
+  },
+  "Input (ui!)": {
+    "prefix": ["uiinput", "ui-input"],
+    "body": "Input::new(${1:value})${2:.placeholder(\"${3:placeholder}\")}${4:.on_change(ctx.link().callback(${5:Msg::InputChanged}))}",
+    "description": "Input builder chain"
+  },
+  "TextArea (ui!)": {
+    "prefix": ["uitextarea", "ui-textarea"],
+    "body": "TextArea::new(${1:value})${2:.placeholder(\"${3:placeholder}\")}${4:.on_change(ctx.link().callback(${5:Msg::TextChanged}))}",
+    "description": "TextArea builder chain"
+  },
+  "List (ui!)": {
+    "prefix": ["uilist", "ui-list"],
+    "body": "List::new()${1:.items(${2:items})}${3:.selected(${4:0})}${5:.on_select(ctx.link().callback(|e| ${6:Msg::Select(e.index)}))}",
+    "description": "List builder chain"
+  },
+  "ScrollView (ui!)": {
+    "prefix": ["uiscrollview", "ui-scrollview"],
+    "body": "ScrollView::new()${1:.scrollbar(${2:true})}${3:.offset(${4:0})}${5:.on_scroll(ctx.link().callback(${6:Msg::Scrolled}))}",
+    "description": "ScrollView builder chain"
+  },
+  "Modal (ui!)": {
+    "prefix": ["uimodal", "ui-modal"],
+    "body": "Modal::new()${1:.title(\"${2:Title}\")}${3:.on_close(ctx.link().callback(|_| ${4:Msg::CloseModal}))}",
+    "description": "Modal builder chain"
+  },
+  "Tabs (ui!)": {
+    "prefix": ["uitabs", "ui-tabs"],
+    "body": "Tabs::new()${1:.tab(\"${2:Tab 1}\").tab(\"${3:Tab 2}\")}${4:.active(${5:0})}${6:.on_change(ctx.link().callback(|e| ${7:Msg::SetTab(e.index)}))}",
+    "description": "Tabs builder chain"
+  },
+  "Spinner (ui!)": {
+    "prefix": ["uispinner", "ui-spinner"],
+    "body": "Spinner::new()${1:.label(\"${2:Loading...}\")}",
+    "description": "Spinner builder chain"
+  },
+  "ProgressBar (ui!)": {
+    "prefix": ["uiprogressbar", "ui-progressbar"],
+    "body": "ProgressBar::new(${1:0.0})${2:.style(${3:Style::new()})}",
+    "description": "ProgressBar builder chain"
+  },
+  "Checkbox (ui!)": {
+    "prefix": ["uicheckbox", "ui-checkbox"],
+    "body": "Checkbox::new(${1:false})${2:.label(\"${3:Label}\")}${4:.on_change(ctx.link().callback(${5:Msg::Toggled}))}",
+    "description": "Checkbox builder chain"
+  },
+  "Slider (ui!)": {
+    "prefix": ["uislider", "ui-slider"],
+    "body": "Slider::new(${1:0.5})${2:.on_change(ctx.link().callback(${3:Msg::SliderChanged}))}",
+    "description": "Slider builder chain"
+  },
+
+  "VStack (rsx!)": {
+    "prefix": ["rsxvstack", "rsx-vstack"],
+    "body": [
+      "VStack {",
+      "\tgap: ${1:1},",
+      "\t$0",
+      "}"
+    ],
+    "description": "VStack in rsx! syntax"
+  },
+  "HStack (rsx!)": {
+    "prefix": ["rsxhstack", "rsx-hstack"],
+    "body": [
+      "HStack {",
+      "\tgap: ${1:1},",
+      "\t$0",
+      "}"
+    ],
+    "description": "HStack in rsx! syntax"
+  },
+  "Frame (rsx!)": {
+    "prefix": ["rsxframe", "rsx-frame"],
+    "body": [
+      "Frame {",
+      "\ttitle: \"${1:Title}\",",
+      "\tborder: ${2:true},",
+      "\tpadding: ${3:1},",
+      "\t$0",
+      "}"
+    ],
+    "description": "Frame in rsx! syntax"
+  },
+  "Text (rsx!)": {
+    "prefix": ["rsxtext", "rsx-text"],
+    "body": "Text { content: \"${1:text}\"${2:, style: ${3:Style::new()}} }",
+    "description": "Text in rsx! syntax"
+  },
+  "Button (rsx!)": {
+    "prefix": ["rsxbutton", "rsx-button"],
+    "body": [
+      "Button {",
+      "\tlabel: \"${1:label}\",",
+      "\ton_click: ctx.link().callback(|_| ${2:Msg::Click}),",
+      "\t$0",
+      "}"
+    ],
+    "description": "Button in rsx! syntax"
+  },
+  "Input (rsx!)": {
+    "prefix": ["rsxinput", "rsx-input"],
+    "body": [
+      "Input {",
+      "\tvalue: ${1:value},",
+      "\tplaceholder: \"${2:placeholder}\",",
+      "\ton_change: ctx.link().callback(${3:Msg::InputChanged}),",
+      "}"
+    ],
+    "description": "Input in rsx! syntax"
+  },
+  "ScrollView (rsx!)": {
+    "prefix": ["rsxscrollview", "rsx-scrollview"],
+    "body": [
+      "ScrollView {",
+      "\tscrollbar: ${1:true},",
+      "\toffset: ${2:0},",
+      "\ton_scroll: ctx.link().callback(${3:Msg::Scrolled}),",
+      "\t$0",
+      "}"
+    ],
+    "description": "ScrollView in rsx! syntax"
+  },
+  "Modal (rsx!)": {
+    "prefix": ["rsxmodal", "rsx-modal"],
+    "body": [
+      "Modal {",
+      "\ttitle: \"${1:Title}\",",
+      "\ton_close: ctx.link().callback(|_| ${2:Msg::CloseModal}),",
+      "\t$0",
+      "}"
+    ],
+    "description": "Modal in rsx! syntax"
+  },
+  "for loop (rsx!/ui!)": {
+    "prefix": ["rsxfor", "uifor"],
+    "body": [
+      "for ${1:item} in ${2:&items} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "for loop inside rsx! or ui! macro"
+  },
+  "if conditional (rsx!/ui!)": {
+    "prefix": ["rsxif", "uiif"],
+    "body": [
+      "if ${1:condition} {",
+      "\t$2",
+      "} else {",
+      "\t$0",
+      "}"
+    ],
+    "description": "if/else inside rsx! or ui! macro"
+  },
+  "Component boilerplate": {
+    "prefix": "tui-component",
+    "body": [
+      "#[derive(Default)]",
+      "pub struct ${1:MyComponent};",
+      "",
+      "pub enum ${2:Msg} {",
+      "\t$3",
+      "}",
+      "",
+      "#[derive(Default)]",
+      "pub struct ${4:State} {",
+      "\t$5",
+      "}",
+      "",
+      "impl Component for ${1:MyComponent} {",
+      "\ttype Message = ${2:Msg};",
+      "\ttype Properties = ();",
+      "\ttype State = ${4:State};",
+      "",
+      "\tfn create_state(&self, _props: &Self::Properties) -> Self::State {",
+      "\t\t${4:State}::default()",
+      "\t}",
+      "",
+      "\tfn update(&mut self, msg: ${2:Msg}, ctx: &mut Context<Self>) -> Update {",
+      "\t\tmatch msg {",
+      "\t\t\t$6",
+      "\t\t}",
+      "\t\tUpdate::full()",
+      "\t}",
+      "",
+      "\tfn view(&self, ctx: &Context<Self>) -> Element {",
+      "\t\tui! {",
+      "\t\t\t$0",
+      "\t\t}",
+      "\t}",
+      "}"
+    ],
+    "description": "Full Component boilerplate with ui! macro"
+  }
+}
