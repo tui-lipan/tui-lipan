@@ -15,6 +15,7 @@ and developer tools - anything that runs in a terminal.
 
 [![Crates.io](https://img.shields.io/crates/v/tui-lipan.svg)](https://crates.io/crates/tui-lipan)
 [![docs.rs](https://img.shields.io/docsrs/tui-lipan)](https://docs.rs/tui-lipan)
+[![Context7](https://img.shields.io/badge/Context7-indexed-8A2BE2)](https://context7.com/websites/tui-lipan_dev)
 [![CI](https://github.com/tui-lipan/tui-lipan/actions/workflows/ci.yml/badge.svg)](https://github.com/tui-lipan/tui-lipan/actions/workflows/ci.yml)
 [![License: MPL-2.0](https://img.shields.io/badge/license-MPL--2.0-blue.svg)](#license)
 [![MSRV](https://img.shields.io/badge/MSRV-1.85-blue)](#)
@@ -282,6 +283,11 @@ The app-facing skills are written to work from *your* application repository -
 copy the ones you want into your project's skills directory (e.g.
 `.claude/skills/` or `.agents/skills/`) or your user-level skills directory,
 and your agent gains framework-specific build, sketch, and review workflows.
+
+The documentation is also indexed on
+[Context7](https://context7.com/websites/tui-lipan_dev): agents with the
+Context7 MCP server can pull current tui-lipan docs and examples on demand
+instead of relying on training data.
 
 ---
 
