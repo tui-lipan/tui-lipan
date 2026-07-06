@@ -152,13 +152,11 @@ pub(crate) fn layout_splitter(
 
         if idx + 1 < pane_sizes.len() {
             let handle_rect = if rides_border(splitter) {
-                let (offset, thickness) = match (
-                    splitter.children.get(idx),
-                    splitter.children.get(idx + 1),
-                ) {
-                    (Some(left), Some(right)) => seam_geometry(left, right, axis),
-                    _ => (1, 1),
-                };
+                let (offset, thickness) =
+                    match (splitter.children.get(idx), splitter.children.get(idx + 1)) {
+                        (Some(left), Some(right)) => seam_geometry(left, right, axis),
+                        _ => (1, 1),
+                    };
                 match axis {
                     Axis::Horizontal => {
                         let seam_x = cursor.saturating_sub(offset as i16).max(bounds.x);
