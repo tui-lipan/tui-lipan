@@ -39,6 +39,11 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Splitter corner-drag junction hit-testing (`find_junction_splitter`) no
+  longer casts a handle rect's `w`/`h` (`u16`) to `i16` before computing
+  bounds, which could wrap to a negative number and break hit-testing for
+  very long splitter handles; the bounds math now runs entirely in `i32`,
+  matching `Rect::contains`.
 - Document `DocumentView` syntax highlighting support in the `syntax-syntect`
   feature tables in `README.md` and `docs/quick-start.md`.
 - Clarify that `theme-reload` supports live TOML theme customization for app

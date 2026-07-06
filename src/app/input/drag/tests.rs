@@ -568,3 +568,84 @@ fn table_rect_copy_cursor_right_of_anchor_column_uses_prefix_trim() {
 
     assert_eq!(copied.as_ref(), "b0\tc\nb1\tc1");
 }
+
+#[test]
+fn find_junction_splitter_bounds_math_does_not_overflow_i16() {
+    use crate::core::node::{NodeKind, NodeTree};
+    use crate::widgets::internal::SplitterNode;
+    use crate::widgets::{Orientation, Splitter, SplitterHandleMode};
+
+    // A handle rect taller than i16::MAX (32767): the old `rect.h as i16` cast would wrap
+    // this to a negative number before the bounds check ran, breaking hit-testing for any
+    // splitter long enough to overflow. `Rect::h` is `u16`, so 40_000 is a valid width/height
+    // even though no real terminal is ever this large.
+    let huge_handle = Rect {
+        x: 5,
+        y: 0,
+        w: 1,
+        h: 40_000,
+    };
+
+    let mut tree = NodeTree::new();
+    let perpendicular_id = tree.alloc();
+    tree.root = perpendicular_id;
+    let mut node: SplitterNode = Splitter::horizontal().into();
+    node.orientation = Orientation::Horizontal;
+    node.handle_mode = SplitterHandleMode::Gutter;
+    node.handle_rects = vec![huge_handle];
+    node.pane_sizes = vec![1, 1];
+    tree.node_mut(perpendicular_id).kind = NodeKind::Splitter(node);
+
+    let primary = crate::core::node::NodeId::INVALID;
+
+    // A point one cell to the left of the handle (inside the documented one-cell expansion)
+    // must still be found; with the old wraparound bug this range collapsed and the point
+    // was missed instead.
+    let target = super::find_junction_splitter(&tree, primary, Orientation::Vertical, 4, 100)
+        .expect("point within the expanded handle bounds must be found");
+    assert_eq!(target.id, perpendicular_id);
+
+    // A point clearly outside the (correctly, non-overflowing) expanded bounds must not match.
+    assert!(
+        super::find_junction_splitter(&tree, primary, Orientation::Vertical, 100, 100).is_none()
+    );
+}
+
+#[test]
+fn find_junction_splitter_click_coordinate_does_not_overflow_i16() {
+    use crate::core::node::{NodeKind, NodeTree};
+    use crate::widgets::internal::SplitterNode;
+    use crate::widgets::{Orientation, Splitter, SplitterHandleMode};
+
+    // A handle positioned near i16::MAX (32767): a click at x = 32775 is a valid u16 (well
+    // within u16::MAX) that falls inside this handle's expanded bounds, but 32775 as i16
+    // wraps to a large negative number. The old code derived the i32 bounds-check value from
+    // that already-wrapped i16, so it would wrongly miss this click.
+    let handle = Rect {
+        x: 32_760,
+        y: 0,
+        w: 20,
+        h: 1,
+    };
+
+    let mut tree = NodeTree::new();
+    let perpendicular_id = tree.alloc();
+    tree.root = perpendicular_id;
+    let mut node: SplitterNode = Splitter::horizontal().into();
+    node.orientation = Orientation::Horizontal;
+    node.handle_mode = SplitterHandleMode::Gutter;
+    node.handle_rects = vec![handle];
+    node.pane_sizes = vec![1, 1];
+    tree.node_mut(perpendicular_id).kind = NodeKind::Splitter(node);
+
+    let primary = crate::core::node::NodeId::INVALID;
+
+    let target = super::find_junction_splitter(&tree, primary, Orientation::Vertical, 32_775, 0)
+        .expect("click past i16::MAX inside the expanded handle bounds must be found");
+    assert_eq!(target.id, perpendicular_id);
+
+    // A click well outside the handle, but still past i16::MAX, must not match.
+    assert!(
+        super::find_junction_splitter(&tree, primary, Orientation::Vertical, 40_000, 0).is_none()
+    );
+}
