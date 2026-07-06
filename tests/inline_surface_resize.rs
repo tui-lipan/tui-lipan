@@ -75,7 +75,9 @@ fn tiny_terminal_fixture_reports_mode_specific_fallback() {
     );
 
     let ephemeral_bounds = expected_content_bounds(
-        SurfaceMode::InlineEphemeral { height: InlineHeight::Fixed(6) },
+        SurfaceMode::InlineEphemeral {
+            height: InlineHeight::Fixed(6),
+        },
         tiny.width,
         tiny.height,
     );
@@ -110,7 +112,9 @@ fn tiny_terminal_fixture_reports_mode_specific_fallback() {
 
 #[test]
 fn inline_ephemeral_rapid_shrink_keeps_surface_clean() {
-    let mode = SurfaceMode::InlineEphemeral { height: InlineHeight::Fixed(4) };
+    let mode = SurfaceMode::InlineEphemeral {
+        height: InlineHeight::Fixed(4),
+    };
     let mut backend = TestBackend::new(ViewportProbe);
     let fixture = [
         ResizeStep::new(120, 24),
@@ -141,7 +145,9 @@ fn inline_ephemeral_rapid_shrink_keeps_surface_clean() {
 
 #[test]
 fn inline_ephemeral_height_shrink_preserves_logical_anchor() {
-    let mode = SurfaceMode::InlineEphemeral { height: InlineHeight::Fixed(8) };
+    let mode = SurfaceMode::InlineEphemeral {
+        height: InlineHeight::Fixed(8),
+    };
     let mut backend = TestBackend::new(ViewportProbe);
     let fixture = [
         ResizeStep::new(80, 20),
