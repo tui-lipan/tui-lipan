@@ -37,6 +37,7 @@ Representative `prelude::*` re-exports:
 | `Theme`, `ColorGradient`, `GradientDirection`, `GradientRange`, `VisualEffect`, `RippleRadius`, `RetroPreset` | Themes & effects |
 | `ClipboardConfig`, `PasteShiftInsertBehavior` | Clipboard config |
 | `TextEditor`, `TextInput`, `TextEditEvent`, `TextEditKind` | Text editing |
+| `word_forward_start`, `word_end`, `line_start_at`, `first_nonblank_in_line`, … (`text_motion` module) | Vim-style word/line text motion helpers |
 | `OverlayId`, `OverlayScope`, `ToastHandle`, `ToastPlacement` | Overlays |
 | `App`, `CommandEntry`, `CommandRegistry` | App commands |
 | `child`, `mockup!`, `rsx!`, `ui!` | Macros & helpers |

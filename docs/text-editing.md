@@ -292,6 +292,47 @@ final empty line, and only `\n` is treated as a line break.
 
 ---
 
+## Text motion helpers (`text_motion`)
+
+`TextArea`'s vim mode word/WORD/line motions (`w`/`b`/`e`, `W`/`B`/`E`, `0`/`^`/`$`) are pure,
+byte-offset functions with no dependency on `TextEditor`/`TextArea` state. They're exposed
+publicly through `tui_lipan::text_motion` (and re-exported from the prelude) so host apps that
+render their own text grids — for example a terminal emulator's scrollback copy mode — can reuse
+the same algorithms instead of reimplementing vim motion from scratch.
+
+| Function | Motion | Description |
+|----------|--------|-------------|
+| `word_forward_start(text, cursor)` | `w` | Start of the next word |
+| `word_backward_start(text, cursor)` | `b` | Start of the previous word |
+| `word_end(text, cursor)` | `e` | End of the current/next word |
+| `big_word_forward_start(text, cursor)` | `W` | Start of the next WORD (whitespace-delimited, punctuation included) |
+| `big_word_backward_start(text, cursor)` | `B` | Start of the previous WORD |
+| `big_word_end(text, cursor)` | `E` | End of the current/next WORD |
+| `line_start_at(text, cursor)` | `0` | Start of the line containing `cursor` |
+| `line_end_at(text, cursor)` | `$` | One past the end of the line (exclusive of the newline) |
+| `first_nonblank_in_line(text, line_start, line_end)` | `^` | First non-blank byte in `text[line_start..line_end]`, or `line_end` if the line is blank |
+
+```rust
+use tui_lipan::text_motion::{word_forward_start, word_end};
+
+let text = "cat dog";
+assert_eq!(word_forward_start(text, 0), 4); // -> start of "dog"
+assert_eq!(word_end(text, 0), 3);           // -> one past "cat"
+```
+
+**Cursor convention:** offsets are "insertion points", matching `TextEditor`/`TextInput` — a
+cursor value `N` sits *between* the bytes at `N - 1` and `N`, not "on" the character at `N`. This
+matters most for `word_end`/`big_word_end`, which land one byte **past** the word's last
+character (the result can equal `text.len()` and isn't always a valid index to read a character
+from). If your own cursor model tracks a selected *cell* instead (as in a terminal grid), convert
+to an insertion point — add the byte width of the character under the cursor — before calling
+`word_end`/`big_word_end`, then map the result back down to the cell at `offset - 1`. Feeding a
+cell's own start byte directly in breaks the case where the cursor already sits on a word's last
+character: since that byte still belongs to the current word, the motion re-finds the same word's
+end instead of advancing to the next word.
+
+---
+
 ## Examples
 
 - `examples/text_area.rs` - Two `TextEditor` instances driving `TextArea` widgets
@@ -320,6 +361,18 @@ use tui_lipan::prelude::TextInput;
 // or
 use tui_lipan::prelude::*;
 ```
+
+The `text_motion` module functions (`word_forward_start`, `word_backward_start`, `word_end`,
+`big_word_forward_start`, `big_word_backward_start`, `big_word_end`, `line_start_at`,
+`line_end_at`, `first_nonblank_in_line`) are available from both the crate root module path and
+the prelude:
+
+```rust
+use tui_lipan::text_motion::{word_forward_start, word_end};
+// or
+use tui_lipan::prelude::*; // brings the same functions into scope directly
+```
+
 ## TextArea metrics, decorations, and state callbacks
 
 For editor integrations, keep byte offsets as the source of truth and use
