@@ -494,23 +494,40 @@ pub(crate) fn handle_splitter_click_test_backend<C: Component>(
     x: u16,
     y: u16,
 ) -> bool {
-    if backend.core.tree.is_valid(grab.node_id)
-        && let NodeKind::Splitter(node) = &mut backend.core.tree.node_mut(grab.node_id).kind
-    {
+    if !backend.core.tree.is_valid(grab.node_id) {
+        return false;
+    }
+    let (start_pos, start_sizes, orientation) = {
+        let NodeKind::Splitter(node) = &mut backend.core.tree.node_mut(grab.node_id).kind else {
+            return false;
+        };
         let start_pos = match node.orientation {
             crate::widgets::Orientation::Vertical => x as i16,
             crate::widgets::Orientation::Horizontal => y as i16,
         };
         node.active_handle = Some(grab.handle);
-        backend.drag.active = ActiveDrag::Splitter(crate::app::input::drag::SplitterDrag {
-            id: grab.node_id,
-            handle: grab.handle,
-            start_pos,
-            start_sizes: node.pane_sizes.clone(),
-        });
-        return true;
+        (start_pos, node.pane_sizes.clone(), node.orientation)
+    };
+    let secondary = crate::app::input::drag::find_junction_splitter(
+        &backend.core.tree,
+        grab.node_id,
+        orientation,
+        x,
+        y,
+    );
+    if let Some(sec) = &secondary
+        && let NodeKind::Splitter(node) = &mut backend.core.tree.node_mut(sec.id).kind
+    {
+        node.active_handle = Some(sec.handle);
     }
-    false
+    backend.drag.active = ActiveDrag::Splitter(crate::app::input::drag::SplitterDrag {
+        id: grab.node_id,
+        handle: grab.handle,
+        start_pos,
+        start_sizes,
+        secondary,
+    });
+    true
 }
 
 pub(crate) fn handle_list_click_test_backend<C: Component>(

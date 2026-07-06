@@ -120,6 +120,70 @@ pub(crate) struct SplitterDrag {
     pub handle: usize,
     pub start_pos: i16,
     pub start_sizes: Vec<u16>,
+    /// Perpendicular splitter grabbed at a handle junction (corner drag).
+    ///
+    /// When the click lands where a vertical and a horizontal handle meet,
+    /// both splitters resize together: the primary follows its own axis and
+    /// the secondary follows the perpendicular one.
+    pub secondary: Option<SplitterDragTarget>,
+}
+
+/// A second splitter participating in a corner (junction) drag.
+#[derive(Clone, Debug)]
+pub(crate) struct SplitterDragTarget {
+    pub id: NodeId,
+    pub handle: usize,
+    pub start_pos: i16,
+    pub start_sizes: Vec<u16>,
+}
+
+/// Find a perpendicular splitter whose handle touches `(x, y)`, i.e. the
+/// click landed on a junction where a vertical and a horizontal handle meet,
+/// so the drag should resize both splitters at once.
+///
+/// The perpendicular handle rect is expanded by one cell because the junction
+/// cell itself belongs to only one of the two handles; the other handle ends
+/// directly beside it.
+pub(crate) fn find_junction_splitter(
+    tree: &crate::core::node::NodeTree,
+    primary: NodeId,
+    primary_orientation: crate::widgets::Orientation,
+    x: u16,
+    y: u16,
+) -> Option<SplitterDragTarget> {
+    use crate::core::node::NodeKind;
+
+    let (xi, yi) = (x as i16, y as i16);
+    for node in tree.iter() {
+        if node.id == primary {
+            continue;
+        }
+        let NodeKind::Splitter(splitter) = &node.kind else {
+            continue;
+        };
+        if splitter.orientation == primary_orientation {
+            continue;
+        }
+        let Some(handle) = splitter.handle_rects.iter().position(|rect| {
+            xi >= rect.x.saturating_sub(1)
+                && xi <= rect.x.saturating_add(rect.w as i16)
+                && yi >= rect.y.saturating_sub(1)
+                && yi <= rect.y.saturating_add(rect.h as i16)
+        }) else {
+            continue;
+        };
+        let start_pos = match splitter.orientation {
+            crate::widgets::Orientation::Vertical => xi,
+            crate::widgets::Orientation::Horizontal => yi,
+        };
+        return Some(SplitterDragTarget {
+            id: node.id,
+            handle,
+            start_pos,
+            start_sizes: splitter.pane_sizes.clone(),
+        });
+    }
+    None
 }
 
 /// Tracks active mouse drag selection for TextArea.
