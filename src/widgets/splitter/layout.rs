@@ -157,23 +157,31 @@ pub(crate) fn layout_splitter(
                         (Some(left), Some(right)) => seam_geometry(left, right, axis),
                         _ => (1, 1),
                     };
+                // Clamp the seam rect to `bounds`: with collapsed panes
+                // (min_size 0, tiny layouts) the cursor can sit on the bounds
+                // edge and an unclamped 2-cell handle would expose an
+                // out-of-bounds cell to hit-testing and junction detection.
                 match axis {
                     Axis::Horizontal => {
                         let seam_x = cursor.saturating_sub(offset as i16).max(bounds.x);
+                        let end = (bounds.x as i32 + bounds.w as i32)
+                            .min(seam_x as i32 + thickness as i32);
                         Rect {
                             x: seam_x,
                             y: bounds.y,
-                            w: thickness,
+                            w: (end - seam_x as i32).max(0) as u16,
                             h: bounds.h,
                         }
                     }
                     Axis::Vertical => {
                         let seam_y = cursor.saturating_sub(offset as i16).max(bounds.y);
+                        let end = (bounds.y as i32 + bounds.h as i32)
+                            .min(seam_y as i32 + thickness as i32);
                         Rect {
                             x: bounds.x,
                             y: seam_y,
                             w: bounds.w,
-                            h: thickness,
+                            h: (end - seam_y as i32).max(0) as u16,
                         }
                     }
                 }
@@ -314,6 +322,31 @@ mod tests {
         assert_eq!(layout.pane_rects[1].x, 10);
         assert_eq!(layout.handle_rects[0].x, 9);
         assert_eq!(layout.handle_rects[0].w, 2);
+    }
+
+    #[test]
+    fn collapsed_pane_seam_handle_stays_within_bounds() {
+        // With min_size 0 the trailing pane can collapse to zero width, which
+        // puts the seam cursor on the bounds edge; the 2-cell handle for
+        // separate borders must be clamped instead of poking past the edge.
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 5,
+        };
+        let splitter = Splitter::vertical()
+            .min_size(0)
+            .handle_mode(SplitterHandleMode::Border)
+            .child(Frame::new().border(true))
+            .child(Frame::new().border(true));
+
+        let layout = layout_splitter(&splitter, &[1.0, 0.0], bounds);
+        assert_eq!(layout.pane_sizes, vec![20, 0]);
+        let handle = layout.handle_rects[0];
+        assert_eq!(handle.x, 19);
+        assert_eq!(handle.w, 1);
+        assert!(handle.x.saturating_add(handle.w as i16) <= bounds.x + bounds.w as i16);
     }
 
     #[test]

@@ -11,6 +11,23 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- `SplitterHandleMode` (`Splitter::handle_mode`): `Gutter` (default) keeps the
+  classic reserved handle gutter; `Border` drops the gutter and rides the pane
+  border seam, deriving handle thickness from the borders actually present
+  (merged borders share a 1-cell wall, separate borders are grabbed together
+  as a 2-cell handle, borderless panes get a synthetic 1-cell handle).
+- Corner drag for splitters: when a vertical and a horizontal handle meet,
+  clicking on or next to the junction grabs both handles and dragging resizes
+  both splitters simultaneously; release emits `on_resize` for both.
+
+### Deprecated
+
+- `Splitter::join_frame(bool)`: use
+  `Splitter::handle_mode(SplitterHandleMode::Border)` instead. Frame border
+  merging (`Frame::join_frame`) is unchanged and remains current API.
+
 ### Fixed
 
 - Document `DocumentView` syntax highlighting support in the `syntax-syntect`
