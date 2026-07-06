@@ -81,11 +81,39 @@ cargo check --workspace --all-targets --all-features
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 cargo test --workspace --all-features
+cargo deny --all-features check licenses sources advisories bans
 ```
 
 If `scripts/generate-node-kind-delegate-arms.py` fails, regenerate the checked-in
 delegate block with `python3 scripts/generate-node-kind-delegate-arms.py --write`
 and rerun the check.
+
+### CI environment notes
+
+- CI runners have **no tty**. Library and test code paths must never query the
+  host terminal. In particular, ratatui's `Terminal::resize` on a
+  `Viewport::Fixed` terminal calls `backend.size()`, which asks the real tty
+  even when the backend writes to an in-memory buffer - it fails with EAGAIN
+  on CI. For in-memory scratch terminals, recreate the terminal with a new
+  `Viewport::Fixed` instead of resizing (`Terminal::with_options` never
+  touches the backend for fixed viewports). See `new_inline_commit_scratch`
+  in `src/app/runner/render_service/inline.rs` and the guardrail test in
+  `src/runtime.rs`.
+- A test passing locally but failing only in CI usually means it depends on a
+  real terminal, the filesystem layout, or wall-clock timing. Fix the
+  dependency, don't loosen the assertion.
+
+### Dependencies & advisories
+
+- New dependencies must carry licenses on the `deny.toml` allowlist and pass
+  `cargo deny --all-features check licenses sources advisories bans` (the
+  exact CI invocation; `cargo install cargo-deny --locked` to run locally).
+- The advisories check can start failing **without any code change** when a
+  new RUSTSEC advisory is published. Resolution order: upgrade if a patched
+  version exists; otherwise add an ignore entry to `deny.toml` **with a
+  written reason** explaining why the vulnerable path is not reachable with
+  untrusted input through tui-lipan's API (see the existing entries for the
+  expected format). Remove ignores that no longer match any crate.
 
 ## Development Workflow
 
@@ -239,7 +267,7 @@ docs/external-programs.md terminal_handoff, UI-thread Command::new, request_full
 docs/error-handling.md    Error handling policy (panics vs Error variants)
 docs/DESIGN.md            Architecture and runtime internals
 docs/patterns.md          Common patterns + anti-patterns
-docs/examples.md          Complete example catalog (77 examples)
+docs/examples.md          Complete example catalog
 docs/widget-authoring.md  Contributor guide: how to add a new widget end-to-end
 docs/widgets/index.md     Widget category listing
 docs/widgets/layout.md    VStack, HStack, ZStack, Frame, Grid, ScrollView, …
@@ -259,9 +287,33 @@ docs/widgets/terminal.md  ManagedTerminal, Terminal, TerminalPty, TerminalScreen
 - **Changing the feature flag set?** Update `docs/quick-start.md` (feature table) and `README.md` (features table).
 - **Adding a new pattern?** Add it to `docs/patterns.md`.
 
-## Commit Messages
+## Commit Practices
 
 Use conventional commits:
 - `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `style:`, `perf:`, `chore:`
 - Imperative mood: "feat: Add button widget" not "Added"
 - Keep under 72 characters, no period at end
+
+Sign-off and identity:
+- Every commit needs a DCO sign-off: `git commit -s` (see
+  [`CONTRIBUTING.md`](CONTRIBUTING.md) for what the sign-off means and how to
+  fix a missed one).
+- Your commit email is public forever - in every clone, mirror, and archive of
+  this repository. Use an address you are comfortable exposing; GitHub's
+  `<user>@users.noreply.github.com` address works fine and still credits your
+  profile. Whatever you pick, use the same identity for authorship and the
+  `Signed-off-by` line.
+- AI-assisted contributions are welcome - this framework is substantially
+  built with agent assistance. You remain the author of record: review what
+  you submit, and remember your sign-off attests that you have the right to
+  contribute it under MPL-2.0. Extra attribution trailers beyond
+  `Signed-off-by` are unnecessary.
+
+## Releases (maintainers)
+
+Releases are tag-driven: bumping versions + `CHANGELOG.md`, then pushing a
+`vX.Y.Z` tag triggers `.github/workflows/release.yml`, which verifies the tag
+against both crate versions and the changelog, runs the test suite, and
+publishes to crates.io via Trusted Publishing. Contributors never need to
+publish - keeping `CHANGELOG.md` accurate is the contribution that makes
+releases painless.
