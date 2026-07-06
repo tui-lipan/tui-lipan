@@ -153,8 +153,11 @@ pub(crate) fn find_junction_splitter(
 ) -> Option<SplitterDragTarget> {
     use crate::core::node::NodeKind;
 
+    // Keep the i16 coordinates only for `start_pos`'s existing i16 field; the bounds check
+    // below widens straight from `x`/`y` (u16) instead, so a click past `i16::MAX` (which
+    // `x`/`y` as u16 can represent, unlike `Rect::x`/`y`) can't wrap before reaching it.
     let (xi, yi) = (x as i16, y as i16);
-    let (xi32, yi32) = (i32::from(xi), i32::from(yi));
+    let (xi32, yi32) = (i32::from(x), i32::from(y));
     for node in tree.iter() {
         if node.id == primary {
             continue;

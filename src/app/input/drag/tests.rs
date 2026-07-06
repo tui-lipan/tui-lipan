@@ -610,3 +610,42 @@ fn find_junction_splitter_bounds_math_does_not_overflow_i16() {
         super::find_junction_splitter(&tree, primary, Orientation::Vertical, 100, 100).is_none()
     );
 }
+
+#[test]
+fn find_junction_splitter_click_coordinate_does_not_overflow_i16() {
+    use crate::core::node::{NodeKind, NodeTree};
+    use crate::widgets::internal::SplitterNode;
+    use crate::widgets::{Orientation, Splitter, SplitterHandleMode};
+
+    // A handle positioned near i16::MAX (32767): a click at x = 32775 is a valid u16 (well
+    // within u16::MAX) that falls inside this handle's expanded bounds, but 32775 as i16
+    // wraps to a large negative number. The old code derived the i32 bounds-check value from
+    // that already-wrapped i16, so it would wrongly miss this click.
+    let handle = Rect {
+        x: 32_760,
+        y: 0,
+        w: 20,
+        h: 1,
+    };
+
+    let mut tree = NodeTree::new();
+    let perpendicular_id = tree.alloc();
+    tree.root = perpendicular_id;
+    let mut node: SplitterNode = Splitter::horizontal().into();
+    node.orientation = Orientation::Horizontal;
+    node.handle_mode = SplitterHandleMode::Gutter;
+    node.handle_rects = vec![handle];
+    node.pane_sizes = vec![1, 1];
+    tree.node_mut(perpendicular_id).kind = NodeKind::Splitter(node);
+
+    let primary = crate::core::node::NodeId::INVALID;
+
+    let target = super::find_junction_splitter(&tree, primary, Orientation::Vertical, 32_775, 0)
+        .expect("click past i16::MAX inside the expanded handle bounds must be found");
+    assert_eq!(target.id, perpendicular_id);
+
+    // A click well outside the handle, but still past i16::MAX, must not match.
+    assert!(
+        super::find_junction_splitter(&tree, primary, Orientation::Vertical, 40_000, 0).is_none()
+    );
+}
