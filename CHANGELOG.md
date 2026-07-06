@@ -21,6 +21,15 @@ While the crate is on `0.x.y`:
 - Corner drag for splitters: when a vertical and a horizontal handle meet,
   clicking on or next to the junction grabs both handles and dragging resizes
   both splitters simultaneously; release emits `on_resize` for both.
+- Public `text_motion` module (also re-exported through the prelude) exposing
+  the byte-offset vim word/WORD/line motion algorithms
+  (`word_forward_start`/`word_backward_start`/`word_end`,
+  `big_word_forward_start`/`big_word_backward_start`/`big_word_end`,
+  `line_start_at`/`line_end_at`/`first_nonblank_in_line`) that back
+  `TextArea`'s vim mode, so host apps that render their own text grids (for
+  example a terminal emulator's scrollback copy mode) can reuse the same
+  `w`/`b`/`e`/`W`/`B`/`E`/`0`/`^`/`$` motions instead of reimplementing them.
+  See `docs/text-editing.md`.
 
 ### Deprecated
 
