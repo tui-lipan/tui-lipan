@@ -220,7 +220,7 @@ pub(crate) fn render_splitter_node(
             ),
             hovered_handle,
             active_handle: splitter.active_handle,
-            preserve_existing_symbols: splitter.join_frame,
+            preserve_existing_symbols: splitter.rides_border(),
             clip_rect: clip_bounds,
         },
     );

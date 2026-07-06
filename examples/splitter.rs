@@ -44,6 +44,11 @@ impl Component for SplitterDemo {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         let joined = ctx.state.mode_tab == 1;
+        let handle_mode = if joined {
+            SplitterHandleMode::Border
+        } else {
+            SplitterHandleMode::Gutter
+        };
 
         let mode_label = if joined { "Frame Join" } else { "Classic" };
         let editor_hint = if joined {
@@ -94,7 +99,7 @@ impl Component for SplitterDemo {
             .on_select(ctx.link().callback(Msg::TableSelect));
 
         let right = Splitter::horizontal()
-            .join_frame(joined)
+            .handle_mode(handle_mode)
             .weights(vec![0.65, 0.35])
             .child(
                 Frame::new()
@@ -114,7 +119,7 @@ impl Component for SplitterDemo {
             );
 
         let root = Splitter::vertical()
-            .join_frame(joined)
+            .handle_mode(handle_mode)
             .weights(vec![0.3, 0.7])
             .child(
                 Frame::new()

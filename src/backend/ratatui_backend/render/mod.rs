@@ -1120,7 +1120,7 @@ fn render_node(
         NodeKind::Splitter(splitter) => {
             defer_splitter_render = true;
             let mut splitter_clip = rect;
-            if splitter.join_frame {
+            if splitter.rides_border() {
                 splitter_clip.x = splitter_clip.x.saturating_sub(1);
                 splitter_clip.w = splitter_clip.w.saturating_add(1);
                 splitter_clip.y = splitter_clip.y.saturating_sub(1);
