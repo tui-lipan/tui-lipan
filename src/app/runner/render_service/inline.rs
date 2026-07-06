@@ -279,6 +279,11 @@ impl<C: Component> AppRunner<C> {
     /// resize the inline viewport to match. Returns the new content bounds
     /// when they differ from `bounds`, so the caller can re-reconcile at the
     /// final size.
+    ///
+    /// The layout bounds stay at the content's natural height even when it
+    /// exceeds the terminal; only the on-screen viewport is clamped (to the
+    /// `max` cap and the terminal height), showing the top of the layout and
+    /// clipping the rest at draw time.
     pub(super) fn sync_inline_auto_height(
         &mut self,
         terminal: &mut crate::backend::ratatui_backend::Terminal,
@@ -297,23 +302,18 @@ impl<C: Component> AppRunner<C> {
         };
 
         let natural = min_size_constrained(element, Some(bounds.w), None).1.max(1);
-        self.surface.inline.auto_height_resolved =
-            max_rows.map_or(natural, |cap| natural.min(cap));
+        self.surface.inline.auto_height_resolved = natural;
 
         let size = terminal.size()?;
-        let new_bounds = self.content_bounds(size.width, size.height);
-        crate::debug::internal_log!(
-            "[auto-height] natural={} size={}x{} frame={:?} bounds={:?} new_bounds={:?}",
-            natural,
-            size.width,
-            size.height,
-            terminal.get_frame().area(),
-            bounds,
-            new_bounds,
-        );
-        if terminal.get_frame().area().height != new_bounds.h {
-            self.resize_inline_viewport(terminal, new_bounds.h)?;
+        let viewport_rows = max_rows
+            .map_or(natural, |cap| natural.min(cap))
+            .min(size.height)
+            .max(1);
+        if terminal.get_frame().area().height != viewport_rows {
+            self.resize_inline_viewport(terminal, viewport_rows)?;
         }
+
+        let new_bounds = self.content_bounds(size.width, size.height);
         Ok((new_bounds != bounds).then_some(new_bounds))
     }
 

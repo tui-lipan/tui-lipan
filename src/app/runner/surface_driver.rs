@@ -44,15 +44,16 @@ impl SurfaceDriver {
         matches!(self.mode, SurfaceMode::InlineTranscript { .. })
     }
 
-    /// Rows the live inline viewport should currently occupy, before clamping
-    /// to the host terminal height.
-    fn requested_live_rows(&self, inline_height: InlineHeight) -> u16 {
+    /// Rows the layout should be reconciled at. For `InlineHeight::Auto` this
+    /// is the content's natural height, deliberately NOT clamped to the
+    /// terminal: reconciling an overflowing root at a smaller height would
+    /// trigger the stack deficit policy (shrink wrapped text, drop children
+    /// from the top). Instead the layout keeps its natural size and the
+    /// viewport shows its top rows, clipping the bottom at draw time.
+    fn layout_rows(&self, inline_height: InlineHeight, screen_rows: u16) -> u16 {
         match inline_height {
-            InlineHeight::Fixed(rows) => rows,
-            InlineHeight::Auto { max } => {
-                let measured = self.inline.auto_height_resolved.max(1);
-                max.map_or(measured, |cap| measured.min(cap))
-            }
+            InlineHeight::Fixed(rows) => rows.min(screen_rows).max(1),
+            InlineHeight::Auto { .. } => self.inline.auto_height_resolved.max(1),
         }
     }
 
@@ -87,7 +88,7 @@ impl SurfaceDriver {
                     let layout_h = if self.inline.expanded_live_viewport_height > 0 {
                         self.inline.expanded_live_viewport_height.min(height).max(1)
                     } else {
-                        self.requested_live_rows(inline_height).min(height).max(1)
+                        self.layout_rows(inline_height, height)
                     };
                     Rect {
                         x: 0,
@@ -100,7 +101,7 @@ impl SurfaceDriver {
                         x: 0,
                         y: 0,
                         w: width.saturating_sub(1).max(1),
-                        h: self.requested_live_rows(inline_height).min(height).max(1),
+                        h: self.layout_rows(inline_height, height),
                     }
                 }
             }
@@ -110,7 +111,7 @@ impl SurfaceDriver {
                 x: 0,
                 y: 0,
                 w: width.saturating_sub(1).max(1),
-                h: self.requested_live_rows(inline_height).min(height).max(1),
+                h: self.layout_rows(inline_height, height),
             },
         }
     }
@@ -275,7 +276,9 @@ mod tests {
             }
         );
 
-        // Content taller than the terminal clamps to the screen height.
+        // Content taller than the terminal keeps its natural layout height;
+        // reconciling at a smaller height would trigger the stack deficit
+        // policy. Only the on-screen viewport (render service) is clamped.
         driver.inline.auto_height_resolved = 40;
         assert_eq!(
             driver.content_bounds(80, 24),
@@ -283,19 +286,21 @@ mod tests {
                 x: 0,
                 y: 0,
                 w: 79,
-                h: 24,
+                h: 40,
             }
         );
     }
 
     #[test]
-    fn inline_auto_height_respects_row_cap() {
+    fn inline_auto_height_cap_does_not_shrink_layout_bounds() {
         let mut driver = SurfaceDriver::new(SurfaceMode::InlineTranscript {
             height: InlineHeight::auto_capped(6),
             startup: InlineStartupPolicy::PreserveHost,
         });
         assert_eq!(driver.auto_inline_height(), Some(Some(6)));
 
+        // The cap limits the on-screen viewport, not the layout: content
+        // taller than the cap is laid out fully and top-clipped at draw time.
         driver.inline.auto_height_resolved = 10;
         assert_eq!(
             driver.content_bounds(80, 24),
@@ -303,7 +308,7 @@ mod tests {
                 x: 0,
                 y: 0,
                 w: 79,
-                h: 6,
+                h: 10,
             }
         );
 

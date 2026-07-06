@@ -34,8 +34,9 @@ App::new()
 Notes on auto height:
 
 - The measured height is the content's natural (minimum) height at the current width; flexible fillers collapse to their minimum.
-- If the content is taller than the terminal (or the cap), the viewport clamps and the content lays out inside the smaller viewport as usual (e.g., `ScrollView` scrolls).
+- If the content is taller than the terminal (or the cap), the layout keeps its natural height and the viewport shows its top rows, cleanly clipping the bottom. The layout is deliberately not squeezed into the smaller viewport, which would trigger the stack overflow policy (wrapped text truncates, children hide from the top). Apps that want scrolling instead of clipping should give a `ScrollView` an explicit height.
 - Growing the viewport near the bottom of the screen scrolls host output up, exactly like printing lines would.
+- On host terminal resize the visible frame stays coherent, but rows the emulator moved into scrollback during its own reflow can remain there as stale copies. This is inherent to inline TUIs (fzf and chat CLIs show the same residue); no app can edit the emulator's scrollback without erasing all of it.
 
 ## Basic Setup
 
