@@ -20,7 +20,8 @@ use crate::style::{
 use crate::utils::color_contrast::contrast_ratio;
 use crate::widgets::{
     Animated, BorderMergeMode, Button, DecorationGlyph, DecorationPlacement, EdgeDecoration,
-    EffectScope, Frame, HStack, List, ListItem, Modal, Spacer, Splitter, Text, VStack, ZStack,
+    EffectScope, Frame, HStack, List, ListItem, Modal, Spacer, Splitter, SplitterHandleMode, Text,
+    VStack, ZStack,
 };
 
 struct HeaderFrameComponent;
@@ -3344,12 +3345,12 @@ impl Component for NestedSplitterFramesJoin {
 
     fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
         let right = Splitter::horizontal()
-            .join_frame(true)
+            .handle_mode(SplitterHandleMode::Border)
             .child(Frame::new().join_frame(true).child(Text::new("top")))
             .child(Frame::new().join_frame(true).child(Text::new("bottom")));
 
         Splitter::vertical()
-            .join_frame(true)
+            .handle_mode(SplitterHandleMode::Border)
             .child(Frame::new().join_frame(true).child(Text::new("left")))
             .child(right)
             .into()

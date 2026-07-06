@@ -683,7 +683,7 @@ Resizable container with draggable handles between panes.
 | `handle_style` | `Style` | Handle idle style |
 | `handle_hover_style` | `Style` | Handle hover style |
 | `handle_active_style` | `Style` | Handle drag style |
-| `join_frame` | `bool` | Overlay handles onto shared pane seams |
+| `handle_mode` | `SplitterHandleMode` | `Gutter` (default) or `Border` (ride the pane border seam) |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 
@@ -695,7 +695,21 @@ Splitter::vertical()   // Left/Right split
     .child(main_content)
 ```
 
-**Frame-join mode**: set `join_frame(true)` alongside neighboring `Frame::join_frame(true)` panes so the merged border itself becomes the splitter handle (no extra gutter).
+**Handle mode**: `handle_mode(SplitterHandleMode::Border)` drops the gutter and rides the pane
+border seam instead of drawing its own handle glyph. Thickness follows the borders actually
+present, so this is **independent** of whether the neighboring `Frame`s merge their borders:
+
+- panes whose `Frame::join_frame(true)` borders merge share one wall → a 1-cell handle on it,
+- panes that keep **separate** borders expose two adjacent walls → a 2-cell handle grabbing both,
+- borderless panes fall back to a synthetic 1-cell handle on the seam.
+
+The older `Splitter::join_frame(bool)` is deprecated; `join_frame(true)` maps to
+`handle_mode(SplitterHandleMode::Border)`. Note `Frame::join_frame` (border merging) is a
+separate, still-current visual choice owned by the frames.
+
+**Corner drag**: when a vertical and a horizontal splitter handle meet (nested splitters),
+clicking on or next to the junction grabs both handles at once - dragging moves the seam on
+both axes simultaneously, like a tiling window manager corner. This is automatic; no opt-in.
 
 ---
 

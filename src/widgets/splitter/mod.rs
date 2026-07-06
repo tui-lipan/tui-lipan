@@ -13,6 +13,28 @@ use crate::core::element::{Element, ElementKind};
 use crate::style::{Length, Style};
 use crate::widgets::Orientation;
 
+/// Where a [`Splitter`] places its drag handles relative to pane borders.
+///
+/// This is independent of whether neighboring [`Frame`](crate::widgets::Frame)s
+/// merge their borders (`Frame::join_frame`). Border merging is a purely visual
+/// choice owned by the frames; the handle mode only decides where the splitter's
+/// drag target lives and how thick it is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SplitterHandleMode {
+    /// Reserve a gutter between panes and draw the handle glyph there.
+    #[default]
+    Gutter,
+    /// Drop the gutter and ride the pane border seam: the border cells between
+    /// panes become the drag target.
+    ///
+    /// Thickness follows the borders actually present:
+    /// - neighbors that merge their borders share one wall → a 1-cell handle,
+    /// - neighbors that keep separate borders expose two adjacent walls → a
+    ///   2-cell handle so both are grabbed together,
+    /// - borderless neighbors fall back to a synthetic 1-cell handle on the seam.
+    Border,
+}
+
 /// Emitted when a splitter drag finishes and pane weights changed.
 #[derive(Clone, Debug)]
 pub struct SplitterResizeEvent {
@@ -33,7 +55,7 @@ pub struct Splitter {
     pub(crate) on_resize: Option<Callback<SplitterResizeEvent>>,
     pub(crate) min_size: u16,
     pub(crate) handle_size: u16,
-    pub(crate) join_frame: bool,
+    pub(crate) handle_mode: SplitterHandleMode,
     pub(crate) handle_symbol: char,
     pub(crate) handle_style: Style,
     pub(crate) handle_hover_style: Style,
@@ -62,7 +84,7 @@ impl Splitter {
             on_resize: None,
             min_size: 3,
             handle_size: 1,
-            join_frame: false,
+            handle_mode: SplitterHandleMode::Gutter,
             handle_symbol: '─',
             handle_style: Style::default(),
             handle_hover_style: Style::default(),
@@ -83,7 +105,7 @@ impl Splitter {
             on_resize: None,
             min_size: 3,
             handle_size: 1,
-            join_frame: false,
+            handle_mode: SplitterHandleMode::Gutter,
             handle_symbol: '│',
             handle_style: Style::default(),
             handle_hover_style: Style::default(),
@@ -156,13 +178,30 @@ impl Splitter {
         self
     }
 
-    /// Merge handles onto adjacent frame borders.
+    /// Set how handles are placed relative to pane borders.
     ///
-    /// When enabled, splitter handles no longer reserve layout space between panes.
-    /// Instead, they are rendered and hit-tested on the shared border seam.
-    pub fn join_frame(mut self, join: bool) -> Self {
-        self.join_frame = join;
+    /// [`SplitterHandleMode::Gutter`] (default) reserves a gutter and draws the
+    /// handle glyph there. [`SplitterHandleMode::Border`] drops the gutter and
+    /// rides the pane border seam, hit-testing the border cells between panes as
+    /// a single handle. This is orthogonal to whether the neighboring frames
+    /// merge their borders (`Frame::join_frame`): separate borders are grabbed
+    /// together as a 2-cell handle, a merged border as a 1-cell handle.
+    pub fn handle_mode(mut self, mode: SplitterHandleMode) -> Self {
+        self.handle_mode = mode;
         self
+    }
+
+    /// Merge handles onto adjacent frame borders.
+    #[deprecated(
+        since = "0.1.1",
+        note = "use `handle_mode(SplitterHandleMode::Border)` instead"
+    )]
+    pub fn join_frame(self, join: bool) -> Self {
+        self.handle_mode(if join {
+            SplitterHandleMode::Border
+        } else {
+            SplitterHandleMode::Gutter
+        })
     }
 
     /// Set handle symbol.
@@ -220,7 +259,7 @@ impl crate::layout::hash::LayoutHash for Splitter {
         self.orientation.hash(hasher);
         self.min_size.hash(hasher);
         self.handle_size.hash(hasher);
-        self.join_frame.hash(hasher);
+        self.handle_mode.hash(hasher);
         self.handle_symbol.hash(hasher);
         self.weights.len().hash(hasher);
         for weight in &self.weights {

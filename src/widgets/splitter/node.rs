@@ -5,7 +5,7 @@ use crate::core::node::{NodeKind, WidgetNode};
 use crate::style::{Rect, Style};
 use crate::widgets::Orientation;
 
-use super::{Splitter, SplitterResizeEvent, sizes_to_weights};
+use super::{Splitter, SplitterHandleMode, SplitterResizeEvent, sizes_to_weights};
 
 #[derive(Clone)]
 pub struct SplitterNode {
@@ -15,7 +15,7 @@ pub struct SplitterNode {
     pub split_id: Option<Arc<str>>,
     pub on_resize: Option<Callback<SplitterResizeEvent>>,
     pub min_size: u16,
-    pub join_frame: bool,
+    pub handle_mode: SplitterHandleMode,
     pub handle_symbol: char,
     pub handle_style: Style,
     pub handle_hover_style: Style,
@@ -26,6 +26,11 @@ pub struct SplitterNode {
 }
 
 impl SplitterNode {
+    /// Whether handles ride the pane border seam instead of a reserved gutter.
+    pub(crate) fn rides_border(&self) -> bool {
+        matches!(self.handle_mode, SplitterHandleMode::Border)
+    }
+
     pub(crate) fn handle_at(&self, x: i16, y: i16) -> Option<usize> {
         self.handle_rects
             .iter()
@@ -62,7 +67,7 @@ impl From<Splitter> for SplitterNode {
             split_id: value.split_id.clone(),
             on_resize: value.on_resize.clone(),
             min_size: value.min_size,
-            join_frame: value.join_frame,
+            handle_mode: value.handle_mode,
             handle_symbol: value.handle_symbol,
             handle_style: value.handle_style,
             handle_hover_style: value.handle_hover_style,

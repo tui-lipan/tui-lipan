@@ -269,23 +269,40 @@ impl<C: Component> AppRunner<C> {
 
     /// Handle left-click on a Splitter handle.
     pub(crate) fn handle_splitter_click(&mut self, grab: SplitterGrab, x: u16, y: u16) -> bool {
-        if self.core.tree.is_valid(grab.node_id)
-            && let NodeKind::Splitter(node) = &mut self.core.tree.node_mut(grab.node_id).kind
-        {
+        if !self.core.tree.is_valid(grab.node_id) {
+            return false;
+        }
+        let (start_pos, start_sizes, orientation) = {
+            let NodeKind::Splitter(node) = &mut self.core.tree.node_mut(grab.node_id).kind else {
+                return false;
+            };
             let start_pos = match node.orientation {
                 crate::widgets::Orientation::Vertical => x as i16,
                 crate::widgets::Orientation::Horizontal => y as i16,
             };
             node.active_handle = Some(grab.handle);
-            self.drag.active = ActiveDrag::Splitter(crate::app::input::drag::SplitterDrag {
-                id: grab.node_id,
-                handle: grab.handle,
-                start_pos,
-                start_sizes: node.pane_sizes.clone(),
-            });
-            return true;
+            (start_pos, node.pane_sizes.clone(), node.orientation)
+        };
+        let secondary = crate::app::input::drag::find_junction_splitter(
+            &self.core.tree,
+            grab.node_id,
+            orientation,
+            x,
+            y,
+        );
+        if let Some(sec) = &secondary
+            && let NodeKind::Splitter(node) = &mut self.core.tree.node_mut(sec.id).kind
+        {
+            node.active_handle = Some(sec.handle);
         }
-        false
+        self.drag.active = ActiveDrag::Splitter(crate::app::input::drag::SplitterDrag {
+            id: grab.node_id,
+            handle: grab.handle,
+            start_pos,
+            start_sizes,
+            secondary,
+        });
+        true
     }
 
     /// Handle left-click on a List item.
@@ -1301,30 +1318,24 @@ impl<C: Component> AppRunner<C> {
                 Some(true)
             }
             ActiveDrag::Splitter(drag) => {
-                let id = drag.id;
-                let resize = self
-                    .core
-                    .tree
-                    .is_valid(id)
-                    .then(|| {
-                        let node = self.core.tree.node(id);
-                        let NodeKind::Splitter(node) = &node.kind else {
-                            return None;
-                        };
-                        Some((
-                            node.on_resize.clone(),
-                            node.split_id.clone(),
-                            node.weights.clone(),
-                        ))
-                    })
-                    .flatten();
-                self.drag.clear();
-                if self.core.tree.is_valid(id)
-                    && let NodeKind::Splitter(node) = &mut self.core.tree.node_mut(id).kind
-                {
-                    node.active_handle = None;
+                let mut ids = vec![drag.id];
+                if let Some(sec) = &drag.secondary {
+                    ids.push(sec.id);
                 }
-                if let Some((Some(cb), split_id, weights)) = resize {
+                self.drag.clear();
+                let mut resizes = Vec::new();
+                for id in ids {
+                    if !self.core.tree.is_valid(id) {
+                        continue;
+                    }
+                    if let NodeKind::Splitter(node) = &mut self.core.tree.node_mut(id).kind {
+                        node.active_handle = None;
+                        if let Some(cb) = node.on_resize.clone() {
+                            resizes.push((cb, node.split_id.clone(), node.weights.clone()));
+                        }
+                    }
+                }
+                for (cb, split_id, weights) in resizes {
                     cb.emit(crate::widgets::SplitterResizeEvent { split_id, weights });
                 }
                 Some(true)

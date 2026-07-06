@@ -2124,12 +2124,93 @@ fn active_splitter_drag_requests_layout() {
         handle: 0,
         start_pos: 0,
         start_sizes: vec![10, 10],
+        secondary: None,
     });
 
     assert_eq!(
         effective_active_drag_dirty_level(&drag),
         Some(DirtyLevel::LayoutOnly)
     );
+}
+
+#[test]
+fn corner_click_finds_perpendicular_junction_splitter() {
+    use crate::widgets::{Orientation, Spacer, Splitter};
+
+    let inner = Splitter::horizontal()
+        .weights(vec![0.5, 0.5])
+        .child(Spacer::new())
+        .child(Spacer::new());
+    let root: crate::core::element::Element = Splitter::vertical()
+        .weights(vec![0.5, 0.5])
+        .child(Spacer::new())
+        .child(inner)
+        .into();
+
+    let mut tree = NodeTree::new();
+    LayoutEngine::reconcile_with_focus(
+        &mut tree,
+        &root,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 41,
+            h: 21,
+        },
+        None,
+    );
+
+    let mut vertical = None;
+    let mut horizontal = None;
+    for node in tree.iter() {
+        if let crate::core::node::NodeKind::Splitter(s) = &node.kind {
+            let entry = Some((node.id, s.handle_rects[0]));
+            match s.orientation {
+                Orientation::Vertical => vertical = entry,
+                Orientation::Horizontal => horizontal = entry,
+            }
+        }
+    }
+    let (vertical_id, v_handle) = vertical.expect("outer vertical splitter");
+    let (horizontal_id, h_handle) = horizontal.expect("inner horizontal splitter");
+
+    // Junction: the vertical handle column cell on the horizontal handle row.
+    let jx = v_handle.x as u16;
+    let jy = h_handle.y as u16;
+
+    let target = crate::app::input::drag::find_junction_splitter(
+        &tree,
+        vertical_id,
+        Orientation::Vertical,
+        jx,
+        jy,
+    )
+    .expect("junction click grabs the perpendicular splitter");
+    assert_eq!(target.id, horizontal_id);
+
+    // Same vertical handle far from the junction stays single-axis.
+    assert!(
+        crate::app::input::drag::find_junction_splitter(
+            &tree,
+            vertical_id,
+            Orientation::Vertical,
+            jx,
+            0,
+        )
+        .is_none()
+    );
+
+    // Symmetric: grabbing the horizontal handle beside the junction finds the
+    // vertical splitter.
+    let target = crate::app::input::drag::find_junction_splitter(
+        &tree,
+        horizontal_id,
+        Orientation::Horizontal,
+        jx + 1,
+        jy,
+    )
+    .expect("junction click from the horizontal handle finds the vertical one");
+    assert_eq!(target.id, vertical_id);
 }
 
 #[test]

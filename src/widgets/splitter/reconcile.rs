@@ -89,7 +89,7 @@ pub(crate) fn reconcile_splitter(
         split_id: splitter.split_id.clone(),
         on_resize: splitter.on_resize.clone(),
         min_size: splitter.min_size,
-        join_frame: splitter.join_frame,
+        handle_mode: splitter.handle_mode,
         handle_symbol: splitter.handle_symbol,
         handle_style: splitter.handle_style,
         handle_hover_style: splitter.handle_hover_style,

@@ -1250,7 +1250,7 @@ mod tests {
     use crate::overlay::{DismissPolicy, OverlayLayer, PointerCapture};
     use crate::style::{Color, Style};
     use crate::widgets::internal::SplitterNode;
-    use crate::widgets::{Button, MouseRegion, Splitter};
+    use crate::widgets::{Button, MouseRegion, Splitter, SplitterHandleMode};
 
     fn overlay_root(id: NodeId, order: u64, captures_pointer: PointerCapture) -> OverlayRoot {
         OverlayRoot {
@@ -1387,7 +1387,7 @@ mod tests {
     #[test]
     fn join_frame_splitter_prefers_handle_overlapping_pane_rect() {
         let splitter_el = Splitter::vertical()
-            .join_frame(true)
+            .handle_mode(SplitterHandleMode::Border)
             .weights(vec![0.5, 0.5])
             .child(Button::new("left"))
             .child(Button::new("right"));
