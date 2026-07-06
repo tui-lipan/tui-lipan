@@ -45,6 +45,7 @@ pub mod style;
 
 mod test_backend;
 mod text;
+pub mod text_motion;
 pub mod utils;
 pub mod validation;
 mod widgets;

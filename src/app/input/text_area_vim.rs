@@ -416,12 +416,18 @@ pub(crate) fn line_bounds_at(text: &str, cursor: usize) -> LineBounds {
     }
 }
 
-pub(crate) fn line_start_at(text: &str, cursor: usize) -> usize {
+/// Byte offset of the start of the line containing `cursor`.
+///
+/// Re-exported publicly as [`crate::text_motion::line_start_at`].
+pub fn line_start_at(text: &str, cursor: usize) -> usize {
     let cursor = clamp_to_char_boundary(text, cursor);
     text[..cursor].rfind('\n').map_or(0, |idx| idx + 1)
 }
 
-pub(crate) fn line_end_at(text: &str, cursor: usize) -> usize {
+/// Byte offset one past the end of the line containing `cursor` (exclusive of the newline).
+///
+/// Re-exported publicly as [`crate::text_motion::line_end_at`].
+pub fn line_end_at(text: &str, cursor: usize) -> usize {
     let cursor = clamp_to_char_boundary(text, cursor);
     let start = line_start_at(text, cursor);
     text[start..]
@@ -443,7 +449,11 @@ pub(crate) fn line_index_at(text: &str, cursor: usize) -> usize {
     text[..start].chars().filter(|&ch| ch == '\n').count()
 }
 
-pub(crate) fn first_nonblank_in_line(text: &str, line_start: usize, line_end: usize) -> usize {
+/// Byte offset of the first non-blank character in `text[line_start..line_end]`, or `line_end`
+/// if the range is entirely spaces/tabs.
+///
+/// Re-exported publicly as [`crate::text_motion::first_nonblank_in_line`].
+pub fn first_nonblank_in_line(text: &str, line_start: usize, line_end: usize) -> usize {
     let start = clamp_to_char_boundary(text, line_start.min(line_end));
     let end = clamp_to_char_boundary(text, line_end.min(text.len()));
     text[start..end]
@@ -481,7 +491,10 @@ pub(crate) fn line_start_by_one_based_count(text: &str, one_based_line: usize) -
     line_start_by_index(text, target - 1)
 }
 
-pub(crate) fn vim_word_forward_start(text: &str, cursor: usize) -> usize {
+/// Move forward to the start of the next vim "word" (`w`).
+///
+/// Re-exported publicly as [`crate::text_motion::word_forward_start`].
+pub fn vim_word_forward_start(text: &str, cursor: usize) -> usize {
     let mut idx = clamp_to_char_boundary(text, cursor);
     if idx >= text.len() {
         return text.len();
@@ -495,7 +508,10 @@ pub(crate) fn vim_word_forward_start(text: &str, cursor: usize) -> usize {
     skip_whitespace_forward(text, idx)
 }
 
-pub(crate) fn vim_word_backward_start(text: &str, cursor: usize) -> usize {
+/// Move backward to the start of the previous vim "word" (`b`).
+///
+/// Re-exported publicly as [`crate::text_motion::word_backward_start`].
+pub fn vim_word_backward_start(text: &str, cursor: usize) -> usize {
     let mut idx = clamp_to_char_boundary(text, cursor);
     if idx == 0 {
         return 0;
@@ -520,7 +536,10 @@ pub(crate) fn vim_word_backward_start(text: &str, cursor: usize) -> usize {
     idx
 }
 
-pub(crate) fn vim_word_end(text: &str, cursor: usize) -> usize {
+/// Move to the end of the current or next vim "word" (`e`).
+///
+/// Re-exported publicly as [`crate::text_motion::word_end`].
+pub fn vim_word_end(text: &str, cursor: usize) -> usize {
     let mut idx = clamp_to_char_boundary(text, cursor);
     if idx >= text.len() {
         return text.len();
@@ -536,7 +555,11 @@ pub(crate) fn vim_word_end(text: &str, cursor: usize) -> usize {
     skip_run_forward(text, idx, class)
 }
 
-pub(crate) fn vim_big_word_forward_start(text: &str, cursor: usize) -> usize {
+/// Move forward to the start of the next vim WORD (`W`; whitespace-delimited, punctuation
+/// included in the run).
+///
+/// Re-exported publicly as [`crate::text_motion::big_word_forward_start`].
+pub fn vim_big_word_forward_start(text: &str, cursor: usize) -> usize {
     let mut idx = clamp_to_char_boundary(text, cursor);
     if idx >= text.len() {
         return text.len();
@@ -549,7 +572,10 @@ pub(crate) fn vim_big_word_forward_start(text: &str, cursor: usize) -> usize {
     skip_whitespace_forward(text, idx)
 }
 
-pub(crate) fn vim_big_word_backward_start(text: &str, cursor: usize) -> usize {
+/// Move backward to the start of the previous vim WORD (`B`).
+///
+/// Re-exported publicly as [`crate::text_motion::big_word_backward_start`].
+pub fn vim_big_word_backward_start(text: &str, cursor: usize) -> usize {
     let mut idx = clamp_to_char_boundary(text, cursor);
     if idx == 0 {
         return 0;
@@ -577,7 +603,10 @@ pub(crate) fn vim_big_word_backward_start(text: &str, cursor: usize) -> usize {
     idx
 }
 
-pub(crate) fn vim_big_word_end(text: &str, cursor: usize) -> usize {
+/// Move to the end of the current or next vim WORD (`E`).
+///
+/// Re-exported publicly as [`crate::text_motion::big_word_end`].
+pub fn vim_big_word_end(text: &str, cursor: usize) -> usize {
     let mut idx = clamp_to_char_boundary(text, cursor);
     if idx >= text.len() {
         return text.len();

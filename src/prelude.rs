@@ -96,6 +96,10 @@ pub use crate::text::edit::{TextEditEvent, TextEditKind};
 pub use crate::text::editor::TextEditor;
 pub use crate::text::input::TextInput;
 pub use crate::text::line_index::{LineIndex, TextEncoding, TextPosition, TextRange};
+pub use crate::text_motion::{
+    big_word_backward_start, big_word_end, big_word_forward_start, first_nonblank_in_line,
+    line_end_at, line_start_at, word_backward_start, word_end, word_forward_start,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Keybindings
