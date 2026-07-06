@@ -154,6 +154,7 @@ pub(crate) fn find_junction_splitter(
     use crate::core::node::NodeKind;
 
     let (xi, yi) = (x as i16, y as i16);
+    let (xi32, yi32) = (i32::from(xi), i32::from(yi));
     for node in tree.iter() {
         if node.id == primary {
             continue;
@@ -164,11 +165,15 @@ pub(crate) fn find_junction_splitter(
         if splitter.orientation == primary_orientation {
             continue;
         }
+        // `Rect::x`/`y` (i16) and `w`/`h` (u16) both fit comfortably in i32, so this bounds
+        // math can never overflow, unlike a `w as i16`/`h as i16` cast which can wrap for
+        // widths/heights above `i16::MAX`. Mirrors `Rect::contains`'s i32 approach.
         let Some(handle) = splitter.handle_rects.iter().position(|rect| {
-            xi >= rect.x.saturating_sub(1)
-                && xi <= rect.x.saturating_add(rect.w as i16)
-                && yi >= rect.y.saturating_sub(1)
-                && yi <= rect.y.saturating_add(rect.h as i16)
+            let x_lo = i32::from(rect.x) - 1;
+            let x_hi = i32::from(rect.x) + i32::from(rect.w);
+            let y_lo = i32::from(rect.y) - 1;
+            let y_hi = i32::from(rect.y) + i32::from(rect.h);
+            xi32 >= x_lo && xi32 <= x_hi && yi32 >= y_lo && yi32 <= y_hi
         }) else {
             continue;
         };
