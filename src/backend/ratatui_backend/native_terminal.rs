@@ -201,7 +201,7 @@ impl TerminalGuard {
         } else {
             let height = match surface_mode {
                 SurfaceMode::InlineEphemeral { height }
-                | SurfaceMode::InlineTranscript { height, .. } => height,
+                | SurfaceMode::InlineTranscript { height, .. } => height.initial_rows(),
                 SurfaceMode::Fullscreen => 1,
             };
             match create_inline_terminal(height) {
@@ -249,18 +249,20 @@ pub(crate) fn restore_terminal_on_panic(surface_mode: SurfaceMode) {
 
 #[cfg(test)]
 pub(crate) fn assert_inline_surface_internal_wrap_policy_is_opaque() {
-    use crate::app::context::{InlineStartupPolicy, SurfaceMode};
+    use crate::app::context::{InlineHeight, InlineStartupPolicy, SurfaceMode};
 
     let fullscreen = surface_terminal_policy(SurfaceMode::Fullscreen);
     assert!(fullscreen.uses_alternate_screen);
     assert!(!fullscreen.disable_auto_wrap);
 
-    let ephemeral = surface_terminal_policy(SurfaceMode::InlineEphemeral { height: 3 });
+    let ephemeral = surface_terminal_policy(SurfaceMode::InlineEphemeral {
+        height: InlineHeight::Fixed(3),
+    });
     assert!(!ephemeral.uses_alternate_screen);
     assert!(ephemeral.disable_auto_wrap);
 
     let transcript = surface_terminal_policy(SurfaceMode::InlineTranscript {
-        height: 3,
+        height: InlineHeight::Fixed(3),
         startup: InlineStartupPolicy::PreserveHost,
     });
     assert!(!transcript.uses_alternate_screen);

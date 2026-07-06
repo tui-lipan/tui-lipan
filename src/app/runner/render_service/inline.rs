@@ -275,6 +275,76 @@ impl<C: Component> AppRunner<C> {
         Ok(())
     }
 
+    /// Measure the live element's natural height for `InlineHeight::Auto` and
+    /// resize the inline viewport to match. Returns the new content bounds
+    /// when they differ from `bounds`, so the caller can re-reconcile at the
+    /// final size.
+    pub(super) fn sync_inline_auto_height(
+        &mut self,
+        terminal: &mut crate::backend::ratatui_backend::Terminal,
+        bounds: Rect,
+    ) -> Result<Option<Rect>> {
+        let Some(max_rows) = self.surface.auto_inline_height() else {
+            return Ok(None);
+        };
+        if self.surface.is_transcript() && self.surface.inline.transcript_expanded {
+            // The expanded-transcript flow sizes the viewport from the full
+            // replay document instead (see `render_expanded_transcript`).
+            return Ok(None);
+        }
+        let Some(element) = self.core.cached_expanded_element.as_ref() else {
+            return Ok(None);
+        };
+
+        let natural = min_size_constrained(element, Some(bounds.w), None).1.max(1);
+        self.surface.inline.auto_height_resolved =
+            max_rows.map_or(natural, |cap| natural.min(cap));
+
+        let size = terminal.size()?;
+        let new_bounds = self.content_bounds(size.width, size.height);
+        crate::debug::internal_log!(
+            "[auto-height] natural={} size={}x{} frame={:?} bounds={:?} new_bounds={:?}",
+            natural,
+            size.width,
+            size.height,
+            terminal.get_frame().area(),
+            bounds,
+            new_bounds,
+        );
+        if terminal.get_frame().area().height != new_bounds.h {
+            self.resize_inline_viewport(terminal, new_bounds.h)?;
+        }
+        Ok((new_bounds != bounds).then_some(new_bounds))
+    }
+
+    /// Recreate the inline terminal with a new viewport height, anchored at
+    /// the current viewport top. Growing near the bottom of the screen scrolls
+    /// host content up (via ratatui's `compute_inline_size`).
+    fn resize_inline_viewport(
+        &mut self,
+        terminal: &mut crate::backend::ratatui_backend::Terminal,
+        rows: u16,
+    ) -> Result<()> {
+        let viewport = terminal.get_frame().area();
+        // The recreated terminal anchors its viewport to the cursor row.
+        execute!(terminal.backend_mut(), MoveTo(0, viewport.y))?;
+        *terminal = crate::backend::ratatui_backend::create_inline_terminal(rows)?;
+        // The new terminal's back buffer is empty, so the next draw skips
+        // cells that are blank in the frame. Erase from the new viewport top
+        // to the end of the display (old viewport rows always sit at or below
+        // it) so stale content cannot show through those skipped cells.
+        terminal.clear()?;
+        // Seed last_terminal_size so the size-change guard in
+        // draw_current_tree does not treat the recreation as a host resize.
+        if let Ok(size) = terminal.size() {
+            self.surface.inline.last_terminal_size = (size.width, size.height);
+        }
+        self.last_frame_snapshot = None;
+        self.scroll_diff_snapshot = None;
+        self.last_scroll_frames.clear();
+        Ok(())
+    }
+
     pub(super) fn capture_inline_cursor_offset(
         &mut self,
         frame_area: ratatui::layout::Rect,

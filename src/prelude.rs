@@ -22,7 +22,8 @@ pub use crate::core::memo::Memo;
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use crate::app::{
-    App, ContrastPolicy, InlineStartupPolicy, ScreenBackground, SurfaceMode, TextAreaNewlineBinding,
+    App, ContrastPolicy, InlineHeight, InlineStartupPolicy, ScreenBackground, SurfaceMode,
+    TextAreaNewlineBinding,
 };
 
 #[cfg(not(target_arch = "wasm32"))]

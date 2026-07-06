@@ -14,8 +14,59 @@ pub(crate) enum ViewportMode {
     /// Take over the full terminal using the alternate screen.
     #[default]
     Fullscreen,
-    /// Render inline at the current cursor position with a fixed viewport height.
-    Inline { height: u16 },
+    /// Render inline at the current cursor position.
+    Inline { height: InlineHeight },
+}
+
+/// Height policy for inline viewports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InlineHeight {
+    /// A fixed number of rows, clamped to at least one row.
+    Fixed(u16),
+    /// Follow the content's measured height, re-sizing the viewport as the
+    /// view changes.
+    Auto {
+        /// Optional row cap. Regardless of the cap, the viewport never grows
+        /// past the host terminal height.
+        max: Option<u16>,
+    },
+}
+
+impl InlineHeight {
+    /// Content-sized height, capped only by the host terminal height.
+    pub const fn auto() -> Self {
+        Self::Auto { max: None }
+    }
+
+    /// Content-sized height, capped at `max` rows.
+    pub const fn auto_capped(max: u16) -> Self {
+        Self::Auto { max: Some(max) }
+    }
+
+    pub(crate) fn normalized(self) -> Self {
+        match self {
+            Self::Fixed(rows) => Self::Fixed(rows.max(1)),
+            Self::Auto { max } => Self::Auto {
+                max: max.map(|rows| rows.max(1)),
+            },
+        }
+    }
+
+    /// Rows to reserve for the viewport before the first frame is measured.
+    pub(crate) fn initial_rows(self) -> u16 {
+        match self {
+            Self::Fixed(rows) => rows.max(1),
+            // Auto starts minimal: the first render measures the content and
+            // grows the viewport before anything is painted.
+            Self::Auto { .. } => 1,
+        }
+    }
+}
+
+impl From<u16> for InlineHeight {
+    fn from(rows: u16) -> Self {
+        Self::Fixed(rows)
+    }
 }
 
 /// Startup behavior for transcript inline mode.
@@ -37,12 +88,12 @@ pub enum SurfaceMode {
     /// Inline viewport intended for ephemeral UI sessions.
     InlineEphemeral {
         /// Requested inline viewport height.
-        height: u16,
+        height: InlineHeight,
     },
     /// Inline viewport intended for transcript-friendly sessions.
     InlineTranscript {
         /// Requested inline viewport height.
-        height: u16,
+        height: InlineHeight,
         /// Startup behavior for the host terminal.
         startup: InlineStartupPolicy,
     },
@@ -57,10 +108,10 @@ impl SurfaceMode {
         match self {
             Self::Fullscreen => Self::Fullscreen,
             Self::InlineEphemeral { height } => Self::InlineEphemeral {
-                height: height.max(1),
+                height: height.normalized(),
             },
             Self::InlineTranscript { height, startup } => Self::InlineTranscript {
-                height: height.max(1),
+                height: height.normalized(),
                 startup,
             },
         }
@@ -304,26 +355,40 @@ impl App {
 
     /// Render the app inline for ephemeral (non-transcript) sessions.
     ///
-    /// Height is clamped to at least one row.
-    pub fn inline_ephemeral(self, height: u16) -> Self {
-        self.surface(SurfaceMode::InlineEphemeral { height })
+    /// Accepts a fixed row count (clamped to at least one row) or an
+    /// [`InlineHeight`] policy such as [`InlineHeight::auto()`], which sizes
+    /// the viewport to the content every frame.
+    pub fn inline_ephemeral(self, height: impl Into<InlineHeight>) -> Self {
+        self.surface(SurfaceMode::InlineEphemeral {
+            height: height.into(),
+        })
     }
 
     /// Render the app inline for transcript sessions.
     ///
-    /// Defaults to preserving host terminal content on startup.
-    pub fn inline_transcript(self, height: u16) -> Self {
+    /// Accepts a fixed row count or an [`InlineHeight`] policy such as
+    /// [`InlineHeight::auto()`]. Defaults to preserving host terminal content
+    /// on startup.
+    pub fn inline_transcript(self, height: impl Into<InlineHeight>) -> Self {
         self.surface(SurfaceMode::InlineTranscript {
-            height,
+            height: height.into(),
             startup: InlineStartupPolicy::PreserveHost,
         })
     }
 
     /// Render the app inline for transcript sessions with explicit startup behavior.
     ///
-    /// Height is clamped to at least one row.
-    pub fn inline_transcript_with_startup(self, height: u16, startup: InlineStartupPolicy) -> Self {
-        self.surface(SurfaceMode::InlineTranscript { height, startup })
+    /// Accepts a fixed row count (clamped to at least one row) or an
+    /// [`InlineHeight`] policy such as [`InlineHeight::auto()`].
+    pub fn inline_transcript_with_startup(
+        self,
+        height: impl Into<InlineHeight>,
+        startup: InlineStartupPolicy,
+    ) -> Self {
+        self.surface(SurfaceMode::InlineTranscript {
+            height: height.into(),
+            startup,
+        })
     }
 
     /// Configure mouse capture behavior.
