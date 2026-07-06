@@ -1,5 +1,5 @@
 use tui_lipan::prelude::*;
-use tui_lipan::{SurfaceMode, TestBackend};
+use tui_lipan::{InlineHeight, SurfaceMode, TestBackend};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ResizeStep {
@@ -69,12 +69,20 @@ pub(crate) fn expected_content_bounds(surface_mode: SurfaceMode, width: u16, hei
         | SurfaceMode::InlineTranscript {
             height: inline_height,
             ..
-        } => Rect {
-            x: 0,
-            y: 0,
-            w: width.saturating_sub(1).max(1),
-            h: inline_height.max(1).min(height).max(1),
-        },
+        } => {
+            let requested = match inline_height {
+                InlineHeight::Fixed(rows) => rows.max(1),
+                // Mirrors the runner: auto height reserves one row until the
+                // first frame has been measured.
+                InlineHeight::Auto { .. } => 1,
+            };
+            Rect {
+                x: 0,
+                y: 0,
+                w: width.saturating_sub(1).max(1),
+                h: requested.min(height).max(1),
+            }
+        }
     }
 }
 

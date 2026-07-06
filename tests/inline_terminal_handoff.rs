@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 
 use crossterm::terminal::is_raw_mode_enabled;
 use tui_lipan::terminal_handoff::{resume_after_external_process, suspend_for_external_process};
-use tui_lipan::{App, InlineStartupPolicy, SurfaceMode};
+use tui_lipan::{App, InlineHeight, InlineStartupPolicy, SurfaceMode};
 
 fn mount_smoke_app(mode: SurfaceMode) {
     struct Smoke;
@@ -36,19 +36,28 @@ fn suspend_resume_restores_surface_state() {
     let _resume_sig: fn(SurfaceMode, bool) -> std::io::Result<()> = resume_after_external_process;
 
     if !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
-        mount_smoke_app(SurfaceMode::InlineEphemeral { height: 4 });
+        mount_smoke_app(SurfaceMode::InlineEphemeral {
+            height: InlineHeight::Fixed(4),
+        });
         mount_smoke_app(SurfaceMode::Fullscreen);
         return;
     }
 
     let baseline_raw = is_raw_mode_enabled().unwrap_or(false);
 
-    suspend_for_external_process(SurfaceMode::InlineEphemeral { height: 4 })
-        .expect("suspend inline surface");
+    suspend_for_external_process(SurfaceMode::InlineEphemeral {
+        height: InlineHeight::Fixed(4),
+    })
+    .expect("suspend inline surface");
     assert!(!is_raw_mode_enabled().unwrap_or(false));
 
-    resume_after_external_process(SurfaceMode::InlineEphemeral { height: 4 }, true)
-        .expect("resume inline surface");
+    resume_after_external_process(
+        SurfaceMode::InlineEphemeral {
+            height: InlineHeight::Fixed(4),
+        },
+        true,
+    )
+    .expect("resume inline surface");
     assert!(is_raw_mode_enabled().unwrap_or(false));
 
     suspend_for_external_process(SurfaceMode::Fullscreen).expect("suspend fullscreen surface");
@@ -71,19 +80,19 @@ fn transcript_startup_policy_defaults_off() {
     );
 
     let transcript_mode = SurfaceMode::InlineTranscript {
-        height: 6,
+        height: InlineHeight::Fixed(6),
         startup: InlineStartupPolicy::default(),
     };
     assert_eq!(
         transcript_mode,
         SurfaceMode::InlineTranscript {
-            height: 6,
+            height: InlineHeight::Fixed(6),
             startup: InlineStartupPolicy::PreserveHost,
         }
     );
 
     mount_smoke_app(SurfaceMode::InlineTranscript {
-        height: 6,
+        height: InlineHeight::Fixed(6),
         startup: InlineStartupPolicy::PreserveHost,
     });
 }

@@ -1,6 +1,6 @@
 # Inline Viewport Mode
 
-tui-lipan supports rendering in a fixed-height inline viewport instead of taking over the terminal with an alternate screen. The terminal history remains intact because inline mode does not enter the alternate screen.
+tui-lipan supports rendering in an inline viewport instead of taking over the terminal with an alternate screen. The terminal history remains intact because inline mode does not enter the alternate screen.
 
 ## Surface Modes
 
@@ -11,6 +11,32 @@ The app surface mode determines how the viewport occupies terminal space.
 | Fullscreen | `.fullscreen()` (default) | Takes over the full terminal using the alternate screen. |
 | Ephemeral | `.inline_ephemeral(height)` | Inline viewport intended for short-lived sessions (e.g., a list picker). |
 | Transcript | `.inline_transcript(height)` | Inline viewport intended for transcript-friendly sessions (e.g., a chat CLI). |
+
+## Viewport Height
+
+Every inline builder accepts either a fixed row count or an `InlineHeight` policy:
+
+| Height | Behavior |
+|--------|----------|
+| `8` / `InlineHeight::Fixed(8)` | Fixed viewport of 8 rows (clamped to at least 1). |
+| `InlineHeight::auto()` | The viewport follows the content's measured height every frame, capped only by the terminal height. |
+| `InlineHeight::auto_capped(12)` | Content-sized, but never taller than 12 rows. |
+
+Auto height removes the guesswork of picking a row count: the framework measures the view at the current terminal width after every layout change and grows or shrinks the viewport to match, so widgets are never clipped by a too-small fixed height.
+
+```rust
+App::new()
+    .inline_ephemeral(InlineHeight::auto())
+    .mount(MyPicker)
+    .run()
+```
+
+Notes on auto height:
+
+- The measured height is the content's natural (minimum) height at the current width; flexible fillers collapse to their minimum.
+- If the content is taller than the terminal (or the cap), the layout keeps its natural height and the viewport shows its top rows, cleanly clipping the bottom. The layout is deliberately not squeezed into the smaller viewport, which would trigger the stack overflow policy (wrapped text truncates, children hide from the top). Apps that want scrolling instead of clipping should give a `ScrollView` an explicit height.
+- Growing the viewport near the bottom of the screen scrolls host output up, exactly like printing lines would.
+- On host terminal resize the visible frame stays coherent, but rows the emulator moved into scrollback during its own reflow can remain there as stale copies. This is inherent to inline TUIs (fzf and chat CLIs show the same residue); no app can edit the emulator's scrollback without erasing all of it.
 
 ## Basic Setup
 
@@ -114,6 +140,7 @@ The last terminal column is reserved only for ephemeral inline mode, where autow
 ## Examples
 
 - `examples/inline.rs` - Basic inline ephemeral session
+- `examples/inline_auto_height.rs` - Content-sized viewport with `InlineHeight::auto()`
 - `examples/native_scroll_chat.rs` - Transcript-style native scrollback chat
 - `examples/inline_list_picker.rs` - Inline lists, filtering, and activation
 - `examples/inline_choices.rs` - Choice selection in inline mode

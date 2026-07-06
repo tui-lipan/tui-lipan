@@ -4,9 +4,9 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tui_lipan::{
-    App, DraggableTabBarOverflow, InlineStartupPolicy, ScrollTarget, ScrollWheelBehavior,
-    ScrollWheelConfig, SurfaceMode, TextAreaLineNumberMode, TextAreaSentinelClickEvent,
-    TextAreaSentinelClickKind,
+    App, DraggableTabBarOverflow, InlineHeight, InlineStartupPolicy, ScrollTarget,
+    ScrollWheelBehavior, ScrollWheelConfig, SurfaceMode, TextAreaLineNumberMode,
+    TextAreaSentinelClickEvent, TextAreaSentinelClickKind,
 };
 
 #[test]
@@ -38,16 +38,39 @@ fn root_exports_include_scroll_wheel_types() {
 #[test]
 fn named_inline_modes_are_constructible() {
     let _ = SurfaceMode::Fullscreen;
-    let _ = SurfaceMode::InlineEphemeral { height: 8 };
+    let _ = SurfaceMode::InlineEphemeral {
+        height: InlineHeight::Fixed(8),
+    };
     let _ = SurfaceMode::InlineTranscript {
-        height: 12,
+        height: InlineHeight::Fixed(12),
         startup: InlineStartupPolicy::PreserveHost,
     };
 
-    let _ = App::new().surface(SurfaceMode::InlineEphemeral { height: 4 });
+    let _ = App::new().surface(SurfaceMode::InlineEphemeral {
+        height: InlineHeight::Fixed(4),
+    });
     let _ = App::new().inline_ephemeral(4);
     let _ = App::new().inline_transcript(4);
     let _ = App::new().inline_transcript_with_startup(4, InlineStartupPolicy::ClearHost);
+}
+
+#[test]
+fn inline_auto_height_modes_are_constructible() {
+    let _ = SurfaceMode::InlineEphemeral {
+        height: InlineHeight::auto(),
+    };
+    let _ = SurfaceMode::InlineTranscript {
+        height: InlineHeight::auto_capped(12),
+        startup: InlineStartupPolicy::PreserveHost,
+    };
+
+    // Plain row counts keep working through `Into<InlineHeight>`.
+    assert_eq!(InlineHeight::from(8), InlineHeight::Fixed(8));
+
+    let _ = App::new().inline_ephemeral(InlineHeight::auto());
+    let _ = App::new().inline_transcript(InlineHeight::auto_capped(10));
+    let _ = App::new()
+        .inline_transcript_with_startup(InlineHeight::auto(), InlineStartupPolicy::ClearHost);
 }
 
 /// Removes a temporary probe crate directory (and its own isolated `target/`, which a

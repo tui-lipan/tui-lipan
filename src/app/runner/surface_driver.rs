@@ -1,4 +1,4 @@
-use crate::app::context::{SurfaceMode, ViewportMode};
+use crate::app::context::{InlineHeight, SurfaceMode, ViewportMode};
 use crate::app::input::convert::translate_mouse_to_viewport;
 use crate::core::event::MouseEvent;
 use crate::style::Rect;
@@ -13,6 +13,9 @@ pub(crate) struct InlineSurfaceState {
     pub(crate) transcript_expanded: bool,
     pub(crate) transcript_reset_pending: bool,
     pub(crate) expanded_live_viewport_height: u16,
+    /// Last content height measured for `InlineHeight::Auto`, in rows.
+    /// Zero until the first frame has been measured.
+    pub(crate) auto_height_resolved: u16,
 }
 
 pub(crate) struct SurfaceDriver {
@@ -41,6 +44,34 @@ impl SurfaceDriver {
         matches!(self.mode, SurfaceMode::InlineTranscript { .. })
     }
 
+    /// Rows the layout should be reconciled at. For `InlineHeight::Auto` this
+    /// is the content's natural height, deliberately NOT clamped to the
+    /// terminal: reconciling an overflowing root at a smaller height would
+    /// trigger the stack deficit policy (shrink wrapped text, drop children
+    /// from the top). Instead the layout keeps its natural size and the
+    /// viewport shows its top rows, clipping the bottom at draw time.
+    fn layout_rows(&self, inline_height: InlineHeight, screen_rows: u16) -> u16 {
+        match inline_height {
+            InlineHeight::Fixed(rows) => rows.min(screen_rows).max(1),
+            InlineHeight::Auto { .. } => self.inline.auto_height_resolved.max(1),
+        }
+    }
+
+    /// The auto-height row cap when the surface uses `InlineHeight::Auto`.
+    /// Returns `None` for fullscreen and fixed-height inline surfaces.
+    pub(crate) fn auto_inline_height(&self) -> Option<Option<u16>> {
+        match self.mode {
+            SurfaceMode::InlineEphemeral {
+                height: InlineHeight::Auto { max },
+            }
+            | SurfaceMode::InlineTranscript {
+                height: InlineHeight::Auto { max },
+                ..
+            } => Some(max),
+            _ => None,
+        }
+    }
+
     pub(crate) fn content_bounds(&self, width: u16, height: u16) -> Rect {
         match self.mode {
             SurfaceMode::Fullscreen => Rect {
@@ -57,7 +88,7 @@ impl SurfaceDriver {
                     let layout_h = if self.inline.expanded_live_viewport_height > 0 {
                         self.inline.expanded_live_viewport_height.min(height).max(1)
                     } else {
-                        inline_height.min(height).max(1)
+                        self.layout_rows(inline_height, height)
                     };
                     Rect {
                         x: 0,
@@ -70,7 +101,7 @@ impl SurfaceDriver {
                         x: 0,
                         y: 0,
                         w: width.saturating_sub(1).max(1),
-                        h: inline_height.min(height).max(1),
+                        h: self.layout_rows(inline_height, height),
                     }
                 }
             }
@@ -80,7 +111,7 @@ impl SurfaceDriver {
                 x: 0,
                 y: 0,
                 w: width.saturating_sub(1).max(1),
-                h: inline_height.min(height).max(1),
+                h: self.layout_rows(inline_height, height),
             },
         }
     }
@@ -106,13 +137,15 @@ impl SurfaceDriver {
 #[cfg(test)]
 mod tests {
     use super::SurfaceDriver;
-    use crate::app::context::{InlineStartupPolicy, SurfaceMode};
+    use crate::app::context::{InlineHeight, InlineStartupPolicy, SurfaceMode};
     use crate::core::event::{KeyMods, MouseEvent, MouseKind};
     use crate::style::Rect;
 
     #[test]
     fn inline_surface_state_single_owner() {
-        let driver = SurfaceDriver::new(SurfaceMode::InlineEphemeral { height: 3 });
+        let driver = SurfaceDriver::new(SurfaceMode::InlineEphemeral {
+            height: InlineHeight::Fixed(3),
+        });
         assert_eq!(driver.inline.inline_cursor_offset, 0);
         assert_eq!(driver.inline.last_terminal_size, (0, 0));
         assert!(!driver.inline.transcript_expanded);
@@ -126,7 +159,7 @@ mod tests {
     fn inline_surface_driver_routes_runner_state() {
         let fullscreen = SurfaceDriver::new(SurfaceMode::Fullscreen);
         let inline = SurfaceDriver::new(SurfaceMode::InlineTranscript {
-            height: 4,
+            height: InlineHeight::Fixed(4),
             startup: InlineStartupPolicy::PreserveHost,
         });
 
@@ -189,7 +222,7 @@ mod tests {
     #[test]
     fn inline_transcript_expanded_uses_live_viewport_height_not_screen() {
         let mut driver = SurfaceDriver::new(SurfaceMode::InlineTranscript {
-            height: 4,
+            height: InlineHeight::Fixed(4),
             startup: InlineStartupPolicy::PreserveHost,
         });
         driver.inline.transcript_expanded = true;
@@ -211,6 +244,95 @@ mod tests {
                 w: 79,
                 h: 14,
             }
+        );
+    }
+
+    #[test]
+    fn inline_auto_height_content_bounds_follow_resolved_rows() {
+        let mut driver = SurfaceDriver::new(SurfaceMode::InlineEphemeral {
+            height: InlineHeight::auto(),
+        });
+        assert_eq!(driver.auto_inline_height(), Some(None));
+
+        // Unresolved auto height reserves a single row.
+        assert_eq!(
+            driver.content_bounds(80, 24),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 79,
+                h: 1,
+            }
+        );
+
+        driver.inline.auto_height_resolved = 7;
+        assert_eq!(
+            driver.content_bounds(80, 24),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 79,
+                h: 7,
+            }
+        );
+
+        // Content taller than the terminal keeps its natural layout height;
+        // reconciling at a smaller height would trigger the stack deficit
+        // policy. Only the on-screen viewport (render service) is clamped.
+        driver.inline.auto_height_resolved = 40;
+        assert_eq!(
+            driver.content_bounds(80, 24),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 79,
+                h: 40,
+            }
+        );
+    }
+
+    #[test]
+    fn inline_auto_height_cap_does_not_shrink_layout_bounds() {
+        let mut driver = SurfaceDriver::new(SurfaceMode::InlineTranscript {
+            height: InlineHeight::auto_capped(6),
+            startup: InlineStartupPolicy::PreserveHost,
+        });
+        assert_eq!(driver.auto_inline_height(), Some(Some(6)));
+
+        // The cap limits the on-screen viewport, not the layout: content
+        // taller than the cap is laid out fully and top-clipped at draw time.
+        driver.inline.auto_height_resolved = 10;
+        assert_eq!(
+            driver.content_bounds(80, 24),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 79,
+                h: 10,
+            }
+        );
+
+        driver.inline.auto_height_resolved = 3;
+        assert_eq!(
+            driver.content_bounds(80, 24),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 79,
+                h: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn fixed_inline_height_reports_no_auto_mode() {
+        let driver = SurfaceDriver::new(SurfaceMode::InlineEphemeral {
+            height: InlineHeight::Fixed(5),
+        });
+        assert_eq!(driver.auto_inline_height(), None);
+        assert_eq!(
+            SurfaceDriver::new(SurfaceMode::Fullscreen).auto_inline_height(),
+            None
         );
     }
 }

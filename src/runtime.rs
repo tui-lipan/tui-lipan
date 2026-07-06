@@ -303,7 +303,7 @@ where
                 viewport,
                 theme,
                 surface_mode: SurfaceMode::InlineTranscript {
-                    height: 8,
+                    height: crate::app::context::InlineHeight::Fixed(8),
                     startup: crate::app::context::InlineStartupPolicy::PreserveHost,
                 },
                 mouse_capture,

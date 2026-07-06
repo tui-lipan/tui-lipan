@@ -8,7 +8,7 @@ use support::inline_surface_fixture::{
     expected_logical_anchor_after_height_change, replay_resize_fixture,
 };
 use tui_lipan::prelude::*;
-use tui_lipan::{InlineStartupPolicy, SurfaceMode, TestBackend};
+use tui_lipan::{InlineHeight, InlineStartupPolicy, SurfaceMode, TestBackend};
 
 struct ViewportProbe;
 
@@ -32,7 +32,7 @@ impl Component for ViewportProbe {
 #[test]
 fn resize_fixture_replays_width_and_height_changes() {
     let mode = SurfaceMode::InlineTranscript {
-        height: 5,
+        height: InlineHeight::Fixed(5),
         startup: InlineStartupPolicy::PreserveHost,
     };
     let mut backend = TestBackend::new(ViewportProbe);
@@ -75,7 +75,9 @@ fn tiny_terminal_fixture_reports_mode_specific_fallback() {
     );
 
     let ephemeral_bounds = expected_content_bounds(
-        SurfaceMode::InlineEphemeral { height: 6 },
+        SurfaceMode::InlineEphemeral {
+            height: InlineHeight::Fixed(6),
+        },
         tiny.width,
         tiny.height,
     );
@@ -91,7 +93,7 @@ fn tiny_terminal_fixture_reports_mode_specific_fallback() {
 
     let transcript_bounds = expected_content_bounds(
         SurfaceMode::InlineTranscript {
-            height: 9,
+            height: InlineHeight::Fixed(9),
             startup: InlineStartupPolicy::ClearHost,
         },
         tiny.width,
@@ -110,7 +112,9 @@ fn tiny_terminal_fixture_reports_mode_specific_fallback() {
 
 #[test]
 fn inline_ephemeral_rapid_shrink_keeps_surface_clean() {
-    let mode = SurfaceMode::InlineEphemeral { height: 4 };
+    let mode = SurfaceMode::InlineEphemeral {
+        height: InlineHeight::Fixed(4),
+    };
     let mut backend = TestBackend::new(ViewportProbe);
     let fixture = [
         ResizeStep::new(120, 24),
@@ -141,7 +145,9 @@ fn inline_ephemeral_rapid_shrink_keeps_surface_clean() {
 
 #[test]
 fn inline_ephemeral_height_shrink_preserves_logical_anchor() {
-    let mode = SurfaceMode::InlineEphemeral { height: 8 };
+    let mode = SurfaceMode::InlineEphemeral {
+        height: InlineHeight::Fixed(8),
+    };
     let mut backend = TestBackend::new(ViewportProbe);
     let fixture = [
         ResizeStep::new(80, 20),

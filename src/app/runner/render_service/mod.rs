@@ -481,6 +481,22 @@ impl<C: Component> AppRunner<C> {
         let reconcile_result = self.render_element_until_scroll_stable(bounds);
         self.pop_drag_layout_collapse_hint();
         reconcile_result?;
+
+        // Auto-height inline viewports follow the content: re-measure after
+        // reconcile and re-reconcile at the settled height. Capped in case a
+        // view keeps changing its natural height in response to the viewport.
+        let mut bounds = bounds;
+        for _ in 0..RENDER_STABILITY_MAX_PASSES {
+            let Some(new_bounds) = self.sync_inline_auto_height(terminal, bounds)? else {
+                break;
+            };
+            bounds = new_bounds;
+            self.push_drag_layout_collapse_hint();
+            let reconcile_result = self.render_element_until_scroll_stable(bounds);
+            self.pop_drag_layout_collapse_hint();
+            reconcile_result?;
+        }
+
         self.dirty_component_scopes.clear();
         self.dirty_scope_set.clear();
         #[cfg(feature = "devtools")]
@@ -588,6 +604,13 @@ impl<C: Component> AppRunner<C> {
         let needs_full_render = needs_full_render?;
         self.restore_active_text_area_drag_snapshot(text_area_drag_snapshot);
         if needs_full_render {
+            return self.render(terminal);
+        }
+
+        // A layout-only frame can still change the content's natural height
+        // (e.g. a list gaining rows). When the auto inline height moves, fall
+        // back to a full render so the tree is reconciled at the new bounds.
+        if self.sync_inline_auto_height(terminal, bounds)?.is_some() {
             return self.render(terminal);
         }
         #[cfg(feature = "devtools")]

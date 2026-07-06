@@ -30,6 +30,24 @@ While the crate is on `0.x.y`:
   example a terminal emulator's scrollback copy mode) can reuse the same
   `w`/`b`/`e`/`W`/`B`/`E`/`0`/`^`/`$` motions instead of reimplementing them.
   See `docs/text-editing.md`.
+- `InlineHeight` height policy for inline viewports: `InlineHeight::Fixed(rows)`
+  keeps the classic fixed height, `InlineHeight::auto()` sizes the viewport to
+  the content's measured height every frame (growing and shrinking as the view
+  changes), and `InlineHeight::auto_capped(rows)` adds an upper bound. The
+  inline builders (`App::inline_ephemeral`, `App::inline_transcript`,
+  `App::inline_transcript_with_startup`) now take `impl Into<InlineHeight>`,
+  so existing calls with a plain row count keep compiling. When auto-sized
+  content is taller than the terminal (or the cap), the layout keeps its
+  natural height and the viewport shows its top rows, clipping the bottom.
+  See `docs/inline-mode.md` and `examples/inline_auto_height.rs`.
+
+### Changed
+
+- **(breaking)** The `height` field of `SurfaceMode::InlineEphemeral` and
+  `SurfaceMode::InlineTranscript` is now `InlineHeight` instead of `u16`.
+  Code constructing these variants directly must wrap the row count
+  (`height: InlineHeight::Fixed(8)` or `height: 8.into()`); the `App` builder
+  methods are unaffected thanks to `From<u16> for InlineHeight`.
 
 ### Deprecated
 
