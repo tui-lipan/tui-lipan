@@ -102,7 +102,7 @@ where
         Self::new_with_app(App::new(), component, props)
     }
 
-    /// Mount a root component using the same app configuration as [`AppRunner`].
+    /// Mount a root component using the same app configuration as [`AppRunner`](crate::AppRunner).
     pub fn new_with_app(app: App, component: C, props: C::Properties) -> Self {
         Self::new_with_app_inner(app, component, props, false)
     }
