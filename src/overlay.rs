@@ -89,7 +89,13 @@ impl DismissPolicy {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum OverlayPlacement {
-    Center,
+    Center {
+        /// When the content carries a `max_height` constraint, reserve that full height
+        /// when centering vertically so the content's top edge stays fixed as it shrinks
+        /// below the cap (e.g. a filtering command palette). Without this, a shrinking
+        /// modal re-centers by its actual height and its top drifts toward the middle.
+        reserve_max_height: bool,
+    },
     Stacked {
         placement: ToastPlacement,
         gap: u16,

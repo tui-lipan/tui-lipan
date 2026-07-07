@@ -13,6 +13,15 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Modal::max_height(Length)` caps a modal's height, and
+  `Modal::reserve_max_height(bool)` keeps a `RootPortal` modal's top edge fixed
+  as its content shrinks below that cap (the overlay is centered as if it filled
+  `max_height`, then the shorter content is top-aligned within that reserved
+  band) instead of re-centering by its actual height. Together with
+  `height(Length::Auto)` this lets a content-hugging modal — e.g. a
+  `SearchPalette` filtered as the user types — shrink to its visible rows
+  without drifting toward the vertical center. See `docs/widgets/overlays.md`.
+
 - Layered keyboard dispatch: `FrameworkAction`, `FrameworkKeymap`, `UserKeymapPolicy`,
   `KeyDispatchPolicy`, `TerminalKeyPolicy`, `CommandConflictPolicy`, and
   `ChordMismatchPolicy` for explicit app-side input routing control.
