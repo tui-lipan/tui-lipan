@@ -539,6 +539,8 @@ Source: `src/widgets/modal.rs:33` (`Modal`).
 | `scope` | `OverlayScope::RootPortal` |
 | `width` | `Length::Px(60)` |
 | `height` | `Length::Auto` |
+| `max_height` | `None` |
+| `reserve_max_height` | `false` |
 | `backdrop_style` | `Style::default()` |
 | `frame_style` | `Style::default()` |
 | `border` | `true` |

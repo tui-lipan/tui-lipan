@@ -18,6 +18,8 @@ pub struct Modal {
     scope: OverlayScope,
     width: Length,
     height: Length,
+    max_height: Option<Length>,
+    reserve_max_height: bool,
     backdrop_style: Style,
     frame_style: Style,
     border: bool,
@@ -37,6 +39,8 @@ impl Modal {
             scope: OverlayScope::RootPortal,
             width: Length::Px(60),
             height: Length::Auto,
+            max_height: None,
+            reserve_max_height: false,
             backdrop_style: Style::default(),
             frame_style: Style::default(),
             border: true,
@@ -68,6 +72,22 @@ impl Modal {
     /// Set height.
     pub fn height(mut self, height: Length) -> Self {
         self.height = height;
+        self
+    }
+
+    /// Cap the modal height. Pair with `height(Length::Auto)` so the modal hugs its content
+    /// but never exceeds this cap; the inner content scrolls when it overflows.
+    pub fn max_height(mut self, max_height: Length) -> Self {
+        self.max_height = Some(max_height);
+        self
+    }
+
+    /// Reserve the full [`max_height`](Self::max_height) when centering a `RootPortal` modal
+    /// vertically, so its top edge stays fixed as its content shrinks below the cap instead of
+    /// the whole modal drifting toward the vertical center. Has no effect without a `max_height`
+    /// or in `OverlayScope::Local`.
+    pub fn reserve_max_height(mut self, reserve: bool) -> Self {
+        self.reserve_max_height = reserve;
         self
     }
 
@@ -201,15 +221,15 @@ impl From<Modal> for Element {
                     .width(local_frame_width)
                     .height(local_frame_height);
 
-                ZStack::new()
-                    .child(backdrop)
-                    .child(
-                        Center::new()
-                            .width(local_width)
-                            .height(local_height)
-                            .child(frame),
-                    )
-                    .into()
+                let content = Center::new()
+                    .width(local_width)
+                    .height(local_height)
+                    .child(frame);
+                let content: Element = match modal.max_height {
+                    Some(max_height) => Element::from(content).max_height(max_height),
+                    None => content.into(),
+                };
+                ZStack::new().child(backdrop).child(content).into()
             }
             OverlayScope::RootPortal => {
                 let frame = base_frame.width(modal.width).height(modal.height);
@@ -221,14 +241,20 @@ impl From<Modal> for Element {
                 let portal = Portal {
                     layer: OverlayLayer::Modal,
                     content: Box::new(frame.into()),
-                    placement: OverlayPlacement::Center,
+                    placement: OverlayPlacement::Center {
+                        reserve_max_height: modal.reserve_max_height,
+                    },
                     dismiss_policy,
                     on_close: modal.on_close,
                     backdrop: Some(modal.backdrop_style),
                     captures_focus: true,
                     captures_pointer: PointerCapture::BackdropFullScreen,
                 };
-                Element::new(ElementKind::Portal(portal))
+                let element = Element::new(ElementKind::Portal(portal));
+                match modal.max_height {
+                    Some(max_height) => element.max_height(max_height),
+                    None => element,
+                }
             }
         }
     }

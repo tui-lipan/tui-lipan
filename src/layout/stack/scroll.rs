@@ -863,7 +863,9 @@ mod tests {
         Element::new(ElementKind::Portal(Portal {
             layer: OverlayLayer::Modal,
             content: Box::new(inner),
-            placement: OverlayPlacement::Center,
+            placement: OverlayPlacement::Center {
+                reserve_max_height: false,
+            },
             dismiss_policy: DismissPolicy::None,
             on_close: None,
             backdrop: None,

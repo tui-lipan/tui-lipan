@@ -26,6 +26,8 @@ modal focus/backdrop semantics.
 | `on_close` | `Callback<()>` | Close callback (Esc/backdrop click) |
 | `width` | `Length` | Dialog width |
 | `height` | `Length` | Dialog height |
+| `max_height` | `Length` | Cap the modal height; pair with `height(Length::Auto)` so the modal hugs its content but never exceeds the cap (inner content scrolls past it) |
+| `reserve_max_height` | `bool` | For `RootPortal` modals: reserve the full `max_height` when centering vertically so the top edge stays fixed as content shrinks below the cap, instead of the whole modal re-centering |
 | `backdrop_style` | `Style` | Backdrop overlay style |
 | `frame_style` | `Style` | Dialog container style |
 | `border_style` | `BorderStyle` | Dialog border |
@@ -52,6 +54,26 @@ if ctx.state.show_confirm {
         .into()
 }
 ```
+
+**Content-hugging modals with a stable top** - a modal whose content grows and
+shrinks (for example a `SearchPalette` filtered as the user types) can hug its
+content while staying capped, without drifting toward the vertical center as it
+shrinks:
+
+```rust
+Modal::new("Commands")
+    .height(Length::Auto)          // hug the visible rows
+    .max_height(Length::Percent(65)) // ...but never exceed 65% of the viewport
+    .reserve_max_height(true)      // keep the top edge fixed as content shrinks
+    .padding(0)
+    .child(palette)
+```
+
+Without `reserve_max_height`, the modal re-centers by its actual height, so a
+shrinking palette drifts upward toward the middle each keystroke. With it, the
+overlay is centered as if it filled `max_height`, then the shorter content is
+top-aligned within that reserved band. Has no effect without `max_height` or in
+`OverlayScope::Local`.
 
 ---
 

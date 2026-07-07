@@ -817,7 +817,9 @@ mod tests {
         let portal = Element::new(ElementKind::Portal(Portal {
             layer: OverlayLayer::Modal,
             content: Box::new(scoped_group("old")),
-            placement: OverlayPlacement::Center,
+            placement: OverlayPlacement::Center {
+                reserve_max_height: false,
+            },
             dismiss_policy: DismissPolicy::None,
             on_close: None,
             backdrop: None,

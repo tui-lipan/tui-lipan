@@ -158,8 +158,14 @@ pub(crate) fn reconcile_portal(
     };
 
     let reuse_child = old_children.first().copied();
+    let reserve_max_height = matches!(
+        portal.placement,
+        OverlayPlacement::Center {
+            reserve_max_height: true
+        }
+    );
     let mut content_rect = match &portal.placement {
-        OverlayPlacement::Center => resolve_center_rect(
+        OverlayPlacement::Center { .. } => resolve_center_rect(
             portal.content.as_ref(),
             overlay_state.bounds,
             Some(constraints),
@@ -182,9 +188,18 @@ pub(crate) fn reconcile_portal(
     content_rect.x = bounds
         .x
         .saturating_add((bounds.w.saturating_sub(content_rect.w) / 2) as i16);
+    // When `reserve_max_height` is set, center as if the content occupied its full
+    // `max_height` cap, then top-align the (possibly shorter) content within that reserved
+    // band. This keeps the top edge fixed as content shrinks below the cap, instead of the
+    // whole overlay drifting toward the vertical center.
+    let reserved_h = reserve_max_height
+        .then(|| constraints.max_h.and_then(|l| l.resolve_as_max(bounds.h)))
+        .flatten()
+        .map(|cap| cap.min(bounds.h).max(content_rect.h))
+        .unwrap_or(content_rect.h);
     content_rect.y = bounds
         .y
-        .saturating_add((bounds.h.saturating_sub(content_rect.h) / 2) as i16);
+        .saturating_add((bounds.h.saturating_sub(reserved_h) / 2) as i16);
 
     let content_id = reconcile_element(
         &mut ReconcileCtx {
@@ -262,7 +277,7 @@ pub(crate) fn reconcile_overlay_entries(ctx: &mut ReconcileCtx<'_>, overlays: &[
 
     for entry in overlays {
         let rect = match entry.placement {
-            OverlayPlacement::Center => {
+            OverlayPlacement::Center { .. } => {
                 resolve_center_rect(&entry.content, overlay_state.bounds, None)
             }
             OverlayPlacement::Stacked {
