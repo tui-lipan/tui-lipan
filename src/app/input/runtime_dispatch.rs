@@ -142,6 +142,16 @@ struct RuntimeDispatchOps<'a, 'b> {
 }
 
 impl RuntimeDispatchOps<'_, '_> {
+    fn forward_terminal_key(&mut self, key: KeyEvent) -> bool {
+        #[cfg(feature = "terminal")]
+        if let Some(id) = self.env.focused.filter(|id| self.env.tree.is_valid(*id))
+            && is_terminal(self.env.tree, id)
+        {
+            return forward_key(self.env.tree, id, key);
+        }
+        keyboard::dispatch_key(self.env.tree, *self.env.focused, key, self.env.key_ctx)
+    }
+
     fn finish(self, outcome: DispatchOutcome) -> RuntimeKeyDispatchOutcome {
         let mut result = RuntimeKeyDispatchOutcome::default();
         match outcome {
@@ -190,20 +200,26 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
     fn continue_command_chord(&mut self, key: KeyEvent) -> CommandDispatchState {
         let was_pending = self.env.dispatch_state.command_runtime.is_pending();
         let registry = self.env.command_registry.clone();
-        if was_pending {
-            self.env.dispatch_state.pending_command_prefix = Some(key);
-        }
         match self.env.dispatch_state.command_runtime.feed(key, &registry) {
             CommandShortcutResult::Pending
                 if !was_pending
                     && self.env.config.key_dispatch_policy == KeyDispatchPolicy::WidgetFirst =>
             {
                 self.env.dispatch_state.command_runtime.reset();
+                self.env.dispatch_state.pending_command_prefix = None;
                 CommandDispatchState::None
             }
-            CommandShortcutResult::Pending => CommandDispatchState::Pending,
+            CommandShortcutResult::Pending => {
+                // Remember the first key that starts an accepted chord so a later
+                // mismatch can replay it under `ForwardPrefixAndCurrent`.
+                if !was_pending {
+                    self.env.dispatch_state.pending_command_prefix = Some(key);
+                }
+                CommandDispatchState::Pending
+            }
             CommandShortcutResult::Matched(_id) if !was_pending => {
                 self.env.dispatch_state.command_runtime.reset();
+                self.env.dispatch_state.pending_command_prefix = None;
                 CommandDispatchState::None
             }
             CommandShortcutResult::Matched(id) => {
@@ -212,10 +228,16 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
                 CommandDispatchState::Matched(id.as_str().into())
             }
             CommandShortcutResult::Mismatch => {
-                self.env.dispatch_state.pending_command_prefix = None;
+                // Keep the swallowed prefix so the consuming sink can forward it
+                // ahead of the mismatching key under `ForwardPrefixAndCurrent`.
+                // Other policies leave it to be cleared on the next reset or
+                // non-chord key.
                 CommandDispatchState::Mismatch
             }
-            CommandShortcutResult::None => CommandDispatchState::None,
+            CommandShortcutResult::None => {
+                self.env.dispatch_state.pending_command_prefix = None;
+                CommandDispatchState::None
+            }
         }
     }
 
@@ -377,13 +399,14 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
     }
 
     fn dispatch_terminal(&mut self, key: KeyEvent) -> bool {
-        #[cfg(feature = "terminal")]
-        if let Some(id) = self.env.focused.filter(|id| self.env.tree.is_valid(*id))
-            && is_terminal(self.env.tree, id)
+        if matches!(
+            self.env.config.chord_mismatch_policy,
+            ChordMismatchPolicy::ForwardPrefixAndCurrent
+        ) && let Some(prefix) = self.env.dispatch_state.pending_command_prefix.take()
         {
-            return forward_key(self.env.tree, id, key);
+            self.forward_terminal_key(prefix);
         }
-        keyboard::dispatch_key(self.env.tree, *self.env.focused, key, self.env.key_ctx)
+        self.forward_terminal_key(key)
     }
 
     fn dispatch_ambient_scroll(&mut self, key: KeyEvent) -> bool {

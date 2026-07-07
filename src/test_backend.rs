@@ -1104,6 +1104,18 @@ impl<C: Component> TestBackendDispatchOps<'_, C> {
             false
         }
     }
+
+    fn forward_terminal_key(&mut self, key: KeyEvent) -> bool {
+        #[cfg(feature = "terminal")]
+        if let Some(id) = self.focused.filter(|id| self.core.tree.is_valid(*id))
+            && self.focused_is_terminal(id)
+        {
+            use crate::app::input::handlers::terminal::forward_key;
+            return forward_key(&mut self.core.tree, id, key);
+        }
+        keyboard::dispatch_key(&mut self.core.tree, *self.focused, key, self.key_ctx)
+    }
+
     fn finish(self, outcome: DispatchOutcome) -> RuntimeKeyDispatchOutcome {
         let mut result = RuntimeKeyDispatchOutcome::default();
         match outcome {
@@ -1155,9 +1167,6 @@ impl<C: Component> TestBackendDispatchOps<'_, C> {
 impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
     fn continue_command_chord(&mut self, key: KeyEvent) -> CommandDispatchState {
         let was_pending = self.key_dispatch_state.command_runtime.is_pending();
-        if was_pending {
-            self.key_dispatch_state.pending_command_prefix = Some(key);
-        }
         match self
             .key_dispatch_state
             .command_runtime
@@ -1169,11 +1178,20 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
                         == crate::KeyDispatchPolicy::WidgetFirst =>
             {
                 self.key_dispatch_state.command_runtime.reset();
+                self.key_dispatch_state.pending_command_prefix = None;
                 CommandDispatchState::None
             }
-            CommandShortcutResult::Pending => CommandDispatchState::Pending,
+            CommandShortcutResult::Pending => {
+                // Remember the first key that starts an accepted chord so a later
+                // mismatch can replay it under `ForwardPrefixAndCurrent`.
+                if !was_pending {
+                    self.key_dispatch_state.pending_command_prefix = Some(key);
+                }
+                CommandDispatchState::Pending
+            }
             CommandShortcutResult::Matched(_id) if !was_pending => {
                 self.key_dispatch_state.command_runtime.reset();
+                self.key_dispatch_state.pending_command_prefix = None;
                 CommandDispatchState::None
             }
             CommandShortcutResult::Matched(id) => {
@@ -1182,10 +1200,16 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
                 CommandDispatchState::Matched(id.as_str().into())
             }
             CommandShortcutResult::Mismatch => {
-                self.key_dispatch_state.pending_command_prefix = None;
+                // Keep the swallowed prefix so the consuming sink can forward it
+                // ahead of the mismatching key under `ForwardPrefixAndCurrent`.
+                // Other policies leave it to be cleared on the next reset or
+                // non-chord key.
                 CommandDispatchState::Mismatch
             }
-            CommandShortcutResult::None => CommandDispatchState::None,
+            CommandShortcutResult::None => {
+                self.key_dispatch_state.pending_command_prefix = None;
+                CommandDispatchState::None
+            }
         }
     }
 
@@ -1360,14 +1384,15 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
     }
 
     fn dispatch_terminal(&mut self, key: KeyEvent) -> bool {
-        #[cfg(feature = "terminal")]
-        if let Some(id) = self.focused.filter(|id| self.core.tree.is_valid(*id))
-            && self.focused_is_terminal(id)
+        use crate::app::input::key_dispatch::ChordMismatchPolicy;
+        if matches!(
+            self.key_dispatch_config.chord_mismatch_policy,
+            ChordMismatchPolicy::ForwardPrefixAndCurrent
+        ) && let Some(prefix) = self.key_dispatch_state.pending_command_prefix.take()
         {
-            use crate::app::input::handlers::terminal::forward_key;
-            return forward_key(&mut self.core.tree, id, key);
+            self.forward_terminal_key(prefix);
         }
-        keyboard::dispatch_key(&mut self.core.tree, *self.focused, key, self.key_ctx)
+        self.forward_terminal_key(key)
     }
 
     fn dispatch_ambient_scroll(&mut self, key: KeyEvent) -> bool {

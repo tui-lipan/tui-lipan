@@ -3920,6 +3920,130 @@ fn chord_mismatch_policy_affects_real_dispatch() {
 }
 
 #[cfg(feature = "terminal")]
+#[test]
+fn forward_prefix_replays_swallowed_prefix_on_pending_chord_mismatch() {
+    let terminal_keys = Rc::new(RefCell::new(Vec::new()));
+    let app = App::new()
+        .mouse(false)
+        .key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst)
+        .terminal_key_policy(crate::TerminalKeyPolicy::AppCommandsThenTerminal)
+        .chord_mismatch_policy(crate::ChordMismatchPolicy::ForwardPrefixAndCurrent);
+    let mut backend = crate::TestBackend::new_with_app(
+        app,
+        TerminalKeyPolicySmoke {
+            keys: terminal_keys.clone(),
+        },
+        (),
+    );
+    backend.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("mux.detach")
+            .shortcut(crate::KeyBinding::from_str("ctrl-a d").expect("binding"))
+            .build(),
+    );
+    let terminal_id = backend
+        .core
+        .tree
+        .iter()
+        .find_map(|node| matches!(node.kind, NodeKind::Terminal(_)).then_some(node.id))
+        .expect("terminal widget");
+    backend.set_focused(terminal_id);
+
+    backend.send_key(ctrl_char('a')).expect("prefix");
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Char('x'),
+            mods: KeyMods::default(),
+        })
+        .expect("mismatch");
+    // Documented ForwardPrefixAndCurrent: terminal should receive BOTH the
+    // swallowed prefix (ctrl-a) and the mismatching key (x).
+    assert_eq!(
+        terminal_keys.borrow().as_slice(),
+        &[
+            ctrl_char('a'),
+            KeyEvent {
+                code: KeyCode::Char('x'),
+                mods: KeyMods::default(),
+            }
+        ],
+        "prefix should be forwarded on mismatch"
+    );
+}
+
+/// End-to-end check of the tmux-style leader model a terminal mux (hyprmux)
+/// relies on: `AppCommandsFirst` + `AppCommandsThenTerminal` + the default
+/// `SwallowPrefixReplayCurrent`. The leader prefix is swallowed, a completing
+/// key runs the command, a mismatching key is replayed to the PTY while the
+/// prefix is dropped, and plain typing reaches the PTY untouched.
+#[cfg(feature = "terminal")]
+#[test]
+fn mux_leader_chord_model_matches_prefix_semantics() {
+    let terminal_keys = Rc::new(RefCell::new(Vec::new()));
+    let detached = Rc::new(Cell::new(0u32));
+    let app = App::new()
+        .mouse(false)
+        .key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst)
+        .terminal_key_policy(crate::TerminalKeyPolicy::AppCommandsThenTerminal);
+    let mut backend = crate::TestBackend::new_with_app(
+        app,
+        TerminalKeyPolicySmoke {
+            keys: terminal_keys.clone(),
+        },
+        (),
+    );
+    backend.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("mux.detach")
+            .shortcut(crate::KeyBinding::from_str("ctrl-a d").expect("binding"))
+            .handler(Callback::new({
+                let detached = detached.clone();
+                move |_| detached.set(detached.get() + 1)
+            }))
+            .build(),
+    );
+    let terminal_id = backend
+        .core
+        .tree
+        .iter()
+        .find_map(|node| matches!(node.kind, NodeKind::Terminal(_)).then_some(node.id))
+        .expect("terminal widget");
+    backend.set_focused(terminal_id);
+
+    let plain = |ch: char| KeyEvent {
+        code: KeyCode::Char(ch),
+        mods: KeyMods::default(),
+    };
+
+    // Completed leader chord runs the command; nothing leaks to the PTY.
+    backend.send_key(ctrl_char('a')).expect("prefix");
+    backend.send_key(plain('d')).expect("completion");
+    assert_eq!(detached.get(), 1, "ctrl-a d should run mux.detach");
+    assert!(
+        terminal_keys.borrow().is_empty(),
+        "leader chord must not leak keys to the PTY"
+    );
+
+    // Mismatch replays only the current key to the PTY; prefix is dropped.
+    backend.send_key(ctrl_char('a')).expect("prefix");
+    backend.send_key(plain('x')).expect("mismatch");
+    assert_eq!(detached.get(), 1, "mismatch must not run the command");
+    assert_eq!(
+        terminal_keys.borrow().as_slice(),
+        &[plain('x')],
+        "mismatch forwards current key only, prefix swallowed"
+    );
+
+    // Plain typing flows straight to the PTY.
+    terminal_keys.borrow_mut().clear();
+    backend.send_key(plain('l')).expect("plain");
+    backend.send_key(plain('s')).expect("plain");
+    assert_eq!(
+        terminal_keys.borrow().as_slice(),
+        &[plain('l'), plain('s')],
+        "plain keys reach the PTY untouched"
+    );
+}
+
+#[cfg(feature = "terminal")]
 fn ctrl_shift_char(ch: char) -> KeyEvent {
     KeyEvent {
         code: KeyCode::Char(ch),
