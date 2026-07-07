@@ -1,8 +1,13 @@
+use crate::app::input::key_dispatch::{
+    ChordMismatchPolicy, CommandConflictPolicy, KeyDispatchPolicy, TerminalKeyPolicy,
+};
+use crate::app::input::keymap::{FrameworkAction, FrameworkKeymap, UserKeymapPolicy};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::app::runner::AppRunner;
 use crate::clipboard::{ClipboardConfig, ClipboardError, ClipboardProvider, ClipboardReporter};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::core::component::Component;
+use crate::input::KeyBindings;
 use crate::overlay::ToastPlacement;
 use crate::style::Padding;
 use crate::style::{Color, Paint, Style, Theme};
@@ -290,6 +295,12 @@ pub struct App {
     pub(crate) toast_margin: Padding,
     pub(crate) clipboard_config: ClipboardConfig,
     pub(crate) keymap_path: Option<PathBuf>,
+    pub(crate) framework_keymap: FrameworkKeymap,
+    pub(crate) user_keymap_policy: UserKeymapPolicy,
+    pub(crate) key_dispatch_policy: KeyDispatchPolicy,
+    pub(crate) terminal_key_policy: TerminalKeyPolicy,
+    pub(crate) command_conflict_policy: CommandConflictPolicy,
+    pub(crate) chord_mismatch_policy: ChordMismatchPolicy,
     pub(crate) text_area_newline_binding: TextAreaNewlineBinding,
     pub(crate) contrast_policy: ContrastPolicy,
     pub(crate) clipboard_provider: Option<Box<dyn ClipboardProvider>>,
@@ -316,6 +327,12 @@ impl Default for App {
             toast_margin: Padding::BORDER,
             clipboard_config: ClipboardConfig::default(),
             keymap_path: None,
+            framework_keymap: FrameworkKeymap::default(),
+            user_keymap_policy: UserKeymapPolicy::default(),
+            key_dispatch_policy: KeyDispatchPolicy::WidgetFirst,
+            terminal_key_policy: TerminalKeyPolicy::FrameworkFirst,
+            command_conflict_policy: CommandConflictPolicy::default(),
+            chord_mismatch_policy: ChordMismatchPolicy::default(),
             text_area_newline_binding: TextAreaNewlineBinding::default(),
             contrast_policy: ContrastPolicy::default(),
             clipboard_provider: None,
@@ -482,6 +499,51 @@ impl App {
     /// `$XDG_CONFIG_HOME/tui-lipan/keymap.conf` fallback.
     pub fn keymap_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.keymap_path = Some(path.into());
+        self
+    }
+
+    /// Override framework key bindings from Rust after file and built-in keymaps are loaded.
+    pub fn framework_keymap(mut self, keymap: FrameworkKeymap) -> Self {
+        self.framework_keymap = keymap;
+        self
+    }
+
+    /// Configure the global quit shortcut. `None` disables framework quit bindings.
+    pub fn global_quit(mut self, bindings: Option<KeyBindings>) -> Self {
+        self.framework_keymap = match bindings {
+            Some(bindings) => self.framework_keymap.bind(FrameworkAction::Quit, bindings),
+            None => self.framework_keymap.unbind(FrameworkAction::Quit),
+        };
+        self
+    }
+
+    /// Enable or disable loading user keymap files.
+    pub fn user_keymap_policy(mut self, policy: UserKeymapPolicy) -> Self {
+        self.user_keymap_policy = policy;
+        self
+    }
+
+    /// Configure app command versus widget key dispatch ordering.
+    pub fn key_dispatch_policy(mut self, policy: KeyDispatchPolicy) -> Self {
+        self.key_dispatch_policy = policy;
+        self
+    }
+
+    /// Configure key dispatch behavior while terminal widgets are focused.
+    pub fn terminal_key_policy(mut self, policy: TerminalKeyPolicy) -> Self {
+        self.terminal_key_policy = policy;
+        self
+    }
+
+    /// Configure how app command shortcut conflicts are resolved.
+    pub fn command_conflict_policy(mut self, policy: CommandConflictPolicy) -> Self {
+        self.command_conflict_policy = policy;
+        self
+    }
+
+    /// Configure how mismatched keys are handled during pending command chords.
+    pub fn chord_mismatch_policy(mut self, policy: ChordMismatchPolicy) -> Self {
+        self.chord_mismatch_policy = policy;
         self
     }
 

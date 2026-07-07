@@ -6,9 +6,12 @@ use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::app::input::key_dispatch::CommandConflictPolicy;
 use crate::app::input::keymap::{Action, Keymap};
 use crate::callback::Callback;
 use crate::callback::ScopeId;
+use crate::core::event::KeyEvent;
+use crate::input::{ChordMatcher, ChordResult, KeyBinding, KeyBindings};
 
 /// Stable identifier for a registered command.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -58,6 +61,10 @@ pub struct CommandEntry {
     pub category: Option<Arc<str>>,
     /// Optional keybinding hint shown on the right.
     pub keybinding_hint: Option<Arc<str>>,
+    /// Executable keyboard shortcuts for this command.
+    pub shortcuts: KeyBindings,
+    /// Relative priority when resolving shortcut conflicts.
+    pub priority: i32,
     /// Whether this command is currently actionable.
     pub enabled: bool,
     pub(crate) scope: Option<ScopeId>,
@@ -73,6 +80,8 @@ impl fmt::Debug for CommandEntry {
             .field("description", &self.description)
             .field("category", &self.category)
             .field("keybinding_hint", &self.keybinding_hint)
+            .field("shortcuts", &self.shortcuts)
+            .field("priority", &self.priority)
             .field("enabled", &self.enabled)
             .field("scope", &self.scope)
             .finish()
@@ -94,6 +103,8 @@ pub struct CommandBuilder {
     description: Option<Arc<str>>,
     category: Option<Arc<str>>,
     keybinding_hint: Option<Arc<str>>,
+    shortcut_bindings: Vec<KeyBinding>,
+    priority: i32,
     enabled: bool,
     scope: Option<ScopeId>,
     handler: Callback<()>,
@@ -108,6 +119,8 @@ impl CommandBuilder {
             description: None,
             category: None,
             keybinding_hint: None,
+            shortcut_bindings: Vec::new(),
+            priority: 0,
             enabled: true,
             scope: None,
             handler: Callback::new(|_| {}),
@@ -132,8 +145,8 @@ impl CommandBuilder {
         self
     }
 
-    /// Set optional keybinding hint text.
-    pub fn keybinding(mut self, hint: impl Into<Arc<str>>) -> Self {
+    /// Set optional keybinding hint text for display only.
+    pub fn keybinding_hint(mut self, hint: impl Into<Arc<str>>) -> Self {
         self.keybinding_hint = Some(hint.into());
         self
     }
@@ -149,6 +162,24 @@ impl CommandBuilder {
         self.keybinding_hint = keymap
             .binding_for_action(action)
             .map(|binding| Arc::<str>::from(binding.canonical_lowercase()));
+        self
+    }
+
+    /// Add an executable keyboard shortcut.
+    pub fn shortcut(mut self, binding: KeyBinding) -> Self {
+        self.shortcut_bindings.push(binding);
+        self
+    }
+
+    /// Add multiple executable keyboard shortcuts.
+    pub fn shortcuts(mut self, bindings: KeyBindings) -> Self {
+        self.shortcut_bindings.extend(bindings.iter().cloned());
+        self
+    }
+
+    /// Set relative shortcut conflict priority.
+    pub fn priority(mut self, priority: i32) -> Self {
+        self.priority = priority;
         self
     }
 
@@ -172,6 +203,8 @@ impl CommandBuilder {
             description: self.description,
             category: self.category,
             keybinding_hint: self.keybinding_hint,
+            shortcuts: KeyBindings::from_bindings(self.shortcut_bindings),
+            priority: self.priority,
             enabled: self.enabled,
             scope: self.scope,
             handler: self.handler,
@@ -183,6 +216,7 @@ impl CommandBuilder {
 #[derive(Clone, Default)]
 pub struct CommandRegistry {
     entries: Rc<RefCell<HashMap<CommandId, CommandEntry>>>,
+    order: Rc<RefCell<Vec<CommandId>>>,
     generation: Rc<Cell<u64>>,
 }
 
@@ -192,9 +226,18 @@ impl CommandRegistry {
         Self::default()
     }
 
-    /// Register a command (replaces same id).
+    /// Register a command (replaces same id while preserving registration order).
     pub fn register(&self, entry: CommandEntry) {
-        self.entries.borrow_mut().insert(entry.id.clone(), entry);
+        let id = entry.id.clone();
+        let mut entries = self.entries.borrow_mut();
+        let mut order = self.order.borrow_mut();
+        let replacing = entries.contains_key(&id);
+        entries.insert(id.clone(), entry);
+        if !replacing {
+            order.push(id);
+        }
+        drop(entries);
+        drop(order);
         self.bump_generation();
     }
 
@@ -207,8 +250,10 @@ impl CommandRegistry {
 
     /// Remove a command by id.
     pub fn unregister(&self, id: impl Into<CommandId>) -> Option<CommandEntry> {
-        let removed = self.entries.borrow_mut().remove(&id.into());
+        let id = id.into();
+        let removed = self.entries.borrow_mut().remove(&id);
         if removed.is_some() {
+            self.order.borrow_mut().retain(|existing| existing != &id);
             self.bump_generation();
         }
         removed
@@ -245,9 +290,65 @@ impl CommandRegistry {
         true
     }
 
+    /// Resolve enabled commands whose shortcuts match a single key event.
+    pub fn matching_enabled_shortcuts(
+        &self,
+        key: KeyEvent,
+        policy: CommandConflictPolicy,
+    ) -> Vec<CommandId> {
+        let entries = self.entries.borrow();
+        let order = self.order.borrow();
+        let mut matches = Vec::new();
+
+        for id in order.iter() {
+            let Some(entry) = entries.get(id) else {
+                continue;
+            };
+            if !entry.enabled {
+                continue;
+            }
+            if entry
+                .shortcuts
+                .iter()
+                .any(|binding| binding.step_count() == 1 && binding.matches_sequence(&[key]))
+            {
+                matches.push(id.clone());
+            }
+        }
+
+        resolve_shortcut_conflicts(matches, &entries, policy)
+    }
+
+    pub(crate) fn shortcut_entries(&self) -> Vec<(KeyBinding, CommandId)> {
+        let entries = self.entries.borrow();
+        let order = self.order.borrow();
+        let mut out = Vec::new();
+        for id in order.iter() {
+            let Some(entry) = entries.get(id) else {
+                continue;
+            };
+            if !entry.enabled {
+                continue;
+            }
+            for binding in entry.shortcuts.iter().cloned() {
+                out.push((binding, id.clone()));
+            }
+        }
+        out
+    }
+
+    pub(crate) fn ordered_entries(&self) -> Vec<CommandEntry> {
+        let entries = self.entries.borrow();
+        self.order
+            .borrow()
+            .iter()
+            .filter_map(|id| entries.get(id).cloned())
+            .collect()
+    }
+
     /// Snapshot all registered entries.
     pub fn entries(&self) -> Vec<CommandEntry> {
-        self.entries.borrow().values().cloned().collect()
+        self.ordered_entries()
     }
 
     pub(crate) fn unregister_scope(&self, scope: ScopeId) {
@@ -255,6 +356,9 @@ impl CommandRegistry {
         self.entries
             .borrow_mut()
             .retain(|_, entry| entry.scope != Some(scope));
+        self.order
+            .borrow_mut()
+            .retain(|id| self.entries.borrow().contains_key(id));
         if self.entries.borrow().len() != before {
             self.bump_generation();
         }
@@ -271,13 +375,141 @@ impl CommandRegistry {
     }
 }
 
+fn resolve_shortcut_conflicts(
+    matches: Vec<CommandId>,
+    entries: &HashMap<CommandId, CommandEntry>,
+    policy: CommandConflictPolicy,
+) -> Vec<CommandId> {
+    if matches.len() <= 1 {
+        return matches;
+    }
+
+    match policy {
+        CommandConflictPolicy::FirstRegistered => vec![matches[0].clone()],
+        CommandConflictPolicy::HighestPriority => {
+            let winner = matches.into_iter().max_by(|left, right| {
+                let left_priority = entries.get(left).map(|entry| entry.priority).unwrap_or(0);
+                let right_priority = entries.get(right).map(|entry| entry.priority).unwrap_or(0);
+                left_priority.cmp(&right_priority)
+            });
+            winner.into_iter().collect()
+        }
+    }
+}
+
+/// Result of feeding a key into [`CommandShortcutRuntime`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CommandShortcutResult {
+    None,
+    Pending,
+    Matched(CommandId),
+    Mismatch,
+}
+
+/// Stateful matcher for executable app command shortcuts.
+pub(crate) struct CommandShortcutRuntime {
+    matcher: ChordMatcher<CommandId>,
+    registry_generation: u64,
+    conflict_policy: CommandConflictPolicy,
+}
+
+impl CommandShortcutRuntime {
+    pub(crate) fn new(registry: &CommandRegistry, conflict_policy: CommandConflictPolicy) -> Self {
+        Self {
+            matcher: ChordMatcher::new(registry.shortcut_entries()),
+            registry_generation: registry.generation(),
+            conflict_policy,
+        }
+    }
+
+    pub(crate) fn sync_registry(&mut self, registry: &CommandRegistry) {
+        let generation = registry.generation();
+        if self.registry_generation == generation {
+            return;
+        }
+        self.matcher = ChordMatcher::new(registry.shortcut_entries());
+        self.registry_generation = generation;
+        self.matcher.reset();
+    }
+
+    pub(crate) fn reset(&mut self) {
+        self.matcher.reset();
+    }
+
+    pub(crate) fn feed(
+        &mut self,
+        key: KeyEvent,
+        registry: &CommandRegistry,
+    ) -> CommandShortcutResult {
+        self.sync_registry(registry);
+        let was_pending = self.matcher.is_pending();
+        match self.matcher.feed(&key) {
+            ChordResult::None => {
+                if was_pending {
+                    CommandShortcutResult::Mismatch
+                } else {
+                    CommandShortcutResult::None
+                }
+            }
+            ChordResult::Pending => CommandShortcutResult::Pending,
+            ChordResult::Matched(id) => {
+                if !was_pending {
+                    let resolved = registry.matching_enabled_shortcuts(key, self.conflict_policy);
+                    return resolved
+                        .into_iter()
+                        .next()
+                        .map(CommandShortcutResult::Matched)
+                        .unwrap_or(CommandShortcutResult::None);
+                }
+                let resolved = resolve_shortcut_conflicts(
+                    vec![(*id).clone()],
+                    &registry.entries.borrow(),
+                    self.conflict_policy,
+                );
+                if let Some(winner) = resolved.into_iter().next() {
+                    CommandShortcutResult::Matched(winner)
+                } else {
+                    CommandShortcutResult::None
+                }
+            }
+        }
+    }
+
+    pub(crate) fn is_pending(&self) -> bool {
+        self.matcher.is_pending()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
+    use std::str::FromStr;
 
-    use super::{CommandBuilder, CommandRegistry};
+    use super::{
+        CommandBuilder, CommandId, CommandRegistry, CommandShortcutResult, CommandShortcutRuntime,
+    };
+    use crate::app::input::key_dispatch::CommandConflictPolicy;
     use crate::callback::Callback;
+    use crate::core::event::{KeyCode, KeyEvent, KeyMods};
+    use crate::input::KeyBinding;
+
+    fn ctrl_key_for_test(ch: char) -> KeyEvent {
+        KeyEvent {
+            code: KeyCode::Char(ch),
+            mods: KeyMods {
+                ctrl: true,
+                ..KeyMods::default()
+            },
+        }
+    }
+
+    fn key_event_for_test(ch: char) -> KeyEvent {
+        KeyEvent {
+            code: KeyCode::Char(ch),
+            mods: KeyMods::default(),
+        }
+    }
 
     #[test]
     fn register_replaces_existing_entry_by_id() {
@@ -362,5 +594,70 @@ mod tests {
         assert!(registry.set_enabled("toggle", true));
         assert!(registry.execute("toggle"));
         assert!(called.get());
+    }
+
+    #[test]
+    fn command_shortcut_conflict_is_stable_first_registered_by_default() {
+        let registry = CommandRegistry::new();
+        registry.register(
+            CommandBuilder::new("first")
+                .shortcut(KeyBinding::from_str("ctrl-k").unwrap())
+                .build(),
+        );
+        registry.register(
+            CommandBuilder::new("second")
+                .shortcut(KeyBinding::from_str("ctrl-k").unwrap())
+                .build(),
+        );
+
+        let matches = registry.matching_enabled_shortcuts(
+            ctrl_key_for_test('k'),
+            CommandConflictPolicy::FirstRegistered,
+        );
+        assert_eq!(matches, vec![CommandId::from("first")]);
+    }
+
+    #[test]
+    fn command_shortcut_conflict_can_use_highest_priority() {
+        let registry = CommandRegistry::new();
+        registry.register(
+            CommandBuilder::new("low")
+                .priority(0)
+                .shortcut(KeyBinding::from_str("ctrl-k").unwrap())
+                .build(),
+        );
+        registry.register(
+            CommandBuilder::new("high")
+                .priority(10)
+                .shortcut(KeyBinding::from_str("ctrl-k").unwrap())
+                .build(),
+        );
+
+        let matches = registry.matching_enabled_shortcuts(
+            ctrl_key_for_test('k'),
+            CommandConflictPolicy::HighestPriority,
+        );
+        assert_eq!(matches, vec![CommandId::from("high")]);
+    }
+
+    #[test]
+    fn command_shortcut_runtime_supports_chords_and_resets_on_generation_change() {
+        let registry = CommandRegistry::new();
+        registry.register(
+            CommandBuilder::new("mux.detach")
+                .shortcut(KeyBinding::from_str("ctrl-a d").unwrap())
+                .build(),
+        );
+        let mut runtime =
+            CommandShortcutRuntime::new(&registry, CommandConflictPolicy::FirstRegistered);
+        assert!(matches!(
+            runtime.feed(ctrl_key_for_test('a'), &registry),
+            CommandShortcutResult::Pending
+        ));
+        registry.unregister("mux.detach");
+        assert!(matches!(
+            runtime.feed(key_event_for_test('d'), &registry),
+            CommandShortcutResult::None
+        ));
     }
 }

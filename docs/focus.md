@@ -1,6 +1,6 @@
 # Focus system
 
-Keyboard **routing** in the component tree (bubbling, `on_key`) lives here. **Configurable bindings**, `keymap.conf`, chord parsing, and `TextArea` newline keys are documented in [`keybindings.md`](keybindings.md).
+Keyboard **routing** in the component tree (bubbling, `on_key`) lives here. **Configurable bindings**, `keymap.conf`, chord parsing, command shortcuts, and `TextArea` newline keys are documented in [`keybindings.md`](keybindings.md).
 
 ## Focus basics
 
@@ -106,6 +106,26 @@ Keyboard events bubble up the tree if unhandled by the focused widget. If no wid
 3. **Root component** `on_key`
 
 `ScrollView` also has an explicit fallback for page navigation: if exactly one mounted scroll view sets `.ambient_page_scroll(true)`, `PageUp` / `PageDown` can target it even when that scroll view is not focused. This ambient fallback runs only after the normal focused-widget path, ancestor `ScrollView` bubbling, and component `on_key` bubbling all leave the page key unhandled.
+
+## Layered keyboard dispatch
+
+Native, test, and web backends share one dispatch pipeline (`key_dispatch`). Configure ordering with `App` policy builders (see [`keybindings.md`](keybindings.md)). The tables below describe the default **`KeyDispatchPolicy::WidgetFirst`** path when focus is **not** inside an embedded terminal.
+
+| Step | Stage | Notes |
+|------|-------|-------|
+| 1 | Active app command chord | Pending prefixes are consumed before widget dispatch |
+| 2 | TextArea `Tab` / `Shift+Tab` first shot | TextArea may handle tab insertion before focus traversal |
+| 3 | Focused widget | Input, TextArea, List, etc. |
+| 4 | Bubbling `on_key` | Parent scopes toward root |
+| 5 | App command shortcuts | Only when widget/bubble did not consume the key |
+| 6 | Framework actions | Dismiss overlay, focus next/prev, quit, devtools |
+| 7 | Ambient page scroll | Single `ScrollView` with `.ambient_page_scroll(true)` |
+
+With **`KeyDispatchPolicy::AppCommandsFirst`**, steps 5 and 6 move before steps 2–4 (command chords still run first). Text widgets keep documented internal precedence under widget-first policy: `key_interceptor` → clear bindings → clipboard/keymap → Vim layer.
+
+When focus is inside a **`Terminal`** widget, terminal routing policy replaces the table above. See [`widgets/terminal.md`](widgets/terminal.md) for the terminal policy matrix.
+
+Framework quit (`Ctrl+Q` by default) is a **fallback**, not a pre-widget trap, except when a completed framework chord explicitly binds quit. Unbind globally with `App::global_quit(None)` or per-action via `FrameworkKeymap`.
 
 ```rust
 impl Component for MyApp {

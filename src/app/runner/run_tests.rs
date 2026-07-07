@@ -1,18 +1,20 @@
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use web_time::Instant;
 
 use super::{
     AppRunner, DirtyLevel, DirtyTracker, DragState, effective_active_drag_dirty_level,
-    mouse_dispatch_dirty_level, should_dispatch_focus_key_to_widget_first, spinner_frame_for_speed,
+    mouse_dispatch_dirty_level, spinner_frame_for_speed,
 };
 use crate::animation::{Easing, TransitionConfig};
 #[cfg(feature = "devtools")]
 use crate::app::context::DevToolsConfig;
 use crate::app::context::{App, SurfaceMode};
+use crate::app::input::runtime_dispatch::should_dispatch_text_area_tab_first;
 use crate::callback::{Callback, ScopeId};
 use crate::clipboard::{ClipboardConfig, ClipboardError, ClipboardProvider};
 use crate::core::component::{Component, Context, Update};
@@ -21,7 +23,9 @@ use crate::core::event::{KeyCode, KeyEvent, KeyMods, MouseButton, MouseEvent, Mo
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::layout::LayoutEngine;
 use crate::runtime::RuntimeCore;
-use crate::style::{Color, HostTerminalColors, Length, Rect, Style, Theme};
+use crate::style::{Color, HostTerminalColors, Length, Rect, Span, Style, Theme};
+#[cfg(feature = "terminal")]
+use crate::widgets::Terminal;
 use crate::widgets::internal::AnimatedNode;
 use crate::widgets::{
     Animated, DocumentView, DragPayload, DragSource, DropTarget, Frame, HStack, Input, List,
@@ -2229,12 +2233,12 @@ fn text_area_gets_first_shot_at_tab_keys() {
         None,
     );
 
-    assert!(should_dispatch_focus_key_to_widget_first(
+    assert!(should_dispatch_text_area_tab_first(
         &tree,
         Some(tree.root),
         key(KeyCode::Tab),
     ));
-    assert!(should_dispatch_focus_key_to_widget_first(
+    assert!(should_dispatch_text_area_tab_first(
         &tree,
         Some(tree.root),
         key(KeyCode::BackTab),
@@ -2257,7 +2261,7 @@ fn non_text_area_widgets_keep_default_tab_focus_traversal() {
         None,
     );
 
-    assert!(!should_dispatch_focus_key_to_widget_first(
+    assert!(!should_dispatch_text_area_tab_first(
         &tree,
         Some(tree.root),
         key(KeyCode::Tab),
@@ -3733,5 +3737,426 @@ fn dispatch_mouse_scroll_uses_scroll_view_horizontal_multiplier() {
     assert_eq!(
         h_offset, 8,
         "shift+wheel should apply the horizontal multiplier, not the vertical default"
+    );
+}
+
+#[test]
+fn app_runner_and_test_backend_share_global_quit_unbind_behavior() {
+    let runner = AppRunner::new(
+        App::new().mouse(false).global_quit(None),
+        RunnerKeymapSmoke,
+        (),
+    );
+    assert!(runner.keymap.matches(ctrl_char('q')).is_empty());
+
+    let mut backend = crate::TestBackend::new_with_app(
+        App::new().mouse(false).global_quit(None),
+        RunnerKeymapSmoke,
+        (),
+    );
+    assert!(!backend.send_key(ctrl_char('q')).expect("send_key succeeds"));
+    assert!(!backend.core.ctx.should_quit());
+}
+
+struct CommandShortcutSmoke {
+    _hit: Rc<Cell<bool>>,
+}
+
+impl Component for CommandShortcutSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        Input::new("").key("input")
+    }
+}
+
+#[test]
+fn command_shortcut_runs_in_test_backend_same_as_runner_policy() {
+    let hit = Rc::new(Cell::new(false));
+    let app = App::new()
+        .mouse(false)
+        .key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst);
+    let mut backend =
+        crate::TestBackend::new_with_app(app, CommandShortcutSmoke { _hit: hit.clone() }, ());
+    backend.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("app.test")
+            .shortcut(crate::KeyBinding::from_str("ctrl-k").expect("binding"))
+            .handler(Callback::new({
+                let hit = hit.clone();
+                move |_| hit.set(true)
+            }))
+            .build(),
+    );
+
+    assert!(backend.send_key(ctrl_char('k')).expect("send_key succeeds"));
+    assert!(hit.get());
+}
+
+#[test]
+fn app_command_highest_priority_policy_affects_real_dispatch() {
+    let low_hit = Rc::new(Cell::new(false));
+    let high_hit = Rc::new(Cell::new(false));
+    let app = App::new()
+        .mouse(false)
+        .key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst)
+        .command_conflict_policy(crate::CommandConflictPolicy::HighestPriority);
+    let mut backend = crate::TestBackend::new_with_app(
+        app,
+        CommandShortcutSmoke {
+            _hit: Rc::new(Cell::new(false)),
+        },
+        (),
+    );
+    backend.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("low")
+            .priority(0)
+            .shortcut(crate::KeyBinding::from_str("ctrl-k").expect("binding"))
+            .handler(Callback::new({
+                let low_hit = low_hit.clone();
+                move |_| low_hit.set(true)
+            }))
+            .build(),
+    );
+    backend.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("high")
+            .priority(10)
+            .shortcut(crate::KeyBinding::from_str("ctrl-k").expect("binding"))
+            .handler(Callback::new({
+                let high_hit = high_hit.clone();
+                move |_| high_hit.set(true)
+            }))
+            .build(),
+    );
+
+    assert!(backend.send_key(ctrl_char('k')).expect("send_key succeeds"));
+    assert!(!low_hit.get());
+    assert!(high_hit.get());
+}
+
+#[cfg(feature = "terminal")]
+struct TerminalKeyPolicySmoke {
+    keys: Rc<RefCell<Vec<KeyEvent>>>,
+}
+
+#[cfg(feature = "terminal")]
+impl Component for TerminalKeyPolicySmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let keys = self.keys.clone();
+        Terminal::new()
+            .focusable(true)
+            .on_key(crate::callback::KeyHandler::new(move |key| {
+                keys.borrow_mut().push(key);
+                true
+            }))
+            .into()
+    }
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn chord_mismatch_policy_affects_real_dispatch() {
+    let terminal_keys = Rc::new(RefCell::new(Vec::new()));
+    let app = App::new()
+        .mouse(false)
+        .terminal_key_policy(crate::TerminalKeyPolicy::AppCommandsThenTerminal)
+        .chord_mismatch_policy(crate::ChordMismatchPolicy::ForwardPrefixAndCurrent);
+    let mut backend = crate::TestBackend::new_with_app(
+        app,
+        TerminalKeyPolicySmoke {
+            keys: terminal_keys.clone(),
+        },
+        (),
+    );
+    backend.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("mux.detach")
+            .shortcut(crate::KeyBinding::from_str("ctrl-a d").expect("binding"))
+            .build(),
+    );
+    let terminal_id = backend
+        .core
+        .tree
+        .iter()
+        .find_map(|node| matches!(node.kind, NodeKind::Terminal(_)).then_some(node.id))
+        .expect("terminal widget");
+    backend.set_focused(terminal_id);
+
+    assert!(backend.send_key(ctrl_char('a')).expect("prefix succeeds"));
+    assert!(
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Char('x'),
+                mods: KeyMods::default(),
+            })
+            .expect("mismatch succeeds")
+    );
+    assert_eq!(
+        terminal_keys.borrow().as_slice(),
+        &[
+            ctrl_char('a'),
+            KeyEvent {
+                code: KeyCode::Char('x'),
+                mods: KeyMods::default(),
+            }
+        ]
+    );
+}
+
+#[cfg(feature = "terminal")]
+fn ctrl_shift_char(ch: char) -> KeyEvent {
+    KeyEvent {
+        code: KeyCode::Char(ch),
+        mods: KeyMods {
+            ctrl: true,
+            shift: true,
+            ..KeyMods::default()
+        },
+    }
+}
+
+#[cfg(feature = "terminal")]
+struct StaticReadClipboardProvider(&'static str);
+
+#[cfg(feature = "terminal")]
+impl ClipboardProvider for StaticReadClipboardProvider {
+    fn read_clipboard_text(&mut self) -> Result<String, ClipboardError> {
+        Ok(self.0.to_string())
+    }
+
+    fn write_clipboard_text(&mut self, _text: &str) -> Result<(), ClipboardError> {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "terminal")]
+struct TerminalDispatchSmoke {
+    keys: Rc<RefCell<Vec<KeyEvent>>>,
+    inputs: Rc<RefCell<Vec<crate::widgets::TerminalInputKind>>>,
+}
+
+#[cfg(feature = "terminal")]
+impl Component for TerminalDispatchSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let keys = self.keys.clone();
+        let inputs = self.inputs.clone();
+        Terminal::new()
+            .focusable(true)
+            .on_key(crate::callback::KeyHandler::new(move |key| {
+                keys.borrow_mut().push(key);
+                true
+            }))
+            .on_input(Callback::new(
+                move |event: crate::widgets::TerminalInputEvent| {
+                    inputs.borrow_mut().push(event.kind);
+                },
+            ))
+            .key("terminal")
+    }
+}
+
+#[cfg(feature = "terminal")]
+fn set_terminal_selection(
+    backend: &mut crate::TestBackend<TerminalDispatchSmoke>,
+    terminal_id: NodeId,
+    line: &str,
+    end_col: usize,
+) {
+    if let NodeKind::Terminal(term) = &mut backend.core.tree.node_mut(terminal_id).kind {
+        term.lines = vec![vec![Span::new(line)]].into();
+        let mut selection =
+            crate::utils::selection::GridSelection::new(crate::utils::selection::GridPos {
+                row: 0,
+                col: 0,
+            });
+        selection.extend_to(crate::utils::selection::GridPos {
+            row: 0,
+            col: end_col,
+        });
+        term.selection = Some(selection);
+    }
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_ctrl_c_with_selection_copies_before_app_command() {
+    let command_hit = Rc::new(Cell::new(false));
+    let keys = Rc::new(RefCell::new(Vec::new()));
+    let inputs = Rc::new(RefCell::new(Vec::new()));
+    let app = App::new()
+        .mouse(false)
+        .terminal_key_policy(crate::TerminalKeyPolicy::AppCommandsThenTerminal);
+    let mut backend = crate::TestBackend::new_with_app(
+        app,
+        TerminalDispatchSmoke {
+            keys: keys.clone(),
+            inputs: inputs.clone(),
+        },
+        (),
+    );
+    backend.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("mux.copy")
+            .shortcut(crate::KeyBinding::from_str("ctrl-c").expect("binding"))
+            .handler(Callback::new({
+                let command_hit = command_hit.clone();
+                move |_| command_hit.set(true)
+            }))
+            .build(),
+    );
+    let terminal_id = node_id_by_key(&backend.core.tree, "terminal");
+    set_terminal_selection(&mut backend, terminal_id, "hello", 5);
+    backend.set_focused(terminal_id);
+
+    assert!(backend.send_key(ctrl_char('c')).expect("send_key succeeds"));
+    assert!(
+        !command_hit.get(),
+        "app command must not run when copy preflight applies"
+    );
+    assert!(
+        keys.borrow().is_empty(),
+        "terminal on_key must not receive ctrl-c"
+    );
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_ctrl_c_without_selection_runs_app_command_before_forwarding_in_mux_policy() {
+    let command_hit = Rc::new(Cell::new(false));
+    let keys = Rc::new(RefCell::new(Vec::new()));
+    let inputs = Rc::new(RefCell::new(Vec::new()));
+    let app = App::new()
+        .mouse(false)
+        .terminal_key_policy(crate::TerminalKeyPolicy::AppCommandsThenTerminal);
+    let mut backend = crate::TestBackend::new_with_app(
+        app,
+        TerminalDispatchSmoke {
+            keys: keys.clone(),
+            inputs,
+        },
+        (),
+    );
+    backend.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("mux.copy")
+            .shortcut(crate::KeyBinding::from_str("ctrl-c").expect("binding"))
+            .handler(Callback::new({
+                let command_hit = command_hit.clone();
+                move |_| command_hit.set(true)
+            }))
+            .build(),
+    );
+    let terminal_id = node_id_by_key(&backend.core.tree, "terminal");
+    backend.set_focused(terminal_id);
+
+    assert!(backend.send_key(ctrl_char('c')).expect("send_key succeeds"));
+    assert!(command_hit.get());
+    assert!(keys.borrow().is_empty());
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_ctrl_shift_v_still_pastes_to_terminal_before_command() {
+    let command_hit = Rc::new(Cell::new(false));
+    let keys = Rc::new(RefCell::new(Vec::new()));
+    let inputs = Rc::new(RefCell::new(Vec::new()));
+    let app = App::new()
+        .mouse(false)
+        .terminal_key_policy(crate::TerminalKeyPolicy::AppCommandsThenTerminal)
+        .clipboard_provider(StaticReadClipboardProvider("pasted-text"));
+    let mut backend = crate::TestBackend::new_with_app(
+        app,
+        TerminalDispatchSmoke {
+            keys,
+            inputs: inputs.clone(),
+        },
+        (),
+    );
+    backend.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("mux.paste")
+            .shortcut(crate::KeyBinding::from_str("ctrl-shift-v").expect("binding"))
+            .handler(Callback::new({
+                let command_hit = command_hit.clone();
+                move |_| command_hit.set(true)
+            }))
+            .build(),
+    );
+    let terminal_id = node_id_by_key(&backend.core.tree, "terminal");
+    backend.set_focused(terminal_id);
+
+    assert!(
+        backend
+            .send_key(ctrl_shift_char('v'))
+            .expect("send_key succeeds")
+    );
+    assert_eq!(
+        inputs.borrow().as_slice(),
+        &[crate::widgets::TerminalInputKind::Paste]
+    );
+    assert!(!command_hit.get());
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_only_forwards_ctrl_q_and_f12_without_framework_actions() {
+    let keys = Rc::new(RefCell::new(Vec::new()));
+    let inputs = Rc::new(RefCell::new(Vec::new()));
+    let app = App::new()
+        .mouse(false)
+        .terminal_key_policy(crate::TerminalKeyPolicy::TerminalOnly);
+    let mut backend = crate::TestBackend::new_with_app(
+        app,
+        TerminalDispatchSmoke {
+            keys: keys.clone(),
+            inputs,
+        },
+        (),
+    );
+    let terminal_id = node_id_by_key(&backend.core.tree, "terminal");
+    backend.set_focused(terminal_id);
+
+    assert!(backend.send_key(ctrl_char('q')).expect("ctrl-q succeeds"));
+    assert!(
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::F(12),
+                mods: KeyMods::default(),
+            })
+            .expect("f12 succeeds")
+    );
+    assert!(!backend.core.ctx.should_quit());
+    assert_eq!(
+        keys.borrow().as_slice(),
+        &[
+            ctrl_char('q'),
+            KeyEvent {
+                code: KeyCode::F(12),
+                mods: KeyMods::default(),
+            }
+        ]
     );
 }

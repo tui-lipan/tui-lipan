@@ -69,6 +69,10 @@ pub use crate::app::DevToolsConfig;
 pub use crate::app::input::command_registry::{
     CommandBuilder, CommandEntry, CommandId, CommandRegistry,
 };
+pub use crate::app::input::key_dispatch::{
+    ChordMismatchPolicy, CommandConflictPolicy, KeyDispatchPolicy, TerminalKeyPolicy,
+};
+pub use crate::app::input::keymap::{FrameworkAction, FrameworkKeymap, UserKeymapPolicy};
 #[cfg(all(target_arch = "wasm32", feature = "web"))]
 pub use crate::app::web_runner::{WebTerminal, mount_web};
 pub use crate::app::{

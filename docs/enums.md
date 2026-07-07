@@ -106,6 +106,70 @@ Use `font_family` or `font_path` for system/Nerd Font captures, and force
 
 Bitflag-style key set for `PanView`: `NONE`, `ARROWS`, `VIM`, and `DEFAULT` (`ARROWS | VIM`). Combine sets with `|` and test with `.contains(...)`. `VIM` includes `h/j/k/l` cardinal panning.
 
+### `FrameworkAction`
+
+Framework-owned actions configurable from Rust via `FrameworkKeymap` and `App::framework_keymap(...)`. Maps to internal keymap actions after file/env/user bindings are applied.
+
+| Variant | Default binding (typical) | `FrameworkKeymap` use |
+|---------|---------------------------|------------------------|
+| `Quit` | `ctrl-q` | `.unbind(FrameworkAction::Quit)` or rebind |
+| `DismissOverlay` | `esc` | Overlay dismissal |
+| `FocusNext` | `tab` | Tab traversal |
+| `FocusPrev` | `shift-tab` | Reverse tab traversal |
+| `ToggleDevTools` | `f12` | DevTools panel (requires `devtools` feature at runtime) |
+
+Sugar: `App::global_quit(None)` unbinds quit without touching other framework actions.
+
+### `FrameworkKeymap`
+
+Builder for Rust-side framework binding overrides. Applied **after** user keymap files and built-in defaults. Methods: `.bind(action, KeyBindings)`, `.unbind(action)`.
+
+### `UserKeymapPolicy`
+
+| Variant | Behavior |
+|---------|----------|
+| `Enabled` **(default)** | Load `App::keymap_path`, `TUI_LIPAN_KEYMAP`, or default user keymap |
+| `Disabled` | Ignore user keymap files; built-in defaults and Rust `FrameworkKeymap` still apply |
+
+### `KeyDispatchPolicy`
+
+Non-terminal focus ordering between widgets and app command shortcuts.
+
+| Variant | Behavior |
+|---------|----------|
+| `WidgetFirst` **(default)** | Focused widget and bubble run before app command shortcuts |
+| `AppCommandsFirst` | App command shortcuts run before focused widget handlers (command chords still first) |
+
+### `TerminalKeyPolicy`
+
+Terminal-focused key ordering. See [`widgets/terminal.md`](widgets/terminal.md).
+
+| Variant | Summary |
+|---------|---------|
+| `FrameworkFirst` **(default)** | Framework shortcuts before terminal passthrough |
+| `AppCommandsThenTerminal` | Mux-style: terminal copy/paste preflight, then app commands, then PTY |
+| `TerminalFirst` | Terminal forwarding before app commands |
+| `TerminalOnly` | No app command or framework fallback while terminal is focused |
+
+### `CommandConflictPolicy`
+
+Resolves duplicate executable shortcuts on `CommandEntry`.
+
+| Variant | Behavior |
+|---------|----------|
+| `FirstRegistered` **(default)** | Stable registration order among equal priorities |
+| `HighestPriority` | Highest `CommandEntry::priority(i32)`, then first registered |
+
+### `ChordMismatchPolicy`
+
+Behavior when a key fails to complete a pending app command chord.
+
+| Variant | Behavior |
+|---------|----------|
+| `SwallowPrefixReplayCurrent` **(default)** | Swallow the prefix; retry the mismatching key as a fresh dispatch |
+| `ForwardPrefixAndCurrent` | Forward both prefix and mismatching key to lower-priority sinks |
+| `CancelOnly` | Cancel pending command state; treat mismatch as unhandled by commands |
+
 ---
 
 ## Layout & Sizing

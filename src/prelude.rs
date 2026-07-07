@@ -36,6 +36,10 @@ pub use crate::app::DevToolsConfig;
 // Callbacks and messaging
 // ─────────────────────────────────────────────────────────────────────────────
 
+pub use crate::app::input::key_dispatch::{
+    ChordMismatchPolicy, CommandConflictPolicy, KeyDispatchPolicy, TerminalKeyPolicy,
+};
+pub use crate::app::input::keymap::{FrameworkAction, FrameworkKeymap, UserKeymapPolicy};
 pub use crate::callback::{Callback, CancellationToken, CommandLink, KeyHandler, Link};
 pub use crate::{CommandBuilder, CommandEntry, CommandId, CommandRegistry};
 

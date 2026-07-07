@@ -38,7 +38,7 @@ use crate::clipboard::{
 use crate::core::component::{Component, Context};
 use crate::core::element::Element;
 use crate::core::event::{KeyCode, MouseEvent, MouseKind};
-use crate::core::node::{NodeId, NodeKind};
+use crate::core::node::NodeId;
 use crate::runtime::{RuntimeCore, RuntimeCoreConfig};
 use crate::style::{HostTerminalColors, Rect, Theme, query_host_colors};
 use crate::widgets::SpinnerSpeed;
@@ -52,13 +52,17 @@ use crate::app::input::command_registry::CommandEntry;
 use crate::app::input::convert::{to_key_event, to_mouse_event};
 use crate::app::input::focus;
 use crate::app::input::keyboard;
-use crate::app::input::keymap::{Action, Keymap, KeymapConfig, KeymapRuntime, KeymapRuntimeResult};
+use crate::app::input::keymap::{Action, Keymap, KeymapConfig, KeymapRuntime};
+use crate::app::input::runtime_dispatch::{
+    FrameworkSideEffect, RuntimeKeyDispatchConfig, RuntimeKeyDispatchState,
+};
 
 mod animation;
 mod animation_ticker;
 mod drag;
 pub(crate) mod events;
 mod exit_view;
+mod key_dispatch;
 mod messages;
 mod mouse_clicks;
 mod overlay;
@@ -225,6 +229,9 @@ pub struct AppRunner<C: Component> {
     pub(crate) clipboard_config: ClipboardConfig,
     pub(crate) keymap: Keymap,
     pub(crate) keymap_runtime: KeymapRuntime,
+    key_dispatch_config: RuntimeKeyDispatchConfig,
+    key_dispatch_state: RuntimeKeyDispatchState,
+    framework_effects: Vec<FrameworkSideEffect>,
     framework_command_queue: Rc<std::cell::RefCell<Vec<FrameworkCommandAction>>>,
     pub(crate) text_area_newline_binding: TextAreaNewlineBinding,
     pub(crate) contrast_policy: ContrastPolicy,
@@ -373,8 +380,17 @@ impl<C: Component> AppRunner<C> {
         if let Some(path) = app.keymap_path.clone() {
             keymap_config = keymap_config.keymap_path(path);
         }
+        keymap_config = keymap_config
+            .framework_keymap(app.framework_keymap.clone())
+            .user_keymap_policy(app.user_keymap_policy);
         let keymap = Keymap::new(keymap_config);
         let keymap_runtime = KeymapRuntime::new(&keymap);
+        let key_dispatch_config = RuntimeKeyDispatchConfig {
+            key_dispatch_policy: app.key_dispatch_policy,
+            terminal_key_policy: app.terminal_key_policy,
+            command_conflict_policy: app.command_conflict_policy,
+            chord_mismatch_policy: app.chord_mismatch_policy,
+        };
         let framework_command_queue = Rc::new(std::cell::RefCell::new(Vec::new()));
 
         let command_registry = core.ctx.command_registry();
@@ -438,6 +454,8 @@ impl<C: Component> AppRunner<C> {
                 ))
                 .build(),
         );
+        let key_dispatch_state =
+            RuntimeKeyDispatchState::new(&command_registry, app.command_conflict_policy);
 
         #[cfg(feature = "image")]
         let animation = AnimationState {
@@ -465,6 +483,9 @@ impl<C: Component> AppRunner<C> {
             clipboard_config,
             keymap,
             keymap_runtime,
+            key_dispatch_config,
+            key_dispatch_state,
+            framework_effects: Vec::new(),
             framework_command_queue,
             text_area_newline_binding: app.text_area_newline_binding,
             contrast_policy: app.contrast_policy,
@@ -608,6 +629,7 @@ impl<C: Component> AppRunner<C> {
         self.refresh_host_terminal_colors(!self.surface.is_inline(), true)
     }
 
+    #[cfg(test)]
     fn dispatch_focused_key(&mut self, key: crate::core::event::KeyEvent) -> KeyDispatchResult {
         let focused = self.focus.focused;
         let mut key_ctx = crate::app::input::handlers::KeyCtx {
@@ -1003,311 +1025,70 @@ impl<C: Component> AppRunner<C> {
                         }
                         CEvent::Key(k) => {
                             if let Some(key) = to_key_event(k) {
-                                // When a Terminal widget is focused it acts as a raw
-                                // input sink. Do not feed chord matching before this
-                                // check: a configured chord prefix must not be swallowed
-                                // instead of being sent to the terminal. Quit keeps its
-                                // existing single-key interception in the terminal branch
-                                // below.
-                                let focused_is_terminal = self
+                                if matches!(key.code, KeyCode::Esc)
+                                    && matches!(self.drag.active, ActiveDrag::DragDrop(_))
+                                    && self.cancel_drag_drop()
+                                {
+                                    self.animation.reset_blink();
+                                    dirty.mark_full();
+                                    continue;
+                                }
+
+                                self.animation.reset_blink();
+
+                                #[cfg(feature = "devtools")]
+                                let _devtools_guard = self
                                     .focus
                                     .focused
                                     .filter(|id| self.core.tree.is_valid(*id))
                                     .is_some_and(|id| {
-                                        #[cfg(feature = "terminal")]
-                                        {
-                                            matches!(
-                                                self.core.tree.node(id).kind,
-                                                NodeKind::Terminal(_)
-                                            )
-                                        }
-                                        #[cfg(not(feature = "terminal"))]
-                                        {
-                                            let _ = id;
-                                            false
-                                        }
-                                    });
+                                        self.core.tree.node_has_ancestor_with_key(
+                                            id,
+                                            crate::devtools::DEVTOOLS_KEY,
+                                        )
+                                    })
+                                    .then(crate::debug::suppress_devtools_log);
 
-                                let runtime_match = if focused_is_terminal {
-                                    self.keymap_runtime.reset();
-                                    None
-                                } else {
-                                    match self.keymap_runtime.feed(key) {
-                                        KeymapRuntimeResult::Pending => {
-                                            self.animation.reset_blink();
-                                            continue;
-                                        }
-                                        KeymapRuntimeResult::Matched(binding) => Some(binding),
-                                        KeymapRuntimeResult::None => None,
-                                    }
-                                };
-                                let action_from_chord =
-                                    runtime_match.is_some_and(|binding| binding.is_chord);
-                                let matches = runtime_match
-                                    .map(|binding| vec![binding.binding_match()])
-                                    .unwrap_or_else(|| self.keymap.matches(key));
+                                crate::debug::internal_log!(
+                                    "[tui-lipan] event: key {:?}",
+                                    key.code
+                                );
+
+                                let key_result = self.dispatch_layered_key(key);
 
                                 #[cfg(feature = "devtools")]
-                                let toggle_requested = matches
-                                    .iter()
-                                    .any(|binding| binding.action == Action::ToggleDevTools);
-                                #[cfg(not(feature = "devtools"))]
-                                let toggle_requested = false;
-
-                                if toggle_requested {
-                                    #[cfg(feature = "devtools")]
-                                    {
-                                        let visible = self.devtools_state.borrow().visible;
-                                        self.set_devtools_visible(!visible);
-                                    }
-                                    self.animation.reset_blink();
-                                    dirty.mark_full();
-                                } else if matches!(key.code, KeyCode::Esc)
-                                    && matches!(self.drag.active, ActiveDrag::DragDrop(_))
-                                    && self.cancel_drag_drop()
                                 {
-                                    dirty.mark_full();
-                                    continue;
-                                } else {
-                                    let selection_dispatch =
-                                        self.dispatch_selection_clipboard_shortcut(key);
-                                    if selection_dispatch.handled {
-                                        self.animation.reset_blink();
-                                        if let Some(level) = selection_dispatch.dirty_override {
-                                            apply_dirty_level(&mut dirty, level);
-                                        } else {
-                                            dirty.mark_full();
-                                        }
-                                    } else {
-                                        self.animation.reset_blink();
-
-                                        // Suppress debug_log! routing to the devtools
-                                        // panel while dispatching keys to widgets that
-                                        // live inside the panel itself (e.g. typing in
-                                        // the log filter input). Keystrokes targeted
-                                        // at user widgets continue to log normally.
-                                        #[cfg(feature = "devtools")]
-                                        let _devtools_guard = self
-                                            .focus
-                                            .focused
-                                            .filter(|id| self.core.tree.is_valid(*id))
-                                            .is_some_and(|id| {
-                                                self.core.tree.node_has_ancestor_with_key(
-                                                    id,
-                                                    crate::devtools::DEVTOOLS_KEY,
-                                                )
-                                            })
-                                            .then(crate::debug::suppress_devtools_log);
-
-                                        crate::debug::internal_log!(
-                                            "[tui-lipan] event: key {:?}",
-                                            key.code
-                                        );
-
-                                        if focused_is_terminal {
-                                            // Intercept Quit action (Ctrl+Q by default) even
-                                            // when a Terminal is focused so the app can always
-                                            // be exited.  The key is first bubbled to the
-                                            // component tree so the app can do cleanup (kill
-                                            // PTY, save state, etc.).  If no component handles
-                                            // it, the framework quits directly.
-                                            let is_quit = self
-                                                .keymap
-                                                .matches(key)
-                                                .iter()
-                                                .any(|binding| binding.action == Action::Quit);
-                                            if is_quit {
-                                                crate::debug::internal_log!(
-                                                    "[tui-lipan] terminal: quit via key {:?}",
-                                                    key
-                                                );
-                                                let bubble = self.bubble_key(key);
-                                                if bubble.dirty {
-                                                    dirty.mark_full();
-                                                }
-                                                if !bubble.dirty {
-                                                    self.core.ctx.quit();
-                                                    dirty.mark_full();
-                                                }
-                                            } else {
-                                                let key_dispatch = self.dispatch_focused_key(key);
-                                                if let Some(level) = key_dispatch.dirty_override {
-                                                    apply_dirty_level(&mut dirty, level);
-                                                }
-                                                if key_dispatch.handled
-                                                    && key.mods.shift
-                                                    && matches!(
-                                                        key.code,
-                                                        KeyCode::Left
-                                                            | KeyCode::Right
-                                                            | KeyCode::Up
-                                                            | KeyCode::Down
-                                                    )
-                                                {
-                                                    dirty.mark_layout();
-                                                }
-                                                if key_dispatch.handled {
-                                                    // Terminal consumed the key – nothing else
-                                                    // to do.
-                                                } else {
-                                                    // Rare: terminal didn't handle the key
-                                                    // (e.g. no on_input/on_key callback). Fall
-                                                    // through to normal framework key handling
-                                                    // below.
-                                                    if self.bubble_key(key).dirty {
-                                                        dirty.mark_full();
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            let dismiss_handled = matches.iter().any(|binding| {
-                                                binding.action == Action::DismissOverlay
-                                            }) && self
-                                                .handle_overlay_escape();
-                                            if dismiss_handled {
+                                    let effects: Vec<_> =
+                                        self.framework_effects.drain(..).collect();
+                                    for effect in effects {
+                                        if matches!(effect, FrameworkSideEffect::ToggleDevtools) {
+                                            let visible = self.devtools_state.borrow().visible;
+                                            if self.set_devtools_visible(!visible) {
                                                 dirty.mark_full();
-                                            }
-
-                                            let focus_next_requested = matches
-                                                .iter()
-                                                .any(|binding| binding.action == Action::FocusNext);
-                                            let focus_prev_requested = matches
-                                                .iter()
-                                                .any(|binding| binding.action == Action::FocusPrev);
-
-                                            if focus_next_requested {
-                                                let handled = !action_from_chord
-                                                    && should_dispatch_focus_key_to_widget_first(
-                                                        &self.core.tree,
-                                                        self.focus.focused,
-                                                        key,
-                                                    )
-                                                    && self.dispatch_focused_key(key).handled;
-                                                if handled {
-                                                    continue;
-                                                }
-
-                                                let bubble = self.bubble_key(key);
-                                                if bubble.dirty {
-                                                    dirty.mark_full();
-                                                }
-                                                if bubble.handled {
-                                                    continue;
-                                                }
-
-                                                if self.focus_overlay_next() {
-                                                    dirty.mark_full();
-                                                } else {
-                                                    focus::focus_next(
-                                                        &self.core.tree,
-                                                        &mut self.focus.focused,
-                                                        &mut self.focus.focused_key,
-                                                        &mut self.focus.focused_tag,
-                                                    );
-                                                    // Reset blink state when focus changes
-                                                    self.animation.reset_blink();
-                                                    dirty.mark_full();
-                                                }
-                                            } else if focus_prev_requested {
-                                                let handled = !action_from_chord
-                                                    && should_dispatch_focus_key_to_widget_first(
-                                                        &self.core.tree,
-                                                        self.focus.focused,
-                                                        key,
-                                                    )
-                                                    && self.dispatch_focused_key(key).handled;
-                                                if handled {
-                                                    continue;
-                                                }
-
-                                                let bubble = self.bubble_key(key);
-                                                if bubble.dirty {
-                                                    dirty.mark_full();
-                                                }
-                                                if bubble.handled {
-                                                    continue;
-                                                }
-
-                                                if self.focus_overlay_prev() {
-                                                    dirty.mark_full();
-                                                } else {
-                                                    focus::focus_prev(
-                                                        &self.core.tree,
-                                                        &mut self.focus.focused,
-                                                        &mut self.focus.focused_key,
-                                                        &mut self.focus.focused_tag,
-                                                    );
-                                                    // Reset blink state when focus changes
-                                                    self.animation.reset_blink();
-                                                    dirty.mark_full();
-                                                }
-                                            } else if self.top_capturing_overlay_is_empty() {
-                                                let is_quit = matches
-                                                    .iter()
-                                                    .any(|binding| binding.action == Action::Quit);
-                                                if is_quit {
-                                                    crate::debug::internal_log!(
-                                                        "[tui-lipan] action: quit via key {:?}",
-                                                        key
-                                                    );
-                                                    self.core.ctx.quit();
-                                                    dirty.mark_full();
-                                                }
-                                            } else if action_from_chord
-                                                && matches
-                                                    .iter()
-                                                    .any(|binding| binding.action == Action::Quit)
-                                            {
-                                                crate::debug::internal_log!(
-                                                    "[tui-lipan] action: quit via key {:?}",
-                                                    key
-                                                );
-                                                self.core.ctx.quit();
-                                                dirty.mark_full();
-                                            } else if !dismiss_handled {
-                                                let key_dispatch = self.dispatch_focused_key(key);
-                                                if key_dispatch.handled {
-                                                    // The focused widget consumed the key and
-                                                    // likely mutated its node (e.g. ScrollView
-                                                    // offset, Input cursor).  Mark layout so the
-                                                    // change is reconciled with the cached element
-                                                    // tree - cheap, and if a queued callback later
-                                                    // returns Update::full() it promotes to Full.
-                                                    if let Some(level) = key_dispatch.dirty_override
-                                                    {
-                                                        apply_dirty_level(&mut dirty, level);
-                                                    } else {
-                                                        dirty.mark_layout();
-                                                    }
-                                                } else {
-                                                    let is_quit = matches.iter().any(|binding| {
-                                                        binding.action == Action::Quit
-                                                    });
-                                                    if is_quit {
-                                                        crate::debug::internal_log!(
-                                                            "[tui-lipan] action: quit via key {:?}",
-                                                            key
-                                                        );
-                                                        self.core.ctx.quit();
-                                                        dirty.mark_full();
-                                                    } else {
-                                                        let bubble = self.bubble_key(key);
-                                                        if bubble.dirty {
-                                                            dirty.mark_full();
-                                                        } else {
-                                                            let ambient_handled = crate::app::input::keyboard::dispatch_ambient_page_scroll(
-                                                                &mut self.core.tree,
-                                                                key,
-                                                            );
-                                                            if ambient_handled {
-                                                                dirty.mark_layout();
-                                                            }
-                                                        }
-                                                    }
-                                                }
                                             }
                                         }
                                     }
+                                }
+                                #[cfg(not(feature = "devtools"))]
+                                self.framework_effects.clear();
+
+                                if key_result.quit {
+                                    crate::debug::internal_log!(
+                                        "[tui-lipan] action: quit via key {:?}",
+                                        key.code
+                                    );
+                                    self.core.ctx.quit();
+                                    dirty.mark_full();
+                                } else if let Some(level) = key_result.dirty_override {
+                                    apply_dirty_level(&mut dirty, level);
+                                } else if key_result.mark_full {
+                                    dirty.mark_full();
+                                } else if key_result.mark_layout {
+                                    dirty.mark_layout();
+                                }
+
+                                if key_result.terminal_shift_navigation {
+                                    dirty.mark_layout();
                                 }
                             }
                         }
@@ -1825,22 +1606,6 @@ impl<C: Component> AppRunner<C> {
 
         Ok(event_rx.and_then(|rx| rx.try_recv().ok()))
     }
-}
-
-fn should_dispatch_focus_key_to_widget_first(
-    tree: &crate::core::node::NodeTree,
-    focused: Option<NodeId>,
-    key: crate::core::event::KeyEvent,
-) -> bool {
-    if !matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
-        return false;
-    }
-
-    let Some(id) = focused else {
-        return false;
-    };
-
-    tree.is_valid(id) && matches!(tree.node(id).kind, NodeKind::TextArea(_))
 }
 
 #[cfg(feature = "image")]

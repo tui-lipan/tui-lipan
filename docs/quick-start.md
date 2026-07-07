@@ -40,6 +40,7 @@ Representative `prelude::*` re-exports:
 | `word_forward_start`, `word_end`, `line_start_at`, `first_nonblank_in_line`, … (`text_motion` module) | Vim-style word/line text motion helpers |
 | `OverlayId`, `OverlayScope`, `ToastHandle`, `ToastPlacement` | Overlays |
 | `App`, `CommandEntry`, `CommandRegistry` | App commands |
+| `FrameworkAction`, `FrameworkKeymap`, `KeyDispatchPolicy`, `TerminalKeyPolicy`, `UserKeymapPolicy`, `CommandConflictPolicy`, `ChordMismatchPolicy` | Layered key dispatch |
 | `child`, `mockup!`, `rsx!`, `ui!` | Macros & helpers |
 | `VStack`, `HStack`, `ZStack`, `Canvas`, `Frame`, `Button`, `Text`, `Input`, `List`, `Tabs`, `Table`, `Modal`, `TextArea`, `Tree`, `DocumentView`, `FileTree`, `Animated`, `AsciiCanvas` | Common and advanced widgets |
 
@@ -308,6 +309,15 @@ App::new()
     .scroll_wheel_multiplier(3) // Optional: lines per wheel tick (default: 1)
     .toast_placement(ToastPlacement::BottomEnd)
     .keymap_path("/path/to/keymap.conf")  // see docs/keybindings.md
+    .global_quit(None)                   // disable Ctrl-Q quit without a keymap file
+    .framework_keymap(
+        FrameworkKeymap::default().unbind(FrameworkAction::Quit),
+    )
+    .user_keymap_policy(UserKeymapPolicy::Disabled) // ignore env/default user keymaps
+    .key_dispatch_policy(KeyDispatchPolicy::AppCommandsFirst)
+    .terminal_key_policy(TerminalKeyPolicy::AppCommandsThenTerminal)
+    .command_conflict_policy(CommandConflictPolicy::HighestPriority)
+    .chord_mismatch_policy(ChordMismatchPolicy::ForwardPrefixAndCurrent)
     .clipboard_config(ClipboardConfig { .. })
     .contrast_policy(ContrastPolicy::Wcag)
     .terminal_bg(query_host_colors().map(|c| c.bg))  // enables Opacity through Color::Reset
@@ -327,6 +337,8 @@ multiplier for a specific widget.
 > **`terminal_bg` / live host colors**: `ColorTransform::Opacity` blends foreground colors toward the resolved cell background. When the cell background is `Color::Reset` (terminal default) there is no RGB to blend toward, so opacity has no effect. Calling `.terminal_bg(query_host_colors().map(|c| c.bg))` before `run()` provides the terminal's actual default background color and enables correct opacity blending for static apps. Use `.system_theme()` to opt into a framework-wide theme derived from live host colors, or `.live_host_terminal_colors(true)` when app code wants to read `ctx.host_terminal_colors()` and build its own tokens. The runner probes once at startup, refreshes on terminal focus gained, services `ctx.request_host_terminal_color_refresh()`, and never polls continuously. Refreshed host backgrounds update `terminal_bg` automatically. Omitting both leaves opacity unchanged on reset-background cells.
 
 > **`exit_view`**: Attach this on `AppRunner<C>` after `.mount(...)` when you want a final one-shot element rendered to stdout after the TUI exits. The callback runs before unmount, so component state is still available in `ctx.state`. This is useful for persisting a session summary or logo in terminal scrollback.
+
+Layered key dispatch policy builders are always available (no extra feature flag). See [`keybindings.md`](keybindings.md) for precedence rules, command `shortcut(...)` vs `keybinding_hint(...)`, and [`focus.md`](focus.md) / [`widgets/terminal.md`](widgets/terminal.md) for dispatch order tables.
 
 ## Development Workflow
 

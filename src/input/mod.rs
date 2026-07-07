@@ -163,6 +163,13 @@ impl fmt::Display for KeyBinding {
 }
 
 impl KeyBindings {
+    /// Create a binding set from individual bindings.
+    pub fn from_bindings(bindings: impl IntoIterator<Item = KeyBinding>) -> Self {
+        Self {
+            bindings: bindings.into_iter().collect(),
+        }
+    }
+
     /// Returns true if no bindings are configured.
     pub fn is_empty(&self) -> bool {
         self.bindings.is_empty()
