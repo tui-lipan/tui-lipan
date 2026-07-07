@@ -2,8 +2,10 @@
 //!
 //! # Keyboard and browser shortcuts
 //!
-//! [`WebTerminal::dispatch_key_event`] returns whether a widget or bubbling `on_key` consumed the
-//! key (not unrelated [`TestBackend::pump`] work). Call
+//! [`WebTerminal::dispatch_key_event`] delegates to [`TestBackend::send_key`], which uses the
+//! same layered key dispatch pipeline as the native [`AppRunner`](crate::AppRunner) event loop.
+//! The return value indicates whether a widget, command shortcut, framework action, or bubbling
+//! `on_key` consumed the key (not unrelated [`TestBackend::pump`] work). Call
 //! [`KeyboardEvent.preventDefault`](https://developer.mozilla.org/en-US/docs/Web/API/Event/preventDefault)
 //! **only when that return value is `true`** so unhandled keys can keep their default browser
 //! behaviour (find, devtools, etc.) *when the browser actually delivers those events to the page*.

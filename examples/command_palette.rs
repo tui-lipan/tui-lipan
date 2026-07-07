@@ -49,7 +49,7 @@ impl Component for EditorPanel {
                 .label("Editor: Save")
                 .description("Save current file")
                 .category("Editor")
-                .keybinding("ctrl-s")
+                .keybinding_hint("ctrl-s")
                 .enabled(true)
                 .handler(Callback::new(move |_| on_save.emit(EditorMsg::Save)))
                 .build(),
@@ -61,7 +61,7 @@ impl Component for EditorPanel {
                 .label("Editor: Save all")
                 .description("Save all open files")
                 .category("Editor")
-                .keybinding("ctrl-shift-s")
+                .keybinding_hint("ctrl-shift-s")
                 .enabled(false)
                 .handler(Callback::new(move |_| on_save_all.emit(EditorMsg::SaveAll)))
                 .build(),

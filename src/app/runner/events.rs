@@ -475,6 +475,7 @@ impl<C: Component> AppRunner<C> {
         false
     }
 
+    #[allow(dead_code)]
     pub(crate) fn bubble_key(&mut self, key: KeyEvent) -> BubbleKeyResult {
         self.core
             .bubble_key(self.focus.focused, self.focus.focused_key.as_ref(), key)

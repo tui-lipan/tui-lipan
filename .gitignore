@@ -28,6 +28,7 @@ docs/node_modules/
 plans/
 vendor/
 athena-plans/
+.slim/deepwork/
 .agents/**/__pycache__/
 
 # OS

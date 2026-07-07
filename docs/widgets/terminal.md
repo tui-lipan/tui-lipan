@@ -98,6 +98,35 @@ Use `scrollbar_config` to configure layout variant, gap, and thumb for the verti
 
 ---
 
+## Terminal key routing policy
+
+Configure how keys are ordered when a terminal pane has focus:
+
+```rust
+App::new()
+    .terminal_key_policy(TerminalKeyPolicy::AppCommandsThenTerminal)
+    .mount(MyMuxApp)
+    .run()
+```
+
+| Policy | Typical use | Order (summary) |
+|--------|-------------|-----------------|
+| `FrameworkFirst` **(default)** | Simple apps, backward-compatible behavior | Framework shortcuts → terminal clipboard preflight → terminal `on_key` / `on_input` → bubble |
+| `AppCommandsThenTerminal` | Multiplexer / terminal-host apps | Terminal performable copy/paste preflight → app command chords/shortcuts → terminal forwarding → bubble → framework fallback |
+| `TerminalFirst` | PTY-first apps that still want optional app shortcuts | Terminal preflight → terminal forwarding → app commands (if terminal did not consume) → bubble → framework fallback |
+| `TerminalOnly` | Full passthrough; no app command or framework fallback while terminal is focused | Terminal preflight → terminal forwarding only |
+
+**Performable preflight** runs before app commands under mux-style policies so terminal copy/paste is never stolen:
+
+- `Ctrl+C` with a non-empty terminal selection copies to the clipboard instead of running an app shortcut on the same key.
+- `Ctrl+Shift+C` / `Ctrl+Shift+V` paste paths run when the terminal can accept input.
+
+Register mux lifecycle shortcuts with executable command bindings (`CommandEntry::shortcut(...)`) rather than framework keymap entries. Pair `AppCommandsThenTerminal` with `KeyDispatchPolicy::AppCommandsFirst` when app shortcuts should win over non-terminal widgets too.
+
+See [`focus.md`](../focus.md) for non-terminal dispatch order and [`keybindings.md`](../keybindings.md) for Rust/file keymap precedence.
+
+---
+
 ## TerminalPty
 
 PTY spawner and I/O bridge. Used internally by `ManagedTerminal`.

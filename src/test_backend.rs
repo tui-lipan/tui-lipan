@@ -3,13 +3,22 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::Result;
-use crate::app::context::{SurfaceMode, TextAreaNewlineBinding};
+use crate::app::context::{App, TextAreaNewlineBinding};
 use crate::app::copy_feedback::CopyFeedbackState;
+use crate::app::input::command_registry::CommandShortcutResult;
 use crate::app::input::focus;
 use crate::app::input::handlers::KeyCtx;
 use crate::app::input::hex_history::HexHistory;
+use crate::app::input::key_dispatch::{
+    CommandDispatchState, DispatchOps, DispatchOutcome, FrameworkDispatch,
+    TerminalPreflightDispatch,
+};
 use crate::app::input::keyboard;
-use crate::app::input::keymap::{Action, Keymap, KeymapConfig, KeymapRuntime, KeymapRuntimeResult};
+use crate::app::input::keymap::{Action, Keymap, KeymapConfig, KeymapRuntime};
+use crate::app::input::runtime_dispatch::{
+    FrameworkSideEffect, RuntimeKeyDispatchConfig, RuntimeKeyDispatchOutcome,
+    RuntimeKeyDispatchState, make_key_ctx, selection_clipboard_shortcut,
+};
 use crate::app::input::text_area_vim::TextAreaVimState;
 use crate::app::interaction_state::{DragState, HexPendingEdit, MouseTrackingState};
 use crate::callback::Link;
@@ -17,12 +26,12 @@ use crate::capture::CapturedFrame;
 use crate::clipboard::ClipboardConfig;
 use crate::core::component::Component;
 use crate::core::element::{Element, Key};
-use crate::core::event::{KeyEvent, MouseEvent};
+use crate::core::event::{KeyCode, KeyEvent, MouseEvent};
 use crate::core::node::{NodeId, OverlayRoot};
 use crate::core::runtime_env::TranscriptEntry;
 use crate::layout::tag::Tag;
-use crate::runtime::{BubbleKeyResult, RuntimeCore};
-use crate::style::{Rect, Theme};
+use crate::runtime::RuntimeCore;
+use crate::style::Rect;
 use crate::text::editor::TextEditor;
 use crate::text::input::TextInput;
 
@@ -63,6 +72,9 @@ pub struct TestBackend<C: Component> {
     pub(crate) read_only_selection: HashMap<NodeId, (usize, Option<usize>)>,
     pub(crate) copy_feedback: CopyFeedbackState,
     pub(crate) screen_background: Option<crate::style::Style>,
+    key_dispatch_config: RuntimeKeyDispatchConfig,
+    key_dispatch_state: RuntimeKeyDispatchState,
+    framework_effects: Vec<FrameworkSideEffect>,
 }
 
 impl<C> TestBackend<C>
@@ -87,50 +99,74 @@ where
 
     /// Mount a root component with explicit properties.
     pub fn new_with_props(component: C, props: C::Properties) -> Self {
-        Self::new_with_props_inner(component, props, false)
+        Self::new_with_app(App::new(), component, props)
+    }
+
+    /// Mount a root component using the same app configuration as [`AppRunner`](crate::AppRunner).
+    pub fn new_with_app(app: App, component: C, props: C::Properties) -> Self {
+        Self::new_with_app_inner(app, component, props, false)
     }
 
     #[allow(missing_docs)]
     pub fn new_transcript_with_props(component: C, props: C::Properties) -> Self {
-        Self::new_with_props_inner(component, props, true)
+        Self::new_with_app_inner(App::new(), component, props, true)
     }
 
-    fn new_with_props_inner(
+    fn new_with_app_inner(
+        app: App,
         component: C,
         props: C::Properties,
         inline_transcript_mode: bool,
     ) -> Self {
         let viewport = DEFAULT_VIEWPORT;
-        let mouse_capture = Rc::new(Cell::new(false));
-        let clipboard_config = ClipboardConfig::default();
-        let keymap = Keymap::new(KeymapConfig::from_clipboard_config(&clipboard_config));
+        let mouse_capture = Rc::new(Cell::new(app.mouse_enabled.unwrap_or(true)));
+        let clipboard_config = app.clipboard_config.clone();
+        let mut keymap_config = KeymapConfig::from_clipboard_config(&clipboard_config);
+        if let Some(path) = app.keymap_path.clone() {
+            keymap_config = keymap_config.keymap_path(path);
+        }
+        keymap_config = keymap_config
+            .framework_keymap(app.framework_keymap.clone())
+            .user_keymap_policy(app.user_keymap_policy);
+        let keymap = Keymap::new(keymap_config);
         let keymap_runtime = KeymapRuntime::new(&keymap);
+        let core = if inline_transcript_mode {
+            RuntimeCore::new_test_transcript(
+                component,
+                props,
+                viewport,
+                app.theme.clone(),
+                mouse_capture,
+            )
+        } else {
+            RuntimeCore::new_test(
+                component,
+                props,
+                viewport,
+                app.theme.clone(),
+                app.surface_mode,
+                mouse_capture,
+            )
+        };
+        let command_registry = core.ctx.command_registry();
+        let key_dispatch_state =
+            RuntimeKeyDispatchState::new(&command_registry, app.command_conflict_policy);
+        let key_dispatch_config = RuntimeKeyDispatchConfig {
+            key_dispatch_policy: app.key_dispatch_policy,
+            terminal_key_policy: app.terminal_key_policy,
+            command_conflict_policy: app.command_conflict_policy,
+            chord_mismatch_policy: app.chord_mismatch_policy,
+        };
+
         let mut backend = Self {
-            core: if inline_transcript_mode {
-                RuntimeCore::new_test_transcript(
-                    component,
-                    props,
-                    viewport,
-                    Theme::default(),
-                    mouse_capture,
-                )
-            } else {
-                RuntimeCore::new_test(
-                    component,
-                    props,
-                    viewport,
-                    Theme::default(),
-                    SurfaceMode::Fullscreen,
-                    mouse_capture,
-                )
-            },
+            core,
             viewport,
             focused: None,
             focused_key: None,
             focused_tag: None,
             keymap,
             keymap_runtime,
-            text_area_newline_binding: TextAreaNewlineBinding::default(),
+            text_area_newline_binding: app.text_area_newline_binding,
             input_history: HashMap::new(),
             textarea_history: HashMap::new(),
             text_area_vim_state: HashMap::new(),
@@ -142,11 +178,22 @@ where
             read_only_selection: HashMap::new(),
             copy_feedback: CopyFeedbackState::default(),
             screen_background: None,
+            key_dispatch_config,
+            key_dispatch_state,
+            framework_effects: Vec::new(),
         };
 
         backend.core.init();
         backend.render();
         backend
+    }
+
+    fn new_with_props_inner(
+        component: C,
+        props: C::Properties,
+        inline_transcript_mode: bool,
+    ) -> Self {
+        Self::new_with_app_inner(App::new(), component, props, inline_transcript_mode)
     }
 
     /// Returns the current viewport used for layout.
@@ -260,21 +307,75 @@ where
     /// handled; that work is not counted here so browser embeddings can use the return value for
     /// `preventDefault` without stealing shortcuts when unrelated updates flush.
     pub fn send_key(&mut self, key: KeyEvent) -> Result<bool> {
-        let runtime_match = match self.keymap_runtime.feed(key) {
-            KeymapRuntimeResult::Pending => return Ok(true),
-            KeymapRuntimeResult::Matched(binding) => Some(binding),
-            KeymapRuntimeResult::None => None,
+        let clipboard = Rc::clone(&self.core.ctx.env().clipboard);
+        let clipboard_config = self.core.ctx.env().clipboard_config.clone();
+        self.framework_effects.clear();
+
+        if matches!(key.code, KeyCode::Esc) {
+            self.key_dispatch_state.reset_command_chord();
+        }
+
+        let selection_handled = {
+            let mut key_ctx = make_key_ctx(
+                Some(&self.read_only_selection),
+                &mut self.input_history,
+                &mut self.textarea_history,
+                &mut self.text_area_vim_state,
+                &mut self.hex_history,
+                &mut self.hex_pending_edit,
+                &self.keymap,
+                self.text_area_newline_binding,
+                &clipboard,
+                &clipboard_config,
+                &mut self.copy_feedback,
+            );
+            selection_clipboard_shortcut(&mut self.core.tree, &mut key_ctx, key)
         };
-        let action_from_chord = runtime_match.is_some_and(|binding| binding.is_chord);
-        let matches = runtime_match
-            .map(|binding| vec![binding.binding_match()])
-            .unwrap_or_else(|| self.keymap.matches(key));
-        let dismiss_handled = matches
+        if selection_handled {
+            let pump_dirty = self.pump()?;
+            if !pump_dirty {
+                self.render();
+            }
+            return Ok(true);
+        }
+
+        let focus = if self
+            .focused
+            .is_some_and(|id| self.core.tree.is_valid(id) && self.focused_is_terminal(id))
+        {
+            crate::app::input::key_dispatch::FocusKind::Terminal
+        } else {
+            crate::app::input::key_dispatch::FocusKind::Widget
+        };
+
+        if focus == crate::app::input::key_dispatch::FocusKind::Widget {
+            use crate::app::input::keymap::KeymapRuntimeResult;
+            match self.keymap_runtime.feed(key) {
+                KeymapRuntimeResult::Pending => return Ok(true),
+                KeymapRuntimeResult::Matched(binding) if binding.is_chord => {
+                    if binding.action == Action::Quit {
+                        self.core.ctx.quit();
+                        let _ = self.pump()?;
+                        return Ok(true);
+                    }
+                    if binding.action == Action::DismissOverlay && self.handle_overlay_escape() {
+                        let _ = self.pump()?;
+                        self.render();
+                        return Ok(true);
+                    }
+                }
+                KeymapRuntimeResult::Matched(_) | KeymapRuntimeResult::None => {}
+            }
+        } else {
+            self.keymap_runtime.reset();
+        }
+
+        let dismiss_handled = self
+            .keymap
+            .matches(key)
             .iter()
             .any(|binding| binding.action == Action::DismissOverlay)
             && self.handle_overlay_escape();
-        let quit_requested = matches.iter().any(|binding| binding.action == Action::Quit);
-
         if dismiss_handled {
             let _ = self.pump()?;
             self.render();
@@ -282,72 +383,138 @@ where
         }
 
         if self.top_capturing_overlay_is_empty() {
-            if quit_requested {
+            if self
+                .keymap
+                .matches(key)
+                .iter()
+                .any(|binding| binding.action == Action::Quit)
+            {
                 self.core.ctx.quit();
                 let _ = self.pump()?;
             }
             return Ok(true);
         }
 
-        if action_from_chord && quit_requested {
-            self.core.ctx.quit();
-            let _ = self.pump()?;
-            self.render();
+        if self
+            .core
+            .tree
+            .top_capturing_overlay()
+            .is_some_and(|overlay| overlay.captures_focus)
+            && self.focused.is_none()
+            && !matches!(key.code, KeyCode::Esc)
+        {
             return Ok(true);
         }
 
-        let clipboard = Rc::clone(&self.core.ctx.env().clipboard);
-        let clipboard_config = self.core.ctx.env().clipboard_config.clone();
+        if focus == crate::app::input::key_dispatch::FocusKind::Terminal {
+            self.keymap_runtime.reset();
+        }
+        let key_dispatch_config = self.key_dispatch_config;
 
+        let TestBackend {
+            core,
+            focused,
+            focused_key,
+            focused_tag,
+            focus_stack,
+            keymap,
+            keymap_runtime,
+            text_area_newline_binding,
+            input_history,
+            textarea_history,
+            text_area_vim_state,
+            hex_history,
+            hex_pending_edit,
+            key_dispatch_state,
+            framework_effects,
+            copy_feedback,
+            ..
+        } = self;
+
+        let command_registry = core.ctx.command_registry();
         let mut key_ctx = KeyCtx {
             read_only_selection: None,
-            input_history: &mut self.input_history,
-            textarea_history: &mut self.textarea_history,
-            text_area_vim_state: &mut self.text_area_vim_state,
-            hex_history: &mut self.hex_history,
-            hex_pending_edit: &mut self.hex_pending_edit,
-            keymap: &self.keymap,
-            text_area_newline_binding: self.text_area_newline_binding,
+            input_history,
+            textarea_history,
+            text_area_vim_state,
+            hex_history,
+            hex_pending_edit,
+            keymap,
+            text_area_newline_binding: *text_area_newline_binding,
             clipboard: &clipboard,
             clipboard_config: &clipboard_config,
-            copy_feedback: &mut self.copy_feedback,
+            copy_feedback,
             dirty_override: None,
         };
 
-        let widget_handled =
-            keyboard::dispatch_key(&mut self.core.tree, self.focused, key, &mut key_ctx);
-        let widget_dirty_override = key_ctx.dirty_override;
-
-        let bubble = if !widget_handled {
-            self.core
-                .bubble_key(self.focused, self.focused_key.as_ref(), key)
-        } else {
-            BubbleKeyResult::default()
+        let mut ops = TestBackendDispatchOps {
+            core,
+            focused,
+            focused_key,
+            focused_tag,
+            focus_stack,
+            keymap,
+            keymap_runtime,
+            key_dispatch_state,
+            key_dispatch_config,
+            framework_effects,
+            command_registry,
+            key_ctx: &mut key_ctx,
+            clipboard: &clipboard,
+            clipboard_config: &clipboard_config,
         };
+        let outcome = crate::app::input::key_dispatch::dispatch_key(
+            crate::app::input::key_dispatch::DispatchRequest::new(key, focus)
+                .key_policy(key_dispatch_config.key_dispatch_policy)
+                .terminal_policy(key_dispatch_config.terminal_key_policy)
+                .chord_mismatch_policy(key_dispatch_config.chord_mismatch_policy),
+            &mut ops,
+        );
+        let dispatch = ops.finish(outcome);
 
-        let ambient_handled = if !widget_handled && !bubble.handled && !bubble.dirty {
-            keyboard::dispatch_ambient_page_scroll(&mut self.core.tree, key)
-        } else {
-            false
-        };
-
-        let quit_handled = quit_requested && !widget_handled && !bubble.handled;
-        if quit_handled {
+        if dispatch.quit {
             self.core.ctx.quit();
         }
 
         let pump_dirty = self.pump()?;
-        let widget_dirty = matches!(
-            widget_dirty_override,
-            Some(crate::app::interaction_state::DirtyLevel::PaintOnly)
-                | Some(crate::app::interaction_state::DirtyLevel::LayoutOnly)
-                | Some(crate::app::interaction_state::DirtyLevel::Full)
-        );
-        if (widget_dirty || bubble.dirty || ambient_handled || quit_handled) && !pump_dirty {
+        if (dispatch.dirty || dispatch.layout_dirty || dispatch.quit) && !pump_dirty {
             self.render();
         }
 
-        Ok(widget_handled || bubble.handled || ambient_handled || quit_handled)
+        Ok(dispatch.handled)
+    }
+
+    #[cfg(feature = "terminal")]
+    fn focused_is_terminal(&self, id: NodeId) -> bool {
+        matches!(
+            self.core.tree.node(id).kind,
+            crate::core::node::NodeKind::Terminal(_)
+        )
+    }
+
+    #[cfg(not(feature = "terminal"))]
+    fn focused_is_terminal(&self, _id: NodeId) -> bool {
+        false
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn focus_terminal_by_key_for_test(&mut self, key: &str) -> bool {
+        self.focus_for_node_by_key(Key::from(key.to_string()))
+    }
+
+    #[cfg(test)]
+    fn focus_for_node_by_key(&mut self, key: Key) -> bool {
+        let id = self
+            .core
+            .tree
+            .iter()
+            .find(|node| node.key.as_ref() == Some(&key))
+            .map(|node| node.id);
+        let Some(id) = id else {
+            return false;
+        };
+        self.focus_for_node(id)
     }
 
     /// Inject a text paste event through the same focused-widget pipeline as the real runner.
@@ -811,6 +978,425 @@ fn collect_element_texts(element: &Element, out: &mut Vec<String>) {
     }
     for child in element.kind.children() {
         collect_element_texts(child, out);
+    }
+}
+
+struct TestBackendDispatchOps<'a, C: Component> {
+    core: &'a mut RuntimeCore<C>,
+    focused: &'a mut Option<NodeId>,
+    focused_key: &'a mut Option<Key>,
+    focused_tag: &'a mut Option<Tag>,
+    focus_stack: &'a mut Vec<Option<Key>>,
+    keymap: &'a Keymap,
+    keymap_runtime: &'a mut KeymapRuntime,
+    key_dispatch_state: &'a mut RuntimeKeyDispatchState,
+    key_dispatch_config: RuntimeKeyDispatchConfig,
+    framework_effects: &'a mut Vec<FrameworkSideEffect>,
+    command_registry: crate::app::input::command_registry::CommandRegistry,
+    key_ctx: &'a mut KeyCtx<'a>,
+    #[allow(dead_code)]
+    clipboard: &'a crate::clipboard::ClipboardService,
+    #[allow(dead_code)]
+    clipboard_config: &'a ClipboardConfig,
+}
+
+impl<C: Component> TestBackendDispatchOps<'_, C> {
+    fn top_capturing_overlay_is_empty(&self) -> bool {
+        self.core
+            .tree
+            .top_capturing_overlay()
+            .is_some_and(|overlay| self.core.tree.focusables_in_subtree(overlay.id).is_empty())
+    }
+
+    fn handle_overlay_escape(&mut self) -> bool {
+        let overlays: Vec<_> = self.core.tree.overlay_roots().to_vec();
+        for overlay in overlays.iter().rev() {
+            if overlay.dismiss_policy.dismiss_on_escape() {
+                return self.dismiss_overlay(overlay);
+            }
+        }
+        overlays.iter().any(|overlay| overlay.captures_focus)
+    }
+
+    fn dismiss_overlay(&mut self, overlay: &OverlayRoot) -> bool {
+        let dismissed = if let Some(id) = overlay.overlay_id {
+            self.core.overlay_manager.borrow_mut().dismiss(id)
+        } else if let Some(cb) = &overlay.on_dismiss {
+            cb.emit(());
+            true
+        } else {
+            false
+        };
+
+        if dismissed
+            && overlay.captures_focus
+            && let Some(saved_key) = self.focus_stack.pop()
+        {
+            *self.focused_key = saved_key;
+            *self.focused = None;
+            focus::restore_focus(
+                &self.core.tree,
+                self.focused,
+                self.focused_key,
+                self.focused_tag,
+            );
+        }
+        dismissed
+    }
+
+    fn focus_overlay_next(&mut self) -> bool {
+        let Some(overlay) = self.core.tree.top_capturing_overlay() else {
+            return false;
+        };
+        let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
+        if focusables.is_empty() {
+            return true;
+        }
+
+        focusables.sort_by_key(|id| id.index());
+        let next = if let Some(curr) = *self.focused
+            && let Some(idx) = focusables.iter().position(|id| *id == curr)
+        {
+            focusables[(idx + 1) % focusables.len()]
+        } else {
+            focusables[0]
+        };
+        *self.focused = Some(next);
+        *self.focused_key = self.core.tree.node(next).key.clone();
+        *self.focused_tag = Some(crate::layout::tag::tag_of_node(self.core.tree.node(next)));
+        true
+    }
+
+    fn focus_overlay_prev(&mut self) -> bool {
+        let Some(overlay) = self.core.tree.top_capturing_overlay() else {
+            return false;
+        };
+        let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
+        if focusables.is_empty() {
+            return true;
+        }
+
+        focusables.sort_by_key(|id| id.index());
+        let prev = if let Some(curr) = *self.focused
+            && let Some(idx) = focusables.iter().position(|id| *id == curr)
+        {
+            focusables[(idx + focusables.len().saturating_sub(1)) % focusables.len()]
+        } else {
+            focusables[focusables.len().saturating_sub(1)]
+        };
+        *self.focused = Some(prev);
+        *self.focused_key = self.core.tree.node(prev).key.clone();
+        *self.focused_tag = Some(crate::layout::tag::tag_of_node(self.core.tree.node(prev)));
+        true
+    }
+
+    fn focused_is_terminal(&self, id: NodeId) -> bool {
+        #[cfg(feature = "terminal")]
+        {
+            matches!(
+                self.core.tree.node(id).kind,
+                crate::core::node::NodeKind::Terminal(_)
+            )
+        }
+        #[cfg(not(feature = "terminal"))]
+        {
+            let _ = id;
+            false
+        }
+    }
+
+    fn forward_terminal_key(&mut self, key: KeyEvent) -> bool {
+        #[cfg(feature = "terminal")]
+        if let Some(id) = self.focused.filter(|id| self.core.tree.is_valid(*id))
+            && self.focused_is_terminal(id)
+        {
+            use crate::app::input::handlers::terminal::forward_key;
+            return forward_key(&mut self.core.tree, id, key);
+        }
+        keyboard::dispatch_key(&mut self.core.tree, *self.focused, key, self.key_ctx)
+    }
+
+    fn finish(self, outcome: DispatchOutcome) -> RuntimeKeyDispatchOutcome {
+        let mut result = RuntimeKeyDispatchOutcome::default();
+        match outcome {
+            DispatchOutcome::Widget
+            | DispatchOutcome::Bubble
+            | DispatchOutcome::Command
+            | DispatchOutcome::CommandPending
+            | DispatchOutcome::Framework
+            | DispatchOutcome::TerminalPreflight
+            | DispatchOutcome::Terminal
+            | DispatchOutcome::AmbientScroll => result.handled = true,
+            DispatchOutcome::FrameworkQuit => {
+                result.handled = true;
+                result.quit = true;
+            }
+            DispatchOutcome::Unhandled => {}
+        }
+
+        if matches!(
+            outcome,
+            DispatchOutcome::Widget
+                | DispatchOutcome::Bubble
+                | DispatchOutcome::Terminal
+                | DispatchOutcome::TerminalPreflight
+                | DispatchOutcome::AmbientScroll
+        ) {
+            result.dirty = true;
+            if matches!(
+                outcome,
+                DispatchOutcome::Widget | DispatchOutcome::AmbientScroll
+            ) {
+                result.layout_dirty = true;
+            }
+        }
+
+        if let Some(level) = self.key_ctx.dirty_override {
+            result.dirty = true;
+            result.layout_dirty = matches!(
+                level,
+                crate::app::interaction_state::DirtyLevel::LayoutOnly
+                    | crate::app::interaction_state::DirtyLevel::Full
+            );
+        }
+
+        result
+    }
+}
+
+impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
+    fn continue_command_chord(&mut self, key: KeyEvent) -> CommandDispatchState {
+        let was_pending = self.key_dispatch_state.command_runtime.is_pending();
+        match self
+            .key_dispatch_state
+            .command_runtime
+            .feed(key, &self.command_registry)
+        {
+            CommandShortcutResult::Pending
+                if !was_pending
+                    && self.key_dispatch_config.key_dispatch_policy
+                        == crate::KeyDispatchPolicy::WidgetFirst =>
+            {
+                self.key_dispatch_state.command_runtime.reset();
+                self.key_dispatch_state.pending_command_prefix = None;
+                CommandDispatchState::None
+            }
+            CommandShortcutResult::Pending => {
+                // Remember the first key that starts an accepted chord so a later
+                // mismatch can replay it under `ForwardPrefixAndCurrent`.
+                if !was_pending {
+                    self.key_dispatch_state.pending_command_prefix = Some(key);
+                }
+                CommandDispatchState::Pending
+            }
+            CommandShortcutResult::Matched(_id) if !was_pending => {
+                self.key_dispatch_state.command_runtime.reset();
+                self.key_dispatch_state.pending_command_prefix = None;
+                CommandDispatchState::None
+            }
+            CommandShortcutResult::Matched(id) => {
+                self.key_dispatch_state.pending_command_prefix = None;
+                self.command_registry.execute(id.clone());
+                CommandDispatchState::Matched(id.as_str().into())
+            }
+            CommandShortcutResult::Mismatch => {
+                // Keep the swallowed prefix so the consuming sink can forward it
+                // ahead of the mismatching key under `ForwardPrefixAndCurrent`.
+                // Other policies leave it to be cleared on the next reset or
+                // non-chord key.
+                CommandDispatchState::Mismatch
+            }
+            CommandShortcutResult::None => {
+                self.key_dispatch_state.pending_command_prefix = None;
+                CommandDispatchState::None
+            }
+        }
+    }
+
+    fn dispatch_widget(&mut self, key: KeyEvent) -> bool {
+        crate::app::input::runtime_dispatch::dispatch_widget_with_policy(
+            &mut self.core.tree,
+            *self.focused,
+            key,
+            self.key_ctx,
+            self.key_dispatch_config.key_dispatch_policy,
+        )
+    }
+
+    fn dispatch_bubble(&mut self, key: KeyEvent) -> bool {
+        use crate::app::input::key_dispatch::ChordMismatchPolicy;
+        if matches!(
+            self.key_dispatch_config.chord_mismatch_policy,
+            ChordMismatchPolicy::ForwardPrefixAndCurrent
+        ) && let Some(prefix) = self.key_dispatch_state.pending_command_prefix.take()
+        {
+            let prefix_bubble =
+                self.core
+                    .bubble_key(*self.focused, self.focused_key.as_ref(), prefix);
+            if prefix_bubble.handled || prefix_bubble.dirty {
+                self.key_ctx.dirty_override = Some(crate::app::interaction_state::DirtyLevel::Full);
+            }
+        }
+        self.core
+            .bubble_key(*self.focused, self.focused_key.as_ref(), key)
+            .handled
+    }
+
+    fn dispatch_command(&mut self, key: KeyEvent) -> bool {
+        let matches = self
+            .command_registry
+            .matching_enabled_shortcuts(key, self.key_dispatch_config.command_conflict_policy);
+        if let Some(id) = matches.into_iter().next() {
+            self.command_registry.execute(id);
+            return true;
+        }
+        false
+    }
+
+    fn dispatch_framework(&mut self, key: KeyEvent) -> FrameworkDispatch {
+        use crate::app::input::keymap::{Action, KeymapRuntimeResult};
+
+        let runtime_match = match self.keymap_runtime.feed(key) {
+            KeymapRuntimeResult::Pending => return FrameworkDispatch::Handled,
+            KeymapRuntimeResult::Matched(binding) => Some(binding),
+            KeymapRuntimeResult::None => None,
+        };
+        let action_from_chord = runtime_match.is_some_and(|binding| binding.is_chord);
+        let matches = runtime_match
+            .map(|binding| vec![binding.binding_match()])
+            .unwrap_or_else(|| self.keymap.matches(key));
+
+        if !self.top_capturing_overlay_is_empty()
+            && matches.iter().any(|binding| binding.action == Action::Quit)
+        {
+            return FrameworkDispatch::Quit;
+        }
+
+        if matches
+            .iter()
+            .any(|binding| binding.action == Action::DismissOverlay)
+            && self.handle_overlay_escape()
+        {
+            return FrameworkDispatch::Handled;
+        }
+
+        if matches
+            .iter()
+            .any(|binding| binding.action == Action::FocusNext)
+        {
+            if !action_from_chord
+                && crate::app::input::runtime_dispatch::should_dispatch_text_area_tab_first(
+                    &self.core.tree,
+                    *self.focused,
+                    key,
+                )
+                && keyboard::dispatch_key(&mut self.core.tree, *self.focused, key, self.key_ctx)
+            {
+                return FrameworkDispatch::Handled;
+            }
+            if self.focus_overlay_next() {
+                return FrameworkDispatch::Handled;
+            }
+            focus::focus_next(
+                &self.core.tree,
+                self.focused,
+                self.focused_key,
+                self.focused_tag,
+            );
+            return FrameworkDispatch::Handled;
+        }
+
+        if matches
+            .iter()
+            .any(|binding| binding.action == Action::FocusPrev)
+        {
+            if !action_from_chord
+                && crate::app::input::runtime_dispatch::should_dispatch_text_area_tab_first(
+                    &self.core.tree,
+                    *self.focused,
+                    key,
+                )
+                && keyboard::dispatch_key(&mut self.core.tree, *self.focused, key, self.key_ctx)
+            {
+                return FrameworkDispatch::Handled;
+            }
+            if self.focus_overlay_prev() {
+                return FrameworkDispatch::Handled;
+            }
+            focus::focus_prev(
+                &self.core.tree,
+                self.focused,
+                self.focused_key,
+                self.focused_tag,
+            );
+            return FrameworkDispatch::Handled;
+        }
+
+        if matches
+            .iter()
+            .any(|binding| binding.action == Action::ToggleDevTools)
+        {
+            self.framework_effects
+                .push(FrameworkSideEffect::ToggleDevtools);
+            return FrameworkDispatch::Handled;
+        }
+
+        if matches.iter().any(|binding| binding.action == Action::Quit) {
+            if action_from_chord || self.top_capturing_overlay_is_empty() {
+                return FrameworkDispatch::Quit;
+            }
+            let bubble = self
+                .core
+                .bubble_key(*self.focused, self.focused_key.as_ref(), key);
+            if bubble.handled {
+                return FrameworkDispatch::Handled;
+            }
+            return FrameworkDispatch::Quit;
+        }
+
+        FrameworkDispatch::None
+    }
+
+    fn dispatch_terminal_preflight(&mut self, key: KeyEvent) -> TerminalPreflightDispatch {
+        #[cfg(not(feature = "terminal"))]
+        {
+            let _ = key;
+            TerminalPreflightDispatch::NotApplicable
+        }
+        #[cfg(feature = "terminal")]
+        {
+            use crate::app::input::handlers::terminal::{TerminalPreflightResult, preflight_key};
+            let Some(id) = self.focused.filter(|id| self.core.tree.is_valid(*id)) else {
+                return TerminalPreflightDispatch::NotApplicable;
+            };
+            match preflight_key(
+                &mut self.core.tree,
+                id,
+                key,
+                self.clipboard,
+                self.clipboard_config,
+            ) {
+                TerminalPreflightResult::Consumed => TerminalPreflightDispatch::Consumed,
+                TerminalPreflightResult::NotConsumed => TerminalPreflightDispatch::NotConsumed,
+                TerminalPreflightResult::NotApplicable => TerminalPreflightDispatch::NotApplicable,
+            }
+        }
+    }
+
+    fn dispatch_terminal(&mut self, key: KeyEvent) -> bool {
+        use crate::app::input::key_dispatch::ChordMismatchPolicy;
+        if matches!(
+            self.key_dispatch_config.chord_mismatch_policy,
+            ChordMismatchPolicy::ForwardPrefixAndCurrent
+        ) && let Some(prefix) = self.key_dispatch_state.pending_command_prefix.take()
+        {
+            self.forward_terminal_key(prefix);
+        }
+        self.forward_terminal_key(key)
+    }
+
+    fn dispatch_ambient_scroll(&mut self, key: KeyEvent) -> bool {
+        keyboard::dispatch_ambient_page_scroll(&mut self.core.tree, key)
     }
 }
 

@@ -289,7 +289,7 @@ fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
             .label("Toggle word wrap")
             .description("Enable or disable editor wrapping")
             .category("Application")
-            .keybinding("p")
+            .keybinding_hint("p")
             .handler(Callback::new(move |_| link.send(Msg::ToggleWrap)))
             .build(),
     );

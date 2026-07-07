@@ -13,6 +13,15 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Layered keyboard dispatch: `FrameworkAction`, `FrameworkKeymap`, `UserKeymapPolicy`,
+  `KeyDispatchPolicy`, `TerminalKeyPolicy`, `CommandConflictPolicy`, and
+  `ChordMismatchPolicy` for explicit app-side input routing control.
+- `App::framework_keymap`, `App::global_quit`, `App::user_keymap_policy`,
+  `App::key_dispatch_policy`, `App::terminal_key_policy`,
+  `App::command_conflict_policy`, and `App::chord_mismatch_policy` builders.
+- Executable app command shortcuts via `CommandBuilder::shortcut` /
+  `CommandBuilder::shortcuts` with deterministic conflict resolution and chord
+  runtime support.
 - `SplitterHandleMode` (`Splitter::handle_mode`): `Gutter` (default) keeps the
   classic reserved handle gutter; `Border` drops the gutter and rides the pane
   border seam, deriving handle thickness from the borders actually present
@@ -42,6 +51,10 @@ While the crate is on `0.x.y`:
   See `docs/inline-mode.md` and `examples/inline_auto_height.rs`.
 
 ### Changed
+
+- **(breaking)** Renamed `CommandBuilder::keybinding(...)` to
+  `CommandBuilder::keybinding_hint(...)` for display-only palette hints;
+  executable bindings use `shortcut(...)` / `shortcuts(...)`.
 
 - **(breaking)** The `height` field of `SurfaceMode::InlineEphemeral` and
   `SurfaceMode::InlineTranscript` is now `InlineHeight` instead of `u16`.

@@ -1,6 +1,8 @@
 use crate::clipboard::{ClipboardConfig, PasteShiftInsertBehavior};
 use crate::core::event::{KeyCode, KeyEvent};
-use crate::input::{ChordMatcher, ChordResult, KeyBinding, KeyBindingParseError, is_none_binding};
+use crate::input::{
+    ChordMatcher, ChordResult, KeyBinding, KeyBindingParseError, KeyBindings, is_none_binding,
+};
 use std::collections::{HashMap as StdHashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -9,6 +11,7 @@ use std::sync::LazyLock;
 #[cfg(test)]
 use crate::core::event::KeyMods;
 
+#[cfg(not(test))]
 const KEYMAP_ENV: &str = "TUI_LIPAN_KEYMAP";
 const DEFAULT_KEYMAP_NAME: &str = "keymap.conf";
 
@@ -79,6 +82,71 @@ pub enum Action {
     InsertChar(char),
     /// No action mapped.
     None,
+}
+
+/// Framework-owned actions that can be configured from Rust app builders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FrameworkAction {
+    /// Quit the application.
+    Quit,
+    /// Dismiss the top-most overlay.
+    DismissOverlay,
+    /// Move focus to the next focusable widget.
+    FocusNext,
+    /// Move focus to the previous focusable widget.
+    FocusPrev,
+    /// Toggle DevTools visibility.
+    ToggleDevTools,
+}
+
+impl FrameworkAction {
+    fn action(self) -> Action {
+        match self {
+            Self::Quit => Action::Quit,
+            Self::DismissOverlay => Action::DismissOverlay,
+            Self::FocusNext => Action::FocusNext,
+            Self::FocusPrev => Action::FocusPrev,
+            Self::ToggleDevTools => Action::ToggleDevTools,
+        }
+    }
+}
+
+/// Enables or disables loading user keymap files from env/default paths.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UserKeymapPolicy {
+    /// Load user keymap files normally.
+    #[default]
+    Enabled,
+    /// Ignore user keymap files while preserving built-in defaults.
+    Disabled,
+}
+
+#[derive(Debug, Clone)]
+enum FrameworkBindingOverride {
+    Bind(KeyBindings),
+    Unbind,
+}
+
+/// Rust-side framework keymap overrides applied after file and built-in bindings.
+#[derive(Debug, Clone, Default)]
+pub struct FrameworkKeymap {
+    overrides: StdHashMap<FrameworkAction, FrameworkBindingOverride>,
+}
+
+impl FrameworkKeymap {
+    /// Bind a framework action to one or more key bindings.
+    pub fn bind(mut self, action: FrameworkAction, bindings: KeyBindings) -> Self {
+        self.overrides
+            .insert(action, FrameworkBindingOverride::Bind(bindings));
+        self
+    }
+
+    /// Remove all key bindings for a framework action.
+    pub fn unbind(mut self, action: FrameworkAction) -> Self {
+        self.overrides
+            .insert(action, FrameworkBindingOverride::Unbind);
+        self
+    }
 }
 
 impl Action {
@@ -249,6 +317,8 @@ pub(crate) struct KeymapConfig {
     pub enable_performable_ctrl_c_copy: bool,
     pub paste_shift_insert_behavior: PasteShiftInsertBehavior,
     pub keymap_path: Option<PathBuf>,
+    pub user_keymap_policy: UserKeymapPolicy,
+    pub framework_keymap: FrameworkKeymap,
 }
 
 impl KeymapConfig {
@@ -257,11 +327,23 @@ impl KeymapConfig {
             enable_performable_ctrl_c_copy: config.enable_performable_ctrl_c_copy,
             paste_shift_insert_behavior: config.paste_shift_insert_behavior,
             keymap_path: None,
+            user_keymap_policy: UserKeymapPolicy::Enabled,
+            framework_keymap: FrameworkKeymap::default(),
         }
     }
 
     pub fn keymap_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.keymap_path = Some(path.into());
+        self
+    }
+
+    pub fn user_keymap_policy(mut self, policy: UserKeymapPolicy) -> Self {
+        self.user_keymap_policy = policy;
+        self
+    }
+
+    pub fn framework_keymap(mut self, keymap: FrameworkKeymap) -> Self {
+        self.framework_keymap = keymap;
         self
     }
 }
@@ -304,16 +386,42 @@ fn default_keymap_path() -> Option<PathBuf> {
     None
 }
 
+#[cfg(test)]
+static TEST_KEYMAP_ENV: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+fn set_test_keymap_env(path: impl Into<PathBuf>) {
+    *TEST_KEYMAP_ENV.lock().expect("test env lock") = Some(path.into());
+}
+
+#[cfg(test)]
+fn remove_test_keymap_env() {
+    *TEST_KEYMAP_ENV.lock().expect("test env lock") = None;
+}
+
+#[cfg(test)]
+fn env_keymap_path() -> Option<PathBuf> {
+    TEST_KEYMAP_ENV.lock().expect("test env lock").clone()
+}
+
+#[cfg(not(test))]
+fn env_keymap_path() -> Option<PathBuf> {
+    if let Ok(raw) = std::env::var(KEYMAP_ENV) {
+        let raw = raw.trim();
+        if !raw.is_empty() {
+            return Some(PathBuf::from(raw));
+        }
+    }
+    None
+}
+
 fn resolve_keymap_path(config: &KeymapConfig) -> Option<(PathBuf, bool)> {
     if let Some(path) = config.keymap_path.clone() {
         return Some((path, true));
     }
 
-    if let Ok(raw) = std::env::var(KEYMAP_ENV) {
-        let raw = raw.trim();
-        if !raw.is_empty() {
-            return Some((PathBuf::from(raw), true));
-        }
+    if let Some(path) = env_keymap_path() {
+        return Some((path, true));
     }
     let path = default_keymap_path()?;
     if path.is_file() {
@@ -403,6 +511,10 @@ fn parse_keymap_file(path: &Path, contents: &str) -> ParsedKeymapConfig {
 }
 
 fn load_user_bindings(config: &KeymapConfig) -> ParsedKeymapConfig {
+    if config.user_keymap_policy == UserKeymapPolicy::Disabled {
+        return ParsedKeymapConfig::default();
+    }
+
     let Some((path, explicit)) = resolve_keymap_path(config) else {
         return ParsedKeymapConfig::default();
     };
@@ -422,6 +534,20 @@ fn load_user_bindings(config: &KeymapConfig) -> ParsedKeymapConfig {
     };
 
     parse_keymap_file(&path, &contents)
+}
+
+fn apply_framework_keymap_overrides(bindings: &mut Vec<Binding>, keymap: &FrameworkKeymap) {
+    for (framework_action, override_) in &keymap.overrides {
+        let action = framework_action.action();
+        bindings.retain(|binding| binding.action != action);
+        if let FrameworkBindingOverride::Bind(key_bindings) = override_ {
+            bindings.extend(key_bindings.iter().cloned().map(|combination| Binding {
+                mode: binding_mode_for(action, &combination),
+                combination,
+                action,
+            }));
+        }
+    }
 }
 
 fn default_bindings(config: &KeymapConfig) -> Vec<Binding> {
@@ -561,6 +687,7 @@ impl Keymap {
             }
             bindings.push(binding);
         }
+        apply_framework_keymap_overrides(&mut bindings, &config.framework_keymap);
         let index = build_binding_index(&bindings);
         Self { bindings, index }
     }
@@ -737,6 +864,106 @@ mod tests {
 
         assert_eq!(resolved.0, PathBuf::from("/tmp/project-keymap.conf"));
         assert!(resolved.1);
+    }
+
+    fn write_temp_keymap(contents: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("tui-lipan-keymap-{unique}.conf"));
+        fs::write(&path, contents).expect("write test keymap");
+        path
+    }
+
+    #[test]
+    fn rust_framework_unbind_beats_explicit_keymap_file() {
+        let path = write_temp_keymap("quit = ctrl-q\n");
+        let config = KeymapConfig::from_clipboard_config(&ClipboardConfig::default())
+            .keymap_path(&path)
+            .framework_keymap(FrameworkKeymap::default().unbind(FrameworkAction::Quit));
+        let keymap = Keymap::new(config);
+        let _ = fs::remove_file(&path);
+        assert!(keymap.matches(ctrl_key('q')).is_empty());
+    }
+
+    #[test]
+    fn app_keymap_path_beats_env_keymap() {
+        let env_path = write_temp_keymap("quit = ctrl-x q\n");
+        let app_path = write_temp_keymap("quit = ctrl-y q\n");
+        set_test_keymap_env(&env_path);
+        let config =
+            KeymapConfig::from_clipboard_config(&ClipboardConfig::default()).keymap_path(&app_path);
+        let keymap = Keymap::new(config);
+        remove_test_keymap_env();
+        let _ = fs::remove_file(&env_path);
+        let _ = fs::remove_file(&app_path);
+        assert!(
+            keymap
+                .binding_for_action(Action::Quit)
+                .is_some_and(|b| b.canonical_lowercase() == "ctrl+y q")
+        );
+    }
+
+    #[test]
+    fn rust_framework_rebind_beats_file_none() {
+        let path = write_temp_keymap("quit = none\n");
+        let config = KeymapConfig::from_clipboard_config(&ClipboardConfig::default())
+            .keymap_path(&path)
+            .framework_keymap(FrameworkKeymap::default().bind(
+                FrameworkAction::Quit,
+                KeyBindings::from_str("ctrl-y q").unwrap(),
+            ));
+        let keymap = Keymap::new(config);
+        let _ = fs::remove_file(&path);
+        assert!(
+            keymap
+                .binding_for_action(Action::Quit)
+                .is_some_and(|b| b.canonical_lowercase() == "ctrl+y q")
+        );
+    }
+
+    #[test]
+    fn user_keymap_policy_disabled_ignores_env_and_default_files() {
+        let path = write_temp_keymap("quit = ctrl-x q\n");
+        set_test_keymap_env(&path);
+        let config = KeymapConfig::from_clipboard_config(&ClipboardConfig::default())
+            .user_keymap_policy(UserKeymapPolicy::Disabled);
+        let keymap = Keymap::new(config);
+        remove_test_keymap_env();
+        let _ = fs::remove_file(&path);
+        assert!(keymap.binding_for_action(Action::Quit).is_some());
+        assert!(
+            keymap
+                .matches(ctrl_key('q'))
+                .iter()
+                .any(|b| b.action == Action::Quit)
+        );
+        assert!(
+            keymap
+                .matches(ctrl_key('x'))
+                .iter()
+                .all(|binding| binding.action != Action::Quit)
+        );
+    }
+
+    #[test]
+    fn user_keymap_policy_disabled_does_not_disable_builtins() {
+        let config = KeymapConfig::from_clipboard_config(&ClipboardConfig::default())
+            .user_keymap_policy(UserKeymapPolicy::Disabled);
+        let keymap = Keymap::new(config);
+        assert!(
+            keymap
+                .matches(ctrl_key('q'))
+                .iter()
+                .any(|b| b.action == Action::Quit)
+        );
+        assert!(
+            keymap
+                .matches(ctrl_key('c'))
+                .iter()
+                .any(|b| b.action == Action::Copy)
+        );
     }
 
     #[test]

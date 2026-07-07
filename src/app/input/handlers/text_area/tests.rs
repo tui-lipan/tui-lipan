@@ -4600,3 +4600,430 @@ fn vim_vertical_nav_accounts_for_inline_virtual_text() {
     ));
     assert_eq!(editor.cursor(), value.len());
 }
+
+// ─── Layered dispatch integration (TestBackend) ─────────────────────────────
+
+use std::cell::Cell;
+
+use crate::CommandEntry;
+use crate::KeyBinding;
+use crate::KeyDispatchPolicy;
+use crate::TestBackend;
+use crate::app::context::App;
+use crate::core::component::{Component, Context, Update};
+use crate::core::element::{Element, IntoElement};
+use crate::core::node::NodeId;
+use crate::widgets::Input;
+
+struct TextAreaClearBindingSmoke {
+    cleared: Rc<Cell<bool>>,
+}
+
+impl Component for TextAreaClearBindingSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let cleared = self.cleared.clone();
+        TextArea::new("hello world")
+            .clear_bindings(KeyBindings::from_str("ctrl-u").expect("binding"))
+            .on_change(Callback::new(move |event: TextAreaEvent| {
+                if event.value.is_empty() {
+                    cleared.set(true);
+                }
+            }))
+            .key("editor")
+    }
+}
+
+struct TextAreaInterceptorSmoke {
+    intercepted: Rc<Cell<bool>>,
+}
+
+impl Component for TextAreaInterceptorSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let intercepted = self.intercepted.clone();
+        TextArea::new("")
+            .key_interceptor(KeyHandler::new(move |key| {
+                if key == ctrl_char('k') {
+                    intercepted.set(true);
+                    true
+                } else {
+                    false
+                }
+            }))
+            .on_change(Callback::new(|_: TextAreaEvent| {}))
+            .key("editor")
+    }
+}
+
+struct TextAreaTabSmoke {
+    tabbed: Rc<Cell<bool>>,
+}
+
+impl Component for TextAreaTabSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let tabbed = self.tabbed.clone();
+        TextArea::new("")
+            .tab_width(4)
+            .insert_tab(true)
+            .on_change(Callback::new(move |event: TextAreaEvent| {
+                if event.value.as_ref() == "\t" {
+                    tabbed.set(true);
+                }
+            }))
+            .key("editor")
+    }
+}
+
+struct TextAreaSelectAllSmoke {
+    selected: Rc<Cell<bool>>,
+}
+
+impl Component for TextAreaSelectAllSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let selected = self.selected.clone();
+        Input::new("hello")
+            .on_change(Callback::new(move |event: crate::widgets::InputEvent| {
+                if event.anchor == Some(0) && event.cursor == event.value.len() {
+                    selected.set(true);
+                }
+            }))
+            .key("editor")
+    }
+}
+
+struct VimTextAreaDispatchSmoke {
+    changes: Rc<RefCell<Vec<String>>>,
+}
+
+impl Component for VimTextAreaDispatchSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = TextEditor;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        TextEditor::new("hello world")
+    }
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let changes = self.changes.clone();
+        TextArea::bound(&ctx.state)
+            .vim_motions(true)
+            .on_change(Callback::new(move |event: TextAreaEvent| {
+                changes.borrow_mut().push(event.value.to_string());
+            }))
+            .key("editor")
+    }
+}
+
+fn editor_node_id(backend: &TestBackend<impl Component>) -> NodeId {
+    backend
+        .core
+        .tree
+        .iter()
+        .find(|node| {
+            node.key
+                .as_ref()
+                .is_some_and(|key| key.as_ref() == "editor")
+        })
+        .map(|node| node.id)
+        .expect("editor node")
+}
+
+#[test]
+fn text_area_clear_binding_still_wins_before_app_command_in_widget_first_policy() {
+    let command_hit = Rc::new(Cell::new(false));
+    let cleared = Rc::new(Cell::new(false));
+    let app = App::new()
+        .mouse(false)
+        .key_dispatch_policy(KeyDispatchPolicy::WidgetFirst);
+    let mut backend = TestBackend::new_with_app(
+        app,
+        TextAreaClearBindingSmoke {
+            cleared: cleared.clone(),
+        },
+        (),
+    );
+    backend.core.ctx.command_registry().register(
+        CommandEntry::builder("app.clear")
+            .shortcut(KeyBinding::from_str("ctrl-u").expect("binding"))
+            .handler(Callback::new({
+                let command_hit = command_hit.clone();
+                move |_| command_hit.set(true)
+            }))
+            .build(),
+    );
+    let editor_id = editor_node_id(&backend);
+    backend.set_focused(editor_id);
+
+    assert!(backend.send_key(ctrl_char('u')).expect("send_key succeeds"));
+    assert!(!command_hit.get());
+    assert!(
+        cleared.get(),
+        "TextArea clear binding should clear the buffer"
+    );
+}
+
+#[test]
+fn text_area_key_interceptor_still_runs_before_builtins_and_commands() {
+    let command_hit = Rc::new(Cell::new(false));
+    let intercepted = Rc::new(Cell::new(false));
+    let app = App::new()
+        .mouse(false)
+        .key_dispatch_policy(KeyDispatchPolicy::WidgetFirst);
+    let mut backend = TestBackend::new_with_app(
+        app,
+        TextAreaInterceptorSmoke {
+            intercepted: intercepted.clone(),
+        },
+        (),
+    );
+    backend.core.ctx.command_registry().register(
+        CommandEntry::builder("app.kill")
+            .shortcut(KeyBinding::from_str("ctrl-k").expect("binding"))
+            .handler(Callback::new({
+                let command_hit = command_hit.clone();
+                move |_| command_hit.set(true)
+            }))
+            .build(),
+    );
+    let editor_id = editor_node_id(&backend);
+    backend.set_focused(editor_id);
+
+    assert!(backend.send_key(ctrl_char('k')).expect("send_key succeeds"));
+    assert!(intercepted.get());
+    assert!(!command_hit.get());
+}
+
+#[test]
+fn text_area_tab_first_shot_preserved() {
+    let tabbed = Rc::new(Cell::new(false));
+    let app = App::new().mouse(false);
+    let mut backend = TestBackend::new_with_app(
+        app,
+        TextAreaTabSmoke {
+            tabbed: tabbed.clone(),
+        },
+        (),
+    );
+    let editor_id = editor_node_id(&backend);
+    backend.set_focused(editor_id);
+
+    assert!(
+        backend
+            .send_key(key(KeyCode::Tab))
+            .expect("send_key succeeds")
+    );
+    assert_eq!(
+        backend.focused_key().map(|key| key.as_ref()),
+        Some("editor")
+    );
+    assert!(
+        tabbed.get(),
+        "TextArea should consume Tab before focus traversal"
+    );
+}
+
+#[test]
+fn ctrl_a_select_all_vs_app_prefix_respects_policy() {
+    let command_hit = Rc::new(Cell::new(false));
+    let selected = Rc::new(Cell::new(false));
+    let widget_first = App::new()
+        .mouse(false)
+        .key_dispatch_policy(KeyDispatchPolicy::WidgetFirst);
+    let mut widget_backend = TestBackend::new_with_app(
+        widget_first,
+        TextAreaSelectAllSmoke {
+            selected: selected.clone(),
+        },
+        (),
+    );
+    widget_backend.core.ctx.command_registry().register(
+        CommandEntry::builder("app.prefix")
+            .shortcut(KeyBinding::from_str("ctrl-a x").expect("binding"))
+            .handler(Callback::new({
+                let command_hit = command_hit.clone();
+                move |_| command_hit.set(true)
+            }))
+            .build(),
+    );
+    let editor_id = editor_node_id(&widget_backend);
+    widget_backend.set_focused(editor_id);
+
+    assert!(
+        widget_backend
+            .send_key(ctrl_char('a'))
+            .expect("send_key succeeds")
+    );
+    assert!(!command_hit.get());
+    assert!(
+        selected.get(),
+        "WidgetFirst should select all before app prefix"
+    );
+
+    command_hit.set(false);
+    selected.set(false);
+    let commands_first = App::new()
+        .mouse(false)
+        .key_dispatch_policy(KeyDispatchPolicy::AppCommandsFirst);
+    let mut command_backend = TestBackend::new_with_app(
+        commands_first,
+        TextAreaSelectAllSmoke {
+            selected: selected.clone(),
+        },
+        (),
+    );
+    command_backend.core.ctx.command_registry().register(
+        CommandEntry::builder("app.prefix")
+            .shortcut(KeyBinding::from_str("ctrl-a x").expect("binding"))
+            .handler(Callback::new({
+                let command_hit = command_hit.clone();
+                move |_| command_hit.set(true)
+            }))
+            .build(),
+    );
+    let editor_id = editor_node_id(&command_backend);
+    command_backend.set_focused(editor_id);
+
+    assert!(
+        command_backend
+            .send_key(ctrl_char('a'))
+            .expect("prefix succeeds")
+    );
+    assert!(
+        command_backend
+            .send_key(key(KeyCode::Char('x')))
+            .expect("suffix succeeds")
+    );
+    assert!(command_hit.get());
+    assert!(
+        !selected.get(),
+        "AppCommandsFirst should run app prefix before select all"
+    );
+}
+
+#[test]
+fn vim_text_area_pending_command_keeps_widget_precedence_over_app_shortcut() {
+    let command_hit = Rc::new(Cell::new(false));
+    let changes = Rc::new(RefCell::new(Vec::new()));
+    let app = App::new()
+        .mouse(false)
+        .key_dispatch_policy(KeyDispatchPolicy::WidgetFirst);
+    let mut backend = TestBackend::new_with_app(
+        app,
+        VimTextAreaDispatchSmoke {
+            changes: changes.clone(),
+        },
+        (),
+    );
+    backend.core.ctx.command_registry().register(
+        CommandEntry::builder("app.delete-word")
+            .shortcut(KeyBinding::from_str("d w").expect("binding"))
+            .handler(Callback::new({
+                let command_hit = command_hit.clone();
+                move |_| command_hit.set(true)
+            }))
+            .build(),
+    );
+    let editor_id = editor_node_id(&backend);
+    backend.set_focused(editor_id);
+
+    assert!(
+        backend
+            .send_key(key(KeyCode::Char('d')))
+            .expect("operator succeeds")
+    );
+    assert!(
+        backend
+            .send_key(key(KeyCode::Char('w')))
+            .expect("motion succeeds")
+    );
+    assert!(!command_hit.get());
+    assert_ne!(
+        changes.borrow().last().map(String::as_str),
+        Some("hello world"),
+        "Vim should mutate the buffer instead of the app shortcut"
+    );
+}
+
+#[test]
+fn app_commands_first_can_preempt_vim_text_area_shortcut_by_policy() {
+    let command_hit = Rc::new(Cell::new(false));
+    let changes = Rc::new(RefCell::new(Vec::new()));
+    let app = App::new()
+        .mouse(false)
+        .key_dispatch_policy(KeyDispatchPolicy::AppCommandsFirst);
+    let mut backend = TestBackend::new_with_app(
+        app,
+        VimTextAreaDispatchSmoke {
+            changes: changes.clone(),
+        },
+        (),
+    );
+    backend.core.ctx.command_registry().register(
+        CommandEntry::builder("app.delete-word")
+            .shortcut(KeyBinding::from_str("d w").expect("binding"))
+            .handler(Callback::new({
+                let command_hit = command_hit.clone();
+                move |_| command_hit.set(true)
+            }))
+            .build(),
+    );
+    let editor_id = editor_node_id(&backend);
+    backend.set_focused(editor_id);
+
+    assert!(
+        backend
+            .send_key(key(KeyCode::Char('d')))
+            .expect("prefix succeeds")
+    );
+    assert!(
+        backend
+            .send_key(key(KeyCode::Char('w')))
+            .expect("suffix succeeds")
+    );
+    assert!(command_hit.get());
+    assert!(changes.borrow().is_empty());
+}

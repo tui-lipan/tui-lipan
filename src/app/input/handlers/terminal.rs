@@ -16,18 +16,28 @@ pub(crate) fn handle_key(
     clipboard: &ClipboardService,
     clipboard_config: &ClipboardConfig,
 ) -> bool {
+    if preflight_key(tree, id, key, clipboard, clipboard_config).is_consumed() {
+        return true;
+    }
+    forward_key(tree, id, key)
+}
+
+/// Performable terminal-local clipboard/paste handling before app commands.
+pub(crate) fn preflight_key(
+    tree: &mut NodeTree,
+    id: NodeId,
+    key: KeyEvent,
+    clipboard: &ClipboardService,
+    clipboard_config: &ClipboardConfig,
+) -> TerminalPreflightResult {
     let node = tree.node(id);
     let NodeKind::Terminal(node) = &node.kind else {
-        return false;
+        return TerminalPreflightResult::NotApplicable;
     };
 
-    let handle_key = |handler: &KeyHandler| -> bool { handler.handle(key) };
-
-    // Copy selection: Ctrl+C (when selection exists) or Ctrl+Shift+C
     let is_ctrl_c = key.mods.ctrl && matches!(key.code, KeyCode::Char('C') | KeyCode::Char('c'));
     let has_selection = node.selection.as_ref().is_some_and(|sel| !sel.is_empty());
 
-    // Ctrl+C copies if selection exists; Ctrl+Shift+C always copies
     if is_ctrl_c && (has_selection || key.mods.shift) {
         if let Some(sel) = node.selection.as_ref()
             && !sel.is_empty()
@@ -60,41 +70,57 @@ pub(crate) fn handle_key(
                 }
             }
         }
-        return true;
+        return TerminalPreflightResult::Consumed;
     }
 
-    // Ctrl+Shift+V paste
     if key.mods.ctrl
         && key.mods.shift
         && matches!(key.code, KeyCode::Char('V') | KeyCode::Char('v'))
-        && let Some(on_input) = node.on_input.as_ref()
     {
-        match clipboard.read_clipboard_text() {
-            Ok(text) => {
-                let text = truncate_paste(&text, clipboard_config.paste_max_bytes);
-                let bytes = wrap_bracketed_paste(&text);
-                on_input.emit(crate::widgets::TerminalInputEvent {
-                    kind: TerminalInputKind::Paste,
-                    key: Some(key),
-                    bytes: bytes.into(),
-                });
+        let NodeKind::Terminal(node) = &tree.node(id).kind else {
+            return TerminalPreflightResult::NotApplicable;
+        };
+        if let Some(on_input) = node.on_input.as_ref() {
+            match clipboard.read_clipboard_text() {
+                Ok(text) => {
+                    let text = truncate_paste(&text, clipboard_config.paste_max_bytes);
+                    let bytes = wrap_bracketed_paste(&text);
+                    on_input.emit(crate::widgets::TerminalInputEvent {
+                        kind: TerminalInputKind::Paste,
+                        key: Some(key),
+                        bytes: bytes.into(),
+                    });
+                }
+                Err(err) => clipboard.report_error(err),
             }
-            Err(err) => clipboard.report_error(err),
+            return TerminalPreflightResult::Consumed;
         }
-        return true;
+        return TerminalPreflightResult::NotConsumed;
     }
 
-    // Clone callbacks before mutating
+    if is_ctrl_c || (key.mods.ctrl && key.mods.shift) {
+        return TerminalPreflightResult::NotConsumed;
+    }
+
+    TerminalPreflightResult::NotApplicable
+}
+
+/// Forward unmatched keys to terminal callbacks.
+pub(crate) fn forward_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) -> bool {
+    let node = tree.node(id);
+    let NodeKind::Terminal(node) = &node.kind else {
+        return false;
+    };
+
+    let handle_key = |handler: &KeyHandler| -> bool { handler.handle(key) };
+    let has_selection = node.selection.as_ref().is_some_and(|sel| !sel.is_empty());
     let on_key_cb = node.on_key.clone();
     let on_selection_cb = node.on_selection.clone();
 
-    // Clear selection when user types (any key that will be forwarded to PTY)
     if has_selection && on_key_cb.is_some() {
-        // Clear selection in the node
         if let NodeKind::Terminal(term) = &mut tree.node_mut(id).kind {
             term.selection = None;
         }
-        // Notify about selection clear
         if let Some(cb) = on_selection_cb {
             cb.emit(crate::widgets::TerminalSelectionEvent {
                 selection: None,
@@ -104,6 +130,19 @@ pub(crate) fn handle_key(
     }
 
     on_key_cb.as_ref().map(&handle_key).unwrap_or(false)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TerminalPreflightResult {
+    Consumed,
+    NotApplicable,
+    NotConsumed,
+}
+
+impl TerminalPreflightResult {
+    pub(crate) fn is_consumed(self) -> bool {
+        matches!(self, Self::Consumed)
+    }
 }
 
 pub(crate) fn handle_paste(tree: &mut NodeTree, id: NodeId, text: &str) -> bool {

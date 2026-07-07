@@ -112,6 +112,32 @@ Entries are parsed with the same **`KeyBinding` rules** as the public API, inclu
 
 When a key is a pending chord prefix, the runner consumes that prefix before focused-widget dispatch. If the following key completes the chord, the mapped built-in action runs. If it does not complete the chord, the matcher resets and tries that key as a fresh keypress, so it can still trigger a single-step keymap action or fall through to normal widget handling. There is no chord timeout.
 
+### Layered dispatch (Rust API)
+
+Explicit `App` configuration wins over file and environment keymaps:
+
+1. `App::framework_keymap(...)` / `App::global_quit(None)` (Rust)
+2. `App::keymap_path(...)` (app file)
+3. `TUI_LIPAN_KEYMAP` / default user keymap (when `UserKeymapPolicy::Enabled`)
+4. Built-in defaults
+
+Policy builders on `App`:
+
+```rust
+App::new()
+    .framework_keymap(FrameworkKeymap::default().unbind(FrameworkAction::Quit))
+    .global_quit(None) // sugar for unbinding quit
+    .user_keymap_policy(UserKeymapPolicy::Disabled)
+    .key_dispatch_policy(KeyDispatchPolicy::AppCommandsFirst)
+    .terminal_key_policy(TerminalKeyPolicy::AppCommandsThenTerminal)
+    .command_conflict_policy(CommandConflictPolicy::HighestPriority)
+    .chord_mismatch_policy(ChordMismatchPolicy::ForwardPrefixAndCurrent)
+```
+
+Command palette entries distinguish **display hints** (`keybinding_hint`) from **executable shortcuts** (`shortcut` / `shortcuts`). Shortcut conflicts resolve with `CommandConflictPolicy::FirstRegistered` (default) or `HighestPriority`.
+
+See [`focus.md`](focus.md) for the full keyboard dispatch order and [`widgets/terminal.md`](widgets/terminal.md) for terminal-focused policies.
+
 ---
 
 ## `KeyBinding` / `KeyBindings` parsing
