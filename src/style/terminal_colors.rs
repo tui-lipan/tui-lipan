@@ -124,6 +124,56 @@ pub fn query_keyboard_enhancement_support() -> Option<bool> {
     None
 }
 
+/// Discard any capability-probe responses still sitting in the TTY input queue.
+///
+/// The startup probes each send a Primary Device Attributes request (`CSI c`)
+/// as a sentinel: the keyboard-enhancement probe above, and (with the `image`
+/// feature) `ratatui-image`'s graphics query. Terminals answer with a DA1 reply
+/// such as `CSI ? 62 ; 22 ; 52 c`. A probe stops reading the moment it has the
+/// answer it needs, so the trailing DA reply can be left unread — e.g. a Kitty
+/// terminal answers `query_keyboard_enhancement_support` with `CSI ? … u` and we
+/// return before consuming the following `CSI c` reply. Those bytes stay
+/// invisible while the app holds raw mode, then get echoed to the shell prompt
+/// as a stray `^[[?…c` when the terminal is restored to cooked mode on exit.
+///
+/// Draining them here, right after the probes and before the event loop starts,
+/// prevents that. The window is short and bounded; a fast, already-drained TTY
+/// returns at the first empty poll.
+#[cfg(unix)]
+pub(crate) fn drain_pending_terminal_responses() {
+    let Some(fd) = tty_open() else {
+        return;
+    };
+    let _fd_guard = FdGuard(fd);
+    let Some(_raw_guard) = RawModeGuard::new(fd) else {
+        return;
+    };
+
+    // Probe replies arrive in well under a millisecond; a small grace window
+    // catches a straggler without a noticeable startup stall. Stop at the first
+    // empty poll so nothing is discarded once the queue is clear.
+    let deadline = Instant::now() + Duration::from_millis(50);
+    let mut chunk = [0u8; 256];
+    while Instant::now() < deadline {
+        let remaining = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis() as i32;
+        match poll_readable(fd, remaining.min(10)) {
+            Some(true) => {}
+            _ => break,
+        }
+        match tty_read(fd, &mut chunk) {
+            Some(n) if n > 0 => {}
+            _ => break,
+        }
+    }
+}
+
+/// Drain stub for non-Unix hosts. Windows terminals do not exhibit the leaked
+/// DA-reply behavior this guards against under crossterm's native handling.
+#[cfg(not(unix))]
+pub(crate) fn drain_pending_terminal_responses() {}
+
 /// Scan probe output for a decisive Kitty/DA reply.
 ///
 /// `Some(true)`  — a `CSI ? … u` Kitty flags reply appeared (protocol supported).
