@@ -187,11 +187,6 @@ pub(crate) fn public_decoration_layers_for_visible_range(
                     ));
                 }
             }
-            // Reserved for a later layout-aware pass. Virtual text changes measured
-            // width and wrapping, so treating it as a style-only range here would
-            // make cursor and metrics geometry lie.
-            #[allow(deprecated)]
-            TextAreaDecorationKind::VirtualText => {}
         }
     }
     out

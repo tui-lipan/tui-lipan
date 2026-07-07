@@ -219,6 +219,15 @@ Controls stack shrink order for widgets that opt into custom layout constraints.
 | `Orientation::Horizontal` | Horizontal divider, horizontal splitter |
 | `Orientation::Vertical` | Vertical divider, vertical splitter |
 
+### `SplitterHandleMode`
+
+Where a `Splitter` places its drag handles relative to pane borders. This is independent of whether neighboring frames merge their borders.
+
+| Variant | Description |
+|---------|-------------|
+| `SplitterHandleMode::Gutter` | Reserve a gutter between panes and draw the handle glyph there **(default)** |
+| `SplitterHandleMode::Border` | Drop the gutter and ride the pane border seam (thickness adapts to borders actually present) |
+
 ### `Padding`
 
 Create via conversion:
@@ -270,6 +279,16 @@ to round and clamp the current value before passing it to widgets such as
 |---------|--------|
 | `BorderEdges::All` | Reserve and render all four border edges **(default)** |
 | `BorderEdges::HorizontalCaps` | Reserve only top/bottom rows and render corner caps; left/right content columns are not consumed |
+
+### `BorderMergeMode`
+
+Strategy used when frame border symbols overlap (e.g. adjacent or overlapping frames).
+
+| Variant | Description |
+|---------|-------------|
+| `BorderMergeMode::Replace` | Last write wins; no symbol merging (clean overlap override) |
+| `BorderMergeMode::Exact` | Merge only when an exact box-drawing intersection symbol exists **(default)** |
+| `BorderMergeMode::Fuzzy` | Merge using the closest matching symbol when an exact merge symbol is unavailable |
 
 ### `Overflow`
 
@@ -1147,10 +1166,9 @@ pub struct GridSelectionEvent {
 | `widget.key("my-key")` | Assign stable identity for reconciliation/focus |
 ## TextArea editor primitive enums
 
-- `TextAreaDecorationKind`: `Range`, `WholeLine`, `Underline`, `VirtualText`.
+- `TextAreaDecorationKind`: `Range`, `WholeLine`, `Underline`.
   Byte offsets remain canonical. `Underline` applies the supplied style and
-  enables underline automatically. `VirtualText` is deprecated and remains a
-  no-op; use `TextAreaVirtualText` with `TextArea::virtual_text` instead.
+  enables underline automatically.
 - `VirtualTextPlacement`: `Inline`, `Eol`. Inline virtual text shifts visual
   columns before the anchor byte; EOL virtual text appends after a logical line's
   final visual row without affecting wrapping.

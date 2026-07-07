@@ -17,7 +17,7 @@ use crate::app::interaction_state::DirtyLevel;
 use crate::core::component::Component;
 use crate::core::element::Key;
 use crate::core::event::{KeyCode, KeyEvent};
-use crate::core::node::{NodeId, NodeKind, OverlayRoot};
+use crate::core::node::{NodeId, OverlayRoot};
 use crate::layout::tag::Tag;
 
 use super::AppRunner;
@@ -189,7 +189,9 @@ impl<C: Component> AppRunner<C> {
             framework_effects,
             command_registry,
             key_ctx: &mut key_ctx,
+            #[cfg(feature = "terminal")]
             clipboard,
+            #[cfg(feature = "terminal")]
             clipboard_config,
         };
 
@@ -223,7 +225,10 @@ impl<C: Component> AppRunner<C> {
     fn focused_is_terminal(&self, id: NodeId) -> bool {
         #[cfg(feature = "terminal")]
         {
-            matches!(self.core.tree.node(id).kind, NodeKind::Terminal(_))
+            matches!(
+                self.core.tree.node(id).kind,
+                crate::core::node::NodeKind::Terminal(_)
+            )
         }
         #[cfg(not(feature = "terminal"))]
         {
@@ -246,7 +251,9 @@ struct RunnerDispatchOps<'a, 'b, C: Component> {
     framework_effects: &'a mut Vec<FrameworkSideEffect>,
     command_registry: CommandRegistry,
     key_ctx: &'a mut KeyCtx<'b>,
+    #[cfg(feature = "terminal")]
     clipboard: &'a crate::clipboard::ClipboardService,
+    #[cfg(feature = "terminal")]
     clipboard_config: &'a crate::clipboard::ClipboardConfig,
 }
 
@@ -338,16 +345,12 @@ impl<C: Component> RunnerDispatchOps<'_, '_, C> {
         true
     }
 
+    #[cfg(feature = "terminal")]
     fn focused_is_terminal(&self, id: NodeId) -> bool {
-        #[cfg(feature = "terminal")]
-        {
-            matches!(self.core.tree.node(id).kind, NodeKind::Terminal(_))
-        }
-        #[cfg(not(feature = "terminal"))]
-        {
-            let _ = id;
-            false
-        }
+        matches!(
+            self.core.tree.node(id).kind,
+            crate::core::node::NodeKind::Terminal(_)
+        )
     }
 
     fn forward_terminal_key(&mut self, key: KeyEvent) -> bool {

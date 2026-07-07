@@ -191,19 +191,6 @@ impl Splitter {
         self
     }
 
-    /// Merge handles onto adjacent frame borders.
-    #[deprecated(
-        since = "0.1.1",
-        note = "use `handle_mode(SplitterHandleMode::Border)` instead"
-    )]
-    pub fn join_frame(self, join: bool) -> Self {
-        self.handle_mode(if join {
-            SplitterHandleMode::Border
-        } else {
-            SplitterHandleMode::Gutter
-        })
-    }
-
     /// Set handle symbol.
     pub fn handle_symbol(mut self, symbol: char) -> Self {
         self.handle_symbol = symbol;

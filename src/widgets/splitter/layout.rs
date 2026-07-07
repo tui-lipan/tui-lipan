@@ -295,13 +295,6 @@ mod tests {
     }
 
     #[test]
-    fn deprecated_join_frame_maps_to_border_mode() {
-        #[allow(deprecated)]
-        let joined = base_vertical().join_frame(true);
-        assert_eq!(joined.handle_mode, SplitterHandleMode::Border);
-    }
-
-    #[test]
     fn separate_bordered_panes_grab_both_walls() {
         // Two bordered frames that do NOT merge their borders: the seam is two
         // adjacent wall columns, so the integrated handle spans both.
