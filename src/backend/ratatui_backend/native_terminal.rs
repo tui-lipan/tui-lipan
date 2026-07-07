@@ -1,7 +1,7 @@
 use std::io::{self, BufWriter, Stdout};
 
 use crate::app::context::SurfaceMode;
-use crate::style::query_keyboard_enhancement_support;
+use crate::style::{drain_pending_terminal_responses, query_keyboard_enhancement_support};
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::style::Print;
@@ -188,6 +188,12 @@ impl TerminalGuard {
 
         #[cfg(feature = "image")]
         image_support::init_image_picker();
+
+        // Both the keyboard-enhancement probe above and the image graphics query
+        // send a `CSI c` sentinel; terminals may leave the DA1 reply unread in the
+        // input queue, which would otherwise echo to the shell as `^[[?…c` on exit.
+        drain_pending_terminal_responses();
+
         let terminal = if policy.uses_alternate_screen {
             let backend =
                 CrosstermBackend::new(BufWriter::with_capacity(TERMINAL_BUFFER_CAPACITY, stdout));
