@@ -1172,7 +1172,7 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
                 CommandDispatchState::None
             }
             CommandShortcutResult::Pending => CommandDispatchState::Pending,
-            CommandShortcutResult::Matched(id) if !was_pending => {
+            CommandShortcutResult::Matched(_id) if !was_pending => {
                 self.key_dispatch_state.command_runtime.reset();
                 CommandDispatchState::None
             }

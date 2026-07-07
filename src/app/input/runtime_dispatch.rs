@@ -202,7 +202,7 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
                 CommandDispatchState::None
             }
             CommandShortcutResult::Pending => CommandDispatchState::Pending,
-            CommandShortcutResult::Matched(id) if !was_pending => {
+            CommandShortcutResult::Matched(_id) if !was_pending => {
                 self.env.dispatch_state.command_runtime.reset();
                 CommandDispatchState::None
             }
