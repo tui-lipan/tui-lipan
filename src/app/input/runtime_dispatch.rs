@@ -248,11 +248,7 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
             return true;
         }
 
-        if self.env.config.key_dispatch_policy == KeyDispatchPolicy::WidgetFirst {
-            return keyboard::dispatch_key(self.env.tree, *self.env.focused, key, self.env.key_ctx);
-        }
-
-        false
+        keyboard::dispatch_key(self.env.tree, *self.env.focused, key, self.env.key_ctx)
     }
 
     fn dispatch_bubble(&mut self, key: KeyEvent) -> bool {
@@ -455,7 +451,7 @@ pub(crate) fn dispatch_widget_with_policy(
     focused: Option<NodeId>,
     key: KeyEvent,
     key_ctx: &mut KeyCtx<'_>,
-    policy: KeyDispatchPolicy,
+    _policy: KeyDispatchPolicy,
 ) -> bool {
     if should_dispatch_focus_key_to_widget_first(tree, focused, key)
         && keyboard::dispatch_key(tree, focused, key, key_ctx)
@@ -463,11 +459,7 @@ pub(crate) fn dispatch_widget_with_policy(
         return true;
     }
 
-    if policy == KeyDispatchPolicy::WidgetFirst {
-        return keyboard::dispatch_key(tree, focused, key, key_ctx);
-    }
-
-    false
+    keyboard::dispatch_key(tree, focused, key, key_ctx)
 }
 
 #[allow(clippy::too_many_arguments)]

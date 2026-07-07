@@ -1423,12 +1423,13 @@ mod tests {
     #[cfg(feature = "syntax-syntect")]
     use crate::widgets::SyntectStrategy;
     use crate::widgets::{
-        Animated, Button, DocumentView, EffectScope, Frame, HStack, Input, InputEvent, List,
-        ListItem, Modal, MouseRegion, Popover, SENTINEL_BASE, ScrollKeymap, ScrollView, SearchItem,
-        SearchPalette, Spinner, SpinnerStyle, StatusBar, Tab, Tabs, Text, TextArea, TextAreaEvent,
-        TextAreaLineNumberMode, TextAreaSentinel, TextAreaVimConfig,
-        TextAreaVimCurrentLineHighlight, TextAreaVimMode, TextAreaVirtualText, ThemeProvider,
-        VStack,
+        Animated, Button, ComboBox, ComboBoxCommitEvent, DocumentView, EffectScope, FileTree,
+        FileTreeChange, FileTreeChangeSource, FileTreeChangeStatus, FileTreeChangeView, Frame,
+        HStack, Input, InputEvent, List, ListItem, Modal, MouseRegion, Popover, SENTINEL_BASE,
+        ScrollKeymap, ScrollView, SearchItem, SearchPalette, Spinner, SpinnerStyle, StatusBar, Tab,
+        Tabs, Text, TextArea, TextAreaEvent, TextAreaLineNumberMode, TextAreaSentinel,
+        TextAreaVimConfig, TextAreaVimCurrentLineHighlight, TextAreaVimMode, TextAreaVirtualText,
+        ThemeProvider, Tree, TreeNode, VStack,
     };
     #[cfg(feature = "diff-view")]
     use crate::widgets::{DiffView, DiffViewBackend, DiffViewMode};
@@ -1465,6 +1466,18 @@ mod tests {
             code: KeyCode::Char(c),
             mods: KeyMods::default(),
         }
+    }
+
+    fn plain_code(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            mods: KeyMods::default(),
+        }
+    }
+
+    fn app_commands_first() -> crate::app::context::App {
+        crate::app::context::App::new()
+            .key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst)
     }
 
     fn ctrl_key(c: char) -> KeyEvent {
@@ -3354,9 +3367,177 @@ mod tests {
             .unwrap_or_else(|| panic!("node with key {key:?} not found"))
     }
 
+    fn first_input_value<C: Component>(backend: &TestBackend<C>) -> String {
+        backend
+            .core
+            .tree
+            .iter_with_overlays()
+            .find_map(|node| match &node.kind {
+                NodeKind::Input(input) => Some(input.value.to_string()),
+                _ => None,
+            })
+            .expect("input node should exist")
+    }
+
     struct AmbientPageScrollRoot;
 
     struct ModalSearchPaletteRoot;
+
+    struct AppCommandPaletteRoot {
+        selected: Rc<RefCell<Vec<usize>>>,
+        activated: Rc<RefCell<Vec<usize>>>,
+    }
+
+    impl Component for AppCommandPaletteRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let selected = Rc::clone(&self.selected);
+            let activated = Rc::clone(&self.activated);
+
+            SearchPalette::<usize>::new()
+                .items((0..4).map(|i| SearchItem::new(format!("item-{i}"), i)))
+                .height(Length::Auto)
+                .on_select(Callback::new(
+                    move |event: crate::widgets::SearchEvent<usize>| {
+                        selected.borrow_mut().push(event.item.value);
+                    },
+                ))
+                .on_activate(Callback::new(
+                    move |event: crate::widgets::SearchEvent<usize>| {
+                        activated.borrow_mut().push(event.item.value);
+                    },
+                ))
+                .key("app-command-palette")
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    struct AppCommandFileTreeRoot;
+
+    impl Component for AppCommandFileTreeRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            FileTree::new("/repo")
+                .explorer(true)
+                .explorer_prefix("")
+                .explorer_divider(false)
+                .show_icons(false)
+                .change_source(FileTreeChangeSource::Provided(vec![FileTreeChange::new(
+                    "src/main.rs",
+                    FileTreeChangeStatus::Modified,
+                )]))
+                .change_view(FileTreeChangeView::ChangedOnly)
+                .key("app-command-file-tree")
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    enum AppCommandComboMsg {
+        Query(std::sync::Arc<str>),
+        Open(bool),
+        Active(Option<usize>),
+        Commit(ComboBoxCommitEvent),
+    }
+
+    #[derive(Default)]
+    struct AppCommandComboState {
+        query: std::sync::Arc<str>,
+        open: bool,
+        active: Option<usize>,
+        commits: Vec<ComboBoxCommitEvent>,
+    }
+
+    struct AppCommandComboRoot;
+
+    impl Component for AppCommandComboRoot {
+        type Message = AppCommandComboMsg;
+        type Properties = ();
+        type State = AppCommandComboState;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            AppCommandComboState::default()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            ComboBox::new()
+                .items(["Alpha", "Beta", "Gamma"])
+                .query(ctx.state.query.clone())
+                .open(ctx.state.open)
+                .active_index(ctx.state.active)
+                .on_query_change(ctx.link().callback(AppCommandComboMsg::Query))
+                .on_open_change(ctx.link().callback(AppCommandComboMsg::Open))
+                .on_active_index_change(ctx.link().callback(AppCommandComboMsg::Active))
+                .on_commit(ctx.link().callback(AppCommandComboMsg::Commit))
+                .key("app-command-combo")
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                AppCommandComboMsg::Query(query) => ctx.state.query = query,
+                AppCommandComboMsg::Open(open) => ctx.state.open = open,
+                AppCommandComboMsg::Active(active) => ctx.state.active = active,
+                AppCommandComboMsg::Commit(event) => ctx.state.commits.push(event),
+            }
+            Update::full()
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    enum AppCommandTreeMsg {
+        Toggle(bool),
+    }
+
+    #[derive(Default)]
+    struct AppCommandTreeState {
+        toggles: Vec<bool>,
+    }
+
+    struct AppCommandTreeRoot;
+
+    impl Component for AppCommandTreeRoot {
+        type Message = AppCommandTreeMsg;
+        type Properties = ();
+        type State = AppCommandTreeState;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            AppCommandTreeState::default()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            Tree::new(TreeNode::new("root").child(TreeNode::new("child")))
+                .on_toggle(
+                    ctx.link()
+                        .callback(|event: crate::widgets::TreeToggleEvent| {
+                            AppCommandTreeMsg::Toggle(event.expanded)
+                        }),
+                )
+                .key("app-command-tree")
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                AppCommandTreeMsg::Toggle(expanded) => ctx.state.toggles.push(expanded),
+            }
+            Update::full()
+        }
+    }
 
     impl Component for ModalSearchPaletteRoot {
         type Message = ();
@@ -3557,6 +3738,130 @@ mod tests {
             hints.y.saturating_add(hints.h as i16) <= 15,
             "hints row should remain inside the capped modal bounds"
         );
+    }
+
+    #[test]
+    fn modal_search_palette_component_focus_still_drives_query_input() {
+        let app = app_commands_first();
+        let mut backend = TestBackend::new_with_app(app, ModalSearchPaletteRoot, ());
+        backend.focused = None;
+        backend.focused_key = Some(Key::from("modal-palette"));
+        backend.focused_tag = None;
+        backend.render();
+
+        let handled = backend
+            .send_key(plain_key('7'))
+            .expect("send_key should succeed");
+
+        assert!(handled, "palette should consume query text");
+        assert_eq!(first_input_value(&backend), "7");
+    }
+
+    #[test]
+    fn app_commands_first_preserves_search_palette_navigation_and_activation() {
+        let selected = Rc::new(RefCell::new(Vec::new()));
+        let activated = Rc::new(RefCell::new(Vec::new()));
+        let mut backend = TestBackend::new_with_app(
+            app_commands_first(),
+            AppCommandPaletteRoot {
+                selected: Rc::clone(&selected),
+                activated: Rc::clone(&activated),
+            },
+            (),
+        );
+        backend.focused = None;
+        backend.focused_key = Some(Key::from("app-command-palette"));
+        backend.focused_tag = None;
+        backend.render();
+
+        assert!(
+            backend
+                .send_key(plain_code(KeyCode::End))
+                .expect("End should dispatch"),
+            "palette should consume End"
+        );
+        assert!(
+            backend
+                .send_key(plain_code(KeyCode::Enter))
+                .expect("Enter should dispatch"),
+            "palette should consume Enter"
+        );
+
+        assert_eq!(selected.borrow().as_slice(), &[3]);
+        assert_eq!(activated.borrow().as_slice(), &[3]);
+    }
+
+    #[test]
+    fn app_commands_first_preserves_file_tree_explorer_focus_and_typing() {
+        let mut backend =
+            TestBackend::new_with_app(app_commands_first(), AppCommandFileTreeRoot, ());
+        backend.focused = None;
+        backend.focused_key = Some(Key::from("__ft_tree"));
+        backend.focused_tag = None;
+        backend.render();
+
+        assert!(
+            backend
+                .send_key(plain_key('/'))
+                .expect("slash should dispatch"),
+            "file tree should consume explorer focus key"
+        );
+        assert_eq!(backend.focused_key, Some(Key::from("__ft_input")));
+        assert!(
+            backend
+                .send_key(plain_key('m'))
+                .expect("typing should dispatch"),
+            "file tree explorer input should consume typed text"
+        );
+
+        assert_eq!(first_input_value(&backend), "m");
+    }
+
+    #[test]
+    fn app_commands_first_preserves_combo_box_typing_navigation_and_commit() {
+        let mut backend = TestBackend::new_with_app(app_commands_first(), AppCommandComboRoot, ());
+        backend.focused = None;
+        backend.focused_key = Some(Key::from("app-command-combo"));
+        backend.focused_tag = None;
+        backend.render();
+
+        assert!(backend.send_key(plain_key('a')).expect("type query"));
+        assert_eq!(backend.state().query.as_ref(), "a");
+        assert!(backend.state().open);
+
+        assert!(
+            backend
+                .send_key(plain_code(KeyCode::Down))
+                .expect("Down should dispatch")
+        );
+        assert_eq!(backend.state().active, Some(1));
+
+        assert!(
+            backend
+                .send_key(plain_code(KeyCode::Enter))
+                .expect("Enter should dispatch")
+        );
+        assert_eq!(backend.state().commits.len(), 1);
+        assert_eq!(backend.state().commits[0].index, Some(1));
+        assert_eq!(backend.state().commits[0].value.as_ref(), "Beta");
+    }
+
+    #[test]
+    fn app_commands_first_preserves_tree_keyboard_actions() {
+        let mut backend = TestBackend::new_with_app(app_commands_first(), AppCommandTreeRoot, ());
+        backend.focused = None;
+        backend.focused_key = Some(Key::from("app-command-tree"));
+        backend.focused_tag = None;
+        backend.render();
+
+        assert!(
+            backend
+                .send_key(plain_code(KeyCode::Right))
+                .expect("Right should dispatch"),
+            "tree should consume expand key"
+        );
+
+        assert_eq!(backend.state().toggles.as_slice(), &[true]);
     }
 
     enum EmptyModalMsg {
