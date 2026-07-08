@@ -16,6 +16,24 @@ Before opening a PR:
 - [ ] If you added a new widget, all checklist steps in
       [`docs/widget-authoring.md`](docs/widget-authoring.md) are completed
 
+Opening the PR fills in [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md)
+automatically - keep its checklist.
+
+## Pull request titles
+
+PRs are **squash-merged**, so the PR title becomes the commit subject on `main`.
+Give it a Conventional Commit title - same format as commits (see below):
+`<type>(<optional scope>): <imperative summary>`, `<= 72` chars, no trailing
+period. For example: `fix(scroll_view): clip last row on odd content height`.
+
+## Commit messages
+
+Use [Conventional Commits](https://www.conventionalcommits.org/): a `<type>`
+(`feat`, `fix`, `docs`, `refactor`, `test`, `style`, `perf`, `chore`, `ci`,
+`release`) with an optional scope, an imperative summary, `<= 72` chars, and no
+trailing period. Mark breaking changes with a "(breaking)" suffix on the
+relevant `CHANGELOG.md` line.
+
 ## Toolchain
 
 - **MSRV:** Rust 1.85 (`edition = "2024"`)

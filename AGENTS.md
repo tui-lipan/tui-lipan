@@ -309,6 +309,25 @@ Sign-off and identity:
   contribute it under MPL-2.0. Extra attribution trailers beyond
   `Signed-off-by` are unnecessary.
 
+## Pull Requests
+
+PRs are **squash-merged**, so the **PR title becomes the squashed commit
+subject** on `main`. The title must therefore be a valid Conventional Commit,
+following the same rules as [Commit Practices](#commit-practices):
+
+- `<type>(<optional scope>): <imperative summary>`, `<= 72` chars, no trailing period
+- Types: `feat`, `fix`, `docs`, `refactor`, `test`, `style`, `perf`, `chore`,
+  `ci`, `release`
+- Examples: `fix(scroll_view): clip last row on odd content height`,
+  `feat(modal): add max_height + reserve_max_height`
+
+Other expectations:
+- One logical change per PR - keep unrelated refactors out.
+- The PR body follows [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md);
+  work through its checklist (which mirrors `CONTRIBUTING.md`) before requesting review.
+- Individual commits inside the PR should also be conventional, but the **title**
+  is what ships to history - get that one right.
+
 ## Releases (maintainers)
 
 Releases are tag-driven: bumping versions + `CHANGELOG.md`, then pushing a
