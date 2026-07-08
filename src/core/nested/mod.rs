@@ -1813,6 +1813,7 @@ mod tests {
                 full_repaint: Rc::new(Cell::new(false)),
                 devtools_request: Rc::new(RefCell::new(None)),
                 ui_snapshot_request: Rc::new(RefCell::new(None)),
+                command_chord_pending: Rc::new(Cell::new(false)),
             },
         })
     }
@@ -1930,6 +1931,7 @@ mod tests {
                 full_repaint: Rc::new(Cell::new(false)),
                 devtools_request: Rc::new(RefCell::new(None)),
                 ui_snapshot_request: Rc::new(RefCell::new(None)),
+                command_chord_pending: Rc::new(Cell::new(false)),
             },
         });
         let mut host = HostState::default();
@@ -2129,6 +2131,7 @@ mod tests {
                 full_repaint: Rc::new(Cell::new(false)),
                 devtools_request: Rc::new(RefCell::new(None)),
                 ui_snapshot_request: Rc::new(RefCell::new(None)),
+                command_chord_pending: Rc::new(Cell::new(false)),
             },
         });
         let mut host = HostState::default();
