@@ -1090,19 +1090,12 @@ impl<C: Component> TestBackendDispatchOps<'_, C> {
         true
     }
 
+    #[cfg(feature = "terminal")]
     fn focused_is_terminal(&self, id: NodeId) -> bool {
-        #[cfg(feature = "terminal")]
-        {
-            matches!(
-                self.core.tree.node(id).kind,
-                crate::core::node::NodeKind::Terminal(_)
-            )
-        }
-        #[cfg(not(feature = "terminal"))]
-        {
-            let _ = id;
-            false
-        }
+        matches!(
+            self.core.tree.node(id).kind,
+            crate::core::node::NodeKind::Terminal(_)
+        )
     }
 
     fn forward_terminal_key(&mut self, key: KeyEvent) -> bool {

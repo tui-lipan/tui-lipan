@@ -89,10 +89,6 @@ pub enum TextAreaDecorationKind {
     Range,
     WholeLine,
     Underline,
-    #[deprecated(
-        note = "TextAreaDecorationKind::VirtualText is a reserved no-op; use TextArea::virtual_text with TextAreaVirtualText instead"
-    )]
-    VirtualText,
 }
 
 /// A sign/adornment rendered in a composable TextArea gutter column.

@@ -13,6 +13,7 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Reference documentation for `BorderMergeMode` and `SplitterHandleMode` enums in `docs/enums.md` and `docs/styling.md`.
 - `Modal::max_height(Length)` caps a modal's height, and
   `Modal::reserve_max_height(bool)` keeps a `RootPortal` modal's top edge fixed
   as its content shrinks below that cap (the overlay is centered as if it filled
@@ -70,12 +71,10 @@ While the crate is on `0.x.y`:
   Code constructing these variants directly must wrap the row count
   (`height: InlineHeight::Fixed(8)` or `height: 8.into()`); the `App` builder
   methods are unaffected thanks to `From<u16> for InlineHeight`.
+### Removed
 
-### Deprecated
-
-- `Splitter::join_frame(bool)`: use
-  `Splitter::handle_mode(SplitterHandleMode::Border)` instead. Frame border
-  merging (`Frame::join_frame`) is unchanged and remains current API.
+- (breaking) Removed `Splitter::join_frame(bool)` method (use `Splitter::handle_mode(SplitterHandleMode::Border)` instead).
+- (breaking) Removed unused `TextAreaDecorationKind::VirtualText` enum variant.
 
 ### Fixed
 

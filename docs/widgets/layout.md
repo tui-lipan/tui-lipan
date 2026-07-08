@@ -703,9 +703,7 @@ present, so this is **independent** of whether the neighboring `Frame`s merge th
 - panes that keep **separate** borders expose two adjacent walls → a 2-cell handle grabbing both,
 - borderless panes fall back to a synthetic 1-cell handle on the seam.
 
-The older `Splitter::join_frame(bool)` is deprecated; `join_frame(true)` maps to
-`handle_mode(SplitterHandleMode::Border)`. Note `Frame::join_frame` (border merging) is a
-separate, still-current visual choice owned by the frames.
+Note `Frame::join_frame` (border merging) is a separate, still-current visual choice owned by the frames.
 
 **Corner drag**: when a vertical and a horizontal splitter handle meet (nested splitters),
 clicking on or next to the junction grabs both handles at once - dragging moves the seam on

@@ -385,6 +385,16 @@ Main-axis alignment for stacks:
 | `BorderEdges::All` | Full box border (default) |
 | `BorderEdges::HorizontalCaps` | Top/bottom rows with corner caps; no left/right content inset |
 
+### BorderMergeMode
+
+`BorderMergeMode` controls how adjacent or overlapping frame border symbols are merged at their seams.
+
+| Value | Effect |
+|-------|--------|
+| `BorderMergeMode::Replace` | Last write wins; no symbol merging (clean overlap override) |
+| `BorderMergeMode::Exact` | Merge only when an exact box-drawing intersection symbol exists (default) |
+| `BorderMergeMode::Fuzzy` | Merge using the closest matching symbol when an exact merge symbol is unavailable |
+
 ## Theme System
 
 ### App-Wide Theme
