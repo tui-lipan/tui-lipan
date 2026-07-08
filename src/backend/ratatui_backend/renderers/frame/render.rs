@@ -565,10 +565,16 @@ fn render_border_frame(
     let (block_style, border_style) = resolve_block_style(props, ctx.active, ctx.is_hovered);
     let border_rstyle = to_ratatui_style(block_style);
 
+    // Fill only the interior, never the border ring: the border draw below styles those cells
+    // itself, and painting over them would clobber a neighbor frame's border that this frame is
+    // meant to merge with (adjacent/overlapping bordered frames sharing a seam). The inset uses
+    // the unshifted border padding so a `join_frame` frame still keeps its fill inside its own
+    // rect rather than bleeding into the neighbor it draws its shared border onto.
+    let fill_rect = rect.inset(geometry.border_padding);
     if style_uses_backdrop_bg(block_style) {
-        clear_fg_preserve_bg_clipped(f, rect, ctx.clip_rect);
+        clear_fg_preserve_bg_clipped(f, fill_rect, ctx.clip_rect);
     } else if style_paints_bg(block_style) {
-        fill_rect_clipped_style(f, rect, block_style, ctx.clip_rect, ctx.terminal_bg);
+        fill_rect_clipped_style(f, fill_rect, block_style, ctx.clip_rect, ctx.terminal_bg);
     }
 
     let buf = f.buffer_mut();
