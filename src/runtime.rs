@@ -182,6 +182,7 @@ where
         let host_terminal_color_refresh_requested = Rc::new(Cell::new(false));
         let mouse_capture_generation = Rc::new(Cell::new(1));
         let memo_dependency_recorder = Rc::new(RefCell::new(None));
+        let command_chord_pending = Rc::new(Cell::new(false));
 
         let env = RuntimeEnv {
             command_registry: CommandRegistry::default(),
@@ -212,6 +213,7 @@ where
             full_repaint,
             devtools_request,
             ui_snapshot_request,
+            command_chord_pending,
         };
 
         let components = crate::core::nested::ComponentRegistry::new(

@@ -151,6 +151,7 @@ pub(crate) struct RuntimeEnv {
     pub devtools_request: Rc<RefCell<Option<DevToolsRequest>>>,
     /// Pending UI snapshot export/delivery after the next render.
     pub ui_snapshot_request: Rc<RefCell<Option<crate::ui_snapshot::UiSnapshotRequest>>>,
+    pub command_chord_pending: Rc<std::cell::Cell<bool>>,
 }
 
 impl RuntimeEnv {

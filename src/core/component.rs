@@ -654,6 +654,11 @@ impl<C: Component> Context<C> {
         self.env.command_registry.clone()
     }
 
+    /// Check if an app command chord is currently pending.
+    pub fn command_chord_pending(&self) -> bool {
+        self.env.command_chord_pending.get()
+    }
+
     /// Register a command scoped to this component instance.
     pub fn register_command(&self, entry: CommandEntry) {
         self.env

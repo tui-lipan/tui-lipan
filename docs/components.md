@@ -101,6 +101,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `ctx.clipboard()` | Programmatic clipboard access (copy/read) |
 | `ctx.quit()` | Exit the application |
 | `ctx.is_inline()` | Whether running in inline mode |
+| `ctx.command_chord_pending()` | Whether an app command chord is currently pending completion (e.g., after a leader prefix key) |
 | `ctx.effect_phase()` | Current renderer animation phase; capture it when starting one-shot phase-based effects |
 | `ctx.mouse_capture_enabled()` | Current mouse capture state |
 | `ctx.set_mouse_capture(bool)` | Change mouse capture at runtime |

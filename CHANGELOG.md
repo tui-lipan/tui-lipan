@@ -13,6 +13,7 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Context::command_chord_pending` method to query whether an app command chord is currently pending completion (e.g., after a leader prefix key has been matched).
 - Reference documentation for `BorderMergeMode` and `SplitterHandleMode` enums in `docs/enums.md` and `docs/styling.md`.
 - `Modal::max_height(Length)` caps a modal's height, and
   `Modal::reserve_max_height(bool)` keeps a `RootPortal` modal's top edge fixed
