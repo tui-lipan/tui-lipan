@@ -1153,11 +1153,12 @@ impl<C: Component> TestBackendDispatchOps<'_, C> {
             );
         }
 
-        self.core
-            .ctx
-            .env()
-            .command_chord_pending
-            .set(self.key_dispatch_state.command_runtime.is_pending());
+        let command_chord_pending = self.key_dispatch_state.command_runtime.is_pending();
+        let pending_cell = &self.core.ctx.env().command_chord_pending;
+        if pending_cell.get() != command_chord_pending {
+            pending_cell.set(command_chord_pending);
+            result.dirty = true;
+        }
 
         result
     }

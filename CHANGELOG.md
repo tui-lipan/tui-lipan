@@ -79,6 +79,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `Context::command_chord_pending()` now schedules a repaint when its value
+  changes, so apps can show or hide leader-prefix indicators immediately.
 - Splitter corner-drag junction hit-testing (`find_junction_splitter`) no
   longer casts a handle rect's `w`/`h` (`u16`) to `i16` before computing
   bounds, which could wrap to a negative number and break hit-testing for

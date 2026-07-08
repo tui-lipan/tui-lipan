@@ -404,11 +404,12 @@ impl<C: Component> RunnerDispatchOps<'_, '_, C> {
             result.layout_dirty = matches!(level, DirtyLevel::LayoutOnly | DirtyLevel::Full);
         }
 
-        self.core
-            .ctx
-            .env()
-            .command_chord_pending
-            .set(self.key_dispatch_state.command_runtime.is_pending());
+        let command_chord_pending = self.key_dispatch_state.command_runtime.is_pending();
+        let pending_cell = &self.core.ctx.env().command_chord_pending;
+        if pending_cell.get() != command_chord_pending {
+            pending_cell.set(command_chord_pending);
+            result.dirty = true;
+        }
 
         result
     }
