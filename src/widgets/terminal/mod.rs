@@ -16,6 +16,8 @@ pub use events::{
     mouse_event_to_bytes, paste_sequences, terminal_selection_text, wrap_bracketed_paste,
 };
 pub use mod_private::Terminal;
+#[cfg(unix)]
+pub use pty::TerminalPtyHandoff;
 pub use pty::{TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent};
 pub use screen::{TerminalColorPalette, TerminalRenderSnapshot, TerminalScreen, TerminalViewport};
 

@@ -60,6 +60,14 @@ While the crate is on `0.x.y`:
   content is taller than the terminal (or the cap), the layout keeps its
   natural height and the viewport shows its top rows, clipping the bottom.
   See `docs/inline-mode.md` and `examples/inline_auto_height.rs`.
+- Unix-only `TerminalPty::handoff()` and `TerminalPtyHandoff` for advanced
+  terminal hosts that need to transfer a live PTY master to another process
+  without restarting the child. See `docs/widgets/terminal.md`.
+- `TerminalScreen::export_replay_bytes()` serializes the current screen state
+  (scrollback, primary/alternate contents, cursor, title, and common modes) as
+  a VT byte stream that a fresh same-sized `TerminalScreen` reproduces by
+  replaying it through the normal parser. Useful for seeding a newly attached
+  client from a server-owned terminal. See `docs/widgets/terminal.md`.
 
 ### Changed
 
