@@ -158,12 +158,10 @@ pub(crate) fn reconcile_portal(
     };
 
     let reuse_child = old_children.first().copied();
-    let reserve_max_height = matches!(
-        portal.placement,
-        OverlayPlacement::Center {
-            reserve_max_height: true
-        }
-    );
+    let reserve_height = match &portal.placement {
+        OverlayPlacement::Center { reserve_height } => *reserve_height,
+        OverlayPlacement::Stacked { .. } => None,
+    };
     let mut content_rect = match &portal.placement {
         OverlayPlacement::Center { .. } => resolve_center_rect(
             portal.content.as_ref(),
@@ -188,14 +186,14 @@ pub(crate) fn reconcile_portal(
     content_rect.x = bounds
         .x
         .saturating_add((bounds.w.saturating_sub(content_rect.w) / 2) as i16);
-    // When `reserve_max_height` is set, center as if the content occupied its full
-    // `max_height` cap, then top-align the (possibly shorter) content within that reserved
-    // band. This keeps the top edge fixed as content shrinks below the cap, instead of the
-    // whole overlay drifting toward the vertical center.
-    let reserved_h = reserve_max_height
-        .then(|| constraints.max_h.and_then(|l| l.resolve_as_max(bounds.h)))
-        .flatten()
-        .map(|cap| cap.min(bounds.h).max(content_rect.h))
+    // When `reserve_height` is set, center as if the content occupied that full height, then
+    // top-align the content within the reserved band. This keeps the top edge fixed as the
+    // content grows and shrinks, instead of the whole overlay drifting toward the vertical
+    // center. The band positions only: content taller than it keeps the same top edge and
+    // extends past the band's bottom, bounded by `max_height` (already clamped above).
+    let reserved_h = reserve_height
+        .and_then(|l| l.resolve_as_max(bounds.h))
+        .map(|band| band.min(bounds.h))
         .unwrap_or(content_rect.h);
     content_rect.y = bounds
         .y

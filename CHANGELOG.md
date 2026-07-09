@@ -22,13 +22,19 @@ While the crate is on `0.x.y`:
 - `Context::command_chord_pending` method to query whether an app command chord is currently pending completion (e.g., after a leader prefix key has been matched).
 - Reference documentation for `BorderMergeMode` and `SplitterHandleMode` enums in `docs/enums.md` and `docs/styling.md`.
 - `Modal::max_height(Length)` caps a modal's height, and
-  `Modal::reserve_max_height(bool)` keeps a `RootPortal` modal's top edge fixed
-  as its content shrinks below that cap (the overlay is centered as if it filled
-  `max_height`, then the shorter content is top-aligned within that reserved
-  band) instead of re-centering by its actual height. Together with
+  `Modal::reserve_height(Length)` keeps a `RootPortal` modal's top edge fixed as
+  its content grows and shrinks: the overlay is centered as if it were
+  `reserve_height` tall, then the content is top-aligned within that reserved
+  band, pinning the top edge at `(viewport - reserve_height) / 2`. Together with
   `height(Length::Auto)` this lets a content-hugging modal — e.g. a
   `SearchPalette` filtered as the user types — shrink to its visible rows
-  without drifting toward the vertical center. See `docs/widgets/overlays.md`.
+  without drifting toward the vertical center.
+
+  `reserve_height` positions and `max_height` bounds, independently: content
+  taller than the band keeps the same top edge and extends past the band's
+  bottom, so a modal can be anchored a quarter of the way down the viewport
+  (`reserve_height(Percent(50))`) while being free to grow to 75% of it. See
+  `docs/widgets/overlays.md`.
 
 - Layered keyboard dispatch: `FrameworkAction`, `FrameworkKeymap`, `UserKeymapPolicy`,
   `KeyDispatchPolicy`, `TerminalKeyPolicy`, `CommandConflictPolicy`, and

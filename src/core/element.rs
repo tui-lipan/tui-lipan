@@ -818,7 +818,7 @@ mod tests {
             layer: OverlayLayer::Modal,
             content: Box::new(scoped_group("old")),
             placement: OverlayPlacement::Center {
-                reserve_max_height: false,
+                reserve_height: None,
             },
             dismiss_policy: DismissPolicy::None,
             on_close: None,

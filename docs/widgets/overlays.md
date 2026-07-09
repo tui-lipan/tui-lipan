@@ -27,7 +27,7 @@ modal focus/backdrop semantics.
 | `width` | `Length` | Dialog width |
 | `height` | `Length` | Dialog height |
 | `max_height` | `Length` | Cap the modal height; pair with `height(Length::Auto)` so the modal hugs its content but never exceeds the cap (inner content scrolls past it) |
-| `reserve_max_height` | `bool` | For `RootPortal` modals: reserve the full `max_height` when centering vertically so the top edge stays fixed as content shrinks below the cap, instead of the whole modal re-centering |
+| `reserve_height` | `Length` | For `RootPortal` modals: center as if the modal were this tall, then top-align it in that band, so the top edge stays fixed as content grows and shrinks. Positions only — content taller than the band extends past its bottom |
 | `backdrop_style` | `Style` | Backdrop overlay style |
 | `frame_style` | `Style` | Dialog container style |
 | `border_style` | `BorderStyle` | Dialog border |
@@ -62,18 +62,24 @@ shrinks:
 
 ```rust
 Modal::new("Commands")
-    .height(Length::Auto)          // hug the visible rows
-    .max_height(Length::Percent(65)) // ...but never exceed 65% of the viewport
-    .reserve_max_height(true)      // keep the top edge fixed as content shrinks
+    .height(Length::Auto)              // hug the visible rows
+    .reserve_height(Length::Percent(50)) // center a 50%-tall band; top-align in it
+    .max_height(Length::Percent(75))   // ...but never grow past 75% of the viewport
     .padding(0)
     .child(palette)
 ```
 
-Without `reserve_max_height`, the modal re-centers by its actual height, so a
+Without `reserve_height`, the modal re-centers by its actual height, so a
 shrinking palette drifts upward toward the middle each keystroke. With it, the
-overlay is centered as if it filled `max_height`, then the shorter content is
-top-aligned within that reserved band. Has no effect without `max_height` or in
-`OverlayScope::Local`.
+overlay is centered as if it were `reserve_height` tall, then the content is
+top-aligned within that reserved band, fixing the top edge at
+`(viewport - reserve_height) / 2`. Has no effect in `OverlayScope::Local`.
+
+`reserve_height` **positions**; `max_height` **bounds**. They are independent, so
+content taller than the band keeps the same top edge and extends past the band's
+bottom — as above, a modal anchored a quarter of the way down the viewport that
+may grow to 75% of it. Give a modal `reserve_height` without a `max_height` and
+it can run off the bottom of the screen.
 
 ---
 
