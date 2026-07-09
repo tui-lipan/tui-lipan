@@ -301,17 +301,19 @@ pub(crate) fn render_terminal(
     }
 
     // Use the real hardware cursor (like Input/TextArea) instead of a
-    // software REVERSED-cell cursor.  The framework's blink timer
-    // controls visibility; TerminalManager sets the cursor shape to
-    // SteadyBlock.
+    // software REVERSED-cell cursor. TerminalManager applies the child's
+    // DECSCUSR shape as a steady hardware cursor; the framework blink timer
+    // drives blinking here, but only when the child asked for a blinking
+    // cursor. A steady cursor stays lit so the child's request is honored.
     //
     // Only show cursor when at live view (scrollback_offset == 0).
     // Hide cursor when there's an active selection.
     let has_selection = node.selection.as_ref().is_some_and(|sel| !sel.is_empty());
+    let cursor_lit = !node.cursor_blinking || blink_visible;
     if rendered_content
         && is_focused
         && node.cursor_visible
-        && blink_visible
+        && cursor_lit
         && node.scrollback_offset == 0
         && !has_selection
     {

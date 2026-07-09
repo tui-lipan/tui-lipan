@@ -77,8 +77,11 @@ impl TerminalManager {
                 }
                 #[cfg(feature = "terminal")]
                 NodeKind::Terminal(node) => {
+                    // Honor the child program's DECSCUSR shape. Blinking is driven
+                    // by the framework blink timer in the terminal renderer, so the
+                    // hardware cursor stays a steady shape here to avoid double blink.
                     if node.cursor_visible {
-                        Some(CaretShape::Block)
+                        Some(node.cursor_shape)
                     } else {
                         None
                     }
@@ -222,5 +225,40 @@ mod tests {
             .unwrap();
 
         assert!(String::from_utf8_lossy(&out).contains("\u{1b}[4 q"));
+    }
+
+    #[cfg(feature = "terminal")]
+    #[test]
+    fn terminal_cursor_shape_follows_child_request() {
+        use crate::widgets::Terminal;
+
+        let term = Terminal::new()
+            .cursor_shape(CaretShape::Bar)
+            .cursor_blinking(false);
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &term.into(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 3,
+            },
+            None,
+        );
+        let mut manager = TerminalManager {
+            osc12_supported: false,
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+
+        manager
+            .update_cursor(&mut out, &tree, Some(tree.root), &HashMap::new())
+            .unwrap();
+
+        // SteadyBar: blinking is handled by the framework blink timer, so the
+        // hardware cursor style stays steady regardless of the blink request.
+        assert!(String::from_utf8_lossy(&out).contains("\u{1b}[6 q"));
     }
 }

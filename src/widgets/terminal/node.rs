@@ -5,7 +5,8 @@ use crate::core::node::{
     NodeId, ScrollbarZone, ScrollbarZonesParams, WidgetNode, compute_scrollbar_zones,
 };
 use crate::style::{
-    BorderStyle, Padding, Rect, ScrollbarVariant, Span, Style, StyleSlot, Theme, ThemeRole,
+    BorderStyle, CaretShape, Padding, Rect, ScrollbarVariant, Span, Style, StyleSlot, Theme,
+    ThemeRole,
 };
 use crate::widgets::ScrollEvent;
 
@@ -21,6 +22,8 @@ pub(crate) struct TerminalNode {
     pub cursor_row: u16,
     pub cursor_col: u16,
     pub cursor_visible: bool,
+    pub cursor_shape: CaretShape,
+    pub cursor_blinking: bool,
     pub selection: Option<TerminalSelection>,
     pub selection_style: StyleSlot,
     pub mouse_mode: MouseModeState,

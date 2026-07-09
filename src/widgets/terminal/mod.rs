@@ -28,7 +28,8 @@ pub(crate) use reconcile::reconcile_terminal;
 use crate::callback::{Callback, KeyHandler};
 use crate::core::element::{Element, ElementKind};
 use crate::style::{
-    BorderStyle, Length, Padding, ScrollbarConfig, ScrollbarVariant, Span, Style, StyleSlot,
+    BorderStyle, CaretShape, Length, Padding, ScrollbarConfig, ScrollbarVariant, Span, Style,
+    StyleSlot,
 };
 use crate::widgets::ScrollEvent;
 use std::sync::Arc;
@@ -40,6 +41,8 @@ impl Default for Terminal {
             cursor_row: 0,
             cursor_col: 0,
             show_cursor: true,
+            cursor_shape: CaretShape::Block,
+            cursor_blinking: true,
             color_lines: None,
             color_cache_key: 0,
             scrollback_offset: 0,
@@ -112,6 +115,18 @@ impl Terminal {
         self
     }
 
+    /// Set the cursor shape (block, bar, or underline).
+    pub fn cursor_shape(mut self, shape: CaretShape) -> Self {
+        self.cursor_shape = shape;
+        self
+    }
+
+    /// Set whether the cursor should blink.
+    pub fn cursor_blinking(mut self, blinking: bool) -> Self {
+        self.cursor_blinking = blinking;
+        self
+    }
+
     /// Set precomputed colored lines (must match `content` line lengths).
     pub fn color_lines(mut self, color_lines: Arc<[Vec<Span>]>, cache_key: u64) -> Self {
         self.color_lines = Some(color_lines);
@@ -125,6 +140,8 @@ impl Terminal {
         self.cursor_row = snapshot.cursor_row;
         self.cursor_col = snapshot.cursor_col;
         self.show_cursor = snapshot.cursor_visible;
+        self.cursor_shape = snapshot.cursor_shape;
+        self.cursor_blinking = snapshot.cursor_blinking;
         self.color_lines = Some(snapshot.color_lines);
         self.color_cache_key = snapshot.sequence;
         self.scrollback_offset = snapshot.scrollback_offset;

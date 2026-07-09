@@ -13,6 +13,12 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `TerminalRenderSnapshot` now carries `cursor_shape` (`CaretShape`) and
+  `cursor_blinking` (`bool`) captured from the child program's `DECSCUSR`
+  (`CSI Ps SP q`) sequences, plus matching `Terminal::cursor_shape()` /
+  `Terminal::cursor_blinking()` builders. The `Terminal` widget now renders the
+  child's requested cursor shape and honors its steady/blinking preference
+  instead of forcing a blinking block. See `docs/widgets/terminal.md`.
 - `Context::command_chord_pending` method to query whether an app command chord is currently pending completion (e.g., after a leader prefix key has been matched).
 - Reference documentation for `BorderMergeMode` and `SplitterHandleMode` enums in `docs/enums.md` and `docs/styling.md`.
 - `Modal::max_height(Length)` caps a modal's height, and
@@ -71,6 +77,10 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- **(breaking)** `TerminalRenderSnapshot::from_parts` takes two additional
+  arguments (`cursor_shape: CaretShape`, `cursor_blinking: bool`) after
+  `cursor_visible`. Callers constructing snapshots from an external transport
+  must supply the child's cursor shape and blink state.
 - **(breaking)** Renamed `CommandBuilder::keybinding(...)` to
   `CommandBuilder::keybinding_hint(...)` for display-only palette hints;
   executable bindings use `shortcut(...)` / `shortcuts(...)`.
@@ -87,6 +97,11 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Focused `Terminal` panes no longer force every cursor into a blinking block.
+  TUIs that set a steady or differently shaped cursor (for example Neovim's
+  steady block in normal mode and steady bar in insert mode) now render as
+  requested; a child that never issues `DECSCUSR` still defaults to a blinking
+  block.
 - `Context::command_chord_pending()` now schedules a repaint when its value
   changes, so apps can show or hide leader-prefix indicators immediately.
 - Splitter corner-drag junction hit-testing (`find_junction_splitter`) no
