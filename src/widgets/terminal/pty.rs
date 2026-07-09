@@ -241,6 +241,14 @@ impl TerminalPty {
                         }
                         Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
                         Err(err) => {
+                            // On Linux a PTY master read returns EIO once the slave side has been
+                            // fully closed (the child exited); that is the normal end-of-stream
+                            // signal for a master, not a fault. Treat it like EOF and let the wait
+                            // thread deliver the real exit code instead of a spurious error.
+                            #[cfg(unix)]
+                            if err.raw_os_error() == Some(libc::EIO) {
+                                break;
+                            }
                             on_event(TerminalPtyEvent::Error(err.to_string().into()));
                             break;
                         }
