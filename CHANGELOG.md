@@ -97,6 +97,12 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `TerminalPty` no longer reports a spurious `TerminalPtyEvent::Error`
+  ("Input/output error (os error 5)") when a child exits on Linux. A PTY master
+  read returns `EIO` once the slave side is fully closed, which is the normal
+  end-of-stream signal for a master rather than a fault; the reader now treats
+  `EIO` like EOF and lets the wait thread deliver the real exit code. Hosts that
+  surfaced this event as an error toast (e.g. on `exit`/`:q`) no longer see it.
 - Focused `Terminal` panes no longer force every cursor into a blinking block.
   TUIs that set a steady or differently shaped cursor (for example Neovim's
   steady block in normal mode and steady bar in insert mode) now render as
