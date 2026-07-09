@@ -85,6 +85,7 @@ pub struct Tabs {
     pub(crate) tab_hover_style: StyleSlot,
     pub(crate) active_style: StyleSlot,
     pub(crate) divider: char,
+    pub(crate) caps: Option<(char, char)>,
     pub(crate) overflow: TabsOverflow,
     pub(crate) border: bool,
     pub(crate) border_style: BorderStyle,
@@ -110,6 +111,7 @@ impl Default for Tabs {
             tab_hover_style: StyleSlot::Inherit,
             active_style: StyleSlot::Inherit,
             divider: '│',
+            caps: None,
             overflow: TabsOverflow::Clip,
             border: false,
             border_style: BorderStyle::Plain,
@@ -239,6 +241,19 @@ impl Tabs {
         self
     }
 
+    /// Set the `(left, right)` end-cap glyphs drawn around the active and hovered tabs.
+    ///
+    /// Each cap replaces one of the tab's two padding cells, so the tab keeps its
+    /// measured width and hit region. The glyphs are painted in the tab's own
+    /// background color over the strip background, so the tab reads as a rounded or
+    /// pointed pill (pass powerline separators for that look). `None` (the default)
+    /// keeps flat space padding on every tab. Caps are skipped for a tab that has no
+    /// distinct background or that is truncated by the overflow policy.
+    pub fn caps(mut self, caps: Option<(char, char)>) -> Self {
+        self.caps = caps;
+        self
+    }
+
     /// Set overflow policy.
     pub fn overflow(mut self, overflow: TabsOverflow) -> Self {
         self.overflow = overflow;
@@ -363,6 +378,7 @@ impl crate::layout::hash::LayoutHash for Tabs {
         self.tabs.len().hash(hasher);
         self.active.hash(hasher);
         self.divider.hash(hasher);
+        self.caps.hash(hasher);
         self.overflow.hash(hasher);
         Some(())
     }
