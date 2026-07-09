@@ -19,7 +19,7 @@ pub struct Modal {
     width: Length,
     height: Length,
     max_height: Option<Length>,
-    reserve_max_height: bool,
+    reserve_height: Option<Length>,
     backdrop_style: Style,
     frame_style: Style,
     border: bool,
@@ -40,7 +40,7 @@ impl Modal {
             width: Length::Px(60),
             height: Length::Auto,
             max_height: None,
-            reserve_max_height: false,
+            reserve_height: None,
             backdrop_style: Style::default(),
             frame_style: Style::default(),
             border: true,
@@ -82,12 +82,14 @@ impl Modal {
         self
     }
 
-    /// Reserve the full [`max_height`](Self::max_height) when centering a `RootPortal` modal
-    /// vertically, so its top edge stays fixed as its content shrinks below the cap instead of
-    /// the whole modal drifting toward the vertical center. Has no effect without a `max_height`
-    /// or in `OverlayScope::Local`.
-    pub fn reserve_max_height(mut self, reserve: bool) -> Self {
-        self.reserve_max_height = reserve;
+    /// Center a `RootPortal` modal vertically as if it were this tall, then top-align the modal
+    /// within that reserved band. Its top edge stays fixed at `(viewport - reserve_height) / 2`
+    /// as its content grows and shrinks, instead of the whole modal drifting toward the vertical
+    /// center. Content taller than the band keeps that same top edge and extends past the band's
+    /// bottom, so pair this with [`max_height`](Self::max_height) to bound it. Has no effect in
+    /// `OverlayScope::Local`.
+    pub fn reserve_height(mut self, reserve_height: Length) -> Self {
+        self.reserve_height = Some(reserve_height);
         self
     }
 
@@ -242,7 +244,7 @@ impl From<Modal> for Element {
                     layer: OverlayLayer::Modal,
                     content: Box::new(frame.into()),
                     placement: OverlayPlacement::Center {
-                        reserve_max_height: modal.reserve_max_height,
+                        reserve_height: modal.reserve_height,
                     },
                     dismiss_policy,
                     on_close: modal.on_close,

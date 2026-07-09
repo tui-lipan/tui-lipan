@@ -8,7 +8,7 @@ use crate::animation::{Easing, Transition};
 use crate::callback::Callback;
 use crate::core::element::Element;
 use crate::core::node::{NodeId, WidgetNode};
-use crate::style::{Padding, Style};
+use crate::style::{Length, Padding, Style};
 use crate::widgets::{Toast, ToastCopyAffordance};
 
 /// Controls whether overlay-like widget content renders at the root or inline.
@@ -90,11 +90,13 @@ impl DismissPolicy {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum OverlayPlacement {
     Center {
-        /// When the content carries a `max_height` constraint, reserve that full height
-        /// when centering vertically so the content's top edge stays fixed as it shrinks
-        /// below the cap (e.g. a filtering command palette). Without this, a shrinking
-        /// modal re-centers by its actual height and its top drifts toward the middle.
-        reserve_max_height: bool,
+        /// Height to reserve when centering vertically, instead of the content's own height.
+        /// The content is top-aligned within that reserved band, so its top edge stays fixed
+        /// as it grows and shrinks (e.g. a filtering command palette). Content taller than the
+        /// band keeps the same top edge and extends past the band's bottom; `max_height` is
+        /// what bounds it. Without this, the overlay centers by its actual height and a
+        /// shrinking modal drifts toward the middle.
+        reserve_height: Option<Length>,
     },
     Stacked {
         placement: ToastPlacement,
