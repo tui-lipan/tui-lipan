@@ -211,6 +211,9 @@ screen.set_scrollback(offset);    // 0 = live view, >0 = history
 screen.scrollback_offset()        // Current offset
 screen.total_scrollback_rows()    // Total scrollback rows available
 screen.resize(new_rows, new_cols) // Resize the terminal
+
+// Serialize the full state so a fresh same-sized screen can reproduce it
+let replay = screen.export_replay_bytes();
 ```
 
 **`TerminalRenderSnapshot` fields:**
@@ -229,6 +232,31 @@ screen.resize(new_rows, new_cols) // Resize the terminal
 `TerminalRenderSnapshot::from_parts(...)` rebuilds a snapshot from owned parts. It is intended for
 applications that define their own versioned external snapshot transport. `TerminalRenderSnapshot`
 itself is not a stable wire protocol.
+
+### Exporting replay bytes
+
+`TerminalScreen::export_replay_bytes()` serializes the current screen state as a VT byte stream.
+Feeding that stream into a fresh, same-sized `TerminalScreen` (via `process_bytes`) reproduces the
+state, because replay goes through the normal VTE parser rather than a parallel snapshot format —
+so future parser fixes apply to exported state automatically.
+
+```rust
+// On the source (e.g. a server-owned terminal):
+let replay = source.export_replay_bytes();
+
+// On a fresh receiver of the same size (`scrollback_lines` is the app's own capacity):
+let mut screen = TerminalScreen::new(source.rows, source.cols, scrollback_lines);
+screen.set_palette(source.palette());
+screen.process_bytes(&replay);
+let _ = screen.drain_responses(); // the source already answered device queries
+```
+
+The stream captures scrollback, primary/alternate screen contents, the cursor position and pen
+template, the title, and common terminal modes. It is a replay stream, not a stable data format:
+tab stops, custom scrolling regions, cursor style, the kitty keyboard stack, hyperlinks, and the
+display offset are intentional non-goals — the receiver lands on the live view. This is the seeding
+mechanism a terminal host uses to bring a newly attached client up to date with a live terminal it
+does not own directly.
 
 ### Serializable terminal snapshot leaf types
 

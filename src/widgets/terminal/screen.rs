@@ -3,7 +3,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use alacritty_terminal::event::{Event as TermEvent, EventListener};
-use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::grid::{Dimensions, GridCell, Scroll};
+use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell as TermCell, Flags as CellFlags};
 use alacritty_terminal::term::{self, Config as TermConfig, Term, TermMode};
 use alacritty_terminal::vte::ansi::Processor as VteProcessor;
@@ -305,6 +306,60 @@ impl TerminalScreen {
         std::mem::take(&mut *self.listener.responses.borrow_mut())
     }
 
+    /// Serialize the current terminal state as bytes that can be replayed by a
+    /// fresh same-sized [`TerminalScreen`].
+    ///
+    /// The stream captures scrollback, primary/alternate screen contents, the
+    /// current cursor position/template, title, and common terminal modes. It is
+    /// intentionally a replay stream rather than a stable data format: replaying
+    /// it goes through the normal VTE parser and future parser fixes naturally
+    /// apply to exported state.
+    ///
+    /// Non-goals: tab stops, custom scrolling regions, cursor style, kitty
+    /// keyboard stack depth, hyperlinks, and the current display offset. The
+    /// receiver lands on the live view.
+    pub fn export_replay_bytes(&mut self) -> Vec<u8> {
+        let dirty = self.dirty;
+        let cache = self.cache.clone();
+        let sequence = self.sequence;
+        let scrollback_offset = self.scrollback_offset;
+        let mouse_mode = self.mouse_mode;
+        let responses = self.drain_responses();
+
+        let was_alt = self.term.mode().contains(TermMode::ALT_SCREEN);
+        let bytes = if was_alt {
+            let saved_alt_cursor = self.term.grid().cursor.clone();
+            let saved_alt_saved_cursor = self.term.grid().saved_cursor.clone();
+            let alt_repaint = self.export_active_grid_repaint(false);
+            self.term.swap_alt();
+            let mut bytes = self.export_primary_replay();
+
+            // Switching primary -> alt clears the alt grid, so immediately
+            // replay the synthesized alt repaint to restore the source screen.
+            self.term.swap_alt();
+            let mut repair_processor: VteProcessor = VteProcessor::new();
+            repair_processor.advance(&mut self.term, &alt_repaint);
+            self.term.grid_mut().cursor = saved_alt_cursor;
+            self.term.grid_mut().saved_cursor = saved_alt_saved_cursor;
+
+            bytes.extend_from_slice(b"\x1b[?1049h");
+            bytes.extend_from_slice(&alt_repaint);
+            self.push_cursor_position(&mut bytes);
+            self.push_modes(&mut bytes);
+            bytes
+        } else {
+            self.export_primary_replay()
+        };
+
+        *self.listener.responses.borrow_mut() = responses;
+        self.dirty = dirty;
+        self.cache = cache;
+        self.sequence = sequence;
+        self.scrollback_offset = scrollback_offset;
+        self.mouse_mode = mouse_mode;
+        bytes
+    }
+
     /// Resize screen dimensions.
     ///
     pub fn resize(&mut self, rows: u16, cols: u16) {
@@ -451,6 +506,396 @@ impl TerminalScreen {
     /// set or it was reset. Updated as bytes are processed.
     pub fn title(&self) -> Option<String> {
         self.listener.title.borrow().clone()
+    }
+
+    fn export_primary_replay(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"\x1bc");
+        bytes.extend_from_slice(&self.export_active_grid_repaint(true));
+        self.push_cursor_position(&mut bytes);
+        self.push_title(&mut bytes);
+        self.push_modes(&mut bytes);
+        bytes
+    }
+
+    fn export_active_grid_repaint(&self, include_scrollback: bool) -> Vec<u8> {
+        let grid = self.term.grid();
+        let top = if include_scrollback {
+            grid.topmost_line()
+        } else {
+            Line(0)
+        };
+        let bottom = grid.bottommost_line();
+        let mut bytes = Vec::new();
+        // No ED 2 here: on alacritty's primary screen it scrolls the cleared
+        // viewport into history, adding a phantom scrollback row. The preceding
+        // RIS (primary) or DECSET 1049 (alt) already blanks the target grid.
+        bytes.extend_from_slice(b"\x1b[0m\x1b[H");
+        let mut style = ReplayStyle::default();
+
+        for line in top.0..=bottom.0 {
+            let line = Line(line);
+            let wrapline = grid[line][grid.last_column()]
+                .flags
+                .contains(CellFlags::WRAPLINE);
+            let end_col = if wrapline {
+                grid.columns()
+            } else {
+                (0..grid.columns())
+                    .rfind(|col| !grid[line][Column(*col)].is_empty())
+                    .map_or(0, |col| col + 1)
+            };
+            for col in 0..end_col {
+                let cell = &grid[line][Column(col)];
+                if cell
+                    .flags
+                    .intersects(CellFlags::WIDE_CHAR_SPACER | CellFlags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    continue;
+                }
+                let next_style = ReplayStyle::from(cell);
+                if next_style != style {
+                    next_style.push_sgr(&mut bytes);
+                    style = next_style;
+                }
+                push_cell_text(&mut bytes, cell);
+            }
+            if line != bottom && !wrapline {
+                if style != ReplayStyle::default() {
+                    ReplayStyle::default().push_sgr(&mut bytes);
+                    style = ReplayStyle::default();
+                }
+                bytes.extend_from_slice(b"\r\n");
+            }
+        }
+        bytes.extend_from_slice(b"\x1b[0m");
+        bytes
+    }
+
+    fn push_cursor_position(&self, bytes: &mut Vec<u8>) {
+        let cursor = &self.term.grid().cursor;
+        let row = (cursor.point.line.0.max(0) as usize + 1).min(self.rows as usize);
+        let col = (cursor.point.column.0 + 1).min(self.cols as usize);
+        bytes.extend_from_slice(format!("\x1b[{row};{col}H").as_bytes());
+        ReplayStyle::from(&cursor.template).push_sgr(bytes);
+    }
+
+    fn push_title(&self, bytes: &mut Vec<u8>) {
+        if let Some(title) = self.title().filter(|title| !title.is_empty()) {
+            bytes.extend_from_slice(b"\x1b]2;");
+            bytes.extend_from_slice(title.as_bytes());
+            bytes.extend_from_slice(b"\x1b\\");
+        }
+    }
+
+    fn push_modes(&self, bytes: &mut Vec<u8>) {
+        let mode = *self.term.mode();
+        push_dec_mode(bytes, 1, mode.contains(TermMode::APP_CURSOR));
+        push_dec_mode(bytes, 7, mode.contains(TermMode::LINE_WRAP));
+        push_dec_mode(bytes, 25, mode.contains(TermMode::SHOW_CURSOR));
+        push_dec_mode(bytes, 1000, mode.contains(TermMode::MOUSE_REPORT_CLICK));
+        push_dec_mode(bytes, 1002, mode.contains(TermMode::MOUSE_DRAG));
+        push_dec_mode(bytes, 1003, mode.contains(TermMode::MOUSE_MOTION));
+        push_dec_mode(bytes, 1004, mode.contains(TermMode::FOCUS_IN_OUT));
+        push_dec_mode(bytes, 1005, mode.contains(TermMode::UTF8_MOUSE));
+        push_dec_mode(bytes, 1006, mode.contains(TermMode::SGR_MOUSE));
+        push_dec_mode(bytes, 2004, mode.contains(TermMode::BRACKETED_PASTE));
+        bytes.extend_from_slice(if mode.contains(TermMode::APP_KEYPAD) {
+            b"\x1b="
+        } else {
+            b"\x1b>"
+        });
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ReplayStyle {
+    fg: TermColor,
+    bg: TermColor,
+    flags: CellFlags,
+    underline_color: Option<TermColor>,
+}
+
+impl Default for ReplayStyle {
+    fn default() -> Self {
+        Self {
+            fg: TermColor::Named(NamedColor::Foreground),
+            bg: TermColor::Named(NamedColor::Background),
+            flags: CellFlags::empty(),
+            underline_color: None,
+        }
+    }
+}
+
+impl From<&TermCell> for ReplayStyle {
+    fn from(cell: &TermCell) -> Self {
+        Self {
+            fg: cell.fg,
+            bg: cell.bg,
+            flags: cell.flags
+                & (CellFlags::BOLD
+                    | CellFlags::DIM
+                    | CellFlags::ITALIC
+                    | CellFlags::ALL_UNDERLINES
+                    | CellFlags::INVERSE
+                    | CellFlags::HIDDEN
+                    | CellFlags::STRIKEOUT),
+            underline_color: cell.underline_color(),
+        }
+    }
+}
+
+impl ReplayStyle {
+    fn push_sgr(self, bytes: &mut Vec<u8>) {
+        let mut params = vec!["0".to_string()];
+        let flags = self.flags;
+        if flags.contains(CellFlags::BOLD) {
+            params.push("1".to_string());
+        }
+        if flags.contains(CellFlags::DIM) {
+            params.push("2".to_string());
+        }
+        if flags.contains(CellFlags::ITALIC) {
+            params.push("3".to_string());
+        }
+        if flags.contains(CellFlags::DOUBLE_UNDERLINE) {
+            params.push("4:2".to_string());
+        } else if flags.contains(CellFlags::UNDERCURL) {
+            params.push("4:3".to_string());
+        } else if flags.contains(CellFlags::DOTTED_UNDERLINE) {
+            params.push("4:4".to_string());
+        } else if flags.contains(CellFlags::DASHED_UNDERLINE) {
+            params.push("4:5".to_string());
+        } else if flags.contains(CellFlags::UNDERLINE) {
+            params.push("4".to_string());
+        }
+        if flags.contains(CellFlags::INVERSE) {
+            params.push("7".to_string());
+        }
+        if flags.contains(CellFlags::HIDDEN) {
+            params.push("8".to_string());
+        }
+        if flags.contains(CellFlags::STRIKEOUT) {
+            params.push("9".to_string());
+        }
+        push_color_sgr(&mut params, self.fg, true);
+        push_color_sgr(&mut params, self.bg, false);
+        if let Some(color) = self.underline_color {
+            push_underline_color_sgr(&mut params, color);
+        }
+        bytes.extend_from_slice(format!("\x1b[{}m", params.join(";")).as_bytes());
+    }
+}
+
+fn push_dec_mode(bytes: &mut Vec<u8>, mode: u16, enabled: bool) {
+    let suffix = if enabled { 'h' } else { 'l' };
+    bytes.extend_from_slice(format!("\x1b[?{mode}{suffix}").as_bytes());
+}
+
+fn push_cell_text(bytes: &mut Vec<u8>, cell: &TermCell) {
+    let mut buf = [0; 4];
+    bytes.extend_from_slice(cell.c.encode_utf8(&mut buf).as_bytes());
+    if let Some(zerowidth) = cell.zerowidth() {
+        for ch in zerowidth {
+            bytes.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+        }
+    }
+}
+
+fn push_color_sgr(params: &mut Vec<String>, color: TermColor, foreground: bool) {
+    match color {
+        TermColor::Named(named) => {
+            let value = named_color_sgr(named, foreground);
+            params.push(value.to_string());
+        }
+        TermColor::Indexed(index) => {
+            params.push(if foreground { "38" } else { "48" }.to_string());
+            params.push("5".to_string());
+            params.push(index.to_string());
+        }
+        TermColor::Spec(TermRgb { r, g, b }) => {
+            params.push(if foreground { "38" } else { "48" }.to_string());
+            params.push("2".to_string());
+            params.push(r.to_string());
+            params.push(g.to_string());
+            params.push(b.to_string());
+        }
+    }
+}
+
+fn push_underline_color_sgr(params: &mut Vec<String>, color: TermColor) {
+    match color {
+        TermColor::Named(named) => {
+            if let Some(index) = named_color_index(named) {
+                params.push("58".to_string());
+                params.push("5".to_string());
+                params.push(index.to_string());
+            }
+        }
+        TermColor::Indexed(index) => {
+            params.push("58".to_string());
+            params.push("5".to_string());
+            params.push(index.to_string());
+        }
+        TermColor::Spec(TermRgb { r, g, b }) => {
+            params.push("58".to_string());
+            params.push("2".to_string());
+            params.push(r.to_string());
+            params.push(g.to_string());
+            params.push(b.to_string());
+        }
+    }
+}
+
+fn named_color_sgr(color: NamedColor, foreground: bool) -> u16 {
+    match color {
+        NamedColor::Foreground | NamedColor::BrightForeground | NamedColor::DimForeground => 39,
+        NamedColor::Background => 49,
+        NamedColor::Black | NamedColor::DimBlack => {
+            if foreground {
+                30
+            } else {
+                40
+            }
+        }
+        NamedColor::Red | NamedColor::DimRed => {
+            if foreground {
+                31
+            } else {
+                41
+            }
+        }
+        NamedColor::Green | NamedColor::DimGreen => {
+            if foreground {
+                32
+            } else {
+                42
+            }
+        }
+        NamedColor::Yellow | NamedColor::DimYellow => {
+            if foreground {
+                33
+            } else {
+                43
+            }
+        }
+        NamedColor::Blue | NamedColor::DimBlue => {
+            if foreground {
+                34
+            } else {
+                44
+            }
+        }
+        NamedColor::Magenta | NamedColor::DimMagenta => {
+            if foreground {
+                35
+            } else {
+                45
+            }
+        }
+        NamedColor::Cyan | NamedColor::DimCyan => {
+            if foreground {
+                36
+            } else {
+                46
+            }
+        }
+        NamedColor::White | NamedColor::DimWhite => {
+            if foreground {
+                37
+            } else {
+                47
+            }
+        }
+        NamedColor::BrightBlack => {
+            if foreground {
+                90
+            } else {
+                100
+            }
+        }
+        NamedColor::BrightRed => {
+            if foreground {
+                91
+            } else {
+                101
+            }
+        }
+        NamedColor::BrightGreen => {
+            if foreground {
+                92
+            } else {
+                102
+            }
+        }
+        NamedColor::BrightYellow => {
+            if foreground {
+                93
+            } else {
+                103
+            }
+        }
+        NamedColor::BrightBlue => {
+            if foreground {
+                94
+            } else {
+                104
+            }
+        }
+        NamedColor::BrightMagenta => {
+            if foreground {
+                95
+            } else {
+                105
+            }
+        }
+        NamedColor::BrightCyan => {
+            if foreground {
+                96
+            } else {
+                106
+            }
+        }
+        NamedColor::BrightWhite => {
+            if foreground {
+                97
+            } else {
+                107
+            }
+        }
+        NamedColor::Cursor => {
+            if foreground {
+                39
+            } else {
+                49
+            }
+        }
+    }
+}
+
+fn named_color_index(color: NamedColor) -> Option<u8> {
+    match color {
+        NamedColor::Black | NamedColor::DimBlack => Some(0),
+        NamedColor::Red | NamedColor::DimRed => Some(1),
+        NamedColor::Green | NamedColor::DimGreen => Some(2),
+        NamedColor::Yellow | NamedColor::DimYellow => Some(3),
+        NamedColor::Blue | NamedColor::DimBlue => Some(4),
+        NamedColor::Magenta | NamedColor::DimMagenta => Some(5),
+        NamedColor::Cyan | NamedColor::DimCyan => Some(6),
+        NamedColor::White | NamedColor::DimWhite => Some(7),
+        NamedColor::BrightBlack => Some(8),
+        NamedColor::BrightRed => Some(9),
+        NamedColor::BrightGreen => Some(10),
+        NamedColor::BrightYellow => Some(11),
+        NamedColor::BrightBlue => Some(12),
+        NamedColor::BrightMagenta => Some(13),
+        NamedColor::BrightCyan => Some(14),
+        NamedColor::BrightWhite => Some(15),
+        NamedColor::Foreground
+        | NamedColor::Background
+        | NamedColor::Cursor
+        | NamedColor::BrightForeground
+        | NamedColor::DimForeground => None,
     }
 }
 
@@ -666,6 +1111,54 @@ fn default_ansi_palette() -> [UiColor; 16] {
 mod tests {
     use super::*;
 
+    fn assert_replay_round_trips(source: &mut TerminalScreen) -> TerminalScreen {
+        let replay = source.export_replay_bytes();
+        let mut target = TerminalScreen::new(source.rows, source.cols, source.scrollback_len);
+        target.set_palette(source.palette());
+        target.process_bytes(&replay);
+        assert!(target.drain_responses().is_empty());
+
+        let source_snapshot = source.render_snapshot();
+        let target_snapshot = target.render_snapshot();
+        assert_eq!(target_snapshot.text, source_snapshot.text);
+        assert_eq!(target_snapshot.color_lines, source_snapshot.color_lines);
+        assert_eq!(target_snapshot.cursor_row, source_snapshot.cursor_row);
+        assert_eq!(target_snapshot.cursor_col, source_snapshot.cursor_col);
+        assert_eq!(
+            target_snapshot.cursor_visible,
+            source_snapshot.cursor_visible
+        );
+        assert_eq!(target_snapshot.mouse_mode, source_snapshot.mouse_mode);
+        assert_eq!(target.title(), source.title());
+        target
+    }
+
+    fn assert_scrollback_views_round_trip(
+        source: &mut TerminalScreen,
+        target: &mut TerminalScreen,
+    ) {
+        let total_scrollback_rows = source.total_scrollback_rows();
+        assert_eq!(target.total_scrollback_rows(), total_scrollback_rows);
+
+        for offset in 0..=total_scrollback_rows {
+            source.set_scrollback(offset);
+            target.set_scrollback(offset);
+            let source_snapshot = source.render_snapshot();
+            let target_snapshot = target.render_snapshot();
+            assert_eq!(
+                target_snapshot.text, source_snapshot.text,
+                "offset {offset}"
+            );
+            assert_eq!(
+                target_snapshot.color_lines, source_snapshot.color_lines,
+                "offset {offset}"
+            );
+        }
+
+        source.set_scrollback(0);
+        target.set_scrollback(0);
+    }
+
     fn span_fg(snapshot: &TerminalRenderSnapshot, span_index: usize) -> Option<UiColor> {
         snapshot.color_lines[0][span_index]
             .style
@@ -753,5 +1246,107 @@ mod tests {
         // OSC 10/11 report the configured default fg/bg.
         assert!(joined.contains("]10;rgb:1111/2222/3333"), "{joined:?}");
         assert!(joined.contains("]11;rgb:4444/5555/6666"), "{joined:?}");
+    }
+
+    #[test]
+    fn replay_round_trips_styled_scrollback() {
+        let mut screen = TerminalScreen::new(3, 10, 20);
+        screen.process_bytes(b"\x1b]2;demo\x1b\\");
+        screen.process_bytes(b"\x1b[31mred\x1b[0m\r\n");
+        screen.process_bytes(b"\x1b[38;5;45mindexed\x1b[0m\r\n");
+        screen.process_bytes(b"\x1b[38;2;1;2;3mtrue\x1b[48;2;4;5;6mcolor\x1b[0m\r\n");
+        screen.process_bytes(b"tail");
+
+        let mut target = assert_replay_round_trips(&mut screen);
+        assert_scrollback_views_round_trip(&mut screen, &mut target);
+    }
+
+    #[test]
+    fn replay_soft_wrap_reflows_identically_after_resize() {
+        let mut source = TerminalScreen::new(2, 8, 20);
+        source.process_bytes(b"abcdefghijklmnopqrst");
+
+        let mut target = assert_replay_round_trips(&mut source);
+        assert_scrollback_views_round_trip(&mut source, &mut target);
+
+        source.resize(2, 24);
+        target.resize(2, 24);
+        let source_snapshot = source.render_snapshot();
+        let target_snapshot = target.render_snapshot();
+
+        assert_eq!(target_snapshot.text, source_snapshot.text);
+        assert_eq!(target_snapshot.color_lines, source_snapshot.color_lines);
+        assert!(source_snapshot.text.starts_with("abcdefghijklmnopqrst"));
+    }
+
+    #[test]
+    fn replay_round_trips_underline_variants_and_hidden_cells() {
+        let mut source = TerminalScreen::new(2, 8, 10);
+        source.process_bytes(b"\x1b[4:2mD\x1b[4:3;58;2;1;2;3mC\x1b[4:4mO\x1b[4:5mA\x1b[8mH");
+
+        let target = assert_replay_round_trips(&mut source);
+        for (col, flags) in [
+            (0, CellFlags::DOUBLE_UNDERLINE),
+            (1, CellFlags::UNDERCURL),
+            (2, CellFlags::DOTTED_UNDERLINE),
+            (3, CellFlags::DASHED_UNDERLINE),
+            (4, CellFlags::HIDDEN),
+        ] {
+            let source_cell = &source.term.grid()[Line(0)][Column(col)];
+            let target_cell = &target.term.grid()[Line(0)][Column(col)];
+            assert!(source_cell.flags.contains(flags), "source col {col}");
+            assert!(target_cell.flags.contains(flags), "target col {col}");
+            assert_eq!(target_cell.flags & flags, source_cell.flags & flags);
+            assert_eq!(target_cell.underline_color(), source_cell.underline_color());
+        }
+    }
+
+    #[test]
+    fn replay_round_trips_wide_combining_and_modes() {
+        let mut screen = TerminalScreen::new(3, 12, 10);
+        screen.process_bytes("wide 漢e\u{301}".as_bytes());
+        screen.process_bytes(b"\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[?2004h");
+
+        assert_replay_round_trips(&mut screen);
+    }
+
+    #[test]
+    fn replay_export_is_idempotent() {
+        let mut screen = TerminalScreen::new(3, 8, 10);
+        screen.process_bytes(b"one\r\ntwo\r\nthree");
+
+        let first = screen.export_replay_bytes();
+        let second = screen.export_replay_bytes();
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn replay_alt_screen_preserves_source() {
+        let mut screen = TerminalScreen::new(3, 10, 10);
+        screen.process_bytes(b"primary\r\nline");
+        screen.process_bytes(b"\x1b[?1049halt\x1b[32mscreen\x1b[2;3H");
+        let before = screen.render_snapshot();
+        let before_title = screen.title();
+
+        assert_replay_round_trips(&mut screen);
+        let after = screen.render_snapshot();
+
+        assert_eq!(after.text, before.text);
+        assert_eq!(after.color_lines, before.color_lines);
+        assert_eq!(after.cursor_row, before.cursor_row);
+        assert_eq!(after.cursor_col, before.cursor_col);
+        assert_eq!(after.cursor_visible, before.cursor_visible);
+        assert_eq!(screen.title(), before_title);
+
+        screen.process_bytes(b"Z");
+        let after_input = screen.render_snapshot();
+        assert!(
+            after_input
+                .text
+                .lines()
+                .nth(1)
+                .is_some_and(|line| line.starts_with("  Z"))
+        );
     }
 }
