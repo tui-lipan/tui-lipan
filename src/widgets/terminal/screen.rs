@@ -8,10 +8,36 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell as TermCell, Flags as CellFlags};
 use alacritty_terminal::term::{self, Config as TermConfig, Term, TermMode};
 use alacritty_terminal::vte::ansi::Processor as VteProcessor;
-use alacritty_terminal::vte::ansi::{Color as TermColor, NamedColor, Rgb as TermRgb};
+use alacritty_terminal::vte::ansi::{
+    Color as TermColor, CursorShape as TermCursorShape, CursorStyle as TermCursorStyle, NamedColor,
+    Rgb as TermRgb,
+};
 
 use super::events::{MouseEncoding, MouseMode, MouseModeState};
-use crate::style::{Color as UiColor, HostTerminalColors, Span, Style};
+use crate::style::{CaretShape, Color as UiColor, HostTerminalColors, Span, Style};
+
+/// Cursor style applied when the child program never issues `DECSCUSR`.
+///
+/// A blinking block matches the historical default and the common terminal
+/// baseline; explicit `CSI Ps SP q` sequences from the child override it.
+const DEFAULT_CURSOR_STYLE: TermCursorStyle = TermCursorStyle {
+    shape: TermCursorShape::Block,
+    blinking: true,
+};
+
+/// Map an `alacritty_terminal` cursor shape to the framework [`CaretShape`].
+///
+/// `HollowBlock`/`Hidden` collapse to `Block`; visibility is tracked separately
+/// via `cursor_visible`.
+fn caret_shape_from_term(shape: TermCursorShape) -> CaretShape {
+    match shape {
+        TermCursorShape::Underline => CaretShape::Underline,
+        TermCursorShape::Beam => CaretShape::Bar,
+        TermCursorShape::Block | TermCursorShape::HollowBlock | TermCursorShape::Hidden => {
+            CaretShape::Block
+        }
+    }
+}
 
 /// Terminal viewport dimensions in character cells.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,6 +160,10 @@ pub struct TerminalRenderSnapshot {
     pub cursor_col: u16,
     /// Whether cursor should be displayed.
     pub cursor_visible: bool,
+    /// Shape the child program requested for the cursor (via `DECSCUSR`).
+    pub cursor_shape: CaretShape,
+    /// Whether the child program requested a blinking cursor (via `DECSCUSR`).
+    pub cursor_blinking: bool,
     /// Stable sequence key for cache invalidation.
     pub sequence: u64,
     /// Current scrollback offset (0 = live view, >0 = scrolled into history).
@@ -152,6 +182,8 @@ impl Default for TerminalRenderSnapshot {
             cursor_row: 0,
             cursor_col: 0,
             cursor_visible: true,
+            cursor_shape: CaretShape::Block,
+            cursor_blinking: true,
             sequence: 0,
             scrollback_offset: 0,
             total_scrollback_rows: 0,
@@ -173,6 +205,8 @@ impl TerminalRenderSnapshot {
         cursor_row: u16,
         cursor_col: u16,
         cursor_visible: bool,
+        cursor_shape: CaretShape,
+        cursor_blinking: bool,
         sequence: u64,
         scrollback_offset: usize,
         total_scrollback_rows: usize,
@@ -184,6 +218,8 @@ impl TerminalRenderSnapshot {
             cursor_row,
             cursor_col,
             cursor_visible,
+            cursor_shape,
+            cursor_blinking,
             sequence,
             scrollback_offset,
             total_scrollback_rows,
@@ -268,6 +304,7 @@ impl TerminalScreen {
         };
         let config = TermConfig {
             scrolling_history: scrollback,
+            default_cursor_style: DEFAULT_CURSOR_STYLE,
             ..TermConfig::default()
         };
         let listener = ResponseCapture::default();
@@ -397,6 +434,9 @@ impl TerminalScreen {
             let cursor_col = cursor_view.as_ref().map(|p| p.column.0 as u16).unwrap_or(0);
             let cursor_visible =
                 mode.contains(TermMode::SHOW_CURSOR) && self.scrollback_offset == 0;
+            let cursor_style = self.term.cursor_style();
+            let cursor_shape = caret_shape_from_term(cursor_style.shape);
+            let cursor_blinking = cursor_style.blinking;
 
             let mut visible = renderable_content_lines(
                 display_iter,
@@ -425,6 +465,8 @@ impl TerminalScreen {
                 cursor_row,
                 cursor_col,
                 cursor_visible,
+                cursor_shape,
+                cursor_blinking,
                 sequence: self.sequence,
                 scrollback_offset: self.scrollback_offset,
                 total_scrollback_rows: self.term.history_size(),
@@ -485,6 +527,7 @@ impl TerminalScreen {
         };
         let config = TermConfig {
             scrolling_history: self.scrollback_len,
+            default_cursor_style: DEFAULT_CURSOR_STYLE,
             ..TermConfig::default()
         };
         self.listener = ResponseCapture::default();
@@ -1348,5 +1391,42 @@ mod tests {
                 .nth(1)
                 .is_some_and(|line| line.starts_with("  Z"))
         );
+    }
+
+    #[test]
+    fn cursor_defaults_to_blinking_block() {
+        let mut screen = TerminalScreen::new(3, 10, 10);
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.cursor_shape, CaretShape::Block);
+        assert!(snapshot.cursor_blinking);
+    }
+
+    #[test]
+    fn decscusr_sets_cursor_shape_and_blink() {
+        let mut screen = TerminalScreen::new(3, 10, 10);
+
+        // CSI 6 SP q: steady bar (odd id blinks, even is steady).
+        screen.process_bytes(b"\x1b[6 q");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.cursor_shape, CaretShape::Bar);
+        assert!(!snapshot.cursor_blinking);
+
+        // CSI 3 SP q: blinking underline.
+        screen.process_bytes(b"\x1b[3 q");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.cursor_shape, CaretShape::Underline);
+        assert!(snapshot.cursor_blinking);
+
+        // CSI 2 SP q: steady block.
+        screen.process_bytes(b"\x1b[2 q");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.cursor_shape, CaretShape::Block);
+        assert!(!snapshot.cursor_blinking);
+
+        // CSI 0 SP q: reset to the configured default (blinking block).
+        screen.process_bytes(b"\x1b[0 q");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.cursor_shape, CaretShape::Block);
+        assert!(snapshot.cursor_blinking);
     }
 }

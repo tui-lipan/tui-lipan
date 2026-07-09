@@ -90,6 +90,8 @@ pub(crate) fn reconcile_terminal(
         cursor_row: terminal.cursor_row,
         cursor_col: terminal.cursor_col,
         cursor_visible: terminal.show_cursor,
+        cursor_shape: terminal.cursor_shape,
+        cursor_blinking: terminal.cursor_blinking,
         selection,
         selection_style: terminal.selection_style,
         mouse_mode: terminal.mouse_mode,

@@ -224,6 +224,8 @@ let replay = screen.export_replay_bytes();
 | `color_lines` | `Arc<[Vec<Span>]>` | Styled visible lines matching `text` logical lines |
 | `cursor_row` / `cursor_col` | `u16` | Cursor position in the visible viewport |
 | `cursor_visible` | `bool` | Whether cursor is shown |
+| `cursor_shape` | `CaretShape` | Shape requested by the child via `DECSCUSR` |
+| `cursor_blinking` | `bool` | Whether the child requested a blinking cursor |
 | `sequence` | `u64` | Cache invalidation sequence |
 | `scrollback_offset` | `usize` | Current scrollback offset |
 | `total_scrollback_rows` | `usize` | Total history rows |
@@ -232,6 +234,16 @@ let replay = screen.export_replay_bytes();
 `TerminalRenderSnapshot::from_parts(...)` rebuilds a snapshot from owned parts. It is intended for
 applications that define their own versioned external snapshot transport. `TerminalRenderSnapshot`
 itself is not a stable wire protocol.
+
+### Cursor shape and blinking
+
+The focused `Terminal` renders the real hardware cursor. It follows the cursor shape the child
+program requests through `DECSCUSR` (`CSI Ps SP q`): a block (`1`/`2`), underline (`3`/`4`), or bar
+(`5`/`6`), mapped to `CaretShape`. Odd codes request blinking and even codes request a steady
+cursor; the widget honors that preference (blinking is driven by the framework blink timer, so a
+steady cursor stays lit). A child that never issues `DECSCUSR` falls back to a blinking block. These
+fields flow through `TerminalRenderSnapshot` and can be overridden directly with
+`Terminal::cursor_shape()` / `Terminal::cursor_blinking()`.
 
 ### Exporting replay bytes
 
