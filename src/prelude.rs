@@ -212,6 +212,8 @@ pub use crate::widgets::{
     SyntectDocumentFormatter, SyntectStrategy, apply_syntect_strategy_app_theme, language_from_path,
 };
 
+#[cfg(all(feature = "terminal", unix))]
+pub use crate::widgets::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
     ManagedTerminal, ManagedTerminalProps, ManagedTerminalStatus, MouseEncoding, MouseMode,

@@ -167,6 +167,8 @@ pub use crate::widgets::{
     rank_search_palette_indices_with_score,
 };
 
+#[cfg(all(feature = "terminal", unix))]
+pub use crate::widgets::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
     MouseEncoding, MouseMode, MouseModeState, TerminalColorPalette, TerminalRenderSnapshot,

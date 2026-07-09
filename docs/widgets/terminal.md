@@ -161,6 +161,21 @@ pty.resize(cols, rows)?;
 
 `TerminalPty::pid()` returns the OS process id reported by the platform at spawn time, or `None` when unavailable.
 
+### Unix PTY handoff
+
+On Unix, advanced terminal-host apps that move a live PTY between processes can call `TerminalPty::handoff()` before transferring the master fd over their own IPC channel:
+
+```rust
+#[cfg(unix)]
+let handoff = pty.handoff()?;
+```
+
+`TerminalPtyHandoff` contains the raw master fd and optional child pid. The token keeps the original PTY master alive until it is dropped; pass or duplicate the fd before dropping it. After handoff, the original `TerminalPty` stops forwarding output, rejects writes/resizes, and will not kill the child on drop. The receiving process is responsible for reading, writing, resizing, and terminating the adopted PTY.
+
+`handoff()` waits for the local reader thread to stop before returning, so the receiving process can start reading without racing the old owner. Calling `kill()` after handoff is a no-op because ownership has moved to the receiver.
+
+This is intentionally a low-level Unix-only escape hatch for multiplexers and session managers. Ordinary apps should keep using `ManagedTerminal` or `TerminalPty::spawn`.
+
 ---
 
 ## TerminalScreen

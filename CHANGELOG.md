@@ -60,6 +60,9 @@ While the crate is on `0.x.y`:
   content is taller than the terminal (or the cap), the layout keeps its
   natural height and the viewport shows its top rows, clipping the bottom.
   See `docs/inline-mode.md` and `examples/inline_auto_height.rs`.
+- Unix-only `TerminalPty::handoff()` and `TerminalPtyHandoff` for advanced
+  terminal hosts that need to transfer a live PTY master to another process
+  without restarting the child. See `docs/widgets/terminal.md`.
 
 ### Changed
 

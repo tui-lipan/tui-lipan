@@ -1,5 +1,16 @@
+#![allow(unsafe_code)]
+
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
+use std::thread::JoinHandle;
+
+#[cfg(unix)]
+use std::fs::File;
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
@@ -107,11 +118,32 @@ impl TerminalPtyConfig {
 /// Handle to a running PTY process.
 #[derive(Clone)]
 pub struct TerminalPty {
-    master: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    killer: Arc<Mutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>>,
+    inner: Arc<TerminalPtyInner>,
+}
+
+struct TerminalPtyInner {
+    backend: Mutex<TerminalPtyBackend>,
+    writer: Mutex<Option<Box<dyn Write + Send>>>,
+    killer: Mutex<Option<Box<dyn portable_pty::ChildKiller + Send + Sync>>>,
+    reader_thread: Mutex<Option<JoinHandle<()>>>,
+    active: AtomicBool,
+    kill_on_drop: AtomicBool,
     /// OS process id of the spawned child, captured at spawn time (`None` if unavailable).
     pid: Option<u32>,
+}
+
+enum TerminalPtyBackend {
+    Portable(Box<dyn portable_pty::MasterPty + Send>),
+}
+
+#[cfg(unix)]
+/// A live PTY master fd prepared for transfer to another process.
+pub struct TerminalPtyHandoff {
+    /// Raw master PTY fd kept open by this token until it is dropped.
+    pub master_fd: RawFd,
+    /// Child process id, if the platform reported one at spawn time.
+    pub pid: Option<u32>,
+    _keepalive: TerminalPty,
 }
 
 impl TerminalPty {
@@ -130,10 +162,23 @@ impl TerminalPty {
             })
             .map_err(|err| TerminalPtyError::Setup(err.to_string()))?;
 
+        #[cfg(unix)]
+        let reader = File::from(
+            unix_dup_master_fd(&*pair.master)
+                .map_err(|err| TerminalPtyError::Reader(err.to_string()))?,
+        );
+        #[cfg(not(unix))]
         let reader = pair
             .master
             .try_clone_reader()
             .map_err(|err| TerminalPtyError::Reader(err.to_string()))?;
+
+        #[cfg(unix)]
+        let writer = Box::new(File::from(
+            unix_dup_master_fd(&*pair.master)
+                .map_err(|err| TerminalPtyError::Writer(err.to_string()))?,
+        )) as Box<dyn Write + Send>;
+        #[cfg(not(unix))]
         let writer = pair
             .master
             .take_writer()
@@ -156,22 +201,40 @@ impl TerminalPty {
             .spawn_command(builder)
             .map_err(|err| TerminalPtyError::Spawn(err.to_string()))?;
 
-        let master = Arc::new(Mutex::new(pair.master));
-        let writer = Arc::new(Mutex::new(writer));
         let pid = child.process_id();
-        let killer = Arc::new(Mutex::new(child.clone_killer()));
+        let inner = Arc::new(TerminalPtyInner {
+            backend: Mutex::new(TerminalPtyBackend::Portable(pair.master)),
+            writer: Mutex::new(Some(writer)),
+            killer: Mutex::new(Some(child.clone_killer())),
+            reader_thread: Mutex::new(None),
+            active: AtomicBool::new(true),
+            kill_on_drop: AtomicBool::new(true),
+            pid,
+        });
 
         let on_event = Arc::new(on_event);
 
         {
             let on_event = on_event.clone();
-            std::thread::spawn(move || {
+            let inner = inner.clone();
+            let thread_inner = inner.clone();
+            let reader_thread = std::thread::spawn(move || {
                 let mut reader = reader;
                 let mut buffer = [0u8; 8192];
                 loop {
+                    if !thread_inner.active.load(Ordering::Acquire) {
+                        break;
+                    }
+                    #[cfg(unix)]
+                    if !unix_wait_readable(reader.as_raw_fd(), &thread_inner.active) {
+                        break;
+                    }
                     match reader.read(&mut buffer) {
                         Ok(0) => break,
                         Ok(read) => {
+                            if !thread_inner.active.load(Ordering::Acquire) {
+                                break;
+                            }
                             on_event(TerminalPtyEvent::Output(Arc::<[u8]>::from(
                                 buffer[..read].to_vec(),
                             )));
@@ -184,6 +247,9 @@ impl TerminalPty {
                     }
                 }
             });
+            if let Ok(mut slot) = inner.reader_thread.lock() {
+                *slot = Some(reader_thread);
+            }
         }
 
         {
@@ -198,25 +264,66 @@ impl TerminalPty {
             });
         }
 
-        Ok(Self {
-            master,
-            writer,
-            killer,
-            pid,
+        Ok(Self { inner })
+    }
+
+    #[cfg(unix)]
+    /// Prepare this PTY for transfer to another process.
+    pub fn handoff(&self) -> std::io::Result<TerminalPtyHandoff> {
+        self.inner.active.store(false, Ordering::Release);
+        self.inner.kill_on_drop.store(false, Ordering::Release);
+        if let Some(handle) = self
+            .inner
+            .reader_thread
+            .lock()
+            .map_err(|_| std::io::Error::other("pty reader thread lock poisoned"))?
+            .take()
+        {
+            let _ = handle.join();
+        }
+        let mut writer = self
+            .inner
+            .writer
+            .lock()
+            .map_err(|_| std::io::Error::other("pty writer lock poisoned"))?;
+        writer.take();
+        drop(writer);
+
+        let backend = self
+            .inner
+            .backend
+            .lock()
+            .map_err(|_| std::io::Error::other("pty master lock poisoned"))?;
+        let fd = match &*backend {
+            TerminalPtyBackend::Portable(master) => master
+                .as_raw_fd()
+                .ok_or_else(|| std::io::Error::other("pty master fd unavailable"))?,
+        };
+        Ok(TerminalPtyHandoff {
+            master_fd: fd,
+            pid: self.inner.pid,
+            _keepalive: self.clone(),
         })
     }
 
     /// OS process id of the spawned child process, if the platform reports one.
     pub fn pid(&self) -> Option<u32> {
-        self.pid
+        self.inner.pid
     }
 
     /// Send raw bytes to child stdin.
     pub fn write(&self, bytes: &[u8]) -> std::io::Result<()> {
+        if !self.inner.active.load(Ordering::Acquire) {
+            return Err(std::io::Error::other("pty has been handed off"));
+        }
         let mut writer = self
+            .inner
             .writer
             .lock()
             .map_err(|_| std::io::Error::other("pty writer lock poisoned"))?;
+        let writer = writer
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("pty writer unavailable"))?;
         writer.write_all(bytes)?;
         writer.flush()
     }
@@ -232,30 +339,83 @@ impl TerminalPty {
 
     /// Resize PTY dimensions.
     pub fn resize(&self, cols: u16, rows: u16) -> std::io::Result<()> {
-        let master = self
-            .master
+        if !self.inner.active.load(Ordering::Acquire) {
+            return Err(std::io::Error::other("pty has been handed off"));
+        }
+        let backend = self
+            .inner
+            .backend
             .lock()
             .map_err(|_| std::io::Error::other("pty master lock poisoned"))?;
-        master
-            .resize(PtySize {
-                rows: rows.max(1),
-                cols: cols.max(1),
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|err| std::io::Error::other(err.to_string()))
+        match &*backend {
+            TerminalPtyBackend::Portable(master) => master
+                .resize(PtySize {
+                    rows: rows.max(1),
+                    cols: cols.max(1),
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .map_err(|err| std::io::Error::other(err.to_string())),
+        }
     }
 
     /// Request graceful process termination.
     pub fn kill(&self) -> std::io::Result<()> {
+        if !self.inner.kill_on_drop.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.inner.active.store(false, Ordering::Release);
         let mut killer = self
+            .inner
             .killer
             .lock()
             .map_err(|_| std::io::Error::other("pty killer lock poisoned"))?;
-        killer
-            .kill()
-            .map_err(|err| std::io::Error::other(err.to_string()))
+        if let Some(killer) = killer.as_mut() {
+            return killer
+                .kill()
+                .map_err(|err| std::io::Error::other(err.to_string()));
+        }
+        Ok(())
     }
+}
+
+#[cfg(unix)]
+fn unix_dup_master_fd(master: &dyn portable_pty::MasterPty) -> std::io::Result<OwnedFd> {
+    let fd = master
+        .as_raw_fd()
+        .ok_or_else(|| std::io::Error::other("pty master fd unavailable"))?;
+    unix_dup_raw_fd(fd)
+}
+
+#[cfg(unix)]
+fn unix_dup_raw_fd(fd: RawFd) -> std::io::Result<OwnedFd> {
+    let dup = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if dup < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(dup) })
+}
+
+#[cfg(unix)]
+fn unix_wait_readable(fd: RawFd, active: &AtomicBool) -> bool {
+    while active.load(Ordering::Acquire) {
+        let mut pollfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let rc = unsafe { libc::poll(&mut pollfd, 1, 100) };
+        if rc > 0 {
+            return pollfd.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0;
+        }
+        if rc == 0 {
+            continue;
+        }
+        if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+            return false;
+        }
+    }
+    false
 }
 
 /// PTY runtime event.

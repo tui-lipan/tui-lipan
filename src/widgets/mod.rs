@@ -273,6 +273,8 @@ pub use table::{
 };
 pub(crate) use tabs::tab_width_budgets;
 pub use tabs::{Tab, Tabs, TabsEvent, TabsOverflow};
+#[cfg(all(feature = "terminal", unix))]
+pub use terminal::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use terminal::{
     MouseEncoding, MouseMode, MouseModeState, Terminal, TerminalBuffer, TerminalColorPalette,
