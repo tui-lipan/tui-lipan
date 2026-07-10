@@ -111,6 +111,16 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `key_event_to_bytes` now encodes `Ctrl` and `Shift` on cursor, navigation, and
+  function keys instead of dropping them, so `Ctrl+Left` reaches the child as
+  `CSI 1;5D` rather than collapsing to a bare `Left` and losing word-wise motion
+  in readline, editors, and other TUIs. Arrows and `Home`/`End` use `CSI 1;<mod>
+  <letter>`; `Insert`, `Delete`, `PageUp`, `PageDown`, and the function keys use
+  `CSI <num>;<mod>~`, with the xterm modifier parameter `1 + shift + 2·alt +
+  4·ctrl`. Plain `Alt` keeps its historical ESC-prefix encoding, and `Shift`
+  alone on `Insert`/`PageUp`/`PageDown` keeps the unmodified bytes because those
+  are emulator-reserved bindings the `Terminal` widget forwards rather than
+  consumes. See `docs/widgets/terminal.md`.
 - `TerminalPty` no longer reports a spurious `TerminalPtyEvent::Error`
   ("Input/output error (os error 5)") when a child exits on Linux. A PTY master
   read returns `EIO` once the slave side is fully closed, which is the normal

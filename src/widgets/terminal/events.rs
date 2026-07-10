@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::core::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseKind};
+use crate::core::event::{KeyCode, KeyEvent, KeyMods, MouseButton, MouseEvent, MouseKind};
 use crate::style::Span;
 use crate::utils::{GridSelection, GridSelectionEvent};
 
@@ -55,6 +55,10 @@ pub fn terminal_selection_text(lines: &[Vec<Span>], selection: &GridSelection) -
 ///
 /// This covers common printable keys and ANSI control sequences.
 pub fn key_event_to_bytes(key: KeyEvent) -> Option<Vec<u8>> {
+    if let Some(bytes) = modified_special_key_bytes(key.code, key.mods) {
+        return Some(bytes);
+    }
+
     let mut bytes = match key.code {
         KeyCode::Char(ch) => {
             if key.mods.ctrl {
@@ -78,25 +82,7 @@ pub fn key_event_to_bytes(key: KeyEvent) -> Option<Vec<u8>> {
         KeyCode::PageDown => b"\x1b[6~".to_vec(),
         KeyCode::Insert => b"\x1b[2~".to_vec(),
         KeyCode::Delete => b"\x1b[3~".to_vec(),
-        KeyCode::F(n) => format!(
-            "\x1b[{}",
-            match n {
-                1 => "11~",
-                2 => "12~",
-                3 => "13~",
-                4 => "14~",
-                5 => "15~",
-                6 => "17~",
-                7 => "18~",
-                8 => "19~",
-                9 => "20~",
-                10 => "21~",
-                11 => "23~",
-                12 => "24~",
-                _ => return None,
-            }
-        )
-        .into_bytes(),
+        KeyCode::F(n) => format!("\x1b[{}~", f_key_number(n)?).into_bytes(),
     };
 
     if key.mods.alt {
@@ -107,6 +93,77 @@ pub fn key_event_to_bytes(key: KeyEvent) -> Option<Vec<u8>> {
     }
 
     Some(bytes)
+}
+
+/// The xterm modifier parameter for a modified special key: `1 + shift + 2·alt + 4·ctrl`, so
+/// Shift=2, Alt=3, Ctrl=5, Ctrl+Shift=6, and so on (Super is not representable and is ignored).
+fn xterm_modifier_param(mods: KeyMods) -> u8 {
+    1 + u8::from(mods.shift) + 2 * u8::from(mods.alt) + 4 * u8::from(mods.ctrl)
+}
+
+/// The parameter number for a function key in the `CSI <num> ~` scheme (F1→11 … F12→24),
+/// matching the unmodified encoding. `None` for out-of-range function keys.
+fn f_key_number(n: u8) -> Option<u8> {
+    Some(match n {
+        1 => 11,
+        2 => 12,
+        3 => 13,
+        4 => 14,
+        5 => 15,
+        6 => 17,
+        7 => 18,
+        8 => 19,
+        9 => 20,
+        10 => 21,
+        11 => 23,
+        12 => 24,
+        _ => return None,
+    })
+}
+
+/// Whether Shift is the only modifier on a key that a terminal emulator conventionally handles
+/// itself: Shift+Insert pastes, Shift+PageUp/PageDown page the scrollback.
+///
+/// This widget forwards those keys to the child rather than consuming them (its scrollback is
+/// driven by the wheel and `on_scroll_to`), so encoding them as `CSI <num> ; 2 ~` would hand the
+/// child a sequence it does not recognize and turn the key into a no-op. Keep the unmodified form
+/// so the child still pages and pastes.
+fn shift_reserved_by_emulator(code: KeyCode, mods: KeyMods) -> bool {
+    mods.shift
+        && !mods.ctrl
+        && !mods.alt
+        && matches!(code, KeyCode::Insert | KeyCode::PageUp | KeyCode::PageDown)
+}
+
+/// Encode a cursor, navigation, or function key that carries a modifier into its xterm
+/// parameterized CSI form: `CSI 1 ; <mod> <letter>` for the arrows and Home/End, `CSI <num> ;
+/// <mod> ~` for the tilde keys. Without this a modified key like Ctrl+Left would collapse to a
+/// bare Left and lose word-wise motion in TUIs (readline, editors).
+///
+/// Returns `None`, leaving the caller to fall back on the plain encoding, when the key has no
+/// parameterized form (`Char`, `Enter`, …), when Alt is the only modifier (that keeps its
+/// historical ESC-prefix encoding), and for the Shift-only keys an emulator normally reserves.
+fn modified_special_key_bytes(code: KeyCode, mods: KeyMods) -> Option<Vec<u8>> {
+    if (!mods.ctrl && !mods.shift) || shift_reserved_by_emulator(code, mods) {
+        return None;
+    }
+
+    let m = xterm_modifier_param(mods);
+    let seq = match code {
+        KeyCode::Up => format!("\x1b[1;{m}A"),
+        KeyCode::Down => format!("\x1b[1;{m}B"),
+        KeyCode::Right => format!("\x1b[1;{m}C"),
+        KeyCode::Left => format!("\x1b[1;{m}D"),
+        KeyCode::Home => format!("\x1b[1;{m}H"),
+        KeyCode::End => format!("\x1b[1;{m}F"),
+        KeyCode::Insert => format!("\x1b[2;{m}~"),
+        KeyCode::Delete => format!("\x1b[3;{m}~"),
+        KeyCode::PageUp => format!("\x1b[5;{m}~"),
+        KeyCode::PageDown => format!("\x1b[6;{m}~"),
+        KeyCode::F(n) => format!("\x1b[{};{m}~", f_key_number(n)?),
+        _ => return None,
+    };
+    Some(seq.into_bytes())
 }
 
 fn ctrl_char(ch: char) -> Option<u8> {
