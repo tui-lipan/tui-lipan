@@ -132,6 +132,9 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Terminal teardown now discards delayed capability-probe responses before raw
+  mode is disabled, preventing stray DA1 sequences such as `^[[?…c` from being
+  echoed into the shell prompt on slower terminals and multiplexers.
 - `key_event_to_bytes` now encodes `Ctrl+Backspace` as `ESC DEL` (readline's
   `backward-kill-word`, identical to `Alt+Backspace`) instead of collapsing it to
   a bare `Backspace`, so it deletes the previous word out of the box in shells and
