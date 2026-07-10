@@ -137,6 +137,9 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- The keyboard-enhancement probe now consumes its terminating DA1 reply instead
+  of relying on a later input flush, closing a race that could still leak
+  `^[[?…c` into the shell prompt on exit.
 - Terminal teardown now discards delayed capability-probe responses before raw
   mode is disabled, preventing stray DA1 sequences such as `^[[?…c` from being
   echoed into the shell prompt on slower terminals and multiplexers.
