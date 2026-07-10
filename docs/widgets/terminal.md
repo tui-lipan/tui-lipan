@@ -129,9 +129,9 @@ See [`focus.md`](../focus.md) for non-terminal dispatch order and [`keybindings.
 
 ## Key encoding
 
-Once a key is routed to the terminal, `key_event_to_bytes` turns it into the bytes written to the child's stdin.
+Once a key is routed to the terminal, `key_event_to_bytes(key, modes)` turns it into the bytes written to the child's stdin. `modes` is a `TerminalKeyModes`, which carries the modes the child has negotiated — see [Input modes](#input-modes) below.
 
-Cursor, navigation, and function keys carry `Ctrl`/`Shift` as an xterm modifier parameter of `1 + shift + 2·alt + 4·ctrl` — so `Shift` is `2`, `Ctrl` is `5`, `Ctrl+Shift` is `6`, `Ctrl+Alt` is `7`. `Super` has no xterm parameter and is ignored.
+Cursor, navigation, and function keys carry `Ctrl`/`Shift` as an xterm modifier parameter of `1 + shift + 2·alt + 4·ctrl` — so `Shift` is `2`, `Ctrl` is `5`, `Ctrl+Shift` is `6`, `Ctrl+Alt` is `7`.
 
 | Key | Unmodified | Modified |
 |-----|-----------|----------|
@@ -139,14 +139,74 @@ Cursor, navigation, and function keys carry `Ctrl`/`Shift` as an xterm modifier 
 | `Home` / `End` | `CSI H` / `CSI F` | `CSI 1;<mod>H` / `CSI 1;<mod>F` |
 | `Insert` / `Delete` | `CSI 2~` / `CSI 3~` | `CSI 2;<mod>~` / `CSI 3;<mod>~` |
 | `PageUp` / `PageDown` | `CSI 5~` / `CSI 6~` | `CSI 5;<mod>~` / `CSI 6;<mod>~` |
-| `F1`–`F12` | `CSI 11~` … `CSI 24~` | `CSI 11;<mod>~` … `CSI 24;<mod>~` |
+| `F1`–`F20` | `CSI 11~` … `CSI 34~` | `CSI 11;<mod>~` … `CSI 34;<mod>~` |
+| `Backspace` | `DEL` | `ESC DEL` (with `Ctrl`) |
+| `Enter` / `Tab` / `Esc` | `CR` / `HT` / `ESC` | unchanged (legacy) |
 
-Two deliberate exceptions:
+Three deliberate exceptions:
 
 - **`Alt` on its own** keeps the historical ESC-prefix encoding (`Alt+Left` is `ESC` followed by `CSI D`), matching xterm's `metaSendsEscape`. Combined with `Ctrl` or `Shift` it folds into the modifier parameter instead.
 - **`Shift+Insert`, `Shift+PageUp`, and `Shift+PageDown`** keep their unmodified bytes. A terminal emulator conventionally consumes these for paste and scrollback, but the `Terminal` widget forwards them (its scrollback runs on the wheel and `on_scroll_to`), and children do not recognize the parameterized form. Sending `CSI 5;2~` would make `Shift+PageUp` a no-op rather than paging the child. Adding `Ctrl` lifts the exception.
+- **`Super`-modified keys** produce no bytes at all. `Super` has no representation in any of these encodings, and forwarding the unmodified key would type a character the user never pressed. `key_event_to_bytes` returns `None` and the chord bubbles to the app.
 
-`Char` keys are unaffected: `Ctrl+<letter>` maps to its control code and everything else is sent as UTF-8.
+`Ctrl+Backspace` sends `ESC DEL` — readline's `backward-kill-word`, the same bytes as `Alt+Backspace` — so it deletes the previous word out of the box.
+
+### Char keys
+
+`Ctrl+<letter>` maps to its C0 control code (`Ctrl+A` → `0x01`); everything else is sent as UTF-8. `Ctrl` also maps the punctuation that has a control code:
+
+| Chord | Byte | | Chord | Byte |
+|-------|------|-|-------|------|
+| `Ctrl+Space`, `Ctrl+@`, `Ctrl+2` | `0x00` | | `Ctrl+^`, `Ctrl+6` | `0x1e` |
+| `Ctrl+[`, `Ctrl+3` | `0x1b` | | `Ctrl+_`, `Ctrl+/`, `Ctrl+7` | `0x1f` |
+| `Ctrl+\`, `Ctrl+4` | `0x1c` | | `Ctrl+?`, `Ctrl+8` | `0x7f` |
+| `Ctrl+]`, `Ctrl+5` | `0x1d` | | | |
+
+A `Ctrl+<char>` chord with no control code (`Ctrl+1`, `Ctrl+;`) has no legacy encoding: it returns `None` and stays available to the app **unless** the child has negotiated the Kitty keyboard protocol (below), which can carry it.
+
+Note that in the legacy encoding `Ctrl+Shift+C` produces `0x03`, identical to `Ctrl+C` — a control code has no shift bit. The `Terminal` widget never reaches that path, because the clipboard preflight consumes the chord first. Code calling `key_event_to_bytes` directly must do the same. Under the Kitty protocol the two are distinct (`CSI 99;6u` versus `CSI 99;5u`).
+
+### Kitty keyboard protocol
+
+Chords like `Ctrl+1`, `Ctrl+Enter`, and `Shift+Enter` have **no** legacy terminal encoding. There is no byte sequence to send a shell for `Ctrl+1`, which is why pressing it in a plain shell does nothing anywhere. They become expressible only under the [Kitty keyboard protocol], which a child turns on by pushing flags with `CSI > <flags> u`.
+
+tui-lipan's own backend pushes `DISAMBIGUATE_ESCAPE_CODES | REPORT_EVENT_TYPES` on startup (when the host terminal supports it), so **a tui-lipan app running inside a `Terminal` widget negotiates the protocol automatically.** When `modes.kitty_keyboard.disambiguate_escape_codes` is set, keys with no unambiguous legacy encoding switch to `CSI <codepoint>;<mod> u`:
+
+| Chord | Bytes |
+|-------|-------|
+| `Ctrl+1` … `Ctrl+9` | `CSI 49;5u` … `CSI 57;5u` |
+| `Ctrl+Enter` / `Shift+Enter` | `CSI 13;5u` / `CSI 13;2u` |
+| `Ctrl+Tab` | `CSI 9;5u` |
+| `Ctrl+Backspace` | `CSI 127;5u` |
+| `Ctrl+C` / `Ctrl+Shift+C` | `CSI 99;5u` / `CSI 99;6u` |
+| `Esc` | `CSI 27u` |
+
+The codepoint is the key **as engraved** (lowercase, no shift applied); Shift lands in the modifier parameter. Text keys still arrive as text — `Shift` alone never promotes a key to the escape form — and the arrows, tilde keys, and function keys keep their unambiguous legacy sequences. Only `Ctrl`/`Alt` (or a chord that has no other encoding, like `Esc`) triggers `CSI u`.
+
+Sending these to a child that has **not** negotiated the protocol would be wrong: a crossterm-based reader rejects the unknown sequence and discards it. So the encoder falls back to the legacy bytes above until the child asks, and a chord with no legacy form is simply dropped (`None`).
+
+[Kitty keyboard protocol]: https://sw.kovidgoyal.net/kitty/keyboard-protocol/
+
+### Input modes
+
+`TerminalKeyModes` carries the modes that change what a key press or a paste must produce. `TerminalRenderSnapshot` publishes it, `Terminal::snapshot` picks it up automatically, and `TerminalScreen::key_modes()` exposes it for manual wiring.
+
+| Field | Mode | Effect |
+|-------|------|--------|
+| `app_cursor` | DECCKM (`CSI ? 1 h`) | Unmodified cursor keys are introduced by `SS3` (`ESC O A`) instead of `CSI` (`ESC [ A`). Modified cursor keys and the tilde keys are unaffected. |
+| `bracketed_paste` | `CSI ? 2004 h` | `encode_paste` wraps pasted text in `CSI 200~` / `CSI 201~`. |
+| `kitty_keyboard` | `CSI > <flags> u` | The negotiated [Kitty keyboard protocol](#kitty-keyboard-protocol) flags (a `KittyKeyboardFlags`). |
+
+These matter for correctness rather than polish. ncurses emits `smkx` (`ESC [ ? 1 h ESC =`) on startup and then matches arrows against terminfo's `kcuu1=\EOA`, so a child in application-cursor mode is waiting for `ESC O A`. A child that never enabled bracketed paste does not strip the wrapper, so pasting into it would insert the literal bytes `ESC [ 200 ~`. And a chord like `Ctrl+1` cannot reach the child at all until it negotiates the Kitty protocol.
+
+```rust
+// Manual wiring: take the modes from the screen, hand them to the encoder.
+Msg::Key(key) => {
+    let modes = ctx.state.screen.key_modes();
+    ctx.state.pty.send_key(key, modes).ok();
+    Update::none()
+}
+```
 
 ---
 
@@ -253,6 +313,7 @@ let replay = screen.export_replay_bytes();
 | `scrollback_offset` | `usize` | Current scrollback offset |
 | `total_scrollback_rows` | `usize` | Total history rows |
 | `mouse_mode` | `MouseModeState` | PTY mouse/focus reporting mode |
+| `key_modes` | `TerminalKeyModes` | PTY input modes (DECCKM, bracketed paste) |
 
 `TerminalRenderSnapshot::from_parts(...)` rebuilds a snapshot from owned parts. It is intended for
 applications that define their own versioned external snapshot transport. `TerminalRenderSnapshot`

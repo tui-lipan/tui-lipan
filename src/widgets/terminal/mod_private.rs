@@ -6,7 +6,7 @@ use crate::widgets::ScrollEvent;
 use std::sync::Arc;
 
 use super::events::{
-    MouseModeState, TerminalInputEvent, TerminalSelection, TerminalSelectionEvent,
+    MouseModeState, TerminalInputEvent, TerminalKeyModes, TerminalSelection, TerminalSelectionEvent,
 };
 use super::screen::TerminalViewport;
 
@@ -24,6 +24,7 @@ pub struct Terminal {
     pub(crate) scrollback_offset: usize,
     pub(crate) total_scrollback_rows: usize,
     pub(crate) mouse_mode: MouseModeState,
+    pub(crate) key_modes: TerminalKeyModes,
     pub(crate) selection: Option<TerminalSelection>,
     pub(crate) selection_controlled: bool,
     pub(crate) selection_style: StyleSlot,

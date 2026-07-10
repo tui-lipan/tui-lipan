@@ -6,7 +6,7 @@ use crate::core::event::{KeyCode, KeyEvent};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::widgets::internal::apply_scroll_action;
 use crate::widgets::{ScrollEvent, ScrollMetrics};
-use crate::widgets::{TerminalInputKind, wrap_bracketed_paste};
+use crate::widgets::{TerminalInputKind, encode_paste};
 
 /// Handle keyboard input for a focused Terminal node.
 pub(crate) fn handle_key(
@@ -84,7 +84,7 @@ pub(crate) fn preflight_key(
             match clipboard.read_clipboard_text() {
                 Ok(text) => {
                     let text = truncate_paste(&text, clipboard_config.paste_max_bytes);
-                    let bytes = wrap_bracketed_paste(&text);
+                    let bytes = encode_paste(&text, node.key_modes);
                     on_input.emit(crate::widgets::TerminalInputEvent {
                         kind: TerminalInputKind::Paste,
                         key: Some(key),
@@ -155,7 +155,7 @@ pub(crate) fn handle_paste(tree: &mut NodeTree, id: NodeId, text: &str) -> bool 
         return false;
     };
 
-    let bytes = wrap_bracketed_paste(text);
+    let bytes = encode_paste(text, node.key_modes);
     on_input.emit(crate::widgets::TerminalInputEvent {
         kind: TerminalInputKind::Paste,
         key: None,

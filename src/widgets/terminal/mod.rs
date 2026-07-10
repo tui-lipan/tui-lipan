@@ -11,9 +11,10 @@ mod screen;
 
 pub use buffer::TerminalBuffer;
 pub use events::{
-    MouseEncoding, MouseMode, MouseModeState, TerminalInputEvent, TerminalInputKind,
-    TerminalSelection, TerminalSelectionEvent, focus_sequences, key_event_to_bytes,
-    mouse_event_to_bytes, paste_sequences, terminal_selection_text, wrap_bracketed_paste,
+    KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, TerminalInputEvent,
+    TerminalInputKind, TerminalKeyModes, TerminalSelection, TerminalSelectionEvent, encode_paste,
+    focus_sequences, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
+    terminal_selection_text,
 };
 pub use mod_private::Terminal;
 #[cfg(unix)]
@@ -48,6 +49,7 @@ impl Default for Terminal {
             scrollback_offset: 0,
             total_scrollback_rows: 0,
             mouse_mode: MouseModeState::default(),
+            key_modes: TerminalKeyModes::default(),
             selection: None,
             selection_controlled: false,
             selection_style: StyleSlot::Inherit,
@@ -147,6 +149,16 @@ impl Terminal {
         self.scrollback_offset = snapshot.scrollback_offset;
         self.total_scrollback_rows = snapshot.total_scrollback_rows;
         self.mouse_mode = snapshot.mouse_mode;
+        self.key_modes = snapshot.key_modes;
+        self
+    }
+
+    /// Set the child's input-affecting DEC modes directly.
+    ///
+    /// [`snapshot`](Self::snapshot) already carries these. Use this only when driving the widget
+    /// from something other than a `TerminalRenderSnapshot`.
+    pub fn key_modes(mut self, key_modes: TerminalKeyModes) -> Self {
+        self.key_modes = key_modes;
         self
     }
 
@@ -363,12 +375,13 @@ impl From<Terminal> for Element {
     fn from(mut terminal: Terminal) -> Self {
         let on_input = terminal.on_input.clone();
         let fallback_on_key = terminal.on_key.clone();
+        let key_modes = terminal.key_modes;
         terminal.on_key = if on_input.is_some() || fallback_on_key.is_some() {
             Some(KeyHandler::new(move |key| {
                 let mut handled = false;
 
                 if let Some(on_input) = on_input.as_ref()
-                    && let Some(bytes) = key_event_to_bytes(key)
+                    && let Some(bytes) = key_event_to_bytes(key, key_modes)
                 {
                     on_input.emit(TerminalInputEvent {
                         kind: TerminalInputKind::Key,
@@ -419,37 +432,59 @@ mod tests {
     use super::*;
     use crate::core::event::{KeyCode, KeyEvent, KeyMods, MouseButton, MouseEvent, MouseKind};
 
+    /// Encode a chord for a child that negotiated nothing (a shell, an editor).
+    fn enc(code: KeyCode, mods: KeyMods) -> Option<Vec<u8>> {
+        key_event_to_bytes(KeyEvent { code, mods }, TerminalKeyModes::default())
+    }
+
+    /// Encode a chord for a child that pushed the Kitty protocol's disambiguate flag, as
+    /// tui-lipan's own backend does on startup.
+    fn kitty(code: KeyCode, mods: KeyMods) -> Option<Vec<u8>> {
+        let modes = TerminalKeyModes {
+            kitty_keyboard: KittyKeyboardFlags {
+                disambiguate_escape_codes: true,
+                ..KittyKeyboardFlags::default()
+            },
+            ..TerminalKeyModes::default()
+        };
+        key_event_to_bytes(KeyEvent { code, mods }, modes)
+    }
+
+    const CTRL_SHIFT: KeyMods = KeyMods {
+        ctrl: true,
+        shift: true,
+        alt: false,
+        super_key: false,
+    };
+    const CTRL_ALT: KeyMods = KeyMods {
+        ctrl: true,
+        alt: true,
+        shift: false,
+        super_key: false,
+    };
+    const ALT_SHIFT: KeyMods = KeyMods {
+        alt: true,
+        shift: true,
+        ctrl: false,
+        super_key: false,
+    };
+
     #[test]
     fn ctrl_mapping_works() {
-        let key = KeyEvent {
-            code: KeyCode::Char('c'),
-            mods: KeyMods {
-                ctrl: true,
-                ..KeyMods::default()
-            },
-        };
-        assert_eq!(key_event_to_bytes(key), Some(vec![3]));
+        assert_eq!(enc(KeyCode::Char('c'), KeyMods::CTRL), Some(vec![3]));
     }
 
     #[test]
     fn alt_prefixes_escape() {
-        let key = KeyEvent {
-            code: KeyCode::Char('x'),
-            mods: KeyMods {
-                alt: true,
-                ..KeyMods::default()
-            },
-        };
-        assert_eq!(key_event_to_bytes(key), Some(vec![0x1b, b'x']));
+        assert_eq!(
+            enc(KeyCode::Char('x'), KeyMods::ALT),
+            Some(vec![0x1b, b'x'])
+        );
     }
 
     #[test]
     fn ctrl_arrows_encode_xterm_modifier_param() {
         // Ctrl+Left/Right drive word-wise motion in TUIs and must not collapse to a bare arrow.
-        let ctrl = KeyMods {
-            ctrl: true,
-            ..KeyMods::default()
-        };
         for (code, expected) in [
             (KeyCode::Left, "\x1b[1;5D"),
             (KeyCode::Right, "\x1b[1;5C"),
@@ -458,9 +493,8 @@ mod tests {
             (KeyCode::Home, "\x1b[1;5H"),
             (KeyCode::End, "\x1b[1;5F"),
         ] {
-            let key = KeyEvent { code, mods: ctrl };
             assert_eq!(
-                key_event_to_bytes(key),
+                enc(code, KeyMods::CTRL),
                 Some(expected.as_bytes().to_vec()),
                 "ctrl {code:?}"
             );
@@ -469,59 +503,16 @@ mod tests {
 
     #[test]
     fn shift_and_combined_modifiers_encode_params() {
-        let shift = KeyMods {
-            shift: true,
-            ..KeyMods::default()
-        };
         assert_eq!(
-            key_event_to_bytes(KeyEvent {
-                code: KeyCode::Left,
-                mods: shift
-            }),
+            enc(KeyCode::Left, KeyMods::SHIFT),
             Some(b"\x1b[1;2D".to_vec())
         );
-
         // Ctrl+Shift => param 6; Ctrl+Alt => param 7 (no separate ESC prefix).
-        let ctrl_shift = KeyMods {
-            ctrl: true,
-            shift: true,
-            ..KeyMods::default()
-        };
-        assert_eq!(
-            key_event_to_bytes(KeyEvent {
-                code: KeyCode::Right,
-                mods: ctrl_shift
-            }),
-            Some(b"\x1b[1;6C".to_vec())
-        );
-
-        let ctrl_alt = KeyMods {
-            ctrl: true,
-            alt: true,
-            ..KeyMods::default()
-        };
-        assert_eq!(
-            key_event_to_bytes(KeyEvent {
-                code: KeyCode::Up,
-                mods: ctrl_alt
-            }),
-            Some(b"\x1b[1;7A".to_vec())
-        );
-
+        assert_eq!(enc(KeyCode::Right, CTRL_SHIFT), Some(b"\x1b[1;6C".to_vec()));
+        assert_eq!(enc(KeyCode::Up, CTRL_ALT), Some(b"\x1b[1;7A".to_vec()));
         // Alt+Shift => param 4. Alt only suppresses the parameterized form when it stands alone,
         // so this takes the CSI path rather than the ESC-prefixed one.
-        let alt_shift = KeyMods {
-            alt: true,
-            shift: true,
-            ..KeyMods::default()
-        };
-        assert_eq!(
-            key_event_to_bytes(KeyEvent {
-                code: KeyCode::Left,
-                mods: alt_shift
-            }),
-            Some(b"\x1b[1;4D".to_vec())
-        );
+        assert_eq!(enc(KeyCode::Left, ALT_SHIFT), Some(b"\x1b[1;4D".to_vec()));
     }
 
     #[test]
@@ -529,18 +520,13 @@ mod tests {
         // Shift+Insert pastes and Shift+PageUp/PageDown page the scrollback by convention. The
         // widget forwards them instead of consuming them, and children do not understand the
         // parameterized form, so the plain bytes must survive or the key becomes a no-op.
-        let shift = KeyMods {
-            shift: true,
-            ..KeyMods::default()
-        };
         for (code, expected) in [
             (KeyCode::Insert, "\x1b[2~"),
             (KeyCode::PageUp, "\x1b[5~"),
             (KeyCode::PageDown, "\x1b[6~"),
         ] {
-            let key = KeyEvent { code, mods: shift };
             assert_eq!(
-                key_event_to_bytes(key),
+                enc(code, KeyMods::SHIFT),
                 Some(expected.as_bytes().to_vec()),
                 "shift {code:?}"
             );
@@ -548,78 +534,303 @@ mod tests {
 
         // Delete is not emulator-reserved, and adding Ctrl lifts the exemption entirely.
         assert_eq!(
-            key_event_to_bytes(KeyEvent {
-                code: KeyCode::Delete,
-                mods: shift
-            }),
+            enc(KeyCode::Delete, KeyMods::SHIFT),
             Some(b"\x1b[3;2~".to_vec())
         );
         assert_eq!(
-            key_event_to_bytes(KeyEvent {
-                code: KeyCode::PageUp,
-                mods: KeyMods {
-                    ctrl: true,
-                    shift: true,
-                    ..KeyMods::default()
-                }
-            }),
+            enc(KeyCode::PageUp, CTRL_SHIFT),
             Some(b"\x1b[5;6~".to_vec())
         );
     }
 
     #[test]
     fn ctrl_tilde_keys_encode_params() {
-        let ctrl = KeyMods {
-            ctrl: true,
-            ..KeyMods::default()
-        };
         assert_eq!(
-            key_event_to_bytes(KeyEvent {
-                code: KeyCode::Delete,
-                mods: ctrl
-            }),
+            enc(KeyCode::Delete, KeyMods::CTRL),
             Some(b"\x1b[3;5~".to_vec())
         );
         assert_eq!(
-            key_event_to_bytes(KeyEvent {
-                code: KeyCode::PageUp,
-                mods: ctrl
-            }),
+            enc(KeyCode::PageUp, KeyMods::CTRL),
             Some(b"\x1b[5;5~".to_vec())
         );
         // F5 uses param 15 in the tilde scheme; Shift keeps that number.
         assert_eq!(
-            key_event_to_bytes(KeyEvent {
-                code: KeyCode::F(5),
-                mods: KeyMods {
-                    shift: true,
-                    ..KeyMods::default()
-                }
-            }),
+            enc(KeyCode::F(5), KeyMods::SHIFT),
             Some(b"\x1b[15;2~".to_vec())
         );
     }
 
     #[test]
-    fn plain_arrows_are_unmodified() {
+    fn high_function_keys_encode_through_f20() {
+        // The tilde scheme skips 16, 22, 27 and 30, so F15 is 28 rather than 27.
         assert_eq!(
-            key_event_to_bytes(KeyEvent {
-                code: KeyCode::Left,
-                mods: KeyMods::default()
-            }),
+            enc(KeyCode::F(13), KeyMods::NONE),
+            Some(b"\x1b[25~".to_vec())
+        );
+        assert_eq!(
+            enc(KeyCode::F(15), KeyMods::NONE),
+            Some(b"\x1b[28~".to_vec())
+        );
+        assert_eq!(
+            enc(KeyCode::F(20), KeyMods::CTRL),
+            Some(b"\x1b[34;5~".to_vec())
+        );
+        // Past F20 there is no sequence to send, so the key is left for the app.
+        assert_eq!(enc(KeyCode::F(21), KeyMods::NONE), None);
+    }
+
+    #[test]
+    fn ctrl_backspace_sends_backward_kill_word() {
+        // Ctrl+Backspace has no native PTY encoding; emit ESC DEL (readline backward-kill-word,
+        // the same bytes as Alt+Backspace) so it deletes the previous word, not one character.
+        assert_eq!(
+            enc(KeyCode::Backspace, KeyMods::CTRL),
+            Some(vec![0x1b, 0x7f])
+        );
+        // Plain Backspace stays a bare DEL.
+        assert_eq!(enc(KeyCode::Backspace, KeyMods::NONE), Some(vec![0x7f]));
+        // Alt+Backspace keeps its historical ESC DEL form (the same word-delete chord).
+        assert_eq!(
+            enc(KeyCode::Backspace, KeyMods::ALT),
+            Some(vec![0x1b, 0x7f])
+        );
+    }
+
+    #[test]
+    fn legacy_children_keep_legacy_enter_tab_and_lose_ctrl_digits() {
+        // A child that never negotiated the Kitty protocol gets exactly the bytes it did before.
+        // Ctrl+Enter is indistinguishable from Enter, and Ctrl+1 has no encoding to send at all --
+        // inventing one (modifyOtherKeys) would hand crossterm children a sequence their parser
+        // rejects and silently discards, which is strictly worse than dropping the key here.
+        assert_eq!(enc(KeyCode::Enter, KeyMods::NONE), Some(vec![b'\r']));
+        assert_eq!(enc(KeyCode::Enter, KeyMods::CTRL), Some(vec![b'\r']));
+        assert_eq!(enc(KeyCode::Enter, CTRL_SHIFT), Some(vec![b'\r']));
+        assert_eq!(enc(KeyCode::Tab, KeyMods::NONE), Some(vec![b'\t']));
+        assert_eq!(enc(KeyCode::Tab, KeyMods::CTRL), Some(vec![b'\t']));
+        assert_eq!(
+            enc(KeyCode::BackTab, KeyMods::SHIFT),
+            Some(b"\x1b[Z".to_vec())
+        );
+        assert_eq!(enc(KeyCode::Esc, KeyMods::NONE), Some(vec![0x1b]));
+        // Alt alone keeps the ESC prefix, matching the arrows.
+        assert_eq!(enc(KeyCode::Enter, KeyMods::ALT), Some(vec![0x1b, b'\r']));
+        assert_eq!(enc(KeyCode::Char('1'), KeyMods::CTRL), None);
+    }
+
+    #[test]
+    fn kitty_children_get_csi_u_for_chords_with_no_legacy_encoding() {
+        // tui-lipan's own backend pushes DISAMBIGUATE_ESCAPE_CODES on startup, so a tui-lipan app
+        // running inside a Terminal widget lands here. Ctrl+1..Ctrl+9 are the motivating case:
+        // they have no legacy bytes, so before the protocol they simply never reached the child.
+        for (ch, expected) in [
+            ('1', "\x1b[49;5u"),
+            ('2', "\x1b[50;5u"),
+            ('9', "\x1b[57;5u"),
+        ] {
+            assert_eq!(
+                kitty(KeyCode::Char(ch), KeyMods::CTRL),
+                Some(expected.as_bytes().to_vec())
+            );
+        }
+
+        // Enter, Tab and Backspace become distinguishable from their unmodified selves.
+        assert_eq!(
+            kitty(KeyCode::Enter, KeyMods::CTRL),
+            Some(b"\x1b[13;5u".to_vec())
+        );
+        assert_eq!(
+            kitty(KeyCode::Enter, KeyMods::SHIFT),
+            Some(b"\x1b[13;2u".to_vec())
+        );
+        assert_eq!(
+            kitty(KeyCode::Tab, KeyMods::CTRL),
+            Some(b"\x1b[9;5u".to_vec())
+        );
+        assert_eq!(
+            kitty(KeyCode::Backspace, KeyMods::CTRL),
+            Some(b"\x1b[127;5u".to_vec())
+        );
+        // BackTab is Shift+Tab; the shift belongs in the parameter.
+        assert_eq!(
+            kitty(KeyCode::BackTab, KeyMods::NONE),
+            Some(b"\x1b[9;2u".to_vec())
+        );
+        // A lone Esc is escaped -- that is what "disambiguate escape codes" buys.
+        assert_eq!(
+            kitty(KeyCode::Esc, KeyMods::NONE),
+            Some(b"\x1b[27u".to_vec())
+        );
+
+        // The codepoint is the key as engraved, so Ctrl+Shift+C reports `c` with shift in the
+        // parameter and is finally distinct from Ctrl+C.
+        assert_eq!(
+            kitty(KeyCode::Char('c'), KeyMods::CTRL),
+            Some(b"\x1b[99;5u".to_vec())
+        );
+        assert_eq!(
+            kitty(KeyCode::Char('C'), CTRL_SHIFT),
+            Some(b"\x1b[99;6u".to_vec())
+        );
+        assert_eq!(
+            kitty(KeyCode::Char('x'), KeyMods::ALT),
+            Some(b"\x1b[120;3u".to_vec())
+        );
+    }
+
+    #[test]
+    fn kitty_children_keep_legacy_bytes_for_text_and_functional_keys() {
+        // Text still arrives as text: Shift alone does not promote a key to the escape form.
+        assert_eq!(
+            kitty(KeyCode::Char('a'), KeyMods::NONE),
+            Some(b"a".to_vec())
+        );
+        assert_eq!(
+            kitty(KeyCode::Char('A'), KeyMods::SHIFT),
+            Some(b"A".to_vec())
+        );
+        assert_eq!(kitty(KeyCode::Enter, KeyMods::NONE), Some(vec![b'\r']));
+        assert_eq!(kitty(KeyCode::Tab, KeyMods::NONE), Some(vec![b'\t']));
+        assert_eq!(kitty(KeyCode::Backspace, KeyMods::NONE), Some(vec![0x7f]));
+
+        // At this protocol level the arrows, tilde keys and function keys keep their unambiguous
+        // legacy sequences; Kitty only escapes them under `report_all_keys_as_escape_codes`.
+        assert_eq!(
+            kitty(KeyCode::Left, KeyMods::NONE),
             Some(b"\x1b[D".to_vec())
         );
-        // Alt alone keeps the historical ESC-prefix form.
         assert_eq!(
-            key_event_to_bytes(KeyEvent {
-                code: KeyCode::Left,
-                mods: KeyMods {
-                    alt: true,
+            kitty(KeyCode::Left, KeyMods::CTRL),
+            Some(b"\x1b[1;5D".to_vec())
+        );
+        assert_eq!(
+            kitty(KeyCode::PageUp, KeyMods::CTRL),
+            Some(b"\x1b[5;5~".to_vec())
+        );
+        assert_eq!(
+            kitty(KeyCode::F(5), KeyMods::NONE),
+            Some(b"\x1b[15~".to_vec())
+        );
+
+        // Super is still dropped: the protocol has a bit for it, but the chord belongs to the app.
+        assert_eq!(
+            kitty(
+                KeyCode::Char('1'),
+                KeyMods {
+                    super_key: true,
                     ..KeyMods::default()
                 }
-            }),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn ctrl_punctuation_maps_to_control_codes() {
+        // Ctrl+/ and Ctrl+_ are both US (0x1f), which readline binds to `undo`. Before this these
+        // returned None and the key was dropped before it ever reached the child.
+        assert_eq!(enc(KeyCode::Char('/'), KeyMods::CTRL), Some(vec![0x1f]));
+        assert_eq!(enc(KeyCode::Char('_'), KeyMods::CTRL), Some(vec![0x1f]));
+        assert_eq!(enc(KeyCode::Char('?'), KeyMods::CTRL), Some(vec![0x7f]));
+        assert_eq!(enc(KeyCode::Char('@'), KeyMods::CTRL), Some(vec![0x00]));
+        assert_eq!(enc(KeyCode::Char(' '), KeyMods::CTRL), Some(vec![0x00]));
+        // xterm's digit aliases.
+        assert_eq!(enc(KeyCode::Char('2'), KeyMods::CTRL), Some(vec![0x00]));
+        assert_eq!(enc(KeyCode::Char('8'), KeyMods::CTRL), Some(vec![0x7f]));
+        // Ctrl+1 has no control code, so the app keeps the chord.
+        assert_eq!(enc(KeyCode::Char('1'), KeyMods::CTRL), None);
+    }
+
+    #[test]
+    fn super_modified_keys_are_dropped() {
+        // Super has no encoding. Sending the bare key would type a character the user never asked
+        // for, so the chord is left for the app to bind.
+        let sup = KeyMods {
+            super_key: true,
+            ..KeyMods::default()
+        };
+        assert_eq!(enc(KeyCode::Char('c'), sup), None);
+        assert_eq!(enc(KeyCode::Left, sup), None);
+        assert_eq!(
+            enc(
+                KeyCode::Char('v'),
+                KeyMods {
+                    super_key: true,
+                    ctrl: true,
+                    ..KeyMods::default()
+                }
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn plain_arrows_are_unmodified() {
+        assert_eq!(enc(KeyCode::Left, KeyMods::NONE), Some(b"\x1b[D".to_vec()));
+        // Alt alone keeps the historical ESC-prefix form.
+        assert_eq!(
+            enc(KeyCode::Left, KeyMods::ALT),
             Some(b"\x1b\x1b[D".to_vec())
         );
+    }
+
+    #[test]
+    fn app_cursor_mode_switches_unmodified_arrows_to_ss3() {
+        // DECCKM: ncurses emits `smkx` on startup and then matches arrows against terminfo's
+        // `kcuu1=\EOA`, so a child in application mode expects SS3 rather than CSI.
+        let modes = TerminalKeyModes {
+            app_cursor: true,
+            ..TerminalKeyModes::default()
+        };
+        let app = |code| {
+            key_event_to_bytes(
+                KeyEvent {
+                    code,
+                    mods: KeyMods::NONE,
+                },
+                modes,
+            )
+        };
+        assert_eq!(app(KeyCode::Up), Some(b"\x1bOA".to_vec()));
+        assert_eq!(app(KeyCode::Down), Some(b"\x1bOB".to_vec()));
+        assert_eq!(app(KeyCode::Right), Some(b"\x1bOC".to_vec()));
+        assert_eq!(app(KeyCode::Left), Some(b"\x1bOD".to_vec()));
+        assert_eq!(app(KeyCode::Home), Some(b"\x1bOH".to_vec()));
+        assert_eq!(app(KeyCode::End), Some(b"\x1bOF".to_vec()));
+
+        // Modified cursor keys stay on the CSI parameterized form regardless of DECCKM.
+        assert_eq!(
+            key_event_to_bytes(
+                KeyEvent {
+                    code: KeyCode::Left,
+                    mods: KeyMods::CTRL
+                },
+                modes
+            ),
+            Some(b"\x1b[1;5D".to_vec())
+        );
+        // The tilde keys are unaffected too.
+        assert_eq!(
+            key_event_to_bytes(
+                KeyEvent {
+                    code: KeyCode::PageUp,
+                    mods: KeyMods::NONE
+                },
+                modes
+            ),
+            Some(b"\x1b[5~".to_vec())
+        );
+    }
+
+    #[test]
+    fn paste_is_bracketed_only_when_the_child_asked_for_it() {
+        let off = TerminalKeyModes::default();
+        assert_eq!(encode_paste("hi", off), b"hi".to_vec());
+
+        let on = TerminalKeyModes {
+            bracketed_paste: true,
+            ..TerminalKeyModes::default()
+        };
+        assert_eq!(encode_paste("hi", on), b"\x1b[200~hi\x1b[201~".to_vec());
     }
 
     #[test]

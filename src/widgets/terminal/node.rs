@@ -11,7 +11,7 @@ use crate::style::{
 use crate::widgets::ScrollEvent;
 
 use super::events::{
-    MouseModeState, TerminalInputEvent, TerminalSelection, TerminalSelectionEvent,
+    MouseModeState, TerminalInputEvent, TerminalKeyModes, TerminalSelection, TerminalSelectionEvent,
 };
 use super::layout::terminal_content_layout;
 
@@ -27,6 +27,7 @@ pub(crate) struct TerminalNode {
     pub selection: Option<TerminalSelection>,
     pub selection_style: StyleSlot,
     pub mouse_mode: MouseModeState,
+    pub key_modes: TerminalKeyModes,
     pub on_selection: Option<Callback<TerminalSelectionEvent>>,
     pub on_mouse_forward: Option<Callback<Vec<u8>>>,
     pub style: Style,
