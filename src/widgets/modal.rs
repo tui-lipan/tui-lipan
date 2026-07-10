@@ -6,7 +6,7 @@ use crate::core::event::MouseEvent;
 use crate::overlay::{
     DismissPolicy, OverlayLayer, OverlayPlacement, OverlayScope, PointerCapture, Portal,
 };
-use crate::style::{Align, BorderStyle, Color, Length, Padding, RichText, Size, Style};
+use crate::style::{Align, BorderStyle, Color, Length, Padding, RichText, Size, Style, StyleSlot};
 use crate::widgets::{Center, Frame, MouseRegion, Spacer, ZStack};
 
 /// A modal dialog with optional title and child content.
@@ -22,7 +22,7 @@ pub struct Modal {
     reserve_height: Option<Length>,
     backdrop_style: Style,
     frame_style: Style,
-    focus_style: Option<Style>,
+    focus_style: StyleSlot,
     border: bool,
     border_style: BorderStyle,
     padding: Padding,
@@ -44,7 +44,7 @@ impl Modal {
             reserve_height: None,
             backdrop_style: Style::default(),
             frame_style: Style::default(),
-            focus_style: None,
+            focus_style: StyleSlot::Inherit,
             border: true,
             border_style: BorderStyle::Plain,
             padding: 1.into(),
@@ -124,7 +124,19 @@ impl Modal {
     /// focus role, which overrides a deliberate `frame_style` border color. Set both to keep an
     /// intentional accent (e.g. an error border) visible on a focused dialog.
     pub fn focus_style(mut self, style: Style) -> Self {
-        self.focus_style = Some(style);
+        self.focus_style = StyleSlot::Replace(style);
+        self
+    }
+
+    /// Extend the themed focus style for the modal frame.
+    pub fn extend_focus_style(mut self, style: Style) -> Self {
+        self.focus_style = StyleSlot::Extend(style);
+        self
+    }
+
+    /// Inherit the themed focus style for the modal frame.
+    pub fn inherit_focus_style(mut self) -> Self {
+        self.focus_style = StyleSlot::Inherit;
         self
     }
 
@@ -180,10 +192,8 @@ impl From<Modal> for Element {
             .border_style(modal.border_style)
             .padding(modal.padding)
             .child(modal.child)
-            .style(frame_style);
-        if let Some(focus_style) = modal.focus_style {
-            base_frame = base_frame.focus_style(focus_style);
-        }
+            .style(frame_style)
+            .focus_style_slot(modal.focus_style);
         if let Some(title) = modal.title {
             base_frame = base_frame.title(title);
         }

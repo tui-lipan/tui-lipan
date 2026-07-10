@@ -31,6 +31,8 @@ modal focus/backdrop semantics.
 | `backdrop_style` | `Style` | Backdrop overlay style |
 | `frame_style` | `Style` | Dialog container style |
 | `focus_style` | `Style` | Dialog frame style while the modal or a descendant holds focus |
+| `extend_focus_style` | `Style` | Extend the themed dialog frame focus style |
+| `inherit_focus_style` | — | Restore the themed dialog frame focus style |
 | `border_style` | `BorderStyle` | Dialog border |
 | `padding` | `impl Into<Padding>` | Dialog inner padding |
 | `title_style` | `Style` | Title style |
