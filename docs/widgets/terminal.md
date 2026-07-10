@@ -127,6 +127,29 @@ See [`focus.md`](../focus.md) for non-terminal dispatch order and [`keybindings.
 
 ---
 
+## Key encoding
+
+Once a key is routed to the terminal, `key_event_to_bytes` turns it into the bytes written to the child's stdin.
+
+Cursor, navigation, and function keys carry `Ctrl`/`Shift` as an xterm modifier parameter of `1 + shift + 2·alt + 4·ctrl` — so `Shift` is `2`, `Ctrl` is `5`, `Ctrl+Shift` is `6`, `Ctrl+Alt` is `7`. `Super` has no xterm parameter and is ignored.
+
+| Key | Unmodified | Modified |
+|-----|-----------|----------|
+| `Up` / `Down` / `Right` / `Left` | `CSI A` / `B` / `C` / `D` | `CSI 1;<mod>A` … `D` |
+| `Home` / `End` | `CSI H` / `CSI F` | `CSI 1;<mod>H` / `CSI 1;<mod>F` |
+| `Insert` / `Delete` | `CSI 2~` / `CSI 3~` | `CSI 2;<mod>~` / `CSI 3;<mod>~` |
+| `PageUp` / `PageDown` | `CSI 5~` / `CSI 6~` | `CSI 5;<mod>~` / `CSI 6;<mod>~` |
+| `F1`–`F12` | `CSI 11~` … `CSI 24~` | `CSI 11;<mod>~` … `CSI 24;<mod>~` |
+
+Two deliberate exceptions:
+
+- **`Alt` on its own** keeps the historical ESC-prefix encoding (`Alt+Left` is `ESC` followed by `CSI D`), matching xterm's `metaSendsEscape`. Combined with `Ctrl` or `Shift` it folds into the modifier parameter instead.
+- **`Shift+Insert`, `Shift+PageUp`, and `Shift+PageDown`** keep their unmodified bytes. A terminal emulator conventionally consumes these for paste and scrollback, but the `Terminal` widget forwards them (its scrollback runs on the wheel and `on_scroll_to`), and children do not recognize the parameterized form. Sending `CSI 5;2~` would make `Shift+PageUp` a no-op rather than paging the child. Adding `Ctrl` lifts the exception.
+
+`Char` keys are unaffected: `Ctrl+<letter>` maps to its control code and everything else is sent as UTF-8.
+
+---
+
 ## TerminalPty
 
 PTY spawner and I/O bridge. Used internally by `ManagedTerminal`.

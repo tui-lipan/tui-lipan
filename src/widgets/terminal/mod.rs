@@ -444,6 +444,185 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_arrows_encode_xterm_modifier_param() {
+        // Ctrl+Left/Right drive word-wise motion in TUIs and must not collapse to a bare arrow.
+        let ctrl = KeyMods {
+            ctrl: true,
+            ..KeyMods::default()
+        };
+        for (code, expected) in [
+            (KeyCode::Left, "\x1b[1;5D"),
+            (KeyCode::Right, "\x1b[1;5C"),
+            (KeyCode::Up, "\x1b[1;5A"),
+            (KeyCode::Down, "\x1b[1;5B"),
+            (KeyCode::Home, "\x1b[1;5H"),
+            (KeyCode::End, "\x1b[1;5F"),
+        ] {
+            let key = KeyEvent { code, mods: ctrl };
+            assert_eq!(
+                key_event_to_bytes(key),
+                Some(expected.as_bytes().to_vec()),
+                "ctrl {code:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn shift_and_combined_modifiers_encode_params() {
+        let shift = KeyMods {
+            shift: true,
+            ..KeyMods::default()
+        };
+        assert_eq!(
+            key_event_to_bytes(KeyEvent {
+                code: KeyCode::Left,
+                mods: shift
+            }),
+            Some(b"\x1b[1;2D".to_vec())
+        );
+
+        // Ctrl+Shift => param 6; Ctrl+Alt => param 7 (no separate ESC prefix).
+        let ctrl_shift = KeyMods {
+            ctrl: true,
+            shift: true,
+            ..KeyMods::default()
+        };
+        assert_eq!(
+            key_event_to_bytes(KeyEvent {
+                code: KeyCode::Right,
+                mods: ctrl_shift
+            }),
+            Some(b"\x1b[1;6C".to_vec())
+        );
+
+        let ctrl_alt = KeyMods {
+            ctrl: true,
+            alt: true,
+            ..KeyMods::default()
+        };
+        assert_eq!(
+            key_event_to_bytes(KeyEvent {
+                code: KeyCode::Up,
+                mods: ctrl_alt
+            }),
+            Some(b"\x1b[1;7A".to_vec())
+        );
+
+        // Alt+Shift => param 4. Alt only suppresses the parameterized form when it stands alone,
+        // so this takes the CSI path rather than the ESC-prefixed one.
+        let alt_shift = KeyMods {
+            alt: true,
+            shift: true,
+            ..KeyMods::default()
+        };
+        assert_eq!(
+            key_event_to_bytes(KeyEvent {
+                code: KeyCode::Left,
+                mods: alt_shift
+            }),
+            Some(b"\x1b[1;4D".to_vec())
+        );
+    }
+
+    #[test]
+    fn shift_only_emulator_reserved_keys_keep_plain_form() {
+        // Shift+Insert pastes and Shift+PageUp/PageDown page the scrollback by convention. The
+        // widget forwards them instead of consuming them, and children do not understand the
+        // parameterized form, so the plain bytes must survive or the key becomes a no-op.
+        let shift = KeyMods {
+            shift: true,
+            ..KeyMods::default()
+        };
+        for (code, expected) in [
+            (KeyCode::Insert, "\x1b[2~"),
+            (KeyCode::PageUp, "\x1b[5~"),
+            (KeyCode::PageDown, "\x1b[6~"),
+        ] {
+            let key = KeyEvent { code, mods: shift };
+            assert_eq!(
+                key_event_to_bytes(key),
+                Some(expected.as_bytes().to_vec()),
+                "shift {code:?}"
+            );
+        }
+
+        // Delete is not emulator-reserved, and adding Ctrl lifts the exemption entirely.
+        assert_eq!(
+            key_event_to_bytes(KeyEvent {
+                code: KeyCode::Delete,
+                mods: shift
+            }),
+            Some(b"\x1b[3;2~".to_vec())
+        );
+        assert_eq!(
+            key_event_to_bytes(KeyEvent {
+                code: KeyCode::PageUp,
+                mods: KeyMods {
+                    ctrl: true,
+                    shift: true,
+                    ..KeyMods::default()
+                }
+            }),
+            Some(b"\x1b[5;6~".to_vec())
+        );
+    }
+
+    #[test]
+    fn ctrl_tilde_keys_encode_params() {
+        let ctrl = KeyMods {
+            ctrl: true,
+            ..KeyMods::default()
+        };
+        assert_eq!(
+            key_event_to_bytes(KeyEvent {
+                code: KeyCode::Delete,
+                mods: ctrl
+            }),
+            Some(b"\x1b[3;5~".to_vec())
+        );
+        assert_eq!(
+            key_event_to_bytes(KeyEvent {
+                code: KeyCode::PageUp,
+                mods: ctrl
+            }),
+            Some(b"\x1b[5;5~".to_vec())
+        );
+        // F5 uses param 15 in the tilde scheme; Shift keeps that number.
+        assert_eq!(
+            key_event_to_bytes(KeyEvent {
+                code: KeyCode::F(5),
+                mods: KeyMods {
+                    shift: true,
+                    ..KeyMods::default()
+                }
+            }),
+            Some(b"\x1b[15;2~".to_vec())
+        );
+    }
+
+    #[test]
+    fn plain_arrows_are_unmodified() {
+        assert_eq!(
+            key_event_to_bytes(KeyEvent {
+                code: KeyCode::Left,
+                mods: KeyMods::default()
+            }),
+            Some(b"\x1b[D".to_vec())
+        );
+        // Alt alone keeps the historical ESC-prefix form.
+        assert_eq!(
+            key_event_to_bytes(KeyEvent {
+                code: KeyCode::Left,
+                mods: KeyMods {
+                    alt: true,
+                    ..KeyMods::default()
+                }
+            }),
+            Some(b"\x1b\x1b[D".to_vec())
+        );
+    }
+
+    #[test]
     fn terminal_buffer_trims_lines() {
         let mut buffer = TerminalBuffer::new(2);
         buffer.push_text("a\nb\nc\n");
