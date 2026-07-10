@@ -30,6 +30,7 @@ modal focus/backdrop semantics.
 | `reserve_height` | `Length` | For `RootPortal` modals: center as if the modal were this tall, then top-align it in that band, so the top edge stays fixed as content grows and shrinks. Positions only — content taller than the band extends past its bottom |
 | `backdrop_style` | `Style` | Backdrop overlay style |
 | `frame_style` | `Style` | Dialog container style |
+| `focus_style` | `Style` | Dialog frame style while the modal or a descendant holds focus |
 | `border_style` | `BorderStyle` | Dialog border |
 | `padding` | `impl Into<Padding>` | Dialog inner padding |
 | `title_style` | `Style` | Title style |
