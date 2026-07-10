@@ -193,8 +193,9 @@ impl TerminalGuard {
         image_support::init_image_picker();
 
         // Both the keyboard-enhancement probe above and the image graphics query
-        // send a `CSI c` sentinel; terminals may leave the DA1 reply unread in the
-        // input queue, which would otherwise echo to the shell as `^[[?…c` on exit.
+        // send a `CSI c` sentinel. The keyboard probe consumes its reply unless it
+        // arrives after timeout; the image probe may leave one unread. Drain either
+        // case before the event loop starts.
         drain_pending_terminal_responses();
 
         let terminal = if policy.uses_alternate_screen {

@@ -129,12 +129,11 @@ pub fn query_keyboard_enhancement_support() -> Option<bool> {
 /// The startup probes each send a Primary Device Attributes request (`CSI c`)
 /// as a sentinel: the keyboard-enhancement probe above, and (with the `image`
 /// feature) `ratatui-image`'s graphics query. Terminals answer with a DA1 reply
-/// such as `CSI ? 62 ; 22 ; 52 c`. A probe stops reading the moment it has the
-/// answer it needs, so the trailing DA reply can be left unread — e.g. a Kitty
-/// terminal answers `query_keyboard_enhancement_support` with `CSI ? … u` and we
-/// return before consuming the following `CSI c` reply. Those bytes stay
-/// invisible while the app holds raw mode, then get echoed to the shell prompt
-/// as a stray `^[[?…c` when the terminal is restored to cooked mode on exit.
+/// such as `CSI ? 62 ; 22 ; 52 c`. The keyboard probe normally consumes its
+/// sentinel, but a reply delayed past its timeout or left by the image probe can
+/// remain unread. Those bytes stay invisible while the app holds raw mode, then
+/// get echoed to the shell prompt as a stray `^[[?…c` when the terminal is
+/// restored to cooked mode on exit.
 ///
 /// Draining them here, right after the probes and before the event loop starts,
 /// prevents that. The window is short and bounded; a fast, already-drained TTY
@@ -208,23 +207,29 @@ pub(crate) fn flush_pending_terminal_responses_on_exit() {
 #[cfg(not(unix))]
 pub(crate) fn flush_pending_terminal_responses_on_exit() {}
 
-/// Scan probe output for a decisive Kitty/DA reply.
+/// Scan probe output through the terminating DA reply.
 ///
-/// `Some(true)`  — a `CSI ? … u` Kitty flags reply appeared (protocol supported).
-/// `Some(false)` — a `CSI ? … c` Primary Device Attributes reply appeared first
-///                 (terminator seen, no Kitty support).
-/// `None`        — no complete `CSI ? …` response yet; keep reading.
+/// `Some(true)`  — the DA terminator arrived after a Kitty flags reply.
+/// `Some(false)` — the DA terminator arrived without a Kitty flags reply.
+/// `None`        — the DA terminator has not arrived yet; keep reading. Waiting
+///                 for it consumes the sentinel instead of leaving it queued to
+///                 leak into the shell when raw mode is disabled.
 #[cfg(unix)]
 fn scan_keyboard_enhancement(buf: &[u8]) -> Option<bool> {
     let mut i = 0usize;
+    let mut kitty_reply = false;
     while i + 2 < buf.len() {
         if buf[i] == 0x1b && buf[i + 1] == b'[' && buf[i + 2] == b'?' {
             let mut j = i + 3;
             while j < buf.len() {
                 let b = buf[j];
                 match b {
-                    b'u' => return Some(true),
-                    b'c' => return Some(false),
+                    b'u' => {
+                        kitty_reply = true;
+                        i = j;
+                        break;
+                    }
+                    b'c' => return Some(kitty_reply),
                     // CSI parameter (0x30..=0x3f) or intermediate (0x20..=0x2f) bytes
                     0x20..=0x3f => j += 1,
                     // any other final byte: not the reply we sent, stop this scan
@@ -501,9 +506,9 @@ mod tests {
     use super::scan_keyboard_enhancement;
 
     #[test]
-    fn kitty_flags_reply_reports_supported() {
-        // CSI ? 1 u  → Kitty keyboard flags present.
-        assert_eq!(scan_keyboard_enhancement(b"\x1b[?1u"), Some(true));
+    fn kitty_flags_reply_waits_for_da_terminator() {
+        // The flags reply proves support, but the DA sentinel must still be consumed.
+        assert_eq!(scan_keyboard_enhancement(b"\x1b[?1u"), None);
     }
 
     #[test]
