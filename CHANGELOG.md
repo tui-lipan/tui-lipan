@@ -13,6 +13,14 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Tabs::caps(Option<(char, char)>)` draws `(left, right)` end-cap glyphs around
+  the active and hovered tabs. Each cap replaces one of the tab's two padding
+  cells, so the tab keeps its measured width and hit region, and is painted in
+  the tab's own background over the strip background so the tab reads as a
+  rounded or pointed pill (pass powerline separators for that look). A tab falls
+  back to flat padding when it is truncated by the overflow policy, when its
+  background matches the strip's, or when either cap is not single-width.
+  Defaults to `None` (flat padding). See `docs/widgets/tabs.md`.
 - `TerminalRenderSnapshot` now carries `cursor_shape` (`CaretShape`) and
   `cursor_blinking` (`bool`) captured from the child program's `DECSCUSR`
   (`CSI Ps SP q`) sequences, plus matching `Terminal::cursor_shape()` /

@@ -1,6 +1,6 @@
 use ratatui::text::{Line, Span, Text as RText};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::ContrastPolicy;
 use crate::backend::ratatui_backend::common::{
@@ -48,6 +48,11 @@ fn resolve_tabs_base_style(
         });
     }
     resolve_state_cascade(style, &layers)
+}
+
+/// Whether both cap glyphs occupy exactly the one cell of padding they replace.
+fn caps_fit_padding((left, right): (char, char)) -> bool {
+    UnicodeWidthChar::width(left) == Some(1) && UnicodeWidthChar::width(right) == Some(1)
 }
 
 struct TabsTabStyleCtx {
@@ -100,6 +105,7 @@ pub(crate) struct TabsRenderCtx {
     pub tab_hover_style: Style,
     pub active_style: Style,
     pub divider: char,
+    pub caps: Option<(char, char)>,
     pub overflow: TabsOverflow,
     pub border: bool,
     pub border_style: BorderStyle,
@@ -128,6 +134,7 @@ pub(crate) fn render_tabs(
         tab_hover_style,
         active_style,
         divider,
+        caps,
         overflow,
         border,
         border_style,
@@ -243,17 +250,18 @@ pub(crate) fn render_tabs(
             break;
         }
 
-        let seg = format!(" {} ", tab.label.as_ref());
+        let full_seg = format!(" {} ", tab.label.as_ref());
         let remaining = budgets.as_ref().map_or_else(
             || max_w.saturating_sub(used).min(u16::MAX as usize) as u16,
             |budgets| budgets.get(idx).copied().unwrap_or(0),
         );
-        let seg = truncate_end_with_ellipsis(&seg, remaining).into_owned();
+        let seg = truncate_end_with_ellipsis(&full_seg, remaining).into_owned();
         let seg_w = UnicodeWidthStr::width(seg.as_str()) as u16;
         let start_x = used.min(u16::MAX as usize) as u16;
 
         let is_tab_hovered =
             hovered_x.is_some_and(|hx| hx >= start_x && hx < start_x.saturating_add(seg_w));
+        let is_active = idx == active;
         let tab_style = resolve_tabs_tab_style(
             base_raw_style,
             TabsTabStyleCtx {
@@ -262,7 +270,7 @@ pub(crate) fn render_tabs(
                 active_style,
                 disabled_style,
                 is_hovered: is_tab_hovered,
-                is_active: idx == active,
+                is_active,
                 disabled,
             },
         );
@@ -270,7 +278,30 @@ pub(crate) fn render_tabs(
 
         let rs = to_ratatui_style(tab_style);
         used = used.saturating_add(seg_w as usize);
-        spans.push(Span::styled(seg, rs));
+
+        // Caps replace the tab's two padding cells with rounded/pointed glyphs painted
+        // in the tab's own background over the strip background. Only the highlighted
+        // tabs get them, and only when the tab is fully visible (untruncated) and has a
+        // background distinct from the strip to fill the glyph with. A cap wider than the
+        // padding cell it replaces would shift every later tab away from the columns
+        // `Tabs::index_at_col` hit-tests against, so those degrade to flat padding.
+        let cap_glyphs = caps.filter(|caps| {
+            (is_active || is_tab_hovered)
+                && seg == full_seg
+                && tab_style.bg != base_style.bg
+                && caps_fit_padding(*caps)
+        });
+        if let Some((left_cap, right_cap)) = cap_glyphs {
+            let mut cap_style = Style::new();
+            cap_style.fg = tab_style.bg;
+            cap_style.bg = base_style.bg;
+            let cap_rs = to_ratatui_style(cap_style);
+            spans.push(Span::styled(left_cap.to_string(), cap_rs));
+            spans.push(Span::styled(tab.label.to_string(), rs));
+            spans.push(Span::styled(right_cap.to_string(), cap_rs));
+        } else {
+            spans.push(Span::styled(seg, rs));
+        }
 
         if used >= max_w {
             break;
@@ -319,6 +350,7 @@ pub(crate) fn render_tabs_node(
             tab_hover_style,
             active_style,
             divider: node.divider,
+            caps: node.caps,
             overflow: node.overflow,
             border: node.border,
             border_style: node.border_style,

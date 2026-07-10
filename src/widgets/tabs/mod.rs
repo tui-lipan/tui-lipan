@@ -85,6 +85,7 @@ pub struct Tabs {
     pub(crate) tab_hover_style: StyleSlot,
     pub(crate) active_style: StyleSlot,
     pub(crate) divider: char,
+    pub(crate) caps: Option<(char, char)>,
     pub(crate) overflow: TabsOverflow,
     pub(crate) border: bool,
     pub(crate) border_style: BorderStyle,
@@ -110,6 +111,7 @@ impl Default for Tabs {
             tab_hover_style: StyleSlot::Inherit,
             active_style: StyleSlot::Inherit,
             divider: '│',
+            caps: None,
             overflow: TabsOverflow::Clip,
             border: false,
             border_style: BorderStyle::Plain,
@@ -236,6 +238,24 @@ impl Tabs {
     /// Set divider character.
     pub fn divider(mut self, ch: char) -> Self {
         self.divider = ch;
+        self
+    }
+
+    /// Set the `(left, right)` end-cap glyphs drawn around the active and hovered tabs.
+    ///
+    /// Each cap replaces one of the tab's two padding cells, so the tab keeps its
+    /// measured width and hit region. The glyphs are painted in the tab's own
+    /// background color over the strip background, so the tab reads as a rounded or
+    /// pointed pill (pass powerline separators for that look). `None` (the default)
+    /// keeps flat space padding on every tab.
+    ///
+    /// A tab falls back to flat padding when it is truncated by the overflow policy,
+    /// when its background matches the strip's (leaving nothing to fill the glyph
+    /// with), or when either cap is not exactly one cell wide. Caps must be
+    /// single-width because a wider glyph would push later tabs off the columns the
+    /// widget hit-tests against.
+    pub fn caps(mut self, caps: Option<(char, char)>) -> Self {
+        self.caps = caps;
         self
     }
 

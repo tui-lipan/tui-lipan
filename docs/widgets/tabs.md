@@ -15,6 +15,7 @@ inherit scoped theme roles.
 | `tab(Tab)` | method | Add a single tab |
 | `active` | `usize` | Active tab index |
 | `divider` | `char` | Separator between tabs |
+| `caps` | `Option<(char, char)>` | End-cap glyphs drawn around the active and hovered tabs. Each cap replaces one padding cell (the tab keeps its measured width), painted in the tab's own background over the strip background, so the tab reads as a rounded/pointed pill. `None` (default) keeps flat padding. A tab falls back to flat padding when it overflow-truncates, when its background matches the strip's, or when either cap is not single-width. |
 | `border` | `bool` | Show border |
 | `border_style` | `BorderStyle` | Border style |
 | `padding` | `impl Into<Padding>` | Padding |
