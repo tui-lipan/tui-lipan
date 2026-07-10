@@ -13,7 +13,9 @@ use alacritty_terminal::vte::ansi::{
     Rgb as TermRgb,
 };
 
-use super::events::{MouseEncoding, MouseMode, MouseModeState};
+use super::events::{
+    KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, TerminalKeyModes,
+};
 use crate::style::{CaretShape, Color as UiColor, HostTerminalColors, Span, Style};
 
 /// Cursor style applied when the child program never issues `DECSCUSR`.
@@ -172,6 +174,8 @@ pub struct TerminalRenderSnapshot {
     pub total_scrollback_rows: usize,
     /// Current mouse mode state.
     pub mouse_mode: MouseModeState,
+    /// Input-affecting DEC private modes the child has enabled (DECCKM, bracketed paste).
+    pub key_modes: TerminalKeyModes,
 }
 
 impl Default for TerminalRenderSnapshot {
@@ -188,6 +192,7 @@ impl Default for TerminalRenderSnapshot {
             scrollback_offset: 0,
             total_scrollback_rows: 0,
             mouse_mode: MouseModeState::default(),
+            key_modes: TerminalKeyModes::default(),
         }
     }
 }
@@ -211,6 +216,7 @@ impl TerminalRenderSnapshot {
         scrollback_offset: usize,
         total_scrollback_rows: usize,
         mouse_mode: MouseModeState,
+        key_modes: TerminalKeyModes,
     ) -> Self {
         Self {
             text: text.into(),
@@ -224,6 +230,7 @@ impl TerminalRenderSnapshot {
             scrollback_offset,
             total_scrollback_rows,
             mouse_mode,
+            key_modes,
         }
     }
 }
@@ -305,6 +312,9 @@ impl TerminalScreen {
         let config = TermConfig {
             scrolling_history: scrollback,
             default_cursor_style: DEFAULT_CURSOR_STYLE,
+            // Track Kitty keyboard protocol pushes so `key_modes()` can report what the child
+            // negotiated; without this alacritty silently drops every `CSI > <flags> u`.
+            kitty_keyboard: true,
             ..TermConfig::default()
         };
         let listener = ResponseCapture::default();
@@ -471,6 +481,7 @@ impl TerminalScreen {
                 scrollback_offset: self.scrollback_offset,
                 total_scrollback_rows: self.term.history_size(),
                 mouse_mode: self.mouse_mode,
+                key_modes: key_modes_from_term(mode),
             };
             self.dirty = false;
         }
@@ -528,6 +539,7 @@ impl TerminalScreen {
         let config = TermConfig {
             scrolling_history: self.scrollback_len,
             default_cursor_style: DEFAULT_CURSOR_STYLE,
+            kitty_keyboard: true,
             ..TermConfig::default()
         };
         self.listener = ResponseCapture::default();
@@ -542,6 +554,14 @@ impl TerminalScreen {
     /// Get current mouse mode state.
     pub fn mouse_mode(&self) -> MouseModeState {
         self.mouse_mode
+    }
+
+    /// Get the input-affecting DEC private modes the child has enabled.
+    ///
+    /// Pass this to [`key_event_to_bytes`](super::key_event_to_bytes) and
+    /// [`encode_paste`](super::encode_paste) when wiring a `TerminalPty` by hand.
+    pub fn key_modes(&self) -> TerminalKeyModes {
+        key_modes_from_term(*self.term.mode())
     }
 
     /// The window title the program has set via OSC 0/2 (e.g. the shell's
@@ -1035,6 +1055,20 @@ fn cell_text(cell: &TermCell) -> String {
     text
 }
 
+fn key_modes_from_term(mode: TermMode) -> TerminalKeyModes {
+    TerminalKeyModes {
+        app_cursor: mode.contains(TermMode::APP_CURSOR),
+        bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
+        kitty_keyboard: KittyKeyboardFlags {
+            disambiguate_escape_codes: mode.contains(TermMode::DISAMBIGUATE_ESC_CODES),
+            report_event_types: mode.contains(TermMode::REPORT_EVENT_TYPES),
+            report_alternate_keys: mode.contains(TermMode::REPORT_ALTERNATE_KEYS),
+            report_all_keys_as_escape_codes: mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC),
+            report_associated_text: mode.contains(TermMode::REPORT_ASSOCIATED_TEXT),
+        },
+    }
+}
+
 fn mouse_mode_from_term(mode: TermMode) -> MouseModeState {
     let encoding = if mode.contains(TermMode::SGR_MOUSE) {
         MouseEncoding::Sgr
@@ -1399,6 +1433,45 @@ mod tests {
         let snapshot = screen.render_snapshot();
         assert_eq!(snapshot.cursor_shape, CaretShape::Block);
         assert!(snapshot.cursor_blinking);
+    }
+
+    #[test]
+    fn key_modes_track_decckm_and_bracketed_paste() {
+        let mut screen = TerminalScreen::new(3, 10, 10);
+        assert_eq!(screen.key_modes(), TerminalKeyModes::default());
+
+        // DECSET 1 (DECCKM) and DECSET 2004 (bracketed paste), as ncurses' `smkx` and a
+        // line editor's paste guard would send them.
+        screen.process_bytes(b"\x1b[?1h\x1b[?2004h");
+        let modes = screen.render_snapshot().key_modes;
+        assert!(modes.app_cursor);
+        assert!(modes.bracketed_paste);
+        assert_eq!(screen.key_modes(), modes);
+
+        // DECRST puts them back; a child that exits application mode must stop getting SS3.
+        screen.process_bytes(b"\x1b[?1l\x1b[?2004l");
+        let modes = screen.render_snapshot().key_modes;
+        assert!(!modes.app_cursor);
+        assert!(!modes.bracketed_paste);
+    }
+
+    #[test]
+    fn key_modes_track_pushed_kitty_keyboard_flags() {
+        let mut screen = TerminalScreen::new(3, 10, 10);
+        assert!(!screen.key_modes().kitty_keyboard.any());
+
+        // `CSI > 3 u`: exactly what tui-lipan's own backend pushes on startup
+        // (DISAMBIGUATE_ESCAPE_CODES | REPORT_EVENT_TYPES).
+        screen.process_bytes(b"\x1b[>3u");
+        let flags = screen.render_snapshot().key_modes.kitty_keyboard;
+        assert!(flags.disambiguate_escape_codes);
+        assert!(flags.report_event_types);
+        assert!(!flags.report_alternate_keys);
+        assert!(flags.any());
+
+        // `CSI < 1 u` pops the child's push; the encoder must fall back to legacy bytes.
+        screen.process_bytes(b"\x1b[<1u");
+        assert!(!screen.key_modes().kitty_keyboard.any());
     }
 
     #[test]

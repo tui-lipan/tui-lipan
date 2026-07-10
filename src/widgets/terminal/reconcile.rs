@@ -95,6 +95,7 @@ pub(crate) fn reconcile_terminal(
         selection,
         selection_style: terminal.selection_style,
         mouse_mode: terminal.mouse_mode,
+        key_modes: terminal.key_modes,
         on_selection: terminal.on_selection.clone(),
         on_mouse_forward: terminal.on_mouse_forward.clone(),
         style: terminal.style,

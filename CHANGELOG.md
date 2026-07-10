@@ -21,6 +21,14 @@ While the crate is on `0.x.y`:
   back to flat padding when it is truncated by the overflow policy, when its
   background matches the strip's, or when either cap is not single-width.
   Defaults to `None` (flat padding). See `docs/widgets/tabs.md`.
+- `TerminalKeyModes` describes the input-affecting modes a child program has
+  enabled: `app_cursor` (DECCKM), `bracketed_paste` (mode 2004), and
+  `kitty_keyboard` (a `KittyKeyboardFlags` capturing the Kitty keyboard protocol
+  flags pushed with `CSI > <flags> u`). It rides on `TerminalRenderSnapshot`, is
+  applied automatically by `Terminal::snapshot`, and is exposed by
+  `TerminalScreen::key_modes()` and `Terminal::key_modes()` for hosts that wire a
+  `TerminalPty` by hand. This is the keyboard counterpart to the existing
+  `MouseModeState`. See `docs/widgets/terminal.md`.
 - `TerminalRenderSnapshot` now carries `cursor_shape` (`CaretShape`) and
   `cursor_blinking` (`bool`) captured from the child program's `DECSCUSR`
   (`CSI Ps SP q`) sequences, plus matching `Terminal::cursor_shape()` /
@@ -91,6 +99,19 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- **(breaking)** `key_event_to_bytes` takes a second argument,
+  `modes: TerminalKeyModes`, carrying the DEC private modes the child has
+  enabled. Pass `TerminalKeyModes::default()` to keep the previous encoding, or
+  `TerminalScreen::key_modes()` to honor the child's requests. `TerminalPty::send_key`
+  gains the same argument.
+- **(breaking)** Renamed `wrap_bracketed_paste(text)` to
+  `encode_paste(text, modes)`. The old name always wrapped, which is wrong for a
+  child that has not enabled bracketed paste; the new one wraps only when
+  `modes.bracketed_paste` is set. `paste_sequences()` is unchanged.
+- **(breaking)** `TerminalRenderSnapshot` gains a `key_modes: TerminalKeyModes`
+  field, and `TerminalRenderSnapshot::from_parts` takes it as a final argument.
+  Callers constructing snapshots from an external transport must carry the
+  child's input modes across the wire, or pass `TerminalKeyModes::default()`.
 - **(breaking)** `TerminalRenderSnapshot::from_parts` takes two additional
   arguments (`cursor_shape: CaretShape`, `cursor_blinking: bool`) after
   `cursor_visible`. Callers constructing snapshots from an external transport
@@ -111,6 +132,43 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `key_event_to_bytes` now encodes `Ctrl+Backspace` as `ESC DEL` (readline's
+  `backward-kill-word`, identical to `Alt+Backspace`) instead of collapsing it to
+  a bare `Backspace`, so it deletes the previous word out of the box in shells and
+  line editors rather than a single character. `Backspace` on its own still sends
+  `DEL`. See `docs/widgets/terminal.md`.
+- `key_event_to_bytes` now honors the Kitty keyboard protocol when the child has
+  negotiated it (`CSI > <flags> u`), encoding chords that have no legacy terminal
+  sequence — `Ctrl+1`…`Ctrl+9`, `Ctrl+Enter`, `Shift+Enter`, `Ctrl+Tab`,
+  `Ctrl+Backspace`, and a disambiguated `Esc` — as `CSI <codepoint>;<mod> u`.
+  Because tui-lipan's own backend pushes `DISAMBIGUATE_ESCAPE_CODES` on startup,
+  a tui-lipan app running inside a `Terminal` widget gets these for free; before,
+  `Ctrl+1` (a common tab-switch binding) reached the child as nothing at all.
+  Children that have not negotiated the protocol keep the legacy bytes, since a
+  crossterm reader discards an unsolicited `CSI u` sequence. `TerminalScreen`
+  now enables alacritty's `kitty_keyboard` config so these pushes are tracked.
+- `Ctrl` chords on punctuation that has a C0 control code are no longer dropped:
+  `Ctrl+/` and `Ctrl+_` send `0x1f` (readline's `undo`), `Ctrl+?` sends `0x7f`,
+  `Ctrl+@` sends `0x00`, and xterm's digit aliases `Ctrl+2`…`Ctrl+8` send their
+  control codes. Previously `key_event_to_bytes` returned `None` for these and
+  the key never reached a legacy child. (Under the Kitty protocol these carry
+  their real codepoint instead.) Chords with no control code and no protocol
+  (`Ctrl+1` in a plain shell) still return `None` and stay available to the app.
+- `key_event_to_bytes` now returns `None` for `Super`-modified keys instead of
+  sending the unmodified key, so `Super+C` no longer types a literal `c` into the
+  child. The chord bubbles to the app.
+- Function keys `F13`–`F20` now encode (`CSI 25~`…`CSI 34~`) instead of being
+  dropped.
+- Pasted text is only wrapped in the bracketed-paste sequences when the child has
+  actually enabled the mode (`CSI ? 2004 h`). A child that never asked for
+  bracketed paste does not strip the wrapper, so it previously received the
+  literal bytes `ESC [ 200 ~` around every paste.
+- Unmodified cursor keys now honor DECCKM (`CSI ? 1 h`): when the child has
+  entered application-cursor mode they are introduced by `SS3` (`ESC O A`)
+  instead of `CSI` (`ESC [ A`). ncurses emits `smkx` on startup and then matches
+  arrows against terminfo's `kcuu1=\EOA`, so children in application mode were
+  seeing a sequence they do not have a binding for. Modified cursor keys stay on
+  the `CSI` parameterized form, as xterm does.
 - `key_event_to_bytes` now encodes `Ctrl` and `Shift` on cursor, navigation, and
   function keys instead of dropping them, so `Ctrl+Left` reaches the child as
   `CSI 1;5D` rather than collapsing to a bare `Left` and losing word-wise motion

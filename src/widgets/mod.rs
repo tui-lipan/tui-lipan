@@ -277,11 +277,11 @@ pub use tabs::{Tab, Tabs, TabsEvent, TabsOverflow};
 pub use terminal::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use terminal::{
-    MouseEncoding, MouseMode, MouseModeState, Terminal, TerminalBuffer, TerminalColorPalette,
-    TerminalInputEvent, TerminalInputKind, TerminalPty, TerminalPtyConfig, TerminalPtyError,
-    TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen, TerminalSelection,
-    TerminalSelectionEvent, TerminalViewport, focus_sequences, key_event_to_bytes,
-    mouse_event_to_bytes, paste_sequences, wrap_bracketed_paste,
+    KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, Terminal, TerminalBuffer,
+    TerminalColorPalette, TerminalInputEvent, TerminalInputKind, TerminalKeyModes, TerminalPty,
+    TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen,
+    TerminalSelection, TerminalSelectionEvent, TerminalViewport, encode_paste, focus_sequences,
+    key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
 };
 pub use text::{Overflow, Text};
 pub use text_area::{

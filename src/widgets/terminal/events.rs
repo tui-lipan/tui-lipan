@@ -51,12 +51,108 @@ pub fn terminal_selection_text(lines: &[Vec<Span>], selection: &GridSelection) -
     selection.extract_text(&row_strings)
 }
 
+/// The [Kitty keyboard protocol] enhancement flags a child program has pushed with `CSI > <flags> u`.
+///
+/// A terminal must not send the protocol's `CSI u` encodings until the child has asked for them,
+/// so these gate [`key_event_to_bytes`]. Only `disambiguate_escape_codes` changes what this encoder
+/// emits today; the rest are surfaced so hosts can see what the child negotiated.
+///
+/// [Kitty keyboard protocol]: https://sw.kovidgoyal.net/kitty/keyboard-protocol/
+#[cfg_attr(
+    feature = "terminal-serde",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KittyKeyboardFlags {
+    /// Bit 1. Keys with no unambiguous legacy encoding are reported as `CSI <codepoint>;<mod> u`,
+    /// and a lone `Esc` becomes `CSI 27 u` so it cannot be confused with an escape sequence.
+    pub disambiguate_escape_codes: bool,
+    /// Bit 2. Key release and repeat events are reported. Not emitted: `KeyEvent` carries no kind.
+    pub report_event_types: bool,
+    /// Bit 4. Shifted and base-layout key codes accompany each report. Not emitted.
+    pub report_alternate_keys: bool,
+    /// Bit 8. Every key, including plain text, is reported as an escape code. Not emitted.
+    pub report_all_keys_as_escape_codes: bool,
+    /// Bit 16. The text a key would produce accompanies each report. Not emitted.
+    pub report_associated_text: bool,
+}
+
+impl KittyKeyboardFlags {
+    /// Whether the child has negotiated any part of the protocol.
+    pub fn any(&self) -> bool {
+        self.disambiguate_escape_codes
+            || self.report_event_types
+            || self.report_alternate_keys
+            || self.report_all_keys_as_escape_codes
+            || self.report_associated_text
+    }
+}
+
+/// Input-affecting modes the child program has turned on.
+///
+/// The child requests these with `CSI ? <n> h` / `CSI ? <n> l` (DEC private modes) or `CSI > <n> u`
+/// (the Kitty keyboard protocol), and they change what bytes a key press or a paste must produce.
+/// `TerminalScreen` tracks them and publishes them on
+/// [`TerminalRenderSnapshot`](crate::widgets::TerminalRenderSnapshot), the same way it publishes
+/// [`MouseModeState`]. Pass [`TerminalKeyModes::default()`] when no child has spoken yet.
+#[cfg_attr(
+    feature = "terminal-serde",
+    derive(serde::Serialize, serde::Deserialize)
+)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TerminalKeyModes {
+    /// DECCKM (`CSI ? 1 h`): unmodified cursor keys are introduced by `SS3` (`ESC O`) instead of
+    /// `CSI` (`ESC [`). Modified cursor keys always stay on the `CSI` form.
+    pub app_cursor: bool,
+    /// Bracketed paste (`CSI ? 2004 h`): pasted text is wrapped in `CSI 200~` / `CSI 201~` so the
+    /// child can tell it apart from typing. When off, pasting the wrapper would insert its literal
+    /// bytes into the child's input.
+    pub bracketed_paste: bool,
+    /// Kitty keyboard protocol flags the child pushed with `CSI > <flags> u`.
+    pub kitty_keyboard: KittyKeyboardFlags,
+}
+
 /// Encode a framework `KeyEvent` into terminal bytes.
 ///
-/// This covers common printable keys and ANSI control sequences.
-pub fn key_event_to_bytes(key: KeyEvent) -> Option<Vec<u8>> {
+/// This covers common printable keys and ANSI control sequences. `modes` carries the modes the
+/// child has negotiated; see [`TerminalKeyModes`]. Returns `None` when the key has no encoding the
+/// child would understand, which leaves the caller free to route it elsewhere.
+///
+/// Chords like `Ctrl+1` have no legacy encoding at all and can only be delivered once the child has
+/// negotiated the Kitty keyboard protocol; until then they return `None` rather than being
+/// flattened onto some other key's bytes.
+///
+/// Note that in the legacy encoding `Ctrl+Shift+C` produces `0x03` (SIGINT) exactly like `Ctrl+C`,
+/// because a control code has no shift bit. The `Terminal` widget never reaches this path for that
+/// chord: the clipboard preflight consumes it first. Direct callers must do the same. Under the
+/// Kitty protocol the two are distinct (`CSI 99;6u` versus `CSI 99;5u`).
+pub fn key_event_to_bytes(key: KeyEvent, modes: TerminalKeyModes) -> Option<Vec<u8>> {
+    // Super has no representation in any encoding we speak. Forwarding the unmodified key would
+    // type a character the user never asked for (Super+C inserting a literal `c`), so drop it and
+    // let the chord bubble to the app instead.
+    if key.mods.super_key {
+        return None;
+    }
+
+    // Only once the child has negotiated the protocol. Sending `CSI u` unsolicited would hand a
+    // legacy child a sequence it cannot parse.
+    if modes.kitty_keyboard.disambiguate_escape_codes
+        && let Some(bytes) = kitty_csi_u_bytes(key.code, key.mods)
+    {
+        return Some(bytes);
+    }
+
     if let Some(bytes) = modified_special_key_bytes(key.code, key.mods) {
         return Some(bytes);
+    }
+
+    // Ctrl+Backspace has no native PTY encoding, so a terminal has to pick a sequence for it.
+    // Emit `ESC DEL` - readline's `backward-kill-word` and the same bytes as Alt+Backspace - so
+    // "delete the previous word" works out of the box in shells and line editors, instead of
+    // collapsing to a bare Backspace (`DEL`) that only deletes a single character. A child that
+    // negotiated the Kitty protocol gets `CSI 127;5 u` above instead.
+    if key.mods.ctrl && key.code == KeyCode::Backspace {
+        return Some(vec![0x1b, 0x7f]);
     }
 
     let mut bytes = match key.code {
@@ -72,12 +168,12 @@ pub fn key_event_to_bytes(key: KeyEvent) -> Option<Vec<u8>> {
         KeyCode::BackTab => b"\x1b[Z".to_vec(),
         KeyCode::Backspace => vec![0x7f],
         KeyCode::Esc => vec![0x1b],
-        KeyCode::Up => b"\x1b[A".to_vec(),
-        KeyCode::Down => b"\x1b[B".to_vec(),
-        KeyCode::Right => b"\x1b[C".to_vec(),
-        KeyCode::Left => b"\x1b[D".to_vec(),
-        KeyCode::Home => b"\x1b[H".to_vec(),
-        KeyCode::End => b"\x1b[F".to_vec(),
+        KeyCode::Up => cursor_key_bytes(b'A', modes),
+        KeyCode::Down => cursor_key_bytes(b'B', modes),
+        KeyCode::Right => cursor_key_bytes(b'C', modes),
+        KeyCode::Left => cursor_key_bytes(b'D', modes),
+        KeyCode::Home => cursor_key_bytes(b'H', modes),
+        KeyCode::End => cursor_key_bytes(b'F', modes),
         KeyCode::PageUp => b"\x1b[5~".to_vec(),
         KeyCode::PageDown => b"\x1b[6~".to_vec(),
         KeyCode::Insert => b"\x1b[2~".to_vec(),
@@ -95,13 +191,25 @@ pub fn key_event_to_bytes(key: KeyEvent) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
+/// An unmodified cursor key, introduced by `SS3` when the child has set DECCKM and by `CSI`
+/// otherwise. ncurses emits `smkx` (`ESC [ ? 1 h ESC =`) on startup and then matches arrows
+/// against terminfo's `kcuu1=\EOA`, so a child in application mode expects `ESC O A`.
+fn cursor_key_bytes(final_byte: u8, modes: TerminalKeyModes) -> Vec<u8> {
+    let introducer: &[u8] = if modes.app_cursor { b"\x1bO" } else { b"\x1b[" };
+    let mut bytes = Vec::with_capacity(3);
+    bytes.extend_from_slice(introducer);
+    bytes.push(final_byte);
+    bytes
+}
+
 /// The xterm modifier parameter for a modified special key: `1 + shift + 2·alt + 4·ctrl`, so
-/// Shift=2, Alt=3, Ctrl=5, Ctrl+Shift=6, and so on (Super is not representable and is ignored).
+/// Shift=2, Alt=3, Ctrl=5, Ctrl+Shift=6, and so on. Super has no bit here; `key_event_to_bytes`
+/// drops Super-modified keys before reaching this point.
 fn xterm_modifier_param(mods: KeyMods) -> u8 {
     1 + u8::from(mods.shift) + 2 * u8::from(mods.alt) + 4 * u8::from(mods.ctrl)
 }
 
-/// The parameter number for a function key in the `CSI <num> ~` scheme (F1→11 … F12→24),
+/// The parameter number for a function key in the `CSI <num> ~` scheme (F1→11 … F20→34),
 /// matching the unmodified encoding. `None` for out-of-range function keys.
 fn f_key_number(n: u8) -> Option<u8> {
     Some(match n {
@@ -117,8 +225,63 @@ fn f_key_number(n: u8) -> Option<u8> {
         10 => 21,
         11 => 23,
         12 => 24,
+        13 => 25,
+        14 => 26,
+        15 => 28,
+        16 => 29,
+        17 => 31,
+        18 => 32,
+        19 => 33,
+        20 => 34,
         _ => return None,
     })
+}
+
+/// Encode a chord in the Kitty keyboard protocol's `CSI <codepoint> ; <mod> u` form.
+///
+/// Only reached once the child has set `disambiguate_escape_codes`. This is what lets a chord like
+/// `Ctrl+1` reach the child at all: it has no legacy encoding, so without the protocol it can only
+/// be dropped. `Ctrl+Enter` and `Shift+Enter` likewise become distinguishable from a bare `Enter`.
+///
+/// Returns `None` for the keys that keep their legacy encoding at this protocol level: plain text,
+/// the arrows, `Home`/`End`, the tilde keys, and the function keys. Those already have unambiguous
+/// sequences, and Kitty only escapes them under `report_all_keys_as_escape_codes`.
+fn kitty_csi_u_bytes(code: KeyCode, mods: KeyMods) -> Option<Vec<u8>> {
+    let (codepoint, mods) = match code {
+        // A text-producing key still produces text under Shift alone. Ctrl and Alt are what
+        // promote it to the escape form, because a control code cannot express which key it was.
+        KeyCode::Char(ch) if mods.ctrl || mods.alt => (kitty_char_codepoint(ch), mods),
+        // The whole point of `disambiguate_escape_codes`: a lone Esc must not look like the start
+        // of an escape sequence.
+        KeyCode::Esc => (27, mods),
+        KeyCode::Enter if !mods.is_empty() => (13, mods),
+        KeyCode::Tab if mods.ctrl || mods.alt => (9, mods),
+        // BackTab *is* Shift+Tab, so put the shift back into the parameter even when the backend
+        // reported the chord without it.
+        KeyCode::BackTab => (
+            9,
+            KeyMods {
+                shift: true,
+                ..mods
+            },
+        ),
+        KeyCode::Backspace if mods.ctrl || mods.alt => (127, mods),
+        _ => return None,
+    };
+
+    let m = xterm_modifier_param(mods);
+    let seq = if m == 1 {
+        format!("\x1b[{codepoint}u")
+    } else {
+        format!("\x1b[{codepoint};{m}u")
+    };
+    Some(seq.into_bytes())
+}
+
+/// The codepoint Kitty reports for a character key: the key as engraved, without Shift applied.
+/// `Ctrl+Shift+C` therefore reports `c` (99) with the shift bit set in the modifier parameter.
+fn kitty_char_codepoint(ch: char) -> u32 {
+    ch.to_lowercase().next().unwrap_or(ch) as u32
 }
 
 /// Whether Shift is the only modifier on a key that a terminal emulator conventionally handles
@@ -166,20 +329,32 @@ fn modified_special_key_bytes(code: KeyCode, mods: KeyMods) -> Option<Vec<u8>> {
     Some(seq.into_bytes())
 }
 
+/// The C0 control code a `Ctrl+<char>` chord produces, or `None` when the chord has no control
+/// code (`Ctrl+1`, `Ctrl+;`, …) and should be left for the app to handle.
 fn ctrl_char(ch: char) -> Option<u8> {
     if ch.is_ascii_alphabetic() {
         return Some((ch.to_ascii_uppercase() as u8) - b'@');
     }
 
-    match ch {
-        ' ' => Some(0),
-        '[' => Some(27),
-        '\\' => Some(28),
-        ']' => Some(29),
-        '^' => Some(30),
-        '_' => Some(31),
-        _ => None,
-    }
+    Some(match ch {
+        ' ' | '@' => 0x00,
+        '[' => 0x1b,
+        '\\' => 0x1c,
+        ']' => 0x1d,
+        '^' => 0x1e,
+        // US. Readline binds it to `undo`, and `/` reaches it without Shift on most layouts.
+        '_' | '/' => 0x1f,
+        '?' => 0x7f,
+        // xterm's digit aliases, for the control codes whose named key needs Shift.
+        '2' => 0x00,
+        '3' => 0x1b,
+        '4' => 0x1c,
+        '5' => 0x1d,
+        '6' => 0x1e,
+        '7' => 0x1f,
+        '8' => 0x7f,
+        _ => return None,
+    })
 }
 
 /// Mouse reporting mode requested by PTY application.
@@ -337,8 +512,16 @@ pub fn focus_sequences() -> (&'static [u8], &'static [u8]) {
     (focus_in_sequence(), focus_out_sequence())
 }
 
-/// Wrap text in bracketed paste mode sequences.
-pub fn wrap_bracketed_paste(text: &str) -> Vec<u8> {
+/// Encode pasted text for the child's stdin.
+///
+/// Wraps the text in the bracketed-paste sequences only when the child has enabled the mode
+/// (`CSI ? 2004 h`). A child that has not asked for bracketed paste does not strip the wrapper, so
+/// sending it unconditionally would insert the literal bytes `ESC [ 200 ~` into its input.
+pub fn encode_paste(text: &str, modes: TerminalKeyModes) -> Vec<u8> {
+    if !modes.bracketed_paste {
+        return text.as_bytes().to_vec();
+    }
+
     let (start, end) = paste_sequences();
     let mut out = Vec::with_capacity(text.len() + start.len() + end.len());
     out.extend_from_slice(start);

@@ -14,7 +14,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
-use super::events::key_event_to_bytes;
+use super::events::{TerminalKeyModes, key_event_to_bytes};
 use crate::core::event::KeyEvent;
 
 /// PTY launch error.
@@ -337,8 +337,11 @@ impl TerminalPty {
     }
 
     /// Encode key and send it to child stdin.
-    pub fn send_key(&self, key: KeyEvent) -> std::io::Result<bool> {
-        let Some(bytes) = key_event_to_bytes(key) else {
+    ///
+    /// Pass the modes the child has enabled, from `TerminalScreen::key_modes()`. Returns `false`
+    /// when the key has no terminal encoding and nothing was written.
+    pub fn send_key(&self, key: KeyEvent, modes: TerminalKeyModes) -> std::io::Result<bool> {
+        let Some(bytes) = key_event_to_bytes(key, modes) else {
             return Ok(false);
         };
         self.write(&bytes)?;
