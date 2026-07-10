@@ -13,6 +13,11 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Modal::focus_style(Style)`, `extend_focus_style(Style)`, and
+  `inherit_focus_style()` configure the dialog frame while the modal or one of
+  its descendants holds focus, allowing focused root-portal dialogs to retain
+  intentional frame accents or compose with the theme focus style. See
+  `docs/widgets/overlays.md`.
 - `Tabs::caps(Option<(char, char)>)` draws `(left, right)` end-cap glyphs around
   the active and hovered tabs. Each cap replaces one of the tab's two padding
   cells, so the tab keeps its measured width and hit region, and is painted in
