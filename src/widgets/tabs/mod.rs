@@ -247,8 +247,13 @@ impl Tabs {
     /// measured width and hit region. The glyphs are painted in the tab's own
     /// background color over the strip background, so the tab reads as a rounded or
     /// pointed pill (pass powerline separators for that look). `None` (the default)
-    /// keeps flat space padding on every tab. Caps are skipped for a tab that has no
-    /// distinct background or that is truncated by the overflow policy.
+    /// keeps flat space padding on every tab.
+    ///
+    /// A tab falls back to flat padding when it is truncated by the overflow policy,
+    /// when its background matches the strip's (leaving nothing to fill the glyph
+    /// with), or when either cap is not exactly one cell wide. Caps must be
+    /// single-width because a wider glyph would push later tabs off the columns the
+    /// widget hit-tests against.
     pub fn caps(mut self, caps: Option<(char, char)>) -> Self {
         self.caps = caps;
         self
@@ -378,7 +383,6 @@ impl crate::layout::hash::LayoutHash for Tabs {
         self.tabs.len().hash(hasher);
         self.active.hash(hasher);
         self.divider.hash(hasher);
-        self.caps.hash(hasher);
         self.overflow.hash(hasher);
         Some(())
     }

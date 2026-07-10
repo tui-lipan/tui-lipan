@@ -1,6 +1,6 @@
 use ratatui::text::{Line, Span, Text as RText};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::ContrastPolicy;
 use crate::backend::ratatui_backend::common::{
@@ -48,6 +48,11 @@ fn resolve_tabs_base_style(
         });
     }
     resolve_state_cascade(style, &layers)
+}
+
+/// Whether both cap glyphs occupy exactly the one cell of padding they replace.
+fn caps_fit_padding((left, right): (char, char)) -> bool {
+    UnicodeWidthChar::width(left) == Some(1) && UnicodeWidthChar::width(right) == Some(1)
 }
 
 struct TabsTabStyleCtx {
@@ -277,9 +282,15 @@ pub(crate) fn render_tabs(
         // Caps replace the tab's two padding cells with rounded/pointed glyphs painted
         // in the tab's own background over the strip background. Only the highlighted
         // tabs get them, and only when the tab is fully visible (untruncated) and has a
-        // distinct background to fill the glyph with.
-        let cap_glyphs = caps
-            .filter(|_| (is_active || is_tab_hovered) && seg == full_seg && tab_style.bg.is_some());
+        // background distinct from the strip to fill the glyph with. A cap wider than the
+        // padding cell it replaces would shift every later tab away from the columns
+        // `Tabs::index_at_col` hit-tests against, so those degrade to flat padding.
+        let cap_glyphs = caps.filter(|caps| {
+            (is_active || is_tab_hovered)
+                && seg == full_seg
+                && tab_style.bg != base_style.bg
+                && caps_fit_padding(*caps)
+        });
         if let Some((left_cap, right_cap)) = cap_glyphs {
             let mut cap_style = Style::new();
             cap_style.fg = tab_style.bg;
