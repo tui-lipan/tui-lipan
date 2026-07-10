@@ -1,7 +1,10 @@
 use std::io::{self, BufWriter, Stdout};
 
 use crate::app::context::SurfaceMode;
-use crate::style::{drain_pending_terminal_responses, query_keyboard_enhancement_support};
+use crate::style::{
+    drain_pending_terminal_responses, flush_pending_terminal_responses_on_exit,
+    query_keyboard_enhancement_support,
+};
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::style::Print;
@@ -229,6 +232,9 @@ impl TerminalGuard {
 }
 
 fn rollback_entered_terminal(policy: SurfaceTerminalPolicy, keyboard_enhancement: bool) {
+    // Drop any probe DA1 reply still queued before `exit_plan` disables raw mode,
+    // so it is not echoed to the shell as `^[[?…c`.
+    flush_pending_terminal_responses_on_exit();
     let mut stdout = io::stdout();
     let plan = exit_plan(policy, keyboard_enhancement);
     let mut executor = CrosstermTransitionExecutor::new(&mut stdout);
@@ -237,6 +243,9 @@ fn rollback_entered_terminal(policy: SurfaceTerminalPolicy, keyboard_enhancement
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        // Drop any probe DA1 reply still queued before `exit_plan` disables raw
+        // mode, so it is not echoed to the shell as `^[[?…c`.
+        flush_pending_terminal_responses_on_exit();
         let plan = exit_plan(self.policy, self.keyboard_enhancement);
         let mut executor = CrosstermTransitionExecutor::new(&mut self.stdout);
         let _ = execute_plan(&mut executor, &plan);
@@ -247,6 +256,9 @@ pub(crate) fn restore_terminal_on_panic(surface_mode: SurfaceMode) {
     let policy = surface_terminal_policy(surface_mode);
     let mut stdout = io::stdout();
     let keyboard_enhancement = query_keyboard_enhancement_support().unwrap_or(false);
+    // The keyboard-enhancement probe above just sent another DA1 sentinel; flush
+    // its reply (and any earlier straggler) before `exit_plan` disables raw mode.
+    flush_pending_terminal_responses_on_exit();
     let plan = exit_plan(policy, keyboard_enhancement);
     let mut executor = CrosstermTransitionExecutor::new(&mut stdout);
     let _ = execute_plan(&mut executor, &plan);

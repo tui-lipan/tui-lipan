@@ -174,6 +174,40 @@ pub(crate) fn drain_pending_terminal_responses() {
 #[cfg(not(unix))]
 pub(crate) fn drain_pending_terminal_responses() {}
 
+/// Discard any terminal query-response bytes still queued on the TTY, called
+/// immediately before the terminal is restored to cooked mode on exit.
+///
+/// A capability probe's DA1 reply (`CSI ? … c`) can arrive after the startup
+/// [`drain_pending_terminal_responses`] window closed and then sit unread in the
+/// input queue. The fullscreen reader thread normally consumes it mid-session
+/// (crossterm parses it as an internal, non-public event and drops it), which is
+/// why the leak is intermittent — but on slower terminals or multiplexers the
+/// reply can still be pending at teardown. `exit_plan` disables raw mode as its
+/// first op, so anything left in the queue is then echoed to the shell prompt as
+/// a stray `^[[?…c`. Flushing the kernel input queue while raw mode is still
+/// active drops it deterministically.
+///
+/// This mirrors the `tcflush` in `terminal_handoff::discard_pending_terminal_input`
+/// used on external-process resume; on final exit there is nothing to preserve
+/// input for, so a blanket flush is correct.
+#[cfg(unix)]
+pub(crate) fn flush_pending_terminal_responses_on_exit() {
+    let Some(fd) = tty_open() else {
+        return;
+    };
+    let _fd_guard = FdGuard(fd);
+    // SAFETY: `tcflush(TCIFLUSH)` on the controlling TTY drops input received but
+    // not yet read (leaked DA/OSC query responses); it is a no-op on an empty
+    // queue and harmless if `/dev/tty` is not a terminal.
+    unsafe {
+        libc::tcflush(fd, libc::TCIFLUSH);
+    }
+}
+
+/// Flush stub for non-Unix hosts. See [`drain_pending_terminal_responses`].
+#[cfg(not(unix))]
+pub(crate) fn flush_pending_terminal_responses_on_exit() {}
+
 /// Scan probe output for a decisive Kitty/DA reply.
 ///
 /// `Some(true)`  — a `CSI ? … u` Kitty flags reply appeared (protocol supported).
