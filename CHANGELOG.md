@@ -13,6 +13,20 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `SearchPalette::match_mode(SearchMatchMode)` adds a `Hybrid` matching
+  strategy alongside the existing (and still default) `Fuzzy` mode.
+  `Hybrid` evaluates exact, prefix, word-prefix, substring, and fuzzy
+  matching together and ranks results by that priority order first, so a
+  real substring or prefix match always outranks a fuzzy one. Fuzzy
+  candidates are additionally quality-gated on match density, span, start
+  position, and whether the matched characters stay mostly within one word,
+  rejecting weak scattered matches (e.g. `layo` against "Enable pane
+  synchronization") while keeping useful abbreviations (e.g. `prd` against
+  "production"). Fields (label/aliases, description, and the right-hand
+  hint) are matched independently - characters never combine across fields
+  to form a single match - with labels/aliases weighted highest, description
+  lower, and the right-hand hint restricted to exact/substring matching. See
+  `docs/widgets/overlays.md` and `docs/enums.md`.
 - `Modal::focus_style(Style)`, `extend_focus_style(Style)`, and
   `inherit_focus_style()` configure the dialog frame while the modal or one of
   its descendants holds focus, allowing focused root-portal dialogs to retain

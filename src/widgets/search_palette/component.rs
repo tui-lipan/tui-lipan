@@ -17,7 +17,7 @@ use super::matching::{SearchResult, all_item_results, build_search_entries, matc
 use super::render::{
     ListItemsOutput, RenderStyles, ScoreRender, SearchListItemsCtx, build_list_items,
 };
-use super::{SearchEvent, SearchItem, SearchPaletteProps};
+use super::{SearchEvent, SearchItem, SearchMatchMode, SearchPaletteProps};
 
 /// Tracks whether the search query is owned by the palette's internal `TextInput`
 /// (uncontrolled) or driven by an external `query` prop (controlled).
@@ -174,6 +174,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
             query_id,
             query,
             &ctx.props.items,
+            ctx.props.match_mode,
             ctx.props.case_matching,
             ctx.props.normalization,
         ))
@@ -212,6 +213,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
         }
 
         if old_props.items != ctx.props.items
+            || old_props.match_mode != ctx.props.match_mode
             || old_props.case_matching != ctx.props.case_matching
             || old_props.normalization != ctx.props.normalization
         {
@@ -621,7 +623,13 @@ fn initial_results<T>(props: &SearchPaletteProps<T>, query: &str) -> Vec<SearchR
 
     if props.items.len() <= sync_match_limit(props) {
         let entries = build_search_entries(&props.items);
-        return match_items(&entries, query, props.case_matching, props.normalization);
+        return match_items(
+            &entries,
+            query,
+            props.match_mode,
+            props.case_matching,
+            props.normalization,
+        );
     }
 
     Vec::new()
@@ -676,6 +684,7 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
         query_id,
         query,
         &ctx.props.items,
+        ctx.props.match_mode,
         ctx.props.case_matching,
         ctx.props.normalization,
     ))
@@ -842,6 +851,7 @@ fn spawn_search<T>(
     query_id: u64,
     query: Arc<str>,
     items: &[SearchItem<T>],
+    match_mode: SearchMatchMode,
     case_matching: CaseMatching,
     normalization: Normalization,
 ) -> crate::core::component::Command {
@@ -857,7 +867,7 @@ fn spawn_search<T>(
         }
         let results = entries.as_ref().map_or_else(
             || all_item_results(item_count),
-            |entries| match_items(entries, &query, case_matching, normalization),
+            |entries| match_items(entries, &query, match_mode, case_matching, normalization),
         );
         let _ = link.send_if_not_cancelled(SearchPaletteMsg::ResultsReady { query_id, results });
     })
