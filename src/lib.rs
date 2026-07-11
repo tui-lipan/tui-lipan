@@ -164,7 +164,7 @@ pub use crate::widgets::{
     TextAreaVimCurrentLineHighlight, TextAreaVimKeyBinding, TextAreaVimKeymap, TextAreaVimMode,
     TextAreaVirtualText, Toast, ToastCopyAffordance, TripleClickSelectionMode,
     VirtualTextPlacement, insert_sentinel, rank_search_palette_indices,
-    rank_search_palette_indices_with_score,
+    rank_search_palette_indices_with_mode, rank_search_palette_indices_with_score,
 };
 
 #[cfg(all(feature = "terminal", unix))]

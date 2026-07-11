@@ -248,7 +248,7 @@ pub use scroll_view::{
 pub use search_palette::{
     DescriptionOverflow, DescriptionPlacement, ItemDescription, SearchEntry, SearchEvent,
     SearchHighlight, SearchItem, SearchMatchMode, SearchPalette, rank_search_palette_indices,
-    rank_search_palette_indices_with_score,
+    rank_search_palette_indices_with_mode, rank_search_palette_indices_with_score,
 };
 pub use select::Select;
 pub use selection::TripleClickSelectionMode;

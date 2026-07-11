@@ -169,9 +169,35 @@ pub fn rank_search_palette_indices<T: Clone + PartialEq>(
 /// and raw fuzzy score. Results are ordered by descending adjusted score, with the source item index
 /// as the tie-breaker. `NaN` adjusted scores rank after finite scores, with the source item index
 /// as the tie-breaker between `NaN` results.
+///
+/// Uses [`SearchMatchMode::Fuzzy`]; call [`rank_search_palette_indices_with_mode`] to pick a
+/// different strategy such as [`SearchMatchMode::Hybrid`].
 pub fn rank_search_palette_indices_with_score<T: Clone + PartialEq, F>(
     items: &[SearchItem<T>],
     query: &str,
+    score_fn: F,
+) -> Vec<usize>
+where
+    F: FnMut(usize, &SearchItem<T>, u32) -> f64,
+{
+    rank_search_palette_indices_with_mode(items, query, SearchMatchMode::Fuzzy, score_fn)
+}
+
+/// Returns indices into `items` in [`SearchPalette`] match order for a given
+/// [`SearchMatchMode`], after score adjustment.
+///
+/// Identical to [`rank_search_palette_indices_with_score`] but lets the caller pick the matching
+/// strategy (for example [`SearchMatchMode::Hybrid`] to rank exact/prefix/substring matches above
+/// fuzzy ones and reject weak scattered fuzzy hits). The query is trimmed; an empty query yields
+/// `0..items.len()` in definition order and does not call `score_fn`. The `score` passed to
+/// `score_fn` is the mode's raw match score (nucleo's fuzzy score under `Fuzzy`, the composite
+/// tiered score under `Hybrid`), so multiplicative adjustments such as frecency boosts compose the
+/// same way in either mode. Results are ordered by descending adjusted score, with the source item
+/// index as the tie-breaker; `NaN` adjusted scores rank after finite scores.
+pub fn rank_search_palette_indices_with_mode<T: Clone + PartialEq, F>(
+    items: &[SearchItem<T>],
+    query: &str,
+    match_mode: SearchMatchMode,
     mut score_fn: F,
 ) -> Vec<usize>
 where
@@ -185,7 +211,7 @@ where
     let mut results: Vec<_> = matching::match_items(
         &entries,
         query,
-        SearchMatchMode::Fuzzy,
+        match_mode,
         CaseMatching::Smart,
         Normalization::Smart,
     )
@@ -217,7 +243,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{SearchItem, rank_search_palette_indices, rank_search_palette_indices_with_score};
+    use super::{
+        SearchItem, SearchMatchMode, rank_search_palette_indices,
+        rank_search_palette_indices_with_mode, rank_search_palette_indices_with_score,
+    };
 
     #[test]
     fn rank_search_palette_indices_uses_identity_scoring() {
@@ -277,6 +306,28 @@ mod tests {
         });
 
         assert_eq!(ranked, vec![1, 0, 2]);
+    }
+
+    #[test]
+    fn rank_search_palette_indices_with_mode_applies_hybrid_gating() {
+        let items = vec![
+            SearchItem::new("Enable pane synchronization", 0),
+            SearchItem::new("Layout", 1),
+        ];
+
+        // Hybrid rejects the weak scattered fuzzy match and keeps only the prefix match.
+        let hybrid = rank_search_palette_indices_with_mode(
+            &items,
+            "layo",
+            SearchMatchMode::Hybrid,
+            |_, _, score| score as f64,
+        );
+        assert_eq!(hybrid, vec![1]);
+
+        // Fuzzy (the default) still surfaces the scattered match.
+        let fuzzy =
+            rank_search_palette_indices_with_score(&items, "layo", |_, _, score| score as f64);
+        assert!(fuzzy.contains(&0));
     }
 }
 
