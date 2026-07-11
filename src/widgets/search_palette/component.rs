@@ -219,7 +219,16 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
         }
 
         if should_refresh {
-            return refresh_results(ctx, reset_selection);
+            // A simultaneous items change must not swallow a controlled selection move.
+            // `initial_selected_item_index` acts as a controlled selection driver, so when
+            // it changes in the same render that also changes the items, re-resolve the
+            // selection against the freshly computed results (a query-driven reset already
+            // does this via `reset_selection`). Without this, `state.selected` keeps its old
+            // numeric row while callers move `initial_selected_item_index` elsewhere, so the
+            // list highlight and the caller's selection diverge.
+            let selection_index_changed =
+                old_props.initial_selected_item_index != ctx.props.initial_selected_item_index;
+            return refresh_results(ctx, reset_selection || selection_index_changed);
         }
 
         if old_props.sync_selection != ctx.props.sync_selection {
@@ -1088,5 +1097,97 @@ mod tests {
         assert!(handler.handle(key(KeyCode::Char(' '))));
         assert_eq!(messages.borrow().len(), 1);
         assert!(*user_seen.borrow());
+    }
+
+    struct ControlledSelectionRoot {
+        selections: Rc<RefCell<Vec<usize>>>,
+    }
+
+    struct ControlledSelectionState {
+        prepend: bool,
+    }
+
+    impl Component for ControlledSelectionRoot {
+        type Message = ();
+        type State = ControlledSelectionState;
+        type Properties = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            ControlledSelectionState { prepend: false }
+        }
+
+        fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state.prepend = true;
+            Update::layout()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let prepend = ctx.state.prepend;
+            let mut items: Vec<SearchItem<usize>> = Vec::new();
+            if prepend {
+                for i in 0..4 {
+                    items.push(SearchItem::new(format!("new-{i}"), 200 + i));
+                }
+            }
+            // Stable "current" row: item index 0 before the prepend, item index 4 after.
+            items.push(SearchItem::new("target", 100));
+            for i in 0..8 {
+                items.push(SearchItem::new(format!("item-{i}"), i));
+            }
+            let target_index = if prepend { 4 } else { 0 };
+            let selections = Rc::clone(&self.selections);
+            SearchPalette::<usize>::new()
+                .items(items)
+                .sync_match_limit(100)
+                .sync_selection(true)
+                .initial_selected_item_index(Some(target_index))
+                .height(Length::Px(6))
+                .on_select(Callback::new(move |ev: SearchEvent<usize>| {
+                    selections.borrow_mut().push(ev.item_index);
+                }))
+                .into()
+        }
+    }
+
+    // Regression: when a controlled `initial_selected_item_index` moves in the same
+    // render that also changes the items (e.g. a session list gaining rows from a
+    // background fetch), the internal selection must follow the controlled index
+    // instead of staying pinned to the old numeric row. Otherwise the palette
+    // highlight and the caller's selection diverge into two highlighted rows.
+    #[test]
+    fn controlled_selection_follows_index_when_items_also_change() {
+        let selections = Rc::new(RefCell::new(Vec::new()));
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 10,
+        };
+        let mut runtime = RuntimeCore::new_test(
+            ControlledSelectionRoot {
+                selections: Rc::clone(&selections),
+            },
+            (),
+            Rect::default(),
+            Theme::default(),
+            crate::app::context::SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(true)),
+        );
+
+        runtime.init();
+        runtime.render_element(bounds, None, None, None);
+        // Initial controlled selection points at the target row (item index 0).
+        assert_eq!(selections.borrow().last().copied(), Some(0));
+
+        // Prepend four rows and move the controlled index to the target's new slot.
+        let level = runtime
+            .update_from_boxed(ScopeId(1), Box::new(()))
+            .expect("root update should succeed");
+        assert_eq!(level, UpdateLevel::Layout);
+        runtime.render_element(bounds, None, None, None);
+
+        // The palette's internal selection must follow the controlled index (4),
+        // not stay on the old numeric row (0) just because the items changed too.
+        assert_eq!(selections.borrow().last().copied(), Some(4));
     }
 }
