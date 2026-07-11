@@ -544,7 +544,7 @@ SearchPalette::new()
       .match_mode(SearchMatchMode::Hybrid)
   ```
 
-**Standalone ranking** - `rank_search_palette_indices(&[SearchItem<T>], query)` returns each item’s index in the source slice ordered like the palette’s fuzzy results (smart case matching and normalization). Use `rank_search_palette_indices_with_score(..., |index, item, score| ...)` when another signal should boost or demote matched items before final ordering; `NaN` adjusted scores rank after finite scores. Use these helpers when another widget owns the query/focus but you need the same ordering for keyboard selection.
+**Standalone ranking** - `rank_search_palette_indices(&[SearchItem<T>], query)` returns each item’s index in the source slice ordered like the palette’s fuzzy results (smart case matching and normalization). Use `rank_search_palette_indices_with_score(..., |index, item, score| ...)` when another signal should boost or demote matched items before final ordering; `NaN` adjusted scores rank after finite scores. Use `rank_search_palette_indices_with_mode(..., match_mode, |index, item, score| ...)` to pick the matching strategy (for example `SearchMatchMode::Hybrid`) while still applying a score adjustment; `_with_score` is the `Fuzzy` shorthand. Use these helpers when another widget owns the query/focus but you need the same ordering for keyboard selection.
 
 **As a modal overlay** - wrap in `Modal` and set `on_close`/size there:
 

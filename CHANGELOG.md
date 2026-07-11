@@ -27,6 +27,12 @@ While the crate is on `0.x.y`:
   to form a single match - with labels/aliases weighted highest, description
   lower, and the right-hand hint restricted to exact/substring matching. See
   `docs/widgets/overlays.md` and `docs/enums.md`.
+- `rank_search_palette_indices_with_mode(items, query, match_mode, score_fn)`
+  ranks items with the standalone helper under an explicit `SearchMatchMode`
+  (e.g. `Hybrid`), for callers that own the query/selection but want the same
+  ordering as a `SearchPalette` configured with that mode.
+  `rank_search_palette_indices_with_score` remains and now delegates to it with
+  `SearchMatchMode::Fuzzy`. See `docs/widgets/overlays.md`.
 - `Modal::focus_style(Style)`, `extend_focus_style(Style)`, and
   `inherit_focus_style()` configure the dialog frame while the modal or one of
   its descendants holds focus, allowing focused root-portal dialogs to retain
