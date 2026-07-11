@@ -758,6 +758,13 @@ style directly.
 | `DescriptionOverflow::Truncate` | Keep descriptions on one visual line and truncate with ellipsis **(default)** |
 | `DescriptionOverflow::Wrap` | Wrap descriptions across multiple lines for `DescriptionPlacement::Above` and `DescriptionPlacement::Below` |
 
+### `SearchMatchMode` *(SearchPalette)*
+
+| Variant | Description |
+|---------|-------------|
+| `SearchMatchMode::Fuzzy` | Plain `nucleo` fuzzy matching across label, aliases, and description **(default)** |
+| `SearchMatchMode::Hybrid` | Exact/prefix/word-prefix/substring/fuzzy tiers evaluated independently per field (label+aliases, description, right-hand hint) and ranked in that priority order; weak scattered fuzzy matches are quality-gated and rejected. See `docs/widgets/overlays.md` (Matching config). |
+
 ### `MultiSelectDescriptionPlacement`
 
 | Variant | Description |

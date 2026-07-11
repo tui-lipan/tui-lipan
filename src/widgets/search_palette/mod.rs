@@ -182,15 +182,20 @@ where
         return (0..items.len()).collect();
     }
     let entries = matching::build_search_entries(items);
-    let mut results: Vec<_> =
-        matching::match_items(&entries, query, CaseMatching::Smart, Normalization::Smart)
-            .into_iter()
-            .map(|result| {
-                let item_index = result.item_index;
-                let adjusted_score = score_fn(item_index, &items[item_index], result.score);
-                (item_index, adjusted_score)
-            })
-            .collect();
+    let mut results: Vec<_> = matching::match_items(
+        &entries,
+        query,
+        SearchMatchMode::Fuzzy,
+        CaseMatching::Smart,
+        Normalization::Smart,
+    )
+    .into_iter()
+    .map(|result| {
+        let item_index = result.item_index;
+        let adjusted_score = score_fn(item_index, &items[item_index], result.score);
+        (item_index, adjusted_score)
+    })
+    .collect();
 
     results.sort_by(|(a_index, a_score), (b_index, b_score)| {
         match (a_score.is_nan(), b_score.is_nan()) {
@@ -335,6 +340,28 @@ pub enum DescriptionOverflow {
     Wrap,
 }
 
+/// Matching strategy used to rank [`SearchPalette`] results.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SearchMatchMode {
+    /// Plain `nucleo` fuzzy matching (default). The label competes with
+    /// aliases via `max()`, and description text adds to the score.
+    #[default]
+    Fuzzy,
+    /// Evaluate exact, prefix, word-prefix, substring, and fuzzy matching
+    /// together per field (label, aliases, description, right-hint) and rank
+    /// by match quality in that priority order, so a real substring or
+    /// prefix match always outranks a fuzzy one, and weak scattered fuzzy
+    /// matches are rejected instead of polluting results.
+    ///
+    /// Fields are matched independently - characters never combine across
+    /// the label, an alias, the description, and the right-hand hint to form
+    /// a single match. Labels and aliases carry the highest weight,
+    /// descriptions a lower weight, and the right-hand hint only matches via
+    /// exact or substring comparison (no fuzzy/prefix matching), which suits
+    /// keybinding-style hints.
+    Hybrid,
+}
+
 /// An entry in the search palette item list.
 ///
 /// Use [`SearchEntry::item`] for searchable rows, [`SearchEntry::header`] for
@@ -460,6 +487,7 @@ pub(crate) struct SearchPaletteProps<T> {
     preserve_groups: bool,
     navigation_wrap: bool,
     // Matching config
+    match_mode: SearchMatchMode,
     case_matching: CaseMatching,
     normalization: Normalization,
     // Input key interceptor
@@ -531,6 +559,7 @@ impl<T: PartialEq> PartialEq for SearchPaletteProps<T> {
             && self.show_scores == other.show_scores
             && self.score_gradient == other.score_gradient
             && self.score_range == other.score_range
+            && self.match_mode == other.match_mode
             && self.case_matching == other.case_matching
             && self.normalization == other.normalization
             && self.input_key_interceptor.is_some() == other.input_key_interceptor.is_some()
@@ -714,6 +743,7 @@ impl<T: Clone + PartialEq> Default for SearchPalette<T> {
                 score_range: None,
                 preserve_groups: false,
                 navigation_wrap: true,
+                match_mode: SearchMatchMode::default(),
                 case_matching: CaseMatching::Smart,
                 normalization: Normalization::Smart,
                 input_key_interceptor: None,
@@ -1399,6 +1429,15 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// (definition) order rather than score order.
     pub fn preserve_groups(mut self, preserve: bool) -> Self {
         self.props.preserve_groups = preserve;
+        self
+    }
+
+    /// Set the matching strategy used to rank results.
+    ///
+    /// Defaults to [`SearchMatchMode::Fuzzy`]. See [`SearchMatchMode::Hybrid`]
+    /// for exact/prefix/word-prefix/substring/fuzzy tiered matching.
+    pub fn match_mode(mut self, mode: SearchMatchMode) -> Self {
+        self.props.match_mode = mode;
         self
     }
 

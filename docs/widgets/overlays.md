@@ -284,7 +284,7 @@ Accordion::new()
 
 ## SearchPalette
 
-Fuzzy search widget powered by `nucleo`. Composes an `Input` and `List` into a filterable, keyboard-navigable search panel.
+Fuzzy search widget powered by `nucleo`. Composes an `Input` and `List` into a filterable, keyboard-navigable search panel. See [Matching config](#matching-config) for the `Fuzzy` (default) and `Hybrid` matching strategies.
 
 SearchPalette is **not** an overlay by itself - wrap it in `Modal` for the classic command-palette experience, or embed it inline in a `Frame`, sidebar, or any other container.
 
@@ -508,12 +508,41 @@ SearchPalette::new()
 
 | Prop | Type | Description |
 |------|------|-------------|
+| `match_mode` | `SearchMatchMode` | Matching strategy: `Fuzzy` or `Hybrid` (default: `Fuzzy`) |
 | `case_matching` | `CaseMatching` | Case sensitivity (default: `Smart`) |
 | `normalization` | `Normalization` | Unicode normalization (default: `Smart`) |
 
 > Matching uses synchronous updates for lists up to `sync_match_limit`
 > items and off-thread `nucleo` searches for larger lists; items do not need
 > `Send`/`Sync`.
+
+#### `SearchMatchMode`
+
+- **`Fuzzy`** (default) - plain `nucleo` fuzzy matching. The label competes
+  with aliases via `max()`, and description text (left and right) adds to
+  the score. Unchanged from earlier releases.
+- **`Hybrid`** - evaluates exact, prefix, word-prefix, substring, and fuzzy
+  matching together, per field, and ranks results by that priority order
+  first: a real substring or prefix match always outranks a fuzzy one, no
+  matter how strong the fuzzy score. Fuzzy candidates are additionally
+  quality-gated on match density, span, start position, and whether the hit
+  characters stay mostly within one word, so weak scattered matches (e.g.
+  `layo` against "Enable pane synchronization") are rejected while tight
+  abbreviations (e.g. `prd` against "production") still match.
+
+  Fields are matched **independently** - characters never combine across the
+  label, an alias, the description, and the right-hand hint to form a single
+  match. Labels and aliases carry the highest weight, the description a
+  lower weight, and the right-hand hint (`ItemDescription::right`) only
+  matches via exact or substring comparison, which suits keybinding-style
+  hints. `Hybrid` ignores the `normalization` prop; matching runs on raw
+  (non-normalized) characters.
+
+  ```rust
+  SearchPalette::new()
+      .items(items)
+      .match_mode(SearchMatchMode::Hybrid)
+  ```
 
 **Standalone ranking** - `rank_search_palette_indices(&[SearchItem<T>], query)` returns each item’s index in the source slice ordered like the palette’s fuzzy results (smart case matching and normalization). Use `rank_search_palette_indices_with_score(..., |index, item, score| ...)` when another signal should boost or demote matched items before final ordering; `NaN` adjusted scores rank after finite scores. Use these helpers when another widget owns the query/focus but you need the same ordering for keyboard selection.
 
