@@ -145,7 +145,11 @@ impl SplitAxis {
     }
 
     fn at_depth(self, depth: usize) -> Self {
-        if depth % 2 == 0 { self } else { self.flipped() }
+        if depth.is_multiple_of(2) {
+            self
+        } else {
+            self.flipped()
+        }
     }
 
     fn label(self) -> &'static str {
@@ -285,7 +289,7 @@ impl Workspace {
             windows: Vec::new(),
             tile_tree: None,
             focused_window: None,
-            start_axis: if index % 2 == 0 {
+            start_axis: if index.is_multiple_of(2) {
                 SplitAxis::Horizontal
             } else {
                 SplitAxis::Vertical
@@ -2429,13 +2433,13 @@ fn close_focused_window(
         workspace_target_rects(workspace, bounds)
     };
     let mut closed = false;
-    if let Some(window) = active_window_mut(&mut ctx.state, id) {
-        if !window.closing {
-            window.floating_rect = placement_for(&placements, id).unwrap_or(window.floating_rect);
-            window.opening = false;
-            window.closing = true;
-            closed = true;
-        }
+    if let Some(window) = active_window_mut(&mut ctx.state, id)
+        && !window.closing
+    {
+        window.floating_rect = placement_for(&placements, id).unwrap_or(window.floating_rect);
+        window.opening = false;
+        window.closing = true;
+        closed = true;
     }
 
     if closed {

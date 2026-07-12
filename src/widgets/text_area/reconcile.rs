@@ -280,15 +280,15 @@ pub fn reconcile_text_area(
 
         let max_offset = geometry.total_visual_lines.saturating_sub(visible_lines);
         let mut new_offset = new_offset.min(max_offset);
-        if let Some(anchor_source_line) = scroll_anchor_source_line {
-            if let Some(anchored) = visual_cache.latest_lines().and_then(|lines| {
+        if let Some(anchor_source_line) = scroll_anchor_source_line
+            && let Some(anchored) = visual_cache.latest_lines().and_then(|lines| {
                 lines
                     .iter()
                     .position(|line| line.line_num.saturating_sub(1) == anchor_source_line)
-            }) {
-                new_offset = anchored.min(max_offset);
-                smooth_scroll.cancel_at(new_offset);
-            }
+            })
+        {
+            new_offset = anchored.min(max_offset);
+            smooth_scroll.cancel_at(new_offset);
         }
 
         let next_scroll_override = if explicit_target.is_some() || current_override.is_some() {

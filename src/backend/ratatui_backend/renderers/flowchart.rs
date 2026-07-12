@@ -77,10 +77,10 @@ pub(crate) fn render_flowchart(
         let mut style = base_style
             .patch(default_subgraph_style)
             .patch(subgraph.style);
-        if hovered.as_ref() == Some(&FlowchartItemPath::Subgraph(subgraph.id.clone())) {
-            if let Some(hover_style) = hover_style {
-                style = style.patch(hover_style);
-            }
+        if hovered.as_ref() == Some(&FlowchartItemPath::Subgraph(subgraph.id.clone()))
+            && let Some(hover_style) = hover_style
+        {
+            style = style.patch(hover_style);
         }
         draw_box(
             &mut paint,
@@ -135,10 +135,10 @@ pub(crate) fn render_flowchart(
         let mut style = base_style
             .patch(default_edge_style)
             .patch(edge.line_style.unwrap_or_default());
-        if hovered.as_ref() == Some(&FlowchartItemPath::Edge(edge.index)) {
-            if let Some(hover_style) = hover_style {
-                style = style.patch(hover_style);
-            }
+        if hovered.as_ref() == Some(&FlowchartItemPath::Edge(edge.index))
+            && let Some(hover_style) = hover_style
+        {
+            style = style.patch(hover_style);
         }
         let style = to_ratatui_style(style);
         if let (Some((x, y)), Some(label)) = (edge.label_pos, edge.label.as_ref()) {

@@ -1389,16 +1389,16 @@ pub(super) fn handle_text_area_vim_edit_command(
         return Some(vim_repeat_search(editor, state, false));
     }
 
-    if matches!(state.mode, TextAreaVimMode::Normal) {
-        if let Some(op) = vim_operator_from_key(key) {
-            let count = take_vim_count(state).unwrap_or(1).max(1);
-            state.pending = Some(TextAreaVimPending::Operator {
-                op,
-                count,
-                g_pending: false,
-            });
-            return Some(VimKeyOutcome::ConsumedUnchanged);
-        }
+    if matches!(state.mode, TextAreaVimMode::Normal)
+        && let Some(op) = vim_operator_from_key(key)
+    {
+        let count = take_vim_count(state).unwrap_or(1).max(1);
+        state.pending = Some(TextAreaVimPending::Operator {
+            op,
+            count,
+            g_pending: false,
+        });
+        return Some(VimKeyOutcome::ConsumedUnchanged);
     }
 
     if matches!(state.mode, TextAreaVimMode::Normal) && is_plainish_char(key, 'x') {

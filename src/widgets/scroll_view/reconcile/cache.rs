@@ -38,7 +38,7 @@ pub(crate) fn maybe_log_scroll_layout_cache_stats() {
     }
 
     let calls = SCROLL_LAYOUT_CACHE_CALLS.load(Ordering::Relaxed);
-    if calls == 0 || calls % 500 != 0 {
+    if calls == 0 || !calls.is_multiple_of(500) {
         return;
     }
 

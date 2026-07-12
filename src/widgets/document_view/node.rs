@@ -1381,11 +1381,11 @@ fn flatten_code_block(
     out: &mut Vec<DocumentVisualLine>,
     max_w: &mut u16,
 ) {
-    if let Some(lang) = cb.language.as_deref() {
-        if lang.eq_ignore_ascii_case("diff") || lang.eq_ignore_ascii_case("patch") {
-            flatten_diff_code_block(cb, &ctx, out, max_w);
-            return;
-        }
+    if let Some(lang) = cb.language.as_deref()
+        && (lang.eq_ignore_ascii_case("diff") || lang.eq_ignore_ascii_case("patch"))
+    {
+        flatten_diff_code_block(cb, &ctx, out, max_w);
+        return;
     }
 
     let block_style = ctx.doc_styles.code_block_style;

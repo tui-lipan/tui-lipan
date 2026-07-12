@@ -1103,10 +1103,10 @@ impl Component for TuiLipanShowcase {
         }
         collect_ripple_effects(&ctx.state.ripples, &mut effects);
 
-        if tab == TAB_VOID {
-            if let Some((_, cx, cy, sz)) = ctx.state.void_charge {
-                effects.extend(void_charge_glow_effects(cx, cy, sz));
-            }
+        if tab == TAB_VOID
+            && let Some((_, cx, cy, sz)) = ctx.state.void_charge
+        {
+            effects.extend(void_charge_glow_effects(cx, cy, sz));
         }
 
         let charging = if tab == TAB_VOID {

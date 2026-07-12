@@ -925,10 +925,10 @@ impl DocumentView {
             if Rc::get_mut(formatter_rc).is_none() {
                 *formatter_rc = Rc::from(formatter_rc.clone_box());
             }
-            if let Some(formatter) = Rc::get_mut(formatter_rc) {
-                if let Some(md) = formatter.as_any_mut().downcast_mut::<MarkdownFormatter>() {
-                    md.render_diagrams = enabled;
-                }
+            if let Some(formatter) = Rc::get_mut(formatter_rc)
+                && let Some(md) = formatter.as_any_mut().downcast_mut::<MarkdownFormatter>()
+            {
+                md.render_diagrams = enabled;
             }
         }
         self
