@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -78,6 +78,8 @@ impl Dimensions for TermDimensions {
 #[derive(Clone, Default)]
 struct ResponseCapture {
     responses: Rc<RefCell<Vec<Vec<u8>>>>,
+    /// Number of BEL events emitted by the terminal parser.
+    bell_count: Rc<Cell<u64>>,
     /// Latest window title set by the program via OSC 0/2; `None` once reset.
     title: Rc<RefCell<Option<String>>>,
     /// The active palette, shared with [`TerminalScreen`], used to answer
@@ -116,6 +118,7 @@ impl EventListener for ResponseCapture {
     fn send_event(&self, event: TermEvent) {
         match event {
             TermEvent::PtyWrite(text) => self.responses.borrow_mut().push(text.into_bytes()),
+            TermEvent::Bell => self.bell_count.set(self.bell_count.get().saturating_add(1)),
             TermEvent::Title(title) => *self.title.borrow_mut() = Some(title),
             TermEvent::ResetTitle => *self.title.borrow_mut() = None,
             // Answer color queries from the active palette. Without this the
@@ -125,7 +128,7 @@ impl EventListener for ResponseCapture {
                 let response = formatter(self.resolve_query_color(index));
                 self.responses.borrow_mut().push(response.into_bytes());
             }
-            // Ignore other events (Clipboard, Bell, etc.) for now
+            // Ignore other events (Clipboard, etc.) for now
             _ => {}
         }
     }
@@ -351,6 +354,11 @@ impl TerminalScreen {
     /// the PTY stdin.
     pub fn drain_responses(&mut self) -> Vec<Vec<u8>> {
         std::mem::take(&mut *self.listener.responses.borrow_mut())
+    }
+
+    /// Return the number of BEL events received since this screen was created.
+    pub fn bell_count(&self) -> u64 {
+        self.listener.bell_count.get()
     }
 
     /// Serialize the current terminal state as bytes that can be replayed by a
@@ -1248,6 +1256,31 @@ mod tests {
             .style
             .bg
             .map(|paint| paint.color())
+    }
+
+    #[test]
+    fn bell_count_starts_at_zero() {
+        let screen = TerminalScreen::new(2, 8, 10);
+
+        assert_eq!(screen.bell_count(), 0);
+    }
+
+    #[test]
+    fn bell_count_tracks_each_bel() {
+        let mut screen = TerminalScreen::new(2, 8, 10);
+
+        screen.process_bytes(b"\x07text\x07\x07");
+
+        assert_eq!(screen.bell_count(), 3);
+    }
+
+    #[test]
+    fn bell_count_ignores_non_bel_input() {
+        let mut screen = TerminalScreen::new(2, 8, 10);
+
+        screen.process_bytes(b"text\r\n\x1b[31mred\x1b[0m");
+
+        assert_eq!(screen.bell_count(), 0);
     }
 
     #[test]
