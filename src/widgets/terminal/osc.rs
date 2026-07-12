@@ -86,7 +86,8 @@ pub enum TerminalCommandPhase {
     },
 }
 
-/// A semantic change extracted from PTY output by [`TerminalScreen::drain_semantic_events`].
+/// A semantic change extracted from PTY output by
+/// [`TerminalScreen::drain_semantic_events`](crate::widgets::terminal::TerminalScreen::drain_semantic_events).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TerminalSemanticEvent {
     /// The reported working directory changed (`OSC 7` or `OSC 9;9`).
@@ -102,9 +103,12 @@ pub enum TerminalSemanticEvent {
 
 /// Current semantic state accumulated from `OSC 7`/`OSC 9;9`/`OSC 133` sequences.
 ///
-/// Returned by [`TerminalScreen::semantic_state`] and accepted by
-/// [`TerminalScreen::restore_semantic_state`] so state can be persisted and reapplied (e.g. across
-/// session resurrection) without replaying synthetic escape sequences.
+/// Returned by
+/// [`TerminalScreen::semantic_state`](crate::widgets::terminal::TerminalScreen::semantic_state)
+/// and accepted by
+/// [`TerminalScreen::restore_semantic_state`](crate::widgets::terminal::TerminalScreen::restore_semantic_state)
+/// so state can be persisted and reapplied (e.g. across session resurrection) without replaying
+/// synthetic escape sequences.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TerminalSemanticState {
     /// Most recently reported working directory, if any.
