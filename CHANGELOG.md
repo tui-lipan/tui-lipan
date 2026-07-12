@@ -13,6 +13,22 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `TerminalScreen::semantic_state()`, `drain_semantic_events()`, and
+  `restore_semantic_state()` expose working-directory and command-lifecycle
+  metadata parsed from `OSC 7` (`file://host/path`), `OSC 9;9` (Windows-style
+  CWD reports), and `OSC 133 A/B/C/D` (prompt/input/execution/completion
+  boundaries), plus a minimal `hyprmux_exe=` key/value extension and Fish/Kitty's
+  `cmdline_url=` for foreground-executable identity. Parsing runs through a
+  second, independent `vte::Perform` observer fed the same raw bytes as the
+  primary Alacritty grid parser, so it cannot affect rendering. New types:
+  `TerminalSemanticState`, `TerminalSemanticEvent`, `TerminalWorkingDirectory`,
+  `TerminalWorkingDirectorySource`, `TerminalCommandPhase`. This state is
+  deliberately kept out of `TerminalRenderSnapshot` - it is runtime metadata,
+  not something the renderer paints. See `docs/widgets/terminal.md`.
+- `TerminalPty::foreground_process_group_id()` (Unix-only) reports the PTY's
+  foreground process-group id (`tcgetpgrp(3)`) without exposing the underlying
+  master file descriptor, for host apps that need a native foreground-process
+  fallback when no shell integration is available.
 - `TerminalScreen::bell_count()` exposes a monotonic count of BEL events parsed
   from child output, allowing hosts to trigger visual or audible notifications.
 - `SearchPalette::match_mode(SearchMatchMode)` adds a `Hybrid` matching
@@ -126,6 +142,9 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- **(breaking)** Raised the declared MSRV from Rust 1.85 to 1.88 (matches the
+  locked Ratatui requirement), as part of laying groundwork for native
+  macOS/Windows support.
 - **(breaking)** `key_event_to_bytes` takes a second argument,
   `modes: TerminalKeyModes`, carrying the DEC private modes the child has
   enabled. Pass `TerminalKeyModes::default()` to keep the previous encoding, or
@@ -159,6 +178,15 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `TerminalPty` now satisfies portable-pty 0.9's initial Windows ConPTY cursor-position handshake
+  before child creation, preventing `PSEUDOCONSOLE_INHERIT_CURSOR` from stalling later requests.
+- `TerminalPty::clone()` no longer kills the shared child process when just one
+  of several outstanding clones is dropped. Previously every `TerminalPty` drop
+  unconditionally killed the PTY, so dropping any handle (not just the last
+  one) could terminate a still-referenced child out from under other holders.
+- The generic `TerminalPtyConfig::default()` shell fallback now resolves
+  `%COMSPEC%` (falling back to `cmd.exe`) on Windows instead of always trying
+  `$SHELL`/`/bin/sh`, which does not exist there.
 - The keyboard-enhancement probe now consumes its terminating DA1 reply instead
   of relying on a later input flush, closing a race that could still leak
   `^[[?…c` into the shell prompt on exit.

@@ -2,7 +2,7 @@
 name = "tui-lipan-macro"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MPL-2.0"
 description = "Procedural macros for the tui-lipan TUI framework (ui!, rsx!, mockup!)."
 repository = "https://github.com/tui-lipan/tui-lipan"

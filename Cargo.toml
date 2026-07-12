@@ -2,7 +2,7 @@
 name = "tui-lipan"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MPL-2.0"
 description = "Opinionated, component-based TUI framework for Rust - declarative components, reconciliation, layout engine, focus, overlays, and rich widgets on top of ratatui."
 repository = "https://github.com/tui-lipan/tui-lipan"
