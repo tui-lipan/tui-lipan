@@ -903,23 +903,23 @@ fn output_bounds(
             max_x = max_x.max(x.saturating_add(label_width).saturating_add(1));
             max_y = max_y.max(y.saturating_add(1));
         }
-        if let Some((x, y)) = edge.from_pos {
-            if let Some(spec) = edges.get(edge.spec_index) {
-                let width = endpoint_width(spec.from_glyph);
-                min_x = min_x.min(x);
-                min_y = min_y.min(y);
-                max_x = max_x.max(x.saturating_add(width as i16));
-                max_y = max_y.max(y.saturating_add(1));
-            }
+        if let Some((x, y)) = edge.from_pos
+            && let Some(spec) = edges.get(edge.spec_index)
+        {
+            let width = endpoint_width(spec.from_glyph);
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x.saturating_add(width as i16));
+            max_y = max_y.max(y.saturating_add(1));
         }
-        if let Some((x, y)) = edge.to_pos {
-            if let Some(spec) = edges.get(edge.spec_index) {
-                let width = endpoint_width(spec.to_glyph);
-                min_x = min_x.min(x);
-                min_y = min_y.min(y);
-                max_x = max_x.max(x.saturating_add(width as i16));
-                max_y = max_y.max(y.saturating_add(1));
-            }
+        if let Some((x, y)) = edge.to_pos
+            && let Some(spec) = edges.get(edge.spec_index)
+        {
+            let width = endpoint_width(spec.to_glyph);
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x.saturating_add(width as i16));
+            max_y = max_y.max(y.saturating_add(1));
         }
     }
 

@@ -375,15 +375,15 @@ fn grow_gaps_for_labels(columns: &mut [Column], diagram: &SequenceDiagram) {
                 }
             }
             SequenceStep::Divider(label) => {
-                if let Some(first) = columns.first().map(|c| c.spec.actor.clone()) {
-                    if let Some(last) = columns.last().map(|c| c.spec.actor.clone()) {
-                        grow_span(
-                            columns,
-                            &first,
-                            &last,
-                            display_label_width(label, diagram).saturating_add(4),
-                        );
-                    }
+                if let Some(first) = columns.first().map(|c| c.spec.actor.clone())
+                    && let Some(last) = columns.last().map(|c| c.spec.actor.clone())
+                {
+                    grow_span(
+                        columns,
+                        &first,
+                        &last,
+                        display_label_width(label, diagram).saturating_add(4),
+                    );
                 }
             }
             _ => {}
@@ -465,15 +465,15 @@ fn compute_note_margins(diagram: &SequenceDiagram, columns: &[Column]) -> (u16, 
         }
     }
     for step in &diagram.steps {
-        if let SequenceStep::SelfMessage { actor, label, .. } = step {
-            if actor == last_actor {
-                let label_w = display_label_width(label, diagram);
-                let extent = SELF_MESSAGE_LOOP_WIDTH
-                    .saturating_add(1)
-                    .saturating_add(label_w);
-                let half = last_col.width / 2;
-                right = right.max(extent.saturating_sub(half));
-            }
+        if let SequenceStep::SelfMessage { actor, label, .. } = step
+            && actor == last_actor
+        {
+            let label_w = display_label_width(label, diagram);
+            let extent = SELF_MESSAGE_LOOP_WIDTH
+                .saturating_add(1)
+                .saturating_add(label_w);
+            let half = last_col.width / 2;
+            right = right.max(extent.saturating_sub(half));
         }
     }
     (left, right)

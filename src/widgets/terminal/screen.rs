@@ -7,6 +7,7 @@ use alacritty_terminal::grid::{Dimensions, GridCell, Scroll};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell as TermCell, Flags as CellFlags};
 use alacritty_terminal::term::{self, Config as TermConfig, Term, TermMode};
+use alacritty_terminal::vte::Parser as SemanticVteParser;
 use alacritty_terminal::vte::ansi::Processor as VteProcessor;
 use alacritty_terminal::vte::ansi::{
     Color as TermColor, CursorShape as TermCursorShape, CursorStyle as TermCursorStyle, NamedColor,
@@ -16,6 +17,7 @@ use alacritty_terminal::vte::ansi::{
 use super::events::{
     KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, TerminalKeyModes,
 };
+use super::osc::{SemanticObserver, TerminalSemanticEvent, TerminalSemanticState};
 use crate::style::{CaretShape, Color as UiColor, HostTerminalColors, Span, Style};
 
 /// Cursor style applied when the child program never issues `DECSCUSR`.
@@ -139,6 +141,13 @@ pub struct TerminalScreen {
     processor: VteProcessor,
     term: Term<ResponseCapture>,
     listener: ResponseCapture,
+    /// Parallel OSC 7/9;9/133 observer, driven by the same raw bytes as `processor`.
+    ///
+    /// Kept entirely separate from the Alacritty grid parser above: it never sees a callback
+    /// besides `osc_dispatch`, so it cannot affect rendering, and its state is deliberately not
+    /// part of `TerminalRenderSnapshot`.
+    semantic_parser: SemanticVteParser,
+    semantic: SemanticObserver,
     /// Logical viewport rows (matches the PTY size).
     rows: u16,
     /// Logical viewport cols (matches the PTY size).
@@ -326,6 +335,8 @@ impl TerminalScreen {
             processor: VteProcessor::new(),
             term,
             listener,
+            semantic_parser: SemanticVteParser::new(),
+            semantic: SemanticObserver::default(),
             rows,
             cols,
             scrollback_len: scrollback,
@@ -342,9 +353,39 @@ impl TerminalScreen {
     ///
     pub fn process_bytes(&mut self, bytes: &[u8]) {
         self.processor.advance(&mut self.term, bytes);
+        self.semantic_parser.advance(&mut self.semantic, bytes);
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode());
         self.dirty = true;
+    }
+
+    /// Return the current working-directory/command-lifecycle state accumulated from `OSC
+    /// 7`/`OSC 9;9`/`OSC 133` sequences seen so far.
+    ///
+    /// This is runtime metadata, not render state: it is never part of
+    /// [`TerminalRenderSnapshot`] and does not participate in `dirty`/cache invalidation.
+    pub fn semantic_state(&self) -> TerminalSemanticState {
+        self.semantic.state()
+    }
+
+    /// Drain semantic-state changes observed since the last call.
+    ///
+    /// Call this after [`process_bytes`](Self::process_bytes) alongside
+    /// [`drain_responses`](Self::drain_responses) to react to CWD/command-phase/executable
+    /// changes without re-deriving them from [`semantic_state`](Self::semantic_state) on every
+    /// poll.
+    pub fn drain_semantic_events(&mut self) -> Vec<TerminalSemanticEvent> {
+        self.semantic.drain_events()
+    }
+
+    /// Reapply previously captured semantic state without replaying escape sequences.
+    ///
+    /// Intended for restoring state across a fresh `TerminalScreen` (e.g. session
+    /// resurrection/reattach) where the byte stream that originally produced it is not being
+    /// replayed. Does not emit [`TerminalSemanticEvent`]s - the caller already knows the state
+    /// it is installing.
+    pub fn restore_semantic_state(&mut self, state: TerminalSemanticState) {
+        self.semantic.restore_state(state);
     }
 
     /// Drain and return any PTY responses that need to be written back.
@@ -553,6 +594,10 @@ impl TerminalScreen {
         self.listener = ResponseCapture::default();
         self.term = Term::new(config, &dimensions, self.listener.clone());
         self.processor = VteProcessor::new();
+        // Drop any in-flight partial OSC/CSI sequence, but keep accumulated semantic state
+        // (cwd/command phase/executable) - a child hard-reset (RIS) does not imply the shell's
+        // last-known working directory or command lifecycle became invalid.
+        self.semantic_parser = SemanticVteParser::new();
         self.mouse_mode = MouseModeState::default();
         self.scrollback_offset = 0;
         self.cache = TerminalRenderSnapshot::default();

@@ -278,10 +278,12 @@ pub use terminal::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use terminal::{
     KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, Terminal, TerminalBuffer,
-    TerminalColorPalette, TerminalInputEvent, TerminalInputKind, TerminalKeyModes, TerminalPty,
-    TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen,
-    TerminalSelection, TerminalSelectionEvent, TerminalViewport, encode_paste, focus_sequences,
-    key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
+    TerminalColorPalette, TerminalCommandPhase, TerminalInputEvent, TerminalInputKind,
+    TerminalKeyModes, TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent,
+    TerminalRenderSnapshot, TerminalScreen, TerminalSelection, TerminalSelectionEvent,
+    TerminalSemanticEvent, TerminalSemanticState, TerminalViewport, TerminalWorkingDirectory,
+    TerminalWorkingDirectorySource, encode_paste, focus_sequences, key_event_to_bytes,
+    mouse_event_to_bytes, paste_sequences,
 };
 pub use text::{Overflow, Text};
 pub use text_area::{

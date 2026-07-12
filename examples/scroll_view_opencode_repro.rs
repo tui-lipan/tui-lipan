@@ -2452,7 +2452,7 @@ fn build_user_message_for_preset(i: usize, preset: ReproPreset) -> DemoMessage {
         ReproPreset::TextHeavy => DemoMessage::User {
             id: format!("user-{i}"),
             text: Arc::from(text_heavy_user_template(i)),
-            files: if i % 5 == 0 {
+            files: if i.is_multiple_of(5) {
                 vec![demo_file("logs/agent.stderr", DemoFileKind::File)]
             } else {
                 Vec::new()
@@ -2485,7 +2485,7 @@ fn build_assistant_message_for_preset(i: usize, preset: ReproPreset) -> DemoMess
             mode: Arc::from("review"),
             model: Arc::from("gpt-5.4"),
             duration: Arc::from(format!("{}ms", 160 + (i % 5) * 90)),
-            interrupted: i % 19 == 0,
+            interrupted: i.is_multiple_of(19),
             error: None,
         },
         ReproPreset::PatchStack => DemoMessage::Assistant {
@@ -2503,7 +2503,7 @@ fn build_assistant_message_for_preset(i: usize, preset: ReproPreset) -> DemoMess
             mode: Arc::from("chat"),
             model: Arc::from("gpt-5.4"),
             duration: Arc::from(format!("{}ms", 100 + (i % 6) * 55)),
-            interrupted: i % 23 == 0,
+            interrupted: i.is_multiple_of(23),
             error: Some(Arc::from(multiline_error_text(i))),
         },
         ReproPreset::ErrorHeavy => DemoMessage::Assistant {
@@ -2512,7 +2512,7 @@ fn build_assistant_message_for_preset(i: usize, preset: ReproPreset) -> DemoMess
             mode: Arc::from("build"),
             model: Arc::from("claude-sonnet-4"),
             duration: Arc::from(format!("{}ms", 220 + (i % 7) * 70)),
-            interrupted: i % 11 == 0,
+            interrupted: i.is_multiple_of(11),
             error: Some(Arc::from(multiline_apply_patch_error(i))),
         },
         ReproPreset::DiffTest => build_assistant_message(i),
@@ -2529,7 +2529,7 @@ fn build_user_message(i: usize) -> DemoMessage {
             "{}:{:02} {}",
             9 + ((i / 6) % 3),
             (7 + i * 5) % 60,
-            if i % 2 == 0 { "AM" } else { "PM" }
+            if i.is_multiple_of(2) { "AM" } else { "PM" }
         )),
         queued: i % 11 == 5,
         has_compaction: i % 13 == 7,
@@ -2546,13 +2546,13 @@ fn build_assistant_message(i: usize) -> DemoMessage {
             2 => "plan",
             _ => "review",
         }),
-        model: Arc::from(if i % 3 == 0 {
+        model: Arc::from(if i.is_multiple_of(3) {
             "gpt-5.4"
         } else {
             "claude-sonnet-4"
         }),
         duration: Arc::from(format!("{}ms", 120 + (i % 7) * 85)),
-        interrupted: i % 17 == 0,
+        interrupted: i.is_multiple_of(17),
         error: assistant_error(i),
     }
 }
@@ -2729,7 +2729,11 @@ fn build_assistant_parts(i: usize) -> Vec<AssistantPart> {
                 title: Arc::from("# trace_scroll summary"),
                 output: Arc::from(generic_output(i)),
             }),
-            AssistantPart::Agent(Arc::from(if i % 2 == 0 { "reviewer" } else { "planner" })),
+            AssistantPart::Agent(Arc::from(if i.is_multiple_of(2) {
+                "reviewer"
+            } else {
+                "planner"
+            })),
             AssistantPart::Retry {
                 attempt: 2 + (i % 3),
             },
@@ -2971,7 +2975,7 @@ fn build_diff_heavy_parts(i: usize) -> Vec<AssistantPart> {
             title: Arc::from("Patch src/widgets/message_view.rs"),
             before: Arc::from(before_a),
             after: Arc::from(after_a),
-            wrap: i % 2 == 0,
+            wrap: i.is_multiple_of(2),
             split: true,
             context_lines: None,
         }),
@@ -2987,8 +2991,8 @@ fn build_diff_heavy_parts(i: usize) -> Vec<AssistantPart> {
             title: Arc::from("Patch src/widgets/tool_part_view.rs"),
             before: Arc::from(before_c),
             after: Arc::from(after_c),
-            wrap: i % 3 != 0,
-            split: i % 2 != 0,
+            wrap: !i.is_multiple_of(3),
+            split: !i.is_multiple_of(2),
             context_lines: None,
         }),
         AssistantPart::Markdown(Arc::from(markdown_template(i))),
@@ -3765,7 +3769,7 @@ fn demo_todos(i: usize) -> Vec<DemoTodo> {
             status: DemoTodoStatus::Completed,
         },
         DemoTodo {
-            content: Arc::from(if i % 2 == 0 {
+            content: Arc::from(if i.is_multiple_of(2) {
                 "Capture another scroll flamegraph"
             } else {
                 "Compare repro against message_view.rs"
@@ -3783,7 +3787,7 @@ fn demo_questions(i: usize) -> Vec<DemoQuestion> {
     vec![
         DemoQuestion {
             question: Arc::from("Which message shape still burns the most CPU?"),
-            answer: Arc::from(if i % 2 == 0 {
+            answer: Arc::from(if i.is_multiple_of(2) {
                 "Mixed DiffView + DocumentView rows near the viewport edge."
             } else {
                 "Large tool blocks with nested markdown and diff surfaces."

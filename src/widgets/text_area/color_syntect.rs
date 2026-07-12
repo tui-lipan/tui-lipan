@@ -1031,12 +1031,12 @@ fn collect_type_like_idents_until(
         if matches!(ch, ',' | '=' | '{' | ')' | ';') {
             break;
         }
-        if is_ident_start(ch) {
-            if let Some(range) = identifier_at(line, idx) {
-                push_rust_type_ident(line, range.clone(), ranges, palette);
-                idx = range.end;
-                continue;
-            }
+        if is_ident_start(ch)
+            && let Some(range) = identifier_at(line, idx)
+        {
+            push_rust_type_ident(line, range.clone(), ranges, palette);
+            idx = range.end;
+            continue;
         }
         idx += ch.len_utf8();
     }

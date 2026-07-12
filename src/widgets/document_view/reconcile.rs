@@ -91,7 +91,7 @@ fn maybe_log_cache_stats() {
         return;
     }
     let total = visual_cache_hits() + visual_cache_misses() + visual_cache_ineligible();
-    if total != 0 && total % 2000 == 0 {
+    if total != 0 && total.is_multiple_of(2000) {
         let h = visual_cache_hits();
         let m = visual_cache_misses();
         let i = visual_cache_ineligible();
@@ -584,16 +584,15 @@ pub fn reconcile_document_view(
     };
 
     effective_offset = effective_offset.min(max_offset);
-    if let Some(anchor_source_line) = scroll_anchor_source_line {
-        if let Some(anchored) = dv_node
+    if let Some(anchor_source_line) = scroll_anchor_source_line
+        && let Some(anchored) = dv_node
             .visual_cache
             .source_line_map
             .iter()
             .position(|&source_line| source_line == anchor_source_line)
-        {
-            effective_offset = anchored.min(max_offset);
-            dv_node.smooth_scroll.cancel_at(effective_offset);
-        }
+    {
+        effective_offset = anchored.min(max_offset);
+        dv_node.smooth_scroll.cancel_at(effective_offset);
     }
     dv_node.scroll_offset = effective_offset;
     dv_node.scroll_override = if current_override.is_some() {

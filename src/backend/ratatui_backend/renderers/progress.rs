@@ -491,21 +491,21 @@ pub(crate) fn render_progress_bar(
     let track_y = current_y;
     let mut cx = inner.x as i32;
 
-    if matches!(pct_position, ProgressTextPosition::Left) {
-        if let Some(text) = percentage_text.as_deref() {
-            draw_grapheme_row(buf, cx, track_y, text, label_rt, clip_opt);
-            cx += UnicodeWidthStr::width(text) as i32;
-            draw_cell_clipped(buf, cx, track_y, " ", space_rt, clip_opt);
-            cx += 1;
-        }
+    if matches!(pct_position, ProgressTextPosition::Left)
+        && let Some(text) = percentage_text.as_deref()
+    {
+        draw_grapheme_row(buf, cx, track_y, text, label_rt, clip_opt);
+        cx += UnicodeWidthStr::width(text) as i32;
+        draw_cell_clipped(buf, cx, track_y, " ", space_rt, clip_opt);
+        cx += 1;
     }
-    if matches!(label_position, ProgressTextPosition::Left) {
-        if let Some(lbl) = display_label.as_deref() {
-            draw_grapheme_row(buf, cx, track_y, lbl, label_rt, clip_opt);
-            cx += UnicodeWidthStr::width(lbl) as i32;
-            draw_cell_clipped(buf, cx, track_y, " ", space_rt, clip_opt);
-            cx += 1;
-        }
+    if matches!(label_position, ProgressTextPosition::Left)
+        && let Some(lbl) = display_label.as_deref()
+    {
+        draw_grapheme_row(buf, cx, track_y, lbl, label_rt, clip_opt);
+        cx += UnicodeWidthStr::width(lbl) as i32;
+        draw_cell_clipped(buf, cx, track_y, " ", space_rt, clip_opt);
+        cx += 1;
     }
 
     let mut sym_buf = [0u8; 4];
@@ -517,20 +517,20 @@ pub(crate) fn render_progress_bar(
         cx += UnicodeWidthChar::width(ch).unwrap_or(1).max(1) as i32;
     }
 
-    if matches!(pct_position, ProgressTextPosition::Right) {
-        if let Some(text) = percentage_text.as_deref() {
-            draw_cell_clipped(buf, cx, track_y, " ", space_rt, clip_opt);
-            cx += 1;
-            draw_grapheme_row(buf, cx, track_y, text, label_rt, clip_opt);
-            cx += UnicodeWidthStr::width(text) as i32;
-        }
+    if matches!(pct_position, ProgressTextPosition::Right)
+        && let Some(text) = percentage_text.as_deref()
+    {
+        draw_cell_clipped(buf, cx, track_y, " ", space_rt, clip_opt);
+        cx += 1;
+        draw_grapheme_row(buf, cx, track_y, text, label_rt, clip_opt);
+        cx += UnicodeWidthStr::width(text) as i32;
     }
-    if matches!(label_position, ProgressTextPosition::Right) {
-        if let Some(lbl) = display_label.as_deref() {
-            draw_cell_clipped(buf, cx, track_y, " ", space_rt, clip_opt);
-            cx += 1;
-            draw_grapheme_row(buf, cx, track_y, lbl, label_rt, clip_opt);
-        }
+    if matches!(label_position, ProgressTextPosition::Right)
+        && let Some(lbl) = display_label.as_deref()
+    {
+        draw_cell_clipped(buf, cx, track_y, " ", space_rt, clip_opt);
+        cx += 1;
+        draw_grapheme_row(buf, cx, track_y, lbl, label_rt, clip_opt);
     }
 
     current_y += 1;

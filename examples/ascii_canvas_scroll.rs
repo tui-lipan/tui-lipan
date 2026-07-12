@@ -50,7 +50,7 @@ impl Component for AsciiCanvasScroll {
             } else {
                 // Repeating fill after the label
                 let fill_x = x as usize - row_label.len();
-                if fill_x % 4 == 0 { '|' } else { '-' }
+                if fill_x.is_multiple_of(4) { '|' } else { '-' }
             };
             let g = 80u8.saturating_add((y as u8).wrapping_mul(7));
             AsciiCell::new(ch).style(Style::new().fg(Color::rgb(g, 200, 255 - g)))

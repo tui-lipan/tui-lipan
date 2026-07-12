@@ -111,17 +111,15 @@ pub(crate) fn handle_key(
                 dv.smooth_scroll.cancel_at(offset);
                 dv.cancelled_scroll_to_source_line = dv.scroll_to_source_line;
             }
-            if offset_changed {
-                if let Some(cb) = on_scroll.as_ref() {
-                    cb.emit(ScrollEvent {
-                        offset,
-                        metrics: ScrollMetrics {
-                            len: total,
-                            visible: viewport_h,
-                            max_offset,
-                        },
-                    });
-                }
+            if offset_changed && let Some(cb) = on_scroll.as_ref() {
+                cb.emit(ScrollEvent {
+                    offset,
+                    metrics: ScrollMetrics {
+                        len: total,
+                        visible: viewport_h,
+                        max_offset,
+                    },
+                });
             }
             handled = true;
         }

@@ -48,7 +48,7 @@ impl Component for DevtoolsDemo {
             Msg::Tick => {
                 ctx.state.tick = ctx.state.tick.saturating_add(1);
 
-                if ctx.state.tick % 2 == 0 {
+                if ctx.state.tick.is_multiple_of(2) {
                     tui_lipan::debug_log!(
                         "[devtools] tick={} phase={}",
                         ctx.state.tick,

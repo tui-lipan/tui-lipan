@@ -361,14 +361,16 @@ fn build_fenced_block(
     // Only commit to rendering a diagram once the fence actually closes.
     // While the user is mid-typing the opening fence, the heavy diagram would
     // otherwise pop in and reflow the document.
-    if is_mermaid && fence_closed && fmt.render_diagrams {
-        if let Ok(diagram) = super::mermaid::parse(&code) {
-            return FormattedBlock::Diagram(FormattedDiagramBlock {
-                diagram,
-                source_code: code,
-                source_line_start,
-            });
-        }
+    if is_mermaid
+        && fence_closed
+        && fmt.render_diagrams
+        && let Ok(diagram) = super::mermaid::parse(&code)
+    {
+        return FormattedBlock::Diagram(FormattedDiagramBlock {
+            diagram,
+            source_code: code,
+            source_line_start,
+        });
     }
 
     FormattedBlock::CodeBlock(FormattedCodeBlock {

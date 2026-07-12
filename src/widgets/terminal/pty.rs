@@ -3,7 +3,7 @@
 use std::io::{Read, Write};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::thread::JoinHandle;
 
@@ -34,6 +34,45 @@ pub enum TerminalPtyError {
     Spawn(String),
 }
 
+/// Resolve the generic fallback shell for [`TerminalPtyConfig::default`].
+///
+/// Unix: `$SHELL`, falling back to `/bin/sh` when unset/empty. Windows has no `$SHELL`
+/// equivalent and `/bin/sh` does not exist, so the fallback there is `%COMSPEC%` (normally
+/// `cmd.exe`), falling back to a bare `cmd.exe` lookup via `PATH` when even that is unset.
+///
+/// This is a last-resort generic default for library consumers that never configure a command;
+/// app-level shell resolution (respecting user config, `pwsh.exe`/`powershell.exe` preference,
+/// etc.) belongs to the host application, not this widget.
+fn default_shell_command() -> String {
+    #[cfg(windows)]
+    {
+        std::env::var("COMSPEC")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "cmd.exe".to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var("SHELL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "/bin/sh".to_string())
+    }
+}
+
+#[cfg(windows)]
+fn prime_conpty_cursor(writer: &mut dyn Write) -> std::io::Result<()> {
+    // portable-pty 0.9 enables PSEUDOCONSOLE_INHERIT_CURSOR. Satisfy its initial DSR before
+    // CreateProcessW, because another ConPTY request can otherwise wait for the cursor reply.
+    writer.write_all(b"\x1b[1;1R")?;
+    writer.flush()
+}
+
+#[cfg(not(windows))]
+fn prime_conpty_cursor(_writer: &mut dyn Write) -> std::io::Result<()> {
+    Ok(())
+}
+
 /// PTY spawn options.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalPtyConfig {
@@ -48,10 +87,7 @@ pub struct TerminalPtyConfig {
 
 impl Default for TerminalPtyConfig {
     fn default() -> Self {
-        let shell = std::env::var("SHELL")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| "/bin/sh".to_string());
+        let shell = default_shell_command();
 
         Self {
             command: shell.into(),
@@ -116,9 +152,26 @@ impl TerminalPtyConfig {
 }
 
 /// Handle to a running PTY process.
-#[derive(Clone)]
+///
+/// Cloning shares the same underlying child process; see [`Drop`](#impl-Drop-for-TerminalPty) for
+/// why dropping one clone must not affect the others.
 pub struct TerminalPty {
     inner: Arc<TerminalPtyInner>,
+}
+
+impl Clone for TerminalPty {
+    fn clone(&self) -> Self {
+        // Track *logical* handles separately from `Arc::strong_count`: the reader thread and the
+        // exit-wait thread each hold their own internal clone of `inner` for as long as they run,
+        // so `Arc::strong_count` alone can never reach 1 while the PTY is still connected and
+        // would make `Drop` unable to ever kill a live child. `handle_count` counts only
+        // `TerminalPty` values a caller can see (this one, `TerminalPtyHandoff`'s keepalive,
+        // etc.), independent of that internal bookkeeping.
+        self.inner.handle_count.fetch_add(1, Ordering::AcqRel);
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
 }
 
 struct TerminalPtyInner {
@@ -128,6 +181,8 @@ struct TerminalPtyInner {
     reader_thread: Mutex<Option<JoinHandle<()>>>,
     active: AtomicBool,
     kill_on_drop: AtomicBool,
+    /// Number of live `TerminalPty` handles sharing this child (see [`Clone`] above).
+    handle_count: AtomicUsize,
     /// OS process id of the spawned child, captured at spawn time (`None` if unavailable).
     pid: Option<u32>,
 }
@@ -174,14 +229,17 @@ impl TerminalPty {
             .map_err(|err| TerminalPtyError::Reader(err.to_string()))?;
 
         #[cfg(unix)]
-        let writer = Box::new(File::from(
+        let mut writer = Box::new(File::from(
             unix_dup_master_fd(&*pair.master)
                 .map_err(|err| TerminalPtyError::Writer(err.to_string()))?,
         )) as Box<dyn Write + Send>;
         #[cfg(not(unix))]
-        let writer = pair
+        let mut writer = pair
             .master
             .take_writer()
+            .map_err(|err| TerminalPtyError::Writer(err.to_string()))?;
+
+        prime_conpty_cursor(&mut *writer)
             .map_err(|err| TerminalPtyError::Writer(err.to_string()))?;
 
         let mut builder = CommandBuilder::new(config.command.as_ref());
@@ -209,6 +267,7 @@ impl TerminalPty {
             reader_thread: Mutex::new(None),
             active: AtomicBool::new(true),
             kill_on_drop: AtomicBool::new(true),
+            handle_count: AtomicUsize::new(1),
             pid,
         });
 
@@ -317,6 +376,25 @@ impl TerminalPty {
     /// OS process id of the spawned child process, if the platform reports one.
     pub fn pid(&self) -> Option<u32> {
         self.inner.pid
+    }
+
+    #[cfg(unix)]
+    /// Foreground process-group id currently attached to this PTY (`tcgetpgrp(3)`).
+    ///
+    /// This is the building block a Linux/macOS foreground-executable fallback needs (e.g. to
+    /// resolve which process a shell handed the terminal to) without exposing the underlying
+    /// master file descriptor to callers. Returns `None` once the PTY has been killed or handed
+    /// off, or if the ioctl fails (e.g. no foreground group is currently set).
+    pub fn foreground_process_group_id(&self) -> Option<i32> {
+        if !self.inner.active.load(Ordering::Acquire) {
+            return None;
+        }
+        let backend = self.inner.backend.lock().ok()?;
+        let fd = match &*backend {
+            TerminalPtyBackend::Portable(master) => master.as_raw_fd()?,
+        };
+        let pgid = unsafe { libc::tcgetpgrp(fd) };
+        (pgid >= 0).then_some(pgid)
     }
 
     /// Send raw bytes to child stdin.
@@ -442,8 +520,53 @@ pub enum TerminalPtyEvent {
 
 impl Drop for TerminalPty {
     fn drop(&mut self) {
-        // Kill the child process to avoid leaking OS resources.
-        // Ignore errors - the child may have already exited.
-        let _ = self.kill();
+        // Only kill the child when *this* drop removes the last outstanding logical handle
+        // (`handle_count`, not `Arc::strong_count` - see the `Clone` impl above for why).
+        if self.inner.handle_count.fetch_sub(1, Ordering::AcqRel) == 1 {
+            // Ignore errors - the child may have already exited.
+            let _ = self.kill();
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropping_a_clone_does_not_kill_the_shared_pty() {
+        let pty = TerminalPty::spawn(
+            TerminalPtyConfig::new("/bin/sh").arg("-c").arg("sleep 5"),
+            |_event| {},
+        )
+        .expect("spawn");
+
+        let clone = pty.clone();
+        assert_eq!(pty.inner.handle_count.load(Ordering::Acquire), 2);
+        drop(clone);
+        assert_eq!(pty.inner.handle_count.load(Ordering::Acquire), 1);
+
+        // Before the fix, dropping any clone unconditionally killed the child; this must not
+        // happen while another handle (`pty`) is still alive.
+        assert!(
+            pty.write(b"").is_ok(),
+            "pty should still be alive after dropping a clone"
+        );
+
+        drop(pty);
+    }
+
+    #[test]
+    fn foreground_process_group_id_reports_a_value_while_alive() {
+        let pty = TerminalPty::spawn(
+            TerminalPtyConfig::new("/bin/sh").arg("-c").arg("sleep 5"),
+            |_event| {},
+        )
+        .expect("spawn");
+
+        // The freshly spawned shell is its own foreground process group.
+        assert!(pty.foreground_process_group_id().is_some());
+
+        drop(pty);
     }
 }

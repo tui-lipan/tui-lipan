@@ -298,18 +298,18 @@ impl Component for WhackAMole {
                 let now = ctx.state.tick;
                 let mut auto_misses: u32 = 0;
                 for i in 0..MOLE_GRID {
-                    if let Some(mole) = ctx.state.holes[i] {
-                        if now.saturating_sub(mole.spawned_at) >= mole.lifetime as u64 {
-                            ctx.state.holes[i] = None;
-                            if mole.kind != MoleKind::Bomb {
-                                auto_misses += 1;
-                            }
+                    if let Some(mole) = ctx.state.holes[i]
+                        && now.saturating_sub(mole.spawned_at) >= mole.lifetime as u64
+                    {
+                        ctx.state.holes[i] = None;
+                        if mole.kind != MoleKind::Bomb {
+                            auto_misses += 1;
                         }
                     }
-                    if let Some((_, t)) = ctx.state.flash[i] {
-                        if now.saturating_sub(t) > 4 {
-                            ctx.state.flash[i] = None;
-                        }
+                    if let Some((_, t)) = ctx.state.flash[i]
+                        && now.saturating_sub(t) > 4
+                    {
+                        ctx.state.flash[i] = None;
                     }
                 }
                 if auto_misses > 0 {
@@ -325,7 +325,7 @@ impl Component for WhackAMole {
                     }
                 }
 
-                if ctx.state.tick % MOLE_SPARK_BUCKET_TICKS == 0 {
+                if ctx.state.tick.is_multiple_of(MOLE_SPARK_BUCKET_TICKS) {
                     let v = ctx.state.bucket_hits;
                     ctx.state.bucket_hits = 0;
                     if ctx.state.history.len() >= MOLE_SPARK_BUCKETS {

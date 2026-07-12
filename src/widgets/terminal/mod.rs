@@ -5,6 +5,7 @@ mod events;
 mod layout;
 mod mod_private;
 mod node;
+mod osc;
 mod pty;
 mod reconcile;
 mod screen;
@@ -17,6 +18,10 @@ pub use events::{
     terminal_selection_text,
 };
 pub use mod_private::Terminal;
+pub use osc::{
+    TerminalCommandPhase, TerminalSemanticEvent, TerminalSemanticState, TerminalWorkingDirectory,
+    TerminalWorkingDirectorySource,
+};
 #[cfg(unix)]
 pub use pty::TerminalPtyHandoff;
 pub use pty::{TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent};

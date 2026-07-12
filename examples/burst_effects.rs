@@ -203,12 +203,12 @@ impl CellEffect for OpenCodeLogoEffect {
                 ink_only.peak += charge.full.peak + charge.pick.peak;
                 ink_only.primary += charge.full.primary + charge.pick.primary;
             }
-            if let Some(held) = self.held.as_ref() {
-                if let Some(&(idx, len)) = held.trace.get(&(mask_x as u16, mask_y as u16)) {
-                    let trace = opencode_trace_pulse(idx, len, held.age_ms, held.rise);
-                    ink_only.peak += trace.peak;
-                    ink_only.primary += trace.primary;
-                }
+            if let Some(held) = self.held.as_ref()
+                && let Some(&(idx, len)) = held.trace.get(&(mask_x as u16, mask_y as u16))
+            {
+                let trace = opencode_trace_pulse(idx, len, held.age_ms, held.rise);
+                ink_only.peak += trace.peak;
+                ink_only.primary += trace.primary;
             }
         } else if let Some(charge) = charge.as_ref() {
             // Upstream's field has sparse crackle around the charge point, not just

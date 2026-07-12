@@ -244,6 +244,13 @@ pty.resize(cols, rows)?;
 
 `TerminalPty::pid()` returns the OS process id reported by the platform at spawn time, or `None` when unavailable.
 
+`TerminalPty::foreground_process_group_id()` (Unix-only) returns the PTY's foreground process-group
+id (`tcgetpgrp(3)`) without exposing the underlying master file descriptor - a building block for a
+native foreground-process fallback when no shell integration/OSC 133 metadata is available.
+
+Cloning a `TerminalPty` shares the same child process; dropping one clone only kills the child once
+every clone has been dropped, not on the first one.
+
 ### Unix PTY handoff
 
 On Unix, advanced terminal-host apps that move a live PTY between processes can call `TerminalPty::handoff()` before transferring the master fd over their own IPC channel:
@@ -328,6 +335,53 @@ cursor; the widget honors that preference (blinking is driven by the framework b
 steady cursor stays lit). A child that never issues `DECSCUSR` falls back to a blinking block. These
 fields flow through `TerminalRenderSnapshot` and can be overridden directly with
 `Terminal::cursor_shape()` / `Terminal::cursor_blinking()`.
+
+### Semantic state (working directory & command lifecycle)
+
+`TerminalScreen` runs a second, independent OSC observer beside the grid parser, fed the same raw
+bytes `process_bytes()` receives. It never touches cell/cursor state and is not part of
+`TerminalRenderSnapshot` - it is runtime metadata a host app polls separately:
+
+```rust
+screen.process_bytes(&bytes);
+
+// Current accumulated state (cwd, command phase, foreground executable).
+let state = screen.semantic_state();
+
+// Or react only to what changed since the last drain.
+for event in screen.drain_semantic_events() {
+    match event {
+        TerminalSemanticEvent::WorkingDirectoryChanged(cwd) => { /* cwd.path, cwd.host */ }
+        TerminalSemanticEvent::CommandPhaseChanged(phase) => { /* ... */ }
+        TerminalSemanticEvent::ExecutableChanged(exe) => { /* ... */ }
+    }
+}
+
+// Reapply previously captured state (e.g. after recreating a screen for session
+// resurrection) without replaying the escape sequences that originally produced it.
+screen.restore_semantic_state(state);
+```
+
+Recognized sequences:
+
+- **`OSC 7 ; file://host/path`** (percent-encoded) reports the child's working directory.
+  `TerminalWorkingDirectory::path` holds the percent-decoded path as raw bytes rather than a lossy
+  UTF-8 string, since arbitrary filenames are valid `OsStr` data but not necessarily valid UTF-8;
+  use `path_str()` for the common UTF-8 case. `host` is `Some(..)` when the child reported a
+  non-empty host component (e.g. over SSH) - a caller must not treat that path as locally
+  spawnable without first checking the host.
+- **`OSC 9 ; 9 ; path`** reports a Windows-style working directory (ConEmu/Windows Terminal
+  convention); the path is taken as-is (no percent-decoding, no host).
+- **`OSC 133 ; A/B/C/D`** reports command lifecycle boundaries: `A` = prompt start, `B` = prompt
+  end / input start, `C` = execution start, `D[;exit_code]` = command finished, surfaced as
+  `TerminalCommandPhase::{Prompt, Input, Executing, Completed { exit_status }}`.
+- Two `OSC 133` key/value extensions report foreground-executable identity - never a full command
+  line - as a normalized basename: hyprmux's own `hyprmux_exe=<percent-encoded name>`, and Fish/
+  Kitty's `cmdline_url=<percent-encoded command line>` (only the first token's basename is kept).
+
+`TerminalScreen::reset()` clears in-flight parser state but preserves accumulated semantic state -
+a child hard reset (RIS) does not imply its last-known working directory or command lifecycle
+became invalid.
 
 ### Exporting replay bytes
 

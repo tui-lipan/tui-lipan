@@ -662,18 +662,16 @@ fn back_edge_route(
     let exit_offset = slots.exit.max(0);
     for target_distance in back_edge_distance_candidates(slots.approach) {
         let south_path = south_face_back_edge(from, to, lane_x, target_distance, exit_offset);
-        if path_clear(&south_path.2, obstacles) {
-            if let Some(path) = update_back_edge_best(&mut best_path, south_path, occupancy, source)
-            {
-                return path;
-            }
+        if path_clear(&south_path.2, obstacles)
+            && let Some(path) = update_back_edge_best(&mut best_path, south_path, occupancy, source)
+        {
+            return path;
         }
         let east_path = east_face_back_edge(from, to, lane_x, target_distance, exit_offset);
-        if path_clear(&east_path.2, obstacles) {
-            if let Some(path) = update_back_edge_best(&mut best_path, east_path, occupancy, source)
-            {
-                return path;
-            }
+        if path_clear(&east_path.2, obstacles)
+            && let Some(path) = update_back_edge_best(&mut best_path, east_path, occupancy, source)
+        {
+            return path;
         }
     }
     best_path
