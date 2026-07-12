@@ -13,6 +13,8 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `TerminalScreen::bell_count()` exposes a monotonic count of BEL events parsed
+  from child output, allowing hosts to trigger visual or audible notifications.
 - `SearchPalette::match_mode(SearchMatchMode)` adds a `Hybrid` matching
   strategy alongside the existing (and still default) `Fuzzy` mode.
   `Hybrid` evaluates exact, prefix, word-prefix, substring, and fuzzy
