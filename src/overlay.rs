@@ -291,6 +291,18 @@ impl OverlayManager {
         false
     }
 
+    pub(crate) fn dismiss_immediately(&mut self, id: OverlayId) -> bool {
+        let Some(index) = self.entries.iter().position(|entry| entry.id == id) else {
+            return false;
+        };
+        let mut entry = self.entries.remove(index);
+        if let Some(callback) = entry.on_dismiss.take() {
+            callback.emit(());
+        }
+        self.bump_generation();
+        true
+    }
+
     pub(crate) fn tick(&mut self) -> TickResult {
         let now = Instant::now();
         let delta = now.saturating_duration_since(self.last_tick);
@@ -467,6 +479,14 @@ impl ToastHandle {
         let _ = self.manager.borrow_mut().dismiss(id);
     }
 
+    /// Dismiss a specific toast synchronously, without its exit transition.
+    ///
+    /// Use this when replacing an existing toast in place would otherwise leave the fading toast
+    /// visible beside its replacement.
+    pub fn dismiss_immediately(&self, id: OverlayId) {
+        let _ = self.manager.borrow_mut().dismiss_immediately(id);
+    }
+
     /// Clear all active toasts.
     pub fn clear(&self) {
         self.manager.borrow_mut().dismiss_toasts();
@@ -500,5 +520,17 @@ mod tests {
         assert!(tick.dirty);
         assert!(!manager.entries[0].copy_feedback_active());
         assert!(manager.entries[0].copy_feedback_until.is_none());
+    }
+
+    #[test]
+    fn immediate_dismiss_removes_toast_without_an_exit_transition() {
+        let mut manager = OverlayManager::new();
+        let first = manager.push_toast(Toast::new("first"));
+        let second = manager.push_toast(Toast::new("second"));
+
+        assert!(manager.dismiss_immediately(first));
+        assert_eq!(manager.entries.len(), 1);
+        assert_eq!(manager.entries[0].id, second);
+        assert!(!manager.entries[0].pending_dismiss);
     }
 }

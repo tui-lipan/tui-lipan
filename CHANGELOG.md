@@ -13,6 +13,9 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `ToastHandle::dismiss_immediately(id)` removes a toast synchronously without an exit transition,
+  allowing state notifications to be replaced without briefly stacking the fading old toast beside
+  its replacement. See `docs/widgets/overlays.md`.
 - `TerminalScreen::semantic_state()`, `drain_semantic_events()`, and
   `restore_semantic_state()` expose working-directory and command-lifecycle
   metadata parsed from `OSC 7` (`file://host/path`), `OSC 9;9` (Windows-style
