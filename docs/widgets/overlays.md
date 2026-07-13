@@ -506,6 +506,12 @@ SearchPalette::new()
 
 ### Matching config
 
+`SearchMatchMode::Hybrid` allows separate whitespace-delimited query terms to
+match different item fields. For example, `openai 5.6` can match `OpenAI` in an
+item description and `5.6` in its label. Every term must match, and characters
+within a single term are never combined across fields. Separators within one
+field may be omitted, so `switchmodel` matches `Switch model`.
+
 | Prop | Type | Description |
 |------|------|-------------|
 | `match_mode` | `SearchMatchMode` | Matching strategy: `Fuzzy` or `Hybrid` (default: `Fuzzy`) |
