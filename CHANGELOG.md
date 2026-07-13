@@ -183,6 +183,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Toast exit transitions now fade from the toast's current opacity and use per-toast timing, so
+  settled, clicked, and timed-out toasts no longer disappear in a single frame.
 - `TerminalPty` now satisfies portable-pty 0.9's initial Windows ConPTY cursor-position handshake
   before child creation, preventing `PSEUDOCONSOLE_INHERIT_CURSOR` from stalling later requests.
 - `TerminalPty::clone()` no longer kills the shared child process when just one

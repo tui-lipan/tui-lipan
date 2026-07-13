@@ -154,6 +154,7 @@ pub(crate) struct OverlayEntry {
     pub(crate) backdrop: Option<Style>,
     pub(crate) captures_pointer: PointerCapture,
     pub(crate) opacity_transition: Option<Transition<f32>>,
+    transition_tick_at: Option<Instant>,
     pub(crate) pending_dismiss: bool,
     pub(crate) copy_text: Option<Arc<str>>,
     pub(crate) copy_zone_right_padding: Option<u16>,
@@ -189,7 +190,6 @@ pub(crate) struct OverlayManager {
     toast_placement: ToastPlacement,
     toast_gap: u16,
     toast_margin: Padding,
-    last_tick: Instant,
 }
 
 impl OverlayManager {
@@ -202,7 +202,6 @@ impl OverlayManager {
             toast_placement: ToastPlacement::BottomEnd,
             toast_gap: 1,
             toast_margin: Padding::BORDER,
-            last_tick: Instant::now(),
         }
     }
 
@@ -221,12 +220,14 @@ impl OverlayManager {
         transition
     }
 
-    fn begin_dismiss(entry: &mut OverlayEntry) -> bool {
+    fn begin_dismiss(entry: &mut OverlayEntry, now: Instant) -> bool {
         if entry.pending_dismiss {
             return false;
         }
+        let opacity = entry.opacity();
         entry.pending_dismiss = true;
-        entry.opacity_transition = Some(Self::exit_transition(entry.opacity()));
+        entry.opacity_transition = Some(Self::exit_transition(opacity));
+        entry.transition_tick_at = Some(now);
         true
     }
 
@@ -275,6 +276,7 @@ impl OverlayManager {
         entry.created_at = Instant::now();
         entry.pending_dismiss = false;
         entry.opacity_transition = Some(Self::enter_transition());
+        entry.transition_tick_at = Some(entry.created_at);
         self.entries.push(entry);
         self.bump_generation();
         id
@@ -282,7 +284,7 @@ impl OverlayManager {
 
     pub(crate) fn dismiss(&mut self, id: OverlayId) -> bool {
         if let Some(entry) = self.entries.iter_mut().find(|entry| entry.id == id) {
-            let changed = Self::begin_dismiss(entry);
+            let changed = Self::begin_dismiss(entry, Instant::now());
             if changed {
                 self.bump_generation();
             }
@@ -305,8 +307,6 @@ impl OverlayManager {
 
     pub(crate) fn tick(&mut self) -> TickResult {
         let now = Instant::now();
-        let delta = now.saturating_duration_since(self.last_tick);
-        self.last_tick = now;
 
         let mut result = TickResult::default();
 
@@ -317,7 +317,7 @@ impl OverlayManager {
                     .map(|timeout| now.duration_since(entry.created_at) >= timeout)
                     .unwrap_or(false);
                 if expired {
-                    result.dirty |= Self::begin_dismiss(entry);
+                    result.dirty |= Self::begin_dismiss(entry, now);
                 }
             }
 
@@ -331,6 +331,10 @@ impl OverlayManager {
             }
 
             if let Some(transition) = entry.opacity_transition.as_mut() {
+                let delta = entry
+                    .transition_tick_at
+                    .replace(now)
+                    .map_or(Duration::ZERO, |last| now.saturating_duration_since(last));
                 let before = transition.current();
                 let complete = transition.tick(delta);
                 let after = transition.current();
@@ -347,6 +351,7 @@ impl OverlayManager {
                         return false;
                     }
                     entry.opacity_transition = None;
+                    entry.transition_tick_at = None;
                 } else {
                     result.has_active_transitions = true;
                 }
@@ -398,9 +403,10 @@ impl OverlayManager {
 
     pub(crate) fn dismiss_toasts(&mut self) {
         let mut changed = false;
+        let now = Instant::now();
         for entry in &mut self.entries {
             if entry.layer == OverlayLayer::Toast {
-                changed |= Self::begin_dismiss(entry);
+                changed |= Self::begin_dismiss(entry, now);
             }
         }
         if changed {
@@ -449,6 +455,7 @@ impl OverlayManager {
             backdrop: None,
             captures_pointer: PointerCapture::None,
             opacity_transition: None,
+            transition_tick_at: None,
             pending_dismiss: false,
             copy_text,
             copy_zone_right_padding,
@@ -532,5 +539,50 @@ mod tests {
         assert_eq!(manager.entries.len(), 1);
         assert_eq!(manager.entries[0].id, second);
         assert!(!manager.entries[0].pending_dismiss);
+    }
+
+    #[test]
+    fn normal_dismiss_fades_from_the_current_opacity_before_removal() {
+        let mut manager = OverlayManager::new();
+        let id = manager.push_toast(Toast::new("message"));
+        settle_entry_transition(&mut manager.entries[0]);
+
+        assert!(manager.dismiss(id));
+        let entry = &manager.entries[0];
+        assert!(entry.pending_dismiss);
+        assert_eq!(entry.opacity(), 1.0);
+
+        age_entry_transition(&mut manager.entries[0], Duration::from_millis(50));
+        manager.tick();
+        assert_eq!(manager.entries.len(), 1);
+        assert!(manager.entries[0].opacity() > 0.0);
+        assert!(manager.entries[0].opacity() < 1.0);
+
+        age_entry_transition(&mut manager.entries[0], Duration::from_millis(100));
+        manager.tick();
+        assert!(manager.entries.is_empty());
+    }
+
+    #[test]
+    fn timeout_starts_exit_transition_without_consuming_it_in_the_same_tick() {
+        let mut manager = OverlayManager::new();
+        manager.push_toast(Toast::new("message").duration(0.0));
+        settle_entry_transition(&mut manager.entries[0]);
+
+        manager.tick();
+
+        assert_eq!(manager.entries.len(), 1);
+        assert!(manager.entries[0].pending_dismiss);
+        assert_eq!(manager.entries[0].opacity(), 1.0);
+    }
+
+    fn settle_entry_transition(entry: &mut OverlayEntry) {
+        entry.opacity_transition = None;
+        entry.transition_tick_at = None;
+    }
+
+    fn age_entry_transition(entry: &mut OverlayEntry, age: Duration) {
+        let now = Instant::now();
+        entry.transition_tick_at = Some(now.checked_sub(age).unwrap_or(now));
     }
 }
