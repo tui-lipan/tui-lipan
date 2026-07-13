@@ -403,13 +403,15 @@ pub enum SearchMatchMode {
     /// by match quality in that priority order, so a real substring or
     /// prefix match always outranks a fuzzy one, and weak scattered fuzzy
     /// matches are rejected instead of polluting results.
+    /// Contiguous queries may omit separators within a field, so
+    /// `switchmodel` matches `Switch model`.
     ///
-    /// Fields are matched independently - characters never combine across
-    /// the label, an alias, the description, and the right-hand hint to form
-    /// a single match. Labels and aliases carry the highest weight,
-    /// descriptions a lower weight, and the right-hand hint only matches via
-    /// exact or substring comparison (no fuzzy/prefix matching), which suits
-    /// keybinding-style hints.
+    /// Each whitespace-separated query term may match a different field, but
+    /// characters within one term never combine across the label, an alias,
+    /// the description, and the right-hand hint. Labels and aliases carry the
+    /// highest weight, descriptions a lower weight, and the right-hand hint
+    /// only matches via exact or substring comparison (no fuzzy/prefix
+    /// matching), which suits keybinding-style hints.
     Hybrid,
 }
 

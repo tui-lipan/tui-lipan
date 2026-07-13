@@ -41,10 +41,12 @@ While the crate is on `0.x.y`:
   rejecting weak scattered matches (e.g. `layo` against "Enable pane
   synchronization") while keeping useful abbreviations (e.g. `prd` against
   "production"). Fields (label/aliases, description, and the right-hand
-  hint) are matched independently - characters never combine across fields
-  to form a single match - with labels/aliases weighted highest, description
-  lower, and the right-hand hint restricted to exact/substring matching. See
-  `docs/widgets/overlays.md` and `docs/enums.md`.
+  hint) allow separate whitespace-delimited terms to match different fields,
+  while characters within one term never combine across fields. All terms
+  must match. Contiguous queries may omit separators within one field, so
+  `switchmodel` matches `Switch model`. Labels/aliases are weighted highest,
+  descriptions lower, and the right-hand hint is restricted to
+  exact/substring matching. See `docs/widgets/overlays.md` and `docs/enums.md`.
 - `rank_search_palette_indices_with_mode(items, query, match_mode, score_fn)`
   ranks items with the standalone helper under an explicit `SearchMatchMode`
   (e.g. `Hybrid`), for callers that own the query/selection but want the same

@@ -259,6 +259,13 @@ mod hybrid {
         hits: Vec<u32>,
     }
 
+    struct DistributedMatch {
+        score: f64,
+        label_hits: Vec<u32>,
+        description_hits: Vec<u32>,
+        description_right_hits: Vec<u32>,
+    }
+
     /// Tier contribution dwarfs weight, which in turn dwarfs quality, so
     /// match-type priority always wins, field weight is the tie-breaker
     /// across tiers-equal fields, and quality only fine-tunes within that.
@@ -337,6 +344,35 @@ mod hybrid {
             return None;
         }
         (0..=hay.len() - query.len()).find(|&i| hay[i..i + query.len()] == query[..])
+    }
+
+    /// Finds a contiguous query after removing non-alphanumeric separators
+    /// from the field, while retaining original indices for highlighting.
+    fn find_separator_insensitive(
+        hay: &[char],
+        query: &[char],
+    ) -> Option<(usize, usize, Vec<u32>)> {
+        if query.is_empty() || query.iter().any(|c| !c.is_alphanumeric()) {
+            return None;
+        }
+
+        let compact: Vec<(usize, char)> = hay
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, c)| c.is_alphanumeric())
+            .collect();
+        if compact.len() == hay.len() {
+            return None;
+        }
+
+        let compact_chars: Vec<char> = compact.iter().map(|(_, c)| *c).collect();
+        let start = find_contiguous(&compact_chars, query)?;
+        let hits = compact[start..start + query.len()]
+            .iter()
+            .map(|(original_index, _)| *original_index as u32)
+            .collect();
+        Some((start, compact.len(), hits))
     }
 
     /// Fraction of `hits` that fall within the single word most of them land
@@ -503,6 +539,24 @@ mod hybrid {
             });
         }
 
+        if let Some((start, compact_len, hits)) =
+            find_separator_insensitive(&hay_folded, &query_folded)
+        {
+            let tier = if query_folded.len() == compact_len {
+                MatchTier::Exact
+            } else if start == 0 {
+                MatchTier::Prefix
+            } else {
+                MatchTier::Substring
+            };
+            let quality = query_folded.len() as f64 / compact_len as f64;
+            return Some(FieldMatch {
+                tier,
+                quality,
+                hits,
+            });
+        }
+
         if role.allow_word_prefix_and_fuzzy()
             && let Some((score, hits)) = fuzzy_field_hits(haystack, query, case_matching, matcher)
         {
@@ -547,6 +601,83 @@ mod hybrid {
             }
         }
         best
+    }
+
+    fn match_terms_across_fields(
+        item: &SearchEntry,
+        query: &str,
+        case_matching: CaseMatching,
+        matcher: &mut FuzzyMatcher,
+    ) -> Option<DistributedMatch> {
+        let mut terms = query.split_whitespace();
+        let first = terms.next()?;
+        let second = terms.next()?;
+        let mut score = 0.0;
+        let mut label_hits = Vec::new();
+        let mut description_hits = Vec::new();
+        let mut hint_hits = Vec::new();
+
+        for term in std::iter::once(first)
+            .chain(std::iter::once(second))
+            .chain(terms)
+        {
+            let label_match = classify_field(
+                item.label.as_ref(),
+                term,
+                case_matching,
+                FieldRole::Primary,
+                matcher,
+            );
+            let best_primary = best_primary_total(item, term, case_matching, matcher, &label_match);
+            let description_match = item.description.as_deref().and_then(|description| {
+                classify_field(
+                    description,
+                    term,
+                    case_matching,
+                    FieldRole::Description,
+                    matcher,
+                )
+            });
+            let description_total = description_match
+                .as_ref()
+                .map(|m| field_total(m.tier, m.quality, FieldRole::Description));
+            let hint_match = item.description_right.as_deref().and_then(|hint| {
+                classify_field(hint, term, case_matching, FieldRole::Hint, matcher)
+            });
+            let hint_total = hint_match
+                .as_ref()
+                .map(|m| field_total(m.tier, m.quality, FieldRole::Hint));
+
+            let term_score = [best_primary, description_total, hint_total]
+                .into_iter()
+                .flatten()
+                .reduce(f64::max)?;
+            score += term_score;
+
+            if let Some(field_match) = label_match {
+                label_hits.extend(field_match.hits);
+            }
+            if let Some(field_match) = description_match {
+                description_hits.extend(field_match.hits);
+            }
+            if let Some(field_match) = hint_match {
+                hint_hits.extend(field_match.hits);
+            }
+        }
+
+        label_hits.sort_unstable();
+        label_hits.dedup();
+        description_hits.sort_unstable();
+        description_hits.dedup();
+        hint_hits.sort_unstable();
+        hint_hits.dedup();
+
+        Some(DistributedMatch {
+            score,
+            label_hits,
+            description_hits,
+            description_right_hits: hint_hits,
+        })
     }
 
     pub(super) fn match_items_hybrid(
@@ -611,6 +742,16 @@ mod hybrid {
                     label_hits,
                     description_hits: desc_hits,
                     description_right_hits: hint_hits,
+                });
+            } else if let Some(distributed_match) =
+                match_terms_across_fields(item, query, case_matching, &mut matcher)
+            {
+                results.push(SearchResult {
+                    item_index: index,
+                    score: distributed_match.score.round().clamp(0.0, u32::MAX as f64) as u32,
+                    label_hits: distributed_match.label_hits,
+                    description_hits: distributed_match.description_hits,
+                    description_right_hits: distributed_match.description_right_hits,
                 });
             }
         }
@@ -709,6 +850,17 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_matches_contiguous_query_across_label_separators() {
+        for query in ["switchmod", "switchmodel"] {
+            let results = hybrid_match(&["Switch model"], query);
+
+            assert_eq!(results.len(), 1, "{query} should match: {results:?}");
+            assert_eq!(results[0].item_index, 0);
+            assert_eq!(results[0].label_hits.len(), query.len());
+        }
+    }
+
+    #[test]
     fn hybrid_matches_cannot_span_multiple_fields() {
         let items = vec![
             SearchItem::new("fooa", 0).description("bc"),
@@ -731,6 +883,29 @@ mod tests {
             results.is_empty(),
             "fields must not combine into a single match: {results:?}"
         );
+    }
+
+    #[test]
+    fn hybrid_matches_separate_terms_across_label_and_description() {
+        let items = vec![
+            SearchItem::new("GPT-5.6 Sol", 0).description("OpenAI"),
+            SearchItem::new("GPT-4.1", 1).description("OpenAI"),
+            SearchItem::new("Claude 4.6", 2).description("Anthropic"),
+        ];
+        let entries = super::build_search_entries(&items);
+
+        let results = match_items(
+            &entries,
+            "openai 5.6",
+            SearchMatchMode::Hybrid,
+            CaseMatching::Smart,
+            Normalization::Smart,
+        );
+
+        assert_eq!(results.len(), 1, "all terms must match: {results:?}");
+        assert_eq!(results[0].item_index, 0);
+        assert!(!results[0].label_hits.is_empty());
+        assert!(!results[0].description_hits.is_empty());
     }
 
     #[test]
