@@ -142,7 +142,12 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 |--------|-------------|
 | `.push(Toast)` | Show toast, returns `OverlayId` |
 | `.dismiss(id)` | Dismiss a specific toast |
+| `.dismiss_immediately(id)` | Remove a toast synchronously without its exit transition |
 | `.clear()` | Clear all toasts |
+
+Use `.dismiss_immediately(id)` before pushing a replacement when the old and new toast must never
+occupy the stack at the same time. Ordinary dismissal should use `.dismiss(id)` so the toast keeps
+its exit transition.
 
 **ToastPlacement:** `TopStart`, `TopCenter`, `TopEnd`, `BottomStart`, `BottomCenter`, `BottomEnd` (default).
 

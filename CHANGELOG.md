@@ -13,6 +13,9 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `ToastHandle::dismiss_immediately(id)` removes a toast synchronously without an exit transition,
+  allowing state notifications to be replaced without briefly stacking the fading old toast beside
+  its replacement. See `docs/widgets/overlays.md`.
 - `TerminalScreen::semantic_state()`, `drain_semantic_events()`, and
   `restore_semantic_state()` expose working-directory and command-lifecycle
   metadata parsed from `OSC 7` (`file://host/path`), `OSC 9;9` (Windows-style
@@ -180,6 +183,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Toast exit transitions now fade from the toast's current opacity and use per-toast timing, so
+  settled, clicked, and timed-out toasts no longer disappear in a single frame.
 - `TerminalPty` now satisfies portable-pty 0.9's initial Windows ConPTY cursor-position handshake
   before child creation, preventing `PSEUDOCONSOLE_INHERIT_CURSOR` from stalling later requests.
 - `TerminalPty::clone()` no longer kills the shared child process when just one
