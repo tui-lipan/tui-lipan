@@ -9,7 +9,7 @@
 //! terminal.
 
 use super::color::Color;
-use super::text::Span;
+use super::text::{RowStylePolicy, Span};
 use super::theme::Style;
 
 /// Parse an ANSI-escaped string into a list of styled spans.
@@ -518,7 +518,7 @@ fn flush_span(text_buf: &mut String, style: Style, out: &mut Vec<Span>) {
     out.push(Span {
         content,
         style,
-        allow_row_style: true,
+        row_style_policy: RowStylePolicy::Full,
     });
 }
 

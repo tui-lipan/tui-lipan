@@ -777,7 +777,7 @@ fn merge_spans(spans: &mut Vec<Span>) {
     let mut drain = spans.drain(..);
     let mut current = drain.next().unwrap();
     for next in drain {
-        if current.style == next.style {
+        if current.style == next.style && current.row_style_policy == next.row_style_policy {
             // Coalesce: concatenate content.
             let mut combined = String::with_capacity(current.content.len() + next.content.len());
             combined.push_str(&current.content);
@@ -785,7 +785,7 @@ fn merge_spans(spans: &mut Vec<Span>) {
             current = Span {
                 content: Arc::from(combined),
                 style: current.style,
-                allow_row_style: current.allow_row_style,
+                row_style_policy: current.row_style_policy,
             };
         } else {
             merged.push(current);

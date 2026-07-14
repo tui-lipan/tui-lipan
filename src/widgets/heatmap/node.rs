@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::core::node::WidgetNode;
-use crate::style::{BorderStyle, Color, Padding, Span, Style};
+use crate::style::{BorderStyle, Color, Padding, RowStylePolicy, Span, Style};
 use crate::utils::gradient::ColorGradient;
 use unicode_width::UnicodeWidthStr;
 
@@ -275,7 +275,7 @@ fn render_cell_span(heatmap: &Heatmap, value: f64, color: Color, cell_width: u16
                 bg: Some(color.into()),
                 ..Style::default()
             },
-            allow_row_style: true,
+            row_style_policy: RowStylePolicy::Full,
         },
         HeatmapCellMode::Glyph(glyph) => Span {
             content: Arc::from(center_glyph(glyph.as_ref(), cell_width)),
@@ -283,7 +283,7 @@ fn render_cell_span(heatmap: &Heatmap, value: f64, color: Color, cell_width: u16
                 bg: Some(color.into()),
                 ..Style::default()
             },
-            allow_row_style: true,
+            row_style_policy: RowStylePolicy::Full,
         },
         HeatmapCellMode::GlyphForeground(glyph) => Span {
             content: Arc::from(center_glyph(glyph.as_ref(), cell_width)),
@@ -291,7 +291,7 @@ fn render_cell_span(heatmap: &Heatmap, value: f64, color: Color, cell_width: u16
                 fg: Some(color.into()),
                 ..Style::default()
             },
-            allow_row_style: true,
+            row_style_policy: RowStylePolicy::Full,
         },
     }
 }

@@ -13,6 +13,13 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `RowStylePolicy` controls how row-level selection/hover/active styling interacts with a rich-text
+  span: `Full` (row styling overrides the span, the default), `PreserveForeground` (row background
+  and modifiers apply but the span keeps its explicit foreground — useful for search matches that
+  must stay distinguishable inside a selected row), and `Disabled` (row styling never touches the
+  span). The new `Span::row_style_policy` field and setter replace the `allow_row_style` bool
+  field and setter: `allow_row_style(true)` becomes `RowStylePolicy::Full` and
+  `allow_row_style(false)` becomes `RowStylePolicy::Disabled`. (breaking)
 - `ToastHandle::dismiss_immediately(id)` removes a toast synchronously without an exit transition,
   allowing state notifications to be replaced without briefly stacking the fading old toast beside
   its replacement. See `docs/widgets/overlays.md`.
@@ -186,6 +193,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `SearchPalette` query matches with an explicit foreground now remain visually distinct inside
+  selected and hovered rows instead of being flattened to the row foreground.
 - `SearchPalette` hybrid matching now averages per-term scores for multi-word queries instead of
   summing them, so an exact phrase match can no longer be outranked by several weaker distributed
   term matches solely because the query contains spaces.

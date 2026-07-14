@@ -24,8 +24,8 @@ use crate::core::node::NodeId;
 use crate::style::resolve::{Durability, StateLayer, resolve_state_cascade};
 use crate::style::theme::merge_channel;
 use crate::style::{
-    BorderStyle, Padding, Rect, ScrollbarVariant, Style, ThemeRole, resolve_selection_slot,
-    resolve_slot,
+    BorderStyle, Padding, Rect, RowStylePolicy, ScrollbarVariant, Style, ThemeRole,
+    resolve_selection_slot, resolve_slot,
 };
 use crate::widgets::list::{
     ListItemGutterKind, ListItemStatusKind, ListSymbolWidthCtx,
@@ -945,13 +945,19 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
             let mut content_spans = Vec::with_capacity(line_spans_src.len());
             let mut left_content_width = 0usize;
             for s in line_spans_src {
-                let (span_base_style, span_override_style) = if s.allow_row_style {
-                    (left_base_style, left_style_override)
-                } else {
-                    (left_protected_content_base_style, Style::default())
-                };
-                let span_style =
-                    list_rich_text_span_style(span_base_style, s.style).patch(span_override_style);
+                let (span_base_style, span_override_style) =
+                    if s.row_style_policy == RowStylePolicy::Disabled {
+                        (left_protected_content_base_style, Style::default())
+                    } else {
+                        (left_base_style, left_style_override)
+                    };
+                let content_style = list_rich_text_span_style(span_base_style, s.style);
+                let mut span_style = content_style.patch(span_override_style);
+                if s.row_style_policy == RowStylePolicy::PreserveForeground {
+                    span_style.fg = content_style.fg;
+                    span_style.fg_transform = content_style.fg_transform;
+                    span_style.contrast_policy = content_style.contrast_policy;
+                }
                 let span_style =
                     finalize_style(span_style, style_backdrop(span_base_style), contrast_policy);
                 left_content_width += UnicodeWidthStr::width(s.content.as_ref());
@@ -965,13 +971,19 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
             let mut right_spans = Vec::with_capacity(line_right_spans_src.len());
             let mut right_width = 0usize;
             for s in line_right_spans_src {
-                let (span_base_style, span_override_style) = if s.allow_row_style {
-                    (right_base_style, right_style_override)
-                } else {
-                    (right_protected_content_base_style, Style::default())
-                };
-                let span_style =
-                    list_rich_text_span_style(span_base_style, s.style).patch(span_override_style);
+                let (span_base_style, span_override_style) =
+                    if s.row_style_policy == RowStylePolicy::Disabled {
+                        (right_protected_content_base_style, Style::default())
+                    } else {
+                        (right_base_style, right_style_override)
+                    };
+                let content_style = list_rich_text_span_style(span_base_style, s.style);
+                let mut span_style = content_style.patch(span_override_style);
+                if s.row_style_policy == RowStylePolicy::PreserveForeground {
+                    span_style.fg = content_style.fg;
+                    span_style.fg_transform = content_style.fg_transform;
+                    span_style.contrast_policy = content_style.contrast_policy;
+                }
                 let span_style =
                     finalize_style(span_style, style_backdrop(span_base_style), contrast_policy);
                 right_width += UnicodeWidthStr::width(s.content.as_ref());
@@ -1356,7 +1368,8 @@ mod tests {
     use super::{ListRenderParams, effective_selection_symbol_style, render_list};
     use crate::app::ContrastPolicy;
     use crate::style::{
-        BorderStyle, Color, ColorTransform, Padding, Rect, ScrollbarVariant, Span, Style,
+        BorderStyle, Color, ColorTransform, Padding, Rect, RowStylePolicy, ScrollbarVariant, Span,
+        Style,
     };
     use crate::widgets::{ListItem, ListItemGutter, ListItemLine, ListSymbolPosition, Spinner};
 
@@ -2925,7 +2938,7 @@ mod tests {
     }
 
     #[test]
-    fn active_transform_only_style_applies_once_to_allow_row_style_content() {
+    fn active_transform_only_style_applies_once_to_row_styled_content() {
         let buffer = draw_list_state_case(DrawListStateCaseInput {
             item: ListItem::new("Label")
                 .style(Style::new().bg(Color::Rgb(100, 100, 100)))
@@ -3074,7 +3087,7 @@ mod tests {
             Span::new("Label "),
             Span::new("Desc")
                 .fg(crate::style::Color::Red)
-                .allow_row_style(false),
+                .row_style_policy(RowStylePolicy::Disabled),
         ]);
 
         let rect = Rect {

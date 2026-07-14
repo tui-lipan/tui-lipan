@@ -1121,7 +1121,7 @@ fn apply_style_ranges(
                     plain_fg,
                     palette,
                 ))
-                .allow_row_style(span.allow_row_style);
+                .row_style_policy(span.row_style_policy);
             rebuilt.push(next);
         }
     }

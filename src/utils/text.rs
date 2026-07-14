@@ -770,6 +770,7 @@ pub(crate) fn push_span_slice(out: &mut Vec<Span>, span: &Span, range: Range<usi
 
     if let Some(last) = out.last_mut()
         && last.style == span.style
+        && last.row_style_policy == span.row_style_policy
     {
         let mut merged = String::with_capacity(last.content.len() + fragment.len());
         merged.push_str(last.content.as_ref());
@@ -781,7 +782,7 @@ pub(crate) fn push_span_slice(out: &mut Vec<Span>, span: &Span, range: Range<usi
     out.push(Span {
         content: fragment,
         style: span.style,
-        allow_row_style: span.allow_row_style,
+        row_style_policy: span.row_style_policy,
     });
 }
 

@@ -448,7 +448,7 @@ fn split_styled_lipan_lines(spans: &[LipanSpan], base_style: Style) -> Vec<Vec<L
                 current_line.push(LipanSpan {
                     content: Arc::from(part),
                     style: cell_style,
-                    allow_row_style: span.allow_row_style,
+                    row_style_policy: span.row_style_policy,
                 });
             }
         }
@@ -518,7 +518,7 @@ fn truncate_lipan_spans(spans: Vec<LipanSpan>, max_width: u16) -> Vec<LipanSpan>
             out.push(LipanSpan {
                 content: Arc::from(&content[..end]),
                 style: span.style,
-                allow_row_style: span.allow_row_style,
+                row_style_policy: span.row_style_policy,
             });
             break;
         }
@@ -562,7 +562,7 @@ fn truncate_lipan_spans_start(spans: Vec<LipanSpan>, max_width: u16) -> Vec<Lipa
             out_rev.push(LipanSpan {
                 content: Arc::from(&content[start..]),
                 style: span.style,
-                allow_row_style: span.allow_row_style,
+                row_style_policy: span.row_style_policy,
             });
             break;
         }
