@@ -186,6 +186,9 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `SearchPalette` hybrid matching now averages per-term scores for multi-word queries instead of
+  summing them, so an exact phrase match can no longer be outranked by several weaker distributed
+  term matches solely because the query contains spaces.
 - Toast exit transitions now fade from the toast's current opacity and use per-toast timing, so
   settled, clicked, and timed-out toasts no longer disappear in a single frame.
 - Opted-in Unix fullscreen apps (`App::system_theme()` or
