@@ -105,7 +105,7 @@ impl<C: Component> AppRunner<C> {
     pub(super) fn render_element_until_scroll_stable(&mut self, bounds: Rect) -> Result<()> {
         let text_area_drag_snapshot = self.active_text_area_drag_snapshot();
         for _pass in 0..RENDER_STABILITY_MAX_PASSES {
-            let scroll_generation = self.core.scroll.generation();
+            let scroll_generations = self.core.scroll.view_generations();
             self.core.render_element(
                 bounds,
                 self.focus.focused,
@@ -116,7 +116,14 @@ impl<C: Component> AppRunner<C> {
             let render_time_dirty = self.drain_render_time_messages()?;
             let needs_state_rerender =
                 matches!(render_time_dirty, DirtyLevel::LayoutOnly | DirtyLevel::Full);
-            let scroll_stable = self.core.scroll.generation() == scroll_generation;
+            // A scroll-generation change only affects view output when some
+            // view() actually reads the data that moved (full TextArea metrics
+            // vs. scrollbar visibility only); otherwise another pass would
+            // rebuild an identical tree.
+            let scroll_stable = !self
+                .core
+                .scroll
+                .view_dependencies_stale(&scroll_generations);
             if scroll_stable && !needs_state_rerender {
                 break;
             }
@@ -543,6 +550,10 @@ impl<C: Component> AppRunner<C> {
                 .core
                 .refresh_cached_scopes(&self.dirty_component_scopes, bounds)
         {
+            crate::debug::internal_log!(
+                "[tui-lipan] layout-only fallback: refresh_cached_scopes failed for {:?}",
+                self.dirty_component_scopes
+            );
             self.dirty_component_scopes.clear();
             self.dirty_scope_set.clear();
             return self.render(terminal);
@@ -556,7 +567,7 @@ impl<C: Component> AppRunner<C> {
         let reconcile_start = Instant::now();
         let needs_full_render = (|| -> Result<bool> {
             for pass in 0..RENDER_STABILITY_MAX_PASSES {
-                let scroll_generation = self.core.scroll.generation();
+                let scroll_generations = self.core.scroll.view_generations();
                 let ok = self.core.reconcile_cached_element(
                     bounds,
                     self.focus.focused,
@@ -564,22 +575,45 @@ impl<C: Component> AppRunner<C> {
                     self.mouse.hovered,
                 );
                 if !ok {
+                    crate::debug::internal_log!(
+                        "[tui-lipan] layout-only fallback: reconcile_cached_element failed"
+                    );
                     return Ok(true);
                 }
 
                 let render_time_dirty = self.drain_render_time_messages()?;
-                if self.core.scroll.generation() != scroll_generation {
+                // Fall back to a full render only when a view() reads scroll
+                // data that actually moved (full TextArea metrics vs. rare
+                // scrollbar-visibility flips): cached views are stale then.
+                // Otherwise the reconcile above already applied the change.
+                if self
+                    .core
+                    .scroll
+                    .view_dependencies_stale(&scroll_generations)
+                {
+                    crate::debug::internal_log!(
+                        "[tui-lipan] layout-only fallback: scroll generation changed"
+                    );
                     return Ok(true);
                 }
 
                 match render_time_dirty {
-                    DirtyLevel::Full => return Ok(true),
+                    DirtyLevel::Full => {
+                        crate::debug::internal_log!(
+                            "[tui-lipan] layout-only fallback: render-time message was Full"
+                        );
+                        return Ok(true);
+                    }
                     DirtyLevel::LayoutOnly => {
                         if !self.dirty_component_scopes.is_empty()
                             && !self
                                 .core
                                 .refresh_cached_scopes(&self.dirty_component_scopes, bounds)
                         {
+                            crate::debug::internal_log!(
+                                "[tui-lipan] layout-only fallback: render-time refresh_cached_scopes failed for {:?}",
+                                self.dirty_component_scopes
+                            );
                             return Ok(true);
                         }
                         self.dirty_component_scopes.clear();
@@ -611,6 +645,9 @@ impl<C: Component> AppRunner<C> {
         // (e.g. a list gaining rows). When the auto inline height moves, fall
         // back to a full render so the tree is reconciled at the new bounds.
         if self.sync_inline_auto_height(terminal, bounds)?.is_some() {
+            crate::debug::internal_log!(
+                "[tui-lipan] layout-only fallback: inline auto height moved"
+            );
             return self.render(terminal);
         }
         #[cfg(feature = "devtools")]

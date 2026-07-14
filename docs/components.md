@@ -48,10 +48,11 @@ User Action → Event → Message → update() → State Change → Re-render
 | Return | Use when |
 |--------|----------|
 | `Update::none()` | State changed only to mirror widget-owned runtime state, or nothing visual changed |
-| `Update::paint()` | Existing tree can be repainted without layout changes |
-| `Update::layout()` | Existing component subtree needs reconcile/layout, but `view()` does not need to rebuild expensive app data |
-| `Update::full()` | Your component's `view()` output changed and must be rebuilt |
-| `Update::with_command(cmd)` | State changed and background work should start |
+| `Update::paint()` | Repaint the existing realized tree without rerunning component views or layout |
+| `Update::layout()` | Rerun the emitting component scope's `view()`, then reconcile and lay out that subtree |
+| `Update::layout_with_command(cmd)` | Same component-scoped refresh while also starting background work |
+| `Update::full()` | Rebuild from the root because state affects other scopes or global composition |
+| `Update::with_command(cmd)` | Same root-wide refresh while also starting background work |
 
 High-frequency widget callbacks such as `ScrollView::on_viewport_change`,
 `on_scroll`, drag updates, and cursor/selection sync should usually return
@@ -110,7 +111,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `ctx.theme_extension::<T>()` | Clone a typed app-specific theme extension |
 | `ctx.host_terminal_colors()` | Read the runner-managed `HostTerminalColors` cache when live host colors are enabled |
 | `ctx.host_terminal_color_generation()` | Read the cache generation; increments when refreshed colors differ |
-| `ctx.request_host_terminal_color_refresh()` | Queue a safe runner-owned OSC 4/10/11 refresh on the UI thread |
+| `ctx.request_host_terminal_color_refresh()` | Queue a safe runner-owned host-color refresh on the UI thread |
 | `ctx.use_context::<T>()` | Read nearest `ContextProvider<T>` value for this subtree |
 | `ctx.append_transcript_lines(lines)` | Append styled lines to transcript history (inline only) |
 | `ctx.append_transcript_element(el)` | Append a rendered element to transcript history (inline only) |
@@ -120,7 +121,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 
 `ctx.effect_phase()` is a snapshot, not a render subscription. Use it to store a start tick in component state during `update()` / `init()`, then build phase-based effects like `VisualEffect::centered_burst_ripple(...)` from that stored value.
 
-Live host terminal colors are opt-in. Use `App::system_theme()` for a framework-wide theme derived from the host palette, or `App::live_host_terminal_colors(true)` when app code needs extra host-derived tokens. The runner probes once at startup, refreshes on terminal focus gained, and services `ctx.request_host_terminal_color_refresh()` while coordinating with its input reader. It never polls continuously. If the palette changed, the runner updates `terminal_bg` and increments `ctx.host_terminal_color_generation()`. Use `ctx.host_terminal_colors()` for app-specific tokens beyond the framework theme; keep those tokens app-owned.
+Live host terminal colors are opt-in. Use `App::system_theme()` for a framework-wide theme derived from the host palette, or `App::live_host_terminal_colors(true)` when app code needs extra host-derived tokens. The runner probes OSC 4/10/11 once at startup, refreshes on terminal focus gained, and services `ctx.request_host_terminal_color_refresh()` while coordinating with its input reader. On Unix fullscreen surfaces it additionally enables DEC private mode 2031; compatible terminals then send exact dark/light palette-change notifications, which trigger an immediate typed OSC 10/11 refresh. The runtime cache retains the startup probe's resolved RGB ANSI slots because Termina does not yet expose OSC 4 responses; it never substitutes unresolved indexed colors into app-owned theme tokens. A changed refresh schedules a complete repaint without presenting a cleared intermediate frame. Inline, non-Unix, non-live, and unsupported terminals retain startup, focus-gained, and manual OSC 4/10/11 refresh behavior. The runner never polls continuously. Use `ctx.host_terminal_colors()` for app-specific tokens beyond the framework theme; keep those tokens app-owned.
 
 When the `devtools` feature is enabled, the built-in panel can be controlled from app code as well as the global keymap. This is useful for wiring DevTools to a button, command palette entry, startup action, or app-specific command:
 

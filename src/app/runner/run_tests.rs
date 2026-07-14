@@ -10,6 +10,7 @@ use super::{
     AppRunner, DirtyLevel, DirtyTracker, DragState, effective_active_drag_dirty_level,
     mouse_dispatch_dirty_level, spinner_frame_for_speed,
 };
+use crate::TextEditor;
 use crate::animation::{Easing, TransitionConfig};
 #[cfg(feature = "devtools")]
 use crate::app::context::DevToolsConfig;
@@ -23,18 +24,24 @@ use crate::core::event::{KeyCode, KeyEvent, KeyMods, MouseButton, MouseEvent, Mo
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::layout::LayoutEngine;
 use crate::runtime::RuntimeCore;
-use crate::style::{Color, HostTerminalColors, Length, Rect, Span, Style, Theme};
+#[cfg(feature = "terminal")]
+use crate::style::Span;
+use crate::style::{Color, HostTerminalColors, Length, Rect, Style, Theme};
 #[cfg(feature = "terminal")]
 use crate::widgets::Terminal;
 use crate::widgets::internal::AnimatedNode;
 use crate::widgets::{
     Animated, DocumentView, DragPayload, DragSource, DropTarget, Frame, HStack, Input, List,
-    ListItem, ScrollView, Spacer, Spinner, SpinnerSpeed, Text, TextArea, VStack,
+    ListItem, ScrollView, Spacer, Spinner, SpinnerSpeed, Text, TextArea, TextAreaEvent, VStack,
 };
 use crossterm::event::{
     Event as CEvent, KeyCode as CKeyCode, KeyEvent as CKeyEvent, KeyModifiers as CKeyModifiers,
     MouseEvent as CMouseEvent, MouseEventKind as CMouseEventKind,
 };
+use ratatui::Terminal as RatatuiTerminal;
+use ratatui::backend::TestBackend;
+use ratatui::buffer::Cell as RatatuiCell;
+use ratatui::widgets::Paragraph;
 
 struct RunnerKeymapSmoke;
 
@@ -181,6 +188,19 @@ fn host_terminal_color_refresh_request_is_opt_in() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn termina_live_input_is_unix_fullscreen_and_opt_in_only() {
+    let fullscreen = super::SurfaceDriver::new(SurfaceMode::Fullscreen);
+    let inline = super::SurfaceDriver::new(SurfaceMode::InlineEphemeral {
+        height: crate::app::InlineHeight::Fixed(4),
+    });
+
+    assert!(super::uses_termina_live_input(&fullscreen, true));
+    assert!(!super::uses_termina_live_input(&fullscreen, false));
+    assert!(!super::uses_termina_live_input(&inline, true));
+}
+
 #[test]
 fn focus_gained_host_color_refresh_request_is_opt_in() {
     let disabled = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
@@ -302,6 +322,73 @@ fn system_theme_palette_change_with_same_background_updates_theme() {
 }
 
 #[test]
+fn termina_runtime_refresh_ignores_equal_resolved_colors() {
+    let mut runner = AppRunner::new(App::new().system_theme(), RunnerKeymapSmoke, ());
+    let colors = host_colors(Color::rgb(10, 11, 12));
+
+    assert!(runner.apply_host_terminal_colors(colors, true));
+    assert_eq!(runner.core.ctx.host_terminal_color_generation(), 1);
+    assert!(runner.core.take_full_repaint_request());
+
+    assert!(!runner.apply_host_terminal_colors(colors, true));
+    assert_eq!(runner.core.ctx.host_terminal_color_generation(), 1);
+    assert!(!runner.core.take_full_repaint_request());
+}
+
+#[test]
+fn previous_frame_invalidation_repaints_without_physically_clearing_first() {
+    let mut terminal = RatatuiTerminal::new(TestBackend::new(6, 1)).unwrap();
+    let draw = |frame: &mut ratatui::Frame<'_>| {
+        frame.render_widget(Paragraph::new("ok"), frame.area());
+    };
+    terminal.draw(draw).unwrap();
+
+    let overwritten = RatatuiCell::new("x");
+    let updates: Vec<_> = (0..6).map(|x| (x, 0, &overwritten)).collect();
+    ratatui::backend::Backend::draw(terminal.backend_mut(), updates.into_iter()).unwrap();
+    assert_eq!(
+        terminal.backend().buffer().cell((5, 0)).unwrap().symbol(),
+        "x"
+    );
+
+    super::invalidate_previous_frame(&mut terminal);
+    assert_eq!(
+        terminal.backend().buffer().cell((5, 0)).unwrap().symbol(),
+        "x",
+        "invalidation must not expose an empty intermediate frame"
+    );
+
+    terminal.draw(draw).unwrap();
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 0)).unwrap().symbol(),
+        "o"
+    );
+    assert_eq!(
+        terminal.backend().buffer().cell((1, 0)).unwrap().symbol(),
+        "k"
+    );
+    assert_eq!(
+        terminal.backend().buffer().cell((5, 0)).unwrap().symbol(),
+        " "
+    );
+
+    let draw_noncharacter = |frame: &mut ratatui::Frame<'_>| {
+        frame.render_widget(Paragraph::new("\u{fdd0}"), frame.area());
+    };
+    terminal.draw(draw_noncharacter).unwrap();
+    let updates: Vec<_> = (0..6).map(|x| (x, 0, &overwritten)).collect();
+    ratatui::backend::Backend::draw(terminal.backend_mut(), updates.into_iter()).unwrap();
+
+    super::invalidate_previous_frame(&mut terminal);
+    terminal.draw(draw_noncharacter).unwrap();
+    assert_eq!(
+        terminal.backend().buffer().cell((0, 0)).unwrap().symbol(),
+        "\u{fdd0}",
+        "forced repaint must not collide with drawable application content"
+    );
+}
+
+#[test]
 fn host_terminal_color_refresh_waits_for_quiet_window() {
     let now = Instant::now();
     let deadline = super::deferred_host_color_refresh_deadline(now);
@@ -321,20 +408,25 @@ fn host_terminal_color_refresh_waits_for_quiet_window() {
 fn resize_burst_followed_by_key_preserves_key_as_pending_event() {
     let runner = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
     let (tx, rx) = std::sync::mpsc::channel();
-    tx.send(CEvent::Resize(81, 24)).unwrap();
-    tx.send(CEvent::Resize(82, 24)).unwrap();
-    tx.send(c_key('x')).unwrap();
+    tx.send(super::RunnerEvent::Terminal(CEvent::Resize(81, 24)))
+        .unwrap();
+    tx.send(super::RunnerEvent::Terminal(CEvent::Resize(82, 24)))
+        .unwrap();
+    tx.send(super::RunnerEvent::Terminal(c_key('x'))).unwrap();
 
     let mut pending_event = None;
     while let Some(next_ev) = runner.try_recv_event(Some(&rx)).unwrap() {
-        if matches!(next_ev, CEvent::Resize(_, _)) {
+        if matches!(next_ev, super::RunnerEvent::Terminal(CEvent::Resize(_, _))) {
             continue;
         }
         super::preserve_pending_event(&mut pending_event, next_ev);
         break;
     }
 
-    assert!(matches!(pending_event, Some(CEvent::Key(_))));
+    assert!(matches!(
+        pending_event,
+        Some(super::RunnerEvent::Terminal(CEvent::Key(_)))
+    ));
     assert!(runner.try_recv_event(Some(&rx)).unwrap().is_none());
 }
 
@@ -343,13 +435,24 @@ fn mouse_move_burst_followed_by_key_or_resize_preserves_non_mouse_event() {
     for trailing in [c_key('m'), CEvent::Resize(100, 30)] {
         let runner = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
         let (tx, rx) = std::sync::mpsc::channel();
-        tx.send(c_mouse(CMouseEventKind::Moved, 2, 3)).unwrap();
-        tx.send(c_mouse(CMouseEventKind::Moved, 3, 4)).unwrap();
-        tx.send(trailing.clone()).unwrap();
+        tx.send(super::RunnerEvent::Terminal(c_mouse(
+            CMouseEventKind::Moved,
+            2,
+            3,
+        )))
+        .unwrap();
+        tx.send(super::RunnerEvent::Terminal(c_mouse(
+            CMouseEventKind::Moved,
+            3,
+            4,
+        )))
+        .unwrap();
+        tx.send(super::RunnerEvent::Terminal(trailing.clone()))
+            .unwrap();
 
         let mut pending_event = None;
         while let Some(next_ev) = runner.try_recv_event(Some(&rx)).unwrap() {
-            if let CEvent::Mouse(next_m) = next_ev {
+            if let super::RunnerEvent::Terminal(CEvent::Mouse(next_m)) = next_ev {
                 if let Some(next_mouse) = runner.convert_mouse_event(next_m)
                     && matches!(next_mouse.kind, MouseKind::Moved)
                 {
@@ -361,7 +464,7 @@ fn mouse_move_burst_followed_by_key_or_resize_preserves_non_mouse_event() {
             }
         }
 
-        assert_eq!(pending_event, Some(trailing));
+        assert_eq!(pending_event, Some(super::RunnerEvent::Terminal(trailing)));
         assert!(runner.try_recv_event(Some(&rx)).unwrap().is_none());
     }
 }
@@ -370,13 +473,23 @@ fn mouse_move_burst_followed_by_key_or_resize_preserves_non_mouse_event() {
 fn scroll_burst_followed_by_non_scroll_event_preserves_event() {
     let runner = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
     let (tx, rx) = std::sync::mpsc::channel();
-    tx.send(c_mouse(CMouseEventKind::ScrollDown, 2, 3)).unwrap();
-    tx.send(c_mouse(CMouseEventKind::ScrollDown, 2, 4)).unwrap();
-    tx.send(c_key('s')).unwrap();
+    tx.send(super::RunnerEvent::Terminal(c_mouse(
+        CMouseEventKind::ScrollDown,
+        2,
+        3,
+    )))
+    .unwrap();
+    tx.send(super::RunnerEvent::Terminal(c_mouse(
+        CMouseEventKind::ScrollDown,
+        2,
+        4,
+    )))
+    .unwrap();
+    tx.send(super::RunnerEvent::Terminal(c_key('s'))).unwrap();
 
     let mut pending_event = None;
     while let Some(next_ev) = runner.try_recv_event(Some(&rx)).unwrap() {
-        if let CEvent::Mouse(next_m) = next_ev {
+        if let super::RunnerEvent::Terminal(CEvent::Mouse(next_m)) = next_ev {
             if let Some(next_mouse) = runner.convert_mouse_event(next_m)
                 && next_mouse.kind == MouseKind::ScrollDown
             {
@@ -388,16 +501,91 @@ fn scroll_burst_followed_by_non_scroll_event_preserves_event() {
         }
     }
 
-    assert!(matches!(pending_event, Some(CEvent::Key(_))));
+    assert!(matches!(
+        pending_event,
+        Some(super::RunnerEvent::Terminal(CEvent::Key(_)))
+    ));
     assert!(runner.try_recv_event(Some(&rx)).unwrap().is_none());
 }
 
 #[test]
 fn frame_skip_preserve_does_not_overwrite_existing_pending_event() {
-    let mut pending_event = Some(c_key('p'));
-    super::preserve_pending_event(&mut pending_event, CEvent::Resize(120, 40));
+    let mut pending_event = Some(super::RunnerEvent::Terminal(c_key('p')));
+    super::preserve_pending_event(
+        &mut pending_event,
+        super::RunnerEvent::Terminal(CEvent::Resize(120, 40)),
+    );
 
-    assert!(matches!(pending_event, Some(CEvent::Key(_))));
+    assert!(matches!(
+        pending_event,
+        Some(super::RunnerEvent::Terminal(CEvent::Key(_)))
+    ));
+}
+
+#[test]
+fn host_color_refresh_event_does_not_drop_queued_ordinary_input() {
+    let runner = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let colors = host_colors(Color::rgb(3, 4, 5));
+    tx.send(super::RunnerEvent::HostTerminalColors(colors))
+        .unwrap();
+    tx.send(super::RunnerEvent::Terminal(CEvent::Resize(90, 30)))
+        .unwrap();
+    tx.send(super::RunnerEvent::Terminal(c_mouse(
+        CMouseEventKind::ScrollDown,
+        2,
+        3,
+    )))
+    .unwrap();
+    tx.send(super::RunnerEvent::Terminal(CEvent::Paste("paste".into())))
+        .unwrap();
+    tx.send(super::RunnerEvent::Terminal(c_key('k'))).unwrap();
+
+    assert_eq!(
+        runner.try_recv_event(Some(&rx)).unwrap(),
+        Some(super::RunnerEvent::HostTerminalColors(colors))
+    );
+    assert!(matches!(
+        runner.try_recv_event(Some(&rx)).unwrap(),
+        Some(super::RunnerEvent::Terminal(CEvent::Resize(90, 30)))
+    ));
+    assert!(matches!(
+        runner.try_recv_event(Some(&rx)).unwrap(),
+        Some(super::RunnerEvent::Terminal(CEvent::Mouse(_)))
+    ));
+    assert!(matches!(
+        runner.try_recv_event(Some(&rx)).unwrap(),
+        Some(super::RunnerEvent::Terminal(CEvent::Paste(_)))
+    ));
+    assert!(matches!(
+        runner.try_recv_event(Some(&rx)).unwrap(),
+        Some(super::RunnerEvent::Terminal(CEvent::Key(_)))
+    ));
+}
+
+#[test]
+fn fullscreen_input_channel_disconnect_is_an_error() {
+    let runner = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
+    let (tx, rx) = std::sync::mpsc::channel();
+    drop(tx);
+
+    let recv_error = runner
+        .recv_event(Duration::ZERO, Some(&rx))
+        .expect_err("disconnected blocking receiver should fail");
+    assert!(matches!(
+        recv_error,
+        crate::Error::Io(error) if error.kind() == std::io::ErrorKind::BrokenPipe
+    ));
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    drop(tx);
+    let try_error = runner
+        .try_recv_event(Some(&rx))
+        .expect_err("disconnected non-blocking receiver should fail");
+    assert!(matches!(
+        try_error,
+        crate::Error::Io(error) if error.kind() == std::io::ErrorKind::BrokenPipe
+    ));
 }
 
 struct ScrollHoverSmoke;
@@ -3552,6 +3740,222 @@ fn process_pending_messages_routes_root_layout_to_layout_scope_refresh() {
 
     assert_eq!(dirty.level(), DirtyLevel::LayoutOnly);
     assert_eq!(runner.dirty_component_scopes, vec![ScopeId(1)]);
+}
+
+#[test]
+fn controlled_text_area_input_remains_layout_only() {
+    #[derive(Clone)]
+    enum Msg {
+        Changed(TextAreaEvent),
+        SentinelsChanged,
+        VimModeChanged,
+        AsyncAutocomplete,
+    }
+
+    struct TextAreaLayoutProbe;
+
+    impl Component for TextAreaLayoutProbe {
+        type Message = Msg;
+        type Properties = ();
+        type State = TextEditor;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            TextEditor::new("")
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Changed(event) => event.apply_to(&mut ctx.state),
+                Msg::SentinelsChanged | Msg::VimModeChanged => return Update::layout(),
+                Msg::AsyncAutocomplete => {
+                    return Update::layout_with_command(crate::Command::new(|| {}));
+                }
+            }
+            Update::layout()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            Element::from(TextArea::bound(&ctx.state).on_change(ctx.link().callback(Msg::Changed)))
+                .key("editor")
+        }
+    }
+
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 4,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), TextAreaLayoutProbe, ());
+    init_runner(&mut runner, TextAreaLayoutProbe, viewport);
+    runner.focus.focused = Some(node_id_by_key(&runner.core.tree, "editor"));
+
+    let key_result = runner.dispatch_focused_key(key(KeyCode::Char('x')));
+    assert!(key_result.handled);
+
+    let mut dirty = DirtyTracker::default();
+    dirty.mark_layout();
+    runner
+        .process_pending_messages(&mut dirty)
+        .expect("TextArea callback should process");
+
+    assert_eq!(dirty.level(), DirtyLevel::LayoutOnly);
+    assert_eq!(runner.dirty_component_scopes, vec![ScopeId(1)]);
+
+    for msg in [
+        Msg::SentinelsChanged,
+        Msg::VimModeChanged,
+        Msg::AsyncAutocomplete,
+    ] {
+        runner
+            .core
+            .queue
+            .borrow_mut()
+            .push_back((ScopeId(1), Box::new(msg)));
+        let mut dirty = DirtyTracker::default();
+        runner
+            .process_pending_messages(&mut dirty)
+            .expect("prompt-local callback should process");
+        assert_eq!(dirty.level(), DirtyLevel::LayoutOnly);
+    }
+}
+
+/// Shared fixture for scroll view-dependency tests: a controlled TextArea
+/// whose view optionally reads scroll data through the `Context` accessors.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScrollReadMode {
+    None,
+    Scrollbars,
+    Metrics,
+}
+
+fn scroll_dependency_probe_stale_after_edits(mode: ScrollReadMode, edits: &[KeyCode]) -> bool {
+    #[derive(Clone)]
+    enum Msg {
+        Changed(TextAreaEvent),
+    }
+
+    struct ScrollReadProbe {
+        mode: ScrollReadMode,
+    }
+
+    impl Component for ScrollReadProbe {
+        type Message = Msg;
+        type Properties = ();
+        type State = TextEditor;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            TextEditor::new("")
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Changed(event) => event.apply_to(&mut ctx.state),
+            }
+            Update::layout()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            match self.mode {
+                ScrollReadMode::None => {}
+                ScrollReadMode::Scrollbars => {
+                    let _ = ctx.text_area_scrollbars("editor");
+                }
+                ScrollReadMode::Metrics => {
+                    let _ = ctx.text_area_metrics("editor");
+                }
+            }
+            Element::from(TextArea::bound(&ctx.state).on_change(ctx.link().callback(Msg::Changed)))
+                .key("editor")
+        }
+    }
+
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 4,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), ScrollReadProbe { mode }, ());
+    init_runner(&mut runner, ScrollReadProbe { mode }, viewport);
+    runner.focus.focused = Some(node_id_by_key(&runner.core.tree, "editor"));
+
+    let scroll_generations = runner.core.scroll.view_generations();
+    let mut stale = false;
+    for code in edits {
+        let key_result = runner.dispatch_focused_key(key(*code));
+        assert!(key_result.handled);
+        let mut dirty = DirtyTracker::default();
+        runner
+            .process_pending_messages(&mut dirty)
+            .expect("TextArea callback should process");
+        assert_eq!(dirty.level(), DirtyLevel::LayoutOnly);
+
+        // Mirror the layout-only render path for the frame: refresh dirty
+        // scopes' views, reconcile the cached element, then ask whether
+        // cached views became stale.
+        let scopes = std::mem::take(&mut runner.dirty_component_scopes);
+        runner.dirty_scope_set.clear();
+        assert!(runner.core.refresh_cached_scopes(&scopes, viewport));
+        assert!(runner.core.reconcile_cached_element(
+            viewport,
+            runner.focus.focused,
+            runner.focus.focused_key.as_ref().cloned().as_ref(),
+            None,
+        ));
+        stale |= runner
+            .core
+            .scroll
+            .view_dependencies_stale(&scroll_generations);
+    }
+    stale
+}
+
+#[test]
+fn text_area_edit_keeps_layout_only_without_scroll_readers() {
+    // No view reads scroll data: a keystroke changes TextArea metrics but must
+    // not invalidate cached views (the pre-fix behavior escalated to full).
+    assert!(!scroll_dependency_probe_stale_after_edits(
+        ScrollReadMode::None,
+        &[KeyCode::Char('x')],
+    ));
+}
+
+#[test]
+fn scrollbar_reader_ignores_edits_that_keep_visibility() {
+    // The view reads only scrollbar visibility; a single typed char cannot
+    // flip it, so cached views stay valid.
+    assert!(!scroll_dependency_probe_stale_after_edits(
+        ScrollReadMode::Scrollbars,
+        &[KeyCode::Char('x')],
+    ));
+}
+
+#[test]
+fn scrollbar_reader_staled_by_visibility_flip() {
+    // Enough newlines to overflow the 4-row area flip vertical scrollbar
+    // visibility, which the reading view must observe via a full rebuild.
+    assert!(scroll_dependency_probe_stale_after_edits(
+        ScrollReadMode::Scrollbars,
+        &[
+            KeyCode::Enter,
+            KeyCode::Enter,
+            KeyCode::Enter,
+            KeyCode::Enter,
+            KeyCode::Enter,
+            KeyCode::Enter,
+        ],
+    ));
+}
+
+#[test]
+fn metrics_reader_staled_by_any_edit() {
+    // Full-metrics readers observe cursor/offset changes, so any edit stales
+    // their cached views.
+    assert!(scroll_dependency_probe_stale_after_edits(
+        ScrollReadMode::Metrics,
+        &[KeyCode::Char('x')],
+    ));
 }
 
 struct UiSnapshotRoot;

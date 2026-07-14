@@ -134,6 +134,9 @@ libc = "0.2"
 open = "5"
 ignore = "0.4"
 
+[target.'cfg(all(unix, not(target_arch = "wasm32")))'.dependencies]
+termina = "=0.3.3"
+
 [target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
 wl-clipboard-rs = { version = "0.9.3", optional = true }
 

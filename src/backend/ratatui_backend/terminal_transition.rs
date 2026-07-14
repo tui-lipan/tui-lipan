@@ -32,6 +32,8 @@ pub(crate) enum TerminalOp {
     ClearScreen,
     PushKeyboardEnhancement,
     PopKeyboardEnhancement,
+    EnableThemeNotifications,
+    DisableThemeNotifications,
     Flush,
 }
 
@@ -52,6 +54,8 @@ impl TerminalOp {
             Self::EnableAutoWrap => Some(Self::DisableAutoWrap),
             Self::PushKeyboardEnhancement => Some(Self::PopKeyboardEnhancement),
             Self::PopKeyboardEnhancement => Some(Self::PushKeyboardEnhancement),
+            Self::EnableThemeNotifications => Some(Self::DisableThemeNotifications),
+            Self::DisableThemeNotifications => Some(Self::EnableThemeNotifications),
             Self::ClearScreen | Self::Flush => None,
         }
     }
@@ -154,6 +158,18 @@ pub(crate) fn resume_plan(
     TerminalTransitionPlan::new(ops)
 }
 
+#[cfg(unix)]
+pub(crate) fn theme_notification_plan(enabled: bool) -> TerminalTransitionPlan {
+    TerminalTransitionPlan::new(vec![
+        if enabled {
+            TerminalOp::EnableThemeNotifications
+        } else {
+            TerminalOp::DisableThemeNotifications
+        },
+        TerminalOp::Flush,
+    ])
+}
+
 pub(crate) trait TerminalTransitionExecutor {
     fn execute_op(&mut self, op: TerminalOp) -> io::Result<()>;
 }
@@ -228,6 +244,12 @@ impl<W: Write> TerminalTransitionExecutor for CrosstermTransitionExecutor<W> {
             }
             TerminalOp::PopKeyboardEnhancement => {
                 execute!(self.writer, PopKeyboardEnhancementFlags)
+            }
+            TerminalOp::EnableThemeNotifications => {
+                execute!(self.writer, Print("\x1b[?2031h"))
+            }
+            TerminalOp::DisableThemeNotifications => {
+                execute!(self.writer, Print("\x1b[?2031l"))
             }
             TerminalOp::Flush => self.writer.flush(),
         }
@@ -341,5 +363,40 @@ mod tests {
                 TerminalOp::DisableRawMode,
             ]
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn theme_notification_operations_emit_exact_dec_mode_2031_sequences() {
+        let mut executor = CrosstermTransitionExecutor::new(Vec::new());
+
+        assert_eq!(
+            theme_notification_plan(false).ops(),
+            &[TerminalOp::DisableThemeNotifications, TerminalOp::Flush]
+        );
+        execute_plan(&mut executor, &theme_notification_plan(true)).unwrap();
+        execute_plan(&mut executor, &theme_notification_plan(false)).unwrap();
+
+        assert_eq!(executor.into_inner(), b"\x1b[?2031h\x1b[?2031l");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn theme_notification_enable_rolls_back_on_later_enter_failure() {
+        let mut plan = theme_notification_plan(true);
+        plan.ops.push(TerminalOp::Flush);
+        let mut executor = MockExecutor {
+            fail_on: Some(TerminalOp::Flush),
+            ..MockExecutor::default()
+        };
+
+        execute_plan_with_rollback(&mut executor, &plan).unwrap_err();
+
+        assert!(executor.ops.windows(2).any(|ops| {
+            ops == [
+                TerminalOp::EnableThemeNotifications,
+                TerminalOp::DisableThemeNotifications,
+            ]
+        }));
     }
 }

@@ -543,6 +543,7 @@ where
 
         #[cfg(feature = "profiling-tracing")]
         let view_start = web_time::Instant::now();
+        self.scroll.begin_view(ScopeId(1));
         let element = self.component.view(&self.ctx);
         #[cfg(feature = "profiling-tracing")]
         let view_ms = view_start.elapsed().as_secs_f64() * 1000.0;
@@ -679,6 +680,7 @@ where
             self.ctx.set_viewport(viewport);
             self.ctx.set_active_theme(self.theme.clone());
 
+            self.scroll.begin_view(ScopeId(1));
             let element = self.component.view(&self.ctx);
 
             let app_root_theme = root_active_theme_for_extra_root(&self.theme, &element);

@@ -15,7 +15,9 @@ use crate::core::component::{
 };
 use crate::core::element::{Element, ElementKind};
 use crate::core::nested::{ComponentRegistry, ComponentRegistryConfig, HostState};
-use crate::core::runtime_env::RuntimeEnv;
+use crate::core::runtime_env::{
+    RuntimeEnv, ScrollDependency, ScrollDependencyKind, ScrollIdentity,
+};
 use crate::overlay::OverlayManager;
 use crate::style::{Rect, Theme};
 use crate::widgets::{Frame, Splitter, Text, VStack};
@@ -160,6 +162,41 @@ fn update_constructors_set_expected_levels() {
     assert_eq!(full2.level(), super::UpdateLevel::Full);
 }
 
+#[test]
+fn scroll_view_dependency_ignores_another_scope_with_the_same_key() {
+    let scroll = ScrollContext::default();
+    let observed = ScrollDependency {
+        identity: ScrollIdentity {
+            scope: ScopeId(7),
+            key: "editor".into(),
+        },
+        kind: ScrollDependencyKind::Metrics,
+    };
+    let unrelated = ScrollIdentity {
+        scope: ScopeId(8),
+        key: "editor".into(),
+    };
+    scroll.mark_view_dependency(&observed);
+    scroll
+        .metrics_generations
+        .borrow_mut()
+        .insert(observed.identity.clone(), 1);
+    scroll
+        .metrics_generations
+        .borrow_mut()
+        .insert(unrelated.clone(), 1);
+    let snapshot = scroll.view_generations();
+
+    scroll.metrics_generations.borrow_mut().insert(unrelated, 2);
+    assert!(!scroll.view_dependencies_stale(&snapshot));
+
+    scroll
+        .metrics_generations
+        .borrow_mut()
+        .insert(observed.identity, 2);
+    assert!(scroll.view_dependencies_stale(&snapshot));
+}
+
 #[cfg(feature = "ui-snapshot-png")]
 #[test]
 fn request_ui_snapshot_to_routes_png_extension_when_feature_enabled() {
@@ -189,6 +226,19 @@ fn with_command_defaults_to_full_level() {
     assert!(update.dirty);
     assert_eq!(update.level(), super::UpdateLevel::Full);
     assert!(update.command.is_some());
+}
+
+#[test]
+fn layout_with_command_preserves_layout_level() {
+    let update = Update::layout_with_command(Command::new(|| {}));
+    assert!(update.dirty);
+    assert_eq!(update.level(), super::UpdateLevel::Layout);
+    assert!(update.command.is_some());
+
+    let update = Update::layout_with_command(Option::<Command>::None);
+    assert!(update.dirty);
+    assert_eq!(update.level(), super::UpdateLevel::Layout);
+    assert!(update.command.is_none());
 }
 
 #[test]

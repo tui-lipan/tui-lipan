@@ -29,9 +29,9 @@ use tui_lipan::terminal_handoff::{
 | Function | Role |
 |----------|------|
 | `suspend_for_external_process(surface_mode)` | Pause the fullscreen stdin reader (when applicable), leave interactive terminal state so the child can use the TTY. |
-| `resume_after_external_process(surface_mode, mouse_enabled)` | Restore raw mode, alternate screen (if not inline), mouse capture if it was enabled, resume the reader, and **request a host redraw** on the next frame (ratatui buffer clear + full draw). |
+| `resume_after_external_process(surface_mode, mouse_enabled)` | Restore raw mode, alternate screen (if not inline), mouse capture if it was enabled, resume the reader, and **request a host redraw** on the next frame. |
 
-The framework consumes that request on the next tick: it promotes the frame to **full** render, runs [`Terminal::clear`](https://docs.rs/ratatui/latest/ratatui/terminal/struct.Terminal.html#method.clear) to reset the back buffer, and drops incremental scroll snapshots so the UI matches the TTY again. You can still call [`Context::request_full_repaint()`](components.md#context-methods) for other cases where the host display may be stale.
+The framework consumes that request on the next tick: it promotes the frame to a **full** render, invalidates Ratatui's previous frame in memory, and drops incremental scroll snapshots so the UI matches the TTY again. The next complete frame is emitted through the normal draw path without first flushing a cleared terminal. You can still call [`Context::request_full_repaint()`](components.md#context-methods) for other cases where the host display may be stale.
 
 **Stale stdin:** Before the event reader is unpaused, `resume_after_external_process` drains the crossterm event queue and, on Unix, `tcflush(TCIFLUSH)` on stdin so CSI/OSC/DA tails and other mode-switch bytes are not delivered as fake key input to the focused widget.
 
@@ -151,7 +151,7 @@ Use `link.send(...)` inside the closure to push follow-up messages; they are pro
 
 ## Force a **full** redraw after handoff
 
-When a nested child returns [`Update::full()`](components.md#the-update-return-type), the runtime may schedule a **layout-only** reconcile for that scope. After the host terminal was repainted by another process, that is often **not enough** to refresh the entire frame.
+[`Update::layout()`](components.md#the-update-return-type) rebuilds only the emitting component scope, while [`Update::full()`](components.md#the-update-return-type) rebuilds from the root. Neither alone tells Ratatui that another process changed the physical terminal, so unchanged cells may still be omitted from its next buffer diff.
 
 Call **`Context::request_full_repaint()`** from the message handler that runs **after** the external program exits (success or failure), before or alongside your usual state updates:
 
@@ -163,7 +163,7 @@ Msg::EditorDone(text) => {
 }
 ```
 
-On the next loop iteration the runner promotes the frame to a **full** render (full reconcile + draw), not only a nested layout pass.
+On the next loop iteration the runner promotes the frame to a **full** render, invalidates Ratatui's previous-frame cache in memory, and emits the complete drawable frame through the normal draw path.
 
 ---
 
