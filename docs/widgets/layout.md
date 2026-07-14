@@ -349,9 +349,9 @@ portion respectively.
 Performance note: `on_viewport_change` can fire during fast wheel scrolling or
 scrollbar dragging. If the callback only mirrors `event.offset` into parent
 state, return `Update::none()` from your component update handler. Use
-`Update::layout()` only when visible-child metadata changes mounted chrome such
-as a sticky header. Avoid `Update::full()` unless the component's `view()` output
-must be rebuilt.
+`Update::layout()` when visible-child metadata changes the emitting component's
+view or mounted subtree, such as a sticky header. Use `Update::full()` only when
+the change affects other scopes or root-level composition.
 
 **One-shot scroll requests**: Use `.scroll_request(...)` for command-driven moves without permanently controlling the settled offset.
 

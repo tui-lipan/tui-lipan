@@ -208,9 +208,9 @@ Msg::Scrolled(offset) => {
 
 For `ScrollView::on_viewport_change`, return `Update::none()` when only the
 stored offset changed. Return `Update::layout()` only when visible metadata
-changes something already in the mounted subtree, such as a sticky header label.
-Reserve `Update::full()` for cases where the component's `view()` output really
-changes.
+changes the emitting component's view or subtree, such as a sticky header label.
+Reserve `Update::full()` for state that affects other scopes or root-level
+composition.
 
 ---
 

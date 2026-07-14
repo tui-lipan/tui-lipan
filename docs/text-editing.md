@@ -163,7 +163,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
             ctx.state.editor.set_text(ev.value.to_string());
             ctx.state.editor.set_cursor(ev.cursor);
             ctx.state.editor.set_anchor(ev.anchor);
-            Update::full()
+            Update::layout()
         }
     }
 }
@@ -199,7 +199,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
     match msg {
         Msg::InputChanged(ev) => {
             ev.apply_to(&mut ctx.state.input);
-            Update::full()
+            Update::layout()
         }
     }
 }

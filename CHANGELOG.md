@@ -16,6 +16,9 @@ While the crate is on `0.x.y`:
 - `ToastHandle::dismiss_immediately(id)` removes a toast synchronously without an exit transition,
   allowing state notifications to be replaced without briefly stacking the fading old toast beside
   its replacement. See `docs/widgets/overlays.md`.
+- `Update::layout_with_command(command)` combines a component-scoped layout
+  refresh with background work, avoiding a root-level full update for controlled
+  editors and other high-frequency widgets that launch async tasks.
 - `TerminalScreen::semantic_state()`, `drain_semantic_events()`, and
   `restore_semantic_state()` expose working-directory and command-lifecycle
   metadata parsed from `OSC 7` (`file://host/path`), `OSC 9;9` (Windows-style
@@ -185,6 +188,26 @@ While the crate is on `0.x.y`:
 
 - Toast exit transitions now fade from the toast's current opacity and use per-toast timing, so
   settled, clicked, and timed-out toasts no longer disappear in a single frame.
+- Opted-in Unix fullscreen apps (`App::system_theme()` or
+  `App::live_host_terminal_colors(true)`) now subscribe to compatible terminals'
+  DEC private mode 2031 palette-change notifications and immediately refresh
+  foreground/background colors through one Termina input worker. Runtime
+  refreshes preserve the startup probe's resolved RGB ANSI palette rather than
+  degrading app-owned syntax and derived colors to unresolved ANSI indices,
+  preserve queued key, mouse, focus, resize, and paste input, and suspend/restore
+  the notification mode around external terminal handoff. Complete repaints now
+  invalidate Ratatui's previous frame in memory instead of flushing a standalone
+  terminal clear, preventing a visible blank frame after focus or handoff.
+  Handoff resume now replaces the Termina reader wake handle, reports legacy
+  crossterm reader failures with their original error, and never leaves a failed
+  Termina resume parked as a live but permanently paused input worker. Terminal
+  response cleanup uses a DA ordering sentinel instead of a timing sleep.
+  Inline, non-live, non-Unix, and unsupported terminals keep the existing
+  startup, focus-gained, and manual refresh behavior.
+- `Context::text_area_metrics()` and `text_area_scrollbars()` dependencies are
+  now tracked by component scope, widget key, and metric kind. TextArea edits no
+  longer invalidate unrelated memoized views or promote unrelated layout-only
+  updates to full renders.
 - `TerminalPty` now satisfies portable-pty 0.9's initial Windows ConPTY cursor-position handshake
   before child creation, preventing `PSEUDOCONSOLE_INHERIT_CURSOR` from stalling later requests.
 - `TerminalPty::clone()` no longer kills the shared child process when just one

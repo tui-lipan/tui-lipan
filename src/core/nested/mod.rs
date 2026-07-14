@@ -1706,10 +1706,12 @@ impl ComponentRegistry {
         let scope_to_id = &mut self.scope_to_id;
         let state_key_index = &mut self.state_key_index;
         let command_registry = self.env.command_registry.clone();
+        let scroll = self.env.scroll.clone();
         self.arena.sweep(
             |entry| entry.epoch != current_epoch,
             |entry| {
                 command_registry.unregister_scope(entry.scope);
+                scroll.remove_scope(entry.scope);
                 scope_to_id.remove(&entry.scope);
                 if let Some(key) = &entry.state_key
                     && state_key_index.get(key) == Some(&entry.id)

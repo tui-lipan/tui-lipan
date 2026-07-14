@@ -12,6 +12,7 @@ use smallvec::SmallVec;
 use crate::animation::AnimationRegistry;
 use crate::app::context::SurfaceMode;
 use crate::app::input::command_registry::CommandRegistry;
+use crate::callback::ScopeId;
 use crate::clipboard::{ClipboardConfig, ClipboardService};
 use crate::core::component::{FocusContext, HoverContext, ScrollContext};
 use crate::core::element::Element;
@@ -36,7 +37,7 @@ pub(crate) struct MemoDependencies {
     pub(crate) theme: bool,
     pub(crate) focus: bool,
     pub(crate) hover: bool,
-    pub(crate) scroll: bool,
+    pub(crate) scroll: SmallVec<[ScrollDependency; 2]>,
     pub(crate) mouse_capture: bool,
     pub(crate) viewport: bool,
     pub(crate) transition: bool,
@@ -55,7 +56,11 @@ impl MemoDependencies {
             }
             MemoDependency::Focus => self.focus = true,
             MemoDependency::Hover => self.hover = true,
-            MemoDependency::Scroll => self.scroll = true,
+            MemoDependency::Scroll(dependency) => {
+                if !self.scroll.contains(&dependency) {
+                    self.scroll.push(dependency);
+                }
+            }
             MemoDependency::MouseCapture => self.mouse_capture = true,
             MemoDependency::Viewport => self.viewport = true,
             MemoDependency::Transition => self.transition = true,
@@ -70,7 +75,7 @@ pub(crate) struct MemoDependencySnapshot {
     pub(crate) theme_generation: u64,
     pub(crate) focus_generation: u64,
     pub(crate) hover_generation: u64,
-    pub(crate) scroll_generation: u64,
+    pub(crate) scroll_generations: SmallVec<[(ScrollDependency, u64); 2]>,
     pub(crate) mouse_capture_generation: u64,
     pub(crate) transition_generation: u64,
     pub(crate) host_terminal_color_generation: u64,
@@ -84,7 +89,12 @@ impl MemoDependencySnapshot {
         (!self.dependencies.theme || self.theme_generation == env.active_theme_generation.get())
             && (!self.dependencies.focus || self.focus_generation == env.focus.generation())
             && (!self.dependencies.hover || self.hover_generation == env.hover.generation())
-            && (!self.dependencies.scroll || self.scroll_generation == env.scroll.generation())
+            && self
+                .scroll_generations
+                .iter()
+                .all(|(dependency, generation)| {
+                    env.scroll.dependency_generation(dependency) == *generation
+                })
             && (!self.dependencies.mouse_capture
                 || self.mouse_capture_generation == env.mouse_capture_generation.get())
             && (!self.dependencies.viewport || self.viewport == viewport)
@@ -101,17 +111,35 @@ impl MemoDependencySnapshot {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MemoDependency {
     Theme,
     Context(TypeId),
     Focus,
     Hover,
-    Scroll,
+    Scroll(ScrollDependency),
     MouseCapture,
     Viewport,
     Transition,
     HostTerminalColors,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ScrollIdentity {
+    pub(crate) scope: ScopeId,
+    pub(crate) key: Key,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ScrollDependencyKind {
+    Metrics,
+    Scrollbars,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ScrollDependency {
+    pub(crate) identity: ScrollIdentity,
+    pub(crate) kind: ScrollDependencyKind,
 }
 
 /// Bundle of shared runtime handles cloned into every component context.
@@ -183,13 +211,22 @@ impl RuntimeEnv {
                 context_generations_map.get(type_id).copied().unwrap_or(0),
             ));
         }
+        let scroll_generations = dependencies
+            .scroll
+            .iter()
+            .cloned()
+            .map(|dependency| {
+                let generation = self.scroll.dependency_generation(&dependency);
+                (dependency, generation)
+            })
+            .collect();
 
         MemoDependencySnapshot {
             dependencies,
             theme_generation: self.active_theme_generation.get(),
             focus_generation: self.focus.generation(),
             hover_generation: self.hover.generation(),
-            scroll_generation: self.scroll.generation(),
+            scroll_generations,
             mouse_capture_generation: self.mouse_capture_generation.get(),
             transition_generation: self.animations.generation(),
             host_terminal_color_generation: self.host_terminal_color_generation.get(),
@@ -224,12 +261,16 @@ impl RuntimeEnv {
         }
 
         self.host_terminal_colors.set(colors);
+        self.advance_host_terminal_color_generation();
+        true
+    }
+
+    fn advance_host_terminal_color_generation(&self) {
         self.host_terminal_color_generation.set(
             self.host_terminal_color_generation
                 .get()
                 .wrapping_add(1)
                 .max(1),
         );
-        true
     }
 }

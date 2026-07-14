@@ -6,11 +6,12 @@ use std::collections::VecDeque;
 use std::io::Write;
 use std::ops::Range;
 use std::rc::Rc;
+#[cfg(feature = "devtools")]
+use std::sync::Mutex;
 #[cfg(feature = "image")]
 use std::sync::OnceLock;
-use std::sync::mpsc;
-#[cfg(feature = "devtools")]
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 #[cfg(feature = "devtools")]
 use std::time::SystemTime;
@@ -44,6 +45,7 @@ use crate::style::{HostTerminalColors, Rect, Theme, query_host_colors};
 use crate::widgets::SpinnerSpeed;
 use crossterm::event::Event as CEvent;
 use crossterm::{cursor::MoveTo, execute, style::Print};
+use ratatui::Terminal as RatatuiTerminal;
 
 #[cfg(feature = "devtools")]
 use crate::app::context::DevToolsConfig;
@@ -62,6 +64,8 @@ mod animation_ticker;
 mod drag;
 pub(crate) mod events;
 mod exit_view;
+#[cfg(unix)]
+pub(crate) mod input_coordinator;
 mod key_dispatch;
 mod messages;
 mod mouse_clicks;
@@ -79,9 +83,28 @@ pub(crate) use crate::app::interaction_state::{
 use surface_driver::SurfaceDriver;
 pub(crate) use terminal::TerminalManager;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RunnerEvent {
+    Terminal(CEvent),
+    HostTerminalColors(HostTerminalColors),
+    InputError(String),
+}
+
 type ExitViewFn<C> = dyn Fn(&C, &Context<C>) -> Element;
 
 const HOST_COLOR_REFRESH_QUIET_WINDOW: Duration = Duration::from_millis(50);
+
+#[allow(deprecated)]
+fn invalidate_previous_frame<B: ratatui::backend::Backend>(terminal: &mut RatatuiTerminal<B>) {
+    terminal.swap_buffers();
+    for cell in &mut terminal.current_buffer_mut().content {
+        // `skip` participates in equality but suppresses output only on the
+        // next/current buffer. Setting it on the previous buffer therefore
+        // guarantees every drawable cell in the next frame differs.
+        cell.skip = true;
+    }
+    terminal.swap_buffers();
+}
 
 pub(super) fn spinner_frame_for_speed(frame: usize, speed: SpinnerSpeed) -> usize {
     const TICK_MS: usize = 50;
@@ -194,7 +217,7 @@ struct KeyDispatchResult {
     dirty_override: Option<DirtyLevel>,
 }
 
-fn preserve_pending_event(pending_event: &mut Option<CEvent>, event: CEvent) {
+fn preserve_pending_event(pending_event: &mut Option<RunnerEvent>, event: RunnerEvent) {
     if pending_event.is_none() {
         *pending_event = Some(event);
     }
@@ -211,6 +234,77 @@ fn host_color_refresh_wait_remaining(
     quiet_until
         .filter(|deadline| now < *deadline)
         .map(|deadline| deadline.saturating_duration_since(now))
+}
+
+#[cfg(unix)]
+fn uses_termina_live_input(surface: &SurfaceDriver, host_color_refresh_enabled: bool) -> bool {
+    !surface.is_inline() && host_color_refresh_enabled
+}
+
+struct PlatformInputCoordinator {
+    #[cfg(unix)]
+    termina: Option<input_coordinator::TerminaInputCoordinator>,
+}
+
+impl PlatformInputCoordinator {
+    fn start(
+        surface: &SurfaceDriver,
+        host_color_refresh_enabled: bool,
+        initial_colors: Option<HostTerminalColors>,
+        panic_input_control: crate::backend::ratatui_backend::terminal_handoff::InputHandoffSlot,
+    ) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        {
+            let termina = uses_termina_live_input(surface, host_color_refresh_enabled)
+                .then(|| {
+                    input_coordinator::TerminaInputCoordinator::start(
+                        initial_colors,
+                        panic_input_control,
+                    )
+                })
+                .transpose()?;
+            Ok(Self { termina })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (
+                surface,
+                host_color_refresh_enabled,
+                initial_colors,
+                panic_input_control,
+            );
+            Ok(Self {})
+        }
+    }
+
+    fn owns_fullscreen_input(&self) -> bool {
+        #[cfg(unix)]
+        return self.termina.is_some();
+        #[cfg(not(unix))]
+        return false;
+    }
+
+    fn receiver<'a>(
+        &'a self,
+        fallback: Option<&'a mpsc::Receiver<RunnerEvent>>,
+    ) -> Option<&'a mpsc::Receiver<RunnerEvent>> {
+        #[cfg(unix)]
+        if let Some(coordinator) = &self.termina {
+            return Some(coordinator.receiver());
+        }
+        fallback
+    }
+
+    fn route_host_color_refresh(&self, requested: bool) -> bool {
+        #[cfg(unix)]
+        if let Some(coordinator) = &self.termina {
+            if requested {
+                coordinator.request_host_color_refresh();
+            }
+            return false;
+        }
+        requested
+    }
 }
 
 /// A mounted and runnable app.
@@ -616,19 +710,6 @@ impl<C: Component> AppRunner<C> {
             .take_host_terminal_color_refresh_request()
     }
 
-    fn apply_pending_host_terminal_color_refresh(&mut self) -> bool {
-        if !self.host_terminal_color_refresh_enabled() {
-            let _ = self.take_host_terminal_color_refresh_request();
-            return false;
-        }
-
-        if !self.take_host_terminal_color_refresh_request() {
-            return false;
-        }
-
-        self.refresh_host_terminal_colors(!self.surface.is_inline(), true)
-    }
-
     #[cfg(test)]
     fn dispatch_focused_key(&mut self, key: crate::core::event::KeyEvent) -> KeyDispatchResult {
         let focused = self.focus.focused;
@@ -852,9 +933,23 @@ impl<C: Component> AppRunner<C> {
         let panic_surface_mode = self.surface.mode();
         let mut exit_element: Option<Element> = None;
         let contrast_policy = self.contrast_policy;
+        let panic_keyboard_enhancement = Arc::new(AtomicBool::new(false));
+        let panic_theme_notifications = Arc::new(AtomicBool::new(false));
+        let panic_input_control =
+            crate::backend::ratatui_backend::terminal_handoff::input_handoff_slot();
+        let hook_keyboard_enhancement = Arc::clone(&panic_keyboard_enhancement);
+        let hook_theme_notifications = Arc::clone(&panic_theme_notifications);
+        let hook_input_control = Arc::clone(&panic_input_control);
         let default_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            crate::backend::ratatui_backend::restore_terminal_on_panic(panic_surface_mode);
+            crate::backend::ratatui_backend::terminal_handoff::pause_input_from_slot(
+                &hook_input_control,
+            );
+            crate::backend::ratatui_backend::restore_terminal_on_panic(
+                panic_surface_mode,
+                hook_keyboard_enhancement.load(Ordering::SeqCst),
+                hook_theme_notifications.load(Ordering::SeqCst),
+            );
             if debug_enabled {
                 crate::debug::internal_log!("[tui-lipan] panic: {}", info);
             }
@@ -862,9 +957,27 @@ impl<C: Component> AppRunner<C> {
         }));
 
         let result = (|| -> Result<()> {
-            let (mut terminal, _guard) =
-                TerminalGuard::enter(self.surface.mode(), self.mouse_enabled)?;
+            let (mut terminal, guard) = TerminalGuard::enter(
+                self.surface.mode(),
+                self.mouse_enabled,
+                panic_keyboard_enhancement.as_ref(),
+            )?;
+            let mut guard = guard;
             self.refresh_host_terminal_colors(false, false);
+
+            // Fullscreen Unix apps that opted into live host colors use Termina
+            // as their sole runtime decoder. Startup probing above deliberately
+            // finishes before this worker takes ownership of terminal input.
+            let platform_input = PlatformInputCoordinator::start(
+                &self.surface,
+                self.host_terminal_color_refresh_enabled(),
+                self.core.ctx.host_terminal_colors(),
+                Arc::clone(&panic_input_control),
+            )?;
+            if platform_input.owns_fullscreen_input() {
+                let notifications_enabled = guard.enable_theme_notifications()?;
+                panic_theme_notifications.store(notifications_enabled, Ordering::SeqCst);
+            }
 
             // Root init runs once with the initial viewport.
             {
@@ -906,10 +1019,10 @@ impl<C: Component> AppRunner<C> {
             // inline autoresize queries cursor position from stdin. A concurrent
             // crossterm reader thread can consume cursor-report bytes and cause
             // viewport desync/timeouts during resize.
-            let mut event_rx: Option<mpsc::Receiver<CEvent>> = None;
-            if !self.surface.is_inline() {
+            let mut crossterm_event_rx: Option<mpsc::Receiver<RunnerEvent>> = None;
+            if !self.surface.is_inline() && !platform_input.owns_fullscreen_input() {
                 // Fullscreen path keeps the background reader for low-latency wakeups.
-                let (event_tx, rx) = mpsc::channel::<CEvent>();
+                let (event_tx, rx) = mpsc::channel::<RunnerEvent>();
                 std::thread::Builder::new()
                     .name("crossterm-reader".into())
                     .spawn({
@@ -922,24 +1035,33 @@ impl<C: Component> AppRunner<C> {
                                 match crossterm::event::poll(Duration::from_millis(100)) {
                                     Ok(true) => match crossterm::event::read() {
                                         Ok(ev) => {
-                                            if tx.send(ev).is_err() {
+                                            if tx.send(RunnerEvent::Terminal(ev)).is_err() {
                                                 break;
                                             }
                                         }
-                                        Err(_) => break,
+                                        Err(err) => {
+                                            let _ =
+                                                tx.send(RunnerEvent::InputError(err.to_string()));
+                                            break;
+                                        }
                                     },
                                     Ok(false) => {}
-                                    Err(_) => break,
+                                    Err(err) => {
+                                        let _ = tx.send(RunnerEvent::InputError(err.to_string()));
+                                        break;
+                                    }
                                 }
                             }
                         }
                     })?;
                 // Drop our copy so the channel closes when the loop ends.
                 drop(event_tx);
-                event_rx = Some(rx);
+                crossterm_event_rx = Some(rx);
             }
 
-            let mut pending_event: Option<CEvent> = None;
+            let event_rx = platform_input.receiver(crossterm_event_rx.as_ref());
+
+            let mut pending_event: Option<RunnerEvent> = None;
             let mut host_color_refresh_quiet_until: Option<Instant> = None;
             let mut deferred_full = false;
             // Last terminal size we observed. Used as a fallback for missed
@@ -1004,9 +1126,20 @@ impl<C: Component> AppRunner<C> {
                     // Genuine input recovered from a prior host-color OSC probe,
                     // replayed ahead of the channel so it is not lost to the blocking
                     // round-trip that ran while it was queued.
-                    Some(ev)
+                    Some(RunnerEvent::Terminal(ev))
                 } else {
-                    self.recv_event(actual_timeout, event_rx.as_ref())?
+                    self.recv_event(actual_timeout, event_rx)?
+                };
+                let maybe_event = match maybe_event {
+                    Some(RunnerEvent::HostTerminalColors(colors)) => {
+                        self.apply_host_terminal_colors(colors, true);
+                        None
+                    }
+                    Some(RunnerEvent::InputError(message)) => {
+                        return Err(std::io::Error::other(message).into());
+                    }
+                    Some(RunnerEvent::Terminal(event)) => Some(event),
+                    None => None,
                 };
                 if let Some(event) = maybe_event {
                     match event {
@@ -1113,11 +1246,9 @@ impl<C: Component> AppRunner<C> {
 
                                 if !handled && matches!(mouse.kind, MouseKind::Drag(_)) {
                                     let mut pending_non_drag: Option<MouseEvent> = None;
-                                    while let Some(next_ev) =
-                                        self.try_recv_event(event_rx.as_ref())?
-                                    {
+                                    while let Some(next_ev) = self.try_recv_event(event_rx)? {
                                         match next_ev {
-                                            CEvent::Mouse(next_m) => {
+                                            RunnerEvent::Terminal(CEvent::Mouse(next_m)) => {
                                                 if let Some(next_mouse) =
                                                     self.convert_mouse_event(next_m)
                                                 {
@@ -1172,10 +1303,10 @@ impl<C: Component> AppRunner<C> {
                                 if !handled {
                                     if matches!(mouse.kind, MouseKind::Moved) {
                                         let mut dispatched_coalesced_move = false;
-                                        while let Some(next_ev) =
-                                            self.try_recv_event(event_rx.as_ref())?
-                                        {
-                                            if let CEvent::Mouse(next_m) = next_ev {
+                                        while let Some(next_ev) = self.try_recv_event(event_rx)? {
+                                            if let RunnerEvent::Terminal(CEvent::Mouse(next_m)) =
+                                                next_ev
+                                            {
                                                 if let Some(next_mouse) =
                                                     self.convert_mouse_event(next_m)
                                                 {
@@ -1224,10 +1355,10 @@ impl<C: Component> AppRunner<C> {
                                         // individually triggers a full render per tick.
                                         let mut count: u16 = 1;
                                         let direction = mouse.kind;
-                                        while let Some(next_ev) =
-                                            self.try_recv_event(event_rx.as_ref())?
-                                        {
-                                            if let CEvent::Mouse(next_m) = next_ev {
+                                        while let Some(next_ev) = self.try_recv_event(event_rx)? {
+                                            if let RunnerEvent::Terminal(CEvent::Mouse(next_m)) =
+                                                next_ev
+                                            {
                                                 if let Some(next_mouse) =
                                                     self.convert_mouse_event(next_m)
                                                 {
@@ -1294,8 +1425,8 @@ impl<C: Component> AppRunner<C> {
                             // channel with many Resize events between frames;
                             // processing each one individually triggers a full
                             // render per tick.
-                            while let Some(next_ev) = self.try_recv_event(event_rx.as_ref())? {
-                                if matches!(next_ev, CEvent::Resize(_, _)) {
+                            while let Some(next_ev) = self.try_recv_event(event_rx)? {
+                                if matches!(next_ev, RunnerEvent::Terminal(CEvent::Resize(_, _))) {
                                     // Discard intermediate resize - the terminal
                                     // backend will query the real size on draw.
                                     continue;
@@ -1346,18 +1477,15 @@ impl<C: Component> AppRunner<C> {
                     dirty.mark_full();
                 }
 
-                // Host terminal color refresh performs a blocking OSC color
-                // round-trip (`OSC 4/10/11 ; ?`). In fullscreen mode it also
-                // pauses the crossterm reader long enough for an in-flight
-                // `poll(100ms)` to settle, so even a host that replies quickly
-                // can block resize delivery for a visible frame burst. A FocusIn
-                // refresh is commonly followed by resize events, but those can
-                // arrive just after the immediate queue check. Keep the request
-                // pending until queued events drain and focus/resize activity
-                // has been quiet briefly.
+                // A FocusIn refresh is commonly followed by resize events. Keep
+                // the request pending until queued events drain and focus/resize
+                // activity has been quiet briefly. The legacy lane then performs
+                // its blocking OSC 4/10/11 probe; Termina fullscreen runs hand
+                // the request to their input worker for a typed OSC 10/11 query
+                // while preserving the startup probe's resolved ANSI slots.
                 let host_color_refresh = if pending_event.is_some() {
                     false
-                } else if let Some(next) = self.try_recv_event(event_rx.as_ref())? {
+                } else if let Some(next) = self.try_recv_event(event_rx)? {
                     preserve_pending_event(&mut pending_event, next);
                     false
                 } else if host_color_refresh_wait_remaining(
@@ -1369,7 +1497,13 @@ impl<C: Component> AppRunner<C> {
                     false
                 } else {
                     host_color_refresh_quiet_until = None;
-                    self.apply_pending_host_terminal_color_refresh()
+                    if platform_input
+                        .route_host_color_refresh(self.take_host_terminal_color_refresh_request())
+                    {
+                        self.refresh_host_terminal_colors(!self.surface.is_inline(), true)
+                    } else {
+                        false
+                    }
                 };
 
                 let ctx_repaint = self.core.take_full_repaint_request();
@@ -1427,7 +1561,7 @@ impl<C: Component> AppRunner<C> {
                     && !(self.surface.is_transcript()
                         && self.surface.inline.transcript_reset_pending)
                     && pending_event.is_none()
-                    && let Some(next) = self.try_recv_event(event_rx.as_ref())?
+                    && let Some(next) = self.try_recv_event(event_rx)?
                 {
                     preserve_pending_event(&mut pending_event, next);
                     deferred_full = true;
@@ -1442,7 +1576,7 @@ impl<C: Component> AppRunner<C> {
                 match frame_level {
                     DirtyLevel::Full => {
                         if force_host_redraw {
-                            terminal.clear().map_err(crate::Error::from)?;
+                            invalidate_previous_frame(&mut terminal);
                             self.last_frame_snapshot = None;
                             self.scroll_diff_snapshot = None;
                         }
@@ -1493,6 +1627,9 @@ impl<C: Component> AppRunner<C> {
             self.core.component.unmount(&mut self.core.ctx);
             Ok(())
         })();
+
+        panic_keyboard_enhancement.store(false, Ordering::SeqCst);
+        panic_theme_notifications.store(false, Ordering::SeqCst);
 
         if result.is_ok()
             && let Some(element) = exit_element
@@ -1581,11 +1718,11 @@ impl<C: Component> AppRunner<C> {
     fn recv_event(
         &self,
         timeout: Duration,
-        event_rx: Option<&mpsc::Receiver<CEvent>>,
-    ) -> Result<Option<CEvent>> {
+        event_rx: Option<&mpsc::Receiver<RunnerEvent>>,
+    ) -> Result<Option<RunnerEvent>> {
         if self.surface.is_inline() {
             if crossterm::event::poll(timeout)? {
-                return Ok(Some(crossterm::event::read()?));
+                return Ok(Some(RunnerEvent::Terminal(crossterm::event::read()?)));
             }
             return Ok(None);
         }
@@ -1593,18 +1730,40 @@ impl<C: Component> AppRunner<C> {
         let Some(rx) = event_rx else {
             return Ok(None);
         };
-        Ok(rx.recv_timeout(timeout).ok())
+        match rx.recv_timeout(timeout) {
+            Ok(event) => Ok(Some(event)),
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "fullscreen input worker disconnected",
+            )
+            .into()),
+        }
     }
 
-    fn try_recv_event(&self, event_rx: Option<&mpsc::Receiver<CEvent>>) -> Result<Option<CEvent>> {
+    fn try_recv_event(
+        &self,
+        event_rx: Option<&mpsc::Receiver<RunnerEvent>>,
+    ) -> Result<Option<RunnerEvent>> {
         if self.surface.is_inline() {
             if crossterm::event::poll(Duration::from_millis(0))? {
-                return Ok(Some(crossterm::event::read()?));
+                return Ok(Some(RunnerEvent::Terminal(crossterm::event::read()?)));
             }
             return Ok(None);
         }
 
-        Ok(event_rx.and_then(|rx| rx.try_recv().ok()))
+        let Some(rx) = event_rx else {
+            return Ok(None);
+        };
+        match rx.try_recv() {
+            Ok(event) => Ok(Some(event)),
+            Err(mpsc::TryRecvError::Empty) => Ok(None),
+            Err(mpsc::TryRecvError::Disconnected) => Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "fullscreen input worker disconnected",
+            )
+            .into()),
+        }
     }
 }
 

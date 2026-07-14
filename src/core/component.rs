@@ -1,4 +1,4 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::any::TypeId;
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
@@ -13,7 +13,8 @@ use crate::core::element::{Element, Key};
 use crate::core::event::KeyEvent;
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::core::runtime_env::{
-    DevToolsRequest, MemoDependency, MemoDependencySnapshot, RuntimeEnv, TranscriptEntry,
+    DevToolsRequest, MemoDependency, MemoDependencySnapshot, RuntimeEnv, ScrollDependency,
+    ScrollDependencyKind, ScrollIdentity, TranscriptEntry,
 };
 use crate::style::{HostTerminalColors, Rect, RichText, Theme, ThemeExtension};
 
@@ -226,6 +227,18 @@ impl Update {
             dirty: true,
             level: UpdateLevel::Layout,
             command: None,
+        }
+    }
+
+    /// Request a layout reconcile and optionally run a command.
+    pub fn layout_with_command(command: impl Into<Option<Command>>) -> Self {
+        match command.into() {
+            Some(command) => Self {
+                dirty: true,
+                level: UpdateLevel::Layout,
+                command: Some(command),
+            },
+            None => Self::layout(),
         }
     }
 
@@ -558,9 +571,20 @@ impl HoverContext {
 /// Shared render-time scrollable information from the previous frame.
 #[derive(Default)]
 pub(crate) struct ScrollContext {
-    by_key: RefCell<FxHashMap<Key, ScrollbarVisibility>>,
-    text_area_metrics_by_key: RefCell<FxHashMap<Key, crate::widgets::TextAreaMetrics>>,
-    generation: Cell<u64>,
+    by_key: RefCell<FxHashMap<ScrollIdentity, ScrollbarVisibility>>,
+    text_area_metrics_by_key: RefCell<FxHashMap<ScrollIdentity, crate::widgets::TextAreaMetrics>>,
+    metrics_generations: RefCell<FxHashMap<ScrollIdentity, u64>>,
+    scrollbar_generations: RefCell<FxHashMap<ScrollIdentity, u64>>,
+    metrics_view_dependencies: RefCell<FxHashSet<ScrollIdentity>>,
+    scrollbar_view_dependencies: RefCell<FxHashSet<ScrollIdentity>>,
+}
+
+/// Snapshot of [`ScrollContext`] generations taken before a reconcile pass,
+/// used to decide whether cached views became stale.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ScrollGenerations {
+    metrics: FxHashMap<ScrollIdentity, u64>,
+    scrollbars: FxHashMap<ScrollIdentity, u64>,
 }
 
 impl ScrollContext {
@@ -572,29 +596,149 @@ impl ScrollContext {
 
         for node in tree.iter_with_overlays() {
             if let (Some(key), NodeKind::TextArea(text_area)) = (&node.key, &node.kind) {
+                let identity = ScrollIdentity {
+                    scope: node_scope(tree, node.id),
+                    key: key.clone(),
+                };
                 let metrics = text_area.metrics(node.rect);
-                map.insert(key.clone(), metrics.scrollbars);
-                metrics_map.insert(key.clone(), metrics);
+                map.insert(identity.clone(), metrics.scrollbars);
+                metrics_map.insert(identity, metrics);
             }
         }
 
-        if *map != prev || *metrics_map != prev_metrics {
-            self.generation
-                .set(self.generation.get().wrapping_add(1).max(1));
+        advance_changed_generations(&prev, &map, &self.scrollbar_generations);
+        advance_changed_generations(&prev_metrics, &metrics_map, &self.metrics_generations);
+    }
+
+    pub(crate) fn get(&self, identity: &ScrollIdentity) -> Option<ScrollbarVisibility> {
+        self.by_key.borrow().get(identity).copied()
+    }
+
+    pub(crate) fn text_area_metrics(
+        &self,
+        identity: &ScrollIdentity,
+    ) -> Option<crate::widgets::TextAreaMetrics> {
+        self.text_area_metrics_by_key
+            .borrow()
+            .get(identity)
+            .cloned()
+    }
+
+    pub(crate) fn begin_view(&self, scope: ScopeId) {
+        self.metrics_view_dependencies
+            .borrow_mut()
+            .retain(|identity| identity.scope != scope);
+        self.scrollbar_view_dependencies
+            .borrow_mut()
+            .retain(|identity| identity.scope != scope);
+    }
+
+    pub(crate) fn remove_scope(&self, scope: ScopeId) {
+        self.begin_view(scope);
+        self.by_key
+            .borrow_mut()
+            .retain(|identity, _| identity.scope != scope);
+        self.text_area_metrics_by_key
+            .borrow_mut()
+            .retain(|identity, _| identity.scope != scope);
+        self.metrics_generations
+            .borrow_mut()
+            .retain(|identity, _| identity.scope != scope);
+        self.scrollbar_generations
+            .borrow_mut()
+            .retain(|identity, _| identity.scope != scope);
+    }
+
+    pub(crate) fn mark_view_dependency(&self, dependency: &ScrollDependency) {
+        match dependency.kind {
+            ScrollDependencyKind::Metrics => {
+                self.metrics_view_dependencies
+                    .borrow_mut()
+                    .insert(dependency.identity.clone());
+            }
+            ScrollDependencyKind::Scrollbars => {
+                self.scrollbar_view_dependencies
+                    .borrow_mut()
+                    .insert(dependency.identity.clone());
+            }
         }
     }
 
-    pub(crate) fn get(&self, key: &Key) -> Option<ScrollbarVisibility> {
-        self.by_key.borrow().get(key).copied()
+    pub(crate) fn dependency_generation(&self, dependency: &ScrollDependency) -> u64 {
+        let generations = match dependency.kind {
+            ScrollDependencyKind::Metrics => &self.metrics_generations,
+            ScrollDependencyKind::Scrollbars => &self.scrollbar_generations,
+        };
+        generations
+            .borrow()
+            .get(&dependency.identity)
+            .copied()
+            .unwrap_or(0)
     }
 
-    pub(crate) fn text_area_metrics(&self, key: &Key) -> Option<crate::widgets::TextAreaMetrics> {
-        self.text_area_metrics_by_key.borrow().get(key).cloned()
+    pub(crate) fn view_generations(&self) -> ScrollGenerations {
+        ScrollGenerations {
+            metrics: self.metrics_generations.borrow().clone(),
+            scrollbars: self.scrollbar_generations.borrow().clone(),
+        }
     }
 
-    pub(crate) fn generation(&self) -> u64 {
-        self.generation.get()
+    /// Whether a change since `prev` can affect the output of any cached
+    /// `view()`, given which accessors views have actually used.
+    pub(crate) fn view_dependencies_stale(&self, prev: &ScrollGenerations) -> bool {
+        self.metrics_view_dependencies
+            .borrow()
+            .iter()
+            .any(|identity| {
+                self.metrics_generations
+                    .borrow()
+                    .get(identity)
+                    .copied()
+                    .unwrap_or(0)
+                    != prev.metrics.get(identity).copied().unwrap_or(0)
+            })
+            || self
+                .scrollbar_view_dependencies
+                .borrow()
+                .iter()
+                .any(|identity| {
+                    self.scrollbar_generations
+                        .borrow()
+                        .get(identity)
+                        .copied()
+                        .unwrap_or(0)
+                        != prev.scrollbars.get(identity).copied().unwrap_or(0)
+                })
     }
+}
+
+fn node_scope(tree: &NodeTree, mut id: NodeId) -> ScopeId {
+    loop {
+        let node = tree.node(id);
+        if let NodeKind::Group(group) = &node.kind {
+            return group.scope;
+        }
+        let Some(parent) = node.parent.filter(|parent| tree.is_valid(*parent)) else {
+            return ScopeId(1);
+        };
+        id = parent;
+    }
+}
+
+fn advance_changed_generations<T: PartialEq>(
+    previous: &FxHashMap<ScrollIdentity, T>,
+    current: &FxHashMap<ScrollIdentity, T>,
+    generations: &RefCell<FxHashMap<ScrollIdentity, u64>>,
+) {
+    let identities: FxHashSet<_> = previous.keys().chain(current.keys()).cloned().collect();
+    let mut generations = generations.borrow_mut();
+    for identity in identities {
+        if previous.get(&identity) != current.get(&identity) {
+            let generation = generations.entry(identity).or_default();
+            *generation = generation.wrapping_add(1).max(1);
+        }
+    }
+    generations.retain(|identity, _| current.contains_key(identity));
 }
 
 /// Per-component runtime context.
@@ -861,11 +1005,21 @@ impl<C: Component> Context<C> {
     /// The `TextArea` element must have an `Element::key`; missing or first-frame entries return
     /// `ScrollbarVisibility::default()`.
     pub fn text_area_scrollbars(&self, key: impl Into<Key>) -> ScrollbarVisibility {
-        let key = key.into();
-        self.env.note_memo_dependency(MemoDependency::Scroll);
-        self.text_area_metrics(key.clone())
+        let dependency = ScrollDependency {
+            identity: ScrollIdentity {
+                scope: self.scope,
+                key: key.into(),
+            },
+            kind: ScrollDependencyKind::Scrollbars,
+        };
+        self.env
+            .note_memo_dependency(MemoDependency::Scroll(dependency.clone()));
+        self.env.scroll.mark_view_dependency(&dependency);
+        self.env
+            .scroll
+            .text_area_metrics(&dependency.identity)
             .map(|metrics| metrics.scrollbars)
-            .or_else(|| self.env.scroll.get(&key))
+            .or_else(|| self.env.scroll.get(&dependency.identity))
             .unwrap_or_default()
     }
 
@@ -874,9 +1028,17 @@ impl<C: Component> Context<C> {
         &self,
         key: impl Into<Key>,
     ) -> Option<crate::widgets::TextAreaMetrics> {
-        let key = key.into();
-        self.env.note_memo_dependency(MemoDependency::Scroll);
-        self.env.scroll.text_area_metrics(&key)
+        let dependency = ScrollDependency {
+            identity: ScrollIdentity {
+                scope: self.scope,
+                key: key.into(),
+            },
+            kind: ScrollDependencyKind::Metrics,
+        };
+        self.env
+            .note_memo_dependency(MemoDependency::Scroll(dependency.clone()));
+        self.env.scroll.mark_view_dependency(&dependency);
+        self.env.scroll.text_area_metrics(&dependency.identity)
     }
 
     /// Returns `true` if the hovered node (from the previous frame) is inside this
@@ -1004,6 +1166,7 @@ impl<C: Component> Context<C> {
     }
 
     pub(crate) fn begin_memo_dependency_capture(&self) {
+        self.env.scroll.begin_view(self.scope);
         self.env.begin_memo_dependency_capture();
     }
 

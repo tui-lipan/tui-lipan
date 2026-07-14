@@ -1,4 +1,5 @@
 use std::io::{self, BufWriter, Stdout};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::app::context::SurfaceMode;
 use crate::style::{
@@ -12,6 +13,8 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::{TerminalOptions, Viewport};
 
 use super::terminal_handoff::reset_handoff_state_for_terminal_restore;
+#[cfg(unix)]
+use super::terminal_transition::theme_notification_plan;
 use super::terminal_transition::{
     CrosstermTransitionExecutor, enter_plan, execute_plan, execute_plan_with_rollback, exit_plan,
 };
@@ -174,12 +177,14 @@ pub(crate) struct TerminalGuard {
     stdout: Stdout,
     policy: SurfaceTerminalPolicy,
     keyboard_enhancement: bool,
+    theme_notifications: bool,
 }
 
 impl TerminalGuard {
     pub(crate) fn enter(
         surface_mode: SurfaceMode,
         mouse_enabled: bool,
+        panic_keyboard_enhancement: &AtomicBool,
     ) -> io::Result<(Terminal, Self)> {
         let policy = surface_terminal_policy(surface_mode);
         let mut stdout = io::stdout();
@@ -188,6 +193,7 @@ impl TerminalGuard {
         let mut executor = CrosstermTransitionExecutor::new(stdout);
         execute_plan_with_rollback(&mut executor, &plan)?;
         stdout = executor.into_inner();
+        panic_keyboard_enhancement.store(keyboard_enhancement, Ordering::SeqCst);
 
         #[cfg(feature = "image")]
         image_support::init_image_picker();
@@ -205,6 +211,7 @@ impl TerminalGuard {
                 Ok(terminal) => terminal,
                 Err(err) => {
                     rollback_entered_terminal(policy, keyboard_enhancement);
+                    panic_keyboard_enhancement.store(false, Ordering::SeqCst);
                     return Err(err);
                 }
             }
@@ -218,6 +225,7 @@ impl TerminalGuard {
                 Ok(terminal) => terminal,
                 Err(err) => {
                     rollback_entered_terminal(policy, keyboard_enhancement);
+                    panic_keyboard_enhancement.store(false, Ordering::SeqCst);
                     return Err(err);
                 }
             }
@@ -227,8 +235,25 @@ impl TerminalGuard {
             stdout: io::stdout(),
             policy,
             keyboard_enhancement,
+            theme_notifications: false,
         };
         Ok((terminal, guard))
+    }
+
+    pub(crate) fn enable_theme_notifications(&mut self) -> io::Result<bool> {
+        #[cfg(not(unix))]
+        return Ok(false);
+        #[cfg(unix)]
+        {
+            if self.theme_notifications {
+                return Ok(true);
+            }
+            let plan = theme_notification_plan(true);
+            let mut executor = CrosstermTransitionExecutor::new(&mut self.stdout);
+            execute_plan_with_rollback(&mut executor, &plan)?;
+            self.theme_notifications = true;
+            Ok(true)
+        }
     }
 }
 
@@ -244,24 +269,40 @@ fn rollback_entered_terminal(policy: SurfaceTerminalPolicy, keyboard_enhancement
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        // Drop any probe DA1 reply still queued before `exit_plan` disables raw
-        // mode, so it is not echoed to the shell as `^[[?…c`.
+        #[cfg(unix)]
+        super::terminal_handoff::pause_input_for_terminal_restore();
+        let mut executor = CrosstermTransitionExecutor::new(&mut self.stdout);
+        #[cfg(unix)]
+        if self.theme_notifications {
+            // Stop notifications and flush the command while raw mode is still
+            // active, then discard any report that raced the Termina shutdown.
+            let _ = execute_plan(&mut executor, &theme_notification_plan(false));
+            self.theme_notifications = false;
+        }
         flush_pending_terminal_responses_on_exit();
         let plan = exit_plan(self.policy, self.keyboard_enhancement);
-        let mut executor = CrosstermTransitionExecutor::new(&mut self.stdout);
         let _ = execute_plan(&mut executor, &plan);
     }
 }
 
-pub(crate) fn restore_terminal_on_panic(surface_mode: SurfaceMode) {
+pub(crate) fn restore_terminal_on_panic(
+    surface_mode: SurfaceMode,
+    keyboard_enhancement: bool,
+    theme_notifications: bool,
+) {
+    #[cfg(unix)]
+    super::terminal_handoff::pause_input_for_terminal_restore();
     let policy = surface_terminal_policy(surface_mode);
     let mut stdout = io::stdout();
-    let keyboard_enhancement = query_keyboard_enhancement_support().unwrap_or(false);
-    // The keyboard-enhancement probe above just sent another DA1 sentinel; flush
-    // its reply (and any earlier straggler) before `exit_plan` disables raw mode.
+    let mut executor = CrosstermTransitionExecutor::new(&mut stdout);
+    #[cfg(unix)]
+    if theme_notifications {
+        let _ = execute_plan(&mut executor, &theme_notification_plan(false));
+    }
+    #[cfg(not(unix))]
+    let _ = theme_notifications;
     flush_pending_terminal_responses_on_exit();
     let plan = exit_plan(policy, keyboard_enhancement);
-    let mut executor = CrosstermTransitionExecutor::new(&mut stdout);
     let _ = execute_plan(&mut executor, &plan);
     reset_handoff_state_for_terminal_restore();
 }

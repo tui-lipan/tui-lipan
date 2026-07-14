@@ -603,6 +603,11 @@ impl App {
     /// through `Context::host_terminal_colors()` and the resolved terminal
     /// background is kept in sync for opacity blending.
     ///
+    /// On Unix fullscreen surfaces, compatible terminals that implement DEC
+    /// private mode 2031 also trigger an immediate refresh when their palette
+    /// changes. Inline, non-Unix, and unsupported terminals retain startup,
+    /// focus-gained, and manual refresh behavior.
+    ///
     /// Disabled by default so static apps do not poll the terminal.
     pub fn live_host_terminal_colors(mut self, enabled: bool) -> Self {
         self.live_host_terminal_colors = enabled;
@@ -613,6 +618,8 @@ impl App {
     ///
     /// The current app theme remains the fallback until the runner successfully
     /// receives host colors. Later failed refreshes keep the last applied theme.
+    /// Unix fullscreen surfaces also subscribe to compatible terminals' DEC mode
+    /// 2031 palette-change notifications while the app is running.
     pub fn system_theme(mut self) -> Self {
         self.system_theme = true;
         self

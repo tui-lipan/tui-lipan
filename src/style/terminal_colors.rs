@@ -10,7 +10,7 @@ use crate::style::Color;
 /// Colors reported by the host terminal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HostTerminalColors {
-    /// ANSI slots 0..15 from OSC 4.
+    /// ANSI slots 0..15 resolved to their reported RGB values.
     pub ansi: [Color; 16],
     /// Default foreground from OSC 10.
     pub fg: Color,
@@ -173,31 +173,50 @@ pub(crate) fn drain_pending_terminal_responses() {
 #[cfg(not(unix))]
 pub(crate) fn drain_pending_terminal_responses() {}
 
-/// Discard any terminal query-response bytes still queued on the TTY, called
-/// immediately before the terminal is restored to cooked mode on exit.
+/// Discard terminal protocol-response bytes still queued on the controlling TTY.
 ///
 /// A capability probe's DA1 reply (`CSI ? … c`) can arrive after the startup
 /// [`drain_pending_terminal_responses`] window closed and then sit unread in the
 /// input queue. The fullscreen reader thread normally consumes it mid-session
 /// (crossterm parses it as an internal, non-public event and drops it), which is
 /// why the leak is intermittent — but on slower terminals or multiplexers the
-/// reply can still be pending at teardown. `exit_plan` disables raw mode as its
-/// first op, so anything left in the queue is then echoed to the shell prompt as
-/// a stray `^[[?…c`. Flushing the kernel input queue while raw mode is still
-/// active drops it deterministically.
+/// reply can still be pending at teardown. Mode-2031 reports can likewise race
+/// notification disablement. Callers use this only while the input worker is
+/// paused or joined and before restoring cooked mode or handing the TTY to an
+/// external child, so a kernel flush cannot compete with a runtime decoder.
 ///
-/// This mirrors the `tcflush` in `terminal_handoff::discard_pending_terminal_input`
-/// used on external-process resume; on final exit there is nothing to preserve
-/// input for, so a blanket flush is correct.
+/// At those boundaries there is no application input to preserve, so a blanket
+/// flush is correct.
 #[cfg(unix)]
 pub(crate) fn flush_pending_terminal_responses_on_exit() {
     let Some(fd) = tty_open() else {
         return;
     };
     let _fd_guard = FdGuard(fd);
-    // SAFETY: `tcflush(TCIFLUSH)` on the controlling TTY drops input received but
-    // not yet read (leaked DA/OSC query responses); it is a no-op on an empty
-    // queue and harmless if `/dev/tty` is not a terminal.
+    // A DA1 request is an ordering sentinel: its reply can only arrive after the
+    // terminal has processed preceding mode changes and their reports. Drain
+    // through that reply, then flush any partial tail before cooked mode returns.
+    let _ = tty_write_all(fd, b"\x1b[c");
+    let deadline = Instant::now() + Duration::from_millis(50);
+    let mut pending = Vec::with_capacity(256);
+    let mut chunk = [0u8; 256];
+    while Instant::now() < deadline {
+        let remaining = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis() as i32;
+        if !matches!(poll_readable(fd, remaining.min(10)), Some(true)) {
+            continue;
+        }
+        let Some(n) = tty_read(fd, &mut chunk) else {
+            break;
+        };
+        pending.extend_from_slice(&chunk[..n]);
+        if scan_keyboard_enhancement(&pending).is_some() {
+            break;
+        }
+    }
+    // SAFETY: `tcflush(TCIFLUSH)` on the controlling TTY drops unread response
+    // fragments after the ordering sentinel; callers have paused the input worker.
     unsafe {
         libc::tcflush(fd, libc::TCIFLUSH);
     }
