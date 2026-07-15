@@ -195,6 +195,10 @@ While the crate is on `0.x.y`:
 
 - `Flow` no longer subtracts its padding and border twice while measuring constrained widths,
   preventing rows that fit from reserving an extra wrapped line.
+- Centered and stacked overlays (`Modal`, toasts) now measure their auto height against the width
+  they are clamped to when a fixed- or percent-width overlay is wider than the viewport, so
+  width-dependent content (a wrapping `Flow` footer, wrapped `Text`) grows the overlay to fit
+  instead of being sized for its unwrapped width and clipped.
 - `Terminal` now discards stale mouse-scroll state when a new snapshot changes the scrollback
   offset, keeping the rendered viewport, scrollbar thumb, and subsequent wheel input synchronized.
 - `SearchPalette` query matches with an explicit foreground now remain visually distinct inside
