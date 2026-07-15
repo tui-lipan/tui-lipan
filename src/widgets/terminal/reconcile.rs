@@ -51,23 +51,34 @@ pub(crate) fn reconcile_terminal(
     let viewport_cols = layout.content_rect.w as usize;
 
     // Read previous scroll state from existing node to persist across frames.
-    let (old_scroll_override, old_selection, old_viewport_rows, old_viewport_cols) =
-        if let NodeKind::Terminal(old) = &tree.node(id).kind {
-            (
-                old.scroll_override,
-                old.selection.clone(),
-                old.viewport_rows,
-                old.viewport_cols,
-            )
-        } else {
-            (None, None, 0, 0)
-        };
+    let (
+        old_scroll_override,
+        old_snapshot_scrollback_offset,
+        old_selection,
+        old_viewport_rows,
+        old_viewport_cols,
+    ) = if let NodeKind::Terminal(old) = &tree.node(id).kind {
+        (
+            old.scroll_override,
+            old.snapshot_scrollback_offset,
+            old.selection.clone(),
+            old.viewport_rows,
+            old.viewport_cols,
+        )
+    } else {
+        (None, terminal.scrollback_offset, None, 0, 0)
+    };
 
     // Determine effective scrollback offset:
-    // - If the mouse scroll handler set a scroll_override, use it.
-    // - Otherwise use whatever the snapshot provides (which the user set
-    //   via TerminalScreen::set_scrollback).
-    let scrollback_offset = old_scroll_override.unwrap_or(terminal.scrollback_offset);
+    // - Preserve an input-driven override while the parent snapshot is unchanged.
+    // - A changed snapshot is authoritative and clears the override.
+    let snapshot_offset_changed = terminal.scrollback_offset != old_snapshot_scrollback_offset;
+    let scroll_override = if snapshot_offset_changed {
+        None
+    } else {
+        old_scroll_override
+    };
+    let scrollback_offset = scroll_override.unwrap_or(terminal.scrollback_offset);
     let selection = if terminal.selection_controlled {
         terminal.selection.clone()
     } else {
@@ -106,11 +117,12 @@ pub(crate) fn reconcile_terminal(
         border_style: terminal.border_style,
         padding: terminal.padding,
         scrollback_offset,
+        snapshot_scrollback_offset: terminal.scrollback_offset,
         total_scrollback_rows: terminal.total_scrollback_rows,
         viewport_rows,
         viewport_cols,
         scroll_wheel: terminal.scroll_wheel,
-        scroll_override: old_scroll_override,
+        scroll_override,
         scrollbar: terminal.scrollbar,
         scrollbar_variant: terminal.scrollbar_variant,
         scrollbar_gap: terminal.scrollbar_gap,
@@ -128,4 +140,74 @@ pub(crate) fn reconcile_terminal(
     tree.register_scrollbar_zone(id);
 
     id
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Element;
+    use crate::layout::LayoutEngine;
+    use crate::widgets::{Terminal, TerminalRenderSnapshot};
+
+    fn reconcile(tree: &mut NodeTree, scrollback_offset: usize) {
+        let terminal: Element = Terminal::new()
+            .snapshot(TerminalRenderSnapshot {
+                scrollback_offset,
+                total_scrollback_rows: 100,
+                ..TerminalRenderSnapshot::default()
+            })
+            .into();
+        LayoutEngine::reconcile_with_focus(
+            tree,
+            &terminal,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 80,
+                h: 24,
+            },
+            None,
+        );
+    }
+
+    #[test]
+    fn changed_snapshot_offset_clears_mouse_scroll_override() {
+        let mut tree = NodeTree::new();
+        reconcile(&mut tree, 10);
+
+        let NodeKind::Terminal(node) = &mut tree.node_mut(tree.root).kind else {
+            panic!("expected terminal root");
+        };
+        node.scrollback_offset = 20;
+        node.scroll_override = Some(20);
+
+        reconcile(&mut tree, 0);
+
+        let NodeKind::Terminal(node) = &tree.node(tree.root).kind else {
+            panic!("expected terminal root");
+        };
+        assert_eq!(node.scrollback_offset, 0);
+        assert_eq!(node.scroll_override, None);
+        assert_eq!(node.snapshot_scrollback_offset, 0);
+    }
+
+    #[test]
+    fn unchanged_snapshot_preserves_pending_mouse_scroll_override() {
+        let mut tree = NodeTree::new();
+        reconcile(&mut tree, 10);
+
+        let NodeKind::Terminal(node) = &mut tree.node_mut(tree.root).kind else {
+            panic!("expected terminal root");
+        };
+        node.scrollback_offset = 20;
+        node.scroll_override = Some(20);
+
+        reconcile(&mut tree, 10);
+
+        let NodeKind::Terminal(node) = &tree.node(tree.root).kind else {
+            panic!("expected terminal root");
+        };
+        assert_eq!(node.scrollback_offset, 20);
+        assert_eq!(node.scroll_override, Some(20));
+    }
 }

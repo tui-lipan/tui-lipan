@@ -38,6 +38,7 @@ pub(crate) struct TerminalNode {
     pub border_style: BorderStyle,
     pub padding: Padding,
     pub scrollback_offset: usize,
+    pub snapshot_scrollback_offset: usize,
     pub total_scrollback_rows: usize,
     pub viewport_rows: usize,
     pub viewport_cols: usize,
