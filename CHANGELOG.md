@@ -193,6 +193,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `Flow` no longer subtracts its padding and border twice while measuring constrained widths,
+  preventing rows that fit from reserving an extra wrapped line.
 - `Terminal` now discards stale mouse-scroll state when a new snapshot changes the scrollback
   offset, keeping the rendered viewport, scrollbar thumb, and subsequent wheel input synchronized.
 - `SearchPalette` query matches with an explicit foreground now remain visually distinct inside
