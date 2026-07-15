@@ -53,20 +53,33 @@ fn resolve_overlay_size(
     // instead of growing unconstrained and being clipped afterward.
     let (measure_max_w, measure_max_h) =
         resolved_overlay_measure_max(content, overlay_constraints, bounds);
-    let (measured_w, measured_h) = min_size_constrained(content, measure_max_w, measure_max_h);
+    let (measured_w, _) = min_size_constrained(content, measure_max_w, measure_max_h);
     let requested_w = requested_main_axis(content, Axis::Horizontal, None);
     let requested_h = requested_main_axis(content, Axis::Vertical, None);
 
-    let mut width = requested_w.resolve(bounds.w, measured_w);
-    let mut height = requested_h.resolve(bounds.h, measured_h);
-
     let constraints = content.layout_constraints();
+
+    // Resolve and clamp the final width first. A fixed/percent-width overlay whose
+    // requested width exceeds the viewport is clamped down to `bounds.w`, so the
+    // width the content actually renders at is only known after clamping.
+    let mut width = requested_w.resolve(bounds.w, measured_w);
     width = constraints.clamp_width(width, bounds.w).min(bounds.w);
-    height = constraints.clamp_height(height, bounds.h).min(bounds.h);
     if let Some(overlay_constraints) = overlay_constraints {
         width = overlay_constraints
             .clamp_width(width, bounds.w)
             .min(bounds.w);
+    }
+
+    // Measure height against the final width, not the requested one. Content whose
+    // height depends on its wrap width (a `Flow`, wrapped `Text`) grows taller as it
+    // narrows; measuring it at the pre-clamp width would under-count rows and the
+    // overlay would clip its own content instead of growing to fit.
+    let height_measure_max_w = Some(measure_max_w.map_or(width, |max_w| max_w.min(width)));
+    let (_, measured_h) = min_size_constrained(content, height_measure_max_w, measure_max_h);
+
+    let mut height = requested_h.resolve(bounds.h, measured_h);
+    height = constraints.clamp_height(height, bounds.h).min(bounds.h);
+    if let Some(overlay_constraints) = overlay_constraints {
         height = overlay_constraints
             .clamp_height(height, bounds.h)
             .min(bounds.h);
@@ -397,7 +410,7 @@ mod tests {
     use super::*;
     use crate::core::element::IntoElement;
     use crate::style::Length;
-    use crate::widgets::{Frame, Text};
+    use crate::widgets::{Flow, Frame, Text};
 
     /// Helper: create an element with a known minimum size by setting
     /// min_width / min_height constraints on a zero-content text node.
@@ -658,5 +671,44 @@ mod tests {
 
         let rect = resolve_center_rect(&content, bounds, Some(&overlay_constraints));
         assert_eq!(rect.h, 5);
+    }
+
+    #[test]
+    fn center_rect_remeasures_wrapping_height_at_clamped_width() {
+        // A fixed-width modal wider than the viewport is clamped down to `bounds.w`.
+        // Its wrapping `Flow` footer fits on a single row at the requested width but
+        // wraps to four rows once the width is clamped. The overlay height must be
+        // measured against the clamped width so it grows to show every row, instead of
+        // sizing itself for the unwrapped footer and clipping its own content.
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 40,
+        };
+
+        let footer = Flow::new()
+            .gap(1)
+            .row_gap(0)
+            .child(sized_element(12, 1))
+            .child(sized_element(12, 1))
+            .child(sized_element(12, 1))
+            .child(sized_element(12, 1));
+
+        let content: Element = Frame::new()
+            .border(true)
+            .width(Length::Px(60))
+            .height(Length::Auto)
+            .child(footer)
+            .into();
+
+        let rect = resolve_center_rect(&content, bounds, None);
+
+        // Width is clamped to the viewport.
+        assert_eq!(rect.w, 20);
+        // Inner width 18 fits one 12-wide chip per row → 4 footer rows plus the top and
+        // bottom border = 6. Measuring at the requested 60-wide frame would report a
+        // single footer row and size the overlay to 3, clipping the other three rows.
+        assert_eq!(rect.h, 6);
     }
 }
