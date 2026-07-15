@@ -195,13 +195,12 @@ pub(crate) fn measure_flow(
         return (w.saturating_add(chrome_w), h.saturating_add(chrome_h));
     };
 
-    let inner_w = max_w.saturating_sub(chrome_w);
     let rows = pack_rows(
         flow,
         Rect {
             x: 0,
             y: 0,
-            w: inner_w,
+            w: max_w,
             h: 0,
         },
     );
@@ -227,6 +226,34 @@ pub(crate) fn measure_flow(
 mod tests {
     use super::*;
     use crate::style::Align;
+    use crate::widgets::Text;
+
+    #[test]
+    fn measure_flow_subtracts_padding_once_when_packing_rows() {
+        let flow = super::super::Flow::new()
+            .padding((1, 1, 0, 1))
+            .gap(3)
+            .row_gap(0)
+            .child(Text::new("open enter"))
+            .child(Text::new("new ctrl+n"))
+            .child(Text::new("name current ctrl+s"))
+            .child(Text::new("kill ctrl+k"));
+
+        // The content is exactly 59 columns wide. With two columns of horizontal
+        // padding, the Flow should remain one content row plus its top padding.
+        assert_eq!(measure_flow(&flow, Some(61), None), (61, 2));
+    }
+
+    #[test]
+    fn measure_flow_subtracts_border_once_when_packing_rows() {
+        let flow = super::super::Flow::new()
+            .border(true)
+            .gap(1)
+            .child(Text::new("1234"))
+            .child(Text::new("5678"));
+
+        assert_eq!(measure_flow(&flow, Some(11), None), (11, 3));
+    }
 
     #[test]
     fn pack_rows_keeps_items_on_one_row_when_they_fit() {
