@@ -2,6 +2,21 @@ use std::{borrow::Cow, sync::Arc};
 
 use super::{Paint, theme::Style};
 
+/// How row-level hover/selection/active styling interacts with a span's own style.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum RowStylePolicy {
+    /// Row-level styling fully overrides the span style.
+    #[default]
+    Full,
+    /// The row background and text modifiers apply, but the span keeps its explicit foreground.
+    ///
+    /// Useful for rich text such as search matches that must remain distinguishable inside a
+    /// selected row.
+    PreserveForeground,
+    /// Row-level styling never touches this span.
+    Disabled,
+}
+
 /// A styled segment of text.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Span {
@@ -9,8 +24,8 @@ pub struct Span {
     pub content: Arc<str>,
     /// Style.
     pub style: Style,
-    /// Whether row-level hover/selection/active styling may override this span.
-    pub allow_row_style: bool,
+    /// How row-level hover/selection/active styling interacts with this span.
+    pub row_style_policy: RowStylePolicy,
 }
 
 impl Default for Span {
@@ -18,7 +33,7 @@ impl Default for Span {
         Self {
             content: Arc::from(""),
             style: Style::default(),
-            allow_row_style: true,
+            row_style_policy: RowStylePolicy::Full,
         }
     }
 }
@@ -29,7 +44,7 @@ impl Span {
         Self {
             content: content.into(),
             style: Style::default(),
-            allow_row_style: true,
+            row_style_policy: RowStylePolicy::Full,
         }
     }
 
@@ -51,9 +66,9 @@ impl Span {
         self
     }
 
-    /// Control whether row-level hover/selection/active styling may override this span.
-    pub fn allow_row_style(mut self, allow: bool) -> Self {
-        self.allow_row_style = allow;
+    /// Set how row-level hover/selection/active styling interacts with this span.
+    pub fn row_style_policy(mut self, policy: RowStylePolicy) -> Self {
+        self.row_style_policy = policy;
         self
     }
 
@@ -81,7 +96,7 @@ impl From<Arc<str>> for Span {
         Self {
             content: s,
             style: Style::default(),
-            allow_row_style: true,
+            row_style_policy: RowStylePolicy::Full,
         }
     }
 }

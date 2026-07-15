@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
-use crate::style::{Span, Style};
+use crate::style::{RowStylePolicy, Span, Style};
 
 use super::format::{
     ColumnAlign, ContentFormatter, DocumentStyles, FormatInput, FormattedBlock,
@@ -448,7 +448,7 @@ fn parse_inline(
                 spans.push(Span {
                     content: Arc::from(t.as_ref()),
                     style: merge_styles(&style_stack),
-                    allow_row_style: true,
+                    row_style_policy: RowStylePolicy::Full,
                 });
                 byte_cursor = byte_cursor.saturating_add(len);
             }
@@ -457,7 +457,7 @@ fn parse_inline(
                 spans.push(Span {
                     content: Arc::from(code.as_ref()),
                     style: merge_styles(&style_stack).patch(styles.code_inline_style),
-                    allow_row_style: true,
+                    row_style_policy: RowStylePolicy::Full,
                 });
                 byte_cursor = byte_cursor.saturating_add(len);
             }
@@ -466,7 +466,7 @@ fn parse_inline(
                 spans.push(Span {
                     content: Arc::from(text),
                     style: merge_styles(&style_stack),
-                    allow_row_style: true,
+                    row_style_policy: RowStylePolicy::Full,
                 });
                 byte_cursor = byte_cursor.saturating_add(text.len());
             }
@@ -474,7 +474,7 @@ fn parse_inline(
                 spans.push(Span {
                     content: Arc::from("\n"),
                     style: merge_styles(&style_stack),
-                    allow_row_style: true,
+                    row_style_policy: RowStylePolicy::Full,
                 });
                 byte_cursor = byte_cursor.saturating_add(1);
             }
@@ -502,7 +502,7 @@ fn parse_inline(
         spans.push(Span {
             content: Arc::from(text),
             style: base_style,
-            allow_row_style: true,
+            row_style_policy: RowStylePolicy::Full,
         });
     }
 

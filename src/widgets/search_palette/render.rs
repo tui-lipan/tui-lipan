@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::style::{Span, Style};
+use crate::style::{RowStylePolicy, Span, Style};
 use crate::utils::gradient::{ColorGradient, GradientRange};
 use crate::widgets::{ListItem, ListItemGutter, ListItemLine, ListItemStatus};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -299,6 +299,11 @@ fn default_render<T>(
     let explicit_description_override =
         explicit_focused_description.or(explicit_active_description);
     let description_style = explicit_description_override.unwrap_or(styles.description);
+    let description_row_policy = if explicit_description_override.is_none() {
+        RowStylePolicy::Full
+    } else {
+        RowStylePolicy::Disabled
+    };
 
     let description_spans = item
         .description
@@ -328,7 +333,7 @@ fn default_render<T>(
         }
         let score_span = Span::new(format!("{:>4}", score_value))
             .style(score_style)
-            .allow_row_style(explicit_description_override.is_none());
+            .row_style_policy(description_row_policy);
         score_right_spans.push(score_span);
     }
     let score_width = spans_width(&score_right_spans) as u16;
@@ -362,7 +367,7 @@ fn default_render<T>(
                     label_spans.push(
                         Span::new(sep)
                             .style(description_style)
-                            .allow_row_style(explicit_description_override.is_none()),
+                            .row_style_policy(description_row_policy),
                     );
                     label_spans.extend(desc_spans);
                 }
@@ -382,7 +387,7 @@ fn default_render<T>(
                     primary_right_spans.push(
                         Span::new(" ")
                             .style(description_style)
-                            .allow_row_style(explicit_description_override.is_none()),
+                            .row_style_policy(description_row_policy),
                     );
                     primary_right_spans.extend(desc_right);
                     primary_right_highlight = explicit_description_override.is_none();
@@ -422,13 +427,13 @@ fn default_render<T>(
             primary_right_spans.push(
                 Span::new("  ")
                     .style(description_style)
-                    .allow_row_style(explicit_description_override.is_none()),
+                    .row_style_policy(description_row_policy),
             );
         } else {
             primary_right_spans.push(
                 Span::new(" ")
                     .style(description_style)
-                    .allow_row_style(explicit_description_override.is_none()),
+                    .row_style_policy(description_row_policy),
             );
         }
         let desc_right_spans = highlight_spans(
@@ -452,7 +457,7 @@ fn default_render<T>(
             primary_right_spans.push(
                 Span::new("  ")
                     .style(description_style)
-                    .allow_row_style(explicit_description_override.is_none()),
+                    .row_style_policy(description_row_policy),
             );
         }
         primary_right_spans.extend(score_right_spans);
@@ -669,6 +674,12 @@ fn highlight_spans(
     let mut current = String::new();
     let mut current_highlight = false;
     let mut hit_idx = 0;
+    let highlight_policy = if selection_style.fg.is_some() || selection_style.fg_transform.is_some()
+    {
+        RowStylePolicy::PreserveForeground
+    } else {
+        RowStylePolicy::Full
+    };
 
     for (idx, ch) in text.chars().enumerate() {
         while hit_idx < hits.len() && (hits[hit_idx] as usize) < idx {
@@ -677,24 +688,28 @@ fn highlight_spans(
         let hit = hit_idx < hits.len() && (hits[hit_idx] as usize) == idx;
 
         if hit != current_highlight && !current.is_empty() {
-            let style = if current_highlight {
-                base_style.patch(selection_style)
+            let (style, policy) = if current_highlight {
+                (base_style.patch(selection_style), highlight_policy)
             } else {
-                base_style
+                (base_style, RowStylePolicy::Full)
             };
-            spans.push(Span::new(std::mem::take(&mut current)).style(style));
+            spans.push(
+                Span::new(std::mem::take(&mut current))
+                    .style(style)
+                    .row_style_policy(policy),
+            );
         }
         current_highlight = hit;
         current.push(ch);
     }
 
     if !current.is_empty() {
-        let style = if current_highlight {
-            base_style.patch(selection_style)
+        let (style, policy) = if current_highlight {
+            (base_style.patch(selection_style), highlight_policy)
         } else {
-            base_style
+            (base_style, RowStylePolicy::Full)
         };
-        spans.push(Span::new(current).style(style));
+        spans.push(Span::new(current).style(style).row_style_policy(policy));
     }
 
     spans
@@ -703,15 +718,18 @@ fn highlight_spans(
 fn disable_row_style_for_spans(spans: Vec<Span>) -> Vec<Span> {
     spans
         .into_iter()
-        .map(|span| span.allow_row_style(false))
+        .map(|span| span.row_style_policy(RowStylePolicy::Disabled))
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::matching::all_item_results;
-    use super::{RenderStyles, ScoreRender, SearchListItemsCtx, build_list_items, default_render};
-    use crate::style::{Color, Style};
+    use super::{
+        RenderStyles, ScoreRender, SearchListItemsCtx, build_list_items, default_render,
+        highlight_spans,
+    };
+    use crate::style::{Color, RowStylePolicy, Style};
     use crate::widgets::search_palette::{
         DescriptionOverflow, DescriptionPlacement, ItemDescription, SearchEntry, SearchHighlight,
         SearchItem,
@@ -731,6 +749,32 @@ mod tests {
             line_width: None,
             highlight: Style::default(),
         }
+    }
+
+    #[test]
+    fn explicit_match_foreground_is_preserved_from_row_selection() {
+        let highlight = Style::new().fg(Color::Yellow).bold();
+        let spans = highlight_spans("alpha", &[1, 2], Style::default(), highlight);
+
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].row_style_policy, RowStylePolicy::Full);
+        assert_eq!(
+            spans[1].row_style_policy,
+            RowStylePolicy::PreserveForeground
+        );
+        assert_eq!(spans[1].style.fg, highlight.fg);
+        assert_eq!(spans[2].row_style_policy, RowStylePolicy::Full);
+    }
+
+    #[test]
+    fn match_without_foreground_keeps_row_foreground_precedence() {
+        let spans = highlight_spans("alpha", &[1, 2], Style::default(), Style::new().bold());
+
+        assert!(
+            spans
+                .iter()
+                .all(|span| span.row_style_policy == RowStylePolicy::Full)
+        );
     }
 
     #[test]
@@ -1235,7 +1279,12 @@ mod tests {
             None,
         );
 
-        assert!(rendered.spans.iter().any(|span| !span.allow_row_style));
+        assert!(
+            rendered
+                .spans
+                .iter()
+                .any(|span| span.row_style_policy == RowStylePolicy::Disabled)
+        );
     }
 
     #[test]

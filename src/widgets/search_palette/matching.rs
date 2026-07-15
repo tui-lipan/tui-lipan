@@ -613,6 +613,7 @@ mod hybrid {
         let first = terms.next()?;
         let second = terms.next()?;
         let mut score = 0.0;
+        let mut term_count = 0usize;
         let mut label_hits = Vec::new();
         let mut description_hits = Vec::new();
         let mut hint_hits = Vec::new();
@@ -621,6 +622,7 @@ mod hybrid {
             .chain(std::iter::once(second))
             .chain(terms)
         {
+            term_count += 1;
             let label_match = classify_field(
                 item.label.as_ref(),
                 term,
@@ -664,6 +666,10 @@ mod hybrid {
                 hint_hits.extend(field_match.hits);
             }
         }
+
+        // Keep distributed matches on the same tier scale as whole-query matches. Summing lets
+        // several weaker term matches outrank an exact phrase solely because the query has spaces.
+        score /= term_count as f64;
 
         label_hits.sort_unstable();
         label_hits.dedup();
@@ -906,6 +912,29 @@ mod tests {
         assert_eq!(results[0].item_index, 0);
         assert!(!results[0].label_hits.is_empty());
         assert!(!results[0].description_hits.is_empty());
+    }
+
+    #[test]
+    fn hybrid_exact_phrase_alias_outranks_distributed_terms() {
+        let items = vec![
+            SearchItem::new("Change appearance", 0).aliases(["focused background", "animations"]),
+            SearchItem::new("Disable focus on hover", 1).aliases(["focus on hover"]),
+        ];
+        let entries = super::build_search_entries(&items);
+
+        let results = match_items(
+            &entries,
+            "focus on",
+            SearchMatchMode::Hybrid,
+            CaseMatching::Smart,
+            Normalization::Smart,
+        );
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results[0].item_index, 1,
+            "exact phrase should win: {results:?}"
+        );
     }
 
     #[test]
