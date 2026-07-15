@@ -193,6 +193,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `Terminal` now discards stale mouse-scroll state when a new snapshot changes the scrollback
+  offset, keeping the rendered viewport, scrollbar thumb, and subsequent wheel input synchronized.
 - `SearchPalette` query matches with an explicit foreground now remain visually distinct inside
   selected and hovered rows instead of being flattened to the row foreground.
 - `SearchPalette` hybrid matching now averages per-term scores for multi-word queries instead of
