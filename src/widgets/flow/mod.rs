@@ -7,13 +7,16 @@ pub use self::node::FlowNode;
 pub(crate) use self::reconcile::reconcile_flow;
 
 use crate::core::element::{Element, ElementKind};
-use crate::style::{Align, BorderStyle, LayoutConstraints, Length, Padding, ShrinkPriority, Style};
+use crate::style::{
+    Align, BorderStyle, Justify, LayoutConstraints, Length, Padding, ShrinkPriority, Style,
+};
 
 /// A horizontal wrapping container.
 ///
 /// Packs children left-to-right, starting a new row whenever the next child
 /// would exceed the available width. Supports `gap`, `align` (cross-axis),
-/// `padding`, and `border` - the same chrome primitives as [`crate::prelude::HStack`] /
+/// `justify` (main-axis, applied per wrapped row), `padding`, and `border` -
+/// the same chrome primitives as [`crate::prelude::HStack`] /
 /// [`crate::prelude::VStack`].
 #[derive(Clone)]
 pub struct Flow {
@@ -23,6 +26,7 @@ pub struct Flow {
     /// the spacing is symmetric by default.
     pub(crate) row_gap: Option<u16>,
     pub(crate) align: Align,
+    pub(crate) justify: Justify,
     pub(crate) padding: Padding,
     pub(crate) border: bool,
     pub(crate) border_style: BorderStyle,
@@ -43,6 +47,7 @@ impl Default for Flow {
             gap: 0,
             row_gap: None,
             align: Align::Start,
+            justify: Justify::Start,
             padding: Padding::default(),
             border: false,
             border_style: BorderStyle::Plain,
@@ -99,6 +104,18 @@ impl Flow {
     /// Set cross-axis alignment within each row.
     pub fn align(mut self, align: Align) -> Self {
         self.align = align;
+        self
+    }
+
+    /// Set main-axis distribution of items within each wrapped row.
+    ///
+    /// Applied per row: each row distributes its own leftover width, so
+    /// `SpaceBetween` pushes the first item of every row to the left edge and
+    /// the last to the right edge. Unlike stacks, Flow children are always
+    /// measured at their natural size, so the space variants work without any
+    /// explicit child sizing.
+    pub fn justify(mut self, justify: Justify) -> Self {
+        self.justify = justify;
         self
     }
 
@@ -165,6 +182,7 @@ impl crate::layout::hash::LayoutHash for Flow {
         self.gap.hash(hasher);
         self.row_gap.hash(hasher);
         self.align.hash(hasher);
+        self.justify.hash(hasher);
         self.padding.hash(hasher);
         self.border.hash(hasher);
         self.border_style.hash(hasher);

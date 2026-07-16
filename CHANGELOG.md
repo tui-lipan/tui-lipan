@@ -13,6 +13,11 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Flow::justify(Justify)` distributes each wrapped row's leftover width along the main axis.
+  All `Justify` variants are supported and applied per row (`SpaceBetween` pins every row's first
+  item to the left edge and last item to the right edge). Because Flow items are always measured
+  at their natural size, the space variants need no explicit child sizing, unlike stacks.
+
 - `RowStylePolicy` controls how row-level selection/hover/active styling interacts with a rich-text
   span: `Full` (row styling overrides the span, the default), `PreserveForeground` (row background
   and modifiers apply but the span keeps its explicit foreground — useful for search matches that
