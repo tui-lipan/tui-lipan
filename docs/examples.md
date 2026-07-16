@@ -57,6 +57,7 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 |---------|-------------|
 | `inputs` | Single-line and multi-line inputs: username, password, search, bio |
 | `drag_drop_kanban` | Generic `DragSource` / `DropTarget` kanban board with preview and cancel |
+| `sidebar_tabs` | Rich vertical sidebar tabs composed from primitives: label + description + status spinner per item, drag to reorder with insertion indicator |
 | `text_area` | `TextArea` editor paired with read-only viewer: scroll, selection, line numbers, Vim modal editing |
 | `text_area_sentinels` | `TextArea` sentinels: `@` file picker tokens, stash/restore snapshots |
 | `text_area_virtual_text` | `TextArea` virtual text: inline inlay hints and end-of-line diagnostics absent from the buffer |
