@@ -219,7 +219,7 @@ pub(crate) fn logical_line_count(value: &str) -> usize {
 }
 
 pub(crate) fn text_area_cursor_reserve(wrap: bool, read_only: bool) -> u16 {
-    u16::from(wrap || !read_only)
+    u16::from(!wrap && !read_only)
 }
 
 pub(crate) struct TextAreaVisualKeyArgs {
@@ -340,7 +340,6 @@ pub(crate) fn text_area_total_gutter_width(
 }
 
 pub(crate) fn text_area_visual_line_for_cursor(
-    value: &str,
     lines: &[TextAreaVisualLine],
     cursor: usize,
 ) -> usize {
@@ -354,30 +353,15 @@ pub(crate) fn text_area_visual_line_for_cursor(
         let next_starts_at_boundary = lines.get(idx + 1).is_some_and(|next| {
             next.line_num == line.line_num && next.continuation && next.start == cursor
         });
-        if cursor == line.end
-            && (!next_starts_at_boundary
-                || text_area_wrap_boundary_belongs_to_previous(value, cursor))
-        {
+        if cursor == line.end && !next_starts_at_boundary {
             return idx;
         }
     }
     lines.len().saturating_sub(1)
 }
 
-/// Keep a visible punctuation break and its trailing caret on the upper wrapped row.
-pub(crate) fn text_area_wrap_boundary_belongs_to_previous(value: &str, boundary: usize) -> bool {
-    value
-        .get(..boundary)
-        .and_then(|prefix| prefix.chars().next_back())
-        .is_some_and(|ch| !ch.is_whitespace() && crate::utils::text::is_wrap_break(ch))
-}
-
-fn cursor_visual_line_for_cursor(
-    value: &str,
-    lines: &[TextAreaVisualLine],
-    cursor: usize,
-) -> usize {
-    text_area_visual_line_for_cursor(value, lines, cursor)
+fn cursor_visual_line_for_cursor(lines: &[TextAreaVisualLine], cursor: usize) -> usize {
+    text_area_visual_line_for_cursor(lines, cursor)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -653,12 +637,8 @@ pub(crate) fn layout_line_with_inline_virtual_text(
     max_line_width
 }
 
-fn cursor_visual_line_for_wrapped_lines(
-    value: &str,
-    lines: &[TextAreaVisualLine],
-    cursor: usize,
-) -> usize {
-    text_area_visual_line_for_cursor(value, lines, cursor)
+fn cursor_visual_line_for_wrapped_lines(lines: &[TextAreaVisualLine], cursor: usize) -> usize {
+    text_area_visual_line_for_cursor(lines, cursor)
 }
 
 pub fn measure_text_area(text_area: &TextArea) -> (u16, u16) {
@@ -924,9 +904,9 @@ pub(crate) fn calculate_text_area_visual_metrics(
     {
         let mut geometry = entry.geometry.clone();
         geometry.cursor_visual_line = if text_area.wrap {
-            cursor_visual_line_for_wrapped_lines(value, &entry.lines, text_area.cursor)
+            cursor_visual_line_for_wrapped_lines(&entry.lines, text_area.cursor)
         } else {
-            cursor_visual_line_for_cursor(value, &entry.lines, text_area.cursor)
+            cursor_visual_line_for_cursor(&entry.lines, text_area.cursor)
         };
 
         #[cfg(feature = "diff-view")]
@@ -1105,14 +1085,52 @@ pub(crate) fn calculate_text_area_visual_metrics(
         max_line_width
     };
 
+    if wrap && !text_area.read_only {
+        let mut idx = 0usize;
+        while idx < visual_lines.len() {
+            let line_num = visual_lines[idx].line_num;
+            let boundary = visual_lines[idx].end;
+            let visual_col = visual_lines[idx].visual_end_col;
+            let row_width = visual_col.saturating_sub(visual_lines[idx].visual_start_col);
+            let source_idx = line_num.saturating_sub(1);
+            let is_last_source_row = visual_lines
+                .get(idx + 1)
+                .is_none_or(|next| next.line_num != line_num);
+            if is_last_source_row
+                && row_width == content_width
+                && boundary
+                    == line_end_offsets
+                        .get(source_idx)
+                        .copied()
+                        .unwrap_or(boundary)
+            {
+                visual_lines.insert(
+                    idx + 1,
+                    TextAreaVisualLine {
+                        line_num,
+                        continuation: true,
+                        start: boundary,
+                        end: boundary,
+                        visual_start_col: visual_col,
+                        visual_end_col: visual_col,
+                        starts_with_virtual_text: false,
+                        ends_with_virtual_text: false,
+                    },
+                );
+                idx = idx.saturating_add(1);
+            }
+            idx = idx.saturating_add(1);
+        }
+    }
+
     // allow(unused_mut): the diff-view feature gate below conditionally mutates these.
     #[allow(unused_mut)]
     let mut total_visual_lines = visual_lines.len();
     #[allow(unused_mut)]
     let mut cursor_visual_line = if wrap {
-        cursor_visual_line_for_wrapped_lines(value, &visual_lines, cursor)
+        cursor_visual_line_for_wrapped_lines(&visual_lines, cursor)
     } else {
-        cursor_visual_line_for_cursor(value, &visual_lines, cursor)
+        cursor_visual_line_for_cursor(&visual_lines, cursor)
     };
 
     #[cfg(feature = "diff-view")]
@@ -1189,7 +1207,7 @@ pub(crate) fn calculate_text_area_visual_metrics(
 
             visual_lines = padded;
             total_visual_lines = visual_lines.len();
-            cursor_visual_line = cursor_visual_line_for_cursor(value, &visual_lines, cursor);
+            cursor_visual_line = cursor_visual_line_for_cursor(&visual_lines, cursor);
         }
     }
 
@@ -1241,7 +1259,7 @@ mod tests {
     use crate::widgets::text_area::IMAGE_SENTINEL_BASE;
 
     /// Helper: build a minimal TextArea with specific fields for testing.
-    /// Disables scrollbar so content_width = inner_w - trailing gap (1) in wrap mode.
+    /// Disables scrollbar so wrapped content can use the full inner width.
     fn make_textarea(value: &str, wrap: bool, line_numbers: bool) -> TextArea {
         TextArea::new(value)
             .wrap(wrap)
@@ -1268,7 +1286,7 @@ mod tests {
     #[test]
     fn single_line_no_wrap() {
         // "hello" is 5 cols wide. With inner_w=20 and no scrollbar,
-        // content_width = 20 - 1 (trailing gap) = 19.
+        // content_width uses the full 20 columns.
         // Fits in one visual line.
         let ta = make_textarea("hello", true, false);
         let (total, cursor_vl, max_w, content_w) = calc(&ta, 20);
@@ -1276,7 +1294,7 @@ mod tests {
         assert_eq!(total, 1, "single short line => 1 visual line");
         assert_eq!(cursor_vl, 0, "cursor at 0 => visual line 0");
         assert_eq!(max_w, 5, "max line width = visual width of 'hello'");
-        assert_eq!(content_w, 19, "content_width = inner_w - 1 gap");
+        assert_eq!(content_w, 20, "wrapped content uses the full inner width");
     }
 
     // ---------------------------------------------------------------
@@ -1284,38 +1302,39 @@ mod tests {
     // ---------------------------------------------------------------
     #[test]
     fn wrap_at_exact_boundary() {
-        // content_width = 5 - 1 = 4. Text "abcdefgh" is 8 chars wide.
+        // content_width = 5. Text "abcdefgh" is 8 chars wide.
         // With no whitespace break points, wraps by character:
-        //   visual line 0: "abcd" (4 cols)
-        //   visual line 1: "efgh" (4 cols)
+        //   visual line 0: "abcde" (5 cols)
+        //   visual line 1: "fgh" (3 cols)
         let ta = make_textarea("abcdefgh", true, false);
         let (total, _cursor_vl, max_w, content_w) = calc(&ta, 5);
 
-        assert_eq!(content_w, 4);
-        assert_eq!(total, 2, "8 chars in 4-wide => 2 visual lines");
+        assert_eq!(content_w, 5);
+        assert_eq!(total, 2, "8 chars in 5-wide => 2 visual lines");
         assert_eq!(max_w, 8, "max_line_width reflects the full logical line");
     }
 
     #[test]
-    fn wrapped_read_only_and_editable_use_same_content_width() {
-        let editable = make_textarea("abcde", true, false);
+    fn full_width_editable_line_adds_caret_continuation() {
+        let editable = make_textarea("abcde", true, false).cursor(5);
         let read_only = editable.clone().read_only(true);
 
-        let (editable_total, _, _, editable_content_w) = calc(&editable, 5);
+        let (editable_total, editable_cursor, _, editable_content_w) = calc(&editable, 5);
         let (read_only_total, _, _, read_only_content_w) = calc(&read_only, 5);
 
-        assert_eq!(editable_content_w, 4);
+        assert_eq!(editable_content_w, 5);
         assert_eq!(read_only_content_w, editable_content_w);
         assert_eq!(editable_total, 2);
-        assert_eq!(read_only_total, editable_total);
+        assert_eq!(editable_cursor, 1);
+        assert_eq!(read_only_total, 1);
     }
 
     #[test]
     fn cursor_on_wrap_boundary_tracks_continuation_visual_line_start() {
-        let ta = make_textarea("abcdefgh", true, false).cursor(4);
+        let ta = make_textarea("abcdefgh", true, false).cursor(5);
         let (total, cursor_vl, _, content_w) = calc(&ta, 5);
 
-        assert_eq!(content_w, 4);
+        assert_eq!(content_w, 5);
         assert_eq!(total, 2);
         assert_eq!(
             cursor_vl, 1,
@@ -1330,24 +1349,23 @@ mod tests {
     fn wrap_with_cjk_characters() {
         // Each CJK char is 2 columns wide.
         // "你好世界" = 4 chars × 2 cols = 8 visual cols.
-        // content_width = 5 - 1 = 4. Each CJK fits exactly 2 per row.
+        // content_width = 5. Each CJK still fits exactly 2 per row.
         //   visual line 0: "你好" (4 cols)
         //   visual line 1: "世界" (4 cols)
         let ta = make_textarea("你好世界", true, false);
         let (total, _, max_w, content_w) = calc(&ta, 5);
 
-        assert_eq!(content_w, 4);
+        assert_eq!(content_w, 5);
         assert_eq!(max_w, 8);
-        assert_eq!(total, 2, "4 CJK chars (8 cols) in 4-wide => 2 visual lines");
+        assert_eq!(total, 2, "4 CJK chars (8 cols) in 5-wide => 2 visual lines");
 
-        // With content_width = 5 (inner_w = 6), the third CJK character still
-        // wraps because it would need 6 columns.
+        // With content_width = 6, three CJK characters fit on the first row.
         let ta2 = make_textarea("你好世界", true, false);
         let (total2, _, _, content_w2) = calc(&ta2, 6);
-        assert_eq!(content_w2, 5);
+        assert_eq!(content_w2, 6);
         assert_eq!(
             total2, 2,
-            "CJK won't split mid-char; still 2 lines at width 5"
+            "CJK won't split mid-char; still 2 lines at width 6"
         );
     }
 
@@ -1358,11 +1376,11 @@ mod tests {
     fn line_number_gutter_width() {
         // With line_numbers=true and no scrollbar, gutter eats into content_width.
         // For 1 line: digits=1, gutter_width = 1 + 2 = 3.
-        // content_width = inner_w - gutter(3) - trailing gap(1).
+        // content_width = inner_w - gutter(3).
         let ta = make_textarea("hello", true, true);
         let (_, _, _, content_w) = calc(&ta, 20);
         // 1 logical line => digits = max("1".len(), 0) = 1, gutter = 3
-        assert_eq!(content_w, 20 - 3 - 1, "gutter(3) + gap(1) subtracted");
+        assert_eq!(content_w, 20 - 3, "gutter(3) subtracted");
 
         // 100 lines => digits = 3 ("100"), gutter = 5.
         let many_lines: String = (1..=100)
@@ -1382,11 +1400,7 @@ mod tests {
         let ta3 = make_textarea("x", true, true).min_line_number_width(4);
         let (_, _, _, content_w3) = calc(&ta3, 20);
         // 1 line => digits = max(1, 4) = 4, gutter = 6
-        assert_eq!(
-            content_w3,
-            20 - 6 - 1,
-            "min_line_number_width=4 => gutter=6"
-        );
+        assert_eq!(content_w3, 20 - 6, "min_line_number_width=4 => gutter=6");
     }
 
     #[test]
@@ -1394,11 +1408,7 @@ mod tests {
         let ta = make_textarea("hello", true, true).gutter_inset(1);
         let (_, _, _, content_w) = calc(&ta, 20);
 
-        assert_eq!(
-            content_w,
-            20 - 4 - 1,
-            "gutter(3) + gap(1) + trailing gap(1)"
-        );
+        assert_eq!(content_w, 20 - 4, "gutter(3) + gap(1)");
     }
 
     // ---------------------------------------------------------------
@@ -1419,11 +1429,11 @@ mod tests {
         assert_eq!(total, 1);
         assert_eq!(max_w, 1);
 
-        // content_width = 0 edge case: should return early (1, 0, 0, 0).
-        // inner_w=1, content_width = 1 - trailing gap(1) = 0.
+        // At inner_w=1 each character occupies one row, followed by an empty
+        // continuation row for the caret after the final full-width character.
         let ta_narrow = make_textarea("hello", true, false);
         let result = calc(&ta_narrow, 1);
-        assert_eq!(result, (1, 0, 0, 0), "content_width=0 => early return");
+        assert_eq!(result, (6, 0, 5, 1));
     }
 
     #[test]
@@ -1470,7 +1480,7 @@ mod tests {
             filename: None,
         }]);
 
-        let (total, _, max_w, content_w) = calc(&ta, 6);
+        let (total, _, max_w, content_w) = calc(&ta, 5);
 
         assert_eq!(content_w, 5);
         assert_eq!(max_w, 9);
@@ -1492,7 +1502,7 @@ mod tests {
         let hash = hash_text(hinted.value.as_ref());
         let mut cache = TextAreaVisualCache::default();
         let geometry =
-            calculate_text_area_visual_metrics(&hinted, 5, false, hash, Some(&mut cache));
+            calculate_text_area_visual_metrics(&hinted, 4, false, hash, Some(&mut cache));
         let lines = cache.latest_lines().expect("visual lines should be cached");
 
         assert_eq!(geometry.content_width, 4);

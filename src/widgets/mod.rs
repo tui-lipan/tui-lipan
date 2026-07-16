@@ -306,7 +306,7 @@ pub(crate) use text_area::{
     inline_virtual_texts_for_visual_line, layout_line_with_inline_virtual_text,
     make_text_area_visual_key, public_decoration_layers_for_visible_range, resolve_text_area_spans,
     segments_from_plain, segments_from_spans, sentinel_info_for, text_area_total_gutter_width,
-    text_area_virtual_text_hash, text_area_wrap_boundary_belongs_to_previous,
+    text_area_virtual_text_hash,
 };
 pub use theme_provider::ThemeProvider;
 

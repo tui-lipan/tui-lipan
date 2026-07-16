@@ -15,7 +15,7 @@ pub(super) fn perform_visual_vertical_nav(
     let value = editor.text().to_string();
     let cursor = clamp_text_area_cursor(&value, editor.cursor());
 
-    let cur_idx = visual_line_for_cursor(&value, lines, cursor);
+    let cur_idx = visual_line_for_cursor(lines, cursor);
     let cur_line = &lines[cur_idx];
 
     let cur_col = editor.visual_nav_col().unwrap_or_else(|| {
@@ -57,9 +57,8 @@ pub(super) fn perform_visual_vertical_nav(
     let target = &lines[target_idx];
     let target_str_end = clamp_text_area_cursor(&value, target.end.min(value.len()));
     let target_str_start = clamp_text_area_cursor(&value, target.start.min(target_str_end));
-    // A forced or whitespace-wrapped row shares its end byte with the next
-    // continuation row's start. Landing on that boundary would skip the target
-    // row; visible punctuation breaks instead retain upper-row affinity.
+    // A soft-wrapped row shares its end byte with the next continuation row's
+    // start. Landing on that boundary would skip past the target row.
     let target_ends_at_soft_wrap = lines.get(target_idx + 1).is_some_and(|next| {
         next.line_num == target.line_num
             && next.continuation
@@ -88,10 +87,7 @@ pub(super) fn perform_visual_vertical_nav(
     // Keep the cursor on the target row: when the projected column reaches the
     // shared soft-wrap boundary, step back one char so it stays on this row
     // instead of falling through to the next continuation row's first column.
-    if target_ends_at_soft_wrap
-        && new_cursor >= target_str_end
-        && !text_area_wrap_boundary_belongs_to_previous(&value, target_str_end)
-    {
+    if target_ends_at_soft_wrap && new_cursor >= target_str_end {
         new_cursor = clamp_text_area_cursor(
             &value,
             crate::utils::text::prev_char_boundary(&value, target_str_end).max(target_str_start),
@@ -158,10 +154,6 @@ pub(super) fn perform_visual_boundary_nav(
 }
 
 /// Return the visual line index containing the cursor.
-pub(super) fn visual_line_for_cursor(
-    value: &str,
-    lines: &[TextAreaVisualLine],
-    cursor: usize,
-) -> usize {
-    text_area_visual_line_for_cursor(value, lines, cursor)
+pub(super) fn visual_line_for_cursor(lines: &[TextAreaVisualLine], cursor: usize) -> usize {
+    text_area_visual_line_for_cursor(lines, cursor)
 }

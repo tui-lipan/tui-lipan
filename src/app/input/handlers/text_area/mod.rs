@@ -35,7 +35,6 @@ use crate::widgets::{
     IMAGE_SENTINEL_BASE, ScrollEvent, SentinelEvent, TextAreaEvent, TextAreaImageMode,
     TextAreaSentinel, TextAreaVimMode, TextAreaVirtualText, TextAreaVisualLine,
     inline_virtual_insertions_for_line, sentinel_info_for, text_area_visual_line_for_cursor,
-    text_area_wrap_boundary_belongs_to_previous,
 };
 use crate::widgets::{text_area_cursor_reserve, text_area_total_gutter_width};
 

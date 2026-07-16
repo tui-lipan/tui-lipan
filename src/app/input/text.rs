@@ -379,6 +379,29 @@ pub(crate) fn textarea_cursor_from_coords(params: TextAreaCursorParams<'_>) -> u
                 });
             }
 
+            if wrap
+                && !read_only
+                && content_width > 0
+                && lines.last().is_some_and(|last| {
+                    last.line_num == line_num + 1
+                        && last.end == line_end_abs
+                        && last.visual_end_col.saturating_sub(last.visual_start_col)
+                            == content_width
+                })
+            {
+                let visual_col = lines.last().map(|last| last.visual_end_col).unwrap_or(0);
+                lines.push(TextAreaVisualLine {
+                    line_num: line_num + 1,
+                    continuation: true,
+                    start: line_end_abs,
+                    end: line_end_abs,
+                    visual_start_col: visual_col,
+                    visual_end_col: visual_col,
+                    starts_with_virtual_text: false,
+                    ends_with_virtual_text: false,
+                });
+            }
+
             current_byte_offset += line_len + 1;
         }
         owned_visual_lines = lines;

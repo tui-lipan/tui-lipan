@@ -23,7 +23,7 @@ pub(crate) use layout::{
     VirtualTextLayoutCtx, hash_peer_source_lines, layout_line_with_inline_virtual_text,
     make_text_area_visual_key, text_area_auto_height_for_width, text_area_cursor_reserve,
     text_area_pending_vim_search_row, text_area_total_gutter_width,
-    text_area_visual_line_for_cursor, text_area_wrap_boundary_belongs_to_previous,
+    text_area_visual_line_for_cursor,
 };
 pub use layout::{measure_text_area, measure_text_area_constrained};
 pub use node::TextAreaNode;

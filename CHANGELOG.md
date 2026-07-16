@@ -198,9 +198,9 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
-- `TextArea` Up/Down navigation now keeps caret affinity on the upper row when a wrapped path or
-  identifier breaks after visible punctuation, so moving down enters the continuation instead of
-  skipping it.
+- `TextArea` wrap boundaries now keep downstream caret affinity, including after visible path and
+  identifier punctuation, while Up/Down navigation no longer skips continuation rows. Wrapped
+  editors also use the full content width instead of reserving a trailing caret column.
 - `Flow` no longer subtracts its padding and border twice while measuring constrained widths,
   preventing rows that fit from reserving an extra wrapped line.
 - Centered and stacked overlays (`Modal`, toasts) now measure their auto height against the width

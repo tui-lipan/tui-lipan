@@ -4362,8 +4362,15 @@ fn arrow_down_from_visible_wrap_break_enters_continuation() {
         "Please implement this plan: ~/.claude/plans/so-by-order-1-quizzical-"
     );
 
+    assert_eq!(
+        text_area_visual_line_for_cursor(&lines, wrap_boundary),
+        continuation,
+        "the boundary after the dash belongs to the continuation start",
+    );
+
+    let initial_cursor = crate::utils::text::prev_char_boundary(value, wrap_boundary);
     let mut editor = TextEditor::new(value);
-    editor.set_cursor(wrap_boundary);
+    editor.set_cursor(initial_cursor);
     assert!(perform_visual_vertical_nav(
         &mut editor,
         Action::MoveDown,
@@ -4373,7 +4380,7 @@ fn arrow_down_from_visible_wrap_break_enters_continuation() {
         &[],
     ));
     assert_eq!(
-        text_area_visual_line_for_cursor(value, &lines, editor.cursor()),
+        text_area_visual_line_for_cursor(&lines, editor.cursor()),
         continuation,
         "Down must enter the wrapped path continuation instead of skipping to the blank line",
     );
@@ -4387,8 +4394,8 @@ fn arrow_down_from_visible_wrap_break_enters_continuation() {
     ));
     assert_eq!(
         editor.cursor(),
-        wrap_boundary,
-        "Up must restore the caret after the visible wrap punctuation",
+        initial_cursor,
+        "Up must restore the caret on the upper row without using the shared boundary",
     );
 }
 
@@ -4559,10 +4566,7 @@ fn visual_vertical_nav_from_wrap_row_end_descends_one_row_at_a_time() {
     ));
     // Lands on row 1 (byte 11, its last cell), not on byte 12 (row 2's start).
     assert_eq!(editor.cursor(), 11);
-    assert_eq!(
-        text_area_visual_line_for_cursor(value, &lines, editor.cursor()),
-        1
-    );
+    assert_eq!(text_area_visual_line_for_cursor(&lines, editor.cursor()), 1);
 
     // Moving back up returns to row 0 instead of getting stuck.
     assert!(perform_visual_vertical_nav(
@@ -4573,10 +4577,7 @@ fn visual_vertical_nav_from_wrap_row_end_descends_one_row_at_a_time() {
         8,
         &[]
     ));
-    assert_eq!(
-        text_area_visual_line_for_cursor(value, &lines, editor.cursor()),
-        0
-    );
+    assert_eq!(text_area_visual_line_for_cursor(&lines, editor.cursor()), 0);
 }
 
 #[test]

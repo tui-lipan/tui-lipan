@@ -2365,7 +2365,7 @@ mod tests {
             TextArea::bound(&ctx.state)
                 .border(false)
                 .scrollbar(false)
-                .width(Length::Px(6))
+                .width(Length::Px(5))
                 .height(Length::Px(4))
                 .vim_motions(true)
                 .vim_config(
@@ -3255,7 +3255,7 @@ mod tests {
         backend.set_viewport(Rect {
             x: 0,
             y: 0,
-            w: 6,
+            w: 5,
             h: 4,
         });
         backend.render();
