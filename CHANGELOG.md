@@ -13,6 +13,17 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `TestBackend` now drives the full generic `DragSource`/`DropTarget` pipeline: `send_mouse`
+  with `Down`/`Drag`/`Up` activates drags past the movement threshold and emits `on_drag_start`,
+  `on_drag_over`, `on_drag_leave`, `on_drop`, and `on_drag_cancel`, enabling headless integration
+  tests of composed drag-and-drop UIs (previously these drags were silently discarded). The
+  axis-neutral activation and target-compatibility logic is shared with the terminal runner.
+
+- New `sidebar_tabs` example: rich vertical sidebar tabs composed from primitives — status
+  icon or live spinner, label plus description line per item, click/keyboard selection, and
+  drag-to-reorder with a flicker-free insertion indicator built on per-item `DropTarget`s.
+  The per-item top/bottom-half drop mapping is documented in `docs/widgets/input.md`.
+
 - `Flow::justify(Justify)` distributes each wrapped row's leftover width along the main axis.
   All `Justify` variants are supported and applied per row (`SpaceBetween` pins every row's first
   item to the left edge and last item to the right edge). Because Flow items are always measured

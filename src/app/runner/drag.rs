@@ -9,9 +9,8 @@ use crate::widgets::internal::{ScrollAction, apply_scroll_action, scroll_metrics
 #[cfg(feature = "terminal")]
 use crate::widgets::internal::{terminal_mouse_content_rect, terminal_selection_text};
 use crate::widgets::{
-    DocumentSelectEvent, DragCancelEvent, DragLeaveEvent, DragOverEvent, DragStartEvent,
-    DragStartedEvent, InputEvent, ProgressEvent, ScrollEvent, ScrollMetrics, TextAreaEvent,
-    calc_scroll_view_window, normalize_input_offset,
+    DocumentSelectEvent, DragCancelEvent, DragOverEvent, InputEvent, ProgressEvent, ScrollEvent,
+    ScrollMetrics, TextAreaEvent, calc_scroll_view_window, normalize_input_offset,
 };
 
 use super::{ActiveDrag, AppRunner};
@@ -100,20 +99,7 @@ impl<C: Component> AppRunner<C> {
     }
 
     fn nearest_ancestor_drop_target(&self, start: NodeId) -> Option<NodeId> {
-        let mut cur = Some(start);
-        while let Some(id) = cur {
-            if !self.core.tree.is_valid(id) {
-                break;
-            }
-            let node = self.core.tree.node(id);
-            if let NodeKind::DropTarget(target) = &node.kind
-                && target.enabled
-            {
-                return Some(id);
-            }
-            cur = node.parent;
-        }
-        None
+        drag::nearest_ancestor_drop_target(&self.core.tree, start)
     }
 
     fn drag_drop_target_is_compatible(
@@ -122,44 +108,15 @@ impl<C: Component> AppRunner<C> {
         drag_group: Option<&std::sync::Arc<str>>,
         payload: &dyn crate::widgets::DragPayload,
     ) -> bool {
-        if !self.core.tree.is_valid(target_id) {
-            return false;
-        }
-        let NodeKind::DropTarget(target) = &self.core.tree.node(target_id).kind else {
-            return false;
-        };
-        if !target.enabled {
-            return false;
-        }
-
-        if let Some(target_group) = target.accept_group.as_ref()
-            && drag_group != Some(target_group)
-        {
-            return false;
-        }
-
-        target
-            .can_accept
-            .as_ref()
-            .is_none_or(|accept| accept(payload))
+        drag::drag_drop_target_is_compatible(&self.core.tree, target_id, drag_group, payload)
     }
 
     fn set_drag_source_dragging(&mut self, id: NodeId, dragging: bool) {
-        if !self.core.tree.is_valid(id) {
-            return;
-        }
-        if let NodeKind::DragSource(source) = &mut self.core.tree.node_mut(id).kind {
-            source.is_dragging = dragging;
-        }
+        drag::set_drag_source_dragging(&mut self.core.tree, id, dragging);
     }
 
     fn set_drop_target_highlighted(&mut self, id: NodeId, highlighted: bool) {
-        if !self.core.tree.is_valid(id) {
-            return;
-        }
-        if let NodeKind::DropTarget(target) = &mut self.core.tree.node_mut(id).kind {
-            target.dnd_highlighted = highlighted;
-        }
+        drag::set_drop_target_highlighted(&mut self.core.tree, id, highlighted);
     }
 
     fn emit_drop_target_leave(
@@ -167,17 +124,7 @@ impl<C: Component> AppRunner<C> {
         id: NodeId,
         payload: &std::sync::Arc<dyn crate::widgets::DragPayload>,
     ) {
-        if !self.core.tree.is_valid(id) {
-            return;
-        }
-        let NodeKind::DropTarget(target) = &self.core.tree.node(id).kind else {
-            return;
-        };
-        if let Some(cb) = &target.on_drag_leave {
-            cb.emit(DragLeaveEvent {
-                payload: payload.clone(),
-            });
-        }
+        drag::emit_drop_target_leave(&self.core.tree, id, payload);
     }
 
     fn handle_drag_drop_move(&mut self, x: u16, y: u16) -> bool {
@@ -251,86 +198,10 @@ impl<C: Component> AppRunner<C> {
     }
 
     fn try_activate_drag_drop(&mut self, x: u16, y: u16) -> bool {
-        if !matches!(self.drag.active, ActiveDrag::None) {
+        if !drag::try_activate_drag_drop(&mut self.core.tree, &mut self.mouse, &mut self.drag, x, y)
+        {
             return false;
         }
-
-        let Some(source_id) = self.mouse.pending_drag_source else {
-            return false;
-        };
-        if !self.core.tree.is_valid(source_id) {
-            self.mouse.pending_drag_source = None;
-            return false;
-        }
-
-        let Some((start_x, start_y)) = self.mouse.left_down_pos else {
-            self.mouse.pending_drag_source = None;
-            return false;
-        };
-
-        let (threshold, on_drag_start, drag_group, preview, on_cancel, on_drag_started) = {
-            let node = self.core.tree.node(source_id);
-            let NodeKind::DragSource(source) = &node.kind else {
-                self.mouse.pending_drag_source = None;
-                return false;
-            };
-            if !source.enabled {
-                self.mouse.pending_drag_source = None;
-                return false;
-            }
-            (
-                source.threshold,
-                source.on_drag_start.clone(),
-                source.drag_group.clone(),
-                source.preview.clone(),
-                source.on_drag_cancel.clone(),
-                source.on_drag_started.clone(),
-            )
-        };
-
-        let dx = x.abs_diff(start_x);
-        let dy = y.abs_diff(start_y);
-        if dx < threshold && dy < threshold {
-            return false;
-        }
-
-        let start_event = DragStartEvent { x, y };
-        let Some(payload) = on_drag_start
-            .as_ref()
-            .and_then(|callback| callback(start_event))
-            .map(|payload| payload.into_arc())
-        else {
-            self.mouse.pending_drag_source = None;
-            return false;
-        };
-
-        if let Some(cb) = on_drag_started {
-            cb.emit(DragStartedEvent {
-                x,
-                y,
-                payload: payload.clone(),
-            });
-        }
-
-        self.set_drag_source_dragging(source_id, true);
-        let preview_snapshot_anchor =
-            matches!(preview, crate::widgets::DragPreview::SourceSnapshot)
-                .then(|| self.core.tree.node(source_id).rect);
-        self.drag.active = ActiveDrag::DragDrop(crate::app::input::drag::DragDropDrag {
-            payload,
-            source_id,
-            drag_group,
-            preview,
-            on_cancel,
-            hovered_target: None,
-            scroll_view_id: None,
-            start_x,
-            start_y,
-            threshold,
-            started: true,
-            preview_snapshot_anchor,
-        });
-        self.mouse.pending_drag_source = None;
         self.handle_drag_drop_move(x, y)
     }
 

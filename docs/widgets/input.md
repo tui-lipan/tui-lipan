@@ -128,6 +128,10 @@ DropTarget::new()
     .on_drop(ctx.link().callback(|ev| Msg::Dropped(ev.payload)))
 ```
 
+**Tip — per-item targets instead of stride math:** for sortable lists, wrap **each item** in its own `DropTarget` and map the pointer's top/bottom half (`local_y * 2 < local_height`) to insert-before/insert-after. Combined with a constant-height indicator row per item (restyled, never inserted), the layout never shifts while hovering, so there is no hover flicker. See `examples/sidebar_tabs.rs` for the full pattern; `examples/drag_drop_kanban.rs` shows the single-target-per-column alternative.
+
+**Examples:** `examples/sidebar_tabs.rs`, `examples/drag_drop_kanban.rs`
+
 ---
 
 ## MouseRegion

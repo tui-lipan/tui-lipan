@@ -797,9 +797,48 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
         dispatch_active_drag_test_backend(self, x, y)
     }
 
-    fn handle_drag_release(&mut self, _x: u16, _y: u16) -> Option<bool> {
+    fn handle_drag_release(&mut self, x: u16, y: u16) -> Option<bool> {
         if matches!(self.drag.active, ActiveDrag::None) {
             return None;
+        }
+        // Mirror of the AppRunner DragDrop release arm, without the snapshot
+        // preview cache (not used by the headless backend).
+        if let ActiveDrag::DragDrop(drag_state) = self.drag.active.clone() {
+            let payload = drag_state.payload.clone();
+
+            if let Some(target_id) = drag_state.hovered_target
+                && self.core.tree.is_valid(target_id)
+                && matches!(self.core.tree.node(target_id).kind, NodeKind::DropTarget(_))
+            {
+                let rect = self.core.tree.node(target_id).rect;
+                let top = rect.y.max(0) as u16;
+                let local_y = y.saturating_sub(top);
+                if let NodeKind::DropTarget(target) = &mut self.core.tree.node_mut(target_id).kind {
+                    target.dnd_highlighted = false;
+                    if let Some(cb) = &target.on_drop {
+                        cb.emit(crate::widgets::DropEvent {
+                            x,
+                            y,
+                            local_y,
+                            local_height: rect.h,
+                            payload: payload.clone(),
+                        });
+                    }
+                    if let Some(cb) = &target.on_drag_leave {
+                        cb.emit(crate::widgets::DragLeaveEvent { payload });
+                    }
+                }
+            } else if let Some(cb) = drag_state.on_cancel {
+                cb.emit(crate::widgets::DragCancelEvent { payload });
+            }
+
+            crate::app::input::drag::set_drag_source_dragging(
+                &mut self.core.tree,
+                drag_state.source_id,
+                false,
+            );
+            self.drag.clear();
+            return Some(true);
         }
         if let ActiveDrag::TextArea(drag_state) = self.drag.active.clone()
             && self.core.tree.is_valid(drag_state.id)
