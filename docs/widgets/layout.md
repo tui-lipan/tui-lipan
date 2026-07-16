@@ -95,6 +95,7 @@ Wrapping layout container for chip/tag-like content. `Flow` packs children left-
 | `gap` | `u16` | Space between children on both axes |
 | `row_gap` | `u16` | Vertical gap between wrapped rows, independent of item `gap` |
 | `align` | `Align` | Cross-axis alignment for items inside each wrapped row |
+| `justify` | `Justify` | Main-axis distribution of items within each wrapped row |
 | `padding` | `Padding` | Inner padding around the content area |
 | `border` | `bool` | Draw a border around the container |
 | `border_style` | `BorderStyle` | Border style variant |
@@ -116,6 +117,15 @@ Flow::new()
 ```
 
 Use `Flow` for mixed-width chips, badges, and quick filters where the number of items is dynamic and row breaks must adapt to container resizing.
+
+`justify` distributes each row's leftover width independently: `SpaceBetween` pins the first item of every row to the left edge and the last to the right edge, `Center`/`End` shift whole rows, and `SpaceAround`/`SpaceEvenly` pad the edges too. Unlike `HStack`/`VStack`, Flow items are always measured at their natural size, so the space variants work without giving children explicit non-flex sizing:
+
+```rust
+Flow::new()
+    .gap(1)
+    .justify(Justify::SpaceBetween)
+    .children(tags)
+```
 
 ---
 

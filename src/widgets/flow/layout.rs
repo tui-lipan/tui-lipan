@@ -1,12 +1,11 @@
 use crate::core::element::ElementKind;
 use crate::layout::measure::min_size_constrained;
-use crate::style::{Align, Rect};
+use crate::style::{Align, Justify, Rect};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FlowRow {
     pub y: i16,
-    // Reserved for future row-level justify logic. Today it's mainly useful
-    // during measurement and debugging.
+    /// Packed content width of the row (items + gaps, before justify offsets).
     pub width: u16,
     pub height: u16,
     pub items: Vec<(usize, Rect)>,
@@ -39,6 +38,7 @@ pub(crate) fn pack_rows(flow: &super::Flow, bounds: Rect) -> Vec<FlowRow> {
             gap: flow.gap,
             row_gap,
             align: flow.align,
+            justify: flow.justify,
             origin_x: inner.x,
             origin_y: inner.y,
         },
@@ -50,6 +50,7 @@ struct FlowPackParams {
     gap: u16,
     row_gap: u16,
     align: Align,
+    justify: Justify,
     origin_x: i16,
     origin_y: i16,
 }
@@ -62,12 +63,33 @@ fn cross_offset(align: Align, row_h: u16, child_h: u16) -> u16 {
     }
 }
 
+/// Extra x offset applied to item `idx` (of `count`) in a row with `slack`
+/// leftover columns. Space variants use cumulative integer math so rounding
+/// remainders spread across the row instead of piling up at one end.
+fn justify_offset(justify: Justify, slack: u16, idx: usize, count: usize) -> u16 {
+    let slack = slack as u64;
+    let idx = idx as u64;
+    let count = count as u64;
+    let offset = match justify {
+        Justify::Start => 0,
+        Justify::Center => slack / 2,
+        Justify::End => slack,
+        // With one item, SpaceBetween degenerates to Start (CSS behavior).
+        Justify::SpaceBetween if count <= 1 => 0,
+        Justify::SpaceBetween => slack * idx / (count - 1),
+        Justify::SpaceAround => slack * (2 * idx + 1) / (2 * count),
+        Justify::SpaceEvenly => slack * (idx + 1) / (count + 1),
+    };
+    offset as u16
+}
+
 fn pack_rows_from_sizes(measured: &[(usize, u16, u16)], params: FlowPackParams) -> Vec<FlowRow> {
     let FlowPackParams {
         available_w,
         gap,
         row_gap,
         align,
+        justify,
         origin_x,
         origin_y,
     } = params;
@@ -93,10 +115,13 @@ fn pack_rows_from_sizes(measured: &[(usize, u16, u16)], params: FlowPackParams) 
         // We intentionally recompute x positions from 0 on flush. It keeps the
         // accumulation path simple and is negligible for typical chip/badge
         // counts.
+        let slack = available_w.saturating_sub(*row_w);
         let mut x_cursor = 0u16;
         let mut items = Vec::with_capacity(row_items.len());
         for (item_idx, (child_idx, child_w, child_h)) in row_items.iter().enumerate() {
-            let child_x = origin_x.saturating_add(x_cursor as i16);
+            let justified =
+                x_cursor.saturating_add(justify_offset(justify, slack, item_idx, row_items.len()));
+            let child_x = origin_x.saturating_add(justified as i16);
             let child_y = row_y.saturating_add(cross_offset(align, *row_h, *child_h) as i16);
             items.push((
                 *child_idx,
@@ -264,6 +289,7 @@ mod tests {
                 gap: 0,
                 row_gap: 0,
                 align: Align::Start,
+                justify: Justify::Start,
                 origin_x: 0,
                 origin_y: 0,
             },
@@ -282,6 +308,7 @@ mod tests {
                 gap: 2,
                 row_gap: 2,
                 align: Align::Start,
+                justify: Justify::Start,
                 origin_x: 0,
                 origin_y: 0,
             },
@@ -301,6 +328,7 @@ mod tests {
                 gap: 1,
                 row_gap: 1,
                 align: Align::Start,
+                justify: Justify::Start,
                 origin_x: 0,
                 origin_y: 0,
             },
@@ -319,6 +347,7 @@ mod tests {
                 gap: 2,
                 row_gap: 2,
                 align: Align::Start,
+                justify: Justify::Start,
                 origin_x: 0,
                 origin_y: 0,
             },
@@ -344,6 +373,7 @@ mod tests {
                 gap: 4,
                 row_gap: 0,
                 align: Align::Start,
+                justify: Justify::Start,
                 origin_x: 0,
                 origin_y: 0,
             },
@@ -364,6 +394,7 @@ mod tests {
                 gap: 1,
                 row_gap: 1,
                 align: Align::Center,
+                justify: Justify::Start,
                 origin_x: 0,
                 origin_y: 0,
             },
@@ -373,6 +404,99 @@ mod tests {
         assert_eq!(rows[0].height, 3);
         assert_eq!(rows[0].items[0].1.y, 1);
         assert_eq!(rows[0].items[1].1.y, 0);
+    }
+
+    fn justify_params(justify: Justify, available_w: u16) -> FlowPackParams {
+        FlowPackParams {
+            available_w,
+            gap: 1,
+            row_gap: 0,
+            align: Align::Start,
+            justify,
+            origin_x: 0,
+            origin_y: 0,
+        }
+    }
+
+    fn row_xs(row: &FlowRow) -> Vec<i16> {
+        row.items.iter().map(|(_, rect)| rect.x).collect()
+    }
+
+    #[test]
+    fn space_between_pins_row_edges() {
+        // Three 4-wide items with gap 1 pack to 14 columns; 6 columns of slack
+        // split 3/3 across the two gaps.
+        let rows = pack_rows_from_sizes(
+            &[(0, 4, 1), (1, 4, 1), (2, 4, 1)],
+            justify_params(Justify::SpaceBetween, 20),
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(row_xs(&rows[0]), vec![0, 8, 16]);
+    }
+
+    #[test]
+    fn space_between_applies_per_wrapped_row() {
+        // Two items per row (2*8 + gap = 17 <= 20, adding a third overflows).
+        let rows = pack_rows_from_sizes(
+            &[(0, 8, 1), (1, 8, 1), (2, 8, 1), (3, 8, 1)],
+            justify_params(Justify::SpaceBetween, 20),
+        );
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(row_xs(&rows[0]), vec![0, 12]);
+        assert_eq!(row_xs(&rows[1]), vec![0, 12]);
+    }
+
+    #[test]
+    fn space_between_with_single_item_stays_at_start() {
+        let rows = pack_rows_from_sizes(&[(0, 4, 1)], justify_params(Justify::SpaceBetween, 20));
+
+        assert_eq!(row_xs(&rows[0]), vec![0]);
+    }
+
+    #[test]
+    fn justify_center_and_end_shift_whole_row() {
+        // Two 4-wide items with gap 1 pack to 9 columns; slack is 11.
+        let sizes = [(0, 4, 1), (1, 4, 1)];
+
+        let center = pack_rows_from_sizes(&sizes, justify_params(Justify::Center, 20));
+        assert_eq!(row_xs(&center[0]), vec![5, 10]);
+
+        let end = pack_rows_from_sizes(&sizes, justify_params(Justify::End, 20));
+        assert_eq!(row_xs(&end[0]), vec![11, 16]);
+    }
+
+    #[test]
+    fn space_around_and_evenly_distribute_slack() {
+        // Two 4-wide items with gap 0: packed width 8, slack 12.
+        let sizes = [(0, 4, 1), (1, 4, 1)];
+        let mut params = justify_params(Justify::SpaceAround, 20);
+        params.gap = 0;
+
+        // SpaceAround: half-unit edges — offsets 12*1/4=3 and 12*3/4=9.
+        let around = pack_rows_from_sizes(&sizes, params);
+        assert_eq!(row_xs(&around[0]), vec![3, 4 + 9]);
+
+        let mut params = justify_params(Justify::SpaceEvenly, 20);
+        params.gap = 0;
+
+        // SpaceEvenly: thirds — offsets 12*1/3=4 and 12*2/3=8.
+        let evenly = pack_rows_from_sizes(&sizes, params);
+        assert_eq!(row_xs(&evenly[0]), vec![4, 4 + 8]);
+    }
+
+    #[test]
+    fn space_between_spreads_rounding_remainder() {
+        // Four 1-wide items, gap 0: packed width 4, slack 6 over 3 gaps of 2.
+        // Then with slack 7 the extra column must not pile onto one gap.
+        let sizes = [(0, 1, 1), (1, 1, 1), (2, 1, 1), (3, 1, 1)];
+        let mut params = justify_params(Justify::SpaceBetween, 11);
+        params.gap = 0;
+
+        let rows = pack_rows_from_sizes(&sizes, params);
+        // Offsets: 7*0/3=0, 7*1/3=2, 7*2/3=4, 7*3/3=7.
+        assert_eq!(row_xs(&rows[0]), vec![0, 3, 6, 10]);
     }
 
     #[test]
@@ -386,6 +510,7 @@ mod tests {
                 gap: 0,
                 row_gap: 0,
                 align: Align::Start,
+                justify: Justify::Start,
                 origin_x: 2,
                 origin_y: 1,
             },
