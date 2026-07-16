@@ -754,7 +754,7 @@ mod tests {
             panic!("expected text area root");
         };
 
-        assert_eq!(node.scroll_offset, 3);
+        assert_eq!(node.scroll_offset, 2);
     }
 
     #[test]

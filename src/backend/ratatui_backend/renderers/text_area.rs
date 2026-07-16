@@ -660,6 +660,7 @@ fn calculate_visual_lines<'a>(
     value: &'a str,
     content_width: usize,
     wrap: bool,
+    append_caret_row: bool,
     sentinel: Option<&SentinelInfo>,
 ) -> Vec<VisualLine<'a>> {
     let mut visual_lines = Vec::new();
@@ -745,6 +746,33 @@ fn calculate_visual_lines<'a>(
             });
         }
 
+        if append_caret_row
+            && wrap
+            && content_width > 0
+            && visual_lines.last().is_some_and(|last| {
+                last.line_num == line_num
+                    && last.end == current_byte_offset + line_len
+                    && last.visual_end_col.saturating_sub(last.visual_start_col) == content_width
+            })
+        {
+            let boundary = current_byte_offset + line_len;
+            let visual_col = visual_lines
+                .last()
+                .map(|last| last.visual_end_col)
+                .unwrap_or(0);
+            visual_lines.push(VisualLine {
+                text: "",
+                line_num,
+                continuation: true,
+                start: boundary,
+                end: boundary,
+                visual_start_col: visual_col,
+                visual_end_col: visual_col,
+                starts_with_virtual_text: false,
+                ends_with_virtual_text: false,
+            });
+        }
+
         current_byte_offset += line_len + 1; // +1 includes the newline char
     }
     visual_lines
@@ -754,6 +782,7 @@ fn build_visual_lines<'a>(
     value: &'a str,
     content_width: usize,
     wrap: bool,
+    append_caret_row: bool,
     cached_lines: Option<&[TextAreaVisualLine]>,
     sentinel: Option<&SentinelInfo>,
 ) -> Vec<VisualLine<'a>> {
@@ -774,7 +803,7 @@ fn build_visual_lines<'a>(
             .collect();
     }
 
-    calculate_visual_lines(value, content_width, wrap, sentinel)
+    calculate_visual_lines(value, content_width, wrap, append_caret_row, sentinel)
 }
 
 pub(crate) struct TextAreaVimRenderCtx<'a> {
@@ -1175,6 +1204,7 @@ pub(crate) fn render_text_area(
         render_value,
         content_width,
         wrap,
+        !read_only && !placeholder_active,
         cached_lines,
         sentinel.as_ref(),
     );
@@ -2600,6 +2630,7 @@ pub(crate) fn text_area_cursor_position(
         value,
         content_width,
         wrap,
+        !read_only,
         visual_cache.get_lines(&visual_key),
         sentinel.as_ref(),
     );
@@ -2893,7 +2924,7 @@ mod tests {
     fn test_wrapping_punctuation_glue() {
         let text = "hello word.";
         let width = 10;
-        let lines = calculate_visual_lines(text, width, true, None);
+        let lines = calculate_visual_lines(text, width, true, false, None);
 
         // Debug output
         for (i, line) in lines.iter().enumerate() {
@@ -3090,6 +3121,86 @@ mod tests {
         layout.wrap = true;
         let position = text_area_cursor_position(
             "abcdefgh",
+            TextAreaCursorInput {
+                cursor: 5,
+                anchor: None,
+                allow_selection_cursor: false,
+            },
+            TextAreaCursorVimCtx {
+                search_feedback: None,
+                visual_line_caret: None,
+            },
+            layout,
+            scroll,
+            extras,
+        );
+
+        assert_eq!(position, Some(ratatui::layout::Position::new(0, 1)));
+    }
+
+    #[test]
+    fn cursor_position_places_visible_wrap_break_on_continuation_start() {
+        let cache = TextAreaVisualCache::default();
+        let geometry = crate::widgets::TextAreaGeometry {
+            inner_w: 6,
+            inner_h: 2,
+            content_width: 5,
+            total_visual_lines: 2,
+            viewport_height: 2,
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 6,
+            h: 2,
+        };
+
+        let (mut layout, scroll, extras) =
+            test_cursor_pos_ctx(&cache, &geometry, rect, 9, 0, false);
+        layout.wrap = true;
+        let position = text_area_cursor_position(
+            "abcd-efgh",
+            TextAreaCursorInput {
+                cursor: 5,
+                anchor: None,
+                allow_selection_cursor: false,
+            },
+            TextAreaCursorVimCtx {
+                search_feedback: None,
+                visual_line_caret: None,
+            },
+            layout,
+            scroll,
+            extras,
+        );
+
+        assert_eq!(position, Some(ratatui::layout::Position::new(0, 1)));
+    }
+
+    #[test]
+    fn cursor_position_wraps_after_exactly_full_final_row() {
+        let cache = TextAreaVisualCache::default();
+        let geometry = crate::widgets::TextAreaGeometry {
+            inner_w: 5,
+            inner_h: 2,
+            content_width: 5,
+            total_visual_lines: 2,
+            viewport_height: 2,
+            ..Default::default()
+        };
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 5,
+            h: 2,
+        };
+
+        let (mut layout, scroll, extras) =
+            test_cursor_pos_ctx(&cache, &geometry, rect, 5, 0, false);
+        layout.wrap = true;
+        let position = text_area_cursor_position(
+            "abcde",
             TextAreaCursorInput {
                 cursor: 5,
                 anchor: None,

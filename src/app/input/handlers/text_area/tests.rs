@@ -4328,6 +4328,78 @@ fn arrow_up_down_walks_wrapped_visual_lines() {
 }
 
 #[test]
+fn arrow_down_from_visible_wrap_break_enters_continuation() {
+    let value = "Please implement this plan: ~/.claude/plans/so-by-order-1-quizzical-teapot.md\n\nCommit each crucial checkpoint.";
+    let root = TextArea::new(value).border(false).scrollbar(false).into();
+    let mut tree = NodeTree::new();
+    LayoutEngine::reconcile_with_focus(
+        &mut tree,
+        &root,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 69,
+            h: 6,
+        },
+        None,
+    );
+    let lines = match &tree.node(tree.root).kind {
+        NodeKind::TextArea(node) => node
+            .visual_cache
+            .latest_lines()
+            .expect("visual lines should be cached")
+            .to_vec(),
+        _ => panic!("expected TextArea node"),
+    };
+
+    let continuation = lines
+        .iter()
+        .position(|line| &value[line.start..line.end] == "teapot.md")
+        .expect("path should wrap before teapot.md");
+    let wrap_boundary = lines[continuation].start;
+    assert_eq!(
+        &value[..wrap_boundary],
+        "Please implement this plan: ~/.claude/plans/so-by-order-1-quizzical-"
+    );
+
+    assert_eq!(
+        text_area_visual_line_for_cursor(&lines, wrap_boundary),
+        continuation,
+        "the boundary after the dash belongs to the continuation start",
+    );
+
+    let initial_cursor = crate::utils::text::prev_char_boundary(value, wrap_boundary);
+    let mut editor = TextEditor::new(value);
+    editor.set_cursor(initial_cursor);
+    assert!(perform_visual_vertical_nav(
+        &mut editor,
+        Action::MoveDown,
+        &lines,
+        None,
+        8,
+        &[],
+    ));
+    assert_eq!(
+        text_area_visual_line_for_cursor(&lines, editor.cursor()),
+        continuation,
+        "Down must enter the wrapped path continuation instead of skipping to the blank line",
+    );
+    assert!(perform_visual_vertical_nav(
+        &mut editor,
+        Action::MoveUp,
+        &lines,
+        None,
+        8,
+        &[],
+    ));
+    assert_eq!(
+        editor.cursor(),
+        initial_cursor,
+        "Up must restore the caret on the upper row without using the shared boundary",
+    );
+}
+
+#[test]
 fn visual_boundary_nav_moves_to_buffer_edges() {
     let lines = vec![
         TextAreaVisualLine {

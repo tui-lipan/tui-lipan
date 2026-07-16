@@ -58,8 +58,7 @@ pub(super) fn perform_visual_vertical_nav(
     let target_str_end = clamp_text_area_cursor(&value, target.end.min(value.len()));
     let target_str_start = clamp_text_area_cursor(&value, target.start.min(target_str_end));
     // A soft-wrapped row shares its end byte with the next continuation row's
-    // start. That boundary byte now belongs to the continuation row (it renders
-    // and measures there), so landing on it would skip past the target row.
+    // start. Landing on that boundary would skip past the target row.
     let target_ends_at_soft_wrap = lines.get(target_idx + 1).is_some_and(|next| {
         next.line_num == target.line_num
             && next.continuation
