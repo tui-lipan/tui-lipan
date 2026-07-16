@@ -970,6 +970,75 @@ fn clear_shared_document_selection_test_backend<C: Component>(
     }
 }
 
+/// Mirror of `AppRunner::handle_drag_drop_move` without edge autoscroll or
+/// snapshot preview bookkeeping (neither applies to the headless backend).
+fn handle_drag_drop_move_test_backend<C: Component>(
+    backend: &mut TestBackend<C>,
+    x: u16,
+    y: u16,
+) -> bool {
+    let ActiveDrag::DragDrop(drag_state) = backend.drag.active.clone() else {
+        return false;
+    };
+
+    if !backend.core.tree.is_valid(drag_state.source_id) {
+        backend.drag.clear();
+        return true;
+    }
+
+    let hit = backend.core.tree.hit_test(x as i16, y as i16);
+    let new_hover = hit
+        .and_then(|h| drag::nearest_ancestor_drop_target(&backend.core.tree, h))
+        .filter(|target_id| {
+            drag::drag_drop_target_is_compatible(
+                &backend.core.tree,
+                *target_id,
+                drag_state.drag_group.as_ref(),
+                drag_state.payload.as_ref(),
+            )
+        });
+
+    let has_visible_preview = !matches!(drag_state.preview, crate::widgets::DragPreview::None);
+
+    if new_hover != drag_state.hovered_target {
+        if let Some(old) = drag_state.hovered_target {
+            drag::set_drop_target_highlighted(&mut backend.core.tree, old, false);
+            drag::emit_drop_target_leave(&backend.core.tree, old, &drag_state.payload);
+        }
+
+        if let Some(new_id) = new_hover {
+            drag::set_drop_target_highlighted(&mut backend.core.tree, new_id, true);
+        }
+    }
+
+    let mut dirty = has_visible_preview;
+
+    if let Some(id) = new_hover
+        && backend.core.tree.is_valid(id)
+        && let NodeKind::DropTarget(target) = &backend.core.tree.node(id).kind
+        && let Some(cb) = &target.on_drag_over
+    {
+        let rect = backend.core.tree.node(id).rect;
+        let top = rect.y.max(0) as u16;
+        let local_y = y.saturating_sub(top);
+        cb.emit(crate::widgets::DragOverEvent {
+            x,
+            y,
+            local_y,
+            local_height: rect.h,
+            payload: drag_state.payload.clone(),
+        });
+        dirty = true;
+    }
+
+    backend.drag.active = ActiveDrag::DragDrop(crate::app::input::drag::DragDropDrag {
+        hovered_target: new_hover,
+        scroll_view_id: None,
+        ..drag_state
+    });
+    dirty
+}
+
 pub(crate) fn dispatch_active_drag_test_backend<C: Component>(
     backend: &mut TestBackend<C>,
     x: u16,
@@ -977,7 +1046,17 @@ pub(crate) fn dispatch_active_drag_test_backend<C: Component>(
 ) -> Option<bool> {
     backend.drag.remember_pointer(x, y);
     backend.mouse.last_mouse = Some((x, y));
+    if drag::try_activate_drag_drop(
+        &mut backend.core.tree,
+        &mut backend.mouse,
+        &mut backend.drag,
+        x,
+        y,
+    ) {
+        return Some(handle_drag_drop_move_test_backend(backend, x, y));
+    }
     match backend.drag.active.clone() {
+        ActiveDrag::DragDrop(_) => Some(handle_drag_drop_move_test_backend(backend, x, y)),
         ActiveDrag::TextArea(drag_state) => {
             if let Some((value, cursor, anchor_opt, on_change, read_only)) =
                 drag::handle_textarea_drag(

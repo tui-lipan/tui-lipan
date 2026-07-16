@@ -369,11 +369,13 @@ pub(crate) struct ClickState {
 
 mod diff;
 mod document;
+mod drag_drop;
 mod scroll_view;
 mod table;
 mod widgets;
 
 pub(crate) use document::*;
+pub(crate) use drag_drop::*;
 pub(crate) use scroll_view::*;
 pub(crate) use table::*;
 pub(crate) use widgets::*;
