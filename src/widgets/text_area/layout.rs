@@ -340,6 +340,7 @@ pub(crate) fn text_area_total_gutter_width(
 }
 
 pub(crate) fn text_area_visual_line_for_cursor(
+    value: &str,
     lines: &[TextAreaVisualLine],
     cursor: usize,
 ) -> usize {
@@ -353,15 +354,30 @@ pub(crate) fn text_area_visual_line_for_cursor(
         let next_starts_at_boundary = lines.get(idx + 1).is_some_and(|next| {
             next.line_num == line.line_num && next.continuation && next.start == cursor
         });
-        if cursor == line.end && !next_starts_at_boundary {
+        if cursor == line.end
+            && (!next_starts_at_boundary
+                || text_area_wrap_boundary_belongs_to_previous(value, cursor))
+        {
             return idx;
         }
     }
     lines.len().saturating_sub(1)
 }
 
-fn cursor_visual_line_for_cursor(lines: &[TextAreaVisualLine], cursor: usize) -> usize {
-    text_area_visual_line_for_cursor(lines, cursor)
+/// Keep a visible punctuation break and its trailing caret on the upper wrapped row.
+pub(crate) fn text_area_wrap_boundary_belongs_to_previous(value: &str, boundary: usize) -> bool {
+    value
+        .get(..boundary)
+        .and_then(|prefix| prefix.chars().next_back())
+        .is_some_and(|ch| !ch.is_whitespace() && crate::utils::text::is_wrap_break(ch))
+}
+
+fn cursor_visual_line_for_cursor(
+    value: &str,
+    lines: &[TextAreaVisualLine],
+    cursor: usize,
+) -> usize {
+    text_area_visual_line_for_cursor(value, lines, cursor)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -637,8 +653,12 @@ pub(crate) fn layout_line_with_inline_virtual_text(
     max_line_width
 }
 
-fn cursor_visual_line_for_wrapped_lines(lines: &[TextAreaVisualLine], cursor: usize) -> usize {
-    text_area_visual_line_for_cursor(lines, cursor)
+fn cursor_visual_line_for_wrapped_lines(
+    value: &str,
+    lines: &[TextAreaVisualLine],
+    cursor: usize,
+) -> usize {
+    text_area_visual_line_for_cursor(value, lines, cursor)
 }
 
 pub fn measure_text_area(text_area: &TextArea) -> (u16, u16) {
@@ -904,9 +924,9 @@ pub(crate) fn calculate_text_area_visual_metrics(
     {
         let mut geometry = entry.geometry.clone();
         geometry.cursor_visual_line = if text_area.wrap {
-            cursor_visual_line_for_wrapped_lines(&entry.lines, text_area.cursor)
+            cursor_visual_line_for_wrapped_lines(value, &entry.lines, text_area.cursor)
         } else {
-            cursor_visual_line_for_cursor(&entry.lines, text_area.cursor)
+            cursor_visual_line_for_cursor(value, &entry.lines, text_area.cursor)
         };
 
         #[cfg(feature = "diff-view")]
@@ -1090,9 +1110,9 @@ pub(crate) fn calculate_text_area_visual_metrics(
     let mut total_visual_lines = visual_lines.len();
     #[allow(unused_mut)]
     let mut cursor_visual_line = if wrap {
-        cursor_visual_line_for_wrapped_lines(&visual_lines, cursor)
+        cursor_visual_line_for_wrapped_lines(value, &visual_lines, cursor)
     } else {
-        cursor_visual_line_for_cursor(&visual_lines, cursor)
+        cursor_visual_line_for_cursor(value, &visual_lines, cursor)
     };
 
     #[cfg(feature = "diff-view")]
@@ -1169,7 +1189,7 @@ pub(crate) fn calculate_text_area_visual_metrics(
 
             visual_lines = padded;
             total_visual_lines = visual_lines.len();
-            cursor_visual_line = cursor_visual_line_for_cursor(&visual_lines, cursor);
+            cursor_visual_line = cursor_visual_line_for_cursor(value, &visual_lines, cursor);
         }
     }
 

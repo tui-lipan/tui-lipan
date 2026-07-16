@@ -4328,6 +4328,71 @@ fn arrow_up_down_walks_wrapped_visual_lines() {
 }
 
 #[test]
+fn arrow_down_from_visible_wrap_break_enters_continuation() {
+    let value = "Please implement this plan: ~/.claude/plans/so-by-order-1-quizzical-teapot.md\n\nCommit each crucial checkpoint.";
+    let root = TextArea::new(value).border(false).scrollbar(false).into();
+    let mut tree = NodeTree::new();
+    LayoutEngine::reconcile_with_focus(
+        &mut tree,
+        &root,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 69,
+            h: 6,
+        },
+        None,
+    );
+    let lines = match &tree.node(tree.root).kind {
+        NodeKind::TextArea(node) => node
+            .visual_cache
+            .latest_lines()
+            .expect("visual lines should be cached")
+            .to_vec(),
+        _ => panic!("expected TextArea node"),
+    };
+
+    let continuation = lines
+        .iter()
+        .position(|line| &value[line.start..line.end] == "teapot.md")
+        .expect("path should wrap before teapot.md");
+    let wrap_boundary = lines[continuation].start;
+    assert_eq!(
+        &value[..wrap_boundary],
+        "Please implement this plan: ~/.claude/plans/so-by-order-1-quizzical-"
+    );
+
+    let mut editor = TextEditor::new(value);
+    editor.set_cursor(wrap_boundary);
+    assert!(perform_visual_vertical_nav(
+        &mut editor,
+        Action::MoveDown,
+        &lines,
+        None,
+        8,
+        &[],
+    ));
+    assert_eq!(
+        text_area_visual_line_for_cursor(value, &lines, editor.cursor()),
+        continuation,
+        "Down must enter the wrapped path continuation instead of skipping to the blank line",
+    );
+    assert!(perform_visual_vertical_nav(
+        &mut editor,
+        Action::MoveUp,
+        &lines,
+        None,
+        8,
+        &[],
+    ));
+    assert_eq!(
+        editor.cursor(),
+        wrap_boundary,
+        "Up must restore the caret after the visible wrap punctuation",
+    );
+}
+
+#[test]
 fn visual_boundary_nav_moves_to_buffer_edges() {
     let lines = vec![
         TextAreaVisualLine {
@@ -4494,7 +4559,10 @@ fn visual_vertical_nav_from_wrap_row_end_descends_one_row_at_a_time() {
     ));
     // Lands on row 1 (byte 11, its last cell), not on byte 12 (row 2's start).
     assert_eq!(editor.cursor(), 11);
-    assert_eq!(text_area_visual_line_for_cursor(&lines, editor.cursor()), 1);
+    assert_eq!(
+        text_area_visual_line_for_cursor(value, &lines, editor.cursor()),
+        1
+    );
 
     // Moving back up returns to row 0 instead of getting stuck.
     assert!(perform_visual_vertical_nav(
@@ -4505,7 +4573,10 @@ fn visual_vertical_nav_from_wrap_row_end_descends_one_row_at_a_time() {
         8,
         &[]
     ));
-    assert_eq!(text_area_visual_line_for_cursor(&lines, editor.cursor()), 0);
+    assert_eq!(
+        text_area_visual_line_for_cursor(value, &lines, editor.cursor()),
+        0
+    );
 }
 
 #[test]
