@@ -22,6 +22,8 @@ The recommended starting point: a complete PTY terminal with automatic lifecycle
 | `scroll_wheel` | `bool` | Mouse wheel for scrollback (default: true) |
 | `style` | `Style` | Terminal content style |
 | `focusable` | `bool` | Accept focus (default: true) |
+| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `width` | `Length` | Width (default: `Flex(1)`) |
 | `height` | `Length` | Height (default: `Flex(1)`) |
 | `on_status` | `Callback<ManagedTerminalStatus>` | Status change callback |
@@ -78,6 +80,8 @@ The low-level terminal viewport widget. Use when you need custom PTY handling, m
 | `focus_style` | `Style` | Focus chrome style |
 | `extend_focus_style` / `inherit_focus_style` | `Style` / `()` | Extend or inherit the focus theme role instead of replacing it |
 | `focusable` | `bool` | Accept focus |
+| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `scroll_wheel` | `bool` | Mouse wheel scrollback |
 | `selection_style` | `Style` | Text selection style |
 | `extend_selection_style` / `inherit_selection_style` | `Style` / `()` | Extend or inherit the text-selection theme role instead of replacing it |

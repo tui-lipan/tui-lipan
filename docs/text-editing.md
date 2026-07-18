@@ -377,6 +377,13 @@ use tui_lipan::text_motion::{word_forward_start, word_end};
 use tui_lipan::prelude::*; // brings the same functions into scope directly
 ```
 
+## TextArea Tab Behavior
+
+`TextArea::tab_stop(bool)` controls sequential focus traversal. Literal tab rendering uses the
+separate `tab_display_width(u8)` setter (default `8`); this replaces the old numeric
+`tab_stop(u8)` API. Use `tab_width(u8)` to insert spaces through the next column multiple, or
+`insert_tab(true)` to insert a literal tab instead of moving focus.
+
 ## TextArea metrics, decorations, and state callbacks
 
 For editor integrations, keep byte offsets as the source of truth and use

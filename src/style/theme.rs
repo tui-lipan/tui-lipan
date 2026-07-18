@@ -816,6 +816,18 @@ mod tests {
     }
 
     #[test]
+    fn focus_decoration_does_not_change_unfocused_selection() {
+        let selection = Style::new().fg(Color::Yellow).bg(Color::Blue);
+        let theme = Theme::default()
+            .selection(selection)
+            .focus(Style::new().fg(Color::Green))
+            .focus_decoration(false);
+
+        assert!(theme.role(ThemeRole::Focus).is_empty());
+        assert_eq!(theme.role(ThemeRole::UnfocusedSelection), selection);
+    }
+
+    #[test]
     fn theme_palette_derives_distinct_selection_colors() {
         let theme = ThemePalette::new(Color::White, Color::Black, Color::Blue)
             .selection(Color::Green)
@@ -1607,6 +1619,12 @@ pub struct Theme {
     /// the theme role. Keep this empty to suppress theme-provided focus visuals
     /// while still allowing explicit widget-level `focus_style(...)` overrides.
     pub focus: Style,
+    /// Whether theme-provided focus decoration is enabled.
+    ///
+    /// Disabling this suppresses focus roles derived from the theme, including
+    /// focused-content palettes and focused scrollbar thumbs. Explicit widget
+    /// focus styles still apply.
+    pub focus_decoration: bool,
     /// Style for hovered items.
     pub hover: Style,
     /// Style for borders and frames.
@@ -1686,23 +1704,33 @@ impl Theme {
             | ThemeRole::DropTarget
             | ThemeRole::DropTargetActive
             | ThemeRole::ItemHover => self.hover,
-            ThemeRole::Focus => self.focus,
+            ThemeRole::Focus if self.focus_decoration => self.focus,
+            ThemeRole::Focus => Style::default(),
             ThemeRole::Active => self.selection,
             ThemeRole::Border => self.primary.patch(self.border),
             ThemeRole::Disabled | ThemeRole::Muted => self.primary.patch(self.muted),
             ThemeRole::Error => Style::new().fg(self.status.error),
-            ThemeRole::InputFocusContent => self.input.focus,
-            ThemeRole::TextAreaFocusContent => self.text_area.focus,
-            ThemeRole::DocumentViewFocusContent => self.document_view.focus,
-            ThemeRole::HexAreaFocusContent => self.hex_area.focus,
-            ThemeRole::HexAreaCursor => self.hex_area.cursor,
-            ThemeRole::TerminalFocusContent => self.terminal.focus,
+            ThemeRole::InputFocusContent if self.focus_decoration => self.input.focus,
+            ThemeRole::TextAreaFocusContent if self.focus_decoration => self.text_area.focus,
+            ThemeRole::DocumentViewFocusContent if self.focus_decoration => {
+                self.document_view.focus
+            }
+            ThemeRole::HexAreaFocusContent if self.focus_decoration => self.hex_area.focus,
+            ThemeRole::HexAreaCursor if self.focus_decoration => self.hex_area.cursor,
+            ThemeRole::TerminalFocusContent if self.focus_decoration => self.terminal.focus,
+            ThemeRole::InputFocusContent
+            | ThemeRole::TextAreaFocusContent
+            | ThemeRole::DocumentViewFocusContent
+            | ThemeRole::HexAreaFocusContent
+            | ThemeRole::HexAreaCursor
+            | ThemeRole::TerminalFocusContent => Style::default(),
             ThemeRole::ScrollbarThumb => Style::new().bg(self.scrollbar.thumb),
-            ThemeRole::ScrollbarThumbFocus => self
+            ThemeRole::ScrollbarThumbFocus if self.focus_decoration => self
                 .scrollbar
                 .thumb_focus
                 .map(|color| Style::new().bg(color))
                 .unwrap_or_default(),
+            ThemeRole::ScrollbarThumbFocus => Style::default(),
             ThemeRole::ScrollbarTrack => self
                 .scrollbar
                 .track
@@ -1736,6 +1764,7 @@ impl Theme {
                 .fg(accent)
                 .bg(primary_bg.blend_toward(accent, 0.22)),
             focus: Style::new().fg(border_active),
+            focus_decoration: true,
             hover: Style::default(),
             border: Style::new().fg(primary_fg.blend_toward(primary_bg, 0.40)),
             muted: Style::new().fg(muted),
@@ -1875,6 +1904,14 @@ impl Theme {
     /// while still allowing widgets to opt into explicit focus styles.
     pub fn focus(mut self, style: Style) -> Self {
         self.focus = style;
+        self
+    }
+
+    /// Enable or disable focus decoration supplied by this theme.
+    ///
+    /// Explicit widget focus styles remain active when this is disabled.
+    pub fn focus_decoration(mut self, focus_decoration: bool) -> Self {
+        self.focus_decoration = focus_decoration;
         self
     }
 
@@ -2207,6 +2244,7 @@ impl From<ThemePalette> for Theme {
                 .fg(text_selection)
                 .bg(p.background.blend_toward(text_selection, 0.22)),
             focus: Style::new().fg(border_active),
+            focus_decoration: true,
             hover: Style::default(),
             border: Style::new().fg(border_color),
             muted: Style::new().fg(muted_color),

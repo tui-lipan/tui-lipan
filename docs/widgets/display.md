@@ -84,7 +84,9 @@ display content differs from source text.
 | `h_scrollbar` | `bool` | Show/hide horizontal scrollbar (only when `wrap` is `false`) |
 | `scroll_wheel` | `bool` | Enable/disable mouse wheel scrolling (default: `true`) |
 | `scroll_wheel_multiplier` | `u16` | Override the app-wide wheel line multiplier for this DocumentView |
-| `focusable` | `bool` | Participate in focus traversal; mouse selection and copy shortcuts still work when false |
+| `focusable` | `bool` | Accept keyboard focus (default: `true`); mouse selection and copy shortcuts still work when false |
+| `tab_stop` | `bool` | Participate in Tab/Shift-Tab traversal while focusable (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus transition callbacks |
 | `on_scroll` | `Callback<ScrollEvent>` | Scroll callback |
 | `on_click` | `Callback<DocumentClickEvent>` | Click callback with source-line mapping |
 | `on_select` | `Callback<DocumentSelectEvent>` | Text selection callback |
@@ -162,6 +164,10 @@ DocumentView::new(markdown_source)
 ```
 
 Keyboard scrolling (when focused): arrows, `j/k`, `PageUp/PageDown`, `Home/End`.
+
+Under the default `FocusPolicy::OnDemand`, `DocumentView` remains focusable but is not focused at
+startup. Tab, pointer focus, or `request_focus(key)` establishes focus. Use `.tab_stop(false)` to
+keep explicit/pointer access while omitting the view from traversal.
 
 `scroll_to_source_line(...)` maps the zero-based source line to the first matching
 wrapped visual row. Add `.scroll_behavior(ScrollBehavior::smooth_default())`,

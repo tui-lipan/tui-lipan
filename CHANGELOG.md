@@ -13,6 +13,10 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Added `Theme::focus_decoration(bool)` and public `Theme::focus_decoration`, defaulting to `true`.
+  Disabling it suppresses theme-sourced focus chrome, focused-content palette defaults, and focused
+  scrollbar thumbs while preserving explicit widget focus styles and all selection styling.
+  (breaking)
 - Added widget `on_focus`/`on_blur` delivery and `App::on_focus_changed`, with public
   `FocusEntry`/`FocusChanged` payloads, keyed-remount deduplication, post-reconcile delivery, and
   focus diagnostics in the `devtools` panel. `Modal` and root `Popover` auto-focus by default;

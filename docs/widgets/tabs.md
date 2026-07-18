@@ -31,6 +31,8 @@ inherit scoped theme roles.
 | `disabled` | `bool` | Disable all tabs |
 | `disabled_style` | `Style` | Style when disabled |
 | `focusable` | `bool` | Accept focus |
+| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_change` | `Callback<TabsEvent>` | Active tab changed |
@@ -111,6 +113,8 @@ Editor-style tab bar with drag reordering, per-tab close buttons, file icons, an
 | `disabled` | `bool` | Disable all tabs |
 | `disabled_style` | `Style` | Style when disabled |
 | `focusable` | `bool` | Accept focus |
+| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_change` | `Callback<TabsEvent>` | Active tab changed |

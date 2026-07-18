@@ -1283,6 +1283,7 @@ fn render_frame_node(
         .style_overrides
         .as_ref()
         .is_none_or(|overrides| overrides.focus_style.is_none())
+        && theme.focus_decoration
         && !theme.focus.is_empty()
     {
         themed_props.overrides_mut().focus_style = Some(StyleSlot::Inherit);

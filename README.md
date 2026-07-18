@@ -111,10 +111,10 @@ tree expansion, reconciliation, layout, event routing, focus, and rendering.
 - **Nested components** - `child::<C, _>(...)` with scoped state/message routing
 - **Async side effects** - `Command` + background tasks + typed message return
 - **Layout engine** - flexbox-inspired `Auto`/`Px`/`Flex`, stacks, frames, splitters
-- **Interaction model** - mouse hit-testing, focus traversal, hover/focus introspection, key bubbling
+- **Interaction model** - `OnDemand`/`Auto`/`Manual` focus policies, tab stops and scopes, mouse hit-testing, focus events, and key bubbling
 - **Overlay system** - modals, popovers, toasts, dismissal policies, focus capture
 - **Rich widget set** - forms, tables, terminal viewport, file tree, log view, diff view, sparkline, charts, and more
-- **Theming** - preset + custom themes, host-derived `system` theme, contrast policies, live hot reload
+- **Theming** - preset + custom themes, focus-decoration control, host-derived `system` theme, contrast policies, live hot reload
 - **Animation & effects** - easing transitions, animated geometry, and `EffectScope` cell shaders (scanlines, palette quantize, custom per-cell effects)
 - **Agent-visible UI** - headless rendering + `UiSnapshot` markdown/JSON/PNG exports, so AI agents (and CI) can *see* the TUI they build - see [Agents can see the TUI](#agents-can-see-the-tui)
 - **Inline mode** - render below the shell prompt, no alternate screen

@@ -153,6 +153,9 @@ pub(crate) fn resolve_scrollbar_theme(
         Some(style)
     });
     let thumb_focus_style = thumb_focus_style.or_else(|| {
+        if !theme.focus_decoration {
+            return None;
+        }
         theme.scrollbar.thumb_focus.map(|focus_color| {
             let mut style = Style::new().fg(focus_color);
             if matches!(focus_color, Color::Transparent) {
@@ -172,6 +175,16 @@ pub(crate) fn resolve_scrollbar_theme(
     });
 
     (thumb_style, thumb_focus_style, track_style)
+}
+
+/// Fill an explicit focused-content style from its widget palette when theme
+/// focus decoration is enabled.
+pub(crate) fn resolve_focus_style_defaults(theme: &Theme, style: Style, defaults: Style) -> Style {
+    if theme.focus_decoration {
+        resolve_style_defaults(style, defaults)
+    } else {
+        style
+    }
 }
 
 fn fill_style_defaults(style: Style, defaults: Style, include_bg: bool) -> Style {
@@ -387,6 +400,48 @@ mod tests {
         );
         assert_eq!(focus_extend.fg, p(Color::Yellow));
         assert_eq!(focus_extend.bg, p(Color::Black));
+    }
+
+    #[test]
+    fn disabled_theme_focus_decoration_preserves_only_explicit_slot_fields() {
+        let theme = Theme::default()
+            .focus(Style::new().fg(Color::Green).bg(Color::Black).bold())
+            .focus_decoration(false);
+
+        assert!(resolve_slot(&theme, ThemeRole::Focus, &StyleSlot::Inherit).is_empty());
+
+        let extended = resolve_slot(
+            &theme,
+            ThemeRole::Focus,
+            &StyleSlot::Extend(Style::new().fg(Color::Yellow)),
+        );
+        assert_eq!(extended.fg, p(Color::Yellow));
+        assert_eq!(extended.bg, None);
+        assert_eq!(extended.bold, None);
+
+        let replaced = resolve_slot(
+            &theme,
+            ThemeRole::Focus,
+            &StyleSlot::Replace(Style::new().bg(Color::Red)),
+        );
+        assert_eq!(replaced.bg, p(Color::Red));
+    }
+
+    #[test]
+    fn disabled_theme_focus_decoration_suppresses_palette_fallbacks_only() {
+        let theme = Theme::default().focus_decoration(false);
+        let explicit = Style::new().fg(Color::Yellow);
+
+        assert_eq!(
+            resolve_focus_style_defaults(&theme, explicit, Style::new().fg(Color::Green)),
+            explicit
+        );
+
+        let (_, inherited_focus, _) = resolve_scrollbar_theme(&theme, None, None, None);
+        assert_eq!(inherited_focus, None);
+
+        let (_, explicit_focus, _) = resolve_scrollbar_theme(&theme, None, Some(explicit), None);
+        assert_eq!(explicit_focus, Some(explicit));
     }
 
     #[test]

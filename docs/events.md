@@ -849,11 +849,14 @@ anchor, the current value, an optional `TextEditEvent` when the existing edit
 path produced one, and an optional Vim mode when a mode transition occurred.
 ## Focus Events
 
-Focusable widgets expose `on_focus(Callback<()>)` and `on_blur(Callback<()>)`. App-wide
-observation is available through `App::on_focus_changed`, which receives a `FocusChanged` with
-optional `old` and `new` `FocusEntry` values. Each entry contains the widget's optional `Key` and
-public `Tag`.
+Widgets documented with focus-event props expose `on_focus(Callback<()>)` and
+`on_blur(Callback<()>)`. App-wide observation is available through `App::on_focus_changed`, which
+receives a `FocusChanged` with optional `old` and `new` `FocusEntry` values. Each entry contains
+the widget's optional `Key` and public `Tag`.
 
-Focus transitions are emitted after reconciliation. Blur is emitted before focus, followed by the
-app hook. Keyed widgets suppress spurious blur/focus pairs when reconciliation replaces their
-runtime node; key focusable widgets when stable event identity matters.
+Focus transitions are emitted only after dispatch/reconciliation has finalized. The runtime emits
+`on_blur(old)` before `on_focus(new)`, then synchronously invokes the app hook. Link-backed widget
+callbacks run from their queue on the next pump, so the app hook executes before those queued
+component handlers. If the old node has unmounted, its widget callback is skipped while the app
+hook still receives the retained old entry. Equal runtime nodes or equal non-empty keys are
+deduplicated; key dynamic focusable widgets when stable event identity matters.

@@ -18,6 +18,10 @@ modal content has no focusable descendants, focus is suspended until the modal i
 dismissed. Use `OverlayScope::Local` only for inline composition without full
 modal focus/backdrop semantics.
 
+Root capture is independent of `FocusPolicy`: `auto_focus: true` also focuses and traps under
+`Manual`. With `auto_focus: false`, capture and trapping remain active while focus is suspended.
+Dismissal restores the prior entry, including an unfocused `OnDemand` state.
+
 | Prop | Type | Description |
 |------|------|-------------|
 | `title` | `impl Into<String>` | **Constructor** - dialog title |
@@ -208,7 +212,7 @@ Floating content panel triggered by an element.
 | `max_width` | `Length` | Cap the resolved popover width; percent resolves against overlay bounds |
 | `anchor` | `Option<(u16, u16)>` | Absolute content-coordinate anchor instead of trigger rect |
 
-`Popover` renders through the root overlay pipeline by default, so it appears above normal in-tree content and captures focus while open. Use `.scope(OverlayScope::Local)` when it should stay inside parent stacking order, such as an autocomplete attached to content that can be covered by an inline sidebar layer. Use `.auto_focus(false)` for a capturing popover that must leave the app unfocused.
+`Popover` renders through the root overlay pipeline by default, so it appears above normal in-tree content and captures focus while open. Auto-focus and trapping remain active under `FocusPolicy::Manual`. Use `.scope(OverlayScope::Local)` when it should stay inside parent stacking order, such as an autocomplete attached to content that can be covered by an inline sidebar layer. Use `.auto_focus(false)` for a capturing popover that must suspend focus while retaining its trap.
 
 By default, `Popover` uses `.min_trigger_width(true)`: the overlay is at least as wide as its trigger but can grow wider for long content. Use `.fit_trigger_width(true)` for exact trigger width, or `.max_width(...)` to cap content-driven growth.
 
@@ -269,7 +273,9 @@ Collapsible content sections.
 | `expanded_icon` | `char` | Expanded section icon |
 | `collapsed_icon` | `char` | Collapsed section icon |
 | `disabled_style` | `Style` | Style when disabled |
-| `focusable` | `bool` | Whether headers participate in focus traversal |
+| `focusable` | `bool` | Whether accordion headers can accept focus (default: `false`) |
+| `tab_stop` | `bool` | Include focusable headers in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Header focus gained / lost |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_toggle` | `Callback<AccordionEvent>` | Section toggle event |
@@ -294,6 +300,11 @@ Accordion::new()
 Fuzzy search widget powered by `nucleo`. Composes an `Input` and `List` into a filterable, keyboard-navigable search panel. See [Matching config](#matching-config) for the `Fuzzy` (default) and `Hybrid` matching strategies.
 
 SearchPalette is **not** an overlay by itself - wrap it in `Modal` for the classic command-palette experience, or embed it inline in a `Frame`, sidebar, or any other container.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `tab_stop` | `bool` | Include internal focus targets in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Internal focus target gained / lost focus |
 
 ---
 

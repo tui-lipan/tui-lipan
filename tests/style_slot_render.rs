@@ -29,6 +29,8 @@ enum StaticCase {
     ProgressFocusReplace,
     SliderFocusInherit,
     SliderFocusReplace,
+    FocusDecorationDisabled,
+    ExplicitFocusWithDecorationDisabled,
 }
 
 impl Component for StaticCase {
@@ -210,6 +212,24 @@ impl Component for StaticCase {
                     .focus_thumb_style(Style::new().fg(REPLACE_FG))
                     .width(Length::Px(4)),
             )
+            .into(),
+            Self::FocusDecorationDisabled => ThemeProvider::new(
+                Theme::default()
+                    .primary(Style::new().fg(ALT_THEME_FG))
+                    .accent(Style::new().fg(ALT_THEME_FG))
+                    .focus(Style::new().fg(THEME_FG).bg(THEME_BG).bold())
+                    .focus_decoration(false),
+            )
+            .child(Checkbox::new(true).label("check"))
+            .into(),
+            Self::ExplicitFocusWithDecorationDisabled => ThemeProvider::new(
+                Theme::default()
+                    .primary(Style::new().fg(ALT_THEME_FG))
+                    .accent(Style::new().fg(ALT_THEME_FG))
+                    .focus(Style::new().fg(THEME_FG).bg(THEME_BG).bold())
+                    .focus_decoration(false),
+            )
+            .child(Checkbox::new(true).focus_style(Style::new().fg(REPLACE_FG)))
             .into(),
         }
     }
@@ -451,6 +471,24 @@ fn checkbox_focus_slot_inherit_and_replace_render_distinctly() {
     assert_eq!(replaced.fg, REPLACE_FG);
     assert_eq!(replaced.bg, Color::Reset);
     assert!(!replaced.modifiers.bold);
+}
+
+#[test]
+fn focused_render_suppresses_theme_decoration_when_disabled() {
+    let cell = render_first_symbol_cell(StaticCase::FocusDecorationDisabled, true, "[");
+
+    assert_eq!(cell.fg, ALT_THEME_FG);
+    assert_eq!(cell.bg, Color::Reset);
+    assert!(!cell.modifiers.bold);
+}
+
+#[test]
+fn focused_render_keeps_explicit_focus_style_when_theme_decoration_is_disabled() {
+    let cell = render_first_symbol_cell(StaticCase::ExplicitFocusWithDecorationDisabled, true, "[");
+
+    assert_eq!(cell.fg, REPLACE_FG);
+    assert_eq!(cell.bg, Color::Reset);
+    assert!(!cell.modifiers.bold);
 }
 
 #[test]

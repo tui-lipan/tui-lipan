@@ -127,6 +127,9 @@ pub struct Foo {
     pub height: Length,
     pub on_change: Option<Callback<f64>>,
     pub focusable: bool,
+    pub tab_stop: bool,
+    pub on_focus: Option<Callback<()>>,
+    pub on_blur: Option<Callback<()>>,
 }
 ```
 
@@ -145,6 +148,9 @@ impl Foo {
             height: Length::Auto,
             on_change: None,
             focusable: true,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
         }
     }
 
@@ -211,10 +217,16 @@ pub struct FooNode {
     pub style: Style,
     pub on_change: Option<Callback<f64>>,
     pub focusable: bool,
+    pub tab_stop: bool,
+    pub on_focus: Option<Callback<()>>,
+    pub on_blur: Option<Callback<()>>,
 }
 
 impl WidgetNode for FooNode {
     fn is_focusable(&self) -> bool { self.focusable }
+    fn is_tab_stop(&self) -> bool { self.tab_stop }
+    fn on_focus_callback(&self) -> Option<&Callback<()>> { self.on_focus.as_ref() }
+    fn on_blur_callback(&self) -> Option<&Callback<()>> { self.on_blur.as_ref() }
     fn has_on_click(&self) -> bool { self.on_change.is_some() }
     fn is_hoverable(&self) -> bool { self.has_on_click() }
 }
@@ -227,6 +239,9 @@ impl From<Foo> for FooNode {
             style: foo.style,
             on_change: foo.on_change,
             focusable: foo.focusable,
+            tab_stop: foo.tab_stop,
+            on_focus: foo.on_focus,
+            on_blur: foo.on_blur,
         }
     }
 }
@@ -243,6 +258,8 @@ The `WidgetNode` trait hooks control input behavior:
 | Method | Purpose |
 |--------|---------|
 | `is_focusable()` | Can this node receive keyboard focus? |
+| `is_tab_stop()` | Should next/previous traversal include this focusable node? |
+| `on_focus_callback()` / `on_blur_callback()` | Optional post-reconcile focus transition callbacks |
 | `has_on_click()` | Is this node a click target? |
 | `is_hoverable()` | Should hover state be tracked? |
 | `hit_test_refinement(x, y, rect)` | Override hit-test for partial-area widgets |
@@ -526,8 +543,15 @@ shape-specific logic in `src/app/input/mouse/hover.rs`.
 
 ### Focus
 
-If `is_focusable()` returns `true`, the widget participates in tab-order traversal.
-Users can also route focus to it via `ctx.request_focus("key")`.
+`is_focusable()` controls whether a widget can own focus. `is_tab_stop()` separately controls
+whether next/previous traversal includes it. Keep `tab_stop: true` as the normal default; a
+focusable non-tab-stop remains reachable by pointer focus and `ctx.request_focus("key")`.
+
+Interactive primitive widgets should carry `tab_stop`, `on_focus`, and `on_blur` through public
+builder fields, node conversion, and reconciliation together. The callback accessors return
+references from the node. Focus notifications are queued after dispatch/reconciliation; do not
+invoke them from the renderer or reconcile function. Stable element keys deduplicate focus events
+across remounts.
 
 ### Hit-testing
 
@@ -593,6 +617,11 @@ fn is_hoverable_for_theme(&self, theme: &Theme) -> bool {
 Use `StyleSlot::resolves_non_empty(theme, role)` instead of checking
 `StyleSlot::is_empty()` for hover/focus bookkeeping; inherited slots depend on
 the active `ThemeProvider` scope.
+
+Focus slots must resolve through `ThemeRole::Focus` so `Theme::focus_decoration(false)` suppresses
+theme-provided decoration while `StyleSlot::Replace` remains explicit. Apply the same gate to any
+per-widget focused-content palette fallback and focused scrollbar-thumb fallback. Do not gate
+selection or `ThemeRole::UnfocusedSelection`; those are selection state, not focus decoration.
 
 ---
 

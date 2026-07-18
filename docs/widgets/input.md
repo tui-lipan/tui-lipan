@@ -33,6 +33,8 @@ Interactive button.
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `focusable` | `bool` | Whether button accepts focus |
+| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `disabled` | `bool` | Disable button |
 | `disabled_style` | `Style` | Style when disabled |
 | `on_click` | `Callback<MouseEvent>` | Mouse click, plain `Enter`, or plain `Space` activation callback |
@@ -199,6 +201,8 @@ Clickable text link built on top of `Button` with link-style defaults.
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `focusable` | `bool` | Whether link accepts focus |
+| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `disabled` | `bool` | Disable interaction |
 | `visited` | `bool` | Mark link as visited |
 | `on_activate` | `Callback<HyperlinkEvent>` | Emits on click, `Enter`, and `Space` |
@@ -253,6 +257,8 @@ Single-line text input field.
 | `mask` | `Option<char>` | Masking character (e.g., `'*'` for passwords) |
 | `read_only` | `bool` | Allow selection but block keyboard input |
 | `focusable` | `bool` | Whether input accepts focus; mouse selection and copy shortcuts still work when false |
+| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_change` | `Callback<InputEvent>` | Emits value, cursor, and anchor on each edit |
@@ -373,7 +379,12 @@ Multi-line text editor.
 | `on_image_paste` | `Callback<ImageContent>` | Legacy: image pasted via Ctrl+V |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
-| `focusable` | `bool` | Participate in focus traversal; mouse selection and copy shortcuts still work when false |
+| `focusable` | `bool` | Accept keyboard focus; mouse selection and copy shortcuts still work when false |
+| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
+| `tab_width` | `u8` | Insert spaces to the next column multiple when Tab is pressed; `0` disables |
+| `insert_tab` | `bool` | Insert a literal tab character instead of moving focus |
+| `tab_display_width` | `u8` | Display width of literal tab characters (default: `8`) |
 
 Use `ctx.text_area_scrollbars(key)` to read the resolved scrollbar visibility
 for a keyed `TextArea` from the previous frame. Unkeyed `TextArea` widgets are
@@ -866,6 +877,9 @@ Toggle widget for boolean values.
 | `padding` | `impl Into<Padding>` | Padding |
 | `disabled` | `bool` | Disable interaction |
 | `disabled_style` | `Style` | Style when disabled |
+| `focusable` | `bool` | Accept focus |
+| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `on_toggle` | `Callback<bool>` | Toggle callback |
 | `on_click` | `Callback<()>` | Click callback |
 
@@ -1103,7 +1117,9 @@ Hex/ASCII binary data viewer with keyboard cursor navigation.
 | `padding` | `impl Into<Padding>` | Inner padding |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
-| `focusable` | `bool` | Participate in focus traversal |
+| `focusable` | `bool` | Accept keyboard focus |
+| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `disabled` | `bool` | Disable interaction |
 | `on_cursor_change` | `Callback<HexAreaCursorEvent>` | Emits on cursor movement (keyboard/mouse) |
 | `on_change` | `Callback<HexAreaChangeEvent>` | Emits updated bytes after edits |
@@ -1169,6 +1185,8 @@ Numeric selection slider.
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `focusable` | `bool` | Accept focus |
+| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `on_change` | `Callback<f64>` | Value changed |
 | `on_click` | `Callback<f64>` | Click / Enter |
 

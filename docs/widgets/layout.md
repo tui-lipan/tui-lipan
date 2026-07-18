@@ -457,7 +457,9 @@ Single-child two-dimensional viewport for wide/tall content such as diagrams.
 | `drag_to_pan` | `bool` | Enable left-button drag panning (default `true`) |
 | `keymap` / `pan_keys` | `PanKeymap` | Keyboard pan keys (`ARROWS`, `VIM`, default both) |
 | `key_step` | `(u16, u16)` | Keyboard pan step as `(horizontal, vertical)` cells (default `(4, 2)`) |
-| `focusable` | `bool` | Whether PanView can receive focus (default `true`) |
+| `focusable` | `bool` | Whether PanView can receive focus (default `false`; interaction callbacks can opt it in) |
+| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `pan_state_key` | `impl Into<Key>` | Stable key for uncontrolled offset persistence |
 | `width` | `Length` | Viewport width |
 | `height` | `Length` | Viewport height |

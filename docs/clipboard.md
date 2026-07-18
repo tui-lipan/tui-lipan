@@ -58,6 +58,11 @@ shortcuts such as `Ctrl+C` and `Ctrl+Insert` also copy any active mouse selectio
 `Input` and `TextArea` selections can also be cut with cut shortcuts such as `Ctrl+X`.
 Otherwise the key falls through to app-level handlers.
 
+This behavior is independent of app focus policy. Under the default unfocused
+`FocusPolicy::OnDemand` state, an existing mouse selection can still be copied. `Manual` prevents
+click-to-focus but does not disable mouse selection or performable copy. Setting
+`Theme::focus_decoration(false)` changes only visuals and does not affect clipboard routing.
+
 Native terminal bracketed-paste events are also routed through the same focused-widget paste path.
 That means dropping files or pasting large/quoted text directly into a terminal running tui-lipan
 reaches `Input`, `TextArea`, or `Terminal` widgets as a paste instead of raw keystrokes.
