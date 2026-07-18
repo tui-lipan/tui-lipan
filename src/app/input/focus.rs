@@ -3,6 +3,7 @@ use crate::callback::ScopeId;
 use crate::core::element::Key;
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::layout::tag::{Tag, tag_of_node};
+use crate::widgets::FocusScope;
 
 pub(crate) fn scope_for_node(tree: &NodeTree, id: NodeId) -> Option<ScopeId> {
     let mut current = Some(id);
@@ -13,6 +14,39 @@ pub(crate) fn scope_for_node(tree: &NodeTree, id: NodeId) -> Option<ScopeId> {
         let node = tree.node(id);
         if let NodeKind::Group(group) = &node.kind {
             return Some(group.scope);
+        }
+        current = node.parent;
+    }
+    None
+}
+
+pub(crate) fn in_excluded_scope(tree: &NodeTree, id: NodeId) -> bool {
+    let mut current = Some(id);
+    while let Some(id) = current {
+        if !tree.is_valid(id) {
+            return false;
+        }
+        let node = tree.node(id);
+        if node.focus_scope() == FocusScope::Exclude {
+            return true;
+        }
+        current = node.parent;
+    }
+    false
+}
+
+fn containing_scope(tree: &NodeTree, id: NodeId) -> Option<NodeId> {
+    if in_excluded_scope(tree, id) {
+        return None;
+    }
+    let mut current = Some(id);
+    while let Some(id) = current {
+        if !tree.is_valid(id) {
+            return None;
+        }
+        let node = tree.node(id);
+        if node.focus_scope() == FocusScope::Contain {
+            return Some(id);
         }
         current = node.parent;
     }
@@ -59,7 +93,12 @@ pub(crate) fn restore_focus(
             }
 
             // Otherwise, look for the first focusable descendant.
-            if let Some(focusable_id) = find_first_focusable_descendant(tree, id) {
+            let descendant = if in_excluded_scope(tree, id) {
+                find_first_focusable_descendant_unscoped(tree, id)
+            } else {
+                find_first_focusable_descendant(tree, id)
+            };
+            if let Some(focusable_id) = descendant {
                 *focused = Some(focusable_id);
                 *focused_tag = Some(tag_of_node(tree.node(focusable_id)));
                 return;
@@ -73,7 +112,7 @@ pub(crate) fn restore_focus(
         && let Some(tag) = *focused_tag
         && let Some(id) = tree
             .iter_with_overlays()
-            .find(|n| n.is_focusable() && tag_of_node(n) == tag)
+            .find(|n| n.is_focusable() && !in_excluded_scope(tree, n.id) && tag_of_node(n) == tag)
             .map(|n| n.id)
     {
         *focused = Some(id);
@@ -85,7 +124,7 @@ pub(crate) fn restore_focus(
     // Fourth: only Auto chooses a fallback. OnDemand and Manual preserve the
     // remembered key so a keyed widget can reclaim focus when it remounts.
     if policy == FocusPolicy::Auto {
-        *focused = tree.iter().find(|n| n.is_focusable()).map(|n| n.id);
+        *focused = first_focusable(tree);
         if let Some(id) = *focused {
             *focused_key = tree.node(id).key.clone();
             *focused_tag = Some(tag_of_node(tree.node(id)));
@@ -104,7 +143,12 @@ pub(crate) fn focus_next(
     focused_tag: &mut Option<Tag>,
     _policy: FocusPolicy,
 ) {
-    let focusables = tree.focusables();
+    let focusables = focused
+        .and_then(|id| containing_scope(tree, id))
+        .map_or_else(
+            || tree.focusables(),
+            |scope| tree.focusables_in_subtree(scope),
+        );
     if focusables.is_empty() {
         return;
     }
@@ -131,7 +175,12 @@ pub(crate) fn focus_prev(
     focused_tag: &mut Option<Tag>,
     _policy: FocusPolicy,
 ) {
-    let focusables = tree.focusables();
+    let focusables = focused
+        .and_then(|id| containing_scope(tree, id))
+        .map_or_else(
+            || tree.focusables(),
+            |scope| tree.focusables_in_subtree(scope),
+        );
     if focusables.is_empty() {
         return;
     }
@@ -152,6 +201,18 @@ pub(crate) fn focus_prev(
 }
 
 pub(crate) fn find_first_focusable_descendant(tree: &NodeTree, root: NodeId) -> Option<NodeId> {
+    find_first_focusable_descendant_impl(tree, root, true)
+}
+
+fn find_first_focusable_descendant_unscoped(tree: &NodeTree, root: NodeId) -> Option<NodeId> {
+    find_first_focusable_descendant_impl(tree, root, false)
+}
+
+fn find_first_focusable_descendant_impl(
+    tree: &NodeTree,
+    root: NodeId,
+    respect_exclude: bool,
+) -> Option<NodeId> {
     // Breadth-first search is usually better for focusable descendants in TUIs
     // to pick the "main" content rather than a deeply nested decorator.
     let mut queue = std::collections::VecDeque::new();
@@ -164,6 +225,9 @@ pub(crate) fn find_first_focusable_descendant(tree: &NodeTree, root: NodeId) -> 
                 continue;
             }
             let child_node = tree.node(child);
+            if respect_exclude && child_node.focus_scope() == FocusScope::Exclude {
+                continue;
+            }
             if child_node.is_focusable() {
                 return Some(child);
             }
@@ -173,10 +237,35 @@ pub(crate) fn find_first_focusable_descendant(tree: &NodeTree, root: NodeId) -> 
     None
 }
 
+fn first_focusable(tree: &NodeTree) -> Option<NodeId> {
+    if !tree.is_valid(tree.root) {
+        return None;
+    }
+    let mut stack = vec![tree.root];
+    while let Some(id) = stack.pop() {
+        let node = tree.node(id);
+        if node.focus_scope() == FocusScope::Exclude {
+            continue;
+        }
+        if node.is_focusable() {
+            return Some(id);
+        }
+        stack.extend(
+            node.children
+                .iter()
+                .rev()
+                .copied()
+                .filter(|child| tree.is_valid(*child)),
+        );
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::widgets::Button;
+    use crate::widgets::internal::FrameNode;
 
     /// Helper: allocate a node in `tree`, set its parent/kind, and return its id.
     /// The node is marked with the current epoch so `is_valid` returns true.
@@ -190,6 +279,15 @@ mod tests {
             node.kind = NodeKind::from(Button::new("btn"));
         }
         // default kind is Text which is not focusable
+        id
+    }
+
+    fn alloc_scope(tree: &mut NodeTree, parent: Option<NodeId>, scope: FocusScope) -> NodeId {
+        let id = alloc_node(tree, parent, false);
+        tree.node_mut(id).kind = NodeKind::Frame(FrameNode {
+            focus_scope: scope,
+            ..FrameNode::default()
+        });
         id
     }
 
@@ -311,6 +409,114 @@ mod tests {
             FocusPolicy::OnDemand,
         );
         assert_eq!(focused, None);
+    }
+
+    #[test]
+    fn excluded_scope_is_skipped_by_ring_fallback_and_descendant_search() {
+        let (mut tree, root, _) = build_tree_with_focusable_children(0);
+        let excluded = alloc_scope(&mut tree, Some(root), FocusScope::Exclude);
+        let hidden = alloc_node(&mut tree, Some(excluded), true);
+        tree.node_mut(hidden).key = Some(Key::from("hidden"));
+        tree.node_mut(excluded).children = vec![hidden];
+        let visible = alloc_node(&mut tree, Some(root), true);
+        tree.node_mut(visible).key = Some(Key::from("visible"));
+        tree.node_mut(root).children = vec![excluded, visible];
+
+        assert_eq!(tree.focusables(), vec![visible]);
+        assert_eq!(find_first_focusable_descendant(&tree, root), Some(visible));
+
+        let mut focused = None;
+        let mut key = None;
+        let mut tag = None;
+        restore_focus(&tree, &mut focused, &mut key, &mut tag, FocusPolicy::Auto);
+        assert_eq!(focused, Some(visible));
+
+        focused = None;
+        key = Some(Key::from("hidden"));
+        tag = None;
+        restore_focus(
+            &tree,
+            &mut focused,
+            &mut key,
+            &mut tag,
+            FocusPolicy::OnDemand,
+        );
+        assert_eq!(focused, Some(hidden), "keyed requests bypass exclusion");
+
+        tree.node_mut(root).key = Some(Key::from("root"));
+        focused = None;
+        key = Some(Key::from("root"));
+        tag = None;
+        restore_focus(
+            &tree,
+            &mut focused,
+            &mut key,
+            &mut tag,
+            FocusPolicy::OnDemand,
+        );
+        assert_eq!(
+            focused,
+            Some(visible),
+            "ancestor requests must still respect nested exclusion"
+        );
+    }
+
+    #[test]
+    fn nearest_containing_scope_cycles_and_wraps() {
+        let (mut tree, root, _) = build_tree_with_focusable_children(0);
+        let outside = alloc_node(&mut tree, Some(root), true);
+        let outer = alloc_scope(&mut tree, Some(root), FocusScope::Contain);
+        let outer_button = alloc_node(&mut tree, Some(outer), true);
+        let inner = alloc_scope(&mut tree, Some(outer), FocusScope::Contain);
+        let inner_first = alloc_node(&mut tree, Some(inner), true);
+        let inner_second = alloc_node(&mut tree, Some(inner), true);
+        tree.node_mut(inner).children = vec![inner_first, inner_second];
+        tree.node_mut(outer).children = vec![outer_button, inner];
+        tree.node_mut(root).children = vec![outside, outer];
+
+        let mut focused = Some(inner_second);
+        let mut key = None;
+        let mut tag = None;
+        focus_next(
+            &tree,
+            &mut focused,
+            &mut key,
+            &mut tag,
+            FocusPolicy::OnDemand,
+        );
+        assert_eq!(focused, Some(inner_first));
+        focus_prev(
+            &tree,
+            &mut focused,
+            &mut key,
+            &mut tag,
+            FocusPolicy::OnDemand,
+        );
+        assert_eq!(focused, Some(inner_second));
+    }
+
+    #[test]
+    fn containing_scope_uses_global_node_order_after_child_reorder() {
+        let (mut tree, root, _) = build_tree_with_focusable_children(0);
+        let scope = alloc_scope(&mut tree, Some(root), FocusScope::Contain);
+        let first_allocated = alloc_node(&mut tree, Some(scope), true);
+        let second_allocated = alloc_node(&mut tree, Some(scope), true);
+        let third_allocated = alloc_node(&mut tree, Some(scope), true);
+        tree.node_mut(scope).children = vec![third_allocated, second_allocated, first_allocated];
+        tree.node_mut(root).children = vec![scope];
+
+        let mut focused = Some(third_allocated);
+        let mut key = None;
+        let mut tag = None;
+        focus_next(
+            &tree,
+            &mut focused,
+            &mut key,
+            &mut tag,
+            FocusPolicy::OnDemand,
+        );
+
+        assert_eq!(focused, Some(first_allocated));
     }
 
     // ---------------------------------------------------------------

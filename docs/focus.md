@@ -16,6 +16,17 @@ Widgets receive focus if they have `focusable: true` (default for interactive wi
 
 Default keys follow the built-in keymap; you can remap `focus_next` / `focus_prev` in `keymap.conf` (see [`keybindings.md`](keybindings.md)).
 
+### Container focus scopes
+
+`VStack`, `HStack`, and `Frame` accept `.focus_scope(FocusScope::...)`:
+
+- `None` (default) inherits normal traversal.
+- `Exclude` removes the whole subtree from Tab traversal, automatic fallback, descendant focus,
+  and click-to-focus. `request_focus(key)` remains an explicit escape hatch.
+- `Contain` makes next/previous traversal wrap inside the nearest containing ancestor while focus
+  is within it. Use app-specific pane-switch actions to leave the scope. Capturing overlay traps
+  still take priority.
+
 ## Programmatic focus
 
 Control focus from `update()`:

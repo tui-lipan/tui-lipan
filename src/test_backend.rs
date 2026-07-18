@@ -591,6 +591,9 @@ where
         if !self.core.tree.is_valid(id) {
             return false;
         }
+        if focus::in_excluded_scope(&self.core.tree, id) {
+            return false;
+        }
         let focusable = self.core.tree.node(id).is_focusable();
         if focusable {
             let changed = self.focused != Some(id);
@@ -1472,12 +1475,12 @@ mod tests {
     use crate::widgets::SyntectStrategy;
     use crate::widgets::{
         Animated, Button, ComboBox, ComboBoxCommitEvent, DocumentView, EffectScope, FileTree,
-        FileTreeChange, FileTreeChangeSource, FileTreeChangeStatus, FileTreeChangeView, Frame,
-        HStack, Input, InputEvent, List, ListItem, Modal, MouseRegion, Popover, SENTINEL_BASE,
-        ScrollKeymap, ScrollView, SearchItem, SearchPalette, Spinner, SpinnerStyle, StatusBar, Tab,
-        Tabs, Text, TextArea, TextAreaEvent, TextAreaLineNumberMode, TextAreaSentinel,
-        TextAreaVimConfig, TextAreaVimCurrentLineHighlight, TextAreaVimMode, TextAreaVirtualText,
-        ThemeProvider, Tree, TreeNode, VStack,
+        FileTreeChange, FileTreeChangeSource, FileTreeChangeStatus, FileTreeChangeView, FocusScope,
+        Frame, HStack, Input, InputEvent, List, ListItem, Modal, MouseRegion, Popover,
+        SENTINEL_BASE, ScrollKeymap, ScrollView, SearchItem, SearchPalette, Spinner, SpinnerStyle,
+        StatusBar, Tab, Tabs, Text, TextArea, TextAreaEvent, TextAreaLineNumberMode,
+        TextAreaSentinel, TextAreaVimConfig, TextAreaVimCurrentLineHighlight, TextAreaVimMode,
+        TextAreaVirtualText, ThemeProvider, Tree, TreeNode, VStack,
     };
     #[cfg(feature = "diff-view")]
     use crate::widgets::{DiffView, DiffViewBackend, DiffViewMode};
@@ -2097,6 +2100,109 @@ mod tests {
             })
             .expect("input click should dispatch");
         assert_eq!(backend.focused_key(), Some(&Key::from("input")));
+    }
+
+    struct ExcludedScopeRoot;
+
+    impl Component for ExcludedScopeRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            VStack::new()
+                .child(
+                    VStack::new()
+                        .focus_scope(FocusScope::Exclude)
+                        .child(Button::new("hidden").key("hidden")),
+                )
+                .child(Button::new("visible").key("visible"))
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.request_focus("hidden");
+            Update::full()
+        }
+    }
+
+    #[test]
+    fn excluded_scope_blocks_fallback_traversal_and_click_but_not_request() {
+        let auto = TestBackend::new_with_app(
+            crate::App::new().focus_policy(FocusPolicy::Auto),
+            ExcludedScopeRoot,
+            (),
+        );
+        assert_eq!(auto.focused_key(), Some(&Key::from("visible")));
+
+        let mut backend = TestBackend::new(ExcludedScopeRoot);
+        backend.focus_next();
+        assert_eq!(backend.focused_key(), Some(&Key::from("visible")));
+        backend.blur();
+
+        let hidden_rect = backend
+            .core
+            .tree
+            .iter()
+            .find(|node| node.key.as_ref() == Some(&Key::from("hidden")))
+            .map(|node| node.rect)
+            .expect("hidden button should be mounted");
+        backend
+            .send_mouse(MouseEvent {
+                x: hidden_rect.x.max(0) as u16,
+                y: hidden_rect.y.max(0) as u16,
+                kind: MouseKind::Down(MouseButton::Left),
+                mods: KeyMods::NONE,
+            })
+            .expect("hidden button click should dispatch");
+        assert_eq!(backend.focused(), None);
+
+        backend.dispatch(()).expect("focus request should dispatch");
+        assert_eq!(backend.focused_key(), Some(&Key::from("hidden")));
+    }
+
+    struct ContainedScopeRoot;
+
+    impl Component for ContainedScopeRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            VStack::new()
+                .child(Button::new("outside").key("outside"))
+                .child(
+                    Frame::new().focus_scope(FocusScope::Contain).child(
+                        VStack::new()
+                            .child(Button::new("first").key("first"))
+                            .child(Button::new("second").key("second")),
+                    ),
+                )
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.request_focus("first");
+            Update::full()
+        }
+    }
+
+    #[test]
+    fn contained_scope_cycles_and_wraps_in_test_backend() {
+        let mut backend = TestBackend::new(ContainedScopeRoot);
+        backend.dispatch(()).expect("focus request should dispatch");
+        assert_eq!(backend.focused_key(), Some(&Key::from("first")));
+
+        backend.focus_next();
+        assert_eq!(backend.focused_key(), Some(&Key::from("second")));
+        backend.focus_next();
+        assert_eq!(backend.focused_key(), Some(&Key::from("first")));
+        backend.focus_prev();
+        assert_eq!(backend.focused_key(), Some(&Key::from("second")));
     }
 
     fn click_button<C: Component>(backend: &mut TestBackend<C>) {

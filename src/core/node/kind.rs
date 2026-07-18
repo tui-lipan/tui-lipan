@@ -22,12 +22,15 @@ use crate::widgets::internal::{
 };
 use crate::widgets::{
     Animated, AsciiCanvas, Button, Chart, Checkbox, ClassDiagram, DragSource, DraggableTabBar,
-    DropTarget, EffectScope, ErDiagram, Flowchart, GanttDiagram, Graph, Heatmap, HexArea, Input,
-    MouseRegion, PanView, ProgressBar, SequenceDiagram, Slider, Sparkline, Spinner, Splitter,
-    StateDiagram, Table, Tabs, TextArea,
+    DropTarget, EffectScope, ErDiagram, Flowchart, FocusScope, GanttDiagram, Graph, Heatmap,
+    HexArea, Input, MouseRegion, PanView, ProgressBar, SequenceDiagram, Slider, Sparkline, Spinner,
+    Splitter, StateDiagram, Table, Tabs, TextArea,
 };
 
 pub(crate) trait WidgetNode {
+    fn focus_scope(&self) -> FocusScope {
+        FocusScope::None
+    }
     fn is_focusable(&self) -> bool {
         false
     }
@@ -301,6 +304,10 @@ pub(crate) enum NodeKind {
 }
 
 impl WidgetNode for NodeKind {
+    fn focus_scope(&self) -> FocusScope {
+        node_kind_delegate_match!(self, focus_scope())
+    }
+
     fn is_focusable(&self) -> bool {
         node_kind_delegate_match!(self, is_focusable())
     }

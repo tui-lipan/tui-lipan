@@ -77,6 +77,10 @@ pub(crate) struct Node {
 }
 
 impl Node {
+    pub fn focus_scope(&self) -> crate::widgets::FocusScope {
+        self.kind.focus_scope()
+    }
+
     /// Returns true if this node can receive focus.
     pub fn is_focusable(&self) -> bool {
         self.kind.is_focusable()
@@ -750,6 +754,7 @@ impl NodeTree {
         }
         let mut out = Vec::new();
         self.collect_focusables(root, &mut out);
+        out.sort_by_key(|id| id.index());
         out
     }
 
@@ -773,6 +778,9 @@ impl NodeTree {
 
     fn collect_focusables(&self, id: NodeId, out: &mut Vec<NodeId>) {
         let node = self.node(id);
+        if node.focus_scope() == crate::widgets::FocusScope::Exclude {
+            return;
+        }
         if node.is_tab_stop() {
             out.push(id);
         }

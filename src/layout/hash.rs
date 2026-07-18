@@ -345,6 +345,7 @@ pub(crate) fn hash_stack_props(props: &StackProps, hasher: &mut impl Hasher) {
     props.justify.hash(hasher);
     props.width.hash(hasher);
     props.height.hash(hasher);
+    props.focus_scope.hash(hasher);
     props.border.hash(hasher);
     props.border_style.hash(hasher);
     hash_focus_sizing(props.focus_sizing, hasher);

@@ -451,6 +451,9 @@ impl<C: Component> AppRunner<C> {
         if !self.core.tree.is_valid(id) {
             return false;
         }
+        if focus::in_excluded_scope(&self.core.tree, id) {
+            return false;
+        }
         let focusable = self.core.tree.node(id).is_focusable();
 
         if focusable {

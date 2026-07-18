@@ -18,6 +18,9 @@ While the crate is on `0.x.y`:
   `on_drag_over`, `on_drag_leave`, `on_drop`, and `on_drag_cancel`, enabling headless integration
   tests of composed drag-and-drop UIs (previously these drags were silently discarded). The
   axis-neutral activation and target-compatibility logic is shared with the terminal runner.
+- Added `FocusScope::{None, Exclude, Contain}` and `.focus_scope(...)` to `VStack`, `HStack`,
+  and `Frame`. Excluded subtrees are skipped by traversal, fallback, descendant, and pointer
+  focus while explicit keyed requests can enter them; contained subtrees cycle focus internally.
 
 - New `sidebar_tabs` example: rich vertical sidebar tabs composed from primitives — status
   icon or live spinner, label plus description line per item, click/keyboard selection, and

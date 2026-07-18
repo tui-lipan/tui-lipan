@@ -565,6 +565,12 @@ impl Frame {
         self
     }
 
+    /// Set focus traversal behavior for this subtree.
+    pub fn focus_scope(mut self, scope: crate::widgets::FocusScope) -> Self {
+        self.props.focus_scope = scope;
+        self
+    }
+
     /// Set alignment of child content within the frame's inner area.
     pub fn child_align(mut self, align: Align) -> Self {
         self.props.child_align = align;

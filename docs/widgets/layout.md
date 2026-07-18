@@ -54,6 +54,7 @@ Layout pitfall checklist:
 | `border` | `bool` | Draw border |
 | `border_style` | `BorderStyle` | Border appearance |
 | `focus_sizing` | `FocusSizing` | Accordion sizing behavior (includes `sticky: bool`, default `true`) |
+| `focus_scope` | `FocusScope` | Subtree traversal behavior (`None`, `Exclude`, or `Contain`) |
 | `tab_titles` | `Vec<String>` | Border-embedded tab titles |
 | `active_tab` | `usize` | Active border tab index |
 | `active_tab_style` | `Style` | Active border tab style |
@@ -223,6 +224,7 @@ Container with border, title, optional status line, and tab affordances.
 | `style` | `Style` | Container style |
 | `width` | `Length` | Width (default `Flex(1)`) |
 | `height` | `Length` | Height (default `Flex(1)`) |
+| `focus_scope` | `FocusScope` | Subtree traversal behavior (`None`, `Exclude`, or `Contain`) |
 
 **Clipping**: Children are automatically clipped to the Frame's inner content area (inside borders and padding).
 

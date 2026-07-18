@@ -374,7 +374,7 @@ Source: `src/widgets/scroll_view/mod.rs:90` (`ScrollView`).
 
 ## VStack/HStack shared StackProps
 
-Source: `src/widgets/containers/mod.rs:193` (`StackProps`).
+Source: `src/widgets/containers/mod.rs:208` (`StackProps`).
 
 Note: Applies to the shared props backing stack container defaults.
 
@@ -388,13 +388,14 @@ Note: Applies to the shared props backing stack container defaults.
 | `width` | `Length::Flex(1)` |
 | `height` | `Length::Flex(1)` |
 | `focus_sizing` | `FocusSizing::None` |
+| `focus_scope` | `FocusScope::None` |
 | `border` | `false` |
 | `border_style` | `BorderStyle::Plain` |
 | `even_flex` | `false` |
 
 ## Frame/FrameNode
 
-Source: `src/widgets/frame/node.rs:301` (`FrameNode`).
+Source: `src/widgets/frame/node.rs:307` (`FrameNode`).
 
 Note: `Frame` is the public builder; these defaults come from its `FrameNode` backing type.
 
@@ -433,6 +434,7 @@ Note: `Frame` is the public builder; these defaults come from its `FrameNode` ba
 | `footer_padding` | `Padding::default()` |
 | `has_header` | `false` |
 | `focusable` | `false` |
+| `focus_scope` | `FocusScope::None` |
 | `child_align` | `Align::Start` |
 | `style_overrides` | `None` |
 
