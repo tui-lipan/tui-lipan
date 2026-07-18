@@ -1330,6 +1330,50 @@ mod tests {
     }
 
     #[test]
+    fn trailing_space_keeps_full_width_word_on_existing_row() {
+        let before = make_textarea("hello word", true, false).cursor(10);
+        let after = make_textarea("hello word ", true, false).cursor(11);
+        let mut before_cache = TextAreaVisualCache::default();
+        let mut after_cache = TextAreaVisualCache::default();
+
+        let before_geometry = calculate_text_area_visual_metrics(
+            &before,
+            10,
+            false,
+            hash_text(before.value.as_ref()),
+            Some(&mut before_cache),
+        );
+        let after_geometry = calculate_text_area_visual_metrics(
+            &after,
+            10,
+            false,
+            hash_text(after.value.as_ref()),
+            Some(&mut after_cache),
+        );
+        let before_lines = before_cache
+            .latest_lines()
+            .expect("before layout is cached");
+        let after_lines = after_cache.latest_lines().expect("after layout is cached");
+
+        assert_eq!(
+            before_lines
+                .iter()
+                .map(|line| (line.start, line.end))
+                .collect::<Vec<_>>(),
+            vec![(0, 10), (10, 10)]
+        );
+        assert_eq!(
+            after_lines
+                .iter()
+                .map(|line| (line.start, line.end))
+                .collect::<Vec<_>>(),
+            vec![(0, 10), (10, 11)]
+        );
+        assert_eq!(before_geometry.cursor_visual_line, 1);
+        assert_eq!(after_geometry.cursor_visual_line, 1);
+    }
+
+    #[test]
     fn cursor_on_wrap_boundary_tracks_continuation_visual_line_start() {
         let ta = make_textarea("abcdefgh", true, false).cursor(5);
         let (total, cursor_vl, _, content_w) = calc(&ta, 5);

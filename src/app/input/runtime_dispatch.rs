@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::app::context::TextAreaNewlineBinding;
+use crate::app::context::{FocusPolicy, TextAreaNewlineBinding};
 use crate::app::copy_feedback::CopyFeedbackState;
 use crate::app::input::command_registry::{
     CommandRegistry, CommandShortcutResult, CommandShortcutRuntime,
@@ -37,6 +37,7 @@ use crate::app::input::handlers::terminal::{TerminalPreflightResult, forward_key
 
 #[derive(Clone, Copy)]
 pub(crate) struct RuntimeKeyDispatchConfig {
+    pub focus_policy: FocusPolicy,
     pub key_dispatch_policy: KeyDispatchPolicy,
     pub terminal_key_policy: TerminalKeyPolicy,
     pub command_conflict_policy: CommandConflictPolicy,
@@ -314,11 +315,15 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
             if self.overlay.focus_next() {
                 return FrameworkDispatch::Handled;
             }
+            if self.env.config.focus_policy == FocusPolicy::Manual {
+                return FrameworkDispatch::None;
+            }
             focus::focus_next(
                 self.env.tree,
                 self.env.focused,
                 self.env.focused_key,
                 self.env.focused_tag,
+                self.env.config.focus_policy,
             );
             return FrameworkDispatch::Handled;
         }
@@ -336,11 +341,15 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
             if self.overlay.focus_prev() {
                 return FrameworkDispatch::Handled;
             }
+            if self.env.config.focus_policy == FocusPolicy::Manual {
+                return FrameworkDispatch::None;
+            }
             focus::focus_prev(
                 self.env.tree,
                 self.env.focused,
                 self.env.focused_key,
                 self.env.focused_tag,
+                self.env.config.focus_policy,
             );
             return FrameworkDispatch::Handled;
         }

@@ -173,6 +173,10 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- Added app-level `FocusPolicy::{Auto, OnDemand, Manual}` and `App::focus_policy(...)`;
+  `OnDemand` is now the default, so apps start unfocused until Tab, pointer interaction, or an
+  explicit focus request establishes focus. `Manual` disables framework Tab and pointer focus
+  movement while preserving explicit focus APIs and capturing-overlay focus traps. (breaking)
 - Renamed stack containers' `FocusPolicy` accordion-sizing enum to `FocusSizing` and
   `.focus_policy(...)` builder to `.focus_sizing(...)`. Tree's distinct
   `.focus_policy(FocusAccordion)` API is unchanged. (breaking)
@@ -212,6 +216,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `TextArea` word wrapping no longer moves a completed full-width word to the next row when a
+  trailing space is typed; the separator now occupies the existing caret continuation row.
 - `TextArea` wrap boundaries now keep downstream caret affinity, including after visible path and
   identifier punctuation, while Up/Down navigation no longer skips continuation rows. Wrapped
   editors also use the full content width instead of reserving a trailing caret column.

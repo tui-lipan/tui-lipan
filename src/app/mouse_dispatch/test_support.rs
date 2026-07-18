@@ -785,7 +785,7 @@ pub(crate) fn handle_hex_area_click_test_backend<C: Component>(
 ) -> bool {
     if let NodeKind::HexArea(hex) = &backend.core.tree.node(hit).kind
         && !hex.disabled
-        && Some(hit) == backend.focused
+        && (Some(hit) == backend.focused || backend.focus_policy == crate::FocusPolicy::Manual)
         && let Some(hit_info) = crate::widgets::pointer_hit(
             backend.core.tree.node(hit).rect,
             crate::widgets::HexAreaPointerHitArgs {
@@ -852,7 +852,9 @@ pub(crate) fn handle_document_view_click_test_backend<C: Component>(
     let NodeKind::DocumentView(doc) = &backend.core.tree.node(hit).kind else {
         return false;
     };
-    let is_active = Some(hit) == backend.focused || !doc.focusable;
+    let is_active = Some(hit) == backend.focused
+        || !doc.focusable
+        || backend.focus_policy == crate::FocusPolicy::Manual;
     if !is_active {
         return false;
     }

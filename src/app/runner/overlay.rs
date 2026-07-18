@@ -100,11 +100,13 @@ impl<C: Component> AppRunner<C> {
         if let Some(saved_key) = self.focus.focus_stack.pop() {
             self.focus.focused_key = saved_key;
             self.focus.focused = None;
+            self.focus.focused_tag = None;
             focus::restore_focus(
                 &self.core.tree,
                 &mut self.focus.focused,
                 &mut self.focus.focused_key,
                 &mut self.focus.focused_tag,
+                self.focus.policy,
             );
             // Reset blink state when focus changes
             self.animation.reset_blink();

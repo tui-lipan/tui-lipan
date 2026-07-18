@@ -1,3 +1,4 @@
+use crate::app::FocusPolicy;
 #[cfg(feature = "terminal")]
 use crate::app::input::drag::TerminalDrag;
 use crate::app::input::drag::{
@@ -303,6 +304,7 @@ pub(crate) struct PanViewDragState {
 }
 
 pub(crate) struct FocusState {
+    pub policy: FocusPolicy,
     pub focused: Option<NodeId>,
     pub focused_key: Option<Key>,
     pub focused_tag: Option<Tag>,
@@ -317,6 +319,7 @@ pub(crate) struct FocusState {
 impl Default for FocusState {
     fn default() -> Self {
         Self {
+            policy: FocusPolicy::default(),
             focused: None,
             focused_key: None,
             focused_tag: None,

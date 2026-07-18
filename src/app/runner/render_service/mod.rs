@@ -763,6 +763,7 @@ impl<C: Component> AppRunner<C> {
             &mut self.focus.focused,
             &mut self.focus.focused_key,
             &mut self.focus.focused_tag,
+            self.focus.policy,
         );
         self.ensure_overlay_focus();
         #[cfg(feature = "terminal")]

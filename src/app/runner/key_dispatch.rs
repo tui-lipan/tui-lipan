@@ -1,5 +1,6 @@
 //! Layered keyboard dispatch for the native event loop.
 
+use crate::app::FocusPolicy;
 use crate::app::input::command_registry::{CommandRegistry, CommandShortcutResult};
 use crate::app::input::focus;
 use crate::app::input::handlers::KeyCtx;
@@ -182,6 +183,7 @@ impl<C: Component> AppRunner<C> {
             focused_key: &mut focus_state.focused_key,
             focused_tag: &mut focus_state.focused_tag,
             focus_stack: &mut focus_state.focus_stack,
+            focus_policy: focus_state.policy,
             keymap,
             keymap_runtime,
             key_dispatch_state,
@@ -244,6 +246,7 @@ struct RunnerDispatchOps<'a, 'b, C: Component> {
     focused_key: &'a mut Option<Key>,
     focused_tag: &'a mut Option<Tag>,
     focus_stack: &'a mut Vec<Option<Key>>,
+    focus_policy: FocusPolicy,
     keymap: &'a Keymap,
     keymap_runtime: &'a mut KeymapRuntime,
     key_dispatch_state: &'a mut RuntimeKeyDispatchState,
@@ -291,11 +294,13 @@ impl<C: Component> RunnerDispatchOps<'_, '_, C> {
         {
             *self.focused_key = saved_key;
             *self.focused = None;
+            *self.focused_tag = None;
             focus::restore_focus(
                 &self.core.tree,
                 self.focused,
                 self.focused_key,
                 self.focused_tag,
+                self.focus_policy,
             );
         }
         dismissed
@@ -547,11 +552,15 @@ impl<C: Component> DispatchOps for RunnerDispatchOps<'_, '_, C> {
             if self.focus_overlay_next() {
                 return FrameworkDispatch::Handled;
             }
+            if self.focus_policy == FocusPolicy::Manual {
+                return FrameworkDispatch::None;
+            }
             focus::focus_next(
                 &self.core.tree,
                 self.focused,
                 self.focused_key,
                 self.focused_tag,
+                self.focus_policy,
             );
             return FrameworkDispatch::Handled;
         }
@@ -573,11 +582,15 @@ impl<C: Component> DispatchOps for RunnerDispatchOps<'_, '_, C> {
             if self.focus_overlay_prev() {
                 return FrameworkDispatch::Handled;
             }
+            if self.focus_policy == FocusPolicy::Manual {
+                return FrameworkDispatch::None;
+            }
             focus::focus_prev(
                 &self.core.tree,
                 self.focused,
                 self.focused_key,
                 self.focused_tag,
+                self.focus_policy,
             );
             return FrameworkDispatch::Handled;
         }

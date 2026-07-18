@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::Result;
-use crate::app::context::{App, TextAreaNewlineBinding};
+use crate::app::context::{App, FocusPolicy, TextAreaNewlineBinding};
 use crate::app::copy_feedback::CopyFeedbackState;
 use crate::app::input::command_registry::CommandShortcutResult;
 use crate::app::input::focus;
@@ -58,6 +58,7 @@ pub struct TestBackend<C: Component> {
     pub(crate) focused: Option<NodeId>,
     pub(crate) focused_key: Option<Key>,
     pub(crate) focused_tag: Option<Tag>,
+    pub(crate) focus_policy: FocusPolicy,
     keymap: Keymap,
     keymap_runtime: KeymapRuntime,
     text_area_newline_binding: TextAreaNewlineBinding,
@@ -152,6 +153,7 @@ where
         let key_dispatch_state =
             RuntimeKeyDispatchState::new(&command_registry, app.command_conflict_policy);
         let key_dispatch_config = RuntimeKeyDispatchConfig {
+            focus_policy: app.focus_policy,
             key_dispatch_policy: app.key_dispatch_policy,
             terminal_key_policy: app.terminal_key_policy,
             command_conflict_policy: app.command_conflict_policy,
@@ -164,6 +166,7 @@ where
             focused: None,
             focused_key: None,
             focused_tag: None,
+            focus_policy: app.focus_policy,
             keymap,
             keymap_runtime,
             text_area_newline_binding: app.text_area_newline_binding,
@@ -569,6 +572,9 @@ where
     ///
     /// Returns `true` if the focused node changed.
     pub(crate) fn focus_for_node(&mut self, id: NodeId) -> bool {
+        if self.focus_policy == FocusPolicy::Manual {
+            return false;
+        }
         if !self.core.tree.is_valid(id) {
             return false;
         }
@@ -601,6 +607,7 @@ where
             &mut self.focused,
             &mut self.focused_key,
             &mut self.focused_tag,
+            self.focus_policy,
         );
     }
 
@@ -615,6 +622,7 @@ where
             &mut self.focused,
             &mut self.focused_key,
             &mut self.focused_tag,
+            self.focus_policy,
         );
     }
 
@@ -657,11 +665,17 @@ where
         let bounds = self.viewport;
         self.core
             .render_element(bounds, self.focused, self.focused_key.as_ref(), None);
+        if let Some(key) = self.core.ctx.take_focus_request() {
+            self.focused = None;
+            self.focused_key = Some(key);
+            self.focused_tag = None;
+        }
         focus::restore_focus(
             &self.core.tree,
             &mut self.focused,
             &mut self.focused_key,
             &mut self.focused_tag,
+            self.focus_policy,
         );
         self.ensure_overlay_focus();
         self.refresh_hover_from_last_mouse();
@@ -811,11 +825,13 @@ where
         {
             self.focused_key = saved_key;
             self.focused = None;
+            self.focused_tag = None;
             focus::restore_focus(
                 &self.core.tree,
                 &mut self.focused,
                 &mut self.focused_key,
                 &mut self.focused_tag,
+                self.focus_policy,
             );
         }
         dismissed
@@ -1034,11 +1050,13 @@ impl<C: Component> TestBackendDispatchOps<'_, C> {
         {
             *self.focused_key = saved_key;
             *self.focused = None;
+            *self.focused_tag = None;
             focus::restore_focus(
                 &self.core.tree,
                 self.focused,
                 self.focused_key,
                 self.focused_tag,
+                self.key_dispatch_config.focus_policy,
             );
         }
         dismissed
@@ -1297,11 +1315,15 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
             if self.focus_overlay_next() {
                 return FrameworkDispatch::Handled;
             }
+            if self.key_dispatch_config.focus_policy == FocusPolicy::Manual {
+                return FrameworkDispatch::None;
+            }
             focus::focus_next(
                 &self.core.tree,
                 self.focused,
                 self.focused_key,
                 self.focused_tag,
+                self.key_dispatch_config.focus_policy,
             );
             return FrameworkDispatch::Handled;
         }
@@ -1323,11 +1345,15 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
             if self.focus_overlay_prev() {
                 return FrameworkDispatch::Handled;
             }
+            if self.key_dispatch_config.focus_policy == FocusPolicy::Manual {
+                return FrameworkDispatch::None;
+            }
             focus::focus_prev(
                 &self.core.tree,
                 self.focused,
                 self.focused_key,
                 self.focused_tag,
+                self.key_dispatch_config.focus_policy,
             );
             return FrameworkDispatch::Handled;
         }
@@ -1407,8 +1433,8 @@ mod tests {
 
     use super::TestBackend;
     use crate::Length;
-    use crate::app::ContrastPolicy;
     use crate::app::input::keymap::{Action, BindingMode, binding_for_test, keymap_for_test};
+    use crate::app::{ContrastPolicy, FocusPolicy};
     use crate::callback::Callback;
     use crate::core::component::{Component, Context, KeyUpdate, Update};
     use crate::core::element::{Element, ElementKind, IntoElement, Key};
@@ -1817,6 +1843,190 @@ mod tests {
         backend.focus_next();
 
         assert_eq!(backend.focused_key(), Some(&key));
+    }
+
+    #[test]
+    fn focus_policy_controls_startup_and_tab_traversal() {
+        let mut on_demand = TestBackend::new(ButtonActivationRoot::enabled());
+        assert_eq!(on_demand.focused(), None);
+        assert!(
+            on_demand
+                .send_key(plain_code(KeyCode::Tab))
+                .expect("Tab should dispatch")
+        );
+        assert!(on_demand.focused().is_some());
+
+        let auto = TestBackend::new_with_app(
+            crate::App::new().focus_policy(FocusPolicy::Auto),
+            ButtonActivationRoot::enabled(),
+            (),
+        );
+        assert!(auto.focused().is_some());
+
+        let mut manual = TestBackend::new_with_app(
+            crate::App::new().focus_policy(FocusPolicy::Manual),
+            ButtonActivationRoot::enabled(),
+            (),
+        );
+        assert_eq!(manual.focused(), None);
+        assert!(
+            !manual
+                .send_key(plain_code(KeyCode::Tab))
+                .expect("Tab should dispatch")
+        );
+        assert_eq!(manual.focused(), None);
+
+        // Explicit traversal remains available under Manual.
+        manual.focus_next();
+        assert!(manual.focused().is_some());
+    }
+
+    struct InitFocusRoot;
+
+    impl Component for InitFocusRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::core::component::Command> {
+            ctx.request_focus("requested");
+            None
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            Button::new("requested").key("requested")
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    #[test]
+    fn init_focus_request_resolves_under_all_policies() {
+        for policy in [
+            FocusPolicy::Auto,
+            FocusPolicy::OnDemand,
+            FocusPolicy::Manual,
+        ] {
+            let backend = TestBackend::new_with_app(
+                crate::App::new().focus_policy(policy),
+                InitFocusRoot,
+                (),
+            );
+            assert_eq!(backend.focused_key(), Some(&Key::from("requested")));
+        }
+    }
+
+    fn click_button<C: Component>(backend: &mut TestBackend<C>) {
+        let rect = backend
+            .core
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::Button(_)))
+            .map(|node| node.rect)
+            .expect("button exists");
+        let x = rect.x.max(0) as u16;
+        let y = rect.y.max(0) as u16;
+        for kind in [
+            MouseKind::Down(MouseButton::Left),
+            MouseKind::Up(MouseButton::Left),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x,
+                    y,
+                    kind,
+                    mods: KeyMods::NONE,
+                })
+                .expect("mouse event should dispatch");
+        }
+    }
+
+    #[test]
+    fn manual_policy_blocks_pointer_focus_but_not_click_handlers() {
+        let mut on_demand = TestBackend::new(ButtonActivationRoot::enabled());
+        click_button(&mut on_demand);
+        assert!(on_demand.focused().is_some());
+        assert_eq!(on_demand.state().clicks.len(), 1);
+
+        let mut manual = TestBackend::new_with_app(
+            crate::App::new().focus_policy(FocusPolicy::Manual),
+            ButtonActivationRoot::enabled(),
+            (),
+        );
+        click_button(&mut manual);
+        assert_eq!(manual.focused(), None);
+        assert_eq!(manual.state().clicks.len(), 1);
+
+        let mut input = TestBackend::new_with_app(
+            crate::App::new().focus_policy(FocusPolicy::Manual),
+            ChordInputRoot,
+            (),
+        );
+        let rect = input
+            .core
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::Input(_)))
+            .map(|node| node.rect)
+            .expect("input exists");
+        input
+            .send_mouse(MouseEvent {
+                x: rect.x.max(0) as u16,
+                y: rect.y.max(0) as u16,
+                kind: MouseKind::Down(MouseButton::Left),
+                mods: KeyMods::NONE,
+            })
+            .expect("input click should dispatch");
+        assert_eq!(input.focused(), None);
+        assert!(matches!(
+            input.drag.active,
+            crate::app::interaction_state::ActiveDrag::Input(_)
+        ));
+    }
+
+    struct CapturingOverlayFocusRoot;
+
+    impl Component for CapturingOverlayFocusRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            Modal::new()
+                .child(
+                    VStack::new()
+                        .child(Button::new("first").key("first"))
+                        .child(Button::new("second").key("second")),
+                )
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    #[test]
+    fn manual_policy_keeps_capturing_overlay_focus_and_traversal() {
+        let mut backend = TestBackend::new_with_app(
+            crate::App::new().focus_policy(FocusPolicy::Manual),
+            CapturingOverlayFocusRoot,
+            (),
+        );
+        assert_eq!(backend.focused_key(), Some(&Key::from("first")));
+
+        assert!(
+            backend
+                .send_key(plain_code(KeyCode::Tab))
+                .expect("overlay Tab should dispatch")
+        );
+        assert_eq!(backend.focused_key(), Some(&Key::from("second")));
     }
 
     struct BubbleLeaf {

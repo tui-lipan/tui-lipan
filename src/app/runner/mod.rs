@@ -480,6 +480,7 @@ impl<C: Component> AppRunner<C> {
         let keymap = Keymap::new(keymap_config);
         let keymap_runtime = KeymapRuntime::new(&keymap);
         let key_dispatch_config = RuntimeKeyDispatchConfig {
+            focus_policy: app.focus_policy,
             key_dispatch_policy: app.key_dispatch_policy,
             terminal_key_policy: app.terminal_key_policy,
             command_conflict_policy: app.command_conflict_policy,
@@ -562,11 +563,16 @@ impl<C: Component> AppRunner<C> {
         #[cfg(feature = "devtools")]
         let devtools_log_queue = Arc::new(Mutex::new(VecDeque::new()));
 
+        let focus = FocusState {
+            policy: app.focus_policy,
+            ..FocusState::default()
+        };
+
         AppRunner {
             title: app.title,
             surface,
             core,
-            focus: FocusState::default(),
+            focus,
             drag: DragState::default(),
             mouse: MouseTrackingState::default(),
             animation,
@@ -1009,6 +1015,7 @@ impl<C: Component> AppRunner<C> {
                     &mut self.focus.focused,
                     &mut self.focus.focused_key,
                     &mut self.focus.focused_tag,
+                    self.focus.policy,
                 );
             }
 

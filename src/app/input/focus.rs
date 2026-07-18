@@ -1,3 +1,4 @@
+use crate::app::context::FocusPolicy;
 use crate::callback::ScopeId;
 use crate::core::element::Key;
 use crate::core::node::{NodeId, NodeKind, NodeTree};
@@ -23,6 +24,7 @@ pub(crate) fn restore_focus(
     focused: &mut Option<NodeId>,
     focused_key: &mut Option<Key>,
     focused_tag: &mut Option<Tag>,
+    policy: FocusPolicy,
 ) {
     // First: keep current focus if still valid.
     if let Some(id) = *focused
@@ -67,7 +69,8 @@ pub(crate) fn restore_focus(
 
     // Third: try to restore by tag (handles tree structure changes where
     // the focused widget type still exists but got a new NodeId without a key).
-    if let Some(tag) = *focused_tag
+    if policy != FocusPolicy::Manual
+        && let Some(tag) = *focused_tag
         && let Some(id) = tree
             .iter_with_overlays()
             .find(|n| n.is_focusable() && tag_of_node(n) == tag)
@@ -79,15 +82,19 @@ pub(crate) fn restore_focus(
         return;
     }
 
-    // Fourth: reset to first focusable.
-    *focused = tree.iter().find(|n| n.is_focusable()).map(|n| n.id);
-    if let Some(id) = *focused {
-        *focused_key = tree.node(id).key.clone();
-        *focused_tag = Some(tag_of_node(tree.node(id)));
-    } else {
+    // Fourth: only Auto chooses a fallback. OnDemand and Manual preserve the
+    // remembered key so a keyed widget can reclaim focus when it remounts.
+    if policy == FocusPolicy::Auto {
+        *focused = tree.iter().find(|n| n.is_focusable()).map(|n| n.id);
+        if let Some(id) = *focused {
+            *focused_key = tree.node(id).key.clone();
+            *focused_tag = Some(tag_of_node(tree.node(id)));
+            return;
+        }
         *focused_key = None;
-        *focused_tag = None;
     }
+    *focused = None;
+    *focused_tag = None;
 }
 
 pub(crate) fn focus_next(
@@ -95,6 +102,7 @@ pub(crate) fn focus_next(
     focused: &mut Option<NodeId>,
     focused_key: &mut Option<Key>,
     focused_tag: &mut Option<Tag>,
+    _policy: FocusPolicy,
 ) {
     let focusables = tree.focusables();
     if focusables.is_empty() {
@@ -121,6 +129,7 @@ pub(crate) fn focus_prev(
     focused: &mut Option<NodeId>,
     focused_key: &mut Option<Key>,
     focused_tag: &mut Option<Tag>,
+    _policy: FocusPolicy,
 ) {
     let focusables = tree.focusables();
     if focusables.is_empty() {
@@ -221,7 +230,13 @@ mod tests {
         let mut key = None;
         let mut tag = None;
 
-        focus_next(&tree, &mut focused, &mut key, &mut tag);
+        focus_next(
+            &tree,
+            &mut focused,
+            &mut key,
+            &mut tag,
+            FocusPolicy::OnDemand,
+        );
         assert_eq!(focused, Some(children[0]), "should wrap to first focusable");
     }
 
@@ -233,7 +248,13 @@ mod tests {
         let mut key = None;
         let mut tag = None;
 
-        focus_prev(&tree, &mut focused, &mut key, &mut tag);
+        focus_prev(
+            &tree,
+            &mut focused,
+            &mut key,
+            &mut tag,
+            FocusPolicy::OnDemand,
+        );
         assert_eq!(focused, Some(children[2]), "should wrap to last focusable");
     }
 
@@ -245,7 +266,13 @@ mod tests {
         let mut key = None;
         let mut tag = None;
 
-        focus_next(&tree, &mut focused, &mut key, &mut tag);
+        focus_next(
+            &tree,
+            &mut focused,
+            &mut key,
+            &mut tag,
+            FocusPolicy::OnDemand,
+        );
         assert_eq!(focused, Some(children[0]));
     }
 
@@ -257,7 +284,13 @@ mod tests {
         let mut key = None;
         let mut tag = None;
 
-        focus_prev(&tree, &mut focused, &mut key, &mut tag);
+        focus_prev(
+            &tree,
+            &mut focused,
+            &mut key,
+            &mut tag,
+            FocusPolicy::OnDemand,
+        );
         assert_eq!(focused, Some(children[2]));
     }
 
@@ -270,7 +303,13 @@ mod tests {
         let mut key = None;
         let mut tag = None;
 
-        focus_next(&tree, &mut focused, &mut key, &mut tag);
+        focus_next(
+            &tree,
+            &mut focused,
+            &mut key,
+            &mut tag,
+            FocusPolicy::OnDemand,
+        );
         assert_eq!(focused, None);
     }
 
@@ -337,7 +376,13 @@ mod tests {
         let mut key = None;
         let mut tag = None;
 
-        restore_focus(&tree, &mut focused, &mut key, &mut tag);
+        restore_focus(
+            &tree,
+            &mut focused,
+            &mut key,
+            &mut tag,
+            FocusPolicy::OnDemand,
+        );
         assert_eq!(
             focused,
             Some(children[1]),
@@ -362,7 +407,7 @@ mod tests {
         let mut key = Some(the_key);
         let mut tag = None;
 
-        restore_focus(&tree, &mut focused, &mut key, &mut tag);
+        restore_focus(&tree, &mut focused, &mut key, &mut tag, FocusPolicy::Manual);
         assert_eq!(focused, Some(children[0]), "should restore by key");
     }
 
@@ -375,7 +420,13 @@ mod tests {
         let mut key = None;
         let mut tag = Some(Tag::Button);
 
-        restore_focus(&tree, &mut focused, &mut key, &mut tag);
+        restore_focus(
+            &tree,
+            &mut focused,
+            &mut key,
+            &mut tag,
+            FocusPolicy::OnDemand,
+        );
         // Should find the first focusable node with Tag::Button
         assert_eq!(focused, Some(children[0]));
     }
@@ -389,7 +440,42 @@ mod tests {
         let mut key = None;
         let mut tag = None;
 
-        restore_focus(&tree, &mut focused, &mut key, &mut tag);
+        restore_focus(&tree, &mut focused, &mut key, &mut tag, FocusPolicy::Auto);
         assert_eq!(focused, Some(children[0]));
+    }
+
+    #[test]
+    fn restore_focus_on_demand_keeps_key_without_fallback() {
+        let (tree, _root, _children) = build_tree_with_focusable_children(2);
+        let remembered_key: Key = "missing".into();
+        let mut focused = Some(NodeId::INVALID);
+        let mut key = Some(remembered_key.clone());
+        let mut tag = None;
+
+        restore_focus(
+            &tree,
+            &mut focused,
+            &mut key,
+            &mut tag,
+            FocusPolicy::OnDemand,
+        );
+
+        assert_eq!(focused, None);
+        assert_eq!(key, Some(remembered_key));
+        assert_eq!(tag, None);
+    }
+
+    #[test]
+    fn restore_focus_manual_skips_tag_restore() {
+        let (tree, _root, _children) = build_tree_with_focusable_children(2);
+        let mut focused = Some(NodeId::INVALID);
+        let mut key = None;
+        let mut tag = Some(Tag::Button);
+
+        restore_focus(&tree, &mut focused, &mut key, &mut tag, FocusPolicy::Manual);
+
+        assert_eq!(focused, None);
+        assert_eq!(key, None);
+        assert_eq!(tag, None);
     }
 }

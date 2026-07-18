@@ -13,8 +13,8 @@ pub mod web_runner;
 #[cfg(feature = "devtools")]
 pub use context::DevToolsConfig;
 pub use context::{
-    App, ContrastPolicy, InlineHeight, InlineStartupPolicy, ScreenBackground, SurfaceMode,
-    TextAreaNewlineBinding,
+    App, ContrastPolicy, FocusPolicy, InlineHeight, InlineStartupPolicy, ScreenBackground,
+    SurfaceMode, TextAreaNewlineBinding,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use runner::AppRunner;

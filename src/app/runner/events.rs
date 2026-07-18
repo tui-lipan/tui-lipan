@@ -445,6 +445,9 @@ impl<C: Component> AppRunner<C> {
     }
 
     pub(crate) fn focus_for_node(&mut self, id: NodeId) -> bool {
+        if self.focus.policy == crate::FocusPolicy::Manual {
+            return false;
+        }
         if !self.core.tree.is_valid(id) {
             return false;
         }

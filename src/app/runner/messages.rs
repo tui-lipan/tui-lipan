@@ -74,12 +74,15 @@ impl<C: Component> AppRunner<C> {
                     let before = self.focus.focused;
                     if self.focus_overlay_next() {
                         dirty = true;
+                    } else if self.focus.policy == crate::FocusPolicy::Manual {
+                        continue;
                     } else {
                         focus::focus_next(
                             &self.core.tree,
                             &mut self.focus.focused,
                             &mut self.focus.focused_key,
                             &mut self.focus.focused_tag,
+                            self.focus.policy,
                         );
                         if self.focus.focused != before {
                             self.animation.reset_blink();
@@ -91,12 +94,15 @@ impl<C: Component> AppRunner<C> {
                     let before = self.focus.focused;
                     if self.focus_overlay_prev() {
                         dirty = true;
+                    } else if self.focus.policy == crate::FocusPolicy::Manual {
+                        continue;
                     } else {
                         focus::focus_prev(
                             &self.core.tree,
                             &mut self.focus.focused,
                             &mut self.focus.focused_key,
                             &mut self.focus.focused_tag,
+                            self.focus.policy,
                         );
                         if self.focus.focused != before {
                             self.animation.reset_blink();
