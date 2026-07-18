@@ -4,7 +4,7 @@ use crate::app::input::focus;
 use crate::clipboard::ClipboardHandle;
 use crate::core::component::Component;
 use crate::core::event::MouseButton;
-use crate::core::node::OverlayRoot;
+use crate::core::node::{NodeId, OverlayRoot};
 
 use super::AppRunner;
 
@@ -97,10 +97,12 @@ impl<C: Component> AppRunner<C> {
     }
 
     pub(crate) fn restore_focus_from_stack(&mut self) {
-        if let Some(saved_key) = self.focus.focus_stack.pop() {
-            self.focus.focused_key = saved_key;
-            self.focus.focused = None;
-            self.focus.focused_tag = None;
+        if let Some(saved) = self.focus.focus_stack.pop() {
+            self.focus.focused = saved.focused.filter(|id| {
+                self.core.tree.is_valid(*id) && self.core.tree.node(*id).is_focusable()
+            });
+            self.focus.focused_key = saved.key;
+            self.focus.focused_tag = saved.tag;
             focus::restore_focus(
                 &self.core.tree,
                 &mut self.focus.focused,
@@ -122,26 +124,28 @@ impl<C: Component> AppRunner<C> {
         else {
             return;
         };
-        if !auto_focus {
-            self.suspend_focus_for_empty_overlay();
-            return;
-        }
         let focused_in_overlay = self
             .focus
             .focused
             .filter(|id| self.core.tree.is_descendant(overlay_id, *id))
             .is_some();
+        if !auto_focus {
+            if !focused_in_overlay {
+                self.suspend_focus_for_overlay(overlay_id);
+            }
+            return;
+        }
         if focused_in_overlay {
             return;
         }
 
         let focusables = self.core.tree.focusables_in_subtree(overlay_id);
         if focusables.is_empty() {
-            self.suspend_focus_for_empty_overlay();
+            self.suspend_focus_for_overlay(overlay_id);
             return;
         }
 
-        self.push_focus_stack_for_overlay();
+        self.push_focus_stack_for_overlay(overlay_id);
         let next = focusables[0];
         self.set_focus(next);
     }
@@ -153,13 +157,12 @@ impl<C: Component> AppRunner<C> {
             .is_some_and(|overlay| self.core.tree.focusables_in_subtree(overlay.id).is_empty())
     }
 
-    fn push_focus_stack_for_overlay(&mut self) {
-        // Deduplicate: don't push if the same key is already on top of the stack.
+    fn push_focus_stack_for_overlay(&mut self, overlay_id: NodeId) {
         let should_push = self
             .focus
             .focus_stack
             .last()
-            .is_none_or(|top| *top != self.focus.focused_key);
+            .is_none_or(|top| top.overlay != overlay_id);
         if !should_push {
             return;
         }
@@ -169,10 +172,17 @@ impl<C: Component> AppRunner<C> {
         if self.focus.focus_stack.len() >= MAX_FOCUS_STACK_DEPTH {
             self.focus.focus_stack.remove(0);
         }
-        self.focus.focus_stack.push(self.focus.focused_key.clone());
+        self.focus
+            .focus_stack
+            .push(crate::app::interaction_state::FocusStackEntry {
+                overlay: overlay_id,
+                focused: self.focus.focused,
+                key: self.focus.focused_key.clone(),
+                tag: self.focus.focused_tag,
+            });
     }
 
-    fn suspend_focus_for_empty_overlay(&mut self) {
+    fn suspend_focus_for_overlay(&mut self, overlay_id: NodeId) {
         if self.focus.focused.is_none()
             && self.focus.focused_key.is_none()
             && self.focus.focused_tag.is_none()
@@ -180,7 +190,7 @@ impl<C: Component> AppRunner<C> {
             return;
         }
 
-        self.push_focus_stack_for_overlay();
+        self.push_focus_stack_for_overlay(overlay_id);
         self.focus.focused = None;
         self.focus.focused_tag = None;
         self.animation.reset_blink();
@@ -190,6 +200,14 @@ impl<C: Component> AppRunner<C> {
         let Some(overlay) = self.core.tree.top_capturing_overlay() else {
             return false;
         };
+        if !overlay.auto_focus
+            && !self
+                .focus
+                .focused
+                .is_some_and(|id| self.core.tree.is_descendant(overlay.id, id))
+        {
+            return true;
+        }
         let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
         if focusables.is_empty() {
             return true;
@@ -210,6 +228,14 @@ impl<C: Component> AppRunner<C> {
         let Some(overlay) = self.core.tree.top_capturing_overlay() else {
             return false;
         };
+        if !overlay.auto_focus
+            && !self
+                .focus
+                .focused
+                .is_some_and(|id| self.core.tree.is_descendant(overlay.id, id))
+        {
+            return true;
+        }
         let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
         if focusables.is_empty() {
             return true;

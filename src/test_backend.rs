@@ -20,7 +20,9 @@ use crate::app::input::runtime_dispatch::{
     RuntimeKeyDispatchState, make_key_ctx, selection_clipboard_shortcut,
 };
 use crate::app::input::text_area_vim::TextAreaVimState;
-use crate::app::interaction_state::{DragState, HexPendingEdit, MouseTrackingState};
+use crate::app::interaction_state::{
+    DragState, FocusStackEntry, HexPendingEdit, MouseTrackingState,
+};
 use crate::app::{FocusChanged, FocusEntry};
 use crate::callback::Link;
 use crate::capture::CapturedFrame;
@@ -68,7 +70,7 @@ pub struct TestBackend<C: Component> {
     pub(crate) text_area_vim_state: HashMap<NodeId, TextAreaVimState>,
     pub(crate) hex_history: HashMap<NodeId, HexHistory>,
     pub(crate) hex_pending_edit: HashMap<NodeId, HexPendingEdit>,
-    focus_stack: Vec<Option<Key>>,
+    focus_stack: Vec<FocusStackEntry>,
     last_notified_focus: Option<(NodeId, FocusEntry)>,
     on_focus_changed: Option<crate::app::context::FocusChangedHook>,
     pub(crate) mouse: MouseTrackingState,
@@ -812,25 +814,27 @@ where
         else {
             return;
         };
-        if !auto_focus {
-            self.suspend_focus_for_empty_overlay();
-            return;
-        }
         let focused_in_overlay = self
             .focused
             .filter(|id| self.core.tree.is_descendant(overlay_id, *id))
             .is_some();
+        if !auto_focus {
+            if !focused_in_overlay {
+                self.suspend_focus_for_overlay(overlay_id);
+            }
+            return;
+        }
         if focused_in_overlay {
             return;
         }
 
         let focusables = self.core.tree.focusables_in_subtree(overlay_id);
         if focusables.is_empty() {
-            self.suspend_focus_for_empty_overlay();
+            self.suspend_focus_for_overlay(overlay_id);
             return;
         }
 
-        self.push_focus_stack_for_overlay();
+        self.push_focus_stack_for_overlay(overlay_id);
         let next = focusables[0];
         self.focused = Some(next);
         self.focused_key = self.core.tree.node(next).key.clone();
@@ -844,11 +848,11 @@ where
             .is_some_and(|overlay| self.core.tree.focusables_in_subtree(overlay.id).is_empty())
     }
 
-    fn push_focus_stack_for_overlay(&mut self) {
+    fn push_focus_stack_for_overlay(&mut self, overlay_id: NodeId) {
         let should_push = self
             .focus_stack
             .last()
-            .is_none_or(|top| *top != self.focused_key);
+            .is_none_or(|top| top.overlay != overlay_id);
         if !should_push {
             return;
         }
@@ -857,15 +861,20 @@ where
         if self.focus_stack.len() >= MAX_FOCUS_STACK_DEPTH {
             self.focus_stack.remove(0);
         }
-        self.focus_stack.push(self.focused_key.clone());
+        self.focus_stack.push(FocusStackEntry {
+            overlay: overlay_id,
+            focused: self.focused,
+            key: self.focused_key.clone(),
+            tag: self.focused_tag,
+        });
     }
 
-    fn suspend_focus_for_empty_overlay(&mut self) {
+    fn suspend_focus_for_overlay(&mut self, overlay_id: NodeId) {
         if self.focused.is_none() && self.focused_key.is_none() && self.focused_tag.is_none() {
             return;
         }
 
-        self.push_focus_stack_for_overlay();
+        self.push_focus_stack_for_overlay(overlay_id);
         self.focused = None;
         self.focused_tag = None;
     }
@@ -874,6 +883,13 @@ where
         let Some(overlay) = self.core.tree.top_capturing_overlay() else {
             return false;
         };
+        if !overlay.auto_focus
+            && !self
+                .focused
+                .is_some_and(|id| self.core.tree.is_descendant(overlay.id, id))
+        {
+            return true;
+        }
         let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
         if focusables.is_empty() {
             return true;
@@ -897,6 +913,13 @@ where
         let Some(overlay) = self.core.tree.top_capturing_overlay() else {
             return false;
         };
+        if !overlay.auto_focus
+            && !self
+                .focused
+                .is_some_and(|id| self.core.tree.is_descendant(overlay.id, id))
+        {
+            return true;
+        }
         let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
         if focusables.is_empty() {
             return true;
@@ -947,11 +970,13 @@ where
 
         if dismissed
             && overlay.captures_focus
-            && let Some(saved_key) = self.focus_stack.pop()
+            && let Some(saved) = self.focus_stack.pop()
         {
-            self.focused_key = saved_key;
-            self.focused = None;
-            self.focused_tag = None;
+            self.focused = saved.focused.filter(|id| {
+                self.core.tree.is_valid(*id) && self.core.tree.node(*id).is_focusable()
+            });
+            self.focused_key = saved.key;
+            self.focused_tag = saved.tag;
             focus::restore_focus(
                 &self.core.tree,
                 &mut self.focused,
@@ -1128,7 +1153,7 @@ struct TestBackendDispatchOps<'a, C: Component> {
     focused: &'a mut Option<NodeId>,
     focused_key: &'a mut Option<Key>,
     focused_tag: &'a mut Option<Tag>,
-    focus_stack: &'a mut Vec<Option<Key>>,
+    focus_stack: &'a mut Vec<FocusStackEntry>,
     keymap: &'a Keymap,
     keymap_runtime: &'a mut KeymapRuntime,
     key_dispatch_state: &'a mut RuntimeKeyDispatchState,
@@ -1172,11 +1197,13 @@ impl<C: Component> TestBackendDispatchOps<'_, C> {
 
         if dismissed
             && overlay.captures_focus
-            && let Some(saved_key) = self.focus_stack.pop()
+            && let Some(saved) = self.focus_stack.pop()
         {
-            *self.focused_key = saved_key;
-            *self.focused = None;
-            *self.focused_tag = None;
+            *self.focused = saved.focused.filter(|id| {
+                self.core.tree.is_valid(*id) && self.core.tree.node(*id).is_focusable()
+            });
+            *self.focused_key = saved.key;
+            *self.focused_tag = saved.tag;
             focus::restore_focus(
                 &self.core.tree,
                 self.focused,
@@ -1192,6 +1219,14 @@ impl<C: Component> TestBackendDispatchOps<'_, C> {
         let Some(overlay) = self.core.tree.top_capturing_overlay() else {
             return false;
         };
+        if !overlay.auto_focus
+            && !self
+                .focused
+                .as_ref()
+                .is_some_and(|id| self.core.tree.is_descendant(overlay.id, *id))
+        {
+            return true;
+        }
         let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
         if focusables.is_empty() {
             return true;
@@ -1215,6 +1250,14 @@ impl<C: Component> TestBackendDispatchOps<'_, C> {
         let Some(overlay) = self.core.tree.top_capturing_overlay() else {
             return false;
         };
+        if !overlay.auto_focus
+            && !self
+                .focused
+                .as_ref()
+                .is_some_and(|id| self.core.tree.is_descendant(overlay.id, *id))
+        {
+            return true;
+        }
         let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
         if focusables.is_empty() {
             return true;
@@ -1755,7 +1798,7 @@ mod tests {
         }
 
         fn view(&self, ctx: &Context<Self>) -> Element {
-            let mut stack = VStack::new().child(Button::new("Background").key("background"));
+            let mut stack = VStack::new().child(Button::new("Background"));
             if ctx.state {
                 stack = stack.child(
                     Modal::new()
@@ -1842,6 +1885,8 @@ mod tests {
         assert!(!overlay.auto_focus);
         assert!(backend.send_key(plain_code(KeyCode::Tab)).unwrap());
         assert_eq!(backend.focused_key(), None);
+        backend.focus_next();
+        assert_eq!(backend.focused(), None);
     }
 
     #[test]
@@ -1909,11 +1954,8 @@ mod tests {
         backend.focus_next();
         let focused = backend
             .focused()
-            .expect("background focus should be restored");
-        assert_eq!(
-            backend.core.tree.node(focused).key,
-            Some(Key::from("background"))
-        );
+            .expect("background should receive initial focus");
+        assert_eq!(backend.core.tree.node(focused).key, None);
 
         backend
             .dispatch(AutoFocusDismissMsg::Open)
@@ -1928,10 +1970,7 @@ mod tests {
         let restored = backend
             .focused()
             .expect("background focus should be restored after dismissal");
-        assert_eq!(
-            backend.core.tree.node(restored).key,
-            Some(Key::from("background"))
-        );
+        assert_eq!(restored, focused);
     }
 
     #[test]

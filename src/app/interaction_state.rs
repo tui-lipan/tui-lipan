@@ -308,13 +308,21 @@ pub(crate) struct FocusState {
     pub focused: Option<NodeId>,
     pub focused_key: Option<Key>,
     pub focused_tag: Option<Tag>,
-    pub focus_stack: Vec<Option<Key>>,
+    pub focus_stack: Vec<FocusStackEntry>,
     pub last_notified: Option<(NodeId, crate::app::FocusEntry)>,
     pub window_focused: bool,
     #[cfg(feature = "terminal")]
     pub last_emitted_focus: Option<NodeId>,
     #[cfg(feature = "terminal")]
     pub last_emitted_window_focused: bool,
+}
+
+#[derive(Clone)]
+pub(crate) struct FocusStackEntry {
+    pub overlay: NodeId,
+    pub focused: Option<NodeId>,
+    pub key: Option<Key>,
+    pub tag: Option<Tag>,
 }
 
 impl Default for FocusState {

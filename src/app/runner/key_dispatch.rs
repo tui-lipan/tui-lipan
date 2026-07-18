@@ -14,7 +14,7 @@ use crate::app::input::runtime_dispatch::{
     FrameworkSideEffect, RuntimeKeyDispatchConfig, RuntimeKeyDispatchOutcome,
     RuntimeKeyDispatchState,
 };
-use crate::app::interaction_state::DirtyLevel;
+use crate::app::interaction_state::{DirtyLevel, FocusStackEntry};
 use crate::core::component::Component;
 use crate::core::element::Key;
 use crate::core::event::{KeyCode, KeyEvent};
@@ -245,7 +245,7 @@ struct RunnerDispatchOps<'a, 'b, C: Component> {
     focused: &'a mut Option<NodeId>,
     focused_key: &'a mut Option<Key>,
     focused_tag: &'a mut Option<Tag>,
-    focus_stack: &'a mut Vec<Option<Key>>,
+    focus_stack: &'a mut Vec<FocusStackEntry>,
     focus_policy: FocusPolicy,
     keymap: &'a Keymap,
     keymap_runtime: &'a mut KeymapRuntime,
@@ -290,11 +290,13 @@ impl<C: Component> RunnerDispatchOps<'_, '_, C> {
 
         if dismissed
             && overlay.captures_focus
-            && let Some(saved_key) = self.focus_stack.pop()
+            && let Some(saved) = self.focus_stack.pop()
         {
-            *self.focused_key = saved_key;
-            *self.focused = None;
-            *self.focused_tag = None;
+            *self.focused = saved.focused.filter(|id| {
+                self.core.tree.is_valid(*id) && self.core.tree.node(*id).is_focusable()
+            });
+            *self.focused_key = saved.key;
+            *self.focused_tag = saved.tag;
             focus::restore_focus(
                 &self.core.tree,
                 self.focused,
@@ -310,6 +312,14 @@ impl<C: Component> RunnerDispatchOps<'_, '_, C> {
         let Some(overlay) = self.core.tree.top_capturing_overlay() else {
             return false;
         };
+        if !overlay.auto_focus
+            && !self
+                .focused
+                .as_ref()
+                .is_some_and(|id| self.core.tree.is_descendant(overlay.id, *id))
+        {
+            return true;
+        }
         let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
         if focusables.is_empty() {
             return true;
@@ -332,6 +342,14 @@ impl<C: Component> RunnerDispatchOps<'_, '_, C> {
         let Some(overlay) = self.core.tree.top_capturing_overlay() else {
             return false;
         };
+        if !overlay.auto_focus
+            && !self
+                .focused
+                .as_ref()
+                .is_some_and(|id| self.core.tree.is_descendant(overlay.id, *id))
+        {
+            return true;
+        }
         let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
         if focusables.is_empty() {
             return true;
