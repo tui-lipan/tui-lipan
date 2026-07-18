@@ -36,7 +36,7 @@ pub enum TabVariant {
 
 /// Focus-aware sizing policy for stack containers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub enum FocusPolicy {
+pub enum FocusSizing {
     /// No focus-aware sizing.
     #[default]
     None,
@@ -44,7 +44,7 @@ pub enum FocusPolicy {
     Accordion(FocusAccordion),
 }
 
-impl FocusPolicy {
+impl FocusSizing {
     /// Use the default accordion policy.
     pub fn accordion() -> Self {
         Self::Accordion(FocusAccordion::default())
@@ -178,7 +178,7 @@ pub(crate) struct StackProps {
     /// Default: `Length::Flex(1)`.
     pub height: Length,
     /// Focus-aware sizing policy.
-    pub focus_policy: FocusPolicy,
+    pub focus_sizing: FocusSizing,
     /// Draw a border.
     pub border: bool,
     /// Border style.
@@ -199,7 +199,7 @@ impl Default for StackProps {
             // Containers default to flex-like behavior.
             width: Length::Flex(1),
             height: Length::Flex(1),
-            focus_policy: FocusPolicy::None,
+            focus_sizing: FocusSizing::None,
             border: false,
             border_style: BorderStyle::Plain,
             even_flex: false,
@@ -289,9 +289,9 @@ macro_rules! impl_stack_props {
                 self
             }
 
-            /// Set focus-aware sizing policy.
-            pub fn focus_policy(mut self, policy: FocusPolicy) -> Self {
-                self.props.focus_policy = policy;
+            /// Set focus-aware sizing behavior.
+            pub fn focus_sizing(mut self, sizing: FocusSizing) -> Self {
+                self.props.focus_sizing = sizing;
                 self
             }
         }

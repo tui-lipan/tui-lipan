@@ -133,7 +133,7 @@ pub use class_diagram::{
 };
 pub use combo_box::{ComboBox, ComboBoxCommitEvent};
 pub use command_palette::CommandPalette;
-pub use containers::{FocusAccordion, FocusPolicy, HStack, TabVariant, VStack};
+pub use containers::{FocusAccordion, FocusSizing, HStack, TabVariant, VStack};
 pub use context_menu::ContextMenu;
 pub use context_provider::ContextProvider;
 pub use date_picker::{DateEvent, DatePicker};

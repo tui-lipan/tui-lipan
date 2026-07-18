@@ -53,7 +53,7 @@ Layout pitfall checklist:
 | `style` | `Style` | Container style |
 | `border` | `bool` | Draw border |
 | `border_style` | `BorderStyle` | Border appearance |
-| `focus_policy` | `FocusPolicy` | Accordion behavior (includes `sticky: bool`, default `true`) |
+| `focus_sizing` | `FocusSizing` | Accordion sizing behavior (includes `sticky: bool`, default `true`) |
 | `tab_titles` | `Vec<String>` | Border-embedded tab titles |
 | `active_tab` | `usize` | Active border tab index |
 | `active_tab_style` | `Style` | Active border tab style |
@@ -61,11 +61,11 @@ Layout pitfall checklist:
 | `width` | `Length` | Width override |
 | `height` | `Length` | Height override |
 
-**Accordion focus policy:**
+**Accordion focus sizing:**
 
 ```rust
 VStack::new()
-    .focus_policy(FocusPolicy::Accordion(FocusAccordion {
+    .focus_sizing(FocusSizing::Accordion(FocusAccordion {
         focused_min: 10,
         collapsed: 1,
         ..FocusAccordion::default()

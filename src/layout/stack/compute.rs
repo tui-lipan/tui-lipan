@@ -9,29 +9,29 @@ use crate::layout::axis::{Axis, is_focus_protected, requested_main_axis};
 use crate::layout::measure::{intrinsic_main, min_size_constrained};
 use crate::style::{Length, ShrinkPriority};
 use crate::widgets::DragSlot;
-use crate::widgets::containers::FocusPolicy;
+use crate::widgets::containers::FocusSizing;
 use crate::widgets::internal::StackProps;
 
 use super::axis_constraints;
 use super::types::{
-    FocusMode, FocusPolicyContext, StackChildLayout, StackMainLayout, StackMeasuredSize,
+    FocusMode, FocusSizingContext, StackChildLayout, StackMainLayout, StackMeasuredSize,
 };
 use crate::layout::drag_source_layout_hint::drag_source_snapshot_collapse_key;
 use crate::widgets::containers::layout::join_overlap_vector;
 
-pub(crate) fn focus_policy_context<C: Borrow<Element>>(
+pub(crate) fn focus_sizing_context<C: Borrow<Element>>(
     props: &StackProps,
     children: &[C],
     axis: Axis,
     available: u16,
     focus: Option<&FocusContext>,
     pinned_key: Option<&str>,
-) -> Option<FocusPolicyContext> {
+) -> Option<FocusSizingContext> {
     if axis != Axis::Vertical {
         return None;
     }
 
-    let FocusPolicy::Accordion(policy) = props.focus_policy else {
+    let FocusSizing::Accordion(policy) = props.focus_sizing else {
         return None;
     };
 
@@ -58,7 +58,7 @@ pub(crate) fn focus_policy_context<C: Borrow<Element>>(
         FocusMode::Accordion
     };
 
-    Some(FocusPolicyContext { mode, policy })
+    Some(FocusSizingContext { mode, policy })
 }
 
 fn measure_child_for_axis(
@@ -141,7 +141,7 @@ pub(crate) struct InternalLayoutContext<'a> {
     pub available: u16,
     pub available_cross: Option<u16>,
     pub focus: Option<&'a FocusContext>,
-    pub focus_policy: Option<FocusPolicyContext>,
+    pub focus_sizing: Option<FocusSizingContext>,
     pub policy_focus_min: u16,
     /// Key of the pseudo-focused child (sticky accordion, no real focus).
     pub pinned_key: Option<Arc<str>>,
@@ -536,7 +536,7 @@ fn run_stack_layout_pass(
             compact = true;
         }
 
-        if let Some(policy_ctx) = ctx.focus_policy
+        if let Some(policy_ctx) = ctx.focus_sizing
             && !compact
         {
             match policy_ctx.mode {
@@ -869,14 +869,14 @@ pub(crate) fn compute_stack_layout<C: Borrow<Element>>(
     } else {
         pinned_key
     };
-    let focus_policy =
-        focus_policy_context(props, children, axis, available, focus, effective_pinned);
-    let policy_focus_min = focus_policy.map(|ctx| ctx.policy.focused_min).unwrap_or(0);
+    let focus_sizing =
+        focus_sizing_context(props, children, axis, available, focus, effective_pinned);
+    let policy_focus_min = focus_sizing.map(|ctx| ctx.policy.focused_min).unwrap_or(0);
     let mut ctx = InternalLayoutContext {
         available,
         available_cross,
         focus,
-        focus_policy,
+        focus_sizing,
         policy_focus_min,
         pinned_key: effective_pinned.map(Arc::from),
         join_overlaps: join_overlap_vector(children),

@@ -327,7 +327,7 @@ Hierarchical tree view with expand/collapse.
 | `focusable` | `bool` | Accept focus |
 | `activate_on_click` | `bool` | Single-click activates |
 | `keymap` | `TreeKeymap` | Keyboard expand/collapse mapping |
-| `focus_policy` | `FocusPolicy` | Accordion behavior |
+| `focus_policy` | `FocusAccordion` | Tree accordion behavior |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_select` | `Callback<TreeEvent>` | Node selected |

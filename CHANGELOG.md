@@ -173,6 +173,9 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- Renamed stack containers' `FocusPolicy` accordion-sizing enum to `FocusSizing` and
+  `.focus_policy(...)` builder to `.focus_sizing(...)`. Tree's distinct
+  `.focus_policy(FocusAccordion)` API is unchanged. (breaking)
 - **(breaking)** Raised the declared MSRV from Rust 1.85 to 1.88 (matches the
   locked Ratatui requirement), as part of laying groundwork for native
   macOS/Windows support.

@@ -151,7 +151,7 @@ pub use crate::widgets::{
     FileTreeChangeStatus, FileTreeChangeView, FileTreeEvent, FileTreeGitView, FileTreeItemStyle,
     FileTreeSuffixPriority, FileTreeToggleEvent, Flow, FlowDirection, Flowchart,
     FlowchartEdgeEvent, FlowchartItemPath, FlowchartNodeEvent, FlowchartSubgraphEvent,
-    FlowchartTheme, FocusAccordion, FocusPolicy, FormatInput, FormattedBlock,
+    FlowchartTheme, FocusAccordion, FocusSizing, FormatInput, FormattedBlock,
     FormattedDiagramBlock, FormattedDocument, FormattedLine, FragmentGlyphs, FragmentKind, Frame,
     FrameParseError, FrameSequence, FrameSequenceBuilder, GanttDate, GanttDiagram,
     GanttDiagramTheme, GanttDuration, GanttSection, GanttSpec, GanttTask, GanttTaskStart,

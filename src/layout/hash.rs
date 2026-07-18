@@ -7,7 +7,7 @@ use crate::core::element::{Element, ElementKind};
 use crate::layout::axis::Axis;
 use crate::layout::tag::tag_of_element;
 use crate::style::{Length, Rect, Span};
-use crate::widgets::containers::{FocusPolicy, StackProps};
+use crate::widgets::containers::{FocusSizing, StackProps};
 
 pub(crate) type LayoutHasher = FxHasher;
 
@@ -347,15 +347,15 @@ pub(crate) fn hash_stack_props(props: &StackProps, hasher: &mut impl Hasher) {
     props.height.hash(hasher);
     props.border.hash(hasher);
     props.border_style.hash(hasher);
-    hash_focus_policy(props.focus_policy, hasher);
+    hash_focus_sizing(props.focus_sizing, hasher);
 }
 
-fn hash_focus_policy(policy: FocusPolicy, hasher: &mut impl Hasher) {
-    match policy {
-        FocusPolicy::None => {
+fn hash_focus_sizing(sizing: FocusSizing, hasher: &mut impl Hasher) {
+    match sizing {
+        FocusSizing::None => {
             0u8.hash(hasher);
         }
-        FocusPolicy::Accordion(policy) => {
+        FocusSizing::Accordion(policy) => {
             1u8.hash(hasher);
             policy.focused_min.hash(hasher);
             policy.collapsed.hash(hasher);

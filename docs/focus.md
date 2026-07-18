@@ -153,7 +153,7 @@ impl Component for MyApp {
 - `KeyUpdate::handled(update)` - stop bubbling
 - `KeyUpdate::unhandled(update)` - continue bubbling
 
-## Focus policy (accordion)
+## Focus sizing (accordion)
 
 `VStack` supports lazygit-style accordion sizing based on focus:
 
@@ -161,7 +161,7 @@ impl Component for MyApp {
 use tui_lipan::prelude::*;
 
 VStack::new()
-    .focus_policy(FocusPolicy::Accordion(FocusAccordion {
+    .focus_sizing(FocusSizing::Accordion(FocusAccordion {
         focused_min: 10,
         collapsed: 1,
         ..Default::default()
@@ -178,7 +178,7 @@ By default, when focus moves outside the stack entirely (e.g. to a sibling colum
 
 ```rust
 VStack::new()
-    .focus_policy(FocusPolicy::Accordion(FocusAccordion {
+    .focus_sizing(FocusSizing::Accordion(FocusAccordion {
         focused_min: 7,
         ..FocusAccordion::default()  // sticky: true by default
     }))

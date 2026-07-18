@@ -315,7 +315,7 @@ Note: Applies to the shared props backing stack container defaults.
 | `justify` | `Justify::Start` |
 | `width` | `Length::Flex(1)` |
 | `height` | `Length::Flex(1)` |
-| `focus_policy` | `FocusPolicy::None` |
+| `focus_sizing` | `FocusSizing::None` |
 | `border` | `false` |
 | `border_style` | `BorderStyle::Plain` |
 | `even_flex` | `false` |

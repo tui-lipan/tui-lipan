@@ -785,12 +785,12 @@ style directly.
 
 ## Focus & Input
 
-### `FocusPolicy`
+### `FocusSizing`
 
 | Variant | Usage |
 |---------|-------|
-| `FocusPolicy::None` | No focus-aware sizing **(default)** |
-| `FocusPolicy::Accordion(FocusAccordion { ... })` | Lazygit-style panel resizing |
+| `FocusSizing::None` | No focus-aware sizing **(default)** |
+| `FocusSizing::Accordion(FocusAccordion { ... })` | Lazygit-style panel resizing |
 
 ### `Grid` track `Length` (`.rows` / `.columns`)
 

@@ -13,7 +13,7 @@ use crate::style::{Length, Rect};
 use crate::utils::diff::reuse_plan;
 #[cfg(feature = "diff-view")]
 use crate::widgets::SplitWrapDualPass;
-use crate::widgets::containers::FocusPolicy;
+use crate::widgets::containers::FocusSizing;
 use crate::widgets::frame::box_metrics::frame_inner_max_size;
 use crate::widgets::internal::StackProps;
 
@@ -696,8 +696,8 @@ pub(crate) fn reconcile_vstack(
     // Only active when the accordion policy has sticky=true and no child
     // currently has real focus (real focus always takes priority).
     let is_sticky = matches!(
-        &vs.props.focus_policy,
-        FocusPolicy::Accordion(acc) if acc.sticky
+        &vs.props.focus_sizing,
+        FocusSizing::Accordion(acc) if acc.sticky
     );
     let has_real_focus = is_sticky && vs.children.iter().any(|c| is_focus_protected(c, focus));
     let pinned_key: Option<crate::core::element::Key> = if is_sticky && !has_real_focus {

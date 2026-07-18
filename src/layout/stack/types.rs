@@ -65,7 +65,7 @@ pub(crate) enum FocusMode {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct FocusPolicyContext {
+pub(crate) struct FocusSizingContext {
     pub mode: FocusMode,
     pub policy: FocusAccordion,
 }
