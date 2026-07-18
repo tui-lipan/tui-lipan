@@ -22,6 +22,7 @@ use crate::layout::drag_source_layout_hint::{
     clear_drag_source_snapshot_collapse_key, set_drag_source_snapshot_collapse_key,
 };
 use crate::layout::measure::min_size_constrained;
+use crate::runtime::FocusRequest;
 use crate::style::{Rect, ThemeRole};
 use crate::widgets::DragPreview;
 
@@ -60,7 +61,7 @@ pub(super) struct ActiveTextAreaDragSnapshot {
 }
 
 impl<C: Component> AppRunner<C> {
-    /// Drain a pending `request_focus(...)` from the runtime env and apply it to
+    /// Drain a pending focus request from the runtime env and apply it to
     /// `self.focus`. Returns `true` if a request was consumed.
     ///
     /// Called both from the event-loop drain site (where it also triggers a Full
@@ -69,14 +70,45 @@ impl<C: Component> AppRunner<C> {
     /// same frame — without it, `restore_focus` would fall back to "first
     /// focusable" for one frame before the request is honored on the next tick.
     pub(super) fn apply_pending_focus_request(&mut self) -> bool {
-        if let Some(key) = self.core.ctx.take_focus_request() {
-            self.focus.focused = None;
-            self.focus.focused_key = Some(key);
-            self.focus.focused_tag = None;
-            true
-        } else {
-            false
+        let Some(request) = self.core.ctx.take_focus_request() else {
+            return false;
+        };
+
+        match request {
+            FocusRequest::Key(key) => {
+                self.focus.focused = None;
+                self.focus.focused_key = Some(key);
+                self.focus.focused_tag = None;
+            }
+            FocusRequest::Clear => {
+                self.focus.focused = None;
+                self.focus.focused_key = None;
+                self.focus.focused_tag = None;
+            }
+            FocusRequest::Next => {
+                if !self.focus_overlay_next() {
+                    focus::focus_next(
+                        &self.core.tree,
+                        &mut self.focus.focused,
+                        &mut self.focus.focused_key,
+                        &mut self.focus.focused_tag,
+                        self.focus.policy,
+                    );
+                }
+            }
+            FocusRequest::Prev => {
+                if !self.focus_overlay_prev() {
+                    focus::focus_prev(
+                        &self.core.tree,
+                        &mut self.focus.focused,
+                        &mut self.focus.focused_key,
+                        &mut self.focus.focused_tag,
+                        self.focus.policy,
+                    );
+                }
+            }
         }
+        true
     }
 
     pub(super) fn push_drag_layout_collapse_hint(&self) {

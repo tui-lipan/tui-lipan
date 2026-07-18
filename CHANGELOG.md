@@ -177,6 +177,8 @@ While the crate is on `0.x.y`:
   `OnDemand` is now the default, so apps start unfocused until Tab, pointer interaction, or an
   explicit focus request establishes focus. `Manual` disables framework Tab and pointer focus
   movement while preserving explicit focus APIs and capturing-overlay focus traps. (breaking)
+- Added `Context::blur()`, `Context::focus_next()`, `Context::focus_prev()`, and
+  `TestBackend::blur()` for explicit focus control.
 - Renamed stack containers' `FocusPolicy` accordion-sizing enum to `FocusSizing` and
   `.focus_policy(...)` builder to `.focus_sizing(...)`. Tree's distinct
   `.focus_policy(FocusAccordion)` API is unchanged. (breaking)

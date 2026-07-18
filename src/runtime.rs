@@ -26,6 +26,13 @@ pub(crate) type PendingTranscriptQueue = Rc<RefCell<VecDeque<TranscriptEntry>>>;
 pub(crate) type TranscriptHistory = Rc<RefCell<Vec<TranscriptEntry>>>;
 pub(crate) const EXTRA_ROOT_WRAPPER_KEY: &str = "__tui_lipan_extra_root_wrapper";
 
+pub(crate) enum FocusRequest {
+    Key(Key),
+    Clear,
+    Next,
+    Prev,
+}
+
 enum ReconcileRoot<'a> {
     Borrowed(&'a Element),
     Owned(Box<Element>),

@@ -30,7 +30,7 @@ use crate::core::event::{KeyCode, KeyEvent, MouseEvent};
 use crate::core::node::{NodeId, OverlayRoot};
 use crate::core::runtime_env::TranscriptEntry;
 use crate::layout::tag::Tag;
-use crate::runtime::RuntimeCore;
+use crate::runtime::{FocusRequest, RuntimeCore};
 use crate::style::Rect;
 use crate::text::editor::TextEditor;
 use crate::text::input::TextInput;
@@ -259,6 +259,15 @@ where
         self.focused = Some(id);
         self.focused_key = self.core.tree.node(id).key.clone();
         self.focused_tag = Some(crate::layout::tag::tag_of_node(self.core.tree.node(id)));
+    }
+
+    /// Clear focus and its remembered keyed target.
+    ///
+    /// A later render under [`FocusPolicy::Auto`] restores the default focus target.
+    pub fn blur(&mut self) {
+        self.focused = None;
+        self.focused_key = None;
+        self.focused_tag = None;
     }
 
     /// Borrow the last rendered `Element` tree.
@@ -630,6 +639,19 @@ where
         );
     }
 
+    fn apply_focus_request(&mut self, request: FocusRequest) {
+        match request {
+            FocusRequest::Key(key) => {
+                self.focused = None;
+                self.focused_key = Some(key);
+                self.focused_tag = None;
+            }
+            FocusRequest::Clear => self.blur(),
+            FocusRequest::Next => self.focus_next(),
+            FocusRequest::Prev => self.focus_prev(),
+        }
+    }
+
     /// Process all queued messages and any messages produced by background commands.
     ///
     /// Returns `true` if any update requested a re-render.
@@ -650,10 +672,8 @@ where
             );
         }
 
-        if let Some(key) = self.core.ctx.take_focus_request() {
-            self.focused = None;
-            self.focused_key = Some(key);
-            self.focused_tag = None;
+        if let Some(request) = self.core.ctx.take_focus_request() {
+            self.apply_focus_request(request);
             dirty = true;
         }
 
@@ -669,10 +689,8 @@ where
         let bounds = self.viewport;
         self.core
             .render_element(bounds, self.focused, self.focused_key.as_ref(), None);
-        if let Some(key) = self.core.ctx.take_focus_request() {
-            self.focused = None;
-            self.focused_key = Some(key);
-            self.focused_tag = None;
+        if let Some(request) = self.core.ctx.take_focus_request() {
+            self.apply_focus_request(request);
         }
         focus::restore_focus(
             &self.core.tree,
@@ -1922,6 +1940,112 @@ mod tests {
             );
             assert_eq!(backend.focused_key(), Some(&Key::from("requested")));
         }
+    }
+
+    #[derive(Clone, Copy)]
+    enum FocusControlMsg {
+        Blur,
+        Next,
+        Prev,
+        BlurThenNext,
+    }
+
+    struct FocusControlRoot;
+
+    impl Component for FocusControlRoot {
+        type Message = FocusControlMsg;
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            VStack::new()
+                .child(Button::new("first").key("first"))
+                .child(Button::new("second").key("second"))
+                .into()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                FocusControlMsg::Blur => ctx.blur(),
+                FocusControlMsg::Next => ctx.focus_next(),
+                FocusControlMsg::Prev => ctx.focus_prev(),
+                FocusControlMsg::BlurThenNext => {
+                    ctx.blur();
+                    ctx.focus_next();
+                }
+            }
+            Update::full()
+        }
+    }
+
+    #[test]
+    fn context_focus_traversal_is_explicit_under_manual_policy() {
+        let mut backend = TestBackend::new_with_app(
+            crate::App::new().focus_policy(FocusPolicy::Manual),
+            FocusControlRoot,
+            (),
+        );
+
+        backend
+            .dispatch(FocusControlMsg::Next)
+            .expect("next request should dispatch");
+        assert_eq!(backend.focused_key(), Some(&Key::from("first")));
+
+        backend
+            .dispatch(FocusControlMsg::Prev)
+            .expect("previous request should dispatch");
+        assert_eq!(backend.focused_key(), Some(&Key::from("second")));
+    }
+
+    #[test]
+    fn context_blur_follows_focus_policy() {
+        for policy in [
+            FocusPolicy::Auto,
+            FocusPolicy::OnDemand,
+            FocusPolicy::Manual,
+        ] {
+            let mut backend = TestBackend::new_with_app(
+                crate::App::new().focus_policy(policy),
+                FocusControlRoot,
+                (),
+            );
+            backend.focus_next();
+
+            backend
+                .dispatch(FocusControlMsg::Blur)
+                .expect("blur request should dispatch");
+
+            if policy == FocusPolicy::Auto {
+                assert_eq!(backend.focused_key(), Some(&Key::from("first")));
+            } else {
+                assert_eq!(backend.focused(), None);
+                assert_eq!(backend.focused_key(), None);
+            }
+        }
+    }
+
+    #[test]
+    fn latest_context_focus_request_wins() {
+        let mut backend = TestBackend::new(FocusControlRoot);
+
+        backend
+            .dispatch(FocusControlMsg::BlurThenNext)
+            .expect("focus requests should dispatch");
+
+        assert_eq!(backend.focused_key(), Some(&Key::from("first")));
+    }
+
+    #[test]
+    fn test_backend_blur_clears_remembered_focus() {
+        let mut backend = TestBackend::new(FocusControlRoot);
+        backend.focus_next();
+
+        backend.blur();
+
+        assert_eq!(backend.focused(), None);
+        assert_eq!(backend.focused_key(), None);
     }
 
     fn click_button<C: Component>(backend: &mut TestBackend<C>) {

@@ -92,6 +92,8 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `ctx.props` | Read-only access to current properties |
 | `ctx.link()` | Build callbacks and commands |
 | `ctx.request_focus(key)` | Move focus to a keyed widget |
+| `ctx.blur()` | Clear focus (`Auto` restores its default target on render) |
+| `ctx.focus_next()` / `ctx.focus_prev()` | Move through the focus ring explicitly |
 | `ctx.show_devtools()` | Show the built-in DevTools panel on the next tick |
 | `ctx.hide_devtools()` | Hide the built-in DevTools panel on the next tick |
 | `ctx.toggle_devtools()` | Toggle the built-in DevTools panel on the next tick |

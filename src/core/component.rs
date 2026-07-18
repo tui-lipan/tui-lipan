@@ -16,6 +16,7 @@ use crate::core::runtime_env::{
     DevToolsRequest, MemoDependency, MemoDependencySnapshot, RuntimeEnv, ScrollDependency,
     ScrollDependencyKind, ScrollIdentity, TranscriptEntry,
 };
+use crate::runtime::FocusRequest;
 use crate::style::{HostTerminalColors, Rect, RichText, Theme, ThemeExtension};
 
 /// Side-effect command returned from `Component::update`.
@@ -1187,7 +1188,24 @@ impl<C: Component> Context<C> {
     ///
     /// This takes effect on the next event loop tick / render.
     pub fn request_focus(&mut self, key: impl Into<Key>) {
-        *self.env.focus_request.borrow_mut() = Some(key.into());
+        *self.env.focus_request.borrow_mut() = Some(FocusRequest::Key(key.into()));
+    }
+
+    /// Clear the current focus.
+    ///
+    /// Under [`crate::FocusPolicy::Auto`], the next render restores the default focus target.
+    pub fn blur(&mut self) {
+        *self.env.focus_request.borrow_mut() = Some(FocusRequest::Clear);
+    }
+
+    /// Request focus to move to the next tab stop.
+    pub fn focus_next(&mut self) {
+        *self.env.focus_request.borrow_mut() = Some(FocusRequest::Next);
+    }
+
+    /// Request focus to move to the previous tab stop.
+    pub fn focus_prev(&mut self) {
+        *self.env.focus_request.borrow_mut() = Some(FocusRequest::Prev);
     }
 
     /// Request a full layout and paint pass on the next frame.
@@ -1213,7 +1231,7 @@ impl<C: Component> Context<C> {
         *self.env.devtools_request.borrow_mut() = Some(DevToolsRequest::Toggle);
     }
 
-    pub(crate) fn take_focus_request(&self) -> Option<Key> {
+    pub(crate) fn take_focus_request(&self) -> Option<FocusRequest> {
         self.env.focus_request.borrow_mut().take()
     }
 
