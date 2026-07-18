@@ -6,7 +6,11 @@ use web_time::Instant;
 use chrono::{DateTime, Local, Timelike, Utc};
 use nucleo::pattern::{CaseMatching, Normalization};
 
+use crate::app::FocusPolicy;
+use crate::core::element::Key;
+use crate::core::node::NodeId;
 use crate::debug::LogSource;
+use crate::layout::tag::Tag;
 use crate::style::Length;
 use crate::text::input::TextInput;
 use crate::widgets::log_view::matching::match_logs;
@@ -21,7 +25,7 @@ const DEFAULT_CONFIG_PANEL_WIDTH: Length = Length::Flex(1);
 const DEFAULT_CONFIG_PANEL_HEIGHT: Length = Length::Percent(30);
 
 const DEFAULT_STATS_PANEL_WIDTH: Length = Length::Px(40);
-const DEFAULT_STATS_PANEL_HEIGHT: Length = Length::Px(11);
+const DEFAULT_STATS_PANEL_HEIGHT: Length = Length::Px(12);
 const DEFAULT_LOGS_PANEL_WIDTH: Length = Length::Flex(1);
 const DEFAULT_LOGS_PANEL_HEIGHT: Length = Length::Px(26);
 
@@ -45,6 +49,16 @@ pub(crate) struct DevLogEntry {
     pub(crate) source: LogSource,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FocusMetrics {
+    pub(crate) policy: FocusPolicy,
+    pub(crate) node_id: Option<NodeId>,
+    pub(crate) key: Option<Key>,
+    pub(crate) tag: Option<Tag>,
+    pub(crate) ring_len: usize,
+    pub(crate) stack_depth: usize,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DevToolsState {
     pub(crate) visible: bool,
@@ -62,6 +76,7 @@ pub(crate) struct DevToolsState {
     /// from the log view so host-application logs aren't drowned out.
     pub(crate) hide_framework_logs: bool,
     pub(crate) fps_samples: VecDeque<Instant>,
+    pub(crate) focus: FocusMetrics,
 }
 
 impl Default for DevToolsState {
@@ -80,6 +95,7 @@ impl Default for DevToolsState {
             log_selected: 0,
             hide_framework_logs: false,
             fps_samples: VecDeque::new(),
+            focus: FocusMetrics::default(),
         }
     }
 }
@@ -618,7 +634,7 @@ mod tests {
 
         assert_eq!(
             state.resolved_panel_size(),
-            (Length::Px(40), Length::Px(11))
+            (Length::Px(40), Length::Px(12))
         );
     }
 

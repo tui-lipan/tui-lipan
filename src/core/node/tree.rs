@@ -90,12 +90,10 @@ impl Node {
         self.kind.is_tab_stop()
     }
 
-    #[allow(dead_code)]
     pub(crate) fn on_focus_callback(&self) -> Option<&crate::callback::Callback<()>> {
         self.kind.on_focus_callback()
     }
 
-    #[allow(dead_code)]
     pub(crate) fn on_blur_callback(&self) -> Option<&crate::callback::Callback<()>> {
         self.kind.on_blur_callback()
     }
@@ -1281,6 +1279,7 @@ mod tests {
             backdrop: None,
             opacity: 1.0,
             captures_focus: false,
+            auto_focus: false,
             captures_pointer,
             copy_text: None,
             copy_zone: None,

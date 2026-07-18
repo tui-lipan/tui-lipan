@@ -118,6 +118,8 @@ impl<C: Component> AppRunner<C> {
             }
         }
 
+        self.notify_focus_change();
+
         dirty
     }
 }

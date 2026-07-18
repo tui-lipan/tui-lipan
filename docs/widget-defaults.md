@@ -597,7 +597,7 @@ Source: `src/widgets/multi_select.rs:138` (`MultiSelect`).
 
 ## Modal
 
-Source: `src/widgets/modal.rs:36` (`Modal`).
+Source: `src/widgets/modal.rs:37` (`Modal`).
 
 | Field | Default initializer |
 |---|---|
@@ -612,11 +612,33 @@ Source: `src/widgets/modal.rs:36` (`Modal`).
 | `backdrop_style` | `Style::default()` |
 | `frame_style` | `Style::default()` |
 | `focus_style` | `StyleSlot::Inherit` |
+| `auto_focus` | `true` |
 | `border` | `true` |
 | `border_style` | `BorderStyle::Plain` |
 | `padding` | `1.into()` |
 | `title_style` | `Style::default()` |
 | `title_alignment` | `Align::Start` |
+
+## Popover
+
+Source: `src/widgets/popover/mod.rs:94` (`Popover`).
+
+| Field | Default initializer |
+|---|---|
+| `trigger` | `Box::new(crate::widgets::Spacer::new().into())` |
+| `content` | `Box::new(crate::widgets::Spacer::new().into())` |
+| `on_close` | `None` |
+| `open` | `false` |
+| `scope` | `OverlayScope::RootPortal` |
+| `placement` | `PopoverPlacement::default()` |
+| `offset` | `PopoverOffset::ZERO` |
+| `clamp` | `true` |
+| `auto_flip` | `true` |
+| `min_trigger_width` | `true` |
+| `fit_trigger_width` | `false` |
+| `max_width` | `None` |
+| `anchor` | `None` |
+| `auto_focus` | `true` |
 
 ## HexArea
 

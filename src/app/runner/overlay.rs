@@ -114,14 +114,18 @@ impl<C: Component> AppRunner<C> {
     }
 
     pub(crate) fn ensure_overlay_focus(&mut self) {
-        let Some(overlay_id) = self
+        let Some((overlay_id, auto_focus)) = self
             .core
             .tree
             .top_capturing_overlay()
-            .map(|overlay| overlay.id)
+            .map(|overlay| (overlay.id, overlay.auto_focus))
         else {
             return;
         };
+        if !auto_focus {
+            self.suspend_focus_for_empty_overlay();
+            return;
+        }
         let focused_in_overlay = self
             .focus
             .focused

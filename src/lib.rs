@@ -76,8 +76,8 @@ pub use crate::app::input::keymap::{FrameworkAction, FrameworkKeymap, UserKeymap
 #[cfg(all(target_arch = "wasm32", feature = "web"))]
 pub use crate::app::web_runner::{WebTerminal, mount_web};
 pub use crate::app::{
-    App, ContrastPolicy, FocusPolicy, InlineHeight, InlineStartupPolicy, ScreenBackground,
-    SurfaceMode, TextAreaNewlineBinding,
+    App, ContrastPolicy, FocusChanged, FocusEntry, FocusPolicy, InlineHeight, InlineStartupPolicy,
+    ScreenBackground, SurfaceMode, TextAreaNewlineBinding,
 };
 pub use crate::mockup::Mockup;
 
@@ -105,6 +105,7 @@ pub use crate::input::{
     ChordMatcher, ChordResult, KeyBinding, KeyBindingParseError, KeyBindings, format_binding,
     format_binding_lowercase, format_bindings, format_bindings_lowercase,
 };
+pub use crate::layout::tag::Tag;
 pub use crate::overlay::{OverlayId, OverlayScope, ToastHandle, ToastPlacement};
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::process::{

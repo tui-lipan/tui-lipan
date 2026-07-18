@@ -798,6 +798,9 @@ impl<C: Component> AppRunner<C> {
             self.focus.policy,
         );
         self.ensure_overlay_focus();
+        self.notify_focus_change();
+        #[cfg(feature = "devtools")]
+        self.update_devtools_focus_metrics();
         #[cfg(feature = "terminal")]
         self.emit_terminal_focus_change();
         self.mouse.hovered = self.mouse.hovered.filter(|id| self.core.tree.is_valid(*id));

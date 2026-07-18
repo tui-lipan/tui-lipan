@@ -847,3 +847,13 @@ single primary reason (`Edit`, `SelectionChange`, `CursorMove`,
 `VimModeChange`, or `Scroll`). The payload carries the canonical byte cursor and
 anchor, the current value, an optional `TextEditEvent` when the existing edit
 path produced one, and an optional Vim mode when a mode transition occurred.
+## Focus Events
+
+Focusable widgets expose `on_focus(Callback<()>)` and `on_blur(Callback<()>)`. App-wide
+observation is available through `App::on_focus_changed`, which receives a `FocusChanged` with
+optional `old` and `new` `FocusEntry` values. Each entry contains the widget's optional `Key` and
+public `Tag`.
+
+Focus transitions are emitted after reconciliation. Blur is emitted before focus, followed by the
+app hook. Keyed widgets suppress spurious blur/focus pairs when reconciliation replaces their
+runtime node; key focusable widgets when stable event identity matters.

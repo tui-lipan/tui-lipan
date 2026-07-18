@@ -53,6 +53,15 @@ fn containing_scope(tree: &NodeTree, id: NodeId) -> Option<NodeId> {
     None
 }
 
+pub(crate) fn traversal_focusables(tree: &NodeTree, focused: Option<NodeId>) -> Vec<NodeId> {
+    focused
+        .and_then(|id| containing_scope(tree, id))
+        .map_or_else(
+            || tree.focusables(),
+            |scope| tree.focusables_in_subtree(scope),
+        )
+}
+
 pub(crate) fn restore_focus(
     tree: &NodeTree,
     focused: &mut Option<NodeId>,
@@ -143,12 +152,7 @@ pub(crate) fn focus_next(
     focused_tag: &mut Option<Tag>,
     _policy: FocusPolicy,
 ) {
-    let focusables = focused
-        .and_then(|id| containing_scope(tree, id))
-        .map_or_else(
-            || tree.focusables(),
-            |scope| tree.focusables_in_subtree(scope),
-        );
+    let focusables = traversal_focusables(tree, *focused);
     if focusables.is_empty() {
         return;
     }
@@ -175,12 +179,7 @@ pub(crate) fn focus_prev(
     focused_tag: &mut Option<Tag>,
     _policy: FocusPolicy,
 ) {
-    let focusables = focused
-        .and_then(|id| containing_scope(tree, id))
-        .map_or_else(
-            || tree.focusables(),
-            |scope| tree.focusables_in_subtree(scope),
-        );
+    let focusables = traversal_focusables(tree, *focused);
     if focusables.is_empty() {
         return;
     }

@@ -2681,8 +2681,8 @@ fn devtools_stats_panel_uses_compact_default_size() {
         .expect("devtools panel node should exist");
 
     assert_eq!(panel_node.rect.w, 40);
-    assert_eq!(panel_node.rect.h, 11);
-    assert_eq!(panel_node.rect.y, 69); // anchored to bottom
+    assert_eq!(panel_node.rect.h, 12);
+    assert_eq!(panel_node.rect.y, 68); // anchored to bottom
 }
 
 #[cfg(feature = "devtools")]

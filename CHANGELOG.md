@@ -13,6 +13,10 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Added widget `on_focus`/`on_blur` delivery and `App::on_focus_changed`, with public
+  `FocusEntry`/`FocusChanged` payloads, keyed-remount deduplication, post-reconcile delivery, and
+  focus diagnostics in the `devtools` panel. `Modal` and root `Popover` auto-focus by default;
+  `.auto_focus(false)` retains their existing focus trap while suspending focus.
 - `TestBackend` now drives the full generic `DragSource`/`DropTarget` pipeline: `send_mouse`
   with `Down`/`Drag`/`Up` activates drags past the movement threshold and emits `on_drag_start`,
   `on_drag_over`, `on_drag_leave`, `on_drop`, and `on_drag_cancel`, enabling headless integration
@@ -226,6 +230,7 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Fixed initially-open root popovers resolving placement before the root node has a valid rect.
 - `TextArea` word wrapping no longer moves a completed full-width word to the next row when a
   trailing space is typed; the separator now occupies the existing caret continuation row.
 - `TextArea` wrap boundaries now keep downstream caret affinity, including after visible path and

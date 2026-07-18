@@ -59,6 +59,7 @@ WIDGETS: tuple[WidgetSpec, ...] = (
     WidgetSpec("ComboBox", "ComboBox", "src/widgets/combo_box.rs", "new"),
     WidgetSpec("MultiSelect", "MultiSelect", "src/widgets/multi_select.rs", "new"),
     WidgetSpec("Modal", "Modal", "src/widgets/modal.rs", "new"),
+    WidgetSpec("Popover", "Popover", "src/widgets/popover/mod.rs", "new"),
     WidgetSpec("HexArea", "HexArea", "src/widgets/hex_area/mod.rs", "default"),
     WidgetSpec("Hyperlink", "Hyperlink", "src/widgets/hyperlink.rs", "new"),
     WidgetSpec("PanView", "PanView", "src/widgets/pan_view/mod.rs", "new"),

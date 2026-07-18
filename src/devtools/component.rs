@@ -192,6 +192,22 @@ fn stats_body(ctx: &Context<DevToolsPanel>, state: &DevToolsState) -> Element {
     );
     let mut rows: Vec<Element> = Vec::new();
 
+    rows.push(
+        Text::new(format!(
+            "Focus: {:?} tag={:?} key={:?} id={:?} ring={} stack={}",
+            state.focus.policy,
+            state.focus.tag,
+            state.focus.key.as_ref().map(AsRef::<str>::as_ref),
+            state.focus.node_id,
+            state.focus.ring_len,
+            state.focus.stack_depth,
+        ))
+        .overflow(Overflow::Ellipsis)
+        .width(Length::Flex(1))
+        .style(secondary_style)
+        .into(),
+    );
+
     if let Some(frame) = state.latest_frame() {
         let total_ms = frame.total_duration.as_secs_f64() * 1000.0;
         let reconcile_ms = frame.reconcile_duration.as_secs_f64() * 1000.0;

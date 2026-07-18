@@ -23,8 +23,9 @@ macro_rules! impl_tags {
         @element_only_const_auto [ $($eo:ident,)* ]
     ) => {
         /// Tag for identifying element/node types during reconciliation.
+        #[allow(missing_docs)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-        pub(crate) enum Tag {
+        pub enum Tag {
             // All non-gated variants (every category)
             $( $v, )*
             $( $dnh, )*

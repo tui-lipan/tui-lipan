@@ -23,6 +23,7 @@ modal focus/backdrop semantics.
 | `title` | `impl Into<String>` | **Constructor** - dialog title |
 | `child` | `Element` | Dialog content |
 | `scope` | `OverlayScope` | `RootPortal` (default) or `Local` |
+| `auto_focus` | `bool` | Focus the first focusable descendant (`true` by default); `false` suspends focus while retaining the modal trap |
 | `on_close` | `Callback<()>` | Close callback (Esc/backdrop click) |
 | `width` | `Length` | Dialog width |
 | `height` | `Length` | Dialog height |
@@ -196,6 +197,7 @@ Floating content panel triggered by an element.
 | `content` | `Element` | Popover content |
 | `open` | `bool` | Controlled open state |
 | `scope` | `OverlayScope` | `RootPortal` (default) or `Local` |
+| `auto_focus` | `bool` | Focus the first focusable descendant (`true` by default); `false` suspends focus while retaining capture/trapping |
 | `on_close` | `Callback<()>` | Close callback |
 | `placement` | `PopoverPlacement` | `Above`, `Below`, `Left`, `Right` + start/center/end variants |
 | `offset` | `u16` | Distance from trigger |
@@ -206,7 +208,7 @@ Floating content panel triggered by an element.
 | `max_width` | `Length` | Cap the resolved popover width; percent resolves against overlay bounds |
 | `anchor` | `Option<(u16, u16)>` | Absolute content-coordinate anchor instead of trigger rect |
 
-`Popover` renders through the root overlay pipeline by default, so it appears above normal in-tree content. Use `.scope(OverlayScope::Local)` when it should stay inside parent stacking order, such as an autocomplete attached to content that can be covered by an inline sidebar layer.
+`Popover` renders through the root overlay pipeline by default, so it appears above normal in-tree content and captures focus while open. Use `.scope(OverlayScope::Local)` when it should stay inside parent stacking order, such as an autocomplete attached to content that can be covered by an inline sidebar layer. Use `.auto_focus(false)` for a capturing popover that must leave the app unfocused.
 
 By default, `Popover` uses `.min_trigger_width(true)`: the overlay is at least as wide as its trigger but can grow wider for long content. Use `.fit_trigger_width(true)` for exact trigger width, or `.max_width(...)` to cap content-driven growth.
 

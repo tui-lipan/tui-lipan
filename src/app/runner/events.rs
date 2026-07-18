@@ -488,7 +488,9 @@ impl<C: Component> AppRunner<C> {
     }
 
     pub(crate) fn dispatch_mouse(&mut self, mouse: MouseEvent) -> bool {
-        mouse_dispatch::dispatch_mouse_runner(self, mouse)
+        let handled = mouse_dispatch::dispatch_mouse_runner(self, mouse);
+        self.notify_focus_change();
+        handled
     }
 
     #[cfg(feature = "terminal")]

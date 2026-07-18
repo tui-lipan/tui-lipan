@@ -6,6 +6,11 @@ Keyboard **routing** in the component tree (bubbling, `on_key`) lives here. **Co
 
 Widgets receive focus if they have `focusable: true` (default for interactive widgets like `Input`, `List`, `Button`, etc.). Non-interactive widgets (`Text`, `Frame`) are not focusable by default.
 
+`App::focus_policy(...)` controls framework-initiated movement. `OnDemand` (default) starts
+unfocused and lets Tab, click, or an explicit request establish focus. `Auto` also selects the
+first focusable widget at startup and after focus is lost. `Manual` disables global Tab traversal,
+click-to-focus, and fallback; explicit context focus methods and capturing overlays remain active.
+
 ## Tab traversal
 
 | Key | Action |
@@ -56,6 +61,21 @@ fn view(&self, ctx: &Context<Self>) -> Element {
     }
 }
 ```
+
+`ctx.blur()` clears focus, while `ctx.focus_next()` and `ctx.focus_prev()` explicitly step the
+ring. Under `Auto`, the next reconciliation can restore the default target after a blur.
+
+## Focus events
+
+Focusable widgets support `.on_focus(Callback<()>)` and `.on_blur(Callback<()>)`. For app-wide
+observation, configure `App::on_focus_changed(|change: &FocusChanged| ...)`; widget callbacks are
+emitted first in `on_blur(old)` then `on_focus(new)` order, followed by the app hook. Notifications
+are produced only after dispatch or reconciliation finishes. Keyed remounts with the same non-empty
+key are deduplicated; key dynamic focus targets to avoid unkeyed remount blur/focus pairs.
+
+`FocusChanged::{old,new}` contain `FocusEntry { key, tag }`. If the old node disappeared during
+reconciliation, its widget blur callback cannot run, but the app hook still receives its retained
+entry.
 
 ## Composite widget focus
 

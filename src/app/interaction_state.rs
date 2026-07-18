@@ -309,6 +309,7 @@ pub(crate) struct FocusState {
     pub focused_key: Option<Key>,
     pub focused_tag: Option<Tag>,
     pub focus_stack: Vec<Option<Key>>,
+    pub last_notified: Option<(NodeId, crate::app::FocusEntry)>,
     pub window_focused: bool,
     #[cfg(feature = "terminal")]
     pub last_emitted_focus: Option<NodeId>,
@@ -324,6 +325,7 @@ impl Default for FocusState {
             focused_key: None,
             focused_tag: None,
             focus_stack: Vec::new(),
+            last_notified: None,
             window_focused: true,
             #[cfg(feature = "terminal")]
             last_emitted_focus: None,

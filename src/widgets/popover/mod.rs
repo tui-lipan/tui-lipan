@@ -79,6 +79,7 @@ pub struct Popover {
     pub(crate) fit_trigger_width: bool,
     pub(crate) max_width: Option<Length>,
     pub(crate) anchor: Option<(u16, u16)>,
+    pub(crate) auto_focus: bool,
 }
 
 impl Default for Popover {
@@ -104,6 +105,7 @@ impl Popover {
             fit_trigger_width: false,
             max_width: None,
             anchor: None,
+            auto_focus: true,
         }
     }
 
@@ -128,6 +130,14 @@ impl Popover {
     /// Set overlay scope (portal vs local rendering).
     pub fn scope(mut self, scope: OverlayScope) -> Self {
         self.scope = scope;
+        self
+    }
+
+    /// Control whether an open root-portal popover focuses its first focusable descendant.
+    ///
+    /// Disabling this keeps keyboard and pointer capture active while focus is suspended.
+    pub fn auto_focus(mut self, auto_focus: bool) -> Self {
+        self.auto_focus = auto_focus;
         self
     }
 
@@ -219,6 +229,7 @@ impl crate::layout::hash::LayoutHash for Popover {
         self.fit_trigger_width.hash(hasher);
         self.max_width.hash(hasher);
         self.anchor.hash(hasher);
+        self.auto_focus.hash(hasher);
         recurse(self.trigger.as_ref())?.hash(hasher);
         Some(())
     }

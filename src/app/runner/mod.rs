@@ -64,6 +64,7 @@ mod animation_ticker;
 mod drag;
 pub(crate) mod events;
 mod exit_view;
+mod focus_events;
 #[cfg(unix)]
 pub(crate) mod input_coordinator;
 mod key_dispatch;
@@ -313,6 +314,7 @@ pub struct AppRunner<C: Component> {
     pub(crate) surface: SurfaceDriver,
     pub(crate) core: RuntimeCore<C>,
     pub(crate) focus: FocusState,
+    on_focus_changed: Option<crate::app::context::FocusChangedHook>,
     pub(crate) drag: DragState,
     pub(crate) mouse: MouseTrackingState,
     pub(crate) animation: AnimationState,
@@ -567,12 +569,14 @@ impl<C: Component> AppRunner<C> {
             policy: app.focus_policy,
             ..FocusState::default()
         };
+        let on_focus_changed = app.on_focus_changed.clone();
 
         AppRunner {
             title: app.title,
             surface,
             core,
             focus,
+            on_focus_changed,
             drag: DragState::default(),
             mouse: MouseTrackingState::default(),
             animation,
@@ -1195,6 +1199,7 @@ impl<C: Component> AppRunner<C> {
                                 );
 
                                 let key_result = self.dispatch_layered_key(key);
+                                self.notify_focus_change();
 
                                 #[cfg(feature = "devtools")]
                                 {
