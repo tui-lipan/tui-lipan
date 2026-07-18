@@ -17,7 +17,7 @@ use crate::backend::ratatui_backend::render::{
     apply_copy_feedback_to_selection_style,
 };
 use crate::style::resolve::{
-    resolve_base_style, resolve_muted_style, resolve_scrollbar_theme, resolve_style_defaults,
+    resolve_base_style, resolve_focus_style_defaults, resolve_muted_style, resolve_scrollbar_theme,
 };
 use crate::style::{BorderStyle, Padding, Rect, ScrollbarVariant, Style, ThemeRole, resolve_slot};
 use crate::utils::scrollbar::ScrollbarMetricsCache;
@@ -2097,7 +2097,8 @@ pub(crate) fn render_text_area_node(
     let style = resolve_base_style(theme, ta.style);
     let hover_style = resolve_slot(theme, ThemeRole::Hover, &ta.hover_style);
     let focus_style = resolve_slot(theme, ThemeRole::Focus, &ta.focus_style);
-    let focus_content_style = resolve_style_defaults(ta.focus_content_style, theme.text_area.focus);
+    let focus_content_style =
+        resolve_focus_style_defaults(theme, ta.focus_content_style, theme.text_area.focus);
     let disabled_style = resolve_muted_style(theme, ta.disabled_style);
     let placeholder_style = resolve_muted_style(theme, ta.placeholder_style);
     let focus_placeholder_style = resolve_muted_style(theme, ta.focus_placeholder_style);

@@ -16,7 +16,9 @@ use crate::backend::ratatui_backend::render::{
     apply_copy_feedback_to_selection_style,
 };
 use crate::core::node::NodeId;
-use crate::style::resolve::{resolve_base_style, resolve_style_defaults};
+use crate::style::resolve::{
+    resolve_base_style, resolve_focus_style_defaults, resolve_scrollbar_theme,
+};
 use crate::style::{Rect, ScrollbarVariant, Span, Style, Theme, ThemeRole, resolve_slot};
 use crate::utils::GridSelection;
 use crate::utils::scrollbar::ScrollbarMetricsCache;
@@ -95,7 +97,7 @@ pub(crate) fn render_terminal(
     let hover_style = resolve_slot(theme, ThemeRole::Hover, &node.hover_style);
     let focus_style = resolve_slot(theme, ThemeRole::Focus, &node.focus_style);
     let focus_content_style =
-        resolve_style_defaults(node.focus_content_style, theme.terminal.focus);
+        resolve_focus_style_defaults(theme, node.focus_content_style, theme.terminal.focus);
 
     let mut content_style = style;
     let mut chrome_style = style;
@@ -219,15 +221,17 @@ pub(crate) fn render_terminal(
             .saturating_sub(node.scrollback_offset);
 
         let thumb = node.scrollbar_thumb.unwrap_or(DEFAULT_SCROLLBAR_THUMB);
-        let mut thumb_style = resolve_scrollbar_thumb_style(
-            is_focused,
+        let (thumb_style, thumb_focus_style, track_style) = resolve_scrollbar_theme(
+            theme,
             node.scrollbar_thumb_style,
             node.scrollbar_thumb_focus_style,
+            node.scrollbar_track_style,
         );
+        let mut thumb_style =
+            resolve_scrollbar_thumb_style(is_focused, thumb_style, thumb_focus_style);
         if !is_focused && node.scrollbar_thumb_style.is_none() {
             thumb_style = thumb_style.dim();
         }
-        let track_style = node.scrollbar_track_style;
 
         if use_integrated {
             let sb_x = parent_integrated_v

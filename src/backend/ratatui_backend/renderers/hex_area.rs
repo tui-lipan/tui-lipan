@@ -10,7 +10,8 @@ use crate::backend::ratatui_backend::common::{
 use crate::backend::ratatui_backend::render::RenderState;
 use crate::core::node::NodeId;
 use crate::style::resolve::{
-    resolve_base_style, resolve_hex_pending_edit_style, resolve_muted_style, resolve_style_defaults,
+    resolve_base_style, resolve_focus_style_defaults, resolve_hex_pending_edit_style,
+    resolve_muted_style,
 };
 use crate::style::{Rect, Theme, ThemeRole, resolve_slot};
 use crate::widgets::internal::HexAreaNode;
@@ -77,10 +78,11 @@ pub(crate) fn render_hex_area(
     let hover_style = resolve_slot(theme, ThemeRole::Hover, &node.hover_style);
     let focus_style = resolve_slot(theme, ThemeRole::Focus, &node.focus_style);
     let focus_content_style =
-        resolve_style_defaults(node.focus_content_style, theme.hex_area.focus);
+        resolve_focus_style_defaults(theme, node.focus_content_style, theme.hex_area.focus);
     let disabled_style = resolve_muted_style(theme, node.disabled_style);
     let selection_style = resolve_slot(theme, ThemeRole::TextSelection, &node.selection_style);
-    let cursor_style = resolve_style_defaults(node.cursor_style, theme.hex_area.cursor);
+    let cursor_style =
+        resolve_focus_style_defaults(theme, node.cursor_style, theme.hex_area.cursor);
     let pending_edit_style = resolve_hex_pending_edit_style(theme, node.pending_edit_style);
 
     let chrome_style = finalize_style(

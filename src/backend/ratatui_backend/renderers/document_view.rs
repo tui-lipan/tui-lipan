@@ -16,7 +16,9 @@ use crate::backend::ratatui_backend::common::{
     resolve_interactive_style, resolve_scrollbar_thumb_style, style_paints_bg,
     to_ratatui_border_set, to_ratatui_border_type, to_ratatui_rect, to_ratatui_style,
 };
-use crate::style::resolve::{resolve_base_style, resolve_scrollbar_theme, resolve_style_defaults};
+use crate::style::resolve::{
+    resolve_base_style, resolve_focus_style_defaults, resolve_scrollbar_theme,
+};
 use crate::style::{Rect, ScrollbarVariant, Style, Theme, ThemeRole, resolve_slot};
 use crate::widgets::ColumnAlign;
 use crate::widgets::DocumentLineNumberMode;
@@ -77,7 +79,7 @@ pub(crate) fn render_document_view(
     let hover_style = resolve_slot(theme, ThemeRole::Hover, &node.hover_style);
     let focus_style = resolve_slot(theme, ThemeRole::Focus, &node.focus_style);
     let focus_content_style =
-        resolve_style_defaults(node.focus_content_style, theme.document_view.focus);
+        resolve_focus_style_defaults(theme, node.focus_content_style, theme.document_view.focus);
     let selection_style = resolve_slot(theme, ThemeRole::TextSelection, &node.selection_style);
     let selection_style = copy_feedback_style
         .map(|flash| selection_style.patch(flash))
