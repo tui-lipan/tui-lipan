@@ -536,5 +536,8 @@ impl Component for Messenger {
 }
 
 fn main() -> Result<()> {
-    App::new().mount(Messenger).run()
+    App::new()
+        .focus_policy(FocusPolicy::Auto)
+        .mount(Messenger)
+        .run()
 }

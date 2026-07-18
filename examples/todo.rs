@@ -404,6 +404,7 @@ impl Component for TodoApp {
 
 fn main() -> Result<()> {
     App::new()
+        .focus_policy(FocusPolicy::Auto)
         .toast_placement(ToastPlacement::BottomEnd)
         .toast_gap(1)
         .mount(TodoApp)

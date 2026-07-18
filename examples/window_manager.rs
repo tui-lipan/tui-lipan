@@ -3271,6 +3271,7 @@ fn prune_closed_command(id: WindowId, delay: Duration) -> Command {
 
 fn main() -> Result<()> {
     App::new()
+        .focus_policy(FocusPolicy::Auto)
         .title("tui-lipan - Canvas Window Manager")
         .mount(WindowManagerDemo::default())
         .run()

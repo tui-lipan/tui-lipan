@@ -948,5 +948,8 @@ impl Component for LazygitDemo {
 }
 
 fn main() -> Result<()> {
-    App::new().mount(LazygitDemo).run()
+    App::new()
+        .focus_policy(FocusPolicy::Auto)
+        .mount(LazygitDemo)
+        .run()
 }

@@ -517,7 +517,11 @@ where
         let Some(id) = id else {
             return false;
         };
-        self.focus_for_node(id)
+        if !self.core.tree.node(id).is_focusable() || self.focused == Some(id) {
+            return false;
+        }
+        self.set_focused(id);
+        true
     }
 
     /// Inject a text paste event through the same focused-widget pipeline as the real runner.

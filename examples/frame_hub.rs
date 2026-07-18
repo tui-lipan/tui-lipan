@@ -783,6 +783,7 @@ fn merge_mode_demo(mode: BorderMergeMode, title: &str) -> Element {
 
 fn main() -> Result<()> {
     App::new()
+        .focus_policy(FocusPolicy::Auto)
         .title("Frame Hub")
         .mount(FrameHub {
             section: 0,
