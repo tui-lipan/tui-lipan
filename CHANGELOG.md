@@ -179,6 +179,11 @@ While the crate is on `0.x.y`:
   movement while preserving explicit focus APIs and capturing-overlay focus traps. (breaking)
 - Added `Context::blur()`, `Context::focus_next()`, `Context::focus_prev()`, and
   `TestBackend::blur()` for explicit focus control.
+- Added `tab_stop`, `on_focus`, and `on_blur` to focusable widgets. Renamed
+  `Input::tab_order` to `Input::tab_stop` and TextArea's literal-tab width setter from
+  `tab_stop` to `tab_display_width`. (breaking)
+- Accordion, DraggableTabBar, Hyperlink, PanView, and Tabs are no longer focusable by default;
+  opt in with `.focusable(true)`. (breaking)
 - Renamed stack containers' `FocusPolicy` accordion-sizing enum to `FocusSizing` and
   `.focus_policy(...)` builder to `.focus_sizing(...)`. Tree's distinct
   `.focus_policy(FocusAccordion)` API is unchanged. (breaking)

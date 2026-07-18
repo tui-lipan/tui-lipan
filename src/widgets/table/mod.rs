@@ -333,6 +333,9 @@ pub struct Table {
     pub(crate) disabled: bool,
     pub(crate) disabled_style: Style,
     pub(crate) focusable: bool,
+    pub(crate) tab_stop: bool,
+    pub(crate) on_focus: Option<Callback<()>>,
+    pub(crate) on_blur: Option<Callback<()>>,
     pub(crate) show_scroll_indicators: bool,
     pub(crate) scroll_indicator_style: Style,
 
@@ -385,6 +388,9 @@ impl Default for Table {
             disabled: false,
             disabled_style: Style::default(),
             focusable: true,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
             show_scroll_indicators: false,
             scroll_indicator_style: Style::default(),
             inspector: false,
@@ -694,6 +700,24 @@ impl Table {
     /// Set focusable.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.focusable = focusable;
+        self
+    }
+
+    /// Control whether the table participates in sequential focus navigation.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the table receives focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the table loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
         self
     }
 

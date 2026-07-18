@@ -31,6 +31,9 @@ pub struct HexAreaNode {
     pub disabled: bool,
     pub disabled_style: Style,
     pub focusable: bool,
+    pub tab_stop: bool,
+    pub on_focus: Option<Callback<()>>,
+    pub on_blur: Option<Callback<()>>,
     pub on_cursor_change: Option<Callback<HexAreaCursorEvent>>,
     pub on_change: Option<Callback<HexAreaChangeEvent>>,
     pub on_edit: Option<Callback<HexAreaEditEvent>>,
@@ -42,6 +45,18 @@ pub struct HexAreaNode {
 impl WidgetNode for HexAreaNode {
     fn is_focusable(&self) -> bool {
         self.focusable
+    }
+
+    fn is_tab_stop(&self) -> bool {
+        self.focusable && self.tab_stop
+    }
+
+    fn on_focus_callback(&self) -> Option<&Callback<()>> {
+        self.on_focus.as_ref()
+    }
+
+    fn on_blur_callback(&self) -> Option<&Callback<()>> {
+        self.on_blur.as_ref()
     }
 
     fn is_hoverable(&self) -> bool {
@@ -78,6 +93,9 @@ impl From<HexArea> for HexAreaNode {
             disabled: value.disabled,
             disabled_style: value.disabled_style,
             focusable: value.focusable,
+            tab_stop: value.tab_stop,
+            on_focus: value.on_focus,
+            on_blur: value.on_blur,
             on_cursor_change: value.on_cursor_change,
             on_change: value.on_change,
             on_edit: value.on_edit,

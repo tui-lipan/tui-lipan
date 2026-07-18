@@ -91,7 +91,7 @@ pub struct TextAreaNode {
     pub newline_binding: Option<TextAreaNewlineBinding>,
     pub tab_width: u8,
     pub insert_tab: bool,
-    pub tab_stop: u8,
+    pub tab_display_width: u8,
     pub on_change: Option<Callback<TextAreaEvent>>,
     pub on_edit: Option<Callback<TextEditEvent>>,
     pub on_editor_state_change: Option<Callback<TextAreaStateChangeEvent>>,
@@ -119,6 +119,9 @@ pub struct TextAreaNode {
     pub image_placeholder_focus_style: Style,
     pub image_placeholder_hover_style: Style,
     pub focusable: bool,
+    pub tab_stop: bool,
+    pub on_focus: Option<Callback<()>>,
+    pub on_blur: Option<Callback<()>>,
     /// Custom gutter spans (per logical line, 0-based). When set, overrides
     /// the built-in `line_numbers` gutter.
     pub gutter_lines: Option<Arc<Vec<Vec<crate::style::Span>>>>,
@@ -314,7 +317,7 @@ impl TextAreaNode {
                     let logical_cursor_col = crate::utils::text::visual_col_with_virtual(
                         &self.value[logical_line_start..byte],
                         0,
-                        self.tab_stop as usize,
+                        self.tab_display_width as usize,
                         sentinel.as_ref(),
                         &insertions,
                     );
@@ -357,6 +360,18 @@ impl TextAreaNode {
 impl WidgetNode for TextAreaNode {
     fn is_focusable(&self) -> bool {
         self.focusable
+    }
+
+    fn is_tab_stop(&self) -> bool {
+        self.focusable && self.tab_stop
+    }
+
+    fn on_focus_callback(&self) -> Option<&Callback<()>> {
+        self.on_focus.as_ref()
+    }
+
+    fn on_blur_callback(&self) -> Option<&Callback<()>> {
+        self.on_blur.as_ref()
     }
 
     fn has_on_click(&self) -> bool {
@@ -490,7 +505,7 @@ impl From<super::TextArea> for TextAreaNode {
             newline_binding: value.newline_binding,
             tab_width: value.tab_width,
             insert_tab: value.insert_tab,
-            tab_stop: value.tab_stop,
+            tab_display_width: value.tab_display_width,
             on_change: value.on_change,
             on_edit: value.on_edit,
             on_editor_state_change: value.on_editor_state_change,
@@ -518,6 +533,9 @@ impl From<super::TextArea> for TextAreaNode {
             image_placeholder_focus_style: value.image_placeholder_focus_style,
             image_placeholder_hover_style: value.image_placeholder_hover_style,
             focusable: value.focusable,
+            tab_stop: value.tab_stop,
+            on_focus: value.on_focus,
+            on_blur: value.on_blur,
             gutter_lines: value.gutter_lines,
             gutter_col_width: value.gutter_col_width,
             gutter_gap: value.gutter_gap,
@@ -583,7 +601,7 @@ mod tests {
                 scrollbar_over_border: false,
                 scrollbar_gap: 0,
                 read_only: false,
-                tab_stop: node.tab_stop,
+                tab_stop: node.tab_display_width,
                 sentinel_ph_width: 0,
                 sentinel_count: 0,
                 custom_sentinel_hash: 0,

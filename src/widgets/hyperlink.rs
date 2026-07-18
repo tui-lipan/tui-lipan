@@ -35,6 +35,9 @@ pub struct Hyperlink {
     align: Align,
     padding: Padding,
     focusable: bool,
+    tab_stop: bool,
+    on_focus: Option<Callback<()>>,
+    on_blur: Option<Callback<()>>,
     disabled: bool,
     visited: bool,
     on_activate: Option<Callback<HyperlinkEvent>>,
@@ -56,7 +59,10 @@ impl Hyperlink {
             height: Length::Auto,
             align: Align::Start,
             padding: Padding::default(),
-            focusable: true,
+            focusable: false,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
             disabled: false,
             visited: false,
             on_activate: None,
@@ -166,6 +172,24 @@ impl Hyperlink {
         self
     }
 
+    /// Control whether the hyperlink participates in tab traversal.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the hyperlink gains focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the hyperlink loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
+        self
+    }
+
     /// Set disabled state.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
@@ -210,6 +234,9 @@ impl From<Hyperlink> for Element {
             align,
             padding,
             focusable,
+            tab_stop,
+            on_focus,
+            on_blur,
             disabled,
             visited,
             on_activate,
@@ -228,7 +255,15 @@ impl From<Hyperlink> for Element {
             .align(align)
             .padding(padding)
             .focusable(focusable && !disabled)
+            .tab_stop(tab_stop)
             .disabled(disabled);
+
+        if let Some(cb) = on_focus {
+            button = button.on_focus(cb);
+        }
+        if let Some(cb) = on_blur {
+            button = button.on_blur(cb);
+        }
 
         if let Some(cb) = on_activate.clone() {
             let event_label = label.clone();

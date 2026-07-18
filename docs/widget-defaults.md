@@ -9,9 +9,41 @@ It is intended as an agent-facing quick reference for avoiding noisy builder cha
 
 Regenerate with `python3 scripts/generate-widget-defaults.py --write`. Check freshness with `python3 scripts/generate-widget-defaults.py --check`.
 
+## Accordion
+
+Source: `src/widgets/accordion/mod.rs:45` (`Accordion`).
+
+| Field | Default initializer |
+|---|---|
+| `items` | `Vec::new()` |
+| `on_toggle` | `None` |
+| `exclusive` | `false` |
+| `gap` | `0` |
+| `padding` | `Padding::default()` |
+| `border` | `false` |
+| `border_style` | `BorderStyle::Plain` |
+| `style` | `Style::default()` |
+| `header_style` | `Style::default()` |
+| `header_hover_style` | `StyleSlot::Inherit` |
+| `header_focus_style` | `StyleSlot::Inherit` |
+| `header_padding` | `Padding::default()` |
+| `content_padding` | `Padding::default()` |
+| `content_border` | `false` |
+| `content_border_style` | `BorderStyle::Plain` |
+| `content_style` | `Style::default()` |
+| `disabled_style` | `Style::default()` |
+| `expanded_icon` | `"▼ ".into()` |
+| `collapsed_icon` | `"▶ ".into()` |
+| `focusable` | `false` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
+| `width` | `Length::Flex(1)` |
+| `height` | `Length::Auto` |
+
 ## Button
 
-Source: `src/widgets/button/mod.rs:90` (`Button`).
+Source: `src/widgets/button/mod.rs:100` (`Button`).
 
 | Field | Default initializer |
 |---|---|
@@ -38,22 +70,43 @@ Source: `src/widgets/button/mod.rs:90` (`Button`).
 | `on_click` | `None` |
 | `on_key` | `None` |
 | `focusable` | `true` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
 
-## Toast
+## Checkbox
 
-Source: `src/widgets/toast/mod.rs:39` (`Toast`).
+Source: `src/widgets/checkbox/mod.rs:182` (`Checkbox`).
 
 | Field | Default initializer |
 |---|---|
-| `message` | `constructor/local value (not a default)` |
-| `duration` | `3.0` |
-| `dismiss_on_click` | `true` |
-| `copyable` | `false` |
-| `copy_affordance` | `ToastCopyAffordance::BorderGlyph` |
+| `state` | `if checked { CheckboxState::Checked } else { CheckboxState::Unchecked }` |
+| `label` | `None` |
+| `variant` | `CheckboxVariant::Bracket` |
+| `gap` | `1` |
+| `style` | `Style::default()` |
+| `hover_style` | `StyleSlot::Inherit` |
+| `focus_style` | `StyleSlot::Inherit` |
+| `checked_style` | `Style::default()` |
+| `unchecked_style` | `Style::default()` |
+| `indeterminate_style` | `Style::default()` |
+| `label_style` | `Style::default()` |
+| `padding` | `Padding::default()` |
+| `disabled` | `false` |
+| `disabled_style` | `Style::default()` |
+| `width` | `Length::Auto` |
+| `height` | `Length::Auto` |
+| `on_toggle` | `None` |
+| `on_click` | `None` |
+| `on_key` | `None` |
+| `focusable` | `true` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
 
 ## Input
 
-Source: `src/widgets/input/mod.rs:83` (`Input`).
+Source: `src/widgets/input/mod.rs:85` (`Input`).
 
 | Field | Default initializer |
 |---|---|
@@ -96,11 +149,13 @@ Source: `src/widgets/input/mod.rs:83` (`Input`).
 | `on_key` | `None` |
 | `key_interceptor` | `None` |
 | `focusable` | `true` |
-| `tab_order` | `true` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
 
 ## TextArea
 
-Source: `src/widgets/text_area/mod.rs:1182` (`TextArea`).
+Source: `src/widgets/text_area/mod.rs:451` (`TextArea`).
 
 | Field | Default initializer |
 |---|---|
@@ -164,10 +219,13 @@ Source: `src/widgets/text_area/mod.rs:1182` (`TextArea`).
 | `disabled_style` | `Style::default()` |
 | `read_only` | `false` |
 | `focusable` | `true` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
 | `newline_binding` | `None` |
 | `tab_width` | `0` |
 | `insert_tab` | `false` |
-| `tab_stop` | `8` |
+| `tab_display_width` | `8` |
 | `scrollbar` | `true` |
 | `scrollbar_config` | `ScrollbarConfig::default()` |
 | `h_scrollbar` | `false` |
@@ -181,6 +239,7 @@ Source: `src/widgets/text_area/mod.rs:1182` (`TextArea`).
 | `peer_source_lines` | `None` |
 | `split_wrap_sync` | `None` |
 | `split_wrap_side` | `None` |
+| `diff_context_separator_click` | `None` |
 | `split_wrap_padding_gutter_style` | `None` |
 | `split_wrap_padding_style` | `None` |
 | `copy_excluded_bytes` | `None` |
@@ -197,7 +256,7 @@ Source: `src/widgets/text_area/mod.rs:1182` (`TextArea`).
 
 ## List
 
-Source: `src/widgets/list/mod.rs:1192` (`List`).
+Source: `src/widgets/list/mod.rs:1288` (`List`).
 
 | Field | Default initializer |
 |---|---|
@@ -215,6 +274,7 @@ Source: `src/widgets/list/mod.rs:1192` (`List`).
 | `active_symbol_position` | `ListSymbolPosition::Left` |
 | `active_symbol_style` | `None` |
 | `selection_symbol` | `None` |
+| `selection_symbol_right` | `None` |
 | `selection_symbol_style` | `None` |
 | `unfocused_selection_symbol_style` | `None` |
 | `unselected_symbol` | `None` |
@@ -243,6 +303,9 @@ Source: `src/widgets/list/mod.rs:1192` (`List`).
 | `disabled` | `false` |
 | `disabled_style` | `Style::default()` |
 | `focusable` | `true` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
 | `show_scroll_indicators` | `false` |
 | `scroll_indicator_style` | `Style::default()` |
 | `empty_text` | `None` |
@@ -251,7 +314,7 @@ Source: `src/widgets/list/mod.rs:1192` (`List`).
 
 ## ListConfig
 
-Source: `src/widgets/list/mod.rs:66` (`ListConfig`).
+Source: `src/widgets/list/mod.rs:78` (`ListConfig`).
 
 | Field | Default initializer |
 |---|---|
@@ -261,19 +324,24 @@ Source: `src/widgets/list/mod.rs:66` (`ListConfig`).
 | `style` | `Style::default()` |
 | `selection_style` | `StyleSlot::Inherit` |
 | `unfocused_selection_style` | `StyleSlot::Inherit` |
+| `item_hover_style` | `None` |
 | `selection_full_width` | `false` |
 | `selection_symbol` | `None` |
+| `selection_symbol_right` | `None` |
 | `selection_symbol_style` | `None` |
 | `unfocused_selection_symbol_style` | `None` |
 | `symbol_column` | `true` |
 | `gutter_gap` | `0` |
 | `gutter_for_non_selectable` | `false` |
+| `item_horizontal_padding` | `Padding::default()` |
+| `header_horizontal_padding` | `Padding::default()` |
+| `empty_text_style` | `Style::default()` |
 | `scrollbar` | `false` |
 | `scrollbar_config` | `ScrollbarConfig::default()` |
 
 ## ScrollView
 
-Source: `src/widgets/scroll_view/mod.rs:687` (`ScrollView`).
+Source: `src/widgets/scroll_view/mod.rs:90` (`ScrollView`).
 
 | Field | Default initializer |
 |---|---|
@@ -285,6 +353,7 @@ Source: `src/widgets/scroll_view/mod.rs:687` (`ScrollView`).
 | `scroll_keys` | `ScrollKeymap::default()` |
 | `scroll_wheel` | `true` |
 | `scroll_wheel_multiplier` | `None` |
+| `h_scroll_wheel_multiplier` | `None` |
 | `scroll_wheel_behavior` | `ScrollWheelBehavior::default()` |
 | `ambient_page_scroll` | `false` |
 | `focusable` | `false` |
@@ -298,6 +367,9 @@ Source: `src/widgets/scroll_view/mod.rs:687` (`ScrollView`).
 | `clip_mode` | `ScrollClip::default()` |
 | `estimated_child_height` | `3` |
 | `scroll_state_key` | `None` |
+| `axis` | `ScrollAxis::default()` |
+| `h_scrollbar` | `false` |
+| `h_scrollbar_config` | `ScrollbarConfig::default()` |
 | `children` | `Vec::new()` |
 
 ## VStack/HStack shared StackProps
@@ -322,7 +394,7 @@ Note: Applies to the shared props backing stack container defaults.
 
 ## Frame/FrameNode
 
-Source: `src/widgets/frame/node.rs:299` (`FrameNode`).
+Source: `src/widgets/frame/node.rs:301` (`FrameNode`).
 
 Note: `Frame` is the public builder; these defaults come from its `FrameNode` backing type.
 
@@ -400,7 +472,7 @@ Source: `src/widgets/progress/mod.rs:239` (`ProgressBar`).
 
 ## Spinner
 
-Source: `src/widgets/spinner/mod.rs:154` (`Spinner`).
+Source: `src/widgets/spinner/mod.rs:184` (`Spinner`).
 
 | Field | Default initializer |
 |---|---|
@@ -416,7 +488,7 @@ Source: `src/widgets/spinner/mod.rs:154` (`Spinner`).
 
 ## Select
 
-Source: `src/widgets/select/mod.rs:53` (`Select`).
+Source: `src/widgets/select/mod.rs:51` (`Select`).
 
 | Field | Default initializer |
 |---|---|
@@ -442,18 +514,16 @@ Source: `src/widgets/select/mod.rs:53` (`Select`).
 | `button_suffix_style` | `Style::default()` |
 | `list_title` | `None` |
 | `list_title_style` | `Style::default()` |
-| `list_config` | `ListConfig { border: true, border_style: BorderStyle::Plain, padding: Padding::default(), style: Style::default(), selection_style: StyleSlot::Inherit, unfocused_selection_style: StyleSlot::Inherit, selection_full_width: false, selection_symbol: Some("> ".into()), selection_symbol_style: None, unfocused_selection_symbol_style: None, symbol_column: true, gutter_gap: 0, gutter_for_non_selectable: false, scrollbar: false, scrollbar_config: ScrollbarConfig::default(), }` |
-| `list_hover_style` | `None` |
+| `list_config` | `ListConfig { border: true, border_style: BorderStyle::Plain, padding: Padding::default(), style: Style::default(), selection_style: StyleSlot::Inherit, unfocused_selection_style: StyleSlot::Inherit, selection_full_width: false, selection_symbol: Some("> ".into()), selection_symbol_right: None, selection_symbol_style: None, unfocused_selection_symbol_style: None, symbol_column: true, gutter_gap: 0, gutter_for_non_selectable: false, item_horizontal_padding: Padding::default(), header_horizontal_padding: Padding::default(), empty_text_style: Style::default(), item_hover_style: None, scrollbar: false, scrollbar_config: ScrollbarConfig::default(), }` |
 | `list_width` | `None` |
 | `list_height` | `Length::Px(6)` |
 | `match_button_width` | `false` |
 | `list_empty_text` | `None` |
-| `list_empty_text_style` | `Style::default()` |
 | `list_disabled_style` | `Style::default()` |
 
 ## ComboBox
 
-Source: `src/widgets/combo_box.rs:68` (`ComboBox`).
+Source: `src/widgets/combo_box.rs:66` (`ComboBox`).
 
 | Field | Default initializer |
 |---|---|
@@ -485,10 +555,8 @@ Source: `src/widgets/combo_box.rs:68` (`ComboBox`).
 | `input_suffix_closed` | `" ▼".into()` |
 | `input_suffix_style` | `Style::default()` |
 | `input_focus_suffix_style` | `Style::default()` |
-| `list_config` | `ListConfig { border: true, border_style: BorderStyle::Plain, padding: Padding::default(), style: Style::default(), selection_style: StyleSlot::Inherit, unfocused_selection_style: StyleSlot::Inherit, selection_full_width: false, selection_symbol: None, selection_symbol_style: None, unfocused_selection_symbol_style: None, symbol_column: true, gutter_gap: 0, gutter_for_non_selectable: false, scrollbar: false, scrollbar_config: ScrollbarConfig::default(), }` |
-| `list_hover_style` | `None` |
+| `list_config` | `ListConfig { border: true, border_style: BorderStyle::Plain, padding: Padding::default(), style: Style::default(), selection_style: StyleSlot::Inherit, unfocused_selection_style: StyleSlot::Inherit, selection_full_width: false, selection_symbol: None, selection_symbol_right: None, selection_symbol_style: None, unfocused_selection_symbol_style: None, symbol_column: true, gutter_gap: 0, gutter_for_non_selectable: false, item_horizontal_padding: Padding::default(), header_horizontal_padding: Padding::default(), empty_text_style: Style::default(), item_hover_style: None, scrollbar: false, scrollbar_config: ScrollbarConfig::default(), }` |
 | `empty_text` | `Some("No matches".into())` |
-| `empty_text_style` | `Style::default()` |
 | `on_query_change` | `None` |
 | `on_open_change` | `None` |
 | `on_active_index_change` | `None` |
@@ -496,7 +564,7 @@ Source: `src/widgets/combo_box.rs:68` (`ComboBox`).
 
 ## MultiSelect
 
-Source: `src/widgets/multi_select.rs:140` (`MultiSelect`).
+Source: `src/widgets/multi_select.rs:138` (`MultiSelect`).
 
 | Field | Default initializer |
 |---|---|
@@ -508,8 +576,7 @@ Source: `src/widgets/multi_select.rs:140` (`MultiSelect`).
 | `title_style` | `Style::default()` |
 | `width` | `Length::Flex(1)` |
 | `height` | `Length::Flex(1)` |
-| `list_config` | `ListConfig { border: true, border_style: BorderStyle::Plain, padding: Padding::default(), style: Style::default(), selection_style: StyleSlot::Inherit, unfocused_selection_style: StyleSlot::Inherit, selection_full_width: false, selection_symbol: Some("[ ] ".into()), selection_symbol_style: None, unfocused_selection_symbol_style: None, symbol_column: true, gutter_gap: 0, gutter_for_non_selectable: false, scrollbar: false, scrollbar_config: ScrollbarConfig::default(), }` |
-| `item_hover_style` | `None` |
+| `list_config` | `ListConfig { border: true, border_style: BorderStyle::Plain, padding: Padding::default(), style: Style::default(), selection_style: StyleSlot::Inherit, unfocused_selection_style: StyleSlot::Inherit, selection_full_width: false, selection_symbol: Some("[ ] ".into()), selection_symbol_right: None, selection_symbol_style: None, unfocused_selection_symbol_style: None, symbol_column: true, gutter_gap: 0, gutter_for_non_selectable: false, item_horizontal_padding: Padding::default(), header_horizontal_padding: Padding::default(), empty_text_style: Style::default(), item_hover_style: None, scrollbar: false, scrollbar_config: ScrollbarConfig::default(), }` |
 | `active_symbol` | `Some("[x] ".into())` |
 | `active_symbol_style` | `None` |
 | `active_style` | `StyleSlot::Inherit` |
@@ -521,7 +588,6 @@ Source: `src/widgets/multi_select.rs:140` (`MultiSelect`).
 | `disabled` | `false` |
 | `disabled_style` | `Style::default()` |
 | `empty_text` | `None` |
-| `empty_text_style` | `Style::default()` |
 | `on_active_index_change` | `None` |
 | `on_toggle` | `None` |
 | `on_change` | `None` |
@@ -529,7 +595,7 @@ Source: `src/widgets/multi_select.rs:140` (`MultiSelect`).
 
 ## Modal
 
-Source: `src/widgets/modal.rs:33` (`Modal`).
+Source: `src/widgets/modal.rs:36` (`Modal`).
 
 | Field | Default initializer |
 |---|---|
@@ -540,18 +606,84 @@ Source: `src/widgets/modal.rs:33` (`Modal`).
 | `width` | `Length::Px(60)` |
 | `height` | `Length::Auto` |
 | `max_height` | `None` |
-| `reserve_max_height` | `false` |
+| `reserve_height` | `None` |
 | `backdrop_style` | `Style::default()` |
 | `frame_style` | `Style::default()` |
+| `focus_style` | `StyleSlot::Inherit` |
 | `border` | `true` |
 | `border_style` | `BorderStyle::Plain` |
 | `padding` | `1.into()` |
 | `title_style` | `Style::default()` |
 | `title_alignment` | `Align::Start` |
 
+## HexArea
+
+Source: `src/widgets/hex_area/mod.rs:114` (`HexArea`).
+
+| Field | Default initializer |
+|---|---|
+| `bytes` | `Arc::from([])` |
+| `cursor` | `0` |
+| `anchor` | `None` |
+| `read_only` | `true` |
+| `bytes_per_row` | `16` |
+| `show_ascii` | `true` |
+| `show_offsets` | `true` |
+| `uppercase_hex` | `true` |
+| `scroll_offset` | `None` |
+| `style` | `Style::default()` |
+| `hover_style` | `StyleSlot::Inherit` |
+| `focus_style` | `StyleSlot::Inherit` |
+| `focus_content_style` | `Style::default()` |
+| `selection_style` | `StyleSlot::Inherit` |
+| `cursor_style` | `Style::default()` |
+| `pending_edit_style` | `Style::default()` |
+| `border` | `true` |
+| `border_style` | `BorderStyle::Plain` |
+| `padding` | `Padding::default()` |
+| `width` | `Length::Flex(1)` |
+| `height` | `Length::Flex(1)` |
+| `disabled` | `false` |
+| `disabled_style` | `Style::default()` |
+| `focusable` | `true` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
+| `on_cursor_change` | `None` |
+| `on_change` | `None` |
+| `on_edit` | `None` |
+| `on_scroll` | `None` |
+| `on_key` | `None` |
+
+## Hyperlink
+
+Source: `src/widgets/hyperlink.rs:50` (`Hyperlink`).
+
+| Field | Default initializer |
+|---|---|
+| `label` | `constructor/local value (not a default)` |
+| `href` | `None` |
+| `style` | `Style::new().underline()` |
+| `hover_style` | `StyleSlot::Extend(Style::new().underline())` |
+| `focus_style` | `StyleSlot::Extend(Style::new().underline().bold())` |
+| `disabled_style` | `Style::default()` |
+| `visited_style` | `None` |
+| `width` | `Length::Auto` |
+| `height` | `Length::Auto` |
+| `align` | `Align::Start` |
+| `padding` | `Padding::default()` |
+| `focusable` | `false` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
+| `disabled` | `false` |
+| `visited` | `false` |
+| `on_activate` | `None` |
+| `on_key` | `None` |
+
 ## PanView
 
-Source: `src/widgets/pan_view/mod.rs:235` (`PanView`).
+Source: `src/widgets/pan_view/mod.rs:237` (`PanView`).
 
 | Field | Default initializer |
 |---|---|
@@ -565,13 +697,106 @@ Source: `src/widgets/pan_view/mod.rs:235` (`PanView`).
 | `drag_to_pan` | `true` |
 | `keymap` | `PanKeymap::default()` |
 | `key_step` | `(4, 2)` |
-| `focusable` | `true` |
+| `focusable` | `false` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
 | `pan_state_key` | `None` |
 | `child` | `None` |
 
+## Slider
+
+Source: `src/widgets/slider/mod.rs:85` (`Slider`).
+
+| Field | Default initializer |
+|---|---|
+| `value` | `constructor/local value (not a default)` |
+| `min` | `0.0` |
+| `max` | `100.0` |
+| `step` | `1.0` |
+| `on_change` | `None` |
+| `on_click` | `None` |
+| `style` | `Style::default()` |
+| `filled_track_style` | `Style::default()` |
+| `filled_track_gradient` | `None` |
+| `thumb_style` | `Style::default()` |
+| `thumb_gradient` | `None` |
+| `label` | `None` |
+| `label_style` | `Style::default()` |
+| `show_value` | `true` |
+| `width` | `Length::Flex(1)` |
+| `height` | `Length::Px(1)` |
+| `padding` | `Padding::default()` |
+| `focusable` | `true` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
+| `focus_style` | `StyleSlot::Inherit` |
+| `focus_thumb_style` | `StyleSlot::Inherit` |
+| `hover_thumb_style` | `StyleSlot::Inherit` |
+| `thumb_symbol` | `"●".to_string()` |
+| `track_symbol` | `"─".to_string()` |
+| `filled_track_symbol` | `"━".to_string()` |
+| `hover_thumb_symbol` | `None` |
+
+## Table
+
+Source: `src/widgets/table/mod.rs:356` (`Table`).
+
+| Field | Default initializer |
+|---|---|
+| `rows` | `Arc::new([])` |
+| `header` | `None` |
+| `widths` | `Vec::new()` |
+| `column_styles` | `Vec::new()` |
+| `row_styles` | `Vec::new()` |
+| `selected` | `0` |
+| `column_spacing` | `1` |
+| `row_gap` | `0` |
+| `style` | `Style::default()` |
+| `hover_style` | `StyleSlot::Inherit` |
+| `item_hover_style` | `StyleSlot::Inherit` |
+| `alternating_row_style` | `None` |
+| `row_style_full_width` | `false` |
+| `selection_style` | `StyleSlot::Inherit` |
+| `selection_symbol` | `None` |
+| `selection_symbol_style` | `None` |
+| `unselected_symbol` | `None` |
+| `border` | `false` |
+| `border_style` | `BorderStyle::Plain` |
+| `padding` | `Padding::default()` |
+| `scrollbar` | `false` |
+| `scrollbar_config` | `ScrollbarConfig::default()` |
+| `scroll_keys` | `ScrollKeymap::default()` |
+| `scroll_wheel` | `true` |
+| `width` | `Length::Flex(1)` |
+| `height` | `Length::Flex(1)` |
+| `on_select` | `None` |
+| `on_activate` | `None` |
+| `on_click` | `None` |
+| `on_scroll_to` | `None` |
+| `on_key` | `None` |
+| `disabled` | `false` |
+| `disabled_style` | `Style::default()` |
+| `focusable` | `true` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
+| `show_scroll_indicators` | `false` |
+| `scroll_indicator_style` | `Style::default()` |
+| `inspector` | `false` |
+| `inspector_key_style` | `Style::default()` |
+| `inspector_value_style` | `Style::default()` |
+| `inspector_section_style` | `Style::default()` |
+| `inspector_separator_style` | `Style::default()` |
+| `inspector_indent_size` | `2` |
+| `inspector_collapsed_symbol` | `Arc::from("▸")` |
+| `inspector_expanded_symbol` | `Arc::from("▾")` |
+| `inspector_separator_char` | `'─'` |
+
 ## Tabs
 
-Source: `src/widgets/tabs/mod.rs:104` (`Tabs`).
+Source: `src/widgets/tabs/mod.rs:108` (`Tabs`).
 
 | Field | Default initializer |
 |---|---|
@@ -583,6 +808,7 @@ Source: `src/widgets/tabs/mod.rs:104` (`Tabs`).
 | `tab_hover_style` | `StyleSlot::Inherit` |
 | `active_style` | `StyleSlot::Inherit` |
 | `divider` | `'│'` |
+| `caps` | `None` |
 | `overflow` | `TabsOverflow::Clip` |
 | `border` | `false` |
 | `border_style` | `BorderStyle::Plain` |
@@ -594,11 +820,14 @@ Source: `src/widgets/tabs/mod.rs:104` (`Tabs`).
 | `on_key` | `None` |
 | `disabled` | `false` |
 | `disabled_style` | `Style::default()` |
-| `focusable` | `true` |
+| `focusable` | `false` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
 
 ## DraggableTabBar
 
-Source: `src/widgets/draggable_tab_bar/mod.rs:456` (`DraggableTabBar`).
+Source: `src/widgets/draggable_tab_bar/mod.rs:461` (`DraggableTabBar`).
 
 | Field | Default initializer |
 |---|---|
@@ -651,11 +880,14 @@ Source: `src/widgets/draggable_tab_bar/mod.rs:456` (`DraggableTabBar`).
 | `on_key` | `None` |
 | `disabled` | `false` |
 | `disabled_style` | `Style::default()` |
-| `focusable` | `true` |
+| `focusable` | `false` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
 
 ## DocumentView
 
-Source: `src/widgets/document_view/mod.rs:316` (`DocumentView`).
+Source: `src/widgets/document_view/mod.rs:329` (`DocumentView`).
 
 | Field | Default initializer |
 |---|---|
@@ -702,6 +934,9 @@ Source: `src/widgets/document_view/mod.rs:316` (`DocumentView`).
 | `scroll_wheel` | `true` |
 | `scroll_wheel_multiplier` | `None` |
 | `focusable` | `true` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
 | `on_scroll` | `None` |
 | `on_click` | `None` |
 | `on_select` | `None` |
@@ -718,6 +953,7 @@ Source: `src/widgets/document_view/mod.rs:316` (`DocumentView`).
 | `split_wrap_sync` | `None` |
 | `split_wrap_side` | `None` |
 | `diff_split_pane` | `None` |
+| `diff_context_separator_click` | `None` |
 | `split_wrap_padding_gutter_style` | `None` |
 | `split_wrap_padding_style` | `None` |
 | `multi_click_select` | `true` |
@@ -726,9 +962,287 @@ Source: `src/widgets/document_view/mod.rs:316` (`DocumentView`).
 | `measure_cache` | `RefCell::new([None, None])` |
 | `measure_format_cache` | `RefCell::new(None)` |
 
+## FileTree
+
+Source: `src/widgets/file_tree/mod.rs:215` (`FileTree`).
+
+| Field | Default initializer |
+|---|---|
+| `root` | `constructor/local value (not a default)` |
+| `show_hidden` | `false` |
+| `max_entries_per_dir` | `2_000` |
+| `show_icons` | `true` |
+| `icon_style` | `FileIconStyle::default()` |
+| `icon_palette` | `FileIconPalette::default()` |
+| `icon_overrides` | `HashMap::new()` |
+| `show_arrows` | `true` |
+| `indent_style` | `crate::widgets::IndentStyle::None` |
+| `indent_guide_style` | `Style::default()` |
+| `directory_icon` | `"[D]".into()` |
+| `opened_directory_icon` | `"[D]".into()` |
+| `file_icon` | `"[F]".into()` |
+| `symlink_icon` | `"[L]".into()` |
+| `other_icon` | `"[?]".into()` |
+| `directory_label_style` | `Style::default()` |
+| `file_label_style` | `Style::default()` |
+| `loading_label` | `"loading...".into()` |
+| `error_prefix` | `"error:".into()` |
+| `width` | `Length::Flex(1)` |
+| `height` | `Length::Flex(1)` |
+| `style` | `Style::default()` |
+| `hover_style` | `StyleSlot::Inherit` |
+| `item_hover_style` | `StyleSlot::Inherit` |
+| `selection_style` | `StyleSlot::Inherit` |
+| `unfocused_selection_style` | `StyleSlot::Inherit` |
+| `selected` | `None` |
+| `selected_path` | `None` |
+| `reveal_path` | `None` |
+| `select_path` | `None` |
+| `force_scroll_to_selected` | `false` |
+| `expanded_paths` | `None` |
+| `selection_symbol` | `None` |
+| `selection_symbol_style` | `None` |
+| `unfocused_selection_symbol_style` | `None` |
+| `scrollbar` | `true` |
+| `scrollbar_config` | `ScrollbarConfig::default()` |
+| `scroll_keys` | `ScrollKeymap::default()` |
+| `scroll_wheel` | `true` |
+| `show_scroll_indicators` | `false` |
+| `scroll_indicator_style` | `Style::default()` |
+| `empty_text` | `Some("Directory is empty".into())` |
+| `empty_text_style` | `Style::default()` |
+| `explorer` | `false` |
+| `explorer_placeholder` | `"Find files...".into()` |
+| `explorer_prefix` | `" ".into()` |
+| `explorer_input_border` | `false` |
+| `explorer_input_border_style` | `BorderStyle::Plain` |
+| `explorer_input_padding` | `Padding { left: 1, right: 0, top: 0, bottom: 0, }` |
+| `explorer_input_style` | `Style::default()` |
+| `explorer_input_focus_style` | `StyleSlot::Inherit` |
+| `explorer_input_focus_content_style` | `Style::default()` |
+| `explorer_placeholder_style` | `Style::default()` |
+| `explorer_focus_placeholder_style` | `Style::default()` |
+| `explorer_match_style` | `Style::default()` |
+| `explorer_divider` | `true` |
+| `explorer_divider_join_frame` | `true` |
+| `explorer_divider_char` | `'─'` |
+| `explorer_divider_style` | `Style::default()` |
+| `activate_on_click` | `true` |
+| `focusable` | `true` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
+| `keymap` | `TreeKeymap::default()` |
+| `git_status` | `true` |
+| `highlight_changed_labels` | `false` |
+| `change_source` | `FileTreeChangeSource::default()` |
+| `change_view` | `FileTreeChangeView::default()` |
+| `git_diff_stats` | `false` |
+| `git_icon_style` | `GitIconStyle::NerdFont` |
+| `git_refresh_nonce` | `0` |
+| `git_marker_modified` | `"M".into()` |
+| `git_marker_added` | `"A".into()` |
+| `git_marker_deleted` | `"D".into()` |
+| `git_marker_renamed` | `"R".into()` |
+| `git_marker_untracked` | `"?".into()` |
+| `git_marker_conflicted` | `"!".into()` |
+| `git_style_modified` | `default_git_style_modified()` |
+| `git_style_added` | `default_git_style_added()` |
+| `git_style_deleted` | `default_git_style_deleted()` |
+| `git_style_renamed` | `default_git_style_renamed()` |
+| `git_style_untracked` | `default_git_style_untracked()` |
+| `git_style_conflicted` | `default_git_style_conflicted()` |
+| `change_suffix_style` | `Style::default()` |
+| `change_suffix_priority` | `FileTreeSuffixPriority::default()` |
+| `path_styles` | `HashMap::new()` |
+| `on_select` | `None` |
+| `on_activate` | `None` |
+| `on_toggle` | `None` |
+
+## SearchPalette
+
+Source: `src/widgets/search_palette/mod.rs:721` (`SearchPalette`).
+
+| Field | Default initializer |
+|---|---|
+| `items` | `Vec::new()` |
+| `entries` | `Vec::new()` |
+| `sync_match_limit` | `DEFAULT_SYNC_MATCH_LIMIT` |
+| `sync_selection` | `false` |
+| `initial_query` | `"".into()` |
+| `initial_selected_item_index` | `None` |
+| `query` | `None` |
+| `placeholder` | `"Search...".into()` |
+| `width` | `Length::Flex(1)` |
+| `height` | `Length::Flex(1)` |
+| `max_width` | `None` |
+| `max_height` | `None` |
+| `input_prefix` | `None` |
+| `input_suffix` | `None` |
+| `input_border` | `false` |
+| `input_divider` | `true` |
+| `input_divider_style` | `Style::default()` |
+| `input_divider_join_frame` | `true` |
+| `input_caret_shape` | `CaretShape::default()` |
+| `input_caret_color` | `None` |
+| `input_border_style` | `BorderStyle::Plain` |
+| `input_padding` | `Padding { left: 1, right: 1, top: 0, bottom: 0, }` |
+| `input_style` | `Style::default()` |
+| `input_hover_style` | `StyleSlot::Inherit` |
+| `input_focus_style` | `StyleSlot::Inherit` |
+| `input_focus_content_style` | `Style::default()` |
+| `input_placeholder_style` | `Style::default()` |
+| `input_focus_placeholder_style` | `Style::default()` |
+| `input_prefix_style` | `Style::default()` |
+| `input_focus_prefix_style` | `Style::default()` |
+| `input_suffix_style` | `Style::default()` |
+| `input_focus_suffix_style` | `Style::default()` |
+| `list_config` | `ListConfig { border: false, border_style: BorderStyle::Plain, padding: Padding::default(), style: Style::default(), selection_style: StyleSlot::Inherit, unfocused_selection_style: StyleSlot::Inherit, selection_full_width: false, selection_symbol: Some("> ".into()), selection_symbol_right: None, selection_symbol_style: None, unfocused_selection_symbol_style: None, symbol_column: true, gutter_gap: 0, gutter_for_non_selectable: false, item_horizontal_padding: Padding::default(), header_horizontal_padding: Padding::default(), empty_text_style: Style::default(), item_hover_style: None, scrollbar: false, scrollbar_config: ScrollbarConfig::default(), }` |
+| `list_symbol_column` | `None` |
+| `list_hover_style` | `StyleSlot::Inherit` |
+| `list_active_style` | `StyleSlot::Inherit` |
+| `list_active_symbol` | `None` |
+| `list_active_symbol_style` | `None` |
+| `list_unselected_symbol` | `None` |
+| `list_focusable` | `true` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
+| `empty_text` | `Some("No matches".into())` |
+| `item_style` | `Style::default()` |
+| `active_item_style` | `None` |
+| `header_style` | `Style::default()` |
+| `description_style` | `Style::default()` |
+| `active_description_style` | `None` |
+| `focused_description_style` | `None` |
+| `description_placement` | `DescriptionPlacement::Inline` |
+| `description_separator` | `None` |
+| `description_selection` | `true` |
+| `description_overflow` | `DescriptionOverflow::Truncate` |
+| `match_style` | `Style::default()` |
+| `show_scores` | `false` |
+| `score_gradient` | `None` |
+| `score_range` | `None` |
+| `preserve_groups` | `false` |
+| `navigation_wrap` | `true` |
+| `match_mode` | `SearchMatchMode::default()` |
+| `case_matching` | `CaseMatching::Smart` |
+| `normalization` | `Normalization::Smart` |
+| `input_key_interceptor` | `None` |
+| `on_query_change` | `None` |
+| `on_select` | `None` |
+| `on_activate` | `None` |
+| `render_item` | `None` |
+| `item_status` | `None` |
+| `item_gutter` | `None` |
+
+## Tree
+
+Source: `src/widgets/tree/mod.rs:27` (`Tree`).
+
+| Field | Default initializer |
+|---|---|
+| `root` | `constructor/local value (not a default)` |
+| `selected` | `None` |
+| `force_scroll_to_selected` | `false` |
+| `gap` | `0` |
+| `icon_gap` | `1` |
+| `show_icons` | `true` |
+| `expanded_icon` | `"▼".into()` |
+| `collapsed_icon` | `"▶".into()` |
+| `leaf_icon` | `None` |
+| `icon_style` | `Style::default()` |
+| `width` | `Length::Flex(1)` |
+| `height` | `Length::Flex(1)` |
+| `style` | `Style::default()` |
+| `hover_style` | `StyleSlot::Inherit` |
+| `item_hover_style` | `StyleSlot::Inherit` |
+| `selection_style` | `StyleSlot::Inherit` |
+| `unfocused_selection_style` | `StyleSlot::Inherit` |
+| `selection_symbol` | `None` |
+| `selection_symbol_style` | `None` |
+| `unfocused_selection_symbol_style` | `None` |
+| `scrollbar` | `false` |
+| `scrollbar_config` | `ScrollbarConfig::default()` |
+| `scroll_keys` | `ScrollKeymap::default()` |
+| `scroll_wheel` | `true` |
+| `show_scroll_indicators` | `false` |
+| `scroll_indicator_style` | `Style::default()` |
+| `empty_text` | `None` |
+| `empty_text_style` | `Style::default()` |
+| `activate_on_click` | `true` |
+| `focusable` | `true` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
+| `on_select` | `None` |
+| `on_activate` | `None` |
+| `on_toggle` | `None` |
+| `keymap` | `TreeKeymap::default()` |
+| `focus_policy` | `None` |
+| `indent_style` | `IndentStyle::None` |
+| `indent_guide_style` | `Style::default()` |
+| `indent_gradient` | `None` |
+| `solid_indent_connector_gap` | `false` |
+| `selection_full_width` | `false` |
+| `unselected_symbol` | `None` |
+| `key_interceptor` | `None` |
+
+## Terminal
+
+Source: `src/widgets/terminal/mod.rs:45` (`Terminal`).
+
+| Field | Default initializer |
+|---|---|
+| `content` | `Arc::from("")` |
+| `cursor_row` | `0` |
+| `cursor_col` | `0` |
+| `show_cursor` | `true` |
+| `cursor_shape` | `CaretShape::Block` |
+| `cursor_blinking` | `true` |
+| `color_lines` | `None` |
+| `color_cache_key` | `0` |
+| `scrollback_offset` | `0` |
+| `total_scrollback_rows` | `0` |
+| `mouse_mode` | `MouseModeState::default()` |
+| `key_modes` | `TerminalKeyModes::default()` |
+| `selection` | `None` |
+| `selection_controlled` | `false` |
+| `selection_style` | `StyleSlot::Inherit` |
+| `on_selection` | `None` |
+| `on_resize` | `None` |
+| `on_mouse_forward` | `None` |
+| `scroll_wheel` | `true` |
+| `on_scroll` | `None` |
+| `on_scroll_to` | `None` |
+| `style` | `Style::default()` |
+| `hover_style` | `StyleSlot::Inherit` |
+| `focus_style` | `StyleSlot::Inherit` |
+| `focus_content_style` | `Style::default()` |
+| `border` | `false` |
+| `border_style` | `BorderStyle::default()` |
+| `padding` | `Padding::default()` |
+| `scrollbar` | `true` |
+| `scrollbar_variant` | `ScrollbarVariant::default()` |
+| `scrollbar_gap` | `0` |
+| `scrollbar_thumb` | `None` |
+| `scrollbar_thumb_style` | `None` |
+| `scrollbar_thumb_focus_style` | `None` |
+| `scrollbar_track_style` | `None` |
+| `h_scrollbar` | `true` |
+| `h_scrollbar_variant` | `ScrollbarVariant::default()` |
+| `width` | `Length::Flex(1)` |
+| `height` | `Length::Flex(1)` |
+| `focusable` | `true` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
+| `on_key` | `None` |
+| `on_input` | `None` |
+
 ## DiffView
 
-Source: `src/widgets/diff_view/mod.rs:255` (`DiffView`).
+Source: `src/widgets/diff_view/mod.rs:285` (`DiffView`).
 
 Note: `DiffView::new()` delegates to `new_internal("", "", None)`; argument-backed content fields are shown as constructor/local values.
 
@@ -778,14 +1292,14 @@ Note: `DiffView::new()` delegates to `new_internal("", "", None)`; argument-back
 | `context_lines` | `None` |
 | `show_context_separator` | `true` |
 | `context_separator_text` | `default_context_separator_text()` |
-| `context_separator_min_lines` | `2` |
-| `context_expand_lines` | `20` |
+| `context_separator_min_lines` | `default_context_separator_min_lines()` |
+| `context_expand_lines` | `default_context_expand_lines()` |
 | `expanded_contexts` | `Vec::new()` |
 | `pane_cache` | `RefCell::new(Vec::new())` |
 
 ## ManagedTerminal
 
-Source: `src/widgets/managed_terminal.rs:89` (`ManagedTerminalProps`).
+Source: `src/widgets/managed_terminal.rs:95` (`ManagedTerminalProps`).
 
 Note: `ManagedTerminal` is a component; defaults come from `ManagedTerminalProps`.
 
@@ -802,6 +1316,9 @@ Note: `ManagedTerminal` is a component; defaults come from `ManagedTerminalProps
 | `scroll_wheel` | `true` |
 | `style` | `crate::style::Style::default()` |
 | `focusable` | `true` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
 | `width` | `Length::Flex(1)` |
 | `height` | `Length::Flex(1)` |
 

@@ -26,7 +26,9 @@ class WidgetSpec:
 
 
 WIDGETS: tuple[WidgetSpec, ...] = (
+    WidgetSpec("Accordion", "Accordion", "src/widgets/accordion/mod.rs", "default"),
     WidgetSpec("Button", "Button", "src/widgets/button/mod.rs", "new"),
+    WidgetSpec("Checkbox", "Checkbox", "src/widgets/checkbox/mod.rs", "new"),
     WidgetSpec("Input", "Input", "src/widgets/input/mod.rs", "new"),
     WidgetSpec("TextArea", "TextArea", "src/widgets/text_area/mod.rs", "new"),
     WidgetSpec("List", "List", "src/widgets/list/mod.rs", "default"),
@@ -57,7 +59,11 @@ WIDGETS: tuple[WidgetSpec, ...] = (
     WidgetSpec("ComboBox", "ComboBox", "src/widgets/combo_box.rs", "new"),
     WidgetSpec("MultiSelect", "MultiSelect", "src/widgets/multi_select.rs", "new"),
     WidgetSpec("Modal", "Modal", "src/widgets/modal.rs", "new"),
+    WidgetSpec("HexArea", "HexArea", "src/widgets/hex_area/mod.rs", "default"),
+    WidgetSpec("Hyperlink", "Hyperlink", "src/widgets/hyperlink.rs", "new"),
     WidgetSpec("PanView", "PanView", "src/widgets/pan_view/mod.rs", "new"),
+    WidgetSpec("Slider", "Slider", "src/widgets/slider/mod.rs", "new"),
+    WidgetSpec("Table", "Table", "src/widgets/table/mod.rs", "default"),
     WidgetSpec("Tabs", "Tabs", "src/widgets/tabs/mod.rs", "new"),
     WidgetSpec(
         "DraggableTabBar",
@@ -66,6 +72,25 @@ WIDGETS: tuple[WidgetSpec, ...] = (
         "new",
     ),
     WidgetSpec("DocumentView", "DocumentView", "src/widgets/document_view/mod.rs", "new"),
+    WidgetSpec(
+        "FileTree",
+        "FileTree",
+        "src/widgets/file_tree/mod.rs",
+        "nested-new:FileTreeProps",
+    ),
+    WidgetSpec(
+        "SearchPalette",
+        "SearchPalette",
+        "src/widgets/search_palette/mod.rs",
+        "nested-default:SearchPaletteProps",
+    ),
+    WidgetSpec(
+        "Tree",
+        "Tree",
+        "src/widgets/tree/mod.rs",
+        "nested-new:TreeProps",
+    ),
+    WidgetSpec("Terminal", "Terminal", "src/widgets/terminal/mod.rs", "default"),
     WidgetSpec(
         "DiffView",
         "DiffView",
@@ -153,7 +178,9 @@ def find_matching(text: str, open_index: int) -> int:
 
 
 def find_impl_block(text: str, type_name: str) -> tuple[int, int] | None:
-    pattern = re.compile(rf"\bimpl(?:\s*<[^>]*>)?\s+{re.escape(type_name)}\s*{{")
+    pattern = re.compile(
+        rf"\bimpl(?:\s*<[^>]*>)?\s+{re.escape(type_name)}(?:\s*<[^>]*>)?\s*{{"
+    )
     match = pattern.search(text)
     if not match:
         return None
@@ -203,6 +230,50 @@ def extract_function_initializer(text: str, type_name: str, function_name: str) 
         raise ValueError(f"fn {function_name} body for {type_name} not found")
     fn_close = find_matching(text, fn_open)
     return extract_self_initializer(text, fn_open, fn_close)
+
+
+def extract_nested_new_initializer(
+    text: str, type_name: str, nested_type: str
+) -> tuple[str, int]:
+    impl_block = find_impl_block(text, type_name)
+    if impl_block is None:
+        raise ValueError(f"impl {type_name} not found")
+    impl_open, impl_close = impl_block
+    body = text[impl_open:impl_close]
+    match = re.search(r"\bpub\s+fn\s+new\s*(?:<[^>]*>\s*)?\(", body)
+    if not match:
+        raise ValueError(f"pub fn new for {type_name} not found")
+    fn_start = impl_open + match.start()
+    fn_open = text.find("{", fn_start, impl_close)
+    if fn_open < 0:
+        raise ValueError(f"pub fn new body for {type_name} not found")
+    fn_close = find_matching(text, fn_open)
+    nested_match = re.search(rf"\b{re.escape(nested_type)}\s*{{", text[fn_open:fn_close])
+    if not nested_match:
+        raise ValueError(f"{nested_type} initializer not found in {type_name}::new")
+    open_index = fn_open + nested_match.end() - 1
+    close_index = find_matching(text, open_index)
+    return text[open_index + 1 : close_index], line_number(text, open_index)
+
+
+def extract_nested_default_initializer(
+    text: str, type_name: str, nested_type: str
+) -> tuple[str, int]:
+    pattern = re.compile(
+        rf"\bimpl(?:\s*<[^>]*>)?\s+Default\s+for\s+{re.escape(type_name)}"
+        rf"(?:\s*<[^>]*>)?\s*{{"
+    )
+    match = pattern.search(text)
+    if not match:
+        raise ValueError(f"impl Default for {type_name} not found")
+    impl_open = text.find("{", match.start())
+    impl_close = find_matching(text, impl_open)
+    nested_match = re.search(rf"\b{re.escape(nested_type)}\s*{{", text[impl_open:impl_close])
+    if not nested_match:
+        raise ValueError(f"{nested_type} initializer not found in {type_name}::default")
+    open_index = impl_open + nested_match.end() - 1
+    close_index = find_matching(text, open_index)
+    return text[open_index + 1 : close_index], line_number(text, open_index)
 
 
 def extract_self_initializer(text: str, start: int, end: int) -> tuple[str, int]:
@@ -347,6 +418,14 @@ def extract_widget(spec: WidgetSpec) -> tuple[list[tuple[str, str]], int]:
         elif spec.extractor.startswith("fn:"):
             initializer, line = extract_function_initializer(
                 text, spec.source_type, spec.extractor.removeprefix("fn:")
+            )
+        elif spec.extractor.startswith("nested-new:"):
+            initializer, line = extract_nested_new_initializer(
+                text, spec.source_type, spec.extractor.removeprefix("nested-new:")
+            )
+        elif spec.extractor.startswith("nested-default:"):
+            initializer, line = extract_nested_default_initializer(
+                text, spec.source_type, spec.extractor.removeprefix("nested-default:")
             )
         else:
             try:

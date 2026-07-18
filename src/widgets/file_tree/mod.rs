@@ -279,6 +279,9 @@ impl FileTree {
                 explorer_divider_style: Style::default(),
                 activate_on_click: true,
                 focusable: true,
+                tab_stop: true,
+                on_focus: None,
+                on_blur: None,
                 keymap: TreeKeymap::default(),
                 git_status: true,
                 highlight_changed_labels: false,
@@ -800,6 +803,24 @@ impl FileTree {
     /// Control focusability.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.props.focusable = focusable;
+        self
+    }
+
+    /// Control whether the file tree participates in Tab / Shift+Tab traversal.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.props.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the file tree gains focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.props.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the file tree loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.props.on_blur = Some(cb);
         self
     }
 

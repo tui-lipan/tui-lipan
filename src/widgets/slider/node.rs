@@ -23,6 +23,9 @@ pub struct SliderNode {
     pub show_value: bool,
     pub padding: Padding,
     pub focusable: bool,
+    pub tab_stop: bool,
+    pub on_focus: Option<Callback<()>>,
+    pub on_blur: Option<Callback<()>>,
     pub focus_style: StyleSlot,
     pub focus_thumb_style: StyleSlot,
     pub hover_thumb_style: StyleSlot,
@@ -35,6 +38,15 @@ pub struct SliderNode {
 impl WidgetNode for SliderNode {
     fn is_focusable(&self) -> bool {
         self.focusable
+    }
+    fn is_tab_stop(&self) -> bool {
+        self.focusable && self.tab_stop
+    }
+    fn on_focus_callback(&self) -> Option<&Callback<()>> {
+        self.on_focus.as_ref()
+    }
+    fn on_blur_callback(&self) -> Option<&Callback<()>> {
+        self.on_blur.as_ref()
     }
     fn has_on_click(&self) -> bool {
         self.on_click.is_some() || self.on_change.is_some()
@@ -71,6 +83,9 @@ impl From<Slider> for SliderNode {
             show_value: value.show_value,
             padding: value.padding,
             focusable: value.focusable,
+            tab_stop: value.tab_stop,
+            on_focus: value.on_focus,
+            on_blur: value.on_blur,
             focus_style: value.focus_style,
             focus_thumb_style: value.focus_thumb_style,
             hover_thumb_style: value.hover_thumb_style,

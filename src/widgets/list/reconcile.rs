@@ -253,6 +253,9 @@ pub fn reconcile_list(tree: &mut NodeTree, id: NodeId, list: &List, rect: Rect) 
             on_scroll_to: list.on_scroll_to.clone(),
             on_key: list.on_key.clone(),
             focusable: list.focusable,
+            tab_stop: list.tab_stop,
+            on_focus: list.on_focus.clone(),
+            on_blur: list.on_blur.clone(),
         };
 
         if let Some(forced) = next_scroll_override {

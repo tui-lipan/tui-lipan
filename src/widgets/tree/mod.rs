@@ -55,6 +55,9 @@ impl Tree {
                 empty_text_style: Style::default(),
                 activate_on_click: true,
                 focusable: true,
+                tab_stop: true,
+                on_focus: None,
+                on_blur: None,
                 on_select: None,
                 on_activate: None,
                 on_toggle: None,
@@ -349,6 +352,24 @@ impl Tree {
     /// Control whether the tree is focusable.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.props.focusable = focusable;
+        self
+    }
+
+    /// Control whether the tree participates in tab focus traversal.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.props.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the tree gains focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.props.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the tree loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.props.on_blur = Some(cb);
         self
     }
 

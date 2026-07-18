@@ -387,7 +387,7 @@ impl<C: Component> AppRunner<C> {
                         gutter_col_width: text_area.gutter_col_width,
                         gutter_gap: text_area.gutter_gap,
                         geometry: &text_area.geometry,
-                        tab_stop: text_area.tab_stop as usize,
+                        tab_stop: text_area.tab_display_width as usize,
                     },
                 )
             }

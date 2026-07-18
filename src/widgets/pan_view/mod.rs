@@ -225,6 +225,9 @@ pub struct PanView {
     pub(crate) keymap: PanKeymap,
     pub(crate) key_step: (u16, u16),
     pub(crate) focusable: bool,
+    pub(crate) tab_stop: bool,
+    pub(crate) on_focus: Option<Callback<()>>,
+    pub(crate) on_blur: Option<Callback<()>>,
     pub(crate) pan_state_key: Option<Key>,
     pub(crate) child: Option<Box<Element>>,
 }
@@ -242,7 +245,10 @@ impl Default for PanView {
             drag_to_pan: true,
             keymap: PanKeymap::default(),
             key_step: (4, 2),
-            focusable: true,
+            focusable: false,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
             pan_state_key: None,
             child: None,
         }
@@ -343,6 +349,24 @@ impl PanView {
     /// Allow the pan view to receive focus.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.focusable = focusable;
+        self
+    }
+
+    /// Control whether the pan view participates in sequential focus navigation.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the pan view receives focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the pan view loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
         self
     }
 

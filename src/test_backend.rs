@@ -2048,6 +2048,57 @@ mod tests {
         assert_eq!(backend.focused_key(), None);
     }
 
+    struct TabStopRoot;
+
+    impl Component for TabStopRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            VStack::new()
+                .child(Input::new("").tab_stop(false).key("input"))
+                .child(Button::new("button").key("button"))
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.request_focus("input");
+            Update::full()
+        }
+    }
+
+    #[test]
+    fn tab_stop_false_skips_traversal_but_allows_explicit_focus() {
+        let mut backend = TestBackend::new(TabStopRoot);
+
+        backend.focus_next();
+        assert_eq!(backend.focused_key(), Some(&Key::from("button")));
+
+        backend.dispatch(()).expect("focus request should dispatch");
+        assert_eq!(backend.focused_key(), Some(&Key::from("input")));
+
+        backend.blur();
+        let input_rect = backend
+            .core
+            .tree
+            .iter()
+            .find(|node| node.key.as_ref() == Some(&Key::from("input")))
+            .map(|node| node.rect)
+            .expect("input should be mounted");
+        backend
+            .send_mouse(MouseEvent {
+                x: input_rect.x.max(0) as u16,
+                y: input_rect.y.max(0) as u16,
+                kind: MouseKind::Down(MouseButton::Left),
+                mods: KeyMods::NONE,
+            })
+            .expect("input click should dispatch");
+        assert_eq!(backend.focused_key(), Some(&Key::from("input")));
+    }
+
     fn click_button<C: Component>(backend: &mut TestBackend<C>) {
         let rect = backend
             .core

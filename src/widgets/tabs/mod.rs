@@ -98,6 +98,9 @@ pub struct Tabs {
     pub(crate) disabled: bool,
     pub(crate) disabled_style: Style,
     pub(crate) focusable: bool,
+    pub(crate) tab_stop: bool,
+    pub(crate) on_focus: Option<Callback<()>>,
+    pub(crate) on_blur: Option<Callback<()>>,
 }
 
 impl Default for Tabs {
@@ -123,7 +126,10 @@ impl Default for Tabs {
             on_key: None,
             disabled: false,
             disabled_style: Style::default(),
-            focusable: true,
+            focusable: false,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
         }
     }
 }
@@ -328,6 +334,24 @@ impl Tabs {
     /// Control whether the node is focusable.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.focusable = focusable;
+        self
+    }
+
+    /// Control whether the tabs participate in sequential focus navigation.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the tabs receive focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the tabs lose focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
         self
     }
 

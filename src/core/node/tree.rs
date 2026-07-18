@@ -82,8 +82,18 @@ impl Node {
         self.kind.is_focusable()
     }
 
-    pub fn in_tab_order(&self) -> bool {
-        self.kind.in_tab_order()
+    pub fn is_tab_stop(&self) -> bool {
+        self.kind.is_tab_stop()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn on_focus_callback(&self) -> Option<&crate::callback::Callback<()>> {
+        self.kind.on_focus_callback()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn on_blur_callback(&self) -> Option<&crate::callback::Callback<()>> {
+        self.kind.on_blur_callback()
     }
 
     /// Returns true if this node has a mouse handler.
@@ -763,7 +773,7 @@ impl NodeTree {
 
     fn collect_focusables(&self, id: NodeId, out: &mut Vec<NodeId>) {
         let node = self.node(id);
-        if node.in_tab_order() {
+        if node.is_tab_stop() {
             out.push(id);
         }
         for &child in &node.children {

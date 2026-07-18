@@ -99,6 +99,9 @@ pub struct HexArea {
     pub(crate) disabled: bool,
     pub(crate) disabled_style: Style,
     pub(crate) focusable: bool,
+    pub(crate) tab_stop: bool,
+    pub(crate) on_focus: Option<Callback<()>>,
+    pub(crate) on_blur: Option<Callback<()>>,
     pub(crate) on_cursor_change: Option<Callback<HexAreaCursorEvent>>,
     pub(crate) on_change: Option<Callback<HexAreaChangeEvent>>,
     pub(crate) on_edit: Option<Callback<HexAreaEditEvent>>,
@@ -133,6 +136,9 @@ impl Default for HexArea {
             disabled: false,
             disabled_style: Style::default(),
             focusable: true,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
             on_cursor_change: None,
             on_change: None,
             on_edit: None,
@@ -346,6 +352,24 @@ impl HexArea {
     /// Control whether the node is focusable.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.focusable = focusable;
+        self
+    }
+
+    /// Control whether the hex area participates in Tab / Shift+Tab traversal.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the hex area gains focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the hex area loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
         self
     }
 

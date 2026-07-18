@@ -55,6 +55,9 @@ pub struct TableNode {
     pub on_scroll_to: Option<Callback<usize>>,
     pub on_key: Option<KeyHandler>,
     pub focusable: bool,
+    pub tab_stop: bool,
+    pub on_focus: Option<Callback<()>>,
+    pub on_blur: Option<Callback<()>>,
     pub inspector: bool,
     pub inspector_key_style: Style,
     pub inspector_value_style: Style,
@@ -69,6 +72,18 @@ pub struct TableNode {
 impl WidgetNode for TableNode {
     fn is_focusable(&self) -> bool {
         self.focusable
+    }
+
+    fn is_tab_stop(&self) -> bool {
+        self.focusable && self.tab_stop
+    }
+
+    fn on_focus_callback(&self) -> Option<&Callback<()>> {
+        self.on_focus.as_ref()
+    }
+
+    fn on_blur_callback(&self) -> Option<&Callback<()>> {
+        self.on_blur.as_ref()
     }
 
     fn has_on_click(&self) -> bool {
@@ -190,6 +205,9 @@ impl From<Table> for TableNode {
             on_scroll_to: value.on_scroll_to,
             on_key: value.on_key,
             focusable: value.focusable,
+            tab_stop: value.tab_stop,
+            on_focus: value.on_focus,
+            on_blur: value.on_blur,
             inspector: value.inspector,
             inspector_key_style: value.inspector_key_style,
             inspector_value_style: value.inspector_value_style,

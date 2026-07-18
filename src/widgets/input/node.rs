@@ -50,7 +50,9 @@ pub struct InputNode {
     /// skipped entirely. `on_key` is NOT called when this returns `true`.
     pub key_interceptor: Option<KeyHandler>,
     pub focusable: bool,
-    pub tab_order: bool,
+    pub tab_stop: bool,
+    pub on_focus: Option<Callback<()>>,
+    pub on_blur: Option<Callback<()>>,
 }
 
 impl WidgetNode for InputNode {
@@ -58,8 +60,16 @@ impl WidgetNode for InputNode {
         self.focusable
     }
 
-    fn in_tab_order(&self) -> bool {
-        self.focusable && self.tab_order
+    fn is_tab_stop(&self) -> bool {
+        self.focusable && self.tab_stop
+    }
+
+    fn on_focus_callback(&self) -> Option<&Callback<()>> {
+        self.on_focus.as_ref()
+    }
+
+    fn on_blur_callback(&self) -> Option<&Callback<()>> {
+        self.on_blur.as_ref()
     }
     fn has_on_click(&self) -> bool {
         !self.disabled

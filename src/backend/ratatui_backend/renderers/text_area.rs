@@ -2393,7 +2393,7 @@ pub(crate) fn render_text_area_node(
                 #[cfg(feature = "diff-view")]
                 diff_context_separator_click: ta.diff_context_separator_click.as_ref(),
                 hover_mouse_pos: is_hovered.then_some(()).and(state.ctx.mouse_pos),
-                tab_stop: ta.tab_stop as usize,
+                tab_stop: ta.tab_display_width as usize,
             },
         },
     );

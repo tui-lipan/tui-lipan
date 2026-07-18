@@ -54,6 +54,9 @@ pub(crate) struct TerminalNode {
     pub on_scroll: Option<Callback<ScrollEvent>>,
     pub on_scroll_to: Option<Callback<usize>>,
     pub focusable: bool,
+    pub tab_stop: bool,
+    pub on_focus: Option<Callback<()>>,
+    pub on_blur: Option<Callback<()>>,
     pub on_key: Option<KeyHandler>,
     pub on_input: Option<Callback<TerminalInputEvent>>,
 }
@@ -61,6 +64,18 @@ pub(crate) struct TerminalNode {
 impl WidgetNode for TerminalNode {
     fn is_focusable(&self) -> bool {
         self.focusable
+    }
+
+    fn is_tab_stop(&self) -> bool {
+        self.focusable && self.tab_stop
+    }
+
+    fn on_focus_callback(&self) -> Option<&Callback<()>> {
+        self.on_focus.as_ref()
+    }
+
+    fn on_blur_callback(&self) -> Option<&Callback<()>> {
+        self.on_blur.as_ref()
     }
 
     fn has_on_click(&self) -> bool {

@@ -195,6 +195,7 @@ impl Component for FileTreeComponent {
             .force_scroll_to_selected(ctx.props.force_scroll_to_selected)
             .activate_on_click(ctx.props.activate_on_click)
             .focusable(ctx.props.focusable)
+            .tab_stop(ctx.props.tab_stop)
             .keymap(ctx.props.keymap)
             .on_select(
                 ctx.link()
@@ -238,6 +239,12 @@ impl Component for FileTreeComponent {
         if let Some(style) = ctx.props.unfocused_selection_symbol_style {
             tree = tree.unfocused_selection_symbol_style(Some(style));
         }
+        if let Some(on_focus) = ctx.props.on_focus.clone() {
+            tree = tree.on_focus(on_focus);
+        }
+        if let Some(on_blur) = ctx.props.on_blur.clone() {
+            tree = tree.on_blur(on_blur);
+        }
         if let Some(text) = ctx.props.empty_text.clone() {
             tree = tree
                 .empty_text(text)
@@ -266,7 +273,7 @@ impl Component for FileTreeComponent {
             .placeholder_style(ctx.props.explorer_placeholder_style)
             .focus_placeholder_style(ctx.props.explorer_focus_placeholder_style)
             .on_change(ctx.link().callback(FileTreeMsg::ExplorerQueryChanged))
-            .tab_order(false)
+            .tab_stop(false)
             .key_interceptor(ctx.link().key_handler(|key| match key.code {
                 crate::core::event::KeyCode::Esc => Some(FileTreeMsg::FocusTree),
                 _ => None,

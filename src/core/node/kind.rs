@@ -1,6 +1,6 @@
 use super::id::NodeId;
 use super::overlay::ScrollbarZone;
-use crate::callback::ScopeId;
+use crate::callback::{Callback, ScopeId};
 use crate::style::{Rect, Theme};
 #[cfg(feature = "big-text")]
 use crate::widgets::internal::BigTextNode;
@@ -31,8 +31,14 @@ pub(crate) trait WidgetNode {
     fn is_focusable(&self) -> bool {
         false
     }
-    fn in_tab_order(&self) -> bool {
+    fn is_tab_stop(&self) -> bool {
         self.is_focusable()
+    }
+    fn on_focus_callback(&self) -> Option<&Callback<()>> {
+        None
+    }
+    fn on_blur_callback(&self) -> Option<&Callback<()>> {
+        None
     }
     fn has_on_click(&self) -> bool {
         false
@@ -299,8 +305,16 @@ impl WidgetNode for NodeKind {
         node_kind_delegate_match!(self, is_focusable())
     }
 
-    fn in_tab_order(&self) -> bool {
-        node_kind_delegate_match!(self, in_tab_order())
+    fn is_tab_stop(&self) -> bool {
+        node_kind_delegate_match!(self, is_tab_stop())
+    }
+
+    fn on_focus_callback(&self) -> Option<&Callback<()>> {
+        node_kind_delegate_match!(self, on_focus_callback())
+    }
+
+    fn on_blur_callback(&self) -> Option<&Callback<()>> {
+        node_kind_delegate_match!(self, on_blur_callback())
     }
 
     fn has_on_click(&self) -> bool {
