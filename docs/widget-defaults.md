@@ -1129,6 +1129,7 @@ Source: `src/widgets/search_palette/mod.rs:721` (`SearchPalette`).
 | `list_active_symbol_style` | `None` |
 | `list_unselected_symbol` | `None` |
 | `list_focusable` | `true` |
+| `input_key` | `None` |
 | `tab_stop` | `true` |
 | `on_focus` | `None` |
 | `on_blur` | `None` |

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use nucleo::pattern::{CaseMatching, Normalization};
 
 use crate::callback::{Callback, KeyHandler};
-use crate::core::element::Element;
+use crate::core::element::{Element, Key};
 use crate::style::{
     BorderStyle, CaretShape, Color, Length, Padding, ScrollbarConfig, Style, StyleSlot,
 };
@@ -535,6 +535,7 @@ pub(crate) struct SearchPaletteProps<T> {
     list_active_symbol_style: Option<Style>,
     list_unselected_symbol: Option<Arc<str>>,
     list_focusable: bool,
+    input_key: Option<Key>,
     tab_stop: bool,
     on_focus: Option<Callback<()>>,
     on_blur: Option<Callback<()>>,
@@ -617,6 +618,7 @@ impl<T: PartialEq> PartialEq for SearchPaletteProps<T> {
             && self.list_active_symbol_style == other.list_active_symbol_style
             && self.list_unselected_symbol == other.list_unselected_symbol
             && self.list_focusable == other.list_focusable
+            && self.input_key == other.input_key
             && self.tab_stop == other.tab_stop
             && self.on_focus == other.on_focus
             && self.on_blur == other.on_blur
@@ -804,6 +806,7 @@ impl<T: Clone + PartialEq> Default for SearchPalette<T> {
                 list_active_symbol_style: None,
                 list_unselected_symbol: None,
                 list_focusable: true,
+                input_key: None,
                 tab_stop: true,
                 on_focus: None,
                 on_blur: None,
@@ -1420,6 +1423,25 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// Control whether the list can receive keyboard focus.
     pub fn list_focusable(mut self, focusable: bool) -> Self {
         self.props.list_focusable = focusable;
+        self
+    }
+
+    /// Set a reconciliation key on the query input.
+    ///
+    /// Keying the palette element itself keys the palette's container, which is not focusable, so
+    /// `Context::request_focus` on that key can only reach the input through the container's
+    /// first-focusable-descendant fallback - and lands elsewhere the moment the palette gains
+    /// another focusable widget. This addresses the input directly:
+    ///
+    /// ```ignore
+    /// SearchPalette::<T>::new().input_key("command-palette-query")
+    /// // ...
+    /// ctx.request_focus("command-palette-query");
+    /// ```
+    ///
+    /// Only meaningful in uncontrolled mode; a controlled palette renders no input of its own.
+    pub fn input_key(mut self, key: impl Into<Key>) -> Self {
+        self.props.input_key = Some(key.into());
         self
     }
 

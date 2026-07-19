@@ -7,7 +7,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::callback::KeyHandler;
 use crate::core::component::{Component, Context, KeyUpdate, TaskPolicy, Update, UpdateLevel};
-use crate::core::element::Element;
+use crate::core::element::{Element, IntoElement};
 use crate::core::event::KeyCode;
 use crate::style::Length;
 use crate::text::input::TextInput;
@@ -465,7 +465,11 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                 input = input.caret_color(color);
             }
 
-            stack = stack.child(input);
+            // `.key()` yields an Element, so it has to come after every Input setter.
+            match ctx.props.input_key.clone() {
+                Some(key) => stack = stack.child(input.key(key)),
+                None => stack = stack.child(input),
+            }
             if ctx.props.input_divider {
                 let divider = Divider::horizontal()
                     .style(ctx.props.input_divider_style)

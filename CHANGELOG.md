@@ -34,6 +34,11 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `SearchPalette::input_key(key)` keys the query input directly, so
+  `ctx.request_focus(key)` targets it instead of relying on the palette
+  container's first-focusable-descendant fallback. Uncontrolled mode only; a
+  controlled palette renders no input of its own.
+
 - DevTools frame metrics now attribute dirty updates to components and input
   sources (`input:key` / `input:mouse` / `input:drag` / `input:scroll`), coalesced
   across deferred-full skipped iterations into the next recorded frame and shown

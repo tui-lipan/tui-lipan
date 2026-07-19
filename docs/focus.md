@@ -88,6 +88,18 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 `request_focus(key)` may be issued before the keyed widget mounts; the pending key resolves after
 reconciliation. It is also the explicit escape hatch into `FocusScope::Exclude`.
 
+Keying a **composite** widget keys its container, which is usually not focusable. `request_focus`
+on such a key falls back to the container's first focusable descendant — which works until the
+composite grows another focusable widget, at which point focus silently lands somewhere else.
+Prefer a setter that keys the inner widget directly when one exists, such as
+`SearchPalette::input_key`:
+
+```rust
+SearchPalette::<T>::new().input_key("command-query")
+// ...
+ctx.request_focus("command-query");
+```
+
 `blur()` clears both the current focus and retained focus identity. Under `OnDemand` and `Manual`,
 the app remains unfocused until focus is established again. Under `Auto`, the next reconciliation
 restores the default eligible target, so blur acts as a reset to automatic focus.
