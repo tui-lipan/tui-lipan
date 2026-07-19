@@ -11,6 +11,27 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Changed
+
+- Redesigned the DevTools stats panel for readability under animation: a fixed
+  13-row layout (no more lines flickering in and out per frame), a bold label
+  gutter with an aligned value column, all values aggregated over the last 60
+  recorded frames instead of the latest one, a frame-time chart with
+  microsecond resolution, an explicit scale caption and square-root height
+  compression so sub-millisecond frames stay visible next to spikes, a compact
+  untruncated focus line, and a 48x15 panel.
+- Restyled the DevTools Logs tab: Follow/Pause/Framework toggle chips that show
+  their on/off state (filled accent dot when on, hollow dimmed dot when off)
+  with hover and focus styles, a Clear action with a destructive hover color,
+  colored log-level tags in the list, and a dimmed line counter.
+
+### Fixed
+
+- DevTools memo hit rate no longer counts plain (non-`memo_key`) component
+  renders as misses; it previously pinned at 0% in apps that memoize few
+  components. A retained component whose child refresh falls back to a full
+  re-render also no longer double-counts as both hit and miss.
+
 ### Added
 
 - DevTools frame metrics now attribute dirty updates to components and input
