@@ -123,7 +123,7 @@ it cannot move focus to a different same-type widget.
 |-------|----------|
 | `FocusScope::None` | Normal inherited behavior. Default. |
 | `FocusScope::Exclude` | Removes the subtree from traversal, automatic fallback, descendant focus, and click-to-focus. Explicit keyed requests may enter it. |
-| `FocusScope::Contain` | While focus is inside, next/previous traversal wraps within the nearest containing ancestor. |
+| `FocusScope::Contain` | While focus is inside, next/previous traversal wraps within the nearest containing ancestor. The pane is also opaque from outside: Tab never enters it. |
 
 ```rust
 HStack::new()
@@ -139,8 +139,37 @@ HStack::new()
     )
 ```
 
-`Contain` is a pane trap. Use an app-owned command and `request_focus` to leave it. Capturing
-overlay traps take priority over contained scopes.
+`Contain` is a pane trap, and the trap works in both directions: Tab from outside the pane will
+not enter it, just as Tab from inside will not leave. A ring that could Tab *in* but not back
+*out* would strand focus, so entering is deliberate — click the pane, `request_focus` a widget
+in it, or bind an app-owned pane-switch key:
+
+```rust
+// Tab cycles within whichever pane holds focus; F6 moves between panes.
+Frame::new().focus_scope(FocusScope::Contain).child(sidebar)
+```
+
+The same rule applies to nested panes: an inner `Contain` is not part of its parent's ring.
+
+The pane's *boundary node* is the exception: a `Contain` frame that is itself focusable
+(`.focusable(true)`) is a tab stop in the enclosing ring, so keyboard users can still reach the
+pane. Tab lands on the frame and the next Tab continues the outer ring; it still never descends
+into the contents. The boundary is never a member of its own pane's ring, so cycling inside the
+pane cannot leak out over it.
+
+One exception keeps traversal from ever being dead. If *every* tab stop in the tree lives inside
+a pane — an app that is a single `Contain` frame, say — Tab from an unfocused app descends into
+panes to establish focus. Once focus is inside, that pane's own ring takes over.
+
+Capturing overlay traps take priority over contained scopes: while a capturing overlay is on
+top, Tab cycles the overlay's own ring, and panes inside the overlay are opaque to it in the
+usual way. The safety valve applies there too - if every tab stop in the overlay lives inside a
+pane, the overlay ring descends through panes so the overlay is never a keyboard dead end.
+
+> **Note:** the tab ring is built from tab stops, but focus is granted to anything focusable. A
+> widget with `.tab_stop(false)`, or one reached through an `Exclude`/`Contain` escape hatch, is
+> focusable without being in the ring. Tab from such a widget moves to the neighbour it *would*
+> have had, rather than restarting the ring.
 
 ## Capturing Overlays
 

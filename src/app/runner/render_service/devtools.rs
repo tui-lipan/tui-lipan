@@ -33,7 +33,7 @@ impl<C: Component> AppRunner<C> {
             || crate::app::input::focus::traversal_focusables(&self.core.tree, focused).len(),
             |overlay| {
                 if overlay.auto_focus {
-                    self.core.tree.focusables_in_subtree(overlay.id).len()
+                    crate::app::focus_service::overlay_ring(&self.core.tree, overlay.id).len()
                 } else {
                     0
                 }

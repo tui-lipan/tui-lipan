@@ -1,10 +1,11 @@
 use std::time::Duration;
 
-use crate::app::input::focus;
+use crate::app::focus_service::{self, OverlayKey};
+use crate::app::input::focus::FocusDirection;
 use crate::clipboard::ClipboardHandle;
 use crate::core::component::Component;
 use crate::core::event::MouseButton;
-use crate::core::node::{NodeId, OverlayRoot};
+use crate::core::node::OverlayRoot;
 
 use super::AppRunner;
 
@@ -91,164 +92,48 @@ impl<C: Component> AppRunner<C> {
         };
 
         if dismissed && overlay.captures_focus {
-            self.restore_focus_from_stack();
+            self.restore_focus_from_stack(OverlayKey::of(overlay));
         }
         dismissed
     }
 
-    pub(crate) fn restore_focus_from_stack(&mut self) {
-        if let Some(saved) = self.focus.focus_stack.pop() {
-            self.focus.focused = saved.focused.filter(|id| {
-                self.core.tree.is_valid(*id) && self.core.tree.node(*id).is_focusable()
-            });
-            self.focus.focused_key = saved.key;
-            self.focus.focused_tag = saved.tag;
-            focus::restore_focus(
-                &self.core.tree,
-                &mut self.focus.focused,
-                &mut self.focus.focused_key,
-                &mut self.focus.focused_tag,
-                self.focus.policy,
-            );
-            // Reset blink state when focus changes
+    pub(crate) fn restore_focus_from_stack(&mut self, overlay: OverlayKey) {
+        let restored = focus_service::restore_focus_from_stack(
+            &self.core.tree,
+            &mut self.focus.refs(),
+            overlay,
+        );
+        if restored {
             self.animation.reset_blink();
         }
     }
 
     pub(crate) fn ensure_overlay_focus(&mut self) {
-        let Some((overlay_id, auto_focus)) = self
-            .core
-            .tree
-            .top_capturing_overlay()
-            .map(|overlay| (overlay.id, overlay.auto_focus))
-        else {
-            return;
-        };
-        let focused_in_overlay = self
-            .focus
-            .focused
-            .filter(|id| self.core.tree.is_descendant(overlay_id, *id))
-            .is_some();
-        if !auto_focus {
-            if !focused_in_overlay {
-                self.suspend_focus_for_overlay(overlay_id);
-            }
-            return;
+        let moved = focus_service::ensure_overlay_focus(&self.core.tree, &mut self.focus.refs());
+        if moved {
+            self.animation.reset_blink();
         }
-        if focused_in_overlay {
-            return;
-        }
-
-        let focusables = self.core.tree.focusables_in_subtree(overlay_id);
-        if focusables.is_empty() {
-            self.suspend_focus_for_overlay(overlay_id);
-            return;
-        }
-
-        self.push_focus_stack_for_overlay(overlay_id);
-        let next = focusables[0];
-        self.set_focus(next);
     }
 
     pub(crate) fn top_capturing_overlay_is_empty(&self) -> bool {
-        self.core
-            .tree
-            .top_capturing_overlay()
-            .is_some_and(|overlay| self.core.tree.focusables_in_subtree(overlay.id).is_empty())
-    }
-
-    fn push_focus_stack_for_overlay(&mut self, overlay_id: NodeId) {
-        let should_push = self
-            .focus
-            .focus_stack
-            .last()
-            .is_none_or(|top| top.overlay != overlay_id);
-        if !should_push {
-            return;
-        }
-
-        // Cap maximum stack depth to prevent unbounded growth.
-        const MAX_FOCUS_STACK_DEPTH: usize = 32;
-        if self.focus.focus_stack.len() >= MAX_FOCUS_STACK_DEPTH {
-            self.focus.focus_stack.remove(0);
-        }
-        self.focus
-            .focus_stack
-            .push(crate::app::interaction_state::FocusStackEntry {
-                overlay: overlay_id,
-                focused: self.focus.focused,
-                key: self.focus.focused_key.clone(),
-                tag: self.focus.focused_tag,
-            });
-    }
-
-    fn suspend_focus_for_overlay(&mut self, overlay_id: NodeId) {
-        if self.focus.focused.is_none()
-            && self.focus.focused_key.is_none()
-            && self.focus.focused_tag.is_none()
-        {
-            return;
-        }
-
-        self.push_focus_stack_for_overlay(overlay_id);
-        self.focus.focused = None;
-        self.focus.focused_tag = None;
-        self.animation.reset_blink();
+        focus_service::top_capturing_overlay_is_empty(&self.core.tree)
     }
 
     pub(crate) fn focus_overlay_next(&mut self) -> bool {
-        let Some(overlay) = self.core.tree.top_capturing_overlay() else {
-            return false;
-        };
-        if !overlay.auto_focus
-            && !self
-                .focus
-                .focused
-                .is_some_and(|id| self.core.tree.is_descendant(overlay.id, id))
-        {
-            return true;
-        }
-        let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
-        if focusables.is_empty() {
-            return true;
-        }
-        focusables.sort_by_key(|id| id.index());
-        let next = if let Some(curr) = self.focus.focused
-            && let Some(idx) = focusables.iter().position(|id| *id == curr)
-        {
-            focusables[(idx + 1) % focusables.len()]
-        } else {
-            focusables[0]
-        };
-        self.set_focus(next);
-        true
+        self.focus_overlay_step(FocusDirection::Next)
     }
 
     pub(crate) fn focus_overlay_prev(&mut self) -> bool {
-        let Some(overlay) = self.core.tree.top_capturing_overlay() else {
-            return false;
-        };
-        if !overlay.auto_focus
-            && !self
-                .focus
-                .focused
-                .is_some_and(|id| self.core.tree.is_descendant(overlay.id, id))
-        {
-            return true;
+        self.focus_overlay_step(FocusDirection::Prev)
+    }
+
+    fn focus_overlay_step(&mut self, direction: FocusDirection) -> bool {
+        let before = self.focus.focused;
+        let handled =
+            focus_service::overlay_step(&self.core.tree, &mut self.focus.refs(), direction);
+        if handled && self.focus.focused != before {
+            self.animation.reset_blink();
         }
-        let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
-        if focusables.is_empty() {
-            return true;
-        }
-        focusables.sort_by_key(|id| id.index());
-        let prev = if let Some(curr) = self.focus.focused
-            && let Some(idx) = focusables.iter().position(|id| *id == curr)
-        {
-            focusables[(idx + focusables.len().saturating_sub(1)) % focusables.len()]
-        } else {
-            focusables[focusables.len().saturating_sub(1)]
-        };
-        self.set_focus(prev);
-        true
+        handled
     }
 }

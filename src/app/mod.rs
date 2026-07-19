@@ -2,6 +2,7 @@
 
 pub mod context;
 pub(crate) mod copy_feedback;
+pub(crate) mod focus_service;
 pub mod input;
 pub(crate) mod interaction_state;
 pub(crate) mod mouse_dispatch;

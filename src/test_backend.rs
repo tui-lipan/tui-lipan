@@ -20,10 +20,10 @@ use crate::app::input::runtime_dispatch::{
     RuntimeKeyDispatchState, make_key_ctx, selection_clipboard_shortcut,
 };
 use crate::app::input::text_area_vim::TextAreaVimState;
-use crate::app::interaction_state::{
-    DragState, FocusStackEntry, HexPendingEdit, MouseTrackingState,
-};
-use crate::app::{FocusChanged, FocusEntry};
+use crate::app::interaction_state::{DragState, HexPendingEdit, MouseTrackingState};
+
+use crate::app::focus_service::{self, FocusRefs, FocusStackEntry, OverlayKey};
+use crate::app::input::focus::FocusDirection;
 use crate::callback::Link;
 use crate::capture::CapturedFrame;
 use crate::clipboard::ClipboardConfig;
@@ -33,6 +33,22 @@ use crate::core::event::{KeyCode, KeyEvent, MouseEvent};
 use crate::core::node::{NodeId, OverlayRoot};
 use crate::core::runtime_env::TranscriptEntry;
 use crate::layout::tag::Tag;
+
+/// Borrow `TestBackend`'s focus fields for the shared focus service.
+///
+/// A method would borrow all of `self`, leaving no way to also pass
+/// `&self.core.tree`; expanding at the call site keeps the borrows field-disjoint.
+macro_rules! focus_refs {
+    ($this:ident) => {
+        FocusRefs {
+            policy: $this.focus_policy,
+            focused: &mut $this.focused,
+            focused_key: &mut $this.focused_key,
+            focused_tag: &mut $this.focused_tag,
+            focus_stack: &mut $this.focus_stack,
+        }
+    };
+}
 use crate::runtime::{FocusRequest, RuntimeCore};
 use crate::style::Rect;
 use crate::text::editor::TextEditor;
@@ -71,7 +87,7 @@ pub struct TestBackend<C: Component> {
     pub(crate) hex_history: HashMap<NodeId, HexHistory>,
     pub(crate) hex_pending_edit: HashMap<NodeId, HexPendingEdit>,
     focus_stack: Vec<FocusStackEntry>,
-    last_notified_focus: Option<(NodeId, FocusEntry)>,
+    last_notified_focus: Option<crate::app::focus_service::NotifiedFocus>,
     on_focus_changed: Option<crate::app::context::FocusChangedHook>,
     pub(crate) mouse: MouseTrackingState,
     pub(crate) drag: DragState,
@@ -639,7 +655,6 @@ where
             &mut self.focused,
             &mut self.focused_key,
             &mut self.focused_tag,
-            self.focus_policy,
         );
         self.notify_focus_change();
     }
@@ -656,46 +671,12 @@ where
             &mut self.focused,
             &mut self.focused_key,
             &mut self.focused_tag,
-            self.focus_policy,
         );
         self.notify_focus_change();
     }
 
     fn apply_focus_request(&mut self, request: FocusRequest) {
-        match request {
-            FocusRequest::Key(key) => {
-                self.focused = None;
-                self.focused_key = Some(key);
-                self.focused_tag = None;
-            }
-            FocusRequest::Clear => {
-                self.focused = None;
-                self.focused_key = None;
-                self.focused_tag = None;
-            }
-            FocusRequest::Next => {
-                if !self.focus_overlay_next() {
-                    focus::focus_next(
-                        &self.core.tree,
-                        &mut self.focused,
-                        &mut self.focused_key,
-                        &mut self.focused_tag,
-                        self.focus_policy,
-                    );
-                }
-            }
-            FocusRequest::Prev => {
-                if !self.focus_overlay_prev() {
-                    focus::focus_prev(
-                        &self.core.tree,
-                        &mut self.focused,
-                        &mut self.focused_key,
-                        &mut self.focused_tag,
-                        self.focus_policy,
-                    );
-                }
-            }
-        }
+        focus_service::apply_focus_request(&self.core.tree, &mut focus_refs!(self), request);
     }
 
     /// Process all queued messages and any messages produced by background commands.
@@ -751,192 +732,36 @@ where
     }
 
     fn notify_focus_change(&mut self) {
-        let current = self
-            .focused
-            .filter(|id| self.core.tree.is_valid(*id))
-            .map(|id| {
-                let node = self.core.tree.node(id);
-                (
-                    id,
-                    FocusEntry {
-                        key: node.key.clone(),
-                        tag: crate::layout::tag::tag_of_node(node),
-                    },
-                )
-            });
-        let unchanged = match (&self.last_notified_focus, &current) {
-            (None, None) => true,
-            (Some((old_id, old)), Some((new_id, new))) => {
-                old_id == new_id
-                    || old
-                        .key
-                        .as_ref()
-                        .zip(new.key.as_ref())
-                        .is_some_and(|(old, new)| old == new)
-            }
-            _ => false,
-        };
-        if unchanged {
-            self.last_notified_focus = current;
-            return;
-        }
-
-        let previous = self.last_notified_focus.take();
-        self.last_notified_focus = current.clone();
-        let on_blur = previous
-            .as_ref()
-            .filter(|(id, _)| self.core.tree.is_valid(*id))
-            .and_then(|(id, _)| self.core.tree.node(*id).on_blur_callback().cloned());
-        let on_focus = current
-            .as_ref()
-            .and_then(|(id, _)| self.core.tree.node(*id).on_focus_callback().cloned());
-
-        if let Some(callback) = on_blur {
-            callback.emit(());
-        }
-        if let Some(callback) = on_focus {
-            callback.emit(());
-        }
-        if let Some(hook) = &self.on_focus_changed {
-            hook(&FocusChanged {
-                old: previous.map(|(_, entry)| entry),
-                new: current.map(|(_, entry)| entry),
-            });
-        }
+        focus_service::notify_focus_change(
+            &self.core.tree,
+            self.focused,
+            &mut self.last_notified_focus,
+            self.on_focus_changed.as_ref(),
+        )
     }
 
     fn ensure_overlay_focus(&mut self) {
-        let Some((overlay_id, auto_focus)) = self
-            .core
-            .tree
-            .top_capturing_overlay()
-            .map(|overlay| (overlay.id, overlay.auto_focus))
-        else {
-            return;
-        };
-        let focused_in_overlay = self
-            .focused
-            .filter(|id| self.core.tree.is_descendant(overlay_id, *id))
-            .is_some();
-        if !auto_focus {
-            if !focused_in_overlay {
-                self.suspend_focus_for_overlay(overlay_id);
-            }
-            return;
-        }
-        if focused_in_overlay {
-            return;
-        }
-
-        let focusables = self.core.tree.focusables_in_subtree(overlay_id);
-        if focusables.is_empty() {
-            self.suspend_focus_for_overlay(overlay_id);
-            return;
-        }
-
-        self.push_focus_stack_for_overlay(overlay_id);
-        let next = focusables[0];
-        self.focused = Some(next);
-        self.focused_key = self.core.tree.node(next).key.clone();
-        self.focused_tag = Some(crate::layout::tag::tag_of_node(self.core.tree.node(next)));
+        focus_service::ensure_overlay_focus(&self.core.tree, &mut focus_refs!(self));
     }
 
     fn top_capturing_overlay_is_empty(&self) -> bool {
-        self.core
-            .tree
-            .top_capturing_overlay()
-            .is_some_and(|overlay| self.core.tree.focusables_in_subtree(overlay.id).is_empty())
-    }
-
-    fn push_focus_stack_for_overlay(&mut self, overlay_id: NodeId) {
-        let should_push = self
-            .focus_stack
-            .last()
-            .is_none_or(|top| top.overlay != overlay_id);
-        if !should_push {
-            return;
-        }
-
-        const MAX_FOCUS_STACK_DEPTH: usize = 32;
-        if self.focus_stack.len() >= MAX_FOCUS_STACK_DEPTH {
-            self.focus_stack.remove(0);
-        }
-        self.focus_stack.push(FocusStackEntry {
-            overlay: overlay_id,
-            focused: self.focused,
-            key: self.focused_key.clone(),
-            tag: self.focused_tag,
-        });
-    }
-
-    fn suspend_focus_for_overlay(&mut self, overlay_id: NodeId) {
-        if self.focused.is_none() && self.focused_key.is_none() && self.focused_tag.is_none() {
-            return;
-        }
-
-        self.push_focus_stack_for_overlay(overlay_id);
-        self.focused = None;
-        self.focused_tag = None;
+        focus_service::top_capturing_overlay_is_empty(&self.core.tree)
     }
 
     fn focus_overlay_next(&mut self) -> bool {
-        let Some(overlay) = self.core.tree.top_capturing_overlay() else {
-            return false;
-        };
-        if !overlay.auto_focus
-            && !self
-                .focused
-                .is_some_and(|id| self.core.tree.is_descendant(overlay.id, id))
-        {
-            return true;
-        }
-        let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
-        if focusables.is_empty() {
-            return true;
-        }
-
-        focusables.sort_by_key(|id| id.index());
-        let next = if let Some(curr) = self.focused
-            && let Some(idx) = focusables.iter().position(|id| *id == curr)
-        {
-            focusables[(idx + 1) % focusables.len()]
-        } else {
-            focusables[0]
-        };
-        self.focused = Some(next);
-        self.focused_key = self.core.tree.node(next).key.clone();
-        self.focused_tag = Some(crate::layout::tag::tag_of_node(self.core.tree.node(next)));
-        true
+        focus_service::overlay_step(
+            &self.core.tree,
+            &mut focus_refs!(self),
+            FocusDirection::Next,
+        )
     }
 
     fn focus_overlay_prev(&mut self) -> bool {
-        let Some(overlay) = self.core.tree.top_capturing_overlay() else {
-            return false;
-        };
-        if !overlay.auto_focus
-            && !self
-                .focused
-                .is_some_and(|id| self.core.tree.is_descendant(overlay.id, id))
-        {
-            return true;
-        }
-        let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
-        if focusables.is_empty() {
-            return true;
-        }
-
-        focusables.sort_by_key(|id| id.index());
-        let prev = if let Some(curr) = self.focused
-            && let Some(idx) = focusables.iter().position(|id| *id == curr)
-        {
-            focusables[(idx + focusables.len().saturating_sub(1)) % focusables.len()]
-        } else {
-            focusables[focusables.len().saturating_sub(1)]
-        };
-        self.focused = Some(prev);
-        self.focused_key = self.core.tree.node(prev).key.clone();
-        self.focused_tag = Some(crate::layout::tag::tag_of_node(self.core.tree.node(prev)));
-        true
+        focus_service::overlay_step(
+            &self.core.tree,
+            &mut focus_refs!(self),
+            FocusDirection::Prev,
+        )
     }
 
     fn refresh_hover_from_last_mouse(&mut self) {
@@ -968,21 +793,11 @@ where
             false
         };
 
-        if dismissed
-            && overlay.captures_focus
-            && let Some(saved) = self.focus_stack.pop()
-        {
-            self.focused = saved.focused.filter(|id| {
-                self.core.tree.is_valid(*id) && self.core.tree.node(*id).is_focusable()
-            });
-            self.focused_key = saved.key;
-            self.focused_tag = saved.tag;
-            focus::restore_focus(
+        if dismissed && overlay.captures_focus {
+            focus_service::restore_focus_from_stack(
                 &self.core.tree,
-                &mut self.focused,
-                &mut self.focused_key,
-                &mut self.focused_tag,
-                self.focus_policy,
+                &mut focus_refs!(self),
+                OverlayKey::of(overlay),
             );
         }
         dismissed
@@ -1169,10 +984,7 @@ struct TestBackendDispatchOps<'a, C: Component> {
 
 impl<C: Component> TestBackendDispatchOps<'_, C> {
     fn top_capturing_overlay_is_empty(&self) -> bool {
-        self.core
-            .tree
-            .top_capturing_overlay()
-            .is_some_and(|overlay| self.core.tree.focusables_in_subtree(overlay.id).is_empty())
+        focus_service::top_capturing_overlay_is_empty(&self.core.tree)
     }
 
     fn handle_overlay_escape(&mut self) -> bool {
@@ -1195,86 +1007,43 @@ impl<C: Component> TestBackendDispatchOps<'_, C> {
             false
         };
 
-        if dismissed
-            && overlay.captures_focus
-            && let Some(saved) = self.focus_stack.pop()
-        {
-            *self.focused = saved.focused.filter(|id| {
-                self.core.tree.is_valid(*id) && self.core.tree.node(*id).is_focusable()
-            });
-            *self.focused_key = saved.key;
-            *self.focused_tag = saved.tag;
-            focus::restore_focus(
+        if dismissed && overlay.captures_focus {
+            let mut refs = FocusRefs {
+                policy: self.key_dispatch_config.focus_policy,
+                focused: &mut *self.focused,
+                focused_key: &mut *self.focused_key,
+                focused_tag: &mut *self.focused_tag,
+                focus_stack: &mut *self.focus_stack,
+            };
+            focus_service::restore_focus_from_stack(
                 &self.core.tree,
-                self.focused,
-                self.focused_key,
-                self.focused_tag,
-                self.key_dispatch_config.focus_policy,
+                &mut refs,
+                OverlayKey::of(overlay),
             );
         }
         dismissed
     }
 
     fn focus_overlay_next(&mut self) -> bool {
-        let Some(overlay) = self.core.tree.top_capturing_overlay() else {
-            return false;
+        let mut refs = FocusRefs {
+            policy: self.key_dispatch_config.focus_policy,
+            focused: &mut *self.focused,
+            focused_key: &mut *self.focused_key,
+            focused_tag: &mut *self.focused_tag,
+            focus_stack: &mut *self.focus_stack,
         };
-        if !overlay.auto_focus
-            && !self
-                .focused
-                .as_ref()
-                .is_some_and(|id| self.core.tree.is_descendant(overlay.id, *id))
-        {
-            return true;
-        }
-        let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
-        if focusables.is_empty() {
-            return true;
-        }
-
-        focusables.sort_by_key(|id| id.index());
-        let next = if let Some(curr) = *self.focused
-            && let Some(idx) = focusables.iter().position(|id| *id == curr)
-        {
-            focusables[(idx + 1) % focusables.len()]
-        } else {
-            focusables[0]
-        };
-        *self.focused = Some(next);
-        *self.focused_key = self.core.tree.node(next).key.clone();
-        *self.focused_tag = Some(crate::layout::tag::tag_of_node(self.core.tree.node(next)));
-        true
+        focus_service::overlay_step(&self.core.tree, &mut refs, FocusDirection::Next)
     }
 
     fn focus_overlay_prev(&mut self) -> bool {
-        let Some(overlay) = self.core.tree.top_capturing_overlay() else {
-            return false;
+        let mut refs = FocusRefs {
+            policy: self.key_dispatch_config.focus_policy,
+            focused: &mut *self.focused,
+            focused_key: &mut *self.focused_key,
+            focused_tag: &mut *self.focused_tag,
+            focus_stack: &mut *self.focus_stack,
         };
-        if !overlay.auto_focus
-            && !self
-                .focused
-                .as_ref()
-                .is_some_and(|id| self.core.tree.is_descendant(overlay.id, *id))
-        {
-            return true;
-        }
-        let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
-        if focusables.is_empty() {
-            return true;
-        }
-
-        focusables.sort_by_key(|id| id.index());
-        let prev = if let Some(curr) = *self.focused
-            && let Some(idx) = focusables.iter().position(|id| *id == curr)
-        {
-            focusables[(idx + focusables.len().saturating_sub(1)) % focusables.len()]
-        } else {
-            focusables[focusables.len().saturating_sub(1)]
-        };
-        *self.focused = Some(prev);
-        *self.focused_key = self.core.tree.node(prev).key.clone();
-        *self.focused_tag = Some(crate::layout::tag::tag_of_node(self.core.tree.node(prev)));
-        true
+        focus_service::overlay_step(&self.core.tree, &mut refs, FocusDirection::Prev)
     }
 
     #[cfg(feature = "terminal")]
@@ -1484,17 +1253,17 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
             if self.focus_overlay_next() {
                 return FrameworkDispatch::Handled;
             }
-            if self.key_dispatch_config.focus_policy == FocusPolicy::Manual {
-                return FrameworkDispatch::None;
-            }
-            focus::focus_next(
+            if focus::step_for_policy(
                 &self.core.tree,
                 self.focused,
                 self.focused_key,
                 self.focused_tag,
                 self.key_dispatch_config.focus_policy,
-            );
-            return FrameworkDispatch::Handled;
+                FocusDirection::Next,
+            ) {
+                return FrameworkDispatch::Handled;
+            }
+            return FrameworkDispatch::None;
         }
 
         if matches
@@ -1514,17 +1283,17 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
             if self.focus_overlay_prev() {
                 return FrameworkDispatch::Handled;
             }
-            if self.key_dispatch_config.focus_policy == FocusPolicy::Manual {
-                return FrameworkDispatch::None;
-            }
-            focus::focus_prev(
+            if focus::step_for_policy(
                 &self.core.tree,
                 self.focused,
                 self.focused_key,
                 self.focused_tag,
                 self.key_dispatch_config.focus_policy,
-            );
-            return FrameworkDispatch::Handled;
+                FocusDirection::Prev,
+            ) {
+                return FrameworkDispatch::Handled;
+            }
+            return FrameworkDispatch::None;
         }
 
         if matches
@@ -1895,6 +1664,153 @@ mod tests {
         let backend = TestBackend::new_with_app(app, ManualModalHarness { auto_focus: true }, ());
 
         assert_eq!(backend.focused_key(), Some(&Key::from("inside")));
+    }
+
+    struct PaneWrappedModalHarness;
+
+    impl Component for PaneWrappedModalHarness {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            Modal::new()
+                .child(
+                    VStack::new()
+                        .focus_scope(FocusScope::Contain)
+                        .child(Button::new("First").key("pane-first"))
+                        .child(Button::new("Second").key("pane-second")),
+                )
+                .into()
+        }
+    }
+
+    struct RemountModalHarness;
+
+    impl Component for RemountModalHarness {
+        type Message = AutoFocusDismissMsg;
+        type Properties = ();
+        type State = bool;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            false
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state = matches!(msg, AutoFocusDismissMsg::Open);
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let mut stack = VStack::new().child(Button::new("Background").key("background"));
+            if ctx.state {
+                stack = stack.child(
+                    Modal::new()
+                        .on_close(ctx.link().callback(|_| AutoFocusDismissMsg::Close))
+                        .child(Button::new("Inside").key("inside")),
+                );
+            }
+            stack.into()
+        }
+    }
+
+    #[test]
+    fn overlay_focus_restore_survives_overlay_remount() {
+        use crate::app::focus_service::OverlayKey;
+
+        let mut backend = TestBackend::new(RemountModalHarness);
+        backend.focus_next();
+        let background = backend.focused().expect("background should take focus");
+
+        backend
+            .dispatch(AutoFocusDismissMsg::Open)
+            .expect("modal should open");
+        assert_eq!(backend.focused_key(), Some(&Key::from("inside")));
+        assert_eq!(backend.focus_stack.len(), 1);
+
+        // Simulate a reconcile remounting the modal under a new NodeId: the
+        // saved entry now carries a dead identity no live overlay matches.
+        backend.focus_stack[0].overlay = OverlayKey::Node(crate::core::node::NodeId::INVALID);
+
+        // The next render rebinds the dead entry to the live overlay instead of
+        // pushing a duplicate save taken while the modal already held focus.
+        backend.render();
+        assert_eq!(backend.focus_stack.len(), 1, "no duplicate save");
+        let live = OverlayKey::of(
+            backend
+                .core
+                .tree
+                .top_capturing_overlay()
+                .expect("modal on top"),
+        );
+        assert_eq!(backend.focus_stack[0].overlay, live, "entry rebound");
+        assert_eq!(
+            backend.focus_stack[0].focused,
+            Some(background),
+            "the original pre-overlay save is preserved"
+        );
+
+        assert!(
+            backend
+                .send_key(plain_code(KeyCode::Esc))
+                .expect("Escape should dismiss modal")
+        );
+        assert_eq!(backend.focused(), Some(background));
+    }
+
+    #[test]
+    fn overlay_restore_consumes_dead_entry_when_identity_changed() {
+        use crate::app::focus_service::OverlayKey;
+
+        let mut backend = TestBackend::new(RemountModalHarness);
+        backend.focus_next();
+        let background = backend.focused().expect("background should take focus");
+
+        backend
+            .dispatch(AutoFocusDismissMsg::Open)
+            .expect("modal should open");
+        backend.focus_stack[0].overlay = OverlayKey::Node(crate::core::node::NodeId::INVALID);
+
+        // Dismiss with the stale identity still in place: the exact match
+        // fails, so the dead-entry fallback must consume the save.
+        assert!(
+            backend
+                .send_key(plain_code(KeyCode::Esc))
+                .expect("Escape should dismiss modal")
+        );
+        assert_eq!(backend.focused(), Some(background));
+    }
+
+    #[test]
+    fn modal_with_pane_wrapped_content_still_receives_focus() {
+        // Regression: the opaque overlay ring was empty when every focusable in
+        // a capturing overlay lived inside a `Contain` pane, so focus was
+        // suspended and Tab consumed doing nothing - a keyboard dead end. The
+        // overlay ring now falls back to descending through panes, mirroring
+        // the global safety valve (the overlay trap outranks pane containment).
+        let mut backend = TestBackend::new(PaneWrappedModalHarness);
+        assert_eq!(backend.focused_key(), Some(&Key::from("pane-first")));
+
+        backend.focus_next();
+        assert_eq!(backend.focused_key(), Some(&Key::from("pane-second")));
+
+        backend.focus_next();
+        assert_eq!(
+            backend.focused_key(),
+            Some(&Key::from("pane-first")),
+            "Tab wraps within the overlay"
+        );
+
+        assert!(
+            !backend.top_capturing_overlay_is_empty(),
+            "pane-wrapped content must not read as an empty overlay"
+        );
     }
 
     #[test]

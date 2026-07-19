@@ -22,7 +22,6 @@ use crate::layout::drag_source_layout_hint::{
     clear_drag_source_snapshot_collapse_key, set_drag_source_snapshot_collapse_key,
 };
 use crate::layout::measure::min_size_constrained;
-use crate::runtime::FocusRequest;
 use crate::style::{Rect, ThemeRole};
 use crate::widgets::DragPreview;
 
@@ -73,41 +72,11 @@ impl<C: Component> AppRunner<C> {
         let Some(request) = self.core.ctx.take_focus_request() else {
             return false;
         };
-
-        match request {
-            FocusRequest::Key(key) => {
-                self.focus.focused = None;
-                self.focus.focused_key = Some(key);
-                self.focus.focused_tag = None;
-            }
-            FocusRequest::Clear => {
-                self.focus.focused = None;
-                self.focus.focused_key = None;
-                self.focus.focused_tag = None;
-            }
-            FocusRequest::Next => {
-                if !self.focus_overlay_next() {
-                    focus::focus_next(
-                        &self.core.tree,
-                        &mut self.focus.focused,
-                        &mut self.focus.focused_key,
-                        &mut self.focus.focused_tag,
-                        self.focus.policy,
-                    );
-                }
-            }
-            FocusRequest::Prev => {
-                if !self.focus_overlay_prev() {
-                    focus::focus_prev(
-                        &self.core.tree,
-                        &mut self.focus.focused,
-                        &mut self.focus.focused_key,
-                        &mut self.focus.focused_tag,
-                        self.focus.policy,
-                    );
-                }
-            }
-        }
+        crate::app::focus_service::apply_focus_request(
+            &self.core.tree,
+            &mut self.focus.refs(),
+            request,
+        );
         true
     }
 

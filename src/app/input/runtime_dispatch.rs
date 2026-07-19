@@ -315,17 +315,17 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
             if self.overlay.focus_next() {
                 return FrameworkDispatch::Handled;
             }
-            if self.env.config.focus_policy == FocusPolicy::Manual {
-                return FrameworkDispatch::None;
-            }
-            focus::focus_next(
+            if focus::step_for_policy(
                 self.env.tree,
                 self.env.focused,
                 self.env.focused_key,
                 self.env.focused_tag,
                 self.env.config.focus_policy,
-            );
-            return FrameworkDispatch::Handled;
+                focus::FocusDirection::Next,
+            ) {
+                return FrameworkDispatch::Handled;
+            }
+            return FrameworkDispatch::None;
         }
 
         if matches
@@ -341,17 +341,17 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
             if self.overlay.focus_prev() {
                 return FrameworkDispatch::Handled;
             }
-            if self.env.config.focus_policy == FocusPolicy::Manual {
-                return FrameworkDispatch::None;
-            }
-            focus::focus_prev(
+            if focus::step_for_policy(
                 self.env.tree,
                 self.env.focused,
                 self.env.focused_key,
                 self.env.focused_tag,
                 self.env.config.focus_policy,
-            );
-            return FrameworkDispatch::Handled;
+                focus::FocusDirection::Prev,
+            ) {
+                return FrameworkDispatch::Handled;
+            }
+            return FrameworkDispatch::None;
         }
 
         if matches

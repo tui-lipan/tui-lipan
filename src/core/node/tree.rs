@@ -76,6 +76,27 @@ pub(crate) struct Node {
     active_theme: Rc<Theme>,
 }
 
+/// Whether `collect_focusables` is visiting the node it was seeded with.
+///
+/// The seed is always descended into: a `Contain` scope only stops traversal
+/// when it is encountered *below* the seed. A `Contain` seed is additionally
+/// never collected - a pane's boundary node belongs to the enclosing ring
+/// rather than its own.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CollectRoot {
+    Yes,
+    No,
+}
+
+/// Whether nested `FocusScope::Contain` panes block traversal.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScopeMode {
+    /// Stop at nested panes - the ring used for Tab traversal.
+    Opaque,
+    /// Descend through panes - used to pick a default focus target.
+    Transparent,
+}
+
 impl Node {
     pub fn focus_scope(&self) -> crate::widgets::FocusScope {
         self.kind.focus_scope()
@@ -746,17 +767,45 @@ impl NodeTree {
         false
     }
 
+    /// Collect the tab ring for the pane rooted at `root`.
+    ///
+    /// `root` itself is always descended into, so passing a `FocusScope::Contain`
+    /// node yields that pane's own ring. A `Contain` seed is never a member of
+    /// the ring it defines: a pane's boundary node belongs to the *enclosing*
+    /// ring, and including it here would let inside-the-pane cycling land on the
+    /// boundary and leak out of the trap on the next step.
     pub(crate) fn focusables_in_subtree(&self, root: NodeId) -> Vec<NodeId> {
         if !self.is_valid(root) {
             return Vec::new();
         }
         let mut out = Vec::new();
-        self.collect_focusables(root, &mut out);
+        self.collect_focusables(root, &mut out, CollectRoot::Yes, ScopeMode::Opaque);
+        out.sort_by_key(|id| id.index());
+        out
+    }
+
+    /// Every tab stop under `root`, descending through `FocusScope::Contain`
+    /// panes.
+    ///
+    /// The overlay-side counterpart of [`Self::focusables_unrestricted`]: used
+    /// as the safety valve when a capturing overlay's opaque ring is empty
+    /// because every tab stop in it lives inside a pane.
+    pub(crate) fn focusables_in_subtree_unrestricted(&self, root: NodeId) -> Vec<NodeId> {
+        if !self.is_valid(root) {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        self.collect_focusables(root, &mut out, CollectRoot::Yes, ScopeMode::Transparent);
         out.sort_by_key(|id| id.index());
         out
     }
 
     /// Collect focusable nodes in traversal order, sorted by definition order.
+    ///
+    /// Nested `FocusScope::Contain` panes are opaque: their contents are *not*
+    /// included, so Tab can never tunnel into a pane it cannot Tab back out of.
+    /// Focus enters a pane by click, `request_focus`, or an app-level pane-switch
+    /// key; once inside, [`Self::focusables_in_subtree`] supplies that pane's ring.
     ///
     /// The result is cached for the current epoch - the first call computes and
     /// stores it; subsequent calls within the same epoch return a clone.
@@ -768,23 +817,60 @@ impl NodeTree {
             return Vec::new();
         }
         let mut out = Vec::new();
-        self.collect_focusables(self.root, &mut out);
+        self.collect_focusables(self.root, &mut out, CollectRoot::Yes, ScopeMode::Opaque);
         out.sort_by_key(|id| id.index());
         *self.cached_focusables.borrow_mut() = Some(out.clone());
         out
     }
 
-    fn collect_focusables(&self, id: NodeId, out: &mut Vec<NodeId>) {
+    /// Every tab stop in the tree, descending through `FocusScope::Contain` panes.
+    ///
+    /// Used only where containment does not apply: picking a default focus target,
+    /// and stepping Tab when nothing is focused yet and [`Self::focusables`] is
+    /// empty because every tab stop lives inside a pane.
+    pub(crate) fn focusables_unrestricted(&self) -> Vec<NodeId> {
+        if !self.is_valid(self.root) {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        self.collect_focusables(
+            self.root,
+            &mut out,
+            CollectRoot::Yes,
+            ScopeMode::Transparent,
+        );
+        out.sort_by_key(|id| id.index());
+        out
+    }
+
+    fn collect_focusables(
+        &self,
+        id: NodeId,
+        out: &mut Vec<NodeId>,
+        root: CollectRoot,
+        mode: ScopeMode,
+    ) {
         let node = self.node(id);
         if node.focus_scope() == crate::widgets::FocusScope::Exclude {
             return;
         }
-        if node.is_tab_stop() {
+        let is_contain = node.focus_scope() == crate::widgets::FocusScope::Contain;
+        if root == CollectRoot::No && mode == ScopeMode::Opaque && is_contain {
+            // Only the pane's *contents* are opaque. The boundary node itself
+            // belongs to this ring, so a focusable pane stays reachable by Tab.
+            if node.is_tab_stop() {
+                out.push(id);
+            }
+            return;
+        }
+        // A `Contain` seed defines this ring; its boundary node belongs to the
+        // *enclosing* ring, so it is never a member of its own.
+        if !(root == CollectRoot::Yes && is_contain) && node.is_tab_stop() {
             out.push(id);
         }
         for &child in &node.children {
             if self.is_valid(child) {
-                self.collect_focusables(child, out);
+                self.collect_focusables(child, out, CollectRoot::No, mode);
             }
         }
     }

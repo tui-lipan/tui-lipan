@@ -29,6 +29,14 @@ While the crate is on `0.x.y`:
 - Added `FocusScope::{None, Exclude, Contain}` and `.focus_scope(...)` to `VStack`, `HStack`,
   and `Frame`. Excluded subtrees are skipped by traversal, fallback, descendant, and pointer
   focus while explicit keyed requests can enter them; contained subtrees cycle focus internally.
+  A `Contain` pane is **opaque to the enclosing tab ring**: Tab from outside never enters it,
+  because a ring that could Tab *in* but not back *out* traps focus. Focus enters a pane by
+  click, `request_focus`, or an app-level pane-switch key. A focusable (`.focusable(true)`)
+  `Contain` pane is itself a tab stop in the enclosing ring, so the pane stays keyboard-reachable
+  even though its contents are opaque; the boundary node is never part of its own pane's ring.
+  As a safety valve, when every tab stop in the tree lives inside a pane, Tab from an unfocused
+  app descends into panes so traversal is never dead; the same valve applies inside capturing
+  overlays, whose ring descends through panes when it would otherwise be empty.
 
 - New `sidebar_tabs` example: rich vertical sidebar tabs composed from primitives — status
   icon or live spinner, label plus description line per item, click/keyboard selection, and
@@ -198,6 +206,26 @@ While the crate is on `0.x.y`:
 - Renamed stack containers' `FocusPolicy` accordion-sizing enum to `FocusSizing` and
   `.focus_policy(...)` builder to `.focus_sizing(...)`. Tree's distinct
   `.focus_policy(FocusAccordion)` API is unchanged. (breaking)
+
+### Fixed
+
+- Tab no longer resets to the first widget when the focused widget is not in the tab ring.
+  Focus is granted on focusability while the ring is built from tab stops, so a widget reached
+  by click or `request_focus` (`.tab_stop(false)`, or an `Exclude`/`Contain` escape hatch) was
+  routinely absent from the ring; traversal now steps from where it would sit.
+- `FocusPolicy::Auto` startup focus now agrees with the first Tab target. The fallback walked
+  children while the ring sorts by node id, so the two diverged whenever children were ordered
+  differently from allocation.
+- Dismissing a capturing overlay no longer restores a *different* overlay's saved focus. Saved
+  entries are keyed by overlay identity and only the matching entry is consumed, so a skipped
+  save (focus already inside the overlay, or nothing focused under it) can no longer desynchronise
+  the focus stack. Declarative overlays whose node identity changes across a remount are handled
+  too: a save whose overlay no longer exists is rebound to the live overlay on the next frame,
+  and consumed as the fallback on dismissal - entries belonging to other still-open overlays are
+  never stolen.
+- `on_blur` is no longer delivered to an unrelated widget when the blurred node's arena slot is
+  recycled during reconcile. The callback is captured when the transition is recorded rather than
+  re-resolved from a stale node id.
 - **(breaking)** Raised the declared MSRV from Rust 1.85 to 1.88 (matches the
   locked Ratatui requirement), as part of laying groundwork for native
   macOS/Windows support.

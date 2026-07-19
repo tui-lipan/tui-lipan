@@ -1,4 +1,5 @@
 use crate::app::FocusPolicy;
+use crate::app::focus_service::{FocusStackEntry, NotifiedFocus};
 #[cfg(feature = "terminal")]
 use crate::app::input::drag::TerminalDrag;
 use crate::app::input::drag::{
@@ -309,7 +310,7 @@ pub(crate) struct FocusState {
     pub focused_key: Option<Key>,
     pub focused_tag: Option<Tag>,
     pub focus_stack: Vec<FocusStackEntry>,
-    pub last_notified: Option<(NodeId, crate::app::FocusEntry)>,
+    pub last_notified: Option<NotifiedFocus>,
     pub window_focused: bool,
     #[cfg(feature = "terminal")]
     pub last_emitted_focus: Option<NodeId>,
@@ -317,12 +318,20 @@ pub(crate) struct FocusState {
     pub last_emitted_window_focused: bool,
 }
 
-#[derive(Clone)]
-pub(crate) struct FocusStackEntry {
-    pub overlay: NodeId,
-    pub focused: Option<NodeId>,
-    pub key: Option<Key>,
-    pub tag: Option<Tag>,
+impl FocusState {
+    /// Borrow this state for the shared focus service.
+    ///
+    /// Takes `&mut self` rather than `&mut` the whole host so callers can still
+    /// hold `&NodeTree` from a sibling field.
+    pub(crate) fn refs(&mut self) -> crate::app::focus_service::FocusRefs<'_> {
+        crate::app::focus_service::FocusRefs {
+            policy: self.policy,
+            focused: &mut self.focused,
+            focused_key: &mut self.focused_key,
+            focused_tag: &mut self.focused_tag,
+            focus_stack: &mut self.focus_stack,
+        }
+    }
 }
 
 impl Default for FocusState {
