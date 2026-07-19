@@ -21,6 +21,7 @@ use super::events::{
 use super::osc::{
     SemanticObserver, TerminalCommandPhase, TerminalSemanticEvent, TerminalSemanticState,
 };
+use super::scrollback_ledger::{LedgerTerm, ledger_capacity, settle_history};
 use crate::style::{CaretShape, Color as UiColor, HostTerminalColors, Span, Style};
 
 /// Kind of semantic mark anchored to an absolute text line.
@@ -181,6 +182,8 @@ pub struct TerminalScreen {
     /// Logical viewport cols (matches the PTY size).
     cols: u16,
     scrollback_len: usize,
+    /// Grid capacity backing `scrollback_len`, including ledger headroom.
+    ledger_capacity: usize,
     mouse_mode: MouseModeState,
     scrollback_offset: usize,
     cache: TerminalRenderSnapshot,
@@ -353,8 +356,12 @@ impl TerminalScreen {
             rows: rows as usize,
             cols: cols as usize,
         };
+        // Extra headroom above the exposed scrollback so the grid can never saturate
+        // inside a single handler call; `LedgerTerm` trims back down to `scrollback`
+        // and counts what it dropped. See `scrollback_ledger`.
+        let capacity = ledger_capacity(scrollback, rows);
         let config = TermConfig {
-            scrolling_history: scrollback,
+            scrolling_history: capacity,
             default_cursor_style: DEFAULT_CURSOR_STYLE,
             // Track Kitty keyboard protocol pushes so `key_modes()` can report what the child
             // negotiated; without this alacritty silently drops every `CSI > <flags> u`.
@@ -372,6 +379,7 @@ impl TerminalScreen {
             rows,
             cols,
             scrollback_len: scrollback,
+            ledger_capacity: capacity,
             mouse_mode: MouseModeState::default(),
             scrollback_offset: 0,
             cache: TerminalRenderSnapshot::default(),
@@ -386,11 +394,18 @@ impl TerminalScreen {
     /// Feed terminal bytes.
     ///
     pub fn process_bytes(&mut self, bytes: &[u8]) {
-        let old_top = self.term.grid().topmost_line().0;
-        self.processor.advance(&mut self.term, bytes);
+        let mut ledger = LedgerTerm::new(&mut self.term, self.scrollback_len, self.ledger_capacity);
+        self.processor.advance(&mut ledger, bytes);
+        let evicted = ledger.evicted();
         self.semantic_parser.advance(&mut self.semantic, bytes);
-        self.remap_semantic_marks_after_scroll(old_top);
-        if !self.term.mode().contains(TermMode::ALT_SCREEN) {
+        self.drop_evicted_semantic_marks(evicted);
+        if self.term.mode().contains(TermMode::ALT_SCREEN) {
+            // Alt-screen programs still emit OSC 133, but those marks belong to a grid
+            // with no scrollback and no absolute-line space of its own. Discard them
+            // rather than leaving them pending, or they get replayed against
+            // main-screen coordinates the moment the alt screen is torn down.
+            self.discard_pending_semantic_marks();
+        } else {
             self.record_semantic_marks_from_pending();
         }
         self.scrollback_offset = self.term.grid().display_offset();
@@ -499,6 +514,7 @@ impl TerminalScreen {
     /// Resize screen dimensions.
     ///
     pub fn resize(&mut self, rows: u16, cols: u16) {
+        let reflowed = cols.max(1) != self.cols;
         self.rows = rows.max(1);
         self.cols = cols.max(1);
         let dimensions = TermDimensions {
@@ -506,6 +522,17 @@ impl TerminalScreen {
             cols: self.cols as usize,
         };
         self.term.resize(dimensions);
+        // `Term::resize` can push lines into history without going through a handler
+        // call, so the ledger never sees it; trim and account for it here.
+        self.ledger_capacity = ledger_capacity(self.scrollback_len, self.rows);
+        let evicted = settle_history(&mut self.term, self.scrollback_len, self.ledger_capacity);
+        if reflowed {
+            // A column change rewraps history, so line indices no longer refer to the
+            // text they were recorded against and cannot be corrected by a shift.
+            self.semantic_marks.clear();
+        } else {
+            self.drop_evicted_semantic_marks(evicted);
+        }
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode());
         self.dirty = true;
@@ -695,13 +722,15 @@ impl TerminalScreen {
     /// Uses the last `OutputStart` paired with a following `OutputEnd`. While a command is still
     /// running (start without end), falls back to `[start, total_text_lines())`.
     pub fn last_command_output_range(&self) -> Option<(usize, usize)> {
-        let marks: Vec<_> = self.semantic_marks.iter().copied().collect();
-        let start_idx = marks
+        let start_idx = self
+            .semantic_marks
             .iter()
             .rposition(|mark| mark.kind == SemanticMarkKind::OutputStart)?;
-        let start = marks[start_idx].absolute_line;
-        let end = marks[start_idx + 1..]
+        let start = self.semantic_marks[start_idx].absolute_line;
+        let end = self
+            .semantic_marks
             .iter()
+            .skip(start_idx + 1)
             .find(|mark| mark.kind == SemanticMarkKind::OutputEnd)
             .map(|mark| mark.absolute_line)
             .unwrap_or_else(|| self.total_text_lines());
@@ -721,25 +750,28 @@ impl TerminalScreen {
         usize::try_from((cursor - top).max(0)).unwrap_or(0)
     }
 
-    fn remap_semantic_marks_after_scroll(&mut self, old_top: i32) {
-        let new_top = self.term.grid().topmost_line().0;
-        if new_top <= old_top {
+    /// Shift marks down by the lines that just fell out of scrollback, dropping
+    /// those whose line is gone.
+    ///
+    /// `evicted` comes from [`LedgerTerm`], which counts evictions as they happen.
+    /// It cannot be re-derived from the grid afterwards: once scrollback is full,
+    /// `topmost_line()` and `history_size()` are pinned while content shifts, so a
+    /// post-hoc comparison sees nothing and marks silently drift onto unrelated
+    /// lines.
+    fn drop_evicted_semantic_marks(&mut self, evicted: usize) {
+        if evicted == 0 {
             return;
         }
-        let delta = usize::try_from(new_top - old_top).unwrap_or(0);
-        if delta == 0 {
-            return;
+        self.semantic_marks
+            .retain(|mark| mark.absolute_line >= evicted);
+        for mark in &mut self.semantic_marks {
+            mark.absolute_line -= evicted;
         }
-        let mut kept = VecDeque::new();
-        for mark in self.semantic_marks.drain(..) {
-            if mark.absolute_line >= delta {
-                kept.push_back(SemanticMark {
-                    absolute_line: mark.absolute_line - delta,
-                    ..mark
-                });
-            }
-        }
-        self.semantic_marks = kept;
+    }
+
+    /// Consume pending semantic events without recording marks for them.
+    fn discard_pending_semantic_marks(&mut self) {
+        self.semantic_events_seen = self.semantic.event_count();
     }
 
     fn record_semantic_marks_from_pending(&mut self) {
@@ -1900,5 +1932,102 @@ mod tests {
         let (start, end) = screen.last_command_output_range().expect("open range");
         assert!(end > start);
         assert_eq!(end, screen.total_text_lines());
+    }
+
+    /// Marks must keep pointing at their own line once scrollback saturates.
+    ///
+    /// This is the case the grid cannot answer for after the fact: `history_size()`
+    /// and `topmost_line()` are pinned while content shifts, so an eviction count
+    /// re-derived from the grid is always zero and marks drift onto whatever text
+    /// later occupies the index.
+    #[test]
+    fn marks_survive_eviction_once_scrollback_saturates() {
+        let mut screen = TerminalScreen::new(2, 20, 3);
+        screen.process_bytes(b"\x1b]133;C\x1b\\");
+        screen.process_bytes(b"MARKED\r\n");
+        for i in 0..2 {
+            screen.process_bytes(format!("filler{i}\r\n").as_bytes());
+        }
+
+        // Still retained: the mark must resolve to the line it was recorded on.
+        let (start, _) = screen.last_command_output_range().expect("range");
+        assert_eq!(
+            screen.text_lines(start, start + 1),
+            vec!["MARKED".to_string()]
+        );
+
+        // Push the marked line out of scrollback entirely; the mark must go with it
+        // rather than survive pointing at unrelated text.
+        for i in 0..10 {
+            screen.process_bytes(format!("more{i}\r\n").as_bytes());
+        }
+        assert!(
+            !screen
+                .text_lines(0, screen.total_text_lines())
+                .iter()
+                .any(|line| line.contains("MARKED")),
+            "precondition: the marked line should have been evicted"
+        );
+        assert_eq!(
+            screen.last_command_output_range(),
+            None,
+            "an evicted mark must be dropped, not left pointing at recycled lines"
+        );
+    }
+
+    #[test]
+    fn alt_screen_marks_do_not_leak_onto_main_screen() {
+        let mut screen = TerminalScreen::new(5, 20, 50);
+        screen.process_bytes(b"\x1b[?1049h");
+        screen.process_bytes(b"\x1b]133;A\x1b\\\x1b]133;C\x1b\\");
+        screen.process_bytes(b"altstuff\r\n");
+        screen.process_bytes(b"\x1b[?1049l");
+        screen.process_bytes(b"back-on-main\r\n");
+
+        assert!(
+            screen.semantic_marks().is_empty(),
+            "alt-screen OSC 133 must not be replayed against main-screen lines"
+        );
+        assert_eq!(screen.last_command_output_range(), None);
+    }
+
+    #[test]
+    fn resize_keeps_scrollback_within_the_requested_limit() {
+        let mut screen = TerminalScreen::new(6, 20, 3);
+        for i in 0..20 {
+            screen.process_bytes(format!("line{i}\r\n").as_bytes());
+        }
+        // Shrinking rows pushes lines into history outside any handler call.
+        screen.resize(2, 20);
+        assert!(
+            screen.total_scrollback_rows() <= 3,
+            "resize must not leave history above the exposed scrollback limit"
+        );
+    }
+
+    #[test]
+    fn reflowing_resize_drops_semantic_marks() {
+        let mut screen = TerminalScreen::new(4, 20, 20);
+        screen.process_bytes(b"\x1b]133;C\x1b\\");
+        screen.process_bytes(b"output\r\n");
+        assert!(screen.last_command_output_range().is_some());
+
+        // A column change rewraps history, so recorded line indices become meaningless.
+        screen.resize(4, 10);
+        assert!(
+            screen.semantic_marks().is_empty(),
+            "reflow invalidates line anchoring; marks must not survive it"
+        );
+    }
+
+    #[test]
+    fn scrollback_depth_matches_requested_limit() {
+        let mut screen = TerminalScreen::new(2, 20, 3);
+        for i in 0..50 {
+            screen.process_bytes(format!("line{i}\r\n").as_bytes());
+        }
+        // Ledger headroom must not leak into the depth callers observe.
+        assert_eq!(screen.total_scrollback_rows(), 3);
+        assert_eq!(screen.total_text_lines(), 5);
     }
 }

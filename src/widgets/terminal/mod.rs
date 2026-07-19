@@ -9,6 +9,7 @@ mod osc;
 mod pty;
 mod reconcile;
 mod screen;
+mod scrollback_ledger;
 
 pub use buffer::TerminalBuffer;
 pub use events::{
