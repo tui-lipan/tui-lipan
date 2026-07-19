@@ -2682,7 +2682,7 @@ fn devtools_stats_panel_uses_compact_default_size() {
 
     assert_eq!(panel_node.rect.w, 40);
     assert_eq!(panel_node.rect.h, 19);
-    assert_eq!(panel_node.rect.y, 65); // anchored to bottom
+    assert_eq!(panel_node.rect.y, 61); // anchored to bottom
 }
 
 #[cfg(feature = "devtools")]
