@@ -4675,6 +4675,71 @@ mod tests {
         assert_eq!(first_input_value(&backend), "7");
     }
 
+    struct KeyedInputPaletteRoot {
+        request: Option<&'static str>,
+    }
+
+    impl Component for KeyedInputPaletteRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::core::component::Command> {
+            if let Some(key) = self.request {
+                ctx.request_focus(key);
+            }
+            None
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let palette: Element = SearchPalette::<usize>::new()
+                .items((0..5).map(|i| SearchItem::new(format!("item-{i}"), i)))
+                .height(Length::Auto)
+                .input_key("palette-query")
+                .into();
+            palette.key("palette-container")
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    fn focused_is_input(backend: &TestBackend<KeyedInputPaletteRoot>) -> bool {
+        backend
+            .focused
+            .is_some_and(|id| matches!(backend.core.tree.node(id).kind, NodeKind::Input(_)))
+    }
+
+    /// `input_key` addresses the query input directly, instead of relying on the container key's
+    /// first-focusable-descendant fallback to happen to land there.
+    #[test]
+    fn search_palette_input_key_is_a_direct_focus_target() {
+        let backend = TestBackend::new(KeyedInputPaletteRoot {
+            request: Some("palette-query"),
+        });
+        assert_eq!(backend.focused_key(), Some(&Key::from("palette-query")));
+        assert!(focused_is_input(&backend), "focus should land on the Input");
+    }
+
+    /// Contrast: the container key resolves through the fallback, so the focused node keeps the
+    /// *container's* key rather than naming the widget that actually holds focus.
+    #[test]
+    fn search_palette_container_key_focus_does_not_name_the_input() {
+        let backend = TestBackend::new(KeyedInputPaletteRoot {
+            request: Some("palette-container"),
+        });
+        assert_eq!(backend.focused_key(), Some(&Key::from("palette-container")));
+    }
+
+    #[test]
+    fn search_palette_input_key_is_optional() {
+        let backend = TestBackend::new(KeyedInputPaletteRoot { request: None });
+        assert_eq!(backend.focused_key(), None);
+    }
+
     #[test]
     fn app_commands_first_preserves_search_palette_navigation_and_activation() {
         let selected = Rc::new(RefCell::new(Vec::new()));
