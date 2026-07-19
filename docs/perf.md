@@ -93,22 +93,27 @@ carry `component` and `scope` fields; `app.render_full` includes `root`.
 ## Input pressure
 
 When many recent Full frames are both driven by input attributions and exceed
-~16ms, the panel shows `Input pressure: N/60 full frames over budget`. Prefer
-Layout/Paint updates from handlers, memoized subtrees, and `_arc` props — the
-signal is informational only (no log spam).
+~16ms, the panel's `Input` row switches from `ok` to
+`Input  N/60 full frames over budget`. Prefer Layout/Paint updates from
+handlers, memoized subtrees, and `_arc` props — the signal is informational
+only (no log spam).
 
 ## Memo miss reasons
 
-With the `devtools` feature enabled, the stats panel shows why memoization
-missed when `memo_misses > 0`. Reason bookkeeping (and the extra dependency
+With the `devtools` feature enabled, the stats panel's `Miss` row shows the top
+miss reasons over the recent frame window. Reason bookkeeping (and the extra dependency
 probe behind it) only runs while the panel is visible with `metrics: true`, so
 shipping with `devtools` compiled in adds nothing beyond the plain hit/miss
 counters until the panel is opened. Component retains report `no-cache`,
 `key`, `dirty`, `dep:*` (theme/focus/hover/scroll/viewport/context/…), or
-`child-refresh` (`no-memo` still counts toward the miss total but is dropped
-before the top-4 reason ranking so the Miss line keeps four actionable slots).
-In-view `Memo` nodes report `view-cache`, `view-deps`, or
-`view-structure`, and now count toward the hit rate.
+`child-refresh`. In-view `Memo` nodes report `view-cache`, `view-deps`, or
+`view-structure`, and count toward the hit rate.
+
+Only components with a `memo_key()` (and in-view `Memo` nodes) participate in
+the hit/miss stats; plain components are not counted as misses. Counters move
+when components actually re-expand (full renders and scoped layout refreshes),
+so an idle app or a purely paint/layout-driven burst legitimately shows
+`no data`.
 
 ## Keep props cheap and stable
 
@@ -207,19 +212,29 @@ App::new().devtools_config(DevToolsConfig {
 })
 ```
 
-While the panel is visible, inspect frame, reconcile, and draw time; node and
-overlay counts; memo hits and misses; and the current dirty level. The overlay
-and sampling slightly perturb the workload, so use tracing or a benchmark for
-final comparisons.
+The stats panel renders a fixed set of rows so nothing appears or disappears
+between frames, and every value aggregates over the last 60 recorded frames
+rather than the latest one (per-frame data at full frame rate is unreadable).
+Rows top to bottom:
 
-### Update attribution
+- `FPS / Nodes / Overlays`: headline counters (latest frame).
+- `Frame` / `Recon` / `Draw`: average and worst frame time over the window.
+- `Chart`: frame-time bar chart, one column per recorded frame. The scale
+  floor is one 60fps frame budget (16.7ms), stretched by the worst frame in
+  view; bar heights are square-root compressed so typical sub-millisecond
+  frames stay visible next to a spike. Spike tops render in the accent color.
+- `Updates`: how many window frames were full, layout-only, or paint-only.
+- `Why`: top update sources (components and input paths) merged across the
+  window, e.g. `input:scroll x120 · Sidebar x10`, or `idle`. Animation ticks,
+  resize, and other framework-internal dirty marks are not attributed.
+- `Memo` / `Miss`: window hit rate and top miss reasons.
+- `Slow`: worst single-frame `view()` time per component.
+- `Focus`: focused tag and key, focus policy, ring size (`r4` = 4 tab stops).
+- `Input`: `ok`, or the input-pressure warning when input-driven full frames
+  repeatedly blow the frame budget.
 
-With `metrics: true` and the panel visible, each recorded frame also lists which
-component or input path requested the dirty level (for example
-`full: MySidebar x3, input:drag x12`). Sources coalesce while the runner skips
-deferred-full iterations: attributions accumulate until the next recorded frame,
-then sort by dirty level and count (capped for the overlay). Animation ticks,
-resize, and other framework-internal dirty marks are not attributed.
+The overlay and sampling slightly perturb the workload, so use tracing or a
+benchmark for final comparisons.
 
 For runtime spans and timing events, enable instrumentation and install a
 subscriber in the app binary:

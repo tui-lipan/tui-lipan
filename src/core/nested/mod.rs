@@ -159,7 +159,6 @@ pub(crate) fn aggregate_view_timings(
 #[cfg(feature = "devtools")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum MemoMissReason {
-    NotMemoized,
     NoCache,
     KeyChanged,
     SelfDirty,
@@ -232,9 +231,6 @@ pub(crate) fn take_memo_frame_stats() -> MemoFrameStats {
     });
     let mut reasons = MEMO_MISS_REASONS.with(|reasons| std::mem::take(&mut *reasons.borrow_mut()));
     if !reasons.is_empty() {
-        // Drop NotMemoized before ranking/truncation so the kept slots stay
-        // actionable. It still contributes to `misses` / the hit-rate denominator.
-        reasons.retain(|(reason, _)| !matches!(reason, MemoMissReason::NotMemoized));
         reasons.sort_by(|a, b| {
             b.1.cmp(&a.1)
                 .then_with(|| format!("{a:?}").cmp(&format!("{b:?}")))
@@ -253,20 +249,18 @@ pub(crate) fn take_memo_frame_stats() -> MemoFrameStats {
 #[cfg(feature = "devtools")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MemoRetainFacts {
-    has_key: bool,
     has_cache: bool,
     self_dirty: bool,
     key_matches: bool,
 }
 
+/// Classify why a memoized component failed to retain. Only called for
+/// components with a `memo_key`; plain components never enter the stats.
 #[cfg(feature = "devtools")]
 fn classify_component_miss(
     facts: MemoRetainFacts,
     dep: Option<MemoDependencyKind>,
 ) -> MemoMissReason {
-    if !facts.has_key {
-        return MemoMissReason::NotMemoized;
-    }
     if !facts.has_cache {
         return MemoMissReason::NoCache;
     }
@@ -283,7 +277,6 @@ fn classify_component_miss(
 #[cfg(feature = "devtools")]
 pub(crate) fn memo_miss_reason_label(reason: MemoMissReason) -> String {
     match reason {
-        MemoMissReason::NotMemoized => "no-memo".into(),
         MemoMissReason::NoCache => "no-cache".into(),
         MemoMissReason::KeyChanged => "key".into(),
         MemoMissReason::SelfDirty => "dirty".into(),
@@ -794,8 +787,9 @@ impl ComponentRegistry {
         }
 
         #[cfg(feature = "devtools")]
+        let memoized;
+        #[cfg(feature = "devtools")]
         let mut retain_facts = MemoRetainFacts {
-            has_key: false,
             has_cache: false,
             self_dirty: false,
             key_matches: false,
@@ -826,13 +820,15 @@ impl ComponentRegistry {
 
             let memo_key = entry.component.memo_key();
             #[cfg(feature = "devtools")]
-            if frame_diagnostics_enabled() {
-                retain_facts.has_key = memo_key.is_some();
+            {
+                memoized = memo_key.is_some();
+            }
+            #[cfg(feature = "devtools")]
+            if memoized && frame_diagnostics_enabled() {
                 retain_facts.has_cache = entry.cached_element.is_some();
                 retain_facts.self_dirty = entry.self_dirty;
                 retain_facts.key_matches = entry.last_memo_key == memo_key;
-                if retain_facts.has_key
-                    && retain_facts.has_cache
+                if retain_facts.has_cache
                     && !retain_facts.self_dirty
                     && retain_facts.key_matches
                     && !entry.component.memo_dependencies_match(&entry.memo_deps)
@@ -854,9 +850,6 @@ impl ComponentRegistry {
         };
 
         if can_retain {
-            #[cfg(feature = "devtools")]
-            increment_memo_hit_counter();
-
             let needs_descendant_refresh = self
                 .direct_child_ids(id)
                 .into_iter()
@@ -877,6 +870,11 @@ impl ComponentRegistry {
                 return self.render_component_instance(id, epoch, viewport);
             }
 
+            // Count the hit only once the retain actually succeeded; the
+            // fallback above records a miss instead.
+            #[cfg(feature = "devtools")]
+            increment_memo_hit_counter();
+
             if self.is_valid(id) {
                 let entry = self.arena.get_mut(id);
                 entry.cached_element = Some(cached.clone());
@@ -887,8 +885,13 @@ impl ComponentRegistry {
             return cached;
         }
 
+        // Only memoized components participate in the hit/miss stats: counting
+        // every plain component render as a "miss" pins the hit rate at 0% in
+        // apps that memoize few components, which measures nothing.
         #[cfg(feature = "devtools")]
-        record_memo_miss(classify_component_miss(retain_facts, dep_mismatch));
+        if memoized {
+            record_memo_miss(classify_component_miss(retain_facts, dep_mismatch));
+        }
 
         self.render_component_instance(id, epoch, viewport)
     }
@@ -2312,27 +2315,26 @@ mod tests {
 
     #[cfg(feature = "devtools")]
     #[test]
-    fn take_memo_frame_stats_drops_not_memoized_before_truncate() {
+    fn take_memo_frame_stats_ranks_reasons_by_count() {
         use super::{
             MemoMissReason, record_memo_miss, set_frame_diagnostics_enabled, take_memo_frame_stats,
         };
 
         let _ = take_memo_frame_stats();
         set_frame_diagnostics_enabled(true);
-        record_memo_miss(MemoMissReason::NotMemoized);
-        record_memo_miss(MemoMissReason::NotMemoized);
+        record_memo_miss(MemoMissReason::SelfDirty);
         record_memo_miss(MemoMissReason::SelfDirty);
         record_memo_miss(MemoMissReason::KeyChanged);
         set_frame_diagnostics_enabled(false);
         let stats = take_memo_frame_stats();
-        assert_eq!(stats.misses, 4);
-        assert!(
-            !stats
-                .reasons
-                .iter()
-                .any(|(reason, _)| matches!(reason, MemoMissReason::NotMemoized))
+        assert_eq!(stats.misses, 3);
+        assert_eq!(
+            stats.reasons,
+            vec![
+                (MemoMissReason::SelfDirty, 2),
+                (MemoMissReason::KeyChanged, 1),
+            ]
         );
-        assert_eq!(stats.reasons.len(), 2);
     }
 
     #[cfg(feature = "devtools")]
@@ -2357,21 +2359,10 @@ mod tests {
         use super::{MemoDependencyKind, MemoMissReason, MemoRetainFacts, classify_component_miss};
 
         let base = MemoRetainFacts {
-            has_key: true,
             has_cache: true,
             self_dirty: false,
             key_matches: true,
         };
-        assert_eq!(
-            classify_component_miss(
-                MemoRetainFacts {
-                    has_key: false,
-                    ..base
-                },
-                None
-            ),
-            MemoMissReason::NotMemoized
-        );
         assert_eq!(
             classify_component_miss(
                 MemoRetainFacts {

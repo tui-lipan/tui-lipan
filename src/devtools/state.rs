@@ -24,16 +24,19 @@ const FPS_WINDOW: Duration = Duration::from_secs(2);
 const LOGS_TAB_INDEX: usize = 1;
 const ATTRIBUTION_PENDING_CAP: usize = 16;
 const ATTRIBUTION_FRAME_CAP: usize = 6;
-const ATTRIBUTION_OVERLAY_LINES: usize = 3;
 
 const DEFAULT_CONFIG_PANEL_WIDTH: Length = Length::Flex(1);
 const DEFAULT_CONFIG_PANEL_HEIGHT: Length = Length::Percent(30);
 
-const DEFAULT_STATS_PANEL_WIDTH: Length = Length::Px(40);
-const DEFAULT_STATS_PANEL_HEIGHT: Length = Length::Px(19);
-const INPUT_PRESSURE_WINDOW: usize = 60;
+const DEFAULT_STATS_PANEL_WIDTH: Length = Length::Px(48);
+/// 2 border rows + the fixed 13-row stats body (see `stats_body`).
+const DEFAULT_STATS_PANEL_HEIGHT: Length = Length::Px(15);
+/// Rolling window (in recorded frames) for stats aggregation and input pressure.
+const RECENT_WINDOW_FRAMES: usize = 60;
 const INPUT_PRESSURE_FRAME_BUDGET: Duration = Duration::from_millis(16);
 const INPUT_PRESSURE_THRESHOLD: u32 = 8;
+/// Sparkline scale floor in microseconds (one 60fps frame budget).
+pub(crate) const FRAME_BUDGET_US: u64 = 16_667;
 const DEFAULT_LOGS_PANEL_WIDTH: Length = Length::Flex(1);
 const DEFAULT_LOGS_PANEL_HEIGHT: Length = Length::Px(26);
 
@@ -134,28 +137,10 @@ fn dirty_level_sort_rank(level: DirtyLevel) -> u8 {
     }
 }
 
-fn dirty_level_overlay_label(level: DirtyLevel) -> &'static str {
-    match level {
-        DirtyLevel::Full => "full",
-        DirtyLevel::LayoutOnly => "layout",
-        DirtyLevel::PaintOnly => "paint",
-        DirtyLevel::None => "none",
-    }
-}
-
 fn attribution_source_label(source: &UpdateSource) -> &str {
     match source {
         UpdateSource::Component { name, .. } => name.as_ref(),
         UpdateSource::Input(label) => label,
-    }
-}
-
-fn format_attribution_source(entry: &UpdateAttribution) -> String {
-    let label = attribution_source_label(&entry.source);
-    if entry.count > 1 {
-        format!("{label} x{}", entry.count)
-    } else {
-        label.to_string()
     }
 }
 
@@ -173,29 +158,34 @@ pub(crate) fn finalize_frame_attributions(
     pending
 }
 
-/// Format overlay lines grouping attributions by dirty level.
+/// Stats aggregated over the last [`RECENT_WINDOW_FRAMES`] recorded frames.
 ///
-/// Expects attributions already sorted (e.g. via [`finalize_frame_attributions`]).
-/// Returns at most [`ATTRIBUTION_OVERLAY_LINES`] lines like
-/// `full: MySidebar x3, input:drag x12`.
-pub(crate) fn format_attribution_overlay_lines(attributions: &[UpdateAttribution]) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut index = 0;
-    while index < attributions.len() && lines.len() < ATTRIBUTION_OVERLAY_LINES {
-        let level = attributions[index].level;
-        let mut parts = Vec::new();
-        while index < attributions.len() && attributions[index].level == level {
-            parts.push(format_attribution_source(&attributions[index]));
-            index += 1;
-        }
-        lines.push(format!(
-            "{}: {}",
-            dirty_level_overlay_label(level),
-            parts.join(", ")
-        ));
-    }
-    lines
+/// The overlay renders from this window instead of the latest frame so lines
+/// stay populated and readable while the app animates: per-frame data at 60fps
+/// flickers in and out; a rolling window decays smoothly.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct StatsWindow {
+    pub(crate) frames: u32,
+    pub(crate) full: u32,
+    pub(crate) layout: u32,
+    pub(crate) paint: u32,
+    pub(crate) avg_total: Duration,
+    pub(crate) max_total: Duration,
+    pub(crate) avg_reconcile: Duration,
+    pub(crate) avg_draw: Duration,
+    pub(crate) memo_hits: u64,
+    pub(crate) memo_misses: u64,
+    /// Update sources merged across levels and frames, count-desc.
+    pub(crate) top_sources: Vec<(String, u32)>,
+    /// Memo miss reasons merged across frames, count-desc.
+    pub(crate) top_miss_reasons: Vec<(crate::core::nested::MemoMissReason, u32)>,
+    /// Worst single-frame view() time per component name, duration-desc.
+    pub(crate) top_slow_views: Vec<(Arc<str>, Duration)>,
 }
+
+const WINDOW_TOP_SOURCES: usize = 3;
+const WINDOW_TOP_MISS_REASONS: usize = 3;
+const WINDOW_TOP_SLOW_VIEWS: usize = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DevLogEntry {
@@ -307,9 +297,90 @@ impl DevToolsState {
         self.prune_fps_samples(sample_ts);
     }
 
+    /// Aggregate the recent frame window for the stats overlay.
+    pub(crate) fn stats_window(&self) -> StatsWindow {
+        let frames: Vec<&FrameMetrics> = self
+            .frame_history
+            .iter()
+            .rev()
+            .take(RECENT_WINDOW_FRAMES)
+            .collect();
+        let mut window = StatsWindow {
+            frames: frames.len() as u32,
+            ..StatsWindow::default()
+        };
+        if frames.is_empty() {
+            return window;
+        }
+
+        let mut sources: Vec<(String, u32)> = Vec::new();
+        let mut reasons: Vec<(crate::core::nested::MemoMissReason, u32)> = Vec::new();
+        let mut slow: Vec<(Arc<str>, Duration)> = Vec::new();
+        let mut sum_total = Duration::ZERO;
+        let mut sum_reconcile = Duration::ZERO;
+        let mut sum_draw = Duration::ZERO;
+
+        for frame in &frames {
+            match frame.dirty_level.as_str() {
+                "full" => window.full += 1,
+                "layout" => window.layout += 1,
+                "paint" => window.paint += 1,
+                _ => {}
+            }
+            sum_total += frame.total_duration;
+            sum_reconcile += frame.reconcile_duration;
+            sum_draw += frame.draw_duration;
+            window.max_total = window.max_total.max(frame.total_duration);
+            window.memo_hits += frame.memo_hits;
+            window.memo_misses += frame.memo_misses;
+
+            for attribution in &frame.attributions {
+                let label = attribution_source_label(&attribution.source);
+                if let Some((_, count)) = sources.iter_mut().find(|(l, _)| l == label) {
+                    *count = count.saturating_add(attribution.count);
+                } else {
+                    sources.push((label.to_string(), attribution.count));
+                }
+            }
+            for &(reason, count) in &frame.memo_miss_reasons {
+                if let Some((_, total)) = reasons.iter_mut().find(|(r, _)| *r == reason) {
+                    *total = total.saturating_add(count);
+                } else {
+                    reasons.push((reason, count));
+                }
+            }
+            for timing in &frame.component_timings {
+                if let Some((_, max)) = slow.iter_mut().find(|(n, _)| *n == timing.name) {
+                    *max = (*max).max(timing.duration);
+                } else {
+                    slow.push((Arc::clone(&timing.name), timing.duration));
+                }
+            }
+        }
+
+        let count = frames.len() as u32;
+        window.avg_total = sum_total / count;
+        window.avg_reconcile = sum_reconcile / count;
+        window.avg_draw = sum_draw / count;
+
+        sources.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        sources.truncate(WINDOW_TOP_SOURCES);
+        window.top_sources = sources;
+
+        reasons.sort_by_key(|entry| std::cmp::Reverse(entry.1));
+        reasons.truncate(WINDOW_TOP_MISS_REASONS);
+        window.top_miss_reasons = reasons;
+
+        slow.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        slow.truncate(WINDOW_TOP_SLOW_VIEWS);
+        window.top_slow_views = slow;
+
+        window
+    }
+
     /// Count recent Full frames that were both input-sourced and over budget.
     pub(crate) fn input_pressure(&self) -> InputPressure {
-        let window = self.frame_history.len().min(INPUT_PRESSURE_WINDOW);
+        let window = self.frame_history.len().min(RECENT_WINDOW_FRAMES);
         let mut offending = 0u32;
         for frame in self.frame_history.iter().rev().take(window) {
             if frame.input_sourced_full && frame.total_duration > INPUT_PRESSURE_FRAME_BUDGET {
@@ -436,94 +507,32 @@ impl DevToolsState {
         self.frame_history.back()
     }
 
-    /// Return the last `width` frames as duration samples in milliseconds.
+    /// Return the last `width` frames as duration samples in microseconds.
     ///
     /// Each sample maps 1:1 to one sparkline column.  Pass the sparkline's
     /// actual column count so no bucket-averaging downsampling is needed.
-    pub(crate) fn duration_history_ms(&self, width: usize) -> Vec<u64> {
+    /// Microsecond resolution keeps sub-millisecond frames visible; whole
+    /// milliseconds would round the typical frame down to an empty column.
+    pub(crate) fn duration_history_us(&self, width: usize) -> Vec<u64> {
         let len = self.frame_history.len();
         let start = len.saturating_sub(width);
         self.frame_history
             .iter()
             .skip(start)
-            .map(|metrics| metrics.total_duration.as_millis().min(u128::from(u64::MAX)) as u64)
+            .map(|metrics| metrics.total_duration.as_micros().min(u128::from(u64::MAX)) as u64)
             .collect()
     }
 
     /// Estimate the sparkline column count from the resolved panel width.
-    /// Subtracts border (2) and horizontal padding (2) for `Px` widths.
+    /// Subtracts the frame border (the panel has no horizontal padding); a
+    /// larger overhead leaves blank columns because `ClipStart` right-aligns
+    /// the bars in the wider content area.
     pub(crate) fn sparkline_columns(&self, viewport_w: u16) -> usize {
-        const FRAME_OVERHEAD: u16 = 4; // 2 border + 2 horizontal padding
+        const FRAME_OVERHEAD: u16 = 2; // left + right border
         match self.resolved_panel_size().0 {
             Length::Px(w) => w.saturating_sub(FRAME_OVERHEAD) as usize,
             _ => viewport_w.saturating_sub(FRAME_OVERHEAD) as usize,
         }
-    }
-
-    /// Average total frame duration over the FPS window.
-    pub(crate) fn avg_frame_ms(&self) -> f64 {
-        let cutoff = self
-            .fps_samples
-            .front()
-            .copied()
-            .unwrap_or_else(Instant::now);
-        let recent: Vec<_> = self
-            .frame_history
-            .iter()
-            .filter(|m| m.timestamp >= cutoff)
-            .collect();
-        if recent.is_empty() {
-            return 0.0;
-        }
-        let sum: f64 = recent
-            .iter()
-            .map(|m| m.total_duration.as_secs_f64() * 1000.0)
-            .sum();
-        sum / recent.len() as f64
-    }
-
-    /// Average reconcile duration over the FPS window.
-    pub(crate) fn avg_reconcile_ms(&self) -> f64 {
-        let cutoff = self
-            .fps_samples
-            .front()
-            .copied()
-            .unwrap_or_else(Instant::now);
-        let recent: Vec<_> = self
-            .frame_history
-            .iter()
-            .filter(|m| m.timestamp >= cutoff)
-            .collect();
-        if recent.is_empty() {
-            return 0.0;
-        }
-        let sum: f64 = recent
-            .iter()
-            .map(|m| m.reconcile_duration.as_secs_f64() * 1000.0)
-            .sum();
-        sum / recent.len() as f64
-    }
-
-    /// Average draw duration over the FPS window.
-    pub(crate) fn avg_draw_ms(&self) -> f64 {
-        let cutoff = self
-            .fps_samples
-            .front()
-            .copied()
-            .unwrap_or_else(Instant::now);
-        let recent: Vec<_> = self
-            .frame_history
-            .iter()
-            .filter(|m| m.timestamp >= cutoff)
-            .collect();
-        if recent.is_empty() {
-            return 0.0;
-        }
-        let sum: f64 = recent
-            .iter()
-            .map(|m| m.draw_duration.as_secs_f64() * 1000.0)
-            .sum();
-        sum / recent.len() as f64
     }
 
     pub(crate) fn filtered_log_count(&self) -> usize {
@@ -812,7 +821,7 @@ mod tests {
 
         assert_eq!(
             state.resolved_panel_size(),
-            (Length::Px(40), Length::Px(19))
+            (Length::Px(48), Length::Px(15))
         );
     }
 
@@ -1001,10 +1010,6 @@ mod tests {
                 assert!(window[0].count >= window[1].count);
             }
         }
-
-        let lines = format_attribution_overlay_lines(&finalized);
-        assert!(lines.len() <= ATTRIBUTION_OVERLAY_LINES);
-        assert!(lines.iter().all(|line| line.contains(':')));
     }
 
     fn sample_frame(input_sourced_full: bool, total_ms: u64) -> FrameMetrics {
@@ -1023,6 +1028,102 @@ mod tests {
             component_timings: Vec::new(),
             input_sourced_full,
         }
+    }
+
+    #[test]
+    fn stats_window_aggregates_levels_durations_and_top_lists() {
+        let mut state = DevToolsState::default();
+
+        let mut layout_frame = sample_frame(false, 2);
+        layout_frame.dirty_level = "layout".into();
+        layout_frame.memo_hits = 8;
+        layout_frame.memo_misses = 2;
+        layout_frame.attributions = vec![UpdateAttribution {
+            source: UpdateSource::Input("input:scroll"),
+            level: DirtyLevel::LayoutOnly,
+            count: 5,
+        }];
+        layout_frame.memo_miss_reasons = vec![(crate::core::nested::MemoMissReason::SelfDirty, 2)];
+        layout_frame.component_timings = vec![ComponentTiming {
+            name: Arc::from("Sidebar"),
+            scope: ScopeId(7),
+            duration: Duration::from_micros(900),
+            calls: 1,
+        }];
+        state.push_frame_metrics(layout_frame.clone());
+
+        let mut full_frame = sample_frame(false, 6);
+        full_frame.memo_hits = 2;
+        full_frame.memo_misses = 3;
+        full_frame.attributions = vec![
+            UpdateAttribution {
+                source: UpdateSource::Input("input:scroll"),
+                level: DirtyLevel::Full,
+                count: 4,
+            },
+            UpdateAttribution {
+                source: UpdateSource::Component {
+                    scope: ScopeId(7),
+                    name: Arc::from("Sidebar"),
+                },
+                level: DirtyLevel::Full,
+                count: 1,
+            },
+        ];
+        full_frame.memo_miss_reasons = vec![
+            (crate::core::nested::MemoMissReason::SelfDirty, 1),
+            (crate::core::nested::MemoMissReason::KeyChanged, 2),
+        ];
+        full_frame.component_timings = vec![ComponentTiming {
+            name: Arc::from("Sidebar"),
+            scope: ScopeId(7),
+            duration: Duration::from_micros(1400),
+            calls: 2,
+        }];
+        state.push_frame_metrics(full_frame);
+
+        let window = state.stats_window();
+        assert_eq!(window.frames, 2);
+        assert_eq!((window.full, window.layout, window.paint), (1, 1, 0));
+        assert_eq!(window.avg_total, Duration::from_millis(4));
+        assert_eq!(window.max_total, Duration::from_millis(6));
+        assert_eq!((window.memo_hits, window.memo_misses), (10, 5));
+        // input:scroll merged across levels: 5 + 4 = 9.
+        assert_eq!(
+            window.top_sources,
+            vec![("input:scroll".to_string(), 9), ("Sidebar".to_string(), 1)]
+        );
+        assert_eq!(
+            window.top_miss_reasons,
+            vec![
+                (crate::core::nested::MemoMissReason::SelfDirty, 3),
+                (crate::core::nested::MemoMissReason::KeyChanged, 2),
+            ]
+        );
+        // Slow views keep the worst single-frame duration per name.
+        assert_eq!(
+            window.top_slow_views,
+            vec![(Arc::from("Sidebar"), Duration::from_micros(1400))]
+        );
+    }
+
+    #[test]
+    fn stats_window_is_empty_defaults_without_frames() {
+        let state = DevToolsState::default();
+        let window = state.stats_window();
+        assert_eq!(window.frames, 0);
+        assert!(window.top_sources.is_empty());
+        assert!(window.top_miss_reasons.is_empty());
+        assert!(window.top_slow_views.is_empty());
+    }
+
+    #[test]
+    fn duration_history_us_keeps_submillisecond_resolution() {
+        let mut state = DevToolsState::default();
+        let mut frame = sample_frame(false, 0);
+        frame.total_duration = Duration::from_micros(420);
+        state.push_frame_metrics(frame);
+        assert_eq!(state.duration_history_us(10), vec![420]);
     }
 
     #[test]
