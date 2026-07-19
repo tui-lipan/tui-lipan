@@ -48,6 +48,20 @@ pub enum KeyBindingParseError {
     Invalid(String),
 }
 
+/// Error returned by [`KeyBinding::key_events`].
+///
+/// Distinct from [`KeyBindingParseError`]: the binding already parsed, it just
+/// cannot be expressed as one discrete [`KeyEvent`] per chord step.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum KeyEventExpansionError {
+    /// The step presses several key codes at once (e.g. a `crokey` multi-code combination).
+    #[error("multi-key combinations cannot be expanded into a single key event")]
+    MultiKeyCombination,
+    /// The step uses a key code with no [`KeyCode`] equivalent.
+    #[error("unsupported key code for event expansion: {0}")]
+    UnsupportedKeyCode(String),
+}
+
 impl KeyBinding {
     /// Returns true when this binding matches the given sequence of key events.
     pub fn matches_sequence(&self, events: &[KeyEvent]) -> bool {
@@ -78,7 +92,7 @@ impl KeyBinding {
     ///
     /// Combinations that press multiple key codes at once are rejected — send-keys and similar
     /// callers need a single discrete event per step.
-    pub fn key_events(&self) -> Result<Vec<KeyEvent>, KeyBindingParseError> {
+    pub fn key_events(&self) -> Result<Vec<KeyEvent>, KeyEventExpansionError> {
         self.steps
             .iter()
             .map(|step| {
@@ -368,18 +382,14 @@ pub(crate) fn to_crokey_event(key: KeyEvent) -> crossterm::event::KeyEvent {
 #[cfg(not(target_arch = "wasm32"))]
 fn key_event_from_combination(
     combination: KeyCombination,
-) -> Result<KeyEvent, KeyBindingParseError> {
+) -> Result<KeyEvent, KeyEventExpansionError> {
     use crokey::OneToThree;
     use crossterm::event::KeyCode as CtKeyCode;
 
     let combination = combination.normalized();
     let ct_code = match combination.codes {
         OneToThree::One(code) => code,
-        _ => {
-            return Err(KeyBindingParseError::Invalid(
-                "multi-key combinations are not supported for key event expansion".into(),
-            ));
-        }
+        _ => return Err(KeyEventExpansionError::MultiKeyCombination),
     };
 
     let mut mods = KeyMods::NONE;
@@ -430,8 +440,8 @@ fn key_event_from_combination(
         CtKeyCode::Insert => KeyCode::Insert,
         CtKeyCode::F(n) => KeyCode::F(n),
         other => {
-            return Err(KeyBindingParseError::Invalid(format!(
-                "unsupported key code for event expansion: {other:?}"
+            return Err(KeyEventExpansionError::UnsupportedKeyCode(format!(
+                "{other:?}"
             )));
         }
     };
@@ -439,8 +449,11 @@ fn key_event_from_combination(
     Ok(KeyEvent { code, mods })
 }
 
-#[cfg(target_arch = "wasm32")]
-fn key_event_from_canonical(canonical: &str) -> Result<KeyEvent, KeyBindingParseError> {
+// Compiled on native under `test` as well, so the canonical-string path stays
+// covered by `canonical_expansion_matches_native_expansion` instead of only ever
+// being exercised on wasm.
+#[cfg(any(target_arch = "wasm32", test))]
+fn key_event_from_canonical(canonical: &str) -> Result<KeyEvent, KeyEventExpansionError> {
     let mut mods = KeyMods::NONE;
     let mut key_token = None;
     for part in canonical.split('+').filter(|part| !part.is_empty()) {
@@ -451,16 +464,26 @@ fn key_event_from_canonical(canonical: &str) -> Result<KeyEvent, KeyBindingParse
             "shift" => mods.shift = true,
             token if key_token.is_none() => key_token = Some(token.to_string()),
             _ => {
-                return Err(KeyBindingParseError::Invalid(canonical.to_string()));
+                return Err(KeyEventExpansionError::UnsupportedKeyCode(
+                    canonical.to_string(),
+                ));
             }
         }
     }
     let Some(token) = key_token else {
-        return Err(KeyBindingParseError::Invalid(canonical.to_string()));
+        return Err(KeyEventExpansionError::UnsupportedKeyCode(
+            canonical.to_string(),
+        ));
     };
     let code = match token.as_str() {
         "esc" | "escape" => KeyCode::Esc,
         "enter" | "return" => KeyCode::Enter,
+        // BackTab already encodes the shift; keeping the modifier too would make
+        // this disagree with the native expansion path.
+        "tab" if mods.shift => {
+            mods.shift = false;
+            KeyCode::BackTab
+        }
         "tab" => KeyCode::Tab,
         "backtab" => KeyCode::BackTab,
         "backspace" => KeyCode::Backspace,
@@ -479,7 +502,11 @@ fn key_event_from_canonical(canonical: &str) -> Result<KeyEvent, KeyBindingParse
             KeyCode::F(token[1..].parse().unwrap_or(1))
         }
         token if token.chars().count() == 1 => KeyCode::Char(token.chars().next().unwrap()),
-        _ => return Err(KeyBindingParseError::Invalid(canonical.to_string())),
+        _ => {
+            return Err(KeyEventExpansionError::UnsupportedKeyCode(
+                canonical.to_string(),
+            ));
+        }
     };
     Ok(KeyEvent { code, mods })
 }
@@ -911,6 +938,46 @@ mod tests {
         assert_eq!(chord[0].code, KeyCode::Char('x'));
         assert!(chord[0].mods.ctrl);
         assert_eq!(chord[1].code, KeyCode::Char('b'));
+    }
+
+    #[test]
+    fn key_binding_expands_shift_tab_to_backtab() {
+        let events = KeyBinding::from_str("shift-tab")
+            .expect("parses")
+            .key_events()
+            .expect("expands");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].code, KeyCode::BackTab);
+        assert!(
+            !events[0].mods.shift,
+            "BackTab already encodes the shift, so it must not be reported twice"
+        );
+    }
+
+    /// The wasm expansion path parses the canonical string rather than a structured
+    /// combination, so it is covered here to keep the two implementations in step.
+    #[test]
+    fn canonical_expansion_matches_native_expansion() {
+        for raw in [
+            "ctrl-c",
+            "shift-tab",
+            "alt-enter",
+            "f5",
+            "esc",
+            "space",
+            "up",
+            "pagedown",
+        ] {
+            let binding = KeyBinding::from_str(raw).expect("parses");
+            let native = binding.key_events().expect("native expands");
+            let canonical =
+                super::key_event_from_canonical(binding.canonical()).expect("canonical expands");
+            assert_eq!(
+                native,
+                vec![canonical],
+                "native and canonical expansion disagree for {raw:?}"
+            );
+        }
     }
 
     #[test]
