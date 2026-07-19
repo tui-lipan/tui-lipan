@@ -13,6 +13,18 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Added plain-text export over absolute terminal line ranges: `TerminalScreen::total_text_lines`,
+  `text_lines`, `export_text`, `absolute_line_to_viewport`, and `absolute_line_to_offset`.
+  Absolute indices count from the oldest retained history line and never mutate the display
+  offset or run the render pipeline, so exporting does not disturb what the user is looking at.
+- Added OSC 133 semantic marks anchored to those absolute lines: public `SemanticMark` and
+  `SemanticMarkKind`, plus `TerminalScreen::semantic_marks`, `last_command_output_range`, and
+  `export_last_command_output`. Marks are bounded, dropped once their line falls out of
+  scrollback, and ignored while the alt screen is up.
+- Added `KeyBinding::key_events`, expanding a parsed binding into one `KeyEvent` per chord step
+  for send-keys style callers, with a dedicated `KeyEventExpansionError` for bindings that cannot
+  be expressed as discrete events.
+
 - Added `Theme::focus_decoration(bool)` and public `Theme::focus_decoration`, defaulting to `true`.
   Disabling it suppresses theme-sourced focus chrome, focused-content palette defaults, and focused
   scrollbar thumbs while preserving explicit widget focus styles and all selection styling.
@@ -209,6 +221,16 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Terminal semantic marks no longer drift onto unrelated lines once scrollback fills up.
+  Eviction cannot be recovered from the grid after the fact: at the scrollback limit
+  `history_size()` and `topmost_line()` are pinned while content keeps shifting, so a remap
+  derived by comparing grid state always computed a zero delta. `export_last_command_output`
+  could then silently return a later command's output instead of the marked one. Evictions are
+  now counted as they happen, while the VTE parser is driving the terminal, and marks whose line
+  is gone are dropped rather than left pointing at recycled lines.
+- OSC 133 sequences emitted by alt-screen programs no longer produce bogus main-screen marks.
+  Recording was skipped while the alt screen was up, but the pending events were left queued and
+  replayed against main-screen coordinates once the alt screen was torn down.
 - Tab no longer resets to the first widget when the focused widget is not in the tab ring.
   Focus is granted on focusability while the ring is built from tab stops, so a widget reached
   by click or `request_focus` (`.tab_stop(false)`, or an `Exclude`/`Contain` escape hatch) was

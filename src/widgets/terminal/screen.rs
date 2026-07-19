@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -17,8 +18,36 @@ use alacritty_terminal::vte::ansi::{
 use super::events::{
     KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, TerminalKeyModes,
 };
-use super::osc::{SemanticObserver, TerminalSemanticEvent, TerminalSemanticState};
+use super::osc::{
+    SemanticObserver, TerminalCommandPhase, TerminalSemanticEvent, TerminalSemanticState,
+};
+use super::scrollback_ledger::{LedgerTerm, ledger_capacity, settle_history};
 use crate::style::{CaretShape, Color as UiColor, HostTerminalColors, Span, Style};
+
+/// Kind of semantic mark anchored to an absolute text line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticMarkKind {
+    /// `OSC 133;A` — shell drawing a prompt.
+    Prompt,
+    /// `OSC 133;C` — command output started.
+    OutputStart,
+    /// `OSC 133;D` — command output ended.
+    OutputEnd,
+}
+
+/// A semantic mark recorded against the absolute text-line space used by
+/// [`TerminalScreen::total_text_lines`] / [`TerminalScreen::export_text`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SemanticMark {
+    /// Prompt / output-start / output-end.
+    pub kind: SemanticMarkKind,
+    /// Absolute line index (`0` = oldest retained history line).
+    pub absolute_line: usize,
+    /// Exit status from `OSC 133;D`, when present.
+    pub exit_status: Option<i32>,
+}
+
+const MAX_SEMANTIC_MARKS: usize = 256;
 
 /// Cursor style applied when the child program never issues `DECSCUSR`.
 ///
@@ -153,12 +182,18 @@ pub struct TerminalScreen {
     /// Logical viewport cols (matches the PTY size).
     cols: u16,
     scrollback_len: usize,
+    /// Grid capacity backing `scrollback_len`, including ledger headroom.
+    ledger_capacity: usize,
     mouse_mode: MouseModeState,
     scrollback_offset: usize,
     cache: TerminalRenderSnapshot,
     palette: TerminalColorPalette,
     dirty: bool,
     sequence: u64,
+    /// Bounded history of OSC 133 marks anchored to absolute text lines.
+    semantic_marks: VecDeque<SemanticMark>,
+    /// How many semantic events have already been turned into marks (reset on drain).
+    semantic_events_seen: usize,
 }
 
 /// Renderable terminal snapshot from `TerminalScreen`.
@@ -321,8 +356,12 @@ impl TerminalScreen {
             rows: rows as usize,
             cols: cols as usize,
         };
+        // Extra headroom above the exposed scrollback so the grid can never saturate
+        // inside a single handler call; `LedgerTerm` trims back down to `scrollback`
+        // and counts what it dropped. See `scrollback_ledger`.
+        let capacity = ledger_capacity(scrollback, rows);
         let config = TermConfig {
-            scrolling_history: scrollback,
+            scrolling_history: capacity,
             default_cursor_style: DEFAULT_CURSOR_STYLE,
             // Track Kitty keyboard protocol pushes so `key_modes()` can report what the child
             // negotiated; without this alacritty silently drops every `CSI > <flags> u`.
@@ -340,20 +379,35 @@ impl TerminalScreen {
             rows,
             cols,
             scrollback_len: scrollback,
+            ledger_capacity: capacity,
             mouse_mode: MouseModeState::default(),
             scrollback_offset: 0,
             cache: TerminalRenderSnapshot::default(),
             palette: TerminalColorPalette::default(),
             dirty: true,
             sequence: 0,
+            semantic_marks: VecDeque::new(),
+            semantic_events_seen: 0,
         }
     }
 
     /// Feed terminal bytes.
     ///
     pub fn process_bytes(&mut self, bytes: &[u8]) {
-        self.processor.advance(&mut self.term, bytes);
+        let mut ledger = LedgerTerm::new(&mut self.term, self.scrollback_len, self.ledger_capacity);
+        self.processor.advance(&mut ledger, bytes);
+        let evicted = ledger.evicted();
         self.semantic_parser.advance(&mut self.semantic, bytes);
+        self.drop_evicted_semantic_marks(evicted);
+        if self.term.mode().contains(TermMode::ALT_SCREEN) {
+            // Alt-screen programs still emit OSC 133, but those marks belong to a grid
+            // with no scrollback and no absolute-line space of its own. Discard them
+            // rather than leaving them pending, or they get replayed against
+            // main-screen coordinates the moment the alt screen is torn down.
+            self.discard_pending_semantic_marks();
+        } else {
+            self.record_semantic_marks_from_pending();
+        }
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode());
         self.dirty = true;
@@ -375,6 +429,7 @@ impl TerminalScreen {
     /// changes without re-deriving them from [`semantic_state`](Self::semantic_state) on every
     /// poll.
     pub fn drain_semantic_events(&mut self) -> Vec<TerminalSemanticEvent> {
+        self.semantic_events_seen = 0;
         self.semantic.drain_events()
     }
 
@@ -459,6 +514,7 @@ impl TerminalScreen {
     /// Resize screen dimensions.
     ///
     pub fn resize(&mut self, rows: u16, cols: u16) {
+        let reflowed = cols.max(1) != self.cols;
         self.rows = rows.max(1);
         self.cols = cols.max(1);
         let dimensions = TermDimensions {
@@ -466,6 +522,17 @@ impl TerminalScreen {
             cols: self.cols as usize,
         };
         self.term.resize(dimensions);
+        // `Term::resize` can push lines into history without going through a handler
+        // call, so the ledger never sees it; trim and account for it here.
+        self.ledger_capacity = ledger_capacity(self.scrollback_len, self.rows);
+        let evicted = settle_history(&mut self.term, self.scrollback_len, self.ledger_capacity);
+        if reflowed {
+            // A column change rewraps history, so line indices no longer refer to the
+            // text they were recorded against and cannot be corrected by a shift.
+            self.semantic_marks.clear();
+        } else {
+            self.drop_evicted_semantic_marks(evicted);
+        }
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode());
         self.dirty = true;
@@ -579,6 +646,169 @@ impl TerminalScreen {
         self.term.history_size()
     }
 
+    /// Number of plain-text lines currently retained (scrollback history + visible screen).
+    ///
+    /// Absolute line indices used by [`text_lines`](Self::text_lines) /
+    /// [`export_text`](Self::export_text) count from the oldest retained history line (`0`)
+    /// through the live bottom (`total_text_lines() - 1`).
+    pub fn total_text_lines(&self) -> usize {
+        let grid = self.term.grid();
+        let top = grid.topmost_line().0;
+        let bottom = grid.bottommost_line().0;
+        usize::try_from(bottom.saturating_sub(top).saturating_add(1)).unwrap_or(0)
+    }
+
+    /// Plain text of grid lines in `[start, end)`, addressed from the oldest retained line.
+    ///
+    /// Does not mutate display offset or go through the render pipeline. Out-of-range bounds
+    /// are clamped; empty ranges yield an empty vec.
+    pub fn text_lines(&self, start: usize, end: usize) -> Vec<String> {
+        let total = self.total_text_lines();
+        let start = start.min(total);
+        let end = end.min(total).max(start);
+        if start == end {
+            return Vec::new();
+        }
+
+        let grid = self.term.grid();
+        let top = grid.topmost_line().0;
+        let mut lines = Vec::with_capacity(end - start);
+        for absolute in start..end {
+            let line = Line(top + absolute as i32);
+            lines.push(plain_line_text(grid, line));
+        }
+        lines
+    }
+
+    /// Newline-joined plain text for an absolute line range. See [`text_lines`](Self::text_lines).
+    pub fn export_text(&self, start: usize, end: usize) -> String {
+        self.text_lines(start, end).join("\n")
+    }
+
+    /// Map an absolute text-line index to `(scrollback_offset, viewport_row)`.
+    ///
+    /// Returns `None` when the line is outside the currently retained grid (evicted or
+    /// out of range). History lines are placed at viewport row 0; live-viewport lines use
+    /// offset 0 and their on-screen row.
+    pub fn absolute_line_to_viewport(&self, absolute: usize) -> Option<(usize, usize)> {
+        let total = self.total_text_lines();
+        if absolute >= total {
+            return None;
+        }
+        let grid = self.term.grid();
+        let top = grid.topmost_line().0;
+        let grid_line = top + absolute as i32;
+        if grid_line < 0 {
+            let offset = usize::try_from(-grid_line).ok()?;
+            Some((offset, 0))
+        } else {
+            Some((0, grid_line as usize))
+        }
+    }
+
+    /// Map an absolute text-line index to a scrollback display offset.
+    pub fn absolute_line_to_offset(&self, absolute: usize) -> Option<usize> {
+        self.absolute_line_to_viewport(absolute)
+            .map(|(offset, _)| offset)
+    }
+
+    /// Retained OSC 133 marks, oldest first (after eviction GC).
+    pub fn semantic_marks(&self) -> Vec<SemanticMark> {
+        self.semantic_marks.iter().copied().collect()
+    }
+
+    /// Half-open absolute-line range `[start, end)` of the last command's output.
+    ///
+    /// Uses the last `OutputStart` paired with a following `OutputEnd`. While a command is still
+    /// running (start without end), falls back to `[start, total_text_lines())`.
+    pub fn last_command_output_range(&self) -> Option<(usize, usize)> {
+        let start_idx = self
+            .semantic_marks
+            .iter()
+            .rposition(|mark| mark.kind == SemanticMarkKind::OutputStart)?;
+        let start = self.semantic_marks[start_idx].absolute_line;
+        let end = self
+            .semantic_marks
+            .iter()
+            .skip(start_idx + 1)
+            .find(|mark| mark.kind == SemanticMarkKind::OutputEnd)
+            .map(|mark| mark.absolute_line)
+            .unwrap_or_else(|| self.total_text_lines());
+        Some((start, end.max(start)))
+    }
+
+    /// Plain text of [`last_command_output_range`](Self::last_command_output_range), when known.
+    pub fn export_last_command_output(&self) -> Option<String> {
+        let (start, end) = self.last_command_output_range()?;
+        Some(self.export_text(start, end))
+    }
+
+    fn cursor_absolute_line(&self) -> usize {
+        let grid = self.term.grid();
+        let top = grid.topmost_line().0;
+        let cursor = grid.cursor.point.line.0;
+        usize::try_from((cursor - top).max(0)).unwrap_or(0)
+    }
+
+    /// Shift marks down by the lines that just fell out of scrollback, dropping
+    /// those whose line is gone.
+    ///
+    /// `evicted` comes from [`LedgerTerm`], which counts evictions as they happen.
+    /// It cannot be re-derived from the grid afterwards: once scrollback is full,
+    /// `topmost_line()` and `history_size()` are pinned while content shifts, so a
+    /// post-hoc comparison sees nothing and marks silently drift onto unrelated
+    /// lines.
+    fn drop_evicted_semantic_marks(&mut self, evicted: usize) {
+        if evicted == 0 {
+            return;
+        }
+        self.semantic_marks
+            .retain(|mark| mark.absolute_line >= evicted);
+        for mark in &mut self.semantic_marks {
+            mark.absolute_line -= evicted;
+        }
+    }
+
+    /// Consume pending semantic events without recording marks for them.
+    fn discard_pending_semantic_marks(&mut self) {
+        self.semantic_events_seen = self.semantic.event_count();
+    }
+
+    fn record_semantic_marks_from_pending(&mut self) {
+        let absolute_line = self.cursor_absolute_line();
+        let events = self.semantic.peek_events();
+        let from = self.semantic_events_seen.min(events.len());
+        let pending: Vec<_> = events[from..].to_vec();
+        self.semantic_events_seen = self.semantic.event_count();
+        for event in pending {
+            let TerminalSemanticEvent::CommandPhaseChanged(phase) = event else {
+                continue;
+            };
+            let mark = match phase {
+                TerminalCommandPhase::Prompt => SemanticMark {
+                    kind: SemanticMarkKind::Prompt,
+                    absolute_line,
+                    exit_status: None,
+                },
+                TerminalCommandPhase::Executing => SemanticMark {
+                    kind: SemanticMarkKind::OutputStart,
+                    absolute_line,
+                    exit_status: None,
+                },
+                TerminalCommandPhase::Completed { exit_status } => SemanticMark {
+                    kind: SemanticMarkKind::OutputEnd,
+                    absolute_line,
+                    exit_status,
+                },
+                TerminalCommandPhase::Unknown | TerminalCommandPhase::Input => continue,
+            };
+            self.semantic_marks.push_back(mark);
+            while self.semantic_marks.len() > MAX_SEMANTIC_MARKS {
+                self.semantic_marks.pop_front();
+            }
+        }
+    }
+
     /// Clear parser state and screen.
     pub fn reset(&mut self) {
         let dimensions = TermDimensions {
@@ -601,6 +831,8 @@ impl TerminalScreen {
         self.mouse_mode = MouseModeState::default();
         self.scrollback_offset = 0;
         self.cache = TerminalRenderSnapshot::default();
+        self.semantic_marks.clear();
+        self.semantic_events_seen = 0;
         self.dirty = true;
     }
 
@@ -1108,6 +1340,31 @@ fn cell_text(cell: &TermCell) -> String {
     text
 }
 
+fn plain_line_text(grid: &alacritty_terminal::grid::Grid<TermCell>, line: Line) -> String {
+    let wrapline = grid[line][grid.last_column()]
+        .flags
+        .contains(CellFlags::WRAPLINE);
+    let end_col = if wrapline {
+        grid.columns()
+    } else {
+        (0..grid.columns())
+            .rfind(|col| !grid[line][Column(*col)].is_empty())
+            .map_or(0, |col| col + 1)
+    };
+    let mut text = String::new();
+    for col in 0..end_col {
+        let cell = &grid[line][Column(col)];
+        if cell
+            .flags
+            .intersects(CellFlags::WIDE_CHAR_SPACER | CellFlags::LEADING_WIDE_CHAR_SPACER)
+        {
+            continue;
+        }
+        text.push_str(&cell_text(cell));
+    }
+    text
+}
+
 fn key_modes_from_term(mode: TermMode) -> TerminalKeyModes {
     TerminalKeyModes {
         app_cursor: mode.contains(TermMode::APP_CURSOR),
@@ -1579,5 +1836,198 @@ mod tests {
         let snapshot = screen.render_snapshot();
         assert_eq!(snapshot.cursor_shape, CaretShape::Block);
         assert!(snapshot.cursor_blinking);
+    }
+
+    #[test]
+    fn export_text_reads_absolute_lines_without_mutating_offset() {
+        let mut screen = TerminalScreen::new(3, 10, 20);
+        screen.process_bytes(b"one\r\ntwo\r\nthree\r\nfour\r\nfive");
+        screen.set_scrollback(2);
+        let offset_before = screen.scrollback_offset();
+        let total = screen.total_text_lines();
+        assert!(total >= 5);
+
+        let lines = screen.text_lines(0, total);
+        assert!(lines.iter().any(|line| line.contains("one")));
+        assert!(lines.iter().any(|line| line.contains("five")));
+        assert_eq!(screen.scrollback_offset(), offset_before);
+
+        let last_two = screen.export_text(total.saturating_sub(2), total);
+        assert!(last_two.contains("four"));
+        assert!(last_two.contains("five"));
+        assert_eq!(screen.scrollback_offset(), offset_before);
+    }
+
+    #[test]
+    fn absolute_line_to_viewport_maps_history_and_live_rows() {
+        let mut screen = TerminalScreen::new(3, 10, 20);
+        screen.process_bytes(b"one\r\ntwo\r\nthree\r\nfour\r\nfive");
+        let total = screen.total_text_lines();
+
+        let (oldest_offset, oldest_row) = screen.absolute_line_to_viewport(0).unwrap();
+        assert_eq!(oldest_row, 0);
+        assert!(oldest_offset > 0);
+
+        let (live_offset, live_row) = screen
+            .absolute_line_to_viewport(total.saturating_sub(1))
+            .unwrap();
+        assert_eq!(live_offset, 0);
+        assert!(live_row < 3);
+
+        assert_eq!(screen.absolute_line_to_viewport(total), None);
+    }
+
+    #[test]
+    fn export_text_clamps_evicted_and_empty_ranges() {
+        let mut screen = TerminalScreen::new(2, 8, 3);
+        for i in 0..20 {
+            screen.process_bytes(format!("line{i}\r\n").as_bytes());
+        }
+        let total = screen.total_text_lines();
+        assert!(total <= 2 + 3);
+        assert!(screen.text_lines(total, total + 10).is_empty());
+        assert_eq!(screen.export_text(0, 0), "");
+        assert_eq!(screen.text_lines(0, total).len(), total);
+    }
+
+    #[test]
+    fn semantic_marks_track_prompt_and_output_ranges() {
+        let mut screen = TerminalScreen::new(5, 20, 50);
+        // OSC 133 A (prompt), then C (executing), output, then D (completed).
+        screen.process_bytes(b"\x1b]133;A\x1b\\");
+        screen.process_bytes(b"\x1b]133;C\x1b\\");
+        screen.process_bytes(b"hello\r\nworld\r\n");
+        screen.process_bytes(b"\x1b]133;D;0\x1b\\");
+        screen.process_bytes(b"\x1b]133;A\x1b\\");
+
+        let marks = screen.semantic_marks();
+        assert!(
+            marks
+                .iter()
+                .any(|m| m.kind == SemanticMarkKind::OutputStart)
+        );
+        assert!(
+            marks
+                .iter()
+                .any(|m| { m.kind == SemanticMarkKind::OutputEnd && m.exit_status == Some(0) })
+        );
+        assert!(marks.iter().any(|m| m.kind == SemanticMarkKind::Prompt));
+
+        let (start, end) = screen.last_command_output_range().expect("range");
+        let text = screen.export_text(start, end);
+        assert!(text.contains("hello"));
+        assert!(text.contains("world"));
+
+        screen.reset();
+        assert!(screen.semantic_marks().is_empty());
+        assert_eq!(screen.last_command_output_range(), None);
+    }
+
+    #[test]
+    fn running_command_output_range_extends_to_live_bottom() {
+        let mut screen = TerminalScreen::new(4, 20, 20);
+        screen.process_bytes(b"\x1b]133;A\x1b\\");
+        screen.process_bytes(b"\x1b]133;C\x1b\\");
+        screen.process_bytes(b"partial\r\n");
+        let (start, end) = screen.last_command_output_range().expect("open range");
+        assert!(end > start);
+        assert_eq!(end, screen.total_text_lines());
+    }
+
+    /// Marks must keep pointing at their own line once scrollback saturates.
+    ///
+    /// This is the case the grid cannot answer for after the fact: `history_size()`
+    /// and `topmost_line()` are pinned while content shifts, so an eviction count
+    /// re-derived from the grid is always zero and marks drift onto whatever text
+    /// later occupies the index.
+    #[test]
+    fn marks_survive_eviction_once_scrollback_saturates() {
+        let mut screen = TerminalScreen::new(2, 20, 3);
+        screen.process_bytes(b"\x1b]133;C\x1b\\");
+        screen.process_bytes(b"MARKED\r\n");
+        for i in 0..2 {
+            screen.process_bytes(format!("filler{i}\r\n").as_bytes());
+        }
+
+        // Still retained: the mark must resolve to the line it was recorded on.
+        let (start, _) = screen.last_command_output_range().expect("range");
+        assert_eq!(
+            screen.text_lines(start, start + 1),
+            vec!["MARKED".to_string()]
+        );
+
+        // Push the marked line out of scrollback entirely; the mark must go with it
+        // rather than survive pointing at unrelated text.
+        for i in 0..10 {
+            screen.process_bytes(format!("more{i}\r\n").as_bytes());
+        }
+        assert!(
+            !screen
+                .text_lines(0, screen.total_text_lines())
+                .iter()
+                .any(|line| line.contains("MARKED")),
+            "precondition: the marked line should have been evicted"
+        );
+        assert_eq!(
+            screen.last_command_output_range(),
+            None,
+            "an evicted mark must be dropped, not left pointing at recycled lines"
+        );
+    }
+
+    #[test]
+    fn alt_screen_marks_do_not_leak_onto_main_screen() {
+        let mut screen = TerminalScreen::new(5, 20, 50);
+        screen.process_bytes(b"\x1b[?1049h");
+        screen.process_bytes(b"\x1b]133;A\x1b\\\x1b]133;C\x1b\\");
+        screen.process_bytes(b"altstuff\r\n");
+        screen.process_bytes(b"\x1b[?1049l");
+        screen.process_bytes(b"back-on-main\r\n");
+
+        assert!(
+            screen.semantic_marks().is_empty(),
+            "alt-screen OSC 133 must not be replayed against main-screen lines"
+        );
+        assert_eq!(screen.last_command_output_range(), None);
+    }
+
+    #[test]
+    fn resize_keeps_scrollback_within_the_requested_limit() {
+        let mut screen = TerminalScreen::new(6, 20, 3);
+        for i in 0..20 {
+            screen.process_bytes(format!("line{i}\r\n").as_bytes());
+        }
+        // Shrinking rows pushes lines into history outside any handler call.
+        screen.resize(2, 20);
+        assert!(
+            screen.total_scrollback_rows() <= 3,
+            "resize must not leave history above the exposed scrollback limit"
+        );
+    }
+
+    #[test]
+    fn reflowing_resize_drops_semantic_marks() {
+        let mut screen = TerminalScreen::new(4, 20, 20);
+        screen.process_bytes(b"\x1b]133;C\x1b\\");
+        screen.process_bytes(b"output\r\n");
+        assert!(screen.last_command_output_range().is_some());
+
+        // A column change rewraps history, so recorded line indices become meaningless.
+        screen.resize(4, 10);
+        assert!(
+            screen.semantic_marks().is_empty(),
+            "reflow invalidates line anchoring; marks must not survive it"
+        );
+    }
+
+    #[test]
+    fn scrollback_depth_matches_requested_limit() {
+        let mut screen = TerminalScreen::new(2, 20, 3);
+        for i in 0..50 {
+            screen.process_bytes(format!("line{i}\r\n").as_bytes());
+        }
+        // Ledger headroom must not leak into the depth callers observe.
+        assert_eq!(screen.total_scrollback_rows(), 3);
+        assert_eq!(screen.total_text_lines(), 5);
     }
 }

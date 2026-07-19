@@ -512,3 +512,87 @@ Msg::ScrollTo(offset) => {
 The cursor is hidden while scrolled into history. Typing input snaps back to live view (set scrollback to 0).
 
 `TerminalScreen::process_bytes()` automatically preserves the user's scrollback position when new output arrives while scrolled up - the offset is adjusted for newly added rows.
+
+---
+
+## Plain-text export
+
+`TerminalScreen` can read out its contents as plain text without touching the display
+offset or running the render pipeline, so exporting never disturbs what the user is
+looking at.
+
+Lines are addressed by **absolute index**, counting from the oldest line still retained
+(`0`) through the live bottom (`total_text_lines() - 1`):
+
+| Method | Returns |
+|--------|---------|
+| `total_text_lines()` | Retained line count (scrollback history + visible screen) |
+| `text_lines(start, end)` | `Vec<String>` for the half-open range `[start, end)` |
+| `export_text(start, end)` | The same range joined with `\n` |
+| `absolute_line_to_viewport(abs)` | `Option<(scrollback_offset, viewport_row)>` |
+| `absolute_line_to_offset(abs)` | `Option<usize>` scrollback offset alone |
+
+Out-of-range bounds are clamped and empty ranges yield empty output. Trailing blanks
+are trimmed per line, and wide-character spacer cells are skipped, so exported text
+matches what is on screen rather than the raw cell grid.
+
+```rust
+// Copy the whole buffer.
+let all = screen.export_text(0, screen.total_text_lines());
+
+// Copy just the last 20 lines.
+let total = screen.total_text_lines();
+let tail = screen.export_text(total.saturating_sub(20), total);
+```
+
+> **Absolute indices are not stable across output.** They are relative to the oldest
+> *retained* line, so once scrollback is full every new line shifts existing indices
+> down by one. Resolve a range and use it promptly rather than storing indices across
+> reads.
+
+## Semantic marks (OSC 133)
+
+When the shell emits [OSC 133](https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/prompts-data-model.md)
+prompt markers, `TerminalScreen` records them against the same absolute line space:
+
+```rust
+pub struct SemanticMark {
+    pub kind: SemanticMarkKind,   // Prompt | OutputStart | OutputEnd
+    pub absolute_line: usize,
+    pub exit_status: Option<i32>, // from OSC 133;D
+}
+```
+
+| Method | Returns |
+|--------|---------|
+| `semantic_marks()` | Retained marks, oldest first |
+| `last_command_output_range()` | `Option<(start, end)>` for the last command's output |
+| `export_last_command_output()` | That range as text |
+
+While a command is still running (an `OutputStart` with no matching `OutputEnd`), the
+range extends to the live bottom.
+
+```rust
+if let Some(output) = screen.export_last_command_output() {
+    ctx.copy_to_clipboard(&output);
+}
+```
+
+Behaviour worth knowing:
+
+- **Marks are bounded** (256 retained); the oldest are discarded first.
+- **Evicted marks are dropped.** When a marked line falls out of scrollback the mark
+  goes with it, so `last_command_output_range()` returns `None` rather than a range
+  pointing at whatever text now occupies those indices. A command whose output is
+  longer than the scrollback depth is therefore not recoverable - size scrollback for
+  the output you intend to export.
+- **Alt-screen marks are ignored.** Full-screen programs (`vim`, `less`) emitting
+  OSC 133 do not contribute marks, since the alt screen has no scrollback of its own.
+- `reset()` clears all marks.
+
+---
+
+## Image passthrough (roadmap)
+
+Kitty graphics / sixel image display is **not implemented**. See the design doc:
+[terminal-images.md](terminal-images.md).

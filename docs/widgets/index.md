@@ -126,3 +126,5 @@ For layout reorders, wrap the moving subtree in `Animated::new(...)`, enable `.p
 | `Terminal` | Low-level terminal viewport widget |
 | `TerminalPty` | PTY spawner and I/O bridge |
 | `TerminalScreen` | VT100/VT220 screen emulator |
+
+Design (not implemented): [terminal-images.md](terminal-images.md) — Kitty/sixel image passthrough.

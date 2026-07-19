@@ -204,6 +204,28 @@ assert_eq!(one.canonical_lowercase(), "cmd+p");
 assert_eq!(many.canonical_lowercase(), "ctrl+d / ctrl+q");
 ```
 
+### Expanding a binding into key events
+
+`KeyBinding::key_events()` turns a parsed binding into one `KeyEvent` per chord step,
+for callers that need to *replay* a binding rather than match it - forwarding a shortcut
+into an embedded terminal, driving a headless test, or scripting input.
+
+```rust
+use std::str::FromStr;
+use tui_lipan::input::KeyBinding;
+
+let events = KeyBinding::from_str("ctrl-x b")?.key_events()?;
+assert_eq!(events.len(), 2); // one per chord step
+```
+
+`shift-tab` expands to `KeyCode::BackTab` with the shift modifier cleared, since
+`BackTab` already encodes it.
+
+Bindings that cannot be expressed as discrete events fail with `KeyEventExpansionError`:
+`MultiKeyCombination` for steps pressing several key codes at once, and
+`UnsupportedKeyCode` for keys with no `KeyCode` equivalent. This is separate from
+`KeyBindingParseError` - the binding parsed fine, it just cannot be replayed.
+
 ---
 
 ## TextArea newline and Tab keys
