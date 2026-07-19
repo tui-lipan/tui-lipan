@@ -1,4 +1,6 @@
 #[cfg(feature = "devtools")]
+use std::mem;
+#[cfg(feature = "devtools")]
 use std::rc::Rc;
 #[cfg(feature = "devtools")]
 use web_time::Instant;
@@ -57,6 +59,10 @@ impl<C: Component> AppRunner<C> {
         reconcile_duration: std::time::Duration,
         draw_duration: std::time::Duration,
     ) {
+        // Drain first so pending attributions never leak across early returns
+        // (suppressed catch-up frames, metrics disabled, panel hidden).
+        let pending = mem::take(&mut self.pending_attributions);
+
         // A catch-up refresh frame only re-renders the panel with the metrics
         // recorded by the previous app frame. Recording here would both mislead
         // (it would time the refresh, not app work) and re-arm the refresh flag,
@@ -70,6 +76,8 @@ impl<C: Component> AppRunner<C> {
         if !self.devtools_state.borrow().visible {
             return;
         }
+
+        let attributions = crate::devtools::state::finalize_frame_attributions(pending);
 
         let (memo_hits, memo_misses) = crate::core::nested::take_memo_counters();
         let mut node_count = self.core.tree.iter().count();
@@ -110,6 +118,7 @@ impl<C: Component> AppRunner<C> {
                 overlay_count: self.core.tree.overlay_roots().len(),
                 memo_hits: u64::from(memo_hits),
                 memo_misses: u64::from(memo_misses),
+                attributions,
             });
 
         // The panel just drawn shows the *previous* frame's metrics (it was built

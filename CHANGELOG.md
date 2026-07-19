@@ -13,6 +13,10 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- DevTools frame metrics now attribute dirty updates to components and input
+  sources (`input:key` / `input:mouse` / `input:drag` / `input:scroll`), coalesced
+  across deferred-full skipped iterations into the next recorded frame and shown
+  under the Dirty line in the stats panel.
 - Collection widgets now expose paired `Arc<[T]>` bulk setters alongside the
   existing iterator setters: `Table::rows_arc`, `Tabs::tabs_arc`,
   `Chart::series_arc`, `ChartSeries::data_arc`, `Sparkline::data_arc`,

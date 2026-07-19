@@ -185,6 +185,15 @@ overlay counts; memo hits and misses; and the current dirty level. The overlay
 and sampling slightly perturb the workload, so use tracing or a benchmark for
 final comparisons.
 
+### Update attribution
+
+With `metrics: true` and the panel visible, each recorded frame also lists which
+component or input path requested the dirty level (for example
+`full: MySidebar x3, input:drag x12`). Sources coalesce while the runner skips
+deferred-full iterations: attributions accumulate until the next recorded frame,
+then sort by dirty level and count (capped for the overlay). Animation ticks,
+resize, and other framework-internal dirty marks are not attributed.
+
 For runtime spans and timing events, enable instrumentation and install a
 subscriber in the app binary:
 

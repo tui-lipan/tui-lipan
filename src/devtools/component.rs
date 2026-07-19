@@ -272,6 +272,15 @@ fn stats_body(ctx: &Context<DevToolsPanel>, state: &DevToolsState) -> Element {
                 .style(dim_style)
                 .into(),
         );
+        for line in crate::devtools::state::format_attribution_overlay_lines(&frame.attributions) {
+            rows.push(
+                Text::new(line)
+                    .overflow(Overflow::Ellipsis)
+                    .width(Length::Flex(1))
+                    .style(dim_style)
+                    .into(),
+            );
+        }
     } else {
         rows.push(
             Text::new("No frame metrics yet")

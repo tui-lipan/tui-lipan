@@ -276,7 +276,7 @@ impl ComponentRegistry {
     }
 
     /// Trimmed component display name for a mounted scope, if still valid.
-    #[allow(dead_code)] // consumed by DevTools update attribution
+    #[cfg_attr(not(feature = "devtools"), allow(dead_code))]
     pub(crate) fn display_name_for_scope(&self, scope: ScopeId) -> Option<Arc<str>> {
         let id = self.scope_to_id.get(&scope).copied()?;
         if !self.is_valid(id) {

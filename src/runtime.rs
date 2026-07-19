@@ -146,7 +146,7 @@ where
     C: Component,
 {
     /// Full root component type name for diagnostics and tracing.
-    #[allow(dead_code)] // consumed by DevTools attribution and render spans
+    #[cfg_attr(not(feature = "devtools"), allow(dead_code))]
     pub(crate) fn root_component_name(&self) -> &'static str {
         std::any::type_name::<C>()
     }

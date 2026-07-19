@@ -7,6 +7,8 @@ use chrono::{DateTime, Local, Timelike, Utc};
 use nucleo::pattern::{CaseMatching, Normalization};
 
 use crate::app::FocusPolicy;
+use crate::app::interaction_state::DirtyLevel;
+use crate::callback::ScopeId;
 use crate::core::element::Key;
 use crate::core::node::NodeId;
 use crate::debug::LogSource;
@@ -20,14 +22,36 @@ const FRAME_HISTORY_CAP: usize = 300;
 const LOG_BUFFER_CAP: usize = 1000;
 const FPS_WINDOW: Duration = Duration::from_secs(2);
 const LOGS_TAB_INDEX: usize = 1;
+const ATTRIBUTION_PENDING_CAP: usize = 16;
+const ATTRIBUTION_FRAME_CAP: usize = 6;
+const ATTRIBUTION_OVERLAY_LINES: usize = 3;
 
 const DEFAULT_CONFIG_PANEL_WIDTH: Length = Length::Flex(1);
 const DEFAULT_CONFIG_PANEL_HEIGHT: Length = Length::Percent(30);
 
 const DEFAULT_STATS_PANEL_WIDTH: Length = Length::Px(40);
-const DEFAULT_STATS_PANEL_HEIGHT: Length = Length::Px(12);
+const DEFAULT_STATS_PANEL_HEIGHT: Length = Length::Px(15);
 const DEFAULT_LOGS_PANEL_WIDTH: Length = Length::Flex(1);
 const DEFAULT_LOGS_PANEL_HEIGHT: Length = Length::Px(26);
+
+/// Origin of a dirty-level request recorded for DevTools frame metrics.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum UpdateSource {
+    Component {
+        scope: ScopeId,
+        name: Arc<str>,
+    },
+    /// `"input:mouse"` | `"input:drag"` | `"input:scroll"` | `"input:key"`
+    Input(&'static str),
+}
+
+/// One coalesced dirty request attributed to a component or input path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct UpdateAttribution {
+    pub(crate) source: UpdateSource,
+    pub(crate) level: DirtyLevel,
+    pub(crate) count: u32,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FrameMetrics {
@@ -40,6 +64,109 @@ pub(crate) struct FrameMetrics {
     pub(crate) overlay_count: usize,
     pub(crate) memo_hits: u64,
     pub(crate) memo_misses: u64,
+    pub(crate) attributions: Vec<UpdateAttribution>,
+}
+
+/// Merge/dedupe/cap pending update attributions for the current frame.
+///
+/// Skips [`DirtyLevel::None`]. Matching `(source, level)` pairs increment
+/// `count`. At most [`ATTRIBUTION_PENDING_CAP`] distinct entries are kept;
+/// additional new sources are ignored once the cap is reached.
+pub(crate) fn note_update_attribution(
+    pending: &mut Vec<UpdateAttribution>,
+    source: UpdateSource,
+    level: DirtyLevel,
+) {
+    if matches!(level, DirtyLevel::None) {
+        return;
+    }
+    if let Some(existing) = pending
+        .iter_mut()
+        .find(|entry| entry.source == source && entry.level == level)
+    {
+        existing.count = existing.count.saturating_add(1);
+        return;
+    }
+    if pending.len() >= ATTRIBUTION_PENDING_CAP {
+        return;
+    }
+    pending.push(UpdateAttribution {
+        source,
+        level,
+        count: 1,
+    });
+}
+
+fn dirty_level_sort_rank(level: DirtyLevel) -> u8 {
+    match level {
+        DirtyLevel::Full => 3,
+        DirtyLevel::LayoutOnly => 2,
+        DirtyLevel::PaintOnly => 1,
+        DirtyLevel::None => 0,
+    }
+}
+
+fn dirty_level_overlay_label(level: DirtyLevel) -> &'static str {
+    match level {
+        DirtyLevel::Full => "full",
+        DirtyLevel::LayoutOnly => "layout",
+        DirtyLevel::PaintOnly => "paint",
+        DirtyLevel::None => "none",
+    }
+}
+
+fn attribution_source_label(source: &UpdateSource) -> &str {
+    match source {
+        UpdateSource::Component { name, .. } => name.as_ref(),
+        UpdateSource::Input(label) => label,
+    }
+}
+
+fn format_attribution_source(entry: &UpdateAttribution) -> String {
+    let label = attribution_source_label(&entry.source);
+    if entry.count > 1 {
+        format!("{label} x{}", entry.count)
+    } else {
+        label.to_string()
+    }
+}
+
+/// Sort pending attributions for a recorded frame: level desc, then count desc.
+/// Truncates to [`ATTRIBUTION_FRAME_CAP`] entries.
+pub(crate) fn finalize_frame_attributions(
+    mut pending: Vec<UpdateAttribution>,
+) -> Vec<UpdateAttribution> {
+    pending.sort_by(|a, b| {
+        dirty_level_sort_rank(b.level)
+            .cmp(&dirty_level_sort_rank(a.level))
+            .then(b.count.cmp(&a.count))
+    });
+    pending.truncate(ATTRIBUTION_FRAME_CAP);
+    pending
+}
+
+/// Format overlay lines grouping attributions by dirty level.
+///
+/// Expects attributions already sorted (e.g. via [`finalize_frame_attributions`]).
+/// Returns at most [`ATTRIBUTION_OVERLAY_LINES`] lines like
+/// `full: MySidebar x3, input:drag x12`.
+pub(crate) fn format_attribution_overlay_lines(attributions: &[UpdateAttribution]) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut index = 0;
+    while index < attributions.len() && lines.len() < ATTRIBUTION_OVERLAY_LINES {
+        let level = attributions[index].level;
+        let mut parts = Vec::new();
+        while index < attributions.len() && attributions[index].level == level {
+            parts.push(format_attribution_source(&attributions[index]));
+            index += 1;
+        }
+        lines.push(format!(
+            "{}: {}",
+            dirty_level_overlay_label(level),
+            parts.join(", ")
+        ));
+    }
+    lines
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -449,6 +576,7 @@ mod tests {
                 overlay_count: 0,
                 memo_hits: 0,
                 memo_misses: 0,
+                attributions: Vec::new(),
             });
         }
 
@@ -496,6 +624,7 @@ mod tests {
                 overlay_count: 0,
                 memo_hits: 0,
                 memo_misses: 0,
+                attributions: Vec::new(),
             });
         }
 
@@ -634,7 +763,7 @@ mod tests {
 
         assert_eq!(
             state.resolved_panel_size(),
-            (Length::Px(40), Length::Px(12))
+            (Length::Px(40), Length::Px(15))
         );
     }
 
@@ -728,5 +857,104 @@ mod tests {
     fn selected_log_text_is_none_when_empty() {
         let state = DevToolsState::default();
         assert!(state.selected_log_text().is_none());
+    }
+
+    #[test]
+    fn note_update_attribution_merges_dedupes_and_caps() {
+        let mut pending = Vec::new();
+        let sidebar = UpdateSource::Component {
+            scope: ScopeId(2),
+            name: Arc::from("MySidebar"),
+        };
+
+        note_update_attribution(
+            &mut pending,
+            UpdateSource::Input("input:key"),
+            DirtyLevel::None,
+        );
+        assert!(pending.is_empty());
+
+        note_update_attribution(&mut pending, sidebar.clone(), DirtyLevel::Full);
+        note_update_attribution(&mut pending, sidebar.clone(), DirtyLevel::Full);
+        note_update_attribution(
+            &mut pending,
+            UpdateSource::Input("input:drag"),
+            DirtyLevel::Full,
+        );
+        note_update_attribution(&mut pending, sidebar, DirtyLevel::LayoutOnly);
+
+        assert_eq!(pending.len(), 3);
+        assert_eq!(pending[0].count, 2);
+        assert_eq!(pending[1].count, 1);
+        assert_eq!(pending[1].source, UpdateSource::Input("input:drag"));
+        assert_eq!(pending[2].level, DirtyLevel::LayoutOnly);
+        assert_eq!(pending[2].count, 1);
+
+        // Fill to the pending cap with unique component sources.
+        for i in 0..ATTRIBUTION_PENDING_CAP {
+            note_update_attribution(
+                &mut pending,
+                UpdateSource::Component {
+                    scope: ScopeId(100 + i as u32),
+                    name: Arc::from(format!("Comp{i}")),
+                },
+                DirtyLevel::PaintOnly,
+            );
+        }
+        assert_eq!(pending.len(), ATTRIBUTION_PENDING_CAP);
+
+        // New sources are ignored once full.
+        note_update_attribution(
+            &mut pending,
+            UpdateSource::Component {
+                scope: ScopeId(999),
+                name: Arc::from("Overflow"),
+            },
+            DirtyLevel::PaintOnly,
+        );
+        assert_eq!(pending.len(), ATTRIBUTION_PENDING_CAP);
+        assert!(pending.iter().all(|entry| entry.source
+            != UpdateSource::Component {
+                scope: ScopeId(999),
+                name: Arc::from("Overflow"),
+            }));
+
+        // Existing entries still increment after the cap is reached.
+        let drag_count_before = pending
+            .iter()
+            .find(|entry| {
+                entry.source == UpdateSource::Input("input:drag") && entry.level == DirtyLevel::Full
+            })
+            .map(|entry| entry.count)
+            .expect("drag attribution");
+        note_update_attribution(
+            &mut pending,
+            UpdateSource::Input("input:drag"),
+            DirtyLevel::Full,
+        );
+        let drag_count_after = pending
+            .iter()
+            .find(|entry| {
+                entry.source == UpdateSource::Input("input:drag") && entry.level == DirtyLevel::Full
+            })
+            .map(|entry| entry.count)
+            .expect("drag attribution");
+        assert_eq!(drag_count_after, drag_count_before + 1);
+        assert_eq!(pending.len(), ATTRIBUTION_PENDING_CAP);
+
+        let finalized = finalize_frame_attributions(pending);
+        assert!(finalized.len() <= ATTRIBUTION_FRAME_CAP);
+        for window in finalized.windows(2) {
+            let left = dirty_level_sort_rank(window[0].level);
+            let right = dirty_level_sort_rank(window[1].level);
+            assert!(left >= right);
+            if left == right {
+                assert!(window[0].count >= window[1].count);
+            }
+        }
+
+        let lines = format_attribution_overlay_lines(&finalized);
+        assert!(lines.len() <= ATTRIBUTION_OVERLAY_LINES);
+        assert!(lines.iter().all(|line| line.contains(':')));
     }
 }
