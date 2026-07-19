@@ -1966,6 +1966,7 @@ mod tests {
                 overlay_count: 0,
                 memo_hits: 0,
                 memo_misses: 0,
+                memo_miss_reasons: Vec::new(),
                 attributions: Vec::new(),
             });
         let baseline = runner.devtools_state.borrow().frame_history.len();

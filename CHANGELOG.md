@@ -25,6 +25,8 @@ While the crate is on `0.x.y`:
   reallocating identical collections.
 - Internal component registry now stores trimmed display names and full type
   names at mount for DevTools diagnostics and tracing identity.
+- DevTools reports memo miss reasons (key/dirty/deps/in-view Memo taxonomy) and
+  counts in-view `Memo` hits toward the panel hit rate.
 - Documented production performance patterns for update scope, widget-owned
   scrolling, subtree memoization, stable shared props, bounded rendering, and
   coalesced background work, distilled from opencode-tui.

@@ -30,7 +30,7 @@ const DEFAULT_CONFIG_PANEL_WIDTH: Length = Length::Flex(1);
 const DEFAULT_CONFIG_PANEL_HEIGHT: Length = Length::Percent(30);
 
 const DEFAULT_STATS_PANEL_WIDTH: Length = Length::Px(40);
-const DEFAULT_STATS_PANEL_HEIGHT: Length = Length::Px(15);
+const DEFAULT_STATS_PANEL_HEIGHT: Length = Length::Px(16);
 const DEFAULT_LOGS_PANEL_WIDTH: Length = Length::Flex(1);
 const DEFAULT_LOGS_PANEL_HEIGHT: Length = Length::Px(26);
 
@@ -64,6 +64,7 @@ pub(crate) struct FrameMetrics {
     pub(crate) overlay_count: usize,
     pub(crate) memo_hits: u64,
     pub(crate) memo_misses: u64,
+    pub(crate) memo_miss_reasons: Vec<(crate::core::nested::MemoMissReason, u32)>,
     pub(crate) attributions: Vec<UpdateAttribution>,
 }
 
@@ -576,6 +577,7 @@ mod tests {
                 overlay_count: 0,
                 memo_hits: 0,
                 memo_misses: 0,
+                memo_miss_reasons: Vec::new(),
                 attributions: Vec::new(),
             });
         }
@@ -624,6 +626,7 @@ mod tests {
                 overlay_count: 0,
                 memo_hits: 0,
                 memo_misses: 0,
+                memo_miss_reasons: Vec::new(),
                 attributions: Vec::new(),
             });
         }

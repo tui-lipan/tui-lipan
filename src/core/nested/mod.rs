@@ -1,6 +1,8 @@
 use rustc_hash::FxHashMap;
 use std::any::{Any, TypeId};
 use std::cell::Cell;
+#[cfg(feature = "devtools")]
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use crate::callback::{CommandTx, Dispatcher, ScopeId};
@@ -52,6 +54,46 @@ pub(crate) fn short_type_name(full: &str) -> String {
 thread_local! {
     static MEMO_HIT_COUNT: Cell<u32> = const { Cell::new(0) };
     static MEMO_MISS_COUNT: Cell<u32> = const { Cell::new(0) };
+    static MEMO_MISS_REASONS: RefCell<Vec<(MemoMissReason, u32)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Why a component or in-view `Memo` failed to retain its cached subtree.
+#[cfg(feature = "devtools")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum MemoMissReason {
+    NotMemoized,
+    NoCache,
+    KeyChanged,
+    SelfDirty,
+    DependencyChanged(MemoDependencyKind),
+    RetainedChildRefreshFailed,
+    ViewMemoNoCache,
+    ViewMemoDepsChanged,
+    ViewMemoStructureChanged,
+}
+
+/// Which memo dependency drifted when a retain check failed.
+#[cfg(feature = "devtools")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum MemoDependencyKind {
+    Theme,
+    Focus,
+    Hover,
+    Scroll,
+    MouseCapture,
+    Viewport,
+    Transition,
+    HostTerminalColors,
+    Context(&'static str),
+}
+
+/// Per-frame memo counters drained into DevTools metrics.
+#[cfg(feature = "devtools")]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct MemoFrameStats {
+    pub hits: u32,
+    pub misses: u32,
+    pub reasons: Vec<(MemoMissReason, u32)>,
 }
 
 #[cfg(feature = "devtools")]
@@ -60,12 +102,20 @@ fn increment_memo_hit_counter() {
 }
 
 #[cfg(feature = "devtools")]
-fn increment_memo_miss_counter() {
+fn record_memo_miss(reason: MemoMissReason) {
     MEMO_MISS_COUNT.with(|count| count.set(count.get().wrapping_add(1)));
+    MEMO_MISS_REASONS.with(|reasons| {
+        let mut reasons = reasons.borrow_mut();
+        if let Some((_, count)) = reasons.iter_mut().find(|(r, _)| *r == reason) {
+            *count = count.saturating_add(1);
+        } else {
+            reasons.push((reason, 1));
+        }
+    });
 }
 
 #[cfg(feature = "devtools")]
-pub(crate) fn take_memo_counters() -> (u32, u32) {
+pub(crate) fn take_memo_frame_stats() -> MemoFrameStats {
     let hits = MEMO_HIT_COUNT.with(|count| {
         let current = count.get();
         count.set(0);
@@ -76,7 +126,80 @@ pub(crate) fn take_memo_counters() -> (u32, u32) {
         count.set(0);
         current
     });
-    (hits, misses)
+    let mut reasons = MEMO_MISS_REASONS.with(|reasons| std::mem::take(&mut *reasons.borrow_mut()));
+    reasons.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| format!("{a:?}").cmp(&format!("{b:?}")))
+    });
+    if reasons.len() > 4 {
+        reasons.truncate(4);
+    }
+    MemoFrameStats {
+        hits,
+        misses,
+        reasons,
+    }
+}
+
+#[cfg(feature = "devtools")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MemoRetainFacts {
+    has_key: bool,
+    has_cache: bool,
+    self_dirty: bool,
+    key_matches: bool,
+}
+
+#[cfg(feature = "devtools")]
+fn classify_component_miss(
+    facts: MemoRetainFacts,
+    dep: Option<MemoDependencyKind>,
+) -> MemoMissReason {
+    if !facts.has_key {
+        return MemoMissReason::NotMemoized;
+    }
+    if !facts.has_cache {
+        return MemoMissReason::NoCache;
+    }
+    if facts.self_dirty {
+        return MemoMissReason::SelfDirty;
+    }
+    if !facts.key_matches {
+        return MemoMissReason::KeyChanged;
+    }
+    MemoMissReason::DependencyChanged(dep.unwrap_or(MemoDependencyKind::Theme))
+}
+
+/// Short overlay label for a memo miss reason.
+#[cfg(feature = "devtools")]
+pub(crate) fn memo_miss_reason_label(reason: MemoMissReason) -> String {
+    match reason {
+        MemoMissReason::NotMemoized => "no-memo".into(),
+        MemoMissReason::NoCache => "no-cache".into(),
+        MemoMissReason::KeyChanged => "key".into(),
+        MemoMissReason::SelfDirty => "dirty".into(),
+        MemoMissReason::DependencyChanged(MemoDependencyKind::Theme) => "dep:theme".into(),
+        MemoMissReason::DependencyChanged(MemoDependencyKind::Focus) => "dep:focus".into(),
+        MemoMissReason::DependencyChanged(MemoDependencyKind::Hover) => "dep:hover".into(),
+        MemoMissReason::DependencyChanged(MemoDependencyKind::Scroll) => "dep:scroll".into(),
+        MemoMissReason::DependencyChanged(MemoDependencyKind::MouseCapture) => {
+            "dep:mouse-capture".into()
+        }
+        MemoMissReason::DependencyChanged(MemoDependencyKind::Viewport) => "dep:viewport".into(),
+        MemoMissReason::DependencyChanged(MemoDependencyKind::Transition) => {
+            "dep:transition".into()
+        }
+        MemoMissReason::DependencyChanged(MemoDependencyKind::HostTerminalColors) => {
+            "dep:host-colors".into()
+        }
+        MemoMissReason::DependencyChanged(MemoDependencyKind::Context(name)) => {
+            format!("dep:ctx({})", short_type_name(name))
+        }
+        MemoMissReason::RetainedChildRefreshFailed => "child-refresh".into(),
+        MemoMissReason::ViewMemoNoCache => "view-cache".into(),
+        MemoMissReason::ViewMemoDepsChanged => "view-deps".into(),
+        MemoMissReason::ViewMemoStructureChanged => "view-structure".into(),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -561,6 +684,16 @@ impl ComponentRegistry {
             return crate::widgets::Text::new("").into();
         }
 
+        #[cfg(feature = "devtools")]
+        let mut retain_facts = MemoRetainFacts {
+            has_key: false,
+            has_cache: false,
+            self_dirty: false,
+            key_matches: false,
+        };
+        #[cfg(feature = "devtools")]
+        let mut dep_mismatch = None;
+
         let can_retain = {
             let fallback_theme = self.env.active_theme.borrow().clone();
             let entry = self.arena.get_mut(id);
@@ -583,6 +716,21 @@ impl ComponentRegistry {
             }
 
             let memo_key = entry.component.memo_key();
+            #[cfg(feature = "devtools")]
+            {
+                retain_facts.has_key = memo_key.is_some();
+                retain_facts.has_cache = entry.cached_element.is_some();
+                retain_facts.self_dirty = entry.self_dirty;
+                retain_facts.key_matches = entry.last_memo_key == memo_key;
+                if retain_facts.has_key
+                    && retain_facts.has_cache
+                    && !retain_facts.self_dirty
+                    && retain_facts.key_matches
+                    && !entry.component.memo_dependencies_match(&entry.memo_deps)
+                {
+                    dep_mismatch = entry.component.memo_dependency_mismatch(&entry.memo_deps);
+                }
+            }
             let can_retain = memo_key.is_some()
                 && entry.cached_element.is_some()
                 && !entry.self_dirty
@@ -616,7 +764,7 @@ impl ComponentRegistry {
                 && !self.refresh_retained_children(id, &mut cached, epoch, viewport)
             {
                 #[cfg(feature = "devtools")]
-                increment_memo_miss_counter();
+                record_memo_miss(MemoMissReason::RetainedChildRefreshFailed);
                 return self.render_component_instance(id, epoch, viewport);
             }
 
@@ -631,7 +779,7 @@ impl ComponentRegistry {
         }
 
         #[cfg(feature = "devtools")]
-        increment_memo_miss_counter();
+        record_memo_miss(classify_component_miss(retain_facts, dep_mismatch));
 
         self.render_component_instance(id, epoch, viewport)
     }
@@ -1517,69 +1665,105 @@ impl ComponentRegistry {
                 };
                 path.push(seg);
 
-                let child = if let Some((mut expanded_child, needs_refresh)) =
-                    host.prev_memo(path, memo.call_site).and_then(|cached| {
-                        (cached.deps_hash == memo.deps_hash).then(|| {
-                            let expanded_child = cached.expanded_child.clone();
-                            let needs_refresh = cached
-                                .descendant_ids
-                                .iter()
-                                .copied()
-                                .any(|id| self.component_subtree_needs_refresh(id));
-                            (expanded_child, needs_refresh)
-                        })
-                    }) {
-                    if needs_refresh {
-                        let descendant_ids =
-                            collect_component_ids_in_element(&expanded_child, &self.scope_to_id);
-                        for child_id in descendant_ids {
-                            if !self.component_subtree_needs_refresh(child_id) {
-                                continue;
-                            }
-                            let replacement =
-                                self.expand_component_instance(child_id, epoch, viewport);
-                            let scope = self.arena.get(child_id).scope;
-                            let mut replacement = Some(replacement);
-                            if expanded_child.replace_group_child_by_scope(scope, &mut replacement)
-                            {
-                                continue;
-                            } else {
-                                let rebuilt = (memo.builder)();
-                                let mut expanded = self.expand_children(
-                                    host,
-                                    parent,
-                                    path,
-                                    vec![rebuilt],
-                                    epoch,
-                                    viewport,
-                                );
-                                let child = expanded
-                                    .pop()
-                                    .unwrap_or_else(|| crate::widgets::Text::new("").into());
-                                let descendant_ids =
-                                    collect_component_ids_in_element(&child, &self.scope_to_id);
-                                host.set_next_memo(
-                                    path,
-                                    memo.call_site,
-                                    MemoCacheEntry {
-                                        deps_hash: memo.deps_hash,
-                                        expanded_child: child.clone(),
-                                        descendant_ids,
-                                    },
-                                );
-                                path.pop();
-                                return child;
+                let prev_state = host.prev_memo(path, memo.call_site).map(|cached| {
+                    (
+                        cached.deps_hash,
+                        cached.expanded_child.clone(),
+                        cached.descendant_ids.clone(),
+                    )
+                });
+                let child = match prev_state {
+                    Some((deps_hash, mut expanded_child, descendant_ids))
+                        if deps_hash == memo.deps_hash =>
+                    {
+                        let needs_refresh = descendant_ids
+                            .iter()
+                            .copied()
+                            .any(|id| self.component_subtree_needs_refresh(id));
+                        if needs_refresh {
+                            let descendant_ids = collect_component_ids_in_element(
+                                &expanded_child,
+                                &self.scope_to_id,
+                            );
+                            for child_id in descendant_ids {
+                                if !self.component_subtree_needs_refresh(child_id) {
+                                    continue;
+                                }
+                                let replacement =
+                                    self.expand_component_instance(child_id, epoch, viewport);
+                                let scope = self.arena.get(child_id).scope;
+                                let mut replacement = Some(replacement);
+                                if expanded_child
+                                    .replace_group_child_by_scope(scope, &mut replacement)
+                                {
+                                    continue;
+                                } else {
+                                    #[cfg(feature = "devtools")]
+                                    record_memo_miss(MemoMissReason::ViewMemoStructureChanged);
+                                    let rebuilt = (memo.builder)();
+                                    let mut expanded = self.expand_children(
+                                        host,
+                                        parent,
+                                        path,
+                                        vec![rebuilt],
+                                        epoch,
+                                        viewport,
+                                    );
+                                    let child = expanded
+                                        .pop()
+                                        .unwrap_or_else(|| crate::widgets::Text::new("").into());
+                                    let descendant_ids =
+                                        collect_component_ids_in_element(&child, &self.scope_to_id);
+                                    host.set_next_memo(
+                                        path,
+                                        memo.call_site,
+                                        MemoCacheEntry {
+                                            deps_hash: memo.deps_hash,
+                                            expanded_child: child.clone(),
+                                            descendant_ids,
+                                        },
+                                    );
+                                    path.pop();
+                                    return child;
+                                }
                             }
                         }
+                        #[cfg(feature = "devtools")]
+                        increment_memo_hit_counter();
+                        expanded_child
                     }
-                    expanded_child
-                } else {
-                    let rebuilt = (memo.builder)();
-                    let mut expanded =
-                        self.expand_children(host, parent, path, vec![rebuilt], epoch, viewport);
-                    expanded
-                        .pop()
-                        .unwrap_or_else(|| crate::widgets::Text::new("").into())
+                    Some(_) => {
+                        #[cfg(feature = "devtools")]
+                        record_memo_miss(MemoMissReason::ViewMemoDepsChanged);
+                        let rebuilt = (memo.builder)();
+                        let mut expanded = self.expand_children(
+                            host,
+                            parent,
+                            path,
+                            vec![rebuilt],
+                            epoch,
+                            viewport,
+                        );
+                        expanded
+                            .pop()
+                            .unwrap_or_else(|| crate::widgets::Text::new("").into())
+                    }
+                    None => {
+                        #[cfg(feature = "devtools")]
+                        record_memo_miss(MemoMissReason::ViewMemoNoCache);
+                        let rebuilt = (memo.builder)();
+                        let mut expanded = self.expand_children(
+                            host,
+                            parent,
+                            path,
+                            vec![rebuilt],
+                            epoch,
+                            viewport,
+                        );
+                        expanded
+                            .pop()
+                            .unwrap_or_else(|| crate::widgets::Text::new("").into())
+                    }
                 };
 
                 let descendant_ids = collect_component_ids_in_element(&child, &self.scope_to_id);
@@ -1993,6 +2177,63 @@ mod tests {
                 .full_name_for_id(id)
                 .expect("full name")
                 .ends_with("Counter")
+        );
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn classify_component_miss_orders_reasons() {
+        use super::{MemoDependencyKind, MemoMissReason, MemoRetainFacts, classify_component_miss};
+
+        let base = MemoRetainFacts {
+            has_key: true,
+            has_cache: true,
+            self_dirty: false,
+            key_matches: true,
+        };
+        assert_eq!(
+            classify_component_miss(
+                MemoRetainFacts {
+                    has_key: false,
+                    ..base
+                },
+                None
+            ),
+            MemoMissReason::NotMemoized
+        );
+        assert_eq!(
+            classify_component_miss(
+                MemoRetainFacts {
+                    has_cache: false,
+                    ..base
+                },
+                None
+            ),
+            MemoMissReason::NoCache
+        );
+        assert_eq!(
+            classify_component_miss(
+                MemoRetainFacts {
+                    self_dirty: true,
+                    ..base
+                },
+                None
+            ),
+            MemoMissReason::SelfDirty
+        );
+        assert_eq!(
+            classify_component_miss(
+                MemoRetainFacts {
+                    key_matches: false,
+                    ..base
+                },
+                None
+            ),
+            MemoMissReason::KeyChanged
+        );
+        assert_eq!(
+            classify_component_miss(base, Some(MemoDependencyKind::Focus)),
+            MemoMissReason::DependencyChanged(MemoDependencyKind::Focus)
         );
     }
 
@@ -3186,7 +3427,7 @@ mod tests {
         let mut host = HostState::default();
         let view_count = Rc::new(Cell::new(0));
 
-        let _ = super::take_memo_counters();
+        let _ = super::take_memo_frame_stats();
 
         let epoch1 = registry.begin_epoch();
         let root1: Element = crate::child(
@@ -3216,10 +3457,11 @@ mod tests {
         registry.expand_in_host(&mut host, None, root2, epoch2, Rect::default());
         registry.sweep(epoch2);
 
-        let (hits, misses) = super::take_memo_counters();
-        assert_eq!(hits, 1);
-        assert_eq!(misses, 1);
-        assert_eq!(super::take_memo_counters(), (0, 0));
+        let stats = super::take_memo_frame_stats();
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 1);
+        let cleared = super::take_memo_frame_stats();
+        assert_eq!((cleared.hits, cleared.misses), (0, 0));
     }
 
     #[cfg(feature = "devtools")]
@@ -3229,7 +3471,7 @@ mod tests {
         let mut host = HostState::default();
         let view_count = Rc::new(Cell::new(0));
 
-        let _ = super::take_memo_counters();
+        let _ = super::take_memo_frame_stats();
 
         let epoch1 = registry.begin_epoch();
         let root1: Element = crate::child(
@@ -3259,9 +3501,9 @@ mod tests {
         registry.expand_in_host(&mut host, None, root2, epoch2, Rect::default());
         registry.sweep(epoch2);
 
-        let (hits, misses) = super::take_memo_counters();
-        assert_eq!(hits, 0);
-        assert_eq!(misses, 2);
+        let stats = super::take_memo_frame_stats();
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.misses, 2);
     }
 
     #[test]

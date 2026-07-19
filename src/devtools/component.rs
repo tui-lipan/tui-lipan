@@ -267,6 +267,27 @@ fn stats_body(ctx: &Context<DevToolsPanel>, state: &DevToolsState) -> Element {
             .style(secondary_style)
             .into(),
         );
+        if frame.memo_misses > 0 && !frame.memo_miss_reasons.is_empty() {
+            let miss_parts: Vec<String> = frame
+                .memo_miss_reasons
+                .iter()
+                .map(|(reason, count)| {
+                    let label = crate::core::nested::memo_miss_reason_label(*reason);
+                    if *count > 1 {
+                        format!("{label} x{count}")
+                    } else {
+                        label
+                    }
+                })
+                .collect();
+            rows.push(
+                Text::new(format!("Miss: {}", miss_parts.join(", ")))
+                    .overflow(Overflow::Ellipsis)
+                    .width(Length::Flex(1))
+                    .style(dim_style)
+                    .into(),
+            );
+        }
         rows.push(
             Text::new(format!("Dirty: {}", frame.dirty_level))
                 .style(dim_style)

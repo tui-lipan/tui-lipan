@@ -37,6 +37,11 @@ pub(crate) trait ErasedComponent {
     fn begin_memo_dependency_capture(&self);
     fn finish_memo_dependency_capture(&self) -> MemoDependencySnapshot;
     fn memo_dependencies_match(&self, snapshot: &MemoDependencySnapshot) -> bool;
+    #[cfg(feature = "devtools")]
+    fn memo_dependency_mismatch(
+        &self,
+        snapshot: &MemoDependencySnapshot,
+    ) -> Option<crate::core::nested::MemoDependencyKind>;
     fn init(&mut self) -> Option<Command>;
     fn view(&self) -> Element;
     fn update(&mut self, msg: Box<dyn Any>) -> crate::Result<Update>;
@@ -108,6 +113,14 @@ impl<C: Component> ErasedComponent for Mounted<C> {
         self.ctx.memo_dependencies_match(snapshot)
     }
 
+    #[cfg(feature = "devtools")]
+    fn memo_dependency_mismatch(
+        &self,
+        snapshot: &MemoDependencySnapshot,
+    ) -> Option<crate::core::nested::MemoDependencyKind> {
+        self.ctx.memo_dependency_mismatch(snapshot)
+    }
+
     fn init(&mut self) -> Option<Command> {
         self.component.init(&mut self.ctx)
     }
@@ -177,6 +190,14 @@ impl ErasedComponent for EmptyComponent {
 
     fn memo_dependencies_match(&self, _snapshot: &MemoDependencySnapshot) -> bool {
         true
+    }
+
+    #[cfg(feature = "devtools")]
+    fn memo_dependency_mismatch(
+        &self,
+        _snapshot: &MemoDependencySnapshot,
+    ) -> Option<crate::core::nested::MemoDependencyKind> {
+        None
     }
 
     fn init(&mut self) -> Option<Command> {

@@ -59,9 +59,10 @@ impl<C: Component> AppRunner<C> {
         reconcile_duration: std::time::Duration,
         draw_duration: std::time::Duration,
     ) {
-        // Drain first so pending attributions never leak across early returns
-        // (suppressed catch-up frames, metrics disabled, panel hidden).
+        // Drain first so pending attributions / memo stats never leak across
+        // early returns (suppressed catch-up frames, metrics disabled, panel hidden).
         let pending = mem::take(&mut self.pending_attributions);
+        let memo_stats = crate::core::nested::take_memo_frame_stats();
 
         // A catch-up refresh frame only re-renders the panel with the metrics
         // recorded by the previous app frame. Recording here would both mislead
@@ -79,7 +80,6 @@ impl<C: Component> AppRunner<C> {
 
         let attributions = crate::devtools::state::finalize_frame_attributions(pending);
 
-        let (memo_hits, memo_misses) = crate::core::nested::take_memo_counters();
         let mut node_count = self.core.tree.iter().count();
         if let Some(devtools_root) = self
             .core
@@ -116,8 +116,9 @@ impl<C: Component> AppRunner<C> {
                 draw_duration,
                 node_count,
                 overlay_count: self.core.tree.overlay_roots().len(),
-                memo_hits: u64::from(memo_hits),
-                memo_misses: u64::from(memo_misses),
+                memo_hits: u64::from(memo_stats.hits),
+                memo_misses: u64::from(memo_stats.misses),
+                memo_miss_reasons: memo_stats.reasons,
                 attributions,
             });
 

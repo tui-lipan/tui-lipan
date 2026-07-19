@@ -83,6 +83,14 @@ reconciliation identity. A stable key is important for dynamic rows, focus, and
 reorders, but does not enable memoization by itself. See
 [Retained subtree reuse](components.md#retained-subtree-reuse).
 
+## Memo miss reasons
+
+With the `devtools` feature enabled, the stats panel shows why memoization
+missed when `memo_misses > 0`. Component retains report `no-memo`, `no-cache`,
+`key`, `dirty`, `dep:*` (theme/focus/hover/scroll/viewport/context/…), or
+`child-refresh`. In-view `Memo` nodes report `view-cache`, `view-deps`, or
+`view-structure`, and now count toward the hit rate.
+
 ## Keep props cheap and stable
 
 Large immutable render inputs should be shared rather than cloned or deeply

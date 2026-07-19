@@ -837,8 +837,10 @@ impl<C: Component> Context<C> {
     where
         T: ContextValue,
     {
-        self.env
-            .note_memo_dependency(MemoDependency::Context(TypeId::of::<T>()));
+        self.env.note_memo_dependency(MemoDependency::Context {
+            type_id: TypeId::of::<T>(),
+            name: std::any::type_name::<T>(),
+        });
         self.env
             .contexts
             .borrow()
@@ -1177,6 +1179,14 @@ impl<C: Component> Context<C> {
 
     pub(crate) fn memo_dependencies_match(&self, snapshot: &MemoDependencySnapshot) -> bool {
         snapshot.matches(&self.env, self.viewport)
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn memo_dependency_mismatch(
+        &self,
+        snapshot: &MemoDependencySnapshot,
+    ) -> Option<crate::core::nested::MemoDependencyKind> {
+        snapshot.first_mismatch(&self.env, self.viewport)
     }
 
     /// Request application shutdown.
