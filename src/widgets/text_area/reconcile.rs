@@ -321,7 +321,7 @@ pub fn reconcile_text_area(
                 geometry.content_width,
                 old_h_scroll_offset,
                 text_area.sentinel_info().as_ref(),
-                text_area.tab_stop as usize,
+                text_area.tab_display_width as usize,
                 &text_area.virtual_texts,
             )
         };

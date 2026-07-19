@@ -114,6 +114,7 @@ pub(crate) struct Portal {
     pub(crate) on_close: Option<Callback<()>>,
     pub(crate) backdrop: Option<Style>,
     pub(crate) captures_focus: bool,
+    pub(crate) auto_focus: bool,
     pub(crate) captures_pointer: PointerCapture,
 }
 
@@ -133,6 +134,7 @@ impl crate::layout::hash::LayoutHash for Portal {
         use std::hash::Hash;
         self.layer.hash(hasher);
         self.captures_focus.hash(hasher);
+        self.auto_focus.hash(hasher);
         self.captures_pointer.hash(hasher);
         recurse(self.content.as_ref())?.hash(hasher);
         Some(())
@@ -151,6 +153,7 @@ pub(crate) struct OverlayEntry {
     pub(crate) created_at: Instant,
     pub(crate) timeout: Option<Duration>,
     pub(crate) captures_focus: bool,
+    pub(crate) auto_focus: bool,
     pub(crate) backdrop: Option<Style>,
     pub(crate) captures_pointer: PointerCapture,
     pub(crate) opacity_transition: Option<Transition<f32>>,
@@ -452,6 +455,7 @@ impl OverlayManager {
             created_at: Instant::now(),
             timeout: Some(Duration::from_secs_f64(duration)),
             captures_focus: false,
+            auto_focus: false,
             backdrop: None,
             captures_pointer: PointerCapture::None,
             opacity_transition: None,

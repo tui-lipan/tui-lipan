@@ -45,7 +45,9 @@ pub(crate) fn reconcile_input(widget: &Input) -> InputNode {
         on_key: widget.on_key.clone(),
         key_interceptor: widget.key_interceptor.clone(),
         focusable: widget.focusable,
-        tab_order: widget.tab_order,
+        tab_stop: widget.tab_stop,
+        on_focus: widget.on_focus.clone(),
+        on_blur: widget.on_blur.clone(),
     }
 }
 

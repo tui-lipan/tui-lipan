@@ -516,6 +516,9 @@ pub(crate) struct SearchPaletteProps<T> {
     list_active_symbol_style: Option<Style>,
     list_unselected_symbol: Option<Arc<str>>,
     list_focusable: bool,
+    tab_stop: bool,
+    on_focus: Option<Callback<()>>,
+    on_blur: Option<Callback<()>>,
     empty_text: Option<Arc<str>>,
     // Item rendering props
     item_style: Style,
@@ -595,6 +598,9 @@ impl<T: PartialEq> PartialEq for SearchPaletteProps<T> {
             && self.list_active_symbol_style == other.list_active_symbol_style
             && self.list_unselected_symbol == other.list_unselected_symbol
             && self.list_focusable == other.list_focusable
+            && self.tab_stop == other.tab_stop
+            && self.on_focus == other.on_focus
+            && self.on_blur == other.on_blur
             && self.empty_text == other.empty_text
             && self.item_style == other.item_style
             && self.active_item_style == other.active_item_style
@@ -779,6 +785,9 @@ impl<T: Clone + PartialEq> Default for SearchPalette<T> {
                 list_active_symbol_style: None,
                 list_unselected_symbol: None,
                 list_focusable: true,
+                tab_stop: true,
+                on_focus: None,
+                on_blur: None,
                 empty_text: Some("No matches".into()),
                 item_style: Style::default(),
                 active_item_style: None,
@@ -1365,6 +1374,24 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// Control whether the list can receive keyboard focus.
     pub fn list_focusable(mut self, focusable: bool) -> Self {
         self.props.list_focusable = focusable;
+        self
+    }
+
+    /// Control whether the palette's primary focus target participates in tab navigation.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.props.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the palette's primary focus target receives focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.props.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the palette's primary focus target loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.props.on_blur = Some(cb);
         self
     }
 

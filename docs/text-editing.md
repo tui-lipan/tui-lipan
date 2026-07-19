@@ -176,6 +176,10 @@ keyboard or programmatic focus changes, matching `DocumentView`. Use
 that inactive highlight. Inherited/default `TextArea` selection styles resolve
 against `theme.text_selection`, not the list/item `theme.selection` role.
 
+With wrapping enabled, an editable line that exactly fills the content width places its caret at
+column zero of a continuation row. Typing a space turns that caret row into content without moving
+the completed full-width word from the preceding row.
+
 ### Input + TextInput
 
 ```rust
@@ -372,6 +376,13 @@ use tui_lipan::text_motion::{word_forward_start, word_end};
 // or
 use tui_lipan::prelude::*; // brings the same functions into scope directly
 ```
+
+## TextArea Tab Behavior
+
+`TextArea::tab_stop(bool)` controls sequential focus traversal. Literal tab rendering uses the
+separate `tab_display_width(u8)` setter (default `8`); this replaces the old numeric
+`tab_stop(u8)` API. Use `tab_width(u8)` to insert spaces through the next column multiple, or
+`insert_tab(true)` to insert a literal tab instead of moving focus.
 
 ## TextArea metrics, decorations, and state callbacks
 

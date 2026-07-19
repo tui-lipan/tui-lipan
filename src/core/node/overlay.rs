@@ -16,6 +16,7 @@ pub(crate) struct OverlayRoot {
     pub(crate) backdrop: Option<Style>,
     pub(crate) opacity: f32,
     pub(crate) captures_focus: bool,
+    pub(crate) auto_focus: bool,
     pub(crate) captures_pointer: PointerCapture,
     pub(crate) copy_text: Option<Arc<str>>,
     pub(crate) copy_zone: Option<Rect>,

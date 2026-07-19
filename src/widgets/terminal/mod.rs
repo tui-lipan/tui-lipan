@@ -83,6 +83,9 @@ impl Default for Terminal {
             width: Length::Flex(1),
             height: Length::Flex(1),
             focusable: true,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
             on_key: None,
             on_input: None,
         }
@@ -360,6 +363,24 @@ impl Terminal {
     /// Control focusability.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.focusable = focusable;
+        self
+    }
+
+    /// Control whether the terminal participates in tab focus traversal.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the terminal gains focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the terminal loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
         self
     }
 

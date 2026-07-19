@@ -5,7 +5,7 @@ use crate::style::{
     Theme, ThemeRole,
 };
 use crate::widgets::frame::{DecorationPlacement, EdgeDecoration};
-use crate::widgets::{BorderMergeMode, TabVariant, TabsEvent};
+use crate::widgets::{BorderMergeMode, FocusScope, TabVariant, TabsEvent};
 
 /// Rarely-used focus/hover style overrides for [`FrameNode`].
 ///
@@ -107,6 +107,8 @@ pub struct FrameNode {
     pub has_header: bool,
     /// Explicitly control focusability.
     pub focusable: bool,
+    /// Focus traversal behavior for this subtree.
+    pub focus_scope: FocusScope,
     /// Alignment of child content within the frame's inner area.
     /// Default: `Align::Start`.
     pub child_align: Align,
@@ -241,6 +243,10 @@ impl FrameNode {
 }
 
 impl WidgetNode for FrameNode {
+    fn focus_scope(&self) -> FocusScope {
+        self.focus_scope
+    }
+
     fn is_focusable(&self) -> bool {
         self.focusable
     }
@@ -332,6 +338,7 @@ impl Default for FrameNode {
             footer_padding: Padding::default(),
             has_header: false,
             focusable: false,
+            focus_scope: FocusScope::None,
             child_align: Align::Start,
             style_overrides: None,
         }

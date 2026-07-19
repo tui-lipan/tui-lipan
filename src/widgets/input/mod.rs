@@ -72,7 +72,9 @@ pub struct Input {
     pub(crate) on_key: Option<KeyHandler>,
     pub(crate) key_interceptor: Option<KeyHandler>,
     pub(crate) focusable: bool,
-    pub(crate) tab_order: bool,
+    pub(crate) tab_stop: bool,
+    pub(crate) on_focus: Option<Callback<()>>,
+    pub(crate) on_blur: Option<Callback<()>>,
 }
 
 impl Input {
@@ -125,7 +127,9 @@ impl Input {
             on_key: None,
             key_interceptor: None,
             focusable: true,
-            tab_order: true,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
         }
     }
 
@@ -434,8 +438,20 @@ impl Input {
     }
 
     /// When `false`, the input stays focusable but is skipped by Tab / Shift+Tab traversal.
-    pub fn tab_order(mut self, tab_order: bool) -> Self {
-        self.tab_order = tab_order;
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the input gains focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the input loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
         self
     }
 }

@@ -1273,6 +1273,9 @@ pub struct List {
     pub(crate) disabled: bool,
     pub(crate) disabled_style: Style,
     pub(crate) focusable: bool,
+    pub(crate) tab_stop: bool,
+    pub(crate) on_focus: Option<Callback<()>>,
+    pub(crate) on_blur: Option<Callback<()>>,
     pub(crate) show_scroll_indicators: bool,
     pub(crate) scroll_indicator_style: Style,
     pub(crate) empty_text: Option<Arc<str>>,
@@ -1326,6 +1329,9 @@ impl Default for List {
             disabled: false,
             disabled_style: Style::default(),
             focusable: true,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
             show_scroll_indicators: false,
             scroll_indicator_style: Style::default(),
             empty_text: None,
@@ -1768,6 +1774,24 @@ impl List {
     /// Control whether the node is focusable.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.focusable = focusable;
+        self
+    }
+
+    /// Control whether the list participates in Tab / Shift+Tab traversal.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the list gains focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the list loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
         self
     }
 

@@ -690,7 +690,7 @@ impl Component for LazygitDemo {
                 VStack {
                     width: Length::Flex(2),
                     gap: 0,
-                    focus_policy: FocusPolicy::Accordion(FocusAccordion {
+                    focus_sizing: FocusSizing::Accordion(FocusAccordion {
                         focused_min: FOCUSED_PANEL_MIN_HEIGHT,
                         ..FocusAccordion::default()
                     }),
@@ -708,7 +708,7 @@ impl Component for LazygitDemo {
                         VStack {
                             width: Length::Flex(1),
                             gap: 0,
-                            focus_policy: FocusPolicy::Accordion(FocusAccordion {
+                            focus_sizing: FocusSizing::Accordion(FocusAccordion {
                                 focused_min: FOCUSED_PANEL_MIN_HEIGHT,
                                 expanded_weight: 1,
                                 ..FocusAccordion::default()
@@ -730,7 +730,7 @@ impl Component for LazygitDemo {
                         VStack {
                             width: Length::Flex(1),
                             gap: 0,
-                            focus_policy: FocusPolicy::Accordion(FocusAccordion {
+                            focus_sizing: FocusSizing::Accordion(FocusAccordion {
                                 focused_min: FOCUSED_PANEL_MIN_HEIGHT,
                                 expanded_weight: 1,
                                 ..FocusAccordion::default()
@@ -749,7 +749,7 @@ impl Component for LazygitDemo {
                 rsx! {
                     VStack {
                         gap: 0,
-                        focus_policy: FocusPolicy::Accordion(FocusAccordion {
+                        focus_sizing: FocusSizing::Accordion(FocusAccordion {
                             focused_min: FOCUSED_PANEL_MIN_HEIGHT,
                             ..FocusAccordion::default()
                         }),
@@ -948,5 +948,8 @@ impl Component for LazygitDemo {
 }
 
 fn main() -> Result<()> {
-    App::new().mount(LazygitDemo).run()
+    App::new()
+        .focus_policy(FocusPolicy::Auto)
+        .mount(LazygitDemo)
+        .run()
 }

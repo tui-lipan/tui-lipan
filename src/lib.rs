@@ -76,8 +76,8 @@ pub use crate::app::input::keymap::{FrameworkAction, FrameworkKeymap, UserKeymap
 #[cfg(all(target_arch = "wasm32", feature = "web"))]
 pub use crate::app::web_runner::{WebTerminal, mount_web};
 pub use crate::app::{
-    App, ContrastPolicy, InlineHeight, InlineStartupPolicy, ScreenBackground, SurfaceMode,
-    TextAreaNewlineBinding,
+    App, ContrastPolicy, FocusChanged, FocusEntry, FocusPolicy, InlineHeight, InlineStartupPolicy,
+    ScreenBackground, SurfaceMode, TextAreaNewlineBinding,
 };
 pub use crate::mockup::Mockup;
 
@@ -105,6 +105,7 @@ pub use crate::input::{
     ChordMatcher, ChordResult, KeyBinding, KeyBindingParseError, KeyBindings, format_binding,
     format_binding_lowercase, format_bindings, format_bindings_lowercase,
 };
+pub use crate::layout::tag::Tag;
 pub use crate::overlay::{OverlayId, OverlayScope, ToastHandle, ToastPlacement};
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::process::{
@@ -147,24 +148,25 @@ pub use crate::widgets::{
     DiagramStateTransitionSpec, DraggableTabBarOverflow, ErAttribute, ErCardinality, ErDiagram,
     ErDiagramTheme, ErEntity, ErRelation, FileKind, FileTree, FileTreeChange, FileTreeChangeSource,
     FileTreeChangeStatus, FileTreeChangeView, FileTreeEvent, FileTreeGitView, FileTreeItemStyle,
-    FileTreeSuffixPriority, FileTreeToggleEvent, FormattedDiagramBlock, GanttDate, GanttDiagram,
-    GanttDiagramTheme, GanttDuration, GanttSection, GanttSpec, GanttTask, GanttTaskStart,
-    GanttTaskStatus, Heatmap, HeatmapCellMode, HeatmapLegendWidth, HexArea, HexAreaChangeEvent,
-    HexAreaCursorEvent, HexAreaEditEvent, HexAreaEditKind, IMAGE_SENTINEL_BASE, PanEvent,
-    PanKeymap, PanMetrics, PanView, ParsedDiagram, SENTINEL_BASE, ScrollAxis, ScrollBehavior,
-    ScrollChildExitDirection, ScrollChildVisibility, ScrollDistanceConfig, ScrollEvent,
-    ScrollExitedChild, ScrollMetrics, ScrollTarget, ScrollViewportEvent, ScrollVisibleChild,
-    ScrollWheelBehavior, ScrollWheelConfig, SentinelEvent, SentinelId, StateDiagram,
-    StateDiagramTheme, StateKind, StateSpec, StateTransition, TextArea, TextAreaColorInput,
-    TextAreaColorLines, TextAreaColorStrategy, TextAreaCursorMetrics, TextAreaDecoration,
-    TextAreaDecorationKind, TextAreaEvent, TextAreaGutter, TextAreaGutterColumn,
-    TextAreaGutterSign, TextAreaImageMode, TextAreaLineNumberMode, TextAreaMetrics,
-    TextAreaPasteEvent, TextAreaSentinel, TextAreaSentinelClickEvent, TextAreaSentinelClickKind,
-    TextAreaSnapshot, TextAreaStateChangeEvent, TextAreaStateChangeReason, TextAreaVimConfig,
-    TextAreaVimCurrentLineHighlight, TextAreaVimKeyBinding, TextAreaVimKeymap, TextAreaVimMode,
-    TextAreaVirtualText, Toast, ToastCopyAffordance, TripleClickSelectionMode,
-    VirtualTextPlacement, insert_sentinel, rank_search_palette_indices,
-    rank_search_palette_indices_with_mode, rank_search_palette_indices_with_score,
+    FileTreeSuffixPriority, FileTreeToggleEvent, FocusScope, FormattedDiagramBlock, GanttDate,
+    GanttDiagram, GanttDiagramTheme, GanttDuration, GanttSection, GanttSpec, GanttTask,
+    GanttTaskStart, GanttTaskStatus, Heatmap, HeatmapCellMode, HeatmapLegendWidth, HexArea,
+    HexAreaChangeEvent, HexAreaCursorEvent, HexAreaEditEvent, HexAreaEditKind, IMAGE_SENTINEL_BASE,
+    PanEvent, PanKeymap, PanMetrics, PanView, ParsedDiagram, SENTINEL_BASE, ScrollAxis,
+    ScrollBehavior, ScrollChildExitDirection, ScrollChildVisibility, ScrollDistanceConfig,
+    ScrollEvent, ScrollExitedChild, ScrollMetrics, ScrollTarget, ScrollViewportEvent,
+    ScrollVisibleChild, ScrollWheelBehavior, ScrollWheelConfig, SentinelEvent, SentinelId,
+    StateDiagram, StateDiagramTheme, StateKind, StateSpec, StateTransition, TextArea,
+    TextAreaColorInput, TextAreaColorLines, TextAreaColorStrategy, TextAreaCursorMetrics,
+    TextAreaDecoration, TextAreaDecorationKind, TextAreaEvent, TextAreaGutter,
+    TextAreaGutterColumn, TextAreaGutterSign, TextAreaImageMode, TextAreaLineNumberMode,
+    TextAreaMetrics, TextAreaPasteEvent, TextAreaSentinel, TextAreaSentinelClickEvent,
+    TextAreaSentinelClickKind, TextAreaSnapshot, TextAreaStateChangeEvent,
+    TextAreaStateChangeReason, TextAreaVimConfig, TextAreaVimCurrentLineHighlight,
+    TextAreaVimKeyBinding, TextAreaVimKeymap, TextAreaVimMode, TextAreaVirtualText, Toast,
+    ToastCopyAffordance, TripleClickSelectionMode, VirtualTextPlacement, insert_sentinel,
+    rank_search_palette_indices, rank_search_palette_indices_with_mode,
+    rank_search_palette_indices_with_score,
 };
 
 #[cfg(all(feature = "terminal", unix))]

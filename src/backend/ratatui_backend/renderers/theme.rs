@@ -112,7 +112,11 @@ pub(crate) fn with_theme_accent(theme: &Theme, style: Style) -> Style {
 }
 
 pub(crate) fn with_theme_input_focus(theme: &Theme, style: Style) -> Style {
-    theme.input.focus.patch(style)
+    if theme.focus_decoration {
+        theme.input.focus.patch(style)
+    } else {
+        style
+    }
 }
 
 pub(crate) fn with_theme_error(theme: &Theme, style: Style) -> Style {
@@ -136,6 +140,9 @@ pub(crate) fn scrollbar_styles(
     let thumb_style =
         thumb_style.or_else(|| Some(scrollbar_palette_style(theme.scrollbar.thumb, 0.16)));
     let thumb_focus_style = thumb_focus_style.or_else(|| {
+        if !theme.focus_decoration {
+            return None;
+        }
         theme
             .scrollbar
             .thumb_focus

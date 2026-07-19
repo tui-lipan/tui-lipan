@@ -17,6 +17,7 @@ use crate::clipboard::{ClipboardConfig, ClipboardService};
 use crate::core::component::{FocusContext, HoverContext, ScrollContext};
 use crate::core::element::Element;
 use crate::core::element::Key;
+use crate::runtime::FocusRequest;
 use crate::style::{HostTerminalColors, Rect, RichText, Theme};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,7 +155,7 @@ pub(crate) struct RuntimeEnv {
     pub scroll: Rc<ScrollContext>,
     pub animations: Rc<AnimationRegistry>,
     pub overlay_manager: Rc<RefCell<crate::overlay::OverlayManager>>,
-    pub focus_request: Rc<RefCell<Option<Key>>>,
+    pub focus_request: Rc<RefCell<Option<FocusRequest>>>,
     pub mouse_capture: Rc<Cell<bool>>,
     pub surface_mode: SurfaceMode,
     pub transcript_history: Rc<RefCell<Vec<TranscriptEntry>>>,

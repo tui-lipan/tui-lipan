@@ -42,7 +42,7 @@ Node-edge structural visualization for trees, with boxed labels and orthogonal b
 | `node_focus_style` | `Style` | Style patched onto the internally focused node |
 | `edge_style` | `Style` | Edge line style |
 | `edge_border_style` | `BorderStyle` | Edge elbow glyph style (`Rounded` uses `╭╮╰╯`) |
-| `focusable` | `bool` | Participate in focus traversal as one widget with internal roving node focus |
+| `focusable` | `bool` | Accept focus as one widget with internal roving node focus |
 | `focused_path` | `GraphNodePath` | Controlled internally focused node path |
 | `on_node_click` | `Callback<GraphNodeEvent>` | Fired when a node box is clicked |
 | `on_node_hover` | `Callback<GraphNodeEvent>` | Fired when hover moves to a different node |

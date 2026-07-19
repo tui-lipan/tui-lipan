@@ -787,10 +787,28 @@ style directly.
 
 ### `FocusPolicy`
 
+| Variant | Behavior |
+|---------|----------|
+| `FocusPolicy::OnDemand` | Start unfocused; Tab, pointer focus, or explicit APIs establish focus. Retain keyed identity across temporary unmounts. **Default.** |
+| `FocusPolicy::Auto` | Focus the first eligible target at startup and when no prior target can be restored. |
+| `FocusPolicy::Manual` | Disable global Tab traversal, click-to-focus, tag fallback, and first-target fallback. Explicit APIs and capturing-overlay traps remain active. |
+
+### `FocusScope`
+
+| Variant | Behavior |
+|---------|----------|
+| `FocusScope::None` | Normal inherited traversal. **Default.** |
+| `FocusScope::Exclude` | Exclude the subtree from traversal, automatic/pointer focus, and fallback; explicit keyed requests may enter it. |
+| `FocusScope::Contain` | Wrap next/previous traversal within the nearest containing ancestor while focus is inside. |
+
+### `FocusSizing`
+
 | Variant | Usage |
 |---------|-------|
-| `FocusPolicy::None` | No focus-aware sizing **(default)** |
-| `FocusPolicy::Accordion(FocusAccordion { ... })` | Lazygit-style panel resizing |
+| `FocusSizing::None` | No focus-aware sizing **(default)** |
+| `FocusSizing::Accordion(FocusAccordion { ... })` | Lazygit-style panel resizing |
+
+`FocusSizing` controls stack geometry and is distinct from app-level `FocusPolicy`.
 
 ### `Grid` track `Length` (`.rows` / `.columns`)
 

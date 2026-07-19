@@ -76,6 +76,12 @@ pub struct ManagedTerminalProps {
     pub style: crate::style::Style,
     /// Whether the terminal should be focusable
     pub focusable: bool,
+    /// Whether the terminal participates in Tab / Shift+Tab traversal.
+    pub tab_stop: bool,
+    /// Callback fired when the terminal gains focus.
+    pub on_focus: Option<Callback<()>>,
+    /// Callback fired when the terminal loses focus.
+    pub on_blur: Option<Callback<()>>,
     /// Custom width.
     /// Default: `Length::Flex(1)`.
     pub width: Length,
@@ -98,6 +104,9 @@ impl Default for ManagedTerminalProps {
             scroll_wheel: true,
             style: crate::style::Style::default(),
             focusable: true,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
             width: Length::Flex(1),
             height: Length::Flex(1),
         }
@@ -184,6 +193,24 @@ impl ManagedTerminal {
     /// Set whether the terminal is focusable.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.props.focusable = focusable;
+        self
+    }
+
+    /// Set whether the terminal participates in Tab / Shift+Tab traversal.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.props.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the terminal gains focus.
+    pub fn on_focus(mut self, callback: Callback<()>) -> Self {
+        self.props.on_focus = Some(callback);
+        self
+    }
+
+    /// Set the callback fired when the terminal loses focus.
+    pub fn on_blur(mut self, callback: Callback<()>) -> Self {
+        self.props.on_blur = Some(callback);
         self
     }
 
@@ -403,6 +430,7 @@ impl Component for ManagedTerminal {
             .snapshot(ctx.state.snapshot.clone())
             .style(ctx.props.style)
             .focusable(ctx.props.focusable)
+            .tab_stop(ctx.props.tab_stop)
             .width(ctx.props.width)
             .height(ctx.props.height)
             .scroll_wheel(ctx.props.scroll_wheel)
@@ -414,6 +442,13 @@ impl Component for ManagedTerminal {
                 }
             }))
             .on_scroll_to(ctx.link().callback(ManagedTerminalMsg::TerminalScrollTo));
+
+        if let Some(on_focus) = ctx.props.on_focus.clone() {
+            terminal = terminal.on_focus(on_focus);
+        }
+        if let Some(on_blur) = ctx.props.on_blur.clone() {
+            terminal = terminal.on_blur(on_blur);
+        }
 
         if ctx.props.forward_mouse {
             terminal =

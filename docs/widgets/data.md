@@ -43,6 +43,8 @@ State-style setters use [StyleSlot semantics](../styling.md#state-style-slots):
 | `item_horizontal_padding` | `impl Into<Padding>` | Left/right padding for normal rows (top/bottom ignored) |
 | `header_horizontal_padding` | `impl Into<Padding>` | Left/right padding for header rows (top/bottom ignored) |
 | `focusable` | `bool` | Accept focus |
+| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_select` | `Callback<ListEvent>` | Selection changed |
@@ -204,6 +206,8 @@ Structured data with rows, columns, and optional scrollbar.
 | `row_styles` | `impl IntoIterator<Item = Style>` | Set zero-based per-data-row styles in order |
 | `row_style_full_width` | `bool` | Extend row hover/selection/zebra style across full row width |
 | `focusable` | `bool` | Accept focus |
+| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_select` | `Callback<TableEvent>` | Row selection changed |
@@ -325,9 +329,11 @@ Hierarchical tree view with expand/collapse.
 | `empty_text` | `String` | Text when tree is empty |
 | `empty_text_style` | `Style` | Empty text style |
 | `focusable` | `bool` | Accept focus |
+| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `activate_on_click` | `bool` | Single-click activates |
 | `keymap` | `TreeKeymap` | Keyboard expand/collapse mapping |
-| `focus_policy` | `FocusPolicy` | Accordion behavior |
+| `focus_policy` | `FocusAccordion` | Tree accordion behavior |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_select` | `Callback<TreeEvent>` | Node selected |
@@ -416,6 +422,9 @@ application-provided change projections.
 | `explorer_input_border` | `bool` | Search input border |
 | `explorer_match_style` | `Style` | Fuzzy match highlight |
 | `explorer_divider` | `bool` | Show divider between search and tree |
+| `focusable` | `bool` | Accept focus |
+| `tab_stop` | `bool` | Include the tree target in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Tree focus gained / lost |
 | `on_select` | `Callback<FileTreeEvent>` | File/dir selected |
 | `on_toggle` | `Callback<FileTreeToggleEvent>` | Directory expanded/collapsed |
 

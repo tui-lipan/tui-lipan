@@ -8,6 +8,7 @@ use crate::clipboard::{ClipboardConfig, ClipboardError, ClipboardProvider, Clipb
 #[cfg(not(target_arch = "wasm32"))]
 use crate::core::component::Component;
 use crate::input::KeyBindings;
+use crate::layout::tag::Tag;
 use crate::overlay::ToastPlacement;
 use crate::style::Padding;
 use crate::style::{Color, Paint, Style, Theme};
@@ -154,6 +155,41 @@ pub enum TextAreaNewlineBinding {
     EnterOrShiftEnter,
 }
 
+/// Controls framework-initiated focus movement.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FocusPolicy {
+    /// Focus the first focusable widget at startup and whenever focus cannot be restored.
+    Auto,
+    /// Start unfocused, then allow Tab and pointer interaction to establish focus.
+    #[default]
+    OnDemand,
+    /// Never move focus through global traversal or pointer interaction.
+    ///
+    /// Explicit focus requests and focus traversal helpers remain available. Capturing overlays
+    /// also continue to establish and trap focus.
+    Manual,
+}
+
+/// Public identity of a focused widget at a focus transition boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FocusEntry {
+    /// Optional stable widget key.
+    pub key: Option<crate::core::element::Key>,
+    /// Widget kind.
+    pub tag: Tag,
+}
+
+/// App-level focus transition payload.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FocusChanged {
+    /// Previously focused widget, if any.
+    pub old: Option<FocusEntry>,
+    /// Newly focused widget, if any.
+    pub new: Option<FocusEntry>,
+}
+
+pub(crate) type FocusChangedHook = std::rc::Rc<dyn Fn(&FocusChanged)>;
+
 /// Controls automatic foreground contrast adjustments for widget text.
 #[cfg_attr(
     feature = "terminal-serde",
@@ -298,6 +334,8 @@ pub struct App {
     pub(crate) framework_keymap: FrameworkKeymap,
     pub(crate) user_keymap_policy: UserKeymapPolicy,
     pub(crate) key_dispatch_policy: KeyDispatchPolicy,
+    pub(crate) focus_policy: FocusPolicy,
+    pub(crate) on_focus_changed: Option<FocusChangedHook>,
     pub(crate) terminal_key_policy: TerminalKeyPolicy,
     pub(crate) command_conflict_policy: CommandConflictPolicy,
     pub(crate) chord_mismatch_policy: ChordMismatchPolicy,
@@ -330,6 +368,8 @@ impl Default for App {
             framework_keymap: FrameworkKeymap::default(),
             user_keymap_policy: UserKeymapPolicy::default(),
             key_dispatch_policy: KeyDispatchPolicy::WidgetFirst,
+            focus_policy: FocusPolicy::default(),
+            on_focus_changed: None,
             terminal_key_policy: TerminalKeyPolicy::FrameworkFirst,
             command_conflict_policy: CommandConflictPolicy::default(),
             chord_mismatch_policy: ChordMismatchPolicy::default(),
@@ -526,6 +566,18 @@ impl App {
     /// Configure app command versus widget key dispatch ordering.
     pub fn key_dispatch_policy(mut self, policy: KeyDispatchPolicy) -> Self {
         self.key_dispatch_policy = policy;
+        self
+    }
+
+    /// Configure framework-initiated focus movement.
+    pub fn focus_policy(mut self, policy: FocusPolicy) -> Self {
+        self.focus_policy = policy;
+        self
+    }
+
+    /// Observe completed focus transitions after widget blur/focus callbacks are emitted.
+    pub fn on_focus_changed(mut self, hook: impl Fn(&FocusChanged) + 'static) -> Self {
+        self.on_focus_changed = Some(std::rc::Rc::new(hook));
         self
     }
 

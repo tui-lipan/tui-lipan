@@ -252,9 +252,16 @@ impl Component for TreeComponent {
             .scroll_indicator_style(ctx.props.scroll_indicator_style)
             .activate_on_click(ctx.props.activate_on_click)
             .focusable(ctx.props.focusable)
+            .tab_stop(ctx.props.tab_stop)
             .on_select(on_select)
             .on_activate(on_activate)
             .on_key(on_key);
+        if let Some(cb) = ctx.props.on_focus.clone() {
+            list = list.on_focus(cb);
+        }
+        if let Some(cb) = ctx.props.on_blur.clone() {
+            list = list.on_blur(cb);
+        }
         list = list
             .selection_style_slot(ctx.props.selection_style)
             .unfocused_selection_style_slot(ctx.props.unfocused_selection_style);

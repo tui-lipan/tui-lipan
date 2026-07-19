@@ -53,6 +53,9 @@ pub struct Terminal {
     pub(crate) width: Length,
     pub(crate) height: Length,
     pub(crate) focusable: bool,
+    pub(crate) tab_stop: bool,
+    pub(crate) on_focus: Option<Callback<()>>,
+    pub(crate) on_blur: Option<Callback<()>>,
     pub(crate) on_key: Option<KeyHandler>,
     pub(crate) on_input: Option<Callback<TerminalInputEvent>>,
 }

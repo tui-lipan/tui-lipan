@@ -71,38 +71,10 @@ impl<C: Component> AppRunner<C> {
                     dirty = true;
                 }
                 FrameworkCommandAction::FocusNext => {
-                    let before = self.focus.focused;
-                    if self.focus_overlay_next() {
-                        dirty = true;
-                    } else {
-                        focus::focus_next(
-                            &self.core.tree,
-                            &mut self.focus.focused,
-                            &mut self.focus.focused_key,
-                            &mut self.focus.focused_tag,
-                        );
-                        if self.focus.focused != before {
-                            self.animation.reset_blink();
-                            dirty = true;
-                        }
-                    }
+                    dirty |= self.framework_focus_step(focus::FocusDirection::Next);
                 }
                 FrameworkCommandAction::FocusPrev => {
-                    let before = self.focus.focused;
-                    if self.focus_overlay_prev() {
-                        dirty = true;
-                    } else {
-                        focus::focus_prev(
-                            &self.core.tree,
-                            &mut self.focus.focused,
-                            &mut self.focus.focused_key,
-                            &mut self.focus.focused_tag,
-                        );
-                        if self.focus.focused != before {
-                            self.animation.reset_blink();
-                            dirty = true;
-                        }
-                    }
+                    dirty |= self.framework_focus_step(focus::FocusDirection::Prev);
                 }
                 FrameworkCommandAction::DismissOverlay => {
                     if self.handle_overlay_escape() {
@@ -112,6 +84,41 @@ impl<C: Component> AppRunner<C> {
             }
         }
 
+        self.notify_focus_change();
+
         dirty
+    }
+
+    /// Tab traversal issued as a framework command (`Command::focus_next()` etc.).
+    ///
+    /// Returns whether a repaint is needed: an overlay consuming the step, or
+    /// focus actually moving. [`FocusPolicy::Manual`] suppresses the framework
+    /// step, matching key dispatch.
+    ///
+    /// [`FocusPolicy::Manual`]: crate::FocusPolicy::Manual
+    fn framework_focus_step(&mut self, direction: focus::FocusDirection) -> bool {
+        let before = self.focus.focused;
+        let overlay_handled = match direction {
+            focus::FocusDirection::Next => self.focus_overlay_next(),
+            focus::FocusDirection::Prev => self.focus_overlay_prev(),
+        };
+        if overlay_handled {
+            return true;
+        }
+        if !focus::step_for_policy(
+            &self.core.tree,
+            &mut self.focus.focused,
+            &mut self.focus.focused_key,
+            &mut self.focus.focused_tag,
+            self.focus.policy,
+            direction,
+        ) {
+            return false;
+        }
+        if self.focus.focused != before {
+            self.animation.reset_blink();
+            return true;
+        }
+        false
     }
 }

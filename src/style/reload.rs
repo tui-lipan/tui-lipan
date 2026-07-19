@@ -787,6 +787,7 @@ struct TomlTheme {
     selection: Option<TomlStyle>,
     text_selection: Option<TomlStyle>,
     focus: Option<TomlStyle>,
+    focus_decoration: Option<bool>,
     hover: Option<TomlStyle>,
     border: Option<TomlStyle>,
     muted: Option<TomlStyle>,
@@ -839,6 +840,9 @@ impl TomlTheme {
         }
         if let Some(style) = self.focus {
             theme.focus = style.apply(theme.focus);
+        }
+        if let Some(focus_decoration) = self.focus_decoration {
+            theme.focus_decoration = focus_decoration;
         }
         if let Some(style) = self.hover {
             theme.hover = style.apply(theme.hover);
@@ -1167,6 +1171,7 @@ mod tests {
             r##"
 extends = "dracula"
 border_active = "#112233"
+focus_decoration = false
 
 [primary]
 fg = "#010203"
@@ -1184,6 +1189,7 @@ fg = "#010203"
         );
         assert_eq!(theme.primary.bg, Theme::dracula().primary.bg);
         assert_eq!(theme.border_active, Color::Rgb(0x11, 0x22, 0x33));
+        assert!(!theme.focus_decoration);
     }
 
     #[test]

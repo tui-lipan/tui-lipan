@@ -487,6 +487,7 @@ fn filtered_items(tab: usize, filter: &str) -> Vec<&'static str> {
 
 fn main() -> Result<()> {
     App::new()
+        .focus_policy(FocusPolicy::Auto)
         .title("tui-lipan - Widgets")
         .mount(WidgetDemo)
         .run()

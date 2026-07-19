@@ -376,6 +376,7 @@ fn filter_items<'a>(items: &'a [&'a str], global: &str, local: &str) -> Vec<&'a 
 
 fn main() -> Result<()> {
     App::new()
+        .focus_policy(FocusPolicy::Auto)
         .title("tui-lipan - Search Lists")
         .mount(SearchLists)
         .run()

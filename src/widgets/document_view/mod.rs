@@ -232,6 +232,12 @@ pub struct DocumentView {
     // ── Interaction ──────────────────────────────────────────────────────
     /// Whether the widget participates in focus traversal.
     pub focusable: bool,
+    /// Whether the widget participates in tab traversal when focusable.
+    pub tab_stop: bool,
+    /// Callback fired when the widget gains focus.
+    pub on_focus: Option<Callback<()>>,
+    /// Callback fired when the widget loses focus.
+    pub on_blur: Option<Callback<()>>,
     /// Scroll event callback.
     pub on_scroll: Option<Callback<ScrollEvent>>,
     /// Click event callback (with source line + link info).
@@ -365,6 +371,9 @@ impl Default for DocumentView {
             scroll_wheel: true,
             scroll_wheel_multiplier: None,
             focusable: true,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
             on_scroll: None,
             on_click: None,
             on_select: None,
@@ -801,6 +810,24 @@ impl DocumentView {
     /// Set whether the widget is focusable.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.focusable = focusable;
+        self
+    }
+
+    /// Control whether the widget participates in tab traversal.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the widget gains focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the widget loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
         self
     }
 

@@ -156,7 +156,11 @@ pub(crate) fn count_lines(pt: &PreparedText, width: usize) -> usize {
             continue;
         }
 
-        if let Some(next_idx) = last_break {
+        let separator_starts_continuation = matches!(
+            pt.segments[cursor].kind,
+            SegmentKind::Space | SegmentKind::PreservedSpace | SegmentKind::Tab
+        );
+        if !separator_starts_continuation && let Some(next_idx) = last_break {
             count += 1;
             idx = next_idx;
             continue;
@@ -248,7 +252,13 @@ pub(crate) fn layout_lines(pt: &PreparedText, width: usize) -> Vec<LineRange> {
             continue;
         }
 
-        if let Some((next_idx, end)) = last_break {
+        // Keep an already-full row stable when the next typed separator overflows.
+        // Reusing an older break here would move the completed word to the next row.
+        let separator_starts_continuation = matches!(
+            cur.kind,
+            SegmentKind::Space | SegmentKind::PreservedSpace | SegmentKind::Tab
+        );
+        if !separator_starts_continuation && let Some((next_idx, end)) = last_break {
             out.push(LineRange {
                 start: line_start,
                 end,
@@ -345,6 +355,38 @@ mod tests {
             ]
         );
         assert_eq!(count_lines(&pt, 3), 2);
+    }
+
+    #[test]
+    fn overflowing_separator_does_not_reflow_completed_word() {
+        let s = "hello word ";
+        let pt = prepare_text(s, None, 4);
+        let lines = layout_lines(&pt, 10);
+
+        assert_eq!(
+            lines,
+            vec![
+                LineRange { start: 0, end: 10 },
+                LineRange { start: 10, end: 11 },
+            ]
+        );
+        assert_eq!(count_lines(&pt, 10), lines.len());
+    }
+
+    #[test]
+    fn overflowing_separator_preserves_full_width_unicode_content() {
+        let s = "ab \u{4F60} ";
+        let pt = prepare_text(s, None, 4);
+        let lines = layout_lines(&pt, 5);
+
+        assert_eq!(
+            lines,
+            vec![
+                LineRange { start: 0, end: 6 },
+                LineRange { start: 6, end: 7 },
+            ]
+        );
+        assert_eq!(count_lines(&pt, 5), lines.len());
     }
 
     #[test]

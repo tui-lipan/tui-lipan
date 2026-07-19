@@ -7,14 +7,14 @@ use std::time::Duration;
 use web_time::Instant;
 
 use super::{
-    AppRunner, DirtyLevel, DirtyTracker, DragState, effective_active_drag_dirty_level,
-    mouse_dispatch_dirty_level, spinner_frame_for_speed,
+    AppRunner, DirtyLevel, DirtyTracker, DragState, FrameworkCommandAction,
+    effective_active_drag_dirty_level, mouse_dispatch_dirty_level, spinner_frame_for_speed,
 };
 use crate::TextEditor;
 use crate::animation::{Easing, TransitionConfig};
 #[cfg(feature = "devtools")]
 use crate::app::context::DevToolsConfig;
-use crate::app::context::{App, SurfaceMode};
+use crate::app::context::{App, FocusPolicy, SurfaceMode};
 use crate::app::input::runtime_dispatch::should_dispatch_text_area_tab_first;
 use crate::callback::{Callback, ScopeId};
 use crate::clipboard::{ClipboardConfig, ClipboardError, ClipboardProvider};
@@ -2457,6 +2457,51 @@ fn non_text_area_widgets_keep_default_tab_focus_traversal() {
 }
 
 #[test]
+fn manual_focus_policy_leaves_native_tab_unhandled() {
+    let mut runner = App::new()
+        .focus_policy(FocusPolicy::Manual)
+        .mount(RunnerKeymapSmoke);
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 3,
+    };
+    runner.core.ctx.set_viewport(viewport);
+    runner.core.render_element(viewport, None, None, None);
+
+    let result = runner.dispatch_layered_key(KeyEvent {
+        code: KeyCode::Tab,
+        mods: KeyMods::NONE,
+    });
+
+    assert!(!result.consumed);
+    assert_eq!(runner.focus.focused, None);
+}
+
+#[test]
+fn manual_focus_policy_ignores_queued_framework_traversal() {
+    let mut runner = App::new()
+        .focus_policy(FocusPolicy::Manual)
+        .mount(RunnerKeymapSmoke);
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 3,
+    };
+    runner.core.ctx.set_viewport(viewport);
+    runner.core.render_element(viewport, None, None, None);
+    runner
+        .framework_command_queue
+        .borrow_mut()
+        .push(FrameworkCommandAction::FocusNext);
+
+    assert!(!runner.apply_framework_commands());
+    assert_eq!(runner.focus.focused, None);
+}
+
+#[test]
 fn default_runner_keymap_keeps_ctrl_q_quit_without_ctrl_c() {
     let runner = App::new().mouse(false).mount(RunnerKeymapSmoke);
 
@@ -2636,8 +2681,8 @@ fn devtools_stats_panel_uses_compact_default_size() {
         .expect("devtools panel node should exist");
 
     assert_eq!(panel_node.rect.w, 40);
-    assert_eq!(panel_node.rect.h, 11);
-    assert_eq!(panel_node.rect.y, 69); // anchored to bottom
+    assert_eq!(panel_node.rect.h, 12);
+    assert_eq!(panel_node.rect.y, 68); // anchored to bottom
 }
 
 #[cfg(feature = "devtools")]

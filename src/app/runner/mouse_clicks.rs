@@ -3,6 +3,7 @@
 //! Each method corresponds to a widget-specific branch that was previously
 //! inlined in the monolithic `dispatch_mouse` function in `events.rs`.
 
+use crate::app::focus_service;
 use crate::app::input::mouse;
 use crate::app::input::mouse::{
     CheckboxToggle, DocumentClick, DraggableTabBarAction, InputChange, ListSelect, ProgressChange,
@@ -705,7 +706,12 @@ impl<C: Component> AppRunner<C> {
             return false;
         }
 
-        let is_active = Some(change.node_id) == self.focus.focused || !change.focusable;
+        let is_active = focus_service::click_target_is_active(
+            self.focus.policy,
+            self.focus.focused,
+            change.node_id,
+            change.focusable,
+        );
         let inner = change.rect.inner(change.border, change.padding);
 
         if is_active && inner.w > 0 && inner.h > 0 && change.rect.contains(x as i16, y as i16) {
@@ -790,8 +796,16 @@ impl<C: Component> AppRunner<C> {
         if !self.core.tree.is_valid(hit) {
             return (false, false);
         }
-        let is_active = Some(hit) == self.focus.focused
-            || matches!(&self.core.tree.node(hit).kind, NodeKind::DocumentView(doc) if !doc.focusable);
+        let focusable = !matches!(
+            &self.core.tree.node(hit).kind,
+            NodeKind::DocumentView(doc) if !doc.focusable
+        );
+        let is_active = focus_service::click_target_is_active(
+            self.focus.policy,
+            self.focus.focused,
+            hit,
+            focusable,
+        );
         if !is_active {
             return (false, false);
         }
@@ -985,7 +999,12 @@ impl<C: Component> AppRunner<C> {
 
     /// Handle left-click on an Input field.
     pub(crate) fn handle_input_click(&mut self, change: InputChange, x: u16) -> bool {
-        let is_active = Some(change.node_id) == self.focus.focused || !change.focusable;
+        let is_active = focus_service::click_target_is_active(
+            self.focus.policy,
+            self.focus.focused,
+            change.node_id,
+            change.focusable,
+        );
         let inner = change.rect.inner(change.border, change.padding);
 
         if is_active && inner.w > 0 && change.rect.contains(x as i16, change.rect.y) {
@@ -1026,7 +1045,12 @@ impl<C: Component> AppRunner<C> {
     ) -> bool {
         if let NodeKind::HexArea(hex) = &self.core.tree.node(hit).kind
             && !hex.disabled
-            && Some(hit) == self.focus.focused
+            && focus_service::click_target_is_active(
+                self.focus.policy,
+                self.focus.focused,
+                hit,
+                true,
+            )
             && let Some(hit_info) = crate::widgets::pointer_hit(
                 self.core.tree.node(hit).rect,
                 crate::widgets::HexAreaPointerHitArgs {

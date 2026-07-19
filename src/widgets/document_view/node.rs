@@ -287,6 +287,9 @@ pub(crate) struct DocumentViewNode {
 
     // ── Interaction ──────────────────────────────────────────────────────
     pub focusable: bool,
+    pub tab_stop: bool,
+    pub on_focus: Option<Callback<()>>,
+    pub on_blur: Option<Callback<()>>,
     pub on_scroll: Option<Callback<ScrollEvent>>,
     pub on_click: Option<Callback<DocumentClickEvent>>,
     pub on_select: Option<Callback<DocumentSelectEvent>>,
@@ -351,6 +354,18 @@ pub(crate) struct DocumentViewNode {
 impl WidgetNode for DocumentViewNode {
     fn is_focusable(&self) -> bool {
         self.focusable
+    }
+
+    fn is_tab_stop(&self) -> bool {
+        self.focusable && self.tab_stop
+    }
+
+    fn on_focus_callback(&self) -> Option<&Callback<()>> {
+        self.on_focus.as_ref()
+    }
+
+    fn on_blur_callback(&self) -> Option<&Callback<()>> {
+        self.on_blur.as_ref()
     }
 
     fn has_on_click(&self) -> bool {
@@ -579,6 +594,9 @@ impl From<DocumentView> for DocumentViewNode {
             scroll_wheel: dv.scroll_wheel,
             scroll_wheel_multiplier: dv.scroll_wheel_multiplier,
             focusable: dv.focusable,
+            tab_stop: dv.tab_stop,
+            on_focus: dv.on_focus,
+            on_blur: dv.on_blur,
             on_scroll: dv.on_scroll,
             on_click: dv.on_click,
             on_select: dv.on_select,

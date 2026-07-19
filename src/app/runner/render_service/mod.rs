@@ -60,7 +60,7 @@ pub(super) struct ActiveTextAreaDragSnapshot {
 }
 
 impl<C: Component> AppRunner<C> {
-    /// Drain a pending `request_focus(...)` from the runtime env and apply it to
+    /// Drain a pending focus request from the runtime env and apply it to
     /// `self.focus`. Returns `true` if a request was consumed.
     ///
     /// Called both from the event-loop drain site (where it also triggers a Full
@@ -69,14 +69,15 @@ impl<C: Component> AppRunner<C> {
     /// same frame — without it, `restore_focus` would fall back to "first
     /// focusable" for one frame before the request is honored on the next tick.
     pub(super) fn apply_pending_focus_request(&mut self) -> bool {
-        if let Some(key) = self.core.ctx.take_focus_request() {
-            self.focus.focused = None;
-            self.focus.focused_key = Some(key);
-            self.focus.focused_tag = None;
-            true
-        } else {
-            false
-        }
+        let Some(request) = self.core.ctx.take_focus_request() else {
+            return false;
+        };
+        crate::app::focus_service::apply_focus_request(
+            &self.core.tree,
+            &mut self.focus.refs(),
+            request,
+        );
+        true
     }
 
     pub(super) fn push_drag_layout_collapse_hint(&self) {
@@ -355,7 +356,7 @@ impl<C: Component> AppRunner<C> {
                         gutter_col_width: text_area.gutter_col_width,
                         gutter_gap: text_area.gutter_gap,
                         geometry: &text_area.geometry,
-                        tab_stop: text_area.tab_stop as usize,
+                        tab_stop: text_area.tab_display_width as usize,
                     },
                 )
             }
@@ -763,8 +764,12 @@ impl<C: Component> AppRunner<C> {
             &mut self.focus.focused,
             &mut self.focus.focused_key,
             &mut self.focus.focused_tag,
+            self.focus.policy,
         );
         self.ensure_overlay_focus();
+        self.notify_focus_change();
+        #[cfg(feature = "devtools")]
+        self.update_devtools_focus_metrics();
         #[cfg(feature = "terminal")]
         self.emit_terminal_focus_change();
         self.mouse.hovered = self.mouse.hovered.filter(|id| self.core.tree.is_valid(*id));

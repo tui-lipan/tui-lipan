@@ -2,6 +2,7 @@
 
 pub mod context;
 pub(crate) mod copy_feedback;
+pub(crate) mod focus_service;
 pub mod input;
 pub(crate) mod interaction_state;
 pub(crate) mod mouse_dispatch;
@@ -13,8 +14,8 @@ pub mod web_runner;
 #[cfg(feature = "devtools")]
 pub use context::DevToolsConfig;
 pub use context::{
-    App, ContrastPolicy, InlineHeight, InlineStartupPolicy, ScreenBackground, SurfaceMode,
-    TextAreaNewlineBinding,
+    App, ContrastPolicy, FocusChanged, FocusEntry, FocusPolicy, InlineHeight, InlineStartupPolicy,
+    ScreenBackground, SurfaceMode, TextAreaNewlineBinding,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use runner::AppRunner;

@@ -86,6 +86,12 @@ pub struct Button {
     pub on_key: Option<KeyHandler>,
     /// Whether the button participates in focus traversal.
     pub focusable: bool,
+    /// Whether the button participates in tab traversal when focusable.
+    pub tab_stop: bool,
+    /// Callback fired when the button gains focus.
+    pub on_focus: Option<Callback<()>>,
+    /// Callback fired when the button loses focus.
+    pub on_blur: Option<Callback<()>>,
 }
 
 impl Button {
@@ -120,6 +126,9 @@ impl Button {
             on_click: None,
             on_key: None,
             focusable: true,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
         }
     }
 
@@ -321,6 +330,24 @@ impl Button {
     /// Control whether the node is focusable.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.focusable = focusable;
+        self
+    }
+
+    /// Control whether the button participates in tab traversal.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the button gains focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the button loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
         self
     }
 }

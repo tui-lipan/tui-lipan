@@ -824,6 +824,7 @@ mod tests {
             on_close: None,
             backdrop: None,
             captures_focus: false,
+            auto_focus: false,
             captures_pointer: PointerCapture::None,
         }));
 

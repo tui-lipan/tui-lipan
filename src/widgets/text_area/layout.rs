@@ -647,7 +647,7 @@ pub fn measure_text_area(text_area: &TextArea) -> (u16, u16) {
     let mut w = 0usize;
     let mut h = 0usize;
 
-    let tab_stop = text_area.tab_stop as usize;
+    let tab_stop = text_area.tab_display_width as usize;
     for line in value.lines() {
         w = w.max(str_visual_width_with_tabs(
             line,
@@ -870,7 +870,7 @@ pub(crate) fn calculate_text_area_visual_metrics(
             scrollbar_over_border,
             scrollbar_gap: text_area.scrollbar_config.gap,
             read_only: text_area.read_only,
-            tab_stop: text_area.tab_stop,
+            tab_stop: text_area.tab_display_width,
             sentinel_ph_width,
             sentinel_count,
             custom_sentinel_hash: custom_sentinel_widths_hash,
@@ -997,7 +997,7 @@ pub(crate) fn calculate_text_area_visual_metrics(
                     wrap,
                     content_width,
                     sentinel: sentinel.as_ref(),
-                    tab_stop: text_area.tab_stop as usize,
+                    tab_stop: text_area.tab_display_width as usize,
                     insertions: &insertions,
                 },
                 &mut visual_lines,
@@ -1011,15 +1011,20 @@ pub(crate) fn calculate_text_area_visual_metrics(
             sentinel_ph_width,
             sentinel_count,
             custom_sentinel_hash: custom_sentinel_widths_hash,
-            tab_stop: text_area.tab_stop,
+            tab_stop: text_area.tab_display_width,
         };
         let prepared = if let Some(cache) = cache.as_deref_mut() {
-            cache.prepared_text(prepared_key, value, sentinel.as_ref(), text_area.tab_stop)
+            cache.prepared_text(
+                prepared_key,
+                value,
+                sentinel.as_ref(),
+                text_area.tab_display_width,
+            )
         } else {
             Arc::new(prepare_text(
                 value,
                 sentinel.as_ref(),
-                text_area.tab_stop as usize,
+                text_area.tab_display_width as usize,
             ))
         };
 
@@ -1042,13 +1047,13 @@ pub(crate) fn calculate_text_area_visual_metrics(
                     &value[logical_line_start..range.start],
                     sentinel.as_ref(),
                     0,
-                    text_area.tab_stop as usize,
+                    text_area.tab_display_width as usize,
                 );
                 let end_col = start_col.saturating_add(str_visual_width_with_tabs(
                     &value[range.start..range.end],
                     sentinel.as_ref(),
                     start_col,
-                    text_area.tab_stop as usize,
+                    text_area.tab_display_width as usize,
                 ));
                 visual_lines.push(TextAreaVisualLine {
                     line_num,
@@ -1068,7 +1073,7 @@ pub(crate) fn calculate_text_area_visual_metrics(
                     &value[start..end],
                     sentinel.as_ref(),
                     0,
-                    text_area.tab_stop as usize,
+                    text_area.tab_display_width as usize,
                 );
                 visual_lines.push(TextAreaVisualLine {
                     line_num: idx + 1,
@@ -1330,6 +1335,50 @@ mod tests {
     }
 
     #[test]
+    fn trailing_space_keeps_full_width_word_on_existing_row() {
+        let before = make_textarea("hello word", true, false).cursor(10);
+        let after = make_textarea("hello word ", true, false).cursor(11);
+        let mut before_cache = TextAreaVisualCache::default();
+        let mut after_cache = TextAreaVisualCache::default();
+
+        let before_geometry = calculate_text_area_visual_metrics(
+            &before,
+            10,
+            false,
+            hash_text(before.value.as_ref()),
+            Some(&mut before_cache),
+        );
+        let after_geometry = calculate_text_area_visual_metrics(
+            &after,
+            10,
+            false,
+            hash_text(after.value.as_ref()),
+            Some(&mut after_cache),
+        );
+        let before_lines = before_cache
+            .latest_lines()
+            .expect("before layout is cached");
+        let after_lines = after_cache.latest_lines().expect("after layout is cached");
+
+        assert_eq!(
+            before_lines
+                .iter()
+                .map(|line| (line.start, line.end))
+                .collect::<Vec<_>>(),
+            vec![(0, 10), (10, 10)]
+        );
+        assert_eq!(
+            after_lines
+                .iter()
+                .map(|line| (line.start, line.end))
+                .collect::<Vec<_>>(),
+            vec![(0, 10), (10, 11)]
+        );
+        assert_eq!(before_geometry.cursor_visual_line, 1);
+        assert_eq!(after_geometry.cursor_visual_line, 1);
+    }
+
+    #[test]
     fn cursor_on_wrap_boundary_tracks_continuation_visual_line_start() {
         let ta = make_textarea("abcdefgh", true, false).cursor(5);
         let (total, cursor_vl, _, content_w) = calc(&ta, 5);
@@ -1537,8 +1586,8 @@ mod tests {
 
     #[test]
     fn tab_stop_invalidates_visual_cache() {
-        let narrow_tab = make_textarea("a\tb", true, false).tab_stop(2);
-        let wide_tab = make_textarea("a\tb", true, false).tab_stop(8);
+        let narrow_tab = make_textarea("a\tb", true, false).tab_display_width(2);
+        let wide_tab = make_textarea("a\tb", true, false).tab_display_width(8);
         let hash = hash_text(narrow_tab.value.as_ref());
         let mut cache = TextAreaVisualCache::default();
 

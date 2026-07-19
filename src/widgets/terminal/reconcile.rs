@@ -133,6 +133,9 @@ pub(crate) fn reconcile_terminal(
         on_scroll: terminal.on_scroll.clone(),
         on_scroll_to: terminal.on_scroll_to.clone(),
         focusable: terminal.focusable,
+        tab_stop: terminal.tab_stop,
+        on_focus: terminal.on_focus.clone(),
+        on_blur: terminal.on_blur.clone(),
         on_key: terminal.on_key.clone(),
         on_input: terminal.on_input.clone(),
     });

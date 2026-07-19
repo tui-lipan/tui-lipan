@@ -1,197 +1,295 @@
-# Focus system
+# Focus
 
-Keyboard **routing** in the component tree (bubbling, `on_key`) lives here. **Configurable bindings**, `keymap.conf`, chord parsing, command shortcuts, and `TextArea` newline keys are documented in [`keybindings.md`](keybindings.md).
+Focus controls keyboard routing, traversal, pointer focus, focus scopes, and focus-change
+notifications. Configurable bindings and chords are documented in
+[`keybindings.md`](keybindings.md).
 
-## Focus basics
+## Focus Policy
 
-Widgets receive focus if they have `focusable: true` (default for interactive widgets like `Input`, `List`, `Button`, etc.). Non-interactive widgets (`Text`, `Frame`) are not focusable by default.
+Configure framework-initiated focus movement on `App`:
 
-## Tab traversal
+```rust
+App::new()
+    .focus_policy(FocusPolicy::OnDemand)
+    .mount(Root)
+```
 
-| Key | Action |
-|-----|--------|
-| `Tab` | Move to next focusable element |
-| `Shift+Tab` | Move to previous focusable element |
-| Click | Focus clicked element |
+| Policy | Startup and fallback | Tab and pointer focus | Explicit APIs |
+|--------|----------------------|-----------------------|---------------|
+| `OnDemand` | Starts unfocused; restores stable keyed targets but has no first-widget fallback. This is the default. | Enabled | Enabled |
+| `Auto` | Focuses the first eligible widget at startup and when no prior target can be restored. | Enabled | Enabled |
+| `Manual` | Starts unfocused; restores only an exact keyed target and never uses tag or first-widget fallback. | Global traversal and click-to-focus disabled | Enabled |
 
-Default keys follow the built-in keymap; you can remap `focus_next` / `focus_prev` in `keymap.conf` (see [`keybindings.md`](keybindings.md)).
+`Manual` disables framework-initiated movement, not focus itself. Calls to
+`ctx.request_focus`, `ctx.focus_next`, and `ctx.focus_prev` still work. Capturing overlays are
+the other deliberate exception: they auto-focus and trap by default even under `Manual`.
 
-## Programmatic focus
+## Focusable Versus Tab Stop
 
-Control focus from `update()`:
+These properties answer different questions:
+
+| Property | Meaning |
+|----------|---------|
+| `focusable` | The widget may own focus and receive focused keyboard input. |
+| `tab_stop` | The widget participates in next/previous traversal. Default: `true`. |
+
+A widget with `.focusable(true).tab_stop(false)` is omitted from Tab traversal but remains
+reachable by pointer focus and `ctx.request_focus(key)`. A non-focusable widget cannot become a
+focus target. Incidental controls such as `Accordion`, `DraggableTabBar`, `Hyperlink`, `PanView`,
+and `Tabs` are not focusable by default; opt in when their keyboard behavior belongs in the app's
+focus ring. Input, editor, and primary data surfaces remain focusable by default.
+
+```rust
+Input::new(value)
+    .key("search")
+    .tab_stop(false)
+```
+
+## Traversal
+
+The default framework bindings are:
+
+| Input | Action |
+|-------|--------|
+| `Tab` | Move to the next tab stop |
+| `Shift+Tab` | Move to the previous tab stop |
+| Pointer press | Focus the eligible target before dispatching its interaction |
+
+With no current focus, next traversal selects the first tab stop and previous traversal selects
+the last. `Manual` leaves global Tab/Shift+Tab unhandled so widget, command, or component layers
+can use those keys. A `TextArea` may consume Tab for insertion before framework traversal. Its
+literal-tab display width is configured with `.tab_display_width(...)`, not `.tab_stop(...)`.
+
+Remap or unbind `focus_next` and `focus_prev` in `keymap.conf`; see
+[`keybindings.md`](keybindings.md).
+
+## Programmatic Focus
+
+Focus APIs are available from `update()` and `on_key()`:
 
 ```rust
 fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
     match msg {
-        Msg::EditItem(id) => {
+        Msg::Edit(id) => {
             ctx.state.editing = Some(id);
-            ctx.request_focus(format!("input-{}", id));  // Move focus to keyed widget
-            Update::full()
+            ctx.request_focus(format!("editor-{id}"));
         }
-        Msg::Save => {
+        Msg::NextPane => ctx.focus_next(),
+        Msg::PreviousPane => ctx.focus_prev(),
+        Msg::CloseEditor => {
             ctx.state.editing = None;
-            ctx.request_focus("list");  // Return focus to list
-            Update::full()
+            ctx.blur();
         }
     }
-}
-
-fn view(&self, ctx: &Context<Self>) -> Element {
-    rsx! {
-        List { key: "list", items: ctx.state.items.clone(), selected: ctx.state.selected }
-        if let Some(id) = ctx.state.editing {
-            Input { key: format!("input-{}", id), value: ctx.state.edit_value.clone() }
-        }
-    }
+    Update::full()
 }
 ```
 
-## Composite widget focus
+`request_focus(key)` may be issued before the keyed widget mounts; the pending key resolves after
+reconciliation. It is also the explicit escape hatch into `FocusScope::Exclude`.
 
-Some widgets expose a single outer focus target while managing an internal active
-item. `Graph` uses this pattern for node navigation: tab traversal enters and
-leaves the graph as one focusable element, then arrow keys move a roving focused
-node inside the rendered tree.
+`blur()` clears both the current focus and retained focus identity. Under `OnDemand` and `Manual`,
+the app remains unfocused until focus is established again. Under `Auto`, the next reconciliation
+restores the default eligible target, so blur acts as a reset to automatic focus.
 
-Static graphs remain unfocusable by default. Set `.focusable(true)` to opt in
-explicitly, or attach `.on_node_focus(...)` / `.on_node_activate(...)` to opt in
-implicitly. Pointer-only graph callbacks such as `.on_node_click(...)` do not
-make the graph keyboard-focusable.
+`TestBackend::focus_next()`, `focus_prev()`, `blur()`, and `focused_key()` expose the same behavior
+for headless tests.
 
-Graph keyboard bindings are direction-aware:
+## OnDemand Retention And Remounts
 
-| Direction | Parent / first child | Siblings |
-|-----------|----------------------|----------|
-| `TopDown` | `Up` / `Down` | `Left` / `Right` |
-| `LeftRight` | `Left` / `Right` | `Up` / `Down` |
+`OnDemand` permits no current focus while retaining the key of a focused widget that temporarily
+unmounts. If a widget with that key remounts, focus returns to it. This is continuity, not a
+first-widget fallback. Use `ctx.blur()` when the old target must be forgotten permanently.
 
-`Enter` and `Space` activate the focused node. `Home` and `End` move to the
-first and last rendered node.
-
-## Focus state queries
-
-In headless tests, use `TestBackend::focus_next()` / `focus_prev()` to drive the
-same traversal and `TestBackend::focused_key()` to assert the focused keyed widget.
+Stable keys are therefore important for dynamic focus targets:
 
 ```rust
-fn view(&self, ctx: &Context<Self>) -> Element {
-    let sidebar_active = ctx.has_focus_within_key("sidebar");
-    let editor_active = ctx.has_focus_within_key("editor");
-
-    rsx! {
-        HStack {
-            Frame {
-                title: "Sidebar",
-                border: true,
-                key: "sidebar",
-                border_style: if sidebar_active { BorderStyle::Thick } else { BorderStyle::Rounded },
-            }
-            Frame {
-                title: "Editor",
-                border: true,
-                key: "editor",
-                border_style: if editor_active { BorderStyle::Thick } else { BorderStyle::Rounded },
-            }
-        }
-    }
+if let Some(id) = ctx.state.editing {
+    Input::new(ctx.state.value.clone()).key(format!("editor-{id}"))
+} else {
+    Element::empty()
 }
 ```
 
-## Key event bubbling
+When no keyed target can be restored, `OnDemand` may restore a surviving target of the same tag
+within the reconciled tree, then otherwise remains unfocused. `Manual` skips that tag heuristic so
+it cannot move focus to a different same-type widget.
 
-Keyboard events bubble up the tree if unhandled by the focused widget. If no widget is focused, bubbling starts at the deepest mounted component scope and continues toward root:
+## Focus Scopes
 
-1. **Focused widget** (e.g., `Input` handles typing)
-2. **Parent components** up the tree (via `on_key`)
-3. **Root component** `on_key`
+`VStack`, `HStack`, and `Frame` accept `.focus_scope(...)`:
 
-`ScrollView` also has an explicit fallback for page navigation: if exactly one mounted scroll view sets `.ambient_page_scroll(true)`, `PageUp` / `PageDown` can target it even when that scroll view is not focused. This ambient fallback runs only after the normal focused-widget path, ancestor `ScrollView` bubbling, and component `on_key` bubbling all leave the page key unhandled.
-
-## Layered keyboard dispatch
-
-Native, test, and web backends share one dispatch pipeline (`key_dispatch`). Configure ordering with `App` policy builders (see [`keybindings.md`](keybindings.md)). The tables below describe the default **`KeyDispatchPolicy::WidgetFirst`** path when focus is **not** inside an embedded terminal.
-
-| Step | Stage | Notes |
-|------|-------|-------|
-| 1 | Active app command chord | Pending prefixes are consumed before widget dispatch |
-| 2 | TextArea `Tab` / `Shift+Tab` first shot | TextArea may handle tab insertion before focus traversal |
-| 3 | Focused widget | Input, TextArea, List, etc. |
-| 4 | Bubbling `on_key` | Parent scopes toward root |
-| 5 | App command shortcuts | Only when widget/bubble did not consume the key |
-| 6 | Framework actions | Dismiss overlay, focus next/prev, quit, devtools |
-| 7 | Ambient page scroll | Single `ScrollView` with `.ambient_page_scroll(true)` |
-
-With **`KeyDispatchPolicy::AppCommandsFirst`**, steps 5 and 6 move before steps 2–4 (command chords still run first). Text widgets keep documented internal precedence under widget-first policy: `key_interceptor` → clear bindings → clipboard/keymap → Vim layer.
-
-When focus is inside a **`Terminal`** widget, terminal routing policy replaces the table above. See [`widgets/terminal.md`](widgets/terminal.md) for the terminal policy matrix.
-
-Framework quit (`Ctrl+Q` by default) is a **fallback**, not a pre-widget trap, except when a completed framework chord explicitly binds quit. Unbind globally with `App::global_quit(None)` or per-action via `FrameworkKeymap`.
+| Scope | Behavior |
+|-------|----------|
+| `FocusScope::None` | Normal inherited behavior. Default. |
+| `FocusScope::Exclude` | Removes the subtree from traversal, automatic fallback, descendant focus, and click-to-focus. Explicit keyed requests may enter it. |
+| `FocusScope::Contain` | While focus is inside, next/previous traversal wraps within the nearest containing ancestor. The pane is also opaque from outside: Tab never enters it. |
 
 ```rust
-impl Component for MyApp {
-    fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
-        match key.code {
-            KeyCode::Char('q') if key.mods.ctrl => {
-                ctx.quit();
-                KeyUpdate::handled(Update::full())
-            }
-            KeyCode::F(1) => {
-                ctx.state.show_help = !ctx.state.show_help;
-                KeyUpdate::handled(Update::full())
-            }
-            _ => KeyUpdate::unhandled(Update::none())
-        }
-    }
-}
+HStack::new()
+    .child(
+        Frame::new()
+            .focus_scope(FocusScope::Contain)
+            .child(editor_pane),
+    )
+    .child(
+        Frame::new()
+            .focus_scope(FocusScope::Exclude)
+            .child(read_only_preview),
+    )
 ```
 
-**`KeyEvent` fields:**
-- `key.code: KeyCode` - `Char('a')`, `Enter`, `Esc`, `Tab`, `F(1)`, `Up`, `Down`, etc.
-- `key.mods: KeyMods` - `ctrl`, `alt`, `shift`, `super_key` boolean flags
-
-**`KeyUpdate`:**
-- `KeyUpdate::handled(update)` - stop bubbling
-- `KeyUpdate::unhandled(update)` - continue bubbling
-
-## Focus policy (accordion)
-
-`VStack` supports lazygit-style accordion sizing based on focus:
+`Contain` is a pane trap, and the trap works in both directions: Tab from outside the pane will
+not enter it, just as Tab from inside will not leave. A ring that could Tab *in* but not back
+*out* would strand focus, so entering is deliberate — click the pane, `request_focus` a widget
+in it, or bind an app-owned pane-switch key:
 
 ```rust
-use tui_lipan::prelude::*;
+// Tab cycles within whichever pane holds focus; F6 moves between panes.
+Frame::new().focus_scope(FocusScope::Contain).child(sidebar)
+```
 
+The same rule applies to nested panes: an inner `Contain` is not part of its parent's ring.
+
+The pane's *boundary node* is the exception: a `Contain` frame that is itself focusable
+(`.focusable(true)`) is a tab stop in the enclosing ring, so keyboard users can still reach the
+pane. Tab lands on the frame and the next Tab continues the outer ring; it still never descends
+into the contents. The boundary is never a member of its own pane's ring, so cycling inside the
+pane cannot leak out over it.
+
+One exception keeps traversal from ever being dead. If *every* tab stop in the tree lives inside
+a pane — an app that is a single `Contain` frame, say — Tab from an unfocused app descends into
+panes to establish focus. Once focus is inside, that pane's own ring takes over.
+
+Capturing overlay traps take priority over contained scopes: while a capturing overlay is on
+top, Tab cycles the overlay's own ring, and panes inside the overlay are opaque to it in the
+usual way. The safety valve applies there too - if every tab stop in the overlay lives inside a
+pane, the overlay ring descends through panes so the overlay is never a keyboard dead end.
+
+> **Note:** the tab ring is built from tab stops, but focus is granted to anything focusable. A
+> widget with `.tab_stop(false)`, or one reached through an `Exclude`/`Contain` escape hatch, is
+> focusable without being in the ring. Tab from such a widget moves to the neighbour it *would*
+> have had, rather than restarting the ring.
+
+## Capturing Overlays
+
+Root `Modal` and `Popover` overlays capture and trap focus. Their default `.auto_focus(true)`
+focuses the first eligible descendant under every policy, including `Manual`. Dismissal restores
+the prior focus entry; opening over an unfocused `OnDemand` app and dismissing returns to no focus.
+
+Set `.auto_focus(false)` to retain keyboard capture and trapping while suspending focus inside the
+overlay. Empty capturing overlays use the same suspension behavior. Local overlays do not provide
+root capture semantics.
+
+## Widget Focus Controls
+
+`Accordion`, `Button`, `Checkbox`, `DocumentView`, `DraggableTabBar`, `FileTree`, `HexArea`,
+`Hyperlink`, `Input`, `List`, `ManagedTerminal`, `PanView`, `SearchPalette`, `Slider`, `Table`,
+`Tabs`, `Terminal`, `TextArea`, and `Tree` expose `tab_stop`, `on_focus`, and `on_blur`.
+
+## Focus Events
+
+The focusable widgets listed in [Widget Focus Controls](#widget-focus-controls) expose
+`.on_focus(Callback<()>)` and `.on_blur(Callback<()>)`. Observe all changes with
+`App::on_focus_changed`:
+
+```rust
+App::new().on_focus_changed(|change: &FocusChanged| {
+    tracing::debug!(?change.old, ?change.new, "focus changed");
+})
+```
+
+`FocusChanged` contains optional `old` and `new` `FocusEntry` values. Each entry carries the
+widget's optional `Key` and public `Tag`.
+
+The runtime emits `on_blur(old)` before `on_focus(new)`, then invokes the app hook. Link-backed
+widget callbacks enter the normal callback queue in that order and run on the next pump, so the
+synchronous app hook runs before those queued component handlers. Delivery is never re-entrant
+into reconciliation.
+If the old node has already unmounted, its widget callback cannot run, but the app hook still
+receives the retained old entry.
+
+Notifications are deduplicated when the runtime node is unchanged or both old and new nodes have
+the same non-empty key. An unkeyed focusable widget that is replaced during reconciliation may
+emit a blur/focus pair. Key dynamic focusable widgets when stable callback identity matters.
+
+## Focus Decoration
+
+Focus ownership and focus visuals are independent. Disable all theme-sourced focus decoration
+without changing traversal or keyboard routing:
+
+```rust
+let theme = Theme::one_dark().focus_decoration(false);
+```
+
+Focus style precedence is:
+
+1. Explicit widget `.focus_style(...)`, focused-content style, or scrollbar focus style.
+2. `Theme::focus_decoration(false)`, which suppresses inherited/extended theme focus roles,
+   per-widget focus palettes, automatic frame focus decoration, and `scrollbar.thumb_focus`.
+3. `theme.focus` and widget focus palettes when decoration is enabled.
+
+An explicit style always survives the theme switch. `Theme::focus(Style::default())` only empties
+the generic focus role; `focus_decoration(false)` is the complete theme-level kill switch.
+
+Selection styling is not focus decoration. `UnfocusedSelection` and text selections remain
+visible when focus decoration is disabled. Because `OnDemand` starts unfocused, a list with a
+selected row initially renders its unfocused-selection styling.
+
+## Focus Queries
+
+Use subtree queries to drive app-owned chrome:
+
+```rust
+let sidebar_active = ctx.has_focus_within_key("sidebar");
+
+Frame::new()
+    .key("sidebar")
+    .border_style(if sidebar_active {
+        BorderStyle::Thick
+    } else {
+        BorderStyle::Rounded
+    })
+    .child(sidebar)
+```
+
+## Keyboard Bubbling
+
+Keyboard input normally starts at the focused widget, then bubbles through parent component
+scopes to the root `Component::on_key`. With no focused widget, bubbling starts at the deepest
+mounted component scope and continues toward the root. Unhandled keys then continue through app
+commands, framework actions, and ambient page-scroll fallback according to `KeyDispatchPolicy`.
+
+Under the default `KeyDispatchPolicy::WidgetFirst`, non-terminal dispatch is:
+
+1. Pending app command chord.
+2. `TextArea` Tab/Shift+Tab insertion opportunity.
+3. Focused widget.
+4. Bubbling component `on_key` handlers.
+5. App command shortcuts.
+6. Framework actions such as overlay dismissal and focus traversal.
+7. A single opted-in ambient `ScrollView` for PageUp/PageDown.
+
+`KeyDispatchPolicy::AppCommandsFirst` moves command and framework actions before widget and
+bubbling dispatch. Embedded terminals use `TerminalKeyPolicy`; see
+[`widgets/terminal.md`](widgets/terminal.md).
+
+## Focus Sizing
+
+`FocusSizing` is stack layout policy, not app focus policy. A `VStack` can expand its focused
+keyed child in lazygit-style layouts:
+
+```rust
 VStack::new()
-    .focus_policy(FocusPolicy::Accordion(FocusAccordion {
+    .focus_sizing(FocusSizing::Accordion(FocusAccordion {
         focused_min: 10,
         collapsed: 1,
-        ..Default::default()
+        ..FocusAccordion::default()
     }))
-    .child(Panel::new().key("panel-a"))
-    .child(Panel::new().key("panel-b"))
+    .child(panel_a.key("panel-a"))
+    .child(panel_b.key("panel-b"))
 ```
 
-Keyed children are required for focus protection (prevents focused panel from collapsing).
-
-### Sticky accordion (remembering layout across focus changes)
-
-By default, when focus moves outside the stack entirely (e.g. to a sibling column), the accordion deactivates and all panels revert to equal sizes. The `sticky` flag (default `true`) makes the VStack automatically remember the last focused child and keep it expanded even when the stack has no real focus - with zero boilerplate:
-
-```rust
-VStack::new()
-    .focus_policy(FocusPolicy::Accordion(FocusAccordion {
-        focused_min: 7,
-        ..FocusAccordion::default()  // sticky: true by default
-    }))
-    .child(frame_a.key("panel-a"))
-    .child(frame_b.key("panel-b"))
-```
-
-The VStack node persists the last focused child's key across frames. When focus leaves the stack, the accordion behaves as if the previously focused child still had focus - expanding it and collapsing others in squash/tiny modes. When real focus returns to any child the sticky state is updated and normal accordion rules apply.
-
-**Requirements**: children must have unique keys (via `.key("...")`) for the sticky tracking to work.
-
-To opt out of sticky behavior, set `sticky: false` explicitly:
-
-```rust
-FocusAccordion { sticky: false, ..FocusAccordion::default() }
-```
+`FocusAccordion::sticky` defaults to `true`, retaining the last focused child for sizing when real
+focus leaves the stack. Set it to `false` to return all panels to normal sizing. Children need
+unique keys for sticky tracking.

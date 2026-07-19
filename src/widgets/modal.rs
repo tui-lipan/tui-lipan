@@ -23,6 +23,7 @@ pub struct Modal {
     backdrop_style: Style,
     frame_style: Style,
     focus_style: StyleSlot,
+    auto_focus: bool,
     border: bool,
     border_style: BorderStyle,
     padding: Padding,
@@ -45,6 +46,7 @@ impl Modal {
             backdrop_style: Style::default(),
             frame_style: Style::default(),
             focus_style: StyleSlot::Inherit,
+            auto_focus: true,
             border: true,
             border_style: BorderStyle::Plain,
             padding: 1.into(),
@@ -104,6 +106,14 @@ impl Modal {
     /// Set overlay scope (portal vs local rendering).
     pub fn scope(mut self, scope: OverlayScope) -> Self {
         self.scope = scope;
+        self
+    }
+
+    /// Control whether a root-portal modal focuses its first focusable descendant.
+    ///
+    /// Disabling this keeps keyboard and pointer capture active while focus is suspended.
+    pub fn auto_focus(mut self, auto_focus: bool) -> Self {
+        self.auto_focus = auto_focus;
         self
     }
 
@@ -274,6 +284,7 @@ impl From<Modal> for Element {
                     on_close: modal.on_close,
                     backdrop: Some(modal.backdrop_style),
                     captures_focus: true,
+                    auto_focus: modal.auto_focus,
                     captures_pointer: PointerCapture::BackdropFullScreen,
                 };
                 let element = Element::new(ElementKind::Portal(portal));

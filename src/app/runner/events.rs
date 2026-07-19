@@ -445,7 +445,13 @@ impl<C: Component> AppRunner<C> {
     }
 
     pub(crate) fn focus_for_node(&mut self, id: NodeId) -> bool {
+        if self.focus.policy == crate::FocusPolicy::Manual {
+            return false;
+        }
         if !self.core.tree.is_valid(id) {
+            return false;
+        }
+        if focus::in_excluded_scope(&self.core.tree, id) {
             return false;
         }
         let focusable = self.core.tree.node(id).is_focusable();
@@ -482,7 +488,9 @@ impl<C: Component> AppRunner<C> {
     }
 
     pub(crate) fn dispatch_mouse(&mut self, mouse: MouseEvent) -> bool {
-        mouse_dispatch::dispatch_mouse_runner(self, mouse)
+        let handled = mouse_dispatch::dispatch_mouse_runner(self, mouse);
+        self.notify_focus_change();
+        handled
     }
 
     #[cfg(feature = "terminal")]

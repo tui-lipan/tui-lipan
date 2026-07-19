@@ -24,6 +24,7 @@ pub(crate) fn reconcile_popover(
             on_close: popover.on_close.clone(),
             open: popover.open,
             scope: popover.scope,
+            auto_focus: popover.auto_focus,
         });
         std::mem::take(&mut node.children)
     };
@@ -52,7 +53,7 @@ pub(crate) fn reconcile_popover(
     let mut content_rect = None;
     if popover.open {
         let trigger_rect = tree.node(trigger_id).rect;
-        let bounds = tree.node(tree.root).rect;
+        let bounds = overlay_state.bounds;
         let resolved = resolve_popover_rect(popover, trigger_rect, bounds);
 
         let content_id = reconcile_element(

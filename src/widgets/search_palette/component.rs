@@ -325,7 +325,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
             _ => Length::Flex(1),
         };
 
-        let list = List::new()
+        let mut list = List::new()
             .width(ctx.props.width)
             .height(list_height)
             .items(list_items)
@@ -348,8 +348,15 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
             .item_horizontal_padding(ctx.props.list_config.item_horizontal_padding)
             .header_horizontal_padding(ctx.props.list_config.header_horizontal_padding)
             .focusable(ctx.props.list_focusable)
+            .tab_stop(ctx.props.tab_stop)
             .scrollbar(ctx.props.list_config.scrollbar)
             .scrollbar_config(ctx.props.list_config.scrollbar_config.clone());
+        if let Some(cb) = ctx.props.on_focus.clone() {
+            list = list.on_focus(cb);
+        }
+        if let Some(cb) = ctx.props.on_blur.clone() {
+            list = list.on_blur(cb);
+        }
         let mut list = list
             .selection_style_slot(ctx.props.list_config.selection_style)
             .unfocused_selection_style_slot(ctx.props.list_config.unfocused_selection_style)
@@ -444,7 +451,15 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                 .placeholder_style(ctx.props.input_placeholder_style)
                 .focus_placeholder_style(ctx.props.input_focus_placeholder_style)
                 .key_interceptor(input_key_interceptor)
+                .tab_stop(ctx.props.tab_stop)
                 .on_change(ctx.link().callback(SearchPaletteMsg::QueryChanged));
+
+            if let Some(cb) = ctx.props.on_focus.clone() {
+                input = input.on_focus(cb);
+            }
+            if let Some(cb) = ctx.props.on_blur.clone() {
+                input = input.on_blur(cb);
+            }
 
             if let Some(color) = ctx.props.input_caret_color {
                 input = input.caret_color(color);

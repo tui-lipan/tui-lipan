@@ -253,7 +253,8 @@ view helper is simpler.
 
 ### 7. Focus Routing
 
-Navigate between panels with `ctx.request_focus`:
+Use stable keys and explicit requests for pane-level navigation. This works under every
+`FocusPolicy`, including `Manual`:
 
 ```rust
 fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
@@ -277,6 +278,16 @@ fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
     }
 }
 ```
+
+Use `.tab_stop(false)` when a target should remain pointer/programmatically focusable but should
+not lengthen the global Tab ring. Wrap editor groups in `FocusScope::Contain` when Tab should cycle
+inside the group, and use pane-switch commands to leave it. Use `FocusScope::Exclude` for a subtree
+that should be absent from automatic and pointer focus while retaining `request_focus(key)` as an
+escape hatch.
+
+Key dynamic focus targets. Under `OnDemand`, a temporarily unmounted focused key is retained and
+focus returns when that key remounts. Call `ctx.blur()` to forget it. Stable keys also suppress
+spurious widget `on_blur`/`on_focus` pairs across remounts.
 
 ---
 

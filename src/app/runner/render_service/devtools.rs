@@ -18,6 +18,38 @@ fn dirty_level_label(draw_mode: DrawMode) -> &'static str {
 
 impl<C: Component> AppRunner<C> {
     #[cfg(feature = "devtools")]
+    pub(super) fn update_devtools_focus_metrics(&mut self) {
+        let focused = self.focus.focused.filter(|id| self.core.tree.is_valid(*id));
+        let (key, tag) = focused
+            .map(|id| {
+                let node = self.core.tree.node(id);
+                (
+                    node.key.clone(),
+                    Some(crate::layout::tag::tag_of_node(node)),
+                )
+            })
+            .unwrap_or_default();
+        let ring_len = self.core.tree.top_capturing_overlay().map_or_else(
+            || crate::app::input::focus::traversal_focusables(&self.core.tree, focused).len(),
+            |overlay| {
+                if overlay.auto_focus {
+                    crate::app::focus_service::overlay_ring(&self.core.tree, overlay.id).len()
+                } else {
+                    0
+                }
+            },
+        );
+        self.devtools_state.borrow_mut().focus = crate::devtools::state::FocusMetrics {
+            policy: self.focus.policy,
+            node_id: focused,
+            key,
+            tag,
+            ring_len,
+            stack_depth: self.focus.focus_stack.len(),
+        };
+    }
+
+    #[cfg(feature = "devtools")]
     pub(crate) fn record_devtools_frame_metrics(
         &mut self,
         draw_mode: DrawMode,

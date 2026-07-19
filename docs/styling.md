@@ -460,6 +460,7 @@ let my_theme = Theme::custom(
 
 // Start from a preset, override only what you need
 let my_theme = Theme::one_dark()
+    .focus_decoration(false)
     .primary(Style::new().fg(Color::rgb(0xE0, 0xE0, 0xE0)).bg(Color::rgb(0x10, 0x10, 0x15)))
     .accent(Style::new().fg(Color::rgb(0xFF, 0x80, 0x00)))
     .selection(Style::new().bg(Color::rgb(0x24, 0x1A, 0x0C)))
@@ -520,6 +521,7 @@ Example TOML theme file with `extends` plus style/color overrides:
 
 ```toml
 extends = "one_dark"
+focus_decoration = false
 
 [primary]
 fg = "#E0E0E0"
@@ -596,6 +598,7 @@ This keeps app-specific tokens inside the same `ThemeProvider` tree as the frame
 | `accent` | `Style` | Interactive emphasis for hover/cursors/controls |
 | `selection` | `Style` | Selected/current state |
 | `focus` | `Style` | Focused widget chrome and focus affordances |
+| `focus_decoration` | `bool` | Enable theme-sourced focus roles, focused-content palettes, automatic frame focus chrome, and focused scrollbar thumbs (default: `true`) |
 | `hover` | `Style` | Optional row/surface hover state |
 | `border` | `Style` | Frame and divider color |
 | `muted` | `Style` | Placeholders, disabled text, indicators |
@@ -616,10 +619,12 @@ Notes:
 
 - `Theme::custom(fg, bg, accent)` derives `accent`, `selection`, `focus`, `border`, `muted`, `diff`, `document`, `syntax`, `scrollbar`, and `splitter` defaults from those three colors.
 - Generic `hover` is disabled by default. Opt in with `Theme::hover(...)` when you want row/surface hover feedback.
-- Set `Theme::focus(Style::default())` when you want the theme itself to stay visually quiet on focus while still allowing widgets to opt into explicit `.focus_style(...)` overrides.
+- `Theme::focus_decoration(false)` is the complete theme-level focus-decoration kill switch. It suppresses inherited and extended `theme.focus`, per-widget focus palettes, automatic frame focus chrome, and `scrollbar.thumb_focus`. Explicit widget focus styles still render.
+- `Theme::focus(Style::default())` only empties the generic focus role; use it when per-widget focus palettes should remain active.
 - Buttons and other control-emphasis states use `accent`, not `selection`, so selection styling stays independent from interactive styling.
 - Text-oriented widgets keep their normal text color on focus by default. Theme `focus` applies to focus chrome (borders, focus affordances), while `input.focus`, `text_area.focus`, `document_view.focus`, `hex_area.focus`, and `terminal.focus` opt into focused content styling.
 - Widget APIs follow the same split: use `.focus_style(...)` for focus chrome and `.focus_content_style(...)` when you want focused text/content to change.
+- Focus precedence is explicit widget focus style > `focus_decoration(false)` suppressing theme sources > `theme.focus` and per-widget palette defaults. Selection and `UnfocusedSelection` are selection styling, not focus decoration, and remain active.
 - `DiffView` now uses `theme.diff` by default unless you explicitly override `diff_style(...)`.
 - `DocumentView::markdown()` now uses `theme.document` by default unless you explicitly override formatter/document styles. Mermaid diagram blocks use `diagram_node_fill_style`, `diagram_node_border_style`, `diagram_node_label_style`, and `diagram_edge_style` on top of `code_block`; Gantt task bars derive foreground-only status shades from the diagram border/primary color, and explicit Mermaid flowchart `style` directives still win for node fill/border/label colors.
 - `SyntectStrategy` now accepts a theme-native `syntax` palette as a hybrid recoloring layer on top of the selected syntect theme.

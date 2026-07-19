@@ -6,7 +6,7 @@ use crate::core::element::Key;
 use crate::core::node::WidgetNode;
 use crate::style::{Rect, RichText, Style, StyleSlot};
 use crate::widgets::internal::StackProps;
-use crate::widgets::{TabVariant, TabsEvent};
+use crate::widgets::{FocusScope, TabVariant, TabsEvent};
 
 #[derive(Clone, Debug)]
 pub struct StackLayoutCache {
@@ -33,6 +33,10 @@ pub struct StackNode {
 }
 
 impl WidgetNode for StackNode {
+    fn focus_scope(&self) -> FocusScope {
+        self.props.focus_scope
+    }
+
     fn has_on_click(&self) -> bool {
         self.on_tab_change.is_some()
     }

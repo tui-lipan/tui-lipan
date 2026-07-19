@@ -104,6 +104,10 @@ focus_prev = ctrl-k
 
 Shift+Tab is normalized to the terminal's reverse-Tab event automatically.
 
+Under `FocusPolicy::Manual`, framework `focus_next` / `focus_prev` traversal is skipped and the
+key remains available to widget, command, or component handling. Capturing overlays still cycle
+their trapped focus, and explicit `ctx.focus_next()` / `ctx.focus_prev()` calls still work.
+
 **Modifier names:** `ctrl`, `alt`, `shift`, `super` (aliases: `cmd`, `command`, `meta`, `win`, `windows`). Use `-` between parts: `ctrl-shift-z`, `super-c`.
 
 ### Built-in keymap matching
@@ -202,7 +206,7 @@ assert_eq!(many.canonical_lowercase(), "ctrl+d / ctrl+q");
 
 ---
 
-## TextArea newline key
+## TextArea newline and Tab keys
 
 Configure Enter behavior for `TextArea` only (does not affect single-line `Input`):
 
@@ -219,3 +223,7 @@ Per-widget override (takes priority over app setting):
 ```rust
 TextArea::new(value).newline_binding(TextAreaNewlineBinding::ShiftEnter)
 ```
+
+`TextArea::tab_display_width(width)` controls the visual width of inserted literal tab characters.
+It was renamed from `tab_stop`; `.tab_stop(bool)` now consistently means focus-ring membership on
+focusable widgets.

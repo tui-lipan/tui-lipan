@@ -36,7 +36,7 @@ pub enum TabVariant {
 
 /// Focus-aware sizing policy for stack containers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub enum FocusPolicy {
+pub enum FocusSizing {
     /// No focus-aware sizing.
     #[default]
     None,
@@ -44,7 +44,20 @@ pub enum FocusPolicy {
     Accordion(FocusAccordion),
 }
 
-impl FocusPolicy {
+/// Focus traversal behavior for a container subtree.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum FocusScope {
+    /// Use the surrounding focus traversal behavior.
+    #[default]
+    None,
+    /// Remove this subtree from traversal, automatic fallback, and click focus.
+    /// Explicit keyed focus requests may still enter the subtree.
+    Exclude,
+    /// Keep next/previous focus traversal within this subtree while it contains focus.
+    Contain,
+}
+
+impl FocusSizing {
     /// Use the default accordion policy.
     pub fn accordion() -> Self {
         Self::Accordion(FocusAccordion::default())
@@ -178,7 +191,9 @@ pub(crate) struct StackProps {
     /// Default: `Length::Flex(1)`.
     pub height: Length,
     /// Focus-aware sizing policy.
-    pub focus_policy: FocusPolicy,
+    pub focus_sizing: FocusSizing,
+    /// Focus traversal behavior for this subtree.
+    pub focus_scope: FocusScope,
     /// Draw a border.
     pub border: bool,
     /// Border style.
@@ -199,7 +214,8 @@ impl Default for StackProps {
             // Containers default to flex-like behavior.
             width: Length::Flex(1),
             height: Length::Flex(1),
-            focus_policy: FocusPolicy::None,
+            focus_sizing: FocusSizing::None,
+            focus_scope: FocusScope::None,
             border: false,
             border_style: BorderStyle::Plain,
             even_flex: false,
@@ -289,9 +305,15 @@ macro_rules! impl_stack_props {
                 self
             }
 
-            /// Set focus-aware sizing policy.
-            pub fn focus_policy(mut self, policy: FocusPolicy) -> Self {
-                self.props.focus_policy = policy;
+            /// Set focus-aware sizing behavior.
+            pub fn focus_sizing(mut self, sizing: FocusSizing) -> Self {
+                self.props.focus_sizing = sizing;
+                self
+            }
+
+            /// Set focus traversal behavior for this subtree.
+            pub fn focus_scope(mut self, scope: FocusScope) -> Self {
+                self.props.focus_scope = scope;
                 self
             }
         }

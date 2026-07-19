@@ -154,7 +154,7 @@ pub(crate) fn handle_key(
     let newline_binding_widget = ta.newline_binding;
     let tab_width = ta.tab_width;
     let insert_tab = ta.insert_tab;
-    let tab_stop = ta.tab_stop as usize;
+    let tab_stop = ta.tab_display_width as usize;
     let wrap = ta.wrap;
     let virtual_texts = ta.virtual_texts.clone();
     let visual_lines: Option<Vec<TextAreaVisualLine>> = if wrap {

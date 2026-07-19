@@ -53,7 +53,8 @@ Layout pitfall checklist:
 | `style` | `Style` | Container style |
 | `border` | `bool` | Draw border |
 | `border_style` | `BorderStyle` | Border appearance |
-| `focus_policy` | `FocusPolicy` | Accordion behavior (includes `sticky: bool`, default `true`) |
+| `focus_sizing` | `FocusSizing` | Accordion sizing behavior (includes `sticky: bool`, default `true`) |
+| `focus_scope` | `FocusScope` | Subtree traversal behavior (`None`, `Exclude`, or `Contain`) |
 | `tab_titles` | `Vec<String>` | Border-embedded tab titles |
 | `active_tab` | `usize` | Active border tab index |
 | `active_tab_style` | `Style` | Active border tab style |
@@ -61,11 +62,11 @@ Layout pitfall checklist:
 | `width` | `Length` | Width override |
 | `height` | `Length` | Height override |
 
-**Accordion focus policy:**
+**Accordion focus sizing:**
 
 ```rust
 VStack::new()
-    .focus_policy(FocusPolicy::Accordion(FocusAccordion {
+    .focus_sizing(FocusSizing::Accordion(FocusAccordion {
         focused_min: 10,
         collapsed: 1,
         ..FocusAccordion::default()
@@ -223,6 +224,7 @@ Container with border, title, optional status line, and tab affordances.
 | `style` | `Style` | Container style |
 | `width` | `Length` | Width (default `Flex(1)`) |
 | `height` | `Length` | Height (default `Flex(1)`) |
+| `focus_scope` | `FocusScope` | Subtree traversal behavior (`None`, `Exclude`, or `Contain`) |
 
 **Clipping**: Children are automatically clipped to the Frame's inner content area (inside borders and padding).
 
@@ -455,7 +457,9 @@ Single-child two-dimensional viewport for wide/tall content such as diagrams.
 | `drag_to_pan` | `bool` | Enable left-button drag panning (default `true`) |
 | `keymap` / `pan_keys` | `PanKeymap` | Keyboard pan keys (`ARROWS`, `VIM`, default both) |
 | `key_step` | `(u16, u16)` | Keyboard pan step as `(horizontal, vertical)` cells (default `(4, 2)`) |
-| `focusable` | `bool` | Whether PanView can receive focus (default `true`) |
+| `focusable` | `bool` | Whether PanView can receive focus (default `false`; interaction callbacks can opt it in) |
+| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `pan_state_key` | `impl Into<Key>` | Stable key for uncontrolled offset persistence |
 | `width` | `Length` | Viewport width |
 | `height` | `Length` | Viewport height |

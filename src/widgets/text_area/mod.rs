@@ -278,13 +278,16 @@ pub struct TextArea {
     pub(crate) disabled_style: Style,
     pub(crate) read_only: bool,
     pub(crate) focusable: bool,
+    pub(crate) tab_stop: bool,
+    pub(crate) on_focus: Option<Callback<()>>,
+    pub(crate) on_blur: Option<Callback<()>>,
     pub(crate) newline_binding: Option<TextAreaNewlineBinding>,
     pub(crate) tab_width: u8,
     pub(crate) insert_tab: bool,
     /// Display width of a literal `\t` character. Tab advances to the next
-    /// multiple of `tab_stop` from the logical line start. Set to 0 to keep
+    /// multiple of `tab_display_width` from the logical line start. Set to 0 to keep
     /// the historical zero-width behavior.
-    pub(crate) tab_stop: u8,
+    pub(crate) tab_display_width: u8,
     /// Vertical scrollbar visibility.
     pub(crate) scrollbar: bool,
     pub(crate) scrollbar_config: ScrollbarConfig,
@@ -400,10 +403,13 @@ impl Default for TextArea {
             disabled_style: Style::default(),
             read_only: false,
             focusable: true,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
             newline_binding: None,
             tab_width: 0,
             insert_tab: false,
-            tab_stop: 8,
+            tab_display_width: 8,
             scrollbar: true,
             scrollbar_config: ScrollbarConfig::default(),
             h_scrollbar: false,
@@ -978,6 +984,18 @@ impl TextArea {
         self
     }
 
+    /// Set the callback fired when the text area gains focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the text area loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
+        self
+    }
+
     /// Override app-level newline key policy for this `TextArea` only.
     pub fn newline_binding(mut self, binding: TextAreaNewlineBinding) -> Self {
         self.newline_binding = Some(binding);
@@ -997,13 +1015,15 @@ impl TextArea {
         self
     }
 
-    /// Display width of a literal `\t` character. `\t` advances to the next
-    /// multiple of this value, measured from the logical line start.
-    ///
-    /// Defaults to `8` (terminal convention). Set to `0` to render `\t` as
-    /// zero columns (rarely useful — mostly for parity with `unicode-width`).
-    pub fn tab_stop(mut self, tab_stop: u8) -> Self {
+    /// Include this text area in sequential Tab focus traversal.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
         self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the display width of a literal `\t` character.
+    pub fn tab_display_width(mut self, width: u8) -> Self {
+        self.tab_display_width = width;
         self
     }
 

@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::app::context::TextAreaNewlineBinding;
+use crate::app::context::{FocusPolicy, TextAreaNewlineBinding};
 use crate::app::copy_feedback::CopyFeedbackState;
 use crate::app::input::command_registry::{
     CommandRegistry, CommandShortcutResult, CommandShortcutRuntime,
@@ -37,6 +37,7 @@ use crate::app::input::handlers::terminal::{TerminalPreflightResult, forward_key
 
 #[derive(Clone, Copy)]
 pub(crate) struct RuntimeKeyDispatchConfig {
+    pub focus_policy: FocusPolicy,
     pub key_dispatch_policy: KeyDispatchPolicy,
     pub terminal_key_policy: TerminalKeyPolicy,
     pub command_conflict_policy: CommandConflictPolicy,
@@ -314,13 +315,17 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
             if self.overlay.focus_next() {
                 return FrameworkDispatch::Handled;
             }
-            focus::focus_next(
+            if focus::step_for_policy(
                 self.env.tree,
                 self.env.focused,
                 self.env.focused_key,
                 self.env.focused_tag,
-            );
-            return FrameworkDispatch::Handled;
+                self.env.config.focus_policy,
+                focus::FocusDirection::Next,
+            ) {
+                return FrameworkDispatch::Handled;
+            }
+            return FrameworkDispatch::None;
         }
 
         if matches
@@ -336,13 +341,17 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
             if self.overlay.focus_prev() {
                 return FrameworkDispatch::Handled;
             }
-            focus::focus_prev(
+            if focus::step_for_policy(
                 self.env.tree,
                 self.env.focused,
                 self.env.focused_key,
                 self.env.focused_tag,
-            );
-            return FrameworkDispatch::Handled;
+                self.env.config.focus_policy,
+                focus::FocusDirection::Prev,
+            ) {
+                return FrameworkDispatch::Handled;
+            }
+            return FrameworkDispatch::None;
         }
 
         if matches

@@ -91,7 +91,9 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `ctx.state` | Mutable access to component state |
 | `ctx.props` | Read-only access to current properties |
 | `ctx.link()` | Build callbacks and commands |
-| `ctx.request_focus(key)` | Move focus to a keyed widget |
+| `ctx.request_focus(key)` | Move focus to a keyed widget, including before mount or inside an excluded scope |
+| `ctx.blur()` | Clear current and retained focus identity (`Auto` restores its default target on render) |
+| `ctx.focus_next()` / `ctx.focus_prev()` | Move through the focus ring explicitly, including under `Manual` |
 | `ctx.show_devtools()` | Show the built-in DevTools panel on the next tick |
 | `ctx.hide_devtools()` | Hide the built-in DevTools panel on the next tick |
 | `ctx.toggle_devtools()` | Toggle the built-in DevTools panel on the next tick |

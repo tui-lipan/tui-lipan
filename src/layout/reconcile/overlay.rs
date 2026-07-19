@@ -245,6 +245,7 @@ pub(crate) fn reconcile_portal(
             backdrop: portal.backdrop,
             opacity: 1.0,
             captures_focus: portal.captures_focus,
+            auto_focus: portal.auto_focus,
             captures_pointer: portal.captures_pointer,
             copy_text: None,
             copy_zone: None,
@@ -352,6 +353,7 @@ pub(crate) fn reconcile_overlay_entries(ctx: &mut ReconcileCtx<'_>, overlays: &[
             } else {
                 entry.captures_focus
             },
+            auto_focus: entry.auto_focus,
             captures_pointer: entry.captures_pointer,
             copy_text,
             copy_zone,
@@ -396,7 +398,8 @@ pub(crate) fn collect_popover_overlay_roots(tree: &NodeTree, overlay_state: &mut
             on_dismiss: popover_node.on_close.clone(),
             backdrop: None,
             opacity: 1.0,
-            captures_focus: false,
+            captures_focus: true,
+            auto_focus: popover_node.auto_focus,
             captures_pointer: crate::overlay::PointerCapture::RectOnly,
             copy_text: None,
             copy_zone: None,

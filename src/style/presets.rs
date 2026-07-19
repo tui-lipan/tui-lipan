@@ -22,6 +22,7 @@ impl Theme {
             selection: super::Style::new().fg(Color::Black).bg(Color::LightCyan),
             text_selection: super::Style::new().fg(Color::Black).bg(Color::LightCyan),
             focus: super::Style::new().fg(Color::LightCyan),
+            focus_decoration: true,
             hover: super::Style::default(),
             border: super::Style::new().fg(Color::DarkGray),
             muted: super::Style::new().fg(Color::DarkGray),

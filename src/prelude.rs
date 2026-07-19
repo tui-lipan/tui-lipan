@@ -21,9 +21,10 @@ pub use crate::core::memo::Memo;
 // App runtime
 // ─────────────────────────────────────────────────────────────────────────────
 
+pub use crate::Tag;
 pub use crate::app::{
-    App, ContrastPolicy, InlineHeight, InlineStartupPolicy, ScreenBackground, SurfaceMode,
-    TextAreaNewlineBinding,
+    App, ContrastPolicy, FocusChanged, FocusEntry, FocusPolicy, InlineHeight, InlineStartupPolicy,
+    ScreenBackground, SurfaceMode, TextAreaNewlineBinding,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -151,7 +152,7 @@ pub use crate::widgets::{
     FileTreeChangeStatus, FileTreeChangeView, FileTreeEvent, FileTreeGitView, FileTreeItemStyle,
     FileTreeSuffixPriority, FileTreeToggleEvent, Flow, FlowDirection, Flowchart,
     FlowchartEdgeEvent, FlowchartItemPath, FlowchartNodeEvent, FlowchartSubgraphEvent,
-    FlowchartTheme, FocusAccordion, FocusPolicy, FormatInput, FormattedBlock,
+    FlowchartTheme, FocusAccordion, FocusScope, FocusSizing, FormatInput, FormattedBlock,
     FormattedDiagramBlock, FormattedDocument, FormattedLine, FragmentGlyphs, FragmentKind, Frame,
     FrameParseError, FrameSequence, FrameSequenceBuilder, GanttDate, GanttDiagram,
     GanttDiagramTheme, GanttDuration, GanttSection, GanttSpec, GanttTask, GanttTaskStart,

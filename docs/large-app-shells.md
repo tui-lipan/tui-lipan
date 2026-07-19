@@ -40,7 +40,21 @@ Apps with global shortcuts and focusable children should make the input sources 
 - Widget callbacks receive keys consumed by focused widgets.
 - Both paths can call the same app-owned routing function when they share policy.
 
-Use `ctx.request_focus(...)` and stable element keys for focus handoff. Return `KeyUpdate::handled(...)` only when the app consumed the key.
+Choose `App::focus_policy(...)` at bootstrap rather than scattering local workarounds. `OnDemand`
+is the default for shells that should start neutral, `Auto` suits applications requiring an
+immediate keyboard target, and `Manual` suits shells with fully app-owned pane routing. Under
+`Manual`, global Tab and click-to-focus are disabled, but explicit context APIs and capturing
+overlay traps remain active.
+
+Use `ctx.request_focus(...)` and stable element keys for focus handoff. A retained `OnDemand` key
+restores focus when its widget remounts; `ctx.blur()` clears that identity. Use `tab_stop(false)`
+for command-only targets, `FocusScope::Contain` for pane-local rings, and
+`FocusScope::Exclude` for non-navigable subtrees. Return `KeyUpdate::handled(...)` only when the app
+consumed the key.
+
+Route widget `on_focus`/`on_blur` callbacks into messages when focus changes affect state. Use
+`App::on_focus_changed` for diagnostics or cross-cutting observation, and key dynamic focusables so
+remount deduplication has stable identity.
 
 ## Terminal apps
 
@@ -63,6 +77,9 @@ When debugging a large app, locate the bug by boundary:
 | Message has no effect | Message dispatcher and operation module |
 | Shortcut works only in some widgets | Root `on_key`, widget callback, and focus bubbling |
 | Focus jumps to the wrong element | Stable keys and `ctx.request_focus(...)` call site |
+| Focus returns after a conditional panel remount | Retained `OnDemand` key; call `ctx.blur()` when closing permanently |
+| Tab cannot leave a pane | Nearest `FocusScope::Contain` and pane-switch command |
+| Focus callbacks duplicate after rerender | Missing stable key on a remounted focusable widget |
 | Widget renders correctly but app state is stale | Callback-to-message wiring in the view boundary |
 | Terminal receives wrong bytes | App terminal input forwarding |
 | Terminal layout or resize is wrong | App geometry policy before framework layout primitives |

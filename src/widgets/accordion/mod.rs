@@ -33,6 +33,9 @@ pub struct Accordion {
     pub(crate) expanded_icon: Arc<str>,
     pub(crate) collapsed_icon: Arc<str>,
     pub(crate) focusable: bool,
+    pub(crate) tab_stop: bool,
+    pub(crate) on_focus: Option<Callback<()>>,
+    pub(crate) on_blur: Option<Callback<()>>,
     pub(crate) width: Length,
     pub(crate) height: Length,
 }
@@ -59,7 +62,10 @@ impl Default for Accordion {
             disabled_style: Style::default(),
             expanded_icon: "▼ ".into(),
             collapsed_icon: "▶ ".into(),
-            focusable: true,
+            focusable: false,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
             width: Length::Flex(1),
             height: Length::Auto,
         }
@@ -228,6 +234,24 @@ impl Accordion {
         self
     }
 
+    /// Control whether section headers participate in tab traversal.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when a section header gains focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when a section header loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
+        self
+    }
+
     /// Set width.
     pub fn width(mut self, width: Length) -> Self {
         self.width = width;
@@ -268,8 +292,16 @@ impl From<Accordion> for Element {
                 .hover_style_slot(accordion.header_hover_style)
                 .focus_style_slot(accordion.header_focus_style)
                 .focusable(accordion.focusable)
+                .tab_stop(accordion.tab_stop)
                 .disabled(item.disabled)
                 .disabled_style(accordion.disabled_style);
+
+            if let Some(cb) = accordion.on_focus.clone() {
+                header = header.on_focus(cb);
+            }
+            if let Some(cb) = accordion.on_blur.clone() {
+                header = header.on_blur(cb);
+            }
 
             if let Some(cb) = accordion.on_toggle.clone()
                 && !item.disabled
@@ -301,12 +333,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accordion_headers_are_focusable_by_default() {
-        assert!(Accordion::new().focusable);
+    fn accordion_headers_are_not_focusable_by_default() {
+        assert!(!Accordion::new().focusable);
     }
 
     #[test]
     fn accordion_focusable_builder_updates_header_focusability() {
-        assert!(!Accordion::new().focusable(false).focusable);
+        assert!(Accordion::new().focusable(true).focusable);
     }
 }

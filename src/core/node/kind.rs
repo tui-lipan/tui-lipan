@@ -1,6 +1,6 @@
 use super::id::NodeId;
 use super::overlay::ScrollbarZone;
-use crate::callback::ScopeId;
+use crate::callback::{Callback, ScopeId};
 use crate::style::{Rect, Theme};
 #[cfg(feature = "big-text")]
 use crate::widgets::internal::BigTextNode;
@@ -22,17 +22,26 @@ use crate::widgets::internal::{
 };
 use crate::widgets::{
     Animated, AsciiCanvas, Button, Chart, Checkbox, ClassDiagram, DragSource, DraggableTabBar,
-    DropTarget, EffectScope, ErDiagram, Flowchart, GanttDiagram, Graph, Heatmap, HexArea, Input,
-    MouseRegion, PanView, ProgressBar, SequenceDiagram, Slider, Sparkline, Spinner, Splitter,
-    StateDiagram, Table, Tabs, TextArea,
+    DropTarget, EffectScope, ErDiagram, Flowchart, FocusScope, GanttDiagram, Graph, Heatmap,
+    HexArea, Input, MouseRegion, PanView, ProgressBar, SequenceDiagram, Slider, Sparkline, Spinner,
+    Splitter, StateDiagram, Table, Tabs, TextArea,
 };
 
 pub(crate) trait WidgetNode {
+    fn focus_scope(&self) -> FocusScope {
+        FocusScope::None
+    }
     fn is_focusable(&self) -> bool {
         false
     }
-    fn in_tab_order(&self) -> bool {
+    fn is_tab_stop(&self) -> bool {
         self.is_focusable()
+    }
+    fn on_focus_callback(&self) -> Option<&Callback<()>> {
+        None
+    }
+    fn on_blur_callback(&self) -> Option<&Callback<()>> {
+        None
     }
     fn has_on_click(&self) -> bool {
         false
@@ -295,12 +304,24 @@ pub(crate) enum NodeKind {
 }
 
 impl WidgetNode for NodeKind {
+    fn focus_scope(&self) -> FocusScope {
+        node_kind_delegate_match!(self, focus_scope())
+    }
+
     fn is_focusable(&self) -> bool {
         node_kind_delegate_match!(self, is_focusable())
     }
 
-    fn in_tab_order(&self) -> bool {
-        node_kind_delegate_match!(self, in_tab_order())
+    fn is_tab_stop(&self) -> bool {
+        node_kind_delegate_match!(self, is_tab_stop())
+    }
+
+    fn on_focus_callback(&self) -> Option<&Callback<()>> {
+        node_kind_delegate_match!(self, on_focus_callback())
+    }
+
+    fn on_blur_callback(&self) -> Option<&Callback<()>> {
+        node_kind_delegate_match!(self, on_blur_callback())
     }
 
     fn has_on_click(&self) -> bool {

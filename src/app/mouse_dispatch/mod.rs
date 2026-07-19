@@ -976,7 +976,12 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
             return false;
         }
 
-        let is_active = Some(change.node_id) == self.focused || !change.focusable;
+        let is_active = crate::app::focus_service::click_target_is_active(
+            self.focus_policy,
+            self.focused,
+            change.node_id,
+            change.focusable,
+        );
         if is_active {
             let (new_cursor, new_anchor, anchor_for_drag) =
                 mouse::process_textarea_click(&change, x, y, &mut self.mouse.last_click);
@@ -1036,7 +1041,12 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
         change: crate::app::input::mouse::InputChange,
         x: u16,
     ) -> bool {
-        let is_active = Some(change.node_id) == self.focused || !change.focusable;
+        let is_active = crate::app::focus_service::click_target_is_active(
+            self.focus_policy,
+            self.focused,
+            change.node_id,
+            change.focusable,
+        );
         if is_active {
             let (new_cursor, new_anchor, anchor_for_drag) =
                 mouse::process_input_click(&change, x, &mut self.mouse.last_click);

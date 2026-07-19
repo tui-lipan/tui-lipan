@@ -27,11 +27,23 @@ pub struct CheckboxNode {
     pub on_click: Option<Callback<MouseEvent>>,
     pub on_key: Option<KeyHandler>,
     pub focusable: bool,
+    pub tab_stop: bool,
+    pub on_focus: Option<Callback<()>>,
+    pub on_blur: Option<Callback<()>>,
 }
 
 impl WidgetNode for CheckboxNode {
     fn is_focusable(&self) -> bool {
         self.focusable
+    }
+    fn is_tab_stop(&self) -> bool {
+        self.focusable && self.tab_stop
+    }
+    fn on_focus_callback(&self) -> Option<&Callback<()>> {
+        self.on_focus.as_ref()
+    }
+    fn on_blur_callback(&self) -> Option<&Callback<()>> {
+        self.on_blur.as_ref()
     }
     fn has_on_click(&self) -> bool {
         !self.disabled && (self.on_click.is_some() || self.on_toggle.is_some())
@@ -68,6 +80,9 @@ impl From<Checkbox> for CheckboxNode {
             on_click: checkbox.on_click,
             on_key: checkbox.on_key,
             focusable: checkbox.focusable,
+            tab_stop: checkbox.tab_stop,
+            on_focus: checkbox.on_focus,
+            on_blur: checkbox.on_blur,
         }
     }
 }

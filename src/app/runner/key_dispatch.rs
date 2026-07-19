@@ -1,7 +1,10 @@
 //! Layered keyboard dispatch for the native event loop.
 
+use crate::app::FocusPolicy;
+use crate::app::focus_service::{self, FocusRefs, FocusStackEntry, OverlayKey};
 use crate::app::input::command_registry::{CommandRegistry, CommandShortcutResult};
 use crate::app::input::focus;
+use crate::app::input::focus::FocusDirection;
 use crate::app::input::handlers::KeyCtx;
 use crate::app::input::key_dispatch::{
     CommandDispatchState, DispatchOps, DispatchOutcome, FocusKind, FrameworkDispatch,
@@ -182,6 +185,7 @@ impl<C: Component> AppRunner<C> {
             focused_key: &mut focus_state.focused_key,
             focused_tag: &mut focus_state.focused_tag,
             focus_stack: &mut focus_state.focus_stack,
+            focus_policy: focus_state.policy,
             keymap,
             keymap_runtime,
             key_dispatch_state,
@@ -243,7 +247,8 @@ struct RunnerDispatchOps<'a, 'b, C: Component> {
     focused: &'a mut Option<NodeId>,
     focused_key: &'a mut Option<Key>,
     focused_tag: &'a mut Option<Tag>,
-    focus_stack: &'a mut Vec<Option<Key>>,
+    focus_stack: &'a mut Vec<FocusStackEntry>,
+    focus_policy: FocusPolicy,
     keymap: &'a Keymap,
     keymap_runtime: &'a mut KeymapRuntime,
     key_dispatch_state: &'a mut RuntimeKeyDispatchState,
@@ -259,10 +264,7 @@ struct RunnerDispatchOps<'a, 'b, C: Component> {
 
 impl<C: Component> RunnerDispatchOps<'_, '_, C> {
     fn top_capturing_overlay_is_empty(&self) -> bool {
-        self.core
-            .tree
-            .top_capturing_overlay()
-            .is_some_and(|overlay| self.core.tree.focusables_in_subtree(overlay.id).is_empty())
+        focus_service::top_capturing_overlay_is_empty(&self.core.tree)
     }
 
     fn handle_overlay_escape(&mut self) -> bool {
@@ -285,64 +287,43 @@ impl<C: Component> RunnerDispatchOps<'_, '_, C> {
             false
         };
 
-        if dismissed
-            && overlay.captures_focus
-            && let Some(saved_key) = self.focus_stack.pop()
-        {
-            *self.focused_key = saved_key;
-            *self.focused = None;
-            focus::restore_focus(
+        if dismissed && overlay.captures_focus {
+            let mut refs = FocusRefs {
+                policy: self.focus_policy,
+                focused: &mut *self.focused,
+                focused_key: &mut *self.focused_key,
+                focused_tag: &mut *self.focused_tag,
+                focus_stack: &mut *self.focus_stack,
+            };
+            focus_service::restore_focus_from_stack(
                 &self.core.tree,
-                self.focused,
-                self.focused_key,
-                self.focused_tag,
+                &mut refs,
+                OverlayKey::of(overlay),
             );
         }
         dismissed
     }
 
     fn focus_overlay_next(&mut self) -> bool {
-        let Some(overlay) = self.core.tree.top_capturing_overlay() else {
-            return false;
+        let mut refs = FocusRefs {
+            policy: self.focus_policy,
+            focused: &mut *self.focused,
+            focused_key: &mut *self.focused_key,
+            focused_tag: &mut *self.focused_tag,
+            focus_stack: &mut *self.focus_stack,
         };
-        let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
-        if focusables.is_empty() {
-            return true;
-        }
-        focusables.sort_by_key(|id| id.index());
-        let next = if let Some(curr) = *self.focused
-            && let Some(idx) = focusables.iter().position(|id| *id == curr)
-        {
-            focusables[(idx + 1) % focusables.len()]
-        } else {
-            focusables[0]
-        };
-        *self.focused = Some(next);
-        *self.focused_key = self.core.tree.node(next).key.clone();
-        *self.focused_tag = Some(crate::layout::tag::tag_of_node(self.core.tree.node(next)));
-        true
+        focus_service::overlay_step(&self.core.tree, &mut refs, FocusDirection::Next)
     }
 
     fn focus_overlay_prev(&mut self) -> bool {
-        let Some(overlay) = self.core.tree.top_capturing_overlay() else {
-            return false;
+        let mut refs = FocusRefs {
+            policy: self.focus_policy,
+            focused: &mut *self.focused,
+            focused_key: &mut *self.focused_key,
+            focused_tag: &mut *self.focused_tag,
+            focus_stack: &mut *self.focus_stack,
         };
-        let mut focusables = self.core.tree.focusables_in_subtree(overlay.id);
-        if focusables.is_empty() {
-            return true;
-        }
-        focusables.sort_by_key(|id| id.index());
-        let prev = if let Some(curr) = *self.focused
-            && let Some(idx) = focusables.iter().position(|id| *id == curr)
-        {
-            focusables[(idx + focusables.len() - 1) % focusables.len()]
-        } else {
-            focusables[focusables.len() - 1]
-        };
-        *self.focused = Some(prev);
-        *self.focused_key = self.core.tree.node(prev).key.clone();
-        *self.focused_tag = Some(crate::layout::tag::tag_of_node(self.core.tree.node(prev)));
-        true
+        focus_service::overlay_step(&self.core.tree, &mut refs, FocusDirection::Prev)
     }
 
     #[cfg(feature = "terminal")]
@@ -547,13 +528,17 @@ impl<C: Component> DispatchOps for RunnerDispatchOps<'_, '_, C> {
             if self.focus_overlay_next() {
                 return FrameworkDispatch::Handled;
             }
-            focus::focus_next(
+            if focus::step_for_policy(
                 &self.core.tree,
                 self.focused,
                 self.focused_key,
                 self.focused_tag,
-            );
-            return FrameworkDispatch::Handled;
+                self.focus_policy,
+                focus::FocusDirection::Next,
+            ) {
+                return FrameworkDispatch::Handled;
+            }
+            return FrameworkDispatch::None;
         }
 
         if matches
@@ -573,13 +558,17 @@ impl<C: Component> DispatchOps for RunnerDispatchOps<'_, '_, C> {
             if self.focus_overlay_prev() {
                 return FrameworkDispatch::Handled;
             }
-            focus::focus_prev(
+            if focus::step_for_policy(
                 &self.core.tree,
                 self.focused,
                 self.focused_key,
                 self.focused_tag,
-            );
-            return FrameworkDispatch::Handled;
+                self.focus_policy,
+                focus::FocusDirection::Prev,
+            ) {
+                return FrameworkDispatch::Handled;
+            }
+            return FrameworkDispatch::None;
         }
 
         if matches

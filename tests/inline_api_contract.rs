@@ -4,10 +4,25 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tui_lipan::{
-    App, DraggableTabBarOverflow, InlineHeight, InlineStartupPolicy, ScrollTarget,
-    ScrollWheelBehavior, ScrollWheelConfig, SurfaceMode, TextAreaLineNumberMode,
+    App, DraggableTabBarOverflow, FocusChanged, FocusEntry, InlineHeight, InlineStartupPolicy, Key,
+    ScrollTarget, ScrollWheelBehavior, ScrollWheelConfig, SurfaceMode, Tag, TextAreaLineNumberMode,
     TextAreaSentinelClickEvent, TextAreaSentinelClickKind,
 };
+
+#[test]
+fn root_and_prelude_export_focus_event_types() {
+    let entry = FocusEntry {
+        key: Some(Key::from("field")),
+        tag: Tag::Input,
+    };
+    let changed = FocusChanged {
+        old: None,
+        new: Some(entry),
+    };
+    let _ = App::new().on_focus_changed(|_: &FocusChanged| {});
+    let _: tui_lipan::prelude::FocusChanged = changed;
+    let _: tui_lipan::prelude::Tag = Tag::Input;
+}
 
 #[test]
 fn root_exports_include_text_area_sentinel_click_types() {

@@ -57,6 +57,12 @@ pub struct Slider {
     pub padding: Padding,
     /// Whether the slider is focusable.
     pub focusable: bool,
+    /// Whether the slider participates in sequential focus navigation.
+    pub tab_stop: bool,
+    /// Callback fired when the slider receives focus.
+    pub on_focus: Option<Callback<()>>,
+    /// Callback fired when the slider loses focus.
+    pub on_blur: Option<Callback<()>>,
     /// Style when focused.
     pub focus_style: StyleSlot,
     /// Thumb style when focused.
@@ -95,6 +101,9 @@ impl Slider {
             height: Length::Px(1),
             padding: Padding::default(),
             focusable: true,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
             focus_style: StyleSlot::Inherit,
             focus_thumb_style: StyleSlot::Inherit,
             hover_thumb_style: StyleSlot::Inherit,
@@ -198,6 +207,24 @@ impl Slider {
     /// Set whether the slider is focusable.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.focusable = focusable;
+        self
+    }
+
+    /// Control whether the slider participates in sequential focus navigation.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the slider receives focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the slider loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
         self
     }
 

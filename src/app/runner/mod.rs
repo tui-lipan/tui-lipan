@@ -64,6 +64,7 @@ mod animation_ticker;
 mod drag;
 pub(crate) mod events;
 mod exit_view;
+mod focus_events;
 #[cfg(unix)]
 pub(crate) mod input_coordinator;
 mod key_dispatch;
@@ -313,6 +314,7 @@ pub struct AppRunner<C: Component> {
     pub(crate) surface: SurfaceDriver,
     pub(crate) core: RuntimeCore<C>,
     pub(crate) focus: FocusState,
+    on_focus_changed: Option<crate::app::context::FocusChangedHook>,
     pub(crate) drag: DragState,
     pub(crate) mouse: MouseTrackingState,
     pub(crate) animation: AnimationState,
@@ -480,6 +482,7 @@ impl<C: Component> AppRunner<C> {
         let keymap = Keymap::new(keymap_config);
         let keymap_runtime = KeymapRuntime::new(&keymap);
         let key_dispatch_config = RuntimeKeyDispatchConfig {
+            focus_policy: app.focus_policy,
             key_dispatch_policy: app.key_dispatch_policy,
             terminal_key_policy: app.terminal_key_policy,
             command_conflict_policy: app.command_conflict_policy,
@@ -562,11 +565,18 @@ impl<C: Component> AppRunner<C> {
         #[cfg(feature = "devtools")]
         let devtools_log_queue = Arc::new(Mutex::new(VecDeque::new()));
 
+        let focus = FocusState {
+            policy: app.focus_policy,
+            ..FocusState::default()
+        };
+        let on_focus_changed = app.on_focus_changed.clone();
+
         AppRunner {
             title: app.title,
             surface,
             core,
-            focus: FocusState::default(),
+            focus,
+            on_focus_changed,
             drag: DragState::default(),
             mouse: MouseTrackingState::default(),
             animation,
@@ -1009,6 +1019,7 @@ impl<C: Component> AppRunner<C> {
                     &mut self.focus.focused,
                     &mut self.focus.focused_key,
                     &mut self.focus.focused_tag,
+                    self.focus.policy,
                 );
             }
 
@@ -1188,6 +1199,7 @@ impl<C: Component> AppRunner<C> {
                                 );
 
                                 let key_result = self.dispatch_layered_key(key);
+                                self.notify_focus_change();
 
                                 #[cfg(feature = "devtools")]
                                 {
