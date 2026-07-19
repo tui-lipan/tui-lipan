@@ -579,6 +579,66 @@ impl TerminalScreen {
         self.term.history_size()
     }
 
+    /// Number of plain-text lines currently retained (scrollback history + visible screen).
+    ///
+    /// Absolute line indices used by [`text_lines`](Self::text_lines) /
+    /// [`export_text`](Self::export_text) count from the oldest retained history line (`0`)
+    /// through the live bottom (`total_text_lines() - 1`).
+    pub fn total_text_lines(&self) -> usize {
+        let grid = self.term.grid();
+        let top = grid.topmost_line().0;
+        let bottom = grid.bottommost_line().0;
+        usize::try_from(bottom.saturating_sub(top).saturating_add(1)).unwrap_or(0)
+    }
+
+    /// Plain text of grid lines in `[start, end)`, addressed from the oldest retained line.
+    ///
+    /// Does not mutate display offset or go through the render pipeline. Out-of-range bounds
+    /// are clamped; empty ranges yield an empty vec.
+    pub fn text_lines(&self, start: usize, end: usize) -> Vec<String> {
+        let total = self.total_text_lines();
+        let start = start.min(total);
+        let end = end.min(total).max(start);
+        if start == end {
+            return Vec::new();
+        }
+
+        let grid = self.term.grid();
+        let top = grid.topmost_line().0;
+        let mut lines = Vec::with_capacity(end - start);
+        for absolute in start..end {
+            let line = Line(top + absolute as i32);
+            lines.push(plain_line_text(grid, line));
+        }
+        lines
+    }
+
+    /// Newline-joined plain text for an absolute line range. See [`text_lines`](Self::text_lines).
+    pub fn export_text(&self, start: usize, end: usize) -> String {
+        self.text_lines(start, end).join("\n")
+    }
+
+    /// Map an absolute text-line index to `(scrollback_offset, viewport_row)`.
+    ///
+    /// Returns `None` when the line is outside the currently retained grid (evicted or
+    /// out of range). History lines are placed at viewport row 0; live-viewport lines use
+    /// offset 0 and their on-screen row.
+    pub fn absolute_line_to_viewport(&self, absolute: usize) -> Option<(usize, usize)> {
+        let total = self.total_text_lines();
+        if absolute >= total {
+            return None;
+        }
+        let grid = self.term.grid();
+        let top = grid.topmost_line().0;
+        let grid_line = top + absolute as i32;
+        if grid_line < 0 {
+            let offset = usize::try_from(-grid_line).ok()?;
+            Some((offset, 0))
+        } else {
+            Some((0, grid_line as usize))
+        }
+    }
+
     /// Clear parser state and screen.
     pub fn reset(&mut self) {
         let dimensions = TermDimensions {
@@ -1108,6 +1168,31 @@ fn cell_text(cell: &TermCell) -> String {
     text
 }
 
+fn plain_line_text(grid: &alacritty_terminal::grid::Grid<TermCell>, line: Line) -> String {
+    let wrapline = grid[line][grid.last_column()]
+        .flags
+        .contains(CellFlags::WRAPLINE);
+    let end_col = if wrapline {
+        grid.columns()
+    } else {
+        (0..grid.columns())
+            .rfind(|col| !grid[line][Column(*col)].is_empty())
+            .map_or(0, |col| col + 1)
+    };
+    let mut text = String::new();
+    for col in 0..end_col {
+        let cell = &grid[line][Column(col)];
+        if cell
+            .flags
+            .intersects(CellFlags::WIDE_CHAR_SPACER | CellFlags::LEADING_WIDE_CHAR_SPACER)
+        {
+            continue;
+        }
+        text.push_str(&cell_text(cell));
+    }
+    text
+}
+
 fn key_modes_from_term(mode: TermMode) -> TerminalKeyModes {
     TerminalKeyModes {
         app_cursor: mode.contains(TermMode::APP_CURSOR),
@@ -1579,5 +1664,57 @@ mod tests {
         let snapshot = screen.render_snapshot();
         assert_eq!(snapshot.cursor_shape, CaretShape::Block);
         assert!(snapshot.cursor_blinking);
+    }
+
+    #[test]
+    fn export_text_reads_absolute_lines_without_mutating_offset() {
+        let mut screen = TerminalScreen::new(3, 10, 20);
+        screen.process_bytes(b"one\r\ntwo\r\nthree\r\nfour\r\nfive");
+        screen.set_scrollback(2);
+        let offset_before = screen.scrollback_offset();
+        let total = screen.total_text_lines();
+        assert!(total >= 5);
+
+        let lines = screen.text_lines(0, total);
+        assert!(lines.iter().any(|line| line.contains("one")));
+        assert!(lines.iter().any(|line| line.contains("five")));
+        assert_eq!(screen.scrollback_offset(), offset_before);
+
+        let last_two = screen.export_text(total.saturating_sub(2), total);
+        assert!(last_two.contains("four"));
+        assert!(last_two.contains("five"));
+        assert_eq!(screen.scrollback_offset(), offset_before);
+    }
+
+    #[test]
+    fn absolute_line_to_viewport_maps_history_and_live_rows() {
+        let mut screen = TerminalScreen::new(3, 10, 20);
+        screen.process_bytes(b"one\r\ntwo\r\nthree\r\nfour\r\nfive");
+        let total = screen.total_text_lines();
+
+        let (oldest_offset, oldest_row) = screen.absolute_line_to_viewport(0).unwrap();
+        assert_eq!(oldest_row, 0);
+        assert!(oldest_offset > 0);
+
+        let (live_offset, live_row) = screen
+            .absolute_line_to_viewport(total.saturating_sub(1))
+            .unwrap();
+        assert_eq!(live_offset, 0);
+        assert!(live_row < 3);
+
+        assert_eq!(screen.absolute_line_to_viewport(total), None);
+    }
+
+    #[test]
+    fn export_text_clamps_evicted_and_empty_ranges() {
+        let mut screen = TerminalScreen::new(2, 8, 3);
+        for i in 0..20 {
+            screen.process_bytes(format!("line{i}\r\n").as_bytes());
+        }
+        let total = screen.total_text_lines();
+        assert!(total <= 2 + 3);
+        assert!(screen.text_lines(total, total + 10).is_empty());
+        assert_eq!(screen.export_text(0, 0), "");
+        assert_eq!(screen.text_lines(0, total).len(), total);
     }
 }

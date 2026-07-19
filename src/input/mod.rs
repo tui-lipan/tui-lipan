@@ -74,6 +74,26 @@ impl KeyBinding {
         self.steps.len()
     }
 
+    /// Expand this binding into one [`KeyEvent`] per chord step.
+    ///
+    /// Combinations that press multiple key codes at once are rejected — send-keys and similar
+    /// callers need a single discrete event per step.
+    pub fn key_events(&self) -> Result<Vec<KeyEvent>, KeyBindingParseError> {
+        self.steps
+            .iter()
+            .map(|step| {
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    key_event_from_combination(*step)
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    key_event_from_canonical(step.as_ref())
+                }
+            })
+            .collect()
+    }
+
     /// Returns the canonical display string for this binding.
     pub fn canonical(&self) -> &str {
         &self.canonical
@@ -343,6 +363,125 @@ pub(crate) fn to_crokey_event(key: KeyEvent) -> crossterm::event::KeyEvent {
         kind: KeyEventKind::Press,
         state: KeyEventState::empty(),
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn key_event_from_combination(
+    combination: KeyCombination,
+) -> Result<KeyEvent, KeyBindingParseError> {
+    use crokey::OneToThree;
+    use crossterm::event::KeyCode as CtKeyCode;
+
+    let combination = combination.normalized();
+    let ct_code = match combination.codes {
+        OneToThree::One(code) => code,
+        _ => {
+            return Err(KeyBindingParseError::Invalid(
+                "multi-key combinations are not supported for key event expansion".into(),
+            ));
+        }
+    };
+
+    let mut mods = KeyMods::NONE;
+    if combination
+        .modifiers
+        .contains(crossterm::event::KeyModifiers::CONTROL)
+    {
+        mods.ctrl = true;
+    }
+    if combination
+        .modifiers
+        .contains(crossterm::event::KeyModifiers::ALT)
+    {
+        mods.alt = true;
+    }
+    if combination
+        .modifiers
+        .contains(crossterm::event::KeyModifiers::SHIFT)
+    {
+        mods.shift = true;
+    }
+    if combination
+        .modifiers
+        .contains(crossterm::event::KeyModifiers::SUPER)
+    {
+        mods.super_key = true;
+    }
+
+    let code = match ct_code {
+        CtKeyCode::Char(c) => KeyCode::Char(c),
+        CtKeyCode::Enter => KeyCode::Enter,
+        CtKeyCode::Esc => KeyCode::Esc,
+        CtKeyCode::Tab if mods.shift => {
+            mods.shift = false;
+            KeyCode::BackTab
+        }
+        CtKeyCode::Tab => KeyCode::Tab,
+        CtKeyCode::Backspace => KeyCode::Backspace,
+        CtKeyCode::Delete => KeyCode::Delete,
+        CtKeyCode::Home => KeyCode::Home,
+        CtKeyCode::End => KeyCode::End,
+        CtKeyCode::PageUp => KeyCode::PageUp,
+        CtKeyCode::PageDown => KeyCode::PageDown,
+        CtKeyCode::Up => KeyCode::Up,
+        CtKeyCode::Down => KeyCode::Down,
+        CtKeyCode::Left => KeyCode::Left,
+        CtKeyCode::Right => KeyCode::Right,
+        CtKeyCode::Insert => KeyCode::Insert,
+        CtKeyCode::F(n) => KeyCode::F(n),
+        other => {
+            return Err(KeyBindingParseError::Invalid(format!(
+                "unsupported key code for event expansion: {other:?}"
+            )));
+        }
+    };
+
+    Ok(KeyEvent { code, mods })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn key_event_from_canonical(canonical: &str) -> Result<KeyEvent, KeyBindingParseError> {
+    let mut mods = KeyMods::NONE;
+    let mut key_token = None;
+    for part in canonical.split('+').filter(|part| !part.is_empty()) {
+        match part.to_ascii_lowercase().as_str() {
+            "ctrl" => mods.ctrl = true,
+            "alt" => mods.alt = true,
+            "cmd" | "super" => mods.super_key = true,
+            "shift" => mods.shift = true,
+            token if key_token.is_none() => key_token = Some(token.to_string()),
+            _ => {
+                return Err(KeyBindingParseError::Invalid(canonical.to_string()));
+            }
+        }
+    }
+    let Some(token) = key_token else {
+        return Err(KeyBindingParseError::Invalid(canonical.to_string()));
+    };
+    let code = match token.as_str() {
+        "esc" | "escape" => KeyCode::Esc,
+        "enter" | "return" => KeyCode::Enter,
+        "tab" => KeyCode::Tab,
+        "backtab" => KeyCode::BackTab,
+        "backspace" => KeyCode::Backspace,
+        "delete" => KeyCode::Delete,
+        "insert" => KeyCode::Insert,
+        "home" => KeyCode::Home,
+        "end" => KeyCode::End,
+        "pageup" => KeyCode::PageUp,
+        "pagedown" => KeyCode::PageDown,
+        "up" => KeyCode::Up,
+        "down" => KeyCode::Down,
+        "left" => KeyCode::Left,
+        "right" => KeyCode::Right,
+        "space" => KeyCode::Char(' '),
+        token if token.len() >= 2 && token.starts_with('f') && token[1..].parse::<u8>().is_ok() => {
+            KeyCode::F(token[1..].parse().unwrap_or(1))
+        }
+        token if token.chars().count() == 1 => KeyCode::Char(token.chars().next().unwrap()),
+        _ => return Err(KeyBindingParseError::Invalid(canonical.to_string())),
+    };
+    Ok(KeyEvent { code, mods })
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -745,6 +884,33 @@ mod tests {
             },
         };
         assert!(binding.matches_sequence(&[key]));
+    }
+
+    #[test]
+    fn key_binding_expands_to_key_events() {
+        let events = KeyBinding::from_str("ctrl-c")
+            .expect("parses")
+            .key_events()
+            .expect("expands");
+        assert_eq!(
+            events,
+            vec![KeyEvent {
+                code: KeyCode::Char('c'),
+                mods: KeyMods {
+                    ctrl: true,
+                    ..KeyMods::default()
+                },
+            }]
+        );
+
+        let chord = KeyBinding::from_str("ctrl-x b")
+            .expect("parses")
+            .key_events()
+            .expect("expands");
+        assert_eq!(chord.len(), 2);
+        assert_eq!(chord[0].code, KeyCode::Char('x'));
+        assert!(chord[0].mods.ctrl);
+        assert_eq!(chord[1].code, KeyCode::Char('b'));
     }
 
     #[test]
