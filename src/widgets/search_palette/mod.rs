@@ -264,6 +264,25 @@ mod tests {
     }
 
     #[test]
+    fn items_arc_and_entries_arc_preserve_shared_slices() {
+        use super::{SearchEntry, SearchPalette};
+        use std::sync::Arc;
+
+        let items: Arc<[SearchItem<usize>]> =
+            Arc::from([SearchItem::new("alpha", 0), SearchItem::new("beta", 1)]);
+        let palette = SearchPalette::new().items_arc(Arc::clone(&items));
+        assert!(Arc::ptr_eq(&palette.props.items, &items));
+        assert!(palette.props.entries.is_empty());
+
+        let entries: Arc<[SearchEntry<usize>]> =
+            Arc::from([SearchEntry::header("Group"), SearchEntry::item("gamma", 2)]);
+        let palette = SearchPalette::new().entries_arc(Arc::clone(&entries));
+        assert!(Arc::ptr_eq(&palette.props.entries, &entries));
+        assert_eq!(palette.props.items.len(), 1);
+        assert_eq!(palette.props.items[0].label.as_ref(), "gamma");
+    }
+
+    #[test]
     fn rank_search_palette_indices_with_score_can_reorder_matches() {
         let items = vec![
             SearchItem::new("alpha", 0),
@@ -468,8 +487,8 @@ impl<T> SearchEntry<T> {
 #[derive(Clone)]
 #[allow(missing_docs)]
 pub(crate) struct SearchPaletteProps<T> {
-    items: Vec<SearchItem<T>>,
-    entries: Vec<SearchEntry<T>>,
+    items: Arc<[SearchItem<T>]>,
+    entries: Arc<[SearchEntry<T>]>,
     sync_match_limit: usize,
     sync_selection: bool,
     initial_query: Arc<str>,
@@ -719,8 +738,8 @@ impl<T: Clone + PartialEq> Default for SearchPalette<T> {
     fn default() -> Self {
         Self {
             props: SearchPaletteProps {
-                items: Vec::new(),
-                entries: Vec::new(),
+                items: Arc::from([]),
+                entries: Arc::from([]),
                 sync_match_limit: DEFAULT_SYNC_MATCH_LIMIT,
                 sync_selection: false,
                 initial_query: "".into(),
@@ -828,8 +847,15 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
 
     /// Set searchable items (no headers or spacers).
     pub fn items(mut self, items: impl IntoIterator<Item = SearchItem<T>>) -> Self {
-        self.props.items = items.into_iter().collect();
-        self.props.entries = Vec::new();
+        self.props.items = items.into_iter().collect::<Vec<_>>().into();
+        self.props.entries = Arc::from([]);
+        self
+    }
+
+    /// Set searchable items from a shared slice.
+    pub fn items_arc(mut self, items: Arc<[SearchItem<T>]>) -> Self {
+        self.props.items = items;
+        self.props.entries = Arc::from([]);
         self
     }
 
@@ -841,7 +867,7 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// the results list only while the query is empty; active search renders a
     /// flat ranked result list for more stable navigation.
     pub fn entries(mut self, entries: impl IntoIterator<Item = SearchEntry<T>>) -> Self {
-        let entries: Vec<SearchEntry<T>> = entries.into_iter().collect();
+        let entries: Arc<[SearchEntry<T>]> = entries.into_iter().collect::<Vec<_>>().into();
         self.props.items = entries
             .iter()
             .filter_map(|e| {
@@ -851,7 +877,27 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
                     None
                 }
             })
-            .collect();
+            .collect::<Vec<_>>()
+            .into();
+        self.props.entries = entries;
+        self
+    }
+
+    /// Set entries from a shared slice.
+    ///
+    /// Searchable items are derived from [`SearchEntry::Item`] rows in the slice.
+    pub fn entries_arc(mut self, entries: Arc<[SearchEntry<T>]>) -> Self {
+        self.props.items = entries
+            .iter()
+            .filter_map(|e| {
+                if let SearchEntry::Item(item) = e {
+                    Some(item.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .into();
         self.props.entries = entries;
         self
     }

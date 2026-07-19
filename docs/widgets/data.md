@@ -183,7 +183,7 @@ Structured data with rows, columns, and optional scrollbar.
 | Prop | Type | Description |
 |------|------|-------------|
 | `header` | `TableRow` | Column header row |
-| `rows` | `Vec<TableRow>` | Data rows |
+| `rows` | `Arc<[TableRow]>` / `rows_arc` | Data rows (`rows(...)` collects into `Arc`; prefer `rows_arc` when sharing) |
 | `widths` | `Vec<ColumnWidth>` | Column widths |
 | `selected` | `Option<usize>` | Selected row index |
 | `column_spacing` | `u16` | Space between columns |

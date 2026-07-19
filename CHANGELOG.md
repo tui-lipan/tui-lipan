@@ -13,6 +13,12 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Collection widgets now expose paired `Arc<[T]>` bulk setters alongside the
+  existing iterator setters: `Table::rows_arc`, `Tabs::tabs_arc`,
+  `Chart::series_arc`, `ChartSeries::data_arc`, `Sparkline::data_arc`,
+  `MultiSelect::items_arc`, and `SearchPalette::{items_arc, entries_arc}`.
+  Prefer these when component state already holds a shared slice so frames avoid
+  reallocating identical collections.
 - Documented production performance patterns for update scope, widget-owned
   scrolling, subtree memoization, stable shared props, bounded rendering, and
   coalesced background work, distilled from opencode-tui.
@@ -206,6 +212,14 @@ While the crate is on `0.x.y`:
   client from a server-owned terminal. See `docs/widgets/terminal.md`.
 
 ### Changed
+
+- `Sparkline.data` is now `Arc<[u64]>` instead of `Vec<u64>` (breaking). Call
+  sites that assigned a `Vec` directly should use `Sparkline::new` / `.data(...)`
+  or `.data_arc(...)`.
+- `MultiSelect` and `SearchPalette` now store item/entry collections as
+  `Arc<[T]>` instead of `Vec<T>` (breaking for any code that depended on the
+  previous private storage shape via struct updates or reflection). Builder
+  iterator setters still accept `IntoIterator` and collect into `Arc`.
 
 - Added app-level `FocusPolicy::{Auto, OnDemand, Manual}` and `App::focus_policy(...)`;
   `OnDemand` is now the default, so apps start unfocused until Tab, pointer interaction, or an

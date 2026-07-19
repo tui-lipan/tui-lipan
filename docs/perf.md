@@ -88,11 +88,25 @@ reorders, but does not enable memoization by itself. See
 Large immutable render inputs should be shared rather than cloned or deeply
 compared on every streamed update:
 
-- Store reused strings and collections in `Arc`, and use widget bulk setters
-  such as `items_arc(...)` or `entries_arc(...)` where available.
+- Collection widgets expose paired `x(impl IntoIterator)` + `x_arc(Arc<[T]>)`
+  setters and store collections as `Arc<[T]>` (for example `List::items_arc`,
+  `Table::rows_arc`, `Tabs::tabs_arc`, `Chart::series_arc` /
+  `ChartSeries::data_arc`, `Sparkline::data_arc`, `MultiSelect::items_arc`,
+  `SearchPalette::items_arc` / `entries_arc`, `LogView::entries_arc`). Prefer
+  holding the `Arc` in component state and passing it through `_arc` when the
+  collection is unchanged between frames.
+- Tiny label collections (`Radio`, `Breadcrumb`, `ComboBox`), recursive trees
+  (`Tree` children), filesystem-sourced `FileTree`, and text-content widgets
+  (`DiffView`, `DocumentView`) intentionally skip the convention — the clone
+  win is negligible or a shared top slice would still deep-clone on child edit.
 - Put an `Arc::ptr_eq` fast path first in hand-written prop equality, followed by
   an allocation-free structural comparison when different allocations can still
   represent equal content.
+- Do not rely on pointer-keyed layout-hash memoization of `Arc` collections:
+  naive `as_ptr` hashing risks spurious relayouts when equal content lives in a
+  new allocation. Content hashing remains the layout-hash contract; `_arc`
+  setters are caller-side clone avoidance only. Pointer-keyed layout memoization
+  remains future work if a safe epoch or generation scheme is designed.
 - Use an explicit content epoch when identity fields do not capture in-place
   content changes.
 - Make hand-written `PartialEq` implementations exhaustive so adding a prop

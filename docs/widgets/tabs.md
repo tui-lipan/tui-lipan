@@ -11,7 +11,7 @@ inherit scoped theme roles.
 
 | Prop | Type | Description |
 |------|------|-------------|
-| `tabs` | `Vec<Tab>` | Tab items |
+| `tabs` | `Arc<[Tab]>` / `tabs_arc` | Tab items (`tabs(...)` collects into `Arc`; prefer `tabs_arc` when sharing) |
 | `tab(Tab)` | method | Add a single tab |
 | `active` | `usize` | Active tab index |
 | `divider` | `char` | Separator between tabs |

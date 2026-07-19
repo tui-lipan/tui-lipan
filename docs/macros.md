@@ -223,7 +223,7 @@ Some widgets require positional arguments in their `new()` constructor. In `rsx!
 | `Radio` | `options` | `Radio { options: vec!["A".into(), "B".into()] }` |
 | `Grid` | `columns` | `Grid { columns: 3 }` |
 | `Heatmap` | `data` | `Heatmap { data: values.clone() }` |
-| `Sparkline` | `data` | `Sparkline { data: vec![1, 2, 3] }` |
+| `Sparkline` | `data` | `Sparkline::new([1, 2, 3])` (stores `Arc<[u64]>`; use `data_arc` to share) |
 | `Tree` | `root` | `Tree { root: node }` |
 | `FileTree` | `root` | `FileTree { root: "/home/user" }` |
 | `Toast` | `message` | `Toast { message: "Saved!" }` |

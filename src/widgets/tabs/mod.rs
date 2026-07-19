@@ -149,6 +149,12 @@ impl Tabs {
         self
     }
 
+    /// Set tabs from a shared slice.
+    pub fn tabs_arc(mut self, tabs: Arc<[Tab]>) -> Self {
+        self.tabs = tabs;
+        self
+    }
+
     /// Add a tab.
     pub fn tab(mut self, tab: impl Into<Tab>) -> Self {
         let mut tabs = self.tabs.to_vec();
@@ -613,5 +619,15 @@ mod tests {
             tab_width_budgets(&tabs, '好', 8, TabsOverflow::Ellipsis),
             Some(vec![3, 3])
         );
+    }
+
+    #[test]
+    fn tabs_arc_preserves_shared_slice() {
+        use super::Tabs;
+        use std::sync::Arc;
+
+        let tabs: Arc<[Tab]> = Arc::from([Tab::new("one"), Tab::new("two")]);
+        let bar = Tabs::new().tabs_arc(Arc::clone(&tabs));
+        assert!(Arc::ptr_eq(&bar.tabs, &tabs));
     }
 }

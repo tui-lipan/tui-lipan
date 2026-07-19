@@ -218,7 +218,7 @@ pub(crate) enum PointTrend {
 #[derive(Clone)]
 pub struct Sparkline {
     /// Data points to plot.
-    pub data: Vec<u64>,
+    pub data: Arc<[u64]>,
     /// Minimum value for the chart range.
     pub min: Option<u64>,
     /// Maximum value for the chart range.
@@ -271,7 +271,7 @@ impl Sparkline {
     /// Create a new sparkline.
     pub fn new(data: impl IntoIterator<Item = u64>) -> Self {
         Self {
-            data: data.into_iter().collect(),
+            data: data.into_iter().collect::<Vec<_>>().into(),
             min: None,
             max: None,
             bars: DEFAULT_BARS.to_vec(),
@@ -299,7 +299,13 @@ impl Sparkline {
 
     /// Replace data points.
     pub fn data(mut self, data: impl IntoIterator<Item = u64>) -> Self {
-        self.data = data.into_iter().collect();
+        self.data = data.into_iter().collect::<Vec<_>>().into();
+        self
+    }
+
+    /// Set data points from a shared slice.
+    pub fn data_arc(mut self, data: Arc<[u64]>) -> Self {
+        self.data = data;
         self
     }
 
@@ -594,5 +600,15 @@ mod tests {
 
         assert_eq!(normal, "⡀");
         assert_eq!(mirrored, "⠁");
+    }
+
+    #[test]
+    fn data_arc_preserves_shared_slice() {
+        use std::sync::Arc;
+
+        let data: Arc<[u64]> = Arc::from([1u64, 2, 3, 4]);
+        let spark = Sparkline::new([]).data_arc(Arc::clone(&data));
+        assert!(Arc::ptr_eq(&spark.data, &data));
+        assert_eq!(spark.data.as_ref(), &[1, 2, 3, 4]);
     }
 }

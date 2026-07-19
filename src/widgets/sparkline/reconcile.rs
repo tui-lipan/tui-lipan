@@ -134,13 +134,13 @@ pub(crate) fn plan_data_preparation(
 
 fn prepare_data(spark: &Sparkline, plan: PreparePlan) -> Vec<u64> {
     let Some(target) = plan.target else {
-        return spark.data.clone();
+        return spark.data.to_vec();
     };
     if target == 0 || spark.data.is_empty() {
         return Vec::new();
     }
     if spark.data.len() <= target {
-        return spark.data.clone();
+        return spark.data.to_vec();
     }
     match plan.strategy {
         PrepareStrategy::Tail => spark.data[spark.data.len() - target..].to_vec(),

@@ -418,6 +418,12 @@ impl Table {
         self
     }
 
+    /// Set rows from a shared slice.
+    pub fn rows_arc(mut self, rows: Arc<[TableRow]>) -> Self {
+        self.rows = rows;
+        self
+    }
+
     /// Add a row.
     pub fn row(mut self, row: impl Into<TableRow>) -> Self {
         let mut rows = self.rows.to_vec();
@@ -862,3 +868,16 @@ pub(crate) use shared::{
     TableBorderLineKind, distribute_extra_width, shrink_widths_to_fit, table_border_glyphs,
     table_border_line, table_fixed_chars, table_render_width,
 };
+
+#[cfg(test)]
+mod arc_setter_tests {
+    use super::{Table, TableRow};
+    use std::sync::Arc;
+
+    #[test]
+    fn rows_arc_preserves_shared_slice() {
+        let rows: Arc<[TableRow]> = Arc::from([TableRow::new(vec!["a", "b"])]);
+        let table = Table::new().rows_arc(Arc::clone(&rows));
+        assert!(Arc::ptr_eq(&table.rows, &rows));
+    }
+}

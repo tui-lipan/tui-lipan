@@ -105,7 +105,7 @@ pub struct MultiSelectCommitEvent {
 /// `active_symbol` > `selection_symbol` > `unselected_symbol` > auto-spaces.
 #[derive(Clone)]
 pub struct MultiSelect {
-    items: Vec<MultiSelectItem>,
+    items: Arc<[MultiSelectItem]>,
     active_index: usize,
     selected_indices: Vec<usize>,
     max_selected: Option<usize>,
@@ -136,7 +136,7 @@ pub struct MultiSelect {
 impl Default for MultiSelect {
     fn default() -> Self {
         Self {
-            items: Vec::new(),
+            items: Arc::from([]),
             active_index: 0,
             selected_indices: Vec::new(),
             max_selected: None,
@@ -193,7 +193,13 @@ impl MultiSelect {
 
     /// Set source items.
     pub fn items(mut self, items: impl IntoIterator<Item = impl Into<MultiSelectItem>>) -> Self {
-        self.items = items.into_iter().map(Into::into).collect();
+        self.items = items.into_iter().map(Into::into).collect::<Vec<_>>().into();
+        self
+    }
+
+    /// Set source items from a shared slice.
+    pub fn items_arc(mut self, items: Arc<[MultiSelectItem]>) -> Self {
+        self.items = items;
         self
     }
 
@@ -866,5 +872,16 @@ mod tests {
 
         assert_eq!(rendered.extra_lines.len(), 1);
         assert!(rendered.extra_lines[0].wrap_label);
+    }
+
+    #[test]
+    fn items_arc_preserves_shared_slice() {
+        use super::MultiSelect;
+        use std::sync::Arc;
+
+        let items: Arc<[MultiSelectItem]> =
+            Arc::from([MultiSelectItem::new("a"), MultiSelectItem::new("b")]);
+        let multi = MultiSelect::new().items_arc(Arc::clone(&items));
+        assert!(Arc::ptr_eq(&multi.items, &items));
     }
 }
