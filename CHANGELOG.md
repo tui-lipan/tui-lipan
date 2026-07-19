@@ -27,6 +27,11 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Keyboard focus traversal (Tab/Shift-Tab) now repaints. Focus chrome drawn from
+  the focused widget - focus styles, carets, `Input` prefix/suffix decorations -
+  previously stayed on the old widget until some later key happened to dirty the
+  tree, so focus appeared to lag one action behind.
+
 - DevTools memo hit rate no longer counts plain (non-`memo_key`) component
   renders as misses; it previously pinned at 0% in apps that memoize few
   components. A retained component whose child refresh falls back to a full
