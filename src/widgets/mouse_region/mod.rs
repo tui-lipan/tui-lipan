@@ -124,6 +124,11 @@ impl MouseRegion {
     }
 
     /// Set hover change callback (fires true on enter, false on leave).
+    ///
+    /// A hover transition repaints on its own only when the region has hover
+    /// visuals (`hover_style` or `hover_effects`). For click-only regions the
+    /// `Update` returned from this callback's message decides — return
+    /// `Update::none()` when nothing rendered depends on hover state.
     pub fn on_hover_change(mut self, cb: Callback<bool>) -> Self {
         self.on_hover_change = Some(cb);
         self

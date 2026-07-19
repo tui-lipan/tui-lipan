@@ -64,6 +64,12 @@ impl WidgetNode for MouseRegionNode {
                 || !self.hover_effects.is_empty())
     }
 
+    fn hover_affects_paint(&self, theme: &Theme) -> bool {
+        self.enabled
+            && (self.hover_style.resolves_non_empty(theme, ThemeRole::Hover)
+                || !self.hover_effects.is_empty())
+    }
+
     fn hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
         let f = self.hit_test.as_ref()?;
         let local_x = x.saturating_sub(rect.x) as u16;

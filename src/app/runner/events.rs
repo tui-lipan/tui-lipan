@@ -612,6 +612,19 @@ impl<C: Component> AppRunner<C> {
         false
     }
 
+    /// Whether either side of a hover enter/leave transition paints differently
+    /// when hovered.
+    fn hover_transition_affects_paint(
+        &self,
+        prev_hovered: Option<NodeId>,
+        hovered: Option<NodeId>,
+    ) -> bool {
+        [prev_hovered, hovered]
+            .into_iter()
+            .flatten()
+            .any(|id| self.core.tree.is_valid(id) && self.core.tree.node(id).hover_affects_paint())
+    }
+
     pub(crate) fn update_hover_impl(&mut self, x: u16, y: u16, force_recompute: bool) -> bool {
         if !self.core.tree.has_hoverables() {
             self.mouse.last_mouse = Some((x, y));
@@ -668,7 +681,12 @@ impl<C: Component> AppRunner<C> {
                     self.update_sequence_item_hover(id, x, y)
                 };
             }
-            return true;
+            // Repaint only when the node leaving or entering hover actually
+            // renders differently while hovered. A click-only MouseRegion has no
+            // hover visuals, so its `on_hover_change` callback decides via the
+            // `Update` it returns; forcing a paint here repaints the whole tree
+            // on every motion event that crosses such a region's boundary.
+            return self.hover_transition_affects_paint(prev_hovered, hovered);
         }
         if !force_recompute && prev_mouse == Some((x, y)) {
             return false;
