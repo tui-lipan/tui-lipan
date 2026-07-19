@@ -268,15 +268,9 @@ fn stats_body(ctx: &Context<DevToolsPanel>, state: &DevToolsState) -> Element {
             .into(),
         );
         if frame.memo_misses > 0 && !frame.memo_miss_reasons.is_empty() {
-            // Omit NotMemoized from the overlay — it dominates apps with many
-            // plain components and crowds out actionable reasons. It still
-            // contributes to memo_misses / the hit-rate denominator.
             let miss_parts: Vec<String> = frame
                 .memo_miss_reasons
                 .iter()
-                .filter(|(reason, _)| {
-                    !matches!(reason, crate::core::nested::MemoMissReason::NotMemoized)
-                })
                 .map(|(reason, count)| {
                     let label = crate::core::nested::memo_miss_reason_label(*reason);
                     if *count > 1 {
@@ -286,15 +280,13 @@ fn stats_body(ctx: &Context<DevToolsPanel>, state: &DevToolsState) -> Element {
                     }
                 })
                 .collect();
-            if !miss_parts.is_empty() {
-                rows.push(
-                    Text::new(format!("Miss: {}", miss_parts.join(", ")))
-                        .overflow(Overflow::Ellipsis)
-                        .width(Length::Flex(1))
-                        .style(dim_style)
-                        .into(),
-                );
-            }
+            rows.push(
+                Text::new(format!("Miss: {}", miss_parts.join(", ")))
+                    .overflow(Overflow::Ellipsis)
+                    .width(Length::Flex(1))
+                    .style(dim_style)
+                    .into(),
+            );
         }
         rows.push(
             Text::new(format!("Dirty: {}", frame.dirty_level))

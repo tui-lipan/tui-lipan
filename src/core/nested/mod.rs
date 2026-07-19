@@ -220,6 +220,9 @@ pub(crate) fn take_memo_frame_stats() -> MemoFrameStats {
         current
     });
     let mut reasons = MEMO_MISS_REASONS.with(|reasons| std::mem::take(&mut *reasons.borrow_mut()));
+    // Drop NotMemoized before ranking/truncation so the kept slots stay
+    // actionable. It still contributes to `misses` / the hit-rate denominator.
+    reasons.retain(|(reason, _)| !matches!(reason, MemoMissReason::NotMemoized));
     reasons.sort_by(|a, b| {
         b.1.cmp(&a.1)
             .then_with(|| format!("{a:?}").cmp(&format!("{b:?}")))
@@ -2292,6 +2295,27 @@ mod tests {
                 .expect("full name")
                 .ends_with("Counter")
         );
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn take_memo_frame_stats_drops_not_memoized_before_truncate() {
+        use super::{MemoMissReason, record_memo_miss, take_memo_frame_stats};
+
+        let _ = take_memo_frame_stats();
+        record_memo_miss(MemoMissReason::NotMemoized);
+        record_memo_miss(MemoMissReason::NotMemoized);
+        record_memo_miss(MemoMissReason::SelfDirty);
+        record_memo_miss(MemoMissReason::KeyChanged);
+        let stats = take_memo_frame_stats();
+        assert_eq!(stats.misses, 4);
+        assert!(
+            !stats
+                .reasons
+                .iter()
+                .any(|(reason, _)| matches!(reason, MemoMissReason::NotMemoized))
+        );
+        assert_eq!(stats.reasons.len(), 2);
     }
 
     #[cfg(feature = "devtools")]

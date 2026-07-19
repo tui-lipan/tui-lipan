@@ -102,7 +102,9 @@ signal is informational only (no log spam).
 With the `devtools` feature enabled, the stats panel shows why memoization
 missed when `memo_misses > 0`. Component retains report `no-cache`,
 `key`, `dirty`, `dep:*` (theme/focus/hover/scroll/viewport/context/…), or
-`child-refresh` (`no-memo` still counts toward the miss total but is omitted from the Miss line so it does not crowd out actionable reasons). In-view `Memo` nodes report `view-cache`, `view-deps`, or
+`child-refresh` (`no-memo` still counts toward the miss total but is dropped
+before the top-4 reason ranking so the Miss line keeps four actionable slots).
+In-view `Memo` nodes report `view-cache`, `view-deps`, or
 `view-structure`, and now count toward the hit rate.
 
 ## Keep props cheap and stable
