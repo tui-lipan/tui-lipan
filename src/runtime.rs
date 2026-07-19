@@ -560,7 +560,7 @@ where
         let view_start = web_time::Instant::now();
         #[cfg(feature = "devtools")]
         let view_start_devtools =
-            crate::core::nested::view_timing_enabled().then(web_time::Instant::now);
+            crate::core::nested::frame_diagnostics_enabled().then(web_time::Instant::now);
         self.scroll.begin_view(ScopeId(1));
         let element = self.component.view(&self.ctx);
         #[cfg(feature = "devtools")]
@@ -710,7 +710,7 @@ where
             self.scroll.begin_view(ScopeId(1));
             #[cfg(feature = "devtools")]
             let view_start_devtools =
-                crate::core::nested::view_timing_enabled().then(web_time::Instant::now);
+                crate::core::nested::frame_diagnostics_enabled().then(web_time::Instant::now);
             let element = self.component.view(&self.ctx);
             #[cfg(feature = "devtools")]
             if let Some(start) = view_start_devtools {

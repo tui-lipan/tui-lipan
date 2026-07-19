@@ -55,7 +55,7 @@ thread_local! {
     static MEMO_HIT_COUNT: Cell<u32> = const { Cell::new(0) };
     static MEMO_MISS_COUNT: Cell<u32> = const { Cell::new(0) };
     static MEMO_MISS_REASONS: RefCell<Vec<(MemoMissReason, u32)>> = const { RefCell::new(Vec::new()) };
-    static VIEW_TIMING_ENABLED: Cell<bool> = const { Cell::new(false) };
+    static FRAME_DIAGNOSTICS_ENABLED: Cell<bool> = const { Cell::new(false) };
     static VIEW_TIMINGS: RefCell<Vec<ViewTimingSample>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -71,19 +71,24 @@ pub(crate) struct ViewTimingSample {
 #[cfg(feature = "devtools")]
 const VIEW_TIMING_CAP: usize = 512;
 
+/// Enable per-frame diagnostics collection (view timings, memo miss reasons).
+///
+/// Set by the runner each frame from `metrics && visible && !suppressed` so
+/// hidden-panel devtools builds skip everything beyond the plain hit/miss
+/// counters.
 #[cfg(feature = "devtools")]
-pub(crate) fn set_view_timing_enabled(enabled: bool) {
-    VIEW_TIMING_ENABLED.with(|flag| flag.set(enabled));
+pub(crate) fn set_frame_diagnostics_enabled(enabled: bool) {
+    FRAME_DIAGNOSTICS_ENABLED.with(|flag| flag.set(enabled));
 }
 
 #[cfg(feature = "devtools")]
-pub(crate) fn view_timing_enabled() -> bool {
-    VIEW_TIMING_ENABLED.with(|flag| flag.get())
+pub(crate) fn frame_diagnostics_enabled() -> bool {
+    FRAME_DIAGNOSTICS_ENABLED.with(|flag| flag.get())
 }
 
 #[cfg(feature = "devtools")]
 pub(crate) fn record_view_timing(scope: ScopeId, name: Arc<str>, duration: std::time::Duration) {
-    if !view_timing_enabled() {
+    if !frame_diagnostics_enabled() {
         return;
     }
     VIEW_TIMINGS.with(|timings| {
@@ -196,7 +201,13 @@ fn increment_memo_hit_counter() {
 
 #[cfg(feature = "devtools")]
 fn record_memo_miss(reason: MemoMissReason) {
+    // The plain miss count always accumulates (matches pre-diagnostics
+    // behavior and feeds the hit-rate line); reason bookkeeping only runs
+    // while the stats panel is actually collecting.
     MEMO_MISS_COUNT.with(|count| count.set(count.get().wrapping_add(1)));
+    if !frame_diagnostics_enabled() {
+        return;
+    }
     MEMO_MISS_REASONS.with(|reasons| {
         let mut reasons = reasons.borrow_mut();
         if let Some((_, count)) = reasons.iter_mut().find(|(r, _)| *r == reason) {
@@ -220,15 +231,17 @@ pub(crate) fn take_memo_frame_stats() -> MemoFrameStats {
         current
     });
     let mut reasons = MEMO_MISS_REASONS.with(|reasons| std::mem::take(&mut *reasons.borrow_mut()));
-    // Drop NotMemoized before ranking/truncation so the kept slots stay
-    // actionable. It still contributes to `misses` / the hit-rate denominator.
-    reasons.retain(|(reason, _)| !matches!(reason, MemoMissReason::NotMemoized));
-    reasons.sort_by(|a, b| {
-        b.1.cmp(&a.1)
-            .then_with(|| format!("{a:?}").cmp(&format!("{b:?}")))
-    });
-    if reasons.len() > 4 {
-        reasons.truncate(4);
+    if !reasons.is_empty() {
+        // Drop NotMemoized before ranking/truncation so the kept slots stay
+        // actionable. It still contributes to `misses` / the hit-rate denominator.
+        reasons.retain(|(reason, _)| !matches!(reason, MemoMissReason::NotMemoized));
+        reasons.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| format!("{a:?}").cmp(&format!("{b:?}")))
+        });
+        if reasons.len() > 4 {
+            reasons.truncate(4);
+        }
     }
     MemoFrameStats {
         hits,
@@ -813,7 +826,7 @@ impl ComponentRegistry {
 
             let memo_key = entry.component.memo_key();
             #[cfg(feature = "devtools")]
-            {
+            if frame_diagnostics_enabled() {
                 retain_facts.has_key = memo_key.is_some();
                 retain_facts.has_cache = entry.cached_element.is_some();
                 retain_facts.self_dirty = entry.self_dirty;
@@ -2300,13 +2313,17 @@ mod tests {
     #[cfg(feature = "devtools")]
     #[test]
     fn take_memo_frame_stats_drops_not_memoized_before_truncate() {
-        use super::{MemoMissReason, record_memo_miss, take_memo_frame_stats};
+        use super::{
+            MemoMissReason, record_memo_miss, set_frame_diagnostics_enabled, take_memo_frame_stats,
+        };
 
         let _ = take_memo_frame_stats();
+        set_frame_diagnostics_enabled(true);
         record_memo_miss(MemoMissReason::NotMemoized);
         record_memo_miss(MemoMissReason::NotMemoized);
         record_memo_miss(MemoMissReason::SelfDirty);
         record_memo_miss(MemoMissReason::KeyChanged);
+        set_frame_diagnostics_enabled(false);
         let stats = take_memo_frame_stats();
         assert_eq!(stats.misses, 4);
         assert!(
@@ -2316,6 +2333,22 @@ mod tests {
                 .any(|(reason, _)| matches!(reason, MemoMissReason::NotMemoized))
         );
         assert_eq!(stats.reasons.len(), 2);
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn record_memo_miss_skips_reason_bookkeeping_when_diagnostics_disabled() {
+        use super::{
+            MemoMissReason, record_memo_miss, set_frame_diagnostics_enabled, take_memo_frame_stats,
+        };
+
+        let _ = take_memo_frame_stats();
+        set_frame_diagnostics_enabled(false);
+        record_memo_miss(MemoMissReason::SelfDirty);
+        record_memo_miss(MemoMissReason::KeyChanged);
+        let stats = take_memo_frame_stats();
+        assert_eq!(stats.misses, 2);
+        assert!(stats.reasons.is_empty());
     }
 
     #[cfg(feature = "devtools")]

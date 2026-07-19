@@ -100,7 +100,10 @@ signal is informational only (no log spam).
 ## Memo miss reasons
 
 With the `devtools` feature enabled, the stats panel shows why memoization
-missed when `memo_misses > 0`. Component retains report `no-cache`,
+missed when `memo_misses > 0`. Reason bookkeeping (and the extra dependency
+probe behind it) only runs while the panel is visible with `metrics: true`, so
+shipping with `devtools` compiled in adds nothing beyond the plain hit/miss
+counters until the panel is opened. Component retains report `no-cache`,
 `key`, `dirty`, `dep:*` (theme/focus/hover/scroll/viewport/context/…), or
 `child-refresh` (`no-memo` still counts toward the miss total but is dropped
 before the top-4 reason ranking so the Miss line keeps four actionable slots).

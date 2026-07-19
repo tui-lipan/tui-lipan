@@ -26,7 +26,9 @@ While the crate is on `0.x.y`:
 - Internal component registry now stores trimmed display names and full type
   names at mount for DevTools diagnostics and tracing identity.
 - DevTools reports memo miss reasons (key/dirty/deps/in-view Memo taxonomy) and
-  counts in-view `Memo` hits toward the panel hit rate.
+  counts in-view `Memo` hits toward the panel hit rate. Reason collection is
+  gated on the stats panel being visible with metrics enabled, so hidden-panel
+  builds pay only the plain hit/miss counters.
 - DevTools records exclusive per-component `view()` timings (top slow views) and
   emits `component.view` / `component.refresh` spans with component identity when
   `profiling-tracing` is enabled.

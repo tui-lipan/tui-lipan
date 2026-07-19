@@ -489,7 +489,7 @@ impl<C: Component> AppRunner<C> {
             let enabled = self.devtools_config.metrics
                 && self.devtools_state.borrow().visible
                 && !self.devtools_metrics_suppressed;
-            crate::core::nested::set_view_timing_enabled(enabled);
+            crate::core::nested::set_frame_diagnostics_enabled(enabled);
         }
 
         #[cfg(feature = "devtools")]
@@ -562,7 +562,7 @@ impl<C: Component> AppRunner<C> {
             let enabled = self.devtools_config.metrics
                 && self.devtools_state.borrow().visible
                 && !self.devtools_metrics_suppressed;
-            crate::core::nested::set_view_timing_enabled(enabled);
+            crate::core::nested::set_frame_diagnostics_enabled(enabled);
         }
 
         if !self.dirty_component_scopes.is_empty()
