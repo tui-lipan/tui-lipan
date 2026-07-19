@@ -83,6 +83,20 @@ reconciliation identity. A stable key is important for dynamic rows, focus, and
 reorders, but does not enable memoization by itself. See
 [Retained subtree reuse](components.md#retained-subtree-reuse).
 
+## View timings and tracing
+
+With `devtools` metrics visible, exclusive (self) `view()` time is sampled per
+component and summed across stability passes. The overlay lists the slowest
+views. With `profiling-tracing`, spans `component.view` / `component.refresh`
+carry `component` and `scope` fields; `app.render_full` includes `root`.
+
+## Input pressure
+
+When many recent Full frames are both driven by input attributions and exceed
+~16ms, the panel shows `Input pressure: N/60 full frames over budget`. Prefer
+Layout/Paint updates from handlers, memoized subtrees, and `_arc` props — the
+signal is informational only (no log spam).
+
 ## Memo miss reasons
 
 With the `devtools` feature enabled, the stats panel shows why memoization

@@ -302,6 +302,37 @@ fn stats_body(ctx: &Context<DevToolsPanel>, state: &DevToolsState) -> Element {
                     .into(),
             );
         }
+        if !frame.component_timings.is_empty() {
+            rows.push(Text::new("Slow views:").style(secondary_style).into());
+            for timing in frame.component_timings.iter().take(3) {
+                let ms = timing.duration.as_secs_f64() * 1000.0;
+                let line = if timing.calls > 1 {
+                    format!("{}  {ms:.3}ms x{}", timing.name, timing.calls)
+                } else {
+                    format!("{}  {ms:.3}ms", timing.name)
+                };
+                rows.push(
+                    Text::new(line)
+                        .overflow(Overflow::Ellipsis)
+                        .width(Length::Flex(1))
+                        .style(dim_style)
+                        .into(),
+                );
+            }
+        }
+        let pressure = state.input_pressure();
+        if pressure.should_warn() {
+            rows.push(
+                Text::new(format!(
+                    "Input pressure: {}/{} full frames over budget",
+                    pressure.offending, pressure.window
+                ))
+                .overflow(Overflow::Ellipsis)
+                .width(Length::Flex(1))
+                .style(Style::default().fg(crate::style::Color::Yellow))
+                .into(),
+            );
+        }
     } else {
         rows.push(
             Text::new("No frame metrics yet")

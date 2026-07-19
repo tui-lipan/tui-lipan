@@ -2,6 +2,8 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
+#[cfg(feature = "devtools")]
+use std::sync::Arc;
 
 use crate::Result;
 use crate::app::context::SurfaceMode;
@@ -556,8 +558,19 @@ where
 
         #[cfg(feature = "profiling-tracing")]
         let view_start = web_time::Instant::now();
+        #[cfg(feature = "devtools")]
+        let view_start_devtools = web_time::Instant::now();
         self.scroll.begin_view(ScopeId(1));
         let element = self.component.view(&self.ctx);
+        #[cfg(feature = "devtools")]
+        {
+            use crate::core::nested::{record_view_timing, short_type_name};
+            record_view_timing(
+                ScopeId(1),
+                Arc::from(short_type_name(self.root_component_name())),
+                view_start_devtools.elapsed(),
+            );
+        }
         #[cfg(feature = "profiling-tracing")]
         let view_ms = view_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -694,7 +707,18 @@ where
             self.ctx.set_active_theme(self.theme.clone());
 
             self.scroll.begin_view(ScopeId(1));
+            #[cfg(feature = "devtools")]
+            let view_start_devtools = web_time::Instant::now();
             let element = self.component.view(&self.ctx);
+            #[cfg(feature = "devtools")]
+            {
+                use crate::core::nested::{record_view_timing, short_type_name};
+                record_view_timing(
+                    ScopeId(1),
+                    Arc::from(short_type_name(self.root_component_name())),
+                    view_start_devtools.elapsed(),
+                );
+            }
 
             let app_root_theme = root_active_theme_for_extra_root(&self.theme, &element);
 

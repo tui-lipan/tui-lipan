@@ -55,6 +55,94 @@ thread_local! {
     static MEMO_HIT_COUNT: Cell<u32> = const { Cell::new(0) };
     static MEMO_MISS_COUNT: Cell<u32> = const { Cell::new(0) };
     static MEMO_MISS_REASONS: RefCell<Vec<(MemoMissReason, u32)>> = const { RefCell::new(Vec::new()) };
+    static VIEW_TIMING_ENABLED: Cell<bool> = const { Cell::new(false) };
+    static VIEW_TIMINGS: RefCell<Vec<ViewTimingSample>> = const { RefCell::new(Vec::new()) };
+}
+
+/// One exclusive `view()` sample collected during a frame.
+#[cfg(feature = "devtools")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ViewTimingSample {
+    pub scope: ScopeId,
+    pub name: Arc<str>,
+    pub duration: std::time::Duration,
+}
+
+#[cfg(feature = "devtools")]
+const VIEW_TIMING_CAP: usize = 512;
+
+#[cfg(feature = "devtools")]
+pub(crate) fn set_view_timing_enabled(enabled: bool) {
+    VIEW_TIMING_ENABLED.with(|flag| flag.set(enabled));
+}
+
+#[cfg(feature = "devtools")]
+pub(crate) fn record_view_timing(scope: ScopeId, name: Arc<str>, duration: std::time::Duration) {
+    if !VIEW_TIMING_ENABLED.with(|flag| flag.get()) {
+        return;
+    }
+    VIEW_TIMINGS.with(|timings| {
+        let mut timings = timings.borrow_mut();
+        if timings.len() >= VIEW_TIMING_CAP {
+            return;
+        }
+        timings.push(ViewTimingSample {
+            scope,
+            name,
+            duration,
+        });
+    });
+}
+
+#[cfg(feature = "devtools")]
+pub(crate) fn take_view_timings() -> Vec<ViewTimingSample> {
+    VIEW_TIMINGS.with(|timings| std::mem::take(&mut *timings.borrow_mut()))
+}
+
+/// Aggregated exclusive `view()` time for one component scope in a frame.
+#[cfg(feature = "devtools")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AggregatedViewTiming {
+    pub name: Arc<str>,
+    pub scope: ScopeId,
+    pub duration: std::time::Duration,
+    pub calls: u32,
+}
+
+/// Aggregate per-scope view samples into top-N timings by total duration.
+#[cfg(feature = "devtools")]
+pub(crate) fn aggregate_view_timings(
+    samples: Vec<ViewTimingSample>,
+    limit: usize,
+) -> Vec<AggregatedViewTiming> {
+    use rustc_hash::FxHashMap;
+    let mut by_scope: FxHashMap<ScopeId, (Arc<str>, std::time::Duration, u32)> =
+        FxHashMap::default();
+    for sample in samples {
+        let entry = by_scope
+            .entry(sample.scope)
+            .or_insert_with(|| (Arc::clone(&sample.name), std::time::Duration::ZERO, 0));
+        entry.1 = entry.1.saturating_add(sample.duration);
+        entry.2 = entry.2.saturating_add(1);
+    }
+    let mut out: Vec<_> = by_scope
+        .into_iter()
+        .map(|(scope, (name, duration, calls))| AggregatedViewTiming {
+            name,
+            scope,
+            duration,
+            calls,
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.duration
+            .cmp(&a.duration)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    if out.len() > limit {
+        out.truncate(limit);
+    }
+    out
 }
 
 /// Why a component or in-view `Memo` failed to retain its cached subtree.
@@ -804,6 +892,13 @@ impl ComponentRegistry {
             .active_theme
             .clone()
             .unwrap_or_else(|| self.env.active_theme.borrow().clone());
+        #[cfg(feature = "profiling-tracing")]
+        let _refresh_span = {
+            let full_name = self.arena.get(id).full_name;
+            let scope = self.arena.get(id).scope.0;
+            tracing::trace_span!("component.refresh", component = full_name, scope = scope)
+                .entered()
+        };
         let expanded = self.expand_component_instance(id, self.epoch, viewport);
         let (splice_scope, expanded_for_splice) =
             self.propagate_cached_replacement_to_ancestors(id, &expanded);
@@ -829,13 +924,44 @@ impl ComponentRegistry {
             entry.component.begin_memo_dependency_capture();
             let memo_key = entry.component.memo_key();
             let (element, memo_deps) = if memo_key.is_some() {
+                #[cfg(feature = "devtools")]
+                let view_start = web_time::Instant::now();
+                #[cfg(feature = "profiling-tracing")]
+                let _view_span = tracing::trace_span!(
+                    "component.view",
+                    component = entry.full_name,
+                    scope = entry.scope.0
+                )
+                .entered();
                 let element = entry.component.view();
+                #[cfg(feature = "devtools")]
+                record_view_timing(
+                    entry.scope,
+                    Arc::clone(&entry.display_name),
+                    view_start.elapsed(),
+                );
                 let memo_deps = entry.component.finish_memo_dependency_capture();
                 (element, memo_deps)
             } else {
                 entry.component.finish_memo_dependency_capture();
+                #[cfg(feature = "devtools")]
+                let view_start = web_time::Instant::now();
+                #[cfg(feature = "profiling-tracing")]
+                let _view_span = tracing::trace_span!(
+                    "component.view",
+                    component = entry.full_name,
+                    scope = entry.scope.0
+                )
+                .entered();
+                let element = entry.component.view();
+                #[cfg(feature = "devtools")]
+                record_view_timing(
+                    entry.scope,
+                    Arc::clone(&entry.display_name),
+                    view_start.elapsed(),
+                );
                 (
-                    entry.component.view(),
+                    element,
                     crate::core::runtime_env::MemoDependencySnapshot::default(),
                 )
             };
@@ -2235,6 +2361,37 @@ mod tests {
             classify_component_miss(base, Some(MemoDependencyKind::Focus)),
             MemoMissReason::DependencyChanged(MemoDependencyKind::Focus)
         );
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn aggregate_view_timings_sums_per_scope_and_keeps_top_n() {
+        use super::{ViewTimingSample, aggregate_view_timings};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let samples = vec![
+            ViewTimingSample {
+                scope: ScopeId(2),
+                name: Arc::from("A"),
+                duration: Duration::from_micros(100),
+            },
+            ViewTimingSample {
+                scope: ScopeId(2),
+                name: Arc::from("A"),
+                duration: Duration::from_micros(50),
+            },
+            ViewTimingSample {
+                scope: ScopeId(3),
+                name: Arc::from("B"),
+                duration: Duration::from_micros(80),
+            },
+        ];
+        let top = aggregate_view_timings(samples, 1);
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].name.as_ref(), "A");
+        assert_eq!(top[0].calls, 2);
+        assert_eq!(top[0].duration, Duration::from_micros(150));
     }
 
     #[test]

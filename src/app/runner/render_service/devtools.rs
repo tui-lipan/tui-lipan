@@ -63,6 +63,7 @@ impl<C: Component> AppRunner<C> {
         // early returns (suppressed catch-up frames, metrics disabled, panel hidden).
         let pending = mem::take(&mut self.pending_attributions);
         let memo_stats = crate::core::nested::take_memo_frame_stats();
+        let view_samples = crate::core::nested::take_view_timings();
 
         // A catch-up refresh frame only re-renders the panel with the metrics
         // recorded by the previous app frame. Recording here would both mislead
@@ -79,6 +80,20 @@ impl<C: Component> AppRunner<C> {
         }
 
         let attributions = crate::devtools::state::finalize_frame_attributions(pending);
+        let input_sourced_full = matches!(draw_mode, DrawMode::Full)
+            && attributions.iter().any(|a| {
+                matches!(a.source, crate::devtools::state::UpdateSource::Input(_))
+                    && a.level == crate::app::interaction_state::DirtyLevel::Full
+            });
+        let component_timings = crate::core::nested::aggregate_view_timings(view_samples, 5)
+            .into_iter()
+            .map(|t| crate::devtools::state::ComponentTiming {
+                name: t.name,
+                scope: t.scope,
+                duration: t.duration,
+                calls: t.calls,
+            })
+            .collect();
 
         let mut node_count = self.core.tree.iter().count();
         if let Some(devtools_root) = self
@@ -120,6 +135,8 @@ impl<C: Component> AppRunner<C> {
                 memo_misses: u64::from(memo_stats.misses),
                 memo_miss_reasons: memo_stats.reasons,
                 attributions,
+                component_timings,
+                input_sourced_full,
             });
 
         // The panel just drawn shows the *previous* frame's metrics (it was built

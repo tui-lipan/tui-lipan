@@ -27,6 +27,11 @@ While the crate is on `0.x.y`:
   names at mount for DevTools diagnostics and tracing identity.
 - DevTools reports memo miss reasons (key/dirty/deps/in-view Memo taxonomy) and
   counts in-view `Memo` hits toward the panel hit rate.
+- DevTools records exclusive per-component `view()` timings (top slow views) and
+  emits `component.view` / `component.refresh` spans with component identity when
+  `profiling-tracing` is enabled.
+- DevTools shows a passive input-pressure line when recent Full frames are both
+  input-sourced and over the 16ms budget (overlay only; no log warnings).
 - Documented production performance patterns for update scope, widget-owned
   scrolling, subtree memoization, stable shared props, bounded rendering, and
   coalesced background work, distilled from opencode-tui.

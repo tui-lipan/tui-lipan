@@ -30,7 +30,10 @@ const DEFAULT_CONFIG_PANEL_WIDTH: Length = Length::Flex(1);
 const DEFAULT_CONFIG_PANEL_HEIGHT: Length = Length::Percent(30);
 
 const DEFAULT_STATS_PANEL_WIDTH: Length = Length::Px(40);
-const DEFAULT_STATS_PANEL_HEIGHT: Length = Length::Px(16);
+const DEFAULT_STATS_PANEL_HEIGHT: Length = Length::Px(19);
+const INPUT_PRESSURE_WINDOW: usize = 60;
+const INPUT_PRESSURE_FRAME_BUDGET: Duration = Duration::from_millis(16);
+const INPUT_PRESSURE_THRESHOLD: u32 = 8;
 const DEFAULT_LOGS_PANEL_WIDTH: Length = Length::Flex(1);
 const DEFAULT_LOGS_PANEL_HEIGHT: Length = Length::Px(26);
 
@@ -53,6 +56,27 @@ pub(crate) struct UpdateAttribution {
     pub(crate) count: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct InputPressure {
+    pub(crate) offending: u32,
+    pub(crate) window: u32,
+}
+
+impl InputPressure {
+    pub(crate) fn should_warn(self) -> bool {
+        self.offending >= INPUT_PRESSURE_THRESHOLD
+    }
+}
+
+/// Aggregated exclusive `view()` time for one component scope in a frame.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ComponentTiming {
+    pub(crate) name: Arc<str>,
+    pub(crate) scope: ScopeId,
+    pub(crate) duration: Duration,
+    pub(crate) calls: u32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FrameMetrics {
     pub(crate) timestamp: Instant,
@@ -66,6 +90,9 @@ pub(crate) struct FrameMetrics {
     pub(crate) memo_misses: u64,
     pub(crate) memo_miss_reasons: Vec<(crate::core::nested::MemoMissReason, u32)>,
     pub(crate) attributions: Vec<UpdateAttribution>,
+    pub(crate) component_timings: Vec<ComponentTiming>,
+    /// True when this frame was a Full draw driven by at least one input-sourced Full attribution.
+    pub(crate) input_sourced_full: bool,
 }
 
 /// Merge/dedupe/cap pending update attributions for the current frame.
@@ -278,6 +305,21 @@ impl DevToolsState {
 
         self.fps_samples.push_back(sample_ts);
         self.prune_fps_samples(sample_ts);
+    }
+
+    /// Count recent Full frames that were both input-sourced and over budget.
+    pub(crate) fn input_pressure(&self) -> InputPressure {
+        let window = self.frame_history.len().min(INPUT_PRESSURE_WINDOW);
+        let mut offending = 0u32;
+        for frame in self.frame_history.iter().rev().take(window) {
+            if frame.input_sourced_full && frame.total_duration > INPUT_PRESSURE_FRAME_BUDGET {
+                offending = offending.saturating_add(1);
+            }
+        }
+        InputPressure {
+            offending,
+            window: window as u32,
+        }
     }
 
     pub(crate) fn push_log_entry(&mut self, entry: DevLogEntry) {
@@ -579,6 +621,8 @@ mod tests {
                 memo_misses: 0,
                 memo_miss_reasons: Vec::new(),
                 attributions: Vec::new(),
+                component_timings: Vec::new(),
+                input_sourced_full: false,
             });
         }
 
@@ -628,6 +672,8 @@ mod tests {
                 memo_misses: 0,
                 memo_miss_reasons: Vec::new(),
                 attributions: Vec::new(),
+                component_timings: Vec::new(),
+                input_sourced_full: false,
             });
         }
 
@@ -959,5 +1005,57 @@ mod tests {
         let lines = format_attribution_overlay_lines(&finalized);
         assert!(lines.len() <= ATTRIBUTION_OVERLAY_LINES);
         assert!(lines.iter().all(|line| line.contains(':')));
+    }
+
+    fn sample_frame(input_sourced_full: bool, total_ms: u64) -> FrameMetrics {
+        FrameMetrics {
+            timestamp: Instant::now(),
+            dirty_level: "full".into(),
+            total_duration: Duration::from_millis(total_ms),
+            reconcile_duration: Duration::from_millis(1),
+            draw_duration: Duration::from_millis(1),
+            node_count: 1,
+            overlay_count: 0,
+            memo_hits: 0,
+            memo_misses: 0,
+            memo_miss_reasons: Vec::new(),
+            attributions: Vec::new(),
+            component_timings: Vec::new(),
+            input_sourced_full,
+        }
+    }
+
+    #[test]
+    fn input_pressure_counts_only_slow_input_full_frames() {
+        let mut state = DevToolsState::default();
+        // cheap input-full frames do not count
+        for _ in 0..10 {
+            state.push_frame_metrics(sample_frame(true, 5));
+        }
+        assert_eq!(state.input_pressure().offending, 0);
+
+        // non-input slow frames do not count
+        for _ in 0..10 {
+            state.push_frame_metrics(sample_frame(false, 30));
+        }
+        assert_eq!(state.input_pressure().offending, 0);
+
+        for _ in 0..8 {
+            state.push_frame_metrics(sample_frame(true, 20));
+        }
+        let pressure = state.input_pressure();
+        assert_eq!(pressure.offending, 8);
+        assert!(pressure.should_warn());
+    }
+
+    #[test]
+    fn input_pressure_window_truncates_at_sixty() {
+        let mut state = DevToolsState::default();
+        for _ in 0..70 {
+            state.push_frame_metrics(sample_frame(true, 20));
+        }
+        let pressure = state.input_pressure();
+        assert_eq!(pressure.window, 60);
+        assert_eq!(pressure.offending, 60);
     }
 }
