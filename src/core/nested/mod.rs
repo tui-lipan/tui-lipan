@@ -24,6 +24,30 @@ pub(crate) use host::{ComponentId, HostState};
 
 use host::{ContainerPath, ContainerTag, MemoCacheEntry, PathSegment, SegmentId, segment_id};
 
+/// Trim a `std::any::type_name` string to a short display form.
+///
+/// Strips module paths while preserving generic arguments, e.g.
+/// `app::Panel<alloc::string::String>` → `Panel<String>`.
+pub(crate) fn short_type_name(full: &str) -> String {
+    let mut out = String::with_capacity(full.len());
+    let mut pending = String::new();
+    for ch in full.chars() {
+        match ch {
+            ':' => {
+                pending.clear();
+            }
+            '<' | '>' | ',' | ' ' | '&' | '(' | ')' | '[' | ']' => {
+                out.push_str(&pending);
+                pending.clear();
+                out.push(ch);
+            }
+            _ => pending.push(ch),
+        }
+    }
+    out.push_str(&pending);
+    out
+}
+
 #[cfg(feature = "devtools")]
 thread_local! {
     static MEMO_HIT_COUNT: Cell<u32> = const { Cell::new(0) };
@@ -71,6 +95,10 @@ struct ComponentEntry {
     host: HostState,
     epoch: u32,
     component: Box<dyn ErasedComponent>,
+    /// Trimmed type name for DevTools overlays (`short_type_name`).
+    display_name: Arc<str>,
+    /// Full `type_name` for tracing spans.
+    full_name: &'static str,
     initialized: bool,
     /// Theme from an ancestor `ThemeProvider`, recorded during expansion
     /// so that `refresh_scope_in_place` can re-apply it.
@@ -98,6 +126,8 @@ impl ComponentEntry {
             host: HostState::default(),
             epoch: 0,
             component: Box::new(EmptyComponent),
+            display_name: Arc::from("<mount-failed>"),
+            full_name: "<mount-failed>",
             initialized: false,
             active_theme: None,
             active_contexts: FxHashMap::default(),
@@ -122,6 +152,8 @@ impl ComponentEntry {
         self.memo_deps = crate::core::runtime_env::MemoDependencySnapshot::default();
         self.self_dirty = false;
         self.descendant_dirty = false;
+        // display_name / full_name are kept across reuse — the next mount that
+        // actually replaces the component will rewrite them.
     }
 
     fn reset_for_free(&mut self) {
@@ -134,6 +166,8 @@ impl ComponentEntry {
         self.host = HostState::default();
         self.epoch = 0;
         self.component = Box::new(EmptyComponent);
+        self.display_name = Arc::from("<mount-failed>");
+        self.full_name = "<mount-failed>";
         self.initialized = false;
         self.active_theme = None;
         self.active_contexts.clear();
@@ -239,6 +273,25 @@ impl ComponentRegistry {
 
     pub(crate) fn is_valid(&self, id: ComponentId) -> bool {
         self.arena.is_valid(id)
+    }
+
+    /// Trimmed component display name for a mounted scope, if still valid.
+    #[allow(dead_code)] // consumed by DevTools update attribution
+    pub(crate) fn display_name_for_scope(&self, scope: ScopeId) -> Option<Arc<str>> {
+        let id = self.scope_to_id.get(&scope).copied()?;
+        if !self.is_valid(id) {
+            return None;
+        }
+        Some(Arc::clone(&self.arena.get(id).display_name))
+    }
+
+    /// Full `type_name` for a mounted component id, if still valid.
+    #[allow(dead_code)] // consumed by DevTools / profiling spans
+    pub(crate) fn full_name_for_id(&self, id: ComponentId) -> Option<&'static str> {
+        if !self.is_valid(id) {
+            return None;
+        }
+        Some(self.arena.get(id).full_name)
     }
 
     pub(crate) fn update_by_scope(
@@ -390,6 +443,9 @@ impl ComponentRegistry {
             }
         };
 
+        let full_name = component.component_name();
+        let display_name: Arc<str> = Arc::from(short_type_name(full_name));
+
         let id = self.alloc();
         let entry = ComponentEntry {
             id,
@@ -401,6 +457,8 @@ impl ComponentRegistry {
             host: HostState::default(),
             epoch,
             component,
+            display_name,
+            full_name,
             initialized: false,
             active_theme: Some(current_theme),
             active_contexts: current_contexts,
@@ -1762,7 +1820,9 @@ mod tests {
     use std::hash::{Hash, Hasher};
     use std::rc::Rc;
 
-    use super::{ComponentId, ComponentRegistry, ComponentRegistryConfig, HostState};
+    use super::{
+        ComponentId, ComponentRegistry, ComponentRegistryConfig, HostState, short_type_name,
+    };
     use crate::app::context::SurfaceMode;
     use crate::app::input::command_registry::CommandRegistry;
     use crate::callback::{Dispatcher, ScopeId};
@@ -1776,6 +1836,24 @@ mod tests {
 
     use crate::Memo;
     use crate::widgets::{ContextProvider, Text, ThemeProvider, VStack};
+
+    #[test]
+    fn short_type_name_strips_module_paths() {
+        assert_eq!(short_type_name("Panel"), "Panel");
+        assert_eq!(short_type_name("app::Panel"), "Panel");
+        assert_eq!(
+            short_type_name("app::Panel<alloc::string::String>"),
+            "Panel<String>"
+        );
+        assert_eq!(
+            short_type_name("a::b::Outer<a::c::Inner<alloc::vec::Vec<u8>>>"),
+            "Outer<Inner<Vec<u8>>>"
+        );
+        assert_eq!(short_type_name("(app::A, core::B)"), "(A, B)");
+        // Closures keep their opaque suffix; we only strip `::` segments.
+        let closure = short_type_name("app::foo::{{closure}}");
+        assert_eq!(closure, "{{closure}}");
+    }
 
     fn new_registry() -> ComponentRegistry {
         let dispatcher = Dispatcher::new(|_, _| {});
@@ -1892,6 +1970,30 @@ mod tests {
             .arena
             .iter_active()
             .find_map(|entry| (entry.key.as_ref() == Some(key)).then_some((entry.id, entry.scope)))
+    }
+
+    #[test]
+    fn display_name_for_scope_returns_trimmed_name_after_mount() {
+        let mut registry = new_registry();
+        let mut host = HostState::default();
+        let epoch = registry.begin_epoch();
+        let root: Element = VStack::new()
+            .child(crate::child::<Counter, _>(|| Counter, 1).key("named"))
+            .into();
+        let _ = registry.expand_in_host(&mut host, None, root, epoch, Rect::default());
+
+        let key: Key = "named".into();
+        let (id, scope) = find_component_by_key(&registry, &key).expect("mounted Counter");
+        let display = registry
+            .display_name_for_scope(scope)
+            .expect("display name");
+        assert_eq!(display.as_ref(), "Counter");
+        assert!(
+            registry
+                .full_name_for_id(id)
+                .expect("full name")
+                .ends_with("Counter")
+        );
     }
 
     #[test]

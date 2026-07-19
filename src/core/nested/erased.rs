@@ -20,6 +20,8 @@ pub(crate) struct ComponentMount {
 
 /// A mounted, type-erased component instance.
 pub(crate) trait ErasedComponent {
+    /// Stable type name for diagnostics (`std::any::type_name`).
+    fn component_name(&self) -> &'static str;
     /// Returns `true` if the given props are equal to the current props,
     /// without cloning.
     fn props_equal(&self, props: &AnyProps) -> bool;
@@ -51,6 +53,10 @@ pub(crate) struct Mounted<C: Component> {
 }
 
 impl<C: Component> ErasedComponent for Mounted<C> {
+    fn component_name(&self) -> &'static str {
+        std::any::type_name::<C>()
+    }
+
     fn props_equal(&self, props: &AnyProps) -> bool {
         props
             .downcast_ref::<C::Properties>()
@@ -136,6 +142,10 @@ impl<C: Component> ErasedComponent for Mounted<C> {
 pub(crate) struct EmptyComponent;
 
 impl ErasedComponent for EmptyComponent {
+    fn component_name(&self) -> &'static str {
+        "<mount-failed>"
+    }
+
     fn props_equal(&self, _props: &AnyProps) -> bool {
         true
     }

@@ -19,6 +19,8 @@ While the crate is on `0.x.y`:
   `MultiSelect::items_arc`, and `SearchPalette::{items_arc, entries_arc}`.
   Prefer these when component state already holds a shared slice so frames avoid
   reallocating identical collections.
+- Internal component registry now stores trimmed display names and full type
+  names at mount for DevTools diagnostics and tracing identity.
 - Documented production performance patterns for update scope, widget-owned
   scrolling, subtree memoization, stable shared props, bounded rendering, and
   coalesced background work, distilled from opencode-tui.

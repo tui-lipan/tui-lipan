@@ -145,6 +145,12 @@ impl<C> RuntimeCore<C>
 where
     C: Component,
 {
+    /// Full root component type name for diagnostics and tracing.
+    #[allow(dead_code)] // consumed by DevTools attribution and render spans
+    pub(crate) fn root_component_name(&self) -> &'static str {
+        std::any::type_name::<C>()
+    }
+
     pub(crate) fn new(component: C, props: C::Properties, config: RuntimeCoreConfig) -> Self {
         let RuntimeCoreConfig {
             viewport,
