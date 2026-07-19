@@ -512,3 +512,10 @@ Msg::ScrollTo(offset) => {
 The cursor is hidden while scrolled into history. Typing input snaps back to live view (set scrollback to 0).
 
 `TerminalScreen::process_bytes()` automatically preserves the user's scrollback position when new output arrives while scrolled up - the offset is adjusted for newly added rows.
+
+---
+
+## Image passthrough (roadmap)
+
+Kitty graphics / sixel image display is **not implemented**. See the design doc:
+[terminal-images.md](terminal-images.md).
