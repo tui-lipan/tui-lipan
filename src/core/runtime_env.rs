@@ -43,16 +43,16 @@ pub(crate) struct MemoDependencies {
     pub(crate) viewport: bool,
     pub(crate) transition: bool,
     pub(crate) host_terminal_colors: bool,
-    pub(crate) contexts: SmallVec<[TypeId; 2]>,
+    pub(crate) contexts: SmallVec<[(TypeId, &'static str); 2]>,
 }
 
 impl MemoDependencies {
     fn note(&mut self, dependency: MemoDependency) {
         match dependency {
             MemoDependency::Theme => self.theme = true,
-            MemoDependency::Context(type_id) => {
-                if !self.contexts.contains(&type_id) {
-                    self.contexts.push(type_id);
+            MemoDependency::Context { type_id, name } => {
+                if !self.contexts.iter().any(|(id, _)| *id == type_id) {
+                    self.contexts.push((type_id, name));
                 }
             }
             MemoDependency::Focus => self.focus = true,
@@ -81,7 +81,7 @@ pub(crate) struct MemoDependencySnapshot {
     pub(crate) transition_generation: u64,
     pub(crate) host_terminal_color_generation: u64,
     pub(crate) viewport: Rect,
-    pub(crate) context_generations: SmallVec<[(TypeId, u64); 2]>,
+    pub(crate) context_generations: SmallVec<[(TypeId, &'static str, u64); 2]>,
 }
 
 impl MemoDependencySnapshot {
@@ -106,16 +106,69 @@ impl MemoDependencySnapshot {
             && self
                 .context_generations
                 .iter()
-                .all(|(type_id, generation)| {
+                .all(|(type_id, _name, generation)| {
                     context_generations.get(type_id).copied().unwrap_or(0) == *generation
                 })
+    }
+
+    /// First dependency that fails the retain check (devtools diagnostics only).
+    #[cfg(feature = "devtools")]
+    pub(crate) fn first_mismatch(
+        &self,
+        env: &RuntimeEnv,
+        viewport: Rect,
+    ) -> Option<crate::core::nested::MemoDependencyKind> {
+        use crate::core::nested::MemoDependencyKind;
+
+        if self.dependencies.theme && self.theme_generation != env.active_theme_generation.get() {
+            return Some(MemoDependencyKind::Theme);
+        }
+        if self.dependencies.focus && self.focus_generation != env.focus.generation() {
+            return Some(MemoDependencyKind::Focus);
+        }
+        if self.dependencies.hover && self.hover_generation != env.hover.generation() {
+            return Some(MemoDependencyKind::Hover);
+        }
+        if self
+            .scroll_generations
+            .iter()
+            .any(|(dependency, generation)| {
+                env.scroll.dependency_generation(dependency) != *generation
+            })
+        {
+            return Some(MemoDependencyKind::Scroll);
+        }
+        if self.dependencies.mouse_capture
+            && self.mouse_capture_generation != env.mouse_capture_generation.get()
+        {
+            return Some(MemoDependencyKind::MouseCapture);
+        }
+        if self.dependencies.viewport && self.viewport != viewport {
+            return Some(MemoDependencyKind::Viewport);
+        }
+        if self.dependencies.transition && self.transition_generation != env.animations.generation()
+        {
+            return Some(MemoDependencyKind::Transition);
+        }
+        if self.dependencies.host_terminal_colors
+            && self.host_terminal_color_generation != env.host_terminal_color_generation.get()
+        {
+            return Some(MemoDependencyKind::HostTerminalColors);
+        }
+        let context_generations = env.context_generations.borrow();
+        for &(type_id, name, generation) in &self.context_generations {
+            if context_generations.get(&type_id).copied().unwrap_or(0) != generation {
+                return Some(MemoDependencyKind::Context(name));
+            }
+        }
+        None
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MemoDependency {
     Theme,
-    Context(TypeId),
+    Context { type_id: TypeId, name: &'static str },
     Focus,
     Hover,
     Scroll(ScrollDependency),
@@ -206,10 +259,11 @@ impl RuntimeEnv {
             .unwrap_or_default();
         let context_generations_map = self.context_generations.borrow();
         let mut context_generations = SmallVec::new();
-        for type_id in &dependencies.contexts {
+        for &(type_id, name) in &dependencies.contexts {
             context_generations.push((
-                *type_id,
-                context_generations_map.get(type_id).copied().unwrap_or(0),
+                type_id,
+                name,
+                context_generations_map.get(&type_id).copied().unwrap_or(0),
             ));
         }
         let scroll_generations = dependencies

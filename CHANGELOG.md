@@ -13,6 +13,27 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- DevTools frame metrics now attribute dirty updates to components and input
+  sources (`input:key` / `input:mouse` / `input:drag` / `input:scroll`), coalesced
+  across deferred-full skipped iterations into the next recorded frame and shown
+  under the Dirty line in the stats panel.
+- Collection widgets now expose paired `Arc<[T]>` bulk setters alongside the
+  existing iterator setters: `Table::rows_arc`, `Tabs::tabs_arc`,
+  `Chart::series_arc`, `ChartSeries::data_arc`, `Sparkline::data_arc`,
+  `MultiSelect::items_arc`, and `SearchPalette::{items_arc, entries_arc}`.
+  Prefer these when component state already holds a shared slice so frames avoid
+  reallocating identical collections.
+- Internal component registry now stores trimmed display names and full type
+  names at mount for DevTools diagnostics and tracing identity.
+- DevTools reports memo miss reasons (key/dirty/deps/in-view Memo taxonomy) and
+  counts in-view `Memo` hits toward the panel hit rate. Reason collection is
+  gated on the stats panel being visible with metrics enabled, so hidden-panel
+  builds pay only the plain hit/miss counters.
+- DevTools records exclusive per-component `view()` timings (top slow views) and
+  emits `component.view` / `component.refresh` spans with component identity when
+  `profiling-tracing` is enabled.
+- DevTools shows a passive input-pressure line when recent Full frames are both
+  input-sourced and over the 16ms budget (overlay only; no log warnings).
 - Documented production performance patterns for update scope, widget-owned
   scrolling, subtree memoization, stable shared props, bounded rendering, and
   coalesced background work, distilled from opencode-tui.
@@ -206,6 +227,14 @@ While the crate is on `0.x.y`:
   client from a server-owned terminal. See `docs/widgets/terminal.md`.
 
 ### Changed
+
+- `Sparkline.data` is now `Arc<[u64]>` instead of `Vec<u64>` (breaking). Call
+  sites that assigned a `Vec` directly should use `Sparkline::new` / `.data(...)`
+  or `.data_arc(...)`.
+- `MultiSelect` and `SearchPalette` now store item/entry collections as
+  `Arc<[T]>` instead of `Vec<T>` (breaking for any code that depended on the
+  previous private storage shape via struct updates or reflection). Builder
+  iterator setters still accept `IntoIterator` and collect into `Arc`.
 
 - Added app-level `FocusPolicy::{Auto, OnDemand, Manual}` and `App::focus_policy(...)`;
   `OnDemand` is now the default, so apps start unfocused until Tab, pointer interaction, or an

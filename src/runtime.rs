@@ -2,6 +2,8 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
+#[cfg(feature = "devtools")]
+use std::sync::Arc;
 
 use crate::Result;
 use crate::app::context::SurfaceMode;
@@ -145,6 +147,12 @@ impl<C> RuntimeCore<C>
 where
     C: Component,
 {
+    /// Full root component type name for diagnostics and tracing.
+    #[cfg_attr(not(feature = "devtools"), allow(dead_code))]
+    pub(crate) fn root_component_name(&self) -> &'static str {
+        std::any::type_name::<C>()
+    }
+
     pub(crate) fn new(component: C, props: C::Properties, config: RuntimeCoreConfig) -> Self {
         let RuntimeCoreConfig {
             viewport,
@@ -550,8 +558,20 @@ where
 
         #[cfg(feature = "profiling-tracing")]
         let view_start = web_time::Instant::now();
+        #[cfg(feature = "devtools")]
+        let view_start_devtools =
+            crate::core::nested::frame_diagnostics_enabled().then(web_time::Instant::now);
         self.scroll.begin_view(ScopeId(1));
         let element = self.component.view(&self.ctx);
+        #[cfg(feature = "devtools")]
+        if let Some(start) = view_start_devtools {
+            use crate::core::nested::{record_view_timing, short_type_name};
+            record_view_timing(
+                ScopeId(1),
+                Arc::from(short_type_name(self.root_component_name())),
+                start.elapsed(),
+            );
+        }
         #[cfg(feature = "profiling-tracing")]
         let view_ms = view_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -688,7 +708,19 @@ where
             self.ctx.set_active_theme(self.theme.clone());
 
             self.scroll.begin_view(ScopeId(1));
+            #[cfg(feature = "devtools")]
+            let view_start_devtools =
+                crate::core::nested::frame_diagnostics_enabled().then(web_time::Instant::now);
             let element = self.component.view(&self.ctx);
+            #[cfg(feature = "devtools")]
+            if let Some(start) = view_start_devtools {
+                use crate::core::nested::{record_view_timing, short_type_name};
+                record_view_timing(
+                    ScopeId(1),
+                    Arc::from(short_type_name(self.root_component_name())),
+                    start.elapsed(),
+                );
+            }
 
             let app_root_theme = root_active_theme_for_extra_root(&self.theme, &element);
 

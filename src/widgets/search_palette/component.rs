@@ -255,7 +255,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         let entries = if ctx.state.results_query.is_empty() || ctx.props.preserve_groups {
-            ctx.props.entries.as_slice()
+            ctx.props.entries.as_ref()
         } else {
             &[]
         };

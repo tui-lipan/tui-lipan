@@ -1,6 +1,8 @@
 use rustc_hash::FxHashMap;
 use std::any::{Any, TypeId};
 use std::cell::Cell;
+#[cfg(feature = "devtools")]
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use crate::callback::{CommandTx, Dispatcher, ScopeId};
@@ -24,10 +26,172 @@ pub(crate) use host::{ComponentId, HostState};
 
 use host::{ContainerPath, ContainerTag, MemoCacheEntry, PathSegment, SegmentId, segment_id};
 
+/// Trim a `std::any::type_name` string to a short display form.
+///
+/// Strips module paths while preserving generic arguments, e.g.
+/// `app::Panel<alloc::string::String>` → `Panel<String>`.
+pub(crate) fn short_type_name(full: &str) -> String {
+    let mut out = String::with_capacity(full.len());
+    let mut pending = String::new();
+    for ch in full.chars() {
+        match ch {
+            ':' => {
+                pending.clear();
+            }
+            '<' | '>' | ',' | ' ' | '&' | '(' | ')' | '[' | ']' => {
+                out.push_str(&pending);
+                pending.clear();
+                out.push(ch);
+            }
+            _ => pending.push(ch),
+        }
+    }
+    out.push_str(&pending);
+    out
+}
+
 #[cfg(feature = "devtools")]
 thread_local! {
     static MEMO_HIT_COUNT: Cell<u32> = const { Cell::new(0) };
     static MEMO_MISS_COUNT: Cell<u32> = const { Cell::new(0) };
+    static MEMO_MISS_REASONS: RefCell<Vec<(MemoMissReason, u32)>> = const { RefCell::new(Vec::new()) };
+    static FRAME_DIAGNOSTICS_ENABLED: Cell<bool> = const { Cell::new(false) };
+    static VIEW_TIMINGS: RefCell<Vec<ViewTimingSample>> = const { RefCell::new(Vec::new()) };
+}
+
+/// One exclusive `view()` sample collected during a frame.
+#[cfg(feature = "devtools")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ViewTimingSample {
+    pub scope: ScopeId,
+    pub name: Arc<str>,
+    pub duration: std::time::Duration,
+}
+
+#[cfg(feature = "devtools")]
+const VIEW_TIMING_CAP: usize = 512;
+
+/// Enable per-frame diagnostics collection (view timings, memo miss reasons).
+///
+/// Set by the runner each frame from `metrics && visible && !suppressed` so
+/// hidden-panel devtools builds skip everything beyond the plain hit/miss
+/// counters.
+#[cfg(feature = "devtools")]
+pub(crate) fn set_frame_diagnostics_enabled(enabled: bool) {
+    FRAME_DIAGNOSTICS_ENABLED.with(|flag| flag.set(enabled));
+}
+
+#[cfg(feature = "devtools")]
+pub(crate) fn frame_diagnostics_enabled() -> bool {
+    FRAME_DIAGNOSTICS_ENABLED.with(|flag| flag.get())
+}
+
+#[cfg(feature = "devtools")]
+pub(crate) fn record_view_timing(scope: ScopeId, name: Arc<str>, duration: std::time::Duration) {
+    if !frame_diagnostics_enabled() {
+        return;
+    }
+    VIEW_TIMINGS.with(|timings| {
+        let mut timings = timings.borrow_mut();
+        if timings.len() >= VIEW_TIMING_CAP {
+            return;
+        }
+        timings.push(ViewTimingSample {
+            scope,
+            name,
+            duration,
+        });
+    });
+}
+
+#[cfg(feature = "devtools")]
+pub(crate) fn take_view_timings() -> Vec<ViewTimingSample> {
+    VIEW_TIMINGS.with(|timings| std::mem::take(&mut *timings.borrow_mut()))
+}
+
+/// Aggregated exclusive `view()` time for one component scope in a frame.
+#[cfg(feature = "devtools")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AggregatedViewTiming {
+    pub name: Arc<str>,
+    pub scope: ScopeId,
+    pub duration: std::time::Duration,
+    pub calls: u32,
+}
+
+/// Aggregate per-scope view samples into top-N timings by total duration.
+#[cfg(feature = "devtools")]
+pub(crate) fn aggregate_view_timings(
+    samples: Vec<ViewTimingSample>,
+    limit: usize,
+) -> Vec<AggregatedViewTiming> {
+    use rustc_hash::FxHashMap;
+    let mut by_scope: FxHashMap<ScopeId, (Arc<str>, std::time::Duration, u32)> =
+        FxHashMap::default();
+    for sample in samples {
+        let entry = by_scope
+            .entry(sample.scope)
+            .or_insert_with(|| (Arc::clone(&sample.name), std::time::Duration::ZERO, 0));
+        entry.1 = entry.1.saturating_add(sample.duration);
+        entry.2 = entry.2.saturating_add(1);
+    }
+    let mut out: Vec<_> = by_scope
+        .into_iter()
+        .map(|(scope, (name, duration, calls))| AggregatedViewTiming {
+            name,
+            scope,
+            duration,
+            calls,
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.duration
+            .cmp(&a.duration)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    if out.len() > limit {
+        out.truncate(limit);
+    }
+    out
+}
+
+/// Why a component or in-view `Memo` failed to retain its cached subtree.
+#[cfg(feature = "devtools")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum MemoMissReason {
+    NotMemoized,
+    NoCache,
+    KeyChanged,
+    SelfDirty,
+    DependencyChanged(MemoDependencyKind),
+    RetainedChildRefreshFailed,
+    ViewMemoNoCache,
+    ViewMemoDepsChanged,
+    ViewMemoStructureChanged,
+}
+
+/// Which memo dependency drifted when a retain check failed.
+#[cfg(feature = "devtools")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum MemoDependencyKind {
+    Theme,
+    Focus,
+    Hover,
+    Scroll,
+    MouseCapture,
+    Viewport,
+    Transition,
+    HostTerminalColors,
+    Context(&'static str),
+}
+
+/// Per-frame memo counters drained into DevTools metrics.
+#[cfg(feature = "devtools")]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct MemoFrameStats {
+    pub hits: u32,
+    pub misses: u32,
+    pub reasons: Vec<(MemoMissReason, u32)>,
 }
 
 #[cfg(feature = "devtools")]
@@ -36,12 +200,26 @@ fn increment_memo_hit_counter() {
 }
 
 #[cfg(feature = "devtools")]
-fn increment_memo_miss_counter() {
+fn record_memo_miss(reason: MemoMissReason) {
+    // The plain miss count always accumulates (matches pre-diagnostics
+    // behavior and feeds the hit-rate line); reason bookkeeping only runs
+    // while the stats panel is actually collecting.
     MEMO_MISS_COUNT.with(|count| count.set(count.get().wrapping_add(1)));
+    if !frame_diagnostics_enabled() {
+        return;
+    }
+    MEMO_MISS_REASONS.with(|reasons| {
+        let mut reasons = reasons.borrow_mut();
+        if let Some((_, count)) = reasons.iter_mut().find(|(r, _)| *r == reason) {
+            *count = count.saturating_add(1);
+        } else {
+            reasons.push((reason, 1));
+        }
+    });
 }
 
 #[cfg(feature = "devtools")]
-pub(crate) fn take_memo_counters() -> (u32, u32) {
+pub(crate) fn take_memo_frame_stats() -> MemoFrameStats {
     let hits = MEMO_HIT_COUNT.with(|count| {
         let current = count.get();
         count.set(0);
@@ -52,7 +230,85 @@ pub(crate) fn take_memo_counters() -> (u32, u32) {
         count.set(0);
         current
     });
-    (hits, misses)
+    let mut reasons = MEMO_MISS_REASONS.with(|reasons| std::mem::take(&mut *reasons.borrow_mut()));
+    if !reasons.is_empty() {
+        // Drop NotMemoized before ranking/truncation so the kept slots stay
+        // actionable. It still contributes to `misses` / the hit-rate denominator.
+        reasons.retain(|(reason, _)| !matches!(reason, MemoMissReason::NotMemoized));
+        reasons.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| format!("{a:?}").cmp(&format!("{b:?}")))
+        });
+        if reasons.len() > 4 {
+            reasons.truncate(4);
+        }
+    }
+    MemoFrameStats {
+        hits,
+        misses,
+        reasons,
+    }
+}
+
+#[cfg(feature = "devtools")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MemoRetainFacts {
+    has_key: bool,
+    has_cache: bool,
+    self_dirty: bool,
+    key_matches: bool,
+}
+
+#[cfg(feature = "devtools")]
+fn classify_component_miss(
+    facts: MemoRetainFacts,
+    dep: Option<MemoDependencyKind>,
+) -> MemoMissReason {
+    if !facts.has_key {
+        return MemoMissReason::NotMemoized;
+    }
+    if !facts.has_cache {
+        return MemoMissReason::NoCache;
+    }
+    if facts.self_dirty {
+        return MemoMissReason::SelfDirty;
+    }
+    if !facts.key_matches {
+        return MemoMissReason::KeyChanged;
+    }
+    MemoMissReason::DependencyChanged(dep.unwrap_or(MemoDependencyKind::Theme))
+}
+
+/// Short overlay label for a memo miss reason.
+#[cfg(feature = "devtools")]
+pub(crate) fn memo_miss_reason_label(reason: MemoMissReason) -> String {
+    match reason {
+        MemoMissReason::NotMemoized => "no-memo".into(),
+        MemoMissReason::NoCache => "no-cache".into(),
+        MemoMissReason::KeyChanged => "key".into(),
+        MemoMissReason::SelfDirty => "dirty".into(),
+        MemoMissReason::DependencyChanged(MemoDependencyKind::Theme) => "dep:theme".into(),
+        MemoMissReason::DependencyChanged(MemoDependencyKind::Focus) => "dep:focus".into(),
+        MemoMissReason::DependencyChanged(MemoDependencyKind::Hover) => "dep:hover".into(),
+        MemoMissReason::DependencyChanged(MemoDependencyKind::Scroll) => "dep:scroll".into(),
+        MemoMissReason::DependencyChanged(MemoDependencyKind::MouseCapture) => {
+            "dep:mouse-capture".into()
+        }
+        MemoMissReason::DependencyChanged(MemoDependencyKind::Viewport) => "dep:viewport".into(),
+        MemoMissReason::DependencyChanged(MemoDependencyKind::Transition) => {
+            "dep:transition".into()
+        }
+        MemoMissReason::DependencyChanged(MemoDependencyKind::HostTerminalColors) => {
+            "dep:host-colors".into()
+        }
+        MemoMissReason::DependencyChanged(MemoDependencyKind::Context(name)) => {
+            format!("dep:ctx({})", short_type_name(name))
+        }
+        MemoMissReason::RetainedChildRefreshFailed => "child-refresh".into(),
+        MemoMissReason::ViewMemoNoCache => "view-cache".into(),
+        MemoMissReason::ViewMemoDepsChanged => "view-deps".into(),
+        MemoMissReason::ViewMemoStructureChanged => "view-structure".into(),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -71,6 +327,10 @@ struct ComponentEntry {
     host: HostState,
     epoch: u32,
     component: Box<dyn ErasedComponent>,
+    /// Trimmed type name for DevTools overlays (`short_type_name`).
+    display_name: Arc<str>,
+    /// Full `type_name` for tracing spans.
+    full_name: &'static str,
     initialized: bool,
     /// Theme from an ancestor `ThemeProvider`, recorded during expansion
     /// so that `refresh_scope_in_place` can re-apply it.
@@ -98,6 +358,8 @@ impl ComponentEntry {
             host: HostState::default(),
             epoch: 0,
             component: Box::new(EmptyComponent),
+            display_name: Arc::from("<mount-failed>"),
+            full_name: "<mount-failed>",
             initialized: false,
             active_theme: None,
             active_contexts: FxHashMap::default(),
@@ -122,6 +384,8 @@ impl ComponentEntry {
         self.memo_deps = crate::core::runtime_env::MemoDependencySnapshot::default();
         self.self_dirty = false;
         self.descendant_dirty = false;
+        // display_name / full_name are kept across reuse — the next mount that
+        // actually replaces the component will rewrite them.
     }
 
     fn reset_for_free(&mut self) {
@@ -134,6 +398,8 @@ impl ComponentEntry {
         self.host = HostState::default();
         self.epoch = 0;
         self.component = Box::new(EmptyComponent);
+        self.display_name = Arc::from("<mount-failed>");
+        self.full_name = "<mount-failed>";
         self.initialized = false;
         self.active_theme = None;
         self.active_contexts.clear();
@@ -239,6 +505,25 @@ impl ComponentRegistry {
 
     pub(crate) fn is_valid(&self, id: ComponentId) -> bool {
         self.arena.is_valid(id)
+    }
+
+    /// Trimmed component display name for a mounted scope, if still valid.
+    #[cfg_attr(not(feature = "devtools"), allow(dead_code))]
+    pub(crate) fn display_name_for_scope(&self, scope: ScopeId) -> Option<Arc<str>> {
+        let id = self.scope_to_id.get(&scope).copied()?;
+        if !self.is_valid(id) {
+            return None;
+        }
+        Some(Arc::clone(&self.arena.get(id).display_name))
+    }
+
+    /// Full `type_name` for a mounted component id, if still valid.
+    #[allow(dead_code)] // consumed by DevTools / profiling spans
+    pub(crate) fn full_name_for_id(&self, id: ComponentId) -> Option<&'static str> {
+        if !self.is_valid(id) {
+            return None;
+        }
+        Some(self.arena.get(id).full_name)
     }
 
     pub(crate) fn update_by_scope(
@@ -390,6 +675,9 @@ impl ComponentRegistry {
             }
         };
 
+        let full_name = component.component_name();
+        let display_name: Arc<str> = Arc::from(short_type_name(full_name));
+
         let id = self.alloc();
         let entry = ComponentEntry {
             id,
@@ -401,6 +689,8 @@ impl ComponentRegistry {
             host: HostState::default(),
             epoch,
             component,
+            display_name,
+            full_name,
             initialized: false,
             active_theme: Some(current_theme),
             active_contexts: current_contexts,
@@ -503,6 +793,16 @@ impl ComponentRegistry {
             return crate::widgets::Text::new("").into();
         }
 
+        #[cfg(feature = "devtools")]
+        let mut retain_facts = MemoRetainFacts {
+            has_key: false,
+            has_cache: false,
+            self_dirty: false,
+            key_matches: false,
+        };
+        #[cfg(feature = "devtools")]
+        let mut dep_mismatch = None;
+
         let can_retain = {
             let fallback_theme = self.env.active_theme.borrow().clone();
             let entry = self.arena.get_mut(id);
@@ -525,6 +825,21 @@ impl ComponentRegistry {
             }
 
             let memo_key = entry.component.memo_key();
+            #[cfg(feature = "devtools")]
+            if frame_diagnostics_enabled() {
+                retain_facts.has_key = memo_key.is_some();
+                retain_facts.has_cache = entry.cached_element.is_some();
+                retain_facts.self_dirty = entry.self_dirty;
+                retain_facts.key_matches = entry.last_memo_key == memo_key;
+                if retain_facts.has_key
+                    && retain_facts.has_cache
+                    && !retain_facts.self_dirty
+                    && retain_facts.key_matches
+                    && !entry.component.memo_dependencies_match(&entry.memo_deps)
+                {
+                    dep_mismatch = entry.component.memo_dependency_mismatch(&entry.memo_deps);
+                }
+            }
             let can_retain = memo_key.is_some()
                 && entry.cached_element.is_some()
                 && !entry.self_dirty
@@ -558,7 +873,7 @@ impl ComponentRegistry {
                 && !self.refresh_retained_children(id, &mut cached, epoch, viewport)
             {
                 #[cfg(feature = "devtools")]
-                increment_memo_miss_counter();
+                record_memo_miss(MemoMissReason::RetainedChildRefreshFailed);
                 return self.render_component_instance(id, epoch, viewport);
             }
 
@@ -573,7 +888,7 @@ impl ComponentRegistry {
         }
 
         #[cfg(feature = "devtools")]
-        increment_memo_miss_counter();
+        record_memo_miss(classify_component_miss(retain_facts, dep_mismatch));
 
         self.render_component_instance(id, epoch, viewport)
     }
@@ -598,6 +913,13 @@ impl ComponentRegistry {
             .active_theme
             .clone()
             .unwrap_or_else(|| self.env.active_theme.borrow().clone());
+        #[cfg(feature = "profiling-tracing")]
+        let _refresh_span = {
+            let full_name = self.arena.get(id).full_name;
+            let scope = self.arena.get(id).scope.0;
+            tracing::trace_span!("component.refresh", component = full_name, scope = scope)
+                .entered()
+        };
         let expanded = self.expand_component_instance(id, self.epoch, viewport);
         let (splice_scope, expanded_for_splice) =
             self.propagate_cached_replacement_to_ancestors(id, &expanded);
@@ -623,13 +945,44 @@ impl ComponentRegistry {
             entry.component.begin_memo_dependency_capture();
             let memo_key = entry.component.memo_key();
             let (element, memo_deps) = if memo_key.is_some() {
+                #[cfg(feature = "devtools")]
+                let view_start = web_time::Instant::now();
+                #[cfg(feature = "profiling-tracing")]
+                let _view_span = tracing::trace_span!(
+                    "component.view",
+                    component = entry.full_name,
+                    scope = entry.scope.0
+                )
+                .entered();
                 let element = entry.component.view();
+                #[cfg(feature = "devtools")]
+                record_view_timing(
+                    entry.scope,
+                    Arc::clone(&entry.display_name),
+                    view_start.elapsed(),
+                );
                 let memo_deps = entry.component.finish_memo_dependency_capture();
                 (element, memo_deps)
             } else {
                 entry.component.finish_memo_dependency_capture();
+                #[cfg(feature = "devtools")]
+                let view_start = web_time::Instant::now();
+                #[cfg(feature = "profiling-tracing")]
+                let _view_span = tracing::trace_span!(
+                    "component.view",
+                    component = entry.full_name,
+                    scope = entry.scope.0
+                )
+                .entered();
+                let element = entry.component.view();
+                #[cfg(feature = "devtools")]
+                record_view_timing(
+                    entry.scope,
+                    Arc::clone(&entry.display_name),
+                    view_start.elapsed(),
+                );
                 (
-                    entry.component.view(),
+                    element,
                     crate::core::runtime_env::MemoDependencySnapshot::default(),
                 )
             };
@@ -1459,18 +1812,22 @@ impl ComponentRegistry {
                 };
                 path.push(seg);
 
-                let child = if let Some((mut expanded_child, needs_refresh)) =
-                    host.prev_memo(path, memo.call_site).and_then(|cached| {
-                        (cached.deps_hash == memo.deps_hash).then(|| {
-                            let expanded_child = cached.expanded_child.clone();
-                            let needs_refresh = cached
-                                .descendant_ids
-                                .iter()
-                                .copied()
-                                .any(|id| self.component_subtree_needs_refresh(id));
-                            (expanded_child, needs_refresh)
+                // Probe deps_hash without cloning; only deep-clone the cached
+                // subtree on a true hit (deps match).
+                let hit = host
+                    .prev_memo(path, memo.call_site)
+                    .is_some_and(|cached| cached.deps_hash == memo.deps_hash);
+                let child = if hit {
+                    let (mut expanded_child, descendant_ids) = host
+                        .prev_memo(path, memo.call_site)
+                        .map(|cached| {
+                            (cached.expanded_child.clone(), cached.descendant_ids.clone())
                         })
-                    }) {
+                        .expect("hit implies a previous memo entry");
+                    let needs_refresh = descendant_ids
+                        .iter()
+                        .copied()
+                        .any(|id| self.component_subtree_needs_refresh(id));
                     if needs_refresh {
                         let descendant_ids =
                             collect_component_ids_in_element(&expanded_child, &self.scope_to_id);
@@ -1486,6 +1843,8 @@ impl ComponentRegistry {
                             {
                                 continue;
                             } else {
+                                #[cfg(feature = "devtools")]
+                                record_memo_miss(MemoMissReason::ViewMemoStructureChanged);
                                 let rebuilt = (memo.builder)();
                                 let mut expanded = self.expand_children(
                                     host,
@@ -1514,8 +1873,21 @@ impl ComponentRegistry {
                             }
                         }
                     }
+                    #[cfg(feature = "devtools")]
+                    increment_memo_hit_counter();
                     expanded_child
+                } else if host.prev_memo(path, memo.call_site).is_some() {
+                    #[cfg(feature = "devtools")]
+                    record_memo_miss(MemoMissReason::ViewMemoDepsChanged);
+                    let rebuilt = (memo.builder)();
+                    let mut expanded =
+                        self.expand_children(host, parent, path, vec![rebuilt], epoch, viewport);
+                    expanded
+                        .pop()
+                        .unwrap_or_else(|| crate::widgets::Text::new("").into())
                 } else {
+                    #[cfg(feature = "devtools")]
+                    record_memo_miss(MemoMissReason::ViewMemoNoCache);
                     let rebuilt = (memo.builder)();
                     let mut expanded =
                         self.expand_children(host, parent, path, vec![rebuilt], epoch, viewport);
@@ -1762,7 +2134,9 @@ mod tests {
     use std::hash::{Hash, Hasher};
     use std::rc::Rc;
 
-    use super::{ComponentId, ComponentRegistry, ComponentRegistryConfig, HostState};
+    use super::{
+        ComponentId, ComponentRegistry, ComponentRegistryConfig, HostState, short_type_name,
+    };
     use crate::app::context::SurfaceMode;
     use crate::app::input::command_registry::CommandRegistry;
     use crate::callback::{Dispatcher, ScopeId};
@@ -1776,6 +2150,24 @@ mod tests {
 
     use crate::Memo;
     use crate::widgets::{ContextProvider, Text, ThemeProvider, VStack};
+
+    #[test]
+    fn short_type_name_strips_module_paths() {
+        assert_eq!(short_type_name("Panel"), "Panel");
+        assert_eq!(short_type_name("app::Panel"), "Panel");
+        assert_eq!(
+            short_type_name("app::Panel<alloc::string::String>"),
+            "Panel<String>"
+        );
+        assert_eq!(
+            short_type_name("a::b::Outer<a::c::Inner<alloc::vec::Vec<u8>>>"),
+            "Outer<Inner<Vec<u8>>>"
+        );
+        assert_eq!(short_type_name("(app::A, core::B)"), "(A, B)");
+        // Closures keep their opaque suffix; we only strip `::` segments.
+        let closure = short_type_name("app::foo::{{closure}}");
+        assert_eq!(closure, "{{closure}}");
+    }
 
     fn new_registry() -> ComponentRegistry {
         let dispatcher = Dispatcher::new(|_, _| {});
@@ -1892,6 +2284,159 @@ mod tests {
             .arena
             .iter_active()
             .find_map(|entry| (entry.key.as_ref() == Some(key)).then_some((entry.id, entry.scope)))
+    }
+
+    #[test]
+    fn display_name_for_scope_returns_trimmed_name_after_mount() {
+        let mut registry = new_registry();
+        let mut host = HostState::default();
+        let epoch = registry.begin_epoch();
+        let root: Element = VStack::new()
+            .child(crate::child::<Counter, _>(|| Counter, 1).key("named"))
+            .into();
+        let _ = registry.expand_in_host(&mut host, None, root, epoch, Rect::default());
+
+        let key: Key = "named".into();
+        let (id, scope) = find_component_by_key(&registry, &key).expect("mounted Counter");
+        let display = registry
+            .display_name_for_scope(scope)
+            .expect("display name");
+        assert_eq!(display.as_ref(), "Counter");
+        assert!(
+            registry
+                .full_name_for_id(id)
+                .expect("full name")
+                .ends_with("Counter")
+        );
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn take_memo_frame_stats_drops_not_memoized_before_truncate() {
+        use super::{
+            MemoMissReason, record_memo_miss, set_frame_diagnostics_enabled, take_memo_frame_stats,
+        };
+
+        let _ = take_memo_frame_stats();
+        set_frame_diagnostics_enabled(true);
+        record_memo_miss(MemoMissReason::NotMemoized);
+        record_memo_miss(MemoMissReason::NotMemoized);
+        record_memo_miss(MemoMissReason::SelfDirty);
+        record_memo_miss(MemoMissReason::KeyChanged);
+        set_frame_diagnostics_enabled(false);
+        let stats = take_memo_frame_stats();
+        assert_eq!(stats.misses, 4);
+        assert!(
+            !stats
+                .reasons
+                .iter()
+                .any(|(reason, _)| matches!(reason, MemoMissReason::NotMemoized))
+        );
+        assert_eq!(stats.reasons.len(), 2);
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn record_memo_miss_skips_reason_bookkeeping_when_diagnostics_disabled() {
+        use super::{
+            MemoMissReason, record_memo_miss, set_frame_diagnostics_enabled, take_memo_frame_stats,
+        };
+
+        let _ = take_memo_frame_stats();
+        set_frame_diagnostics_enabled(false);
+        record_memo_miss(MemoMissReason::SelfDirty);
+        record_memo_miss(MemoMissReason::KeyChanged);
+        let stats = take_memo_frame_stats();
+        assert_eq!(stats.misses, 2);
+        assert!(stats.reasons.is_empty());
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn classify_component_miss_orders_reasons() {
+        use super::{MemoDependencyKind, MemoMissReason, MemoRetainFacts, classify_component_miss};
+
+        let base = MemoRetainFacts {
+            has_key: true,
+            has_cache: true,
+            self_dirty: false,
+            key_matches: true,
+        };
+        assert_eq!(
+            classify_component_miss(
+                MemoRetainFacts {
+                    has_key: false,
+                    ..base
+                },
+                None
+            ),
+            MemoMissReason::NotMemoized
+        );
+        assert_eq!(
+            classify_component_miss(
+                MemoRetainFacts {
+                    has_cache: false,
+                    ..base
+                },
+                None
+            ),
+            MemoMissReason::NoCache
+        );
+        assert_eq!(
+            classify_component_miss(
+                MemoRetainFacts {
+                    self_dirty: true,
+                    ..base
+                },
+                None
+            ),
+            MemoMissReason::SelfDirty
+        );
+        assert_eq!(
+            classify_component_miss(
+                MemoRetainFacts {
+                    key_matches: false,
+                    ..base
+                },
+                None
+            ),
+            MemoMissReason::KeyChanged
+        );
+        assert_eq!(
+            classify_component_miss(base, Some(MemoDependencyKind::Focus)),
+            MemoMissReason::DependencyChanged(MemoDependencyKind::Focus)
+        );
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn aggregate_view_timings_sums_per_scope_and_keeps_top_n() {
+        use super::{ViewTimingSample, aggregate_view_timings};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let samples = vec![
+            ViewTimingSample {
+                scope: ScopeId(2),
+                name: Arc::from("A"),
+                duration: Duration::from_micros(100),
+            },
+            ViewTimingSample {
+                scope: ScopeId(2),
+                name: Arc::from("A"),
+                duration: Duration::from_micros(50),
+            },
+            ViewTimingSample {
+                scope: ScopeId(3),
+                name: Arc::from("B"),
+                duration: Duration::from_micros(80),
+            },
+        ];
+        let top = aggregate_view_timings(samples, 1);
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].name.as_ref(), "A");
+        assert_eq!(top[0].calls, 2);
+        assert_eq!(top[0].duration, Duration::from_micros(150));
     }
 
     #[test]
@@ -3084,7 +3629,7 @@ mod tests {
         let mut host = HostState::default();
         let view_count = Rc::new(Cell::new(0));
 
-        let _ = super::take_memo_counters();
+        let _ = super::take_memo_frame_stats();
 
         let epoch1 = registry.begin_epoch();
         let root1: Element = crate::child(
@@ -3114,10 +3659,11 @@ mod tests {
         registry.expand_in_host(&mut host, None, root2, epoch2, Rect::default());
         registry.sweep(epoch2);
 
-        let (hits, misses) = super::take_memo_counters();
-        assert_eq!(hits, 1);
-        assert_eq!(misses, 1);
-        assert_eq!(super::take_memo_counters(), (0, 0));
+        let stats = super::take_memo_frame_stats();
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 1);
+        let cleared = super::take_memo_frame_stats();
+        assert_eq!((cleared.hits, cleared.misses), (0, 0));
     }
 
     #[cfg(feature = "devtools")]
@@ -3127,7 +3673,7 @@ mod tests {
         let mut host = HostState::default();
         let view_count = Rc::new(Cell::new(0));
 
-        let _ = super::take_memo_counters();
+        let _ = super::take_memo_frame_stats();
 
         let epoch1 = registry.begin_epoch();
         let root1: Element = crate::child(
@@ -3157,9 +3703,9 @@ mod tests {
         registry.expand_in_host(&mut host, None, root2, epoch2, Rect::default());
         registry.sweep(epoch2);
 
-        let (hits, misses) = super::take_memo_counters();
-        assert_eq!(hits, 0);
-        assert_eq!(misses, 2);
+        let stats = super::take_memo_frame_stats();
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.misses, 2);
     }
 
     #[test]

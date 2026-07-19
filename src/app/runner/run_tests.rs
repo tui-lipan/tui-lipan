@@ -2681,8 +2681,8 @@ fn devtools_stats_panel_uses_compact_default_size() {
         .expect("devtools panel node should exist");
 
     assert_eq!(panel_node.rect.w, 40);
-    assert_eq!(panel_node.rect.h, 12);
-    assert_eq!(panel_node.rect.y, 68); // anchored to bottom
+    assert_eq!(panel_node.rect.h, 19);
+    assert_eq!(panel_node.rect.y, 61); // anchored to bottom
 }
 
 #[cfg(feature = "devtools")]
@@ -2900,6 +2900,94 @@ fn devtools_catch_up_frame_records_no_metrics_and_terminates() {
     assert!(
         !runner.devtools_refresh_pending,
         "catch-up frame must not re-arm the refresh (no infinite loop)"
+    );
+}
+
+#[cfg(feature = "devtools")]
+#[test]
+fn attribution_records_component_full_update() {
+    use super::render_service::DrawMode;
+    use crate::devtools::state::UpdateSource;
+
+    #[derive(Clone)]
+    enum Msg {
+        Bump,
+    }
+
+    struct AttributionFullProbe;
+
+    impl Component for AttributionFullProbe {
+        type Message = Msg;
+        type Properties = ();
+        type State = u32;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            0
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                Msg::Bump => {
+                    ctx.state = ctx.state.wrapping_add(1);
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> crate::core::element::Element {
+            Text::new(format!("count={}", ctx.state)).into()
+        }
+    }
+
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 10,
+    };
+    let mut runner = AppRunner::new(
+        App::new().mouse(false).devtools_config(DevToolsConfig {
+            logs: false,
+            metrics: true,
+            show_framework_logs: false,
+        }),
+        AttributionFullProbe,
+        (),
+    );
+    init_runner(&mut runner, AttributionFullProbe, viewport);
+    runner.devtools_state.borrow_mut().set_visible(true);
+
+    runner
+        .core
+        .queue
+        .borrow_mut()
+        .push_back((ScopeId(1), Box::new(Msg::Bump)));
+
+    let mut dirty = DirtyTracker::default();
+    runner
+        .process_pending_messages(&mut dirty)
+        .expect("full update message should process");
+    assert_eq!(dirty.level(), DirtyLevel::Full);
+
+    let dur = Duration::from_millis(1);
+    runner.record_devtools_frame_metrics(DrawMode::Full, dur, dur, dur);
+
+    let frame = runner
+        .devtools_state
+        .borrow()
+        .latest_frame()
+        .cloned()
+        .expect("frame metrics should be recorded");
+    assert!(
+        frame.attributions.iter().any(|entry| {
+            matches!(
+                &entry.source,
+                UpdateSource::Component { name, .. } if name.as_ref() == "AttributionFullProbe"
+            ) && entry.level == DirtyLevel::Full
+                && entry.count >= 1
+        }),
+        "expected AttributionFullProbe Full attribution, got {:?}",
+        frame.attributions
     );
 }
 

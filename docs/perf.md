@@ -83,16 +83,57 @@ reconciliation identity. A stable key is important for dynamic rows, focus, and
 reorders, but does not enable memoization by itself. See
 [Retained subtree reuse](components.md#retained-subtree-reuse).
 
+## View timings and tracing
+
+With `devtools` metrics visible, exclusive (self) `view()` time is sampled per
+component and summed across stability passes. The overlay lists the slowest
+views. With `profiling-tracing`, spans `component.view` / `component.refresh`
+carry `component` and `scope` fields; `app.render_full` includes `root`.
+
+## Input pressure
+
+When many recent Full frames are both driven by input attributions and exceed
+~16ms, the panel shows `Input pressure: N/60 full frames over budget`. Prefer
+Layout/Paint updates from handlers, memoized subtrees, and `_arc` props — the
+signal is informational only (no log spam).
+
+## Memo miss reasons
+
+With the `devtools` feature enabled, the stats panel shows why memoization
+missed when `memo_misses > 0`. Reason bookkeeping (and the extra dependency
+probe behind it) only runs while the panel is visible with `metrics: true`, so
+shipping with `devtools` compiled in adds nothing beyond the plain hit/miss
+counters until the panel is opened. Component retains report `no-cache`,
+`key`, `dirty`, `dep:*` (theme/focus/hover/scroll/viewport/context/…), or
+`child-refresh` (`no-memo` still counts toward the miss total but is dropped
+before the top-4 reason ranking so the Miss line keeps four actionable slots).
+In-view `Memo` nodes report `view-cache`, `view-deps`, or
+`view-structure`, and now count toward the hit rate.
+
 ## Keep props cheap and stable
 
 Large immutable render inputs should be shared rather than cloned or deeply
 compared on every streamed update:
 
-- Store reused strings and collections in `Arc`, and use widget bulk setters
-  such as `items_arc(...)` or `entries_arc(...)` where available.
+- Collection widgets expose paired `x(impl IntoIterator)` + `x_arc(Arc<[T]>)`
+  setters and store collections as `Arc<[T]>` (for example `List::items_arc`,
+  `Table::rows_arc`, `Tabs::tabs_arc`, `Chart::series_arc` /
+  `ChartSeries::data_arc`, `Sparkline::data_arc`, `MultiSelect::items_arc`,
+  `SearchPalette::items_arc` / `entries_arc`, `LogView::entries_arc`). Prefer
+  holding the `Arc` in component state and passing it through `_arc` when the
+  collection is unchanged between frames.
+- Tiny label collections (`Radio`, `Breadcrumb`, `ComboBox`), recursive trees
+  (`Tree` children), filesystem-sourced `FileTree`, and text-content widgets
+  (`DiffView`, `DocumentView`) intentionally skip the convention — the clone
+  win is negligible or a shared top slice would still deep-clone on child edit.
 - Put an `Arc::ptr_eq` fast path first in hand-written prop equality, followed by
   an allocation-free structural comparison when different allocations can still
   represent equal content.
+- Do not rely on pointer-keyed layout-hash memoization of `Arc` collections:
+  naive `as_ptr` hashing risks spurious relayouts when equal content lives in a
+  new allocation. Content hashing remains the layout-hash contract; `_arc`
+  setters are caller-side clone avoidance only. Pointer-keyed layout memoization
+  remains future work if a safe epoch or generation scheme is designed.
 - Use an explicit content epoch when identity fields do not capture in-place
   content changes.
 - Make hand-written `PartialEq` implementations exhaustive so adding a prop
@@ -170,6 +211,15 @@ While the panel is visible, inspect frame, reconcile, and draw time; node and
 overlay counts; memo hits and misses; and the current dirty level. The overlay
 and sampling slightly perturb the workload, so use tracing or a benchmark for
 final comparisons.
+
+### Update attribution
+
+With `metrics: true` and the panel visible, each recorded frame also lists which
+component or input path requested the dirty level (for example
+`full: MySidebar x3, input:drag x12`). Sources coalesce while the runner skips
+deferred-full iterations: attributions accumulate until the next recorded frame,
+then sort by dirty level and count (capped for the overlay). Animation ticks,
+resize, and other framework-internal dirty marks are not attributed.
 
 For runtime spans and timing events, enable instrumentation and install a
 subscriber in the app binary:

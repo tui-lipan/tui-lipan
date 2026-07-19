@@ -382,8 +382,8 @@ You can also mark rows active with `.active(true)` on `SearchItem` or `SearchEnt
 
 | Prop | Type | Description |
 |------|------|-------------|
-| `items` | `impl IntoIterator<Item = SearchItem<T>>` | Flat searchable items (clears entries) |
-| `entries` | `impl IntoIterator<Item = SearchEntry<T>>` | Grouped entries via item/header/spacer rows |
+| `items` | `impl IntoIterator<Item = SearchItem<T>>` / `items_arc` | Flat searchable items (clears entries; prefer `items_arc` when sharing) |
+| `entries` | `impl IntoIterator<Item = SearchEntry<T>>` / `entries_arc` | Grouped entries via item/header/spacer rows (prefer `entries_arc` when sharing) |
 | `sync_match_limit` | `usize` | Max item count that still matches synchronously (default: `100`) |
 | `sync_selection` | `bool` | Keep `on_select` synced with the current visible row |
 | `initial_query` | `impl Into<Arc<str>>` | Pre-populate search field |

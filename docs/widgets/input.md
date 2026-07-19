@@ -1030,7 +1030,7 @@ Controlled list for selecting multiple items with `Space` toggle and `Enter` com
 
 | Prop | Type | Description |
 |------|------|-------------|
-| `items` | `impl Iterator<Item = impl Into<MultiSelectItem>>` | Source rows |
+| `items` | `Arc<[MultiSelectItem]>` / `items_arc` | Source rows (`items(...)` collects into `Arc`; prefer `items_arc` when sharing) |
 | `active_index` | `usize` | Active source index |
 | `selected_indices` | `Vec<usize>` | Controlled selected source indices |
 | `max_selected` | `usize` | Optional maximum selected rows |

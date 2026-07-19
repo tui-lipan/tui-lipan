@@ -403,6 +403,12 @@ pub struct AppRunner<C: Component> {
     /// recording so the refresh does not feed back into `devtools_refresh_pending`.
     #[cfg(feature = "devtools")]
     devtools_metrics_suppressed: bool,
+    /// Pending update attributions coalesced until the next recorded metrics frame.
+    #[cfg(feature = "devtools")]
+    pending_attributions: Vec<crate::devtools::state::UpdateAttribution>,
+    /// Lazy cache of the root component's short display name for attribution.
+    #[cfg(feature = "devtools")]
+    root_component_display_name: Option<Arc<str>>,
     pub(crate) exit_view_fn: Option<Box<ExitViewFn<C>>>,
     #[cfg(debug_assertions)]
     debug_paint_claim_root: bool,
@@ -630,6 +636,10 @@ impl<C: Component> AppRunner<C> {
             devtools_refresh_pending: false,
             #[cfg(feature = "devtools")]
             devtools_metrics_suppressed: false,
+            #[cfg(feature = "devtools")]
+            pending_attributions: Vec::new(),
+            #[cfg(feature = "devtools")]
+            root_component_display_name: None,
             exit_view_fn: None,
             #[cfg(debug_assertions)]
             debug_paint_claim_root: false,
@@ -843,6 +853,42 @@ impl<C: Component> AppRunner<C> {
             state.sync_logs();
         }
         true
+    }
+
+    #[cfg(feature = "devtools")]
+    fn note_attribution(
+        &mut self,
+        source: crate::devtools::state::UpdateSource,
+        level: DirtyLevel,
+    ) {
+        if matches!(level, DirtyLevel::None) {
+            return;
+        }
+        if !self.devtools_config.metrics {
+            return;
+        }
+        if !self.devtools_state.borrow().visible {
+            return;
+        }
+        if self.devtools_metrics_suppressed {
+            return;
+        }
+        crate::devtools::state::note_update_attribution(
+            &mut self.pending_attributions,
+            source,
+            level,
+        );
+    }
+
+    #[cfg(feature = "devtools")]
+    fn apply_input_dirty(
+        &mut self,
+        dirty: &mut DirtyTracker,
+        level: DirtyLevel,
+        label: &'static str,
+    ) {
+        apply_dirty_level(dirty, level);
+        self.note_attribution(crate::devtools::state::UpdateSource::Input(label), level);
     }
 
     #[cfg(feature = "devtools")]
@@ -1225,10 +1271,27 @@ impl<C: Component> AppRunner<C> {
                                     self.core.ctx.quit();
                                     dirty.mark_full();
                                 } else if let Some(level) = key_result.dirty_override {
+                                    #[cfg(feature = "devtools")]
+                                    self.apply_input_dirty(&mut dirty, level, "input:key");
+                                    #[cfg(not(feature = "devtools"))]
                                     apply_dirty_level(&mut dirty, level);
                                 } else if key_result.mark_full {
+                                    #[cfg(feature = "devtools")]
+                                    self.apply_input_dirty(
+                                        &mut dirty,
+                                        DirtyLevel::Full,
+                                        "input:key",
+                                    );
+                                    #[cfg(not(feature = "devtools"))]
                                     dirty.mark_full();
                                 } else if key_result.mark_layout {
+                                    #[cfg(feature = "devtools")]
+                                    self.apply_input_dirty(
+                                        &mut dirty,
+                                        DirtyLevel::LayoutOnly,
+                                        "input:key",
+                                    );
+                                    #[cfg(not(feature = "devtools"))]
                                     dirty.mark_layout();
                                 }
 
@@ -1285,28 +1348,30 @@ impl<C: Component> AppRunner<C> {
                                     // terminal PTY applications that have mouse mode enabled.
                                     let drag_before = effective_active_drag_dirty_level(&self.drag);
                                     if self.dispatch_mouse(mouse) {
-                                        apply_dirty_level(
-                                            &mut dirty,
-                                            mouse_dispatch_dirty_level(
-                                                mouse.kind,
-                                                drag_before,
-                                                effective_active_drag_dirty_level(&self.drag),
-                                            ),
+                                        let level = mouse_dispatch_dirty_level(
+                                            mouse.kind,
+                                            drag_before,
+                                            effective_active_drag_dirty_level(&self.drag),
                                         );
+                                        #[cfg(feature = "devtools")]
+                                        self.apply_input_dirty(&mut dirty, level, "input:drag");
+                                        #[cfg(not(feature = "devtools"))]
+                                        apply_dirty_level(&mut dirty, level);
                                     }
 
                                     if let Some(non_drag) = pending_non_drag {
                                         let drag_before =
                                             effective_active_drag_dirty_level(&self.drag);
                                         if self.dispatch_mouse(non_drag) {
-                                            apply_dirty_level(
-                                                &mut dirty,
-                                                mouse_dispatch_dirty_level(
-                                                    non_drag.kind,
-                                                    drag_before,
-                                                    effective_active_drag_dirty_level(&self.drag),
-                                                ),
+                                            let level = mouse_dispatch_dirty_level(
+                                                non_drag.kind,
+                                                drag_before,
+                                                effective_active_drag_dirty_level(&self.drag),
                                             );
+                                            #[cfg(feature = "devtools")]
+                                            self.apply_input_dirty(&mut dirty, level, "input:drag");
+                                            #[cfg(not(feature = "devtools"))]
+                                            apply_dirty_level(&mut dirty, level);
                                         }
                                     }
                                     handled = true;
@@ -1333,16 +1398,21 @@ impl<C: Component> AppRunner<C> {
                                                             &self.drag.active,
                                                         );
                                                         if self.dispatch_mouse(next_mouse) {
-                                                            apply_dirty_level(
-                                                                &mut dirty,
-                                                                mouse_dispatch_dirty_level(
-                                                                    next_mouse.kind,
-                                                                    drag_before,
-                                                                    active_drag_dirty_level(
-                                                                        &self.drag.active,
-                                                                    ),
+                                                            let level = mouse_dispatch_dirty_level(
+                                                                next_mouse.kind,
+                                                                drag_before,
+                                                                active_drag_dirty_level(
+                                                                    &self.drag.active,
                                                                 ),
                                                             );
+                                                            #[cfg(feature = "devtools")]
+                                                            self.apply_input_dirty(
+                                                                &mut dirty,
+                                                                level,
+                                                                "input:mouse",
+                                                            );
+                                                            #[cfg(not(feature = "devtools"))]
+                                                            apply_dirty_level(&mut dirty, level);
                                                         }
                                                         break;
                                                     }
@@ -1392,8 +1462,22 @@ impl<C: Component> AppRunner<C> {
                                                             // visible children are laid out, but skip
                                                             // the expensive view() rebuild.
                                                             dirty.mark_layout();
+                                                            #[cfg(feature = "devtools")]
+                                                            self.note_attribution(
+                                                                crate::devtools::state::UpdateSource::Input(
+                                                                    "input:scroll",
+                                                                ),
+                                                                DirtyLevel::LayoutOnly,
+                                                            );
                                                         }
                                                         if self.dispatch_mouse(next_mouse) {
+                                                            #[cfg(feature = "devtools")]
+                                                            self.apply_input_dirty(
+                                                                &mut dirty,
+                                                                DirtyLevel::Full,
+                                                                "input:mouse",
+                                                            );
+                                                            #[cfg(not(feature = "devtools"))]
                                                             dirty.mark_full();
                                                         }
                                                         count = 0; // Already dispatched
@@ -1411,19 +1495,31 @@ impl<C: Component> AppRunner<C> {
                                             // visible children are laid out, but skip
                                             // the expensive view() rebuild.
                                             dirty.mark_layout();
+                                            #[cfg(feature = "devtools")]
+                                            self.note_attribution(
+                                                crate::devtools::state::UpdateSource::Input(
+                                                    "input:scroll",
+                                                ),
+                                                DirtyLevel::LayoutOnly,
+                                            );
                                         }
                                     } else {
                                         let drag_before =
                                             effective_active_drag_dirty_level(&self.drag);
                                         if self.dispatch_mouse(mouse) {
-                                            apply_dirty_level(
-                                                &mut dirty,
-                                                mouse_dispatch_dirty_level(
-                                                    mouse.kind,
-                                                    drag_before,
-                                                    effective_active_drag_dirty_level(&self.drag),
-                                                ),
+                                            let level = mouse_dispatch_dirty_level(
+                                                mouse.kind,
+                                                drag_before,
+                                                effective_active_drag_dirty_level(&self.drag),
                                             );
+                                            #[cfg(feature = "devtools")]
+                                            self.apply_input_dirty(
+                                                &mut dirty,
+                                                level,
+                                                "input:mouse",
+                                            );
+                                            #[cfg(not(feature = "devtools"))]
+                                            apply_dirty_level(&mut dirty, level);
                                         }
                                     }
                                 }

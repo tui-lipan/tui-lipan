@@ -465,7 +465,10 @@ impl<C: Component> AppRunner<C> {
         terminal: &mut crate::backend::ratatui_backend::Terminal,
     ) -> Result<()> {
         #[cfg(feature = "profiling-tracing")]
-        let _render_span = trace_span!("app.render_full").entered();
+        let _render_span = {
+            let root = self.core.root_component_name();
+            trace_span!("app.render_full", root = root).entered()
+        };
 
         #[cfg(feature = "devtools")]
         let total_start = Instant::now();
@@ -480,6 +483,14 @@ impl<C: Component> AppRunner<C> {
 
         #[cfg(feature = "devtools")]
         self.install_devtools_overlay();
+
+        #[cfg(feature = "devtools")]
+        {
+            let enabled = self.devtools_config.metrics
+                && self.devtools_state.borrow().visible
+                && !self.devtools_metrics_suppressed;
+            crate::core::nested::set_frame_diagnostics_enabled(enabled);
+        }
 
         #[cfg(feature = "devtools")]
         let reconcile_start = Instant::now();
@@ -545,6 +556,14 @@ impl<C: Component> AppRunner<C> {
 
         #[cfg(feature = "devtools")]
         self.install_devtools_overlay();
+
+        #[cfg(feature = "devtools")]
+        {
+            let enabled = self.devtools_config.metrics
+                && self.devtools_state.borrow().visible
+                && !self.devtools_metrics_suppressed;
+            crate::core::nested::set_frame_diagnostics_enabled(enabled);
+        }
 
         if !self.dirty_component_scopes.is_empty()
             && !self
@@ -1966,6 +1985,10 @@ mod tests {
                 overlay_count: 0,
                 memo_hits: 0,
                 memo_misses: 0,
+                memo_miss_reasons: Vec::new(),
+                attributions: Vec::new(),
+                component_timings: Vec::new(),
+                input_sourced_full: false,
             });
         let baseline = runner.devtools_state.borrow().frame_history.len();
 

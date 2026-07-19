@@ -431,7 +431,7 @@ Minimal inline chart for time-series data.
 
 | Prop | Type | Description |
 |------|------|-------------|
-| `data` | `Vec<u64>` | **Constructor** - data points |
+| `data` | `Arc<[u64]>` / `data_arc` | **Constructor** - data points (`data(...)` collects into `Arc`; prefer `data_arc` when sharing) |
 | `variant` | `SparklineVariant` | `Bars` (default), `Braille`, `Line` |
 | `min` | `Option<u64>` | Data minimum (auto if None) |
 | `max` | `Option<u64>` | Data maximum (auto if None) |
@@ -470,7 +470,7 @@ Multi-series chart with axes, legend, thresholds, and viewport windowing.
 
 | Prop | Type | Description |
 |------|------|-------------|
-| `series` | `Vec<ChartSeries>` | Data series |
+| `series` | `Arc<[ChartSeries]>` / `series_arc` | Data series (`series(...)` collects into `Arc`; prefer `series_arc` when sharing) |
 | `x_axis` | `ChartAxis` | X axis configuration |
 | `y_axis` | `ChartAxis` | Y axis configuration |
 | `thresholds` | `Vec<ChartThreshold>` | Horizontal threshold lines |

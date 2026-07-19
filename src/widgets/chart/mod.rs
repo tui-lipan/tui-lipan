@@ -49,6 +49,12 @@ impl ChartSeries {
         }
     }
 
+    /// Set series data from a shared slice.
+    pub fn data_arc(mut self, data: Arc<[f64]>) -> Self {
+        self.data = data;
+        self
+    }
+
     /// Set series rendering mode.
     pub fn mode(mut self, mode: ChartSeriesMode) -> Self {
         self.mode = mode;
@@ -249,6 +255,12 @@ impl Chart {
         self
     }
 
+    /// Set series from a shared slice.
+    pub fn series_arc(mut self, series: Arc<[ChartSeries]>) -> Self {
+        self.series = series;
+        self
+    }
+
     /// Add one chart series.
     pub fn add_series(mut self, series: ChartSeries) -> Self {
         let mut next = self.series.to_vec();
@@ -363,5 +375,25 @@ impl Chart {
 impl From<Chart> for Element {
     fn from(value: Chart) -> Self {
         Element::new(ElementKind::Chart(Box::new(value)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn series_arc_preserves_shared_slice() {
+        let series: Arc<[ChartSeries]> = Arc::from([ChartSeries::new("cpu", [1.0, 2.0, 3.0])]);
+        let chart = Chart::new().series_arc(Arc::clone(&series));
+        assert!(Arc::ptr_eq(&chart.series, &series));
+    }
+
+    #[test]
+    fn chart_series_data_arc_preserves_shared_slice() {
+        let data: Arc<[f64]> = Arc::from([1.0, 2.0, 3.0]);
+        let series = ChartSeries::new("cpu", []).data_arc(Arc::clone(&data));
+        assert!(Arc::ptr_eq(&series.data, &data));
     }
 }

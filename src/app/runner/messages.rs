@@ -46,6 +46,41 @@ impl<C: Component> AppRunner<C> {
                     dirty.mark_full();
                 }
             }
+
+            #[cfg(feature = "devtools")]
+            if !matches!(update_level, UpdateLevel::None)
+                && self.devtools_config.metrics
+                && self.devtools_state.borrow().visible
+                && !self.devtools_metrics_suppressed
+            {
+                let level = match update_level {
+                    UpdateLevel::Paint => super::DirtyLevel::PaintOnly,
+                    UpdateLevel::Layout => super::DirtyLevel::LayoutOnly,
+                    UpdateLevel::Full => super::DirtyLevel::Full,
+                    UpdateLevel::None => unreachable!(),
+                };
+                let name = if scope == ScopeId(1) {
+                    self.root_component_display_name
+                        .get_or_insert_with(|| {
+                            std::sync::Arc::from(
+                                crate::core::nested::short_type_name(
+                                    self.core.root_component_name(),
+                                )
+                                .as_str(),
+                            )
+                        })
+                        .clone()
+                } else {
+                    self.core
+                        .components
+                        .display_name_for_scope(scope)
+                        .unwrap_or_else(|| std::sync::Arc::from("?"))
+                };
+                self.note_attribution(
+                    crate::devtools::state::UpdateSource::Component { scope, name },
+                    level,
+                );
+            }
         }
         Ok(())
     }

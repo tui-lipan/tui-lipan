@@ -20,6 +20,8 @@ pub(crate) struct ComponentMount {
 
 /// A mounted, type-erased component instance.
 pub(crate) trait ErasedComponent {
+    /// Stable type name for diagnostics (`std::any::type_name`).
+    fn component_name(&self) -> &'static str;
     /// Returns `true` if the given props are equal to the current props,
     /// without cloning.
     fn props_equal(&self, props: &AnyProps) -> bool;
@@ -35,6 +37,11 @@ pub(crate) trait ErasedComponent {
     fn begin_memo_dependency_capture(&self);
     fn finish_memo_dependency_capture(&self) -> MemoDependencySnapshot;
     fn memo_dependencies_match(&self, snapshot: &MemoDependencySnapshot) -> bool;
+    #[cfg(feature = "devtools")]
+    fn memo_dependency_mismatch(
+        &self,
+        snapshot: &MemoDependencySnapshot,
+    ) -> Option<crate::core::nested::MemoDependencyKind>;
     fn init(&mut self) -> Option<Command>;
     fn view(&self) -> Element;
     fn update(&mut self, msg: Box<dyn Any>) -> crate::Result<Update>;
@@ -51,6 +58,10 @@ pub(crate) struct Mounted<C: Component> {
 }
 
 impl<C: Component> ErasedComponent for Mounted<C> {
+    fn component_name(&self) -> &'static str {
+        std::any::type_name::<C>()
+    }
+
     fn props_equal(&self, props: &AnyProps) -> bool {
         props
             .downcast_ref::<C::Properties>()
@@ -102,6 +113,14 @@ impl<C: Component> ErasedComponent for Mounted<C> {
         self.ctx.memo_dependencies_match(snapshot)
     }
 
+    #[cfg(feature = "devtools")]
+    fn memo_dependency_mismatch(
+        &self,
+        snapshot: &MemoDependencySnapshot,
+    ) -> Option<crate::core::nested::MemoDependencyKind> {
+        self.ctx.memo_dependency_mismatch(snapshot)
+    }
+
     fn init(&mut self) -> Option<Command> {
         self.component.init(&mut self.ctx)
     }
@@ -136,6 +155,10 @@ impl<C: Component> ErasedComponent for Mounted<C> {
 pub(crate) struct EmptyComponent;
 
 impl ErasedComponent for EmptyComponent {
+    fn component_name(&self) -> &'static str {
+        "<mount-failed>"
+    }
+
     fn props_equal(&self, _props: &AnyProps) -> bool {
         true
     }
@@ -167,6 +190,14 @@ impl ErasedComponent for EmptyComponent {
 
     fn memo_dependencies_match(&self, _snapshot: &MemoDependencySnapshot) -> bool {
         true
+    }
+
+    #[cfg(feature = "devtools")]
+    fn memo_dependency_mismatch(
+        &self,
+        _snapshot: &MemoDependencySnapshot,
+    ) -> Option<crate::core::nested::MemoDependencyKind> {
+        None
     }
 
     fn init(&mut self) -> Option<Command> {

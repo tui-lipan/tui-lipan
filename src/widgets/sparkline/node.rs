@@ -73,7 +73,7 @@ impl SparklineWidgetKey {
 
 #[derive(Clone)]
 pub struct SparklineNode {
-    pub data: Vec<u64>,
+    pub data: Arc<[u64]>,
     pub min: Option<u64>,
     pub max: Option<u64>,
     pub bars: Vec<char>,
@@ -111,7 +111,7 @@ pub(crate) struct SparklineRenderOutput {
 impl Default for SparklineNode {
     fn default() -> Self {
         Self {
-            data: Vec::new(),
+            data: Arc::from([]),
             min: None,
             max: None,
             bars: Vec::new(),
