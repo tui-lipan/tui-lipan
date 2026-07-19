@@ -392,6 +392,7 @@ is shipped in this repository:
 | [`docs/text-editing.md`](docs/text-editing.md) | `TextEditor`, `TextInput`, undo/redo, widget integration |
 | [`docs/events.md`](docs/events.md) | Event/callback types for all widgets |
 | [`docs/enums.md`](docs/enums.md) | Enum & type reference (all variants with defaults) |
+| [`docs/perf.md`](docs/perf.md) | App performance, DevTools, tracing, and benchmarks |
 | [`docs/styling.md`](docs/styling.md) | Style, Color, themes, contrast |
 | [`docs/web-backend.md`](docs/web-backend.md) | Browser/WASM backend |
 | [`docs/focus.md`](docs/focus.md) | Focus system, key bubbling |

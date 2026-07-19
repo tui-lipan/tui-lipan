@@ -243,6 +243,7 @@ The docs are split into focused files. **Update the right file.**
 | `ui!` / `rsx!` macros / constructor keys | `docs/macros.md` |
 | Inline viewport mode | `docs/inline-mode.md` |
 | New pattern or anti-pattern | `docs/patterns.md` |
+| Application performance guidance | `docs/perf.md` |
 | Runtime architecture or module-level design | `docs/DESIGN.md` |
 | Adding a new widget (contributor) | `docs/widget-authoring.md` (checklist + wiring guide) |
 
@@ -256,7 +257,7 @@ docs/components.md        Component lifecycle, update(), commands, async
 docs/text-editing.md      TextEditor, TextInput, undo/redo, widget integration
 docs/events.md            Event/callback types for all widgets (payload structs)
 docs/enums.md             Enum & type reference (all variants with defaults)
-docs/perf.md              Performance benchmarking and runtime profiling
+docs/perf.md              App performance, update scope, DevTools, tracing, benchmarks
 docs/styling.md           Style, Color, Length, Padding, themes, contrast
 docs/web-backend.md       Browser/WASM backend
 docs/focus.md             Focus traversal, programmatic focus, key bubbling

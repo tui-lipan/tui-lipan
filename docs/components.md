@@ -53,12 +53,16 @@ User Action → Event → Message → update() → State Change → Re-render
 | `Update::layout_with_command(cmd)` | Same component-scoped refresh while also starting background work |
 | `Update::full()` | Rebuild from the root because state affects other scopes or global composition |
 | `Update::with_command(cmd)` | Same root-wide refresh while also starting background work |
+| `Update::command_only(cmd)` | Start background work without marking a component dirty |
 
 High-frequency widget callbacks such as `ScrollView::on_viewport_change`,
 `on_scroll`, drag updates, and cursor/selection sync should usually return
 `Update::none()` when they only store the reported offset or selection in parent
 state. Returning `Update::full()` from those paths can rebuild large trees on
 every wheel tick or drag frame.
+
+See [Performance](perf.md) for production patterns around update scope,
+scrolling, memoization, and bounded work.
 
 ```rust
 fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
@@ -227,7 +231,7 @@ match msg {
             let results = filter_items(&q);
             let _ = link.send_if_not_cancelled(Msg::FilterDone(results));
         });
-        Update { dirty: false, command: Some(cmd) }
+        Update::command_only(cmd)
     }
 }
 ```

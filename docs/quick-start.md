@@ -94,6 +94,8 @@ tui-lipan = { version = "*", features = ["markdown", "profiling-tracing"] }
 Then install any standard `tracing` subscriber in your app binary (for example
 `tracing-subscriber`, `tracing-tracy`, or OpenTelemetry exporters). tui-lipan emits
 spans/events for frame loop, draw, and `DocumentView` formatting/reconcile hot paths.
+See [Performance](perf.md) for update-scope guidance, DevTools diagnostics, and
+repeatable benchmarks.
 
 To **disable** clipboard (e.g. for minimal no-system-dep builds):
 
@@ -157,7 +159,7 @@ Subsystem cost — what each toggle controls:
 | Subsystem | When `true` (default)                                                                                        | When to turn off                                                                |
 | --------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
 | `logs`    | Every `debug_log!` allocates a `String` and pushes a `DevLogEntry` onto a bounded ring buffer (small).       | Hot loops calling `debug_log!` thousands of times per frame, or to drop the formatting cost when the panel is never opened. |
-| `metrics` | Per-frame timing samples + node-tree size snapshot collected on every render; small fixed-size ring buffer.  | Profiling renders against a `release` build where you don't want sampling overhead, or shipping a build with the feature compiled in but the panel unused. |
+| `metrics` | Per-frame timing samples + node-tree size snapshot collected while the DevTools panel is visible; small fixed-size ring buffer. | Profiling renders against a `release` build where you don't want sampling overhead. |
 
 Note: `debug_log!` works in `--release` builds when the `devtools` feature is enabled — there is no `debug_assertions` gate. Lines are emitted to the panel regardless of profile, so guard hot paths yourself if you need zero overhead in release.
 

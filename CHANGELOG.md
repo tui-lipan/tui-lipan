@@ -13,6 +13,9 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Documented production performance patterns for update scope, widget-owned
+  scrolling, subtree memoization, stable shared props, bounded rendering, and
+  coalesced background work, distilled from opencode-tui.
 - Added plain-text export over absolute terminal line ranges: `TerminalScreen::total_text_lines`,
   `text_lines`, `export_text`, `absolute_line_to_viewport`, and `absolute_line_to_offset`.
   Absolute indices count from the oldest retained history line and never mutate the display

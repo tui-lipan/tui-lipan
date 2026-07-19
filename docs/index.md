@@ -15,6 +15,8 @@ and is rebuilt on every push to `main`. If a page looks out of date, click the
   application end-to-end.
 - **Building a large app?** See [Large app shells](large-app-shells.md) -
   structure and diagnostics for multi-pane, root-routed apps.
+- **App feels slow?** See [Performance](./perf.md) for update granularity,
+  scrolling, memoization, tracing, and repeatable benchmarks.
 - **Reference?** Jump straight into [Components](./components.md),
   [UI Macros](./macros.md), or the [widget reference](./widgets/index.md).
 

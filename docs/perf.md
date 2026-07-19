@@ -1,71 +1,184 @@
-# Performance and Benchmarking
+# Performance
 
-This guide documents the supported way to measure tui-lipan performance.
+Performance work on [opencode-tui](https://github.com/tui-lipan/opencode-tui) found
+several hot paths caused by doing valid work at the wrong scope or frequency.
+Large transcripts, streamed updates, syntax-highlighted documents, and diff
+views became cheaper once the app stopped rebuilding them for unrelated input
+and scroll events.
 
-Use two layers:
+Use this order when tuning an application:
 
-1. **Criterion benches** for repeatable regressions and optimization tracking.
-2. **Runtime tracing** for live frame diagnostics inside real apps.
+1. Measure a release build with representative data and a fixed viewport.
+2. Reduce how often work runs.
+3. Reduce the scope of each update.
+4. Memoize or cache only the expensive work that remains.
+5. Bound retained data and background work.
 
-## 1) Criterion Benchmarks
+## Choose the smallest `Update`
 
-Current benchmark targets:
+An update's refresh level determines how much of the UI pipeline runs:
 
-- `document_view_markdown_formatter/`*
-- `document_view_markdown_reconcile/*`
-- `text_area_reconcile/*`
-- `document_view_wrap/*`
-- `scroll_view_rich_children/*`
+| Return | Use when |
+|--------|----------|
+| `Update::none()` | Only non-visual metadata changed, or a widget already updated its runtime-owned visual state |
+| `Update::paint()` | The realized tree only needs repainting; no `view()` output or layout changed |
+| `Update::layout()` | The emitting component's subtree changed |
+| `Update::layout_with_command(cmd)` | The local subtree changed and background work must start |
+| `Update::full()` | Root composition or another component scope depends on the change |
+| `Update::with_command(cmd)` | A root-wide change also starts background work |
+| `Update::command_only(cmd)` | Work must start, but no immediate visual state changed |
 
-Run:
+High-frequency callbacks deserve special attention. Scroll telemetry, drag
+positions, cursor synchronization, hidden-screen cache updates, and stale-result
+bookkeeping often need `Update::none()`, not `Update::full()`.
 
-```bash
-cargo bench --bench document_view_markdown --features markdown
-```
+`Update::paint()` is not a general shortcut for `layout()`: use it only when
+rerunning `view()` would produce the same element tree. See
+[Components](components.md#the-update-return-type) for the complete update model.
 
-```bash
-cargo bench --bench text_area_reconcile
-```
+## Let widgets own high-frequency state
 
-```bash
-cargo bench --bench document_view_wrap --features markdown
-```
+Avoid mirroring widget-owned state back into controlled props on every event. In
+particular:
 
-```bash
-cargo bench --bench scroll_view_rich_children --features markdown
-```
+- Leave `ScrollView` uncontrolled during wheel and scrollbar interaction.
+- Treat controlled offsets as one-shot programmatic requests, then release
+  control after the widget reports the target position.
+- Return `Update::none()` from viewport callbacks that only record offset or
+  visibility metadata.
+- Use `ScrollRequest`, keyed targets, `scroll_to_bottom()`, and a stable
+  `scroll_state_key` instead of app-side page calculations or sentinel rows.
+- Request layout only when a scroll event changes app-rendered chrome, such as a
+  sticky header or a newly consumed anchor.
 
-### Save a baseline
+This prevents a feedback loop where scrolling changes props, reruns `view()`,
+remeasures the document, and changes the controlled offset again. See the
+[ScrollView scrolling model](widgets/layout.md#scrolling-model).
 
-```bash
-cargo bench --bench document_view_markdown --features markdown -- --save-baseline stable1
-```
+## Isolate expensive subtrees
 
-PreparedText/TextArea baseline workflow:
+Move a costly transcript, diff pane, or tool output into a child `Component` and
+give it a semantic `memo_key()`. The key should contain every input that changes
+the rendered subtree, but nothing else.
 
-```bash
-cargo bench --bench text_area_reconcile -- --save-baseline before-prepared-text
-```
+Useful patterns from opencode-tui:
 
-### Compare against a baseline
+- Reduce raw dimensions to the mode that affects output. For example, key a diff
+  pane by split versus unified mode rather than every intermediate terminal
+  width when layout already handles wrapping.
+- Exclude callbacks from memo identity only when they are behaviorally identical
+  and capture no changing data, including IDs or routing context.
+- Cache derived values against a narrow content revision, not a generic render
+  count.
+- Test both sides of the contract: unrelated changes must retain the subtree,
+  while every structural or content change must invalidate it.
 
-```bash
-cargo bench --bench document_view_markdown --features markdown -- --baseline stable1
-```
+For a smaller expensive region inside `view()`, use
+`Memo::new(deps_hash).build(...)`. The dependency hash must include every
+captured value that affects output. Use `Memo::with_call_site(...)` when a shared
+helper creates memos, so separate call sites cannot collide.
 
-```bash
-cargo bench --bench text_area_reconcile -- --baseline before-prepared-text
-```
+`Component::memo_key()` retains a component subtree, while `.key(...)` preserves
+reconciliation identity. A stable key is important for dynamic rows, focus, and
+reorders, but does not enable memoization by itself. See
+[Retained subtree reuse](components.md#retained-subtree-reuse).
 
-## 2) Runtime Profiling with tracing
+## Keep props cheap and stable
 
-Enable framework instrumentation:
+Large immutable render inputs should be shared rather than cloned or deeply
+compared on every streamed update:
+
+- Store reused strings and collections in `Arc`, and use widget bulk setters
+  such as `items_arc(...)` or `entries_arc(...)` where available.
+- Put an `Arc::ptr_eq` fast path first in hand-written prop equality, followed by
+  an allocation-free structural comparison when different allocations can still
+  represent equal content.
+- Use an explicit content epoch when identity fields do not capture in-place
+  content changes.
+- Make hand-written `PartialEq` implementations exhaustive so adding a prop
+  forces its render semantics to be considered.
+- Build invariant catalogs, color maps, parsed assets, and formatter inputs once,
+  outside `view()`.
+
+Do this for data that is large, shared, or expensive to compare. Small values do
+not need `Arc` merely for consistency.
+
+## Bound work before layout
+
+The fastest row to measure is the row the app never builds:
+
+- Cap long histories and search results to the amount the UI can use.
+- Collapse large tool output by default; only build the full document when the
+  user expands it.
+- Give immediate `ScrollView` children stable semantic keys. Set
+  `estimated_child_height` when the default estimate differs materially from
+  typical rows so virtual measurement can converge quickly.
+- Cache repeated parsing or preprocessing with an explicit size bound and
+  invalidation rule.
+- Prefer framework `DocumentView`, `DiffView`, and syntax formatters over local
+  implementations so formatting, measurement, and cache identity stay under one
+  contract.
+
+Do not add app-side list virtualization until measurement shows that
+`ScrollView`'s virtual measurement is insufficient.
+
+## Coalesce background and streamed work
+
+Never block `view()` or normal `update()` with filesystem, network, parsing, or
+expensive search work. Run it through `ctx.link().command(...)` or
+`Command::spawn`, and use the narrow update that matches the immediate UI
+change. `Command::new` runs synchronously on the UI thread.
+
+For superseding work such as filter-as-you-type, use a keyed command with
+`TaskPolicy::LatestOnly`. Cancellation is cooperative, so check
+`is_cancelled()` and use `send_if_not_cancelled(...)` before publishing results.
+
+For streamed views:
+
+- Apply events incrementally instead of refetching and rebuilding the whole
+  document after each token.
+- Filter events by semantic relevance and debounce bursty refreshes, while
+  preserving a final trailing refresh.
+- Keep one authoritative reducer and monotonic sequence for live and cached
+  views. Reject stale snapshots and mark invalidation explicitly.
+- Prune side maps and cached derived state when their owning rows are evicted.
+
+These are app architecture decisions, but they determine how often tui-lipan is
+asked to reconcile and lay out a large tree.
+
+Prefer built-in spinners, transitions, and effects over an app-owned 16 ms
+command loop. Remove completed effects and lower custom effect cadence where
+possible so an idle app returns to event-driven rendering.
+
+## Diagnose before optimizing
+
+Enable the built-in panel while investigating update scope and subtree reuse:
 
 ```toml
-tui-lipan = { version = "*", features = ["profiling-tracing"] }
+tui-lipan = { version = "*", features = ["devtools"] }
 ```
 
-Then install your own subscriber in the app binary. Minimal example:
+```rust
+App::new().devtools_config(DevToolsConfig {
+    logs: false,
+    metrics: true,
+    show_framework_logs: false,
+})
+```
+
+While the panel is visible, inspect frame, reconcile, and draw time; node and
+overlay counts; memo hits and misses; and the current dirty level. The overlay
+and sampling slightly perturb the workload, so use tracing or a benchmark for
+final comparisons.
+
+For runtime spans and timing events, enable instrumentation and install a
+subscriber in the app binary:
+
+```toml
+[dependencies]
+tui-lipan = { version = "*", features = ["profiling-tracing"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+```
 
 ```rust
 tracing_subscriber::fmt()
@@ -73,48 +186,59 @@ tracing_subscriber::fmt()
     .init();
 ```
 
-You can also use:
+The feature emits spans and events for full, layout-only, and paint-only frames,
+drawing, reconciliation, and `DocumentView` formatting/cache work. A CPU profiler
+should use an optimized build with debug symbols so inlined hot frames remain
+visible.
 
-- `tracing-tracy` for timeline/profiler UI.
-- OpenTelemetry exporters for centralized traces.
+Measure startup separately from steady-state rendering. Terminal capability
+queries and readiness probes must have short bounds; otherwise a silent PTY or
+test harness can look like a slow first frame even when no app view is running.
 
-## How to Read Criterion Output
+## Benchmarking
 
-Example shape:
+Use `TestBackend` with a fixed viewport to benchmark application messages and
+view/reconcile/layout work without terminal variance. Construct and warm the
+backend outside the timed loop, then benchmark representative mutations such as
+a streamed update, cache miss, width change, reorder, or far scroll jump. Call
+`capture_frame()` when the benchmark should include backend painting.
 
-```text
-time:   [a b c]
-change: [-X% ...] (p = 0.00 < 0.05)
+Use a separate PTY/process harness for startup, ready-frame latency, aggregate
+CPU, and resident memory. Keep data, features, viewport, power state, terminal,
+and build profile constant between comparisons.
+
+tui-lipan's Criterion targets are:
+
+```bash
+cargo bench --bench document_view_markdown --features markdown
+cargo bench --bench text_area_reconcile
+cargo bench --bench document_view_wrap --features markdown
+cargo bench --bench scroll_view_rich_children --features markdown
+cargo bench --bench scroll_reorder_reconcile
 ```
 
-- `time [a b c]` = confidence interval (lower, center, upper).
-- `change` = comparison vs previous/baseline.
-- `p < 0.05` = statistically significant.
-- `Performance has improved` = significant and above Criterion noise threshold.
-- `Change within noise threshold` = small shift, not actionable.
+Save and compare a baseline with Criterion's standard flags:
 
-`Gnuplot not found, using plotters backend` is informational only.
+```bash
+cargo bench --bench document_view_markdown --features markdown -- --save-baseline stable1
+cargo bench --bench document_view_markdown --features markdown -- --baseline stable1
+```
 
-## Practical Interpretation Rules
+Read Criterion results by relative change and confidence interval, not one
+absolute run. Treat very small changes as noise unless they reproduce; warm up,
+alternate comparison order, and rerun before drawing conclusions.
 
-- Prefer **relative** changes over absolute numbers.
-- Track at least these hot paths:
-  - formatter: `small`, `medium`, `large`
-  - reconcile: `warm_cache_render`, `cache_miss_value_toggle`, `reflow_on_width_change`
-- Treat tiny deltas (<~1%) as likely noise unless repeatedly reproduced.
-- Outliers are normal on dev machines; focus on medians and confidence intervals.
+For `DocumentView`, optimize cache misses first, width-driven reflow second, and
+warm unchanged renders last. The warm path is already expected to be cheap.
 
-## Run Hygiene (for stable numbers)
+## Checklist
 
-- Close heavy background apps.
-- Use consistent power mode (avoid CPU governor changes).
-- Keep terminal/session setup constant.
-- Re-run at least 2-3 times before concluding regressions.
-
-## Optimization Priority Order (DocumentView)
-
-When chasing markdown speed, optimize in this order:
-
-1. `cache_miss_value_toggle` (largest cost).
-2. `reflow_on_width_change` (layout pressure).
-3. `warm_cache_render` (already cheap, optimize last).
+- Does idle avoid unnecessary app-driven frames when no cursor, spinner,
+  transition, or effect is active?
+- Do high-frequency callbacks use the smallest correct `Update`?
+- Does user scrolling remain widget-owned?
+- Are expensive children keyed and memoized by semantic content only?
+- Are large props shared and compared without temporary allocations?
+- Are histories, outputs, caches, and pending work bounded?
+- Is blocking work command-driven, cancellable, and coalesced?
+- Was the change measured in a release build with representative data?
