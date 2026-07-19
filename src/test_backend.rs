@@ -17,7 +17,8 @@ use crate::app::input::keyboard;
 use crate::app::input::keymap::{Action, Keymap, KeymapConfig, KeymapRuntime};
 use crate::app::input::runtime_dispatch::{
     FrameworkSideEffect, RuntimeKeyDispatchConfig, RuntimeKeyDispatchOutcome,
-    RuntimeKeyDispatchState, make_key_ctx, selection_clipboard_shortcut,
+    RuntimeKeyDispatchState, make_key_ctx, outcome_to_dispatch_result,
+    selection_clipboard_shortcut,
 };
 use crate::app::input::text_area_vim::TextAreaVimState;
 use crate::app::interaction_state::{DragState, HexPendingEdit, MouseTrackingState};
@@ -1066,39 +1067,7 @@ impl<C: Component> TestBackendDispatchOps<'_, C> {
     }
 
     fn finish(self, outcome: DispatchOutcome) -> RuntimeKeyDispatchOutcome {
-        let mut result = RuntimeKeyDispatchOutcome::default();
-        match outcome {
-            DispatchOutcome::Widget
-            | DispatchOutcome::Bubble
-            | DispatchOutcome::Command
-            | DispatchOutcome::CommandPending
-            | DispatchOutcome::Framework
-            | DispatchOutcome::TerminalPreflight
-            | DispatchOutcome::Terminal
-            | DispatchOutcome::AmbientScroll => result.handled = true,
-            DispatchOutcome::FrameworkQuit => {
-                result.handled = true;
-                result.quit = true;
-            }
-            DispatchOutcome::Unhandled => {}
-        }
-
-        if matches!(
-            outcome,
-            DispatchOutcome::Widget
-                | DispatchOutcome::Bubble
-                | DispatchOutcome::Terminal
-                | DispatchOutcome::TerminalPreflight
-                | DispatchOutcome::AmbientScroll
-        ) {
-            result.dirty = true;
-            if matches!(
-                outcome,
-                DispatchOutcome::Widget | DispatchOutcome::AmbientScroll
-            ) {
-                result.layout_dirty = true;
-            }
-        }
+        let mut result = outcome_to_dispatch_result(outcome);
 
         if let Some(level) = self.key_ctx.dirty_override {
             result.dirty = true;

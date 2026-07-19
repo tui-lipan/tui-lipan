@@ -75,6 +75,56 @@ pub(crate) enum FrameworkSideEffect {
     ToggleDevtools,
 }
 
+/// Map a dispatch outcome to the work the frame owes it.
+///
+/// Every `DispatchOps::finish` shares this so the three implementations (native runner, generic
+/// runtime, `TestBackend`) cannot drift apart - they did once, and a `Framework` outcome that was
+/// `handled` but not `dirty` left focus chrome a frame behind until an unrelated key dirtied the
+/// tree.
+///
+/// `Framework` repaints without invalidating layout: a framework action only reports `Handled`
+/// when it changed something (focus traversal, overlay dismissal), and focus chrome - focus
+/// styles, carets, suffix counters - is drawn from the focused node, so a moved focus is invisible
+/// until the next frame. Traversal therefore costs a repaint, not a relayout.
+pub(crate) fn outcome_to_dispatch_result(outcome: DispatchOutcome) -> RuntimeKeyDispatchOutcome {
+    let mut result = RuntimeKeyDispatchOutcome::default();
+    match outcome {
+        DispatchOutcome::Widget
+        | DispatchOutcome::Bubble
+        | DispatchOutcome::Command
+        | DispatchOutcome::CommandPending
+        | DispatchOutcome::Framework
+        | DispatchOutcome::TerminalPreflight
+        | DispatchOutcome::Terminal
+        | DispatchOutcome::AmbientScroll => result.handled = true,
+        DispatchOutcome::FrameworkQuit => {
+            result.handled = true;
+            result.quit = true;
+        }
+        DispatchOutcome::Unhandled => {}
+    }
+
+    if matches!(
+        outcome,
+        DispatchOutcome::Widget
+            | DispatchOutcome::Bubble
+            | DispatchOutcome::Framework
+            | DispatchOutcome::Terminal
+            | DispatchOutcome::TerminalPreflight
+            | DispatchOutcome::AmbientScroll
+    ) {
+        result.dirty = true;
+        if matches!(
+            outcome,
+            DispatchOutcome::Widget | DispatchOutcome::AmbientScroll
+        ) {
+            result.layout_dirty = true;
+        }
+    }
+
+    result
+}
+
 pub(crate) struct RuntimeKeyDispatchEnv<'a> {
     pub tree: &'a mut NodeTree,
     pub focused: &'a mut Option<NodeId>,
@@ -154,39 +204,7 @@ impl RuntimeDispatchOps<'_, '_> {
     }
 
     fn finish(self, outcome: DispatchOutcome) -> RuntimeKeyDispatchOutcome {
-        let mut result = RuntimeKeyDispatchOutcome::default();
-        match outcome {
-            DispatchOutcome::Widget
-            | DispatchOutcome::Bubble
-            | DispatchOutcome::Command
-            | DispatchOutcome::CommandPending
-            | DispatchOutcome::Framework
-            | DispatchOutcome::TerminalPreflight
-            | DispatchOutcome::Terminal
-            | DispatchOutcome::AmbientScroll => result.handled = true,
-            DispatchOutcome::FrameworkQuit => {
-                result.handled = true;
-                result.quit = true;
-            }
-            DispatchOutcome::Unhandled => {}
-        }
-
-        if matches!(
-            outcome,
-            DispatchOutcome::Widget
-                | DispatchOutcome::Bubble
-                | DispatchOutcome::Terminal
-                | DispatchOutcome::TerminalPreflight
-                | DispatchOutcome::AmbientScroll
-        ) {
-            result.dirty = true;
-            if matches!(
-                outcome,
-                DispatchOutcome::Widget | DispatchOutcome::AmbientScroll
-            ) {
-                result.layout_dirty = true;
-            }
-        }
+        let mut result = outcome_to_dispatch_result(outcome);
 
         if let Some(level) = self.env.key_ctx.dirty_override {
             result.dirty = true;
@@ -511,4 +529,56 @@ pub(crate) fn selection_clipboard_shortcut(
 
 pub(crate) fn devtools_toggle_cell() -> Rc<Cell<bool>> {
     Rc::new(Cell::new(false))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Focus traversal reports `Framework`. It must repaint so focus chrome tracks the move, and
+    /// must not relayout - nothing about the tree's geometry changed.
+    #[test]
+    fn framework_outcome_repaints_without_relayout() {
+        let result = outcome_to_dispatch_result(DispatchOutcome::Framework);
+        assert!(result.handled);
+        assert!(result.dirty, "focus chrome would lag a frame without this");
+        assert!(!result.layout_dirty);
+        assert!(!result.quit);
+    }
+
+    #[test]
+    fn unhandled_outcome_owes_the_frame_nothing() {
+        let result = outcome_to_dispatch_result(DispatchOutcome::Unhandled);
+        assert_eq!(result, RuntimeKeyDispatchOutcome::default());
+    }
+
+    #[test]
+    fn quit_outcome_is_handled_and_quits() {
+        let result = outcome_to_dispatch_result(DispatchOutcome::FrameworkQuit);
+        assert!(result.handled);
+        assert!(result.quit);
+    }
+
+    /// Only outcomes that can resize or re-place nodes earn a relayout.
+    #[test]
+    fn layout_dirty_is_a_strict_subset_of_dirty() {
+        for outcome in [
+            DispatchOutcome::Widget,
+            DispatchOutcome::Bubble,
+            DispatchOutcome::Command,
+            DispatchOutcome::CommandPending,
+            DispatchOutcome::Framework,
+            DispatchOutcome::TerminalPreflight,
+            DispatchOutcome::Terminal,
+            DispatchOutcome::AmbientScroll,
+            DispatchOutcome::FrameworkQuit,
+            DispatchOutcome::Unhandled,
+        ] {
+            let result = outcome_to_dispatch_result(outcome);
+            assert!(
+                !result.layout_dirty || result.dirty,
+                "{outcome:?} marks layout dirty without a repaint"
+            );
+        }
+    }
 }
