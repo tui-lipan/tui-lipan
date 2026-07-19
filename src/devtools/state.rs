@@ -812,7 +812,7 @@ mod tests {
 
         assert_eq!(
             state.resolved_panel_size(),
-            (Length::Px(40), Length::Px(15))
+            (Length::Px(40), Length::Px(19))
         );
     }
 

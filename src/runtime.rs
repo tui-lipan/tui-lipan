@@ -559,16 +559,17 @@ where
         #[cfg(feature = "profiling-tracing")]
         let view_start = web_time::Instant::now();
         #[cfg(feature = "devtools")]
-        let view_start_devtools = web_time::Instant::now();
+        let view_start_devtools =
+            crate::core::nested::view_timing_enabled().then(web_time::Instant::now);
         self.scroll.begin_view(ScopeId(1));
         let element = self.component.view(&self.ctx);
         #[cfg(feature = "devtools")]
-        {
+        if let Some(start) = view_start_devtools {
             use crate::core::nested::{record_view_timing, short_type_name};
             record_view_timing(
                 ScopeId(1),
                 Arc::from(short_type_name(self.root_component_name())),
-                view_start_devtools.elapsed(),
+                start.elapsed(),
             );
         }
         #[cfg(feature = "profiling-tracing")]
@@ -708,15 +709,16 @@ where
 
             self.scroll.begin_view(ScopeId(1));
             #[cfg(feature = "devtools")]
-            let view_start_devtools = web_time::Instant::now();
+            let view_start_devtools =
+                crate::core::nested::view_timing_enabled().then(web_time::Instant::now);
             let element = self.component.view(&self.ctx);
             #[cfg(feature = "devtools")]
-            {
+            if let Some(start) = view_start_devtools {
                 use crate::core::nested::{record_view_timing, short_type_name};
                 record_view_timing(
                     ScopeId(1),
                     Arc::from(short_type_name(self.root_component_name())),
-                    view_start_devtools.elapsed(),
+                    start.elapsed(),
                 );
             }
 

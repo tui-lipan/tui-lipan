@@ -77,8 +77,13 @@ pub(crate) fn set_view_timing_enabled(enabled: bool) {
 }
 
 #[cfg(feature = "devtools")]
+pub(crate) fn view_timing_enabled() -> bool {
+    VIEW_TIMING_ENABLED.with(|flag| flag.get())
+}
+
+#[cfg(feature = "devtools")]
 pub(crate) fn record_view_timing(scope: ScopeId, name: Arc<str>, duration: std::time::Duration) {
-    if !VIEW_TIMING_ENABLED.with(|flag| flag.get()) {
+    if !view_timing_enabled() {
         return;
     }
     VIEW_TIMINGS.with(|timings| {
@@ -1791,105 +1796,88 @@ impl ComponentRegistry {
                 };
                 path.push(seg);
 
-                let prev_state = host.prev_memo(path, memo.call_site).map(|cached| {
-                    (
-                        cached.deps_hash,
-                        cached.expanded_child.clone(),
-                        cached.descendant_ids.clone(),
-                    )
-                });
-                let child = match prev_state {
-                    Some((deps_hash, mut expanded_child, descendant_ids))
-                        if deps_hash == memo.deps_hash =>
-                    {
-                        let needs_refresh = descendant_ids
-                            .iter()
-                            .copied()
-                            .any(|id| self.component_subtree_needs_refresh(id));
-                        if needs_refresh {
-                            let descendant_ids = collect_component_ids_in_element(
-                                &expanded_child,
-                                &self.scope_to_id,
-                            );
-                            for child_id in descendant_ids {
-                                if !self.component_subtree_needs_refresh(child_id) {
-                                    continue;
-                                }
-                                let replacement =
-                                    self.expand_component_instance(child_id, epoch, viewport);
-                                let scope = self.arena.get(child_id).scope;
-                                let mut replacement = Some(replacement);
-                                if expanded_child
-                                    .replace_group_child_by_scope(scope, &mut replacement)
-                                {
-                                    continue;
-                                } else {
-                                    #[cfg(feature = "devtools")]
-                                    record_memo_miss(MemoMissReason::ViewMemoStructureChanged);
-                                    let rebuilt = (memo.builder)();
-                                    let mut expanded = self.expand_children(
-                                        host,
-                                        parent,
-                                        path,
-                                        vec![rebuilt],
-                                        epoch,
-                                        viewport,
-                                    );
-                                    let child = expanded
-                                        .pop()
-                                        .unwrap_or_else(|| crate::widgets::Text::new("").into());
-                                    let descendant_ids =
-                                        collect_component_ids_in_element(&child, &self.scope_to_id);
-                                    host.set_next_memo(
-                                        path,
-                                        memo.call_site,
-                                        MemoCacheEntry {
-                                            deps_hash: memo.deps_hash,
-                                            expanded_child: child.clone(),
-                                            descendant_ids,
-                                        },
-                                    );
-                                    path.pop();
-                                    return child;
-                                }
+                // Probe deps_hash without cloning; only deep-clone the cached
+                // subtree on a true hit (deps match).
+                let hit = host
+                    .prev_memo(path, memo.call_site)
+                    .is_some_and(|cached| cached.deps_hash == memo.deps_hash);
+                let child = if hit {
+                    let (mut expanded_child, descendant_ids) = host
+                        .prev_memo(path, memo.call_site)
+                        .map(|cached| {
+                            (cached.expanded_child.clone(), cached.descendant_ids.clone())
+                        })
+                        .expect("hit implies a previous memo entry");
+                    let needs_refresh = descendant_ids
+                        .iter()
+                        .copied()
+                        .any(|id| self.component_subtree_needs_refresh(id));
+                    if needs_refresh {
+                        let descendant_ids =
+                            collect_component_ids_in_element(&expanded_child, &self.scope_to_id);
+                        for child_id in descendant_ids {
+                            if !self.component_subtree_needs_refresh(child_id) {
+                                continue;
+                            }
+                            let replacement =
+                                self.expand_component_instance(child_id, epoch, viewport);
+                            let scope = self.arena.get(child_id).scope;
+                            let mut replacement = Some(replacement);
+                            if expanded_child.replace_group_child_by_scope(scope, &mut replacement)
+                            {
+                                continue;
+                            } else {
+                                #[cfg(feature = "devtools")]
+                                record_memo_miss(MemoMissReason::ViewMemoStructureChanged);
+                                let rebuilt = (memo.builder)();
+                                let mut expanded = self.expand_children(
+                                    host,
+                                    parent,
+                                    path,
+                                    vec![rebuilt],
+                                    epoch,
+                                    viewport,
+                                );
+                                let child = expanded
+                                    .pop()
+                                    .unwrap_or_else(|| crate::widgets::Text::new("").into());
+                                let descendant_ids =
+                                    collect_component_ids_in_element(&child, &self.scope_to_id);
+                                host.set_next_memo(
+                                    path,
+                                    memo.call_site,
+                                    MemoCacheEntry {
+                                        deps_hash: memo.deps_hash,
+                                        expanded_child: child.clone(),
+                                        descendant_ids,
+                                    },
+                                );
+                                path.pop();
+                                return child;
                             }
                         }
-                        #[cfg(feature = "devtools")]
-                        increment_memo_hit_counter();
-                        expanded_child
                     }
-                    Some(_) => {
-                        #[cfg(feature = "devtools")]
-                        record_memo_miss(MemoMissReason::ViewMemoDepsChanged);
-                        let rebuilt = (memo.builder)();
-                        let mut expanded = self.expand_children(
-                            host,
-                            parent,
-                            path,
-                            vec![rebuilt],
-                            epoch,
-                            viewport,
-                        );
-                        expanded
-                            .pop()
-                            .unwrap_or_else(|| crate::widgets::Text::new("").into())
-                    }
-                    None => {
-                        #[cfg(feature = "devtools")]
-                        record_memo_miss(MemoMissReason::ViewMemoNoCache);
-                        let rebuilt = (memo.builder)();
-                        let mut expanded = self.expand_children(
-                            host,
-                            parent,
-                            path,
-                            vec![rebuilt],
-                            epoch,
-                            viewport,
-                        );
-                        expanded
-                            .pop()
-                            .unwrap_or_else(|| crate::widgets::Text::new("").into())
-                    }
+                    #[cfg(feature = "devtools")]
+                    increment_memo_hit_counter();
+                    expanded_child
+                } else if host.prev_memo(path, memo.call_site).is_some() {
+                    #[cfg(feature = "devtools")]
+                    record_memo_miss(MemoMissReason::ViewMemoDepsChanged);
+                    let rebuilt = (memo.builder)();
+                    let mut expanded =
+                        self.expand_children(host, parent, path, vec![rebuilt], epoch, viewport);
+                    expanded
+                        .pop()
+                        .unwrap_or_else(|| crate::widgets::Text::new("").into())
+                } else {
+                    #[cfg(feature = "devtools")]
+                    record_memo_miss(MemoMissReason::ViewMemoNoCache);
+                    let rebuilt = (memo.builder)();
+                    let mut expanded =
+                        self.expand_children(host, parent, path, vec![rebuilt], epoch, viewport);
+                    expanded
+                        .pop()
+                        .unwrap_or_else(|| crate::widgets::Text::new("").into())
                 };
 
                 let descendant_ids = collect_component_ids_in_element(&child, &self.scope_to_id);

@@ -156,9 +156,9 @@ impl MemoDependencySnapshot {
             return Some(MemoDependencyKind::HostTerminalColors);
         }
         let context_generations = env.context_generations.borrow();
-        for (type_id, name, generation) in &self.context_generations {
-            if context_generations.get(type_id).copied().unwrap_or(0) != *generation {
-                return Some(MemoDependencyKind::Context(*name));
+        for &(type_id, name, generation) in &self.context_generations {
+            if context_generations.get(&type_id).copied().unwrap_or(0) != generation {
+                return Some(MemoDependencyKind::Context(name));
             }
         }
         None

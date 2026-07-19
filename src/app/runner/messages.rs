@@ -48,7 +48,11 @@ impl<C: Component> AppRunner<C> {
             }
 
             #[cfg(feature = "devtools")]
-            if !matches!(update_level, UpdateLevel::None) {
+            if !matches!(update_level, UpdateLevel::None)
+                && self.devtools_config.metrics
+                && self.devtools_state.borrow().visible
+                && !self.devtools_metrics_suppressed
+            {
                 let level = match update_level {
                     UpdateLevel::Paint => super::DirtyLevel::PaintOnly,
                     UpdateLevel::Layout => super::DirtyLevel::LayoutOnly,
