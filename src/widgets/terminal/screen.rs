@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -17,8 +18,35 @@ use alacritty_terminal::vte::ansi::{
 use super::events::{
     KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, TerminalKeyModes,
 };
-use super::osc::{SemanticObserver, TerminalSemanticEvent, TerminalSemanticState};
+use super::osc::{
+    SemanticObserver, TerminalCommandPhase, TerminalSemanticEvent, TerminalSemanticState,
+};
 use crate::style::{CaretShape, Color as UiColor, HostTerminalColors, Span, Style};
+
+/// Kind of semantic mark anchored to an absolute text line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SemanticMarkKind {
+    /// `OSC 133;A` — shell drawing a prompt.
+    Prompt,
+    /// `OSC 133;C` — command output started.
+    OutputStart,
+    /// `OSC 133;D` — command output ended.
+    OutputEnd,
+}
+
+/// A semantic mark recorded against the absolute text-line space used by
+/// [`TerminalScreen::total_text_lines`] / [`TerminalScreen::export_text`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SemanticMark {
+    /// Prompt / output-start / output-end.
+    pub kind: SemanticMarkKind,
+    /// Absolute line index (`0` = oldest retained history line).
+    pub absolute_line: usize,
+    /// Exit status from `OSC 133;D`, when present.
+    pub exit_status: Option<i32>,
+}
+
+const MAX_SEMANTIC_MARKS: usize = 256;
 
 /// Cursor style applied when the child program never issues `DECSCUSR`.
 ///
@@ -159,6 +187,10 @@ pub struct TerminalScreen {
     palette: TerminalColorPalette,
     dirty: bool,
     sequence: u64,
+    /// Bounded history of OSC 133 marks anchored to absolute text lines.
+    semantic_marks: VecDeque<SemanticMark>,
+    /// How many semantic events have already been turned into marks (reset on drain).
+    semantic_events_seen: usize,
 }
 
 /// Renderable terminal snapshot from `TerminalScreen`.
@@ -346,14 +378,21 @@ impl TerminalScreen {
             palette: TerminalColorPalette::default(),
             dirty: true,
             sequence: 0,
+            semantic_marks: VecDeque::new(),
+            semantic_events_seen: 0,
         }
     }
 
     /// Feed terminal bytes.
     ///
     pub fn process_bytes(&mut self, bytes: &[u8]) {
+        let old_top = self.term.grid().topmost_line().0;
         self.processor.advance(&mut self.term, bytes);
         self.semantic_parser.advance(&mut self.semantic, bytes);
+        self.remap_semantic_marks_after_scroll(old_top);
+        if !self.term.mode().contains(TermMode::ALT_SCREEN) {
+            self.record_semantic_marks_from_pending();
+        }
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode());
         self.dirty = true;
@@ -375,6 +414,7 @@ impl TerminalScreen {
     /// changes without re-deriving them from [`semantic_state`](Self::semantic_state) on every
     /// poll.
     pub fn drain_semantic_events(&mut self) -> Vec<TerminalSemanticEvent> {
+        self.semantic_events_seen = 0;
         self.semantic.drain_events()
     }
 
@@ -639,6 +679,104 @@ impl TerminalScreen {
         }
     }
 
+    /// Map an absolute text-line index to a scrollback display offset.
+    pub fn absolute_line_to_offset(&self, absolute: usize) -> Option<usize> {
+        self.absolute_line_to_viewport(absolute)
+            .map(|(offset, _)| offset)
+    }
+
+    /// Retained OSC 133 marks, oldest first (after eviction GC).
+    pub fn semantic_marks(&self) -> Vec<SemanticMark> {
+        self.semantic_marks.iter().copied().collect()
+    }
+
+    /// Half-open absolute-line range `[start, end)` of the last command's output.
+    ///
+    /// Uses the last `OutputStart` paired with a following `OutputEnd`. While a command is still
+    /// running (start without end), falls back to `[start, total_text_lines())`.
+    pub fn last_command_output_range(&self) -> Option<(usize, usize)> {
+        let marks: Vec<_> = self.semantic_marks.iter().copied().collect();
+        let start_idx = marks
+            .iter()
+            .rposition(|mark| mark.kind == SemanticMarkKind::OutputStart)?;
+        let start = marks[start_idx].absolute_line;
+        let end = marks[start_idx + 1..]
+            .iter()
+            .find(|mark| mark.kind == SemanticMarkKind::OutputEnd)
+            .map(|mark| mark.absolute_line)
+            .unwrap_or_else(|| self.total_text_lines());
+        Some((start, end.max(start)))
+    }
+
+    /// Plain text of [`last_command_output_range`](Self::last_command_output_range), when known.
+    pub fn export_last_command_output(&self) -> Option<String> {
+        let (start, end) = self.last_command_output_range()?;
+        Some(self.export_text(start, end))
+    }
+
+    fn cursor_absolute_line(&self) -> usize {
+        let grid = self.term.grid();
+        let top = grid.topmost_line().0;
+        let cursor = grid.cursor.point.line.0;
+        usize::try_from((cursor - top).max(0)).unwrap_or(0)
+    }
+
+    fn remap_semantic_marks_after_scroll(&mut self, old_top: i32) {
+        let new_top = self.term.grid().topmost_line().0;
+        if new_top <= old_top {
+            return;
+        }
+        let delta = usize::try_from(new_top - old_top).unwrap_or(0);
+        if delta == 0 {
+            return;
+        }
+        let mut kept = VecDeque::new();
+        for mark in self.semantic_marks.drain(..) {
+            if mark.absolute_line >= delta {
+                kept.push_back(SemanticMark {
+                    absolute_line: mark.absolute_line - delta,
+                    ..mark
+                });
+            }
+        }
+        self.semantic_marks = kept;
+    }
+
+    fn record_semantic_marks_from_pending(&mut self) {
+        let absolute_line = self.cursor_absolute_line();
+        let events = self.semantic.peek_events();
+        let from = self.semantic_events_seen.min(events.len());
+        let pending: Vec<_> = events[from..].to_vec();
+        self.semantic_events_seen = self.semantic.event_count();
+        for event in pending {
+            let TerminalSemanticEvent::CommandPhaseChanged(phase) = event else {
+                continue;
+            };
+            let mark = match phase {
+                TerminalCommandPhase::Prompt => SemanticMark {
+                    kind: SemanticMarkKind::Prompt,
+                    absolute_line,
+                    exit_status: None,
+                },
+                TerminalCommandPhase::Executing => SemanticMark {
+                    kind: SemanticMarkKind::OutputStart,
+                    absolute_line,
+                    exit_status: None,
+                },
+                TerminalCommandPhase::Completed { exit_status } => SemanticMark {
+                    kind: SemanticMarkKind::OutputEnd,
+                    absolute_line,
+                    exit_status,
+                },
+                TerminalCommandPhase::Unknown | TerminalCommandPhase::Input => continue,
+            };
+            self.semantic_marks.push_back(mark);
+            while self.semantic_marks.len() > MAX_SEMANTIC_MARKS {
+                self.semantic_marks.pop_front();
+            }
+        }
+    }
+
     /// Clear parser state and screen.
     pub fn reset(&mut self) {
         let dimensions = TermDimensions {
@@ -661,6 +799,8 @@ impl TerminalScreen {
         self.mouse_mode = MouseModeState::default();
         self.scrollback_offset = 0;
         self.cache = TerminalRenderSnapshot::default();
+        self.semantic_marks.clear();
+        self.semantic_events_seen = 0;
         self.dirty = true;
     }
 
@@ -1716,5 +1856,49 @@ mod tests {
         assert!(screen.text_lines(total, total + 10).is_empty());
         assert_eq!(screen.export_text(0, 0), "");
         assert_eq!(screen.text_lines(0, total).len(), total);
+    }
+
+    #[test]
+    fn semantic_marks_track_prompt_and_output_ranges() {
+        let mut screen = TerminalScreen::new(5, 20, 50);
+        // OSC 133 A (prompt), then C (executing), output, then D (completed).
+        screen.process_bytes(b"\x1b]133;A\x1b\\");
+        screen.process_bytes(b"\x1b]133;C\x1b\\");
+        screen.process_bytes(b"hello\r\nworld\r\n");
+        screen.process_bytes(b"\x1b]133;D;0\x1b\\");
+        screen.process_bytes(b"\x1b]133;A\x1b\\");
+
+        let marks = screen.semantic_marks();
+        assert!(
+            marks
+                .iter()
+                .any(|m| m.kind == SemanticMarkKind::OutputStart)
+        );
+        assert!(
+            marks
+                .iter()
+                .any(|m| { m.kind == SemanticMarkKind::OutputEnd && m.exit_status == Some(0) })
+        );
+        assert!(marks.iter().any(|m| m.kind == SemanticMarkKind::Prompt));
+
+        let (start, end) = screen.last_command_output_range().expect("range");
+        let text = screen.export_text(start, end);
+        assert!(text.contains("hello"));
+        assert!(text.contains("world"));
+
+        screen.reset();
+        assert!(screen.semantic_marks().is_empty());
+        assert_eq!(screen.last_command_output_range(), None);
+    }
+
+    #[test]
+    fn running_command_output_range_extends_to_live_bottom() {
+        let mut screen = TerminalScreen::new(4, 20, 20);
+        screen.process_bytes(b"\x1b]133;A\x1b\\");
+        screen.process_bytes(b"\x1b]133;C\x1b\\");
+        screen.process_bytes(b"partial\r\n");
+        let (start, end) = screen.last_command_output_range().expect("open range");
+        assert!(end > start);
+        assert_eq!(end, screen.total_text_lines());
     }
 }

@@ -219,12 +219,13 @@ pub use crate::widgets::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
     KittyKeyboardFlags, ManagedTerminal, ManagedTerminalProps, ManagedTerminalStatus,
-    MouseEncoding, MouseMode, MouseModeState, Terminal, TerminalBuffer, TerminalColorPalette,
-    TerminalCommandPhase, TerminalInputEvent, TerminalInputKind, TerminalKeyModes, TerminalPty,
-    TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen,
-    TerminalSelection, TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState,
-    TerminalViewport, TerminalWorkingDirectory, TerminalWorkingDirectorySource, encode_paste,
-    focus_sequences, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
+    MouseEncoding, MouseMode, MouseModeState, SemanticMark, SemanticMarkKind, Terminal,
+    TerminalBuffer, TerminalColorPalette, TerminalCommandPhase, TerminalInputEvent,
+    TerminalInputKind, TerminalKeyModes, TerminalPty, TerminalPtyConfig, TerminalPtyError,
+    TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen, TerminalSelection,
+    TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState, TerminalViewport,
+    TerminalWorkingDirectory, TerminalWorkingDirectorySource, encode_paste, focus_sequences,
+    key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

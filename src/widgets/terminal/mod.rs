@@ -25,7 +25,10 @@ pub use osc::{
 #[cfg(unix)]
 pub use pty::TerminalPtyHandoff;
 pub use pty::{TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent};
-pub use screen::{TerminalColorPalette, TerminalRenderSnapshot, TerminalScreen, TerminalViewport};
+pub use screen::{
+    SemanticMark, SemanticMarkKind, TerminalColorPalette, TerminalRenderSnapshot, TerminalScreen,
+    TerminalViewport,
+};
 
 pub(crate) use layout::{measure_terminal, terminal_content_layout, terminal_mouse_content_rect};
 pub(crate) use node::TerminalNode;

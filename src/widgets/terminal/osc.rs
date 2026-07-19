@@ -142,6 +142,14 @@ impl SemanticObserver {
         std::mem::take(&mut self.events)
     }
 
+    pub(super) fn peek_events(&self) -> &[TerminalSemanticEvent] {
+        &self.events
+    }
+
+    pub(super) fn event_count(&self) -> usize {
+        self.events.len()
+    }
+
     fn set_cwd(&mut self, cwd: TerminalWorkingDirectory) {
         if self.state.cwd.as_ref() != Some(&cwd) {
             self.state.cwd = Some(cwd.clone());
