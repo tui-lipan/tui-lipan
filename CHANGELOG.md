@@ -25,6 +25,10 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- Theme reload files now accept TOML 1.1 syntax, including multiline inline
+  tables and trailing commas. The dependency stacks behind optional image,
+  diff, filesystem-watcher, and terminal-emulation features were also updated
+  to their latest stable release lines, along with the procedural macro stack.
 - `PanView` now responds to the mouse wheel. It supported drag and keyboard
   panning but was never routed to the wheel dispatcher at all, so spinning the
   wheel over a pan surface did nothing. The wheel pans vertically and

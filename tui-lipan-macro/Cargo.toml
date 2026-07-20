@@ -16,8 +16,8 @@ authors = ["Adam Mikołajczyk <adam@tui-lipan.dev>"]
 proc-macro = true
 
 [dependencies]
-proc-macro2 = { version = "1", features = ["span-locations"] }
-quote = "1"
-syn = { version = "2", features = ["full", "visit"] }
+proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
+quote = "1.0.47"
+syn = { version = "3.0.2", features = ["full", "visit"] }
 proc-macro-crate = "3"
-prettyplease = "0.2"
+prettyplease = "0.3.0"

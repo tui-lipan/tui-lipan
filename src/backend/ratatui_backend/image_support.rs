@@ -16,8 +16,10 @@ fn render_suspend_until() -> &'static RwLock<Option<Instant>> {
 }
 
 pub(crate) fn init_image_picker() {
-    let mut options = QueryStdioOptions::default();
-    options.timeout = Duration::from_millis(200);
+    let options = QueryStdioOptions {
+        timeout: Duration::from_millis(200),
+        ..QueryStdioOptions::default()
+    };
 
     let picker =
         Picker::from_query_stdio_with_options(options).unwrap_or_else(|_| Picker::halfblocks());
