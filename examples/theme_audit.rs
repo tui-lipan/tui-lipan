@@ -261,21 +261,8 @@ fn render_theme(name: &str, theme: Theme) {
     }
 }
 
-/// Solarized Light, derived only from the 3 core tokens to exercise the
-/// `ThemePalette` derivation on a light background.
-fn solarized_light() -> Theme {
-    ThemePalette::new(
-        Color::hex_u24(0x586E75), // text
-        Color::hex_u24(0xFDF6E3), // background
-        Color::hex_u24(0x268BD2), // accent
-    )
-    .success(Color::hex_u24(0x859900))
-    .warning(Color::hex_u24(0xB58900))
-    .error(Color::hex_u24(0xDC322F))
-    .into_theme()
-}
-
-/// A clean paper / GitHub-light style theme from 3 tokens.
+/// A clean paper / GitHub-light style theme from 3 tokens. Kept as a local
+/// (not a preset) to exercise `ThemePalette` derivation on a light background.
 fn paper_light() -> Theme {
     ThemePalette::new(
         Color::hex_u24(0x24292F), // text
@@ -300,7 +287,26 @@ fn main() {
         ("tokyo_night", Theme::tokyo_night),
         ("solarized_dark", Theme::solarized_dark),
         ("monokai", Theme::monokai),
-        ("solarized_light", solarized_light),
+        ("solarized_light", Theme::solarized_light),
+        ("gruvbox_light", Theme::gruvbox_light),
+        ("tokyo_night_day", Theme::tokyo_night_day),
+        ("catppuccin_latte", Theme::catppuccin_latte),
+        ("catppuccin_frappe", Theme::catppuccin_frappe),
+        ("catppuccin_macchiato", Theme::catppuccin_macchiato),
+        ("rose_pine", Theme::rose_pine),
+        ("rose_pine_moon", Theme::rose_pine_moon),
+        ("rose_pine_dawn", Theme::rose_pine_dawn),
+        ("kanagawa", Theme::kanagawa),
+        ("everforest", Theme::everforest),
+        ("ayu_dark", Theme::ayu_dark),
+        ("ayu_mirage", Theme::ayu_mirage),
+        ("ayu_light", Theme::ayu_light),
+        ("nightfox", Theme::nightfox),
+        ("nordfox", Theme::nordfox),
+        ("night_owl", Theme::night_owl),
+        ("material_palenight", Theme::material_palenight),
+        ("oxocarbon", Theme::oxocarbon),
+        ("zenburn", Theme::zenburn),
         ("paper_light", paper_light),
     ];
     for (name, factory) in themes {

@@ -13,6 +13,9 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- The nine original theme presets now share the same internal color-table
+  construction as the new ones. Every preset's rendered colors are unchanged;
+  this is an internal cleanup only.
 - Redesigned the DevTools stats panel for readability under animation: a fixed
   13-row layout (no more lines flickering in and out per frame), a bold label
   gutter with an aligned value column, all values aggregated over the last 60
@@ -26,6 +29,14 @@ While the crate is on `0.x.y`:
   colored log-level tags in the list, and a dimmed line counter.
 
 ### Fixed
+
+- `ProgressBar` in `ProgressStyle::Block` no longer paints a black trough on
+  light themes. The empty half of the track dimmed the fill color toward black
+  regardless of the theme, which is invisible on a dark background but draws a
+  black bar across a light one. It now recedes toward the surface behind the
+  bar, so `block_empty_bg_dim` means "how far toward the background" in both
+  polarities. Themes whose background is not a concrete color (`Theme::ansi`)
+  keep the previous dimming.
 
 - Hover transitions no longer force a repaint when neither the node being left
   nor the one being entered paints differently while hovered. A `MouseRegion`
@@ -46,6 +57,15 @@ While the crate is on `0.x.y`:
   re-render also no longer double-counts as both hit and miss.
 
 ### Added
+
+- 20 new built-in `Theme` presets, all resolvable through `preset_by_name`.
+  Light: `solarized_light`, `gruvbox_light`, `tokyo_night_day`,
+  `catppuccin_latte`, `rose_pine_dawn`, `ayu_light` — the first light presets
+  the crate ships. Dark: `catppuccin_frappe`, `catppuccin_macchiato`,
+  `rose_pine`, `rose_pine_moon`, `kanagawa`, `everforest`, `ayu_dark`,
+  `ayu_mirage`, `nightfox`, `nordfox`, `night_owl`, `material_palenight`,
+  `oxocarbon`, `zenburn`. `preset_by_name` also accepts `"catppuccin_mocha"`
+  as an alias for the existing `catppuccin` preset.
 
 - `SearchPalette::input_key(key)` keys the query input directly, so
   `ctx.request_focus(key)` targets it instead of relying on the palette

@@ -426,17 +426,53 @@ Style precedence: **explicit widget style/slot > ThemeProvider theme > widget de
 
 ### Named Presets
 
+Dark:
+
 ```rust
 Theme::default()
 Theme::one_dark()
 Theme::dracula()
 Theme::nord()
 Theme::gruvbox()
-Theme::catppuccin()
+Theme::catppuccin()          // Mocha
+Theme::catppuccin_frappe()
+Theme::catppuccin_macchiato()
 Theme::tokyo_night()
 Theme::solarized_dark()
 Theme::monokai()
+Theme::rose_pine()
+Theme::rose_pine_moon()
+Theme::kanagawa()
+Theme::everforest()
+Theme::ayu_dark()
+Theme::ayu_mirage()
+Theme::nightfox()
+Theme::nordfox()
+Theme::night_owl()
+Theme::material_palenight()
+Theme::oxocarbon()
+Theme::zenburn()
 ```
+
+Light:
+
+```rust
+Theme::solarized_light()
+Theme::gruvbox_light()
+Theme::tokyo_night_day()
+Theme::catppuccin_latte()
+Theme::rose_pine_dawn()
+Theme::ayu_light()
+```
+
+Every preset above also resolves through `preset_by_name`, which is
+case-insensitive and ignores `-`, `_`, and spaces, so `"rose pine dawn"`,
+`"rose-pine-dawn"`, and `"RosePineDawn"` are equivalent. `catppuccin` and
+`catppuccin_mocha` both resolve to the Mocha flavor.
+
+`Theme::ayu_light()` substitutes Ayu's blue for its upstream orange accent:
+the orange does not hold up on the near-white background for borders and focus
+rings.
 
 ### System Theme
 

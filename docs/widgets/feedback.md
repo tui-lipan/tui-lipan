@@ -16,7 +16,7 @@ Visual progress indicator with multiple styles and optional drag interaction.
 | `filled_style` | `Style` | Filled portion style (default: green) |
 | `filled_gradient` | `ColorGradient` | Filled portion gradient |
 | `empty_style` | `Style` | Empty portion style (default: dark gray) |
-| `block_empty_bg_dim` | `f32` | Dim intensity for block-track background |
+| `block_empty_bg_dim` | `f32` | How far the empty block track recedes toward the surface behind the bar (`0.0` = full fill color, `1.0` = indistinguishable from the background) |
 | `style` | `Style` | Base style |
 | `hover_style` | `Style` | Hover style (when draggable) |
 | `extend_hover_style` / `inherit_hover_style` | `Style` / `()` | Extend or inherit the hover theme role instead of replacing it |
