@@ -539,7 +539,7 @@ impl ListItemLine {
         }
     }
 
-    /// Add description (right-aligned) content.
+    /// Replace the description (right-aligned) content.
     pub fn description_spans(mut self, spans: impl IntoIterator<Item = Span>) -> Self {
         self.description_spans = spans.into_iter().collect();
         self
@@ -715,7 +715,7 @@ impl ListItem {
         }
     }
 
-    /// Add description (right-aligned) content.
+    /// Replace the description (right-aligned) content.
     pub fn description_spans(mut self, spans: impl IntoIterator<Item = Span>) -> Self {
         self.description_spans = spans.into_iter().collect();
         self

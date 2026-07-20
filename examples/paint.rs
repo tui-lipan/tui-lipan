@@ -174,13 +174,11 @@ fn toolbar(ctx: &Context<PaintDemo>) -> Element {
         .child(Button::new("Pencil").on_click(ctx.link().callback(|_| Msg::PickTool(Tool::Pencil))))
         .child(Button::new("Eraser").on_click(ctx.link().callback(|_| Msg::PickTool(Tool::Eraser))))
         .child(Button::new("Clear").on_click(ctx.link().callback(|_| Msg::Clear)))
-        .children([
-            color_button(ctx, "Cyan", Color::indexed(51)),
-            color_button(ctx, "Magenta", Color::indexed(201)),
-            color_button(ctx, "Yellow", Color::indexed(226)),
-            color_button(ctx, "Green", Color::indexed(46)),
-            color_button(ctx, "White", Color::indexed(255)),
-        ])
+        .child(color_button(ctx, "Cyan", Color::indexed(51)))
+        .child(color_button(ctx, "Magenta", Color::indexed(201)))
+        .child(color_button(ctx, "Yellow", Color::indexed(226)))
+        .child(color_button(ctx, "Green", Color::indexed(46)))
+        .child(color_button(ctx, "White", Color::indexed(255)))
         .into()
 }
 
@@ -289,4 +287,33 @@ fn apply_pixel(state: &mut State, px: i32, py: i32, tool: Tool, color: Color) {
 
 fn main() -> Result<()> {
     App::new().mount(PaintDemo).run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PaintDemo;
+    use tui_lipan::TestBackend;
+    use tui_lipan::prelude::*;
+
+    /// The toolbar mixes `child(...)` and `children([...])` easily, and
+    /// `children` replaces rather than appends, so a regression there silently
+    /// drops the leading buttons instead of failing to compile.
+    #[test]
+    fn toolbar_renders_every_button() {
+        let mut backend = TestBackend::new(PaintDemo);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 30,
+        });
+        backend.render();
+
+        let text = backend.capture_frame().plain_text();
+        for label in [
+            "Pencil", "Eraser", "Clear", "Cyan", "Magenta", "Yellow", "Green", "White",
+        ] {
+            assert!(text.contains(label), "toolbar is missing {label}:\n{text}");
+        }
+    }
 }
