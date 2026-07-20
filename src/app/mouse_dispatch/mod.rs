@@ -757,6 +757,30 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
         mouse
     }
 
+    /// Mirrors the runner: a terminal in a mouse-tracking mode consumes the event before ordinary
+    /// `MouseRegion` dispatch. Leaving this at the default made the harness quietly diverge from
+    /// the real app for exactly the case apps most need to test.
+    fn forward_terminal_mouse(&mut self, mouse: MouseEvent) -> bool {
+        #[cfg(feature = "terminal")]
+        {
+            let Some(plan) =
+                crate::app::runner::events::terminal_mouse_forward_plan(&self.core.tree, mouse)
+            else {
+                return false;
+            };
+            if plan.focus {
+                let _ = self.focus_for_node(plan.hit);
+            }
+            plan.callback.emit(plan.bytes);
+            true
+        }
+        #[cfg(not(feature = "terminal"))]
+        {
+            let _ = mouse;
+            false
+        }
+    }
+
     fn mouse_state(&mut self) -> &mut crate::app::interaction_state::MouseTrackingState {
         &mut self.mouse
     }

@@ -495,88 +495,14 @@ impl<C: Component> AppRunner<C> {
 
     #[cfg(feature = "terminal")]
     pub(crate) fn forward_terminal_mouse(&mut self, mouse: MouseEvent) -> bool {
-        let force_local = mouse.mods.shift;
-        if force_local {
-            return false;
-        }
-
-        let Some(hit) = self.core.tree.hit_test(mouse.x as i16, mouse.y as i16) else {
+        let Some(plan) = terminal_mouse_forward_plan(&self.core.tree, mouse) else {
             return false;
         };
-        if !self.core.tree.is_valid(hit) {
-            return false;
+        if plan.focus {
+            let _ = self.focus_for_node(plan.hit);
         }
-        if mouse::ancestor_mouse_region_captures_mods(&self.core.tree, hit, mouse.mods) {
-            return false;
-        }
-
-        let (content_rect, encoding, on_mouse_forward) = {
-            let node = self.core.tree.node(hit);
-            let NodeKind::Terminal(term) = &node.kind else {
-                return false;
-            };
-
-            if term.mouse_mode.mode == MouseMode::None {
-                return false;
-            }
-
-            let should_forward = match term.mouse_mode.mode {
-                MouseMode::X10 => matches!(mouse.kind, MouseKind::Down(_)),
-                MouseMode::Normal => matches!(
-                    mouse.kind,
-                    MouseKind::Down(_)
-                        | MouseKind::Up(_)
-                        | MouseKind::Drag(_)
-                        | MouseKind::ScrollUp
-                        | MouseKind::ScrollDown
-                ),
-                MouseMode::AnyEvent => true,
-                MouseMode::None => false,
-            };
-            if !should_forward {
-                return false;
-            }
-
-            if matches!(mouse.kind, MouseKind::Moved) && term.mouse_mode.mode != MouseMode::AnyEvent
-            {
-                return false;
-            }
-
-            let Some(content_rect) = terminal_mouse_content_rect(&self.core.tree, hit) else {
-                return false;
-            };
-
-            (
-                content_rect,
-                term.mouse_mode.encoding,
-                term.on_mouse_forward.clone(),
-            )
-        };
-
-        if content_rect.w == 0 || content_rect.h == 0 {
-            return false;
-        }
-        if !content_rect.contains(mouse.x as i16, mouse.y as i16) {
-            return false;
-        }
-
-        let Some(cb) = on_mouse_forward else {
-            return false;
-        };
-
-        let offset = (content_rect.x.max(0) as u16, content_rect.y.max(0) as u16);
-        if let Some(bytes) = mouse_event_to_bytes(mouse, encoding, offset) {
-            // Clicks, drags, and scrolls focus the terminal they act on, but
-            // plain motion must not: hovering over an any-event pane would
-            // otherwise steal focus.
-            if !matches!(mouse.kind, MouseKind::Moved) {
-                let _ = self.focus_for_node(hit);
-            }
-            cb.emit(bytes);
-            return true;
-        }
-
-        false
+        plan.callback.emit(plan.bytes);
+        true
     }
 
     pub(crate) fn dispatch_mouse_move(&mut self, mouse: MouseEvent) -> bool {
@@ -909,4 +835,89 @@ impl<C: Component> AppRunner<C> {
     pub(crate) fn to_content_coords(&self, x: u16, y: u16) -> (u16, u16) {
         (x, y)
     }
+}
+
+/// What forwarding a mouse event to a terminal requires, resolved from the node tree alone.
+///
+/// Split out from [`AppRunner::forward_terminal_mouse`] so `TestBackend` can share it. Without
+/// that, the test harness silently skipped terminal forwarding entirely and mouse behavior over a
+/// mouse-tracking terminal — which bypasses ordinary `MouseRegion` dispatch — could not be tested
+/// by any application.
+///
+/// Resolving into a plan (rather than acting directly) keeps the tree borrow separate from the
+/// `&mut self` needed to move focus.
+#[cfg(feature = "terminal")]
+pub(crate) struct TerminalMouseForward {
+    pub(crate) hit: crate::core::node::NodeId,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) callback: crate::callback::Callback<Vec<u8>>,
+    /// Clicks, drags, and scrolls focus the terminal they act on; plain motion must not, or
+    /// hovering an any-event pane would steal focus.
+    pub(crate) focus: bool,
+}
+
+#[cfg(feature = "terminal")]
+pub(crate) fn terminal_mouse_forward_plan(
+    tree: &crate::core::node::NodeTree,
+    mouse: MouseEvent,
+) -> Option<TerminalMouseForward> {
+    // Shift is the escape hatch for local selection over a tracking terminal.
+    if mouse.mods.shift {
+        return None;
+    }
+
+    let hit = tree.hit_test(mouse.x as i16, mouse.y as i16)?;
+    if !tree.is_valid(hit) {
+        return None;
+    }
+    if mouse::ancestor_mouse_region_captures_mods(tree, hit, mouse.mods) {
+        return None;
+    }
+
+    let node = tree.node(hit);
+    let NodeKind::Terminal(term) = &node.kind else {
+        return None;
+    };
+    if term.mouse_mode.mode == MouseMode::None {
+        return None;
+    }
+
+    let should_forward = match term.mouse_mode.mode {
+        MouseMode::X10 => matches!(mouse.kind, MouseKind::Down(_)),
+        MouseMode::Normal => matches!(
+            mouse.kind,
+            MouseKind::Down(_)
+                | MouseKind::Up(_)
+                | MouseKind::Drag(_)
+                | MouseKind::ScrollUp
+                | MouseKind::ScrollDown
+        ),
+        MouseMode::AnyEvent => true,
+        MouseMode::None => false,
+    };
+    if !should_forward {
+        return None;
+    }
+    if matches!(mouse.kind, MouseKind::Moved) && term.mouse_mode.mode != MouseMode::AnyEvent {
+        return None;
+    }
+
+    let content_rect = terminal_mouse_content_rect(tree, hit)?;
+    if content_rect.w == 0 || content_rect.h == 0 {
+        return None;
+    }
+    if !content_rect.contains(mouse.x as i16, mouse.y as i16) {
+        return None;
+    }
+
+    let callback = term.on_mouse_forward.clone()?;
+    let encoding = term.mouse_mode.encoding;
+    let offset = (content_rect.x.max(0) as u16, content_rect.y.max(0) as u16);
+    let bytes = mouse_event_to_bytes(mouse, encoding, offset)?;
+    Some(TerminalMouseForward {
+        hit,
+        bytes,
+        callback,
+        focus: !matches!(mouse.kind, MouseKind::Moved),
+    })
 }
