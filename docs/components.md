@@ -236,6 +236,44 @@ match msg {
 }
 ```
 
+### Delayed work: debounces, retries, and ticks
+
+Never `thread::sleep` inside a command. Tasks run on a fixed pool of 2-8 workers, so a sleeping
+task occupies one for the whole delay — two recurring timers are enough to park the pool on a
+low-core machine and stall every other background task behind them.
+
+Use `Command::after`, which waits on a shared timer thread and reaches the pool only once due:
+
+```rust
+use std::time::Duration;
+
+// Debounce: coalesce a resize storm into one flush.
+Command::after(Duration::from_millis(16), |link: CommandLink<Msg>| {
+    link.send(Msg::FlushResizes);
+})
+```
+
+Re-arming from the handler gives a recurring tick that costs no thread between firings:
+
+```rust
+Msg::Tick => {
+    refresh(ctx);
+    Update::with_command(Command::after(Duration::from_secs(1), |link: CommandLink<Msg>| {
+        link.send(Msg::Tick);
+    }))
+}
+```
+
+When you already hold a `CommandLink` and only need to deliver a message later, `send_after` is
+the direct form. It is dropped if the command is cancelled first:
+
+```rust
+link.send_after(Duration::from_millis(800), Msg::Deadline);
+```
+
+Delay first, then work: the closure body still runs on the pool, so a delayed fetch or filesystem
+sweep is fine inside `Command::after` — only the *waiting* moves off the pool.
+
 ### Thread Safety
 
 Commands use channels internally. The component itself never needs to be `Send` or `Sync`.
