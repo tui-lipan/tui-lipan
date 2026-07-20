@@ -17,6 +17,8 @@ impl TimerService {
     pub(super) fn schedule(&self, delay: Duration, task: Task) {
         #[cfg(feature = "web")]
         {
+            use wasm_bindgen::JsCast as _;
+
             let millis = i32::try_from(delay.as_millis()).unwrap_or(i32::MAX);
             let closure = wasm_bindgen::closure::Closure::once_into_js(move || {
                 super::TaskExecutor::global().execute(task);
