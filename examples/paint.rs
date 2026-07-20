@@ -288,3 +288,32 @@ fn apply_pixel(state: &mut State, px: i32, py: i32, tool: Tool, color: Color) {
 fn main() -> Result<()> {
     App::new().mount(PaintDemo).run()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::PaintDemo;
+    use tui_lipan::TestBackend;
+    use tui_lipan::prelude::*;
+
+    /// The toolbar mixes `child(...)` and `children([...])` easily, and
+    /// `children` replaces rather than appends, so a regression there silently
+    /// drops the leading buttons instead of failing to compile.
+    #[test]
+    fn toolbar_renders_every_button() {
+        let mut backend = TestBackend::new(PaintDemo);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 30,
+        });
+        backend.render();
+
+        let text = backend.capture_frame().plain_text();
+        for label in [
+            "Pencil", "Eraser", "Clear", "Cyan", "Magenta", "Yellow", "Green", "White",
+        ] {
+            assert!(text.contains(label), "toolbar is missing {label}:\n{text}");
+        }
+    }
+}

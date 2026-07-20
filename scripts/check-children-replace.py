@@ -28,8 +28,14 @@ ROOT = Path(__file__).resolve().parents[1]
 SEARCH_DIRS = ("src", "examples", "tests", "benches")
 
 # Appending setter -> the replacing setter that would discard its work.
+# Only `child`/`children` has been caught in the wild so far; the rest are
+# latent pairs guarded pre-emptively because they have the same shape.
 APPEND_THEN_REPLACE = {
     "child": "children",
+    "add_series": "series",
+    "class": "classes",
+    "item": "items",
+    "relation": "relations",
 }
 
 CHAIN_START = re.compile(r"\b[A-Z]\w*(?:::<[^>]*>)?::(?:new|default)\s*\(\s*\)")
@@ -91,7 +97,10 @@ def main() -> int:
             problems.extend(scan(path))
 
     if not problems:
-        print(f"children()/child() ordering OK ({files} files checked).")
+        print(
+            f"append/replace setter ordering OK "
+            f"({len(APPEND_THEN_REPLACE)} pairs, {files} files checked)."
+        )
         return 0
 
     print("Replacing setter discards an earlier appending setter:\n", file=sys.stderr)
