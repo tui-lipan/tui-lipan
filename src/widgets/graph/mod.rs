@@ -100,7 +100,8 @@ impl GraphNode {
         }
     }
 
-    /// Replace all child nodes.
+    /// Replace all children, discarding anything already added with
+    /// [`child`](Self::child). Call `child` repeatedly to append instead.
     pub fn children(mut self, children: impl IntoIterator<Item = GraphNode>) -> Self {
         self.children = children.into_iter().collect::<Vec<_>>().into();
         self

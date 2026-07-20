@@ -174,13 +174,11 @@ fn toolbar(ctx: &Context<PaintDemo>) -> Element {
         .child(Button::new("Pencil").on_click(ctx.link().callback(|_| Msg::PickTool(Tool::Pencil))))
         .child(Button::new("Eraser").on_click(ctx.link().callback(|_| Msg::PickTool(Tool::Eraser))))
         .child(Button::new("Clear").on_click(ctx.link().callback(|_| Msg::Clear)))
-        .children([
-            color_button(ctx, "Cyan", Color::indexed(51)),
-            color_button(ctx, "Magenta", Color::indexed(201)),
-            color_button(ctx, "Yellow", Color::indexed(226)),
-            color_button(ctx, "Green", Color::indexed(46)),
-            color_button(ctx, "White", Color::indexed(255)),
-        ])
+        .child(color_button(ctx, "Cyan", Color::indexed(51)))
+        .child(color_button(ctx, "Magenta", Color::indexed(201)))
+        .child(color_button(ctx, "Yellow", Color::indexed(226)))
+        .child(color_button(ctx, "Green", Color::indexed(46)))
+        .child(color_button(ctx, "White", Color::indexed(255)))
         .into()
 }
 
