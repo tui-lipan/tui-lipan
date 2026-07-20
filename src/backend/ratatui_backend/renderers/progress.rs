@@ -98,6 +98,7 @@ struct ProgressTrackCellsCtx<'a> {
     zones: &'a [ProgressZone],
     block_empty_bg_dim: f32,
     is_block_mode: bool,
+    track_backdrop: Option<Color>,
 }
 
 fn compute_progress_track_cells(
@@ -114,6 +115,7 @@ fn compute_progress_track_cells(
         zones,
         block_empty_bg_dim,
         is_block_mode,
+        track_backdrop,
     } = ctx;
     let filled_char = progress_style.filled_char();
     let empty_char = progress_style.empty_char();
@@ -179,7 +181,7 @@ fn compute_progress_track_cells(
         }
 
         if is_block_mode {
-            style = with_block_track_bg(style, is_filled_cell, block_empty_bg_dim);
+            style = with_block_track_bg(style, is_filled_cell, block_empty_bg_dim, track_backdrop);
             ch = ' ';
         }
 
@@ -205,6 +207,9 @@ pub(crate) struct ProgressBarRenderCtx<'a> {
     pub target_symbol: char,
     pub zones: &'a [ProgressZone],
     pub block_empty_bg_dim: f32,
+    /// Surface behind the bar; the empty track recedes toward this instead of
+    /// toward black. `None` when the theme background is not a concrete color.
+    pub track_backdrop: Option<Color>,
     pub padding: Padding,
     pub inverted: bool,
     pub is_hovered: bool,
@@ -237,6 +242,7 @@ pub(crate) fn render_progress_bar(
         target_symbol,
         zones,
         block_empty_bg_dim,
+        track_backdrop,
         padding,
         inverted,
         is_hovered,
@@ -342,6 +348,7 @@ pub(crate) fn render_progress_bar(
             zones_fingerprint: fingerprint_progress_zones(zones),
             block_empty_bg_dim_bits: block_empty_bg_dim.to_bits(),
             is_block_mode,
+            track_backdrop,
         };
         let arc_track = {
             let mut caches = rc.borrow_mut();
@@ -362,6 +369,7 @@ pub(crate) fn render_progress_bar(
                                 zones,
                                 block_empty_bg_dim,
                                 is_block_mode,
+                                track_backdrop,
                             },
                         )
                         .into_boxed_slice(),
@@ -386,6 +394,7 @@ pub(crate) fn render_progress_bar(
                 zones,
                 block_empty_bg_dim,
                 is_block_mode,
+                track_backdrop,
             },
         );
         for (ch, style) in fill_track {
@@ -613,12 +622,24 @@ fn merged_position_text(
     }
 }
 
-fn with_block_track_bg(mut style: Style, is_filled_cell: bool, empty_dim: f32) -> Style {
+fn with_block_track_bg(
+    mut style: Style,
+    is_filled_cell: bool,
+    empty_dim: f32,
+    backdrop: Option<Color>,
+) -> Style {
     let source = style.bg.or(style.fg);
     let bg = if is_filled_cell {
         source
     } else {
-        source.map(|paint| dim_paint_by(paint, empty_dim))
+        // Recede the empty track toward the surface behind the bar, not toward
+        // black: on a light theme, dimming the fill produces a black trough on
+        // pale paper. Without a known backdrop (ANSI colors, `Color::Reset`)
+        // fall back to dimming, which is the best guess available.
+        source.map(|paint| match backdrop {
+            Some(surface) => blend_paint_toward(paint, surface, empty_dim),
+            None => dim_paint_by(paint, empty_dim),
+        })
     };
 
     style.bg = bg;
@@ -664,6 +685,15 @@ fn dim_paint_by(paint: Paint, amount: f32) -> Paint {
     match paint {
         Paint::Solid(color) => Paint::Solid(color.dim_by(amount)),
         Paint::Alpha { color, alpha } => Paint::from_color_alpha_u8(color.dim_by(amount), alpha),
+    }
+}
+
+fn blend_paint_toward(paint: Paint, target: Color, amount: f32) -> Paint {
+    match paint {
+        Paint::Solid(color) => Paint::Solid(color.blend_toward(target, amount)),
+        Paint::Alpha { color, alpha } => {
+            Paint::from_color_alpha_u8(color.blend_toward(target, amount), alpha)
+        }
     }
 }
 
@@ -715,6 +745,7 @@ pub(crate) fn render_progress_bar_node(
             target_symbol: node.target_symbol,
             zones: &zones,
             block_empty_bg_dim: node.block_empty_bg_dim,
+            track_backdrop: theme.primary.bg.map(|p| p.color()),
             padding: node.padding,
             inverted: node.inverted,
             is_hovered,

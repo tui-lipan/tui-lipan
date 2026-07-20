@@ -50,6 +50,9 @@ pub(crate) struct ProgressTrackCacheKey {
     pub zones_fingerprint: u64,
     pub block_empty_bg_dim_bits: u32,
     pub is_block_mode: bool,
+    /// Surface the empty track blends toward; part of the key so a theme
+    /// switch cannot serve a track cached against the previous background.
+    pub track_backdrop: Option<Color>,
 }
 
 /// Key for [`crate::utils::color_contrast::readable_text_color`] and friends: preferred fg + background.

@@ -426,17 +426,62 @@ Style precedence: **explicit widget style/slot > ThemeProvider theme > widget de
 
 ### Named Presets
 
+Dark:
+
 ```rust
 Theme::default()
 Theme::one_dark()
 Theme::dracula()
 Theme::nord()
-Theme::gruvbox()
-Theme::catppuccin()
+Theme::gruvbox_dark()
+Theme::catppuccin_mocha()
+Theme::catppuccin_frappe()
+Theme::catppuccin_macchiato()
 Theme::tokyo_night()
 Theme::solarized_dark()
 Theme::monokai()
+Theme::rose_pine()
+Theme::rose_pine_moon()
+Theme::kanagawa()
+Theme::everforest()
+Theme::ayu_dark()
+Theme::ayu_mirage()
+Theme::nightfox()
+Theme::nordfox()
+Theme::night_owl()
+Theme::material_palenight()
+Theme::oxocarbon()
+Theme::zenburn()
 ```
+
+Light:
+
+```rust
+Theme::solarized_light()
+Theme::gruvbox_light()
+Theme::tokyo_night_day()
+Theme::catppuccin_latte()
+Theme::rose_pine_dawn()
+Theme::ayu_light()
+```
+
+Every preset above also resolves through `preset_by_name`, which is
+case-insensitive and ignores `-`, `_`, and spaces, so `"rose pine dawn"`,
+`"rose-pine-dawn"`, and `"RosePineDawn"` are equivalent.
+
+The pre-0.2 names `catppuccin` and `gruvbox` still resolve through
+`preset_by_name`, so theme TOML and config files written against 0.1 keep
+working after the constructors were renamed to `Theme::catppuccin_mocha` and
+`Theme::gruvbox_dark`.
+
+A bare preset name means the theme has one canonical scheme (`dracula`,
+`nord`), or that the bare name is what upstream calls that variant
+(`tokyo_night`, `rose_pine`). Families whose variants all carry names spell the
+variant out (`solarized_dark`/`solarized_light`, `ayu_dark`/`ayu_mirage`).
+
+`Theme::ayu_light()` substitutes Ayu's blue for its upstream orange accent:
+the orange does not hold up on the near-white background for borders and focus
+rings.
 
 ### System Theme
 

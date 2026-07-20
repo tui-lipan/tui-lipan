@@ -373,5 +373,8 @@ fn main() -> tui_lipan::Result<()> {
 }
 ```
 
-Available themes: `default()`, `one_dark()`, `dracula()`, `nord()`, `gruvbox()`,
-`catppuccin()`, `tokyo_night()`, `solarized_dark()`, `monokai()`.
+Common themes: `default()`, `one_dark()`, `dracula()`, `nord()`,
+`gruvbox_dark()`, `catppuccin_mocha()`, `tokyo_night()`, `rose_pine()`,
+`kanagawa()`, `solarized_dark()`, `monokai()`, plus light variants such as
+`solarized_light()` and `catppuccin_latte()`. See
+[Styling](./styling.md#named-presets) for the full list.
