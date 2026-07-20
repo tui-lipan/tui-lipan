@@ -23,6 +23,15 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- A plain mouse wheel tick over a `ScrollView` with `ScrollAxis::Horizontal`
+  now pans that view horizontally instead of being discarded. Shift+wheel is
+  still the explicit horizontal override, and stays required when both axes are
+  enabled; with vertical scrolling off there was nothing to disambiguate, so the
+  modifier only made the wheel do nothing. When the view has no horizontal
+  travel left the tick is reported unhandled and bubbles to an ancestor, so a
+  horizontal strip nested inside a vertical `ScrollView` does not trap the
+  wheel.
+
 - Renamed `Theme::catppuccin` to `Theme::catppuccin_mocha` and `Theme::gruvbox`
   to `Theme::gruvbox_dark`, so every preset in a multi-variant family names its
   variant explicitly. Both bare names were ambiguous next to the variants added
@@ -49,6 +58,9 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `ScrollView::scroll_wheel(false)` now also suppresses horizontal wheel
+  panning. Shift+wheel previously kept panning a view that had opted out of
+  wheel scrolling entirely.
 - `TestBackend` now forwards mouse events to a terminal in a mouse-tracking
   mode, matching the runner. It left `forward_terminal_mouse` at the trait
   default of `false`, so a full-screen TUI that consumes clicks before ordinary

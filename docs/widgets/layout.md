@@ -303,7 +303,7 @@ Scrollable container with optional scrollbar.
 | `axis` | `ScrollAxis` | Scroll axes: `Vertical` (default), `Horizontal`, or `Both` |
 | `h_scrollbar` | `bool` | Show horizontal scrollbar when axis includes horizontal scrolling |
 | `h_scrollbar_config` | `ScrollbarConfig` | Horizontal scrollbar styling (same type as `scrollbar_config`) |
-| `h_scroll_wheel_multiplier` | `u16` | Shift+wheel step (columns); falls back to `scroll_wheel_multiplier`, then the app default |
+| `h_scroll_wheel_multiplier` | `u16` | Horizontal wheel step (columns); falls back to `scroll_wheel_multiplier`, then the app default |
 | `show_scroll_indicators` | `bool` | Show top/bottom overflow indicators |
 | `scroll_indicator_style` | `Style` | Overflow indicator style |
 | `estimated_child_height` | `u16` | Cold-start fallback height for unmeasured off-screen children (default `3`) |
@@ -337,6 +337,12 @@ The same `ScrollbarConfig` type is used on all scrollable widgets (`List`, `Tabl
 natural width instead of stretching to the viewport width. Arrow Left/Right and
 shift+mouse wheel pan horizontally; Up/Down and the vertical wheel remain on the vertical
 axis when both are enabled.
+
+With `ScrollAxis::Horizontal` the plain mouse wheel also pans horizontally, since there is
+no vertical axis to disambiguate against. Once the view reaches the relevant edge the tick
+is left unhandled and bubbles to an ancestor, so a horizontal strip nested inside a
+vertical `ScrollView` does not trap the wheel. Shift+wheel keeps working as the explicit
+horizontal override on every axis configuration.
 
 ```rust
 ScrollView::new()

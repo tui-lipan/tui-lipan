@@ -23,13 +23,28 @@ fn h_scroll_metrics(sv: &crate::widgets::internal::ScrollViewNode) -> ScrollMetr
     }
 }
 
-fn apply_h_scroll(tree: &mut NodeTree, id: NodeId, action: ScrollAction) -> bool {
+/// Outcome of a horizontal pan attempt.
+///
+/// Distinguishing `AtEdge` from `Moved` lets the wheel dispatcher bubble a
+/// plain wheel tick to an ancestor once a horizontal-only view has run out of
+/// travel, while keyboard panning still reports the key as consumed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HScrollOutcome {
+    /// The node cannot pan horizontally at all.
+    Rejected,
+    /// Horizontal panning is possible but the offset did not change.
+    AtEdge,
+    /// The offset changed.
+    Moved,
+}
+
+fn apply_h_scroll_inner(tree: &mut NodeTree, id: NodeId, action: ScrollAction) -> HScrollOutcome {
     let (next, offset) = {
         let NodeKind::ScrollView(sv) = &tree.node(id).kind else {
-            return false;
+            return HScrollOutcome::Rejected;
         };
         if !sv.axis.horizontal_enabled() || sv.h_max_offset == 0 {
-            return false;
+            return HScrollOutcome::Rejected;
         }
         let metrics = h_scroll_metrics(sv);
         let next = apply_scroll_action(sv.h_offset, metrics, action).min(sv.h_max_offset);
@@ -37,17 +52,21 @@ fn apply_h_scroll(tree: &mut NodeTree, id: NodeId, action: ScrollAction) -> bool
     };
 
     if next == offset {
-        return true;
+        return HScrollOutcome::AtEdge;
     }
 
     let NodeKind::ScrollView(sv) = &mut tree.node_mut(id).kind else {
-        return false;
+        return HScrollOutcome::Rejected;
     };
     sv.h_offset = next;
     sv.h_scroll_offset = next as u16;
     sv.h_scroll_override = Some(next);
     sv.h_scroll_handler_dirty = true;
-    true
+    HScrollOutcome::Moved
+}
+
+fn apply_h_scroll(tree: &mut NodeTree, id: NodeId, action: ScrollAction) -> bool {
+    apply_h_scroll_inner(tree, id, action) != HScrollOutcome::Rejected
 }
 
 fn scroll_action_delta(action: crate::widgets::internal::ScrollAction) -> isize {
@@ -212,6 +231,32 @@ pub(crate) fn handle_key(tree: &mut NodeTree, node_id: NodeId, key: &KeyEvent) -
     true
 }
 
+/// Whether a plain (unmodified) wheel tick over this node should pan
+/// horizontally instead of being discarded.
+///
+/// Only horizontal-*only* views remap: when both axes are enabled the wheel
+/// keeps its vertical meaning and `Shift` selects the horizontal axis.
+pub(crate) fn wheel_remaps_to_horizontal(kind: &NodeKind) -> bool {
+    let NodeKind::ScrollView(sv) = kind else {
+        return false;
+    };
+    sv.scroll_wheel && sv.axis.horizontal_enabled() && !sv.axis.vertical_enabled()
+}
+
+/// Handle a plain wheel tick that [`wheel_remaps_to_horizontal`] redirected to
+/// the horizontal axis.
+///
+/// Returns `false` when the view has no horizontal travel left, so the tick
+/// bubbles to an ancestor that can still scroll. Without that, a horizontal
+/// strip nested in a vertical `ScrollView` would trap the wheel.
+pub(crate) fn handle_remapped_wheel_scroll(
+    tree: &mut NodeTree,
+    id: NodeId,
+    action: ScrollAction,
+) -> bool {
+    apply_h_scroll_inner(tree, id, action) == HScrollOutcome::Moved
+}
+
 /// Handle scroll-wheel events for a ScrollView node.
 pub(crate) fn handle_scroll(
     tree: &mut NodeTree,
@@ -219,6 +264,12 @@ pub(crate) fn handle_scroll(
     action: crate::widgets::internal::ScrollAction,
 ) -> bool {
     if is_horizontal_action(action) {
+        let NodeKind::ScrollView(sv) = &tree.node(id).kind else {
+            return false;
+        };
+        if !sv.scroll_wheel {
+            return false;
+        }
         return apply_h_scroll(tree, id, action);
     }
 
@@ -337,7 +388,9 @@ mod tests {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use super::{handle_key, handle_scroll};
+    use super::{
+        handle_key, handle_remapped_wheel_scroll, handle_scroll, wheel_remaps_to_horizontal,
+    };
     use crate::Length;
     use crate::animation::{Easing, TransitionConfig};
     use crate::callback::Callback;
@@ -346,6 +399,7 @@ mod tests {
     use crate::core::node::{NodeKind, NodeTree};
     use crate::layout::LayoutEngine;
     use crate::style::Rect;
+    use crate::widgets::internal::ScrollAction;
     use crate::widgets::{HStack, ScrollAxis, ScrollBehavior, ScrollView, Text};
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -634,6 +688,73 @@ mod tests {
         };
         assert!(scroll.h_offset > 0);
         assert!(scroll.h_scroll_handler_dirty);
+    }
+
+    fn make_horizontal_only_scroll_view() -> crate::Element {
+        ScrollView::new()
+            .axis(ScrollAxis::Horizontal)
+            .h_scrollbar(true)
+            .scroll_keys(crate::widgets::ScrollKeymap::DEFAULT)
+            .child(
+                HStack::new()
+                    .child(Text::new(
+                        "extra wide trailing content for horizontal overflow",
+                    ))
+                    .height(Length::Px(1))
+                    .width(Length::Auto)
+                    .key("row"),
+            )
+            .into()
+    }
+
+    #[test]
+    fn plain_wheel_remaps_on_horizontal_only_view() {
+        let root = make_horizontal_only_scroll_view();
+        let tree = reconcile_scroll_view(&root);
+        assert!(wheel_remaps_to_horizontal(&tree.node(tree.root).kind));
+    }
+
+    #[test]
+    fn plain_wheel_does_not_remap_when_vertical_is_enabled() {
+        for root in [make_both_axes_scroll_view(), make_scroll_view()] {
+            let tree = reconcile_scroll_view(&root);
+            assert!(!wheel_remaps_to_horizontal(&tree.node(tree.root).kind));
+        }
+    }
+
+    #[test]
+    fn remapped_wheel_pans_then_releases_at_edge() {
+        let root = make_horizontal_only_scroll_view();
+        let mut tree = reconcile_scroll_view(&root);
+        let root_id = tree.root;
+
+        assert!(handle_remapped_wheel_scroll(
+            &mut tree,
+            root_id,
+            ScrollAction::LineRight(1),
+        ));
+        let NodeKind::ScrollView(scroll) = &tree.node(root_id).kind else {
+            panic!("expected scroll view");
+        };
+        assert!(scroll.h_offset > 0);
+
+        // Pan back to the left edge: still a real move, so still handled.
+        assert!(handle_remapped_wheel_scroll(
+            &mut tree,
+            root_id,
+            ScrollAction::LineLeft(99),
+        ));
+        let NodeKind::ScrollView(scroll) = &tree.node(root_id).kind else {
+            panic!("expected scroll view");
+        };
+        assert_eq!(scroll.h_offset, 0);
+
+        // Now out of travel: report unhandled so an ancestor can scroll.
+        assert!(!handle_remapped_wheel_scroll(
+            &mut tree,
+            root_id,
+            ScrollAction::LineLeft(1),
+        ));
     }
 
     #[test]
