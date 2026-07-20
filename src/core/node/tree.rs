@@ -140,6 +140,12 @@ impl Node {
         self.kind.is_hoverable_for_theme(self.active_theme())
     }
 
+    /// Returns true if entering or leaving hover on this node changes what is painted.
+    /// Nodes that are hoverable only because they accept clicks return false.
+    pub fn hover_affects_paint(&self) -> bool {
+        self.kind.hover_affects_paint(self.active_theme())
+    }
+
     /// Active theme for render-time style-slot resolution.
     pub(crate) fn active_theme(&self) -> &Theme {
         &self.active_theme

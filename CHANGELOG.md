@@ -27,6 +27,14 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Hover transitions no longer force a repaint when neither the node being left
+  nor the one being entered paints differently while hovered. A `MouseRegion`
+  that is hoverable only because it accepts clicks — with a masked `hit_test`,
+  flapping hover on every gap the pointer crosses — repainted the whole tree on
+  each motion event; now its `on_hover_change` callback's `Update` decides
+  (breaking). Widgets can override the new `WidgetNode::hover_affects_paint`
+  to declare hover-dependent visuals.
+
 - Keyboard focus traversal (Tab/Shift-Tab) now repaints. Focus chrome drawn from
   the focused widget - focus styles, carets, `Input` prefix/suffix decorations -
   previously stayed on the old widget until some later key happened to dirty the

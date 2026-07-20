@@ -32,7 +32,8 @@ use crate::widgets::Terminal;
 use crate::widgets::internal::AnimatedNode;
 use crate::widgets::{
     Animated, DocumentView, DragPayload, DragSource, DropTarget, Frame, HStack, Input, List,
-    ListItem, ScrollView, Spacer, Spinner, SpinnerSpeed, Text, TextArea, TextAreaEvent, VStack,
+    ListItem, MouseRegion, ScrollView, Spacer, Spinner, SpinnerSpeed, Text, TextArea,
+    TextAreaEvent, VStack,
 };
 use crossterm::event::{
     Event as CEvent, KeyCode as CKeyCode, KeyEvent as CKeyEvent, KeyModifiers as CKeyModifiers,
@@ -2989,6 +2990,65 @@ fn attribution_records_component_full_update() {
         "expected AttributionFullProbe Full attribution, got {:?}",
         frame.attributions
     );
+}
+
+struct HoverPaintSmoke;
+
+impl Component for HoverPaintSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        HStack::new()
+            .children([
+                // Click-only: hoverable, but nothing about it paints differently.
+                MouseRegion::new()
+                    .on_click(ctx.link().callback(|_: MouseEvent| ()))
+                    .child(Text::new("aaaaa"))
+                    .key("click-only-a"),
+                MouseRegion::new()
+                    .on_click(ctx.link().callback(|_: MouseEvent| ()))
+                    .child(Text::new("bbbbb"))
+                    .key("click-only-b"),
+                MouseRegion::new()
+                    .on_click(ctx.link().callback(|_: MouseEvent| ()))
+                    .hover_style(Style::new().bg(Color::Blue))
+                    .child(Text::new("ccccc"))
+                    .key("hover-styled"),
+            ])
+            .into()
+    }
+}
+
+/// Motion across click-only mouse regions must not repaint. The hover node
+/// changes on every boundary crossing, but neither side renders differently
+/// while hovered, so a repaint there is pure waste — and with a masked
+/// `hit_test` the hover flaps on every gap, repainting many times per second.
+#[test]
+fn hover_transition_between_click_only_regions_is_not_dirty() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 15,
+        h: 1,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), HoverPaintSmoke, ());
+    init_runner(&mut runner, HoverPaintSmoke, viewport);
+
+    assert!(!runner.update_hover(1, 0), "entering click-only a");
+    assert!(!runner.update_hover(6, 0), "crossing into click-only b");
+    assert!(
+        runner.update_hover(11, 0),
+        "entering the hover-styled region"
+    );
+    assert!(runner.update_hover(1, 0), "leaving the hover-styled region");
 }
 
 #[test]

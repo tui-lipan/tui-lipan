@@ -55,6 +55,15 @@ pub(crate) trait WidgetNode {
     fn is_hoverable_for_theme(&self, _theme: &Theme) -> bool {
         self.is_hoverable()
     }
+    /// Whether a hover enter/leave transition on this node changes what is painted.
+    ///
+    /// Hover tracking runs for anything [`Self::is_hoverable_for_theme`] accepts, which
+    /// includes nodes that are hoverable only because they take clicks. Those have no
+    /// hover-dependent visuals, so a transition must not force a repaint on its own —
+    /// the `Update` returned from the node's hover callback decides.
+    fn hover_affects_paint(&self, theme: &Theme) -> bool {
+        self.is_hoverable_for_theme(theme)
+    }
     /// Refine hit-testing. Returns Some(true/false) to override default interactive check.
     fn hit_test_refinement(&self, _x: i16, _y: i16, _rect: Rect) -> Option<bool> {
         None
@@ -338,6 +347,10 @@ impl WidgetNode for NodeKind {
 
     fn is_hoverable_for_theme(&self, theme: &Theme) -> bool {
         node_kind_delegate_match!(self, is_hoverable_for_theme(theme))
+    }
+
+    fn hover_affects_paint(&self, theme: &Theme) -> bool {
+        node_kind_delegate_match!(self, hover_affects_paint(theme))
     }
 
     fn hit_test_refinement(&self, x: i16, y: i16, rect: Rect) -> Option<bool> {
