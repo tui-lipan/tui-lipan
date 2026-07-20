@@ -132,6 +132,7 @@ pub(crate) enum ScrollableTag {
     Terminal,
     DraggableTabBar,
     DocumentView,
+    PanView,
     /// Not scrollable - bubble to parent.
     NonScrollable,
 }
@@ -148,6 +149,7 @@ pub(crate) fn classify_scrollable(kind: &NodeKind) -> ScrollableTag {
         NodeKind::Terminal(_) => ScrollableTag::Terminal,
         NodeKind::DraggableTabBar(_) => ScrollableTag::DraggableTabBar,
         NodeKind::DocumentView(_) => ScrollableTag::DocumentView,
+        NodeKind::PanView(_) => ScrollableTag::PanView,
         _ => ScrollableTag::NonScrollable,
     }
 }

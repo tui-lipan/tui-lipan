@@ -20,8 +20,18 @@ While the crate is on `0.x.y`:
 - `CommandLink<Msg>` now implements `Clone` unconditionally. The derived impl
   bounded on `Msg: Clone`, so `link.clone()` silently resolved to cloning the
   reference, which cannot escape into a task.
+- `PanView::wheel_to_pan(bool)` toggles mouse-wheel panning, mirroring the
+  existing `drag_to_pan`. Defaults to `true`.
 
 ### Changed
+
+- `PanView` now responds to the mouse wheel. It supported drag and keyboard
+  panning but was never routed to the wheel dispatcher at all, so spinning the
+  wheel over a pan surface did nothing. The wheel pans vertically and
+  shift+wheel horizontally, each tick moving one `key_step` in that axis so
+  wheel and keyboard panning share one step size. A clamped view at its edge
+  leaves the tick unhandled so it bubbles to an ancestor; an unclamped free
+  canvas has no edge and keeps consuming. Opt out with `wheel_to_pan(false)`.
 
 - `children(...)` doc comments on `ScrollView`, the stack containers, `Flow`,
   `Splitter`, `TreeNode`, and `GraphNode` now state that the call discards

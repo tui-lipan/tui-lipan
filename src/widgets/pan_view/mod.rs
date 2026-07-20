@@ -222,6 +222,7 @@ pub struct PanView {
     pub(crate) center_content: bool,
     pub(crate) free_pan_margin: Option<(u16, u16)>,
     pub(crate) drag_to_pan: bool,
+    pub(crate) wheel_to_pan: bool,
     pub(crate) keymap: PanKeymap,
     pub(crate) key_step: (u16, u16),
     pub(crate) focusable: bool,
@@ -243,6 +244,7 @@ impl Default for PanView {
             center_content: false,
             free_pan_margin: None,
             drag_to_pan: true,
+            wheel_to_pan: true,
             keymap: PanKeymap::default(),
             key_step: (4, 2),
             focusable: false,
@@ -324,6 +326,16 @@ impl PanView {
         self
     }
 
+    /// Enable or disable mouse-wheel panning (default `true`).
+    ///
+    /// The wheel pans vertically and `Shift`+wheel horizontally, each tick
+    /// moving one [`key_step`](Self::key_step) in that axis. Disable this when
+    /// an ancestor should receive the wheel instead.
+    pub fn wheel_to_pan(mut self, enabled: bool) -> Self {
+        self.wheel_to_pan = enabled;
+        self
+    }
+
     /// Configure keys that move the viewport.
     pub fn keymap(mut self, keymap: PanKeymap) -> Self {
         self.keymap = keymap;
@@ -402,6 +414,7 @@ impl crate::layout::hash::LayoutHash for PanView {
         self.center_content.hash(hasher);
         self.free_pan_margin.hash(hasher);
         self.drag_to_pan.hash(hasher);
+        self.wheel_to_pan.hash(hasher);
         self.keymap.hash(hasher);
         self.key_step.hash(hasher);
         self.focusable.hash(hasher);

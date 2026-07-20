@@ -142,7 +142,7 @@ fn status_line(ctx: &Context<PanViewExample>) -> String {
         None => "clicked=none".to_string(),
     };
     format!(
-        "The graph starts centered in an unclamped, bounded PanView. Drag or use arrows/hjkl to pan; press r to animate back to center. {pan}. {clicked}."
+        "The graph starts centered in an unclamped, bounded PanView. Drag, spin the wheel (shift+wheel pans horizontally), or use arrows/hjkl to pan; press r to animate back to center. {pan}. {clicked}."
     )
 }
 
