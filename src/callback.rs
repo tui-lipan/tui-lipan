@@ -93,12 +93,25 @@ impl CancellationToken {
 }
 
 /// Type-safe handle used by background tasks to send messages back to the UI thread.
-#[derive(Clone)]
 pub struct CommandLink<Msg: Send + 'static> {
     scope: ScopeId,
     tx: CommandTx,
     cancellation_token: CancellationToken,
     _marker: PhantomData<fn(Msg)>,
+}
+
+/// Hand-written so cloning does not require `Msg: Clone`. `#[derive(Clone)]` would bound the impl
+/// on the message type, and `link.clone()` would then silently resolve to cloning the `&` instead —
+/// borrowing the link rather than sharing it, which fails to escape into a task.
+impl<Msg: Send + 'static> Clone for CommandLink<Msg> {
+    fn clone(&self) -> Self {
+        Self {
+            scope: self.scope,
+            tx: self.tx.clone(),
+            cancellation_token: self.cancellation_token.clone(),
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<Msg: Send + 'static> CommandLink<Msg> {
@@ -136,6 +149,20 @@ impl<Msg: Send + 'static> CommandLink<Msg> {
             return false;
         }
         self.tx.send((self.scope, Box::new(msg))).is_ok()
+    }
+
+    /// Send a message after `delay`, without holding a thread while it waits.
+    ///
+    /// The shared timer thread does the waiting, so this is the right way to arm a debounce or a
+    /// recurring tick from code that already holds a link — spawning a thread per delay, or
+    /// sleeping inside a task, both cost far more than the message being delivered.
+    ///
+    /// The message is dropped if the command is cancelled before the delay elapses.
+    pub fn send_after(&self, delay: std::time::Duration, msg: Msg) {
+        let link = self.clone();
+        crate::core::component::schedule_after(delay, move || {
+            link.send_if_not_cancelled(msg);
+        });
     }
 }
 

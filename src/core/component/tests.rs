@@ -495,3 +495,89 @@ fn command_link_send_if_not_cancelled_suppresses_messages() {
         Err(mpsc::RecvTimeoutError::Timeout)
     ));
 }
+
+/// `Command::after` must not occupy an executor worker while it waits. The executor runs 2-8
+/// workers, so if delays were served by sleeping tasks, a couple of recurring timers would park
+/// the pool and stall everything behind them. Saturating the pool with long timers and then
+/// requiring prompt work to run proves the waiting happens elsewhere.
+#[test]
+fn after_does_not_occupy_executor_workers_while_waiting() {
+    let (cmd_tx, _cmd_rx) = mpsc::channel();
+    let runtime = || CommandRuntime {
+        scope: ScopeId(1),
+        tx: cmd_tx.clone(),
+    };
+
+    // Far more long timers than the pool has workers (worker count is capped at 8).
+    for _ in 0..64 {
+        Command::after(Duration::from_secs(30), |_link: CommandLink<()>| {}).run(runtime());
+    }
+
+    // Ordinary background work must still run promptly.
+    let (ran_tx, ran_rx) = mpsc::channel();
+    Command::spawn(move |_link: CommandLink<()>| {
+        let _ = ran_tx.send(());
+    })
+    .run(runtime());
+
+    ran_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("pending timers must not block the executor pool");
+}
+
+#[test]
+fn after_runs_the_task_once_the_delay_elapses() {
+    let (cmd_tx, _cmd_rx) = mpsc::channel();
+    let (ran_tx, ran_rx) = mpsc::channel();
+
+    let start = std::time::Instant::now();
+    Command::after(Duration::from_millis(60), move |_link: CommandLink<()>| {
+        let _ = ran_tx.send(());
+    })
+    .run(CommandRuntime {
+        scope: ScopeId(1),
+        tx: cmd_tx,
+    });
+
+    ran_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("delayed task must run");
+    assert!(
+        start.elapsed() >= Duration::from_millis(50),
+        "task ran before its delay elapsed"
+    );
+}
+
+/// Timers must fire in due order even when queued out of order, or a short debounce submitted
+/// after a long tick would be held behind it.
+#[test]
+fn after_fires_in_due_order_regardless_of_submission_order() {
+    let (cmd_tx, _cmd_rx) = mpsc::channel();
+    let runtime = || CommandRuntime {
+        scope: ScopeId(1),
+        tx: cmd_tx.clone(),
+    };
+    let (order_tx, order_rx) = mpsc::channel();
+
+    let late = order_tx.clone();
+    Command::after(Duration::from_millis(220), move |_link: CommandLink<()>| {
+        let _ = late.send("late");
+    })
+    .run(runtime());
+
+    let early = order_tx.clone();
+    Command::after(Duration::from_millis(40), move |_link: CommandLink<()>| {
+        let _ = early.send("early");
+    })
+    .run(runtime());
+
+    assert_eq!(
+        order_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        "early",
+        "a shorter delay submitted second must still fire first"
+    );
+    assert_eq!(
+        order_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        "late"
+    );
+}

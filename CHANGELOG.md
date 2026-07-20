@@ -11,6 +11,16 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- `Command::after` and `CommandLink::send_after` schedule delayed work on a
+  shared timer thread instead of sleeping inside a pool worker, so a pending
+  timer no longer occupies one of the 2-8 task workers. Timers fire through the
+  executor, so a slow callback cannot delay later timers.
+- `CommandLink<Msg>` now implements `Clone` unconditionally. The derived impl
+  bounded on `Msg: Clone`, so `link.clone()` silently resolved to cloning the
+  reference, which cannot escape into a task.
+
 ### Changed
 
 - Renamed `Theme::catppuccin` to `Theme::catppuccin_mocha` and `Theme::gruvbox`

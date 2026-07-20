@@ -175,6 +175,13 @@ expensive search work. Run it through `ctx.link().command(...)` or
 `Command::spawn`, and use the narrow update that matches the immediate UI
 change. `Command::new` runs synchronously on the UI thread.
 
+Do not `thread::sleep` inside a task to delay work. The executor is a fixed pool
+of 2-8 workers, so a sleeping task holds one for its whole delay; a couple of
+recurring ticks can park every worker and stall unrelated background work behind
+them. Use `Command::after(delay, ...)` or `link.send_after(delay, msg)`, which
+wait on a shared timer thread and only reach the pool once due. See
+[Components](components.md#delayed-work-debounces-retries-and-ticks).
+
 For superseding work such as filter-as-you-type, use a keyed command with
 `TaskPolicy::LatestOnly`. Cancellation is cooperative, so check
 `is_cancelled()` and use `send_if_not_cancelled(...)` before publishing results.

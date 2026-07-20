@@ -47,11 +47,19 @@ use task_policy::Task;
 mod executor_native;
 #[cfg(target_arch = "wasm32")]
 mod executor_wasm;
+#[cfg(not(target_arch = "wasm32"))]
+mod timer_native;
+#[cfg(target_arch = "wasm32")]
+mod timer_wasm;
 
 #[cfg(not(target_arch = "wasm32"))]
 use executor_native::TaskExecutor;
 #[cfg(target_arch = "wasm32")]
 use executor_wasm::TaskExecutor;
+#[cfg(not(target_arch = "wasm32"))]
+use timer_native::TimerService;
+#[cfg(target_arch = "wasm32")]
+use timer_wasm::TimerService;
 
 impl std::fmt::Debug for Command {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -75,6 +83,42 @@ impl Command {
     {
         Self {
             action: Box::new(SpawnAction::<Msg, F> {
+                f: Some(f),
+                _marker: PhantomData,
+            }),
+        }
+    }
+
+    /// Run a background task after `delay`, without holding a worker while it waits.
+    ///
+    /// Use this for debounces, retries, and recurring ticks instead of `Command::spawn` with a
+    /// `thread::sleep` inside. The executor runs on a fixed pool of 2-8 workers, so a sleeping task
+    /// occupies one for the whole delay: two recurring timers can park every worker on a low-core
+    /// machine and stall unrelated background work behind them. A shared timer thread does the
+    /// waiting here, and the task reaches the pool only once it is due.
+    ///
+    /// ```no_run
+    /// # use tui_lipan::prelude::*;
+    /// # use std::time::Duration;
+    /// # #[derive(Clone)] enum Msg { Tick }
+    /// # fn example() -> Command {
+    /// Command::after(Duration::from_secs(1), |link: CommandLink<Msg>| {
+    ///     link.send(Msg::Tick);
+    /// })
+    /// # }
+    /// ```
+    ///
+    /// Re-arming from the handler gives a recurring tick that costs no thread between firings. On
+    /// the web target without the `web` feature there is no timer source, and the task runs
+    /// immediately rather than being dropped.
+    pub fn after<Msg, F>(delay: std::time::Duration, f: F) -> Self
+    where
+        Msg: Send + 'static,
+        F: FnOnce(CommandLink<Msg>) + Send + 'static,
+    {
+        Self {
+            action: Box::new(AfterAction::<Msg, F> {
+                delay,
                 f: Some(f),
                 _marker: PhantomData,
             }),
@@ -134,6 +178,36 @@ struct SpawnKeyedAction<Msg, F> {
     policy: TaskPolicy,
     f: Option<F>,
     _marker: PhantomData<fn(Msg)>,
+}
+
+/// Run `f` on the executor after `delay`, for crate code that already holds its own channel and so
+/// has no [`CommandRuntime`] to build a [`Command`] against (see [`CommandLink::send_after`]).
+///
+/// [`CommandLink::send_after`]: crate::callback::CommandLink::send_after
+pub(crate) fn schedule_after(delay: std::time::Duration, f: impl FnOnce() + Send + 'static) {
+    TimerService::global().schedule(delay, Task::with_token(f, CancellationToken::default()));
+}
+
+struct AfterAction<Msg, F> {
+    delay: std::time::Duration,
+    f: Option<F>,
+    _marker: PhantomData<fn(Msg)>,
+}
+
+impl<Msg, F> CommandAction for AfterAction<Msg, F>
+where
+    Msg: Send + 'static,
+    F: FnOnce(CommandLink<Msg>) + Send + 'static,
+{
+    fn run(mut self: Box<Self>, runtime: CommandRuntime) {
+        let Some(f) = self.f.take() else {
+            return;
+        };
+
+        let token = CancellationToken::default();
+        let link = CommandLink::new(runtime.scope, runtime.tx, token.clone());
+        TimerService::global().schedule(self.delay, Task::with_token(move || f(link), token));
+    }
 }
 
 impl<Msg, F> CommandAction for SpawnAction<Msg, F>
