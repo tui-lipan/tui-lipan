@@ -82,6 +82,7 @@ pub(crate) fn reconcile_pan_view(ctx: &mut ReconcileCtx<'_>, args: PanViewReconc
             clamp: pan.clamp,
             free_pan_margin: pan.free_pan_margin,
             drag_to_pan: pan.drag_to_pan,
+            wheel_to_pan: pan.wheel_to_pan,
             focusable: pan.focusable,
             tab_stop: pan.tab_stop,
             on_focus: pan.on_focus.clone(),

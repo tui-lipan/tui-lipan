@@ -69,7 +69,7 @@ pub(crate) use super::mouse_region::{
 };
 pub(crate) use super::pan_view::reconcile::{PanViewReconcile, reconcile_pan_view};
 pub(crate) use super::pan_view::{
-    PanViewNode, apply_pan_action, apply_pan_delta, bound_pan_offset, measure_pan_view,
+    PanAction, PanViewNode, apply_pan_action, apply_pan_delta, bound_pan_offset, measure_pan_view,
     pan_action_from_key, pan_metrics,
 };
 pub(crate) use super::progress::{ProgressNode, measure_progress_bar, reconcile_progress_bar};

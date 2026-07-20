@@ -74,6 +74,7 @@ pub(crate) fn handle_scroll_wheel_n(
                 handlers::tabs::handle_tab_bar_scroll(tree, id, action)
             }
             ScrollableTag::DocumentView => handlers::document_view::handle_scroll(tree, id, action),
+            ScrollableTag::PanView => handlers::pan_view::handle_scroll(tree, id, action),
             ScrollableTag::NonScrollable => false,
         };
 
@@ -110,6 +111,9 @@ fn effective_scroll_lines(
         NodeKind::ScrollView(node) => node.scroll_wheel_multiplier.unwrap_or(fallback_multiplier),
         NodeKind::TextArea(node) => node.scroll_wheel_multiplier.unwrap_or(fallback_multiplier),
         NodeKind::DocumentView(node) => node.scroll_wheel_multiplier.unwrap_or(fallback_multiplier),
+        // PanView scales each tick by its own `key_step` instead, so the
+        // dispatcher must hand it raw tick counts.
+        NodeKind::PanView(_) => 1,
         _ => fallback_multiplier,
     };
     scroll_ticks.saturating_mul(usize::from(multiplier.max(1)))

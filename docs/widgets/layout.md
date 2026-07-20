@@ -461,6 +461,7 @@ Single-child two-dimensional viewport for wide/tall content such as diagrams.
 | `free_pan_margin` | `u16` | With `clamp(false)`, limit movement so at least this many cells of content remain reachable |
 | `free_pan_margins` | `(u16, u16)` | Independent horizontal/vertical free-pan margins |
 | `drag_to_pan` | `bool` | Enable left-button drag panning (default `true`) |
+| `wheel_to_pan` | `bool` | Enable mouse-wheel panning (default `true`) |
 | `keymap` / `pan_keys` | `PanKeymap` | Keyboard pan keys (`ARROWS`, `VIM`, default both) |
 | `key_step` | `(u16, u16)` | Keyboard pan step as `(horizontal, vertical)` cells (default `(4, 2)`) |
 | `focusable` | `bool` | Whether PanView can receive focus (default `false`; interaction callbacks can opt it in) |
@@ -482,7 +483,9 @@ PanView::new()
     .pan_state_key("diagram-preview")
 ```
 
-Dragging right/down decreases the offset; dragging left/up increases it. Keyboard panning defaults to a wider horizontal step than vertical step because terminal cells are taller than they are wide. With the default `clamp(true)`, offsets stay within `0..=max` for each axis. Use `.clamp(false)` for free-canvas previews where the child can be pulled past the viewport edges; add `.free_pan_margin(...)` when you want that free movement bounded instead of infinite. The child rect is translated by the negative offset and clipped to the viewport, so child hit-testing stays aligned with visible content.
+Dragging right/down decreases the offset; dragging left/up increases it. Keyboard panning defaults to a wider horizontal step than vertical step because terminal cells are taller than they are wide.
+
+**Wheel panning**: the mouse wheel pans vertically and shift+wheel horizontally, each tick moving one `key_step` in that axis, so wheel and keyboard panning share one step size and the horizontal step stays wider for the same reason. With the default `clamp(true)`, a tick that cannot move the viewport is left unhandled and bubbles to an ancestor, so a `PanView` sitting inside a scrolling page releases the wheel once it reaches its edge. An unclamped free canvas has no edge and therefore keeps consuming the wheel, which is what an infinite surface should do; bound it with `.free_pan_margin(...)` if you want it to release. Set `.wheel_to_pan(false)` to opt out entirely. With the default `clamp(true)`, offsets stay within `0..=max` for each axis. Use `.clamp(false)` for free-canvas previews where the child can be pulled past the viewport edges; add `.free_pan_margin(...)` when you want that free movement bounded instead of infinite. The child rect is translated by the negative offset and clipped to the viewport, so child hit-testing stays aligned with visible content.
 
 When the `image` feature is enabled, input-driven PanView movement temporarily renders image children as lightweight placeholder frames while movement stabilizes. This mirrors image handling during layout changes and keeps pan interaction responsive for expensive image protocols.
 
