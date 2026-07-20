@@ -252,5 +252,5 @@ fn render(name: &str, theme: Theme) {
 fn main() {
     render("lipan", Theme::lipan());
     render("default", Theme::default());
-    render("gruvbox", Theme::gruvbox());
+    render("gruvbox_dark", Theme::gruvbox_dark());
 }

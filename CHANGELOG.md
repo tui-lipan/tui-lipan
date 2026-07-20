@@ -13,6 +13,15 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- Renamed `Theme::catppuccin` to `Theme::catppuccin_mocha` and `Theme::gruvbox`
+  to `Theme::gruvbox_dark`, so every preset in a multi-variant family names its
+  variant explicitly. Both bare names were ambiguous next to the variants added
+  this release: Catppuccin has four equally-named flavors and no default, and
+  `gruvbox` sat asymmetrically beside `gruvbox_light` and
+  `solarized_dark`/`solarized_light`. Presets whose bare name is upstream's own
+  variant name (`tokyo_night`, `rose_pine`) are unchanged. `preset_by_name`
+  still resolves `"catppuccin"` and `"gruvbox"`, so theme TOML and config files
+  keep working. (breaking)
 - The nine original theme presets now share the same internal color-table
   construction as the new ones. Every preset's rendered colors are unchanged;
   this is an internal cleanup only.

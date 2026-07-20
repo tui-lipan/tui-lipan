@@ -433,8 +433,8 @@ Theme::default()
 Theme::one_dark()
 Theme::dracula()
 Theme::nord()
-Theme::gruvbox()
-Theme::catppuccin()          // Mocha
+Theme::gruvbox_dark()
+Theme::catppuccin_mocha()
 Theme::catppuccin_frappe()
 Theme::catppuccin_macchiato()
 Theme::tokyo_night()
@@ -467,8 +467,17 @@ Theme::ayu_light()
 
 Every preset above also resolves through `preset_by_name`, which is
 case-insensitive and ignores `-`, `_`, and spaces, so `"rose pine dawn"`,
-`"rose-pine-dawn"`, and `"RosePineDawn"` are equivalent. `catppuccin` and
-`catppuccin_mocha` both resolve to the Mocha flavor.
+`"rose-pine-dawn"`, and `"RosePineDawn"` are equivalent.
+
+The pre-0.2 names `catppuccin` and `gruvbox` still resolve through
+`preset_by_name`, so theme TOML and config files written against 0.1 keep
+working after the constructors were renamed to `Theme::catppuccin_mocha` and
+`Theme::gruvbox_dark`.
+
+A bare preset name means the theme has one canonical scheme (`dracula`,
+`nord`), or that the bare name is what upstream calls that variant
+(`tokyo_night`, `rose_pine`). Families whose variants all carry names spell the
+variant out (`solarized_dark`/`solarized_light`, `ayu_dark`/`ayu_mirage`).
 
 `Theme::ayu_light()` substitutes Ayu's blue for its upstream orange accent:
 the orange does not hold up on the near-white background for borders and focus

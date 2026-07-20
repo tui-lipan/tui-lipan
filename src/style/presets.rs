@@ -221,8 +221,9 @@ impl Theme {
 
     /// Gruvbox theme (dark variant).
     ///
-    /// A retro groove color scheme with warm earthy tones.
-    pub fn gruvbox() -> Self {
+    /// A retro groove color scheme with warm earthy tones. See also
+    /// [`Theme::gruvbox_light`].
+    pub fn gruvbox_dark() -> Self {
         PresetColors {
             text: Color::hex_u24(0xEBDBB2),
             bg: Color::hex_u24(0x282828),
@@ -243,8 +244,11 @@ impl Theme {
 
     /// Catppuccin Mocha theme.
     ///
-    /// A soothing pastel theme with good contrast and soft colors.
-    pub fn catppuccin() -> Self {
+    /// A soothing pastel theme with good contrast and soft colors. This is the
+    /// darkest of the four Catppuccin flavors; see also
+    /// [`Theme::catppuccin_macchiato`], [`Theme::catppuccin_frappe`], and
+    /// [`Theme::catppuccin_latte`].
+    pub fn catppuccin_mocha() -> Self {
         let mut theme = PresetColors {
             text: Color::hex_u24(0xCDD6F4),
             bg: Color::hex_u24(0x1E1E2E),
@@ -480,7 +484,7 @@ impl Theme {
 
     /// Catppuccin Latte theme.
     ///
-    /// The light flavor of Catppuccin. See also [`Theme::catppuccin`] (Mocha).
+    /// The light flavor of Catppuccin. See also [`Theme::catppuccin_mocha`].
     pub fn catppuccin_latte() -> Self {
         let mut theme = PresetColors {
             text: Color::hex_u24(0x4C4F69),
@@ -949,8 +953,8 @@ pub fn preset_by_name(name: &str) -> Option<Theme> {
         "onedark" => Some(Theme::one_dark()),
         "dracula" => Some(Theme::dracula()),
         "nord" => Some(Theme::nord()),
-        "gruvbox" => Some(Theme::gruvbox()),
-        "catppuccin" => Some(Theme::catppuccin()),
+        "gruvbox" | "gruvboxdark" => Some(Theme::gruvbox_dark()),
+        "catppuccin" | "catppuccinmocha" => Some(Theme::catppuccin_mocha()),
         "ansi" => Some(Theme::ansi()),
         "tokyonight" => Some(Theme::tokyo_night()),
         "solarizeddark" => Some(Theme::solarized_dark()),
@@ -962,7 +966,6 @@ pub fn preset_by_name(name: &str) -> Option<Theme> {
         "catppuccinlatte" => Some(Theme::catppuccin_latte()),
         "catppuccinfrappe" => Some(Theme::catppuccin_frappe()),
         "catppuccinmacchiato" => Some(Theme::catppuccin_macchiato()),
-        "catppuccinmocha" => Some(Theme::catppuccin()),
         "rosepine" => Some(Theme::rose_pine()),
         "rosepinemoon" => Some(Theme::rose_pine_moon()),
         "rosepinedawn" => Some(Theme::rose_pine_dawn()),
@@ -996,8 +999,8 @@ mod tests {
         "one_dark",
         "dracula",
         "nord",
-        "gruvbox",
-        "catppuccin",
+        "gruvbox_dark",
+        "catppuccin_mocha",
         "tokyo_night",
         "solarized_dark",
         "monokai",
@@ -1023,6 +1026,18 @@ mod tests {
         "oxocarbon",
         "zenburn",
     ];
+
+    #[test]
+    fn renamed_presets_still_resolve_under_their_old_names() {
+        // `Theme::catppuccin` and `Theme::gruvbox` were renamed to name their
+        // variant explicitly. The old strings stay valid so theme TOML and
+        // config files written against 0.1 keep resolving.
+        assert_eq!(
+            preset_by_name("catppuccin"),
+            Some(Theme::catppuccin_mocha())
+        );
+        assert_eq!(preset_by_name("gruvbox"), Some(Theme::gruvbox_dark()));
+    }
 
     #[test]
     fn every_preset_resolves_by_name() {

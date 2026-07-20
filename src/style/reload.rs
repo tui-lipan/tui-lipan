@@ -16,16 +16,42 @@ use crate::style::{
     SurfacePalette, SyntaxPalette, TerminalPalette, TextAreaPalette, Theme,
 };
 
+/// Preset names advertised when a theme file's `extends` does not resolve.
+///
+/// Kept in sync with `presets::preset_by_name`; that function is the authority
+/// on what actually resolves, including the pre-0.2 aliases `catppuccin` and
+/// `gruvbox`, which are omitted here in favor of their explicit names.
 const SUPPORTED_PRESET_NAMES: &[&str] = &[
+    "ansi",
     "one_dark",
     "dracula",
     "nord",
-    "gruvbox",
-    "catppuccin",
-    "ansi",
+    "gruvbox_dark",
+    "gruvbox_light",
+    "catppuccin_mocha",
+    "catppuccin_macchiato",
+    "catppuccin_frappe",
+    "catppuccin_latte",
     "tokyo_night",
+    "tokyo_night_day",
     "solarized_dark",
+    "solarized_light",
     "monokai",
+    "lipan",
+    "rose_pine",
+    "rose_pine_moon",
+    "rose_pine_dawn",
+    "kanagawa",
+    "everforest",
+    "ayu_dark",
+    "ayu_mirage",
+    "ayu_light",
+    "nightfox",
+    "nordfox",
+    "night_owl",
+    "material_palenight",
+    "oxocarbon",
+    "zenburn",
 ];
 
 fn theme_reload_error(message: impl Into<String>) -> crate::Error {

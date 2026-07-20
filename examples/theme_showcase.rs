@@ -44,8 +44,8 @@ impl ThemeChoice {
             Self::OneDark => Theme::one_dark(),
             Self::Dracula => Theme::dracula(),
             Self::Nord => Theme::nord(),
-            Self::Gruvbox => Theme::gruvbox(),
-            Self::Catppuccin => Theme::catppuccin(),
+            Self::Gruvbox => Theme::gruvbox_dark(),
+            Self::Catppuccin => Theme::catppuccin_mocha(),
             Self::Ansi => Theme::ansi(),
         }
     }
