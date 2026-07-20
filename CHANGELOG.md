@@ -39,6 +39,14 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `TestBackend` now forwards mouse events to a terminal in a mouse-tracking
+  mode, matching the runner. It left `forward_terminal_mouse` at the trait
+  default of `false`, so a full-screen TUI that consumes clicks before ordinary
+  `MouseRegion` dispatch behaved differently under test than in the real app,
+  and that path could not be regression-tested at all. The runner's logic now
+  lives in one shared `terminal_mouse_forward_plan` so the two cannot drift
+  again.
+
 - `ProgressBar` in `ProgressStyle::Block` no longer paints a black trough on
   light themes. The empty half of the track dimmed the fill color toward black
   regardless of the theme, which is invisible on a dark background but draws a
