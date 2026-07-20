@@ -33,6 +33,12 @@ While the crate is on `0.x.y`:
   leaves the tick unhandled so it bubbles to an ancestor; an unclamped free
   canvas has no edge and keeps consuming. Opt out with `wheel_to_pan(false)`.
 
+- `children(...)` doc comments on `ScrollView`, the stack containers, `Flow`,
+  `Splitter`, `TreeNode`, and `GraphNode` now state that the call discards
+  anything already added with `child(...)`. Semantics are unchanged: plural
+  setters replace, singular setters append. A new CI guard
+  (`scripts/check-children-replace.py`) fails the build when a `children(...)`
+  call would silently drop earlier `child(...)` entries.
 - A plain mouse wheel tick over a `ScrollView` with `ScrollAxis::Horizontal`
   now pans that view horizontally instead of being discarded. Shift+wheel is
   still the explicit horizontal override, and stays required when both axes are
@@ -68,6 +74,11 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- The `paint` example's toolbar now renders its Pencil, Eraser, and Clear
+  buttons. They were added with `child(...)` and then discarded by a following
+  `children([...])`, which replaces the child list rather than extending it.
+- Corrected doc comments on `ContextMenu::items` and `ListItem::description_spans`
+  that read "Add ..." while both methods replace the whole collection.
 - `ScrollView::scroll_wheel(false)` now also suppresses horizontal wheel
   panning. Shift+wheel previously kept panning a view that had opted out of
   wheel scrolling entirely.

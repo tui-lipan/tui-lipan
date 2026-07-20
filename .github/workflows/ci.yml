@@ -43,6 +43,9 @@ jobs:
       - name: Check widget style slots
         run: python3 scripts/check-widget-style-slots.py
 
+      - name: Check children()/child() ordering
+        run: python3 scripts/check-children-replace.py
+
       - name: Check macro and rust formatting
         shell: bash
         run: |

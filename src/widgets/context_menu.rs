@@ -67,7 +67,7 @@ impl ContextMenu {
         }
     }
 
-    /// Add menu items.
+    /// Replace all menu items.
     pub fn items(mut self, items: impl IntoIterator<Item = impl Into<ListItem>>) -> Self {
         self.items = items.into_iter().map(Into::into).collect();
         self

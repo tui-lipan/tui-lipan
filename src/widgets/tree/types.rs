@@ -162,7 +162,8 @@ impl TreeNode {
         self
     }
 
-    /// Replace children.
+    /// Replace all children, discarding anything already added with
+    /// [`child`](Self::child). Call `child` repeatedly to append instead.
     pub fn children(mut self, children: impl IntoIterator<Item = TreeNode>) -> Self {
         self.children = children.into_iter().collect();
         self

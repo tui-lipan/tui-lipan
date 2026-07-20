@@ -133,7 +133,8 @@ impl Splitter {
         self
     }
 
-    /// Replace all child panes.
+    /// Replace all children, discarding anything already added with
+    /// [`child`](Self::child). Call `child` repeatedly to append instead.
     pub fn children<I>(mut self, children: I) -> Self
     where
         I: IntoIterator<Item = Element>,
