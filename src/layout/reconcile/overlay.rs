@@ -398,7 +398,7 @@ pub(crate) fn collect_popover_overlay_roots(tree: &NodeTree, overlay_state: &mut
             on_dismiss: popover_node.on_close.clone(),
             backdrop: None,
             opacity: 1.0,
-            captures_focus: true,
+            captures_focus: popover_node.capture_focus,
             auto_focus: popover_node.auto_focus,
             captures_pointer: crate::overlay::PointerCapture::RectOnly,
             copy_text: None,

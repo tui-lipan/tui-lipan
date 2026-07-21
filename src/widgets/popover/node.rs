@@ -13,6 +13,8 @@ pub struct PopoverNode {
     pub open: bool,
     /// Whether content is rendered inline or via root overlay pipeline.
     pub scope: OverlayScope,
+    /// Whether the root overlay captures and traps focus.
+    pub capture_focus: bool,
     /// Whether the root overlay establishes focus automatically.
     pub auto_focus: bool,
 }

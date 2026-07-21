@@ -1488,26 +1488,36 @@ mod tests {
         }
     }
 
-    struct PopoverAutoFocusHarness;
+    struct PopoverAutoFocusHarness {
+        capture_focus: bool,
+    }
 
     impl Component for PopoverAutoFocusHarness {
-        type Message = ();
+        type Message = InputEvent;
         type Properties = ();
-        type State = ();
+        type State = String;
 
-        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
-
-        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
-            Update::none()
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            String::new()
         }
 
-        fn view(&self, _ctx: &Context<Self>) -> Element {
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state = msg.value.to_string();
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
             VStack::new()
                 .child(
                     Popover::new()
                         .open(true)
+                        .capture_focus(self.capture_focus)
                         .auto_focus(false)
-                        .trigger(Button::new("Trigger").key("trigger"))
+                        .trigger(
+                            Input::new(ctx.state.clone())
+                                .on_change(ctx.link().callback(|event| event))
+                                .key("trigger"),
+                        )
                         .content(Button::new("Content").key("content")),
                 )
                 .into()
@@ -1821,7 +1831,13 @@ mod tests {
     #[test]
     fn popover_auto_focus_false_suspends_focus_but_keeps_capture() {
         let app = crate::App::new().focus_policy(FocusPolicy::Manual);
-        let backend = TestBackend::new_with_app(app, PopoverAutoFocusHarness, ());
+        let backend = TestBackend::new_with_app(
+            app,
+            PopoverAutoFocusHarness {
+                capture_focus: true,
+            },
+            (),
+        );
 
         assert_eq!(backend.focused_key(), None);
         let overlay = backend
@@ -1831,6 +1847,32 @@ mod tests {
             .expect("capturing popover");
         assert!(overlay.captures_focus);
         assert!(!overlay.auto_focus);
+    }
+
+    #[test]
+    fn non_capturing_root_popover_keeps_trigger_focus_and_keyboard_routing() {
+        let app = crate::App::new().focus_policy(FocusPolicy::Auto);
+        let mut backend = TestBackend::new_with_app(
+            app,
+            PopoverAutoFocusHarness {
+                capture_focus: false,
+            },
+            (),
+        );
+
+        assert_eq!(backend.focused_key(), Some(&Key::from("trigger")));
+        assert!(backend.core.tree.top_capturing_overlay().is_none());
+        assert!(
+            backend
+                .core
+                .tree
+                .overlay_roots()
+                .iter()
+                .any(|overlay| !overlay.captures_focus)
+        );
+        assert!(backend.send_key(plain_key('x')).expect("type into trigger"));
+        assert_eq!(backend.focused_key(), Some(&Key::from("trigger")));
+        assert_eq!(backend.state(), "x");
     }
 
     #[test]

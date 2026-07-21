@@ -13,6 +13,8 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add `Popover::capture_focus` for passive root-portal overlays that must leave keyboard focus on their trigger.
+
 - `ScrollView::reveal_horizontal_range(start, end)` minimally pans a horizontal
   viewport to reveal a half-open content-column range. The request reapplies
   when the range or viewport width changes while leaving subsequent user

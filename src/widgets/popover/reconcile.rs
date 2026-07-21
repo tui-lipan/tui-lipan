@@ -24,6 +24,7 @@ pub(crate) fn reconcile_popover(
             on_close: popover.on_close.clone(),
             open: popover.open,
             scope: popover.scope,
+            capture_focus: popover.capture_focus,
             auto_focus: popover.auto_focus,
         });
         std::mem::take(&mut node.children)
