@@ -1447,6 +1447,9 @@ impl crate::layout::hash::LayoutHash for TextArea {
             crate::widgets::diff_view::split_wrap_layout_pass(sync).hash(hasher);
         }
         self.read_only.hash(hasher);
+        if self.wrap && !self.read_only {
+            self.cursor.hash(hasher);
+        }
 
         for s in &self.sentinels {
             s.label.hash(hasher);

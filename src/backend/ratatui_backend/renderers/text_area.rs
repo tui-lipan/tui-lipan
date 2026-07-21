@@ -660,7 +660,7 @@ fn calculate_visual_lines<'a>(
     value: &'a str,
     content_width: usize,
     wrap: bool,
-    append_caret_row: bool,
+    caret: Option<usize>,
     sentinel: Option<&SentinelInfo>,
 ) -> Vec<VisualLine<'a>> {
     let mut visual_lines = Vec::new();
@@ -693,14 +693,6 @@ fn calculate_visual_lines<'a>(
             for (idx, ch) in line.char_indices() {
                 let char_width = char_visual_width(ch, sentinel);
 
-                // Check if this is a valid break point (after whitespace or punctuation)
-                if ch.is_whitespace() {
-                    // Mark the position AFTER this character as a potential break
-                    let next_idx = idx + ch.len_utf8();
-                    last_break_idx = next_idx;
-                    last_break_width = current_width + char_width;
-                }
-
                 if current_width + char_width > content_width {
                     // Need to break - prefer word boundary if available AND it fits
                     let (break_idx, break_width) =
@@ -731,6 +723,11 @@ fn calculate_visual_lines<'a>(
                 } else {
                     current_width += char_width;
                 }
+
+                if ch.is_whitespace() {
+                    last_break_idx = idx + ch.len_utf8();
+                    last_break_width = current_width;
+                }
             }
             // Remainder
             visual_lines.push(VisualLine {
@@ -746,7 +743,7 @@ fn calculate_visual_lines<'a>(
             });
         }
 
-        if append_caret_row
+        if caret == Some(current_byte_offset + line_len)
             && wrap
             && content_width > 0
             && visual_lines.last().is_some_and(|last| {
@@ -755,22 +752,40 @@ fn calculate_visual_lines<'a>(
                     && last.visual_end_col.saturating_sub(last.visual_start_col) == content_width
             })
         {
-            let boundary = current_byte_offset + line_len;
-            let visual_col = visual_lines
-                .last()
-                .map(|last| last.visual_end_col)
-                .unwrap_or(0);
-            visual_lines.push(VisualLine {
-                text: "",
-                line_num,
-                continuation: true,
-                start: boundary,
-                end: boundary,
-                visual_start_col: visual_col,
-                visual_end_col: visual_col,
-                starts_with_virtual_text: false,
-                ends_with_virtual_text: false,
-            });
+            let last = visual_lines.pop().expect("checked last visual line");
+            if content_width == 1 || last.text.ends_with(char::is_whitespace) {
+                let boundary = last.end;
+                let visual_col = last.visual_end_col;
+                visual_lines.push(last);
+                visual_lines.push(VisualLine {
+                    text: "",
+                    line_num,
+                    continuation: true,
+                    start: boundary,
+                    end: boundary,
+                    visual_start_col: visual_col,
+                    visual_end_col: visual_col,
+                    starts_with_virtual_text: false,
+                    ends_with_virtual_text: false,
+                });
+            } else {
+                let start = last.start;
+                let start_col = last.visual_start_col;
+                let continuation = last.continuation;
+                for (idx, mut row) in
+                    calculate_visual_lines(last.text, content_width - 1, true, None, sentinel)
+                        .into_iter()
+                        .enumerate()
+                {
+                    row.line_num = line_num;
+                    row.continuation = continuation || idx > 0;
+                    row.start = row.start.saturating_add(start);
+                    row.end = row.end.saturating_add(start);
+                    row.visual_start_col = row.visual_start_col.saturating_add(start_col);
+                    row.visual_end_col = row.visual_end_col.saturating_add(start_col);
+                    visual_lines.push(row);
+                }
+            }
         }
 
         current_byte_offset += line_len + 1; // +1 includes the newline char
@@ -782,7 +797,7 @@ fn build_visual_lines<'a>(
     value: &'a str,
     content_width: usize,
     wrap: bool,
-    append_caret_row: bool,
+    caret: Option<usize>,
     cached_lines: Option<&[TextAreaVisualLine]>,
     sentinel: Option<&SentinelInfo>,
 ) -> Vec<VisualLine<'a>> {
@@ -803,7 +818,7 @@ fn build_visual_lines<'a>(
             .collect();
     }
 
-    calculate_visual_lines(value, content_width, wrap, append_caret_row, sentinel)
+    calculate_visual_lines(value, content_width, wrap, caret, sentinel)
 }
 
 pub(crate) struct TextAreaVimRenderCtx<'a> {
@@ -1180,6 +1195,7 @@ pub(crate) fn render_text_area(
             scrollbar_over_border,
             scrollbar_gap,
             read_only,
+            cursor,
             tab_stop: tab_stop as u8,
             sentinel_ph_width,
             sentinel_count,
@@ -1204,7 +1220,7 @@ pub(crate) fn render_text_area(
         render_value,
         content_width,
         wrap,
-        !read_only && !placeholder_active,
+        (!read_only && !placeholder_active).then_some(cursor),
         cached_lines,
         sentinel.as_ref(),
     );
@@ -2612,6 +2628,7 @@ pub(crate) fn text_area_cursor_position(
             scrollbar_over_border: v_scrollbar_over_border,
             scrollbar_gap,
             read_only,
+            cursor,
             tab_stop: tab_stop as u8,
             sentinel_ph_width,
             sentinel_count,
@@ -2631,7 +2648,7 @@ pub(crate) fn text_area_cursor_position(
         value,
         content_width,
         wrap,
-        !read_only,
+        (!read_only).then_some(cursor),
         visual_cache.get_lines(&visual_key),
         sentinel.as_ref(),
     );
@@ -2925,7 +2942,7 @@ mod tests {
     fn test_wrapping_punctuation_glue() {
         let text = "hello word.";
         let width = 10;
-        let lines = calculate_visual_lines(text, width, true, false, None);
+        let lines = calculate_visual_lines(text, width, true, None, None);
 
         // Debug output
         for (i, line) in lines.iter().enumerate() {
@@ -3180,7 +3197,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_position_wraps_after_exactly_full_final_row() {
+    fn cursor_position_reserves_end_of_exactly_full_final_row() {
         let cache = TextAreaVisualCache::default();
         let geometry = crate::widgets::TextAreaGeometry {
             inner_w: 5,
@@ -3216,7 +3233,57 @@ mod tests {
             extras,
         );
 
-        assert_eq!(position, Some(ratatui::layout::Position::new(0, 1)));
+        assert_eq!(position, Some(ratatui::layout::Position::new(1, 1)));
+    }
+
+    #[test]
+    fn cursor_position_keeps_trailing_space_before_next_input() {
+        for (value, expected_x) in [
+            ("really long tex ", 4),
+            ("really long tex d", 5),
+            ("really long te ", 0),
+            ("really long te t", 1),
+        ] {
+            let cache = TextAreaVisualCache::default();
+            let geometry = crate::widgets::TextAreaGeometry {
+                inner_w: 15,
+                inner_h: 2,
+                content_width: 15,
+                total_visual_lines: 2,
+                viewport_height: 2,
+                ..Default::default()
+            };
+            let rect = Rect {
+                x: 0,
+                y: 0,
+                w: 15,
+                h: 2,
+            };
+            let (mut layout, scroll, extras) =
+                test_cursor_pos_ctx(&cache, &geometry, rect, value.len(), 0, false);
+            layout.wrap = true;
+
+            let position = text_area_cursor_position(
+                value,
+                TextAreaCursorInput {
+                    cursor: value.len(),
+                    anchor: None,
+                    allow_selection_cursor: false,
+                },
+                TextAreaCursorVimCtx {
+                    search_feedback: None,
+                    visual_line_caret: None,
+                },
+                layout,
+                scroll,
+                extras,
+            );
+
+            assert_eq!(
+                position,
+                Some(ratatui::layout::Position::new(expected_x, 1))
+            );
+        }
     }
 
     #[test]

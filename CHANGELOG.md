@@ -440,11 +440,14 @@ While the crate is on `0.x.y`:
 ### Fixed
 
 - Fixed initially-open root popovers resolving placement before the root node has a valid rect.
-- `TextArea` word wrapping no longer moves a completed full-width word to the next row when a
-  trailing space is typed; the separator now occupies the existing caret continuation row.
+- `TextArea` word wrapping reuses the previous word break when a separator overflows, including
+  while that separator is still trailing, so typing the next character cannot jump ahead of it.
+  When a trailing separator itself fills the row, it stays there and the caret moves to the
+  continuation row until the next input arrives.
 - `TextArea` wrap boundaries now keep downstream caret affinity, including after visible path and
   identifier punctuation, while Up/Down navigation no longer skips continuation rows. Wrapped
-  editors also use the full content width instead of reserving a trailing caret column.
+  editors use the full content width for non-caret rows and reserve the final cell only on an
+  exactly full row ending at the caret, instead of rendering the caret on a synthetic empty row.
 - `Flow` no longer subtracts its padding and border twice while measuring constrained widths,
   preventing rows that fit from reserving an extra wrapped line.
 - Centered and stacked overlays (`Modal`, toasts) now measure their auto height against the width

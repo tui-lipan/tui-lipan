@@ -274,6 +274,7 @@ pub(crate) fn textarea_cursor_from_coords(params: TextAreaCursorParams<'_>) -> u
                         line_num: line_num + 1,
                         wrap,
                         content_width,
+                        caret: (!read_only).then_some(current_cursor),
                         sentinel: sentinel.as_ref(),
                         tab_stop,
                         insertions: &insertions,
@@ -313,11 +314,6 @@ pub(crate) fn textarea_cursor_from_coords(params: TextAreaCursorParams<'_>) -> u
                         char_visual_width(ch, sentinel.as_ref())
                     };
                     let next_absolute_width = absolute_width.saturating_add(char_width);
-                    if ch.is_whitespace() {
-                        last_break_idx = idx + ch.len_utf8();
-                        last_break_width = current_width + char_width;
-                    }
-
                     if current_width + char_width > content_width {
                         let (break_idx, break_width) =
                             if last_break_idx > start_idx && last_break_width <= content_width {
@@ -353,6 +349,10 @@ pub(crate) fn textarea_cursor_from_coords(params: TextAreaCursorParams<'_>) -> u
                         is_first = false;
                     } else {
                         current_width += char_width;
+                    }
+                    if ch.is_whitespace() {
+                        last_break_idx = idx + ch.len_utf8();
+                        last_break_width = current_width;
                     }
                     absolute_width = next_absolute_width;
                 }
@@ -657,6 +657,51 @@ mod tests {
         });
 
         assert_eq!(cursor, 2);
+    }
+
+    #[test]
+    fn textarea_cursor_from_coords_fallback_keeps_trailing_space_with_word() {
+        let value = "really long tex ";
+        let cursor = textarea_cursor_from_coords(TextAreaCursorParams {
+            value,
+            current_cursor: value.len(),
+            coords: TextAreaCursorCoords {
+                x: 0,
+                y: 1,
+                inner: Rect {
+                    x: 0,
+                    y: 0,
+                    w: 15,
+                    h: 2,
+                },
+                clamp_to_inner: true,
+            },
+            layout: TextAreaCursorLayout {
+                line_numbers: false,
+                min_line_number_width: 0,
+                wrap: true,
+                scroll_offset: 0,
+                scrollbar: false,
+                scrollbar_variant: ScrollbarVariant::Standalone,
+                scrollbar_gap: 0,
+                scrollbar_over_border: false,
+                h_scrollbar: false,
+                h_scrollbar_variant: ScrollbarVariant::Standalone,
+                h_scrollbar_over_border: false,
+                max_line_width: 15,
+                h_scroll_offset: 0,
+                tab_stop: 4,
+                gutter_col_width: 0,
+                gutter_gap: 0,
+                logical_lines_count: 1,
+            },
+            read_only: false,
+            sentinel: None,
+            visual_lines: None,
+            virtual_texts: &[],
+        });
+
+        assert_eq!(cursor, 12);
     }
 
     #[test]

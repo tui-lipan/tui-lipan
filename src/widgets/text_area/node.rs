@@ -601,6 +601,7 @@ mod tests {
                 scrollbar_over_border: false,
                 scrollbar_gap: 0,
                 read_only: false,
+                cursor: node.cursor,
                 tab_stop: node.tab_display_width,
                 sentinel_ph_width: 0,
                 sentinel_count: 0,

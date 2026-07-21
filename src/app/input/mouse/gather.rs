@@ -673,6 +673,7 @@ pub(crate) fn gather_hit_actions(tree: &NodeTree, hit: NodeId, x: u16, y: u16) -
                         scrollbar_over_border,
                         scrollbar_gap: ta.scrollbar_gap,
                         read_only: ta.read_only,
+                        cursor: ta.cursor,
                         tab_stop: ta.tab_display_width,
                         sentinel_ph_width,
                         sentinel_count,

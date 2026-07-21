@@ -5,7 +5,9 @@ use rustc_hash::FxHasher;
 
 use crate::core::node::{NodeKind, ScrollbarZone};
 use crate::style::ScrollbarVariant;
-use crate::utils::prepared_text::{PreparedText, SegmentKind, layout_lines, prepare_text};
+use crate::utils::prepared_text::{
+    PreparedText, SegmentKind, layout_lines, layout_lines_with_caret, prepare_text,
+};
 use crate::utils::text::{
     VirtualTextInsertion, char_visual_width, str_visual_width_with_tabs, visual_col_with_virtual,
 };
@@ -30,6 +32,7 @@ pub(crate) struct TextAreaVisualKey {
     /// Extra empty cells reserved before a standalone vertical scrollbar.
     pub reserve_scrollbar_gap: u16,
     pub read_only: bool,
+    pub caret: Option<usize>,
     /// Tab stop used by tab-aware visual width and wrapping.
     pub tab_stop: u8,
     /// Placeholder width for inline image sentinels (0 when not in Inline mode or no images).
@@ -231,6 +234,7 @@ pub(crate) struct TextAreaVisualKeyArgs {
     pub scrollbar_over_border: bool,
     pub scrollbar_gap: u16,
     pub read_only: bool,
+    pub cursor: usize,
     pub tab_stop: u8,
     pub sentinel_ph_width: usize,
     pub sentinel_count: usize,
@@ -260,6 +264,7 @@ pub(crate) fn make_text_area_visual_key(
         scrollbar_over_border,
         scrollbar_gap,
         read_only,
+        cursor,
         tab_stop,
         sentinel_ph_width,
         sentinel_count,
@@ -288,6 +293,7 @@ pub(crate) fn make_text_area_visual_key(
             0
         },
         read_only,
+        caret: (wrap && !read_only).then_some(cursor),
         tab_stop,
         sentinel_ph_width,
         sentinel_count,
@@ -435,6 +441,7 @@ pub(crate) struct VirtualTextLayoutCtx<'a> {
     pub line_num: usize,
     pub wrap: bool,
     pub content_width: usize,
+    pub caret: Option<usize>,
     pub sentinel: Option<&'a crate::utils::text::SentinelInfo>,
     pub tab_stop: usize,
     pub insertions: &'a [VirtualTextInsertion],
@@ -450,12 +457,22 @@ pub(crate) fn layout_line_with_inline_virtual_text(
         line_num,
         wrap,
         content_width,
+        caret,
         sentinel,
         tab_stop,
         insertions,
     } = ctx;
     let max_line_width = visual_col_with_virtual(line, 0, tab_stop, sentinel, insertions);
-    if !wrap || max_line_width <= content_width {
+    let wrap_width = if wrap
+        && content_width > 1
+        && caret == Some(line_start_abs.saturating_add(line.len()))
+        && max_line_width == content_width
+    {
+        content_width - 1
+    } else {
+        content_width.max(1)
+    };
+    if !wrap || max_line_width <= wrap_width {
         push_virtual_layout_line(
             out,
             VirtualLayoutLineArgs {
@@ -475,7 +492,6 @@ pub(crate) fn layout_line_with_inline_virtual_text(
         return max_line_width;
     }
 
-    let wrap_width = content_width.max(1);
     let mut insertion_idx = 0usize;
     let mut row_start = 0usize;
     let mut row_end = 0usize;
@@ -870,6 +886,7 @@ pub(crate) fn calculate_text_area_visual_metrics(
             scrollbar_over_border,
             scrollbar_gap: text_area.scrollbar_config.gap,
             read_only: text_area.read_only,
+            cursor: text_area.cursor,
             tab_stop: text_area.tab_display_width,
             sentinel_ph_width,
             sentinel_count,
@@ -996,6 +1013,7 @@ pub(crate) fn calculate_text_area_visual_metrics(
                     line_num: idx + 1,
                     wrap,
                     content_width,
+                    caret: (!text_area.read_only).then_some(cursor),
                     sentinel: sentinel.as_ref(),
                     tab_stop: text_area.tab_display_width as usize,
                     insertions: &insertions,
@@ -1030,7 +1048,11 @@ pub(crate) fn calculate_text_area_visual_metrics(
 
         let max_line_width = max_logical_line_width(&prepared);
         if wrap {
-            let line_ranges = layout_lines(&prepared, content_width);
+            let line_ranges = if text_area.read_only {
+                layout_lines(&prepared, content_width)
+            } else {
+                layout_lines_with_caret(&prepared, content_width, cursor)
+            };
             let mut logical_line_idx = 0usize;
             let mut seen_visual_in_line = vec![false; logical_lines_count.max(1)];
             for range in line_ranges {
@@ -1089,44 +1111,6 @@ pub(crate) fn calculate_text_area_visual_metrics(
         }
         max_line_width
     };
-
-    if wrap && !text_area.read_only {
-        let mut idx = 0usize;
-        while idx < visual_lines.len() {
-            let line_num = visual_lines[idx].line_num;
-            let boundary = visual_lines[idx].end;
-            let visual_col = visual_lines[idx].visual_end_col;
-            let row_width = visual_col.saturating_sub(visual_lines[idx].visual_start_col);
-            let source_idx = line_num.saturating_sub(1);
-            let is_last_source_row = visual_lines
-                .get(idx + 1)
-                .is_none_or(|next| next.line_num != line_num);
-            if is_last_source_row
-                && row_width == content_width
-                && boundary
-                    == line_end_offsets
-                        .get(source_idx)
-                        .copied()
-                        .unwrap_or(boundary)
-            {
-                visual_lines.insert(
-                    idx + 1,
-                    TextAreaVisualLine {
-                        line_num,
-                        continuation: true,
-                        start: boundary,
-                        end: boundary,
-                        visual_start_col: visual_col,
-                        visual_end_col: visual_col,
-                        starts_with_virtual_text: false,
-                        ends_with_virtual_text: false,
-                    },
-                );
-                idx = idx.saturating_add(1);
-            }
-            idx = idx.saturating_add(1);
-        }
-    }
 
     // allow(unused_mut): the diff-view feature gate below conditionally mutates these.
     #[allow(unused_mut)]
@@ -1320,62 +1304,204 @@ mod tests {
     }
 
     #[test]
-    fn full_width_editable_line_adds_caret_continuation() {
+    fn full_width_editable_line_reflows_only_caret_row() {
         let editable = make_textarea("abcde", true, false).cursor(5);
         let read_only = editable.clone().read_only(true);
+        let mut cache = TextAreaVisualCache::default();
 
-        let (editable_total, editable_cursor, _, editable_content_w) = calc(&editable, 5);
+        let editable_geometry = calculate_text_area_visual_metrics(
+            &editable,
+            5,
+            false,
+            hash_text(editable.value.as_ref()),
+            Some(&mut cache),
+        );
         let (read_only_total, _, _, read_only_content_w) = calc(&read_only, 5);
 
-        assert_eq!(editable_content_w, 5);
-        assert_eq!(read_only_content_w, editable_content_w);
-        assert_eq!(editable_total, 2);
-        assert_eq!(editable_cursor, 1);
+        assert_eq!(editable_geometry.content_width, 5);
+        assert_eq!(read_only_content_w, editable_geometry.content_width);
+        assert_eq!(editable_geometry.total_visual_lines, 2);
+        assert_eq!(editable_geometry.cursor_visual_line, 1);
+        assert_eq!(
+            cache
+                .latest_lines()
+                .expect("editable layout is cached")
+                .iter()
+                .map(|line| (line.start, line.end))
+                .collect::<Vec<_>>(),
+            vec![(0, 4), (4, 5)]
+        );
         assert_eq!(read_only_total, 1);
     }
 
     #[test]
-    fn trailing_space_keeps_full_width_word_on_existing_row() {
-        let before = make_textarea("hello word", true, false).cursor(10);
-        let after = make_textarea("hello word ", true, false).cursor(11);
-        let mut before_cache = TextAreaVisualCache::default();
-        let mut after_cache = TextAreaVisualCache::default();
+    fn caret_reservation_reflows_at_word_boundary() {
+        let value = "really long tex";
+        let ta = make_textarea(value, true, false).cursor(value.len());
+        let mut cache = TextAreaVisualCache::default();
 
-        let before_geometry = calculate_text_area_visual_metrics(
-            &before,
-            10,
-            false,
-            hash_text(before.value.as_ref()),
-            Some(&mut before_cache),
-        );
-        let after_geometry = calculate_text_area_visual_metrics(
-            &after,
-            10,
-            false,
-            hash_text(after.value.as_ref()),
-            Some(&mut after_cache),
-        );
-        let before_lines = before_cache
-            .latest_lines()
-            .expect("before layout is cached");
-        let after_lines = after_cache.latest_lines().expect("after layout is cached");
+        let geometry =
+            calculate_text_area_visual_metrics(&ta, 15, false, hash_text(value), Some(&mut cache));
 
+        assert_eq!(geometry.total_visual_lines, 2);
+        assert_eq!(geometry.cursor_visual_line, 1);
         assert_eq!(
-            before_lines
+            cache
+                .latest_lines()
+                .expect("layout is cached")
                 .iter()
                 .map(|line| (line.start, line.end))
                 .collect::<Vec<_>>(),
-            vec![(0, 10), (10, 10)]
+            vec![(0, 12), (12, 15)]
         );
+    }
+
+    #[test]
+    fn caret_reservation_does_not_shrink_other_wrapped_rows() {
+        let value = "abcdefghijklmno\nreally long tex";
+        let ta = make_textarea(value, true, false).cursor(value.len());
+        let mut cache = TextAreaVisualCache::default();
+
+        calculate_text_area_visual_metrics(&ta, 15, false, hash_text(value), Some(&mut cache));
+
         assert_eq!(
-            after_lines
+            cache
+                .latest_lines()
+                .expect("layout is cached")
                 .iter()
                 .map(|line| (line.start, line.end))
                 .collect::<Vec<_>>(),
-            vec![(0, 10), (10, 11)]
+            vec![(0, 15), (16, 28), (28, 31)]
         );
-        assert_eq!(before_geometry.cursor_visual_line, 1);
-        assert_eq!(after_geometry.cursor_visual_line, 1);
+    }
+
+    #[test]
+    fn auto_height_tracks_cursor_dependent_caret_row() {
+        let value = "really long tex";
+        let at_start = make_textarea(value, true, false)
+            .width(crate::style::Length::Px(15))
+            .height(crate::style::Length::Auto);
+        let at_end = at_start.clone().cursor(value.len());
+
+        assert_eq!(measure_text_area_constrained(&at_start, Some(15)).1, 1);
+        assert_eq!(measure_text_area_constrained(&at_end, Some(15)).1, 2);
+    }
+
+    #[test]
+    fn cursor_change_invalidates_caret_dependent_visual_layout() {
+        let value = "really long tex";
+        let at_start = make_textarea(value, true, false);
+        let at_end = at_start.clone().cursor(value.len());
+        let mut cache = TextAreaVisualCache::default();
+
+        let start_geometry = calculate_text_area_visual_metrics(
+            &at_start,
+            15,
+            false,
+            hash_text(value),
+            Some(&mut cache),
+        );
+        let end_geometry = calculate_text_area_visual_metrics(
+            &at_end,
+            15,
+            false,
+            hash_text(value),
+            Some(&mut cache),
+        );
+
+        assert_eq!(start_geometry.total_visual_lines, 1);
+        assert_eq!(end_geometry.total_visual_lines, 2);
+        assert_eq!(cache.entries.len(), 2);
+    }
+
+    #[test]
+    fn overflowing_internal_separator_reuses_previous_word_break() {
+        let value = "really long tex forgot \"t\"";
+        let ta = make_textarea(value, true, false).cursor(value.len());
+        let mut cache = TextAreaVisualCache::default();
+
+        calculate_text_area_visual_metrics(&ta, 15, false, hash_text(value), Some(&mut cache));
+
+        assert_eq!(
+            cache
+                .latest_lines()
+                .expect("layout is cached")
+                .iter()
+                .map(|line| (line.start, line.end))
+                .collect::<Vec<_>>(),
+            vec![(0, 12), (12, value.len())]
+        );
+    }
+
+    #[test]
+    fn trailing_space_and_next_input_stay_on_caret_row() {
+        for (value, expected_col) in [("really long tex ", 4), ("really long tex d", 5)] {
+            let text_area = make_textarea(value, true, false).cursor(value.len());
+            let mut cache = TextAreaVisualCache::default();
+            let geometry = calculate_text_area_visual_metrics(
+                &text_area,
+                15,
+                false,
+                hash_text(value),
+                Some(&mut cache),
+            );
+            let lines = cache.latest_lines().expect("layout is cached");
+
+            assert_eq!(
+                lines
+                    .iter()
+                    .map(|line| (line.start, line.end))
+                    .collect::<Vec<_>>(),
+                vec![(0, 12), (12, value.len())]
+            );
+            assert_eq!(geometry.cursor_visual_line, 1);
+            assert_eq!(
+                str_visual_width_with_tabs(
+                    &value[lines[1].start..value.len()],
+                    None,
+                    lines[1].visual_start_col,
+                    4,
+                ),
+                expected_col
+            );
+        }
+    }
+
+    #[test]
+    fn exact_width_trailing_space_keeps_full_row_before_next_input() {
+        for (value, expected_ranges, expected_col) in [
+            ("really long te ", vec![(0, 15), (15, 15)], 0),
+            ("really long te t", vec![(0, 15), (15, 16)], 1),
+        ] {
+            let text_area = make_textarea(value, true, false).cursor(value.len());
+            let mut cache = TextAreaVisualCache::default();
+            let geometry = calculate_text_area_visual_metrics(
+                &text_area,
+                15,
+                false,
+                hash_text(value),
+                Some(&mut cache),
+            );
+            let lines = cache.latest_lines().expect("layout is cached");
+
+            assert_eq!(
+                lines
+                    .iter()
+                    .map(|line| (line.start, line.end))
+                    .collect::<Vec<_>>(),
+                expected_ranges
+            );
+            assert_eq!(geometry.cursor_visual_line, 1);
+            assert_eq!(
+                str_visual_width_with_tabs(
+                    &value[lines[1].start..value.len()],
+                    None,
+                    lines[1].visual_start_col,
+                    4,
+                ),
+                expected_col
+            );
+        }
     }
 
     #[test]
@@ -1478,11 +1604,11 @@ mod tests {
         assert_eq!(total, 1);
         assert_eq!(max_w, 1);
 
-        // At inner_w=1 each character occupies one row, followed by an empty
-        // continuation row for the caret after the final full-width character.
+        // At inner_w=1 each character occupies one row. The caret remains at
+        // its configured start position, so no final continuation is needed.
         let ta_narrow = make_textarea("hello", true, false);
         let result = calc(&ta_narrow, 1);
-        assert_eq!(result, (6, 0, 5, 1));
+        assert_eq!(result, (5, 0, 5, 1));
     }
 
     #[test]
@@ -1566,10 +1692,10 @@ mod tests {
 
     #[test]
     fn virtual_text_hash_invalidates_visual_cache() {
-        let short = make_textarea("ab", true, false).virtual_text(
+        let short = make_textarea("ab", true, false).cursor(2).virtual_text(
             super::super::TextAreaVirtualText::inline(1, vec![Span::new("<")]),
         );
-        let long = make_textarea("ab", true, false).virtual_text(
+        let long = make_textarea("ab", true, false).cursor(2).virtual_text(
             super::super::TextAreaVirtualText::inline(1, vec![Span::new("<<<")]),
         );
         let hash = hash_text(short.value.as_ref());
