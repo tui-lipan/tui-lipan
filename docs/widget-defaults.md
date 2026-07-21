@@ -622,7 +622,7 @@ Source: `src/widgets/modal.rs:37` (`Modal`).
 
 ## Popover
 
-Source: `src/widgets/popover/mod.rs:94` (`Popover`).
+Source: `src/widgets/popover/mod.rs:95` (`Popover`).
 
 | Field | Default initializer |
 |---|---|
@@ -639,6 +639,7 @@ Source: `src/widgets/popover/mod.rs:94` (`Popover`).
 | `fit_trigger_width` | `false` |
 | `max_width` | `None` |
 | `anchor` | `None` |
+| `capture_focus` | `true` |
 | `auto_focus` | `true` |
 
 ## HexArea

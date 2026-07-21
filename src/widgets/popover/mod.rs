@@ -79,6 +79,7 @@ pub struct Popover {
     pub(crate) fit_trigger_width: bool,
     pub(crate) max_width: Option<Length>,
     pub(crate) anchor: Option<(u16, u16)>,
+    pub(crate) capture_focus: bool,
     pub(crate) auto_focus: bool,
 }
 
@@ -105,6 +106,7 @@ impl Popover {
             fit_trigger_width: false,
             max_width: None,
             anchor: None,
+            capture_focus: true,
             auto_focus: true,
         }
     }
@@ -130,6 +132,16 @@ impl Popover {
     /// Set overlay scope (portal vs local rendering).
     pub fn scope(mut self, scope: OverlayScope) -> Self {
         self.scope = scope;
+        self
+    }
+
+    /// Control whether an open root-portal popover captures and traps focus.
+    ///
+    /// Disable this for passive overlays such as autocomplete suggestions that
+    /// must render through the root portal while their trigger retains keyboard focus.
+    /// This has no effect on local popovers.
+    pub fn capture_focus(mut self, capture_focus: bool) -> Self {
+        self.capture_focus = capture_focus;
         self
     }
 
@@ -229,6 +241,7 @@ impl crate::layout::hash::LayoutHash for Popover {
         self.fit_trigger_width.hash(hasher);
         self.max_width.hash(hasher);
         self.anchor.hash(hasher);
+        self.capture_focus.hash(hasher);
         self.auto_focus.hash(hasher);
         recurse(self.trigger.as_ref())?.hash(hasher);
         Some(())
@@ -249,6 +262,7 @@ mod tests {
         };
 
         assert_eq!(popover.scope, OverlayScope::RootPortal);
+        assert!(popover.capture_focus);
     }
 
     #[test]
@@ -260,5 +274,16 @@ mod tests {
         };
 
         assert_eq!(popover.scope, OverlayScope::Local);
+    }
+
+    #[test]
+    fn popover_capture_focus_builder_updates_capture() {
+        let element: Element = Popover::new().capture_focus(false).into();
+
+        let ElementKind::Popover(popover) = element.kind else {
+            panic!("expected popover element");
+        };
+
+        assert!(!popover.capture_focus);
     }
 }

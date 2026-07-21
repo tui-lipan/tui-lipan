@@ -193,6 +193,10 @@ Set `.auto_focus(false)` to retain keyboard capture and trapping while suspendin
 overlay. Empty capturing overlays use the same suspension behavior. Local overlays do not provide
 root capture semantics.
 
+Set `Popover::capture_focus(false)` for a passive root-portal overlay that must remain above the
+normal tree without taking focus from its trigger, such as autocomplete suggestions. In this mode,
+`auto_focus` has no effect and keyboard input continues to route to the existing focused widget.
+
 ## Widget Focus Controls
 
 `Accordion`, `Button`, `Checkbox`, `DocumentView`, `DraggableTabBar`, `FileTree`, `HexArea`,
