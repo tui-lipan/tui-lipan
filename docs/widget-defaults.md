@@ -261,7 +261,7 @@ Source: `src/widgets/list/mod.rs:1288` (`List`).
 | Field | Default initializer |
 |---|---|
 | `items` | `Arc::new([])` |
-| `selected` | `0` |
+| `selected` | `Some(0)` |
 | `scroll_keys` | `ScrollKeymap::default()` |
 | `scroll_wheel` | `true` |
 | `style` | `Style::default()` |
@@ -571,7 +571,7 @@ Source: `src/widgets/multi_select.rs:138` (`MultiSelect`).
 
 | Field | Default initializer |
 |---|---|
-| `items` | `Vec::new()` |
+| `items` | `Arc::from([])` |
 | `active_index` | `0` |
 | `selected_indices` | `Vec::new()` |
 | `max_selected` | `None` |
@@ -709,7 +709,7 @@ Source: `src/widgets/hyperlink.rs:50` (`Hyperlink`).
 
 ## PanView
 
-Source: `src/widgets/pan_view/mod.rs:237` (`PanView`).
+Source: `src/widgets/pan_view/mod.rs:238` (`PanView`).
 
 | Field | Default initializer |
 |---|---|
@@ -721,6 +721,7 @@ Source: `src/widgets/pan_view/mod.rs:237` (`PanView`).
 | `center_content` | `false` |
 | `free_pan_margin` | `None` |
 | `drag_to_pan` | `true` |
+| `wheel_to_pan` | `true` |
 | `keymap` | `PanKeymap::default()` |
 | `key_step` | `(4, 2)` |
 | `focusable` | `false` |
@@ -776,7 +777,7 @@ Source: `src/widgets/table/mod.rs:356` (`Table`).
 | `widths` | `Vec::new()` |
 | `column_styles` | `Vec::new()` |
 | `row_styles` | `Vec::new()` |
-| `selected` | `0` |
+| `selected` | `Some(0)` |
 | `column_spacing` | `1` |
 | `row_gap` | `0` |
 | `style` | `Style::default()` |
@@ -1021,6 +1022,7 @@ Source: `src/widgets/file_tree/mod.rs:215` (`FileTree`).
 | `selection_style` | `StyleSlot::Inherit` |
 | `unfocused_selection_style` | `StyleSlot::Inherit` |
 | `selected` | `None` |
+| `clear_selection` | `false` |
 | `selected_path` | `None` |
 | `reveal_path` | `None` |
 | `select_path` | `None` |
@@ -1087,12 +1089,12 @@ Source: `src/widgets/file_tree/mod.rs:215` (`FileTree`).
 
 ## SearchPalette
 
-Source: `src/widgets/search_palette/mod.rs:721` (`SearchPalette`).
+Source: `src/widgets/search_palette/mod.rs:742` (`SearchPalette`).
 
 | Field | Default initializer |
 |---|---|
-| `items` | `Vec::new()` |
-| `entries` | `Vec::new()` |
+| `items` | `Arc::from([])` |
+| `entries` | `Arc::from([])` |
 | `sync_match_limit` | `DEFAULT_SYNC_MATCH_LIMIT` |
 | `sync_selection` | `false` |
 | `initial_query` | `"".into()` |
@@ -1171,6 +1173,7 @@ Source: `src/widgets/tree/mod.rs:27` (`Tree`).
 |---|---|
 | `root` | `constructor/local value (not a default)` |
 | `selected` | `None` |
+| `clear_selection` | `false` |
 | `force_scroll_to_selected` | `false` |
 | `gap` | `0` |
 | `icon_gap` | `1` |
@@ -1217,7 +1220,7 @@ Source: `src/widgets/tree/mod.rs:27` (`Tree`).
 
 ## Terminal
 
-Source: `src/widgets/terminal/mod.rs:45` (`Terminal`).
+Source: `src/widgets/terminal/mod.rs:49` (`Terminal`).
 
 | Field | Default initializer |
 |---|---|
