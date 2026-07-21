@@ -209,6 +209,7 @@ pub enum IndentStyle {
 pub(crate) struct TreeProps {
     pub root: TreeNode,
     pub selected: Option<usize>,
+    pub clear_selection: bool,
     pub force_scroll_to_selected: bool,
     pub gap: u16,
     pub icon_gap: u16,

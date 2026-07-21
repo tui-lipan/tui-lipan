@@ -156,7 +156,7 @@ struct ListRowStateStyleInput<'a> {
 pub(crate) struct ListRenderParams<'f, 'b, 'a> {
     pub f: &'f mut ratatui::Frame<'b>,
     pub items: &'a [ListItem],
-    pub selected: usize,
+    pub selected: Option<usize>,
     pub offset: usize,
     pub style: Style,
     pub hover_style: Style,
@@ -532,7 +532,13 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
         return;
     }
 
-    let selected = selected.min(len.saturating_sub(1));
+    let selected = selected.and_then(|s| {
+        if len == 0 {
+            None
+        } else {
+            Some(s.min(len.saturating_sub(1)))
+        }
+    });
     let visible_height = inner.h as usize;
     let top_indicator = show_scroll_indicators && top_indicator;
     let bottom_indicator = show_scroll_indicators && bottom_indicator;
@@ -647,7 +653,7 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
         }
 
         let item_selectable = item.is_selectable();
-        let is_selected = item_selectable && idx == selected;
+        let is_selected = item_selectable && selected == Some(idx);
         let is_active = item.is_active();
         let item_symbol_width = item_symbol_width_for_reserved(
             reserved_symbol_width.min(u16::MAX as usize) as u16,
@@ -1375,7 +1381,7 @@ mod tests {
 
     struct DrawListStateCaseInput {
         item: ListItem,
-        selected: usize,
+        selected: Option<usize>,
         item_hover_style: Style,
         active_style: Style,
         selection_style: Style,
@@ -1385,7 +1391,7 @@ mod tests {
 
     struct DrawPlainListWithLeadingInput<'a> {
         items: &'a [ListItem],
-        selected: usize,
+        selected: Option<usize>,
         active_symbol: Option<&'a str>,
         active_symbol_position: ListSymbolPosition,
         selection_symbol: Option<&'a str>,
@@ -1614,7 +1620,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &[item],
-                    selected: 0,
+                    selected: Some(0),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),
@@ -1706,7 +1712,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &items,
-                    selected: 0,
+                    selected: Some(0),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),
@@ -1776,6 +1782,102 @@ mod tests {
     }
 
     #[test]
+    fn selected_none_paints_no_selection_caps() {
+        let items = [
+            ListItem::from_spans([Span::new("Aa")]),
+            ListItem::from_spans([Span::new("Bb")]),
+        ];
+
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 2,
+        };
+        let backend = TestBackend::new(rect.w, rect.h);
+        let mut terminal = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Fixed(ratatui::layout::Rect::new(0, 0, rect.w, rect.h)),
+            },
+        )
+        .expect("terminal");
+
+        terminal
+            .draw(|f| {
+                render_list(ListRenderParams {
+                    f,
+                    items: &items,
+                    selected: None,
+                    offset: 0,
+                    style: Style::default(),
+                    hover_style: Style::default(),
+                    item_hover_style: Style::default(),
+                    active_style: Style::default(),
+                    selection_style: Style::new().bold(),
+                    active_symbol: None,
+                    active_symbol_position: ListSymbolPosition::Left,
+                    active_symbol_style: None,
+                    selection_symbol: Some("["),
+                    selection_symbol_right: Some("]"),
+                    selection_symbol_style: None,
+                    unselected_symbol: None,
+                    symbol_column: true,
+                    gutter_gap: 0,
+                    gutter_for_non_selectable: false,
+                    selection_full_width: false,
+                    item_horizontal_padding: Padding::default(),
+                    header_horizontal_padding: Padding::default(),
+                    border: false,
+                    border_style: BorderStyle::Plain,
+                    title: None,
+                    title_style: Style::default(),
+                    padding: Padding::default(),
+                    scrollbar: false,
+                    scrollbar_variant: ScrollbarVariant::Standalone,
+                    scrollbar_gap: 0,
+                    scrollbar_thumb: None,
+                    scrollbar_thumb_style: None,
+                    scrollbar_thumb_focus_style: None,
+                    scrollbar_track_style: None,
+                    show_scroll_indicators: false,
+                    scroll_indicator_style: Style::default(),
+                    top_indicator: false,
+                    bottom_indicator: false,
+                    bottom_count: 0,
+                    empty_text: None,
+                    empty_text_style: Style::default(),
+                    is_focused: true,
+                    is_hovered: false,
+                    mouse_pos: None,
+                    disabled: false,
+                    disabled_style: Style::default(),
+                    rect,
+                    rrect: ratatui::layout::Rect::new(0, 0, rect.w, rect.h),
+                    parent_integrated_v: None,
+                    clip_rect: None,
+                    contrast_policy: ContrastPolicy::Off,
+                });
+            })
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let row0 = (0..rect.w)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect::<String>();
+        let row1 = (0..rect.w)
+            .map(|x| buffer[(x, 1)].symbol())
+            .collect::<String>();
+
+        assert!(!row0.contains('['), "row0 = {row0:?}");
+        assert!(!row0.contains(']'), "row0 = {row0:?}");
+        assert!(!row1.contains('['), "row1 = {row1:?}");
+        assert!(!row1.contains(']'), "row1 = {row1:?}");
+        assert!(row0.contains("Aa"), "row0 = {row0:?}");
+        assert!(row1.contains("Bb"), "row1 = {row1:?}");
+    }
+
+    #[test]
     fn selection_symbol_right_moves_to_edge_when_highlight_fills_row() {
         let items = [ListItem::from_spans([Span::new("Aa")])];
 
@@ -1799,7 +1901,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &items,
-                    selected: 0,
+                    selected: Some(0),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),
@@ -1892,7 +1994,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &items,
-                    selected: 0,
+                    selected: Some(0),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),
@@ -1985,7 +2087,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &items,
-                    selected: 1,
+                    selected: Some(1),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),
@@ -2071,7 +2173,7 @@ mod tests {
 
         let buffer = draw_plain_list_with_leading(DrawPlainListWithLeadingInput {
             items: &items,
-            selected: 1,
+            selected: Some(1),
             active_symbol: None,
             active_symbol_position: ListSymbolPosition::Left,
             selection_symbol: Some("> "),
@@ -2103,7 +2205,7 @@ mod tests {
 
         let buffer = draw_plain_list_with_leading(DrawPlainListWithLeadingInput {
             items: &items,
-            selected: 0,
+            selected: Some(0),
             active_symbol: Some("@@"),
             active_symbol_position: ListSymbolPosition::Left,
             selection_symbol: Some(">>"),
@@ -2145,7 +2247,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &items,
-                    selected: 1,
+                    selected: Some(1),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),
@@ -2234,7 +2336,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &items,
-                    selected: 0,
+                    selected: Some(0),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),
@@ -2321,7 +2423,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &[item],
-                    selected: 0,
+                    selected: Some(0),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),
@@ -2410,7 +2512,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &[item],
-                    selected: 0,
+                    selected: Some(0),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),
@@ -2495,7 +2597,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &[item],
-                    selected: 0,
+                    selected: Some(0),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),
@@ -2589,7 +2691,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &items,
-                    selected: 0,
+                    selected: Some(0),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),
@@ -2683,7 +2785,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &items,
-                    selected: 0,
+                    selected: Some(0),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),
@@ -2768,7 +2870,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &[item],
-                    selected: 0,
+                    selected: Some(0),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),
@@ -2850,7 +2952,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &[item],
-                    selected: 0,
+                    selected: Some(0),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),
@@ -2911,7 +3013,7 @@ mod tests {
     fn selected_concrete_style_overrides_hover_concrete_style_when_hovered() {
         let buffer = draw_list_state_case(DrawListStateCaseInput {
             item: ListItem::new("Label"),
-            selected: 0,
+            selected: Some(0),
             item_hover_style: Style::new().bg(Color::Red),
             active_style: Style::default(),
             selection_style: Style::new().bg(Color::Blue),
@@ -2926,7 +3028,7 @@ mod tests {
     fn active_concrete_style_overrides_selection_and_hover_concrete_style_when_hovered() {
         let buffer = draw_list_state_case(DrawListStateCaseInput {
             item: ListItem::new("Label").active(true),
-            selected: 0,
+            selected: Some(0),
             item_hover_style: Style::new().bg(Color::Red),
             active_style: Style::new().bg(Color::Green),
             selection_style: Style::new().bg(Color::Blue),
@@ -2943,7 +3045,7 @@ mod tests {
             item: ListItem::new("Label")
                 .style(Style::new().bg(Color::Rgb(100, 100, 100)))
                 .active(true),
-            selected: 0,
+            selected: Some(0),
             item_hover_style: Style::default(),
             active_style: Style::new().transform_bg(ColorTransform::Dim(0.5)),
             selection_style: Style::default(),
@@ -2958,7 +3060,7 @@ mod tests {
     fn selected_active_transform_applies_once_after_selection_concrete_bg() {
         let buffer = draw_list_state_case(DrawListStateCaseInput {
             item: ListItem::new("Label").active(true),
-            selected: 0,
+            selected: Some(0),
             item_hover_style: Style::default(),
             active_style: Style::new().transform_bg(ColorTransform::Dim(0.5)),
             selection_style: Style::new().bg(Color::Rgb(100, 100, 100)),
@@ -2973,7 +3075,7 @@ mod tests {
     fn hover_transform_applies_over_selected_concrete_style_when_hovered() {
         let buffer = draw_list_state_case(DrawListStateCaseInput {
             item: ListItem::new("Label"),
-            selected: 0,
+            selected: Some(0),
             item_hover_style: Style::new().transform_bg(ColorTransform::Lighten(1.0)),
             active_style: Style::default(),
             selection_style: Style::new().bg(Color::Rgb(10, 20, 30)),
@@ -2988,7 +3090,7 @@ mod tests {
     fn hover_transform_applies_over_active_concrete_style_when_hovered() {
         let buffer = draw_list_state_case(DrawListStateCaseInput {
             item: ListItem::new("Label").active(true),
-            selected: 0,
+            selected: Some(0),
             item_hover_style: Style::new().transform_bg(ColorTransform::Lighten(1.0)),
             active_style: Style::new().bg(Color::Rgb(10, 20, 30)),
             selection_style: Style::new().bg(Color::Blue),
@@ -3023,7 +3125,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &[item],
-                    selected: 0,
+                    selected: Some(0),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),
@@ -3110,7 +3212,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &[item],
-                    selected: 0,
+                    selected: Some(0),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),
@@ -3194,7 +3296,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &[item],
-                    selected: 0,
+                    selected: Some(0),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),
@@ -3275,7 +3377,7 @@ mod tests {
                 render_list(ListRenderParams {
                     f,
                     items: &[item],
-                    selected: 0,
+                    selected: Some(0),
                     offset: 0,
                     style: Style::default(),
                     hover_style: Style::default(),

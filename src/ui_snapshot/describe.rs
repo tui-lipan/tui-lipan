@@ -122,7 +122,7 @@ fn describe_node(
             if let Some(title) = &list.title {
                 desc.title = Some(title.to_string());
             }
-            desc.selected_index = Some(list.selected);
+            desc.selected_index = list.selected;
             desc.scroll_offset = Some(list.offset);
             let total = list.items.len();
             if total > 0 {
@@ -132,7 +132,7 @@ fn describe_node(
             }
         }
         NodeKind::Table(table) => {
-            desc.selected_index = Some(table.selected);
+            desc.selected_index = table.selected;
             desc.scroll_offset = Some(table.offset);
             let total = table.rows.len();
             if total > 0 {

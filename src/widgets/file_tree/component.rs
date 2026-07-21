@@ -218,6 +218,9 @@ impl Component for FileTreeComponent {
         if let Some(selected) = selected_by_path.or(ctx.props.selected) {
             tree = tree.selected(selected);
         }
+        if ctx.props.clear_selection {
+            tree = tree.clear_selection(true);
+        }
         if selected_by_path.is_some() && ctx.props.select_path.is_some() {
             tree = tree.force_scroll_to_selected(true);
         }

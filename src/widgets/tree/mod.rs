@@ -27,6 +27,7 @@ impl Tree {
             props: TreeProps {
                 root,
                 selected: None,
+                clear_selection: false,
                 force_scroll_to_selected: false,
                 gap: 0,
                 icon_gap: 1,
@@ -118,6 +119,18 @@ impl Tree {
     /// Set the selected visible row index.
     pub fn selected(mut self, selected: usize) -> Self {
         self.props.selected = Some(selected);
+        self
+    }
+
+    /// Clear the selection highlight (no current row).
+    ///
+    /// When `true`, this is authoritative over both the controlled `selected`
+    /// prop and internal selection state: nothing is highlighted. Keyboard
+    /// navigation on the inner list may still emit `on_select` (adopting a
+    /// row), and internal state may record it, but `clear_selection` keeps
+    /// the highlight suppressed until cleared.
+    pub fn clear_selection(mut self, clear: bool) -> Self {
+        self.props.clear_selection = clear;
         self
     }
 

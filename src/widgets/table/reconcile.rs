@@ -47,17 +47,19 @@ pub(crate) fn reconcile_table(
             table.row_gap,
         );
 
-        let (new_offset, top_indicator, bottom_indicator, bottom_count) =
-            if max_display_rows == 0 || len == 0 {
-                (0, false, false, 0)
-            } else if let Some(forced) = scroll_override {
-                let (start, end, top, bot) =
-                    crate::widgets::list::utils::calc_list_window(forced, len, max_display_rows);
-                (start, top, bot, len.saturating_sub(end))
-            } else if table.show_scroll_indicators {
+        let (new_offset, top_indicator, bottom_indicator, bottom_count) = if max_display_rows == 0
+            || len == 0
+        {
+            (0, false, false, 0)
+        } else if let Some(forced) = scroll_override {
+            let (start, end, top, bot) =
+                crate::widgets::list::utils::calc_list_window(forced, len, max_display_rows);
+            (start, top, bot, len.saturating_sub(end))
+        } else if let Some(selected) = table.selected {
+            if table.show_scroll_indicators {
                 let smart_off = crate::widgets::scroll::smart_list_offset_with_indicators(
                     old_offset,
-                    table.selected,
+                    selected,
                     len,
                     max_display_rows,
                 );
@@ -68,7 +70,7 @@ pub(crate) fn reconcile_table(
                 (
                     crate::widgets::scroll::smart_list_offset(
                         old_offset,
-                        table.selected,
+                        selected,
                         len,
                         max_display_rows as u16,
                     ),
@@ -76,7 +78,18 @@ pub(crate) fn reconcile_table(
                     false,
                     0,
                 )
-            };
+            }
+        } else if table.show_scroll_indicators {
+            // No selection: keep the previous offset, but still derive the
+            // overflow indicators from it so a read-only table keeps its
+            // "N more" affordance.
+            let (start, end, top, bot) =
+                crate::widgets::list::utils::calc_list_window(old_offset, len, max_display_rows);
+            (start, top, bot, len.saturating_sub(end))
+        } else {
+            // No selection: keep the previous offset (clamped below).
+            (old_offset, false, false, 0)
+        };
 
         let new_offset = new_offset.min(len.saturating_sub(1));
 
@@ -117,4 +130,51 @@ pub(crate) fn reconcile_table(
     tree.register_scrollbar_zone(id);
 
     id
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reconcile_table;
+    use crate::core::node::{NodeKind, NodeTree};
+    use crate::style::Rect;
+    use crate::widgets::{Table, TableRow};
+
+    fn overflow_indicators(selected: Option<usize>) -> (bool, bool, usize) {
+        let mut tree = NodeTree::new();
+        let id = tree.alloc();
+        let table = Table::new()
+            .rows((0..30).map(|i| TableRow::new([format!("row {i}")])))
+            .selected(selected)
+            .show_scroll_indicators(true);
+
+        reconcile_table(
+            &mut tree,
+            id,
+            &table,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 20,
+                h: 10,
+            },
+        );
+
+        let NodeKind::Table(node) = &tree.node(id).kind else {
+            panic!("expected table node");
+        };
+        (node.top_indicator, node.bottom_indicator, node.bottom_count)
+    }
+
+    #[test]
+    fn selected_none_still_reports_overflow_indicators() {
+        // A read-only table must keep its "N more below" affordance; the
+        // no-selection scroll branch used to hardcode the indicators off.
+        let (top, bottom, bottom_count) = overflow_indicators(None);
+        assert!(!top);
+        assert!(bottom, "overflowing table should report a bottom indicator");
+        assert!(bottom_count > 0, "bottom_count = {bottom_count}");
+
+        // Matches what an equivalent selected table reports from the same offset.
+        assert_eq!(overflow_indicators(Some(0)), (top, bottom, bottom_count));
+    }
 }

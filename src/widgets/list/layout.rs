@@ -46,7 +46,7 @@ pub fn measure_list(list: &List) -> (u16, u16) {
             list.item_horizontal_padding.horizontal() as usize
         };
 
-        let leading = leading_metrics(list, item, idx == list.selected);
+        let leading = leading_metrics(list, item, list.selected == Some(idx));
         let symbol_w = leading.symbol_width as usize;
         let gutter_w = leading.gutter_width as usize;
         let active_right_w = leading.active_right_symbol_width as usize;

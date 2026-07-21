@@ -375,9 +375,9 @@ pub struct AppRunner<C: Component> {
     /// Tracks which scopes are already in `dirty_component_scopes` for O(1) dedup.
     dirty_scope_set: FxHashSet<ScopeId>,
     /// Previous list `selected` index per node (for pointer-hover suppression).
-    pub(crate) last_seen_list_selection: FxHashMap<NodeId, usize>,
+    pub(crate) last_seen_list_selection: FxHashMap<NodeId, Option<usize>>,
     /// Previous table `selected` index per node.
-    pub(crate) last_seen_table_selection: FxHashMap<NodeId, usize>,
+    pub(crate) last_seen_table_selection: FxHashMap<NodeId, Option<usize>>,
     /// Resolved terminal background color for opacity blending through
     /// `Color::Reset` backgrounds.
     pub(crate) terminal_bg: Option<crate::style::Color>,

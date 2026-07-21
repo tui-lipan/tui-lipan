@@ -11,7 +11,7 @@ use std::collections::HashSet;
 #[derive(Clone, Debug)]
 pub(crate) struct TreeState {
     pub expanded: HashSet<TreePath>,
-    pub selected: usize,
+    pub selected: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -37,7 +37,11 @@ impl Component for TreeComponent {
     fn create_state(&self, props: &Self::Properties) -> Self::State {
         TreeState {
             expanded: expanded_paths_from_root(&props.root),
-            selected: props.selected.unwrap_or(0),
+            selected: if props.clear_selection {
+                None
+            } else {
+                Some(props.selected.unwrap_or(0))
+            },
         }
     }
 
@@ -51,16 +55,19 @@ impl Component for TreeComponent {
 
         if old_expanded != next_expanded {
             ctx.state.expanded = next_expanded;
-            if let Some(selected) = ctx.props.selected {
-                ctx.state.selected = selected;
-            }
+            sync_selection_from_props(&ctx.props, &mut ctx.state);
+            return Update::full();
+        }
+
+        if old_props.clear_selection != ctx.props.clear_selection {
+            sync_selection_from_props(&ctx.props, &mut ctx.state);
             return Update::full();
         }
 
         if old_props.selected != ctx.props.selected
             && let Some(selected) = ctx.props.selected
         {
-            ctx.state.selected = selected;
+            ctx.state.selected = Some(selected);
             return Update::full();
         }
 
@@ -70,7 +77,7 @@ impl Component for TreeComponent {
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
         match msg {
             TreeMsg::Select(index) => {
-                ctx.state.selected = index;
+                ctx.state.selected = Some(index);
                 if let Some(cb) = ctx.props.on_select.as_ref()
                     && let Some(entry) = entry_at_index(&ctx.props, &ctx.state, index)
                 {
@@ -108,7 +115,9 @@ impl Component for TreeComponent {
                 Update::full()
             }
             TreeMsg::Action(action) => {
-                let selected = selected_index(ctx);
+                let Some(selected) = selected_index(ctx) else {
+                    return Update::none();
+                };
                 let expanded_paths = resolved_expanded(ctx);
                 let entries = flatten_tree(&ctx.props.root, expanded_paths.as_ref());
                 let Some(entry) = entries.get(selected).cloned() else {
@@ -150,7 +159,7 @@ impl Component for TreeComponent {
                                     .segments()
                                     .starts_with(entry.path.segments())
                                 {
-                                    ctx.state.selected = selected + 1;
+                                    ctx.state.selected = Some(selected + 1);
                                 }
                             }
                         }
@@ -177,7 +186,7 @@ impl Component for TreeComponent {
                                 if let Some(parent_idx) =
                                     entries.iter().position(|e| e.path == parent_path)
                                 {
-                                    ctx.state.selected = parent_idx;
+                                    ctx.state.selected = Some(parent_idx);
 
                                     if let Some(cb) = ctx.props.on_toggle.as_ref() {
                                         cb.emit(TreeToggleEvent {
@@ -206,7 +215,7 @@ impl Component for TreeComponent {
             .map(|entry| build_item(entry, &ctx.props, max_depth))
             .collect::<Vec<_>>();
 
-        let selected = selected_index(ctx).min(items.len().saturating_sub(1));
+        let selected = selected_index(ctx).map(|s| s.min(items.len().saturating_sub(1)));
 
         let on_select = ctx
             .link()
@@ -345,7 +354,10 @@ fn resolved_expanded(ctx: &Context<TreeComponent>) -> Cow<'_, HashSet<TreePath>>
         return Cow::Borrowed(&ctx.state.expanded);
     }
 
-    let Some(entry) = entry_at_index(&ctx.props, &ctx.state, ctx.state.selected) else {
+    let Some(selected) = ctx.state.selected else {
+        return Cow::Borrowed(&ctx.state.expanded);
+    };
+    let Some(entry) = entry_at_index(&ctx.props, &ctx.state, selected) else {
         return Cow::Borrowed(&ctx.state.expanded);
     };
 
@@ -359,8 +371,27 @@ fn resolved_expanded(ctx: &Context<TreeComponent>) -> Cow<'_, HashSet<TreePath>>
     Cow::Owned(constrained)
 }
 
-fn selected_index(ctx: &Context<TreeComponent>) -> usize {
-    ctx.props.selected.unwrap_or(ctx.state.selected)
+/// Reconcile internal selection state with the current props.
+///
+/// Shared by every `on_props_changed` path so an update that changes several
+/// props at once cannot skip part of the sync. Leaving `clear_selection` with no
+/// controlled index restores a cursor rather than staying blank.
+fn sync_selection_from_props(props: &TreeProps, state: &mut TreeState) {
+    if props.clear_selection {
+        state.selected = None;
+    } else if let Some(selected) = props.selected {
+        state.selected = Some(selected);
+    } else if state.selected.is_none() {
+        state.selected = Some(0);
+    }
+}
+
+fn selected_index(ctx: &Context<TreeComponent>) -> Option<usize> {
+    if ctx.props.clear_selection {
+        None
+    } else {
+        ctx.props.selected.or(ctx.state.selected)
+    }
 }
 
 fn push_entries<'a>(
@@ -724,7 +755,106 @@ mod tests {
         let component = TreeComponent::new();
         let state = component.create_state(&props);
 
-        assert_eq!(state.selected, 2);
+        assert_eq!(state.selected, Some(2));
+    }
+
+    /// Render a `Tree` through the real component and report the selection the
+    /// inner `List` ended up with.
+    fn inner_list_selection(tree: crate::widgets::Tree) -> Option<usize> {
+        let mut backend =
+            crate::TestBackend::new_with_props(TreeComponent::new(), tree.props.clone());
+        backend.set_viewport(crate::style::Rect {
+            x: 0,
+            y: 0,
+            w: 30,
+            h: 10,
+        });
+        backend.render();
+
+        let snapshot = backend.capture_ui_snapshot();
+        snapshot
+            .widgets
+            .iter()
+            .find(|w| w.kind == crate::ui_snapshot::UiWidgetKind::List)
+            .expect("tree renders an inner list")
+            .selected_index
+    }
+
+    fn sample_tree() -> TreeNode {
+        TreeNode::new("root")
+            .expanded(true)
+            .child(TreeNode::new("a"))
+            .child(TreeNode::new("b"))
+    }
+
+    #[test]
+    fn clear_selection_suppresses_inner_list_highlight() {
+        // Baseline: the controlled prop reaches the inner list.
+        assert_eq!(
+            inner_list_selection(crate::widgets::Tree::new(sample_tree()).selected(1)),
+            Some(1)
+        );
+
+        // clear_selection wins over the controlled prop.
+        assert_eq!(
+            inner_list_selection(
+                crate::widgets::Tree::new(sample_tree())
+                    .selected(1)
+                    .clear_selection(true)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn leaving_clear_selection_restores_a_cursor_even_when_expansion_also_changed() {
+        // Both branches of on_props_changed must run the same sync; the
+        // expansion branch used to skip the restore and leave the tree blank.
+        let mut state = TreeState {
+            expanded: HashSet::new(),
+            selected: None,
+        };
+
+        let cleared = crate::widgets::Tree::new(sample_tree())
+            .clear_selection(true)
+            .props;
+        sync_selection_from_props(&cleared, &mut state);
+        assert_eq!(state.selected, None);
+
+        let restored = crate::widgets::Tree::new(sample_tree()).props;
+        sync_selection_from_props(&restored, &mut state);
+        assert_eq!(state.selected, Some(0));
+    }
+
+    #[test]
+    fn clear_selection_survives_a_select_message() {
+        let tree = crate::widgets::Tree::new(sample_tree()).clear_selection(true);
+        let mut backend =
+            crate::TestBackend::new_with_props(TreeComponent::new(), tree.props.clone());
+        backend.set_viewport(crate::style::Rect {
+            x: 0,
+            y: 0,
+            w: 30,
+            h: 10,
+        });
+        backend.render();
+
+        // The inner list may still adopt and emit a selection; clear_selection
+        // must keep the highlight suppressed regardless of recorded state.
+        backend
+            .dispatch(TreeMsg::Select(2))
+            .expect("dispatch tree select");
+        backend.render();
+
+        assert_eq!(backend.state().selected, Some(2));
+
+        let snapshot = backend.capture_ui_snapshot();
+        let list = snapshot
+            .widgets
+            .iter()
+            .find(|w| w.kind == crate::ui_snapshot::UiWidgetKind::List)
+            .expect("tree renders an inner list");
+        assert_eq!(list.selected_index, None);
     }
 
     #[test]

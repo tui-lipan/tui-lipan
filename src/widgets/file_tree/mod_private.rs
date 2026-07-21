@@ -68,6 +68,7 @@ pub(crate) struct FileTreeProps {
     pub(crate) selection_style: StyleSlot,
     pub(crate) unfocused_selection_style: StyleSlot,
     pub(crate) selected: Option<usize>,
+    pub(crate) clear_selection: bool,
     pub(crate) selected_path: Option<Arc<str>>,
     pub(crate) reveal_path: Option<Arc<str>>,
     pub(crate) select_path: Option<Arc<str>>,

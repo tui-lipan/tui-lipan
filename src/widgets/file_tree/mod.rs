@@ -240,6 +240,7 @@ impl FileTree {
                 selection_style: StyleSlot::Inherit,
                 unfocused_selection_style: StyleSlot::Inherit,
                 selected: None,
+                clear_selection: false,
                 selected_path: None,
                 reveal_path: None,
                 select_path: None,
@@ -570,6 +571,15 @@ impl FileTree {
     /// Set the selected visible row index.
     pub fn selected(mut self, selected: usize) -> Self {
         self.props.selected = Some(selected);
+        self
+    }
+
+    /// Clear the selection highlight (no current row).
+    ///
+    /// When `true`, this is authoritative over both the controlled `selected`
+    /// prop and internal selection state. See [`crate::widgets::Tree::clear_selection`].
+    pub fn clear_selection(mut self, clear: bool) -> Self {
+        self.props.clear_selection = clear;
         self
     }
 

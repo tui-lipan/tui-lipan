@@ -1231,7 +1231,7 @@ pub(crate) fn effective_extra_line_indent(list: &List, item: &ListItem) -> u16 {
 #[derive(Clone)]
 pub struct List {
     pub(crate) items: Arc<[ListItem]>,
-    pub(crate) selected: usize,
+    pub(crate) selected: Option<usize>,
     pub(crate) scroll_keys: ScrollKeymap,
     pub(crate) scroll_wheel: bool,
     pub(crate) style: Style,
@@ -1287,7 +1287,7 @@ impl Default for List {
     fn default() -> Self {
         Self {
             items: Arc::new([]),
-            selected: 0,
+            selected: Some(0),
             scroll_keys: ScrollKeymap::default(),
             scroll_wheel: true,
             style: Style::default(),
@@ -1376,8 +1376,11 @@ impl List {
     }
 
     /// Set selected item index.
-    pub fn selected(mut self, selected: usize) -> Self {
-        self.selected = selected;
+    ///
+    /// Pass `None` for no current row (no selection highlight). Bare integers
+    /// still work via `From<T> for Option<T>` (`list.selected(0)`).
+    pub fn selected(mut self, selected: impl Into<Option<usize>>) -> Self {
+        self.selected = selected.into();
         self
     }
 
