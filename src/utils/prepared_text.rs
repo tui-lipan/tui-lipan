@@ -156,11 +156,7 @@ pub(crate) fn count_lines(pt: &PreparedText, width: usize) -> usize {
             continue;
         }
 
-        let separator_starts_continuation = matches!(
-            pt.segments[cursor].kind,
-            SegmentKind::Space | SegmentKind::PreservedSpace | SegmentKind::Tab
-        );
-        if !separator_starts_continuation && let Some(next_idx) = last_break {
+        if let Some(next_idx) = last_break {
             count += 1;
             idx = next_idx;
             continue;
@@ -252,13 +248,7 @@ pub(crate) fn layout_lines(pt: &PreparedText, width: usize) -> Vec<LineRange> {
             continue;
         }
 
-        // Keep an already-full row stable when the next typed separator overflows.
-        // Reusing an older break here would move the completed word to the next row.
-        let separator_starts_continuation = matches!(
-            cur.kind,
-            SegmentKind::Space | SegmentKind::PreservedSpace | SegmentKind::Tab
-        );
-        if !separator_starts_continuation && let Some((next_idx, end)) = last_break {
+        if let Some((next_idx, end)) = last_break {
             out.push(LineRange {
                 start: line_start,
                 end,
@@ -289,6 +279,87 @@ pub(crate) fn layout_lines(pt: &PreparedText, width: usize) -> Vec<LineRange> {
     }
 
     out
+}
+
+/// Lays out text while reserving the final cell of an exactly full caret row.
+///
+/// The regular width still applies to every other visual row. Only the row
+/// ending at `caret` is reflowed, avoiding both an off-screen caret and a
+/// synthetic empty continuation row. A trailing separator already occupying
+/// the final cell stays in place and gives the caret a real continuation row.
+pub(crate) fn layout_lines_with_caret(
+    pt: &PreparedText,
+    width: usize,
+    caret: usize,
+) -> Vec<LineRange> {
+    let mut lines = layout_lines(pt, width);
+    let Some(idx) = lines.iter().enumerate().find_map(|(idx, line)| {
+        let continues_at_caret = lines.get(idx + 1).is_some_and(|next| next.start == caret);
+        (line.end == caret && !continues_at_caret).then_some(idx)
+    }) else {
+        return lines;
+    };
+
+    let line = lines[idx];
+    let row_width = pt
+        .segments
+        .iter()
+        .zip(pt.widths.iter())
+        .filter(|(segment, _)| {
+            segment.kind != SegmentKind::HardBreak
+                && segment.start >= line.start
+                && segment.end <= line.end
+        })
+        .map(|(_, width)| *width)
+        .fold(0usize, usize::saturating_add);
+    if row_width != width.max(1) {
+        return lines;
+    }
+
+    let ends_with_separator = pt.segments.iter().rev().find_map(|segment| {
+        (segment.kind != SegmentKind::HardBreak && segment.end <= line.end).then_some(segment.kind)
+    });
+    if width <= 1
+        || matches!(
+            ends_with_separator,
+            Some(SegmentKind::Space | SegmentKind::PreservedSpace | SegmentKind::Tab)
+        )
+    {
+        lines.insert(
+            idx + 1,
+            LineRange {
+                start: caret,
+                end: caret,
+            },
+        );
+        return lines;
+    }
+
+    let mut row = PreparedText::default();
+    for (segment, segment_width) in pt.segments.iter().zip(pt.widths.iter()) {
+        if segment.kind == SegmentKind::HardBreak
+            || segment.start < line.start
+            || segment.end > line.end
+        {
+            continue;
+        }
+        row.segments.push(Segment {
+            start: segment.start - line.start,
+            end: segment.end - line.start,
+            kind: segment.kind,
+        });
+        row.widths.push(*segment_width);
+    }
+
+    let replacement = layout_lines(&row, width - 1)
+        .into_iter()
+        .map(|range| LineRange {
+            start: line.start + range.start,
+            end: line.start + range.end,
+        })
+        .collect::<Vec<_>>();
+    lines.splice(idx..=idx, replacement);
+    lines
 }
 
 #[cfg(test)]
@@ -358,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn overflowing_separator_does_not_reflow_completed_word() {
+    fn overflowing_trailing_separator_reuses_previous_word_break() {
         let s = "hello word ";
         let pt = prepare_text(s, None, 4);
         let lines = layout_lines(&pt, 10);
@@ -366,15 +437,15 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                LineRange { start: 0, end: 10 },
-                LineRange { start: 10, end: 11 },
+                LineRange { start: 0, end: 6 },
+                LineRange { start: 6, end: 11 },
             ]
         );
         assert_eq!(count_lines(&pt, 10), lines.len());
     }
 
     #[test]
-    fn overflowing_separator_preserves_full_width_unicode_content() {
+    fn overflowing_trailing_separator_reuses_unicode_word_break() {
         let s = "ab \u{4F60} ";
         let pt = prepare_text(s, None, 4);
         let lines = layout_lines(&pt, 5);
@@ -382,8 +453,8 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                LineRange { start: 0, end: 6 },
-                LineRange { start: 6, end: 7 },
+                LineRange { start: 0, end: 3 },
+                LineRange { start: 3, end: 7 },
             ]
         );
         assert_eq!(count_lines(&pt, 5), lines.len());
