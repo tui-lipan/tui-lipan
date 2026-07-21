@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::style::Span;
-use crate::utils::file_icons::file_icon;
+use crate::utils::file_icons::{directory_icon, file_icon};
 
 /// Icon style for file tree items.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -75,18 +75,23 @@ impl FileKind {
                 match props.icon_style {
                     FileIconStyle::Text => Span::new(base.as_ref()),
                     FileIconStyle::NerdFont | FileIconStyle::NerdFontColored => {
-                        let folder_icon = if expanded { " " } else { " " };
+                        let (folder_glyph, folder_color) = directory_icon(expanded, palette);
                         let icon = if is_root || !props.show_arrows {
-                            // Remove the arrow for root or when arrows are disabled
-                            folder_icon.chars().skip(2).collect::<String>()
+                            folder_glyph.to_string()
                         } else {
-                            folder_icon.to_string()
+                            let arrow = if expanded {
+                                "\u{f47c} " // 
+                            } else {
+                                "\u{f460} " // 
+                            };
+                            format!("{arrow}{folder_glyph}")
                         };
 
                         let mut span = Span::new(icon);
-                        if props.icon_style == FileIconStyle::NerdFontColored {
-                            // Directories are typically blue in mini.icons
-                            span = span.fg(palette.blue);
+                        if props.icon_style == FileIconStyle::NerdFontColored
+                            && let Some(c) = folder_color
+                        {
+                            span = span.fg(c);
                         }
                         span
                     }

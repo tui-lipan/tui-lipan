@@ -36,6 +36,56 @@ pub fn file_icon_span(name: &str, palette: &FileIconPalette) -> Span {
     span
 }
 
+/// Resolve the Nerd Font folder glyph and semantic color.
+///
+/// Returns the bare folder icon only (no disclosure arrow). Expanded uses
+/// `U+E5FE` (``); collapsed uses `U+E5FF` (``). [`FileTree`] prefixes its
+/// own expand/collapse arrows when needed.
+///
+/// ```
+/// use tui_lipan::style::FileIconPalette;
+/// use tui_lipan::utils::directory_icon;
+///
+/// let palette = FileIconPalette::default();
+/// let (glyph, color) = directory_icon(false, &palette);
+/// assert_eq!(glyph, "\u{e5ff}");
+/// assert_eq!(color, Some(palette.blue));
+/// ```
+///
+/// [`FileTree`]: crate::widgets::FileTree
+pub fn directory_icon(expanded: bool, palette: &FileIconPalette) -> (&'static str, Option<Color>) {
+    let glyph = if expanded {
+        "\u{e5fe}" // 
+    } else {
+        "\u{e5ff}" // 
+    };
+    (glyph, Some(palette.blue))
+}
+
+/// Build a [`Span`] with the directory Nerd Font icon, colored from `palette`.
+///
+/// Convenience wrapper over [`directory_icon`]:
+///
+/// ```
+/// use tui_lipan::prelude::*;
+/// use tui_lipan::style::FileIconPalette;
+/// use tui_lipan::utils::directory_icon_span;
+///
+/// let palette = FileIconPalette::default();
+/// let _item = ListItem::from_spans([
+///     directory_icon_span(false, &palette),
+///     Span::new(" src"),
+/// ]);
+/// ```
+pub fn directory_icon_span(expanded: bool, palette: &FileIconPalette) -> Span {
+    let (glyph, color) = directory_icon(expanded, palette);
+    let mut span = Span::new(glyph);
+    if let Some(color) = color {
+        span = span.fg(color);
+    }
+    span
+}
+
 /// Resolve the Nerd Font glyph and semantic color for a file name or path.
 ///
 /// This is the canonical extension/name → icon mapping; [`FileTree`] and the

@@ -17,6 +17,8 @@ pub(crate) mod scrollbar;
 pub(crate) mod selection;
 pub(crate) mod text;
 
-pub use file_icons::{FileIconOverride, file_icon, file_icon_span};
+pub use file_icons::{
+    FileIconOverride, directory_icon, directory_icon_span, file_icon, file_icon_span,
+};
 pub use open_url::{OpenUrlError, open_url};
 pub use selection::{GridPos, GridSelection, GridSelectionEvent};
