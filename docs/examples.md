@@ -234,9 +234,11 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 | Example | Description |
 |---------|-------------|
 | `syntax_theme_compare` | Side-by-side syntax highlighting themes |
+| `yazi` | Compact Yazi-inspired file browser: resizable borderless panes, keyboard/mouse navigation, full-row selection, directory previews, Nerd Font icons, and syntax-highlighted file previews |
 
 ```bash
 cargo run --example syntax_theme_compare --features syntax-syntect
+cargo run --example yazi --features syntax-syntect
 ```
 
 ### `terminal`

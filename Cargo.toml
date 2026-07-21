@@ -189,6 +189,10 @@ name = "terminal_filetree_devtools"
 required-features = ["terminal"]
 
 [[example]]
+name = "yazi"
+required-features = ["syntax-syntect"]
+
+[[example]]
 name = "devtools"
 required-features = ["devtools"]
 
