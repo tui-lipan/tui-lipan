@@ -500,9 +500,9 @@ fn resolve_image_render_rect(node: &ImageNode, bounds: Rect) -> Rect {
     }
 
     let picker = image_support::picker_snapshot();
-    let (cell_w, cell_h) = picker.font_size();
-    let cell_w = u32::from(cell_w.max(1));
-    let cell_h = u32::from(cell_h.max(1));
+    let font_size = picker.font_size();
+    let cell_w = u32::from(font_size.width.max(1));
+    let cell_h = u32::from(font_size.height.max(1));
 
     let image_w = image.width();
     let image_h = image.height();
@@ -573,7 +573,7 @@ fn build_encode_request(
         None
     };
     if let Some((r, g, b)) = effective_background_rgb {
-        picker.set_background_color(image::Rgba([r, g, b, 255]));
+        picker.set_background_color(Some(image::Rgba([r, g, b, 255])));
     }
     let key = RenderCacheKey {
         source_hash: node.source_hash,
@@ -599,13 +599,13 @@ fn encode_request(request: &EncodeRequest) -> Option<Protocol> {
         picker.set_protocol_type(protocol_type);
     }
     if let Some((r, g, b)) = request.key.background_rgb {
-        picker.set_background_color(image::Rgba([r, g, b, 255]));
+        picker.set_background_color(Some(image::Rgba([r, g, b, 255])));
     }
 
-    let area = ratatui::layout::Rect::new(0, 0, request.key.width, request.key.height);
+    let size = ratatui::layout::Size::new(request.key.width, request.key.height);
     let resize = fit_to_resize(request.key.fit);
     picker
-        .new_protocol((*request.image).clone(), area, resize)
+        .new_protocol((*request.image).clone(), size, resize)
         .ok()
 }
 

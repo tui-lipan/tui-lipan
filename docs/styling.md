@@ -576,6 +576,17 @@ bg = "#101015"
 fg = "#FF8000"
 ```
 
+Theme files support TOML 1.1 syntax, including multiline inline tables with
+trailing commas:
+
+```toml
+primary = {
+    fg = "#E0E0E0",
+    bg = "#101015",
+    bold = true,
+}
+```
+
 Style fields (`fg`, `bg`, and `underline_color` on style tables such as
 `[primary]`, `[selection]`, `[text_selection]`, `[document.heading_style]`, etc.) are
 paint-capable. They accept opaque color formats plus alpha hex and `rgba(...)`:

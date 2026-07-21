@@ -1237,6 +1237,33 @@ success = "#ABCDEF"
     }
 
     #[test]
+    fn toml_theme_parses_multiline_inline_tables() {
+        let overlay = toml::from_str::<TomlTheme>(
+            r##"
+primary = {
+    fg = "#010203",
+    bg = "#040506",
+    bold = true,
+}
+"##,
+        )
+        .expect("TOML 1.1 multiline inline table should parse");
+
+        let theme = overlay
+            .into_theme(Theme::default())
+            .expect("overlay should succeed");
+        assert_eq!(
+            theme.primary.fg,
+            Some(Paint::Solid(Color::Rgb(0x01, 0x02, 0x03)))
+        );
+        assert_eq!(
+            theme.primary.bg,
+            Some(Paint::Solid(Color::Rgb(0x04, 0x05, 0x06)))
+        );
+        assert_eq!(theme.primary.bold, Some(true));
+    }
+
+    #[test]
     fn toml_theme_document_overrides_apply_diagram_styles() {
         let overlay = toml::from_str::<TomlTheme>(
             r##"
