@@ -11,7 +11,7 @@ use crate::widgets::list::{ListEvent, ListItem, ListSymbolPosition};
 #[derive(Clone)]
 pub struct ListNode {
     pub items: Arc<[ListItem]>,
-    pub selected: usize,
+    pub selected: Option<usize>,
     pub scroll_keys: crate::widgets::ScrollKeymap,
     pub scroll_wheel: bool,
     /// Computed scroll offset (top visible index).

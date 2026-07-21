@@ -13,6 +13,21 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add the `yazi` example, a compact Yazi-inspired file browser with resizable
+  borderless panes, keyboard/mouse navigation, full-row selection, directory
+  previews, Nerd Font icons, pill selection, and syntax-highlighted file
+  previews.
+- `List::selected` and `Table::selected` now take `impl Into<Option<usize>>`, so
+  apps can pass `None` for no current row. Defaults remain `Some(0)`. Bare
+  integers still work via `From<T> for Option<T>`. With no selection, the first
+  navigation key (arrows, vim keys, `Home`/`End`, `PageUp`/`PageDown`)
+  establishes a cursor at the first or last selectable row instead of doing
+  nothing; `Enter` stays inert until a row is current.
+- `Tree::clear_selection` / `FileTree::clear_selection` suppress the selection
+  highlight authoritatively over both the controlled `selected` prop and
+  internal state.
+- `tui_lipan::utils::{directory_icon, directory_icon_span}` expose the shared
+  Nerd Font folder glyph (`U+E5FE` open / `U+E5FF` closed) used by `FileTree`.
 - Add `Popover::capture_focus` for passive root-portal overlays that must leave keyboard focus on their trigger.
 
 - `ScrollView::reveal_horizontal_range(start, end)` minimally pans a horizontal
@@ -31,6 +46,14 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- `ListNode.selected` and `TableNode.selected` are now `Option<usize>`
+  (breaking). Defaults and builder call sites that pass bare integers are
+  unchanged; only code that reads the public node fields as `usize` needs an
+  update.
+- `List` and `Table` keep reporting overflow scroll indicators when
+  `show_scroll_indicators` is on and no row is selected. The no-selection
+  scroll branch reported no indicators and a zero overflow count, so a
+  read-only list lost its "N more below" affordance until the user scrolled.
 - Theme reload files now accept TOML 1.1 syntax, including multiline inline
   tables and trailing commas. The dependency stacks behind optional image,
   diff, filesystem-watcher, and terminal-emulation features were also updated

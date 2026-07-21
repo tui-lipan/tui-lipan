@@ -297,7 +297,7 @@ pub struct Table {
     pub(crate) widths: Vec<ColumnWidth>,
     pub(crate) column_styles: Vec<Style>,
     pub(crate) row_styles: Vec<Style>,
-    pub(crate) selected: usize,
+    pub(crate) selected: Option<usize>,
     pub(crate) column_spacing: u16,
     pub(crate) row_gap: u16,
     pub(crate) style: Style,
@@ -359,7 +359,7 @@ impl Default for Table {
             widths: Vec::new(),
             column_styles: Vec::new(),
             row_styles: Vec::new(),
-            selected: 0,
+            selected: Some(0),
             column_spacing: 1,
             row_gap: 0,
             style: Style::default(),
@@ -505,8 +505,11 @@ impl Table {
     }
 
     /// Set selected row index.
-    pub fn selected(mut self, selected: usize) -> Self {
-        self.selected = selected;
+    ///
+    /// Pass `None` for no current row (no selection highlight). Bare integers
+    /// still work via `From<T> for Option<T>` (`table.selected(0)`).
+    pub fn selected(mut self, selected: impl Into<Option<usize>>) -> Self {
+        self.selected = selected.into();
         self
     }
 

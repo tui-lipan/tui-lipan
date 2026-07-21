@@ -42,7 +42,7 @@ pub fn reconcile_list(tree: &mut NodeTree, id: NodeId, list: &List, rect: Rect) 
                 (
                     list_node.offset,
                     list_node.scroll_override,
-                    Some(list_node.selected),
+                    list_node.selected,
                     old_inner.h as usize,
                     old_inner.w as usize,
                 )
@@ -53,9 +53,9 @@ pub fn reconcile_list(tree: &mut NodeTree, id: NodeId, list: &List, rect: Rect) 
         let inner = rect.inner(list.border, list.padding);
         let wrapped_items = wrap_right_lines_for_runtime(list, inner.w);
         let len = wrapped_items.len();
-        let selected =
-            crate::widgets::List::nearest_selectable_index(&wrapped_items, list.selected)
-                .unwrap_or_else(|| list.selected.min(len.saturating_sub(1)));
+        let selected = list
+            .selected
+            .and_then(|s| crate::widgets::List::nearest_selectable_index(&wrapped_items, s));
         let max_display = inner.h as usize;
         let viewport_changed = old_inner_h != max_display || old_inner_w != inner.w as usize;
         let visible_capacity = crate::widgets::list::utils::visible_items_for_height(
@@ -69,7 +69,7 @@ pub fn reconcile_list(tree: &mut NodeTree, id: NodeId, list: &List, rect: Rect) 
         // immediately so smart-scroll brings the new selection into view this frame.
         let effective_scroll_override = match scroll_override {
             Some(forced) if len > 0 && max_display > 0 => {
-                let selection_unchanged = old_selected.is_none_or(|old| old == selected);
+                let selection_unchanged = old_selected == selected;
                 let (f_start, f_end, _, _) =
                     crate::widgets::list::utils::calc_list_window_for_items_with_indicators(
                         forced,
@@ -77,7 +77,8 @@ pub fn reconcile_list(tree: &mut NodeTree, id: NodeId, list: &List, rect: Rect) 
                         max_display,
                         list.show_scroll_indicators,
                     );
-                let selection_visible = selected >= f_start && selected < f_end;
+                let selection_visible =
+                    selected.is_some_and(|selected| selected >= f_start && selected < f_end);
 
                 // Keep pinned viewport during explicit browsing (selection unchanged)
                 // but release pin if a resize/wrap change made selection disappear.
@@ -108,7 +109,7 @@ pub fn reconcile_list(tree: &mut NodeTree, id: NodeId, list: &List, rect: Rect) 
                         list.show_scroll_indicators,
                     );
                 (start, top, bot, len.saturating_sub(end))
-            } else if list.force_scroll_to_selected {
+            } else if let Some(selected) = selected.filter(|_| list.force_scroll_to_selected) {
                 // Force scroll to show selected item at the bottom (for auto-follow)
                 let visible_for_scroll = visible_capacity.max(1);
                 let target_offset = selected.saturating_sub(visible_for_scroll.saturating_sub(1));
@@ -125,33 +126,50 @@ pub fn reconcile_list(tree: &mut NodeTree, id: NodeId, list: &List, rect: Rect) 
                 } else {
                     (clamped_offset, false, false, 0)
                 }
+            } else if let Some(selected) = selected {
+                if list.show_scroll_indicators {
+                    let smart_off = crate::widgets::scroll::smart_list_offset_with_indicators(
+                        old_offset,
+                        selected,
+                        len,
+                        max_display,
+                    );
+                    let (start, end, top, bot) =
+                        crate::widgets::list::utils::calc_list_window_for_items_with_indicators(
+                            smart_off,
+                            &wrapped_items,
+                            max_display,
+                            true,
+                        );
+                    (start, top, bot, len.saturating_sub(end))
+                } else {
+                    (
+                        crate::widgets::scroll::smart_list_offset(
+                            old_offset,
+                            selected,
+                            len,
+                            visible_capacity.min(u16::MAX as usize) as u16,
+                        ),
+                        false,
+                        false,
+                        0,
+                    )
+                }
             } else if list.show_scroll_indicators {
-                let smart_off = crate::widgets::scroll::smart_list_offset_with_indicators(
-                    old_offset,
-                    selected,
-                    len,
-                    max_display,
-                );
+                // No selection: keep the previous offset, but still derive the
+                // overflow indicators from it so a read-only list keeps its
+                // "N more" affordance.
                 let (start, end, top, bot) =
                     crate::widgets::list::utils::calc_list_window_for_items_with_indicators(
-                        smart_off,
+                        old_offset,
                         &wrapped_items,
                         max_display,
                         true,
                     );
                 (start, top, bot, len.saturating_sub(end))
             } else {
-                (
-                    crate::widgets::scroll::smart_list_offset(
-                        old_offset,
-                        list.selected,
-                        len,
-                        visible_capacity.min(u16::MAX as usize) as u16,
-                    ),
-                    false,
-                    false,
-                    0,
-                )
+                // No selection: keep the previous offset (clamped below).
+                (old_offset, false, false, 0)
             };
 
         let new_offset = new_offset.min(len.saturating_sub(1));
@@ -260,27 +278,32 @@ pub fn reconcile_list(tree: &mut NodeTree, id: NodeId, list: &List, rect: Rect) 
 
         if let Some(forced) = next_scroll_override {
             if len > 0 && visible_items > 0 {
-                let margin = if visible_items <= 2 {
-                    0
-                } else if visible_items <= 6 {
-                    1
+                if let Some(selected) = selected {
+                    let margin = if visible_items <= 2 {
+                        0
+                    } else if visible_items <= 6 {
+                        1
+                    } else {
+                        2
+                    };
+                    let selected = selected.min(len.saturating_sub(1));
+                    let min_selected = forced.saturating_add(margin);
+                    let max_selected = forced
+                        .saturating_add(visible_items.saturating_sub(1).saturating_sub(margin))
+                        .min(len.saturating_sub(1));
+                    if selected < min_selected || selected > max_selected {
+                        // Selection is outside the comfortable margin of the pinned
+                        // viewport.  The effective_scroll_override logic above has already
+                        // released the override when the selection moved outside the window,
+                        // so reaching here means the selection is unchanged (user is
+                        // browsing) - keep the viewport pinned.
+                        list_node.scroll_override = Some(forced);
+                    } else {
+                        list_node.scroll_override = None;
+                    }
                 } else {
-                    2
-                };
-                let selected = selected.min(len.saturating_sub(1));
-                let min_selected = forced.saturating_add(margin);
-                let max_selected = forced
-                    .saturating_add(visible_items.saturating_sub(1).saturating_sub(margin))
-                    .min(len.saturating_sub(1));
-                if selected < min_selected || selected > max_selected {
-                    // Selection is outside the comfortable margin of the pinned
-                    // viewport.  The effective_scroll_override logic above has already
-                    // released the override when the selection moved outside the window,
-                    // so reaching here means the selection is unchanged (user is
-                    // browsing) - keep the viewport pinned.
+                    // No selection: keep the pinned viewport while browsing.
                     list_node.scroll_override = Some(forced);
-                } else {
-                    list_node.scroll_override = None;
                 }
             } else {
                 list_node.scroll_override = None;
@@ -320,7 +343,9 @@ pub(crate) fn wrap_right_lines_for_runtime(list: &List, inner_w: u16) -> Arc<[Li
         .items
         .iter()
         .enumerate()
-        .map(|(idx, item)| wrap_item_right_lines(item, list, max_text_w, idx == list.selected))
+        .map(|(idx, item)| {
+            wrap_item_right_lines(item, list, max_text_w, list.selected == Some(idx))
+        })
         .collect();
 
     wrapped.into()
@@ -679,5 +704,72 @@ mod tests {
         assert!(!node.symbol_column);
         assert_eq!(node.gutter_gap, 2);
         assert!(node.gutter_for_non_selectable);
+    }
+
+    #[test]
+    fn selected_none_keeps_empty_selection_on_node() {
+        let mut tree = NodeTree::new();
+        let id = tree.alloc();
+        let list = List::new()
+            .items([ListItem::new("Alpha"), ListItem::new("Beta")])
+            .selected(None)
+            .selection_symbol(Some("> "))
+            .selection_style(crate::style::Style::new().bold());
+
+        reconcile_list(
+            &mut tree,
+            id,
+            &list,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 20,
+                h: 3,
+            },
+        );
+
+        let NodeKind::List(node) = &tree.node(id).kind else {
+            panic!("expected list node");
+        };
+        assert_eq!(node.selected, None);
+    }
+
+    fn overflow_indicators(selected: Option<usize>) -> (bool, bool, usize) {
+        let mut tree = NodeTree::new();
+        let id = tree.alloc();
+        let list = List::new()
+            .items((0..30).map(|i| ListItem::new(format!("row {i}"))))
+            .selected(selected)
+            .show_scroll_indicators(true);
+
+        reconcile_list(
+            &mut tree,
+            id,
+            &list,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 20,
+                h: 10,
+            },
+        );
+
+        let NodeKind::List(node) = &tree.node(id).kind else {
+            panic!("expected list node");
+        };
+        (node.top_indicator, node.bottom_indicator, node.bottom_count)
+    }
+
+    #[test]
+    fn selected_none_still_reports_overflow_indicators() {
+        // A read-only list must keep its "N more below" affordance; the
+        // no-selection scroll branch used to hardcode the indicators off.
+        let (top, bottom, bottom_count) = overflow_indicators(None);
+        assert!(!top);
+        assert!(bottom, "overflowing list should report a bottom indicator");
+        assert!(bottom_count > 0, "bottom_count = {bottom_count}");
+
+        // Matches what an equivalent selected list reports from the same offset.
+        assert_eq!(overflow_indicators(Some(0)), (top, bottom, bottom_count));
     }
 }

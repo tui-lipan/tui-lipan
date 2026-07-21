@@ -12,7 +12,7 @@ State-style setters use [StyleSlot semantics](../styling.md#state-style-slots):
 | Prop | Type | Description |
 |------|------|-------------|
 | `items` | `impl Iterator<Item = ListItem>` | List items |
-| `selected` | `usize` | Selected index |
+| `selected` | `Option<usize>` | Selected index; pass `None` for no current row (no selection highlight). Bare integers still work (`list.selected(0)`) |
 | `scroll_keys` | `bool` | Enable keyboard scroll keys |
 | `scroll_wheel` | `bool` | Enable mouse wheel |
 | `scrollbar` | `bool` | Show scrollbar |
@@ -159,7 +159,7 @@ literals so newly added fields do not break app code.
 
 > `item_horizontal_padding` and `header_horizontal_padding` accept `Padding`, but only `left`/`right` are applied in `List`.
 
-> **File icons in a plain list:** the Nerd Font icon resolver `FileTree` uses is exposed via `tui_lipan::utils::{file_icon, file_icon_span}`, so you can prefix list rows with themed file icons without reimplementing the mapping. Pass a `FileIconPalette` (e.g. `theme.file_icons`): `ListItem::from_spans([file_icon_span(name, &palette), Span::new(format!(" {name}"))])`.
+> **File icons in a plain list:** the Nerd Font icon resolvers `FileTree` uses are exposed via `tui_lipan::utils::{file_icon, file_icon_span, directory_icon, directory_icon_span}`, so you can prefix list rows with themed file/folder icons without reimplementing the mapping. Pass a `FileIconPalette` (e.g. `theme.file_icons`): `ListItem::from_spans([file_icon_span(name, &palette), Span::new(format!(" {name}"))])` for files, or `directory_icon_span(expanded, &palette)` for folders (bare glyph only; no disclosure arrow).
 
 > **Pointer vs keyboard row hover:** For `List` and `Table`, when `item_hover_style` is non-empty, changing `selected` from the keyboard or from component logic (not a row click) stops using the mouse position for per-row hover until the pointer moves. Widget-level hover and row clicks behave as usual. **`Tree` uses an inner `List`** with the same `item_hover_style` prop, so it follows the same rules automatically.
 
@@ -299,6 +299,7 @@ Hierarchical tree view with expand/collapse.
 |------|------|-------------|
 | `root` | `TreeNode` | **Constructor** - root node |
 | `selected` | `usize` | Controlled selected visible row index |
+| `clear_selection` | `bool` | When `true`, suppress the selection highlight (authoritative over `selected` and internal state) |
 | `force_scroll_to_selected` | `bool` | Force the internal list to reveal the selected row on next render |
 | `gap` | `u16` | Vertical gap between items |
 | `icon_gap` | `u16` | Gap between icon and label |
@@ -407,6 +408,7 @@ application-provided change projections.
 | `git_diff_stats` | `bool` | Compatibility setter for `+N -M` diff stats next to change markers |
 | `git_refresh_token` | `u64` | Token to trigger deterministic git refresh |
 | `selected` | `usize` | Controlled selected visible row index |
+| `clear_selection` | `bool` | When `true`, suppress the selection highlight (authoritative over `selected` and internal state) |
 | `selected_path` | `impl Into<Arc<str>>` | Controlled selection by absolute path under the root or path relative to the root, when the row is visible |
 | `reveal_path` | `impl Into<Arc<str>>` | Expand/load ancestors for an absolute or root-relative path when possible |
 | `select_path` | `impl Into<Arc<str>>` | Reveal and select a path, forcing the tree to scroll to the row when visible |

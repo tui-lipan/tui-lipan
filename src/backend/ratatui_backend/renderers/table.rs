@@ -33,7 +33,7 @@ use crate::widgets::table::{
 use crate::widgets::{ColumnWidth, TableDisclosureState, TableRow, TableRowRole};
 
 pub(crate) struct TableLayoutCtx {
-    pub selected: usize,
+    pub selected: Option<usize>,
     pub column_spacing: u16,
     pub row_gap: u16,
     pub border: bool,
@@ -407,7 +407,7 @@ pub(crate) fn render_table(
 
         let row_y = content_inner.y.saturating_add(y_offset as i16);
         let row_hovered = hovered_row == Some(idx);
-        let is_selected = idx == selected && is_focused && !disabled;
+        let is_selected = selected == Some(idx) && is_focused && !disabled;
 
         let row_raw_style = if matches!(row.role, TableRowRole::Normal) && idx % 2 == 1 {
             alternating_row_style.unwrap_or_default()

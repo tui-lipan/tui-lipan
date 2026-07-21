@@ -16,7 +16,7 @@ pub struct TableNode {
     pub widths: Vec<ColumnWidth>,
     pub column_styles: Vec<Style>,
     pub row_styles: Vec<Style>,
-    pub selected: usize,
+    pub selected: Option<usize>,
     pub column_spacing: u16,
     pub row_gap: u16,
     pub style: Style,

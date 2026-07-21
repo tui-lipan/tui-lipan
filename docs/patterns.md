@@ -214,6 +214,21 @@ composition.
 
 ---
 
+### 5a. Read-only list with no selection
+
+Pass `.selected(None)` when a list should show rows without a current-row
+highlight (for example a directory preview pane). Keyboard navigation still
+adopts the first/last selectable row on Down/Up so the list is not inert.
+
+```rust
+List::new()
+    .items(preview_entries.iter().map(|e| ListItem::new(e.name.clone())))
+    .selected(None)
+    .focusable(false)
+```
+
+---
+
 ### 6. Memoized Heavy Child Components
 
 When a parent rerenders often but some child panels/rows are expensive to rebuild, move those
