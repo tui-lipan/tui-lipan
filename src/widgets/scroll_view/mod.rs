@@ -30,6 +30,8 @@ pub struct ScrollView {
     pub(crate) props: StackProps,
     /// Row index scrolled from top (0 = at top).
     pub(crate) offset: Option<usize>,
+    /// Horizontal content range to reveal with the smallest necessary scroll.
+    pub(crate) horizontal_reveal_range: Option<(usize, usize)>,
     /// One-shot scroll request applied relative to the current viewport.
     pub(crate) scroll_request: Option<ScrollRequest>,
     /// Framework-owned semantic scroll target.
@@ -90,6 +92,7 @@ impl Default for ScrollView {
         Self {
             props: StackProps::default(),
             offset: None,
+            horizontal_reveal_range: None,
             scroll_request: None,
             scroll_target: None,
             scroll_behavior: ScrollBehavior::default(),
@@ -188,6 +191,15 @@ impl ScrollView {
     /// Set scroll offset (row index from top).
     pub fn offset(mut self, offset: usize) -> Self {
         self.offset = Some(offset);
+        self
+    }
+
+    /// Reveal a horizontal content range with the smallest necessary scroll.
+    ///
+    /// The request is reapplied when the range or viewport width changes. User scrolling remains
+    /// authoritative while both stay unchanged.
+    pub fn reveal_horizontal_range(mut self, start: usize, end: usize) -> Self {
+        self.horizontal_reveal_range = Some((start.min(end), start.max(end)));
         self
     }
 

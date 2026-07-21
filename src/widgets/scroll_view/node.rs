@@ -68,6 +68,8 @@ pub struct ScrollViewNode {
     pub viewport_height: u16,
     pub viewport_width: u16,
     pub axis: ScrollAxis,
+    /// Last element-provided horizontal reveal range.
+    pub horizontal_reveal_range: Option<(usize, usize)>,
     pub h_offset: usize,
     pub h_max_offset: usize,
     pub h_scroll_offset: u16,

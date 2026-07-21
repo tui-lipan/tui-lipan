@@ -283,6 +283,7 @@ Scrollable container with optional scrollbar.
 | Prop | Type | Description |
 |------|------|-------------|
 | `offset` | `Option<usize>` | Controlled scroll offset |
+| `reveal_horizontal_range` | `(usize, usize)` | Minimally pan to reveal a half-open horizontal content range; reapplies when the range or viewport width changes |
 | `scroll_request` | `Option<ScrollRequest>` | One-shot relative scroll request (`lines`, page fractions, top, bottom) |
 | `scroll_to` | `Option<ScrollTarget>` | Semantic target (`Top`, `Bottom`, `Key`, or `KeyOffset`) resolved each layout |
 | `scroll_to_key` | `Option<Key>` | Convenience wrapper for `ScrollTarget::Key` |
@@ -353,6 +354,20 @@ ScrollView::new()
 ```
 
 See `examples/scroll_view_both_axes.rs` for a combined vertical + horizontal demo.
+
+**Horizontal range reveal**: Use `.reveal_horizontal_range(start, end)` to keep
+a half-open content-column range visible without controlling the horizontal
+offset directly. The view pans only far enough to expose the range and leaves
+an already-visible range in place. The request is reevaluated when the range or
+viewport width changes; user wheel, key, or scrollbar movement remains
+authoritative while both values stay unchanged.
+
+```rust
+ScrollView::new()
+    .axis(ScrollAxis::Horizontal)
+    .reveal_horizontal_range(match_start, match_end)
+    .child(wide_content)
+```
 
 **Viewport visibility**: `.on_viewport_change(...)` reports which immediate
 `ScrollView` children are visible, entered, or exited. It fires after

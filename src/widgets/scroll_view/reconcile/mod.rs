@@ -765,7 +765,26 @@ pub(crate) fn reconcile_scroll_view(
     } else {
         0
     };
-    let effective_h_offset = if h_handler_dirty {
+    let old_horizontal_reveal_range = if let NodeKind::ScrollView(node) = &tree.node(id).kind {
+        node.horizontal_reveal_range
+    } else {
+        None
+    };
+    let reveal_changed = sv.horizontal_reveal_range != old_horizontal_reveal_range
+        || (old_viewport_w > 0 && old_viewport_w != viewport_w);
+    let effective_h_offset = if reveal_changed {
+        sv.horizontal_reveal_range
+            .map(|(start, end)| {
+                horizontal_offset_revealing_range(
+                    old_h_override.unwrap_or(old_h_offset),
+                    viewport_w as usize,
+                    start,
+                    end,
+                    h_max_offset,
+                )
+            })
+            .unwrap_or_else(|| old_h_offset.min(h_max_offset))
+    } else if h_handler_dirty {
         old_h_override.unwrap_or(old_h_offset).min(h_max_offset)
     } else {
         old_h_offset.min(h_max_offset)
@@ -855,6 +874,7 @@ pub(crate) fn reconcile_scroll_view(
             viewport_height,
             viewport_width: viewport_w,
             axis: sv.axis,
+            horizontal_reveal_range: sv.horizontal_reveal_range,
             h_offset: effective_h_offset,
             h_max_offset,
             h_scroll_offset: effective_h_offset as u16,
@@ -1208,6 +1228,24 @@ pub(crate) fn reconcile_scroll_view(
     tree.register_scrollbar_zone(id);
 
     id
+}
+
+fn horizontal_offset_revealing_range(
+    current_offset: usize,
+    viewport_width: usize,
+    start: usize,
+    end: usize,
+    max_offset: usize,
+) -> usize {
+    let current_offset = current_offset.min(max_offset);
+    let end = end.max(start);
+    if start < current_offset {
+        start.min(max_offset)
+    } else if end > current_offset.saturating_add(viewport_width) {
+        end.saturating_sub(viewport_width).min(max_offset)
+    } else {
+        current_offset
+    }
 }
 
 #[cfg(test)]
