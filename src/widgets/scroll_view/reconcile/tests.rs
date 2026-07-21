@@ -15,7 +15,7 @@ use crate::widgets::scroll_view::utils::calc_scroll_view_window;
 #[cfg(feature = "diff-view")]
 use crate::widgets::{DiffView, DiffViewBackend, DiffViewMode};
 use crate::widgets::{
-    DocumentView, Flow, Frame, HStack, ScrollBehavior, ScrollChildExitDirection,
+    DocumentView, Flow, Frame, HStack, ScrollAxis, ScrollBehavior, ScrollChildExitDirection,
     ScrollChildVisibility, ScrollRequest, ScrollTarget, ScrollView, ScrollViewportEvent, Spacer,
     Text, ThemeProvider, VStack,
 };
@@ -777,6 +777,124 @@ fn scroll_to_key_matches_nested_child_keys() {
 
     assert_eq!(scroll.offset, 4);
     assert!(find_by_key(&tree, "message-4").is_some());
+}
+
+#[test]
+fn horizontal_reveal_scrolls_only_enough_to_show_the_range() {
+    let root = |start, end| -> Element {
+        ScrollView::new()
+            .axis(ScrollAxis::Horizontal)
+            .reveal_horizontal_range(start, end)
+            .child(Text::new("0123456789abcdef").width(Length::Px(16)))
+            .into()
+    };
+    let mut tree = NodeTree::new();
+    LayoutEngine::reconcile_with_focus(
+        &mut tree,
+        &root(0, 4),
+        Rect {
+            x: 0,
+            y: 0,
+            w: 8,
+            h: 1,
+        },
+        None,
+    );
+    LayoutEngine::reconcile_with_focus(
+        &mut tree,
+        &root(10, 14),
+        Rect {
+            x: 0,
+            y: 0,
+            w: 8,
+            h: 1,
+        },
+        None,
+    );
+
+    let NodeKind::ScrollView(scroll) = &tree.node(tree.root).kind else {
+        panic!("root should be a scroll view");
+    };
+    assert_eq!(scroll.h_offset, 6);
+
+    LayoutEngine::reconcile_with_focus(
+        &mut tree,
+        &root(2, 4),
+        Rect {
+            x: 0,
+            y: 0,
+            w: 8,
+            h: 1,
+        },
+        None,
+    );
+    let NodeKind::ScrollView(scroll) = &tree.node(tree.root).kind else {
+        panic!("root should be a scroll view");
+    };
+    assert_eq!(scroll.h_offset, 2);
+}
+
+#[test]
+fn horizontal_reveal_defers_to_user_scroll_until_viewport_changes() {
+    let root = || -> Element {
+        ScrollView::new()
+            .axis(ScrollAxis::Horizontal)
+            .reveal_horizontal_range(10, 14)
+            .child(Text::new("0123456789abcdef").width(Length::Px(16)))
+            .into()
+    };
+    let mut tree = NodeTree::new();
+    LayoutEngine::reconcile_with_focus(
+        &mut tree,
+        &root(),
+        Rect {
+            x: 0,
+            y: 0,
+            w: 8,
+            h: 1,
+        },
+        None,
+    );
+
+    let NodeKind::ScrollView(scroll) = &mut tree.node_mut(tree.root).kind else {
+        panic!("root should be a scroll view");
+    };
+    scroll.h_offset = 3;
+    scroll.h_scroll_offset = 3;
+    scroll.h_scroll_override = Some(3);
+    scroll.h_scroll_handler_dirty = true;
+
+    LayoutEngine::reconcile_with_focus(
+        &mut tree,
+        &root(),
+        Rect {
+            x: 0,
+            y: 0,
+            w: 8,
+            h: 1,
+        },
+        None,
+    );
+    let NodeKind::ScrollView(scroll) = &tree.node(tree.root).kind else {
+        panic!("root should be a scroll view");
+    };
+    assert_eq!(scroll.h_offset, 3);
+
+    LayoutEngine::reconcile_with_focus(
+        &mut tree,
+        &root(),
+        Rect {
+            x: 0,
+            y: 0,
+            w: 6,
+            h: 1,
+        },
+        None,
+    );
+    let NodeKind::ScrollView(scroll) = &tree.node(tree.root).kind else {
+        panic!("root should be a scroll view");
+    };
+    assert_eq!(scroll.h_offset, 8);
 }
 
 #[test]

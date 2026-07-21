@@ -341,12 +341,13 @@ Source: `src/widgets/list/mod.rs:78` (`ListConfig`).
 
 ## ScrollView
 
-Source: `src/widgets/scroll_view/mod.rs:90` (`ScrollView`).
+Source: `src/widgets/scroll_view/mod.rs:92` (`ScrollView`).
 
 | Field | Default initializer |
 |---|---|
 | `props` | `StackProps::default()` |
 | `offset` | `None` |
+| `horizontal_reveal_range` | `None` |
 | `scroll_request` | `None` |
 | `scroll_target` | `None` |
 | `scroll_behavior` | `ScrollBehavior::default()` |

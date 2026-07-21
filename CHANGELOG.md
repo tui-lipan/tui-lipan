@@ -13,6 +13,10 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `ScrollView::reveal_horizontal_range(start, end)` minimally pans a horizontal
+  viewport to reveal a half-open content-column range. The request reapplies
+  when the range or viewport width changes while leaving subsequent user
+  scrolling authoritative when both remain stable.
 - `Command::after` and `CommandLink::send_after` schedule delayed work on a
   shared timer thread instead of sleeping inside a pool worker, so a pending
   timer no longer occupies one of the 2-8 task workers. Timers fire through the
