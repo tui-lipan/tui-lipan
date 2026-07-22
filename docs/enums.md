@@ -1047,7 +1047,8 @@ guide glyphs.
 `FileTreeDirectoryListing::error(path, error)` supplies a failed result. Each `FileTreeEntry`
 contains its relative name, directory and symlink flags, optional `GitFileStatus`, and ignore state.
 Use `FileTreeEntry::file(name)` or `FileTreeEntry::directory(name)` and the `.symlink(...)`,
-`.git_status(...)`, and `.ignored(...)` builders.
+`.git_status(...)`, and `.ignored(...)` builders. Successful listing entries are retained as a
+shared `Arc<[FileTreeEntry]>`, so cloning widget props does not clone every child entry.
 
 ### `FileTreeChangeSource`
 

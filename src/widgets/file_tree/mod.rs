@@ -175,13 +175,28 @@ impl FileTreeEntry {
 }
 
 /// Completed application-provided listing for one directory path.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct FileTreeDirectoryListing {
     /// Listed directory path, absolute or relative to the tree root.
     pub path: Arc<str>,
     /// Child entries, or an error message when listing failed.
-    pub entries: Result<Vec<FileTreeEntry>, Arc<str>>,
+    pub entries: Result<Arc<[FileTreeEntry]>, Arc<str>>,
 }
+
+impl PartialEq for FileTreeDirectoryListing {
+    fn eq(&self, other: &Self) -> bool {
+        if self.path != other.path {
+            return false;
+        }
+        match (&self.entries, &other.entries) {
+            (Ok(left), Ok(right)) => Arc::ptr_eq(left, right) || left == right,
+            (Err(left), Err(right)) => Arc::ptr_eq(left, right) || left == right,
+            (Ok(_), Err(_)) | (Err(_), Ok(_)) => false,
+        }
+    }
+}
+
+impl Eq for FileTreeDirectoryListing {}
 
 impl FileTreeDirectoryListing {
     /// Create a successful directory listing.
@@ -191,7 +206,7 @@ impl FileTreeDirectoryListing {
     ) -> Self {
         Self {
             path: path.into(),
-            entries: Ok(entries.into_iter().collect()),
+            entries: Ok(entries.into_iter().collect::<Vec<_>>().into()),
         }
     }
 

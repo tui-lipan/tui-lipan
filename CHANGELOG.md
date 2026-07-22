@@ -16,7 +16,8 @@ While the crate is on `0.x.y`:
 - Add `FileTreeEntrySource::Provided` for asynchronously supplied directory listings. Missing
   expanded paths render the existing loading row and emit `FileTreeEntryRequest`; completed
   `FileTreeDirectoryListing` values carry child type, symlink, Git status, ignore, and error data
-  without accessing the local filesystem. `FileTreeEntrySource::Local` remains the default.
+  without enumerating the local filesystem. `FileTreeEntrySource::Local` remains the default. The
+  `provided_file_tree` example demonstrates the complete request/command/delivery cycle.
 - Add the opt-in `syntax-extra` feature with bat-curated syntax definitions for
   broad language coverage, including TOML, TypeScript/TSX, Dockerfile, Vue, Zig,
   and Terraform. The `yazi` example now runs with `--features syntax-extra`.
@@ -114,6 +115,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Changing the root prop of a mounted local `FileTree` now rebuilds the tree and reloads Git status
+  instead of continuing to display the previous root.
 - `syntax-syntect` no longer pulls C Oniguruma into `wasm32` builds; browser
   builds use Syntect's pure-Rust `fancy-regex` backend.
 - The `paint` example's toolbar now renders its Pencil, Eraser, and Clear

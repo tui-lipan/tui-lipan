@@ -440,6 +440,9 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
   `loading_label`, emits one `FileTreeEntryRequest` for the expanded path, and waits for the app to
   rebuild it with a matching `FileTreeDirectoryListing`. The callback must enqueue remote or other
   blocking work through a `Command`; it must not perform that work on the UI thread.
+- Keep completed listings in app state and batch responses received together into one state update.
+  The widget incrementally applies changed directory results, while one batched prop update avoids
+  repeated comparison and status-projection work across a large listing set.
 - Provided entries include `is_dir`, `is_symlink`, `git_status`, and `ignored`. Their Git status is
   rendered without local Git discovery. Ignored entries remain visible during normal browsing, as
   with the local source, but explorer search excludes them.
@@ -461,6 +464,8 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
 - `selected_path`, `reveal_path`, and `select_path` normalize absolute paths under the root or paths relative to the root. They are no-ops for paths outside the root, paths hidden by `show_hidden(false)`, absent/unreadable/capped entries, or rows filtered out by the current all-files/changed-only projection. `selected_path` only selects an already-visible row; `reveal_path` expands/loads ancestors when possible; `select_path` combines reveal + selection and scrolls to the selected row. With controlled `expanded_paths`, app-provided expansion remains authoritative, so reveal/select can only display rows made available by the controlled expansion set plus the reveal request during rendering.
 - Restores pre-search expansion state when query clears.
 - Queries containing file extensions (e.g. `layout.rs`) prioritize filename matches.
+
+Run the complete asynchronous pattern with `cargo run --example provided_file_tree`.
 
 ```rust
 let listings = vec![FileTreeDirectoryListing::new(
