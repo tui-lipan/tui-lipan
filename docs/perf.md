@@ -161,6 +161,11 @@ The fastest row to measure is the row the app never builds:
   typical rows so virtual measurement can converge quickly.
 - Cache repeated parsing or preprocessing with an explicit size bound and
   invalidation rule.
+- `FileTree` skips the subtree of a collapsed directory, so render cost tracks
+  visible rows rather than loaded ones. With `FileTreeEntrySource::Provided`,
+  the listings you supply are still hydrated and still compared between
+  renders, so evict cached listings the user has navigated away from if the
+  set grows without bound.
 - Prefer framework `DocumentView`, `DiffView`, and syntax formatters over local
   implementations so formatting, measurement, and cache identity stay under one
   contract.
