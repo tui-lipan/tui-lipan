@@ -2,8 +2,8 @@ use super::events::{FileTreeEvent, FileTreeToggleEvent};
 use super::fs::FileIconStyle;
 use super::git::GitIconStyle;
 use super::{
-    FileIconOverride, FileTreeChangeSource, FileTreeChangeView, FileTreeItemStyle,
-    FileTreeSuffixPriority,
+    FileIconOverride, FileTreeChangeSource, FileTreeChangeView, FileTreeEntrySource,
+    FileTreeItemStyle, FileTreeSuffixPriority,
 };
 use crate::callback::Callback;
 use crate::style::{BorderStyle, FileIconPalette, Length, Padding, Style, StyleSlot};
@@ -42,6 +42,7 @@ pub(super) fn default_git_style_conflicted() -> Style {
 #[derive(Clone, PartialEq)]
 pub(crate) struct FileTreeProps {
     pub(crate) root: Arc<str>,
+    pub(crate) entry_source: FileTreeEntrySource,
     pub(crate) show_hidden: bool,
     pub(crate) max_entries_per_dir: usize,
     pub(crate) show_icons: bool,
@@ -132,4 +133,5 @@ pub(crate) struct FileTreeProps {
     pub(crate) on_select: Option<Callback<FileTreeEvent>>,
     pub(crate) on_activate: Option<Callback<FileTreeEvent>>,
     pub(crate) on_toggle: Option<Callback<FileTreeToggleEvent>>,
+    pub(crate) on_entry_request: Option<Callback<super::events::FileTreeEntryRequest>>,
 }

@@ -186,7 +186,8 @@ pub use effect_scope::EffectScope;
 pub use er_diagram::{ErAttribute, ErCardinality, ErDiagram, ErDiagramTheme, ErEntity, ErRelation};
 pub use file_tree::{
     FileIconStyle, FileKind, FileTree, FileTreeChange, FileTreeChangeSource, FileTreeChangeStatus,
-    FileTreeChangeView, FileTreeEvent, FileTreeGitView, FileTreeItemStyle, FileTreeSuffixPriority,
+    FileTreeChangeView, FileTreeDirectoryListing, FileTreeEntry, FileTreeEntryRequest,
+    FileTreeEntrySource, FileTreeEvent, FileTreeGitView, FileTreeItemStyle, FileTreeSuffixPriority,
     FileTreeToggleEvent, GitChangeState, GitFileStatus, GitIconStyle,
 };
 pub use flow::Flow;

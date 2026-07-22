@@ -13,6 +13,10 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add `FileTreeEntrySource::Provided` for asynchronously supplied directory listings. Missing
+  expanded paths render the existing loading row and emit `FileTreeEntryRequest`; completed
+  `FileTreeDirectoryListing` values carry child type, symlink, Git status, ignore, and error data
+  without accessing the local filesystem. `FileTreeEntrySource::Local` remains the default.
 - Add the opt-in `syntax-extra` feature with bat-curated syntax definitions for
   broad language coverage, including TOML, TypeScript/TSX, Dockerfile, Vue, Zig,
   and Terraform. The `yazi` example now runs with `--features syntax-extra`.

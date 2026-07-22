@@ -1036,6 +1036,19 @@ guide glyphs.
 
 `FileTreeGitView` is a compatibility alias for `FileTreeChangeView`.
 
+### `FileTreeEntrySource`
+
+| Variant | Description |
+|---------|-------------|
+| `FileTreeEntrySource::Local` | Enumerate the local filesystem **(default)** |
+| `FileTreeEntrySource::Provided(Vec<FileTreeDirectoryListing>)` | Use completed directory listings supplied by the application; absent listings are pending and requested asynchronously |
+
+`FileTreeDirectoryListing::new(path, entries)` supplies one successful directory result.
+`FileTreeDirectoryListing::error(path, error)` supplies a failed result. Each `FileTreeEntry`
+contains its relative name, directory and symlink flags, optional `GitFileStatus`, and ignore state.
+Use `FileTreeEntry::file(name)` or `FileTreeEntry::directory(name)` and the `.symlink(...)`,
+`.git_status(...)`, and `.ignored(...)` builders.
+
 ### `FileTreeChangeSource`
 
 | Variant | Description |

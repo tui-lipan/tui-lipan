@@ -996,6 +996,7 @@ Source: `src/widgets/file_tree/mod.rs:215` (`FileTree`).
 | Field | Default initializer |
 |---|---|
 | `root` | `constructor/local value (not a default)` |
+| `entry_source` | `FileTreeEntrySource::default()` |
 | `show_hidden` | `false` |
 | `max_entries_per_dir` | `2_000` |
 | `show_icons` | `true` |
@@ -1086,6 +1087,7 @@ Source: `src/widgets/file_tree/mod.rs:215` (`FileTree`).
 | `on_select` | `None` |
 | `on_activate` | `None` |
 | `on_toggle` | `None` |
+| `on_entry_request` | `None` |
 
 ## SearchPalette
 

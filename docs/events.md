@@ -49,6 +49,21 @@ pub struct ListEvent {
 }
 ```
 
+### `FileTreeEntryRequest`
+
+Emitted by: `FileTree::on_entry_request` when an expanded directory is absent from
+`FileTreeEntrySource::Provided`.
+
+```rust
+pub struct FileTreeEntryRequest {
+    pub path: Arc<str>, // Full directory path to list asynchronously
+}
+```
+
+The callback should start application work through a `Command`. Deliver the result by rebuilding
+the widget with a matching `FileTreeDirectoryListing`; the widget displays its loading row while
+the path remains absent.
+
 ### `CheckboxEvent`
 
 Emitted by: `Checkbox::on_toggle`
