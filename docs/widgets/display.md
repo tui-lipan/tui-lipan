@@ -245,6 +245,10 @@ DocumentView::new(text)
 // .markdown() already sets this default theme; override here to use a different one
 ```
 
+For broad grammar coverage, enable `syntax-extra` in addition to
+`syntax-syntect`. It supplies the bat-curated syntax set, including TOML,
+TypeScript/TSX, Dockerfile, Vue, Zig, and Terraform.
+
 ---
 
 ## AsciiCanvas

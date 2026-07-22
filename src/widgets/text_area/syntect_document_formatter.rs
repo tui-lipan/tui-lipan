@@ -159,4 +159,19 @@ mod tests {
         };
         assert!(lines[0].spans.len() >= 2);
     }
+
+    #[cfg(feature = "syntax-extra")]
+    #[test]
+    fn formatter_produces_styled_toml_spans() {
+        let formatter = SyntectDocumentFormatter::new(Some(Arc::from("toml")));
+        let doc = formatter.format(FormatInput {
+            value: "name = \"tui-lipan\"",
+            content_type: None,
+            document_styles: None,
+        });
+        let FormattedBlock::Lines(lines) = &doc.blocks[0] else {
+            panic!("expected Lines");
+        };
+        assert!(lines[0].spans.iter().any(|span| span.style.fg.is_some()));
+    }
 }

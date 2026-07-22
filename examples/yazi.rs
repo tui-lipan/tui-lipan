@@ -3,7 +3,7 @@
 //! Run with:
 //!
 //! ```text
-//! cargo run --example yazi --features syntax-syntect
+//! cargo run --example yazi --features syntax-extra
 //! ```
 
 use std::fs::{self, File};
