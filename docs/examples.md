@@ -73,6 +73,7 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 | `table` | `Table`: header, rows, selection, scroll + inspector preset (tabs, sections, key/value, disclosure) |
 | `list_headers` | `List` with section headers and spacers |
 | `log_viewer` | `LogView` over a sample file: filter, follow, pause, level coloring |
+| `provided_file_tree` | Async application-provided `FileTree` listings with loading, Git, and ignore metadata |
 
 ---
 

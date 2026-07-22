@@ -8,7 +8,7 @@ mod git;
 mod mod_private;
 
 pub use crate::style::FileIconPalette;
-pub use events::{FileTreeEvent, FileTreeToggleEvent};
+pub use events::{FileTreeEntryRequest, FileTreeEvent, FileTreeToggleEvent};
 pub use fs::{FileIconStyle, FileKind};
 pub use git::{GitChangeState, GitFileStatus, GitIconStyle};
 pub(crate) use mod_private::FileTreeProps;
@@ -92,6 +92,132 @@ pub enum FileTreeChangeView {
 
 /// Compatibility alias for the previous Git-specific display mode name.
 pub type FileTreeGitView = FileTreeChangeView;
+
+/// Source used to enumerate [`FileTree`] directory entries.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum FileTreeEntrySource {
+    /// Enumerate the local filesystem on demand.
+    #[default]
+    Local,
+    /// Use directory listings supplied by the application.
+    ///
+    /// A directory absent from this collection is pending. The widget renders its loading row and
+    /// emits [`FileTreeEntryRequest`] through [`FileTree::on_entry_request`]. Add the completed
+    /// listing to this collection and rebuild the widget to deliver the result without blocking the
+    /// UI thread.
+    Provided(Vec<FileTreeDirectoryListing>),
+}
+
+impl FileTreeEntrySource {
+    /// Create an application-provided entry source from completed directory listings.
+    pub fn provided(listings: impl IntoIterator<Item = FileTreeDirectoryListing>) -> Self {
+        Self::Provided(listings.into_iter().collect())
+    }
+}
+
+/// One application-provided child entry in a [`FileTreeDirectoryListing`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileTreeEntry {
+    /// Entry name relative to the listed directory.
+    pub name: Arc<str>,
+    /// Whether the entry is a directory.
+    pub is_dir: bool,
+    /// Whether the entry is a symbolic link.
+    pub is_symlink: bool,
+    /// Git status supplied by the application, when any.
+    pub git_status: Option<GitFileStatus>,
+    /// Whether ignore rules mark this entry as ignored.
+    ///
+    /// Ignored entries remain visible in normal browsing, matching the local source, but are
+    /// excluded from explorer search results.
+    pub ignored: bool,
+}
+
+impl FileTreeEntry {
+    /// Create a provided file or directory entry.
+    pub fn new(name: impl Into<Arc<str>>, is_dir: bool) -> Self {
+        Self {
+            name: name.into(),
+            is_dir,
+            is_symlink: false,
+            git_status: None,
+            ignored: false,
+        }
+    }
+
+    /// Create a provided regular file entry.
+    pub fn file(name: impl Into<Arc<str>>) -> Self {
+        Self::new(name, false)
+    }
+
+    /// Create a provided directory entry.
+    pub fn directory(name: impl Into<Arc<str>>) -> Self {
+        Self::new(name, true)
+    }
+
+    /// Mark whether this entry is a symbolic link.
+    pub fn symlink(mut self, is_symlink: bool) -> Self {
+        self.is_symlink = is_symlink;
+        self
+    }
+
+    /// Set application-provided Git status for this entry.
+    pub fn git_status(mut self, status: GitFileStatus) -> Self {
+        self.git_status = Some(status);
+        self
+    }
+
+    /// Mark whether ignore rules classify this entry as ignored.
+    pub fn ignored(mut self, ignored: bool) -> Self {
+        self.ignored = ignored;
+        self
+    }
+}
+
+/// Completed application-provided listing for one directory path.
+#[derive(Clone, Debug)]
+pub struct FileTreeDirectoryListing {
+    /// Listed directory path, absolute or relative to the tree root.
+    pub path: Arc<str>,
+    /// Child entries, or an error message when listing failed.
+    pub entries: Result<Arc<[FileTreeEntry]>, Arc<str>>,
+}
+
+impl PartialEq for FileTreeDirectoryListing {
+    fn eq(&self, other: &Self) -> bool {
+        if self.path != other.path {
+            return false;
+        }
+        match (&self.entries, &other.entries) {
+            (Ok(left), Ok(right)) => Arc::ptr_eq(left, right) || left == right,
+            (Err(left), Err(right)) => Arc::ptr_eq(left, right) || left == right,
+            (Ok(_), Err(_)) | (Err(_), Ok(_)) => false,
+        }
+    }
+}
+
+impl Eq for FileTreeDirectoryListing {}
+
+impl FileTreeDirectoryListing {
+    /// Create a successful directory listing.
+    pub fn new(
+        path: impl Into<Arc<str>>,
+        entries: impl IntoIterator<Item = FileTreeEntry>,
+    ) -> Self {
+        Self {
+            path: path.into(),
+            entries: Ok(entries.into_iter().collect::<Vec<_>>().into()),
+        }
+    }
+
+    /// Create a failed directory listing.
+    pub fn error(path: impl Into<Arc<str>>, error: impl Into<Arc<str>>) -> Self {
+        Self {
+            path: path.into(),
+            entries: Err(error.into()),
+        }
+    }
+}
 
 /// Source used for file change decorations and changed-only projection.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -214,6 +340,7 @@ impl FileTree {
         Self {
             props: FileTreeProps {
                 root: root.into(),
+                entry_source: FileTreeEntrySource::default(),
                 show_hidden: false,
                 max_entries_per_dir: 2_000,
                 show_icons: true,
@@ -311,8 +438,19 @@ impl FileTree {
                 on_select: None,
                 on_activate: None,
                 on_toggle: None,
+                on_entry_request: None,
             },
         }
+    }
+
+    /// Set the source used to enumerate directory entries.
+    ///
+    /// [`FileTreeEntrySource::Local`] is the default. With a provided source, missing expanded
+    /// directories render the loading row and are requested through
+    /// [`FileTree::on_entry_request`].
+    pub fn entry_source(mut self, source: FileTreeEntrySource) -> Self {
+        self.props.entry_source = source;
+        self
     }
 
     /// Toggle hidden entries (dotfiles).
@@ -834,6 +972,16 @@ impl FileTree {
         self
     }
 
+    /// Set the callback fired when a provided entry source needs a directory listing.
+    ///
+    /// The callback should only enqueue application work. Perform remote or other blocking I/O in
+    /// a [`crate::Command`], then rebuild the widget with a matching
+    /// [`FileTreeDirectoryListing`] in [`FileTreeEntrySource::Provided`].
+    pub fn on_entry_request(mut self, cb: Callback<FileTreeEntryRequest>) -> Self {
+        self.props.on_entry_request = Some(cb);
+        self
+    }
+
     /// Configure expand/collapse keymap.
     pub fn keymap(mut self, keymap: TreeKeymap) -> Self {
         self.props.keymap = keymap;
@@ -1216,6 +1364,27 @@ mod tests {
     }
 
     #[test]
+    fn entry_source_defaults_to_local_and_builds_provided_listings() {
+        let tree = FileTree::new("/repo");
+        assert_eq!(tree.props.entry_source, FileTreeEntrySource::Local);
+
+        let listing = FileTreeDirectoryListing::new(
+            ".",
+            [
+                FileTreeEntry::directory("src"),
+                FileTreeEntry::file("README.md")
+                    .git_status(GitFileStatus::new(None, Some(GitChangeState::Modified)))
+                    .ignored(true),
+            ],
+        );
+        let source = FileTreeEntrySource::provided([listing.clone()]);
+        let tree = tree.entry_source(source.clone());
+
+        assert_eq!(source, FileTreeEntrySource::Provided(vec![listing]));
+        assert_eq!(tree.props.entry_source, source);
+    }
+
+    #[test]
     fn change_view_builders_update_source_agnostic_props() {
         let changes = vec![FileTreeChange::new(
             "src/main.rs",
@@ -1299,6 +1468,10 @@ mod tests {
         let _source = crate::FileTreeChangeSource::provided([change]);
         let _view: crate::FileTreeChangeView = crate::FileTreeGitView::ChangedOnly;
         let _kind: crate::FileKind = FileKind::File;
+        let listing =
+            crate::FileTreeDirectoryListing::new(".", [crate::FileTreeEntry::file("README.md")]);
+        let _entry_source = crate::FileTreeEntrySource::provided([listing]);
+        let _request: Option<crate::FileTreeEntryRequest> = None;
     }
 
     #[test]

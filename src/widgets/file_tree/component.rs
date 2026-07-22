@@ -10,15 +10,19 @@ use crate::style::Style;
 use crate::text::input::TextInput;
 use crate::widgets::{Divider, Input, InputEvent, ListItem, Tree, TreeNode, VStack};
 
-use super::events::{FileTreeEvent, FileTreeToggleEvent};
+use super::events::{FileTreeEntryRequest, FileTreeEvent, FileTreeToggleEvent};
 use super::explorer::{ExplorerCandidate, ExplorerFilter, search_candidates, search_filesystem};
 use super::fs::{FileIconStyle, FileKind, FsNode, read_directory, root_node};
 use super::git::{
-    GitFileDecorations, GitStatusSnapshot, discover_git_root, load_git_snapshot,
-    provided_change_snapshot, provided_root_path,
+    GitFileDecorations, GitStatusSnapshot, discover_git_root,
+    insert_provided_decoration_path_and_parents, load_git_snapshot, provided_change_snapshot,
+    provided_root_path,
 };
 use super::mod_private::FileTreeProps;
-use super::{FileTreeChangeSource, FileTreeChangeView, FileTreeItemStyle, FileTreeSuffixPriority};
+use super::{
+    FileTreeChangeSource, FileTreeChangeView, FileTreeDirectoryListing, FileTreeEntrySource,
+    FileTreeItemStyle, FileTreeSuffixPriority,
+};
 use crate::widgets::{TreeEvent, TreeToggleEvent};
 
 #[derive(Clone, Debug)]
@@ -27,6 +31,7 @@ pub(crate) struct FileTreeState {
     pub(crate) root_virtual: bool,
     pub(crate) expanded: HashSet<Arc<str>>,
     pub(crate) git_snapshot: GitStatusSnapshot,
+    pub(crate) git_load_generation: u64,
     pub(crate) last_git_refresh_nonce: u64,
     pub(crate) changed_only_auto_expand_signature: u64,
     pub(crate) explorer_input: TextInput,
@@ -34,6 +39,7 @@ pub(crate) struct FileTreeState {
     pub(crate) explorer_filter: ExplorerFilter,
     pub(crate) search_expanded_snapshot: Option<HashSet<Arc<str>>>,
     pub(crate) search_found_dir: Option<Arc<str>>,
+    pub(crate) requested_entry_paths: HashSet<Arc<str>>,
 }
 
 #[derive(Clone, Debug)]
@@ -55,6 +61,7 @@ pub(crate) enum FileTreeMsg {
     },
     RequestGitRefresh(u64),
     GitSnapshotLoaded {
+        generation: u64,
         snapshot: GitStatusSnapshot,
     },
     SyncRootMode,
@@ -108,6 +115,7 @@ impl Component for FileTreeComponent {
             root_virtual,
             expanded,
             git_snapshot,
+            git_load_generation: 0,
             last_git_refresh_nonce: props.git_refresh_nonce,
             changed_only_auto_expand_signature: 0,
             explorer_input: TextInput::new(""),
@@ -115,6 +123,7 @@ impl Component for FileTreeComponent {
             explorer_filter: ExplorerFilter::default(),
             search_expanded_snapshot: None,
             search_found_dir: None,
+            requested_entry_paths: HashSet::new(),
         };
 
         apply_reveal_paths_to_state(&mut state, props);
@@ -122,6 +131,8 @@ impl Component for FileTreeComponent {
     }
 
     fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+        request_missing_provided_directories(&mut ctx.state, &ctx.props);
+
         if !needs_git_snapshot(&ctx.props) {
             return None;
         }
@@ -133,11 +144,12 @@ impl Component for FileTreeComponent {
             ctx.link().clone(),
             repo_root,
             ctx.props.git_diff_stats,
+            ctx.state.git_load_generation,
         ))
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
-        if ctx.state.root_virtual != is_provided_changed_only(&ctx.props) {
+        if ctx.state.root_virtual != uses_virtual_root(&ctx.props) {
             ctx.link().send(FileTreeMsg::SyncRootMode);
         }
 
@@ -148,8 +160,8 @@ impl Component for FileTreeComponent {
                 .send(FileTreeMsg::RequestGitRefresh(ctx.props.git_refresh_nonce));
         }
 
-        let change_snapshot = effective_change_snapshot(&ctx.props, &ctx.state);
-        if should_auto_expand_changed_only(&ctx.props, &ctx.state, &change_snapshot) {
+        let change_snapshot = effective_change_snapshot(&ctx.state);
+        if should_auto_expand_changed_only(&ctx.props, &ctx.state, change_snapshot) {
             ctx.link().send(FileTreeMsg::EnsureChangedOnlyExpanded);
         }
 
@@ -331,12 +343,8 @@ impl Component for FileTreeComponent {
 
                     ctx.state.search_found_dir = None;
 
-                    load_expanded_directories_sync(
-                        &mut ctx.state.root,
-                        &ctx.state.expanded,
-                        ctx.props.show_hidden,
-                        ctx.props.max_entries_per_dir,
-                    );
+                    let expanded = ctx.state.expanded.clone();
+                    load_expanded_directories(&mut ctx.state, &ctx.props, expanded);
                     return Update::full();
                 }
 
@@ -359,7 +367,7 @@ impl Component for FileTreeComponent {
                     search_root,
                     ctx.props.show_hidden,
                     ctx.props.max_entries_per_dir,
-                    changed_only_search_candidates(&ctx.props, &ctx.state),
+                    explorer_search_candidates(&ctx.props, &ctx.state),
                 ))
             }
             FileTreeMsg::ExplorerResultsReady { query_id, filter } => {
@@ -382,12 +390,8 @@ impl Component for FileTreeComponent {
                     ctx.state.expanded.insert(path.clone());
                 }
 
-                load_expanded_directories_sync(
-                    &mut ctx.state.root,
-                    &ctx.state.expanded,
-                    ctx.props.show_hidden,
-                    ctx.props.max_entries_per_dir,
-                );
+                let expanded = ctx.state.expanded.clone();
+                load_expanded_directories(&mut ctx.state, &ctx.props, expanded);
                 Update::full()
             }
             FileTreeMsg::TreeSelected { entry } => {
@@ -445,14 +449,22 @@ impl Component for FileTreeComponent {
 
                 if ctx.props.change_view != FileTreeChangeView::ChangedOnly
                     && expanded
-                    && let Some(path) = node_path
-                    && let Some(node) = node_by_path_mut(&mut ctx.state.root, &path)
+                    && !uses_provided_entries(&ctx.props)
+                    && let Some(path) = node_path.as_ref()
+                    && let Some(node) = node_by_path_mut(&mut ctx.state.root, path)
                     && node.is_dir()
                     && !node.loaded
                 {
                     let result =
-                        read_directory(&path, ctx.props.show_hidden, ctx.props.max_entries_per_dir);
+                        read_directory(path, ctx.props.show_hidden, ctx.props.max_entries_per_dir);
                     apply_directory_load(node, result);
+                }
+
+                if expanded
+                    && let Some(path) = node_path
+                    && uses_provided_entries(&ctx.props)
+                {
+                    request_provided_directory(&mut ctx.state, &ctx.props, path);
                 }
 
                 Update::full()
@@ -463,8 +475,10 @@ impl Component for FileTreeComponent {
                 }
 
                 ctx.state.last_git_refresh_nonce = nonce;
+                ctx.state.git_load_generation = ctx.state.git_load_generation.wrapping_add(1);
                 let root = ctx.props.root.clone();
                 let include_diff_stats = ctx.props.git_diff_stats;
+                let generation = ctx.state.git_load_generation;
                 Update {
                     dirty: false,
                     level: crate::core::component::UpdateLevel::None,
@@ -472,22 +486,32 @@ impl Component for FileTreeComponent {
                         let snapshot = discover_git_root(Path::new(root.as_ref()))
                             .and_then(|repo_root| load_git_snapshot(&repo_root, include_diff_stats))
                             .unwrap_or_default();
-                        link.send(FileTreeMsg::GitSnapshotLoaded { snapshot });
+                        link.send(FileTreeMsg::GitSnapshotLoaded {
+                            generation,
+                            snapshot,
+                        });
                     })),
                 }
             }
-            FileTreeMsg::GitSnapshotLoaded { snapshot } => {
+            FileTreeMsg::GitSnapshotLoaded {
+                generation,
+                snapshot,
+            } => {
+                if generation != ctx.state.git_load_generation || !needs_git_snapshot(&ctx.props) {
+                    return Update::none();
+                }
                 ctx.state.git_snapshot = snapshot;
-                let snapshot = effective_change_snapshot(&ctx.props, &ctx.state);
-                if should_auto_expand_changed_only(&ctx.props, &ctx.state, &snapshot) {
-                    expand_changed_only_directories(&mut ctx.state, &snapshot);
-                    ctx.state.changed_only_auto_expand_signature =
-                        change_snapshot_signature(&snapshot);
+                let snapshot = effective_change_snapshot(&ctx.state);
+                if should_auto_expand_changed_only(&ctx.props, &ctx.state, snapshot) {
+                    let changed_paths = snapshot.changed_paths.clone();
+                    let signature = change_snapshot_signature(snapshot);
+                    expand_changed_only_directories(&mut ctx.state, &changed_paths);
+                    ctx.state.changed_only_auto_expand_signature = signature;
                 }
                 Update::full()
             }
             FileTreeMsg::SyncRootMode => {
-                if ctx.state.root_virtual == is_provided_changed_only(&ctx.props) {
+                if ctx.state.root_virtual == uses_virtual_root(&ctx.props) {
                     return Update::none();
                 }
 
@@ -495,11 +519,12 @@ impl Component for FileTreeComponent {
                 Update::full()
             }
             FileTreeMsg::EnsureChangedOnlyExpanded => {
-                let snapshot = effective_change_snapshot(&ctx.props, &ctx.state);
-                if should_auto_expand_changed_only(&ctx.props, &ctx.state, &snapshot) {
-                    expand_changed_only_directories(&mut ctx.state, &snapshot);
-                    ctx.state.changed_only_auto_expand_signature =
-                        change_snapshot_signature(&snapshot);
+                let snapshot = effective_change_snapshot(&ctx.state);
+                if should_auto_expand_changed_only(&ctx.props, &ctx.state, snapshot) {
+                    let changed_paths = snapshot.changed_paths.clone();
+                    let signature = change_snapshot_signature(snapshot);
+                    expand_changed_only_directories(&mut ctx.state, &changed_paths);
+                    ctx.state.changed_only_auto_expand_signature = signature;
                     return Update::full();
                 }
                 Update::none()
@@ -520,13 +545,98 @@ impl Component for FileTreeComponent {
             }
         }
     }
+
+    fn on_props_changed(
+        &mut self,
+        old_props: &Self::Properties,
+        ctx: &mut Context<Self>,
+    ) -> Update {
+        let source_changed = old_props.entry_source != ctx.props.entry_source;
+        let change_source_changed = old_props.change_source != ctx.props.change_source;
+        let entry_mode_changed =
+            uses_provided_entries(old_props) != uses_provided_entries(&ctx.props);
+        let provided_options_changed = uses_provided_entries(&ctx.props)
+            && (old_props.show_hidden != ctx.props.show_hidden
+                || old_props.max_entries_per_dir != ctx.props.max_entries_per_dir);
+        let root_mode_changed = old_props.root != ctx.props.root
+            || entry_mode_changed
+            || uses_virtual_root(old_props) != uses_virtual_root(&ctx.props);
+        let should_load_git = should_load_git_after_props_change(old_props, &ctx.props);
+
+        if old_props.root != ctx.props.root
+            || source_changed
+            || change_source_changed
+            || old_props.git_diff_stats != ctx.props.git_diff_stats
+            || needs_git_snapshot(old_props) != needs_git_snapshot(&ctx.props)
+        {
+            ctx.state.git_load_generation = ctx.state.git_load_generation.wrapping_add(1);
+        }
+
+        if root_mode_changed {
+            rebuild_root_for_props(&mut ctx.state, &ctx.props);
+        } else if provided_options_changed {
+            let (root, root_virtual) = initial_root(&ctx.props);
+            ctx.state.root = root;
+            ctx.state.root_virtual = root_virtual;
+        } else if source_changed && uses_provided_entries(&ctx.props) {
+            apply_changed_provided_listings(&mut ctx.state.root, old_props, &ctx.props);
+        }
+
+        if !root_mode_changed
+            && (source_changed || change_source_changed || provided_options_changed)
+        {
+            ctx.state.git_snapshot = effective_initial_snapshot(&ctx.props);
+        }
+
+        if source_changed {
+            clear_completed_entry_requests(&mut ctx.state, &ctx.props);
+        }
+
+        if uses_provided_entries(&ctx.props) {
+            apply_reveal_paths_to_state(&mut ctx.state, &ctx.props);
+            request_missing_provided_directories(&mut ctx.state, &ctx.props);
+        }
+
+        let dirty = root_mode_changed
+            || source_changed
+            || change_source_changed
+            || provided_options_changed
+            || old_props.expanded_paths != ctx.props.expanded_paths
+            || should_load_git;
+        let command = if should_load_git {
+            discover_git_root(Path::new(ctx.props.root.as_ref())).map(|repo_root| {
+                git_snapshot_command(
+                    ctx.link().clone(),
+                    Arc::from(repo_root.to_string_lossy().as_ref()),
+                    ctx.props.git_diff_stats,
+                    ctx.state.git_load_generation,
+                )
+            })
+        } else {
+            None
+        };
+
+        if dirty {
+            Update::with_command(command)
+        } else {
+            Update::none()
+        }
+    }
 }
 
 fn needs_git_snapshot(props: &FileTreeProps) -> bool {
-    matches!(props.change_source, FileTreeChangeSource::Git)
+    !uses_provided_entries(props)
+        && matches!(props.change_source, FileTreeChangeSource::Git)
         && (props.git_status
             || props.git_diff_stats
             || props.change_view == FileTreeChangeView::ChangedOnly)
+}
+
+fn should_load_git_after_props_change(old_props: &FileTreeProps, props: &FileTreeProps) -> bool {
+    needs_git_snapshot(props)
+        && (!needs_git_snapshot(old_props)
+            || old_props.root != props.root
+            || old_props.git_diff_stats != props.git_diff_stats)
 }
 
 fn is_provided_changed_only(props: &FileTreeProps) -> bool {
@@ -534,14 +644,28 @@ fn is_provided_changed_only(props: &FileTreeProps) -> bool {
         && props.change_view == FileTreeChangeView::ChangedOnly
 }
 
+fn uses_provided_entries(props: &FileTreeProps) -> bool {
+    matches!(props.entry_source, FileTreeEntrySource::Provided(_))
+}
+
+fn uses_virtual_root(props: &FileTreeProps) -> bool {
+    uses_provided_entries(props) || is_provided_changed_only(props)
+}
+
 fn initial_root(props: &FileTreeProps) -> (FsNode, bool) {
-    let root_virtual = is_provided_changed_only(props);
-    let mut root = if root_virtual {
+    let root_virtual = uses_virtual_root(props);
+    let mut root = if uses_provided_entries(props) {
+        provided_entry_root_node(&props.root)
+    } else if root_virtual {
         virtual_root_node(&props.root)
     } else {
         root_node(&props.root)
     };
-    if root.is_dir() && !root_virtual {
+    if uses_provided_entries(props) {
+        root.loaded = false;
+        apply_provided_listings(&mut root, props);
+        root.loading = !root.loaded;
+    } else if root.is_dir() && !root_virtual {
         let result = read_directory(&root.path, props.show_hidden, props.max_entries_per_dir);
         apply_directory_load(&mut root, result);
     }
@@ -555,14 +679,19 @@ fn rebuild_root_for_props(state: &mut FileTreeState, props: &FileTreeProps) {
     state.expanded.clear();
     state.expanded.insert(state.root.path.clone());
     state.git_snapshot = effective_initial_snapshot(props);
+    state.git_load_generation = state.git_load_generation.wrapping_add(1);
     state.last_git_refresh_nonce = props.git_refresh_nonce;
     state.changed_only_auto_expand_signature = 0;
     state.explorer_filter = ExplorerFilter::default();
     state.search_expanded_snapshot = None;
     state.search_found_dir = None;
+    state.requested_entry_paths.clear();
 }
 
 fn effective_initial_snapshot(props: &FileTreeProps) -> GitStatusSnapshot {
+    if uses_provided_entries(props) {
+        return provided_entry_snapshot(props);
+    }
     match &props.change_source {
         FileTreeChangeSource::Git => GitStatusSnapshot::default(),
         FileTreeChangeSource::Provided(changes) => {
@@ -571,12 +700,226 @@ fn effective_initial_snapshot(props: &FileTreeProps) -> GitStatusSnapshot {
     }
 }
 
-fn effective_change_snapshot(props: &FileTreeProps, state: &FileTreeState) -> GitStatusSnapshot {
-    match &props.change_source {
-        FileTreeChangeSource::Git => state.git_snapshot.clone(),
-        FileTreeChangeSource::Provided(changes) => {
-            provided_change_snapshot(state.root.path.as_ref(), changes)
+fn effective_change_snapshot(state: &FileTreeState) -> &GitStatusSnapshot {
+    &state.git_snapshot
+}
+
+fn apply_provided_listings(root: &mut FsNode, props: &FileTreeProps) {
+    let FileTreeEntrySource::Provided(listings) = &props.entry_source else {
+        return;
+    };
+    let listing_map = provided_listing_map(root.path.as_ref(), listings);
+    apply_provided_listing_recursive(root, props, &listing_map);
+}
+
+fn apply_changed_provided_listings(
+    root: &mut FsNode,
+    old_props: &FileTreeProps,
+    props: &FileTreeProps,
+) {
+    let (FileTreeEntrySource::Provided(old_listings), FileTreeEntrySource::Provided(listings)) =
+        (&old_props.entry_source, &props.entry_source)
+    else {
+        return;
+    };
+    let old_map = provided_listing_map(root.path.as_ref(), old_listings);
+    let listing_map = provided_listing_map(root.path.as_ref(), listings);
+    let changed_paths: HashSet<Arc<str>> = old_map
+        .keys()
+        .chain(listing_map.keys())
+        .filter(|path| old_map.get(path.as_ref()) != listing_map.get(path.as_ref()))
+        .cloned()
+        .collect();
+    apply_changed_provided_listings_recursive(root, props, &listing_map, &changed_paths);
+}
+
+fn apply_changed_provided_listings_recursive(
+    node: &mut FsNode,
+    props: &FileTreeProps,
+    listings: &HashMap<Arc<str>, &FileTreeDirectoryListing>,
+    changed_paths: &HashSet<Arc<str>>,
+) {
+    if changed_paths.contains(&node.path) {
+        if listings.contains_key(node.path.as_ref()) {
+            apply_provided_listing_recursive(node, props, listings);
+        } else {
+            node.loaded = false;
+            node.loading = true;
+            node.error = None;
+            node.children.clear();
         }
+        return;
+    }
+
+    for child in &mut node.children {
+        if child.is_dir() {
+            apply_changed_provided_listings_recursive(child, props, listings, changed_paths);
+        }
+    }
+}
+
+fn provided_listing_map<'a>(
+    root: &str,
+    listings: &'a [FileTreeDirectoryListing],
+) -> HashMap<Arc<str>, &'a FileTreeDirectoryListing> {
+    let root = Path::new(root);
+    listings
+        .iter()
+        .filter_map(|listing| {
+            resolve_provided_path(root, listing.path.as_ref())
+                .map(|path| (Arc::<str>::from(path.to_string_lossy().as_ref()), listing))
+        })
+        .collect()
+}
+
+fn apply_provided_listing_recursive(
+    node: &mut FsNode,
+    props: &FileTreeProps,
+    listings: &HashMap<Arc<str>, &FileTreeDirectoryListing>,
+) {
+    let Some(listing) = listings.get(node.path.as_ref()) else {
+        return;
+    };
+
+    let directory = node.path.clone();
+    apply_directory_load(
+        node,
+        provided_directory_load(directory.as_ref(), listing, props),
+    );
+    for child in &mut node.children {
+        if child.is_dir() {
+            apply_provided_listing_recursive(child, props, listings);
+        }
+    }
+}
+
+fn provided_directory_load(
+    directory: &str,
+    listing: &FileTreeDirectoryListing,
+    props: &FileTreeProps,
+) -> super::fs::DirectoryLoadResult {
+    let entries = match &listing.entries {
+        Ok(entries) => entries,
+        Err(error) => {
+            return super::fs::DirectoryLoadResult {
+                entries: Vec::new(),
+                omitted: 0,
+                error: Some(error.clone()),
+            };
+        }
+    };
+
+    let mut loaded = Vec::new();
+    let mut omitted = 0usize;
+    for entry in entries.iter() {
+        if (!props.show_hidden && is_hidden_entry(entry.name.as_ref()))
+            || !is_valid_provided_name(entry.name.as_ref())
+        {
+            continue;
+        }
+        if loaded.len() >= props.max_entries_per_dir {
+            omitted = omitted.saturating_add(1);
+            continue;
+        }
+
+        let kind = provided_entry_kind(entry);
+        let path = lexical_normalize_path(&Path::new(directory).join(entry.name.as_ref()));
+        loaded.push(super::fs::LoadedEntry {
+            name: entry.name.clone(),
+            path: Arc::from(path.to_string_lossy().as_ref()),
+            kind,
+        });
+    }
+    loaded.sort_by(|left, right| {
+        let left_dir = left.kind == FileKind::Directory;
+        let right_dir = right.kind == FileKind::Directory;
+        right_dir
+            .cmp(&left_dir)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+
+    super::fs::DirectoryLoadResult {
+        entries: loaded,
+        omitted,
+        error: None,
+    }
+}
+
+fn provided_entry_snapshot(props: &FileTreeProps) -> GitStatusSnapshot {
+    let FileTreeEntrySource::Provided(listings) = &props.entry_source else {
+        return GitStatusSnapshot::default();
+    };
+    let root = provided_entry_root_path(props.root.as_ref());
+    let mut snapshot = GitStatusSnapshot {
+        virtual_changes: true,
+        ..GitStatusSnapshot::default()
+    };
+
+    for listing in listings {
+        let Some(directory) = resolve_provided_path(&root, listing.path.as_ref()) else {
+            continue;
+        };
+        let Ok(entries) = &listing.entries else {
+            continue;
+        };
+        for entry in entries.iter() {
+            if entry.ignored
+                || (!props.show_hidden && is_hidden_entry(entry.name.as_ref()))
+                || !is_valid_provided_name(entry.name.as_ref())
+            {
+                continue;
+            }
+            let Some(status) = entry.git_status else {
+                continue;
+            };
+            if status.staged.is_none() && status.unstaged.is_none() {
+                continue;
+            }
+
+            let full_path = lexical_normalize_path(&directory.join(entry.name.as_ref()));
+            let path = Arc::<str>::from(full_path.to_string_lossy().as_ref());
+            snapshot.changed_paths.push(path.clone());
+            snapshot.kinds.insert(path, provided_entry_kind(entry));
+            insert_provided_decoration_path_and_parents(
+                &mut snapshot.entries,
+                &full_path,
+                GitFileDecorations::from_status(status, true),
+                &root,
+            );
+        }
+    }
+    snapshot.changed_paths.sort();
+    snapshot.changed_paths.dedup();
+    snapshot
+}
+
+fn resolve_provided_path(root: &Path, path: &str) -> Option<PathBuf> {
+    let path = Path::new(path);
+    let resolved = if path.is_absolute() {
+        lexical_normalize_path(path)
+    } else {
+        lexical_normalize_path(&root.join(path))
+    };
+    resolved.starts_with(root).then_some(resolved)
+}
+
+fn is_valid_provided_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    matches!(components.next(), Some(PathComponent::Normal(_))) && components.next().is_none()
+}
+
+fn is_hidden_entry(name: &str) -> bool {
+    name.starts_with('.') && name != "." && name != ".."
+}
+
+fn provided_entry_kind(entry: &super::FileTreeEntry) -> FileKind {
+    if entry.is_symlink {
+        FileKind::Symlink
+    } else if entry.is_dir {
+        FileKind::Directory
+    } else {
+        FileKind::File
     }
 }
 
@@ -619,6 +962,16 @@ fn has_reveal_path(props: &FileTreeProps) -> bool {
 }
 
 fn normalized_reveal_paths(props: &FileTreeProps, root_path: &Arc<str>) -> Vec<Arc<str>> {
+    if uses_provided_entries(props) {
+        let root = Path::new(root_path.as_ref());
+        return [props.reveal_path.as_ref(), props.select_path.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter_map(|path| resolve_provided_path(root, path.as_ref()))
+            .map(|path| Arc::<str>::from(path.to_string_lossy().as_ref()))
+            .collect();
+    }
+
     [props.reveal_path.as_ref(), props.select_path.as_ref()]
         .into_iter()
         .flatten()
@@ -635,7 +988,14 @@ fn selected_visible_index_by_path(
         .select_path
         .as_ref()
         .or(props.selected_path.as_ref())
-        .and_then(|path| resolve_path_under_root(&state.root.path, path.as_ref()))?;
+        .and_then(|path| {
+            if uses_provided_entries(props) {
+                resolve_provided_path(Path::new(state.root.path.as_ref()), path.as_ref())
+                    .map(|path| Arc::<str>::from(path.to_string_lossy().as_ref()))
+            } else {
+                resolve_path_under_root(&state.root.path, path.as_ref())
+            }
+        })?;
     projection.path_to_visible_index.get(path.as_ref()).copied()
 }
 
@@ -657,12 +1017,7 @@ fn apply_reveal_paths_to_state(state: &mut FileTreeState, props: &FileTreeProps)
     }
 
     let before = loaded_signature(&state.root);
-    load_expanded_directories_sync(
-        &mut state.root,
-        &expanded_for_load,
-        props.show_hidden,
-        props.max_entries_per_dir,
-    );
+    load_expanded_directories(state, props, expanded_for_load);
     changed || loaded_signature(&state.root) != before
 }
 
@@ -696,11 +1051,15 @@ fn git_snapshot_command(
     link: crate::callback::Link<FileTreeMsg>,
     repo_root: Arc<str>,
     include_diff_stats: bool,
+    generation: u64,
 ) -> Command {
     link.command(move |link| {
         let snapshot = load_git_snapshot(Path::new(repo_root.as_ref()), include_diff_stats)
             .unwrap_or_default();
-        link.send(FileTreeMsg::GitSnapshotLoaded { snapshot });
+        link.send(FileTreeMsg::GitSnapshotLoaded {
+            generation,
+            snapshot,
+        });
     })
 }
 
@@ -759,6 +1118,95 @@ fn apply_directory_load(node: &mut FsNode, result: super::fs::DirectoryLoadResul
                 error: None,
                 children: Vec::new(),
             });
+        }
+    }
+}
+
+fn load_expanded_directories(
+    state: &mut FileTreeState,
+    props: &FileTreeProps,
+    expanded: HashSet<Arc<str>>,
+) {
+    if uses_provided_entries(props) {
+        request_missing_provided_directories_for(state, props, &expanded);
+    } else {
+        load_expanded_directories_sync(
+            &mut state.root,
+            &expanded,
+            props.show_hidden,
+            props.max_entries_per_dir,
+        );
+    }
+}
+
+fn request_missing_provided_directories(state: &mut FileTreeState, props: &FileTreeProps) {
+    let expanded = effective_expanded_paths(props, state).into_owned();
+    request_missing_provided_directories_for(state, props, &expanded);
+}
+
+fn request_missing_provided_directories_for(
+    state: &mut FileTreeState,
+    props: &FileTreeProps,
+    expanded: &HashSet<Arc<str>>,
+) {
+    if !uses_provided_entries(props) {
+        return;
+    }
+
+    let mut paths = Vec::new();
+    collect_pending_expanded_paths(&state.root, expanded, &mut paths);
+    for path in paths {
+        request_provided_directory(state, props, path);
+    }
+}
+
+fn collect_pending_expanded_paths(
+    node: &FsNode,
+    expanded: &HashSet<Arc<str>>,
+    paths: &mut Vec<Arc<str>>,
+) {
+    if !node.is_dir() || !expanded.contains(&node.path) {
+        return;
+    }
+
+    if !node.loaded {
+        paths.push(node.path.clone());
+        return;
+    }
+
+    for child in &node.children {
+        collect_pending_expanded_paths(child, expanded, paths);
+    }
+}
+
+fn request_provided_directory(state: &mut FileTreeState, props: &FileTreeProps, path: Arc<str>) {
+    let Some(node) = node_by_path_mut(&mut state.root, &path) else {
+        return;
+    };
+    if !node.is_dir() || node.loaded {
+        return;
+    }
+    node.loading = true;
+    let Some(callback) = props.on_entry_request.as_ref() else {
+        return;
+    };
+    if !state.requested_entry_paths.insert(path.clone()) {
+        return;
+    }
+    callback.emit(FileTreeEntryRequest { path });
+}
+
+fn clear_completed_entry_requests(state: &mut FileTreeState, props: &FileTreeProps) {
+    let FileTreeEntrySource::Provided(listings) = &props.entry_source else {
+        state.requested_entry_paths.clear();
+        return;
+    };
+    let root = Path::new(state.root.path.as_ref());
+    for listing in listings {
+        if let Some(path) = resolve_provided_path(root, listing.path.as_ref()) {
+            state
+                .requested_entry_paths
+                .remove(path.to_string_lossy().as_ref());
         }
     }
 }
@@ -848,16 +1296,26 @@ fn build_projection(
     state: &FileTreeState,
     explorer_filter: Option<&ExplorerFilter>,
 ) -> FileTreeProjection {
-    let snapshot = effective_change_snapshot(props, state);
+    let snapshot = effective_change_snapshot(state);
     let root = if props.change_view == FileTreeChangeView::ChangedOnly {
-        build_changed_only_root(&state.root, &snapshot, props.show_hidden)
+        let mut root = build_changed_only_root(&state.root, snapshot, props.show_hidden);
+        if uses_provided_entries(props) {
+            insert_unknown_provided_directories(&mut root, &state.root);
+            sort_virtual_tree(&mut root);
+            sync_projected_load_states(&mut root, &state.root);
+        }
+        root
     } else {
         state.root.clone()
     };
     let expanded = effective_expanded_paths(props, state);
 
     let mut lookup = HashMap::new();
-    let path_styles = resolved_path_styles(&props.path_styles, root.path.as_ref());
+    let path_styles = resolved_path_styles(
+        &props.path_styles,
+        root.path.as_ref(),
+        uses_provided_entries(props),
+    );
     let mut build_ctx = ProjectionBuildContext {
         props,
         expanded: expanded.as_ref(),
@@ -873,6 +1331,76 @@ fn build_projection(
         root,
         lookup: Arc::new(lookup),
         path_to_visible_index,
+    }
+}
+
+fn sync_projected_load_states(projected: &mut FsNode, source: &FsNode) {
+    projected.loaded = source.loaded;
+    projected.loading = source.loading;
+    projected.error = source.error.clone();
+    let source_by_path: HashMap<&str, &FsNode> = source
+        .children
+        .iter()
+        .map(|child| (child.path.as_ref(), child))
+        .collect();
+    for child in &mut projected.children {
+        if let Some(source_child) = source_by_path.get(child.path.as_ref()) {
+            sync_projected_load_states(child, source_child);
+        }
+    }
+}
+
+fn insert_unknown_provided_directories(projected: &mut FsNode, source: &FsNode) {
+    let unknown_children = source
+        .children
+        .iter()
+        .filter_map(build_unknown_provided_directory)
+        .collect();
+    merge_unknown_provided_directories(projected, unknown_children);
+}
+
+fn build_unknown_provided_directory(source: &FsNode) -> Option<FsNode> {
+    if !source.is_dir() {
+        return None;
+    }
+    let children: Vec<FsNode> = source
+        .children
+        .iter()
+        .filter_map(build_unknown_provided_directory)
+        .collect();
+    if source.loaded && children.is_empty() {
+        return None;
+    }
+
+    Some(FsNode {
+        name: source.name.clone(),
+        path: source.path.clone(),
+        kind: FileKind::Directory,
+        loaded: source.loaded,
+        loading: source.loading,
+        error: source.error.clone(),
+        children,
+    })
+}
+
+fn merge_unknown_provided_directories(projected: &mut FsNode, unknown: Vec<FsNode>) {
+    let mut projected_by_path: HashMap<Arc<str>, usize> = projected
+        .children
+        .iter()
+        .enumerate()
+        .map(|(index, child)| (child.path.clone(), index))
+        .collect();
+    for mut child in unknown {
+        if let Some(index) = projected_by_path.get(child.path.as_ref()).copied() {
+            merge_unknown_provided_directories(
+                &mut projected.children[index],
+                std::mem::take(&mut child.children),
+            );
+        } else {
+            let path = child.path.clone();
+            projected.children.push(child);
+            projected_by_path.insert(path, projected.children.len() - 1);
+        }
     }
 }
 
@@ -1056,12 +1584,18 @@ fn apply_suffix_style(
 fn resolved_path_styles(
     styles: &HashMap<Arc<str>, FileTreeItemStyle>,
     effective_root: &str,
+    lexical_only: bool,
 ) -> HashMap<Arc<str>, FileTreeItemStyle> {
     let root = Path::new(effective_root);
     styles
         .iter()
         .filter_map(|(path, style)| {
-            resolve_item_style_path(root, path.as_ref()).map(|resolved| {
+            let resolved = if lexical_only {
+                resolve_provided_path(root, path.as_ref())
+            } else {
+                resolve_item_style_path(root, path.as_ref())
+            };
+            resolved.map(|resolved| {
                 (
                     Arc::<str>::from(resolved.to_string_lossy().as_ref()),
                     *style,
@@ -1286,6 +1820,7 @@ fn sort_virtual_tree(node: &mut FsNode) {
         let right_dir = right.kind == FileKind::Directory;
         right_dir
             .cmp(&left_dir)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
             .then_with(|| left.name.cmp(&right.name))
     });
     for child in &mut node.children {
@@ -1322,6 +1857,19 @@ fn file_kind_for_changed_leaf(_path: &Path) -> FileKind {
     FileKind::File
 }
 
+fn explorer_search_candidates(
+    props: &FileTreeProps,
+    state: &FileTreeState,
+) -> Option<Vec<ExplorerCandidate>> {
+    if props.change_view == FileTreeChangeView::ChangedOnly {
+        return changed_only_search_candidates(props, state);
+    }
+    if uses_provided_entries(props) {
+        return Some(provided_entry_search_candidates(props, &state.root));
+    }
+    None
+}
+
 fn changed_only_search_candidates(
     props: &FileTreeProps,
     state: &FileTreeState,
@@ -1330,11 +1878,61 @@ fn changed_only_search_candidates(
         return None;
     }
 
-    let snapshot = effective_change_snapshot(props, state);
-    let root = build_changed_only_root(&state.root, &snapshot, props.show_hidden);
+    let snapshot = effective_change_snapshot(state);
+    let root = build_changed_only_root(&state.root, snapshot, props.show_hidden);
     let mut candidates = Vec::new();
     collect_virtual_candidates(&root, true, &mut candidates);
     Some(candidates)
+}
+
+fn provided_entry_search_candidates(
+    props: &FileTreeProps,
+    root: &FsNode,
+) -> Vec<ExplorerCandidate> {
+    let FileTreeEntrySource::Provided(listings) = &props.entry_source else {
+        return Vec::new();
+    };
+    let root_path = Path::new(root.path.as_ref());
+    let mut ignored = HashSet::new();
+    for listing in listings {
+        let Some(directory) = resolve_provided_path(root_path, listing.path.as_ref()) else {
+            continue;
+        };
+        let Ok(entries) = &listing.entries else {
+            continue;
+        };
+        for entry in entries.iter() {
+            if entry.ignored && is_valid_provided_name(entry.name.as_ref()) {
+                let path = lexical_normalize_path(&directory.join(entry.name.as_ref()));
+                ignored.insert(Arc::<str>::from(path.to_string_lossy().as_ref()));
+            }
+        }
+    }
+    let mut candidates = Vec::new();
+    collect_provided_search_candidates(root, true, &ignored, &mut candidates);
+    candidates.sort_by(|left, right| left.path.cmp(&right.path));
+    candidates
+}
+
+fn collect_provided_search_candidates(
+    node: &FsNode,
+    is_root: bool,
+    ignored: &HashSet<Arc<str>>,
+    candidates: &mut Vec<ExplorerCandidate>,
+) {
+    if !is_root {
+        if ignored.contains(&node.path) || node.kind == FileKind::Other {
+            return;
+        }
+        candidates.push(ExplorerCandidate {
+            path: node.path.clone(),
+            label: node.name.clone(),
+            is_dir: node.is_dir(),
+        });
+    }
+    for child in &node.children {
+        collect_provided_search_candidates(child, false, ignored, candidates);
+    }
 }
 
 fn collect_virtual_candidates(
@@ -1355,9 +1953,9 @@ fn collect_virtual_candidates(
     }
 }
 
-fn expand_changed_only_directories(state: &mut FileTreeState, snapshot: &GitStatusSnapshot) {
+fn expand_changed_only_directories(state: &mut FileTreeState, changed_paths: &[Arc<str>]) {
     let root_path = state.root.path.clone();
-    for path in &snapshot.changed_paths {
+    for path in changed_paths {
         if let Some(parent) = Path::new(path.as_ref()).parent() {
             let parent = Arc::<str>::from(parent.to_string_lossy().as_ref());
             insert_path_with_ancestors(&mut state.expanded, &parent, &root_path);
@@ -1367,6 +1965,26 @@ fn expand_changed_only_directories(state: &mut FileTreeState, snapshot: &GitStat
 
 fn virtual_root_node(root: &Arc<str>) -> FsNode {
     let path = provided_root_path(root.as_ref());
+    virtual_root_node_at(root, path)
+}
+
+fn provided_entry_root_node(root: &Arc<str>) -> FsNode {
+    virtual_root_node_at(root, provided_entry_root_path(root.as_ref()))
+}
+
+fn provided_entry_root_path(root: &str) -> PathBuf {
+    let root = Path::new(root);
+    let absolute = if root.is_absolute() {
+        root.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(root)
+    };
+    lexical_normalize_path(&absolute)
+}
+
+fn virtual_root_node_at(root: &Arc<str>, path: PathBuf) -> FsNode {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -1489,7 +2107,11 @@ fn node_by_path_mut<'a>(root: &'a mut FsNode, path: &str) -> Option<&'a mut FsNo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::Color;
+    use crate::app::context::SurfaceMode;
+    use crate::runtime::RuntimeCore;
+    use crate::style::{Color, Rect, Theme};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     fn test_root() -> FsNode {
         FsNode {
@@ -1528,6 +2150,7 @@ mod tests {
             root_virtual: false,
             expanded,
             git_snapshot: GitStatusSnapshot::default(),
+            git_load_generation: 0,
             last_git_refresh_nonce: 0,
             changed_only_auto_expand_signature: 0,
             explorer_input: TextInput::new(""),
@@ -1535,6 +2158,7 @@ mod tests {
             explorer_filter: ExplorerFilter::default(),
             search_expanded_snapshot: None,
             search_found_dir: None,
+            requested_entry_paths: HashSet::new(),
         }
     }
 
@@ -1560,6 +2184,455 @@ mod tests {
         assert!(expanded.contains("/repo"));
         assert!(expanded.contains("/repo/src"));
         assert!(expanded.contains("/repo/src/widgets"));
+    }
+
+    #[test]
+    fn provided_path_resolution_rejects_escapes_and_prefix_siblings() {
+        let root = Path::new("/remote/repo");
+
+        assert_eq!(resolve_provided_path(root, "../etc"), None);
+        assert_eq!(resolve_provided_path(root, "src/../../etc"), None);
+        assert_eq!(resolve_provided_path(root, "/etc/passwd"), None);
+        assert_eq!(resolve_provided_path(root, "/remote/repo2/file"), None);
+        assert_eq!(
+            resolve_provided_path(root, "src/../README.md"),
+            Some(PathBuf::from("/remote/repo/README.md"))
+        );
+
+        for invalid in ["../x", "a/b", "/abs", "..", ".", ""] {
+            assert!(!is_valid_provided_name(invalid), "accepted {invalid:?}");
+        }
+        assert!(is_valid_provided_name("main.rs"));
+    }
+
+    #[test]
+    fn props_hook_rebuilds_a_changed_local_root() {
+        let old_root = unique_component_test_dir("props-hook-old-root");
+        let new_root = unique_component_test_dir("props-hook-new-root");
+        std::fs::create_dir_all(&old_root).unwrap();
+        std::fs::create_dir_all(&new_root).unwrap();
+        std::fs::write(old_root.join("old.rs"), "").unwrap();
+        std::fs::write(new_root.join("new.rs"), "").unwrap();
+        let old_props =
+            crate::widgets::file_tree::FileTree::new(old_root.to_string_lossy().into_owned()).props;
+        let new_props =
+            crate::widgets::file_tree::FileTree::new(new_root.to_string_lossy().into_owned()).props;
+        let mut runtime = RuntimeCore::new_test(
+            FileTreeComponent::new(),
+            old_props,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 12,
+            },
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(std::cell::Cell::new(false)),
+        );
+
+        let old_props = std::mem::replace(&mut runtime.ctx.props, new_props);
+        let update = runtime
+            .component
+            .on_props_changed(&old_props, &mut runtime.ctx);
+
+        assert!(update.dirty);
+        assert!(
+            runtime
+                .ctx
+                .state
+                .root
+                .children
+                .iter()
+                .any(|child| child.name.as_ref() == "new.rs")
+        );
+        assert!(
+            runtime
+                .ctx
+                .state
+                .root
+                .children
+                .iter()
+                .all(|child| child.name.as_ref() != "old.rs")
+        );
+
+        let _ = std::fs::remove_dir_all(old_root);
+        let _ = std::fs::remove_dir_all(new_root);
+    }
+
+    #[test]
+    fn props_hook_delivers_listing_and_refreshes_cached_snapshot() {
+        let modified =
+            super::super::GitFileStatus::new(None, Some(super::super::GitChangeState::Modified));
+        let old_props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::provided([
+                FileTreeDirectoryListing::new(".", [super::super::FileTreeEntry::directory("src")]),
+            ]))
+            .props;
+        let new_props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::provided([
+                FileTreeDirectoryListing::new(".", [super::super::FileTreeEntry::directory("src")]),
+                FileTreeDirectoryListing::new(
+                    "src",
+                    [super::super::FileTreeEntry::file("main.rs").git_status(modified)],
+                ),
+            ]))
+            .props;
+        let mut runtime = RuntimeCore::new_test(
+            FileTreeComponent::new(),
+            old_props,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 12,
+            },
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(std::cell::Cell::new(false)),
+        );
+        runtime
+            .ctx
+            .state
+            .expanded
+            .insert(Arc::from("/remote/repo/src"));
+
+        let old_props = std::mem::replace(&mut runtime.ctx.props, new_props);
+        let update = runtime
+            .component
+            .on_props_changed(&old_props, &mut runtime.ctx);
+
+        assert!(update.dirty);
+        assert!(runtime.ctx.state.expanded.contains("/remote/repo/src"));
+        assert!(
+            node_by_path_mut(&mut runtime.ctx.state.root, "/remote/repo/src")
+                .is_some_and(|node| node.loaded && node.children.len() == 1)
+        );
+        assert!(
+            effective_change_snapshot(&runtime.ctx.state)
+                .entries
+                .contains_key("/remote/repo/src/main.rs")
+        );
+        assert!(std::ptr::eq(
+            effective_change_snapshot(&runtime.ctx.state),
+            effective_change_snapshot(&runtime.ctx.state)
+        ));
+
+        let changed_props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::provided([
+                FileTreeDirectoryListing::new(".", [super::super::FileTreeEntry::directory("src")]),
+                FileTreeDirectoryListing::new("src", [super::super::FileTreeEntry::file("lib.rs")]),
+            ]))
+            .props;
+        let old_props = std::mem::replace(&mut runtime.ctx.props, changed_props);
+        runtime
+            .component
+            .on_props_changed(&old_props, &mut runtime.ctx);
+
+        let src = node_by_path_mut(&mut runtime.ctx.state.root, "/remote/repo/src").unwrap();
+        assert_eq!(src.children.len(), 1);
+        assert_eq!(src.children[0].name.as_ref(), "lib.rs");
+        assert!(
+            !effective_change_snapshot(&runtime.ctx.state)
+                .entries
+                .contains_key("/remote/repo/src/main.rs")
+        );
+
+        let removed_props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::provided([
+                FileTreeDirectoryListing::new(".", [super::super::FileTreeEntry::directory("src")]),
+            ]))
+            .props;
+        let old_props = std::mem::replace(&mut runtime.ctx.props, removed_props);
+        runtime
+            .component
+            .on_props_changed(&old_props, &mut runtime.ctx);
+
+        assert!(
+            node_by_path_mut(&mut runtime.ctx.state.root, "/remote/repo/src")
+                .is_some_and(|node| !node.loaded && node.loading && node.children.is_empty())
+        );
+    }
+
+    #[test]
+    fn stale_git_result_cannot_replace_a_provided_snapshot() {
+        let modified =
+            super::super::GitFileStatus::new(None, Some(super::super::GitChangeState::Modified));
+        let props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::provided([
+                FileTreeDirectoryListing::new(
+                    ".",
+                    [super::super::FileTreeEntry::file("README.md").git_status(modified)],
+                ),
+            ]))
+            .props;
+        let mut runtime = RuntimeCore::new_test(
+            FileTreeComponent::new(),
+            props,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 12,
+            },
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(std::cell::Cell::new(false)),
+        );
+        runtime.ctx.state.git_load_generation = 1;
+
+        let update = runtime.component.update(
+            FileTreeMsg::GitSnapshotLoaded {
+                generation: 0,
+                snapshot: GitStatusSnapshot::default(),
+            },
+            &mut runtime.ctx,
+        );
+
+        assert!(!update.dirty);
+        assert!(
+            runtime
+                .ctx
+                .state
+                .git_snapshot
+                .entries
+                .contains_key("/remote/repo/README.md")
+        );
+    }
+
+    #[test]
+    fn disabling_and_reenabling_git_invalidates_older_loads() {
+        let enabled = crate::widgets::file_tree::FileTree::new("/definitely/missing/repo").props;
+        let disabled = crate::widgets::file_tree::FileTree::new("/definitely/missing/repo")
+            .git_status(false)
+            .props;
+        let mut runtime = RuntimeCore::new_test(
+            FileTreeComponent::new(),
+            enabled.clone(),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 12,
+            },
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(std::cell::Cell::new(false)),
+        );
+
+        let old_props = std::mem::replace(&mut runtime.ctx.props, disabled);
+        runtime
+            .component
+            .on_props_changed(&old_props, &mut runtime.ctx);
+        assert_eq!(runtime.ctx.state.git_load_generation, 1);
+
+        let old_props = std::mem::replace(&mut runtime.ctx.props, enabled);
+        runtime
+            .component
+            .on_props_changed(&old_props, &mut runtime.ctx);
+        assert_eq!(runtime.ctx.state.git_load_generation, 2);
+    }
+
+    #[test]
+    fn provided_source_requests_missing_root_once_without_local_io() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let captured = requests.clone();
+        let props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::Provided(Vec::new()))
+            .on_entry_request(crate::Callback::new(
+                move |request: FileTreeEntryRequest| {
+                    captured.borrow_mut().push(request.path);
+                },
+            ))
+            .props;
+        let mut state = FileTreeComponent::new().create_state(&props);
+
+        assert_eq!(state.root.path.as_ref(), "/remote/repo");
+        assert!(!state.root.loaded);
+        assert!(state.root.error.is_none());
+
+        request_missing_provided_directories(&mut state, &props);
+        request_missing_provided_directories(&mut state, &props);
+
+        assert!(state.root.loading);
+        assert_eq!(requests.borrow().as_slice(), &[Arc::from("/remote/repo")]);
+    }
+
+    #[test]
+    fn provided_source_does_not_request_a_loaded_directory() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let captured = requests.clone();
+        let props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::provided([
+                FileTreeDirectoryListing::new(".", [super::super::FileTreeEntry::directory("src")]),
+                FileTreeDirectoryListing::new("src", Vec::new()),
+            ]))
+            .on_entry_request(crate::Callback::new(
+                move |request: FileTreeEntryRequest| {
+                    captured.borrow_mut().push(request.path);
+                },
+            ))
+            .props;
+        let mut state = FileTreeComponent::new().create_state(&props);
+
+        request_provided_directory(&mut state, &props, Arc::from("/remote/repo/src"));
+
+        assert!(requests.borrow().is_empty());
+        assert!(
+            node_by_path_mut(&mut state.root, "/remote/repo/src")
+                .is_some_and(|node| { node.loaded && !node.loading })
+        );
+    }
+
+    #[test]
+    fn provided_listing_options_are_applied_when_root_is_rebuilt() {
+        let source = FileTreeEntrySource::provided([FileTreeDirectoryListing::new(
+            ".",
+            [
+                super::super::FileTreeEntry::file(".hidden"),
+                super::super::FileTreeEntry::file("one.rs"),
+                super::super::FileTreeEntry::file("two.rs"),
+            ],
+        )]);
+        let hidden_props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(source.clone())
+            .max_entries_per_dir(1)
+            .props;
+        let visible_props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(source)
+            .show_hidden(true)
+            .max_entries_per_dir(3)
+            .props;
+
+        let (hidden_root, _) = initial_root(&hidden_props);
+        let (visible_root, _) = initial_root(&visible_props);
+
+        assert_eq!(hidden_root.children.len(), 2); // one entry plus the truncation row
+        assert_eq!(visible_root.children.len(), 3);
+        assert!(
+            visible_root
+                .children
+                .iter()
+                .any(|child| child.name.as_ref() == ".hidden")
+        );
+
+        let hidden_state = FileTreeComponent::new().create_state(&hidden_props);
+        let candidates = explorer_search_candidates(&hidden_props, &hidden_state).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].label.as_ref(), "one.rs");
+    }
+
+    #[test]
+    fn provided_changed_only_keeps_unknown_directories_expandable() {
+        let props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::provided([
+                FileTreeDirectoryListing::new(".", [super::super::FileTreeEntry::directory("src")]),
+            ]))
+            .change_view(FileTreeChangeView::ChangedOnly)
+            .props;
+        let state = FileTreeComponent::new().create_state(&props);
+
+        let projection = build_projection(&props, &state, None);
+
+        assert_eq!(projection.root.children.len(), 1);
+        assert_eq!(
+            projection.root.children[0].item.spans[2].content.as_ref(),
+            "src"
+        );
+        assert_eq!(
+            projection
+                .lookup
+                .get(&crate::widgets::TreePath::from(vec![0]))
+                .map(|entry| entry.path.as_ref()),
+            Some("/remote/repo/src")
+        );
+    }
+
+    #[test]
+    fn leaving_provided_entries_restarts_local_git_loading() {
+        let provided = crate::widgets::file_tree::FileTree::new("/repo")
+            .entry_source(FileTreeEntrySource::Provided(Vec::new()))
+            .props;
+        let local = crate::widgets::file_tree::FileTree::new("/repo").props;
+
+        assert!(should_load_git_after_props_change(&provided, &local));
+    }
+
+    #[test]
+    fn provided_listings_hydrate_lazily_and_project_git_status() {
+        let modified =
+            super::super::GitFileStatus::new(None, Some(super::super::GitChangeState::Modified));
+        let props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::provided([
+                FileTreeDirectoryListing::new(
+                    ".",
+                    [
+                        super::super::FileTreeEntry::directory("src"),
+                        super::super::FileTreeEntry::file("README.md").git_status(modified),
+                    ],
+                ),
+                FileTreeDirectoryListing::new(
+                    "src",
+                    [super::super::FileTreeEntry::file("main.rs").git_status(modified)],
+                ),
+            ]))
+            .props;
+
+        let state = FileTreeComponent::new().create_state(&props);
+        let src = state
+            .root
+            .children
+            .iter()
+            .find(|child| child.name.as_ref() == "src")
+            .unwrap();
+        assert!(state.root.loaded);
+        assert!(src.loaded);
+        assert_eq!(src.children[0].path.as_ref(), "/remote/repo/src/main.rs");
+
+        let snapshot = effective_change_snapshot(&state);
+        assert!(snapshot.entries.contains_key("/remote/repo"));
+        assert!(snapshot.entries.contains_key("/remote/repo/src"));
+        assert!(snapshot.entries.contains_key("/remote/repo/src/main.rs"));
+        assert!(snapshot.entries.contains_key("/remote/repo/README.md"));
+    }
+
+    #[test]
+    fn provided_ignore_state_excludes_explorer_candidates_only() {
+        let props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::provided([
+                FileTreeDirectoryListing::new(
+                    ".",
+                    [
+                        super::super::FileTreeEntry::file("visible.rs"),
+                        super::super::FileTreeEntry::file("generated.rs").ignored(true),
+                    ],
+                ),
+            ]))
+            .props;
+        let state = FileTreeComponent::new().create_state(&props);
+
+        assert_eq!(state.root.children.len(), 2);
+        let candidates = explorer_search_candidates(&props, &state).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].label.as_ref(), "visible.rs");
+    }
+
+    #[test]
+    fn provided_listing_error_is_renderable_without_filesystem_access() {
+        let props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::provided([
+                FileTreeDirectoryListing::error(".", "permission denied"),
+            ]))
+            .props;
+        let state = FileTreeComponent::new().create_state(&props);
+
+        assert!(state.root.loaded);
+        assert_eq!(state.root.error.as_deref(), Some("permission denied"));
+        let projection = build_projection(&props, &state, None);
+        assert_eq!(
+            projection.root.children[0].item.spans[0].content.as_ref(),
+            "error: permission denied"
+        );
     }
 
     #[test]
@@ -2006,7 +3079,7 @@ mod tests {
                 true,
             ),
         );
-        let path_styles = resolved_path_styles(&props.path_styles, "/repo");
+        let path_styles = resolved_path_styles(&props.path_styles, "/repo", false);
         let expanded = HashSet::new();
         let mut lookup = HashMap::new();
         let mut ctx = ProjectionBuildContext {
@@ -2059,7 +3132,7 @@ mod tests {
                 direct: true,
             },
         );
-        let path_styles = resolved_path_styles(&props.path_styles, "/repo");
+        let path_styles = resolved_path_styles(&props.path_styles, "/repo", false);
         let expanded = HashSet::new();
         let mut lookup = HashMap::new();
         let mut ctx = ProjectionBuildContext {
@@ -2208,7 +3281,7 @@ mod tests {
             ),
         ]);
 
-        let resolved = resolved_path_styles(&styles, "/repo");
+        let resolved = resolved_path_styles(&styles, "/repo", false);
 
         assert!(resolved.contains_key("/repo/src/main.rs"));
         assert!(resolved.contains_key("/repo/src/lib.rs"));
@@ -2304,6 +3377,7 @@ mod tests {
                 kinds: HashMap::new(),
                 virtual_changes: false,
             },
+            git_load_generation: 0,
             last_git_refresh_nonce: 0,
             changed_only_auto_expand_signature: 0,
             explorer_input: TextInput::new(""),
@@ -2311,6 +3385,7 @@ mod tests {
             explorer_filter: ExplorerFilter::default(),
             search_expanded_snapshot: None,
             search_found_dir: None,
+            requested_entry_paths: HashSet::new(),
         };
 
         let projection = build_projection(&props, &state, None);

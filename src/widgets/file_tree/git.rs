@@ -498,7 +498,7 @@ fn insert_decoration_path_and_parents(
     }
 }
 
-fn insert_provided_decoration_path_and_parents(
+pub(crate) fn insert_provided_decoration_path_and_parents(
     entries: &mut HashMap<Arc<str>, GitFileDecorations>,
     full_path: &Path,
     decoration: GitFileDecorations,

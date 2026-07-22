@@ -382,12 +382,13 @@ TreeNode::new(ListItem::from_spans(vec![
 
 ## FileTree
 
-Lazy-loading filesystem explorer built on `Tree`, with git-backed or
-application-provided change projections.
+Lazy-loading filesystem explorer built on `Tree`, with local or application-provided directory
+entries and git-backed or application-provided change projections.
 
 | Prop | Type | Description |
 |------|------|-------------|
 | `root` | `impl Into<Arc<str>>` | **Constructor** - root directory path |
+| `entry_source` | `FileTreeEntrySource` | Directory entry source; defaults to local filesystem enumeration |
 | `show_hidden` | `bool` | Show hidden files (`.` prefix) |
 | `max_entries_per_dir` | `usize` | Cap entries per directory |
 | `directory_label_style` | `Style` | Style applied to directory names |
@@ -429,11 +430,24 @@ application-provided change projections.
 | `on_focus` / `on_blur` | `Callback<()>` | Tree focus gained / lost |
 | `on_select` | `Callback<FileTreeEvent>` | File/dir selected |
 | `on_toggle` | `Callback<FileTreeToggleEvent>` | Directory expanded/collapsed |
+| `on_entry_request` | `Callback<FileTreeEntryRequest>` | Missing provided directory listing requested |
 
 Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar_config`.
 
 **Behavior:**
-- Directories load on demand in a background command on first expand.
+- Local directories load on demand on first expand.
+- With `FileTreeEntrySource::Provided`, an absent directory listing is pending: the widget renders
+  `loading_label`, emits one `FileTreeEntryRequest` for the expanded path, and waits for the app to
+  rebuild it with a matching `FileTreeDirectoryListing`. The callback must enqueue remote or other
+  blocking work through a `Command`; it must not perform that work on the UI thread.
+- Keep completed listings in app state and batch responses received together into one state update.
+  The widget incrementally applies changed directory results, while one batched prop update avoids
+  repeated comparison and status-projection work across a large listing set.
+- Provided entries include `is_dir`, `is_symlink`, `git_status`, and `ignored`. Their Git status is
+  rendered without local Git discovery. Ignored entries remain visible during normal browsing, as
+  with the local source, but explorer search excludes them.
+- In changed-only mode, provided directories with pending descendants remain visible so they can
+  be expanded and requested; a loaded clean directory disappears from that projection.
 - Git is the default change source; use `FileTreeChangeSource::Provided(...)` to display backend-provided change data without requiring a local git repository.
 - `directory_label_style(...)` and `file_label_style(...)` style names independently from icons and right-aligned change indicators.
 - `path_style(...)` / `path_styles(...)` match exact paths and can override row, icon, label, and suffix styling for reviewed, pinned, or otherwise annotated files.
@@ -450,6 +464,28 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
 - `selected_path`, `reveal_path`, and `select_path` normalize absolute paths under the root or paths relative to the root. They are no-ops for paths outside the root, paths hidden by `show_hidden(false)`, absent/unreadable/capped entries, or rows filtered out by the current all-files/changed-only projection. `selected_path` only selects an already-visible row; `reveal_path` expands/loads ancestors when possible; `select_path` combines reveal + selection and scrolls to the selected row. With controlled `expanded_paths`, app-provided expansion remains authoritative, so reveal/select can only display rows made available by the controlled expansion set plus the reveal request during rendering.
 - Restores pre-search expansion state when query clears.
 - Queries containing file extensions (e.g. `layout.rs`) prioritize filename matches.
+
+Run the complete asynchronous pattern with `cargo run --example provided_file_tree`.
+
+```rust
+let listings = vec![FileTreeDirectoryListing::new(
+    project_root.clone(),
+    [
+        FileTreeEntry::directory("src"),
+        FileTreeEntry::file("README.md").git_status(GitFileStatus::new(
+            None,
+            Some(GitChangeState::Modified),
+        )),
+    ],
+)];
+
+FileTree::new(project_root)
+    .entry_source(FileTreeEntrySource::Provided(listings))
+    .on_entry_request(
+        ctx.link()
+            .callback(|request: FileTreeEntryRequest| Msg::ListDirectory(request.path)),
+    )
+```
 
 ```rust
 let changes = vec![
@@ -492,6 +528,7 @@ FileTree::new("/home/user/projects")
 ```rust
 // FileTreeEvent { path: Arc<str>, kind: FileKind }
 // FileTreeToggleEvent { path: Arc<str>, kind: FileKind, expanded: bool }
+// FileTreeEntryRequest { path: Arc<str> }
 ```
 
 ---
