@@ -54,6 +54,12 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- `FileTree` no longer rebuilds the subtree of a collapsed directory on every
+  render. A collapsed directory projects a single placeholder child, so
+  per-frame work now scales with the rows a user can actually see instead of
+  with everything the tree has loaded. Explorer search keeps the full walk.
+  This matters most for `FileTreeEntrySource::Provided`, which hydrates every
+  supplied listing rather than only the expanded ones.
 - `ListNode.selected` and `TableNode.selected` are now `Option<usize>`
   (breaking). Defaults and builder call sites that pass bare integers are
   unchanged; only code that reads the public node fields as `usize` needs an

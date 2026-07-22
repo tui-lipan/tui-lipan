@@ -1542,6 +1542,18 @@ fn build_projected_tree_node(
             tree = tree.child(TreeNode::new(" "));
         } else if let Some(error) = node.error.as_ref() {
             tree = tree.child(TreeNode::new(format!("{} {error}", ctx.props.error_prefix)));
+        } else if !is_expanded && ctx.explorer_filter.is_none() && !node.children.is_empty() {
+            // A collapsed directory contributes no visible rows, so materializing its
+            // subtree is wasted work on every frame. Emit the same single placeholder
+            // used for a not-yet-loaded directory: `Tree` only checks that `children`
+            // is non-empty to keep the row expandable, and never flattens past a
+            // collapsed node. The real children are built on the next render, once
+            // `expanded` contains this path.
+            //
+            // Explorer search keeps the full walk: its filter decides visibility per
+            // child, so a collapsed directory's toggleability depends on how many of
+            // its children survive the filter.
+            tree = tree.child(TreeNode::new(" "));
         } else {
             let mut display_index = 0usize;
             for child in &node.children {
@@ -2184,6 +2196,135 @@ mod tests {
         assert!(expanded.contains("/repo"));
         assert!(expanded.contains("/repo/src"));
         assert!(expanded.contains("/repo/src/widgets"));
+    }
+
+    fn collapsed_projection_props() -> FileTreeProps {
+        crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::provided([
+                FileTreeDirectoryListing::new(
+                    ".",
+                    [
+                        super::super::FileTreeEntry::directory("src"),
+                        super::super::FileTreeEntry::directory("empty"),
+                    ],
+                ),
+                FileTreeDirectoryListing::new(
+                    "src",
+                    [super::super::FileTreeEntry::directory("widgets")],
+                ),
+                FileTreeDirectoryListing::new(
+                    "src/widgets",
+                    [super::super::FileTreeEntry::file("tree.rs")],
+                ),
+                FileTreeDirectoryListing::new("empty", Vec::new()),
+            ]))
+            .props
+    }
+
+    fn projected_child<'a>(node: &'a TreeNode, name: &str) -> &'a TreeNode {
+        node.children
+            .iter()
+            .find(|child| {
+                child
+                    .item
+                    .spans
+                    .iter()
+                    .any(|span| span.content.as_ref() == name)
+            })
+            .unwrap_or_else(|| panic!("no projected child named {name:?}"))
+    }
+
+    #[test]
+    fn collapsed_directories_project_one_placeholder_instead_of_their_subtree() {
+        let props = collapsed_projection_props();
+        let state = FileTreeComponent::new().create_state(&props);
+
+        let projection = build_projection(&props, &state, None);
+        let src = projected_child(&projection.root, "src");
+
+        // A single placeholder keeps the row expandable without materializing
+        // `src/widgets` or `src/widgets/tree.rs`.
+        assert_eq!(src.children.len(), 1);
+        assert!(src.children[0].children.is_empty());
+        assert!(!src.expanded);
+
+        // Nothing below a collapsed directory reaches the event lookup, because
+        // none of it can be clicked while the parent stays closed.
+        let deep = projection
+            .lookup
+            .values()
+            .any(|entry| entry.path.as_ref() == "/remote/repo/src/widgets");
+        assert!(!deep, "collapsed subtree must not populate the lookup");
+    }
+
+    #[test]
+    fn a_loaded_empty_directory_stays_a_leaf() {
+        let props = collapsed_projection_props();
+        let state = FileTreeComponent::new().create_state(&props);
+
+        let projection = build_projection(&props, &state, None);
+        let empty = projected_child(&projection.root, "empty");
+
+        // `Tree` treats an empty `children` list as "not expandable". A loaded
+        // directory with no entries must keep that shape, or it would grow a
+        // toggle arrow that opens onto nothing.
+        assert!(empty.children.is_empty());
+    }
+
+    #[test]
+    fn expanding_a_directory_materializes_its_real_children() {
+        let props = collapsed_projection_props();
+        let mut state = FileTreeComponent::new().create_state(&props);
+        state.expanded.insert(Arc::from("/remote/repo/src"));
+
+        let projection = build_projection(&props, &state, None);
+        let src = projected_child(&projection.root, "src");
+        let widgets = projected_child(src, "widgets");
+
+        assert!(src.expanded);
+        assert_eq!(src.children.len(), 1);
+        // `widgets` is itself still collapsed, so it stops at its placeholder.
+        assert_eq!(widgets.children.len(), 1);
+        assert!(widgets.children[0].children.is_empty());
+        assert!(
+            projection
+                .lookup
+                .values()
+                .any(|entry| entry.path.as_ref() == "/remote/repo/src/widgets")
+        );
+    }
+
+    #[test]
+    fn explorer_search_still_walks_collapsed_directories() {
+        let props = collapsed_projection_props();
+        let state = FileTreeComponent::new().create_state(&props);
+        // Search visibility is decided per child, so a filtered walk cannot be
+        // replaced by the placeholder shortcut.
+        let filter_with = |paths: &[&str]| ExplorerFilter {
+            visible_paths: paths.iter().copied().map(Arc::<str>::from).collect(),
+            ..ExplorerFilter::default()
+        };
+
+        // A match below the closed `src` still has to be projected and resolvable,
+        // otherwise search could not reveal it.
+        let deep = filter_with(&["/remote/repo/src", "/remote/repo/src/widgets"]);
+        let projection = build_projection(&props, &state, Some(&deep));
+        let src = projected_child(&projection.root, "src");
+        assert_eq!(src.children.len(), 1);
+        assert!(
+            projection
+                .lookup
+                .values()
+                .any(|entry| entry.path.as_ref() == "/remote/repo/src/widgets"),
+            "filtered projection must keep resolving matches below a closed directory"
+        );
+
+        // When the filter excludes every child, `src` must stay a leaf. The
+        // placeholder shortcut would wrongly give it one child here, which is
+        // exactly why the filtered path keeps the full walk.
+        let shallow = filter_with(&["/remote/repo/src"]);
+        let projection = build_projection(&props, &state, Some(&shallow));
+        assert!(projected_child(&projection.root, "src").children.is_empty());
     }
 
     #[test]
