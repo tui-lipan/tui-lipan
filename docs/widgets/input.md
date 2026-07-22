@@ -614,9 +614,11 @@ if let Some(lang) = tui_lipan::language_from_path(&file_path) {
 
 Built-in themes: `Catppuccin Frappe`, `Catppuccin Latte`, `Catppuccin Macchiato`, `Catppuccin Mocha`, `Dracula`, `InspiredGitHub`, `Monokai Extended`, `One Dark (Atom)`, `Solarized (dark)`, `Solarized (light)`, `base16-eighties.dark`, `base16-mocha.dark`, `base16-ocean.dark`, `base16-ocean.light`.
 
-The bundled Syntect defaults do not include TypeScript/TSX grammars. When
-`.language_from_path(...)` sees `.ts` or `.tsx` and no exact grammar is present,
-it falls back to JavaScript highlighting instead of leaving the content plain.
+The lightweight bundled Syntect defaults do not include TypeScript/TSX grammars.
+When `.language_from_path(...)` sees `.ts` or `.tsx` and no exact grammar is
+present, it falls back to JavaScript highlighting instead of leaving the content
+plain. Enable `syntax-extra` for the bat-curated grammar set, which includes
+TOML, TypeScript/TSX, Dockerfile, Vue, Zig, Terraform, and many more.
 
 `SyntectStrategy::use_background(true)` - apply syntax theme backgrounds (default: false).
 

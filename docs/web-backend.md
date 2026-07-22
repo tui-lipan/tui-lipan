@@ -43,6 +43,15 @@ tui-lipan = { path = "…", default-features = false, features = ["web"] }
 The following features are **incompatible** with `web` and trigger a compile
 error on wasm32: `image`, `terminal`.
 
+When `syntax-syntect` is enabled, native builds use Syntect's Oniguruma backend,
+while `wasm32` builds use the pure-Rust `fancy-regex` backend, so syntax
+highlighting does not pull C Oniguruma into browser builds. The optional
+`syntax-extra` feature uses the same target-appropriate backends with the
+bat-curated grammar set. The fancy build omits these seven definitions because
+their regex features cannot be compiled infallibly: ARM Assembly, Hosts File,
+JavaScript (Babel), PowerShell, Regular Expressions (Elixir), Salt State (SLS),
+and VimHelp. The extra syntax data adds about 0.6 MiB to the binary.
+
 Native process streaming is not part of the wasm API. The `tui_lipan::process`
 module and prelude exports such as `ProcessSpec` and `ProcessEvent` are gated
 with `#[cfg(not(target_arch = "wasm32"))]`; browser builds should use web APIs

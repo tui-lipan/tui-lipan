@@ -195,7 +195,8 @@ writing any `update()` logic.
 | `image-full-formats` | Restores the broad `image` crate default codec set for image-backed features |
 | `markdown` | Markdown formatter for `DocumentView` |
 | `profiling-tracing` | `tracing` spans/events for render loop and `DocumentView` hot paths |
-| `syntax-syntect` | Syntax highlighting in `TextArea`, `DocumentView`, and `DiffView` |
+| `syntax-syntect` | Lightweight syntax highlighting in `TextArea`, `DocumentView`, and `DiffView`; native uses Oniguruma and WASM uses pure-Rust `fancy-regex` |
+| `syntax-extra` | Opt-in bat-curated grammar set for broad language coverage; adds about 0.6 MiB to the binary and includes `syntax-syntect` |
 | `terminal` | `Terminal` and `ManagedTerminal`: embedded PTY terminal viewport |
 | `terminal-serde` | Serde derives for terminal snapshot leaf style/mouse types used by external, versioned snapshot transports; includes `terminal` |
 | `theme-reload` | Live reload of TOML theme files without restarting the app - see [`docs/styling.md`](docs/styling.md) |
@@ -496,4 +497,6 @@ sign-off (`git commit -s`) instead. See [CONTRIBUTING.md](CONTRIBUTING.md).
 ### Third-party licenses
 
 Dependencies are predominantly MIT / Apache-2.0 / MPL-2.0 and remain under their
-own terms.
+own terms. The notices for the optional `syntax-extra` grammar data are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); redistributors enabling that
+feature must retain the applicable notices.

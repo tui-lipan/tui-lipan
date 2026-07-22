@@ -121,13 +121,14 @@ font8x8 = { version = "0.3.1", optional = true }
 fontdb = { version = "0.23", optional = true }
 fontdue = { version = "0.9", optional = true }
 similar = { version = "3.1.1", optional = true }
-syntect = { version = "5.2", optional = true }
 pulldown-cmark = { version = "0.13", optional = true, default-features = false }
 portable-pty = { version = "0.9", optional = true }
 alacritty_terminal = { version = "0.26.0", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "scrolling-regions", "layout-cache", "underline-color"] }
+syntect = { version = "5.2", optional = true, default-features = false, features = ["default-onig"] }
+two-face = { version = "0.5.1", optional = true, default-features = false, features = ["syntect-onig"] }
 crossterm = "0.29"
 crokey = "1.4.0"
 libc = "0.2"
@@ -142,6 +143,8 @@ wl-clipboard-rs = { version = "0.9.3", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 ratatui = { version = "0.30", default-features = false, features = ["layout-cache", "underline-color"] }
+syntect = { version = "5.2", optional = true, default-features = false, features = ["default-fancy"] }
+two-face = { version = "0.5.1", optional = true, default-features = false, features = ["syntect-fancy"] }
 
 # ─── Features ────────────────────────────────────────────────────────────────
 
@@ -155,6 +158,7 @@ clipboard-images = ["dep:image", "dep:wl-clipboard-rs", "arboard?/image-data"]
 image            = ["clipboard-images", "dep:ratatui-image"]
 image-full-formats = ["image?/default-formats", "ratatui-image?/image-defaults"]
 syntax-syntect = ["dep:syntect"]
+syntax-extra = ["syntax-syntect", "dep:two-face"]
 markdown       = ["dep:pulldown-cmark"]
 terminal      = ["dep:portable-pty", "dep:alacritty_terminal"]
 terminal-serde = ["terminal", "dep:serde"]
@@ -190,7 +194,7 @@ required-features = ["terminal"]
 
 [[example]]
 name = "yazi"
-required-features = ["syntax-syntect"]
+required-features = ["syntax-extra"]
 
 [[example]]
 name = "devtools"

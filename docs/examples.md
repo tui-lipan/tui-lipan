@@ -229,7 +229,7 @@ cargo run --example document_view_mermaid --features markdown
 cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 ```
 
-### `syntax-syntect`
+### `syntax-syntect` and `syntax-extra`
 
 | Example | Description |
 |---------|-------------|
@@ -238,8 +238,11 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 
 ```bash
 cargo run --example syntax_theme_compare --features syntax-syntect
-cargo run --example yazi --features syntax-syntect
+cargo run --example yazi --features syntax-extra
 ```
+
+`yazi` requires `syntax-extra` because its shared file-path detection is used to
+demonstrate the extended grammar set.
 
 ### `terminal`
 

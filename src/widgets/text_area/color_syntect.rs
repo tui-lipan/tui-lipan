@@ -93,6 +93,9 @@ const BUILTIN_THEMES: &[(&str, &[u8])] = &[
 
 thread_local! {
     static DEFAULT_SETS: (Rc<SyntaxSet>, Rc<ThemeSet>) = {
+        #[cfg(feature = "syntax-extra")]
+        let syntax_set = two_face::syntax::extra_newlines();
+        #[cfg(not(feature = "syntax-extra"))]
         let syntax_set = SyntaxSet::load_defaults_newlines();
         let mut theme_set = ThemeSet::load_defaults();
         add_builtin_themes(&mut theme_set);
@@ -537,9 +540,18 @@ fn language_for_path_inner(syntax_set: &SyntaxSet, path: &Path) -> Option<Arc<st
     let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     syntax_set
         .find_syntax_by_extension(file_name)
+        .or_else(|| syntax_alias(syntax_set, file_name))
         .or_else(|| syntax_set.find_syntax_by_extension(extension))
         .or_else(|| typescript_fallback_syntax(syntax_set, extension))
         .map(|s| Arc::from(s.name.as_str()))
+}
+
+fn syntax_alias<'a>(syntax_set: &'a SyntaxSet, file_name: &str) -> Option<&'a SyntaxReference> {
+    match file_name {
+        "rust-toolchain" => syntax_set.find_syntax_by_name("TOML"),
+        "Dockerfile.dev" => syntax_set.find_syntax_by_name("Dockerfile"),
+        _ => None,
+    }
 }
 
 fn typescript_fallback_syntax<'a>(
@@ -1832,6 +1844,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "syntax-extra"))]
     #[test]
     fn language_for_path_falls_back_typescript_to_javascript() {
         let strategy = SyntectStrategy::default();
@@ -1845,12 +1858,93 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "syntax-extra"))]
+    #[test]
+    fn baseline_syntax_set_does_not_include_toml() {
+        let strategy = SyntectStrategy::default();
+        assert!(strategy.language_for_path("Cargo.toml").is_none());
+    }
+
+    #[cfg(feature = "syntax-extra")]
+    #[test]
+    fn extra_syntax_set_resolves_broad_grammar_coverage() {
+        let strategy = SyntectStrategy::default();
+        for (path, language) in [
+            ("Cargo.toml", "TOML"),
+            ("Dockerfile", "Dockerfile"),
+            ("src/App.vue", "Vue Component"),
+            ("build/main.zig", "Zig"),
+            ("infra/main.tf", "Terraform"),
+            ("src/app.ts", "TypeScript"),
+            ("src/app.tsx", "TypeScriptReact"),
+        ] {
+            assert_eq!(
+                strategy.language_for_path(path).as_deref(),
+                Some(language),
+                "language for {path}"
+            );
+        }
+    }
+
+    #[cfg(feature = "syntax-extra")]
+    #[test]
+    fn extra_syntax_set_resolves_only_committed_filename_aliases() {
+        let strategy = SyntectStrategy::default();
+        assert_eq!(
+            strategy.language_for_path("rust-toolchain").as_deref(),
+            Some("TOML")
+        );
+        assert_eq!(
+            strategy.language_for_path("Dockerfile.dev").as_deref(),
+            Some("Dockerfile")
+        );
+
+        // Lock files vary by package manager: package-lock.json is JSON,
+        // pnpm-lock.yaml is YAML, and yarn.lock has its own format. Do not
+        // add a generic `.lock` alias.
+        assert!(strategy.language_for_path("yarn.lock").is_none());
+        assert!(strategy.language_for_path("Justfile").is_none());
+    }
+
+    #[cfg(feature = "syntax-extra")]
+    #[test]
+    fn extra_syntax_set_styles_toml_spans() {
+        let strategy = SyntectStrategy::default();
+        let lines = strategy.highlight(TextAreaColorInput {
+            value: "[package]\nname = \"tui-lipan\"\nversion = 1",
+            language: Some("toml"),
+            theme: Some("base16-ocean.dark"),
+        });
+
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| line.iter())
+                .any(|span| span.style.fg.is_some()),
+            "TOML highlighting should produce styled spans"
+        );
+    }
+
+    #[test]
+    fn custom_syntax_sets_remain_authoritative() {
+        let strategy = SyntectStrategy::with_sets(
+            Rc::new(SyntaxSet::load_defaults_newlines()),
+            Rc::new(ThemeSet::load_defaults()),
+        );
+        assert_eq!(
+            strategy.language_for_path("src/app.ts").as_deref(),
+            Some("JavaScript")
+        );
+        assert!(strategy.language_for_path("Cargo.toml").is_none());
+    }
+
     #[test]
     fn language_for_path_returns_none_for_unknown() {
         let strategy = SyntectStrategy::default();
         assert!(strategy.language_for_path("data.xyz123").is_none());
     }
 
+    #[cfg(not(feature = "syntax-extra"))]
     #[test]
     fn language_from_path_free_function() {
         assert_eq!(

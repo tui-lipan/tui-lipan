@@ -128,6 +128,18 @@ jobs:
       - name: Check web search palette example
         run: cargo check --manifest-path examples/web/search_palette/Cargo.toml --target wasm32-unknown-unknown
 
+      - name: Check lib on wasm with syntect
+        run: cargo check --lib --target wasm32-unknown-unknown --no-default-features --features "web,syntax-syntect"
+
+      - name: Check lib on wasm with extra syntaxes
+        run: cargo check --lib --target wasm32-unknown-unknown --no-default-features --features "web,syntax-extra"
+
+      - name: Check wasm extra syntaxes exclude Oniguruma
+        run: test -z "$(cargo tree --target wasm32-unknown-unknown --no-default-features --features 'web,syntax-extra' -i onig_sys 2>/dev/null)"
+
+      - name: Test baseline syntax set
+        run: cargo test --no-default-features --features syntax-syntect
+
   licenses:
     name: Licenses & Advisories
     runs-on: ubuntu-latest

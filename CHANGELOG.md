@@ -13,6 +13,9 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add the opt-in `syntax-extra` feature with bat-curated syntax definitions for
+  broad language coverage, including TOML, TypeScript/TSX, Dockerfile, Vue, Zig,
+  and Terraform. The `yazi` example now runs with `--features syntax-extra`.
 - Add the `yazi` example, a compact Yazi-inspired file browser with resizable
   borderless panes, keyboard/mouse navigation, full-row selection, directory
   previews, Nerd Font icons, pill selection, and syntax-highlighted file
@@ -107,6 +110,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `syntax-syntect` no longer pulls C Oniguruma into `wasm32` builds; browser
+  builds use Syntect's pure-Rust `fancy-regex` backend.
 - The `paint` example's toolbar now renders its Pencil, Eraser, and Clear
   buttons. They were added with `child(...)` and then discarded by a following
   `children([...])`, which replaces the child list rather than extending it.

@@ -1955,6 +1955,59 @@ mod tests {
         assert_eq!(reconstructed, code);
     }
 
+    #[cfg(all(feature = "markdown", feature = "syntax-extra"))]
+    #[test]
+    fn markdown_toml_fence_reaches_document_code_highlighter() {
+        use super::{DocumentFlattenCtx, VisualLineKind, flatten_blocks};
+        use crate::style::BorderStyle;
+        use crate::widgets::SyntectStrategy;
+        use crate::widgets::document_view::format::ContentFormatter;
+        use crate::widgets::document_view::{
+            DocumentStyles, DocumentTableWidthMode, FormatInput, MarkdownFormatter,
+            TableRowSeparators,
+        };
+
+        let markdown = "```toml\nname = \"tui-lipan\"\n```";
+        let doc = MarkdownFormatter::default().format(FormatInput {
+            value: markdown,
+            content_type: Some("markdown"),
+            document_styles: None,
+        });
+        let doc_styles = DocumentStyles::default();
+        let strategy = SyntectStrategy::default();
+        let (lines, _) = flatten_blocks(
+            &doc,
+            80,
+            DocumentFlattenCtx {
+                wrap: true,
+                table_wrap: false,
+                table_width_mode: DocumentTableWidthMode::default(),
+                table_outer_frame: true,
+                table_column_separators: true,
+                table_row_separators: TableRowSeparators::default(),
+                table_cell_padding: 0,
+                table_border_variant: BorderStyle::Plain,
+                doc_styles: &doc_styles,
+                code_strategy: Some(&strategy),
+            },
+        );
+
+        let code_line = lines
+            .iter()
+            .find_map(|line| match &line.kind {
+                VisualLineKind::CodeLine { spans, .. }
+                    if spans
+                        .iter()
+                        .any(|span| span.content.as_ref().contains("name")) =>
+                {
+                    Some(spans)
+                }
+                _ => None,
+            })
+            .expect("TOML code line");
+        assert!(code_line.iter().any(|span| span.style.fg.is_some()));
+    }
+
     #[cfg(feature = "markdown")]
     #[test]
     fn nested_list_code_block_flattens_with_list_indentation() {
