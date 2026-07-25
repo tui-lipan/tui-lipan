@@ -142,6 +142,8 @@ where
         inline_transcript_mode: bool,
     ) -> Self {
         let viewport = DEFAULT_VIEWPORT;
+        let clipboard_provider = app.clipboard_provider;
+        let clipboard_reporter = app.clipboard_reporter.clone();
         let mouse_capture = Rc::new(Cell::new(app.mouse_enabled.unwrap_or(true)));
         let clipboard_config = app.clipboard_config.clone();
         let mut keymap_config = KeymapConfig::from_clipboard_config(&clipboard_config);
@@ -171,6 +173,13 @@ where
                 mouse_capture,
             )
         };
+        if let Some(provider) = clipboard_provider {
+            core.ctx.env().clipboard.replace_provider(provider);
+        }
+        core.ctx
+            .env()
+            .clipboard
+            .replace_reporter(clipboard_reporter);
         let command_registry = core.ctx.command_registry();
         let key_dispatch_state =
             RuntimeKeyDispatchState::new(&command_registry, app.command_conflict_policy);
@@ -1310,6 +1319,7 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
                 self.clipboard_config,
             ) {
                 TerminalPreflightResult::Consumed => TerminalPreflightDispatch::Consumed,
+                TerminalPreflightResult::Forward => TerminalPreflightDispatch::Forward,
                 TerminalPreflightResult::NotConsumed => TerminalPreflightDispatch::NotConsumed,
                 TerminalPreflightResult::NotApplicable => TerminalPreflightDispatch::NotApplicable,
             }

@@ -67,6 +67,14 @@ Native terminal bracketed-paste events are also routed through the same focused-
 That means dropping files or pasting large/quoted text directly into a terminal running tui-lipan
 reaches `Input`, `TextArea`, or `Terminal` widgets as a paste instead of raw keystrokes.
 
+Terminal-host applications can set
+`Terminal::paste_shortcut_behavior(TerminalPasteShortcutBehavior::Performable)` to make direct
+`Ctrl+V` paste text locally while forwarding the key for file lists, images, or unknown non-text
+clipboard content. Enable `clipboard-images` when image data may also advertise a text fallback and
+must still be recognized as rich content. Wayland classification checks the advertised MIME types
+without reading image bytes. Arboard does not expose the equivalent presence query on X11, macOS,
+or Windows, so those backends currently decode an advertised image during classification.
+
 For `DocumentView`, when siblings inside the same `ScrollView` share
 `shared_selection_id`, copy shortcuts copy a single concatenated selection for
 that shared group (in visual order), including selections temporarily virtualized

@@ -112,6 +112,17 @@ pub struct TerminalKeyModes {
     pub kitty_keyboard: KittyKeyboardFlags,
 }
 
+/// How a focused terminal handles a direct `Ctrl+V` shortcut before app commands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TerminalPasteShortcutBehavior {
+    /// Forward `Ctrl+V` to the child unchanged.
+    #[default]
+    Forward,
+    /// Paste plain text locally, but forward `Ctrl+V` when the clipboard contains files, an image,
+    /// or another non-text format so the child can inspect the system clipboard itself.
+    Performable,
+}
+
 /// Encode a framework `KeyEvent` into terminal bytes.
 ///
 /// This covers common printable keys and ANSI control sequences. `modes` carries the modes the

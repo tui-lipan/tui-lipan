@@ -86,8 +86,8 @@ pub use crate::capture::{CapturedCell, CapturedFrame, CellModifiers, CursorState
 #[cfg(feature = "ui-snapshot-png")]
 pub use crate::capture::{PngOptions, PngTextRenderer};
 pub use crate::clipboard::{
-    ClipboardConfig, ClipboardError, ClipboardProvider, ImageContent, ImageFormat,
-    PasteShiftInsertBehavior,
+    ClipboardConfig, ClipboardError, ClipboardPasteContent, ClipboardProvider, ImageContent,
+    ImageFormat, PasteShiftInsertBehavior,
 };
 pub use crate::core::component::{
     Breakpoint, Command, Component, Context, KeyUpdate, ScrollbarVisibility, TaskPolicy, Update,
@@ -176,7 +176,7 @@ pub use crate::widgets::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
     KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, TerminalColorPalette,
-    TerminalKeyModes, TerminalRenderSnapshot,
+    TerminalKeyModes, TerminalPasteShortcutBehavior, TerminalRenderSnapshot,
 };
 
 #[cfg(feature = "diff-view")]

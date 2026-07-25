@@ -117,7 +117,7 @@ pub use crate::input::{KeyBinding, KeyBindings};
 // Clipboard
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub use crate::clipboard::{ClipboardConfig, PasteShiftInsertBehavior};
+pub use crate::clipboard::{ClipboardConfig, ClipboardPasteContent, PasteShiftInsertBehavior};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Curated widgets
@@ -222,11 +222,11 @@ pub use crate::widgets::{
     KittyKeyboardFlags, ManagedTerminal, ManagedTerminalProps, ManagedTerminalStatus,
     MouseEncoding, MouseMode, MouseModeState, SemanticMark, SemanticMarkKind, Terminal,
     TerminalBuffer, TerminalColorPalette, TerminalCommandPhase, TerminalInputEvent,
-    TerminalInputKind, TerminalKeyModes, TerminalPty, TerminalPtyConfig, TerminalPtyError,
-    TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen, TerminalSelection,
-    TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState, TerminalViewport,
-    TerminalWorkingDirectory, TerminalWorkingDirectorySource, encode_paste, focus_sequences,
-    key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
+    TerminalInputKind, TerminalKeyModes, TerminalPasteShortcutBehavior, TerminalPty,
+    TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen,
+    TerminalSelection, TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState,
+    TerminalViewport, TerminalWorkingDirectory, TerminalWorkingDirectorySource, encode_paste,
+    focus_sequences, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

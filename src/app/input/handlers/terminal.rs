@@ -1,12 +1,12 @@
 //! Terminal keyboard and scroll-wheel handlers.
 
 use crate::callback::KeyHandler;
-use crate::clipboard::{ClipboardConfig, ClipboardService, write_osc52};
+use crate::clipboard::{ClipboardConfig, ClipboardPasteContent, ClipboardService, write_osc52};
 use crate::core::event::{KeyCode, KeyEvent};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::widgets::internal::apply_scroll_action;
 use crate::widgets::{ScrollEvent, ScrollMetrics};
-use crate::widgets::{TerminalInputKind, encode_paste};
+use crate::widgets::{TerminalInputKind, TerminalPasteShortcutBehavior, encode_paste};
 
 /// Handle keyboard input for a focused Terminal node.
 pub(crate) fn handle_key(
@@ -36,7 +36,38 @@ pub(crate) fn preflight_key(
     };
 
     let is_ctrl_c = key.mods.ctrl && matches!(key.code, KeyCode::Char('C') | KeyCode::Char('c'));
+    let is_plain_ctrl_v = key.mods.ctrl
+        && !key.mods.shift
+        && !key.mods.alt
+        && !key.mods.super_key
+        && matches!(key.code, KeyCode::Char('V') | KeyCode::Char('v'));
     let has_selection = node.selection.as_ref().is_some_and(|sel| !sel.is_empty());
+
+    if is_plain_ctrl_v && node.paste_shortcut_behavior == TerminalPasteShortcutBehavior::Performable
+    {
+        let Some(on_input) = node.on_input.as_ref() else {
+            return TerminalPreflightResult::Forward;
+        };
+        match clipboard.read_terminal_paste() {
+            Ok(ClipboardPasteContent::Text(text)) => {
+                let text = truncate_paste(&text, clipboard_config.paste_max_bytes);
+                let bytes = encode_paste(&text, node.key_modes);
+                on_input.emit(crate::widgets::TerminalInputEvent {
+                    kind: TerminalInputKind::Paste,
+                    key: Some(key),
+                    bytes: bytes.into(),
+                });
+                return TerminalPreflightResult::Consumed;
+            }
+            Ok(ClipboardPasteContent::Rich | ClipboardPasteContent::Unavailable) => {
+                return TerminalPreflightResult::Forward;
+            }
+            Err(err) => {
+                clipboard.report_error(err);
+                return TerminalPreflightResult::Consumed;
+            }
+        }
+    }
 
     if is_ctrl_c && (has_selection || key.mods.shift) {
         if let Some(sel) = node.selection.as_ref()
@@ -135,6 +166,7 @@ pub(crate) fn forward_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) -> boo
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TerminalPreflightResult {
     Consumed,
+    Forward,
     NotApplicable,
     NotConsumed,
 }

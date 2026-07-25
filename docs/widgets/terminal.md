@@ -92,6 +92,7 @@ The low-level terminal viewport widget. Use when you need custom PTY handling, m
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_input` | `Callback<TerminalInputEvent>` | Keyboard/paste input from user |
+| `paste_shortcut_behavior` | `TerminalPasteShortcutBehavior` | Direct `Ctrl+V` routing (`Forward` by default; `Performable` pastes text and forwards rich/non-text content) |
 | `on_resize` | `Callback<TerminalViewport>` | Viewport size changed |
 | `on_scroll_to` | `Callback<usize>` | Scrollback offset changed |
 | `on_mouse_forward` | `Callback<Vec<u8>>` | Mouse event bytes for PTY |
@@ -124,6 +125,10 @@ App::new()
 
 - `Ctrl+C` with a non-empty terminal selection copies to the clipboard instead of running an app shortcut on the same key.
 - `Ctrl+Shift+C` / `Ctrl+Shift+V` paste paths run when the terminal can accept input.
+- A terminal using `TerminalPasteShortcutBehavior::Performable` consumes direct `Ctrl+V` when the
+  clipboard contains plain text, but forwards the key to the child for files, images, and unknown
+  non-text formats. This lets terminal hosts keep a text-paste shortcut without blocking a nested
+  clipboard-aware TUI from reading richer formats itself.
 
 Register mux lifecycle shortcuts with executable command bindings (`CommandEntry::shortcut(...)`) rather than framework keymap entries. Pair `AppCommandsThenTerminal` with `KeyDispatchPolicy::AppCommandsFirst` when app shortcuts should win over non-terminal widgets too.
 
