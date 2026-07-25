@@ -129,6 +129,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `Frame` border headers now preserve tab titles alongside grouped labels, and
+  label padding glyphs use the resolved border style instead of the label style.
 - `TestBackend::new_with_app` now honors custom `App::clipboard_provider` and
   `App::clipboard_reporter` values, matching the native runner and allowing deterministic
   clipboard-routing tests.

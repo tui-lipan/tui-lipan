@@ -21,7 +21,7 @@ use crate::utils::color_contrast::contrast_ratio;
 use crate::widgets::{
     Animated, BorderLabels, BorderMergeMode, Button, DecorationGlyph, DecorationPlacement,
     EdgeDecoration, EffectScope, Frame, FrameLabel, HStack, List, ListItem, Modal, Spacer,
-    Splitter, SplitterHandleMode, Text, VStack, ZStack,
+    Splitter, SplitterHandleMode, TabVariant, Text, VStack, ZStack,
 };
 
 struct HeaderFrameComponent;
@@ -84,6 +84,10 @@ struct CompactFramePaintLeakComponent;
 struct CompactFrameStatusRightComponent;
 
 struct GroupedBorderLabelsComponent;
+
+struct TabsWithHeaderLabelComponent;
+
+struct HeaderLabelPaddingStyleComponent;
 
 struct OffscreenModalOverlayComponent;
 
@@ -219,6 +223,57 @@ impl Component for GroupedBorderLabelsComponent {
     }
 }
 
+impl Component for TabsWithHeaderLabelComponent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        Frame::new()
+            .width(Length::Px(42))
+            .height(Length::Px(3))
+            .header_left("[2]")
+            .header_padding(1)
+            .tab_titles(["Files", "Worktrees", "Submodule"])
+            .tab_variant(TabVariant::Minimal)
+            .active_tab(1)
+            .child(Text::new("body"))
+            .into()
+    }
+}
+
+impl Component for HeaderLabelPaddingStyleComponent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        Frame::new()
+            .width(Length::Px(12))
+            .height(Length::Px(3))
+            .style(Style::new().fg(Color::Red))
+            .header(
+                BorderLabels::new()
+                    .left(FrameLabel::new("X").style(Style::new().fg(Color::Blue)))
+                    .padding(1),
+            )
+            .child(Text::new("body"))
+            .into()
+    }
+}
+
 #[test]
 fn grouped_border_labels_render_in_all_positions() {
     let viewport = Rect {
@@ -280,6 +335,62 @@ fn grouped_label_style_resolution_preserves_each_layer() {
     assert_eq!(focused.fg, label_focused.fg);
     assert_eq!(focused.bold, group_style.bold);
     assert_eq!(focused.underline, group_focused.underline);
+}
+
+#[test]
+fn tabs_remain_after_a_grouped_header_prefix() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 42,
+        h: 3,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        TabsWithHeaderLabelComponent,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    runtime.render_element(viewport, None, None, None);
+
+    let buffer = render_runtime_with_hover(&runtime, viewport, None, None);
+    let row = (0..viewport.w)
+        .map(|x| buffer[(x, 0)].symbol().to_owned())
+        .collect::<String>();
+
+    assert!(
+        row.contains("─[2]─Files - Worktrees - Submodule"),
+        "rendered header: {row:?}"
+    );
+}
+
+#[test]
+fn header_label_padding_uses_border_style() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 12,
+        h: 3,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        HeaderLabelPaddingStyleComponent,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    runtime.render_element(viewport, None, None, None);
+
+    let buffer = render_runtime_with_hover(&runtime, viewport, None, None);
+
+    assert_eq!(buffer[(1, 0)].fg, ratatui::style::Color::Red);
+    assert_eq!(buffer[(2, 0)].fg, ratatui::style::Color::Blue);
+    assert_eq!(buffer[(3, 0)].fg, ratatui::style::Color::Red);
 }
 
 impl Component for EffectScopeRenderComponent {

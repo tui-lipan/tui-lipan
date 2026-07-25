@@ -80,6 +80,7 @@ fn render_plain_frame_header(
             active: ctx.active,
             fill_char: " ",
             clip_rect: ctx.clip_rect,
+            terminal_bg: ctx.terminal_bg,
         },
     );
 }
@@ -577,21 +578,22 @@ fn label_spans<'a>(
     block_style: Style,
     active: bool,
     fill_char: &str,
+    terminal_bg: Option<Color>,
 ) -> Vec<Span<'a>> {
     let style = resolve_label_style(block_style, group, label, active);
-    let rstyle = to_ratatui_style(style);
+    let padding_style = to_ratatui_style_with_terminal_bg(block_style, terminal_bg);
     let mut spans = Vec::new();
     if group.padding.left > 0 {
         spans.push(Span::styled(
             fill_char.repeat(group.padding.left as usize),
-            rstyle,
+            padding_style,
         ));
     }
     spans.extend(richtext_to_spans(&label.content, style));
     if group.padding.right > 0 {
         spans.push(Span::styled(
             fill_char.repeat(group.padding.right as usize),
-            rstyle,
+            padding_style,
         ));
     }
     spans
@@ -613,6 +615,7 @@ struct BorderLabelsRender<'a> {
     active: bool,
     fill_char: &'a str,
     clip_rect: Option<Rect>,
+    terminal_bg: Option<Color>,
 }
 
 fn render_border_labels(buf: &mut Buffer, render: &BorderLabelsRender<'_>) {
@@ -625,6 +628,7 @@ fn render_border_labels(buf: &mut Buffer, render: &BorderLabelsRender<'_>) {
         active,
         fill_char,
         clip_rect,
+        terminal_bg,
     } = render;
     if *width <= 0 || !labels.has_labels() {
         return;
@@ -634,17 +638,44 @@ fn render_border_labels(buf: &mut Buffer, render: &BorderLabelsRender<'_>) {
         .left
         .as_ref()
         .filter(|label| !label.content.is_empty())
-        .map(|label| label_spans(label, labels, *block_style, *active, fill_char));
+        .map(|label| {
+            label_spans(
+                label,
+                labels,
+                *block_style,
+                *active,
+                fill_char,
+                *terminal_bg,
+            )
+        });
     let center = labels
         .center
         .as_ref()
         .filter(|label| !label.content.is_empty())
-        .map(|label| label_spans(label, labels, *block_style, *active, fill_char));
+        .map(|label| {
+            label_spans(
+                label,
+                labels,
+                *block_style,
+                *active,
+                fill_char,
+                *terminal_bg,
+            )
+        });
     let right = labels
         .right
         .as_ref()
         .filter(|label| !label.content.is_empty())
-        .map(|label| label_spans(label, labels, *block_style, *active, fill_char));
+        .map(|label| {
+            label_spans(
+                label,
+                labels,
+                *block_style,
+                *active,
+                fill_char,
+                *terminal_bg,
+            )
+        });
 
     let left_w = left.as_ref().map_or(0, |spans| spans_width(spans));
     let right_w = right.as_ref().map_or(0, |spans| spans_width(spans));
@@ -703,6 +734,128 @@ fn render_border_labels(buf: &mut Buffer, render: &BorderLabelsRender<'_>) {
             *clip_rect,
         );
     }
+}
+
+fn render_border_tabs_header(
+    buf: &mut Buffer,
+    props: &FrameProps,
+    render: &BorderLabelsRender<'_>,
+) -> bool {
+    let BorderLabelsRender {
+        x,
+        y,
+        width,
+        labels,
+        block_style,
+        active,
+        fill_char,
+        clip_rect,
+        terminal_bg,
+    } = render;
+    let Some(tabs) = build_tabs_line(
+        props,
+        *block_style,
+        *active,
+        (*width).max(0).min(u16::MAX as i32) as u16,
+    ) else {
+        return false;
+    };
+
+    let left = labels
+        .left
+        .as_ref()
+        .filter(|label| !label.content.is_empty())
+        .map(|label| {
+            label_spans(
+                label,
+                labels,
+                *block_style,
+                *active,
+                fill_char,
+                *terminal_bg,
+            )
+        });
+    let right = labels
+        .right
+        .as_ref()
+        .filter(|label| !label.content.is_empty())
+        .map(|label| {
+            label_spans(
+                label,
+                labels,
+                *block_style,
+                *active,
+                fill_char,
+                *terminal_bg,
+            )
+        });
+    let left_w = left.as_ref().map_or(0, |spans| spans_width(spans));
+    let right_w = right.as_ref().map_or(0, |spans| spans_width(spans));
+    let available = (*width).max(0) as usize;
+    let has_left = left.is_some();
+    let has_right = right.is_some();
+    let left_separator = has_left && labels.padding.right == 0;
+    let right_separator = has_right && labels.padding.left == 0;
+    let separator_count = usize::from(left_separator) + usize::from(right_separator);
+    let label_budget = available.saturating_sub(separator_count);
+    let left_budget = left_w.min(label_budget);
+    let right_budget = right_w.min(label_budget.saturating_sub(left_budget));
+    let tabs_budget = label_budget.saturating_sub(left_budget + right_budget);
+    let separator_style = to_ratatui_style_with_terminal_bg(*block_style, *terminal_bg);
+
+    if let Some(spans) = left.as_ref() {
+        let line = Line::from(truncate_spans(
+            spans.clone(),
+            left_budget.min(u16::MAX as usize) as u16,
+        ))
+        .left_aligned();
+        render_line_clipped(buf, *x, *y, left_budget as i32, &line, *clip_rect);
+        if left_separator {
+            render_line_clipped(
+                buf,
+                (*x).saturating_add(left_budget as i32),
+                *y,
+                1,
+                &Line::from(Span::styled(fill_char.to_owned(), separator_style)),
+                *clip_rect,
+            );
+        }
+    }
+
+    let tabs_x = (*x)
+        .saturating_add(left_budget as i32)
+        .saturating_add(i32::from(left_separator));
+    if tabs_budget > 0 {
+        let line = Line::from(truncate_spans(
+            tabs.spans,
+            tabs_budget.min(u16::MAX as usize) as u16,
+        ));
+        render_line_clipped(buf, tabs_x, *y, tabs_budget as i32, &line, *clip_rect);
+    }
+
+    if let Some(spans) = right.as_ref() {
+        let right_x = (*x)
+            .saturating_add(*width)
+            .saturating_sub(right_budget as i32);
+        if right_separator {
+            render_line_clipped(
+                buf,
+                right_x.saturating_sub(1),
+                *y,
+                1,
+                &Line::from(Span::styled(fill_char.to_owned(), separator_style)),
+                *clip_rect,
+            );
+        }
+        let line = Line::from(truncate_spans(
+            spans.clone(),
+            right_budget.min(u16::MAX as usize) as u16,
+        ))
+        .right_aligned();
+        render_line_clipped(buf, right_x, *y, right_budget as i32, &line, *clip_rect);
+    }
+
+    true
 }
 
 pub(crate) fn resolve_block_style(
@@ -816,29 +969,19 @@ fn render_border_frame(
     }
 
     let line_width = right.saturating_sub(left).saturating_sub(1);
-    if !props.header.has_labels()
-        && let Some(line) = build_tabs_line(
-            props,
-            block_style,
-            ctx.active,
-            line_width.max(0).min(u16::MAX as i32) as u16,
-        )
-    {
-        render_line_clipped(buf, left + 1, top, line_width, &line, ctx.clip_rect);
-    } else {
-        render_border_labels(
-            buf,
-            &BorderLabelsRender {
-                x: left + 1,
-                y: top,
-                width: line_width,
-                labels: &props.header,
-                block_style,
-                active: ctx.active,
-                fill_char: h_char,
-                clip_rect: ctx.clip_rect,
-            },
-        );
+    let header_render = BorderLabelsRender {
+        x: left + 1,
+        y: top,
+        width: line_width,
+        labels: &props.header,
+        block_style,
+        active: ctx.active,
+        fill_char: h_char,
+        clip_rect: ctx.clip_rect,
+        terminal_bg: ctx.terminal_bg,
+    };
+    if !render_border_tabs_header(buf, props, &header_render) {
+        render_border_labels(buf, &header_render);
     }
     render_border_labels(
         buf,
@@ -851,6 +994,7 @@ fn render_border_frame(
             active: ctx.active,
             fill_char: b_char,
             clip_rect: ctx.clip_rect,
+            terminal_bg: ctx.terminal_bg,
         },
     );
 
@@ -905,6 +1049,7 @@ fn render_plain_frame_footer(
             active: ctx.active,
             fill_char: " ",
             clip_rect: ctx.clip_rect,
+            terminal_bg: ctx.terminal_bg,
         },
     );
 }
@@ -947,40 +1092,21 @@ fn render_compact_frame(
     );
     let label_x = rect.x as i32 + cap_left as i32;
     let label_width = rect.w as i32 - cap_left as i32 - cap_right as i32;
-    if props.header.has_labels() {
-        render_border_labels(
-            buf,
-            &BorderLabelsRender {
-                x: label_x,
-                y: rect.y as i32,
-                width: label_width,
-                labels: &props.header,
-                block_style,
-                active: ctx.active,
-                fill_char: dash,
-                clip_rect: ctx.clip_rect,
-            },
-        );
-
-        if props.header.right.is_none() && props.footer.has_labels() {
-            let mut footer_right = props.footer.clone();
-            footer_right.left = None;
-            footer_right.center = None;
-            render_border_labels(
-                buf,
-                &BorderLabelsRender {
-                    x: label_x,
-                    y: rect.y as i32,
-                    width: label_width,
-                    labels: &footer_right,
-                    block_style,
-                    active: ctx.active,
-                    fill_char: dash,
-                    clip_rect: ctx.clip_rect,
-                },
-            );
-        }
-    } else {
+    let header_render = BorderLabelsRender {
+        x: label_x,
+        y: rect.y as i32,
+        width: label_width,
+        labels: &props.header,
+        block_style,
+        active: ctx.active,
+        fill_char: dash,
+        clip_rect: ctx.clip_rect,
+        terminal_bg: ctx.terminal_bg,
+    };
+    let rendered_tabs = render_border_tabs_header(buf, props, &header_render);
+    if !rendered_tabs && props.header.has_labels() {
+        render_border_labels(buf, &header_render);
+    } else if !rendered_tabs {
         render_border_labels(
             buf,
             &BorderLabelsRender {
@@ -992,6 +1118,30 @@ fn render_compact_frame(
                 active: ctx.active,
                 fill_char: dash,
                 clip_rect: ctx.clip_rect,
+                terminal_bg: ctx.terminal_bg,
+            },
+        );
+    }
+
+    if (rendered_tabs || props.header.has_labels())
+        && props.header.right.is_none()
+        && props.footer.has_labels()
+    {
+        let mut footer_right = props.footer.clone();
+        footer_right.left = None;
+        footer_right.center = None;
+        render_border_labels(
+            buf,
+            &BorderLabelsRender {
+                x: label_x,
+                y: rect.y as i32,
+                width: label_width,
+                labels: &footer_right,
+                block_style,
+                active: ctx.active,
+                fill_char: dash,
+                clip_rect: ctx.clip_rect,
+                terminal_bg: ctx.terminal_bg,
             },
         );
     }

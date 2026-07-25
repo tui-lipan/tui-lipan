@@ -9,7 +9,7 @@ pub(crate) fn build_tabs_line<'a>(
     active: bool,
     width: u16,
 ) -> Option<Line<'a>> {
-    if props.tab_titles.is_empty() {
+    if props.has_header || props.tab_titles.is_empty() {
         return None;
     }
 
