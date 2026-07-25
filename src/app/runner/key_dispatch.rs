@@ -584,6 +584,7 @@ impl<C: Component> DispatchOps for RunnerDispatchOps<'_, '_, C> {
                 self.clipboard_config,
             ) {
                 TerminalPreflightResult::Consumed => TerminalPreflightDispatch::Consumed,
+                TerminalPreflightResult::Forward => TerminalPreflightDispatch::Forward,
                 TerminalPreflightResult::NotConsumed => TerminalPreflightDispatch::NotConsumed,
                 TerminalPreflightResult::NotApplicable => TerminalPreflightDispatch::NotApplicable,
             }

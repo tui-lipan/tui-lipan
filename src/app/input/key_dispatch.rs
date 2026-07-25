@@ -188,6 +188,9 @@ fn dispatch_terminal_focus(
         TerminalKeyPolicy::AppCommandsThenTerminal => {
             match ops.dispatch_terminal_preflight(request.key) {
                 TerminalPreflightDispatch::Consumed => return DispatchOutcome::TerminalPreflight,
+                TerminalPreflightDispatch::Forward => {
+                    return dispatch_terminal_forward(request.key, ops);
+                }
                 TerminalPreflightDispatch::NotApplicable
                 | TerminalPreflightDispatch::NotConsumed => {}
             }
@@ -205,6 +208,9 @@ fn dispatch_terminal_focus(
         TerminalKeyPolicy::TerminalFirst => {
             match ops.dispatch_terminal_preflight(request.key) {
                 TerminalPreflightDispatch::Consumed => return DispatchOutcome::TerminalPreflight,
+                TerminalPreflightDispatch::Forward => {
+                    return dispatch_terminal_forward(request.key, ops);
+                }
                 TerminalPreflightDispatch::NotApplicable
                 | TerminalPreflightDispatch::NotConsumed => {}
             }
@@ -221,6 +227,7 @@ fn dispatch_terminal_focus(
         }
         TerminalKeyPolicy::TerminalOnly => match ops.dispatch_terminal_preflight(request.key) {
             TerminalPreflightDispatch::Consumed => DispatchOutcome::TerminalPreflight,
+            TerminalPreflightDispatch::Forward => dispatch_terminal_forward(request.key, ops),
             TerminalPreflightDispatch::NotApplicable | TerminalPreflightDispatch::NotConsumed => {
                 dispatch_terminal_forward(request.key, ops)
             }
@@ -300,6 +307,7 @@ fn dispatch_framework_only(key: KeyEvent, ops: &mut impl DispatchOps) -> Dispatc
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TerminalPreflightDispatch {
     Consumed,
+    Forward,
     NotApplicable,
     NotConsumed,
 }

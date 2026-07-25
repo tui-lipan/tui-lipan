@@ -415,6 +415,7 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
                 self.env.clipboard_config,
             ) {
                 TerminalPreflightResult::Consumed => TerminalPreflightDispatch::Consumed,
+                TerminalPreflightResult::Forward => TerminalPreflightDispatch::Forward,
                 TerminalPreflightResult::NotConsumed => TerminalPreflightDispatch::NotConsumed,
                 TerminalPreflightResult::NotApplicable => TerminalPreflightDispatch::NotApplicable,
             }

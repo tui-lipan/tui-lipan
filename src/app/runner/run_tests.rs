@@ -101,7 +101,7 @@ impl Component for RunnerKeymapSmoke {
     }
 
     fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
-        Input::new("").into()
+        Input::new("").key("input")
     }
 }
 
@@ -4667,6 +4667,145 @@ impl ClipboardProvider for StaticReadClipboardProvider {
 }
 
 #[cfg(feature = "terminal")]
+struct ClassifiedClipboardProvider {
+    content: crate::ClipboardPasteContent,
+    text_fallback: Option<&'static str>,
+}
+
+#[cfg(feature = "terminal")]
+impl ClipboardProvider for ClassifiedClipboardProvider {
+    fn read_clipboard_text(&mut self) -> Result<String, ClipboardError> {
+        self.text_fallback.map(str::to_string).ok_or_else(|| {
+            ClipboardError::provider(
+                crate::clipboard::error::ClipboardOperation::ReadClipboard,
+                "text representation unavailable",
+            )
+        })
+    }
+
+    fn write_clipboard_text(&mut self, _text: &str) -> Result<(), ClipboardError> {
+        Ok(())
+    }
+
+    fn read_terminal_paste(&mut self) -> Result<crate::ClipboardPasteContent, ClipboardError> {
+        Ok(self.content.clone())
+    }
+}
+
+#[cfg(feature = "terminal")]
+struct FailingClipboardProvider;
+
+#[cfg(feature = "terminal")]
+impl ClipboardProvider for FailingClipboardProvider {
+    fn read_clipboard_text(&mut self) -> Result<String, ClipboardError> {
+        Err(ClipboardError::provider(
+            crate::clipboard::error::ClipboardOperation::ReadClipboard,
+            "clipboard unavailable",
+        ))
+    }
+
+    fn write_clipboard_text(&mut self, _text: &str) -> Result<(), ClipboardError> {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "terminal")]
+struct CapturedTerminalPasteSmoke {
+    keys: Rc<RefCell<Vec<KeyEvent>>>,
+    inputs: Rc<RefCell<Vec<crate::widgets::TerminalInputEvent>>>,
+    behavior: crate::widgets::TerminalPasteShortcutBehavior,
+    key_modes: crate::widgets::TerminalKeyModes,
+}
+
+#[cfg(feature = "terminal")]
+impl Component for CapturedTerminalPasteSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let keys = self.keys.clone();
+        let inputs = self.inputs.clone();
+        Terminal::new()
+            .key_modes(self.key_modes)
+            .paste_shortcut_behavior(self.behavior)
+            .on_key(crate::callback::KeyHandler::new(move |key| {
+                keys.borrow_mut().push(key);
+                true
+            }))
+            .on_input(Callback::new(
+                move |event: crate::widgets::TerminalInputEvent| {
+                    inputs.borrow_mut().push(event);
+                },
+            ))
+            .key("terminal")
+    }
+}
+
+#[cfg(feature = "terminal")]
+struct PasteDispatchResult {
+    keys: Rc<RefCell<Vec<KeyEvent>>>,
+    inputs: Rc<RefCell<Vec<crate::widgets::TerminalInputEvent>>>,
+    command_hit: Rc<Cell<bool>>,
+    errors: Rc<RefCell<Vec<ClipboardError>>>,
+}
+
+#[cfg(feature = "terminal")]
+fn dispatch_ctrl_v(
+    provider: impl ClipboardProvider + 'static,
+    behavior: crate::widgets::TerminalPasteShortcutBehavior,
+    key_modes: crate::widgets::TerminalKeyModes,
+) -> PasteDispatchResult {
+    let keys = Rc::new(RefCell::new(Vec::new()));
+    let inputs = Rc::new(RefCell::new(Vec::new()));
+    let command_hit = Rc::new(Cell::new(false));
+    let errors = Rc::new(RefCell::new(Vec::new()));
+    let app = App::new()
+        .mouse(false)
+        .terminal_key_policy(crate::TerminalKeyPolicy::AppCommandsThenTerminal)
+        .clipboard_provider(provider)
+        .clipboard_reporter({
+            let errors = errors.clone();
+            move |error| errors.borrow_mut().push(error)
+        });
+    let mut backend = crate::TestBackend::new_with_app(
+        app,
+        CapturedTerminalPasteSmoke {
+            keys: keys.clone(),
+            inputs: inputs.clone(),
+            behavior,
+            key_modes,
+        },
+        (),
+    );
+    backend.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("mux.paste")
+            .shortcut(crate::KeyBinding::from_str("ctrl-v").expect("binding"))
+            .handler(Callback::new({
+                let command_hit = command_hit.clone();
+                move |_| command_hit.set(true)
+            }))
+            .build(),
+    );
+    let terminal_id = node_id_by_key(&backend.core.tree, "terminal");
+    backend.set_focused(terminal_id);
+    assert!(backend.send_key(ctrl_char('v')).expect("send_key succeeds"));
+
+    PasteDispatchResult {
+        keys,
+        inputs,
+        command_hit,
+        errors,
+    }
+}
+
+#[cfg(feature = "terminal")]
 struct TerminalDispatchSmoke {
     keys: Rc<RefCell<Vec<KeyEvent>>>,
     inputs: Rc<RefCell<Vec<crate::widgets::TerminalInputKind>>>,
@@ -4689,6 +4828,7 @@ impl Component for TerminalDispatchSmoke {
         let inputs = self.inputs.clone();
         Terminal::new()
             .focusable(true)
+            .paste_shortcut_behavior(crate::widgets::TerminalPasteShortcutBehavior::Performable)
             .on_key(crate::callback::KeyHandler::new(move |key| {
                 keys.borrow_mut().push(key);
                 true
@@ -4839,6 +4979,281 @@ fn terminal_ctrl_shift_v_still_pastes_to_terminal_before_command() {
         &[crate::widgets::TerminalInputKind::Paste]
     );
     assert!(!command_hit.get());
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_performable_ctrl_v_pastes_text_before_app_command() {
+    let command_hit = Rc::new(Cell::new(false));
+    let keys = Rc::new(RefCell::new(Vec::new()));
+    let inputs = Rc::new(RefCell::new(Vec::new()));
+    let app = App::new()
+        .mouse(false)
+        .terminal_key_policy(crate::TerminalKeyPolicy::AppCommandsThenTerminal)
+        .clipboard_provider(StaticReadClipboardProvider("pasted-text"));
+    let mut backend = crate::TestBackend::new_with_app(
+        app,
+        TerminalDispatchSmoke {
+            keys: keys.clone(),
+            inputs: inputs.clone(),
+        },
+        (),
+    );
+    backend.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("mux.paste")
+            .shortcut(crate::KeyBinding::from_str("ctrl-v").expect("binding"))
+            .handler(Callback::new({
+                let command_hit = command_hit.clone();
+                move |_| command_hit.set(true)
+            }))
+            .build(),
+    );
+    let terminal_id = node_id_by_key(&backend.core.tree, "terminal");
+    backend.set_focused(terminal_id);
+
+    assert!(backend.send_key(ctrl_char('v')).expect("send_key succeeds"));
+    assert_eq!(
+        inputs.borrow().as_slice(),
+        &[crate::widgets::TerminalInputKind::Paste]
+    );
+    assert!(keys.borrow().is_empty());
+    assert!(!command_hit.get());
+}
+
+#[cfg(feature = "terminal")]
+fn assert_performable_forwarded(result: &PasteDispatchResult, modes: crate::TerminalKeyModes) {
+    let key = ctrl_char('v');
+    assert_eq!(result.keys.borrow().as_slice(), &[key]);
+    let inputs = result.inputs.borrow();
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0].kind, crate::widgets::TerminalInputKind::Key);
+    assert_eq!(inputs[0].key, Some(key));
+    assert_eq!(
+        inputs[0].bytes.as_ref(),
+        crate::widgets::key_event_to_bytes(key, modes)
+            .expect("ctrl-v is encodable")
+            .as_slice()
+    );
+    assert!(!result.command_hit.get());
+    assert!(result.errors.borrow().is_empty());
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_performable_ctrl_v_emits_plain_text_without_bracketed_mode() {
+    let result = dispatch_ctrl_v(
+        ClassifiedClipboardProvider {
+            content: crate::ClipboardPasteContent::Text("plain text".into()),
+            text_fallback: Some("plain text"),
+        },
+        crate::TerminalPasteShortcutBehavior::Performable,
+        crate::TerminalKeyModes::default(),
+    );
+
+    assert!(result.keys.borrow().is_empty());
+    assert_eq!(
+        result.inputs.borrow()[0].kind,
+        crate::widgets::TerminalInputKind::Paste
+    );
+    assert_eq!(result.inputs.borrow()[0].bytes.as_ref(), b"plain text");
+    assert!(!result.command_hit.get());
+    assert!(result.errors.borrow().is_empty());
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_performable_ctrl_v_wraps_text_in_bracketed_mode() {
+    let modes = crate::TerminalKeyModes {
+        bracketed_paste: true,
+        ..crate::TerminalKeyModes::default()
+    };
+    let result = dispatch_ctrl_v(
+        ClassifiedClipboardProvider {
+            content: crate::ClipboardPasteContent::Text("plain text".into()),
+            text_fallback: Some("plain text"),
+        },
+        crate::TerminalPasteShortcutBehavior::Performable,
+        modes,
+    );
+
+    assert!(result.keys.borrow().is_empty());
+    assert_eq!(
+        result.inputs.borrow()[0].kind,
+        crate::widgets::TerminalInputKind::Paste
+    );
+    assert_eq!(
+        result.inputs.borrow()[0].bytes.as_ref(),
+        b"\x1b[200~plain text\x1b[201~"
+    );
+    assert!(!result.command_hit.get());
+    assert!(result.errors.borrow().is_empty());
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_performable_ctrl_v_prefers_file_list_over_text_fallback() {
+    let result = dispatch_ctrl_v(
+        ClassifiedClipboardProvider {
+            content: crate::ClipboardPasteContent::Rich,
+            text_fallback: Some("file:///tmp/photo.png"),
+        },
+        crate::TerminalPasteShortcutBehavior::Performable,
+        crate::TerminalKeyModes::default(),
+    );
+    assert_performable_forwarded(&result, crate::TerminalKeyModes::default());
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_performable_ctrl_v_prefers_image_over_text_fallback() {
+    let result = dispatch_ctrl_v(
+        ClassifiedClipboardProvider {
+            content: crate::ClipboardPasteContent::Rich,
+            text_fallback: Some("image fallback"),
+        },
+        crate::TerminalPasteShortcutBehavior::Performable,
+        crate::TerminalKeyModes::default(),
+    );
+    assert_performable_forwarded(&result, crate::TerminalKeyModes::default());
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_performable_ctrl_v_forwards_file_list_without_text() {
+    let result = dispatch_ctrl_v(
+        ClassifiedClipboardProvider {
+            content: crate::ClipboardPasteContent::Rich,
+            text_fallback: None,
+        },
+        crate::TerminalPasteShortcutBehavior::Performable,
+        crate::TerminalKeyModes::default(),
+    );
+    assert_performable_forwarded(&result, crate::TerminalKeyModes::default());
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_performable_ctrl_v_forwards_image_without_text() {
+    let result = dispatch_ctrl_v(
+        ClassifiedClipboardProvider {
+            content: crate::ClipboardPasteContent::Rich,
+            text_fallback: None,
+        },
+        crate::TerminalPasteShortcutBehavior::Performable,
+        crate::TerminalKeyModes::default(),
+    );
+    assert_performable_forwarded(&result, crate::TerminalKeyModes::default());
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_performable_ctrl_v_forwards_empty_clipboard() {
+    let result = dispatch_ctrl_v(
+        ClassifiedClipboardProvider {
+            content: crate::ClipboardPasteContent::Unavailable,
+            text_fallback: None,
+        },
+        crate::TerminalPasteShortcutBehavior::Performable,
+        crate::TerminalKeyModes::default(),
+    );
+    assert_performable_forwarded(&result, crate::TerminalKeyModes::default());
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_performable_ctrl_v_forwards_unknown_unsupported_format() {
+    let result = dispatch_ctrl_v(
+        ClassifiedClipboardProvider {
+            content: crate::ClipboardPasteContent::Unavailable,
+            text_fallback: None,
+        },
+        crate::TerminalPasteShortcutBehavior::Performable,
+        crate::TerminalKeyModes::default(),
+    );
+    assert_performable_forwarded(&result, crate::TerminalKeyModes::default());
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_performable_ctrl_v_consumes_and_reports_provider_failure() {
+    let result = dispatch_ctrl_v(
+        FailingClipboardProvider,
+        crate::TerminalPasteShortcutBehavior::Performable,
+        crate::TerminalKeyModes::default(),
+    );
+
+    assert!(result.keys.borrow().is_empty());
+    assert!(result.inputs.borrow().is_empty());
+    assert!(!result.command_hit.get());
+    assert_eq!(result.errors.borrow().len(), 1);
+    assert!(
+        result.errors.borrow()[0]
+            .to_string()
+            .contains("clipboard unavailable")
+    );
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_performable_ctrl_v_forwards_through_negotiated_key_encoder() {
+    let modes = crate::TerminalKeyModes {
+        kitty_keyboard: crate::KittyKeyboardFlags {
+            disambiguate_escape_codes: true,
+            ..crate::KittyKeyboardFlags::default()
+        },
+        ..crate::TerminalKeyModes::default()
+    };
+    let result = dispatch_ctrl_v(
+        ClassifiedClipboardProvider {
+            content: crate::ClipboardPasteContent::Rich,
+            text_fallback: Some("image fallback"),
+        },
+        crate::TerminalPasteShortcutBehavior::Performable,
+        modes,
+    );
+
+    assert_performable_forwarded(&result, modes);
+    assert_ne!(result.inputs.borrow()[0].bytes.as_ref(), &[0x16]);
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_forward_behavior_leaves_ctrl_v_to_the_existing_app_command() {
+    let result = dispatch_ctrl_v(
+        ClassifiedClipboardProvider {
+            content: crate::ClipboardPasteContent::Text("plain text".into()),
+            text_fallback: Some("plain text"),
+        },
+        crate::TerminalPasteShortcutBehavior::Forward,
+        crate::TerminalKeyModes::default(),
+    );
+
+    assert!(result.keys.borrow().is_empty());
+    assert!(result.inputs.borrow().is_empty());
+    assert!(result.command_hit.get());
+    assert!(result.errors.borrow().is_empty());
+}
+
+#[test]
+fn non_terminal_focus_keeps_normal_app_command_routing_for_ctrl_v() {
+    let command_hit = Rc::new(Cell::new(false));
+    let app = App::new()
+        .mouse(false)
+        .key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst);
+    let mut backend = crate::TestBackend::new_with_app(app, RunnerKeymapSmoke, ());
+    backend.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("app.paste")
+            .shortcut(crate::KeyBinding::from_str("ctrl-v").expect("binding"))
+            .handler(Callback::new({
+                let command_hit = command_hit.clone();
+                move |_| command_hit.set(true)
+            }))
+            .build(),
+    );
+    backend.set_focused(node_id_by_key(&backend.core.tree, "input"));
+
+    assert!(backend.send_key(ctrl_char('v')).expect("send_key succeeds"));
+    assert!(command_hit.get());
 }
 
 #[cfg(feature = "terminal")]

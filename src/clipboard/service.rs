@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::clipboard::error::ClipboardError;
-use crate::clipboard::provider::{ClipboardProvider, ImageContent};
+use crate::clipboard::provider::{ClipboardPasteContent, ClipboardProvider, ImageContent};
 use crate::style::Style;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,14 +62,14 @@ pub type ClipboardReporter = Rc<dyn Fn(ClipboardError) + 'static>;
 
 pub struct ClipboardService {
     provider: RefCell<Box<dyn ClipboardProvider>>,
-    reporter: ClipboardReporter,
+    reporter: RefCell<ClipboardReporter>,
 }
 
 impl ClipboardService {
     pub fn new(provider: Box<dyn ClipboardProvider>, reporter: ClipboardReporter) -> Self {
         Self {
             provider: RefCell::new(provider),
-            reporter,
+            reporter: RefCell::new(reporter),
         }
     }
 
@@ -79,6 +79,10 @@ impl ClipboardService {
 
     pub fn write_clipboard_text(&self, text: &str) -> Result<(), ClipboardError> {
         self.provider.borrow_mut().write_clipboard_text(text)
+    }
+
+    pub(crate) fn read_terminal_paste(&self) -> Result<ClipboardPasteContent, ClipboardError> {
+        self.provider.borrow_mut().read_terminal_paste()
     }
 
     #[cfg(all(target_arch = "wasm32", feature = "web"))]
@@ -112,12 +116,16 @@ impl ClipboardService {
     }
 
     pub fn report_error(&self, error: ClipboardError) {
-        (self.reporter)(error);
+        let reporter = self.reporter.borrow().clone();
+        reporter(error);
     }
 
-    #[cfg(all(target_arch = "wasm32", feature = "web"))]
     pub(crate) fn replace_provider(&self, provider: Box<dyn ClipboardProvider>) {
         *self.provider.borrow_mut() = provider;
+    }
+
+    pub(crate) fn replace_reporter(&self, reporter: ClipboardReporter) {
+        *self.reporter.borrow_mut() = reporter;
     }
 }
 

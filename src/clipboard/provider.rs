@@ -37,6 +37,17 @@ pub struct ImageContent {
     pub filename: Option<String>,
 }
 
+/// Clipboard content classification used by performable terminal paste shortcuts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClipboardPasteContent {
+    /// Plain text that the terminal host can paste directly.
+    Text(String),
+    /// A file list, image, or another richer format that the child should inspect itself.
+    Rich,
+    /// No known text or rich format was available. This may also represent an empty clipboard.
+    Unavailable,
+}
+
 impl ImageContent {
     /// Creates new image content from raw bytes, encoding as base64.
     pub fn from_bytes(bytes: &[u8], format: ImageFormat) -> Self {
@@ -67,6 +78,15 @@ pub trait ClipboardProvider {
     fn read_clipboard_text(&mut self) -> Result<String, ClipboardError>;
     /// Write text to the system clipboard.
     fn write_clipboard_text(&mut self, text: &str) -> Result<(), ClipboardError>;
+
+    /// Classify content for a terminal's performable paste shortcut.
+    ///
+    /// Providers with richer format support should prefer files/images over a text fallback. The
+    /// default keeps custom providers source-compatible and treats text read failures as genuine
+    /// provider failures rather than guessing that the clipboard contains another format.
+    fn read_terminal_paste(&mut self) -> Result<ClipboardPasteContent, ClipboardError> {
+        self.read_clipboard_text().map(ClipboardPasteContent::Text)
+    }
 
     /// Update any provider-side cache used to satisfy sync clipboard reads.
     fn set_clipboard_text_cache(&mut self, _text: String) {}
@@ -178,6 +198,58 @@ impl ClipboardProvider for SystemClipboardProvider {
         clipboard.set_text(text.to_string()).map_err(|err| {
             ClipboardError::provider(ClipboardOperation::WriteClipboard, err.to_string())
         })
+    }
+
+    fn read_terminal_paste(&mut self) -> Result<ClipboardPasteContent, ClipboardError> {
+        let clipboard = self.ensure_clipboard(ClipboardOperation::ReadClipboard)?;
+        match clipboard.get().file_list() {
+            Ok(files) if !files.is_empty() => return Ok(ClipboardPasteContent::Rich),
+            Ok(_) | Err(arboard::Error::ContentNotAvailable) => {}
+            Err(err) => {
+                return Err(ClipboardError::provider(
+                    ClipboardOperation::ReadClipboard,
+                    err.to_string(),
+                ));
+            }
+        }
+
+        #[cfg(feature = "clipboard-images")]
+        {
+            let probe_image_data = true;
+            #[cfg(target_os = "linux")]
+            let probe_image_data = match wayland_clipboard_has_png()? {
+                Some(true) => return Ok(ClipboardPasteContent::Rich),
+                Some(false) => false,
+                None => probe_image_data,
+            };
+
+            if probe_image_data {
+                // arboard has no cross-platform format-presence API. X11, macOS, and Windows must
+                // currently decode the advertised image to confirm it; Wayland uses the MIME list
+                // above and avoids reading the payload.
+                let clipboard = self.ensure_clipboard(ClipboardOperation::ReadImageClipboard)?;
+                match clipboard.get().image() {
+                    Ok(_) => return Ok(ClipboardPasteContent::Rich),
+                    Err(arboard::Error::ContentNotAvailable) => {}
+                    Err(err) => {
+                        return Err(ClipboardError::provider(
+                            ClipboardOperation::ReadImageClipboard,
+                            err.to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        let clipboard = self.ensure_clipboard(ClipboardOperation::ReadClipboard)?;
+        match clipboard.get().text() {
+            Ok(text) => Ok(ClipboardPasteContent::Text(text)),
+            Err(arboard::Error::ContentNotAvailable) => Ok(ClipboardPasteContent::Unavailable),
+            Err(err) => Err(ClipboardError::provider(
+                ClipboardOperation::ReadClipboard,
+                err.to_string(),
+            )),
+        }
     }
 
     fn read_primary_selection_text(&mut self) -> Result<String, ClipboardError> {
@@ -364,6 +436,36 @@ fn read_wayland_png_clipboard() -> Result<Option<ImageContent>, ClipboardError> 
     }
 
     Ok(Some(ImageContent::from_bytes(&bytes, ImageFormat::Png)))
+}
+
+#[cfg(all(
+    feature = "clipboard",
+    feature = "clipboard-images",
+    target_os = "linux"
+))]
+fn wayland_clipboard_has_png() -> Result<Option<bool>, ClipboardError> {
+    use wl_clipboard_rs::paste::{ClipboardType, Error, Seat, get_mime_types};
+
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        return Ok(None);
+    }
+
+    match get_mime_types(ClipboardType::Regular, Seat::Unspecified) {
+        Ok(types) => Ok(Some(types.contains(ImageFormat::Png.mime_type()))),
+        Err(Error::ClipboardEmpty | Error::NoMimeType) => Ok(Some(false)),
+        Err(
+            Error::NoSeats
+            | Error::SocketOpenError(_)
+            | Error::WaylandConnection(_)
+            | Error::MissingProtocol { .. }
+            | Error::PrimarySelectionUnsupported
+            | Error::SeatNotFound,
+        ) => Ok(None),
+        Err(err) => Err(ClipboardError::provider(
+            ClipboardOperation::ReadImageClipboard,
+            err.to_string(),
+        )),
+    }
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "web"))]

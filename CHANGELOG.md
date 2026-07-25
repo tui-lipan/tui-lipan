@@ -13,6 +13,9 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add `TerminalPasteShortcutBehavior::Performable` for terminal hosts that bind direct `Ctrl+V`:
+  plain text is emitted through terminal paste input, while file lists, images, and unknown
+  non-text clipboard formats forward the original key to clipboard-aware child applications.
 - Add `FileTreeEntrySource::Provided` for asynchronously supplied directory listings. Missing
   expanded paths render the existing loading row and emit `FileTreeEntryRequest`; completed
   `FileTreeDirectoryListing` values carry child type, symlink, Git status, ignore, and error data
@@ -121,6 +124,9 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `TestBackend::new_with_app` now honors custom `App::clipboard_provider` and
+  `App::clipboard_reporter` values, matching the native runner and allowing deterministic
+  clipboard-routing tests.
 - Changing the root prop of a mounted local `FileTree` now rebuilds the tree and reloads Git status
   instead of continuing to display the previous root.
 - `syntax-syntect` no longer pulls C Oniguruma into `wasm32` builds; browser

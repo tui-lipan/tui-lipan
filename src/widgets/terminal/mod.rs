@@ -14,9 +14,9 @@ mod scrollback_ledger;
 pub use buffer::TerminalBuffer;
 pub use events::{
     KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, TerminalInputEvent,
-    TerminalInputKind, TerminalKeyModes, TerminalSelection, TerminalSelectionEvent, encode_paste,
-    focus_sequences, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
-    terminal_selection_text,
+    TerminalInputKind, TerminalKeyModes, TerminalPasteShortcutBehavior, TerminalSelection,
+    TerminalSelectionEvent, encode_paste, focus_sequences, key_event_to_bytes,
+    mouse_event_to_bytes, paste_sequences, terminal_selection_text,
 };
 pub use mod_private::Terminal;
 pub use osc::{
@@ -59,6 +59,7 @@ impl Default for Terminal {
             total_scrollback_rows: 0,
             mouse_mode: MouseModeState::default(),
             key_modes: TerminalKeyModes::default(),
+            paste_shortcut_behavior: TerminalPasteShortcutBehavior::Forward,
             selection: None,
             selection_controlled: false,
             selection_style: StyleSlot::Inherit,
@@ -171,6 +172,12 @@ impl Terminal {
     /// from something other than a `TerminalRenderSnapshot`.
     pub fn key_modes(mut self, key_modes: TerminalKeyModes) -> Self {
         self.key_modes = key_modes;
+        self
+    }
+
+    /// Configure direct `Ctrl+V` handling while this terminal has focus.
+    pub fn paste_shortcut_behavior(mut self, behavior: TerminalPasteShortcutBehavior) -> Self {
+        self.paste_shortcut_behavior = behavior;
         self
     }
 
