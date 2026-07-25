@@ -854,7 +854,7 @@ pub(crate) fn gather_border_tabs_change(
             })
         }),
         NodeKind::Frame(props) => props.on_tab_change.clone().and_then(|cb| {
-            if !props.has_border() || props.tab_titles.is_empty() {
+            if !props.has_border() || props.has_header || props.tab_titles.is_empty() {
                 return None;
             }
 
@@ -878,14 +878,16 @@ pub(crate) fn gather_border_tabs_change(
             let active = props.active_tab.min(len.saturating_sub(1));
 
             let col = (x as i32).saturating_sub(title_rect.x as i32) as usize;
-            // Tab titles occupy the top border directly; grouped labels are not
-            // rendered when tabs are present.
+            let (tab_offset, tab_width) = frame_tab_hit_region(&props.header, title_w);
+            if col < tab_offset || col >= tab_offset.saturating_add(tab_width) {
+                return None;
+            }
 
             let idx = crate::widgets::VStack::border_index_at_col(
                 &props.tab_titles,
                 active,
                 props.tab_variant,
-                col,
+                col.saturating_sub(tab_offset),
             )?;
             Some(TabsChange {
                 cb,
@@ -897,16 +899,92 @@ pub(crate) fn gather_border_tabs_change(
     }
 }
 
+fn frame_tab_hit_region(header: &crate::widgets::BorderLabels, width: u16) -> (usize, usize) {
+    let label_width = |label: Option<&crate::widgets::FrameLabel>| {
+        label
+            .filter(|label| !label.content.is_empty())
+            .map(|label| {
+                label
+                    .content
+                    .width()
+                    .saturating_add(header.padding.left as usize)
+                    .saturating_add(header.padding.right as usize)
+            })
+            .unwrap_or(0)
+    };
+    let left_width = label_width(header.left.as_ref());
+    let right_width = label_width(header.right.as_ref());
+    let has_left = header
+        .left
+        .as_ref()
+        .is_some_and(|label| !label.content.is_empty());
+    let has_right = header
+        .right
+        .as_ref()
+        .is_some_and(|label| !label.content.is_empty());
+    let left_separator = has_left && header.padding.right == 0;
+    let right_separator = has_right && header.padding.left == 0;
+    let available = width as usize;
+    let label_budget = available
+        .saturating_sub(usize::from(left_separator))
+        .saturating_sub(usize::from(right_separator));
+    let left_budget = left_width.min(label_budget);
+    let right_budget = right_width.min(label_budget.saturating_sub(left_budget));
+    let tab_offset = left_budget + usize::from(left_separator);
+    let tab_width = label_budget.saturating_sub(left_budget + right_budget);
+
+    (tab_offset, tab_width)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{find_ancestor_on_click, gather_hit_actions, resolve_left_click_target};
+    use super::{
+        find_ancestor_on_click, frame_tab_hit_region, gather_hit_actions, resolve_left_click_target,
+    };
     use crate::callback::Callback;
     use crate::core::event::{KeyMods, MouseEvent};
     use crate::core::node::{NodeKind, NodeTree};
     use crate::layout::LayoutEngine;
     use crate::style::Rect;
     use crate::widgets::internal::{MouseRegionNode, TextNode};
-    use crate::widgets::{Graph, GraphNode};
+    use crate::widgets::{BorderLabels, Frame, Graph, GraphNode, TabVariant, Text};
+
+    #[test]
+    fn frame_tab_hit_region_accounts_for_grouped_header_padding() {
+        let header = BorderLabels::new().left("[2]").padding(1);
+
+        assert_eq!(frame_tab_hit_region(&header, 30), (5, 25));
+    }
+
+    #[test]
+    fn frame_tab_click_uses_rendered_prefix_offset() {
+        let frame = Frame::new()
+            .width(crate::style::Length::Px(30))
+            .height(crate::style::Length::Px(5))
+            .header_left("[2]")
+            .header_padding(1)
+            .tab_titles(["Files", "Worktrees", "Submodule"])
+            .tab_variant(TabVariant::Minimal)
+            .on_tab_change(Callback::new(|_| {}))
+            .child(Text::new("body"));
+        let root: crate::Element = frame.into();
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 30,
+                h: 5,
+            },
+            None,
+        );
+
+        let change = super::gather_border_tabs_change(&tree, tree.node(tree.root), 6, 0)
+            .expect("clicking the first rendered tab should gather a tab change");
+        assert_eq!(change.next, 0);
+    }
 
     fn noop_mouse_cb() -> Callback<MouseEvent> {
         Callback::new(|_| {})

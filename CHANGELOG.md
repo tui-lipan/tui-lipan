@@ -131,6 +131,8 @@ While the crate is on `0.x.y`:
 
 - `Frame` border headers now preserve tab titles alongside grouped labels, and
   label padding glyphs use the resolved border style instead of the label style.
+- Border-tab mouse hit-testing now accounts for grouped header prefixes and
+  padding before resolving the clicked tab.
 - `TestBackend::new_with_app` now honors custom `App::clipboard_provider` and
   `App::clipboard_reporter` values, matching the native runner and allowing deterministic
   clipboard-routing tests.
