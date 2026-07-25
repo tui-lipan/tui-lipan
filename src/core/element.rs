@@ -342,7 +342,7 @@ pub(crate) enum ElementKind {
     Center(Center),
     /// Center-pinned layout with collision-aware top/bottom zones.
     CenterPin(CenterPin),
-    /// Framed container with optional title.
+    /// Framed container with optional border labels.
     Frame(Frame),
     /// Divider line.
     Divider(Divider),

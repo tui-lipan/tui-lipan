@@ -135,7 +135,7 @@ impl Component for DevToolsApp {
                     .height(Length::Flex(1))
                     .child(
                         Frame::new()
-                            .title(if ctx.state.changed_only {
+                            .header_left(if ctx.state.changed_only {
                                 "Changed files"
                             } else {
                                 "Files"
@@ -148,8 +148,8 @@ impl Component for DevToolsApp {
                     )
                     .child(
                         Frame::new()
-                            .title("Terminal")
-                            .status(status_text)
+                            .header_left("Terminal")
+                            .footer_left(status_text)
                             .border(true)
                             .padding(0)
                             .width(Length::Flex(2))

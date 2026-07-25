@@ -999,7 +999,7 @@ impl Component for DragDropSmoke {
         let mut source = DragSource::new()
             .child(
                 Frame::new()
-                    .title("Source")
+                    .header_left("Source")
                     .border(true)
                     .padding(1)
                     .height(crate::style::Length::Px(3))
@@ -1361,7 +1361,7 @@ fn make_drop_target(
         .child(
             Element::from(
                 Frame::new()
-                    .title(name)
+                    .header_left(name)
                     .border(true)
                     .padding(1)
                     .width(crate::style::Length::Px(14))

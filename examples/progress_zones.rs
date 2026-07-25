@@ -143,7 +143,7 @@ impl Component for ProgressZonesDemo {
             ]);
 
         Frame::new()
-            .title("Progress Zones")
+            .header_left("Progress Zones")
             .border(true)
             .padding(1)
             .child(

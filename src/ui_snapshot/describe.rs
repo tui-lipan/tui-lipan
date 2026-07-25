@@ -171,7 +171,11 @@ fn describe_node(
             desc.checkbox_state = Some(checkbox.state);
         }
         NodeKind::Frame(frame) => {
-            desc.title = rich_text_plain(frame.title.as_ref());
+            desc.title = frame
+                .header
+                .left
+                .as_ref()
+                .and_then(|label| rich_text_plain(Some(&label.content)));
             desc.selected_index = Some(frame.active_tab);
             if !frame.tab_titles.is_empty() {
                 let labels: Vec<String> = frame
@@ -185,10 +189,12 @@ fn describe_node(
                     desc.total_items = Some(total);
                 }
             }
-            if desc.title.is_none()
-                && let Some(status) = rich_text_plain(frame.status.as_ref())
-            {
-                desc.label = Some(status);
+            if desc.title.is_none() {
+                desc.label = frame
+                    .footer
+                    .left
+                    .as_ref()
+                    .and_then(|label| rich_text_plain(Some(&label.content)));
             }
         }
         NodeKind::ScrollView(scroll) => {

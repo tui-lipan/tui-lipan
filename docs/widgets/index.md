@@ -10,7 +10,7 @@ All widgets are available via `use tui_lipan::prelude::*;`
 | `HStack` | Horizontal stack container |
 | `ZStack` | Overlay container (children stacked) |
 | `Canvas` | Absolute-positioned child container with local `Rect` placement |
-| `Frame` | Container with border, title, status line |
+| `Frame` | Container with border, header/footer labels, and tab affordances |
 | `Grid` | 2D grid layout |
 | `Flow` | Wrapping row container for chip/tag-like content |
 | `ScrollView` | Scrollable container |

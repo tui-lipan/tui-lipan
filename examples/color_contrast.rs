@@ -104,7 +104,7 @@ impl Component for ContrastDemo {
                 stack = stack.child(row);
             }
             Frame::new()
-                .title("Raw: Black fg on every background")
+                .header_left("Raw: Black fg on every background")
                 .border(true)
                 .border_style(BorderStyle::Rounded)
                 .padding(1)
@@ -118,7 +118,7 @@ impl Component for ContrastDemo {
                 stack = stack.child(row);
             }
             Frame::new()
-                .title("Auto-adjusted for WCAG AA (4.5:1)")
+                .header_left("Auto-adjusted for WCAG AA (4.5:1)")
                 .border(true)
                 .border_style(BorderStyle::Rounded)
                 .padding(1)
@@ -166,7 +166,7 @@ impl Component for ContrastDemo {
         }
 
         let blue_section = Frame::new()
-            .title("Regression: Black text on blue backgrounds")
+            .header_left("Regression: Black text on blue backgrounds")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)
@@ -196,7 +196,7 @@ impl Component for ContrastDemo {
         }
 
         let bw_section = Frame::new()
-            .title("black_or_white() on grayscale spectrum")
+            .header_left("black_or_white() on grayscale spectrum")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)

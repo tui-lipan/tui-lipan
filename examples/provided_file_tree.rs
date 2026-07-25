@@ -58,8 +58,8 @@ impl Component for ProvidedFileTreeApp {
             );
 
         Frame::new()
-            .title("Remote project")
-            .status("Expand directories to request their listings")
+            .header_left("Remote project")
+            .footer_left("Expand directories to request their listings")
             .border(true)
             .child(tree)
             .into()

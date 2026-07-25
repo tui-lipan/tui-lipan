@@ -7,9 +7,9 @@ use crate::core::event::KeyCode;
 use crate::style::{Align, BorderStyle, Justify, Length, Paint, ScrollbarConfig, Style};
 use crate::utils::gradient::ColorGradient;
 use crate::widgets::{
-    Button, ButtonVariant, Frame, HStack, Input, InputEvent, LogFilterMode, LogView, LogViewEvent,
-    Overflow, Spacer, Sparkline, SparklineBarsPreset, SparklineVariant, SparklineZeroPolicy,
-    TabsEvent, Text, VStack,
+    Button, ButtonVariant, Frame, FrameLabel, HStack, Input, InputEvent, LogFilterMode, LogView,
+    LogViewEvent, Overflow, Spacer, Sparkline, SparklineBarsPreset, SparklineVariant,
+    SparklineZeroPolicy, TabsEvent, Text, VStack,
 };
 
 use super::state::DevToolsState;
@@ -149,8 +149,8 @@ impl Component for DevToolsPanel {
                     .active_tab(state.active_tab.min(DEVTOOLS_TAB_LOGS))
                     .on_tab_change(ctx.link().callback(DevToolsMsg::TabChanged))
                     .style(frame_style)
-                    .status_right("DevTools")
-                    .status_style(secondary_style)
+                    .header_right(FrameLabel::new("DevTools").style(secondary_style))
+                    .header_style(secondary_style)
                     .width(panel_width)
                     .height(panel_height)
                     .child(body)

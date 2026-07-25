@@ -239,7 +239,7 @@ fn main() -> tui_lipan::Result<()> {
             .gap(1)
             .child(
                 Frame::new()
-                    .title("Sidebar")
+                    .header_left("Sidebar")
                     .border(true)
                     .width(Length::Px(30))
                     .child(List::new().items([
@@ -250,7 +250,7 @@ fn main() -> tui_lipan::Result<()> {
             )
             .child(
                 Frame::new()
-                    .title("Content")
+                    .header_left("Content")
                     .border(true)
                     .padding(1)
                     .child(Text::new("Hello from mockup!")),
@@ -271,7 +271,7 @@ fn main() -> tui_lipan::Result<()> {
 App::new()
     .title("My Layout")
     .mount(Mockup::new(|| {
-        Frame::new().title("Panel").border(true)
+        Frame::new().header_left("Panel").border(true)
             .child(Text::new("World")).into()  // closure must return Element
     }))
     .run()
@@ -283,7 +283,7 @@ Extract views as plain functions reusable in both mockups and real components:
 
 ```rust
 fn sidebar(items: &[&str], selected: usize) -> Element {
-    Frame::new().title("Nav").border(true)
+    Frame::new().header_left("Nav").border(true)
         .width(Length::Px(28))
         .child(List::new().items(items.iter().map(|s| ListItem::new(*s))).selected(selected))
         .into()

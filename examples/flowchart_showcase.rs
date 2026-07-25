@@ -103,14 +103,14 @@ impl Component for FlowchartShowcase {
                     .gap(1)
                     .child(
                         Frame::new()
-                            .title("Flowchart showcase")
+                            .header_left("Flowchart showcase")
                             .border(true)
                             .padding(1)
                             .child(chart),
                     )
                     .child(
                         Frame::new()
-                            .title("Decision flowchart")
+                            .header_left("Decision flowchart")
                             .border(true)
                             .padding(1)
                             .child(decision_chart),

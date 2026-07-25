@@ -7,7 +7,7 @@ use crate::overlay::{
     DismissPolicy, OverlayLayer, OverlayPlacement, OverlayScope, PointerCapture, Portal,
 };
 use crate::style::{Align, BorderStyle, Color, Length, Padding, RichText, Size, Style, StyleSlot};
-use crate::widgets::{Center, Frame, MouseRegion, Spacer, ZStack};
+use crate::widgets::{BorderLabels, Center, Frame, FrameLabel, MouseRegion, Spacer, ZStack};
 
 /// A modal dialog with optional title and child content.
 #[derive(Clone)]
@@ -196,8 +196,6 @@ impl From<Modal> for Element {
         };
 
         let mut base_frame = Frame::new()
-            .title_style(modal.title_style)
-            .title_alignment(modal.title_alignment)
             .border(modal.border)
             .border_style(modal.border_style)
             .padding(modal.padding)
@@ -205,7 +203,13 @@ impl From<Modal> for Element {
             .style(frame_style)
             .focus_style_slot(modal.focus_style);
         if let Some(title) = modal.title {
-            base_frame = base_frame.title(title);
+            let label = FrameLabel::new(title).style(modal.title_style);
+            let header = match modal.title_alignment {
+                Align::Center => BorderLabels::new().center(label),
+                Align::End => BorderLabels::new().right(label),
+                Align::Start | Align::Stretch => BorderLabels::new().left(label),
+            };
+            base_frame = base_frame.header(header);
         }
 
         match modal.scope {

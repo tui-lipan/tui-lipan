@@ -110,7 +110,7 @@ fn syntax_legend(theme: &Theme) -> Element {
 #[cfg(all(feature = "markdown", feature = "syntax-syntect"))]
 fn theme_preview_panel(theme: Theme) -> Element {
     Frame::new()
-        .title("Markdown + Syntax")
+        .header_left("Markdown + Syntax")
         .border(true)
         .border_style(BorderStyle::Rounded)
         .height(Length::Flex(1))
@@ -145,7 +145,7 @@ fn theme_preview_panel(theme: Theme) -> Element {
 #[cfg(all(feature = "markdown", not(feature = "syntax-syntect")))]
 fn theme_preview_panel(_theme: Theme) -> Element {
     Frame::new()
-        .title("Markdown")
+        .header_left("Markdown")
         .border(true)
         .border_style(BorderStyle::Rounded)
         .height(Length::Flex(1))
@@ -161,7 +161,7 @@ fn theme_preview_panel(_theme: Theme) -> Element {
 #[cfg(all(feature = "syntax-syntect", not(feature = "markdown")))]
 fn theme_preview_panel(theme: Theme) -> Element {
     Frame::new()
-        .title("Syntax (syntect)")
+        .header_left("Syntax (syntect)")
         .border(true)
         .border_style(BorderStyle::Rounded)
         .height(Length::Flex(1))
@@ -185,7 +185,7 @@ fn theme_preview_panel(theme: Theme) -> Element {
 #[cfg(not(any(feature = "markdown", feature = "syntax-syntect")))]
 fn theme_preview_panel(_theme: Theme) -> Element {
     Frame::new()
-        .title("Markdown + Syntax")
+        .header_left("Markdown + Syntax")
         .border(true)
         .border_style(BorderStyle::Rounded)
         .height(Length::Flex(1))
@@ -337,7 +337,7 @@ impl Component for ThemeShowcase {
             .gap(1)
             .child(
                 Frame::new()
-                    .title("FileTree (themed icons)")
+                    .header_left("FileTree (themed icons)")
                     .height(Length::Px(12))
                     .border(true)
                     .border_style(BorderStyle::Rounded)
@@ -356,7 +356,7 @@ impl Component for ThemeShowcase {
                 gap: 1,
                 padding: 1,
                 Frame {
-                    title: format!("Theme Showcase - {}", current.name()),
+                    header_left: format!("Theme Showcase - {}", current.name()),
                     border: true,
                     border_style: BorderStyle::Rounded,
                     padding: 1,
@@ -376,7 +376,7 @@ impl Component for ThemeShowcase {
                     VStack {
                         gap: 1,
                         Frame {
-                            title: "Input",
+                            header_left: "Input",
                             border: true,
                             border_style: BorderStyle::Rounded,
                             padding: 1,
@@ -390,7 +390,7 @@ impl Component for ThemeShowcase {
                             },
                         },
                         Frame {
-                            title: "List",
+                            header_left: "List",
                             border: true,
                             border_style: BorderStyle::Rounded,
                             List {
@@ -400,7 +400,7 @@ impl Component for ThemeShowcase {
                             },
                         },
                         Frame {
-                            title: "Other Widgets",
+                            header_left: "Other Widgets",
                             border: true,
                             border_style: BorderStyle::Rounded,
                             padding: 1,

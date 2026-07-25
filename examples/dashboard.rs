@@ -37,7 +37,7 @@ impl Component for DashboardDemo {
             .width(Length::Flex(1))
             .height(Length::Flex(1))
             .child(
-                Frame::new().title("CPU Usage").border(true).child(
+                Frame::new().header_left("CPU Usage").border(true).child(
                     VStack::new()
                         .child(
                             Badge::new("ON")
@@ -57,7 +57,7 @@ impl Component for DashboardDemo {
                 ),
             )
             .child(
-                Frame::new().title("Memory Usage").border(true).child(
+                Frame::new().header_left("Memory Usage").border(true).child(
                     VStack::new()
                         .child(
                             Badge::new("OK")
@@ -78,13 +78,13 @@ impl Component for DashboardDemo {
             )
             .child(
                 Frame::new()
-                    .title("Network")
+                    .header_left("Network")
                     .border(true)
                     .child(Text::new("Receiving data...")),
             )
             .child(
                 Frame::new()
-                    .title("Disk")
+                    .header_left("Disk")
                     .border(true)
                     .child(Text::new("I/O Idle")),
             );

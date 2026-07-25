@@ -136,7 +136,7 @@ pub use crate::ui_snapshot::{
 };
 pub use crate::validation::{StringValidator, ValidationError, Validator};
 pub use crate::widgets::{
-    Canvas, CanvasItem, ClassDiagram, ClassDiagramTheme, ClassMember, ClassRelation,
+    BorderLabels, Canvas, CanvasItem, ClassDiagram, ClassDiagramTheme, ClassMember, ClassRelation,
     ClassRelationKind, ClassSpec, ClassVisibility, ContextProvider, DEFAULT_PREVIEW_MAX_HEIGHT,
     DEFAULT_PREVIEW_MAX_WIDTH, DiagramClassMemberSpec, DiagramClassNodeSpec,
     DiagramClassRelationSpec, DiagramClassSpec, DiagramClassVisibilitySpec, DiagramDirection,
@@ -150,15 +150,15 @@ pub use crate::widgets::{
     ErDiagramTheme, ErEntity, ErRelation, FileKind, FileTree, FileTreeChange, FileTreeChangeSource,
     FileTreeChangeStatus, FileTreeChangeView, FileTreeDirectoryListing, FileTreeEntry,
     FileTreeEntryRequest, FileTreeEntrySource, FileTreeEvent, FileTreeGitView, FileTreeItemStyle,
-    FileTreeSuffixPriority, FileTreeToggleEvent, FocusScope, FormattedDiagramBlock, GanttDate,
-    GanttDiagram, GanttDiagramTheme, GanttDuration, GanttSection, GanttSpec, GanttTask,
-    GanttTaskStart, GanttTaskStatus, Heatmap, HeatmapCellMode, HeatmapLegendWidth, HexArea,
-    HexAreaChangeEvent, HexAreaCursorEvent, HexAreaEditEvent, HexAreaEditKind, IMAGE_SENTINEL_BASE,
-    PanEvent, PanKeymap, PanMetrics, PanView, ParsedDiagram, SENTINEL_BASE, ScrollAxis,
-    ScrollBehavior, ScrollChildExitDirection, ScrollChildVisibility, ScrollDistanceConfig,
-    ScrollEvent, ScrollExitedChild, ScrollMetrics, ScrollTarget, ScrollViewportEvent,
-    ScrollVisibleChild, ScrollWheelBehavior, ScrollWheelConfig, SentinelEvent, SentinelId,
-    StateDiagram, StateDiagramTheme, StateKind, StateSpec, StateTransition, TextArea,
+    FileTreeSuffixPriority, FileTreeToggleEvent, FocusScope, FormattedDiagramBlock, Frame,
+    FrameLabel, GanttDate, GanttDiagram, GanttDiagramTheme, GanttDuration, GanttSection, GanttSpec,
+    GanttTask, GanttTaskStart, GanttTaskStatus, Heatmap, HeatmapCellMode, HeatmapLegendWidth,
+    HexArea, HexAreaChangeEvent, HexAreaCursorEvent, HexAreaEditEvent, HexAreaEditKind,
+    IMAGE_SENTINEL_BASE, PanEvent, PanKeymap, PanMetrics, PanView, ParsedDiagram, SENTINEL_BASE,
+    ScrollAxis, ScrollBehavior, ScrollChildExitDirection, ScrollChildVisibility,
+    ScrollDistanceConfig, ScrollEvent, ScrollExitedChild, ScrollMetrics, ScrollTarget,
+    ScrollViewportEvent, ScrollVisibleChild, ScrollWheelBehavior, ScrollWheelConfig, SentinelEvent,
+    SentinelId, StateDiagram, StateDiagramTheme, StateKind, StateSpec, StateTransition, TextArea,
     TextAreaColorInput, TextAreaColorLines, TextAreaColorStrategy, TextAreaCursorMetrics,
     TextAreaDecoration, TextAreaDecorationKind, TextAreaEvent, TextAreaGutter,
     TextAreaGutterColumn, TextAreaGutterSign, TextAreaImageMode, TextAreaLineNumberMode,
@@ -214,7 +214,7 @@ pub use tui_lipan_macro::ui;
 /// fn main() -> Result<()> {
 ///     mockup!("Dashboard", {
 ///         Frame::new()
-///             .title("Panel")
+///             .header_left("Panel")
 ///             .border(true)
 ///             .child(Text::new("Hello!"))
 ///     })
@@ -231,7 +231,7 @@ pub use tui_lipan_macro::ui;
 ///
 /// fn sidebar(items: &[&str], sel: usize) -> Element {
 ///     Frame::new()
-///         .title("Nav")
+///         .header_left("Nav")
 ///         .border(true)
 ///         .child(List::new()
 ///             .items(items.iter().map(|s| ListItem::new(*s)))

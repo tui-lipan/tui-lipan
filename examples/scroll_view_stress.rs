@@ -144,11 +144,11 @@ impl Component for ScrollStressDemo {
             );
 
         Frame::new()
-            .title("ScrollView Stress Test")
+            .header_left("ScrollView Stress Test")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)
-            .status(format!(
+            .footer_left(format!(
                 "FPS: {fps:.1} | {MESSAGE_COUNT} messages | offset: {} | q to quit",
                 ctx.state.offset,
             ))

@@ -46,8 +46,13 @@ pub(crate) fn measure_frame_chrome(frame: &Frame) -> (u16, u16) {
             }
             let w = w.saturating_add(2).min(u16::MAX as usize) as u16;
             min_w = min_w.max(w);
-        } else if let Some(title) = &frame.props.title {
-            let w = title.width().saturating_add(2).min(u16::MAX as usize) as u16;
+        } else {
+            let w = frame
+                .props
+                .header
+                .min_width()
+                .max(frame.props.footer.min_width())
+                .min(u16::MAX as usize) as u16;
             min_w = min_w.max(w);
         }
     } else {
@@ -63,22 +68,19 @@ pub(crate) fn measure_frame_chrome(frame: &Frame) -> (u16, u16) {
         }
 
         // Status takes space if no border
-        let has_status = frame.props.status.is_some()
-            || frame.props.status_center.is_some()
-            || frame.props.status_right.is_some();
-        if has_status {
-            let mut w = 0u16;
-            if let Some(status) = &frame.props.status {
-                w = w.max(status.width().min(u16::MAX as usize) as u16);
-            }
-            if let Some(status) = &frame.props.status_center {
-                w = w.max(status.width().min(u16::MAX as usize) as u16);
-            }
-            if let Some(status) = &frame.props.status_right {
-                w = w.max(status.width().min(u16::MAX as usize) as u16);
-            }
+        let has_header_labels = frame.props.header.has_labels();
+        let has_footer_labels = frame.props.footer.has_labels();
+        if has_header_labels || has_footer_labels {
+            let w = frame
+                .props
+                .header
+                .min_width()
+                .max(frame.props.footer.min_width())
+                .min(u16::MAX as usize) as u16;
             min_w = min_w.max(w);
-            min_h = min_h.saturating_add(1);
+            min_h = min_h
+                .saturating_add(has_header_labels as u16)
+                .saturating_add(has_footer_labels as u16);
         }
     }
 
@@ -138,23 +140,20 @@ pub(crate) fn measure_frame(
         inner_h = inner_h.saturating_add(header_h.max(1));
     }
 
-    let has_status = frame.props.status.is_some()
-        || frame.props.status_center.is_some()
-        || frame.props.status_right.is_some();
-    if has_status {
-        let mut w = 0u16;
-        if let Some(status) = &frame.props.status {
-            w = w.max(status.width().min(u16::MAX as usize) as u16);
-        }
-        if let Some(status) = &frame.props.status_center {
-            w = w.max(status.width().min(u16::MAX as usize) as u16);
-        }
-        if let Some(status) = &frame.props.status_right {
-            w = w.max(status.width().min(u16::MAX as usize) as u16);
-        }
+    let has_header_labels = frame.props.header.has_labels();
+    let has_footer_labels = frame.props.footer.has_labels();
+    if has_header_labels || has_footer_labels {
+        let w = frame
+            .props
+            .header
+            .min_width()
+            .max(frame.props.footer.min_width())
+            .min(u16::MAX as usize) as u16;
         inner_w = inner_w.max(w);
         if !frame.props.has_border() {
-            inner_h = inner_h.saturating_add(1);
+            inner_h = inner_h
+                .saturating_add(has_header_labels as u16)
+                .saturating_add(has_footer_labels as u16);
         }
     }
 
@@ -185,8 +184,13 @@ pub(crate) fn measure_frame(
             }
             let w = w.saturating_add(2).min(u16::MAX as usize) as u16;
             outer_w = outer_w.max(w);
-        } else if let Some(title) = &frame.props.title {
-            let w = title.width().saturating_add(2).min(u16::MAX as usize) as u16;
+        } else {
+            let w = frame
+                .props
+                .header
+                .min_width()
+                .max(frame.props.footer.min_width())
+                .min(u16::MAX as usize) as u16;
             outer_w = outer_w.max(w);
         }
 

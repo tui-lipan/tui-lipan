@@ -141,11 +141,11 @@ impl Component for InlineListPicker {
         });
 
         Frame::new()
-            .title("Inline list picker")
+            .header_left("Inline list picker")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)
-            .status(format!(
+            .footer_left(format!(
                 "Enter = insert above | m toggles mouse ({}) | q/Esc quits",
                 if ctx.mouse_capture_enabled() {
                     "on"

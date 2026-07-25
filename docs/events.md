@@ -460,7 +460,7 @@ pub enum TextAreaVimMode {
 
 Opt-in Vim-enabled TextAreas start in Normal mode. The callback fires when the
 TextArea changes between Insert, Normal, Visual, and VisualLine modes. Use it for
-app-owned status labels, frame titles, or focus styling; it is not an edit event
+app-owned status labels, frame headers, or focus styling; it is not an edit event
 and does not replace `TextArea::on_change`. Commands such as `i`, `a`, `I`, `A`,
 `o`, `O`, `c{motion}`, Visual `c`, `Esc`, and Visual operators can all trigger
 mode-change callbacks. Mouse-created selections in Vim-enabled TextAreas

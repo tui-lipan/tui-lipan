@@ -139,27 +139,27 @@ impl Component for HeatmapExample {
                     style: Style::new().dim(),
                 },
                 Frame {
-                    title: "Weekly Activity",
+                    header_left: "Weekly Activity",
                     border: true,
                     activity_heatmap,
                 },
                 HStack {
                     spacing: 1,
                     Frame {
-                        title: "Server Load Glyph Mode",
+                        header_left: "Server Load Glyph Mode",
                         border: true,
                         width: Length::Flex(2),
                         load_heatmap,
                     },
                     VStack {
                         Frame {
-                            title: "Simple Grid",
+                            header_left: "Simple Grid",
                             border: true,
                             width: Length::Flex(1),
                             simple_heatmap,
                         },
                         Frame {
-                            title: "Glyph Foreground Grid",
+                            header_left: "Glyph Foreground Grid",
                             border: true,
                             width: Length::Flex(1),
                             big_glyphforeground_heatmap,

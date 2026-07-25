@@ -61,11 +61,11 @@ impl Component for AutoWrapDemo {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .title("Inline Transcript mode")
+            .header_left("Inline Transcript mode")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)
-            .status("Enter appends to transcript | q/Esc quits | try resizing the terminal")
+            .footer_left("Enter appends to transcript | q/Esc quits | try resizing the terminal")
             .child(
                 VStack::new()
                     .gap(1)

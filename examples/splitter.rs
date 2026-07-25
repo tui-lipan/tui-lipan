@@ -103,7 +103,7 @@ impl Component for SplitterDemo {
             .weights(vec![0.65, 0.35])
             .child(
                 Frame::new()
-                    .title("Editor")
+                    .header_left("Editor")
                     .join_frame(joined)
                     .padding(1)
                     .border(true)
@@ -111,7 +111,7 @@ impl Component for SplitterDemo {
             )
             .child(
                 Frame::new()
-                    .title("Metadata")
+                    .header_left("Metadata")
                     .join_frame(joined)
                     .padding(1)
                     .border(true)
@@ -123,7 +123,7 @@ impl Component for SplitterDemo {
             .weights(vec![0.3, 0.7])
             .child(
                 Frame::new()
-                    .title("Files")
+                    .header_left("Files")
                     .join_frame(joined)
                     .padding(1)
                     .border(true)
@@ -137,7 +137,7 @@ impl Component for SplitterDemo {
             .on_change(ctx.link().callback(Msg::ModeTabChanged));
 
         Frame::new()
-            .title("Splitter Demo")
+            .header_left("Splitter Demo")
             .border(true)
             .padding(1)
             .child(VStack::new().gap(1).child(tabs).child(root))

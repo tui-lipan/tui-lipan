@@ -68,7 +68,7 @@ impl Component for FlowBadgesDemo {
             .collect::<Vec<Element>>();
 
         let instructions = Frame::new()
-            .title("Controls")
+            .header_left("Controls")
             .border(true)
             .padding(1)
             .child(Text::new(
@@ -78,7 +78,7 @@ impl Component for FlowBadgesDemo {
             ));
 
         let preview = Frame::new()
-            .title("Flow badge wrap preview")
+            .header_left("Flow badge wrap preview")
             .border(true)
             .padding(1)
             .child(
@@ -89,7 +89,7 @@ impl Component for FlowBadgesDemo {
             );
 
         Frame::new()
-            .title("Flow Demo")
+            .header_left("Flow Demo")
             .border(true)
             .padding(1)
             .child(

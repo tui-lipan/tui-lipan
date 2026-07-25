@@ -57,6 +57,11 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- Replace the breaking `Frame` border title/status API with positional `BorderLabels` header and
+  footer groups. Labels now support left, center, and right placement, independent group styles,
+  focused group styles, per-label overrides, and group padding. The old `title`, `status`, and
+  related Frame style methods and fields were removed (breaking).
+
 - `FileTree` no longer rebuilds the subtree of a collapsed directory on every
   render. A collapsed directory projects a single placeholder child, so
   per-frame work now scales with the rows a user can actually see instead of

@@ -877,15 +877,9 @@ pub(crate) fn gather_border_tabs_change(
             let len = props.tab_titles.len();
             let active = props.active_tab.min(len.saturating_sub(1));
 
-            let mut col = (x as i32).saturating_sub(title_rect.x as i32) as usize;
-            // Subtract header padding (left).
-            col = col.saturating_sub(props.header_padding.left as usize);
-
-            if let Some(prefix) = &props.title_prefix {
-                let prefix_w = prefix.width();
-                // Subtract prefix and the separator frame character (1 char).
-                col = col.saturating_sub(prefix_w).saturating_sub(1);
-            }
+            let col = (x as i32).saturating_sub(title_rect.x as i32) as usize;
+            // Tab titles occupy the top border directly; grouped labels are not
+            // rendered when tabs are present.
 
             let idx = crate::widgets::VStack::border_index_at_col(
                 &props.tab_titles,

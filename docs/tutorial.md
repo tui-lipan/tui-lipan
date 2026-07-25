@@ -71,7 +71,7 @@ fn view(&self, ctx: &Context<Self>) -> Element {
         .gap(0)
         .child(
             Frame::new()
-                .title("Items")
+                .header_left("Items")
                 .border(true)
                 .border_style(if sidebar_focused { BorderStyle::Thick } else { BorderStyle::Rounded })
                 .width(Length::Px(30))
@@ -88,7 +88,7 @@ fn view(&self, ctx: &Context<Self>) -> Element {
         )
         .child(
             Frame::new()
-                .title("Detail")
+                .header_left("Detail")
                 .border(true)
                 .border_style(if detail_focused { BorderStyle::Thick } else { BorderStyle::Rounded })
                 .padding(1)
@@ -106,8 +106,8 @@ fn view(&self, ctx: &Context<Self>) -> Element {
 - `BorderStyle::Thick` vs `BorderStyle::Rounded` gives visual focus cues.
 - `ListEvent { index }` is the payload for `on_select` and `on_activate`.
 
-> **Note**: We use `Frame` here because we need borders and titles to visually
-> distinguish panels. If you don't need visual chrome (border, title, status),
+> **Note**: We use `Frame` here because we need borders and header labels to visually
+> distinguish panels. If you don't need visual chrome (border, header/footer labels),
 > use `VStack`/`HStack` directly - they are lighter containers with the same
 > layout behavior. See [`patterns.md`](patterns.md) for container selection guidance.
 

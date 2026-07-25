@@ -22,7 +22,7 @@ impl Component for WebCounter {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .title("wasm hello")
+            .header_left("wasm hello")
             .border(true)
             .child(
                 VStack::new()

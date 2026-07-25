@@ -891,8 +891,8 @@ impl Component for OpencodeScrollRepro {
                     },
                 },
                 Frame::new()
-                    .title("Timeline")
-                    .status(status)
+                    .header_left("Timeline")
+                    .footer_left(status)
                     .border(true)
                     .border_style(BorderStyle::Rounded)
                     .child(timeline),

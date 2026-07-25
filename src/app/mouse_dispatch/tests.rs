@@ -655,7 +655,8 @@ fn mouse_region_wrapping_frame_receives_border_clicks() {
                 })
                 .child(
                     Frame::new()
-                        .title(" hit ")
+                        .header_left("hit")
+                        .header_padding(1)
                         .border(true)
                         .width(Length::Px(11))
                         .height(Length::Px(5))
@@ -751,7 +752,8 @@ fn mouse_region_wrapping_frame_receives_border_mouse_down() {
                 })
                 .child(
                     Frame::new()
-                        .title(" hit ")
+                        .header_left("hit")
+                        .header_padding(1)
                         .border(true)
                         .width(Length::Px(11))
                         .height(Length::Px(5))
@@ -820,7 +822,8 @@ fn mouse_region_with_only_mouse_down_receives_inner_content_press() {
                 })
                 .child(
                     Frame::new()
-                        .title(" hit ")
+                        .header_left("hit")
+                        .header_padding(1)
                         .border(true)
                         .width(Length::Px(11))
                         .height(Length::Px(5))
@@ -1626,7 +1629,7 @@ fn textarea_click_hold_rebases_after_selection_then_wheel_scroll() {
                 area = area.scroll_offset(offset);
             }
             Frame::new()
-                .title("Editor")
+                .header_left("Editor")
                 .border(true)
                 .height(Length::Flex(1))
                 .width(Length::Flex(1))

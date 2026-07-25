@@ -103,7 +103,7 @@ Do not judge a visible UI change from source alone when tui-lipan can render the
 
 - Do not set defaults explicitly. If docs mark a value as default, omit it.
 - Do not repeat `bg` on every child or sub-style. Set shared background on the nearest parent that paints it.
-- Do not use `Frame` for plain layout. Use it only for border, title, status, tabs, clipping, or decoration.
+- Do not use `Frame` for plain layout. Use it only for border, header/footer labels, tabs, clipping, or decoration.
 - Do not block in `update()` or `view()`.
 - Do not use `TaskPolicy::QueueAll` for filter-as-you-type.
 - Do not forget stable `.key(...)` values on dynamic children and focus targets.

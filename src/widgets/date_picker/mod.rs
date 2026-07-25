@@ -10,7 +10,7 @@ use crate::callback::Callback;
 use crate::core::element::Element;
 use crate::core::event::MouseEvent;
 use crate::style::{BorderStyle, Length, Padding, Style, StyleSlot};
-use crate::widgets::{Button, Center, Frame, HStack, Text, VStack};
+use crate::widgets::{BorderLabels, Button, Center, Frame, FrameLabel, HStack, Text, VStack};
 use std::sync::Arc;
 
 /// A simple calendar-based date selection widget.
@@ -444,7 +444,8 @@ impl From<DatePicker> for Element {
             .height(picker.height);
 
         if let Some(title) = picker.title.clone() {
-            frame = frame.title(title).title_style(picker.title_style);
+            frame = frame
+                .header(BorderLabels::new().left(FrameLabel::new(title).style(picker.title_style)));
         }
 
         frame.into()

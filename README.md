@@ -133,7 +133,7 @@ formatting surrounding Rust, and you can optionally run `ui-fmt` (then
 
 ```rust
 ui! {
-    Frame::new().title("Counter").border(true).padding(1) => {
+    Frame::new().header_left("Counter").border(true).padding(1) => {
         VStack::new().gap(1) => {
             Text::new(format!("Value: {}", ctx.state.value)),
             Button::new("Increment")
@@ -144,7 +144,7 @@ ui! {
 ```
 
 An alternative `rsx!` macro with struct-literal syntax is also available
-(`rsx! { Frame { title: "Counter", ... } }`), but it lacks editor
+(`rsx! { Frame { header_left: "Counter", ... } }`), but it lacks editor
 autocomplete. Both macros produce `Element` and can be mixed freely.
 
 See [`docs/macros.md`](docs/macros.md) for full syntax reference, control
@@ -161,13 +161,13 @@ fn main() -> tui_lipan::Result<()> {
     mockup!("Dashboard Preview", {
         HStack::new().gap(1)
             .child(
-                Frame::new().title("Sidebar").border(true).width(Length::Px(28))
+                Frame::new().header_left("Sidebar").border(true).width(Length::Px(28))
                     .child(List::new()
                         .items(["Dashboard", "Settings", "Logs"].map(ListItem::new))
                         .selected(0))
             )
             .child(
-                Frame::new().title("Content").border(true).padding(1)
+                Frame::new().header_left("Content").border(true).padding(1)
                     .child(Text::new("Press Esc or q to quit"))
             )
     })

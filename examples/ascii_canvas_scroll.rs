@@ -81,7 +81,7 @@ impl Component for AsciiCanvasScroll {
         );
 
         Frame::new()
-            .title("AsciiCanvas in ScrollView  (↑↓ / j k to scroll · q to quit)")
+        .header_left("AsciiCanvas in ScrollView  (↑↓ / j k to scroll · q to quit)")
             .border_style(BorderStyle::Rounded)
             .child(
                 ScrollView::new()
@@ -91,25 +91,25 @@ impl Component for AsciiCanvasScroll {
                     .scroll_keys(ScrollKeymap::DEFAULT)
                     .child(
                         Frame::new()
-                            .title("Canvas 1 - checkerboard, per-cell colors (56×18)")
+                            .header_left("Canvas 1 - checkerboard, per-cell colors (56×18)")
                             .border(true)
                             .child(checkerboard),
                     )
                     .child(
                         Frame::new()
-                            .title("Canvas 2 - row labels, per-cell colors (scroll to verify row-skip, 56×22)")
+                            .header_left("Canvas 2 - row labels, per-cell colors (scroll to verify row-skip, 56×22)")
                             .border(true)
                             .child(row_grid),
                     )
                     .child(
                         Frame::new()
-                            .title("Canvas 3 - shading + horizontal gradient orange→cyan (56×18)")
+                            .header_left("Canvas 3 - shading + horizontal gradient orange→cyan (56×18)")
                             .border(true)
                             .child(shade_canvas),
                     )
                     .child(
                         Frame::new()
-                            .title("Canvas 4 - diagonal stripes + vertical gradient magenta→yellow (56×18)")
+                            .header_left("Canvas 4 - diagonal stripes + vertical gradient magenta→yellow (56×18)")
                             .border(true)
                             .child(diagonal),
                     ),

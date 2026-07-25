@@ -1179,7 +1179,7 @@ impl Component for TuiLipanShowcase {
         let stage = Center::new().child(EffectScope::new().effects(effects).child(interactive_art));
 
         Frame::new()
-            .title(title)
+            .header_left(title)
             .border_style(BorderStyle::Rounded)
             .padding(1)
             .child(

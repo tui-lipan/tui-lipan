@@ -93,15 +93,15 @@ impl Component for TodoApp {
 
         let main_content: Element = rsx! {
             Frame {
-                title: "Todo App",
-                status: "Tab to focus • Enter adds • Ctrl+Q quits",
+                header_left: "Todo App",
+                footer_left: "Tab to focus • Enter adds • Ctrl+Q quits",
                 padding: 1,
                 border: true,
                 border_style: BorderStyle::Rounded,
                 HStack {
                     gap: 1,
                     Frame {
-                        title: "Todos",
+                        header_left: "Todos",
                         border: true,
                         border_style: panel_border_style(sidebar_active),
                         style: panel_style(sidebar_active),
@@ -166,7 +166,7 @@ impl Component for TodoApp {
                         },
                     },
                     Frame {
-                        title: "New Task",
+                        header_left: "New Task",
                         border: true,
                         border_style: panel_border_style(main_active),
                         style: panel_style(main_active),

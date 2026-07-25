@@ -5305,7 +5305,12 @@ fn repro_timeline_patch_stack_diff_panel_matches_diff_body_after_resize() {
             );
         }
 
-        Element::from(Frame::new().title("Timeline").border(true).child(scroll))
+        Element::from(
+            Frame::new()
+                .header_left("Timeline")
+                .border(true)
+                .child(scroll),
+        )
     };
 
     let mut tree = NodeTree::new();
@@ -5395,7 +5400,7 @@ fn repro_timeline_split_wrapped_diff_keeps_both_panes_same_height_on_resize() {
             .key("panel");
 
         Element::from(
-            Frame::new().title("Timeline").border(true).child(
+            Frame::new().header_left("Timeline").border(true).child(
                 ScrollView::new()
                     .border(false)
                     .scrollbar(true)

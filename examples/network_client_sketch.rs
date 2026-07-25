@@ -216,14 +216,14 @@ fn top_bar(scenario: SketchScenario) -> Element {
 
 fn collections_panel(scenario: SketchScenario) -> Element {
     Frame::new()
-        .title("Collections")
+        .header_left("Collections")
         .border(true)
         .border_style(BorderStyle::Rounded)
         .width(Length::Px(28))
         .style(surface())
-        .title_style(Style::new().fg(accent()).bold())
-        .status("Tab | Enter")
-        .status_style(muted())
+        .header_style(Style::new().fg(accent()).bold())
+        .footer_left("Tab | Enter")
+        .footer_style(muted())
         .child(
             VStack::new()
                 .gap(1)
@@ -285,12 +285,12 @@ fn request_item(method: &str, path: &str, meta: &str, color: Color) -> ListItem 
 
 fn request_panel(scenario: SketchScenario) -> Element {
     Frame::new()
-        .title("Request")
+        .header_left("Request")
         .border(true)
         .border_style(BorderStyle::Rounded)
         .height(Length::Px(10))
         .style(surface())
-        .title_style(Style::new().fg(Color::rgb(125, 211, 252)).bold())
+        .header_style(Style::new().fg(Color::rgb(125, 211, 252)).bold())
         .child(
             VStack::new()
                 .gap(1)
@@ -378,8 +378,8 @@ fn chip(label: &'static str, value: &'static str, color: Color) -> Element {
         .border(true)
         .border_style(BorderStyle::Rounded)
         .style(Style::new().bg(Color::indexed(236)).fg(Color::indexed(250)))
-        .title(label)
-        .title_style(Style::new().fg(color).bold())
+        .header_left(label)
+        .header_style(Style::new().fg(color).bold())
         .height(Length::Px(2))
         .child(Text::new(value).style(muted()).overflow(Overflow::Ellipsis))
         .into()
@@ -398,8 +398,8 @@ fn body_panel(scenario: SketchScenario) -> Element {
         .style(surface())
         .active_tab_style(Style::new().fg(Color::Black).bg(accent()).bold())
         .inactive_tab_style(muted())
-        .status("edit body | focusable TextArea")
-        .status_style(muted())
+        .footer_left("edit body | focusable TextArea")
+        .footer_style(muted())
         .child(
             TextArea::new(scenario.body())
                 .line_numbers(true)
@@ -417,13 +417,13 @@ fn body_panel(scenario: SketchScenario) -> Element {
 
 fn response_panel(scenario: SketchScenario) -> Element {
     Frame::new()
-        .title("Response")
+        .header_left("Response")
         .border(true)
         .border_style(BorderStyle::Rounded)
         .style(surface())
-        .title_style(status_style(scenario.status()).bold())
-        .status(response_status_line(scenario.status()))
-        .status_style(status_style(scenario.status()))
+        .header_style(status_style(scenario.status()).bold())
+        .footer_left(response_status_line(scenario.status()))
+        .footer_style(status_style(scenario.status()))
         .child(
             VStack::new()
                 .gap(1)
@@ -477,8 +477,8 @@ fn metric(label: &'static str, value: &'static str, value_style: Style) -> Eleme
         .border(true)
         .border_style(BorderStyle::Rounded)
         .style(Style::new().bg(Color::indexed(236)).fg(Color::indexed(250)))
-        .title(label)
-        .title_style(muted())
+        .header_left(label)
+        .header_style(muted())
         .child(Text::new(value).style(value_style.bold()))
         .into()
 }

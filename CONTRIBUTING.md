@@ -77,7 +77,8 @@ in `CHANGELOG.md`. The format follows [Keep a Changelog](https://keepachangelog.
 - New `Foo` widget with `.bar()` builder.
 
 ### Changed
-- `Frame::title` now accepts `impl Into<Cow<'static, str>>` (breaking).
+- `Frame` now uses positional `BorderLabels` header/footer groups instead of its
+  former title/status API (breaking).
 
 ### Fixed
 - `ScrollView` no longer clips the last row when content height is odd.

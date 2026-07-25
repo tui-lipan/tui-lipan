@@ -2308,7 +2308,7 @@ impl Component for BurstEffectsDemo {
         };
 
         Frame::new()
-            .title(frame_title)
+            .header_left(frame_title)
             .border_style(BorderStyle::Rounded)
             .padding(2)
             .child(

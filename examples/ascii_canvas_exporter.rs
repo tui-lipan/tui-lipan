@@ -928,9 +928,9 @@ impl Component for ExporterApp {
         let hint = controls_hint(&ctx.state);
 
         Frame::new()
-            .title(title)
-            .status_left(hint)
-            .status_right(status_text)
+            .header_left(title)
+            .footer_left(hint)
+            .footer_right(status_text)
             .border_style(BorderStyle::Rounded)
             .padding(1)
             .child(

@@ -125,7 +125,7 @@ pub use crate::clipboard::{ClipboardConfig, ClipboardPasteContent, PasteShiftIns
 
 pub use crate::widgets::{
     Accordion, AccordionItem, ActivationTheme, ActorKind, ActorRef, Animated, AnimationFrame,
-    AsciiCanvas, AsciiCanvasBuffer, AsciiCell, AutonumberTheme, Badge, BadgePosition,
+    AsciiCanvas, AsciiCanvasBuffer, AsciiCell, AutonumberTheme, Badge, BadgePosition, BorderLabels,
     BorderMergeMode, Breadcrumb, Button, ButtonVariant, Canvas, CanvasItem, Center, CenterPin,
     Chart, ChartAxis, ChartSeries, ChartSeriesMode, ChartThreshold, Checkbox, CheckboxEvent,
     CheckboxState, CheckboxVariant, ClassDiagram, ClassDiagramTheme, ClassMember, ClassRelation,
@@ -155,7 +155,7 @@ pub use crate::widgets::{
     FlowchartEdgeEvent, FlowchartItemPath, FlowchartNodeEvent, FlowchartSubgraphEvent,
     FlowchartTheme, FocusAccordion, FocusScope, FocusSizing, FormatInput, FormattedBlock,
     FormattedDiagramBlock, FormattedDocument, FormattedLine, FragmentGlyphs, FragmentKind, Frame,
-    FrameParseError, FrameSequence, FrameSequenceBuilder, GanttDate, GanttDiagram,
+    FrameLabel, FrameParseError, FrameSequence, FrameSequenceBuilder, GanttDate, GanttDiagram,
     GanttDiagramTheme, GanttDuration, GanttSection, GanttSpec, GanttTask, GanttTaskStart,
     GanttTaskStatus, GitChangeState, GitFileStatus, GitIconStyle, Graph, GraphDirection,
     GraphLayout, GraphNode, GraphNodeEvent, GraphNodePath, Grid, GridItem, GridProps, HStack,

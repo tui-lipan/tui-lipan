@@ -450,7 +450,7 @@ for that `TextArea` only. Existing apps keep plain TextArea behavior unless they
 enable it. An enabled TextArea starts in `TextAreaVimMode::Normal`; `i`, `a`,
 `I`, or `A` enter Insert, `v` toggles characterwise Visual selection mode from
 Normal/Visual, and `V` enters linewise Visual selection mode from Normal. Use
-`on_vim_mode_change` to update app-owned status bars, frame titles, or other
+`on_vim_mode_change` to update app-owned status bars, frame headers, or other
 mode-aware chrome.
 
 When `caret_shape` is not overridden, Vim mode uses a steady block cursor for

@@ -396,25 +396,20 @@ Note: Applies to the shared props backing stack container defaults.
 
 ## Frame/FrameNode
 
-Source: `src/widgets/frame/node.rs:307` (`FrameNode`).
+Source: `src/widgets/frame/node.rs:272` (`FrameNode`).
 
 Note: `Frame` is the public builder; these defaults come from its `FrameNode` backing type.
 
 | Field | Default initializer |
 |---|---|
-| `title` | `None` |
-| `title_prefix` | `None` |
-| `title_suffix` | `None` |
-| `title_alignment` | `Align::Start` |
+| `header` | `crate::widgets::frame::BorderLabels::default()` |
+| `footer` | `crate::widgets::frame::BorderLabels::default()` |
 | `tab_titles` | `Vec::new()` |
 | `active_tab` | `0` |
 | `active_tab_style` | `Style::default()` |
 | `inactive_tab_style` | `Style::default()` |
 | `tab_variant` | `TabVariant::default()` |
 | `on_tab_change` | `None` |
-| `status` | `None` |
-| `status_center` | `None` |
-| `status_right` | `None` |
 | `padding` | `Padding::default()` |
 | `decorations` | `Vec::new()` |
 | `border` | `true` |
@@ -423,16 +418,12 @@ Note: `Frame` is the public builder; these defaults come from its `FrameNode` ba
 | `border_merge_mode` | `BorderMergeMode::Exact` |
 | `join_frame` | `false` |
 | `style` | `Style::default()` |
-| `title_style` | `Style::default()` |
-| `status_style` | `Style::default()` |
 | `width` | `Length::Flex(1)` |
 | `height` | `Length::Flex(1)` |
 | `unfocused_height` | `None` |
 | `focus_min_height` | `None` |
 | `compact` | `false` |
 | `collapsible` | `true` |
-| `header_padding` | `Padding::default()` |
-| `footer_padding` | `Padding::default()` |
 | `has_header` | `false` |
 | `focusable` | `false` |
 | `focus_scope` | `FocusScope::None` |
@@ -991,7 +982,7 @@ Source: `src/widgets/document_view/mod.rs:329` (`DocumentView`).
 
 ## FileTree
 
-Source: `src/widgets/file_tree/mod.rs:215` (`FileTree`).
+Source: `src/widgets/file_tree/mod.rs:341` (`FileTree`).
 
 | Field | Default initializer |
 |---|---|
@@ -1238,6 +1229,7 @@ Source: `src/widgets/terminal/mod.rs:49` (`Terminal`).
 | `total_scrollback_rows` | `0` |
 | `mouse_mode` | `MouseModeState::default()` |
 | `key_modes` | `TerminalKeyModes::default()` |
+| `paste_shortcut_behavior` | `TerminalPasteShortcutBehavior::Forward` |
 | `selection` | `None` |
 | `selection_controlled` | `false` |
 | `selection_style` | `StyleSlot::Inherit` |

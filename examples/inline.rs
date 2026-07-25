@@ -64,11 +64,11 @@ impl Component for InlineDemo {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .title("Inline mode")
+            .header_left("Inline mode")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)
-            .status(format!(
+            .footer_left(format!(
                 "Enter records a line | m toggles mouse ({}) | q/Esc quits",
                 if ctx.mouse_capture_enabled() {
                     "on"

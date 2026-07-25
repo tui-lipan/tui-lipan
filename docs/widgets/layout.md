@@ -162,11 +162,11 @@ in declaration order, so later children appear visually on top.
 Canvas::new()
     .child_at(
         Rect { x: 2, y: 1, w: 26, h: 6 },
-        Frame::new().title("Logs").child(log_panel),
+        Frame::new().header_left("Logs").child(log_panel),
     )
     .child_at(
         Rect { x: 18, y: 4, w: 24, h: 7 },
-        Frame::new().title("Inspector").child(inspector),
+        Frame::new().header_left("Inspector").child(inspector),
     )
 ```
 
@@ -191,21 +191,51 @@ example.
 
 ## Frame
 
-Container with border, title, optional status line, and tab affordances.
+Container with border, positional header/footer labels, and tab affordances.
+
+Border labels are organized into two independent groups. Each group has `left`,
+`center`, and `right` positions. The grouped API is canonical; the
+`header_left`/`footer_right` methods are thin convenience setters.
+
+```rust
+Frame::new()
+    .header(BorderLabels::new().left("Title").right("Status"))
+    .footer(
+        BorderLabels::new()
+            .left("Mode")
+            .center("Workspace")
+            .right("Time"),
+    )
+```
+
+For custom styles, group styles provide defaults and per-label styles extend
+them. Focused styles are applied only while the frame is focused:
+
+```rust
+Frame::new().header(
+    BorderLabels::new()
+        .left(
+            FrameLabel::new("Project")
+                .style(Style::new().fg(Color::Cyan))
+                .focused_style(Style::new().bold()),
+        )
+        .center("Workspace 1")
+        .right("Connected")
+        .style(Style::new().fg(Color::Gray))
+        .focused_style(Style::new().fg(Color::White))
+        .padding(1),
+)
+```
 
 | Prop | Type | Description |
 |------|------|-------------|
-| `title` | `impl Into<String>` | Frame title |
-| `title_style` | `Style` | Title style |
-| `focus_title_style` | `Style` | Title style when focused |
+| `header` | `BorderLabels` | Top border labels (`left` / `center` / `right`) |
+| `footer` | `BorderLabels` | Bottom border labels (`left` / `center` / `right`) |
+| `header_content` | `impl Into<Element>` | Optional content row inside a borderless frame |
 | `focus_style` | `Style` | Frame style when focused |
 | `extend_focus_style` / `inherit_focus_style` | `Style` / `()` | Extend or inherit the focus theme role instead of replacing it |
 | `hover_style` | `Style` | Frame style when hovered |
 | `extend_hover_style` / `inherit_hover_style` | `Style` / `()` | Extend or inherit the hover theme role instead of replacing it |
-| `title_align` | `Align` | Title alignment |
-| `status` | `impl Into<String>` | Right-side status text |
-| `status_style` | `Style` | Status text style |
-| `focus_status_style` | `Style` | Status style when focused |
 | `border` | `bool` | Draw border |
 | `border_style` | `BorderStyle` | Border appearance |
 | `border_edges` | `BorderEdges` | Border geometry (`All` or `HorizontalCaps`) |

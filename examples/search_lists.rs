@@ -125,11 +125,11 @@ impl Component for SearchLists {
 
         rsx! {
             Frame {
-                status: ctx.state.status.clone(),
+                footer_left: ctx.state.status.clone(),
                 border: true,
                 border_style: BorderStyle::Rounded,
                 padding: (0, 1, 1, 1),
-                header: rsx! {
+                header_content: rsx! {
                     HStack {
                         gap: 1,
                         Text {
@@ -165,7 +165,7 @@ impl Component for SearchLists {
                         border_style: border_style(files_active),
                         style: active_style(files_active),
                         padding: (0, 1, 1, 1),
-                        header: rsx! {
+                        header_content: rsx! {
                             Input {
                                 value: ctx.state.files_query.text().to_owned(),
                                 cursor: ctx.state.files_query.cursor(),
@@ -207,7 +207,7 @@ impl Component for SearchLists {
                         border_style: border_style(branches_active),
                         style: active_style(branches_active),
                         padding: (0, 1, 1, 1),
-                        header: rsx! {
+                        header_content: rsx! {
                             Input {
                                 value: ctx.state.branches_query.text().to_owned(),
                                 cursor: ctx.state.branches_query.cursor(),
@@ -248,7 +248,7 @@ impl Component for SearchLists {
                         border_style: border_style(tasks_active),
                         style: active_style(tasks_active),
                         padding: (0, 1, 1, 1),
-                        header: rsx! {
+                        header_content: rsx! {
                             Input {
                                 value: ctx.state.tasks_query.text().to_owned(),
                                 cursor: ctx.state.tasks_query.cursor(),

@@ -46,8 +46,8 @@ impl Component for LiveHostColors {
             .gap(1)
             .child(
                 Frame::new()
-                    .title("Live Host Colors")
-                    .status("r refresh - q/Esc quit")
+                    .header_left("Live Host Colors")
+                    .footer_left("r refresh - q/Esc quit")
                     .border(true)
                     .border_style(BorderStyle::Rounded)
                     .padding(1)
@@ -66,7 +66,7 @@ impl Component for LiveHostColors {
             )
             .child(
                 Frame::new()
-                    .title("App-wide System Theme")
+                    .header_left("App-wide System Theme")
                     .border(true)
                     .border_style(BorderStyle::Rounded)
                     .padding(1)
@@ -89,7 +89,7 @@ impl Component for LiveHostColors {
             .child(
                 ThemeProvider::new(app_owned_theme.clone()).child(
                     Frame::new()
-                        .title("App-owned Tokens")
+                        .header_left("App-owned Tokens")
                         .border(true)
                         .border_style(BorderStyle::Rounded)
                         .padding(1)

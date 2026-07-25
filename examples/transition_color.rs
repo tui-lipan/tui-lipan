@@ -80,7 +80,7 @@ impl Component for TransitionColorDemo {
             ctx.transition::<f32>("box-progress", if active { 1.0 } else { 0.0 }, scalar_cfg);
 
         let animated_box = Frame::new()
-            .title("With transition")
+            .header_left("With transition")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .style(Style::new().bg(bg).fg(fg))
@@ -97,7 +97,7 @@ impl Component for TransitionColorDemo {
             );
 
         let plain_box = Frame::new()
-            .title("Without transition (snap)")
+            .header_left("Without transition (snap)")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .style(
@@ -121,8 +121,8 @@ impl Component for TransitionColorDemo {
             );
 
         Frame::new()
-            .title("ctx.transition(...) — property-scoped animation")
-            .status("SPACE toggle • Q quit")
+            .header_left("ctx.transition(...) — property-scoped animation")
+            .footer_left("SPACE toggle • Q quit")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)

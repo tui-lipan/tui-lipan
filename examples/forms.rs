@@ -42,7 +42,7 @@ impl Component for FormsDemo {
         let countries = vec!["USA", "Canada", "UK", "Germany", "France", "Japan"];
 
         let radio_section = Frame::new()
-            .title("Theme Selection")
+            .header_left("Theme Selection")
             .border(true)
             .height(Length::Flex(1))
             .child_align(Align::Center)
@@ -58,7 +58,7 @@ impl Component for FormsDemo {
             );
 
         let select_section = Frame::new()
-            .title("Country")
+            .header_left("Country")
             .border(true)
             .height(Length::Flex(1))
             .child(
@@ -74,7 +74,7 @@ impl Component for FormsDemo {
             );
 
         let date_section = Frame::new()
-            .title("Date Picker")
+            .header_left("Date Picker")
             .border(true)
             .height(Length::Flex(1))
             .child(
@@ -98,7 +98,7 @@ impl Component for FormsDemo {
             );
 
         let slider_section = Frame::new()
-            .title("Volume")
+            .header_left("Volume")
             .border(true)
             .height(Length::Flex(1))
             .child(
@@ -124,7 +124,7 @@ impl Component for FormsDemo {
         ];
 
         let combo_section = Frame::new()
-            .title("Language")
+            .header_left("Language")
             .border(true)
             .height(Length::Flex(1))
             .child(

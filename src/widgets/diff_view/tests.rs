@@ -1427,7 +1427,7 @@ fn split_diff_text_view_example_geometry_shows_h_scrollbar_at_103_and_105_cols()
         let root: Element = VStack::new()
             .child(
                 Frame::new()
-                    .title("DiffView - Split (TextArea backend, scroll synced)")
+                    .header_left("DiffView - Split (TextArea backend, scroll synced)")
                     .padding(1)
                     .height(Length::Flex(1))
                     .child(
@@ -1454,14 +1454,14 @@ fn split_diff_text_view_example_geometry_shows_h_scrollbar_at_103_and_105_cols()
             )
             .child(
                 Frame::new()
-                    .title("DiffView - Split (DocumentView backend, scroll synced)")
+                    .header_left("DiffView - Split (DocumentView backend, scroll synced)")
                     .padding(1)
                     .height(Length::Flex(1))
                     .child(crate::widgets::Text::new("placeholder")),
             )
             .child(
                 Frame::new()
-                    .title("DiffView - Unified (editable TextArea backend)")
+                    .header_left("DiffView - Unified (editable TextArea backend)")
                     .padding(1)
                     .height(Length::Flex(1))
                     .child(crate::widgets::Text::new("placeholder")),
