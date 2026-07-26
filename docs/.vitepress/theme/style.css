@@ -1094,4 +1094,15 @@ body.scanlines::after {
     .vp-doc h2 {
         font-size: 16px !important;
     }
+
+    /* Keep the mobile hamburger aligned with the navbar's right padding. */
+    .VPNavBarHamburger {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-end !important;
+        width: 32px !important;
+        height: 48px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
 }
