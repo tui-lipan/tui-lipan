@@ -121,7 +121,7 @@ body {
     padding: 0 16px 0 24px !important;
 }
 .VPNavBar > .wrapper,
-.VPNavBar .container,
+.VPNavBar > .wrapper > .container,
 .VPNavBar .content,
 .VPNavBar .content-body {
     height: 48px !important;
@@ -1104,5 +1104,9 @@ body.scanlines::after {
         height: 48px !important;
         margin: 0 !important;
         padding: 0 !important;
+    }
+    .VPNavBarHamburger .container {
+        width: 16px !important;
+        height: 14px !important;
     }
 }
