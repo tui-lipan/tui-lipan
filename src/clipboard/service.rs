@@ -2,7 +2,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::clipboard::error::ClipboardError;
-use crate::clipboard::provider::{ClipboardPasteContent, ClipboardProvider, ImageContent};
+#[cfg(feature = "terminal")]
+use crate::clipboard::provider::ClipboardPasteContent;
+use crate::clipboard::provider::{ClipboardProvider, ImageContent};
 use crate::style::Style;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +83,7 @@ impl ClipboardService {
         self.provider.borrow_mut().write_clipboard_text(text)
     }
 
+    #[cfg(feature = "terminal")]
     pub(crate) fn read_terminal_paste(&self) -> Result<ClipboardPasteContent, ClipboardError> {
         self.provider.borrow_mut().read_terminal_paste()
     }

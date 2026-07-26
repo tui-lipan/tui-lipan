@@ -766,8 +766,8 @@ mod tests {
         backend.render();
         let snapshot = backend.capture_ui_snapshot();
         let markdown = snapshot.to_markdown();
+        #[cfg(feature = "ui-snapshot-png")]
         if let Ok(dir) = std::env::var("DEVTOOLS_SNAPSHOT_DIR") {
-            #[cfg(feature = "ui-snapshot-png")]
             let _ = std::fs::write(
                 format!("{dir}/devtools-stats-empty.png"),
                 snapshot.to_png_default(),

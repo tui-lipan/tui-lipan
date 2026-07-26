@@ -3,7 +3,7 @@ use std::collections::hash_map::DefaultHasher;
 #[cfg(feature = "image")]
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
-#[cfg(any(feature = "image", feature = "profiling-tracing"))]
+#[cfg(feature = "image")]
 use web_time::Instant;
 
 #[cfg(feature = "image")]
