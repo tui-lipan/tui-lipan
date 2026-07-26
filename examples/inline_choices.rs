@@ -104,11 +104,11 @@ impl Component for InlineChoices {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .title("Inline choices")
+            .header_left("Inline choices")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)
-            .status(format!(
+            .footer_left(format!(
                 "Enter applies from note input | m toggles mouse ({}) | q/Esc quits",
                 if ctx.mouse_capture_enabled() {
                     "on"

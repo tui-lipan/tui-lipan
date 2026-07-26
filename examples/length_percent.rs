@@ -6,7 +6,7 @@ fn main() -> Result<()> {
             .gap(1)
             .child(
                 Frame::new()
-                    .title("Horizontal Percent Widths")
+                    .header_left("Horizontal Percent Widths")
                     .border(true)
                     .height(Length::Percent(35))
                     .child(
@@ -31,7 +31,7 @@ fn main() -> Result<()> {
             )
             .child(
                 Frame::new()
-                    .title("Vertical Percent Heights")
+                    .header_left("Vertical Percent Heights")
                     .border(true)
                     .child(
                         HStack::new()
@@ -58,7 +58,7 @@ fn main() -> Result<()> {
                             )
                             .child(
                                 Frame::new()
-                                    .title("Notes")
+                                    .header_left("Notes")
                                     .border(true)
                                     .width(Length::Flex(1))
                                     .padding(1)
@@ -82,7 +82,7 @@ fn main() -> Result<()> {
 
 fn width_card(title: &'static str, width: Length, color: Color) -> Element {
     Frame::new()
-        .title(title)
+        .header_left(title)
         .border(true)
         .width(width)
         .style(Style::new().bg(color).fg(Color::White))
@@ -92,7 +92,7 @@ fn width_card(title: &'static str, width: Length, color: Color) -> Element {
 
 fn height_card(title: &'static str, height: Length, color: Color) -> Element {
     Frame::new()
-        .title(title)
+        .header_left(title)
         .border(true)
         .height(height)
         .style(Style::new().bg(color).fg(Color::White))

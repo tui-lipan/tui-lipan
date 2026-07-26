@@ -5992,8 +5992,8 @@ mod tests {
             Frame::new()
                 .style(Style::new().fg(Color::Rgb(90, 91, 92)))
                 .tab_titles(["Files", "Branches"])
-                .title_prefix("[2]")
-                .status("ready")
+                .header_left("[2]")
+                .footer_left("ready")
                 .child(VStack::new().child(Text::new("content")))
                 .into()
         }
@@ -6014,11 +6014,11 @@ mod tests {
                     theme.muted.fg.or(theme.primary.fg)
                 );
                 assert_eq!(
-                    resolve_base_style(&theme, frame.props.title_style).fg,
+                    resolve_base_style(&theme, frame.props.header.style).fg,
                     theme.primary.fg
                 );
                 assert_eq!(
-                    resolve_muted_style(&theme, frame.props.status_style).fg,
+                    resolve_muted_style(&theme, frame.props.footer.style).fg,
                     theme.muted.fg.or(theme.primary.fg)
                 );
             }

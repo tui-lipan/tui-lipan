@@ -24,7 +24,7 @@ impl Component for AgentDashboard {
         HStack::new()
             .child(
                 Frame::new()
-                    .title("Nav")
+                    .header_left("Nav")
                     .width(Length::Px(22))
                     .child(
                         List::new()
@@ -36,7 +36,7 @@ impl Component for AgentDashboard {
             )
             .child(
                 Frame::new()
-                    .title("Panel")
+                    .header_left("Panel")
                     .child(Text::new(format!("tick {}", ctx.state)))
                     .key("panel"),
             )

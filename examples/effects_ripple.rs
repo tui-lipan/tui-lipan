@@ -85,8 +85,8 @@ impl Component for RippleEffectsDemo {
         }
 
         let shell = Frame::new()
-            .title("Ripple Effects")
-            .status("b/enter burst | q quit")
+            .header_left("Ripple Effects")
+            .footer_left("b/enter burst | q quit")
             .border(true)
             .padding(1)
             .child(
@@ -116,7 +116,7 @@ fn ripple_panel(ctx: &Context<RippleEffectsDemo>) -> Element {
     });
 
     Frame::new()
-        .title("Loop + Once")
+        .header_left("Loop + Once")
         .border(true)
         .height(Length::Flex(1))
         .style(Style::new().bg(Color::rgb(8, 12, 22)))

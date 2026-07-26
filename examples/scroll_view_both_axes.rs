@@ -56,7 +56,7 @@ impl Component for BothAxesDemo {
         ui! {
             VStack::new().gap(1).padding(1) => {
                 Frame::new()
-                    .title("ScrollView · vertical + horizontal")
+                    .header_left("ScrollView · vertical + horizontal")
                     .border(true)
                     .padding(1)
                     .child(

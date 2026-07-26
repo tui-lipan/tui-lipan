@@ -8,7 +8,7 @@ use crate::core::element::Element;
 use crate::style::{Align, BorderStyle, Length, Padding, Rect, RichText, Span, Style};
 use crate::widgets::frame::EdgeDecoration;
 use crate::widgets::text::Overflow;
-use crate::widgets::{Frame, Text};
+use crate::widgets::{BorderLabels, Frame, FrameLabel, Text};
 
 pub(crate) const COPY_GLYPH: &str = "⧉";
 
@@ -247,18 +247,9 @@ impl Toast {
         let render_copy_affordance = self.copyable
             && self.border
             && matches!(self.copy_affordance, ToastCopyAffordance::BorderGlyph);
-        let title_alignment = if render_copy_affordance {
-            Align::End
-        } else {
-            self.title_alignment
-        };
-
         let mut frame = Frame::new()
-            .title_style(self.title_style)
-            .title_alignment(title_alignment)
             .border(self.border)
             .border_style(self.border_style)
-            .header_padding(self.header_padding)
             .padding(self.padding)
             .style(self.frame_style)
             .child(
@@ -269,12 +260,6 @@ impl Toast {
             .width(self.width)
             .height(self.height);
 
-        if let Some(title) = self.title {
-            frame = frame.title(title);
-        }
-        if let Some(prefix) = self.title_prefix.clone() {
-            frame = frame.title_prefix(prefix);
-        }
         let title_suffix = if render_copy_affordance {
             let mut suffix = self.title_suffix.clone().unwrap_or_default();
             if !suffix.is_empty() {
@@ -285,9 +270,37 @@ impl Toast {
         } else {
             self.title_suffix.clone()
         };
-        if let Some(suffix) = title_suffix {
-            frame = frame.title_suffix(suffix);
+        let mut header = BorderLabels::new()
+            .padding(self.header_padding)
+            .style(self.title_style);
+        let mut title = RichText::new();
+        if let Some(prefix) = self.title_prefix {
+            title.spans.extend(prefix.spans);
         }
+        if let Some(title_text) = self.title {
+            if !title.is_empty() {
+                title.spans.push(Span::new("─"));
+            }
+            title.spans.push(Span::new(title_text));
+        }
+        if let Some(suffix) = title_suffix {
+            if !title.is_empty() {
+                title.spans.push(Span::new("─"));
+            }
+            title.spans.extend(suffix.spans);
+        }
+        if !title.is_empty() {
+            let label = FrameLabel::new(title);
+            header = match self.title_alignment {
+                Align::Center => header.center(label),
+                Align::End => header.right(label),
+                Align::Start | Align::Stretch => header.left(label),
+            };
+        }
+        if render_copy_affordance {
+            header = header.right(FrameLabel::new(COPY_GLYPH));
+        }
+        frame = frame.header(header);
         if !self.decorations.is_empty() {
             frame = frame.decorations(self.decorations.clone());
         }
@@ -320,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    fn copy_zone_tracks_top_right_title_suffix_cell() {
+    fn copy_zone_tracks_top_right_header_label_cell() {
         let zone = copy_zone_with_right_padding(
             Rect {
                 x: 10,
@@ -368,7 +381,7 @@ mod tests {
         let ElementKind::Frame(frame) = element.kind else {
             panic!("toast should lower to a frame");
         };
-        assert!(frame.props.title_suffix.is_none());
+        assert!(!frame.props.header.has_labels());
     }
 
     #[test]
@@ -381,6 +394,6 @@ mod tests {
         let ElementKind::Frame(frame) = element.kind else {
             panic!("toast should lower to a frame");
         };
-        assert!(frame.props.title_suffix.is_none());
+        assert!(!frame.props.header.has_labels());
     }
 }

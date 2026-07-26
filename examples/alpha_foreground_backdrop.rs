@@ -37,7 +37,7 @@ impl Component for AlphaForegroundBackdrop {
             .style(Style::new().bg(TERMINAL_FALLBACK_BG))
             .child(
                 Frame::new()
-                    .title("Alpha foreground backdrop repro")
+                    .header_left("Alpha foreground backdrop repro")
                     .border(true)
                     .border_style(BorderStyle::Rounded)
                     .padding(1)
@@ -70,7 +70,7 @@ impl Component for AlphaForegroundBackdrop {
             )
             .child(
                 Frame::new()
-                    .title("Interactive hover check")
+                    .header_left("Interactive hover check")
                     .border(true)
                     .border_style(BorderStyle::Rounded)
                     .padding(1)

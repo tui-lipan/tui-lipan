@@ -766,7 +766,7 @@ impl MyComposite {
 impl From<MyComposite> for Element {
     fn from(val: MyComposite) -> Self {
         Frame::new()
-            .title(val.title)
+            .header_left(val.title)
             .border(true)
             .child(
                 VStack::new()

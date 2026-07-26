@@ -65,14 +65,14 @@ impl Component for ContextProviderDemo {
             )
             .child(
                 Frame::new()
-                    .title("Inherited Context")
+                    .header_left("Inherited Context")
                     .border(true)
                     .padding(1)
                     .child(child::<ContextReadout, _>(|| ContextReadout, "root")),
             )
             .child(
                 Frame::new()
-                    .title("Shadowed Count")
+                    .header_left("Shadowed Count")
                     .border(true)
                     .padding(1)
                     .child(

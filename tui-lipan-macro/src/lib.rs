@@ -25,7 +25,7 @@ pub fn rsx(input: TokenStream) -> TokenStream {
 ///
 /// ```ignore
 /// ui! {
-///     Frame::new().title("Panel").border(true) => {
+///     Frame::new().header_left("Panel").border(true) => {
 ///         Text::new("Hello"),
 ///         Button::new("Click").on_click(handler),
 ///     }

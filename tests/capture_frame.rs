@@ -17,7 +17,7 @@ impl Component for FrameAndText {
 
     fn view(&self, _ctx: &Context<Self>) -> Element {
         Frame::new()
-            .title("Panel")
+            .header_left("Panel")
             .child(Text::new("hello frame"))
             .into()
     }
@@ -164,7 +164,7 @@ impl Component for SplitDiffThemedFiller {
 }
 
 #[test]
-fn plain_text_includes_frame_title_and_text_content() {
+fn plain_text_includes_frame_header_and_text_content() {
     let mut backend = TestBackend::new(FrameAndText);
     backend.set_viewport(Rect {
         x: 0,

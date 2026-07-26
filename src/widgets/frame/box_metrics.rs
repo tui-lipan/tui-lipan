@@ -27,8 +27,10 @@ pub(crate) struct FrameGeometry {
     pub content_rect: Rect,
     /// Rect reserved for the header element, if any.
     pub header_rect: Option<Rect>,
-    /// Rect reserved for the status line in borderless mode, if any.
-    pub status_rect: Option<Rect>,
+    /// Rect reserved for border header labels in borderless mode.
+    pub header_labels_rect: Option<Rect>,
+    /// Rect reserved for footer labels in borderless mode, if any.
+    pub footer_rect: Option<Rect>,
     /// Whether the frame borders join with a neighbor.
     pub join_overlap: FrameJoinOverlap,
     /// Whether the frame renders a border.
@@ -132,12 +134,16 @@ pub(crate) fn compute_frame_geometry(
         }
     }
 
-    let has_status =
-        props.status.is_some() || props.status_center.is_some() || props.status_right.is_some();
+    let has_header_labels = props.header.has_labels();
+    let has_footer_labels = props.footer.has_labels();
 
     let mut content_rect = inner;
-    if has_status && !has_border {
-        content_rect.h = content_rect.h.saturating_sub(1);
+    if !has_border {
+        content_rect.y = content_rect.y.saturating_add(has_header_labels as i16);
+        content_rect.h = content_rect
+            .h
+            .saturating_sub(has_header_labels as u16)
+            .saturating_sub(has_footer_labels as u16);
     }
 
     content_rect = content_rect.inset(props.padding);
@@ -145,6 +151,16 @@ pub(crate) fn compute_frame_geometry(
 
     // Header rect
     let mut header_rect = None;
+    let header_labels_rect = if has_header_labels && !has_border && inner.h > 0 {
+        Some(Rect {
+            x: inner.x,
+            y: inner.y,
+            w: inner.w,
+            h: 1,
+        })
+    } else {
+        None
+    };
     let has_header = props.has_header && !props.compact && frame_rect.h > 0;
     if has_header {
         if has_border {
@@ -159,7 +175,7 @@ pub(crate) fn compute_frame_geometry(
                     .saturating_add(if join_left { 1 } else { 0 }),
                 h: 1,
             };
-            let pad = props.header_padding;
+            let pad = props.header.padding;
             header = header.inset(Padding {
                 left: pad.left,
                 right: pad.right,
@@ -176,7 +192,7 @@ pub(crate) fn compute_frame_geometry(
                 w: content_rect.w,
                 h: 1,
             };
-            let pad = props.header_padding;
+            let pad = props.header.padding;
             header = header.inset(Padding {
                 left: pad.left,
                 right: pad.right,
@@ -191,26 +207,19 @@ pub(crate) fn compute_frame_geometry(
         }
     }
 
-    // Status rect (for borderless frames)
-    let mut status_rect = None;
-    if has_status && !has_border {
-        let mut status = Rect {
+    // Footer rect (for borderless frames)
+    let mut footer_rect = None;
+    if has_footer_labels && !has_border {
+        let mut footer = Rect {
             x: inner.x,
             y: inner.y.saturating_add(inner.h as i16).saturating_sub(1),
             w: inner.w,
             h: 1,
         };
-        let pad = props.footer_padding;
-        status = status.inset(props.padding);
-        status = status.inset(border_deco_inset);
-        status = status.inset(Padding {
-            left: pad.left,
-            right: pad.right,
-            top: 0,
-            bottom: 0,
-        });
-        if status.w > 0 && status.h > 0 {
-            status_rect = Some(status);
+        footer = footer.inset(props.padding);
+        footer = footer.inset(border_deco_inset);
+        if footer.w > 0 && footer.h > 0 {
+            footer_rect = Some(footer);
         }
     }
 
@@ -275,7 +284,8 @@ pub(crate) fn compute_frame_geometry(
         body_rect,
         content_rect,
         header_rect,
-        status_rect,
+        header_labels_rect,
+        footer_rect,
         join_overlap,
         has_border,
         border_padding,

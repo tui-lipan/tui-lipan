@@ -162,7 +162,7 @@ impl Component for SentinelDemo {
                         .map(|(i, name)| ListItem::new(*name).active(i == state.picker_index))
                         .collect();
                     Frame::new()
-                        .title("Mention a file  (↑↓ Enter Esc)")
+                        .header_left("Mention a file  (↑↓ Enter Esc)")
                         .border(true)
                         .height(Length::Px((FILES.len() as u16).saturating_add(2)))
                         .width(Length::Px(45))
@@ -180,7 +180,7 @@ impl Component for SentinelDemo {
             })
             .child(
                 Frame::new()
-                    .title("TextArea Sentinel Demo")
+                    .header_left("TextArea Sentinel Demo")
                     .border(true)
                     .height(Length::Flex(1))
                     .child(
@@ -201,7 +201,7 @@ impl Component for SentinelDemo {
             .child(Text::new(hint).height(Length::Px(1)))
             .child(
                 Frame::new()
-                    .title("Tokens (path + id)")
+                    .header_left("Tokens (path + id)")
                     .border(true)
                     .height(Length::Px(3))
                     .child(Text::new(format!("  {}", tokens_text))),

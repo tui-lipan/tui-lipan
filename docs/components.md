@@ -485,7 +485,7 @@ impl Component for MyWidget {
 
     fn view(&self, _ctx: &Context<Self>) -> Element {
         Frame::new()
-            .title("Panel")
+            .header_left("Panel")
             .child(Text::new("hello"))
             .into()
     }

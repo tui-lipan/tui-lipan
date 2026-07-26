@@ -18,8 +18,153 @@ use crate::style::{
 use crate::widgets::{TabVariant, TabsEvent};
 
 pub use self::node::FrameNode;
-// Alias for backward compatibility if needed, though we are updating usages.
+// Internal renderer alias.
 pub(crate) use self::node::FrameProps;
+
+/// A label rendered in one of a frame's border positions.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct FrameLabel {
+    /// Label content.
+    pub content: RichText,
+    /// Optional style layered on top of the containing group style.
+    pub style: Option<Style>,
+    /// Optional style layered on top of the group focus style while focused.
+    pub focused_style: Option<Style>,
+}
+
+impl FrameLabel {
+    /// Create a border label.
+    pub fn new(content: impl Into<RichText>) -> Self {
+        Self {
+            content: content.into(),
+            style: None,
+            focused_style: None,
+        }
+    }
+
+    /// Set the normal label style.
+    pub fn style(mut self, style: Style) -> Self {
+        self.style = Some(style);
+        self
+    }
+
+    /// Set the label style while its frame is focused.
+    pub fn focused_style(mut self, style: Style) -> Self {
+        self.focused_style = Some(style);
+        self
+    }
+}
+
+impl From<RichText> for FrameLabel {
+    fn from(content: RichText) -> Self {
+        Self::new(content)
+    }
+}
+
+impl From<String> for FrameLabel {
+    fn from(content: String) -> Self {
+        Self::new(content)
+    }
+}
+
+impl From<std::sync::Arc<str>> for FrameLabel {
+    fn from(content: std::sync::Arc<str>) -> Self {
+        Self::new(content)
+    }
+}
+
+impl From<&str> for FrameLabel {
+    fn from(content: &str) -> Self {
+        Self::new(content.to_owned())
+    }
+}
+
+impl From<crate::style::Span> for FrameLabel {
+    fn from(content: crate::style::Span) -> Self {
+        Self::new(content)
+    }
+}
+
+/// Positional labels rendered in one border row of a frame.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BorderLabels {
+    /// Left-aligned label.
+    pub left: Option<FrameLabel>,
+    /// Center-aligned label.
+    pub center: Option<FrameLabel>,
+    /// Right-aligned label.
+    pub right: Option<FrameLabel>,
+    /// Default style for labels in this group.
+    pub style: Style,
+    /// Optional style layered on top while the frame is focused.
+    pub focused_style: Option<Style>,
+    /// Horizontal padding around each label.
+    pub padding: Padding,
+}
+
+impl BorderLabels {
+    /// Create an empty label group.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the left label.
+    pub fn left(mut self, label: impl Into<FrameLabel>) -> Self {
+        self.left = Some(label.into());
+        self
+    }
+
+    /// Set the centered label.
+    pub fn center(mut self, label: impl Into<FrameLabel>) -> Self {
+        self.center = Some(label.into());
+        self
+    }
+
+    /// Set the right label.
+    pub fn right(mut self, label: impl Into<FrameLabel>) -> Self {
+        self.right = Some(label.into());
+        self
+    }
+
+    /// Set the default style for labels in this group.
+    pub fn style(mut self, style: Style) -> Self {
+        self.style = style;
+        self
+    }
+
+    /// Set the group style while the frame is focused.
+    pub fn focused_style(mut self, style: Style) -> Self {
+        self.focused_style = Some(style);
+        self
+    }
+
+    /// Set horizontal padding around labels in this group.
+    pub fn padding(mut self, padding: impl Into<Padding>) -> Self {
+        self.padding = padding.into();
+        self
+    }
+
+    pub(crate) fn has_labels(&self) -> bool {
+        [&self.left, &self.center, &self.right]
+            .into_iter()
+            .flatten()
+            .any(|label| !label.content.is_empty())
+    }
+
+    pub(crate) fn min_width(&self) -> usize {
+        [&self.left, &self.center, &self.right]
+            .into_iter()
+            .flatten()
+            .map(|label| {
+                label
+                    .content
+                    .width()
+                    .saturating_add(self.padding.left as usize)
+                    .saturating_add(self.padding.right as usize)
+            })
+            .sum()
+    }
+}
 
 /// Strategy used when frame border symbols overlap.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -254,30 +399,6 @@ impl Frame {
         Self::default()
     }
 
-    /// Set title (ignored when border tabs are set).
-    pub fn title(mut self, title: impl Into<RichText>) -> Self {
-        self.props.title = Some(title.into());
-        self
-    }
-
-    /// Set an optional prefix rendered before the title or tabs.
-    pub fn title_prefix(mut self, prefix: impl Into<RichText>) -> Self {
-        self.props.title_prefix = Some(prefix.into());
-        self
-    }
-
-    /// Set an optional suffix rendered after the title or tabs.
-    pub fn title_suffix(mut self, suffix: impl Into<RichText>) -> Self {
-        self.props.title_suffix = Some(suffix.into());
-        self
-    }
-
-    /// Set the title alignment in the top border.
-    pub fn title_alignment(mut self, align: Align) -> Self {
-        self.props.title_alignment = align;
-        self
-    }
-
     /// Set tab titles rendered in the top border.
     pub fn tab_titles<I, S>(mut self, titles: I) -> Self
     where
@@ -330,26 +451,27 @@ impl Frame {
         self
     }
 
-    /// Set a status line shown at the bottom of the inner area (left-aligned).
-    pub fn status(mut self, status: impl Into<RichText>) -> Self {
-        self.props.status = Some(status.into());
+    /// Set labels rendered in the top border.
+    pub fn header(mut self, header: BorderLabels) -> Self {
+        self.props.header = Box::new(header);
         self
     }
 
-    /// Set a left-aligned status segment.
-    pub fn status_left(self, status: impl Into<RichText>) -> Self {
-        self.status(status)
-    }
-
-    /// Set a centered status segment.
-    pub fn status_center(mut self, status: impl Into<RichText>) -> Self {
-        self.props.status_center = Some(status.into());
+    /// Set the left header label.
+    pub fn header_left(mut self, label: impl Into<FrameLabel>) -> Self {
+        self.props.header.left = Some(label.into());
         self
     }
 
-    /// Set a right-aligned status segment.
-    pub fn status_right(mut self, status: impl Into<RichText>) -> Self {
-        self.props.status_right = Some(status.into());
+    /// Set the centered header label.
+    pub fn header_center(mut self, label: impl Into<FrameLabel>) -> Self {
+        self.props.header.center = Some(label.into());
+        self
+    }
+
+    /// Set the right header label.
+    pub fn header_right(mut self, label: impl Into<FrameLabel>) -> Self {
+        self.props.header.right = Some(label.into());
         self
     }
 
@@ -362,18 +484,6 @@ impl Frame {
     /// Set style for the inner content area (distinct from border).
     pub fn inner_style(mut self, style: Style) -> Self {
         self.props.overrides_mut().inner_style = Some(style);
-        self
-    }
-
-    /// Set title style.
-    pub fn title_style(mut self, style: Style) -> Self {
-        self.props.title_style = style;
-        self
-    }
-
-    /// Set style applied to the title when focused.
-    pub fn focus_title_style(mut self, style: Style) -> Self {
-        self.props.overrides_mut().focus_title_style = Some(style);
         self
     }
 
@@ -431,18 +541,6 @@ impl Frame {
         self
     }
 
-    /// Set status line style.
-    pub fn status_style(mut self, style: Style) -> Self {
-        self.props.status_style = style;
-        self
-    }
-
-    /// Set style applied to the status line when focused.
-    pub fn focus_status_style(mut self, style: Style) -> Self {
-        self.props.overrides_mut().focus_status_style = Some(style);
-        self
-    }
-
     /// Enable or disable border decoration.
     pub fn border(mut self, border: bool) -> Self {
         self.props.border = border;
@@ -494,9 +592,8 @@ impl Frame {
         self
     }
 
-    /// Set the frame header element.
-    /// Set the header element.
-    pub fn header(mut self, header: impl Into<Element>) -> Self {
+    /// Set a content header element rendered inside the frame.
+    pub fn header_content(mut self, header: impl Into<Element>) -> Self {
         self.header = Some(Box::new(header.into()));
         self.props.has_header = true;
         self
@@ -548,15 +645,63 @@ impl Frame {
         self
     }
 
-    /// Set padding for the header (title/tabs). Top/bottom are ignored.
-    pub fn header_padding(mut self, padding: impl Into<Padding>) -> Self {
-        self.props.header_padding = padding.into();
+    /// Set labels rendered in the bottom border.
+    pub fn footer(mut self, footer: BorderLabels) -> Self {
+        self.props.footer = Box::new(footer);
         self
     }
 
-    /// Set padding for the footer (status). Top/bottom are ignored.
+    /// Set the left footer label.
+    pub fn footer_left(mut self, label: impl Into<FrameLabel>) -> Self {
+        self.props.footer.left = Some(label.into());
+        self
+    }
+
+    /// Set the centered footer label.
+    pub fn footer_center(mut self, label: impl Into<FrameLabel>) -> Self {
+        self.props.footer.center = Some(label.into());
+        self
+    }
+
+    /// Set the right footer label.
+    pub fn footer_right(mut self, label: impl Into<FrameLabel>) -> Self {
+        self.props.footer.right = Some(label.into());
+        self
+    }
+
+    /// Set the header group style.
+    pub fn header_style(mut self, style: Style) -> Self {
+        self.props.header.style = style;
+        self
+    }
+
+    /// Set the focused header group style.
+    pub fn focused_header_style(mut self, style: Style) -> Self {
+        self.props.header.focused_style = Some(style);
+        self
+    }
+
+    /// Set the footer group style.
+    pub fn footer_style(mut self, style: Style) -> Self {
+        self.props.footer.style = style;
+        self
+    }
+
+    /// Set the focused footer group style.
+    pub fn focused_footer_style(mut self, style: Style) -> Self {
+        self.props.footer.focused_style = Some(style);
+        self
+    }
+
+    /// Set header label padding.
+    pub fn header_padding(mut self, padding: impl Into<Padding>) -> Self {
+        self.props.header.padding = padding.into();
+        self
+    }
+
+    /// Set footer label padding.
     pub fn footer_padding(mut self, padding: impl Into<Padding>) -> Self {
-        self.props.footer_padding = padding.into();
+        self.props.footer.padding = padding.into();
         self
     }
     /// Make the frame focusable even if it has no child or tabs.
@@ -658,8 +803,6 @@ impl crate::layout::hash::LayoutHash for Frame {
         self.props.border_merge_mode.hash(hasher);
         self.props.join_frame.hash(hasher);
         self.props.padding.hash(hasher);
-        self.props.header_padding.hash(hasher);
-        self.props.footer_padding.hash(hasher);
         self.props.compact.hash(hasher);
         self.props.collapsible.hash(hasher);
         self.props.child_align.hash(hasher);
@@ -672,18 +815,14 @@ impl crate::layout::hash::LayoutHash for Frame {
             decoration.cap_start.hash(hasher);
             decoration.cap_end.hash(hasher);
         }
-        hash_optional_rich_text_content(self.props.title.as_ref(), hasher);
-        hash_optional_rich_text_content(self.props.title_prefix.as_ref(), hasher);
-        hash_optional_rich_text_content(self.props.title_suffix.as_ref(), hasher);
+        hash_border_labels(&self.props.header, hasher);
+        hash_border_labels(&self.props.footer, hasher);
         self.props.tab_titles.len().hash(hasher);
         for tab in &self.props.tab_titles {
             crate::layout::hash::hash_spans_content(&tab.spans, hasher);
         }
         self.props.active_tab.hash(hasher);
         self.props.tab_variant.hash(hasher);
-        hash_optional_rich_text_content(self.props.status.as_ref(), hasher);
-        hash_optional_rich_text_content(self.props.status_center.as_ref(), hasher);
-        hash_optional_rich_text_content(self.props.status_right.as_ref(), hasher);
         self.header.is_some().hash(hasher);
         if let Some(header) = self.header.as_deref() {
             recurse(header)?.hash(hasher);
@@ -704,5 +843,108 @@ fn hash_optional_rich_text_content(text: Option<&RichText>, hasher: &mut impl st
     text.is_some().hash(hasher);
     if let Some(text) = text {
         crate::layout::hash::hash_spans_content(&text.spans, hasher);
+    }
+}
+
+fn hash_border_labels(labels: &BorderLabels, hasher: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+
+    for label in [&labels.left, &labels.center, &labels.right]
+        .into_iter()
+        .flatten()
+    {
+        hash_optional_rich_text_content(Some(&label.content), hasher);
+    }
+    labels.padding.hash(hasher);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BorderLabels, Frame, FrameLabel};
+    use crate::style::{Color, Padding, Style};
+
+    #[test]
+    fn grouped_frame_builder_stores_all_positions_and_styles() {
+        let header_style = Style::new().fg(Color::Cyan);
+        let focused_header_style = Style::new().bold();
+        let left_style = Style::new().fg(Color::Yellow);
+        let focused_left_style = Style::new().underline();
+        let frame = Frame::new().header(
+            BorderLabels::new()
+                .left(
+                    FrameLabel::new("left")
+                        .style(left_style)
+                        .focused_style(focused_left_style),
+                )
+                .center("center")
+                .right("right")
+                .style(header_style)
+                .focused_style(focused_header_style)
+                .padding(1),
+        );
+
+        let header = &frame.props.header;
+        assert_eq!(
+            header.left.as_ref().and_then(|label| label.style),
+            Some(left_style)
+        );
+        assert_eq!(
+            header.left.as_ref().and_then(|label| label.focused_style),
+            Some(focused_left_style)
+        );
+        assert_eq!(
+            header
+                .center
+                .as_ref()
+                .map(|label| label.content.plain_content()),
+            Some("center".into())
+        );
+        assert_eq!(
+            header
+                .right
+                .as_ref()
+                .map(|label| label.content.plain_content()),
+            Some("right".into())
+        );
+        assert_eq!(header.style, header_style);
+        assert_eq!(header.focused_style, Some(focused_header_style));
+        assert_eq!(header.padding, Padding::from(1));
+    }
+
+    #[test]
+    fn repeated_group_setters_replace_the_previous_group() {
+        let frame = Frame::new()
+            .header(BorderLabels::new().left("old").right("removed"))
+            .footer(BorderLabels::new().center("old footer"))
+            .header(BorderLabels::new().center("new"))
+            .footer(BorderLabels::new().right("new footer"));
+
+        assert!(frame.props.header.left.is_none());
+        assert_eq!(
+            frame
+                .props
+                .header
+                .center
+                .as_ref()
+                .map(|label| label.content.plain_content()),
+            Some("new".into())
+        );
+        assert!(frame.props.footer.center.is_none());
+        assert_eq!(
+            frame
+                .props
+                .footer
+                .right
+                .as_ref()
+                .map(|label| label.content.plain_content()),
+            Some("new footer".into())
+        );
+    }
+
+    #[test]
+    fn label_width_uses_display_width_and_padding() {
+        let labels = BorderLabels::new().left("界").padding(1);
+
+        assert_eq!(labels.min_width(), 4);
     }
 }

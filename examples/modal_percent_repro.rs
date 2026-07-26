@@ -74,7 +74,7 @@ impl Component for ModalPercentRepro {
         };
 
         let panel_background = Frame::new()
-            .title("Panel Host (Local scope target)")
+            .header_left("Panel Host (Local scope target)")
             .border(true)
             .padding(1)
             .child(
@@ -85,7 +85,7 @@ impl Component for ModalPercentRepro {
                     ))
                     .child(
                         Frame::new()
-                            .title("Panel Background")
+                            .header_left("Panel Background")
                             .border(true)
                             .height(Length::Flex(1))
                             .child(Text::new(
@@ -116,7 +116,7 @@ impl Component for ModalPercentRepro {
                             ))
                             .child(
                                 Frame::new()
-                                    .title("Fill target")
+                                    .header_left("Fill target")
                                     .border(true)
                                     .height(Length::Flex(1))
                                     .child(Text::new(
@@ -128,7 +128,7 @@ impl Component for ModalPercentRepro {
         }
 
         Frame::new()
-            .title("Modal Length::Percent Repro")
+            .header_left("Modal Length::Percent Repro")
             .border(true)
             .padding(1)
             .child(
@@ -151,7 +151,7 @@ impl Component for ModalPercentRepro {
                             .height(Length::Flex(1))
                             .child(
                                 Frame::new()
-                                    .title("Outside Panel Area")
+                                    .header_left("Outside Panel Area")
                                     .border(true)
                                     .width(Length::Flex(1))
                                     .child(Text::new(
@@ -160,7 +160,7 @@ impl Component for ModalPercentRepro {
                             )
                             .child(
                                 Frame::new()
-                                    .title("Host Area")
+                                    .header_left("Host Area")
                                     .border(true)
                                     .padding(1)
                                     .width(Length::Flex(2))

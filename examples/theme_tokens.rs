@@ -98,7 +98,7 @@ impl Component for Screen {
             ]))
             .child(line(vec![sp("}", s.variable)]));
         let source = Frame::new()
-            .title("Syntax")
+            .header_left("Syntax")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .style(Style::new().bg(t.surface.panel))
@@ -160,7 +160,7 @@ impl Component for Screen {
                 d.context,
             ));
         let diff_frame = Frame::new()
-            .title("Diff")
+            .header_left("Diff")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .style(Style::new().bg(t.surface.panel))
@@ -203,7 +203,7 @@ impl Component for Screen {
                 sp("pick three core colors", t.primary),
             ]));
         let markdown = Frame::new()
-            .title("Markdown")
+            .header_left("Markdown")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .style(Style::new().bg(t.surface.panel))

@@ -57,6 +57,11 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- Replace the breaking `Frame` border title/status API with positional `BorderLabels` header and
+  footer groups. Labels now support left, center, and right placement, independent group styles,
+  focused group styles, per-label overrides, and group padding. The old `title`, `status`, and
+  related Frame style methods and fields were removed (breaking).
+
 - `FileTree` no longer rebuilds the subtree of a collapsed directory on every
   render. A collapsed directory projects a single placeholder child, so
   per-frame work now scales with the rows a user can actually see instead of
@@ -124,6 +129,10 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `Frame` border headers now preserve tab titles alongside grouped labels, and
+  label padding glyphs use the resolved border style instead of the label style.
+- Border-tab mouse hit-testing now accounts for grouped header prefixes and
+  padding before resolving the clicked tab.
 - `TestBackend::new_with_app` now honors custom `App::clipboard_provider` and
   `App::clipboard_reporter` values, matching the native runner and allowing deterministic
   clipboard-routing tests.

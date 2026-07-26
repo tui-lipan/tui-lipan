@@ -201,7 +201,7 @@ impl Component for MarkdownHub {
             )
             .child(
                 Frame::new()
-                    .title(format!("Markdown Hub - {title}"))
+                    .header_left(format!("Markdown Hub - {title}"))
                     .border(true)
                     .padding(1)
                     .height(Length::Flex(1))

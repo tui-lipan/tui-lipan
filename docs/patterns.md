@@ -10,7 +10,7 @@ Extract reusable view functions so the same code works in both mockup previews a
 // View functions take plain data, return Element
 fn sidebar(items: &[&str], selected: usize) -> Element {
     Frame::new()
-        .title("Nav").border(true).width(Length::Px(28))
+        .header_left("Nav").border(true).width(Length::Px(28))
         .child(List::new().items(items.iter().map(|s| ListItem::new(*s))).selected(selected))
         .into()
 }
@@ -31,14 +31,14 @@ fn view(&self, ctx: &Context<Self>) -> Element {
 
 ### 2. Reusable Panel Shells (Parameterized UI)
 
-When multiple panels share the same chrome but differ in title, status, or body,
+When multiple panels share the same chrome but differ in header/footer labels or body,
 extract the shared shell into plain Rust helpers. The parameters come from Rust,
 while `rsx!` stays focused on composition.
 
 ```rust
 fn app_panel(title: impl Into<Arc<str>>, child: impl Into<Element>) -> Element {
     Frame::new()
-        .title(title)
+        .header_left(title)
         .border(true)
         .padding(1)
         .child(child)
@@ -99,7 +99,7 @@ impl AppPanel {
 impl From<AppPanel> for Element {
     fn from(panel: AppPanel) -> Element {
         Frame::new()
-            .title(panel.title)
+            .header_left(panel.title)
             .border(true)
             .padding(1)
             .child(panel.child)
@@ -108,8 +108,8 @@ impl From<AppPanel> for Element {
 }
 ```
 
-Use this when the same shell needs a named, reusable API (`AppPanel::new(...)`,
-`.status(...)`, `.footer(...)`, etc.).
+Use this when the same shell needs a named, reusable API such as
+`AppPanel::new(...)`, `.footer_left(...)`, `.header(...)`, and `.footer(...)`.
 
 Choose the abstraction level by behavior:
 - **Helper function returning `Element`** - best for simple reusable shells
@@ -427,16 +427,16 @@ Store app data on `TextAreaSentinel::payload(your_type)` and rely on `SentinelId
 
 | Need | Use | Don't use |
 |------|-----|-----------|
-| Stack children vertically | `VStack` | `Frame` (unless you need border/title) |
-| Stack children horizontally | `HStack` | `Frame` (unless you need border/title) |
-| Border + title + status line | `Frame` | bare VStack with manual border |
+| Stack children vertically | `VStack` | `Frame` (unless you need border/labels) |
+| Stack children horizontally | `HStack` | `Frame` (unless you need border/labels) |
+| Border + header/footer labels | `Frame` | bare VStack with manual border |
 | Overlay children on top of each other | `ZStack` | - |
 | Center a single child | `Center` | VStack with align + justify hacks |
 | Scrollable content | `ScrollView` | - |
 | Resizable split panes | `Splitter` | - |
 
 **`Frame` is for visual chrome, not layout.** Use `Frame` only when you need one or
-more of: border, title, status text, tab titles, join_frame, clipping, or `FrameDecoration`.
+more of: border, header/footer labels, tab titles, join_frame, clipping, or `FrameDecoration`.
 If you just need to group children, use `VStack` or `HStack` directly.
 
 ---
@@ -681,10 +681,10 @@ See [`styling.md`](./styling.md) for the full style inheritance rules.
 
 ### ❌ Wrapping containers in `Frame` unnecessarily
 
-`Frame` is for visual chrome (border, title, status text, clipping). If you just need layout, use `VStack`/`HStack` directly:
+`Frame` is for visual chrome (border, header/footer labels, clipping). If you just need layout, use `VStack`/`HStack` directly:
 
 ```rust
-// BAD: Frame adds no value here - no border, title, or status used
+// BAD: Frame adds no value here - no border or labels used
 Frame::new()
     .child(
         VStack::new()
@@ -699,9 +699,9 @@ VStack::new()
 
 // GOOD: Frame is justified when you use its features
 Frame::new()
-    .title("Settings")
+    .header_left("Settings")
     .border(true)
-    .status("v1.2")
+    .footer_right("v1.2")
     .child(
         VStack::new()
             .gap(1)

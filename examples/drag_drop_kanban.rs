@@ -190,8 +190,8 @@ impl Component for KanbanDemo {
         );
 
         Frame::new()
-            .title("Generic Drag and Drop")
-            .status(ctx.state.status.clone())
+            .header_left("Generic Drag and Drop")
+            .footer_left(ctx.state.status.clone())
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)
@@ -228,7 +228,7 @@ fn kanban_column(ctx: &Context<KanbanDemo>, column_index: usize, column: &Column
     let stack = VStack::new().gap(1).children(elems);
 
     let frame = Frame::new()
-        .title(column.title.clone())
+        .header_left(column.title.clone())
         .border(true)
         .border_style(BorderStyle::Rounded)
         .style(Style::new().fg(column.tint))

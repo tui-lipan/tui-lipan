@@ -1,17 +1,16 @@
 use ratatui::buffer::Buffer;
 use ratatui::symbols::merge::MergeStrategy;
 use ratatui::text::{Line, Span};
-use unicode_width::UnicodeWidthStr;
 
 use crate::backend::ratatui_backend::common::{
-    ClipBounds, border_horizontal_char, border_tabs_title_line, clear_fg_preserve_bg_clipped,
-    fill_rect_clipped_style, render_line_clipped, richtext_to_spans, style_paints_bg,
-    style_uses_backdrop_bg, to_ratatui_border_set, to_ratatui_style,
-    to_ratatui_style_with_terminal_bg, truncate_spans,
+    ClipBounds, border_horizontal_char, clear_fg_preserve_bg_clipped, fill_rect_clipped_style,
+    render_line_clipped, richtext_to_spans, style_paints_bg, style_uses_backdrop_bg,
+    to_ratatui_border_set, to_ratatui_style, to_ratatui_style_with_terminal_bg, truncate_spans,
 };
-use crate::backend::ratatui_backend::renderers::frame::utils::build_header_line;
+use crate::backend::ratatui_backend::renderers::frame::utils::build_tabs_line;
 use crate::style::{Color, Edge, Paint, Rect, Style};
 use crate::widgets::internal::{FrameGeometry, FrameProps};
+use crate::widgets::{BorderLabels, FrameLabel};
 use crate::widgets::{BorderMergeMode, DecorationGlyph, DecorationPlacement, EdgeDecoration};
 
 pub(crate) struct FrameRenderCtx {
@@ -51,12 +50,39 @@ pub(crate) fn render_frame(
         render_border_frame(f, props, geometry, &ctx);
     } else {
         render_plain_frame(f, props, body_rect, &ctx);
-        render_plain_frame_status(f, props, geometry, &ctx);
+        render_plain_frame_header(f, props, geometry, &ctx);
+        render_plain_frame_footer(f, props, geometry, &ctx);
     }
 
     render_frame_decorations(f, props, geometry, &ctx);
 
     restore_decoration_backgrounds(f, &transparent_decoration_bg_snapshot, ctx.clip_rect);
+}
+
+fn render_plain_frame_header(
+    f: &mut ratatui::Frame<'_>,
+    props: &FrameProps,
+    geometry: &FrameGeometry,
+    ctx: &FrameRenderCtx,
+) {
+    let Some(header_rect) = geometry.header_labels_rect else {
+        return;
+    };
+    let (block_style, _) = resolve_block_style(props, ctx.active, ctx.is_hovered);
+    render_border_labels(
+        f.buffer_mut(),
+        &BorderLabelsRender {
+            x: header_rect.x as i32,
+            y: header_rect.y as i32,
+            width: header_rect.w as i32,
+            labels: &props.header,
+            block_style,
+            active: ctx.active,
+            fill_char: " ",
+            clip_rect: ctx.clip_rect,
+            terminal_bg: ctx.terminal_bg,
+        },
+    );
 }
 
 #[derive(Clone, Debug)]
@@ -525,6 +551,313 @@ fn draw_symbol_rect(
     }
 }
 
+pub(crate) fn resolve_label_style(
+    block_style: Style,
+    group: &BorderLabels,
+    label: &FrameLabel,
+    active: bool,
+) -> Style {
+    let mut style = block_style.patch(group.style);
+    if let Some(label_style) = label.style {
+        style = style.patch(label_style);
+    }
+    if active {
+        if let Some(focused_style) = group.focused_style {
+            style = style.patch(focused_style);
+        }
+        if let Some(focused_style) = label.focused_style {
+            style = style.patch(focused_style);
+        }
+    }
+    style
+}
+
+fn label_spans<'a>(
+    label: &'a FrameLabel,
+    group: &BorderLabels,
+    block_style: Style,
+    active: bool,
+    fill_char: &str,
+    terminal_bg: Option<Color>,
+) -> Vec<Span<'a>> {
+    let style = resolve_label_style(block_style, group, label, active);
+    let padding_style = to_ratatui_style_with_terminal_bg(block_style, terminal_bg);
+    let mut spans = Vec::new();
+    if group.padding.left > 0 {
+        spans.push(Span::styled(
+            fill_char.repeat(group.padding.left as usize),
+            padding_style,
+        ));
+    }
+    spans.extend(richtext_to_spans(&label.content, style));
+    if group.padding.right > 0 {
+        spans.push(Span::styled(
+            fill_char.repeat(group.padding.right as usize),
+            padding_style,
+        ));
+    }
+    spans
+}
+
+fn spans_width(spans: &[Span<'_>]) -> usize {
+    spans
+        .iter()
+        .map(|span| unicode_width::UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
+}
+
+struct BorderLabelsRender<'a> {
+    x: i32,
+    y: i32,
+    width: i32,
+    labels: &'a BorderLabels,
+    block_style: Style,
+    active: bool,
+    fill_char: &'a str,
+    clip_rect: Option<Rect>,
+    terminal_bg: Option<Color>,
+}
+
+fn render_border_labels(buf: &mut Buffer, render: &BorderLabelsRender<'_>) {
+    let BorderLabelsRender {
+        x,
+        y,
+        width,
+        labels,
+        block_style,
+        active,
+        fill_char,
+        clip_rect,
+        terminal_bg,
+    } = render;
+    if *width <= 0 || !labels.has_labels() {
+        return;
+    }
+
+    let left = labels
+        .left
+        .as_ref()
+        .filter(|label| !label.content.is_empty())
+        .map(|label| {
+            label_spans(
+                label,
+                labels,
+                *block_style,
+                *active,
+                fill_char,
+                *terminal_bg,
+            )
+        });
+    let center = labels
+        .center
+        .as_ref()
+        .filter(|label| !label.content.is_empty())
+        .map(|label| {
+            label_spans(
+                label,
+                labels,
+                *block_style,
+                *active,
+                fill_char,
+                *terminal_bg,
+            )
+        });
+    let right = labels
+        .right
+        .as_ref()
+        .filter(|label| !label.content.is_empty())
+        .map(|label| {
+            label_spans(
+                label,
+                labels,
+                *block_style,
+                *active,
+                fill_char,
+                *terminal_bg,
+            )
+        });
+
+    let left_w = left.as_ref().map_or(0, |spans| spans_width(spans));
+    let right_w = right.as_ref().map_or(0, |spans| spans_width(spans));
+    let available = *width as usize;
+
+    let (left_budget, right_budget) = if left.is_some() && right.is_some() {
+        if left_w.saturating_add(right_w) <= available {
+            (left_w, right_w)
+        } else {
+            let left_budget = available.div_ceil(2);
+            (left_budget, available.saturating_sub(left_budget))
+        }
+    } else {
+        (
+            left_w.min(available),
+            right_w.min(available.saturating_sub(left_w.min(available))),
+        )
+    };
+    let center_budget = available.saturating_sub(left_budget.saturating_add(right_budget));
+
+    if let Some(spans) = left {
+        let line = Line::from(truncate_spans(
+            spans,
+            left_budget.min(u16::MAX as usize) as u16,
+        ))
+        .left_aligned();
+        render_line_clipped(buf, *x, *y, left_budget as i32, &line, *clip_rect);
+    }
+    if let Some(spans) = center {
+        let line = Line::from(truncate_spans(
+            spans,
+            center_budget.min(u16::MAX as usize) as u16,
+        ))
+        .centered();
+        render_line_clipped(
+            buf,
+            x.saturating_add(left_budget as i32),
+            *y,
+            center_budget as i32,
+            &line,
+            *clip_rect,
+        );
+    }
+    if let Some(spans) = right {
+        let line = Line::from(truncate_spans(
+            spans,
+            right_budget.min(u16::MAX as usize) as u16,
+        ))
+        .right_aligned();
+        render_line_clipped(
+            buf,
+            x.saturating_add(*width).saturating_sub(right_budget as i32),
+            *y,
+            right_budget as i32,
+            &line,
+            *clip_rect,
+        );
+    }
+}
+
+fn render_border_tabs_header(
+    buf: &mut Buffer,
+    props: &FrameProps,
+    render: &BorderLabelsRender<'_>,
+) -> bool {
+    let BorderLabelsRender {
+        x,
+        y,
+        width,
+        labels,
+        block_style,
+        active,
+        fill_char,
+        clip_rect,
+        terminal_bg,
+    } = render;
+    let Some(tabs) = build_tabs_line(
+        props,
+        *block_style,
+        *active,
+        (*width).max(0).min(u16::MAX as i32) as u16,
+    ) else {
+        return false;
+    };
+
+    let left = labels
+        .left
+        .as_ref()
+        .filter(|label| !label.content.is_empty())
+        .map(|label| {
+            label_spans(
+                label,
+                labels,
+                *block_style,
+                *active,
+                fill_char,
+                *terminal_bg,
+            )
+        });
+    let right = labels
+        .right
+        .as_ref()
+        .filter(|label| !label.content.is_empty())
+        .map(|label| {
+            label_spans(
+                label,
+                labels,
+                *block_style,
+                *active,
+                fill_char,
+                *terminal_bg,
+            )
+        });
+    let left_w = left.as_ref().map_or(0, |spans| spans_width(spans));
+    let right_w = right.as_ref().map_or(0, |spans| spans_width(spans));
+    let available = (*width).max(0) as usize;
+    let has_left = left.is_some();
+    let has_right = right.is_some();
+    let left_separator = has_left && labels.padding.right == 0;
+    let right_separator = has_right && labels.padding.left == 0;
+    let separator_count = usize::from(left_separator) + usize::from(right_separator);
+    let label_budget = available.saturating_sub(separator_count);
+    let left_budget = left_w.min(label_budget);
+    let right_budget = right_w.min(label_budget.saturating_sub(left_budget));
+    let tabs_budget = label_budget.saturating_sub(left_budget + right_budget);
+    let separator_style = to_ratatui_style_with_terminal_bg(*block_style, *terminal_bg);
+
+    if let Some(spans) = left.as_ref() {
+        let line = Line::from(truncate_spans(
+            spans.clone(),
+            left_budget.min(u16::MAX as usize) as u16,
+        ))
+        .left_aligned();
+        render_line_clipped(buf, *x, *y, left_budget as i32, &line, *clip_rect);
+        if left_separator {
+            render_line_clipped(
+                buf,
+                (*x).saturating_add(left_budget as i32),
+                *y,
+                1,
+                &Line::from(Span::styled(fill_char.to_owned(), separator_style)),
+                *clip_rect,
+            );
+        }
+    }
+
+    let tabs_x = (*x)
+        .saturating_add(left_budget as i32)
+        .saturating_add(i32::from(left_separator));
+    if tabs_budget > 0 {
+        let line = Line::from(truncate_spans(
+            tabs.spans,
+            tabs_budget.min(u16::MAX as usize) as u16,
+        ));
+        render_line_clipped(buf, tabs_x, *y, tabs_budget as i32, &line, *clip_rect);
+    }
+
+    if let Some(spans) = right.as_ref() {
+        let right_x = (*x)
+            .saturating_add(*width)
+            .saturating_sub(right_budget as i32);
+        if right_separator {
+            render_line_clipped(
+                buf,
+                right_x.saturating_sub(1),
+                *y,
+                1,
+                &Line::from(Span::styled(fill_char.to_owned(), separator_style)),
+                *clip_rect,
+            );
+        }
+        let line = Line::from(truncate_spans(
+            spans.clone(),
+            right_budget.min(u16::MAX as usize) as u16,
+        ))
+        .right_aligned();
+        render_line_clipped(buf, right_x, *y, right_budget as i32, &line, *clip_rect);
+    }
+
+    true
+}
+
 pub(crate) fn resolve_block_style(
     props: &FrameProps,
     active: bool,
@@ -635,60 +968,35 @@ fn render_border_frame(
         }
     }
 
-    if let Some(line) = build_header_line(props, block_style, ctx.active, rect.w, h_char, None) {
-        let line_width = right.saturating_sub(left).saturating_sub(1);
-        render_line_clipped(buf, left + 1, top, line_width, &line, ctx.clip_rect);
-    }
-
-    let max_title_w = rect.w.saturating_sub(2);
-    let status_style = {
-        let mut s = block_style.patch(props.status_style);
-        if ctx.active
-            && let Some(fss) = props.focus_status_style()
-        {
-            s = block_style.patch(fss);
-        }
-        s
+    let line_width = right.saturating_sub(left).saturating_sub(1);
+    let header_render = BorderLabelsRender {
+        x: left + 1,
+        y: top,
+        width: line_width,
+        labels: &props.header,
+        block_style,
+        active: ctx.active,
+        fill_char: h_char,
+        clip_rect: ctx.clip_rect,
+        terminal_bg: ctx.terminal_bg,
     };
-
-    let footer_line = if let Some(status) = &props.status {
-        let spans = richtext_to_spans(status, status_style);
-        let spans = truncate_spans(spans, max_title_w);
-        let line = Line::from(spans).left_aligned();
-        Some(apply_footer_padding(
-            line,
-            props.footer_padding,
-            b_char,
-            block_style,
-        ))
-    } else if let Some(status) = &props.status_center {
-        let spans = richtext_to_spans(status, status_style);
-        let spans = truncate_spans(spans, max_title_w);
-        let line = Line::from(spans).centered();
-        Some(apply_footer_padding(
-            line,
-            props.footer_padding,
-            b_char,
-            block_style,
-        ))
-    } else if let Some(status) = &props.status_right {
-        let spans = richtext_to_spans(status, status_style);
-        let spans = truncate_spans(spans, max_title_w);
-        let line = Line::from(spans).right_aligned();
-        Some(apply_footer_padding(
-            line,
-            props.footer_padding,
-            b_char,
-            block_style,
-        ))
-    } else {
-        None
-    };
-
-    if let Some(line) = footer_line {
-        let line_width = right.saturating_sub(left).saturating_sub(1);
-        render_line_clipped(buf, left + 1, bottom, line_width, &line, ctx.clip_rect);
+    if !render_border_tabs_header(buf, props, &header_render) {
+        render_border_labels(buf, &header_render);
     }
+    render_border_labels(
+        buf,
+        &BorderLabelsRender {
+            x: left + 1,
+            y: bottom,
+            width: line_width,
+            labels: &props.footer,
+            block_style,
+            active: ctx.active,
+            fill_char: b_char,
+            clip_rect: ctx.clip_rect,
+            terminal_bg: ctx.terminal_bg,
+        },
+    );
 
     if let Some(inner_style) = props.inner_style() {
         fill_rect_clipped_style(
@@ -699,27 +1007,6 @@ fn render_border_frame(
             ctx.terminal_bg,
         );
     }
-}
-
-fn apply_footer_padding<'a>(
-    mut line: Line<'a>,
-    p: crate::style::Padding,
-    fill_char: &str,
-    style: Style,
-) -> Line<'a> {
-    if p.left == 0 && p.right == 0 {
-        return line;
-    }
-    let rstyle = to_ratatui_style(style);
-    let left_span = Span::styled(fill_char.repeat(p.left as usize), rstyle);
-    let right_span = Span::styled(fill_char.repeat(p.right as usize), rstyle);
-    if p.left > 0 {
-        line.spans.insert(0, left_span);
-    }
-    if p.right > 0 {
-        line.spans.push(right_span);
-    }
-    line
 }
 
 fn render_plain_frame(
@@ -740,60 +1027,31 @@ fn render_plain_frame(
     }
 }
 
-fn render_plain_frame_status(
+fn render_plain_frame_footer(
     f: &mut ratatui::Frame<'_>,
     props: &FrameProps,
     geometry: &FrameGeometry,
     ctx: &FrameRenderCtx,
 ) {
-    let Some(status_rect) = geometry.status_rect else {
+    let Some(footer_rect) = geometry.footer_rect else {
         return;
     };
 
     let (block_style, _) = resolve_block_style(props, ctx.active, ctx.is_hovered);
-    let mut status_style = block_style.patch(props.status_style);
-    if ctx.active
-        && let Some(fss) = props.focus_status_style()
-    {
-        status_style = block_style.patch(fss);
-    }
-
-    let line = if let Some(status) = &props.status {
-        Some(
-            Line::from(truncate_spans(
-                richtext_to_spans(status, status_style),
-                status_rect.w,
-            ))
-            .left_aligned(),
-        )
-    } else if let Some(status) = &props.status_center {
-        Some(
-            Line::from(truncate_spans(
-                richtext_to_spans(status, status_style),
-                status_rect.w,
-            ))
-            .centered(),
-        )
-    } else {
-        props.status_right.as_ref().map(|status| {
-            Line::from(truncate_spans(
-                richtext_to_spans(status, status_style),
-                status_rect.w,
-            ))
-            .right_aligned()
-        })
-    };
-
-    if let Some(line) = line {
-        render_line_clipped(
-            f.buffer_mut(),
-            status_rect.x as i32,
-            status_rect.y as i32,
-            status_rect.w as i32,
-            &line,
-            ctx.clip_rect,
-        );
-    }
+    render_border_labels(
+        f.buffer_mut(),
+        &BorderLabelsRender {
+            x: footer_rect.x as i32,
+            y: footer_rect.y as i32,
+            width: footer_rect.w as i32,
+            labels: &props.footer,
+            block_style,
+            active: ctx.active,
+            fill_char: " ",
+            clip_rect: ctx.clip_rect,
+            terminal_bg: ctx.terminal_bg,
+        },
+    );
 }
 
 fn render_compact_frame(
@@ -807,195 +1065,15 @@ fn render_compact_frame(
     }
 
     let compact_rect = Rect { h: 1, ..rect };
-
     let (block_style, border_style) = resolve_block_style(props, ctx.active, ctx.is_hovered);
-
-    let mut title_style = block_style.patch(props.title_style);
-    if ctx.active
-        && let Some(fts) = props.focus_title_style()
-    {
-        title_style = block_style.patch(fts);
-    }
-
-    let status_style = block_style.patch(props.status_style);
-
-    let width = rect.w as usize;
-
     let dash = border_horizontal_char(border_style);
     let block_rstyle = to_ratatui_style(block_style);
-
-    let mut title_spans: Vec<Span<'_>> = if props.has_header {
-        Vec::new()
-    } else if props.has_border() && !props.tab_titles.is_empty() {
-        let mut active_tab_style = block_style.patch(props.active_tab_style);
-        if ctx.active
-            && let Some(fts) = props.focus_active_tab_style()
-        {
-            active_tab_style = block_style.patch(fts);
-        }
-        let mut inactive_tab_style = block_style.patch(props.inactive_tab_style);
-        if ctx.active
-            && let Some(ifts) = props.focus_inactive_tab_style()
-        {
-            inactive_tab_style = block_style.patch(ifts);
-        }
-        border_tabs_title_line(
-            &props.tab_titles,
-            props.active_tab,
-            active_tab_style,
-            inactive_tab_style,
-            props.tab_variant,
-            block_style,
-            title_style,
-        )
-        .spans
-    } else if let Some(t) = &props.title {
-        richtext_to_spans(t, title_style)
-    } else {
-        Vec::new()
-    };
-
-    if let Some(prefix) = &props.title_prefix {
-        let prefix_spans = richtext_to_spans(prefix, title_style);
-        if title_spans.is_empty() {
-            title_spans = prefix_spans;
-        } else {
-            let sep_span = Span::styled(dash.to_string(), block_rstyle);
-            let mut out = Vec::with_capacity(title_spans.len() + prefix_spans.len() + 1);
-            out.extend(prefix_spans);
-            out.push(sep_span);
-            out.extend(title_spans);
-            title_spans = out;
-        }
-    }
-
-    if let Some(suffix) = &props.title_suffix {
-        let suffix_spans = richtext_to_spans(suffix, title_style);
-        if title_spans.is_empty() {
-            title_spans = suffix_spans;
-        } else {
-            let sep_span = Span::styled(dash.to_string(), block_rstyle);
-            title_spans.push(sep_span);
-            title_spans.extend(suffix_spans);
-        }
-    }
-
-    let status_spans: Vec<Span<'_>> = props
-        .status_right
-        .as_ref()
-        .or(props.status_center.as_ref())
-        .or(props.status.as_ref())
-        .map(|s| richtext_to_spans(s, status_style))
-        .unwrap_or_default();
-
-    let title_w: usize = title_spans
-        .iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-        .sum();
-    let status_w: usize = status_spans
-        .iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-        .sum();
-
-    let has_title = title_w > 0;
-    let has_status = status_w > 0;
-
-    let cap_left = 1usize;
-    let cap_right = if width > 1 { 1usize } else { 0usize };
-
-    let title_left_count = if has_title {
-        props.header_padding.left as usize
-    } else {
-        0
-    };
-    let title_right_count = if has_title {
-        props.header_padding.right as usize
-    } else {
-        0
-    };
-    let status_left_count = if has_status {
-        props.footer_padding.left as usize
-    } else {
-        0
-    };
-    let status_right_count = if has_status {
-        props.footer_padding.right as usize
-    } else {
-        0
-    };
-
-    let separator_min = if has_title && has_status { 2 } else { 0 };
-
-    let fixed_w = cap_left
-        + cap_right
-        + title_left_count
-        + title_right_count
-        + status_left_count
-        + status_right_count
-        + separator_min;
-    let content_budget = width.saturating_sub(fixed_w);
-
-    let (final_title_spans, final_status_spans) = if title_w + status_w <= content_budget {
-        (title_spans, status_spans)
-    } else if title_w <= content_budget.saturating_sub(status_w.min(content_budget / 3)) {
-        let remaining = content_budget.saturating_sub(title_w);
-        (title_spans, truncate_spans(status_spans, remaining as u16))
-    } else {
-        let title_budget = content_budget.saturating_mul(2) / 3;
-        let status_budget = content_budget.saturating_sub(title_budget);
-        (
-            truncate_spans(title_spans, title_budget as u16),
-            truncate_spans(status_spans, status_budget as u16),
-        )
-    };
-
-    let separator_dashes = width.saturating_sub(
-        fixed_w
-            + final_title_spans
-                .iter()
-                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
-                .sum::<usize>()
-            + final_status_spans
-                .iter()
-                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
-                .sum::<usize>(),
-    ) + separator_min;
-
-    let mut spans = Vec::with_capacity(9);
-
-    spans.push(Span::styled(dash.repeat(cap_left), block_rstyle));
-
-    if title_left_count > 0 {
-        spans.push(Span::styled(dash.repeat(title_left_count), block_rstyle));
-    }
-
-    spans.extend(final_title_spans);
-
-    if title_right_count > 0 {
-        spans.push(Span::styled(dash.repeat(title_right_count), block_rstyle));
-    }
-
-    if separator_dashes > 0 {
-        spans.push(Span::styled(dash.repeat(separator_dashes), block_rstyle));
-    }
-
-    if status_left_count > 0 {
-        spans.push(Span::styled(dash.repeat(status_left_count), block_rstyle));
-    }
-
-    if !final_status_spans.is_empty() {
-        spans.extend(final_status_spans);
-    }
-
-    if status_right_count > 0 {
-        spans.push(Span::styled(dash.repeat(status_right_count), block_rstyle));
-    }
-
-    if cap_right > 0 {
-        spans.push(Span::styled(dash.repeat(cap_right), block_rstyle));
-    }
-
-    let line = Line::from(spans);
+    let cap_left = usize::from(rect.w > 0);
+    let cap_right = usize::from(rect.w > 1);
+    let line = Line::from(vec![Span::styled(
+        dash.repeat(rect.w as usize),
+        block_rstyle,
+    )]);
 
     if style_uses_backdrop_bg(block_style) {
         clear_fg_preserve_bg_clipped(f, compact_rect, ctx.clip_rect);
@@ -1012,4 +1090,59 @@ fn render_compact_frame(
         &line,
         ctx.clip_rect,
     );
+    let label_x = rect.x as i32 + cap_left as i32;
+    let label_width = rect.w as i32 - cap_left as i32 - cap_right as i32;
+    let header_render = BorderLabelsRender {
+        x: label_x,
+        y: rect.y as i32,
+        width: label_width,
+        labels: &props.header,
+        block_style,
+        active: ctx.active,
+        fill_char: dash,
+        clip_rect: ctx.clip_rect,
+        terminal_bg: ctx.terminal_bg,
+    };
+    let rendered_tabs = render_border_tabs_header(buf, props, &header_render);
+    if !rendered_tabs && props.header.has_labels() {
+        render_border_labels(buf, &header_render);
+    } else if !rendered_tabs {
+        render_border_labels(
+            buf,
+            &BorderLabelsRender {
+                x: label_x,
+                y: rect.y as i32,
+                width: label_width,
+                labels: &props.footer,
+                block_style,
+                active: ctx.active,
+                fill_char: dash,
+                clip_rect: ctx.clip_rect,
+                terminal_bg: ctx.terminal_bg,
+            },
+        );
+    }
+
+    if (rendered_tabs || props.header.has_labels())
+        && props.header.right.is_none()
+        && props.footer.has_labels()
+    {
+        let mut footer_right = props.footer.clone();
+        footer_right.left = None;
+        footer_right.center = None;
+        render_border_labels(
+            buf,
+            &BorderLabelsRender {
+                x: label_x,
+                y: rect.y as i32,
+                width: label_width,
+                labels: &footer_right,
+                block_style,
+                active: ctx.active,
+                fill_char: dash,
+                clip_rect: ctx.clip_rect,
+                terminal_bg: ctx.terminal_bg,
+            },
+        );
+    }
 }

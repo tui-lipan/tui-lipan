@@ -99,7 +99,7 @@ impl Component for ListHeadersDemo {
             .unwrap_or_else(|| "(none)".to_string());
 
         Frame::new()
-            .title("List Headers + Gutters")
+        .header_left("List Headers + Gutters")
             .padding(1)
             .child(
                 VStack::new()

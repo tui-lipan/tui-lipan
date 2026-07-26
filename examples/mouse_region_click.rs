@@ -70,8 +70,8 @@ impl Component for MouseRegionClickDemo {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .title("MouseRegion click capture")
-            .status(format!("{} | q/esc: quit", ctx.state.last_event))
+            .header_left("MouseRegion click capture")
+            .footer_left(format!("{} | q/esc: quit", ctx.state.last_event))
             .border_style(BorderStyle::Rounded)
             .padding(1)
             .child(
@@ -95,7 +95,7 @@ impl MouseRegionClickDemo {
             .hover_style(Style::new().bg(Color::indexed(236)))
             .child(
                 Frame::new()
-                    .title("capture_click(false)")
+                    .header_left("capture_click(false)")
                     .border_style(BorderStyle::Rounded)
                     .style(Style::new().bg(Color::indexed(234)))
                     .hover_style(Style::new().bg(Color::indexed(236)))
@@ -134,7 +134,7 @@ impl MouseRegionClickDemo {
             .hover_style(Style::new().bg(Color::indexed(236)))
             .child(
                 Frame::new()
-                    .title("capture_click(true)")
+                    .header_left("capture_click(true)")
                     .border_style(BorderStyle::Rounded)
                     .style(Style::new().bg(Color::indexed(234)))
                     .hover_style(Style::new().bg(Color::indexed(236)))

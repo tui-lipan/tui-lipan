@@ -30,7 +30,7 @@ impl Component for GridBasic {
             .child(Text::new("…"))
             .cell_span(2, 0, 1, 3, {
                 Frame::new()
-                    .title("Span row")
+                    .header_left("Span row")
                     .border(true)
                     .width(Length::Flex(1))
                     .child(Text::new("One cell spanning three columns"))

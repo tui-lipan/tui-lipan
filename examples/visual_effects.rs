@@ -101,8 +101,8 @@ impl Component for VisualEffectsDemo {
             .into();
 
         Frame::new()
-            .title("Visual Effects")
-            .status("1 retro preset • 2 palette • q quit")
+            .header_left("Visual Effects")
+            .footer_left("1 retro preset • 2 palette • q quit")
             .border(true)
             .padding(1)
             .child(
@@ -129,7 +129,7 @@ impl Component for VisualEffectsDemo {
 
 fn static_palette_panel(palette: EffectPalette) -> Element {
     Frame::new()
-        .title("Palette + Scanlines")
+        .header_left("Palette + Scanlines")
         .border(true)
         .height(Length::Flex(1))
         .child(
@@ -153,7 +153,7 @@ fn static_palette_panel(palette: EffectPalette) -> Element {
 
 fn animated_wave_panel() -> Element {
     Frame::new()
-        .title("Rainbow Wave")
+        .header_left("Rainbow Wave")
         .border(true)
         .height(Length::Flex(1))
         .child(
@@ -174,7 +174,7 @@ fn animated_wave_panel() -> Element {
 
 fn retro_zstack_panel(retro: RetroPreset) -> Element {
     Frame::new()
-        .title("Retro CRT over ZStack")
+        .header_left("Retro CRT over ZStack")
         .border(true)
         .height(Length::Flex(1))
         .child(
@@ -191,7 +191,7 @@ fn retro_zstack_panel(retro: RetroPreset) -> Element {
                         .child(
                             Center::new().child(
                                 Frame::new()
-                                    .title("COMPOSED FIRST")
+                                    .header_left("COMPOSED FIRST")
                                     .border(true)
                                     .width(Length::Px(28))
                                     .height(Length::Px(7))

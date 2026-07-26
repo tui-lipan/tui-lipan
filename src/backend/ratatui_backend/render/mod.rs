@@ -1272,9 +1272,33 @@ fn render_frame_node(
     let mut themed_props = props.clone();
     let theme = node.active_theme();
     themed_props.style = crate::style::resolve::resolve_border_style(theme, themed_props.style);
-    themed_props.title_style = resolve_base_style(theme, themed_props.title_style);
-    themed_props.status_style =
-        crate::style::resolve::resolve_muted_style(theme, themed_props.status_style);
+    themed_props.header.style = resolve_base_style(theme, themed_props.header.style);
+    themed_props.footer.style =
+        crate::style::resolve::resolve_muted_style(theme, themed_props.footer.style);
+    for label in [
+        &mut themed_props.header.left,
+        &mut themed_props.header.center,
+        &mut themed_props.header.right,
+        &mut themed_props.footer.left,
+        &mut themed_props.footer.center,
+        &mut themed_props.footer.right,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        label.style = label.style.map(|style| resolve_base_style(theme, style));
+        label.focused_style = label
+            .focused_style
+            .map(|style| resolve_base_style(theme, style));
+    }
+    themed_props.header.focused_style = themed_props
+        .header
+        .focused_style
+        .map(|style| resolve_base_style(theme, style));
+    themed_props.footer.focused_style = themed_props
+        .footer
+        .focused_style
+        .map(|style| resolve_base_style(theme, style));
     themed_props.active_tab_style =
         crate::style::resolve::resolve_accent_style(theme, themed_props.active_tab_style);
     themed_props.inactive_tab_style =
@@ -1298,12 +1322,6 @@ fn render_frame_node(
         overrides.hover_style = overrides
             .hover_style
             .map(|slot| StyleSlot::Replace(resolve_slot(theme, ThemeRole::Hover, &slot)));
-        overrides.focus_title_style = overrides
-            .focus_title_style
-            .map(|style| resolve_base_style(theme, style));
-        overrides.focus_status_style = overrides
-            .focus_status_style
-            .map(|style| resolve_base_style(theme, style));
         overrides.focus_active_tab_style = overrides
             .focus_active_tab_style
             .map(|style| resolve_base_style(theme, style));

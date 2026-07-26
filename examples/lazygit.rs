@@ -236,7 +236,7 @@ fn panel_focus_style() -> Style {
     Style::new().fg(Color::LightCyan)
 }
 
-fn panel_focus_title_style() -> Style {
+fn panel_focused_header_style() -> Style {
     panel_focus_style().bold()
 }
 
@@ -250,17 +250,17 @@ fn panel_frame() -> Frame {
         .border_style(BorderStyle::Rounded)
         .style(panel_chrome_style())
         .focus_style(panel_focus_style())
-        .title_style(panel_chrome_style())
+        .header_style(panel_chrome_style())
         .header_padding(1)
         .footer_padding(1)
-        .focus_title_style(panel_focus_title_style())
-        .status_style(panel_chrome_style())
-        .focus_status_style(panel_focus_style())
+        .focused_header_style(panel_focused_header_style())
+        .footer_style(panel_chrome_style())
+        .focused_footer_style(panel_focus_style())
         .padding(0)
 }
 
 fn numbered_panel_frame(pane: Pane) -> Frame {
-    panel_frame().title_prefix(format!("[{}]", pane.number()))
+    panel_frame().header_left(format!("[{}]", pane.number()))
 }
 
 fn panel_list(
@@ -492,7 +492,7 @@ impl Component for LazygitDemo {
         let status_panel: Element = numbered_panel_frame(Pane::Status)
             .height(Length::Auto)
             .focus_min_height(3)
-            .title(Pane::Status.title())
+            .header_left(Pane::Status.title())
             .focusable(true)
             .child(rsx! {
                 VStack {
@@ -528,9 +528,9 @@ impl Component for LazygitDemo {
             .tab_variant(TabVariant::Minimal)
             .active_tab(ctx.state.files_tab)
             .active_tab_style(panel_focus_style())
-            .focus_active_tab_style(panel_focus_title_style())
+            .focus_active_tab_style(panel_focused_header_style())
             .on_tab_change(ctx.link().callback(Msg::FilesTabChanged))
-            .status_right(count_status(
+            .footer_right(count_status(
                 match ctx.state.files_tab {
                     0 => ctx.state.files_selected,
                     1 => ctx.state.worktrees_selected,
@@ -568,9 +568,9 @@ impl Component for LazygitDemo {
             .tab_variant(TabVariant::Minimal)
             .active_tab(ctx.state.branches_tab)
             .active_tab_style(panel_focus_style())
-            .focus_active_tab_style(panel_focus_title_style())
+            .focus_active_tab_style(panel_focused_header_style())
             .on_tab_change(ctx.link().callback(Msg::BranchesTabChanged))
-            .status_right(count_status(
+            .footer_right(count_status(
                 match ctx.state.branches_tab {
                     0 => ctx.state.branches_selected,
                     1 => ctx.state.remotes_selected,
@@ -603,9 +603,9 @@ impl Component for LazygitDemo {
             .tab_variant(TabVariant::Minimal)
             .active_tab(ctx.state.commits_tab)
             .active_tab_style(panel_focus_style())
-            .focus_active_tab_style(panel_focus_title_style())
+            .focus_active_tab_style(panel_focused_header_style())
             .on_tab_change(ctx.link().callback(Msg::CommitsTabChanged))
-            .status_right(count_status(
+            .footer_right(count_status(
                 match ctx.state.commits_tab {
                     0 => ctx.state.commits_selected,
                     _ => ctx.state.reflog_selected,
@@ -621,8 +621,8 @@ impl Component for LazygitDemo {
         let commits_panel = commits_panel.key(Pane::Commits.key());
 
         let stash_panel: Element = numbered_panel_frame(Pane::Stash)
-            .title(Pane::Stash.title())
-            .status_right(count_status(ctx.state.stash_selected, stash_len))
+            .header_left(Pane::Stash.title())
+            .footer_right(count_status(ctx.state.stash_selected, stash_len))
             .height(Length::Flex(1))
             .unfocused_height(Length::Px(3))
             .focus_min_height(4)
@@ -637,7 +637,7 @@ impl Component for LazygitDemo {
         let stash_panel = stash_panel.key(Pane::Stash.key());
 
         let log_panel: Element = numbered_panel_frame(Pane::Log)
-            .title(Pane::Log.title())
+            .header_left(Pane::Log.title())
             .height(Length::Flex(2))
             .focus_min_height(FOCUSED_PANEL_MIN_HEIGHT)
             .width(Length::Flex(1))
@@ -663,7 +663,7 @@ impl Component for LazygitDemo {
         let log_panel = log_panel.key(Pane::Log.key());
 
         let cmd_panel: Element = panel_frame()
-            .title(Pane::CommandLog.title())
+            .header_left(Pane::CommandLog.title())
             .height(Length::Flex(1))
             .unfocused_height(Length::Px(3))
             .focus_min_height(FOCUSED_PANEL_MIN_HEIGHT)

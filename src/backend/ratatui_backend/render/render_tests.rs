@@ -19,9 +19,9 @@ use crate::style::{
 };
 use crate::utils::color_contrast::contrast_ratio;
 use crate::widgets::{
-    Animated, BorderMergeMode, Button, DecorationGlyph, DecorationPlacement, EdgeDecoration,
-    EffectScope, Frame, HStack, List, ListItem, Modal, Spacer, Splitter, SplitterHandleMode, Text,
-    VStack, ZStack,
+    Animated, BorderLabels, BorderMergeMode, Button, DecorationGlyph, DecorationPlacement,
+    EdgeDecoration, EffectScope, Frame, FrameLabel, HStack, List, ListItem, Modal, Spacer,
+    Splitter, SplitterHandleMode, TabVariant, Text, VStack, ZStack,
 };
 
 struct HeaderFrameComponent;
@@ -82,6 +82,12 @@ struct AnimatedPositionOffsetComponent {
 
 struct CompactFramePaintLeakComponent;
 struct CompactFrameStatusRightComponent;
+
+struct GroupedBorderLabelsComponent;
+
+struct TabsWithHeaderLabelComponent;
+
+struct HeaderLabelPaddingStyleComponent;
 
 struct OffscreenModalOverlayComponent;
 
@@ -179,10 +185,212 @@ impl Component for HeaderFrameComponent {
     fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
         Frame::new()
             .height(Length::Px(3))
-            .header(Text::new("Search"))
+            .header_content(Text::new("Search"))
             .child(Text::new("Body"))
             .into()
     }
+}
+
+impl Component for GroupedBorderLabelsComponent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        Frame::new()
+            .width(Length::Px(24))
+            .height(Length::Px(5))
+            .header(
+                BorderLabels::new()
+                    .left(FrameLabel::new("left"))
+                    .center("center")
+                    .right("right"),
+            )
+            .footer(
+                BorderLabels::new()
+                    .left("mode")
+                    .center("workspace")
+                    .right("time"),
+            )
+            .child(Text::new("body"))
+            .into()
+    }
+}
+
+impl Component for TabsWithHeaderLabelComponent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        Frame::new()
+            .width(Length::Px(42))
+            .height(Length::Px(3))
+            .header_left("[2]")
+            .header_padding(1)
+            .tab_titles(["Files", "Worktrees", "Submodule"])
+            .tab_variant(TabVariant::Minimal)
+            .active_tab(1)
+            .child(Text::new("body"))
+            .into()
+    }
+}
+
+impl Component for HeaderLabelPaddingStyleComponent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        Frame::new()
+            .width(Length::Px(12))
+            .height(Length::Px(3))
+            .style(Style::new().fg(Color::Red))
+            .header(
+                BorderLabels::new()
+                    .left(FrameLabel::new("X").style(Style::new().fg(Color::Blue)))
+                    .padding(1),
+            )
+            .child(Text::new("body"))
+            .into()
+    }
+}
+
+#[test]
+fn grouped_border_labels_render_in_all_positions() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 24,
+        h: 5,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        GroupedBorderLabelsComponent,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    runtime.render_element(viewport, None, None, None);
+
+    let buffer = render_runtime_with_hover(&runtime, viewport, None, None);
+    let row = |y: u16| {
+        (0..viewport.w)
+            .map(|x| buffer[(x, y)].symbol().to_owned())
+            .collect::<String>()
+    };
+
+    assert!(row(0).contains("left"));
+    assert!(row(0).contains("center"));
+    assert!(row(0).contains("right"));
+    assert!(row(4).contains("mode"));
+    assert!(row(4).contains("workspace"));
+    assert!(row(4).contains("time"));
+}
+
+#[test]
+fn grouped_label_style_resolution_preserves_each_layer() {
+    let base = Style::new().fg(Color::Red);
+    let group_style = Style::new().fg(Color::Green).bold();
+    let group_focused = Style::new().underline();
+    let label_style = Style::new().fg(Color::Blue);
+    let label_focused = Style::new().fg(Color::Yellow);
+    let group = BorderLabels::new()
+        .style(group_style)
+        .focused_style(group_focused);
+    let label = FrameLabel::new("label")
+        .style(label_style)
+        .focused_style(label_focused);
+
+    let unfocused = crate::backend::ratatui_backend::renderers::frame::render::resolve_label_style(
+        base, &group, &label, false,
+    );
+    assert_eq!(unfocused.fg, label_style.fg);
+    assert_eq!(unfocused.bold, group_style.bold);
+    assert_eq!(unfocused.underline, None);
+
+    let focused = crate::backend::ratatui_backend::renderers::frame::render::resolve_label_style(
+        base, &group, &label, true,
+    );
+    assert_eq!(focused.fg, label_focused.fg);
+    assert_eq!(focused.bold, group_style.bold);
+    assert_eq!(focused.underline, group_focused.underline);
+}
+
+#[test]
+fn tabs_remain_after_a_grouped_header_prefix() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 42,
+        h: 3,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        TabsWithHeaderLabelComponent,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    runtime.render_element(viewport, None, None, None);
+
+    let buffer = render_runtime_with_hover(&runtime, viewport, None, None);
+    let row = (0..viewport.w)
+        .map(|x| buffer[(x, 0)].symbol().to_owned())
+        .collect::<String>();
+
+    assert!(
+        row.contains("─[2]─Files - Worktrees - Submodule"),
+        "rendered header: {row:?}"
+    );
+}
+
+#[test]
+fn header_label_padding_uses_border_style() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 12,
+        h: 3,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        HeaderLabelPaddingStyleComponent,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    runtime.render_element(viewport, None, None, None);
+
+    let buffer = render_runtime_with_hover(&runtime, viewport, None, None);
+
+    assert_eq!(buffer[(1, 0)].fg, ratatui::style::Color::Red);
+    assert_eq!(buffer[(2, 0)].fg, ratatui::style::Color::Blue);
+    assert_eq!(buffer[(3, 0)].fg, ratatui::style::Color::Red);
 }
 
 impl Component for EffectScopeRenderComponent {
@@ -685,7 +893,7 @@ impl Component for CompactFramePaintLeakComponent {
             .border(true)
             .height(Length::Px(2))
             .style(Style::new().bg(Color::DarkGray))
-            .title("Compact")
+            .header_left("Compact")
             .child(Text::new("body"))
             .into()
     }
@@ -708,8 +916,8 @@ impl Component for CompactFrameStatusRightComponent {
             .border(true)
             .header_padding(1)
             .footer_padding(1)
-            .title("Files")
-            .status_right("1 of 6")
+            .header_left("Files")
+            .footer_right("1 of 6")
             .child(Text::new("body"))
             .into()
     }
@@ -2822,7 +3030,7 @@ fn compact_frame_only_paints_the_visible_row() {
 }
 
 #[test]
-fn compact_frame_with_status_right_fills_the_visible_row() {
+fn compact_frame_with_footer_right_fills_the_visible_row() {
     let viewport = Rect {
         x: 0,
         y: 0,

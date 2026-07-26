@@ -72,7 +72,7 @@ impl Component for EditorPanel {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         Frame::new()
-            .title("Editor")
+            .header_left("Editor")
             .border(true)
             .padding(1)
             .child(
@@ -230,7 +230,7 @@ impl Component for CommandPaletteDemo {
             .child(Text::new("p: open palette | q: quit").style(Style::new().fg(Color::DarkGray)))
             .child(
                 Frame::new()
-                    .title("App state")
+                    .header_left("App state")
                     .border(true)
                     .padding(1)
                     .child(

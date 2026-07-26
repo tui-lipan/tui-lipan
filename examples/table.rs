@@ -116,7 +116,7 @@ impl Component for TableDemo {
             )
             .child(
                 Frame::new()
-                    .title(title)
+                    .header_left(title)
                     .padding(1)
                     .border(true)
                     .height(Length::Flex(1))

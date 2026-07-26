@@ -107,8 +107,8 @@ impl Component for ImageDemo {
         };
 
         Frame::new()
-            .title("Image Widget")
-            .status("Ctrl+Q quit | Space play/pause | L loop | +/- speed")
+            .header_left("Image Widget")
+            .footer_left("Ctrl+Q quit | Space play/pause | L loop | +/- speed")
             .padding(1)
             .child(
                 VStack::new()
@@ -123,7 +123,7 @@ impl Component for ImageDemo {
                             .height(Length::Flex(1))
                             .child(
                                 Frame::new()
-                                    .title("Static PNG")
+                                    .header_left("Static PNG")
                                     .width(Length::Flex(1))
                                     .padding(1)
                                     .child(
@@ -136,7 +136,7 @@ impl Component for ImageDemo {
                             )
                             .child(
                                 Frame::new()
-                                    .title("Gandalf GIF")
+                                    .header_left("Gandalf GIF")
                                     .width(Length::Flex(1))
                                     .padding(1)
                                     .child(
@@ -152,7 +152,7 @@ impl Component for ImageDemo {
                             )
                             .child(
                                 Frame::new()
-                                    .title("Decode Fallback")
+                                    .header_left("Decode Fallback")
                                     .width(Length::Flex(1))
                                     .padding(1)
                                     .child(

@@ -195,7 +195,10 @@ pub use flowchart::{
     Edge, EdgeArrow, EdgeStyle, FlowDirection, Flowchart, FlowchartEdgeEvent, FlowchartItemPath,
     FlowchartNodeEvent, FlowchartSubgraphEvent, FlowchartTheme, NodeId, NodeShape,
 };
-pub use frame::{BorderMergeMode, DecorationGlyph, DecorationPlacement, EdgeDecoration, Frame};
+pub use frame::{
+    BorderLabels, BorderMergeMode, DecorationGlyph, DecorationPlacement, EdgeDecoration, Frame,
+    FrameLabel,
+};
 pub use gantt_diagram::{
     GanttDate, GanttDate as DiagramGanttDate, GanttDiagram, GanttDiagramTheme, GanttDuration,
     GanttDuration as DiagramGanttDuration, GanttRenderRole, GanttSection,

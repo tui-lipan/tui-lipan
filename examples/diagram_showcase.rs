@@ -412,7 +412,7 @@ fn sequence_tab(ctx: &Context<DiagramShowcase>) -> Element {
         )
         .child(
             Frame::new()
-                .title("Sequence item status")
+                .header_left("Sequence item status")
                 .border(true)
                 .height(Length::Auto)
                 .padding((0, 1))
@@ -451,7 +451,7 @@ fn class_tab() -> Element {
         .padding(1);
 
     Frame::new()
-        .title("ClassDiagram")
+        .header_left("ClassDiagram")
         .border(true)
         .padding(1)
         .child(diagram)
@@ -480,7 +480,7 @@ fn er_tab() -> Element {
         .padding(1);
 
     Frame::new()
-        .title("ErDiagram")
+        .header_left("ErDiagram")
         .border(true)
         .padding(1)
         .child(diagram)
@@ -502,7 +502,7 @@ fn state_tab() -> Element {
         .padding(1);
 
     Frame::new()
-        .title("StateDiagram")
+        .header_left("StateDiagram")
         .border(true)
         .padding(1)
         .child(diagram)
@@ -650,7 +650,7 @@ fn gantt_tab() -> Element {
 
 fn section(title: &'static str, child: impl Into<Element>) -> Element {
     Frame::new()
-        .title(title)
+        .header_left(title)
         .border(true)
         .height(Length::Auto)
         .padding(1)

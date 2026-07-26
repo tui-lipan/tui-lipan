@@ -222,7 +222,7 @@ impl Component for Messenger {
 
         rsx! {
             Frame {
-                title: "Messenger",
+                header_left: "Messenger",
                 border: true,
                 padding: 0,
                 HStack {

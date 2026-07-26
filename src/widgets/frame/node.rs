@@ -15,16 +15,12 @@ use crate::widgets::{BorderMergeMode, FocusScope, TabVariant, TabsEvent};
 pub struct FrameStyleOverrides {
     /// Style for the inner content area (distinct from border).
     pub inner_style: Option<Style>,
-    /// Style applied to the title when focused.
-    pub focus_title_style: Option<Style>,
     /// Style applied when the frame or its children have focus.
     pub focus_style: Option<StyleSlot>,
     /// Style applied when the frame is hovered.
     pub hover_style: Option<StyleSlot>,
     /// Border style applied when focused.
     pub focus_border_style: Option<BorderStyle>,
-    /// Style applied to the status line when focused.
-    pub focus_status_style: Option<Style>,
     /// Style applied to the active tab when the frame is focused.
     pub focus_active_tab_style: Option<Style>,
     /// Style applied to inactive tabs when the frame is focused.
@@ -34,15 +30,10 @@ pub struct FrameStyleOverrides {
 /// Runtime state for a frame node.
 #[derive(Clone)]
 pub struct FrameNode {
-    /// Optional title (used when no border tabs are set).
-    pub title: Option<RichText>,
-    /// Optional title prefix (rendered before title or tabs).
-    pub title_prefix: Option<RichText>,
-    /// Optional title suffix (rendered after title or tabs).
-    pub title_suffix: Option<RichText>,
-    /// Title alignment in the top border.
-    /// Default: `Align::Start`.
-    pub title_alignment: Align,
+    /// Labels rendered in the top border.
+    pub header: Box<crate::widgets::frame::BorderLabels>,
+    /// Labels rendered in the bottom border.
+    pub footer: Box<crate::widgets::frame::BorderLabels>,
     /// Tab titles rendered in the top border.
     pub tab_titles: Vec<RichText>,
     /// Active tab index for border tabs.
@@ -55,12 +46,6 @@ pub struct FrameNode {
     pub tab_variant: TabVariant,
     /// Callback fired when a border tab is clicked.
     pub on_tab_change: Option<Callback<TabsEvent>>,
-    /// Optional status line (left) shown at the bottom of the inner area.
-    pub status: Option<RichText>,
-    /// Optional centered status segment.
-    pub status_center: Option<RichText>,
-    /// Optional right-aligned status segment.
-    pub status_right: Option<RichText>,
     /// Padding inside the border.
     /// Default: `Padding::default()`.
     pub padding: Padding,
@@ -80,10 +65,6 @@ pub struct FrameNode {
     pub join_frame: bool,
     /// Base style (border + background).
     pub style: Style,
-    /// Title style.
-    pub title_style: Style,
-    /// Status line style.
-    pub status_style: Style,
     /// Optional width override.
     /// Default: `Length::Flex(1)`.
     pub width: Length,
@@ -98,12 +79,6 @@ pub struct FrameNode {
     pub compact: bool,
     /// Allow the frame to collapse when space is constrained.
     pub collapsible: bool,
-    /// Header (title/tabs) padding (top/bottom ignored).
-    /// Default: `Padding::default()`.
-    pub header_padding: Padding,
-    /// Footer (status) padding (top/bottom ignored).
-    /// Default: `Padding::default()`.
-    pub footer_padding: Padding,
     pub has_header: bool,
     /// Explicitly control focusability.
     pub focusable: bool,
@@ -135,11 +110,6 @@ impl FrameNode {
         self.style_overrides.as_ref()?.inner_style
     }
 
-    /// Access the focused title style override.
-    pub fn focus_title_style(&self) -> Option<Style> {
-        self.style_overrides.as_ref()?.focus_title_style
-    }
-
     /// Access the focused frame style override.
     pub fn focus_style(&self) -> Option<Style> {
         match self.style_overrides.as_ref()?.focus_style? {
@@ -161,11 +131,6 @@ impl FrameNode {
         self.style_overrides.as_ref()?.focus_border_style
     }
 
-    /// Access the focused status style override.
-    pub fn focus_status_style(&self) -> Option<Style> {
-        self.style_overrides.as_ref()?.focus_status_style
-    }
-
     /// Access the focused active tab style override.
     pub fn focus_active_tab_style(&self) -> Option<Style> {
         self.style_overrides.as_ref()?.focus_active_tab_style
@@ -178,13 +143,13 @@ impl FrameNode {
 
     fn has_focus_chrome(&self) -> bool {
         self.focus_min_height.is_some()
+            || self.header.focused_style.is_some()
+            || self.footer.focused_style.is_some()
             || self.style_overrides.as_ref().is_some_and(|overrides| {
                 overrides
                     .focus_style
                     .is_some_and(|s| !matches!(s, StyleSlot::Inherit))
                     || overrides.focus_border_style.is_some()
-                    || overrides.focus_title_style.is_some_and(|s| !s.is_empty())
-                    || overrides.focus_status_style.is_some_and(|s| !s.is_empty())
                     || overrides
                         .focus_active_tab_style
                         .is_some_and(|s| !s.is_empty())
@@ -305,19 +270,14 @@ impl WidgetNode for FrameNode {
 impl Default for FrameNode {
     fn default() -> Self {
         Self {
-            title: None,
-            title_prefix: None,
-            title_suffix: None,
-            title_alignment: Align::Start,
+            header: Box::new(crate::widgets::frame::BorderLabels::default()),
+            footer: Box::new(crate::widgets::frame::BorderLabels::default()),
             tab_titles: Vec::new(),
             active_tab: 0,
             active_tab_style: Style::default(),
             inactive_tab_style: Style::default(),
             tab_variant: TabVariant::default(),
             on_tab_change: None,
-            status: None,
-            status_center: None,
-            status_right: None,
             padding: Padding::default(),
             decorations: Vec::new(),
             border: true,
@@ -326,16 +286,12 @@ impl Default for FrameNode {
             border_merge_mode: BorderMergeMode::Exact,
             join_frame: false,
             style: Style::default(),
-            title_style: Style::default(),
-            status_style: Style::default(),
             width: Length::Flex(1),
             height: Length::Flex(1),
             unfocused_height: None,
             focus_min_height: None,
             compact: false,
             collapsible: true,
-            header_padding: Padding::default(),
-            footer_padding: Padding::default(),
             has_header: false,
             focusable: false,
             focus_scope: FocusScope::None,

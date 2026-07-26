@@ -175,7 +175,7 @@ impl Component for LogViewer {
                 padding: 1,
                 gap: 1,
                 Frame {
-                    title: "Log Filter",
+                    header_left: "Log Filter",
                     border: true,
                     height: Length::Auto,
                     HStack {
@@ -215,7 +215,7 @@ impl Component for LogViewer {
                 },
                 log_view,
                 Frame {
-                    title: "Log Details",
+                    header_left: "Log Details",
                     border: true,
                     height: Length::Px(10),
                     TextArea::new(details).border(false).read_only(true).wrap(true),

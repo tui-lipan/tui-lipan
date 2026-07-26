@@ -509,8 +509,8 @@ impl Component for DiffHub {
             )
             .child(
                 Frame::new()
-                    .title(format!("Diff Hub - {title}"))
-                    .status("Switch variants with tabs")
+                    .header_left(format!("Diff Hub - {title}"))
+                    .footer_left("Switch variants with tabs")
                     .border(true)
                     .padding(1)
                     .height(Length::Flex(1))

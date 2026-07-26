@@ -163,11 +163,11 @@ impl Component for ScrollToKeyDemo {
         }
 
         Frame::new()
-            .title("ScrollView scroll_to_key")
+            .header_left("ScrollView scroll_to_key")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .padding(1)
-            .status("Type to jump | q or Esc quits")
+            .footer_left("Type to jump | q or Esc quits")
             .child(
                 VStack::new()
                     .gap(1)
@@ -211,7 +211,7 @@ fn first_match_key(query: &str) -> Option<String> {
 fn render_message(message: &MessageItem) -> Element {
     Element::from(
         Frame::new()
-            .title(message.title)
+            .header_left(message.title)
             .border(true)
             .border_style(BorderStyle::Plain)
             .padding(1)

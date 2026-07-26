@@ -83,13 +83,13 @@ impl Component for HoverDemo {
         let item_hover = Style::new().bg(Color::indexed(240)).fg(Color::LightCyan);
 
         Frame::new()
-            .title("Hover Demo")
-            .status(ctx.state.status.clone())
+            .header_left("Hover Demo")
+            .footer_left(ctx.state.status.clone())
             .border(true)
             .border_style(BorderStyle::Rounded)
             .style(base_style)
-            .title_style(Style::new().fg(Color::LightBlue).bold())
-            .status_style(Style::new().fg(Color::indexed(244)).dim())
+            .header_style(Style::new().fg(Color::LightBlue).bold())
+            .footer_style(Style::new().fg(Color::indexed(244)).dim())
             .padding(1)
             .child(
                 VStack::new()
@@ -137,7 +137,7 @@ impl HoverDemo {
 
     fn list_section(&self, ctx: &Context<Self>, hover_style: Style, item_hover: Style) -> Element {
         Frame::new()
-            .title("List (hover items)")
+            .header_left("List (hover items)")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .hover_style(hover_style)
@@ -166,7 +166,7 @@ impl HoverDemo {
         let header = TableRow::new(["Name", "Type", "Size"]);
 
         Frame::new()
-            .title("Table (hover rows)")
+            .header_left("Table (hover rows)")
             .border(true)
             .border_style(BorderStyle::Rounded)
             .hover_style(hover_style)
@@ -247,7 +247,7 @@ impl HoverDemo {
             .height(Length::Px(5))
             .child(
                 Frame::new()
-                    .title("Hoverable Frame 1")
+                    .header_left("Hoverable Frame 1")
                     .border(true)
                     .border_style(BorderStyle::Rounded)
                     .style(Style::new().bg(Color::indexed(236)))
@@ -257,7 +257,7 @@ impl HoverDemo {
             )
             .child(
                 Frame::new()
-                    .title("Hoverable Frame 2")
+                    .header_left("Hoverable Frame 2")
                     .border(true)
                     .border_style(BorderStyle::Plain)
                     .style(Style::new().bg(Color::indexed(236)))
@@ -267,7 +267,7 @@ impl HoverDemo {
             )
             .child(
                 Frame::new()
-                    .title("No Hover Style")
+                    .header_left("No Hover Style")
                     .border(true)
                     .border_style(BorderStyle::Rounded)
                     .style(Style::new().bg(Color::indexed(236)))

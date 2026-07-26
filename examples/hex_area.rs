@@ -48,7 +48,7 @@ impl Component for HexAreaDemo {
             .unwrap_or(0);
 
         Frame::new()
-            .title("HexArea Binary Inspector")
+            .header_left("HexArea Binary Inspector")
             .border(true)
             .padding(1)
             .child(

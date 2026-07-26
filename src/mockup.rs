@@ -11,7 +11,7 @@
 //! fn main() -> Result<()> {
 //!     mockup!("Dashboard", {
 //!         Frame::new()
-//!             .title("Panel")
+//!             .header_left("Panel")
 //!             .border(true)
 //!             .child(Text::new("Hello!"))
 //!     })
@@ -42,7 +42,7 @@ use crate::core::event::{KeyCode, KeyEvent};
 ///         .title("My Layout")
 ///         .mount(Mockup::new(|| {
 ///             Frame::new()
-///                 .title("Hello")
+///                 .header_left("Hello")
 ///                 .border(true)
 ///                 .child(Text::new("World"))
 ///                 .into()
@@ -59,7 +59,7 @@ use crate::core::event::{KeyCode, KeyEvent};
 /// fn main() -> Result<()> {
 ///     mockup!("My Layout", {
 ///         Frame::new()
-///             .title("Hello")
+///             .header_left("Hello")
 ///             .border(true)
 ///             .child(Text::new("World"))
 ///     })

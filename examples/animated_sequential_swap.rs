@@ -223,13 +223,17 @@ impl Component for Demo {
         let (title_t, blurb_t) = OPACITY_TARGET_PAGES[ctx.state.target_slot];
 
         let fg_bg_block = Animated::new(
-            Frame::new().title(title_b).border(true).padding(1).child(
-                VStack::new()
-                    .gap(1)
-                    .child(Text::new("Fg + bg on Animated").style(Style::new().bold()))
-                    .child(Text::new(blurb_b))
-                    .key(format!("fg-bg-{}", ctx.state.fg_bg_slot)),
-            ),
+            Frame::new()
+                .header_left(title_b)
+                .border(true)
+                .padding(1)
+                .child(
+                    VStack::new()
+                        .gap(1)
+                        .child(Text::new("Fg + bg on Animated").style(Style::new().bold()))
+                        .child(Text::new(blurb_b))
+                        .key(format!("fg-bg-{}", ctx.state.fg_bg_slot)),
+                ),
         )
         .fg(fg_b)
         .bg(bg_b)
@@ -250,7 +254,7 @@ impl Component for Demo {
         .on_opacity_transition_end(ctx.link().callback(|_| Msg::OpacityEndFgOnly));
 
         let frame_block = Frame::new()
-            .title("Fixed frame background")
+            .header_left("Fixed frame background")
             .border(true)
             .padding(1)
             .style(Style::new().bg(Color::Rgb(36, 40, 48)))
@@ -270,7 +274,7 @@ impl Component for Demo {
             );
 
         let target_block = Frame::new()
-            .title("opacity_target(Color::Red)")
+            .header_left("opacity_target(Color::Red)")
             .border(true)
             .padding(1)
             .style(Style::new().bg(Color::Rgb(28, 32, 40)))
@@ -291,8 +295,8 @@ impl Component for Demo {
             );
 
         Frame::new()
-            .title("Sequential Animated swap")
-            .status("[1] fg+bg  [2] fg only  [3] frame+fg  [4] opacity target  [q] quit")
+            .header_left("Sequential Animated swap")
+            .footer_left("[1] fg+bg  [2] fg only  [3] frame+fg  [4] opacity target  [q] quit")
             .border(true)
             .padding(1)
             .child(

@@ -84,7 +84,7 @@ impl Component for SparklineShowcase {
 
         // ── Bars Presets + Zero Policy ────────────────────────────────────────
         let bars_frame = Frame::new()
-            .title("Bars Presets + Zero Policy")
+            .header_left("Bars Presets + Zero Policy")
             .border(true)
             .width(Length::Flex(1))
             .padding(1)
@@ -140,7 +140,7 @@ impl Component for SparklineShowcase {
 
         // ── Braille Variants ──────────────────────────────────────────────────
         let braille_frame = Frame::new()
-            .title("Braille Variants")
+            .header_left("Braille Variants")
             .border(true)
             .width(Length::Flex(1))
             .padding(1)
@@ -193,7 +193,7 @@ impl Component for SparklineShowcase {
 
         // ── Line Variants ─────────────────────────────────────────────────────
         let line_frame = Frame::new()
-            .title("Line Variants")
+            .header_left("Line Variants")
             .border(true)
             .width(Length::Flex(1))
             .padding(1)
@@ -258,7 +258,7 @@ impl Component for SparklineShowcase {
 
         // ── Gradients ─────────────────────────────────────────────────────────
         let gradient_frame = Frame::new()
-            .title("Gradients")
+            .header_left("Gradients")
             .border(true)
             .width(Length::Flex(1))
             .padding(1)
@@ -323,7 +323,7 @@ impl Component for SparklineShowcase {
 
         // ── Aggregation Strategies ────────────────────────────────────────────
         let aggregation_frame = Frame::new()
-            .title("Downsampling: All Aggregation Strategies")
+            .header_left("Downsampling: All Aggregation Strategies")
             .border(true)
             .width(Length::Flex(1))
             .padding(1)
@@ -388,7 +388,7 @@ impl Component for SparklineShowcase {
 
         // ── Mirroring ─────────────────────────────────────────────────────────
         let mirror_frame = Frame::new()
-            .title("Mirroring")
+            .header_left("Mirroring")
             .border(true)
             .width(Length::Flex(1))
             .padding(1)
@@ -470,7 +470,7 @@ impl Component for SparklineShowcase {
 
         // ── Live Stream ───────────────────────────────────────────────────────
         let live_frame = Frame::new()
-            .title("Live Stream")
+            .header_left("Live Stream")
             .border(true)
             .width(Length::Flex(1))
             .padding(1)
@@ -547,7 +547,7 @@ impl Component for SparklineShowcase {
 
         // ── Overflow Modes (Live) ─────────────────────────────────────────────
         let overflow_frame = Frame::new()
-            .title("Overflow Modes (Live - same data, different strategy)")
+            .header_left("Overflow Modes (Live - same data, different strategy)")
             .border(true)
             .width(Length::Flex(1))
             .padding(1)
