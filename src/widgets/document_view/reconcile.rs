@@ -57,7 +57,7 @@ fn increment_visual_cache_counter(counter: &AtomicU64) {
     counter.fetch_add(1, Ordering::Relaxed);
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "diff-view"))]
 fn reset_visual_cache_counter(counter: &'static std::thread::LocalKey<Cell<u64>>) {
     counter.with(|cell| cell.set(0));
 }
@@ -67,7 +67,7 @@ fn increment_visual_cache_counter(counter: &'static std::thread::LocalKey<Cell<u
     counter.with(|cell| cell.set(cell.get().saturating_add(1)));
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "diff-view"))]
 pub fn visual_cache_stats() -> (u64, u64, u64) {
     (
         visual_cache_hits(),
@@ -76,7 +76,7 @@ pub fn visual_cache_stats() -> (u64, u64, u64) {
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "diff-view"))]
 pub fn reset_visual_cache_stats() {
     reset_visual_cache_counter(&VISUAL_CACHE_HITS);
     reset_visual_cache_counter(&VISUAL_CACHE_MISSES);
