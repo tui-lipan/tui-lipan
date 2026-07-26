@@ -7,9 +7,9 @@ use crate::core::event::KeyCode;
 use crate::style::{Align, BorderStyle, Justify, Length, Paint, ScrollbarConfig, Style};
 use crate::utils::gradient::ColorGradient;
 use crate::widgets::{
-    Button, ButtonVariant, Frame, FrameLabel, HStack, Input, InputEvent, LogFilterMode, LogView,
-    LogViewEvent, Overflow, Spacer, Sparkline, SparklineBarsPreset, SparklineVariant,
-    SparklineZeroPolicy, TabsEvent, Text, VStack,
+    BorderMergeMode, Button, ButtonVariant, Frame, FrameLabel, HStack, Input, InputEvent,
+    LogFilterMode, LogView, LogViewEvent, Overflow, Spacer, Sparkline, SparklineBarsPreset,
+    SparklineVariant, SparklineZeroPolicy, TabsEvent, Text, VStack,
 };
 
 use super::state::DevToolsState;
@@ -145,6 +145,9 @@ impl Component for DevToolsPanel {
                 Frame::new()
                     .border(true)
                     .border_style(BorderStyle::Rounded)
+                    // DevTools is painted as a separate top layer; its border must not
+                    // merge with app-layer borders that happen to occupy the same cells.
+                    .border_merge_mode(BorderMergeMode::Replace)
                     .tab_titles(["Stats", "Logs"])
                     .active_tab(state.active_tab.min(DEVTOOLS_TAB_LOGS))
                     .on_tab_change(ctx.link().callback(DevToolsMsg::TabChanged))
