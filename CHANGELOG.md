@@ -129,6 +129,7 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- DevTools borders no longer merge their rounded corners with app-layer borders beneath the panel.
 - `Frame` border headers now preserve tab titles alongside grouped labels, and
   label padding glyphs use the resolved border style instead of the label style.
 - Border-tab mouse hit-testing now accounts for grouped header prefixes and

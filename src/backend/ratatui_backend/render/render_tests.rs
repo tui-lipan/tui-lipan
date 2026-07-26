@@ -14,8 +14,8 @@ use crate::core::component::{Component, Context, Update};
 use crate::core::node::{NodeId, NodeKind};
 use crate::runtime::RuntimeCore;
 use crate::style::{
-    BorderEdges, Color, ColorTransform, Edge, EffectAxis, EffectPalette, Length, Paint, Rect,
-    ScrollbarConfig, ScrollbarVariant, Style, Theme, VisualEffect,
+    BorderEdges, BorderStyle, Color, ColorTransform, Edge, EffectAxis, EffectPalette, Length,
+    Paint, Rect, ScrollbarConfig, ScrollbarVariant, Style, Theme, VisualEffect,
 };
 use crate::utils::color_contrast::contrast_ratio;
 use crate::widgets::{
@@ -49,6 +49,9 @@ struct EffectScopeScanlinesComponent;
 struct NestedEffectScopeCompositionComponent;
 
 struct DevToolsTopmostAppBackdropComponent;
+
+#[cfg(feature = "devtools")]
+struct DevToolsBorderUnderlayComponent;
 
 struct TransparentModalOverlayComponent;
 
@@ -720,6 +723,27 @@ impl Component for DevToolsTopmostAppBackdropComponent {
                             .child(Text::new("MODAL")),
                     ),
             )
+            .into()
+    }
+}
+
+#[cfg(feature = "devtools")]
+impl Component for DevToolsBorderUnderlayComponent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        Frame::new()
+            .border(true)
+            .border_style(BorderStyle::Plain)
+            .child(Text::new("app"))
             .into()
     }
 }
@@ -2578,6 +2602,59 @@ fn extra_root_renders_above_app_modal_backdrop_and_effect_scope() {
     let buffer = terminal.backend().buffer();
     assert_eq!(buffer[(0, 0)].symbol(), "D");
     assert_eq!(buffer[(0, 0)].fg, ratatui::style::Color::Green);
+}
+
+#[cfg(feature = "devtools")]
+#[test]
+fn devtools_border_does_not_merge_with_app_layer_border() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 60,
+        h: 20,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        DevToolsBorderUnderlayComponent,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    let state = Rc::new(RefCell::new(crate::devtools::DevToolsState::default()));
+    state.borrow_mut().set_visible(true);
+    runtime.extra_root_element = Some(crate::devtools::panel_element(state));
+    runtime.init();
+    runtime.render_element(viewport, None, None, None);
+
+    let panel = runtime
+        .tree
+        .iter()
+        .find(|node| {
+            node.key
+                .as_ref()
+                .is_some_and(|key| key.as_ref() == crate::devtools::DEVTOOLS_KEY)
+        })
+        .expect("devtools panel should exist");
+    let panel_bottom_right = (
+        panel
+            .rect
+            .x
+            .saturating_add(panel.rect.w as i16)
+            .saturating_sub(1) as u16,
+        panel
+            .rect
+            .y
+            .saturating_add(panel.rect.h as i16)
+            .saturating_sub(1) as u16,
+    );
+    let buffer = render_runtime_with_hover(&runtime, viewport, None, None);
+
+    assert_eq!(
+        buffer[panel_bottom_right].symbol(),
+        "╯",
+        "the DevTools rounded corner must replace, not merge with, the app border beneath it"
+    );
 }
 
 #[test]
