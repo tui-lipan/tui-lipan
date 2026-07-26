@@ -41,10 +41,8 @@ All changes are tracked in [`CHANGELOG.md`](https://github.com/tui-lipan/tui-lip
 
 ## License
 
-Dual-licensed under **MIT OR Apache-2.0**
-([MIT](https://github.com/tui-lipan/tui-lipan/blob/main/LICENSE-MIT) or
-[Apache-2.0](https://github.com/tui-lipan/tui-lipan/blob/main/LICENSE-APACHE)) at
-your option. You can build closed-source, proprietary, and commercial apps on top
-of tui-lipan freely. Commercial
+Licensed under the [Mozilla Public License 2.0 (MPL-2.0)](https://www.mozilla.org/en-US/MPL/2.0/).
+See the [LICENSE](https://github.com/tui-lipan/tui-lipan/blob/main/LICENSE) file for
+the complete terms. Commercial
 [support and services](https://github.com/tui-lipan/tui-lipan/blob/main/COMMERCIAL.md)
 are also available.
