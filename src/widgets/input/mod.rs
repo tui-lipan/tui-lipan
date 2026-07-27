@@ -43,7 +43,7 @@ pub struct Input {
     pub(crate) focus_prefix_style: Style,
     pub(crate) suffix_style: Style,
     pub(crate) focus_suffix_style: Style,
-    pub(crate) caret_shape: CaretShape,
+    pub(crate) caret_shape: Option<CaretShape>,
     pub(crate) caret_color: Option<Color>,
     pub(crate) selection_style: StyleSlot,
     pub(crate) border: bool,
@@ -101,7 +101,7 @@ impl Input {
             focus_prefix_style: Style::default(),
             suffix_style: Style::default(),
             focus_suffix_style: Style::default(),
-            caret_shape: CaretShape::default(),
+            caret_shape: None,
             caret_color: None,
             selection_style: StyleSlot::Inherit,
             border: true,
@@ -285,13 +285,13 @@ impl Input {
         self
     }
 
-    /// Set caret shape (bar, block, or underline).
+    /// Override the active theme's caret shape (bar, block, or underline).
     pub fn caret_shape(mut self, shape: CaretShape) -> Self {
-        self.caret_shape = shape;
+        self.caret_shape = Some(shape);
         self
     }
 
-    /// Set caret color (only used for block caret rendering).
+    /// Override the active theme's hardware caret color (only used for block caret rendering).
     pub fn caret_color(mut self, color: Color) -> Self {
         self.caret_color = Some(color);
         self

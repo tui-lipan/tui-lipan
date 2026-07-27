@@ -32,7 +32,7 @@ Representative `prelude::*` re-exports:
 | `Callback`, `CommandLink`, `KeyHandler`, `Link` | Messaging |
 | `KeyCode`, `KeyEvent`, `KeyMods`, `MouseEvent`, `MouseMoveEvent` | Events |
 | `KeyBinding`, `KeyBindings` | Common keybinding types |
-| `Style`, `Color`, `Length`, `Padding`, `Align`, `Justify`, `BorderStyle`, `BorderEdges`, `CaretShape` | Styling |
+| `Style`, `Color`, `Length`, `Padding`, `Align`, `Justify`, `BorderStyle`, `BorderEdges`, `CaretPalette`, `CaretShape` | Styling |
 | `RichText`, `Span`, `Edge`, `Rect`, `Size`, `ScrollbarConfig`, `ScrollbarVariant` | Layout & text types |
 | `Theme`, `ColorGradient`, `GradientDirection`, `GradientRange`, `VisualEffect`, `RippleRadius`, `RetroPreset` | Themes & effects |
 | `ClipboardConfig`, `PasteShiftInsertBehavior` | Clipboard config |

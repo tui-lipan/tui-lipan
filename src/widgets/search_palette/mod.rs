@@ -512,7 +512,7 @@ pub(crate) struct SearchPaletteProps<T> {
     input_divider: bool,
     input_divider_style: Style,
     input_divider_join_frame: bool,
-    input_caret_shape: CaretShape,
+    input_caret_shape: Option<CaretShape>,
     input_caret_color: Option<Color>,
     input_border_style: BorderStyle,
     input_padding: Padding,
@@ -758,7 +758,7 @@ impl<T: Clone + PartialEq> Default for SearchPalette<T> {
                 input_divider: true,
                 input_divider_style: Style::default(),
                 input_divider_join_frame: true,
-                input_caret_shape: CaretShape::default(),
+                input_caret_shape: None,
                 input_caret_color: None,
                 input_border_style: BorderStyle::Plain,
                 input_padding: Padding {
@@ -1072,13 +1072,13 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
         self
     }
 
-    /// Set input caret shape (block, bar, or underline).
+    /// Override the active theme's input caret shape (block, bar, or underline).
     pub fn input_caret_shape(mut self, shape: CaretShape) -> Self {
-        self.props.input_caret_shape = shape;
+        self.props.input_caret_shape = Some(shape);
         self
     }
 
-    /// Set input caret color (OSC 12 cursor color, terminal support required).
+    /// Override the active theme's input caret color (OSC 12 cursor color, terminal support required).
     pub fn input_caret_color(mut self, color: Color) -> Self {
         self.props.input_caret_color = Some(color);
         self

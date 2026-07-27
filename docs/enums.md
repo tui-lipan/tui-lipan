@@ -308,6 +308,18 @@ Strategy used when frame border symbols overlap (e.g. adjacent or overlapping fr
 | `CaretShape::Bar` | Vertical bar cursor (│) |
 | `CaretShape::Underline` | Underline cursor (_) |
 
+### `CaretPalette`
+
+Global caret defaults for editable text-entry widgets. `ThemePalette` derives
+`CaretShape::Block` and the palette accent color by default. Individual
+`Input`, `TextArea`, and embedded `SearchPalette` query inputs can override
+either field with their caret setters.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `shape` | `CaretShape` | Default hardware caret shape |
+| `color` | `Option<Color>` | Default OSC 12 hardware caret color |
+
 ### `ScrollbarVariant`
 
 | Variant | Description |

@@ -413,8 +413,8 @@ You can also mark rows active with `.active(true)` on `SearchItem` or `SearchEnt
 | `input_divider` | `bool` | Render divider below input (uncontrolled mode, default: `true`) |
 | `input_divider_style` | `Style` | Divider style below input |
 | `input_divider_join_frame` | `bool` | Join divider with surrounding frame border (default: `true`) |
-| `input_caret_shape` | `CaretShape` | Input caret shape (`Block`, `Bar`, `Underline`) |
-| `input_caret_color` | `Color` | Input caret color (OSC 12 cursor color, terminal support required) |
+| `input_caret_shape` | `CaretShape` | Override the active theme's input caret shape (`Block`, `Bar`, `Underline`) |
+| `input_caret_color` | `Color` | Override the active theme's input caret color (OSC 12 cursor color, terminal support required) |
 | `input_border_style` | `BorderStyle` | Input border style |
 | `input_padding` | `impl Into<Padding>` | Input padding |
 | `input_style` | `Style` | Input base style |

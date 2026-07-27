@@ -115,8 +115,8 @@ pub use crate::process::{
 };
 pub use crate::style::Theme;
 pub use crate::style::{
-    Align, BorderEdges, BorderStyle, CaretShape, CellEffect, Color, ColorTransform, DiffPalette,
-    DocumentPalette, DocumentViewPalette, Edge, EffectAxis, EffectCell, EffectContext,
+    Align, BorderEdges, BorderStyle, CaretPalette, CaretShape, CellEffect, Color, ColorTransform,
+    DiffPalette, DocumentPalette, DocumentViewPalette, Edge, EffectAxis, EffectCell, EffectContext,
     EffectPalette, EffectPrepareContext, FileIconPalette, FloatRect, GitStatusPalette,
     HexAreaPalette, HostTerminalColors, InputPalette, Justify, LayoutConstraints, Length, Padding,
     Paint, PreparedCellEffect, Rect, RetroPreset, RichText, RippleRadius, ScrollbarConfig,

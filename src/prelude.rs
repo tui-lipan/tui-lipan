@@ -80,11 +80,11 @@ pub use crate::{
 pub use crate::style::Theme;
 pub use crate::style::query_host_colors;
 pub use crate::style::{
-    Align, BorderEdges, BorderStyle, CaretShape, CellEffect, Color, ColorTransform, Edge,
-    EffectAlignment, EffectCell, EffectContext, EffectOrigin, EffectPrepareContext, FloatRect,
-    HostTerminalColors, Justify, LayoutConstraints, Length, Padding, Paint, PreparedCellEffect,
-    Rect, RetroPreset, RichText, RippleRadius, ScrollbarConfig, ScrollbarVariant, ShrinkPriority,
-    Size, Span, Style, TerminalColor, VisualEffect,
+    Align, BorderEdges, BorderStyle, CaretPalette, CaretShape, CellEffect, Color, ColorTransform,
+    Edge, EffectAlignment, EffectCell, EffectContext, EffectOrigin, EffectPrepareContext,
+    FloatRect, HostTerminalColors, Justify, LayoutConstraints, Length, Padding, Paint,
+    PreparedCellEffect, Rect, RetroPreset, RichText, RippleRadius, ScrollbarConfig,
+    ScrollbarVariant, ShrinkPriority, Size, Span, Style, TerminalColor, VisualEffect,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

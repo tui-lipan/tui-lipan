@@ -234,6 +234,12 @@ if let Some(url) = ev.href.as_deref() {
 
 Single-line text input field.
 
+`Input` inherits its caret shape and hardware color from the nearest active
+theme's `CaretPalette`. Use `caret_shape(...)` or `caret_color(...)` when this
+input needs an explicit override. `SearchPalette` query inputs follow the same
+inheritance unless their `input_caret_shape(...)` or `input_caret_color(...)`
+setter is used.
+
 > **State binding:** Use `Input::bound(&state)` to create an `Input` that reads value, cursor, and anchor from a `TextInput` state bundle, and `InputEvent::apply_to(&mut state)` in your `update` handler to write changes back. This preserves cursor position and selection across rerenders. Using `Input::new(value)` resets the cursor to the end on every render.
 
 | Prop | Type | Description |
@@ -244,8 +250,8 @@ Single-line text input field.
 | `value` | `impl Into<Arc<str>>` | Current text value (use `bound`/`bind` instead for cursor preservation) |
 | `cursor` | `usize` | Byte cursor position |
 | `anchor` | `Option<usize>` | Selection anchor (for text selection) |
-| `caret_shape` | `CaretShape` | Cursor shape - **default: `Block`** (only set when you want `Bar` or `Underline`) |
-| `caret_color` | `Option<Color>` | OSC 12 cursor color (terminal support required) |
+| `caret_shape` | `CaretShape` | Override the active theme's cursor shape (`Block`, `Bar`, or `Underline`) |
+| `caret_color` | `Option<Color>` | Override the active theme's OSC 12 cursor color (terminal support required) |
 | `style` | `Style` | Idle style |
 | `hover_style` | `Style` | Hover style |
 | `extend_hover_style` / `inherit_hover_style` | `Style` / `()` | Extend or inherit the hover theme role instead of replacing it |
@@ -322,8 +328,8 @@ Multi-line text editor.
 | `value` | `impl Into<Arc<str>>` | Current text value (use `bound`/`bind` instead for cursor preservation) |
 | `cursor` | `usize` | Byte cursor position |
 | `anchor` | `Option<usize>` | Selection anchor |
-| `caret_shape` | `CaretShape` | Cursor shape - **default: `Block`**; Vim-enabled TextAreas use mode-aware defaults unless overridden |
-| `caret_color` | `Option<Color>` | OSC 12 cursor color |
+| `caret_shape` | `CaretShape` | Override the active theme's cursor shape; Vim-enabled TextAreas use mode-aware defaults when the resolved shape is `Block` |
+| `caret_color` | `Option<Color>` | Override the active theme's OSC 12 cursor color |
 | `line_numbers` | `bool` | Show line number gutter |
 | `line_number_mode` | `TextAreaLineNumberMode` | `Absolute` by default; `Relative` shows Vim-style distances from the cursor line while keeping the cursor line absolute |
 | `gutter_inset` | `u16` | Empty cells before the gutter / line numbers |
@@ -453,7 +459,7 @@ Normal/Visual, and `V` enters linewise Visual selection mode from Normal. Use
 `on_vim_mode_change` to update app-owned status bars, frame headers, or other
 mode-aware chrome.
 
-When `caret_shape` is not overridden, Vim mode uses a steady block cursor for
+When the resolved caret shape is `Block`, Vim mode uses a steady block cursor for
 Normal, Visual, and VisualLine, and a steady vertical bar for Insert. Non-Vim
 TextAreas keep the regular caret behavior, including selection-driven cursor
 hiding for non-Vim selections.

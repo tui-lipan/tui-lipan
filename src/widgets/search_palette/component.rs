@@ -433,7 +433,6 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
             let mut input = Input::new(text_input.text().to_owned())
                 .cursor(text_input.cursor())
                 .anchor(text_input.anchor())
-                .caret_shape(ctx.props.input_caret_shape)
                 .placeholder(ctx.props.placeholder.as_ref())
                 .prefix(prefix)
                 .prefix_style(ctx.props.input_prefix_style)
@@ -453,6 +452,10 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                 .key_interceptor(input_key_interceptor)
                 .tab_stop(ctx.props.tab_stop)
                 .on_change(ctx.link().callback(SearchPaletteMsg::QueryChanged));
+
+            if let Some(shape) = ctx.props.input_caret_shape {
+                input = input.caret_shape(shape);
+            }
 
             if let Some(cb) = ctx.props.on_focus.clone() {
                 input = input.on_focus(cb);
@@ -906,9 +909,10 @@ mod tests {
     use crate::core::component::{Component, Context, Update, UpdateLevel};
     use crate::core::element::Element;
     use crate::core::event::{KeyCode, KeyEvent, KeyMods};
+    use crate::core::node::NodeKind;
     use crate::runtime::RuntimeCore;
-    use crate::style::{Length, Rect, Theme};
-    use crate::widgets::{ListConfig, SearchEvent, SearchItem, SearchPalette};
+    use crate::style::{CaretShape, Length, Rect, Theme};
+    use crate::widgets::{ListConfig, SearchEvent, SearchItem, SearchPalette, ThemeProvider};
 
     struct PaletteRoot {
         view_count: Rc<Cell<usize>>,
@@ -1016,6 +1020,76 @@ mod tests {
         let palette = SearchPalette::<usize>::new().list_symbol_column(false);
 
         assert_eq!(palette.props.list_symbol_column, Some(false));
+    }
+
+    #[test]
+    fn input_caret_shape_defaults_to_theme_inheritance() {
+        let palette = SearchPalette::<usize>::new();
+        assert_eq!(palette.props.input_caret_shape, None);
+
+        let palette = SearchPalette::<usize>::new().input_caret_shape(CaretShape::Bar);
+        assert_eq!(palette.props.input_caret_shape, Some(CaretShape::Bar));
+    }
+
+    struct ThemedPaletteRoot;
+
+    impl Component for ThemedPaletteRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            ThemeProvider::new(Theme::default().caret_shape(CaretShape::Underline))
+                .child(
+                    SearchPalette::<usize>::new()
+                        .items([SearchItem::new("item", 1)])
+                        .height(Length::Px(4)),
+                )
+                .into()
+        }
+    }
+
+    #[test]
+    fn realized_input_inherits_theme_caret_shape_without_palette_override() {
+        let mut runtime = RuntimeCore::new_test(
+            ThemedPaletteRoot,
+            (),
+            Rect::default(),
+            Theme::default(),
+            crate::app::context::SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(true)),
+        );
+
+        runtime.init();
+        runtime.render_element(
+            Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 10,
+            },
+            None,
+            None,
+            None,
+        );
+
+        let input = runtime
+            .tree
+            .iter()
+            .find_map(|node| match &node.kind {
+                NodeKind::Input(input) => Some((input, node.active_theme().caret.shape)),
+                _ => None,
+            })
+            .expect("search palette should realize its query input");
+
+        assert_eq!(input.0.caret_shape, None);
+        assert_eq!(input.1, CaretShape::Underline);
     }
 
     #[test]
