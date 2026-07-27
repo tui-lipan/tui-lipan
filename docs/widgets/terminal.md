@@ -74,6 +74,10 @@ The low-level terminal viewport widget. Use when you need custom PTY handling, m
 | Prop | Type | Description |
 |------|------|-------------|
 | `snapshot` | `TerminalRenderSnapshot` | Current screen snapshot |
+| `show_cursor` | `bool` | Show the hardware caret |
+| `cursor_shape` | `CaretShape` | Hardware caret shape |
+| `cursor_blinking` | `bool` | Child-requested caret blinking preference |
+| `caret_color` | `Color` | Hardware caret color via OSC 12 (terminal support required) |
 | `style` | `Style` | Container style |
 | `hover_style` | `Style` | Hover style |
 | `extend_hover_style` / `inherit_hover_style` | `Style` / `()` | Extend or inherit the hover theme role instead of replacing it |
@@ -344,6 +348,12 @@ cursor; the widget honors that preference (blinking is driven by the framework b
 steady cursor stays lit). A child that never issues `DECSCUSR` falls back to a blinking block. These
 fields flow through `TerminalRenderSnapshot` and can be overridden directly with
 `Terminal::cursor_shape()` / `Terminal::cursor_blinking()`.
+
+### Cursor color
+
+`Terminal::caret_color(Color)` sets the focused hardware caret color through OSC 12. This is
+independent of the terminal cell styles and palette; omit it to let the host terminal choose the
+caret color. OSC 12 support can be disabled with `TUI_LIPAN_OSC12=0`.
 
 ### Semantic state (working directory & command lifecycle)
 

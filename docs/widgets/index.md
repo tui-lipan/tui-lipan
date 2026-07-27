@@ -123,7 +123,7 @@ For layout reorders, wrap the moving subtree in `Animated::new(...)`, enable `.p
 | Widget | Description |
 |--------|-------------|
 | `ManagedTerminal` | Full PTY terminal (recommended) |
-| `Terminal` | Low-level terminal viewport widget |
+| `Terminal` | Low-level terminal viewport widget with hardware caret controls |
 | `TerminalPty` | PTY spawner and I/O bridge |
 | `TerminalScreen` | VT100/VT220 screen emulator |
 

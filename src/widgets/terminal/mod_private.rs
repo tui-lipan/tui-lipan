@@ -1,6 +1,6 @@
 use crate::callback::{Callback, KeyHandler};
 use crate::style::{
-    BorderStyle, CaretShape, Length, Padding, ScrollbarVariant, Span, Style, StyleSlot,
+    BorderStyle, CaretShape, Color, Length, Padding, ScrollbarVariant, Span, Style, StyleSlot,
 };
 use crate::widgets::ScrollEvent;
 use std::sync::Arc;
@@ -20,6 +20,7 @@ pub struct Terminal {
     pub(crate) show_cursor: bool,
     pub(crate) cursor_shape: CaretShape,
     pub(crate) cursor_blinking: bool,
+    pub(crate) caret_color: Option<Color>,
     pub(crate) color_lines: Option<Arc<[Vec<Span>]>>,
     pub(crate) color_cache_key: u64,
     pub(crate) scrollback_offset: usize,
