@@ -511,6 +511,9 @@ While the crate is on `0.x.y`:
   identifier punctuation, while Up/Down navigation no longer skips continuation rows. Wrapped
   editors use the full content width for non-caret rows and reserve the final cell only on an
   exactly full row ending at the caret, instead of rendering the caret on a synthetic empty row.
+- Fixed wrapped `TextArea` rows moving back when the cursor leaves a caret-adjusted row after an
+  edit; cursor-only movement now preserves the continuation row and word break, and auto height
+  reserves the same row so the preserved wrap is not clipped.
 - `Flow` no longer subtracts its padding and border twice while measuring constrained widths,
   preventing rows that fit from reserving an extra wrapped line.
 - Centered and stacked overlays (`Modal`, toasts) now measure their auto height against the width

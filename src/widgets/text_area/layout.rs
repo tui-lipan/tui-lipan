@@ -88,6 +88,8 @@ pub(crate) struct TextAreaVisualCacheEntry {
     pub key: TextAreaVisualKey,
     pub geometry: TextAreaGeometry,
     pub lines: Vec<TextAreaVisualLine>,
+    /// Whether this layout reserves/reflows for an exactly full caret row.
+    pub caret_adjusted: bool,
     #[cfg(feature = "diff-view")]
     pub own_source_heights: Option<Arc<Vec<u16>>>,
 }
@@ -128,11 +130,23 @@ impl TextAreaVisualCache {
         self.get_lines(key).map(Arc::from)
     }
 
+    fn get_caret_adjusted_entry(
+        &self,
+        key: &TextAreaVisualKey,
+    ) -> Option<&TextAreaVisualCacheEntry> {
+        // Keep an edit-time wrap decision stable when only the cursor key changes.
+        self.entries
+            .iter()
+            .rev()
+            .find(|entry| entry.caret_adjusted && entry.key.matches_without_caret(key))
+    }
+
     pub(crate) fn insert_with_lines(
         &mut self,
         key: TextAreaVisualKey,
         geometry: TextAreaGeometry,
         lines: Vec<TextAreaVisualLine>,
+        caret_adjusted: bool,
         #[cfg(feature = "diff-view")] own_source_heights: Option<Arc<Vec<u16>>>,
     ) {
         if let Some(idx) = self.entries.iter().position(|entry| entry.key == key) {
@@ -143,6 +157,7 @@ impl TextAreaVisualCache {
             key,
             geometry,
             lines,
+            caret_adjusted,
             #[cfg(feature = "diff-view")]
             own_source_heights,
         });
@@ -191,6 +206,16 @@ impl TextAreaVisualCache {
             self.prepared_entries.remove(0);
         }
         prepared
+    }
+}
+
+impl TextAreaVisualKey {
+    fn matches_without_caret(&self, other: &Self) -> bool {
+        let mut key = self.clone();
+        key.caret = None;
+        let mut other = other.clone();
+        other.caret = None;
+        key == other
     }
 }
 
@@ -451,7 +476,7 @@ pub(crate) fn layout_line_with_inline_virtual_text(
     line: &str,
     ctx: VirtualTextLayoutCtx<'_>,
     out: &mut Vec<TextAreaVisualLine>,
-) -> usize {
+) -> (usize, bool) {
     let VirtualTextLayoutCtx {
         line_start_abs,
         line_num,
@@ -472,6 +497,7 @@ pub(crate) fn layout_line_with_inline_virtual_text(
     } else {
         content_width.max(1)
     };
+    let caret_adjusted = wrap_width < content_width.max(1);
     if !wrap || max_line_width <= wrap_width {
         push_virtual_layout_line(
             out,
@@ -489,7 +515,7 @@ pub(crate) fn layout_line_with_inline_virtual_text(
                     .any(|insertion| insertion.anchor == line.len()),
             },
         );
-        return max_line_width;
+        return (max_line_width, caret_adjusted);
     }
 
     let mut insertion_idx = 0usize;
@@ -650,7 +676,7 @@ pub(crate) fn layout_line_with_inline_virtual_text(
         );
     }
 
-    max_line_width
+    (max_line_width, caret_adjusted)
 }
 
 fn cursor_visual_line_for_wrapped_lines(lines: &[TextAreaVisualLine], cursor: usize) -> usize {
@@ -770,17 +796,13 @@ pub fn measure_text_area_constrained(text_area: &TextArea, max_width: Option<u16
     // Use layout_w (not clamped_w) for inner_w to match actual rendering width
     let inner_w = layout_w.saturating_sub(border_w).saturating_sub(padding_h);
 
-    let value_hash = hash_text(text_area.value.as_ref());
-    let reserve_v_scrollbar = !matches!(text_area.height, crate::style::Length::Auto);
-    let geo = calculate_text_area_visual_metrics(
-        text_area,
-        inner_w,
-        !reserve_v_scrollbar,
-        value_hash,
-        None,
-    );
-
-    let mut visual_h = geo.total_visual_lines;
+    let mut visual_h = if matches!(text_area.height, crate::style::Length::Auto) {
+        stable_wrapped_auto_height_lines(text_area, inner_w)
+    } else {
+        let value_hash = hash_text(text_area.value.as_ref());
+        calculate_text_area_visual_metrics(text_area, inner_w, false, value_hash, None)
+            .total_visual_lines
+    };
     visual_h = visual_h.saturating_add(text_area.padding.vertical() as usize);
     if text_area.border {
         visual_h = visual_h.saturating_add(2);
@@ -818,12 +840,8 @@ pub(crate) fn text_area_auto_height_for_width(
     let inner_w = resolved_w
         .saturating_sub(if text_area.border { 2 } else { 0 })
         .saturating_sub(text_area.padding.horizontal());
-    let value_hash = hash_text(text_area.value.as_ref());
-    let geo = calculate_text_area_visual_metrics(text_area, inner_w, true, value_hash, None);
-
     if text_area.wrap {
-        let mut visual_h = geo
-            .total_visual_lines
+        let mut visual_h = stable_wrapped_auto_height_lines(text_area, inner_w)
             .saturating_add(usize::from(pending_vim_search_row));
         visual_h = visual_h.saturating_add(text_area.padding.vertical() as usize);
         if text_area.border {
@@ -832,6 +850,8 @@ pub(crate) fn text_area_auto_height_for_width(
         return visual_h.min(u16::MAX as usize) as u16;
     }
 
+    let value_hash = hash_text(text_area.value.as_ref());
+    let geo = calculate_text_area_visual_metrics(text_area, inner_w, true, value_hash, None);
     let h_scrollbar_over_border = text_area.h_scrollbar
         && matches!(text_area.h_scrollbar_variant, ScrollbarVariant::Integrated)
         && (text_area.border || parent_h_edge);
@@ -842,6 +862,36 @@ pub(crate) fn text_area_auto_height_for_width(
         height = height.saturating_add(1);
     }
     height
+}
+
+fn stable_wrapped_auto_height_lines(text_area: &TextArea, inner_w: u16) -> usize {
+    let mut normal_layout = text_area.clone();
+    normal_layout.read_only = true;
+    let mut cache = TextAreaVisualCache::default();
+    let geometry = calculate_text_area_visual_metrics(
+        &normal_layout,
+        inner_w,
+        true,
+        hash_text(normal_layout.value.as_ref()),
+        Some(&mut cache),
+    );
+    let needs_caret_row = !text_area.read_only
+        && geometry.content_width > 0
+        && cache.latest_lines().is_some_and(|lines| {
+            lines.iter().enumerate().any(|(idx, line)| {
+                let row_width = line.visual_end_col.saturating_sub(line.visual_start_col);
+                let next_is_real_continuation = lines.get(idx + 1).is_some_and(|next| {
+                    next.line_num == line.line_num
+                        && next.continuation
+                        && next.start == line.end
+                        && next.start != next.end
+                });
+                row_width == geometry.content_width && !next_is_real_continuation
+            })
+        });
+    geometry
+        .total_visual_lines
+        .saturating_add(usize::from(needs_caret_row))
 }
 
 pub(crate) fn calculate_text_area_visual_metrics(
@@ -995,6 +1045,7 @@ pub(crate) fn calculate_text_area_visual_metrics(
             && super::virtual_text_content_width(vt) > 0
     });
 
+    let mut caret_adjusted = false;
     let max_line_width = if has_inline_virtual_text {
         let mut max_line_width = 0usize;
         for (idx, line) in lines.iter().enumerate() {
@@ -1006,7 +1057,7 @@ pub(crate) fn calculate_text_area_visual_metrics(
                 line_start,
                 line_end,
             );
-            let width = layout_line_with_inline_virtual_text(
+            let (width, adjusted) = layout_line_with_inline_virtual_text(
                 line,
                 VirtualTextLayoutCtx {
                     line_start_abs: line_start,
@@ -1020,6 +1071,7 @@ pub(crate) fn calculate_text_area_visual_metrics(
                 },
                 &mut visual_lines,
             );
+            caret_adjusted |= adjusted;
             max_line_width = max_line_width.max(width);
         }
         max_line_width
@@ -1051,7 +1103,9 @@ pub(crate) fn calculate_text_area_visual_metrics(
             let line_ranges = if text_area.read_only {
                 layout_lines(&prepared, content_width)
             } else {
-                layout_lines_with_caret(&prepared, content_width, cursor)
+                let (ranges, adjusted) = layout_lines_with_caret(&prepared, content_width, cursor);
+                caret_adjusted = adjusted;
+                ranges
             };
             let mut logical_line_idx = 0usize;
             let mut seen_visual_in_line = vec![false; logical_lines_count.max(1)];
@@ -1111,6 +1165,45 @@ pub(crate) fn calculate_text_area_visual_metrics(
         }
         max_line_width
     };
+
+    if wrap
+        && !text_area.read_only
+        && !caret_adjusted
+        && let Some(entry) = cache
+            .as_deref()
+            .and_then(|cache| cache.get_caret_adjusted_entry(&cache_key))
+            .cloned()
+    {
+        let TextAreaVisualCacheEntry {
+            mut geometry,
+            lines,
+            #[cfg(feature = "diff-view")]
+            own_source_heights,
+            ..
+        } = entry;
+        geometry.cursor_visual_line = cursor_visual_line_for_wrapped_lines(&lines, cursor);
+
+        #[cfg(feature = "diff-view")]
+        if cache_key.split_wrap_layout_pass == 1
+            && let (Some(sync), Some(side)) =
+                (&text_area.split_wrap_sync, text_area.split_wrap_side)
+            && let Some(heights) = &own_source_heights
+        {
+            record_pass1_source_heights(sync, side, heights);
+        }
+
+        if let Some(cache) = cache {
+            cache.insert_with_lines(
+                cache_key,
+                geometry.clone(),
+                lines,
+                true,
+                #[cfg(feature = "diff-view")]
+                own_source_heights,
+            );
+        }
+        return geometry;
+    }
 
     // allow(unused_mut): the diff-view feature gate below conditionally mutates these.
     #[allow(unused_mut)]
@@ -1229,6 +1322,7 @@ pub(crate) fn calculate_text_area_visual_metrics(
             cache_key,
             geometry.clone(),
             visual_lines,
+            caret_adjusted,
             #[cfg(feature = "diff-view")]
             own_source_heights_cache,
         );
@@ -1376,15 +1470,31 @@ mod tests {
     }
 
     #[test]
-    fn auto_height_tracks_cursor_dependent_caret_row() {
+    fn auto_height_reserves_caret_adjusted_row_after_cursor_moves() {
         let value = "really long tex";
         let at_start = make_textarea(value, true, false)
             .width(crate::style::Length::Px(15))
             .height(crate::style::Length::Auto);
         let at_end = at_start.clone().cursor(value.len());
 
-        assert_eq!(measure_text_area_constrained(&at_start, Some(15)).1, 1);
+        assert_eq!(measure_text_area_constrained(&at_start, Some(15)).1, 2);
         assert_eq!(measure_text_area_constrained(&at_end, Some(15)).1, 2);
+    }
+
+    #[test]
+    fn auto_height_keeps_space_and_word_wraps_after_cursor_only_changes() {
+        for (value, cursor) in [("really long te ", 0), ("really long ted", 14)] {
+            let text_area = make_textarea(value, true, false)
+                .cursor(cursor)
+                .width(crate::style::Length::Px(15))
+                .height(crate::style::Length::Auto);
+
+            assert_eq!(measure_text_area_constrained(&text_area, Some(15)).1, 2);
+            assert_eq!(
+                text_area_auto_height_for_width(&text_area, 15, false, false),
+                2
+            );
+        }
     }
 
     #[test]
@@ -1502,6 +1612,95 @@ mod tests {
                 expected_col
             );
         }
+    }
+
+    #[test]
+    fn caret_adjusted_wrap_survives_cursor_only_changes() {
+        let mut cache = TextAreaVisualCache::default();
+        let initial = make_textarea("really long te", true, false).cursor(14);
+        calculate_text_area_visual_metrics(
+            &initial,
+            15,
+            false,
+            hash_text(initial.value.as_ref()),
+            Some(&mut cache),
+        );
+
+        let spaced = make_textarea("really long te ", true, false).cursor(15);
+        calculate_text_area_visual_metrics(
+            &spaced,
+            15,
+            false,
+            hash_text(spaced.value.as_ref()),
+            Some(&mut cache),
+        );
+        assert_eq!(
+            cache
+                .latest_lines()
+                .expect("spaced layout is cached")
+                .iter()
+                .map(|line| (line.start, line.end))
+                .collect::<Vec<_>>(),
+            vec![(0, 15), (15, 15)]
+        );
+
+        let spaced_after_up = spaced.clone().cursor(0);
+        let geometry = calculate_text_area_visual_metrics(
+            &spaced_after_up,
+            15,
+            false,
+            hash_text(spaced_after_up.value.as_ref()),
+            Some(&mut cache),
+        );
+        assert_eq!(geometry.total_visual_lines, 2);
+        assert_eq!(geometry.cursor_visual_line, 0);
+        assert_eq!(
+            cache
+                .latest_lines()
+                .expect("spaced cursor-only layout is cached")
+                .iter()
+                .map(|line| (line.start, line.end))
+                .collect::<Vec<_>>(),
+            vec![(0, 15), (15, 15)]
+        );
+
+        let typed = make_textarea("really long ted", true, false).cursor(15);
+        calculate_text_area_visual_metrics(
+            &typed,
+            15,
+            false,
+            hash_text(typed.value.as_ref()),
+            Some(&mut cache),
+        );
+        assert_eq!(
+            cache
+                .latest_lines()
+                .expect("typed layout is cached")
+                .iter()
+                .map(|line| (line.start, line.end))
+                .collect::<Vec<_>>(),
+            vec![(0, 12), (12, 15)]
+        );
+
+        let typed_after_left = typed.clone().cursor(14);
+        let geometry = calculate_text_area_visual_metrics(
+            &typed_after_left,
+            15,
+            false,
+            hash_text(typed_after_left.value.as_ref()),
+            Some(&mut cache),
+        );
+        assert_eq!(geometry.total_visual_lines, 2);
+        assert_eq!(geometry.cursor_visual_line, 1);
+        assert_eq!(
+            cache
+                .latest_lines()
+                .expect("typed cursor-only layout is cached")
+                .iter()
+                .map(|line| (line.start, line.end))
+                .collect::<Vec<_>>(),
+            vec![(0, 12), (12, 15)]
+        );
     }
 
     #[test]

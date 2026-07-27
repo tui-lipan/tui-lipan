@@ -605,6 +605,54 @@ mod tests {
     }
 
     #[test]
+    fn auto_height_preserves_caret_adjusted_wrap_after_cursor_move() {
+        for (value, moved_cursor, expected_ranges) in [
+            ("really long te ", 0, vec![(0, 15), (15, 15)]),
+            ("really long ted", 14, vec![(0, 12), (12, 15)]),
+        ] {
+            let root = |cursor| -> Element {
+                VStack::new()
+                    .width(Length::Auto)
+                    .height(Length::Auto)
+                    .child(
+                        TextArea::new(value)
+                            .cursor(cursor)
+                            .width(Length::Px(15))
+                            .height(Length::Auto)
+                            .scrollbar(false)
+                            .border(false),
+                    )
+                    .into()
+            };
+            let bounds = Rect {
+                x: 0,
+                y: 0,
+                w: 20,
+                h: 20,
+            };
+            let mut tree = NodeTree::new();
+
+            LayoutEngine::reconcile_with_focus(&mut tree, &root(value.len()), bounds, None);
+            LayoutEngine::reconcile_with_focus(&mut tree, &root(moved_cursor), bounds, None);
+
+            let child_id = tree.node(tree.root).children[0];
+            let NodeKind::TextArea(node) = &tree.node(child_id).kind else {
+                panic!("expected text area child");
+            };
+            assert_eq!(tree.node(child_id).rect.h, 2);
+            assert_eq!(
+                node.visual_cache
+                    .latest_lines()
+                    .expect("wrapped layout is cached")
+                    .iter()
+                    .map(|line| (line.start, line.end))
+                    .collect::<Vec<_>>(),
+                expected_ranges
+            );
+        }
+    }
+
+    #[test]
     fn h_scrollbar_can_appear_only_after_vertical_scrollbar_reserves_width() {
         let value = [
             "    let items = vec![\"Rust\", \"TUI\", \"Lipan\"];".to_string(),
