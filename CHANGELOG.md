@@ -129,6 +129,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `TerminalScreen::export_replay_bytes` now preserves effective Kitty keyboard flags, so attached
+  terminal clients keep modified-key input such as `Shift+Enter` after reconnecting.
 - DevTools borders no longer merge their rounded corners with app-layer borders beneath the panel.
 - `Frame` border headers now preserve tab titles alongside grouped labels, and
   label padding glyphs use the resolved border style instead of the label style.

@@ -411,11 +411,11 @@ let _ = screen.drain_responses(); // the source already answered device queries
 ```
 
 The stream captures scrollback, primary/alternate screen contents, the cursor position and pen
-template, the title, and common terminal modes. It is a replay stream, not a stable data format:
-tab stops, custom scrolling regions, cursor style, the kitty keyboard stack, hyperlinks, and the
-display offset are intentional non-goals — the receiver lands on the live view. This is the seeding
-mechanism a terminal host uses to bring a newly attached client up to date with a live terminal it
-does not own directly.
+template, the title, and common terminal modes, including the effective Kitty keyboard flags. It is
+a replay stream, not a stable data format: tab stops, custom scrolling regions, cursor style, exact
+Kitty keyboard stack depth, hyperlinks, and the display offset are intentional non-goals — the
+receiver lands on the live view. This is the seeding mechanism a terminal host uses to bring a newly
+attached client up to date with a live terminal it does not own directly.
 
 ### Serializable terminal snapshot leaf types
 
