@@ -622,6 +622,11 @@ where
         Ok(bubble_dirty || pump_dirty)
     }
 
+    pub(crate) fn reset_command_chord(&mut self) -> bool {
+        self.key_dispatch_state.reset_command_chord();
+        self.core.ctx.env().command_chord_pending.replace(false)
+    }
+
     /// Focus the node at `id` or the first focusable descendant beneath it.
     ///
     /// Returns `true` if the focused node changed.
@@ -1347,6 +1352,7 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
 mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
+    use std::str::FromStr;
 
     use super::TestBackend;
     use crate::Length;
@@ -2085,6 +2091,29 @@ mod tests {
         }
     }
 
+    struct CommandChordIndicatorRoot;
+
+    impl Component for CommandChordIndicatorRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            Text::new(if ctx.command_chord_pending() {
+                "PENDING"
+            } else {
+                "IDLE"
+            })
+            .into()
+        }
+    }
+
     fn focused_chord_input_backend() -> TestBackend<ChordInputRoot> {
         let mut backend = TestBackend::new(ChordInputRoot);
         let input_id = backend
@@ -2149,6 +2178,44 @@ mod tests {
         assert!(backend.send_key(plain_key('z')).expect("mismatch succeeds"));
         assert_eq!(backend.state(), "z");
         assert!(!backend.core.ctx.should_quit());
+    }
+
+    #[test]
+    fn mouse_release_clears_pending_command_chord_and_repaints() {
+        let command_hit = Rc::new(std::cell::Cell::new(false));
+        let app = crate::App::new().key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst);
+        let mut backend = TestBackend::new_with_app(app, CommandChordIndicatorRoot, ());
+        backend.core.ctx.command_registry().register(
+            crate::CommandEntry::builder("test.chord")
+                .shortcut(crate::KeyBinding::from_str("ctrl-x q").expect("binding"))
+                .handler(Callback::new({
+                    let command_hit = command_hit.clone();
+                    move |_| command_hit.set(true)
+                }))
+                .build(),
+        );
+
+        assert!(backend.send_key(ctrl_key('x')).expect("prefix succeeds"));
+        assert!(backend.core.ctx.env().command_chord_pending.get());
+        assert!(backend.capture_frame().to_fixed_grid_lines()[0].starts_with("PENDING"));
+
+        assert!(
+            backend
+                .send_mouse(MouseEvent {
+                    x: 79,
+                    y: 23,
+                    kind: MouseKind::Up(MouseButton::Left),
+                    mods: KeyMods::default(),
+                })
+                .expect("mouse release succeeds")
+        );
+        assert!(!backend.core.ctx.env().command_chord_pending.get());
+        assert!(backend.capture_frame().to_fixed_grid_lines()[0].starts_with("IDLE"));
+
+        backend
+            .send_key(plain_key('q'))
+            .expect("former suffix dispatches normally");
+        assert!(!command_hit.get());
     }
 
     struct ButtonActivationRoot {

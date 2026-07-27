@@ -36,6 +36,11 @@ pub(crate) struct LayeredKeyEventResult {
 }
 
 impl<C: Component> AppRunner<C> {
+    pub(crate) fn reset_command_chord(&mut self) -> bool {
+        self.key_dispatch_state.reset_command_chord();
+        self.core.ctx.env().command_chord_pending.replace(false)
+    }
+
     pub(crate) fn dispatch_layered_key(&mut self, key: KeyEvent) -> LayeredKeyEventResult {
         self.framework_effects.clear();
 
