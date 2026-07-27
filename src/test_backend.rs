@@ -622,6 +622,11 @@ where
         Ok(bubble_dirty || pump_dirty)
     }
 
+    pub(crate) fn reset_command_chord(&mut self) {
+        self.key_dispatch_state.reset_command_chord();
+        self.core.ctx.env().command_chord_pending.set(false);
+    }
+
     /// Focus the node at `id` or the first focusable descendant beneath it.
     ///
     /// Returns `true` if the focused node changed.

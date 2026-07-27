@@ -107,6 +107,7 @@ pub(crate) trait MouseDispatchCtx<C: Component> {
     fn tree_mut(&mut self) -> &mut crate::core::node::NodeTree;
     fn drag_is_active(&self) -> bool;
     fn active_drag(&self) -> ActiveDrag;
+    fn reset_command_chord(&mut self);
 
     fn dispatch_mouse_move(&mut self, mouse: MouseEvent) -> bool;
     fn update_hover(&mut self, x: u16, y: u16) -> bool;
@@ -246,6 +247,9 @@ fn dispatch_mouse_shared<C: Component, T: MouseDispatchCtx<C>>(
     let adjusted_mouse = ctx.adjust_mouse(mouse);
     let x = adjusted_mouse.x;
     let y = adjusted_mouse.y;
+    if matches!(mouse.kind, MouseKind::Up(_)) {
+        ctx.reset_command_chord();
+    }
     let is_down = matches!(mouse.kind, MouseKind::Down(MouseButton::Left));
     let is_up = matches!(mouse.kind, MouseKind::Up(MouseButton::Left));
 
@@ -502,6 +506,10 @@ impl<C: Component> MouseDispatchCtx<C> for AppRunner<C> {
 
     fn active_drag(&self) -> ActiveDrag {
         self.drag.active.clone()
+    }
+
+    fn reset_command_chord(&mut self) {
+        AppRunner::<C>::reset_command_chord(self);
     }
 
     fn dispatch_mouse_move(&mut self, mouse: MouseEvent) -> bool {
@@ -803,6 +811,10 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
 
     fn active_drag(&self) -> ActiveDrag {
         self.drag.active.clone()
+    }
+
+    fn reset_command_chord(&mut self) {
+        self.reset_command_chord();
     }
 
     fn dispatch_mouse_move(&mut self, mouse: MouseEvent) -> bool {
