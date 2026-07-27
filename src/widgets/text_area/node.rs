@@ -630,6 +630,7 @@ mod tests {
                 starts_with_virtual_text: false,
                 ends_with_virtual_text: false,
             }],
+            false,
             #[cfg(feature = "diff-view")]
             None,
         );

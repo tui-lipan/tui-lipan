@@ -291,13 +291,13 @@ pub(crate) fn layout_lines_with_caret(
     pt: &PreparedText,
     width: usize,
     caret: usize,
-) -> Vec<LineRange> {
+) -> (Vec<LineRange>, bool) {
     let mut lines = layout_lines(pt, width);
     let Some(idx) = lines.iter().enumerate().find_map(|(idx, line)| {
         let continues_at_caret = lines.get(idx + 1).is_some_and(|next| next.start == caret);
         (line.end == caret && !continues_at_caret).then_some(idx)
     }) else {
-        return lines;
+        return (lines, false);
     };
 
     let line = lines[idx];
@@ -313,7 +313,7 @@ pub(crate) fn layout_lines_with_caret(
         .map(|(_, width)| *width)
         .fold(0usize, usize::saturating_add);
     if row_width != width.max(1) {
-        return lines;
+        return (lines, false);
     }
 
     let ends_with_separator = pt.segments.iter().rev().find_map(|segment| {
@@ -332,7 +332,7 @@ pub(crate) fn layout_lines_with_caret(
                 end: caret,
             },
         );
-        return lines;
+        return (lines, true);
     }
 
     let mut row = PreparedText::default();
@@ -359,7 +359,7 @@ pub(crate) fn layout_lines_with_caret(
         })
         .collect::<Vec<_>>();
     lines.splice(idx..=idx, replacement);
-    lines
+    (lines, true)
 }
 
 #[cfg(test)]

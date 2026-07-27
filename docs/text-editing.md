@@ -178,7 +178,9 @@ against `theme.text_selection`, not the list/item `theme.selection` role.
 
 With wrapping enabled, an editable line that exactly fills the content width places its caret at
 column zero of a continuation row. Typing a space turns that caret row into content without moving
-the completed full-width word from the preceding row.
+the completed full-width word from the preceding row. Cursor-only movement after that edit keeps the
+same visual continuation row and word break until the text or wrapping constraints change. Auto
+height reserves this caret-adjusted continuation capacity independently of the current cursor.
 
 ### Input + TextInput
 
