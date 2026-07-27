@@ -87,7 +87,9 @@ impl MouseDispatchCtx<MockComponent> for MockCtx {
         ActiveDrag::None
     }
 
-    fn reset_command_chord(&mut self) {}
+    fn reset_command_chord(&mut self) -> bool {
+        false
+    }
 
     fn dispatch_mouse_move(&mut self, _mouse: MouseEvent) -> bool {
         false

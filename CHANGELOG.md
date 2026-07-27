@@ -129,7 +129,7 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
-- Mouse release now clears pending command chords, preventing a prior key prefix from leaking into subsequent input.
+- Mouse release now clears pending command chords and repaints the indicator immediately, preventing a prior key prefix from leaking into subsequent input.
 - `TerminalScreen::export_replay_bytes` now preserves effective Kitty keyboard flags, so attached
   terminal clients keep modified-key input such as `Shift+Enter` after reconnecting.
 - DevTools borders no longer merge their rounded corners with app-layer borders beneath the panel.
