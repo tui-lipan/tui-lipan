@@ -39,30 +39,33 @@ impl TerminalManager {
             && tree.is_valid(id)
         {
             let node = tree.node(id);
+            let theme = node.active_theme();
             let caret = match &node.kind {
                 NodeKind::TextArea(node) => {
                     if node.read_only {
                         None
                     } else {
+                        let caret_shape = node.caret_shape.unwrap_or(theme.caret.shape);
                         if self.osc12_supported {
-                            desired_cursor_color = node.caret_color.and_then(Color::to_rgb);
+                            desired_cursor_color = node
+                                .caret_color
+                                .or(theme.caret.color)
+                                .and_then(Color::to_rgb);
                         }
-                        Some(
-                            if node.vim_motions && node.caret_shape == CaretShape::Block {
-                                match text_area_vim_state
-                                    .get(&id)
-                                    .map(|state| state.mode)
-                                    .unwrap_or_default()
-                                {
-                                    TextAreaVimMode::Insert => CaretShape::Bar,
-                                    TextAreaVimMode::Normal
-                                    | TextAreaVimMode::Visual
-                                    | TextAreaVimMode::VisualLine => CaretShape::Block,
-                                }
-                            } else {
-                                node.caret_shape
-                            },
-                        )
+                        Some(if node.vim_motions && caret_shape == CaretShape::Block {
+                            match text_area_vim_state
+                                .get(&id)
+                                .map(|state| state.mode)
+                                .unwrap_or_default()
+                            {
+                                TextAreaVimMode::Insert => CaretShape::Bar,
+                                TextAreaVimMode::Normal
+                                | TextAreaVimMode::Visual
+                                | TextAreaVimMode::VisualLine => CaretShape::Block,
+                            }
+                        } else {
+                            caret_shape
+                        })
                     }
                 }
                 NodeKind::Input(node) => {
@@ -70,9 +73,12 @@ impl TerminalManager {
                         None
                     } else {
                         if self.osc12_supported {
-                            desired_cursor_color = node.caret_color.and_then(Color::to_rgb);
+                            desired_cursor_color = node
+                                .caret_color
+                                .or(theme.caret.color)
+                                .and_then(Color::to_rgb);
                         }
-                        Some(node.caret_shape)
+                        Some(node.caret_shape.unwrap_or(theme.caret.shape))
                     }
                 }
                 #[cfg(feature = "terminal")]
@@ -143,10 +149,11 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::app::input::text_area_vim::TextAreaVimState;
+    use crate::core::element::Element;
     use crate::core::node::NodeTree;
     use crate::layout::LayoutEngine;
-    use crate::style::{CaretShape, Rect};
-    use crate::widgets::{TextArea, TextAreaVimMode};
+    use crate::style::{CaretShape, Color, Rect, Theme};
+    use crate::widgets::{Input, TextArea, TextAreaVimMode, ThemeProvider};
 
     use super::TerminalManager;
 
@@ -155,10 +162,15 @@ mod tests {
     }
 
     fn text_area_tree_with(text_area: TextArea) -> NodeTree {
+        tree_with_theme(text_area, Theme::default())
+    }
+
+    fn tree_with_theme(child: impl Into<Element>, theme: Theme) -> NodeTree {
+        let root: Element = ThemeProvider::new(theme).child(child).into();
         let mut tree = NodeTree::new();
         LayoutEngine::reconcile_with_focus(
             &mut tree,
-            &text_area.into(),
+            &root,
             Rect {
                 x: 0,
                 y: 0,
@@ -228,6 +240,88 @@ mod tests {
             .unwrap();
 
         assert!(String::from_utf8_lossy(&out).contains("\u{1b}[4 q"));
+    }
+
+    #[test]
+    fn theme_caret_shape_applies_to_input() {
+        let tree = tree_with_theme(
+            Input::new("abc"),
+            Theme::default().caret_shape(CaretShape::Underline),
+        );
+        let mut manager = TerminalManager {
+            osc12_supported: false,
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+
+        manager
+            .update_cursor(&mut out, &tree, Some(tree.root), &HashMap::new())
+            .unwrap();
+
+        assert!(String::from_utf8_lossy(&out).contains("\u{1b}[4 q"));
+    }
+
+    #[test]
+    fn theme_caret_shape_applies_to_text_area() {
+        let tree = tree_with_theme(
+            TextArea::new("abc"),
+            Theme::default().caret_shape(CaretShape::Underline),
+        );
+        let mut manager = TerminalManager {
+            osc12_supported: false,
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+
+        manager
+            .update_cursor(&mut out, &tree, Some(tree.root), &HashMap::new())
+            .unwrap();
+
+        assert!(String::from_utf8_lossy(&out).contains("\u{1b}[4 q"));
+    }
+
+    #[test]
+    fn explicit_caret_shape_overrides_theme_for_text_area() {
+        let tree = tree_with_theme(
+            TextArea::new("abc").caret_shape(CaretShape::Underline),
+            Theme::default().caret_shape(CaretShape::Bar),
+        );
+        let mut manager = TerminalManager {
+            osc12_supported: false,
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+
+        manager
+            .update_cursor(&mut out, &tree, Some(tree.root), &HashMap::new())
+            .unwrap();
+
+        assert!(String::from_utf8_lossy(&out).contains("\u{1b}[4 q"));
+    }
+
+    #[test]
+    fn theme_caret_color_applies_and_explicit_color_overrides_it() {
+        let theme_color = Color::rgb(0x12, 0x34, 0x56);
+        let explicit_color = Color::rgb(0xAB, 0xCD, 0xEF);
+        let theme = Theme::default().caret_color(theme_color);
+        let tree = tree_with_theme(Input::new("abc"), theme.clone());
+        let mut manager = TerminalManager {
+            osc12_supported: true,
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+
+        manager
+            .update_cursor(&mut out, &tree, Some(tree.root), &HashMap::new())
+            .unwrap();
+        assert!(String::from_utf8_lossy(&out).contains("\u{1b}]12;#123456\u{7}"));
+
+        let tree = tree_with_theme(Input::new("abc").caret_color(explicit_color), theme);
+        out.clear();
+        manager
+            .update_cursor(&mut out, &tree, Some(tree.root), &HashMap::new())
+            .unwrap();
+        assert!(String::from_utf8_lossy(&out).contains("\u{1b}]12;#abcdef\u{7}"));
     }
 
     #[cfg(feature = "terminal")]

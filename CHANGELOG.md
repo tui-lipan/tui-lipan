@@ -58,6 +58,9 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- Add theme-level `CaretPalette` defaults for `Input`, `TextArea`, and embedded
+  `SearchPalette` query inputs; explicit widget caret settings still override the
+  theme (breaking)
 - Replace the breaking `Frame` border title/status API with positional `BorderLabels` header and
   footer groups. Labels now support left, center, and right placement, independent group styles,
   focused group styles, per-label overrides, and group padding. The old `title`, `status`, and

@@ -35,7 +35,7 @@ pub struct TextAreaNode {
     pub focus_style: StyleSlot,
     pub focus_content_style: Style,
     pub hover_border_style: Option<BorderStyle>,
-    pub caret_shape: CaretShape,
+    pub caret_shape: Option<CaretShape>,
     pub caret_color: Option<Color>,
     pub selection_style: StyleSlot,
     pub unfocused_selection_style: StyleSlot,

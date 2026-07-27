@@ -222,7 +222,7 @@ pub struct TextArea {
     pub(crate) focus_style: StyleSlot,
     pub(crate) focus_content_style: Style,
     pub(crate) hover_border_style: Option<BorderStyle>,
-    pub(crate) caret_shape: CaretShape,
+    pub(crate) caret_shape: Option<CaretShape>,
     pub(crate) caret_color: Option<Color>,
     pub(crate) selection_style: StyleSlot,
     pub(crate) unfocused_selection_style: StyleSlot,
@@ -352,7 +352,7 @@ impl Default for TextArea {
             focus_style: StyleSlot::Inherit,
             focus_content_style: Style::default(),
             hover_border_style: None,
-            caret_shape: CaretShape::default(),
+            caret_shape: None,
             caret_color: None,
             selection_style: StyleSlot::Inherit,
             unfocused_selection_style: StyleSlot::Inherit,
@@ -690,13 +690,13 @@ impl TextArea {
         self
     }
 
-    /// Set caret shape.
+    /// Override the active theme's caret shape.
     pub fn caret_shape(mut self, shape: CaretShape) -> Self {
-        self.caret_shape = shape;
+        self.caret_shape = Some(shape);
         self
     }
 
-    /// Set caret color (only used for block caret rendering).
+    /// Override the active theme's hardware caret color (only used for block caret rendering).
     pub fn caret_color(mut self, color: Color) -> Self {
         self.caret_color = Some(color);
         self

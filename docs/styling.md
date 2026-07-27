@@ -520,6 +520,8 @@ let palette_theme = ThemePalette::new(
 )
 .selection(Color::rgb(0xFF, 0x80, 0x00))
 .text_selection(Color::rgb(0x66, 0x99, 0xFF))
+.caret_shape(CaretShape::Bar)
+.caret_color(Color::rgb(0xFF, 0xC0, 0x66))
 .into_theme();
 
 // Opt in to focused text recoloring on specific text surfaces
@@ -538,6 +540,7 @@ let my_theme = Theme::one_dark()
 let full_custom = Theme::default()
     .primary(Style::new().fg(Color::White).bg(Color::Black))
     .accent(Style::new().fg(Color::Cyan))
+    .caret(CaretPalette::new(CaretShape::Bar, Some(Color::Cyan)))
     .selection(Style::new().fg(Color::Black).bg(Color::Cyan))
     .text_selection(Style::new().fg(Color::White).bg(Color::Blue))
     .hover(Style::new().bg(Color::indexed(236)))
@@ -574,6 +577,10 @@ bg = "#101015"
 
 [accent]
 fg = "#FF8000"
+
+[caret]
+shape = "bar"
+color = "#FFC066"
 ```
 
 Theme files support TOML 1.1 syntax, including multiline inline tables with
@@ -652,6 +659,7 @@ This keeps app-specific tokens inside the same `ThemeProvider` tree as the frame
 |-------|------|---------|
 | `primary` | `Style` | Base text and background |
 | `accent` | `Style` | Interactive emphasis for hover/cursors/controls |
+| `caret` | `CaretPalette` | Global shape and hardware color for editable text-entry carets |
 | `selection` | `Style` | Selected/current state |
 | `focus` | `Style` | Focused widget chrome and focus affordances |
 | `focus_decoration` | `bool` | Enable theme-sourced focus roles, focused-content palettes, automatic frame focus chrome, and focused scrollbar thumbs (default: `true`) |
@@ -677,6 +685,8 @@ Notes:
 - Generic `hover` is disabled by default. Opt in with `Theme::hover(...)` when you want row/surface hover feedback.
 - `Theme::focus_decoration(false)` is the complete theme-level focus-decoration kill switch. It suppresses inherited and extended `theme.focus`, per-widget focus palettes, automatic frame focus chrome, and `scrollbar.thumb_focus`. Explicit widget focus styles still render.
 - `Theme::focus(Style::default())` only empties the generic focus role; use it when per-widget focus palettes should remain active.
+- `Input`, `TextArea`, and embedded `SearchPalette` query inputs inherit `theme.caret`; their explicit caret setters override the inherited shape or color. `ThemePalette` defaults to a block caret colored with its accent.
+- `Terminal` keeps the cursor shape requested by its child process; terminal output is not rewritten by the global text-entry caret palette.
 - Buttons and other control-emphasis states use `accent`, not `selection`, so selection styling stays independent from interactive styling.
 - Text-oriented widgets keep their normal text color on focus by default. Theme `focus` applies to focus chrome (borders, focus affordances), while `input.focus`, `text_area.focus`, `document_view.focus`, `hex_area.focus`, and `terminal.focus` opt into focused content styling.
 - Widget APIs follow the same split: use `.focus_style(...)` for focus chrome and `.focus_content_style(...)` when you want focused text/content to change.

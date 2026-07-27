@@ -128,7 +128,7 @@ Source: `src/widgets/input/mod.rs:85` (`Input`).
 | `focus_prefix_style` | `Style::default()` |
 | `suffix_style` | `Style::default()` |
 | `focus_suffix_style` | `Style::default()` |
-| `caret_shape` | `CaretShape::default()` |
+| `caret_shape` | `None` |
 | `caret_color` | `None` |
 | `selection_style` | `StyleSlot::Inherit` |
 | `border` | `true` |
@@ -168,7 +168,7 @@ Source: `src/widgets/text_area/mod.rs:451` (`TextArea`).
 | `focus_style` | `StyleSlot::Inherit` |
 | `focus_content_style` | `Style::default()` |
 | `hover_border_style` | `None` |
-| `caret_shape` | `CaretShape::default()` |
+| `caret_shape` | `None` |
 | `caret_color` | `None` |
 | `selection_style` | `StyleSlot::Inherit` |
 | `unfocused_selection_style` | `StyleSlot::Inherit` |
@@ -1104,7 +1104,7 @@ Source: `src/widgets/search_palette/mod.rs:742` (`SearchPalette`).
 | `input_divider` | `true` |
 | `input_divider_style` | `Style::default()` |
 | `input_divider_join_frame` | `true` |
-| `input_caret_shape` | `CaretShape::default()` |
+| `input_caret_shape` | `None` |
 | `input_caret_color` | `None` |
 | `input_border_style` | `BorderStyle::Plain` |
 | `input_padding` | `Padding { left: 1, right: 1, top: 0, bottom: 0, }` |

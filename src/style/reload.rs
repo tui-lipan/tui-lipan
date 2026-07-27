@@ -11,9 +11,10 @@ use serde::Deserialize;
 
 use crate::style::presets::preset_by_name;
 use crate::style::{
-    Color, DiffPalette, DocumentPalette, DocumentViewPalette, FileIconPalette, GitStatusPalette,
-    HexAreaPalette, InputPalette, Paint, ScrollbarPalette, SplitterPalette, StatusPalette, Style,
-    SurfacePalette, SyntaxPalette, TerminalPalette, TextAreaPalette, Theme,
+    CaretPalette, CaretShape, Color, DiffPalette, DocumentPalette, DocumentViewPalette,
+    FileIconPalette, GitStatusPalette, HexAreaPalette, InputPalette, Paint, ScrollbarPalette,
+    SplitterPalette, StatusPalette, Style, SurfacePalette, SyntaxPalette, TerminalPalette,
+    TextAreaPalette, Theme,
 };
 
 /// Preset names advertised when a theme file's `extends` does not resolve.
@@ -690,6 +691,43 @@ impl TomlSyntaxPalette {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TomlCaretShape {
+    #[default]
+    Block,
+    Bar,
+    Underline,
+}
+
+impl From<TomlCaretShape> for CaretShape {
+    fn from(value: TomlCaretShape) -> Self {
+        match value {
+            TomlCaretShape::Block => Self::Block,
+            TomlCaretShape::Bar => Self::Bar,
+            TomlCaretShape::Underline => Self::Underline,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+struct TomlCaretPalette {
+    shape: Option<TomlCaretShape>,
+    color: Option<ColorSpec>,
+}
+
+impl TomlCaretPalette {
+    fn apply(self, mut base: CaretPalette) -> CaretPalette {
+        if let Some(shape) = self.shape {
+            base.shape = shape.into();
+        }
+        if let Some(color) = self.color {
+            base.color = Some(color.into());
+        }
+        base
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
 struct TomlInputPalette {
     focus: Option<TomlStyle>,
 }
@@ -817,6 +855,7 @@ struct TomlTheme {
     hover: Option<TomlStyle>,
     border: Option<TomlStyle>,
     muted: Option<TomlStyle>,
+    caret: Option<TomlCaretPalette>,
 
     surface: Option<TomlSurfacePalette>,
     status: Option<TomlStatusPalette>,
@@ -878,6 +917,9 @@ impl TomlTheme {
         }
         if let Some(style) = self.muted {
             theme.muted = style.apply(theme.muted);
+        }
+        if let Some(caret) = self.caret {
+            theme.caret = caret.apply(theme.caret);
         }
 
         if let Some(surface) = self.surface {
@@ -1216,6 +1258,25 @@ fg = "#010203"
         assert_eq!(theme.primary.bg, Theme::dracula().primary.bg);
         assert_eq!(theme.border_active, Color::Rgb(0x11, 0x22, 0x33));
         assert!(!theme.focus_decoration);
+    }
+
+    #[test]
+    fn toml_theme_caret_overrides_shape_and_color() {
+        let overlay = toml::from_str::<TomlTheme>(
+            r##"
+[caret]
+shape = "underline"
+color = "#112233"
+"##,
+        )
+        .expect("theme TOML should parse");
+
+        let theme = overlay
+            .into_theme(Theme::default())
+            .expect("overlay should succeed");
+
+        assert_eq!(theme.caret.shape, crate::style::CaretShape::Underline);
+        assert_eq!(theme.caret.color, Some(Color::Rgb(0x11, 0x22, 0x33)));
     }
 
     #[test]

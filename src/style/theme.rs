@@ -779,7 +779,7 @@ pub(crate) fn resolve_channel(
 
 #[cfg(test)]
 mod tests {
-    use super::{ColorTransform, Style, Theme, ThemePalette, ThemeRole};
+    use super::{CaretShape, ColorTransform, Style, Theme, ThemePalette, ThemeRole};
     use crate::app::ContrastPolicy;
     use crate::style::{Color, HostTerminalColors, Paint};
 
@@ -836,6 +836,22 @@ mod tests {
 
         assert_eq!(theme.selection.fg, p(Color::Green));
         assert_eq!(theme.text_selection.fg, p(Color::Magenta));
+    }
+
+    #[test]
+    fn theme_palette_derives_and_overrides_caret_defaults() {
+        let theme = ThemePalette::new(Color::White, Color::Black, Color::Blue).into_theme();
+
+        assert_eq!(theme.caret.shape, CaretShape::Block);
+        assert_eq!(theme.caret.color, Some(Color::Blue));
+
+        let themed = ThemePalette::new(Color::White, Color::Black, Color::Blue)
+            .caret_shape(CaretShape::Underline)
+            .caret_color(Color::Magenta)
+            .into_theme();
+
+        assert_eq!(themed.caret.shape, CaretShape::Underline);
+        assert_eq!(themed.caret.color, Some(Color::Magenta));
     }
 
     #[test]
@@ -1073,6 +1089,31 @@ pub enum CaretShape {
     Bar,
     /// Underline cursor (_), rendered as an underline.
     Underline,
+}
+
+/// Global caret defaults for editable text-entry widgets.
+///
+/// Widget-level caret setters take precedence over these defaults. A `None`
+/// color leaves the terminal's existing hardware caret color unchanged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct CaretPalette {
+    /// Default caret shape.
+    pub shape: CaretShape,
+    /// Default hardware caret color sent through OSC 12 when supported.
+    pub color: Option<Color>,
+}
+
+impl CaretPalette {
+    /// Create caret defaults with an optional hardware color.
+    pub fn new(shape: CaretShape, color: Option<Color>) -> Self {
+        Self { shape, color }
+    }
+
+    /// Set the default hardware caret color.
+    pub fn color(mut self, color: impl Into<Option<Color>>) -> Self {
+        self.color = color.into();
+        self
+    }
 }
 
 /// Custom glyphs for borders.
@@ -1609,6 +1650,8 @@ pub struct Theme {
     /// Used for control hover, cursors, active glyphs, and other
     /// foreground-only emphasis that should not imply selection ownership.
     pub accent: Style,
+    /// Global caret defaults for editable text-entry widgets.
+    pub caret: CaretPalette,
     /// Style for selected/current items.
     pub selection: Style,
     /// Style for selected text or byte ranges.
@@ -1746,7 +1789,7 @@ impl Theme {
     /// - `primary_fg`: default text/foreground color
     /// - `primary_bg`: base surface/background color
     /// - `accent`: interactive accent used for control emphasis, selection,
-    ///   text selection, splitters, and focused scrollbar thumbs
+    ///   text selection, carets, splitters, and focused scrollbar thumbs
     pub fn custom(primary_fg: Color, primary_bg: Color, accent: Color) -> Self {
         let success = Color::Green;
         let warning = Color::Yellow;
@@ -1757,6 +1800,7 @@ impl Theme {
         Self {
             primary: Style::new().fg(primary_fg).bg(primary_bg),
             accent: Style::new().fg(accent),
+            caret: CaretPalette::new(CaretShape::default(), Some(accent)),
             selection: Style::new()
                 .fg(accent)
                 .bg(primary_bg.blend_toward(accent, 0.22)),
@@ -1894,6 +1938,28 @@ impl Theme {
     /// avoid painting a selection background.
     pub fn accent(mut self, style: Style) -> Self {
         self.accent = style;
+        self
+    }
+
+    /// Set global caret defaults for editable text-entry widgets.
+    ///
+    /// Explicit caret settings on an individual widget still take precedence.
+    pub fn caret(mut self, palette: CaretPalette) -> Self {
+        self.caret = palette;
+        self
+    }
+
+    /// Set the global caret shape for editable text-entry widgets.
+    pub fn caret_shape(mut self, shape: CaretShape) -> Self {
+        self.caret.shape = shape;
+        self
+    }
+
+    /// Set the global hardware caret color for editable text-entry widgets.
+    ///
+    /// Pass `None` to leave the terminal's existing caret color unchanged.
+    pub fn caret_color(mut self, color: impl Into<Option<Color>>) -> Self {
+        self.caret.color = color.into();
         self
     }
 
@@ -2075,8 +2141,8 @@ impl Theme {
 /// A minimal color palette that derives a complete [`Theme`].
 ///
 /// Set 3 required colors (text, background, accent) and optionally override
-/// a few more. Everything else - accent, selection, text selection, border, muted, scrollbar,
-/// splitter, toast, diff, document, syntax, text-surface interaction, file-icon,
+/// a few more. Everything else - accent, caret, selection, text selection, border, muted,
+/// scrollbar, splitter, toast, diff, document, syntax, text-surface interaction, file-icon,
 /// and git-status palettes - is derived automatically so every widget in the
 /// tree shares a coherent look. Focus chrome is derived separately from the
 /// accent token so apps can mute or restyle focus without affecting hover,
@@ -2114,8 +2180,11 @@ pub struct ThemePalette {
     pub text: Color,
     /// Primary background color.
     pub background: Color,
-    /// Accent color used to derive interactive emphasis and default selection styles.
+    /// Accent color used to derive interactive emphasis, caret color, and default selection styles.
     pub accent: Color,
+    /// Global caret defaults for editable text-entry widgets. The default shape
+    /// is `Block` and the default color is the palette accent.
+    pub caret: CaretPalette,
     /// Color used to derive selected/current item styles. Default: accent.
     pub selection: Option<Color>,
     /// Color used to derive text/range selection styles. Default: accent.
@@ -2144,6 +2213,7 @@ impl ThemePalette {
             text,
             background,
             accent,
+            caret: CaretPalette::new(CaretShape::default(), Some(accent)),
             selection: None,
             text_selection: None,
             border: None,
@@ -2210,6 +2280,26 @@ impl ThemePalette {
         self
     }
 
+    /// Override the global caret defaults for editable text-entry widgets.
+    pub fn caret(mut self, palette: CaretPalette) -> Self {
+        self.caret = palette;
+        self
+    }
+
+    /// Override the global caret shape for editable text-entry widgets.
+    pub fn caret_shape(mut self, shape: CaretShape) -> Self {
+        self.caret.shape = shape;
+        self
+    }
+
+    /// Override the global hardware caret color for editable text-entry widgets.
+    ///
+    /// Pass `None` to leave the terminal's existing caret color unchanged.
+    pub fn caret_color(mut self, color: impl Into<Option<Color>>) -> Self {
+        self.caret.color = color.into();
+        self
+    }
+
     /// Convert this palette into a fully-derived [`Theme`].
     pub fn into_theme(self) -> Theme {
         Theme::from(self)
@@ -2237,6 +2327,7 @@ impl From<ThemePalette> for Theme {
         Theme {
             primary: Style::new().fg(p.text).bg(p.background),
             accent: Style::new().fg(p.accent),
+            caret: p.caret,
             selection: Style::new()
                 .fg(selection)
                 .bg(p.background.blend_toward(selection, 0.22)),

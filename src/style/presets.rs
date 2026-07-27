@@ -5,9 +5,9 @@
 //! colors that match the original theme specification.
 
 use super::{
-    Color, DiffPalette, DocumentPalette, DocumentViewPalette, FileIconPalette, GitStatusPalette,
-    HexAreaPalette, InputPalette, SyntaxPalette, TerminalPalette, TextAreaPalette, Theme,
-    ThemePalette,
+    CaretPalette, CaretShape, Color, DiffPalette, DocumentPalette, DocumentViewPalette,
+    FileIconPalette, GitStatusPalette, HexAreaPalette, InputPalette, SyntaxPalette,
+    TerminalPalette, TextAreaPalette, Theme, ThemePalette,
 };
 
 impl Theme {
@@ -19,6 +19,7 @@ impl Theme {
         Self {
             primary: super::Style::new().fg(Color::Gray).bg(Color::Black),
             accent: super::Style::new().fg(Color::LightCyan),
+            caret: CaretPalette::new(CaretShape::Block, Some(Color::LightCyan)),
             selection: super::Style::new().fg(Color::Black).bg(Color::LightCyan),
             text_selection: super::Style::new().fg(Color::Black).bg(Color::LightCyan),
             focus: super::Style::new().fg(Color::LightCyan),

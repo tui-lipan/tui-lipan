@@ -613,9 +613,8 @@ Button::new("Click").focus_style(Style::new().bg(Color::rgb(80, 80, 80)))
 Don't set properties that are already the default - it adds noise and signals misunderstanding of the framework. Common offenders:
 
 ```rust
-// BAD: All of these are no-ops (they set the default value)
+// BAD: explicit framework defaults add noise
 Input::new(query.clone())
-    .caret_shape(CaretShape::Block)    // Block is the default
     .focusable(true)                   // interactive widgets are focusable by default
 
 VStack::new()
@@ -628,9 +627,10 @@ App::new()
     .mouse(true)                      // true in fullscreen mode by default
     .contrast_policy(ContrastPolicy::Wcag)  // Wcag is the default
 
-// GOOD: Only set properties when you want non-default values
+// GOOD: Let the theme provide the shared caret, or explicitly override it when needed
+Input::new(query.clone())                    // inherits the active theme caret
 Input::new(query.clone())
-    .caret_shape(CaretShape::Bar)     // Bar is NOT the default - this IS meaningful
+    .caret_shape(CaretShape::Bar)     // explicit per-input override
 
 VStack::new()
     .align(Align::Center)             // Center is NOT the default - this IS meaningful
