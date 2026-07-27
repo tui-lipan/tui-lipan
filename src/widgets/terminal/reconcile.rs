@@ -103,6 +103,7 @@ pub(crate) fn reconcile_terminal(
         cursor_visible: terminal.show_cursor,
         cursor_shape: terminal.cursor_shape,
         cursor_blinking: terminal.cursor_blinking,
+        caret_color: terminal.caret_color,
         selection,
         selection_style: terminal.selection_style,
         mouse_mode: terminal.mouse_mode,

@@ -13,6 +13,7 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add `Terminal::caret_color` for setting the focused hardware caret color through OSC 12.
 - Add `TerminalPasteShortcutBehavior::Performable` for terminal hosts that bind direct `Ctrl+V`:
   plain text is emitted through terminal paste input, while file lists, images, and unknown
   non-text clipboard formats forward the original key to clipboard-aware child applications.

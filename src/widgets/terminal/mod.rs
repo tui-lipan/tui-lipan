@@ -38,8 +38,8 @@ pub(crate) use reconcile::reconcile_terminal;
 use crate::callback::{Callback, KeyHandler};
 use crate::core::element::{Element, ElementKind};
 use crate::style::{
-    BorderStyle, CaretShape, Length, Padding, ScrollbarConfig, ScrollbarVariant, Span, Style,
-    StyleSlot,
+    BorderStyle, CaretShape, Color, Length, Padding, ScrollbarConfig, ScrollbarVariant, Span,
+    Style, StyleSlot,
 };
 use crate::widgets::ScrollEvent;
 use std::sync::Arc;
@@ -53,6 +53,7 @@ impl Default for Terminal {
             show_cursor: true,
             cursor_shape: CaretShape::Block,
             cursor_blinking: true,
+            caret_color: None,
             color_lines: None,
             color_cache_key: 0,
             scrollback_offset: 0,
@@ -139,6 +140,12 @@ impl Terminal {
     /// Set whether the cursor should blink.
     pub fn cursor_blinking(mut self, blinking: bool) -> Self {
         self.cursor_blinking = blinking;
+        self
+    }
+
+    /// Set the hardware caret color through OSC 12.
+    pub fn caret_color(mut self, color: Color) -> Self {
+        self.caret_color = Some(color);
         self
     }
 
