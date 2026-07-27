@@ -467,8 +467,8 @@ impl TerminalScreen {
     /// apply to exported state.
     ///
     /// Non-goals: tab stops, custom scrolling regions, cursor style, kitty
-    /// keyboard stack depth, hyperlinks, and the current display offset. The
-    /// receiver lands on the live view.
+    /// keyboard stack depth (the effective flags are preserved), hyperlinks,
+    /// and the current display offset. The receiver lands on the live view.
     pub fn export_replay_bytes(&mut self) -> Vec<u8> {
         let dirty = self.dirty;
         let cache = self.cache.clone();
@@ -948,6 +948,14 @@ impl TerminalScreen {
         push_dec_mode(bytes, 1005, mode.contains(TermMode::UTF8_MOUSE));
         push_dec_mode(bytes, 1006, mode.contains(TermMode::SGR_MOUSE));
         push_dec_mode(bytes, 2004, mode.contains(TermMode::BRACKETED_PASTE));
+        let kitty_flags = u8::from(mode.contains(TermMode::DISAMBIGUATE_ESC_CODES))
+            | (u8::from(mode.contains(TermMode::REPORT_EVENT_TYPES)) << 1)
+            | (u8::from(mode.contains(TermMode::REPORT_ALTERNATE_KEYS)) << 2)
+            | (u8::from(mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC)) << 3)
+            | (u8::from(mode.contains(TermMode::REPORT_ASSOCIATED_TEXT)) << 4);
+        if kitty_flags != 0 {
+            bytes.extend_from_slice(format!("\x1b[>{kitty_flags}u").as_bytes());
+        }
         bytes.extend_from_slice(if mode.contains(TermMode::APP_KEYPAD) {
             b"\x1b="
         } else {
@@ -1516,6 +1524,7 @@ mod tests {
             source_snapshot.cursor_visible
         );
         assert_eq!(target_snapshot.mouse_mode, source_snapshot.mouse_mode);
+        assert_eq!(target_snapshot.key_modes, source_snapshot.key_modes);
         assert_eq!(target.title(), source.title());
         target
     }
@@ -1717,7 +1726,7 @@ mod tests {
     fn replay_round_trips_wide_combining_and_modes() {
         let mut screen = TerminalScreen::new(3, 12, 10);
         screen.process_bytes("wide 漢e\u{301}".as_bytes());
-        screen.process_bytes(b"\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[?2004h");
+        screen.process_bytes(b"\x1b[?25l\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[?2004h\x1b[>3u");
 
         assert_replay_round_trips(&mut screen);
     }
