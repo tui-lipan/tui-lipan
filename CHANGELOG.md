@@ -13,6 +13,10 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add `TestBackend::advance(dt)`, which ticks every time-based animation and
+  refreshes the rendered tree as needed. Tests can now deterministically step
+  `Animated` transitions, smooth scrolls, and `Context::transition` property
+  animations using the runner's ordering and 50 ms per-frame clamp.
 - Add sentinel resolution helpers on `Color`, `Style`, and `Theme`, plus
   `TerminalColorPalette::from_theme`; host-derived themes retain their exact
   `HostTerminalColors` as a typed theme extension.
@@ -162,6 +166,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Make `TestBackend::advance(dt)` available to web examples by sharing animation stepping with
+  both native and WASM runtimes.
 - Terminal selection copying now uses the same display-column convention as
   rendering, so CJK, emoji, and other wide cells copy the text that was
   highlighted rather than a range shifted by the width of each wide cell.
@@ -174,7 +180,6 @@ While the crate is on `0.x.y`:
 - `assign_labels` no longer returns duplicate labels for a single-character key
   alphabet, and ignores repeated characters in `keys`. Both cases produced
   colliding labels that `filter_labels` could never resolve.
-
 - Mouse release now clears pending command chords and repaints the indicator immediately, preventing a prior key prefix from leaking into subsequent input.
 - `TerminalScreen::export_replay_bytes` now preserves effective Kitty keyboard flags, so attached
   terminal clients keep modified-key input such as `Shift+Enter` after reconnecting.

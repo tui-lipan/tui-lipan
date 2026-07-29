@@ -540,6 +540,30 @@ assert!(cursor.visible);
 assert_eq!(cursor.y, 0);
 ```
 
+### Animations
+
+`render()` recomputes the tree but does not advance time, so anything time-based
+renders at its starting value. `advance(dt)` ticks every animation and refreshes
+layout or the rendered tree as needed, which lets a test assert that an animation
+actually moves rather than that it merely exists. It covers `Animated` transitions,
+smooth scrolls, and the property transitions behind `Context::transition`.
+
+```rust
+backend.render();
+let start = width_of(&backend, "panel");
+
+backend.advance(Duration::from_millis(25));
+assert!(width_of(&backend, "panel") < start, "the panel should be shrinking");
+
+backend.advance(Duration::from_millis(200));
+assert_eq!(width_of(&backend, "panel"), 0);
+```
+
+Each call is clamped to one frame's worth of time (50 ms), the same clamp the
+runner applies, so a single large `dt` behaves like one long frame instead of
+jumping to the end of the animation. Step through with repeated calls when you
+need intermediate states.
+
 ### Viewport resize
 
 ```rust

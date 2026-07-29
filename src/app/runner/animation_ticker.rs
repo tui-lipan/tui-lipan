@@ -245,21 +245,20 @@ impl<C: Component> AppRunner<C> {
             // Wall-clock gaps (idle, first tick after startup) must not advance a full
             // transition in one step - Transition::tick clamps elapsed to duration.
             let dt = dt.min(Duration::from_millis(50));
-            let (changed, needs_paint, needs_layout) = self.update_animated_widgets(dt);
-            let (scroll_changed, scroll_needs_paint, scroll_needs_layout) =
-                self.update_smooth_scrolls(dt);
+            let (changed, needs_paint, needs_layout) =
+                crate::app::animation::tick_tree_animations(&mut self.core.tree, dt);
             // Property-scoped transitions: advance and mark full re-render when
             // any interpolated value changed (the new value must flow through
             // the next view() into the rendered styles).
             let property_transitions_changed = self.core.ctx.env().animations.tick(dt);
-            if changed || scroll_changed || property_transitions_changed {
+            if changed || property_transitions_changed {
                 crate::debug::internal_log!("[tui-lipan] dirty: animated widget tick");
             }
             if property_transitions_changed {
                 dirty.mark_full();
-            } else if needs_layout || scroll_needs_layout {
+            } else if needs_layout {
                 dirty.mark_layout();
-            } else if needs_paint || scroll_needs_paint {
+            } else if needs_paint {
                 dirty.mark_paint();
             }
         }

@@ -730,6 +730,36 @@ where
         Ok(dirty)
     }
 
+    /// Advance every time-based animation by `dt`, then update layout or re-render as needed.
+    ///
+    /// The real runner ticks animations from wall-clock time inside its event loop, which a test
+    /// has no way to drive. Without this, anything time-based renders only at its starting value:
+    /// [`Animated`](crate::widgets::Animated) transitions, smooth scrolls, and the property
+    /// transitions behind [`Context::transition`](crate::core::component::Context::transition) all
+    /// look frozen, so an app cannot assert that its animation actually moves.
+    ///
+    /// Ticks in the same order and with the same clamping as the runner, so a single large `dt`
+    /// behaves like one long frame rather than fast-forwarding to the end. Call it repeatedly to
+    /// step through an animation:
+    ///
+    /// ```ignore
+    /// backend.render();
+    /// let start = rect_of(&backend);
+    /// backend.advance(Duration::from_millis(60));
+    /// assert_ne!(rect_of(&backend), start, "the close animation should have moved");
+    /// ```
+    pub fn advance(&mut self, dt: Duration) {
+        // Matches the runner's per-frame clamp, so one call cannot skip an entire transition.
+        let dt = dt.min(Duration::from_millis(50));
+
+        let (_, _, needs_layout) =
+            crate::app::animation::tick_tree_animations(&mut self.core.tree, dt);
+        let property_transitions_changed = self.core.ctx.env().animations.tick(dt);
+        if needs_layout || property_transitions_changed {
+            self.render();
+        }
+    }
+
     /// Recompute the current `Element` tree and layout.
     pub fn render(&mut self) {
         self.drain_copy_feedback_requests();
@@ -1392,9 +1422,11 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::str::FromStr;
+    use std::time::Duration;
 
     use super::TestBackend;
     use crate::Length;
+    use crate::animation::{Easing, TransitionConfig};
     use crate::app::input::keymap::{Action, BindingMode, binding_for_test, keymap_for_test};
     use crate::app::{ContrastPolicy, FocusPolicy};
     use crate::callback::Callback;
@@ -4453,6 +4485,160 @@ mod tests {
             code: KeyCode::PageDown,
             mods: Default::default(),
         }
+    }
+
+    struct AdvanceSmoothScrollHarness;
+
+    impl Component for AdvanceSmoothScrollHarness {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            DocumentView::new(
+                (0..10)
+                    .map(|index| format!("line {index}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .border(false)
+            .height(Length::Px(4))
+            .scroll_to_source_line(8)
+            .scroll_transition(TransitionConfig {
+                duration: Duration::from_millis(100),
+                easing: Easing::Linear,
+            })
+            .key("smooth-scroll")
+        }
+    }
+
+    struct AdvanceTransitionsHarness;
+
+    enum AdvanceTransitionsMessage {
+        Start,
+    }
+
+    impl Component for AdvanceTransitionsHarness {
+        type Message = AdvanceTransitionsMessage;
+        type Properties = ();
+        type State = bool;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            false
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                AdvanceTransitionsMessage::Start => ctx.state = true,
+            }
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let transition = TransitionConfig {
+                duration: Duration::from_millis(100),
+                easing: Easing::Linear,
+            };
+            let property_fg = ctx.transition(
+                "property-fg",
+                if ctx.state {
+                    Color::rgb(100, 100, 100)
+                } else {
+                    Color::rgb(0, 0, 0)
+                },
+                transition,
+            );
+
+            VStack::new()
+                .child(
+                    Animated::new(Text::new("animated"))
+                        .opacity(if ctx.state { 0.0 } else { 1.0 })
+                        .transition(transition)
+                        .key("animated"),
+                )
+                .child(
+                    Text::new("property")
+                        .style(Style::new().fg(property_fg))
+                        .key("property"),
+                )
+                .into()
+        }
+    }
+
+    fn document_offset_by_key<C: Component>(backend: &TestBackend<C>, key: &str) -> usize {
+        let target = Key::from(key.to_string());
+        backend
+            .core
+            .tree
+            .iter()
+            .find(|node| node.key.as_ref() == Some(&target))
+            .and_then(|node| match &node.kind {
+                NodeKind::DocumentView(document) => Some(document.scroll_offset),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("document view with key {key:?} not found"))
+    }
+
+    #[test]
+    fn advance_ticks_smooth_scrolls() {
+        let mut backend = TestBackend::new(AdvanceSmoothScrollHarness);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 4,
+        });
+        backend.render();
+
+        assert_eq!(document_offset_by_key(&backend, "smooth-scroll"), 0);
+        assert!(backend.core.tree.has_animated_scrolls());
+
+        backend.advance(Duration::from_millis(50));
+
+        let offset = document_offset_by_key(&backend, "smooth-scroll");
+        assert!(offset > 0, "smooth scroll should move after one tick");
+        assert!(offset < 6, "one tick should not complete the transition");
+    }
+
+    #[test]
+    fn advance_ticks_animated_and_property_transitions() {
+        let mut backend = TestBackend::new(AdvanceTransitionsHarness);
+        backend
+            .dispatch(AdvanceTransitionsMessage::Start)
+            .expect("transition update should succeed");
+
+        backend.advance(Duration::from_millis(50));
+
+        let animated_opacity = backend
+            .core
+            .tree
+            .iter()
+            .find(|node| node.key.as_ref() == Some(&Key::from("animated")))
+            .and_then(|node| match &node.kind {
+                NodeKind::Animated(animated) => Some(animated.opacity),
+                _ => None,
+            })
+            .expect("animated node should exist");
+        assert!((0.0..1.0).contains(&animated_opacity));
+
+        let property_fg = backend
+            .core
+            .tree
+            .iter()
+            .find(|node| node.key.as_ref() == Some(&Key::from("property")))
+            .and_then(|node| match &node.kind {
+                NodeKind::Text(text) => text.style.fg,
+                _ => None,
+            })
+            .expect("property text should have a foreground");
+        assert_ne!(property_fg, Paint::Solid(Color::rgb(0, 0, 0)));
+        assert_ne!(property_fg, Paint::Solid(Color::rgb(100, 100, 100)));
     }
 
     fn scroll_offset_by_key<C: Component>(backend: &TestBackend<C>, key: &str) -> usize {
