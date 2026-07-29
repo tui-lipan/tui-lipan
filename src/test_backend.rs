@@ -764,8 +764,12 @@ where
     pub fn render(&mut self) {
         self.drain_copy_feedback_requests();
         let bounds = self.viewport;
-        self.core
-            .render_element(bounds, self.focused, self.focused_key.as_ref(), None);
+        self.core.render_element(
+            bounds,
+            self.focused,
+            self.focused_key.as_ref(),
+            self.mouse.hovered,
+        );
         if let Some(request) = self.core.ctx.take_focus_request() {
             self.apply_focus_request(request);
         }
@@ -1446,10 +1450,11 @@ mod tests {
         Animated, Button, ComboBox, ComboBoxCommitEvent, DocumentView, EffectScope, FileTree,
         FileTreeChange, FileTreeChangeSource, FileTreeChangeStatus, FileTreeChangeView, FocusScope,
         Frame, HStack, Input, InputEvent, List, ListItem, Modal, MouseRegion, Popover,
-        SENTINEL_BASE, ScrollKeymap, ScrollView, SearchItem, SearchPalette, Spinner, SpinnerStyle,
-        StatusBar, Tab, Tabs, Text, TextArea, TextAreaEvent, TextAreaLineNumberMode,
-        TextAreaSentinel, TextAreaVimConfig, TextAreaVimCurrentLineHighlight, TextAreaVimMode,
-        TextAreaVirtualText, ThemeProvider, Tree, TreeNode, VStack,
+        PopoverPlacement, SENTINEL_BASE, ScrollKeymap, ScrollView, SearchItem, SearchPalette,
+        Spinner, SpinnerStyle, StatusBar, Tab, Tabs, Text, TextArea, TextAreaEvent,
+        TextAreaLineNumberMode, TextAreaSentinel, TextAreaVimConfig,
+        TextAreaVimCurrentLineHighlight, TextAreaVimMode, TextAreaVirtualText, ThemeProvider,
+        Tooltip, Tree, TreeNode, VStack,
     };
 
     struct FocusEventHarness {
@@ -5332,6 +5337,10 @@ mod tests {
 
     struct HoverCaptureButtonRoot;
 
+    struct TooltipHoverRoot;
+
+    struct ControlledTooltipRoot;
+
     impl Component for BackdropHoverRoot {
         type Message = ();
         type Properties = ();
@@ -5395,6 +5404,154 @@ mod tests {
         fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
             Update::none()
         }
+    }
+
+    impl Component for TooltipHoverRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            VStack::new()
+                .child(
+                    Tooltip::new("Helpful tip")
+                        .show_on_focus(false)
+                        .placement(PopoverPlacement::RightCenter)
+                        .child(Button::new("Hover")),
+                )
+                .child(Button::new("Background").key("background"))
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    impl Component for ControlledTooltipRoot {
+        type Message = bool;
+        type Properties = ();
+        type State = bool;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            false
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let open = ctx.state;
+            Tooltip::new("Controlled tip")
+                .open(open)
+                .placement(PopoverPlacement::RightCenter)
+                .child(
+                    Button::new("Toggle")
+                        .on_click(ctx.link().callback(move |_| !open))
+                        .key("toggle"),
+                )
+                .into()
+        }
+
+        fn update(&mut self, open: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state = open;
+            Update::full()
+        }
+    }
+
+    #[test]
+    fn tooltip_opens_on_hover_without_capturing_background_input() {
+        let mut backend = TestBackend::new(TooltipHoverRoot);
+        assert!(backend.core.has_hover_view_dependencies());
+
+        backend
+            .send_mouse(MouseEvent {
+                x: 1,
+                y: 0,
+                kind: MouseKind::Moved,
+                mods: Default::default(),
+            })
+            .expect("hovering tooltip trigger should succeed");
+
+        let overlay = backend
+            .core
+            .tree
+            .overlay_roots()
+            .first()
+            .expect("hovering the trigger should open the tooltip");
+        assert!(!overlay.captures_focus);
+
+        let background = rect_by_key(&backend, "background");
+
+        for kind in [
+            MouseKind::Down(MouseButton::Left),
+            MouseKind::Up(MouseButton::Left),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x: 1,
+                    y: 0,
+                    kind,
+                    mods: Default::default(),
+                })
+                .expect("clicking the hover-only trigger should succeed");
+        }
+
+        backend
+            .send_mouse(MouseEvent {
+                x: background.x as u16,
+                y: background.y as u16,
+                kind: MouseKind::Moved,
+                mods: Default::default(),
+            })
+            .expect("leaving the hover-only trigger should succeed");
+        assert!(backend.core.tree.overlay_roots().is_empty());
+
+        backend
+            .send_mouse(MouseEvent {
+                x: background.x as u16,
+                y: background.y as u16,
+                kind: MouseKind::Down(MouseButton::Left),
+                mods: Default::default(),
+            })
+            .expect("background click should succeed");
+
+        assert_eq!(backend.focused_key().map(Key::as_ref), Some("background"));
+    }
+
+    #[test]
+    fn controlled_tooltip_can_close_while_its_trigger_remains_focused() {
+        let mut backend = TestBackend::new(ControlledTooltipRoot);
+
+        for kind in [
+            MouseKind::Down(MouseButton::Left),
+            MouseKind::Up(MouseButton::Left),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x: 1,
+                    y: 0,
+                    kind,
+                    mods: Default::default(),
+                })
+                .expect("first tooltip click should succeed");
+        }
+        assert_eq!(backend.core.tree.overlay_roots().len(), 1);
+
+        for kind in [
+            MouseKind::Down(MouseButton::Left),
+            MouseKind::Up(MouseButton::Left),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x: 1,
+                    y: 0,
+                    kind,
+                    mods: Default::default(),
+                })
+                .expect("second tooltip click should succeed");
+        }
+        assert!(backend.core.tree.overlay_roots().is_empty());
+        assert!(backend.focused_key().is_some());
     }
 
     #[test]

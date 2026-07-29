@@ -616,7 +616,8 @@ impl<C: Component> AppRunner<C> {
             // hover visuals, so its `on_hover_change` callback decides via the
             // `Update` it returns; forcing a paint here repaints the whole tree
             // on every motion event that crosses such a region's boundary.
-            return self.hover_transition_affects_paint(prev_hovered, hovered);
+            return self.hover_transition_affects_paint(prev_hovered, hovered)
+                || self.core.has_hover_view_dependencies();
         }
         if !force_recompute && prev_mouse == Some((x, y)) {
             return false;

@@ -179,6 +179,11 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Tooltips now open when their trigger is hovered and remain passive, so showing one no longer
+  captures focus or blocks input to the rest of the application. The controlled `open` value now
+  overrides automatic hover/focus behavior, allowing a focused trigger to close its tooltip.
+  `Tooltip::show_on_focus(false)` supports hover-only triggers while focus display remains enabled
+  by default for keyboard accessibility.
 - Blend Toast enter and exit transitions against the rendered cells underneath the toast instead
   of the terminal's default background.
 

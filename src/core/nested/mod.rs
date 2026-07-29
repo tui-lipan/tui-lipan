@@ -585,6 +585,12 @@ impl ComponentRegistry {
         }
     }
 
+    pub(crate) fn has_hover_view_dependencies(&self) -> bool {
+        self.scope_to_id.values().copied().any(|id| {
+            self.is_valid(id) && self.arena.get(id).memo_deps.dependencies.depends_on_hover()
+        })
+    }
+
     pub(crate) fn mount(
         &mut self,
         element: &ComponentElement,
@@ -947,48 +953,23 @@ impl ComponentRegistry {
             // reads inside memo_key() itself are recorded.
             entry.component.begin_memo_dependency_capture();
             let memo_key = entry.component.memo_key();
-            let (element, memo_deps) = if memo_key.is_some() {
-                #[cfg(feature = "devtools")]
-                let view_start = web_time::Instant::now();
-                #[cfg(feature = "profiling-tracing")]
-                let _view_span = tracing::trace_span!(
-                    "component.view",
-                    component = entry.full_name,
-                    scope = entry.scope.0
-                )
-                .entered();
-                let element = entry.component.view();
-                #[cfg(feature = "devtools")]
-                record_view_timing(
-                    entry.scope,
-                    Arc::clone(&entry.display_name),
-                    view_start.elapsed(),
-                );
-                let memo_deps = entry.component.finish_memo_dependency_capture();
-                (element, memo_deps)
-            } else {
-                entry.component.finish_memo_dependency_capture();
-                #[cfg(feature = "devtools")]
-                let view_start = web_time::Instant::now();
-                #[cfg(feature = "profiling-tracing")]
-                let _view_span = tracing::trace_span!(
-                    "component.view",
-                    component = entry.full_name,
-                    scope = entry.scope.0
-                )
-                .entered();
-                let element = entry.component.view();
-                #[cfg(feature = "devtools")]
-                record_view_timing(
-                    entry.scope,
-                    Arc::clone(&entry.display_name),
-                    view_start.elapsed(),
-                );
-                (
-                    element,
-                    crate::core::runtime_env::MemoDependencySnapshot::default(),
-                )
-            };
+            #[cfg(feature = "devtools")]
+            let view_start = web_time::Instant::now();
+            #[cfg(feature = "profiling-tracing")]
+            let _view_span = tracing::trace_span!(
+                "component.view",
+                component = entry.full_name,
+                scope = entry.scope.0
+            )
+            .entered();
+            let element = entry.component.view();
+            #[cfg(feature = "devtools")]
+            record_view_timing(
+                entry.scope,
+                Arc::clone(&entry.display_name),
+                view_start.elapsed(),
+            );
+            let memo_deps = entry.component.finish_memo_dependency_capture();
             let host = std::mem::take(&mut entry.host);
             (element, host, memo_key, memo_deps)
         };
