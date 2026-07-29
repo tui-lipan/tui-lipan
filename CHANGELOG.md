@@ -181,6 +181,12 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Scrolling a `ScrollView` no longer punches holes of the host terminal background through an
+  `App::fill_background` surface. The incremental scroll fast path assumed the terminal's
+  scroll-region command left the exposed rows filled with the configured screen background, but
+  `CSI S`/`CSI T` carry no SGR and background-color erase fills them with the terminal default, so
+  the follow-up diff judged every blank exposed cell already-correct and never repainted it. Most
+  visible when dragging the scrollbar, which jumps many rows per frame.
 - Make constrained `DocumentView` auto width use its intrinsic content and scrollbar chrome instead
   of expanding to the full available width and wrapping content under the scrollbar.
 - Tooltips now open when their trigger is hovered and remain passive, so showing one no longer
