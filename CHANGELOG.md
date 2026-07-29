@@ -179,6 +179,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Make constrained `DocumentView` auto width use its intrinsic content and scrollbar chrome instead
+  of expanding to the full available width and wrapping content under the scrollbar.
 - Blend Toast enter and exit transitions against the rendered cells underneath the toast instead
   of the terminal's default background.
 
