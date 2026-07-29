@@ -13,6 +13,10 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add `TestBackend::advance(dt)`, which ticks every time-based animation and
+  refreshes the rendered tree as needed. Tests can now deterministically step
+  `Animated` transitions, smooth scrolls, and `Context::transition` property
+  animations using the runner's ordering and 50 ms per-frame clamp.
 - Add `Terminal::caret_color` for setting the focused hardware caret color through OSC 12.
 - Add `TerminalPasteShortcutBehavior::Performable` for terminal hosts that bind direct `Ctrl+V`:
   plain text is emitted through terminal paste input, while file lists, images, and unknown

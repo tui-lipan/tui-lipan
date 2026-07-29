@@ -61,6 +61,7 @@ use crate::app::input::runtime_dispatch::{
 
 mod animation;
 mod animation_ticker;
+pub(crate) use animation::tick_tree_animations;
 mod drag;
 pub(crate) mod events;
 mod exit_view;
