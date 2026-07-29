@@ -13,6 +13,8 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add `ToastHandle::renew` to restart an active toast's dismissal countdown without changing its
+  stack order or replaying its enter transition.
 - Add `Animated::auto_exit` and `ExitAnimation` for automatically retaining and
   animating removed keyed children of `VStack`, `HStack`, `Canvas`, and
   `ZStack`. Retained subtrees are inert, suppress descendant transition-end

@@ -306,6 +306,26 @@ impl OverlayManager {
         true
     }
 
+    /// Restart an entry's dismissal countdown in place, leaving everything the renderer reads
+    /// untouched: no new `order`, no replayed enter transition, and no generation bump.
+    ///
+    /// `created_at` feeds only the expiry check in [`Self::tick`], which reads `self.entries`
+    /// directly, so a cached overlay snapshot holding the previous value stays correct to render
+    /// from. That is what makes a renew free: the toast looks identical, it just lives longer.
+    ///
+    /// Returns `false` when the toast is gone or already fading, since neither can be extended -
+    /// callers that still want it on screen must push a fresh one.
+    pub(crate) fn renew(&mut self, id: OverlayId) -> bool {
+        let Some(entry) = self.entries.iter_mut().find(|entry| entry.id == id) else {
+            return false;
+        };
+        if entry.pending_dismiss {
+            return false;
+        }
+        entry.created_at = Instant::now();
+        true
+    }
+
     pub(crate) fn tick(&mut self) -> TickResult {
         let now = Instant::now();
 
@@ -496,6 +516,18 @@ impl ToastHandle {
         let _ = self.manager.borrow_mut().dismiss_immediately(id);
     }
 
+    /// Restart a toast's countdown without redrawing it, returning whether it was still alive.
+    ///
+    /// Use this instead of dismiss-and-push when the replacement toast would render identically:
+    /// pushing assigns a fresh order and replays the enter transition, so an unchanged message
+    /// visibly blinks and can jump past its neighbors. A renew keeps it exactly where it is.
+    ///
+    /// `false` means the toast expired or is already fading, so the caller should [`Self::push`]
+    /// a new one.
+    pub fn renew(&self, id: OverlayId) -> bool {
+        self.manager.borrow_mut().renew(id)
+    }
+
     /// Clear all active toasts.
     pub fn clear(&self) {
         self.manager.borrow_mut().dismiss_toasts();
@@ -529,6 +561,72 @@ mod tests {
         assert!(tick.dirty);
         assert!(!manager.entries[0].copy_feedback_active());
         assert!(manager.entries[0].copy_feedback_until.is_none());
+    }
+
+    #[test]
+    fn renew_extends_the_countdown_without_disturbing_the_render() {
+        let mut manager = OverlayManager::new();
+        let id = manager.push_toast(Toast::new("message").duration(10.0));
+        settle_entry_transition(&mut manager.entries[0]);
+        let order = manager.entries[0].order;
+        let generation = manager.generation();
+        let created_at = manager.entries[0].created_at;
+
+        thread::sleep(Duration::from_millis(5));
+        assert!(manager.renew(id));
+
+        assert!(manager.entries[0].created_at > created_at);
+        // Everything the renderer reads must be untouched, and the cached overlay snapshot must
+        // stay valid - a renew that bumped the generation would force a pointless re-clone.
+        assert_eq!(manager.entries[0].order, order);
+        assert_eq!(manager.generation(), generation);
+        assert!(manager.entries[0].opacity_transition.is_none());
+    }
+
+    #[test]
+    fn renew_keeps_a_toast_alive_past_its_original_timeout() {
+        let mut manager = OverlayManager::new();
+        let id = manager.push_toast(Toast::new("held").duration(0.01));
+
+        thread::sleep(Duration::from_millis(5));
+        assert!(manager.renew(id));
+        thread::sleep(Duration::from_millis(7));
+        manager.tick();
+
+        assert!(
+            !manager.entries[0].pending_dismiss,
+            "the renewed deadline has not passed yet"
+        );
+    }
+
+    #[test]
+    fn renew_reports_failure_for_a_toast_that_cannot_be_extended() {
+        let mut manager = OverlayManager::new();
+        let missing = manager.push_toast(Toast::new("gone"));
+        assert!(manager.dismiss_immediately(missing));
+        assert!(
+            !manager.renew(missing),
+            "an expired toast cannot be renewed"
+        );
+
+        let fading = manager.push_toast(Toast::new("fading"));
+        assert!(manager.dismiss(fading));
+        assert!(
+            !manager.renew(fading),
+            "a toast mid-exit cannot be pulled back"
+        );
+    }
+
+    #[test]
+    fn renew_does_not_reorder_a_toast_among_its_neighbors() {
+        let mut manager = OverlayManager::new();
+        let first = manager.push_toast(Toast::new("first"));
+        let second = manager.push_toast(Toast::new("second"));
+
+        assert!(manager.renew(first));
+
+        let ids: Vec<_> = manager.entries.iter().map(|entry| entry.id).collect();
+        assert_eq!(ids, vec![first, second]);
     }
 
     #[test]
