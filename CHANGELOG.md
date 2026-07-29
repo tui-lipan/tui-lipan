@@ -137,6 +137,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Make `TestBackend::advance(dt)` available to web examples by sharing animation stepping with
+  both native and WASM runtimes.
 - Mouse release now clears pending command chords and repaints the indicator immediately, preventing a prior key prefix from leaking into subsequent input.
 - `TerminalScreen::export_replay_bytes` now preserves effective Kitty keyboard flags, so attached
   terminal clients keep modified-key input such as `Shift+Enter` after reconnecting.

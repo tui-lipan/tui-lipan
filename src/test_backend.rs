@@ -750,7 +750,7 @@ where
         let dt = dt.min(Duration::from_millis(50));
 
         let (_, _, needs_layout) =
-            crate::app::runner::tick_tree_animations(&mut self.core.tree, dt);
+            crate::app::animation::tick_tree_animations(&mut self.core.tree, dt);
         let property_transitions_changed = self.core.ctx.env().animations.tick(dt);
         if needs_layout || property_transitions_changed {
             self.render();

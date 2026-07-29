@@ -220,7 +220,7 @@ impl<C: Component> AppRunner<C> {
             // transition in one step - Transition::tick clamps elapsed to duration.
             let dt = dt.min(Duration::from_millis(50));
             let (changed, needs_paint, needs_layout) =
-                super::tick_tree_animations(&mut self.core.tree, dt);
+                crate::app::animation::tick_tree_animations(&mut self.core.tree, dt);
             // Property-scoped transitions: advance and mark full re-render when
             // any interpolated value changed (the new value must flow through
             // the next view() into the rendered styles).
