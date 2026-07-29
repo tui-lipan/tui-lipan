@@ -179,6 +179,9 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Blend Toast enter and exit transitions against the rendered cells underneath the toast instead
+  of the terminal's default background.
+
 - Make `TestBackend::advance(dt)` available to web examples by sharing animation stepping with
   both native and WASM runtimes.
 - Terminal selection copying now uses the same display-column convention as

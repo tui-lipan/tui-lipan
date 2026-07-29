@@ -2,10 +2,9 @@ use ratatui::buffer::Cell as BufferCell;
 use ratatui::style::Color as RColor;
 
 use crate::backend::ratatui_backend::common::{
-    apply_effect_style_clipped, from_ratatui_color, preserve_palette_blend, to_ratatui_color,
-    to_ratatui_rect,
+    apply_effect_style_clipped, from_ratatui_color, to_ratatui_color, to_ratatui_rect,
 };
-use crate::backend::ratatui_backend::render::AnimatedRestoreSnapshot;
+use crate::backend::ratatui_backend::render::{AnimatedRestoreSnapshot, blend_ratatui_toward};
 use crate::style::{ColorTransform, Rect, Style};
 use crate::widgets::internal::AnimatedNode;
 
@@ -175,35 +174,6 @@ fn cells_match(cell: &BufferCell, saved: &BufferCell) -> bool {
 
 fn non_reset(color: RColor) -> Option<RColor> {
     (color != RColor::Reset).then_some(color)
-}
-
-/// Blend `source` toward `target` by `1.0 - opacity`, returning the resolved color and whether
-/// the cell should gain `DIM`. A palette color whose blend would carry a foreign hue is kept
-/// on-palette (see [`preserve_palette_blend`]) so the user's terminal palette stays in control.
-fn blend_ratatui_toward(
-    source: RColor,
-    target: RColor,
-    source_fallback: Option<RColor>,
-    target_fallback: Option<RColor>,
-    opacity: f32,
-) -> (RColor, bool) {
-    if source == RColor::Reset && source_fallback.is_none() {
-        return (source, false);
-    }
-    let source = non_reset(source).or(source_fallback).unwrap_or(source);
-    let Some(target) = non_reset(target).or(target_fallback) else {
-        return (source, false);
-    };
-    if source == target {
-        return (source, false);
-    }
-
-    let src = from_ratatui_color(source);
-    let result = src.blend_toward(from_ratatui_color(target), 1.0 - opacity);
-    if let Some(darkened) = preserve_palette_blend(src, result) {
-        return (source, darkened);
-    }
-    (to_ratatui_color(result), false)
 }
 
 #[cfg(test)]

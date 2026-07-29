@@ -62,7 +62,7 @@ use crate::backend::ratatui_backend::renderers::{
 };
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::style::resolve::{resolve_base_style, resolve_force_accent_style};
-use crate::style::{ColorTransform, Rect, Style, StyleSlot, ThemeRole, resolve_slot};
+use crate::style::{Rect, Style, StyleSlot, ThemeRole, resolve_slot};
 use crate::utils::scrollbar::ScrollbarMetricsCache;
 use crate::widgets::internal::{FrameGeometry, StackProps, compute_frame_geometry};
 use crate::widgets::{DragSlot, DropHighlight};
@@ -314,21 +314,13 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
         }
 
         if overlay_opacity < 1.0 {
-            let opacity_style = Style::new()
-                .transform_fg(ColorTransform::Opacity(overlay_opacity))
-                .transform_bg(ColorTransform::Opacity(overlay_opacity));
-            let opacity_rect = Rect {
-                x: clear_rect.x as i16,
-                y: clear_rect.y as i16,
-                w: clear_rect.width,
-                h: clear_rect.height,
-            };
-            apply_effect_style_clipped(
+            let bg_snapshot = state.ctx.overlay_bg_snapshot.borrow();
+            composite_overlay_opacity(
                 state.f,
-                opacity_rect,
-                opacity_style,
-                Some(content_rect),
+                clear_rect,
+                &bg_snapshot,
                 state.ctx.terminal_bg,
+                overlay_opacity,
             );
         }
     }
