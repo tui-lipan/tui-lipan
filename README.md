@@ -193,6 +193,7 @@ writing any `update()` logic.
 | `diff-view` | `DiffView` widget: side-by-side and unified diff viewer |
 | `image` | `Image` widget: Kitty/iTerm2/Sixel/halfblock rendering with PNG/JPEG/GIF/WebP codecs, including animated GIF/WebP (includes `clipboard-images`) |
 | `image-full-formats` | Restores the broad `image` crate default codec set for image-backed features |
+| `hints-regex` | `regex-lite` scanner for string-configured custom text hints; core hint scanning stays dependency-free |
 | `markdown` | Markdown formatter for `DocumentView` |
 | `profiling-tracing` | `tracing` spans/events for render loop and `DocumentView` hot paths |
 | `syntax-syntect` | Lightweight syntax highlighting in `TextArea`, `DocumentView`, and `DiffView`; native uses Oniguruma and WASM uses pure-Rust `fancy-regex` |

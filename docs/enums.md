@@ -36,6 +36,15 @@ Column encoding for `LineIndex` conversions:
 Snapshot helper for converting between canonical byte offsets and
 `TextPosition` / `TextRange`. Rebuild it when the underlying text changes.
 
+### `SelectionEnd`
+
+Controls how a normalized `GridSelection` endpoint is interpreted:
+
+| Variant | Meaning |
+|---------|---------|
+| `Exclusive` **(default)** | The endpoint is the first grid position not selected |
+| `Inclusive` | The endpoint cell is included, for cell-cursor copy modes |
+
 ---
 
 ## UI Snapshots (agent / design review)
@@ -169,6 +178,24 @@ Behavior when a key fails to complete a pending app command chord.
 | `SwallowPrefixReplayCurrent` **(default)** | Swallow the prefix; retry the mismatching key as a fresh dispatch |
 | `ForwardPrefixAndCurrent` | Forward both prefix and mismatching key to lower-priority sinks |
 | `CancelOnly` | Cancel pending command state; treat mismatch as unhandled by commands |
+
+### `CopyModeAction`
+
+Result of `TerminalCopyMode::handle_key`:
+
+| Variant | Meaning |
+|---------|---------|
+| `Ignored` | No copy-mode binding handled the key, or a motion was already at its boundary |
+| `Moved` | Cursor or scrollback position changed without an active selection |
+| `SelectionChanged` | Selection anchor or anchored cursor position changed |
+| `RequestCopy` | Copy the current selection |
+| `Cancel` | Leave copy mode without copying |
+
+### `HintKind` and `HintFilter`
+
+`HintKind` identifies scanner output as `Url`, `Path`, `GitSha`, or
+`Custom(u16)`. `HintFilter` reports incremental label filtering as `NoMatch`,
+`Ambiguous`, or `Selected(usize)`.
 
 ---
 

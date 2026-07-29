@@ -205,6 +205,46 @@ Named colors: `Black`, `Red`, `Green`, `Yellow`, `Blue`, `Magenta`, `Cyan`, `Whi
 
 > **Tip**: Prefer `Color::rgb(...)` for interactive/selection styles when exact contrast matters. Named ANSI colors vary by terminal palette.
 
+## Span line editing
+
+`tui_lipan::utils::spans` is the public facade for editing styled lines without
+flattening them. Rendered-grid APIs use **display columns** (wide characters
+consume two columns); text APIs use UTF-8 byte offsets, with character columns
+only as a presentation adapter.
+
+```rust
+use tui_lipan::utils::spans;
+
+let line = vec![Span::new("state: "), Span::new("ready").fg(Color::Green)];
+let marked = spans::restyle_columns(&line, &[(7..12, Style::new().bold())]);
+let labelled = spans::insert_at_column(&marked, 7, Span::new("[ok] "));
+let visible = spans::slice_columns(&labelled, 0, 20);
+```
+
+Use `line_width` and `line_text` for aggregate values. Use
+`char_col_to_display_col` / `display_col_to_char_col` when bridging a
+text-facing character cursor to rendered-grid coordinates. Column cuts never
+split a wide or combining grapheme, and unchanged whole spans retain their
+shared `Arc<str>` storage where possible.
+
+## Displaying untrusted text
+
+`Text::new` treats input as trusted display text and does not scan every string
+on the hot construction path. The renderer ignores control characters so
+unsanitized data cannot overrun its measured layout, but callers should strip
+terminal control sequences before displaying logs, filenames, or remote data:
+
+```rust
+use tui_lipan::utils::sanitize_display_text;
+
+Text::new(sanitize_display_text(untrusted).into_owned())
+```
+
+`sanitize_display_span` and `sanitize_display_spans` preserve styles while
+removing ESC/CSI/OSC/DCS/SOS/PM/APC sequences and bare C0/C1 controls. They do
+not trim surrounding whitespace. Use `Text::from_ansi` only when ANSI is
+trusted and should be **interpreted** rather than stripped.
+
 ### Palette (Tailwind-style colors)
 
 `tui_lipan::style::palette` provides a comprehensive color palette based on Tailwind CSS. Use it for consistent, designer-friendly colors across your app.

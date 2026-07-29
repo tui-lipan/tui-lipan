@@ -75,6 +75,7 @@ tui-lipan = { version = "*", features = ["image", "big-text"] }
 | `diff-view` | No | Side-by-side/unified diff viewer - `DiffView` |
 | `image` | No | Protocol-aware image rendering (Kitty, iTerm2, Sixel, halfblocks) with PNG/JPEG/GIF/WebP codecs - includes `clipboard-images` |
 | `image-full-formats` | No | Restores the broad `image` crate default codec set for `image`, `clipboard-images`, or `ui-snapshot-png` builds |
+| `hints-regex` | No | `regex-lite` scanner for string-configured custom text hints; the dependency-free `HintScanner` trait and URL/path/Git scanners are always available |
 | `markdown` | No | Markdown formatter for `DocumentView` + markdown preview example |
 | `profiling-tracing` | No | `tracing` spans/events around render loop and `DocumentView` formatting/reconcile hot paths |
 | `syntax-syntect` | No | Lightweight syntax highlighting in `TextArea`, `DocumentView`, and `DiffView` via syntect; WASM uses pure-Rust `fancy-regex` |
@@ -83,6 +84,11 @@ tui-lipan = { version = "*", features = ["image", "big-text"] }
 | `terminal-serde` | No | Serde derives for terminal snapshot leaf style/mouse types used by external, versioned snapshot transports; includes `terminal` |
 | `theme-reload` | No | Live reload of TOML theme files without restarting the app - see [Styling](styling.md) |
 | `web` | No | Browser/WASM backend - see [Web / WASM Backend](web-backend.md) |
+
+`HintScanner` is the primary custom-hint interface and does not require a
+feature. Enable `hints-regex` only when config needs patterns as strings. An app
+that already depends on a different `regex-lite` version may compile a second
+copy until its config layer also uses the framework scanner.
 
 ### Profiling with `tracing`
 

@@ -7,7 +7,9 @@ use crate::utils::{GridPos, GridSelection};
 use crate::widgets::internal::{ScrollAction, apply_scroll_action, scroll_metrics};
 
 #[cfg(feature = "terminal")]
-use crate::widgets::internal::{terminal_mouse_content_rect, terminal_selection_text};
+use crate::widgets::internal::{
+    apply_terminal_selection_input, terminal_mouse_content_rect, terminal_selection_text,
+};
 use crate::widgets::{
     DocumentSelectEvent, DragCancelEvent, DragOverEvent, InputEvent, ProgressEvent, ScrollEvent,
     ScrollMetrics, TextAreaEvent, calc_scroll_view_window, normalize_input_offset,
@@ -1534,7 +1536,11 @@ impl<C: Component> AppRunner<C> {
         );
 
         if let NodeKind::Terminal(term) = &mut self.core.tree.node_mut(drag.id).kind {
-            term.selection = Some(next.clone());
+            apply_terminal_selection_input(
+                &mut term.selection,
+                term.selection_controlled,
+                Some(next.clone()),
+            );
         }
         if let Some(cb) = on_selection {
             let text = terminal_selection_text(&lines, &next);

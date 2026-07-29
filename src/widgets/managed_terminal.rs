@@ -24,6 +24,7 @@
 //! use the low-level [`Terminal`] widget with [`TerminalPty`] directly.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::Command;
 use crate::callback::{Callback, CommandLink};
@@ -72,6 +73,10 @@ pub struct ManagedTerminalProps {
     /// Enable scroll wheel for scrollback.
     /// Default: `true`.
     pub scroll_wheel: bool,
+    /// Delay before applying a burst of terminal viewport resizes.
+    /// Default: `16ms`. Use [`std::time::Duration::ZERO`] to apply every resize immediately.
+    /// Interval used to coalesce bursts of PTY resize requests; zero applies each request.
+    pub resize_debounce: Duration,
     /// Style for the terminal content
     pub style: crate::style::Style,
     /// Whether the terminal should be focusable
@@ -102,6 +107,7 @@ impl Default for ManagedTerminalProps {
             placeholder: Some(Arc::from("Starting terminal...")),
             forward_mouse: true,
             scroll_wheel: true,
+            resize_debounce: Duration::from_millis(16),
             style: crate::style::Style::default(),
             focusable: true,
             tab_stop: true,
@@ -184,6 +190,21 @@ impl ManagedTerminal {
         self
     }
 
+    /// Set the window used to coalesce PTY and screen resizes.
+    ///
+    /// The first resize of a burst arms a single timer and the latest pending size
+    /// is applied when it fires, so a continuous drag keeps reflowing at a steady
+    /// cadence instead of stalling until the drag stops. A zero duration disables
+    /// coalescing and applies each resize immediately.
+    ///
+    /// Coalescing matters beyond saving `ioctl` calls: a column change forces the
+    /// screen to reflow, which drops every OSC 133 semantic mark, so an unthrottled
+    /// width drag destroys shell-integration history.
+    pub fn resize_debounce(mut self, delay: Duration) -> Self {
+        self.props.resize_debounce = delay;
+        self
+    }
+
     /// Set the terminal content style.
     pub fn style(mut self, style: crate::style::Style) -> Self {
         self.props.style = style;
@@ -255,6 +276,8 @@ pub enum ManagedTerminalMsg {
     TerminalScrollTo(usize),
     /// Terminal resized
     Resize { cols: u16, rows: u16 },
+    /// Apply the latest debounced terminal resize if this generation is current.
+    FlushResize { generation: u64 },
     /// Start the PTY (manual mode only)
     Start,
 }
@@ -266,6 +289,10 @@ pub struct ManagedTerminalState {
     pty: Option<TerminalPty>,
     cols: u16,
     rows: u16,
+    pending_resize: Option<(u16, u16)>,
+    resize_generation: u64,
+    #[cfg(test)]
+    resize_apply_count: usize,
     status: ManagedTerminalStatus,
 }
 
@@ -281,6 +308,10 @@ impl Component for ManagedTerminal {
             pty: None,
             cols: props.initial_cols,
             rows: props.initial_rows,
+            pending_resize: None,
+            resize_generation: 0,
+            #[cfg(test)]
+            resize_apply_count: 0,
             status: ManagedTerminalStatus::Starting,
         }
     }
@@ -379,25 +410,44 @@ impl Component for ManagedTerminal {
                 Update::full()
             }
             ManagedTerminalMsg::Resize { cols, rows } => {
-                if cols == ctx.state.cols && rows == ctx.state.rows {
+                let dimensions = (cols.max(1), rows.max(1));
+                if ctx.props.resize_debounce.is_zero() {
+                    ctx.state.pending_resize = None;
+                    ctx.state.resize_generation =
+                        ctx.state.resize_generation.wrapping_add(1).max(1);
+                    return Self::apply_resize(ctx, dimensions.0, dimensions.1);
+                }
+
+                let armed = ctx.state.pending_resize.is_some();
+                if !armed && dimensions == (ctx.state.cols, ctx.state.rows) {
                     return Update::none();
                 }
 
-                ctx.state.cols = cols;
-                ctx.state.rows = rows;
-
-                // Resize PTY first so the child process learns the new dimensions
-                if let Some(pty) = &ctx.state.pty
-                    && let Err(err) = pty.resize(cols, rows)
-                {
-                    let msg = format!("pty resize failed: {err}");
-                    ctx.state.status = ManagedTerminalStatus::Error(Arc::from(msg));
-                    return Update::full();
+                ctx.state.pending_resize = Some(dimensions);
+                // Only the first resize of a burst arms a timer. Re-arming on every
+                // event would restart the window each frame of a drag, so the flush
+                // would never fire until the drag paused.
+                if armed {
+                    return Update::none();
                 }
 
-                ctx.state.screen.resize(rows, cols);
-                ctx.state.snapshot = ctx.state.screen.render_snapshot();
-                Update::full()
+                ctx.state.resize_generation = ctx.state.resize_generation.wrapping_add(1).max(1);
+                let generation = ctx.state.resize_generation;
+                Update::command_only(Command::after(
+                    ctx.props.resize_debounce,
+                    move |link: CommandLink<ManagedTerminalMsg>| {
+                        link.send(ManagedTerminalMsg::FlushResize { generation });
+                    },
+                ))
+            }
+            ManagedTerminalMsg::FlushResize { generation } => {
+                if generation != ctx.state.resize_generation {
+                    return Update::none();
+                }
+                let Some((cols, rows)) = ctx.state.pending_resize.take() else {
+                    return Update::none();
+                };
+                Self::apply_resize(ctx, cols, rows)
             }
             ManagedTerminalMsg::Start => {
                 if ctx.state.pty.is_none() {
@@ -460,6 +510,34 @@ impl Component for ManagedTerminal {
 }
 
 impl ManagedTerminal {
+    fn apply_resize(ctx: &mut Context<Self>, cols: u16, rows: u16) -> Update {
+        if cols == ctx.state.cols && rows == ctx.state.rows {
+            return Update::none();
+        }
+
+        ctx.state.cols = cols;
+        ctx.state.rows = rows;
+        #[cfg(test)]
+        {
+            ctx.state.resize_apply_count += 1;
+        }
+
+        // Resize PTY first so the child process learns the new dimensions.
+        if let Some(pty) = &ctx.state.pty
+            && let Err(err) = pty.resize(cols, rows)
+        {
+            let msg = format!("pty resize failed: {err}");
+            ctx.state.status = ManagedTerminalStatus::Error(Arc::from(msg));
+            return Update::full();
+        }
+
+        ctx.state.screen.resize(rows, cols);
+        ctx.state.snapshot = ctx.state.screen.render_snapshot();
+        Update::full()
+    }
+}
+
+impl ManagedTerminal {
     /// Spawn the PTY and set up event handling.
     fn spawn_pty(link: CommandLink<ManagedTerminalMsg>, config: &TerminalPtyConfig) {
         let config = config.clone();
@@ -489,6 +567,7 @@ mod tests {
         assert!(props.auto_start);
         assert!(props.forward_mouse);
         assert!(props.scroll_wheel);
+        assert_eq!(props.resize_debounce, Duration::from_millis(16));
         assert!(props.focusable);
     }
 
@@ -498,12 +577,95 @@ mod tests {
             .scrollback(5000)
             .initial_size(80, 30)
             .auto_start(false)
-            .forward_mouse(false);
+            .forward_mouse(false)
+            .resize_debounce(Duration::ZERO);
 
         assert_eq!(terminal.props.scrollback, 5000);
         assert_eq!(terminal.props.initial_cols, 80);
         assert_eq!(terminal.props.initial_rows, 30);
         assert!(!terminal.props.auto_start);
         assert!(!terminal.props.forward_mouse);
+        assert_eq!(terminal.props.resize_debounce, Duration::ZERO);
+    }
+
+    #[test]
+    fn rapid_resize_burst_avoids_intermediate_mark_wipes_and_applies_once() {
+        let props = ManagedTerminalProps {
+            auto_start: false,
+            resize_debounce: Duration::from_millis(32),
+            ..ManagedTerminalProps::default()
+        };
+        let mut backend =
+            crate::test_backend::TestBackend::new_with_props(ManagedTerminal::new(), props);
+        backend
+            .state_mut()
+            .screen
+            .process_bytes(b"\x1b]133;C\x1b\\output\r\n");
+        let marks = backend.state().screen.semantic_marks();
+        assert!(!marks.is_empty());
+
+        backend
+            .dispatch(ManagedTerminalMsg::Resize { cols: 10, rows: 24 })
+            .unwrap();
+        backend
+            .dispatch(ManagedTerminalMsg::Resize {
+                cols: 110,
+                rows: 24,
+            })
+            .unwrap();
+
+        // The burst arms exactly one timer: re-arming per event would restart the
+        // window every frame of a drag, so the flush would never fire until it ended.
+        let latest_generation = backend.state().resize_generation;
+        assert_eq!(latest_generation, 1);
+        backend
+            .dispatch(ManagedTerminalMsg::FlushResize {
+                generation: latest_generation.saturating_add(1),
+            })
+            .unwrap();
+
+        // Neither intermediate width was applied, so the semantic marks remain anchored.
+        assert_eq!(backend.state().cols, 120);
+        assert_eq!(backend.state().resize_apply_count, 0);
+        assert_eq!(backend.state().screen.semantic_marks(), marks);
+
+        std::thread::sleep(Duration::from_millis(64));
+        backend.pump().unwrap();
+
+        // Only the final, different width reaches the resize path.
+        assert_eq!(backend.state().cols, 110);
+        assert_eq!(backend.state().resize_apply_count, 1);
+        // A settled width reflow still invalidates absolute semantic indices;
+        // debounce prevents every transient width from doing this repeatedly.
+        assert!(backend.state().screen.semantic_marks().is_empty());
+    }
+
+    #[test]
+    fn a_resize_after_a_flush_arms_a_fresh_window() {
+        let props = ManagedTerminalProps {
+            auto_start: false,
+            resize_debounce: Duration::from_millis(16),
+            ..ManagedTerminalProps::default()
+        };
+        let mut backend =
+            crate::test_backend::TestBackend::new_with_props(ManagedTerminal::new(), props);
+
+        backend
+            .dispatch(ManagedTerminalMsg::Resize { cols: 90, rows: 24 })
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(48));
+        backend.pump().unwrap();
+        assert_eq!(backend.state().cols, 90);
+        assert_eq!(backend.state().resize_apply_count, 1);
+
+        // A continuous drag keeps reflowing: the next burst is not swallowed by the
+        // generation guard left behind by the previous one.
+        backend
+            .dispatch(ManagedTerminalMsg::Resize { cols: 70, rows: 24 })
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(48));
+        backend.pump().unwrap();
+        assert_eq!(backend.state().cols, 70);
+        assert_eq!(backend.state().resize_apply_count, 2);
     }
 }

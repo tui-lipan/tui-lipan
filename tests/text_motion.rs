@@ -4,8 +4,9 @@
 //! mode) build on, so accidental renames/signature drift here should fail CI.
 
 use tui_lipan::text_motion::{
-    big_word_backward_start, big_word_end, big_word_forward_start, first_nonblank_in_line,
-    line_end_at, line_start_at, word_backward_start, word_end, word_forward_start,
+    big_word_backward_start, big_word_end, big_word_forward_start, cell_big_word_end,
+    cell_line_first_nonblank, cell_word_end, char_col_to_byte, first_nonblank_in_line, line_end_at,
+    line_start_at, word_backward_start, word_end, word_forward_start,
 };
 
 #[test]
@@ -67,4 +68,13 @@ fn line_motions_on_blank_line_land_on_line_end() {
         first_nonblank_in_line(text, blank_start, blank_end),
         blank_end
     );
+}
+
+#[test]
+fn cell_cursor_adapters_keep_char_columns_separate_from_bytes() {
+    let row = "héllo world";
+    assert_eq!(char_col_to_byte(row, 1), 1);
+    assert_eq!(cell_word_end(row, 0), 4);
+    assert_eq!(cell_line_first_nonblank("  hé"), 2);
+    assert_eq!(cell_big_word_end("foo.bar baz", 0), 6);
 }

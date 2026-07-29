@@ -1,25 +1,8 @@
 use super::{Overflow, Text};
-use crate::style::Span;
-use unicode_width::UnicodeWidthStr;
+use crate::utils::spans::spans_width;
 
 /// Split `&[Span]` on embedded `\n` characters into logical lines.
-pub(crate) fn split_spans_on_newlines(spans: &[Span]) -> Vec<Vec<Span>> {
-    let mut lines: Vec<Vec<Span>> = Vec::new();
-    let mut current_line: Vec<Span> = Vec::new();
-
-    for span in spans {
-        for (i, part) in span.content.split('\n').enumerate() {
-            if i > 0 {
-                lines.push(std::mem::take(&mut current_line));
-            }
-            if !part.is_empty() {
-                current_line.push(Span::new(part).style(span.style));
-            }
-        }
-    }
-    lines.push(current_line);
-    lines
-}
+pub(crate) use crate::utils::spans::split_spans_on_newlines;
 
 pub fn measure_text_constrained(text: &Text, max_w: Option<u16>) -> (u16, u16) {
     let wrap_width = if matches!(text.overflow, Overflow::Wrap | Overflow::Auto) {
@@ -33,10 +16,7 @@ pub fn measure_text_constrained(text: &Text, max_w: Option<u16>) -> (u16, u16) {
     let mut total_h = 0usize;
 
     for logical_line in &logical_lines {
-        let logical_w: usize = logical_line
-            .iter()
-            .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
-            .sum();
+        let logical_w = spans_width(logical_line);
         max_line_w = max_line_w.max(logical_w);
 
         match wrap_width {
@@ -72,6 +52,12 @@ mod tests {
     fn measures_newlines_across_span_boundaries() {
         let text = Text::from_spans([Span::from("ab"), Span::from("\ncd")]);
         assert_eq!(measure_text_constrained(&text, None), (2, 2));
+    }
+
+    #[test]
+    fn measurement_skips_control_characters() {
+        let text = Text::new("a\0\u{7}b");
+        assert_eq!(measure_text_constrained(&text, None), (2, 1));
     }
 
     #[test]

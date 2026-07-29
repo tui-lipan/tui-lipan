@@ -2,9 +2,10 @@
 
 use std::borrow::Cow;
 
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::style::Span;
+use crate::style::{Span, Style};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -62,6 +63,14 @@ pub(crate) fn is_wrap_break(ch: char) -> bool {
 
 /// Returns the visual width of a character, accounting for sentinel placeholders.
 pub(crate) fn char_visual_width(ch: char, sentinel: Option<&SentinelInfo>) -> usize {
+    // `UnicodeWidthChar::width` already reports `None` for control characters, so this
+    // is a no-op guard kept to state the invariant explicitly: control characters
+    // occupy no columns. The paint side must agree, and does, by skipping them in
+    // `renderers::text::render_lipan_line_clipped`; when only one side skipped them,
+    // escape payload bytes were drawn into a zero-column budget.
+    if ch.is_control() {
+        return 0;
+    }
     if let Some(si) = sentinel
         && let Some(w) = si.width_of(ch)
     {
@@ -73,7 +82,7 @@ pub(crate) fn char_visual_width(ch: char, sentinel: Option<&SentinelInfo>) -> us
 /// Returns the visual width of a string, accounting for sentinel placeholders.
 pub(crate) fn str_visual_width(s: &str, sentinel: Option<&SentinelInfo>) -> usize {
     match sentinel {
-        None => UnicodeWidthStr::width(s),
+        None => crate::utils::spans::display_width(s),
         Some(si) => s.chars().map(|ch| char_visual_width(ch, Some(si))).sum(),
     }
 }
@@ -158,10 +167,20 @@ pub(crate) fn expand_tabs<'a>(s: &'a str, start_col: usize, tab_stop: usize) -> 
             col += w;
         } else {
             out.push(ch);
-            col += UnicodeWidthChar::width(ch).unwrap_or(0);
+            col += char_visual_width(ch, None);
         }
     }
     Cow::Owned(out)
+}
+
+/// Remove control characters for a paint path without allocating for normal
+/// display text. This intentionally does not parse escape sequences; callers
+/// that need terminal escape removal should use [`crate::utils::sanitize`].
+pub(crate) fn strip_controls<'a>(s: &'a str) -> Cow<'a, str> {
+    if !s.chars().any(char::is_control) {
+        return Cow::Borrowed(s);
+    }
+    Cow::Owned(s.chars().filter(|ch| !ch.is_control()).collect())
 }
 
 /// Replace sentinel characters in `text` with human-readable text.
@@ -529,7 +548,7 @@ pub(crate) fn input_viewport_start(line: &str, cursor: usize, width: u16) -> usi
     }
 
     let cursor = clamp_cursor(line, cursor);
-    let cursor_col = UnicodeWidthStr::width(&line[..cursor]);
+    let cursor_col = str_visual_width(&line[..cursor], None);
 
     // Keep cursor visible and reserve 1 cell for the caret.
     let start_col = cursor_col.saturating_add(1).saturating_sub(width);
@@ -543,14 +562,14 @@ pub(crate) fn viewport(line: &str, cursor: usize, width: u16) -> (usize, usize, 
     }
 
     let cursor = clamp_cursor(line, cursor);
-    let cursor_col = UnicodeWidthStr::width(&line[..cursor]);
+    let cursor_col = str_visual_width(&line[..cursor], None);
 
     // Keep cursor visible and reserve 1 cell for the caret.
     let start_col = cursor_col.saturating_add(1).saturating_sub(width);
     let start = byte_at_col(line, start_col);
     let end = end_at_width(line, start, width);
 
-    let cursor_x = UnicodeWidthStr::width(&line[start..cursor])
+    let cursor_x = str_visual_width(&line[start..cursor], None)
         .min(width.saturating_sub(1))
         .min(u16::MAX as usize) as u16;
 
@@ -691,6 +710,26 @@ pub(crate) fn take_chunk_end(spans: &[Span], start: SpanCursor, max_width: usize
     last_break.unwrap_or(cursor)
 }
 
+/// Return the first cursor at or beyond a hard display-column cut.
+///
+/// Unlike [`take_chunk_end`], this never falls back to a word boundary. If the
+/// requested column falls inside a wide character, the cursor remains before
+/// that character so callers never split its UTF-8 representation.
+pub(crate) fn cursor_at_column(spans: &[Span], column: usize) -> SpanCursor {
+    let mut cursor = SpanCursor::default();
+    let mut used = 0usize;
+
+    while let Some((next, _, width)) = next_char_cursor(spans, cursor) {
+        if used.saturating_add(width) > column {
+            break;
+        }
+        used = used.saturating_add(width);
+        cursor = next;
+    }
+
+    cursor
+}
+
 pub(crate) fn next_char_cursor(
     spans: &[Span],
     cursor: SpanCursor,
@@ -706,13 +745,18 @@ pub(crate) fn next_char_cursor(
             continue;
         }
 
-        let mut chars = content[byte_idx..].chars();
-        let ch = chars.next()?;
+        let grapheme = content[byte_idx..].graphemes(true).next()?;
+        let ch = grapheme.chars().next()?;
         let next = SpanCursor {
             span_idx,
-            byte_idx: byte_idx + ch.len_utf8(),
+            byte_idx: byte_idx + grapheme.len(),
         };
-        return Some((next, ch, UnicodeWidthChar::width(ch).unwrap_or(0)));
+        let width = if grapheme.chars().all(char::is_control) {
+            0
+        } else {
+            UnicodeWidthStr::width(grapheme)
+        };
+        return Some((next, ch, width));
     }
 
     None
@@ -757,6 +801,20 @@ pub(crate) fn collect_span_range(spans: &[Span], start: SpanCursor, end: SpanCur
 }
 
 pub(crate) fn push_span_slice(out: &mut Vec<Span>, span: &Span, range: Range<usize>) {
+    push_span_slice_styled(out, span, range, span.style);
+}
+
+/// Append a slice of `span` under `style`, reusing the source `Arc` for a whole-span
+/// range and merging into the previous span when both style and row policy match.
+///
+/// This is the single merge implementation; [`push_span_slice`] is the same thing with
+/// the source span's own style.
+pub(crate) fn push_span_slice_styled(
+    out: &mut Vec<Span>,
+    span: &Span,
+    range: Range<usize>,
+    style: Style,
+) {
     if range.is_empty() {
         return;
     }
@@ -769,7 +827,7 @@ pub(crate) fn push_span_slice(out: &mut Vec<Span>, span: &Span, range: Range<usi
     };
 
     if let Some(last) = out.last_mut()
-        && last.style == span.style
+        && last.style == style
         && last.row_style_policy == span.row_style_policy
     {
         let mut merged = String::with_capacity(last.content.len() + fragment.len());
@@ -781,7 +839,7 @@ pub(crate) fn push_span_slice(out: &mut Vec<Span>, span: &Span, range: Range<usi
 
     out.push(Span {
         content: fragment,
-        style: span.style,
+        style,
         row_style_policy: span.row_style_policy,
     });
 }
@@ -791,7 +849,7 @@ mod tests {
     use super::{
         VirtualTextInsertion, byte_at_col, byte_at_col_sentinel_tabs_virtual, clamp_cursor,
         count_wrapped_lines_for_budgets, end_at_width, expand_tabs, input_viewport_start,
-        is_wrap_break, next_char_boundary, str_visual_width_with_tabs, viewport,
+        is_wrap_break, next_char_boundary, str_visual_width, str_visual_width_with_tabs, viewport,
         visual_col_with_virtual, word_boundary_left, word_boundary_right, wrap_spans_for_budgets,
     };
     use crate::style::{Color, Span};
@@ -949,6 +1007,12 @@ mod tests {
         assert_eq!(str_visual_width_with_tabs("abcd\t", None, 0, 4), 8);
         assert_eq!(str_visual_width_with_tabs("\t", None, 2, 4), 2);
         assert_eq!(str_visual_width_with_tabs("plain", None, 0, 4), 5);
+    }
+
+    #[test]
+    fn control_characters_have_no_visual_width() {
+        assert_eq!(str_visual_width("a\0\u{7}b", None), 2);
+        assert_eq!(str_visual_width("你\0\u{1b}", None), 2);
     }
 
     #[test]

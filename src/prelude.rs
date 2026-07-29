@@ -91,6 +91,7 @@ pub use crate::style::{
 // Utilities and validation
 // ─────────────────────────────────────────────────────────────────────────────
 
+pub use crate::utils::SelectionEnd;
 pub use crate::utils::gradient::{ColorGradient, GradientDirection, GradientRange};
 pub use crate::validation::{StringValidator, ValidationError, Validator};
 
@@ -103,8 +104,11 @@ pub use crate::text::editor::TextEditor;
 pub use crate::text::input::TextInput;
 pub use crate::text::line_index::{LineIndex, TextEncoding, TextPosition, TextRange};
 pub use crate::text_motion::{
-    big_word_backward_start, big_word_end, big_word_forward_start, first_nonblank_in_line,
-    line_end_at, line_start_at, word_backward_start, word_end, word_forward_start,
+    big_word_backward_start, big_word_end, big_word_forward_start, byte_to_char_col,
+    cell_big_word_backward_start, cell_big_word_end, cell_big_word_forward_start,
+    cell_line_first_nonblank, cell_line_last, cell_word_backward_start, cell_word_end,
+    cell_word_forward_start, char_col_to_byte, first_nonblank_in_line, line_end_at, line_start_at,
+    word_backward_start, word_end, word_forward_start,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -219,14 +223,15 @@ pub use crate::widgets::{
 pub use crate::widgets::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
-    KittyKeyboardFlags, ManagedTerminal, ManagedTerminalProps, ManagedTerminalStatus,
-    MouseEncoding, MouseMode, MouseModeState, SemanticMark, SemanticMarkKind, Terminal,
-    TerminalBuffer, TerminalColorPalette, TerminalCommandPhase, TerminalInputEvent,
-    TerminalInputKind, TerminalKeyModes, TerminalPasteShortcutBehavior, TerminalPty,
-    TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen,
-    TerminalSelection, TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState,
-    TerminalViewport, TerminalWorkingDirectory, TerminalWorkingDirectorySource, encode_paste,
-    focus_sequences, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
+    CopyModeAction, CopyModeGrid, KittyKeyboardFlags, ManagedTerminal, ManagedTerminalProps,
+    ManagedTerminalStatus, MouseEncoding, MouseMode, MouseModeState, SemanticMark,
+    SemanticMarkKind, Terminal, TerminalBuffer, TerminalColorPalette, TerminalCommandPhase,
+    TerminalCopyMode, TerminalDecoration, TerminalInputEvent, TerminalInputKind, TerminalKeyModes,
+    TerminalPasteShortcutBehavior, TerminalPty, TerminalPtyConfig, TerminalPtyError,
+    TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen, TerminalSelection,
+    TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState, TerminalViewport,
+    TerminalWorkingDirectory, TerminalWorkingDirectorySource, encode_paste, focus_sequences,
+    key_event_to_bytes, mouse_event_to_bytes, paste_sequences, terminal_selection_text,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

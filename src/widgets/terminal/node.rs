@@ -27,6 +27,7 @@ pub(crate) struct TerminalNode {
     pub cursor_blinking: bool,
     pub caret_color: Option<Color>,
     pub selection: Option<TerminalSelection>,
+    pub selection_controlled: bool,
     pub selection_style: StyleSlot,
     pub mouse_mode: MouseModeState,
     pub key_modes: TerminalKeyModes,
@@ -62,6 +63,16 @@ pub(crate) struct TerminalNode {
     pub on_blur: Option<Callback<()>>,
     pub on_key: Option<KeyHandler>,
     pub on_input: Option<Callback<TerminalInputEvent>>,
+}
+
+pub(crate) fn apply_terminal_selection_input(
+    selection: &mut Option<TerminalSelection>,
+    controlled: bool,
+    proposed: Option<TerminalSelection>,
+) {
+    if !controlled {
+        *selection = proposed;
+    }
 }
 
 impl WidgetNode for TerminalNode {
@@ -142,5 +153,37 @@ impl WidgetNode for TerminalNode {
             parent_border_x,
             parent_border_y: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::{GridPos, GridSelection};
+
+    fn selection(col: usize) -> TerminalSelection {
+        GridSelection {
+            anchor: GridPos { row: 1, col },
+            cursor: GridPos { row: 1, col },
+        }
+    }
+
+    #[test]
+    fn controlled_selection_ignores_mouse_selection_input() {
+        let original = selection(4);
+        let mut current = Some(original.clone());
+
+        apply_terminal_selection_input(&mut current, true, None);
+        assert_eq!(current, Some(original.clone()));
+
+        apply_terminal_selection_input(&mut current, true, Some(selection(8)));
+        assert_eq!(current, Some(original));
+    }
+
+    #[test]
+    fn uncontrolled_selection_accepts_mouse_selection_input() {
+        let mut current = Some(selection(4));
+        apply_terminal_selection_input(&mut current, false, None);
+        assert_eq!(current, None);
     }
 }
