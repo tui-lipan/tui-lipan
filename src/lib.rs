@@ -81,6 +81,7 @@ pub use crate::app::{
 };
 pub use crate::mockup::Mockup;
 
+pub use crate::animation::{ExitAnimation, ExitQueue, ExitTransfer};
 pub use crate::callback::{Callback, CancellationToken, CommandLink, KeyHandler, Link};
 pub use crate::capture::{CapturedCell, CapturedFrame, CellModifiers, CursorState};
 #[cfg(feature = "ui-snapshot-png")]

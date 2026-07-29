@@ -102,6 +102,7 @@ pub(crate) fn reconcile_animated(
         next.opacity_fg_only = animated.opacity_fg_only;
         next.opacity_target = animated.opacity_target;
         next.position_transition = animated.position_transition;
+        next.auto_exit = animated.auto_exit;
 
         let (_, natural_h) = min_size_constrained(animated.child.as_ref(), Some(rect.w), None);
         let next_target_height = animated.height.map(|height| match height {
@@ -241,5 +242,7 @@ pub(crate) fn reconcile_animated(
     );
 
     tree.node_mut(id).children = new_children;
+    #[cfg(debug_assertions)]
+    crate::widgets::containers::exit_retention::warn_if_auto_exit_inert(tree, id);
     id
 }

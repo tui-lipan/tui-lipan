@@ -11,6 +11,7 @@ use crate::style::{
 use crate::widgets::TabsEvent;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+pub(crate) mod exit_retention;
 pub(crate) mod layout;
 pub(crate) mod node;
 pub(crate) mod reconcile;

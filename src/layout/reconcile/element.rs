@@ -297,6 +297,7 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
                         tab_variant: vs.tab_variant,
                         title_prefix: vs.title_prefix.clone(),
                         layout_cache: None,
+                        exiting: Vec::new(),
                         last_focused_key: None,
                     });
                 }
@@ -338,6 +339,7 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
                         tab_variant: crate::widgets::TabVariant::default(),
                         title_prefix: None,
                         layout_cache: None,
+                        exiting: Vec::new(),
                         last_focused_key: None,
                     });
                 }
