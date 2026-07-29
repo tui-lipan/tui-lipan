@@ -3,7 +3,8 @@ use ratatui::style::Color as RColor;
 use ratatui::widgets::Block;
 
 use crate::backend::ratatui_backend::common::{
-    apply_effect_style_clipped, from_ratatui_color, paint_to_ratatui_bg, to_ratatui_rect,
+    apply_effect_style_clipped, from_ratatui_color, paint_to_ratatui_bg, preserve_palette_blend,
+    to_ratatui_color, to_ratatui_rect,
 };
 use crate::core::node::NodeKind;
 use crate::style::{ColorTransform, Rect, Style};
@@ -126,6 +127,94 @@ pub(crate) fn is_clear_equivalent(cell: &BufferCell) -> bool {
         && cell.bg == RColor::Reset
         && cell.underline_color == RColor::Reset
         && cell.modifier.is_empty()
+}
+
+pub(crate) fn composite_overlay_opacity(
+    f: &mut ratatui::Frame<'_>,
+    rect: ratatui::layout::Rect,
+    underlay: &[BufferCell],
+    terminal_bg: Option<RColor>,
+    opacity: f32,
+) {
+    let opacity = opacity.clamp(0.0, 1.0);
+    let buf = f.buffer_mut();
+    for dy in 0..rect.height {
+        for dx in 0..rect.width {
+            let index = dy as usize * rect.width as usize + dx as usize;
+            let Some(saved) = underlay.get(index) else {
+                continue;
+            };
+            let Some(cell) = buf.cell_mut((rect.x + dx, rect.y + dy)) else {
+                continue;
+            };
+
+            if opacity <= f32::EPSILON {
+                *cell = saved.clone();
+                continue;
+            }
+            if cells_match(cell, saved) {
+                continue;
+            }
+
+            let source_fallback = non_reset(saved.bg).or(terminal_bg);
+            let (bg, bg_dim) =
+                blend_ratatui_toward(cell.bg, saved.bg, source_fallback, terminal_bg, opacity);
+            cell.bg = bg;
+
+            let fg_target = non_reset(cell.bg)
+                .or_else(|| non_reset(saved.bg))
+                .or(terminal_bg);
+            let fg_dim = fg_target.is_some_and(|target| {
+                let (fg, dim) = blend_ratatui_toward(cell.fg, target, None, terminal_bg, opacity);
+                cell.fg = fg;
+                dim
+            });
+            if bg_dim || fg_dim {
+                cell.set_style(cell.style().add_modifier(ratatui::style::Modifier::DIM));
+            }
+        }
+    }
+}
+
+fn cells_match(cell: &BufferCell, saved: &BufferCell) -> bool {
+    cell.symbol() == saved.symbol()
+        && cell.fg == saved.fg
+        && cell.bg == saved.bg
+        && cell.underline_color == saved.underline_color
+        && cell.modifier == saved.modifier
+}
+
+fn non_reset(color: RColor) -> Option<RColor> {
+    (color != RColor::Reset).then_some(color)
+}
+
+/// Blend `source` toward `target` by `1.0 - opacity`, returning the resolved color and whether
+/// the cell should gain `DIM`. Palette colors stay on-palette so the terminal palette remains in
+/// control.
+pub(crate) fn blend_ratatui_toward(
+    source: RColor,
+    target: RColor,
+    source_fallback: Option<RColor>,
+    target_fallback: Option<RColor>,
+    opacity: f32,
+) -> (RColor, bool) {
+    if source == RColor::Reset && source_fallback.is_none() {
+        return (source, false);
+    }
+    let source = non_reset(source).or(source_fallback).unwrap_or(source);
+    let Some(target) = non_reset(target).or(target_fallback) else {
+        return (source, false);
+    };
+    if source == target {
+        return (source, false);
+    }
+
+    let src = from_ratatui_color(source);
+    let result = src.blend_toward(from_ratatui_color(target), 1.0 - opacity);
+    if let Some(darkened) = preserve_palette_blend(src, result) {
+        return (source, darkened);
+    }
+    (to_ratatui_color(result), false)
 }
 
 pub(crate) struct AnimatedRestoreSnapshot {

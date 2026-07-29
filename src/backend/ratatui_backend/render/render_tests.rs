@@ -13,15 +13,17 @@ use crate::backend::ratatui_backend::common::finalize_style;
 use crate::core::component::{Component, Context, Update};
 use crate::core::node::{NodeId, NodeKind};
 use crate::runtime::RuntimeCore;
+#[cfg(feature = "devtools")]
+use crate::style::BorderStyle;
 use crate::style::{
-    BorderEdges, BorderStyle, Color, ColorTransform, Edge, EffectAxis, EffectPalette, Length,
-    Paint, Rect, ScrollbarConfig, ScrollbarVariant, Style, Theme, VisualEffect,
+    BorderEdges, Color, ColorTransform, Edge, EffectAxis, EffectPalette, Length, Paint, Rect,
+    ScrollbarConfig, ScrollbarVariant, Style, Theme, VisualEffect,
 };
 use crate::utils::color_contrast::contrast_ratio;
 use crate::widgets::{
     Animated, BorderLabels, BorderMergeMode, Button, DecorationGlyph, DecorationPlacement,
     EdgeDecoration, EffectScope, Frame, FrameLabel, HStack, List, ListItem, Modal, Spacer,
-    Splitter, SplitterHandleMode, TabVariant, Text, VStack, ZStack,
+    Splitter, SplitterHandleMode, TabVariant, Text, Toast, VStack, ZStack,
 };
 
 struct HeaderFrameComponent;
@@ -58,6 +60,8 @@ struct TransparentModalOverlayComponent;
 struct ExplicitOverlayBackgroundPaintComponent;
 
 struct ExplicitOverlayForegroundOnlySpacesComponent;
+
+struct ToastTransitionUnderlayComponent;
 
 struct TransparentModalBorderOverColoredBackgroundComponent;
 
@@ -1034,6 +1038,25 @@ impl Component for ExplicitOverlayBackgroundPaintComponent {
                     .frame_style(Style::new().bg(Color::Transparent))
                     .child(Text::new("     ").style(Style::new().bg(Color::Red))),
             )
+            .into()
+    }
+}
+
+impl Component for ToastTransitionUnderlayComponent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        VStack::new()
+            .style(Style::new().bg(Color::rgb(20, 40, 60)))
+            .child(Spacer::new())
             .into()
     }
 }
@@ -2167,6 +2190,83 @@ fn explicit_overlay_background_paint_is_not_restored() {
     let painted_cell = &buffer[(4, 1)];
     assert_eq!(painted_cell.symbol(), " ");
     assert_eq!(painted_cell.bg, ratatui::style::Color::Red);
+}
+
+#[test]
+fn toast_transition_blends_against_the_rendered_underlay() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 9,
+        h: 5,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        ToastTransitionUnderlayComponent,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    runtime.overlay_manager.borrow_mut().push_toast(
+        Toast::new("T")
+            .border(false)
+            .width(Length::Px(3))
+            .height(Length::Px(1))
+            .frame_style(Style::new().bg(Color::rgb(220, 40, 60))),
+    );
+    runtime.render_element(viewport, None, None, None);
+
+    let mut overlays = runtime.tree.overlay_roots().to_vec();
+    let toast_rect = runtime.tree.node(overlays[0].id).rect;
+    let first_frame = render_runtime_with_hover(&runtime, viewport, None, None);
+    assert_eq!(
+        first_frame[(toast_rect.x as u16, toast_rect.y as u16)].bg,
+        ratatui::style::Color::Rgb(20, 40, 60)
+    );
+
+    overlays[0].opacity = 0.5;
+    runtime.tree.set_overlay_roots(overlays);
+
+    let backend = TestBackend::new(viewport.w, viewport.h);
+    let mut terminal = Terminal::new(backend).expect("terminal should init");
+    let terminal_bg = ratatui::style::Color::Rgb(0, 0, 0);
+    let ctx = RenderContext {
+        tree: &runtime.tree,
+        focused: None,
+        hovered: None,
+        mouse_pos: None,
+        suppress_pointer_item_hover_nodes: None,
+        blink_visible: true,
+        effect_phase: 0,
+        images_enabled: true,
+        contrast_policy: ContrastPolicy::Off,
+        read_only_selection: None,
+        scrollbar_metrics_cache: &RefCell::new(Default::default()),
+        overlay_bg_snapshot: &RefCell::new(Vec::new()),
+        join_index: &build_join_index(&runtime.tree),
+        cursor_position: &Cell::new(None),
+        terminal_bg: Some(terminal_bg),
+        drag_preview_label: None,
+        drag_preview_at_mouse: false,
+        drag_preview_snapshot_rect: None,
+        dnd_snapshot_cells: &RefCell::new(None),
+        drag_preview_max_width: None,
+        drag_preview_max_height: None,
+        drop_slot_source_preview_rect: None,
+        paint_glyph_caches: None,
+        copy_feedback: None,
+        copy_feedback_style: Style::default(),
+    };
+
+    terminal
+        .draw(|f| render(f, &ctx))
+        .expect("render should succeed");
+
+    let cell = &terminal.backend().buffer()[(toast_rect.x as u16, toast_rect.y as u16)];
+    assert_eq!(cell.bg, ratatui::style::Color::Rgb(120, 40, 60));
+    assert_ne!(cell.bg, terminal_bg);
 }
 
 #[test]
