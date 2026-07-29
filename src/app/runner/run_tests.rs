@@ -2077,15 +2077,23 @@ fn animated_position_zero_duration_snaps_and_emits_callback() {
 #[test]
 fn moved_mouse_events_only_need_paint() {
     assert_eq!(
-        mouse_dispatch_dirty_level(MouseKind::Moved, None, None),
+        mouse_dispatch_dirty_level(MouseKind::Moved, None, None, false),
         DirtyLevel::PaintOnly
+    );
+}
+
+#[test]
+fn moved_mouse_events_refresh_hover_dependent_views() {
+    assert_eq!(
+        mouse_dispatch_dirty_level(MouseKind::Moved, None, None, true),
+        DirtyLevel::Full
     );
 }
 
 #[test]
 fn mouse_down_without_widget_dirty_level_requests_full_render() {
     assert_eq!(
-        mouse_dispatch_dirty_level(MouseKind::Down(MouseButton::Left), None, None),
+        mouse_dispatch_dirty_level(MouseKind::Down(MouseButton::Left), None, None, false),
         DirtyLevel::Full
     );
 }
@@ -2279,7 +2287,8 @@ fn mouse_up_preserves_active_drag_dirty_level() {
         mouse_dispatch_dirty_level(
             MouseKind::Up(MouseButton::Left),
             Some(DirtyLevel::PaintOnly),
-            None
+            None,
+            false,
         ),
         DirtyLevel::PaintOnly
     );

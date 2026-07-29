@@ -120,6 +120,7 @@ pub(crate) struct RuntimeCore<C: Component> {
     pub(crate) scroll: Rc<ScrollContext>,
     pub(crate) overlay_manager: Rc<RefCell<crate::overlay::OverlayManager>>,
     pub(crate) components: crate::core::nested::ComponentRegistry,
+    root_memo_deps: crate::core::runtime_env::MemoDependencySnapshot,
     pub(crate) root_host: crate::core::nested::HostState,
     pub(crate) extra_root_host: crate::core::nested::HostState,
     pub(crate) tree: NodeTree,
@@ -259,6 +260,7 @@ where
             scroll,
             overlay_manager,
             components,
+            root_memo_deps: crate::core::runtime_env::MemoDependencySnapshot::default(),
             root_host: crate::core::nested::HostState::default(),
             extra_root_host: crate::core::nested::HostState::default(),
             tree: NodeTree::new(),
@@ -564,7 +566,9 @@ where
         let view_start_devtools =
             crate::core::nested::frame_diagnostics_enabled().then(web_time::Instant::now);
         self.scroll.begin_view(ScopeId(1));
+        self.ctx.begin_memo_dependency_capture();
         let element = self.component.view(&self.ctx);
+        self.root_memo_deps = self.ctx.finish_memo_dependency_capture();
         #[cfg(feature = "devtools")]
         if let Some(start) = view_start_devtools {
             use crate::core::nested::{record_view_timing, short_type_name};
@@ -649,6 +653,11 @@ where
         );
         // Hoverables/move-handlers/animation flags are tracked incrementally via
         // note_kind_set() during reconciliation - no DFS needed.
+    }
+
+    pub(crate) fn has_hover_view_dependencies(&self) -> bool {
+        self.root_memo_deps.dependencies.depends_on_hover()
+            || self.components.has_hover_view_dependencies()
     }
 
     pub(crate) fn reconcile_cached_element(

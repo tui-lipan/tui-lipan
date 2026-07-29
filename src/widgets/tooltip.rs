@@ -15,8 +15,9 @@ static TOOLTIP_ID: AtomicUsize = AtomicUsize::new(1);
 pub struct Tooltip {
     child: Element,
     text: Arc<str>,
-    open: bool,
+    open: Option<bool>,
     auto: bool,
+    show_on_focus: bool,
     text_style: Style,
     container_style: Style,
     border: bool,
@@ -34,8 +35,9 @@ impl Tooltip {
         Self {
             child: crate::widgets::Spacer::new().into(),
             text: text.into(),
-            open: false,
+            open: None,
             auto: true,
+            show_on_focus: true,
             text_style: Style::default(),
             container_style: Style::default(),
             border: false,
@@ -56,13 +58,19 @@ impl Tooltip {
 
     /// Set open state.
     pub fn open(mut self, open: bool) -> Self {
-        self.open = open;
+        self.open = Some(open);
         self
     }
 
     /// Enable or disable auto-open on hover/focus.
     pub fn auto(mut self, auto: bool) -> Self {
         self.auto = auto;
+        self
+    }
+
+    /// Enable or disable automatic display while the trigger has focus.
+    pub fn show_on_focus(mut self, show_on_focus: bool) -> Self {
+        self.show_on_focus = show_on_focus;
         self
     }
 
@@ -125,8 +133,9 @@ impl Tooltip {
 struct TooltipProps {
     child: Element,
     text: Arc<str>,
-    open: bool,
+    open: Option<bool>,
     auto: bool,
+    show_on_focus: bool,
     text_style: Style,
     container_style: Style,
     border: bool,
@@ -143,6 +152,7 @@ impl PartialEq for TooltipProps {
         if self.text != other.text
             || self.open != other.open
             || self.auto != other.auto
+            || self.show_on_focus != other.show_on_focus
             || self.text_style != other.text_style
             || self.container_style != other.container_style
             || self.border != other.border
@@ -172,6 +182,7 @@ impl From<Tooltip> for TooltipProps {
             text: tooltip.text,
             open: tooltip.open,
             auto: tooltip.auto,
+            show_on_focus: tooltip.show_on_focus,
             text_style: tooltip.text_style,
             container_style: tooltip.container_style,
             border: tooltip.border,
@@ -219,8 +230,9 @@ impl Component for TooltipComponent {
 
         let auto_open = ctx.props.auto
             && (ctx.has_hover_within_key(ctx.state.trigger_key.clone())
-                || ctx.has_focus_within_key(ctx.state.trigger_key.clone()));
-        let open = ctx.props.open || auto_open;
+                || (ctx.props.show_on_focus
+                    && ctx.has_focus_within_key(ctx.state.trigger_key.clone())));
+        let open = ctx.props.open.unwrap_or(auto_open);
 
         let content = Frame::new()
             .border(ctx.props.border)
@@ -233,6 +245,8 @@ impl Component for TooltipComponent {
             .trigger(trigger)
             .content(content)
             .open(open)
+            .capture_focus(false)
+            .auto_focus(false)
             .min_trigger_width(false)
             .placement(ctx.props.placement)
             .offset(ctx.props.offset)

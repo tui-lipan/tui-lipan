@@ -228,8 +228,9 @@ Help text on hover or focus.
 |------|------|-------------|
 | `text` | `impl Into<String>` | **Constructor** - tooltip text |
 | `child` | `Element` | The element to add tooltip to |
-| `open` | `bool` | Controlled open state |
+| `open` | `bool` | Controlled open state; overrides automatic behavior |
 | `auto` | `bool` | Auto-show on hover/focus |
+| `show_on_focus` | `bool` | Show automatically on focus (default `true`) |
 | `text_style` | `Style` | Tooltip text style |
 | `container_style` | `Style` | Tooltip container style |
 | `border` | `bool` | Show border |
