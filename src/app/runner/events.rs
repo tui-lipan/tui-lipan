@@ -556,6 +556,15 @@ impl<C: Component> AppRunner<C> {
     }
 
     pub(crate) fn update_hover_impl(&mut self, x: u16, y: u16, force_recompute: bool) -> bool {
+        let hovered_toast = crate::overlay::hovered_toast(&self.core.tree, x, y);
+        if self
+            .core
+            .overlay_manager
+            .borrow_mut()
+            .set_hovered_toast(hovered_toast)
+        {
+            return true;
+        }
         if !self.core.tree.has_hoverables() {
             self.mouse.last_mouse = Some((x, y));
             return false;
@@ -814,6 +823,12 @@ impl<C: Component> AppRunner<C> {
     pub(crate) fn dispatch_mouse_scroll(&mut self, mouse: MouseEvent, scroll_lines: u16) -> bool {
         let (x, y) = self.to_content_coords(mouse.x, mouse.y);
         let adjusted_mouse = MouseEvent { x, y, ..mouse };
+        let hovered_toast = crate::overlay::hovered_toast(&self.core.tree, x, y);
+        let toast_hover_dirty = self
+            .core
+            .overlay_manager
+            .borrow_mut()
+            .set_hovered_toast(hovered_toast);
 
         #[cfg(feature = "terminal")]
         if self.forward_terminal_mouse(adjusted_mouse) {
@@ -834,7 +849,7 @@ impl<C: Component> AppRunner<C> {
         };
         let hover_dirty = self.update_hover_impl(x, y, true);
 
-        hover_dirty || scroll_dirty || selection_dirty
+        toast_hover_dirty || hover_dirty || scroll_dirty || selection_dirty
     }
 
     pub(crate) fn to_content_coords(&self, x: u16, y: u16) -> (u16, u16) {

@@ -162,6 +162,7 @@ pub(crate) struct OverlayEntry {
     pub(crate) copy_text: Option<Arc<str>>,
     pub(crate) copy_zone_right_padding: Option<u16>,
     pub(crate) copy_feedback_until: Option<Instant>,
+    hover_remaining: Option<Duration>,
 }
 
 impl OverlayEntry {
@@ -210,6 +211,15 @@ impl OverlayManager {
 
     fn enter_transition() -> Transition<f32> {
         Transition::new(0.0, 1.0, Duration::from_millis(150), Easing::EaseOutQuad)
+    }
+
+    fn enter_transition_from(from: f32) -> Transition<f32> {
+        Transition::new(
+            from.clamp(0.0, 1.0),
+            1.0,
+            Duration::from_millis(150),
+            Easing::EaseOutQuad,
+        )
     }
 
     fn exit_transition(from: f32) -> Transition<f32> {
@@ -323,7 +333,57 @@ impl OverlayManager {
             return false;
         }
         entry.created_at = Instant::now();
+        if entry.hover_remaining.is_some() {
+            entry.hover_remaining = entry.timeout;
+        }
         true
+    }
+
+    pub(crate) fn set_hovered_toast(&mut self, hovered: Option<OverlayId>) -> bool {
+        let now = Instant::now();
+        let mut dirty = false;
+
+        for entry in &mut self.entries {
+            if entry.layer != OverlayLayer::Toast {
+                continue;
+            }
+
+            let should_hover = Some(entry.id) == hovered;
+            if should_hover && entry.hover_remaining.is_none() {
+                let remaining = if entry.pending_dismiss {
+                    // A toast caught during its exit gets a short grace period after the pointer
+                    // leaves instead of disappearing immediately or restarting its full lifetime.
+                    entry
+                        .timeout
+                        .map(|timeout| timeout.min(Duration::from_secs(1)))
+                } else {
+                    entry
+                        .timeout
+                        .map(|timeout| timeout.saturating_sub(now.duration_since(entry.created_at)))
+                };
+                entry.hover_remaining = remaining;
+
+                if entry.pending_dismiss {
+                    let opacity = entry.opacity();
+                    entry.pending_dismiss = false;
+                    entry.opacity_transition = Some(Self::enter_transition_from(opacity));
+                    entry.transition_tick_at = Some(now);
+                    dirty = true;
+                }
+            } else if !should_hover
+                && let Some(remaining) = entry.hover_remaining.take()
+                && let Some(timeout) = entry.timeout
+            {
+                entry.created_at = now
+                    .checked_sub(timeout.saturating_sub(remaining))
+                    .unwrap_or(now);
+            }
+        }
+
+        if dirty {
+            self.bump_generation();
+        }
+        dirty
     }
 
     pub(crate) fn tick(&mut self) -> TickResult {
@@ -332,7 +392,7 @@ impl OverlayManager {
         let mut result = TickResult::default();
 
         self.entries.retain_mut(|entry| {
-            if !entry.pending_dismiss {
+            if !entry.pending_dismiss && entry.hover_remaining.is_none() {
                 let expired = entry
                     .timeout
                     .map(|timeout| now.duration_since(entry.created_at) >= timeout)
@@ -482,9 +542,24 @@ impl OverlayManager {
             copy_text,
             copy_zone_right_padding,
             copy_feedback_until: None,
+            hover_remaining: None,
         };
         self.push(entry)
     }
+}
+
+pub(crate) fn hovered_toast(
+    tree: &crate::core::node::NodeTree,
+    x: u16,
+    y: u16,
+) -> Option<OverlayId> {
+    tree.overlay_roots().iter().rev().find_map(|root| {
+        (root.layer == OverlayLayer::Toast
+            && tree.is_valid(root.id)
+            && tree.node(root.id).rect.contains(x as i16, y as i16))
+        .then_some(root.overlay_id)
+        .flatten()
+    })
 }
 
 /// Handle for showing toast notifications via `ctx.toast()`.
@@ -630,6 +705,60 @@ mod tests {
     }
 
     #[test]
+    fn hovering_pauses_and_then_resumes_the_remaining_timeout() {
+        let mut manager = OverlayManager::new();
+        let id = manager.push_toast(Toast::new("held").duration(3.0));
+        settle_entry_transition(&mut manager.entries[0]);
+        age_entry_timeout(&mut manager.entries[0], Duration::from_millis(2_500));
+
+        assert!(!manager.set_hovered_toast(Some(id)));
+        let remaining = manager.entries[0]
+            .hover_remaining
+            .expect("hover should capture the remaining timeout");
+        assert!(remaining <= Duration::from_millis(500));
+
+        age_entry_timeout(&mut manager.entries[0], Duration::from_secs(10));
+        manager.tick();
+        assert!(!manager.entries[0].pending_dismiss);
+
+        assert!(!manager.set_hovered_toast(None));
+        age_entry_timeout(
+            &mut manager.entries[0],
+            remaining + Duration::from_millis(1),
+        );
+        manager.tick();
+        assert!(manager.entries[0].pending_dismiss);
+    }
+
+    #[test]
+    fn hovering_during_exit_revives_toast_with_post_hover_grace() {
+        let mut manager = OverlayManager::new();
+        let id = manager.push_toast(Toast::new("caught").duration(3.0));
+        settle_entry_transition(&mut manager.entries[0]);
+        age_entry_timeout(&mut manager.entries[0], Duration::from_secs(3));
+        manager.tick();
+        age_entry_transition(&mut manager.entries[0], Duration::from_millis(50));
+        manager.tick();
+        let faded_opacity = manager.entries[0].opacity();
+
+        assert!(manager.set_hovered_toast(Some(id)));
+        assert!(!manager.entries[0].pending_dismiss);
+        assert_eq!(
+            manager.entries[0].hover_remaining,
+            Some(Duration::from_secs(1))
+        );
+        assert_eq!(manager.entries[0].opacity(), faded_opacity);
+
+        assert!(!manager.set_hovered_toast(None));
+        age_entry_timeout(&mut manager.entries[0], Duration::from_millis(999));
+        manager.tick();
+        assert!(!manager.entries[0].pending_dismiss);
+        age_entry_timeout(&mut manager.entries[0], Duration::from_millis(2));
+        manager.tick();
+        assert!(manager.entries[0].pending_dismiss);
+    }
+
+    #[test]
     fn immediate_dismiss_removes_toast_without_an_exit_transition() {
         let mut manager = OverlayManager::new();
         let first = manager.push_toast(Toast::new("first"));
@@ -684,5 +813,12 @@ mod tests {
     fn age_entry_transition(entry: &mut OverlayEntry, age: Duration) {
         let now = Instant::now();
         entry.transition_tick_at = Some(now.checked_sub(age).unwrap_or(now));
+    }
+
+    fn age_entry_timeout(entry: &mut OverlayEntry, age: Duration) {
+        entry.created_at = entry
+            .created_at
+            .checked_sub(age)
+            .unwrap_or(entry.created_at);
     }
 }

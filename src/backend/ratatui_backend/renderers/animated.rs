@@ -152,11 +152,15 @@ fn composite_opacity_over_underlay(
             let fg_target = non_reset(cell.bg)
                 .or_else(|| non_reset(saved.bg))
                 .or(terminal_bg);
-            if let Some(target) = fg_target {
-                let (fg, dim) = blend_ratatui_toward(cell.fg, target, None, terminal_bg, opacity);
-                cell.fg = fg;
-                dim_cell |= dim;
-            }
+            let (fg, dim) = blend_ratatui_toward(
+                cell.fg,
+                fg_target.unwrap_or(RColor::Reset),
+                None,
+                terminal_bg,
+                opacity,
+            );
+            cell.fg = fg;
+            dim_cell |= dim;
             if dim_cell {
                 cell.set_style(cell.style().add_modifier(ratatui::style::Modifier::DIM));
             }

@@ -164,11 +164,14 @@ pub(crate) fn composite_overlay_opacity(
             let fg_target = non_reset(cell.bg)
                 .or_else(|| non_reset(saved.bg))
                 .or(terminal_bg);
-            let fg_dim = fg_target.is_some_and(|target| {
-                let (fg, dim) = blend_ratatui_toward(cell.fg, target, None, terminal_bg, opacity);
-                cell.fg = fg;
-                dim
-            });
+            let (fg, fg_dim) = blend_ratatui_toward(
+                cell.fg,
+                fg_target.unwrap_or(RColor::Reset),
+                None,
+                terminal_bg,
+                opacity,
+            );
+            cell.fg = fg;
             if bg_dim || fg_dim {
                 cell.set_style(cell.style().add_modifier(ratatui::style::Modifier::DIM));
             }
@@ -203,7 +206,9 @@ pub(crate) fn blend_ratatui_toward(
     }
     let source = non_reset(source).or(source_fallback).unwrap_or(source);
     let Some(target) = non_reset(target).or(target_fallback) else {
-        return (source, false);
+        // The terminal owns the concrete color behind Reset, so RGB interpolation is impossible.
+        // DIM is the terminal-native opacity fallback and keeps palette semantics intact.
+        return (source, opacity < 1.0 && source != RColor::Reset);
     };
     if source == target {
         return (source, false);

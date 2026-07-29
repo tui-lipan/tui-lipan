@@ -63,6 +63,8 @@ struct ExplicitOverlayForegroundOnlySpacesComponent;
 
 struct ToastTransitionUnderlayComponent;
 
+struct ToastTransitionDefaultUnderlayComponent;
+
 struct TransparentModalBorderOverColoredBackgroundComponent;
 
 struct DefaultModalBackdropClearsForegroundComponent;
@@ -1058,6 +1060,22 @@ impl Component for ToastTransitionUnderlayComponent {
             .style(Style::new().bg(Color::rgb(20, 40, 60)))
             .child(Spacer::new())
             .into()
+    }
+}
+
+impl Component for ToastTransitionDefaultUnderlayComponent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        Spacer::new().into()
     }
 }
 
@@ -2267,6 +2285,52 @@ fn toast_transition_blends_against_the_rendered_underlay() {
     let cell = &terminal.backend().buffer()[(toast_rect.x as u16, toast_rect.y as u16)];
     assert_eq!(cell.bg, ratatui::style::Color::Rgb(120, 40, 60));
     assert_ne!(cell.bg, terminal_bg);
+}
+
+#[test]
+fn toast_transition_dims_foreground_only_decorations_over_terminal_background() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 9,
+        h: 5,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        ToastTransitionDefaultUnderlayComponent,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    runtime.overlay_manager.borrow_mut().push_toast(
+        Toast::new("T")
+            .border(false)
+            .width(Length::Px(3))
+            .height(Length::Px(3))
+            .decoration(
+                EdgeDecoration::new(Edge::Left)
+                    .glyph(DecorationGlyph::AutoHeavy)
+                    .style(Style::new().fg(Color::LightBlue)),
+            ),
+    );
+    runtime.render_element(viewport, None, None, None);
+
+    let mut overlays = runtime.tree.overlay_roots().to_vec();
+    overlays[0].opacity = 0.5;
+    runtime.tree.set_overlay_roots(overlays);
+
+    let buffer = render_runtime_with_hover(&runtime, viewport, None, None);
+    let decoration = buffer
+        .content
+        .iter()
+        .find(|cell| cell.fg == ratatui::style::Color::LightBlue && cell.symbol() != " ")
+        .expect("toast decoration should render");
+    assert!(
+        decoration.modifier.contains(ratatui::style::Modifier::DIM),
+        "foreground-only decoration should participate in partial opacity"
+    );
 }
 
 #[test]

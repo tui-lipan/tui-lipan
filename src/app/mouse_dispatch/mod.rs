@@ -110,6 +110,9 @@ pub(crate) trait MouseDispatchCtx<C: Component> {
     fn reset_command_chord(&mut self) -> bool;
 
     fn dispatch_mouse_move(&mut self, mouse: MouseEvent) -> bool;
+    fn update_toast_hover(&mut self, _x: u16, _y: u16) -> bool {
+        false
+    }
     fn update_hover(&mut self, x: u16, y: u16) -> bool;
     fn update_hover_impl(&mut self, x: u16, y: u16, force_recompute: bool) -> bool;
     fn dispatch_active_drag(&mut self, x: u16, y: u16) -> Option<bool>;
@@ -255,6 +258,9 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
     let adjusted_mouse = ctx.adjust_mouse(mouse);
     let x = adjusted_mouse.x;
     let y = adjusted_mouse.y;
+    if ctx.update_toast_hover(x, y) {
+        return true;
+    }
     let is_down = matches!(mouse.kind, MouseKind::Down(MouseButton::Left));
     let is_up = matches!(mouse.kind, MouseKind::Up(MouseButton::Left));
 
@@ -519,6 +525,14 @@ impl<C: Component> MouseDispatchCtx<C> for AppRunner<C> {
 
     fn dispatch_mouse_move(&mut self, mouse: MouseEvent) -> bool {
         AppRunner::<C>::dispatch_mouse_move(self, mouse)
+    }
+
+    fn update_toast_hover(&mut self, x: u16, y: u16) -> bool {
+        let hovered = crate::overlay::hovered_toast(&self.core.tree, x, y);
+        self.core
+            .overlay_manager
+            .borrow_mut()
+            .set_hovered_toast(hovered)
     }
 
     fn update_hover(&mut self, x: u16, y: u16) -> bool {
@@ -824,6 +838,14 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
 
     fn dispatch_mouse_move(&mut self, mouse: MouseEvent) -> bool {
         dispatch_mouse_move_test_backend(self, mouse)
+    }
+
+    fn update_toast_hover(&mut self, x: u16, y: u16) -> bool {
+        let hovered = crate::overlay::hovered_toast(&self.core.tree, x, y);
+        self.core
+            .overlay_manager
+            .borrow_mut()
+            .set_hovered_toast(hovered)
     }
 
     fn update_hover(&mut self, x: u16, y: u16) -> bool {
