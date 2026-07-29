@@ -2,7 +2,7 @@ use crate::core::component::ScrollbarVisibility;
 use crate::style::{Rect, Span};
 use crate::text::line_index::TextPosition;
 
-use super::virtual_text;
+use super::virtual_text::sanitize_virtual_text_spans;
 
 /// Line-number display mode for the built-in `TextArea` gutter.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -67,9 +67,10 @@ impl TextAreaVirtualText {
         content: impl Into<Vec<Span>>,
         placement: VirtualTextPlacement,
     ) -> Self {
+        let content = content.into();
         Self {
             anchor,
-            content: virtual_text::sanitize_virtual_text_spans(content.into()),
+            content: sanitize_virtual_text_spans(&content),
             placement,
             priority: 0,
         }

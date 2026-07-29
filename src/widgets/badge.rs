@@ -3,8 +3,10 @@
 use std::sync::Arc;
 
 use crate::core::element::{Element, IntoElement};
-use crate::style::{BorderStyle, Length, Padding, Style};
-use crate::widgets::{Frame, HStack, Spacer, Text, VStack, ZStack};
+use crate::style::{BorderStyle, Color, Length, Padding, Style};
+use crate::widgets::{CapSides, CapStyle, Frame, HStack, Spacer, Text, VStack, ZStack};
+
+use super::segment_cap::segment_cap;
 
 /// Badge position relative to its child.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -34,6 +36,10 @@ pub struct Badge {
     position: BadgePosition,
     width: Length,
     height: Length,
+    cap_style: CapStyle,
+    cap_sides: CapSides,
+    cap_behind: Color,
+    cap_same_color: bool,
 }
 
 impl Badge {
@@ -51,6 +57,10 @@ impl Badge {
             position: BadgePosition::TopEnd,
             width: Length::Auto,
             height: Length::Auto,
+            cap_style: CapStyle::Padded,
+            cap_sides: CapSides::Both,
+            cap_behind: Color::Reset,
+            cap_same_color: false,
         }
     }
 
@@ -113,20 +123,74 @@ impl Badge {
         self.height = height;
         self
     }
+
+    /// Set the cap style used around the badge segment.
+    ///
+    /// [`CapStyle::Round`] and [`CapStyle::Arrow`] use Nerd Font Powerline glyphs;
+    /// call [`CapStyle::font_safe`] when a font-independent fallback is needed.
+    /// With automatic width, each rendered cap can replace one cell of padding
+    /// or one edge space in the label. Caps sit outside an explicit inner width.
+    pub fn cap(mut self, cap_style: CapStyle) -> Self {
+        self.cap_style = cap_style;
+        self
+    }
+
+    /// Set which sides of the badge segment receive caps.
+    pub fn cap_sides(mut self, cap_sides: CapSides) -> Self {
+        self.cap_sides = cap_sides;
+        self
+    }
+
+    /// Set the color painted behind cap glyphs.
+    pub fn cap_behind(mut self, color: Color) -> Self {
+        self.cap_behind = color;
+        self
+    }
+
+    /// Keep the left seam visible when this badge and its neighbor share a background.
+    ///
+    /// Arrow caps use the Powerline thin separator (`U+E0B3`); other styles use
+    /// the font-safe left eighth block (`U+258F`).
+    pub fn cap_same_color(mut self, same_color: bool) -> Self {
+        self.cap_same_color = same_color;
+        self
+    }
 }
 
 impl From<Badge> for Element {
     fn from(badge: Badge) -> Self {
-        let text_style = badge.style.patch(badge.text_style);
+        let badge_style = badge.style;
+        let text_style = badge_style.patch(badge.text_style);
+        let badge_bg = badge_style
+            .bg
+            .map(crate::style::Paint::color)
+            .unwrap_or(crate::style::Color::Reset);
+
+        let (content, padding) = replace_padding_with_caps(
+            badge.content,
+            badge.padding,
+            badge.cap_style,
+            badge.cap_sides,
+            badge.cap_same_color,
+        );
 
         let badge_el = Frame::new()
             .border(badge.border)
             .border_style(badge.border_style)
-            .padding(badge.padding)
-            .style(badge.style)
-            .child(Text::new(badge.content).style(text_style))
+            .padding(padding)
+            .style(badge_style)
+            .child(Text::new(content).style(text_style))
             .width(badge.width)
             .height(badge.height);
+
+        let badge_el = segment_cap(
+            badge_el.into(),
+            badge.cap_style,
+            badge.cap_sides,
+            badge_bg,
+            badge.cap_behind,
+            badge.cap_same_color,
+        );
 
         let overlay_row = match badge.position {
             BadgePosition::TopStart | BadgePosition::BottomStart => {
@@ -153,5 +217,95 @@ impl From<Badge> for Element {
             .child(badge.child)
             .child(overlay)
             .into()
+    }
+}
+
+/// Reduce auto-sized inner content so an outer cap can occupy the same measured
+/// cell. Prefer frame padding, then the edge spaces used by labels like `" MAIN "`.
+fn replace_padding_with_caps(
+    mut content: Arc<str>,
+    mut padding: Padding,
+    cap_style: CapStyle,
+    cap_sides: CapSides,
+    same_color_left: bool,
+) -> (Arc<str>, Padding) {
+    let has_glyphs = cap_style.glyphs().is_some();
+    let replace_left = cap_sides.has_left() && (has_glyphs || same_color_left);
+    let replace_right = cap_sides.has_right() && has_glyphs;
+
+    if replace_left {
+        if padding.left > 0 {
+            padding.left -= 1;
+        } else if let Some(stripped) = content.strip_prefix(' ') {
+            content = Arc::from(stripped);
+        }
+    }
+    if replace_right {
+        if padding.right > 0 {
+            padding.right -= 1;
+        } else if let Some(stripped) = content.strip_suffix(' ') {
+            content = Arc::from(stripped);
+        }
+    }
+
+    (content, padding)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn caps_replace_label_spaces_without_changing_intrinsic_width() {
+        let (content, padding) = replace_padding_with_caps(
+            Arc::from(" MAIN "),
+            Padding::default(),
+            CapStyle::Half,
+            CapSides::Both,
+            false,
+        );
+
+        assert_eq!(content.as_ref(), "MAIN");
+        assert_eq!(padding, Padding::default());
+        assert_eq!(
+            2 + content.chars().count() + padding.horizontal() as usize,
+            6
+        );
+    }
+
+    #[test]
+    fn caps_prefer_explicit_padding_without_changing_intrinsic_width() {
+        let (content, padding) = replace_padding_with_caps(
+            Arc::from(" MAIN "),
+            Padding::from((0, 1)),
+            CapStyle::Round,
+            CapSides::Both,
+            false,
+        );
+
+        assert_eq!(content.as_ref(), " MAIN ");
+        assert_eq!(padding, Padding::default());
+        assert_eq!(
+            2 + content.chars().count() + padding.horizontal() as usize,
+            8
+        );
+    }
+
+    #[test]
+    fn padded_same_color_separator_replaces_left_padding() {
+        let (content, padding) = replace_padding_with_caps(
+            Arc::from(" READY "),
+            Padding::default(),
+            CapStyle::Padded,
+            CapSides::Both,
+            true,
+        );
+
+        assert_eq!(content.as_ref(), "READY ");
+        assert_eq!(padding, Padding::default());
+        assert_eq!(
+            1 + content.chars().count() + padding.horizontal() as usize,
+            7
+        );
     }
 }

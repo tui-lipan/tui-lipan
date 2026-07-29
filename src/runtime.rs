@@ -187,6 +187,7 @@ where
         let full_repaint = Rc::new(Cell::new(false));
         let devtools_request = Rc::new(RefCell::new(None));
         let ui_snapshot_request = Rc::new(RefCell::new(None));
+        let copy_feedback_request = Rc::new(RefCell::new(Vec::new()));
         let active_theme = Rc::new(RefCell::new(theme.clone()));
         let active_theme_generation = Rc::new(Cell::new(1));
         let effect_phase = Rc::new(Cell::new(0));
@@ -228,6 +229,7 @@ where
             full_repaint,
             devtools_request,
             ui_snapshot_request,
+            copy_feedback_request,
             command_chord_pending,
         };
 

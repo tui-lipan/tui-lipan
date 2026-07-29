@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -17,12 +18,14 @@ use alacritty_terminal::vte::ansi::{
 
 use super::events::{
     KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, TerminalKeyModes,
+    terminal_selection_text_with,
 };
 use super::osc::{
     SemanticObserver, TerminalCommandPhase, TerminalSemanticEvent, TerminalSemanticState,
 };
 use super::scrollback_ledger::{LedgerTerm, ledger_capacity, settle_history};
-use crate::style::{CaretShape, Color as UiColor, HostTerminalColors, Span, Style};
+use crate::style::{CaretShape, Color as UiColor, HostTerminalColors, Span, Style, Theme};
+use crate::utils::{GridPos, GridSelection, SelectionEnd};
 
 /// Kind of semantic mark anchored to an absolute text line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -225,6 +228,45 @@ pub struct TerminalRenderSnapshot {
     pub key_modes: TerminalKeyModes,
 }
 
+/// A display-column decoration applied to a terminal render snapshot.
+///
+/// Decorations affect only [`TerminalRenderSnapshot::color_lines`]. The snapshot's plain `text`
+/// remains unchanged so callers that scan plain snapshot text continue to see the terminal's
+/// original contents. Use [`Self::highlight`] for a restyled range and [`Self::label`] for an
+/// inserted span.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TerminalDecoration {
+    row: usize,
+    start_col: usize,
+    end_col: usize,
+    style: Style,
+    insert: Option<Span>,
+}
+
+impl TerminalDecoration {
+    /// Highlight the half-open display-column range `cols` on `row`.
+    pub fn highlight(row: usize, cols: std::ops::Range<usize>, style: Style) -> Self {
+        Self {
+            row,
+            start_col: cols.start,
+            end_col: cols.end,
+            style,
+            insert: None,
+        }
+    }
+
+    /// Insert a styled label at a display column on `row`.
+    pub fn label(row: usize, col: usize, span: Span) -> Self {
+        Self {
+            row,
+            start_col: col,
+            end_col: col,
+            style: Style::default(),
+            insert: Some(span),
+        }
+    }
+}
+
 impl Default for TerminalRenderSnapshot {
     fn default() -> Self {
         Self {
@@ -280,6 +322,80 @@ impl TerminalRenderSnapshot {
             key_modes,
         }
     }
+
+    /// Extract a selection from the styled visible grid using display columns.
+    ///
+    /// This deliberately reads [`Self::color_lines`] rather than [`Self::text`], because the
+    /// latter has no display-column mapping once wide characters are present. Call it on the
+    /// undecorated snapshot when labels or other render-only overlays must not be copied.
+    pub fn selection_text(
+        &self,
+        selection: &GridSelection,
+        endpoint: SelectionEnd,
+        trim_row_end: bool,
+    ) -> String {
+        terminal_selection_text_with(&self.color_lines, selection, endpoint, trim_row_end)
+    }
+
+    /// Return a copy of this snapshot with display-column decorations applied to its styled lines.
+    ///
+    /// Decorations are grouped and restyled once per row, then inserted labels are applied from
+    /// right to left so earlier display columns remain stable. The plain [`Self::text`] is left
+    /// unchanged by design, keeping render-only overlays out of plain-text scanners. Copy from
+    /// the undecorated snapshot when labels should not be included. The sequence combines the
+    /// source sequence with an order-sensitive decoration hash.
+    pub fn decorated(&self, decorations: &[TerminalDecoration]) -> Self {
+        if decorations.is_empty() {
+            return self.clone();
+        }
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.sequence.hash(&mut hasher);
+        decorations.hash(&mut hasher);
+        let sequence = hasher.finish();
+
+        let mut rows: BTreeMap<usize, Vec<(&TerminalDecoration, usize)>> = BTreeMap::new();
+        for (index, decoration) in decorations.iter().enumerate() {
+            rows.entry(decoration.row)
+                .or_default()
+                .push((decoration, index));
+        }
+
+        let mut color_lines: Vec<Vec<Span>> = self.color_lines.iter().cloned().collect();
+        for (row, decorations) in rows {
+            let Some(line) = color_lines.get_mut(row) else {
+                continue;
+            };
+            let mut sorted = decorations;
+            sorted.sort_by_key(|(decoration, index)| (decoration.start_col, *index));
+
+            let ranges: Vec<_> = sorted
+                .iter()
+                .filter(|(decoration, _)| decoration.insert.is_none())
+                .map(|(decoration, _)| (decoration.start_col..decoration.end_col, decoration.style))
+                .collect();
+            if !ranges.is_empty() {
+                *line = crate::utils::spans::restyle_columns(line, &ranges);
+            }
+
+            for (decoration, _) in sorted
+                .iter()
+                .filter(|(decoration, _)| decoration.insert.is_some())
+                .rev()
+            {
+                if let Some(insert) = decoration.insert.clone() {
+                    *line =
+                        crate::utils::spans::insert_at_column(line, decoration.start_col, insert);
+                }
+            }
+        }
+
+        Self {
+            color_lines: color_lines.into(),
+            sequence,
+            ..self.clone()
+        }
+    }
 }
 
 /// Color palette used to resolve terminal ANSI/default colors into concrete UI colors.
@@ -326,6 +442,59 @@ impl TerminalColorPalette {
     /// app-owned surface color for embedded terminal panes.
     pub fn from_host_colors(colors: HostTerminalColors, background: UiColor) -> Self {
         Self::new(colors.fg, background, colors.ansi)
+    }
+
+    /// Create a terminal palette from an application theme.
+    ///
+    /// A [`HostTerminalColors`] theme extension takes precedence so a probed ANSI palette is
+    /// preserved exactly. Otherwise the palette is derived from the theme's semantic status,
+    /// icon, accent, and muted colors. `background` is resolved to black when it is a sentinel,
+    /// matching terminal protocol defaults.
+    pub fn from_theme(theme: &Theme, background: UiColor) -> Self {
+        let resolve_style_fg = |style: Style, fallback: UiColor| {
+            style
+                .resolved_fg()
+                .map(|color| color.resolve(UiColor::Reset))
+                .filter(|color| !color.is_sentinel())
+                .unwrap_or(fallback)
+        };
+        let foreground = resolve_style_fg(theme.primary, UiColor::White);
+        let background = background.resolve(UiColor::Black);
+        if let Some(host_colors) = theme.extension::<HostTerminalColors>() {
+            return Self::from_host_colors(*host_colors, background);
+        }
+
+        let muted = resolve_style_fg(theme.muted, theme.surface.menu.resolve(background));
+        let accent = resolve_style_fg(theme.accent, theme.border_active.resolve(foreground));
+        let error = theme.status.error.resolve(UiColor::Red);
+        let success = theme.status.success.resolve(UiColor::Green);
+        let warning = theme.status.warning.resolve(UiColor::Yellow);
+        let info = theme.status.info.resolve(accent);
+        let purple = theme.file_icons.purple.resolve(UiColor::Magenta);
+        let cyan = theme.file_icons.cyan.resolve(UiColor::Cyan);
+
+        Self::new(
+            foreground,
+            background,
+            [
+                background,
+                error,
+                success,
+                warning,
+                info,
+                purple,
+                cyan,
+                foreground,
+                muted,
+                error.lighten_by(0.18),
+                success.lighten_by(0.18),
+                warning.lighten_by(0.18),
+                accent.lighten_by(0.12),
+                purple.lighten_by(0.18),
+                cyan.lighten_by(0.18),
+                foreground.lighten_by(0.12),
+            ],
+        )
     }
 
     /// Set the terminal default foreground color.
@@ -683,6 +852,35 @@ impl TerminalScreen {
     /// Newline-joined plain text for an absolute line range. See [`text_lines`](Self::text_lines).
     pub fn export_text(&self, start: usize, end: usize) -> String {
         self.text_lines(start, end).join("\n")
+    }
+
+    /// Export a selection across retained scrollback lines.
+    ///
+    /// This path is intentionally **character-indexed** and uses the pre-trimmed text returned by
+    /// [`text_lines`](Self::text_lines). It is separate from the display-column snapshot path:
+    /// changing `plain_line_text` here would alter [`Self::export_text`] and semantic output
+    /// exports. With [`SelectionEnd::Inclusive`], both the start and end character positions are
+    /// included.
+    pub fn export_selection_text(
+        &self,
+        start: GridPos,
+        end: GridPos,
+        endpoint: SelectionEnd,
+    ) -> String {
+        let row_start = start.row.min(end.row);
+        let row_end = start.row.max(end.row);
+        let selection = GridSelection {
+            anchor: GridPos {
+                row: start.row - row_start,
+                col: start.col,
+            },
+            cursor: GridPos {
+                row: end.row - row_start,
+                col: end.col,
+            },
+        };
+        let lines = self.text_lines(row_start, row_end.saturating_add(1));
+        selection.extract_text_with(&lines, endpoint, false)
     }
 
     /// Map an absolute text-line index to `(scrollback_offset, viewport_row)`.
@@ -1570,6 +1768,197 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_selection_text_uses_display_columns_and_inclusive_endpoints() {
+        let snapshot = TerminalRenderSnapshot::from_parts(
+            "a界🙂b",
+            vec![vec![Span::new("a界🙂b")]],
+            0,
+            0,
+            true,
+            CaretShape::Block,
+            true,
+            7,
+            0,
+            0,
+            MouseModeState::default(),
+            TerminalKeyModes::default(),
+        );
+
+        assert_eq!(
+            snapshot.selection_text(
+                &GridSelection {
+                    anchor: GridPos { row: 0, col: 1 },
+                    cursor: GridPos { row: 0, col: 2 },
+                },
+                SelectionEnd::Inclusive,
+                true,
+            ),
+            "界"
+        );
+        assert_eq!(
+            snapshot.selection_text(
+                &GridSelection {
+                    anchor: GridPos { row: 0, col: 3 },
+                    cursor: GridPos { row: 0, col: 4 },
+                },
+                SelectionEnd::Inclusive,
+                true,
+            ),
+            "🙂"
+        );
+
+        let trailing = TerminalRenderSnapshot::from_parts(
+            "a  ",
+            vec![vec![Span::new("a  ")]],
+            0,
+            0,
+            true,
+            CaretShape::Block,
+            true,
+            7,
+            0,
+            0,
+            MouseModeState::default(),
+            TerminalKeyModes::default(),
+        );
+        let trailing_selection = GridSelection {
+            anchor: GridPos { row: 0, col: 0 },
+            cursor: GridPos { row: 0, col: 2 },
+        };
+        assert_eq!(
+            trailing.selection_text(&trailing_selection, SelectionEnd::Inclusive, false),
+            "a  "
+        );
+        assert_eq!(
+            trailing.selection_text(&trailing_selection, SelectionEnd::Inclusive, true),
+            "a"
+        );
+    }
+
+    #[test]
+    fn decorated_snapshot_keeps_plain_text_and_hashes_decorations() {
+        let snapshot = TerminalRenderSnapshot::from_parts(
+            "abc",
+            vec![vec![Span::new("abc")]],
+            0,
+            0,
+            true,
+            CaretShape::Block,
+            true,
+            7,
+            0,
+            0,
+            MouseModeState::default(),
+            TerminalKeyModes::default(),
+        );
+        let decoration = TerminalDecoration::highlight(0, 1..2, Style::new().bold());
+        let decorated = snapshot.decorated(std::slice::from_ref(&decoration));
+        let repeated = snapshot.decorated(std::slice::from_ref(&decoration));
+
+        assert_eq!(decorated.text, snapshot.text);
+        assert_ne!(decorated.sequence, snapshot.sequence);
+        assert_eq!(decorated.sequence, repeated.sequence);
+        assert_eq!(decorated.color_lines[0][0].content.as_ref(), "a");
+        assert_eq!(decorated.color_lines[0][1].content.as_ref(), "b");
+        assert_eq!(decorated.color_lines[0][1].style.bold, Some(true));
+    }
+
+    #[test]
+    fn decorated_snapshot_uses_sorted_overlap_precedence_and_right_to_left_labels() {
+        let snapshot = TerminalRenderSnapshot::from_parts(
+            "abcd",
+            vec![vec![Span::new("abcd")]],
+            0,
+            0,
+            true,
+            CaretShape::Block,
+            true,
+            7,
+            0,
+            0,
+            MouseModeState::default(),
+            TerminalKeyModes::default(),
+        );
+        let red = TerminalDecoration::highlight(0, 0..3, Style::new().fg(UiColor::Red));
+        let blue = TerminalDecoration::highlight(0, 1..2, Style::new().fg(UiColor::Blue));
+        let decorated = snapshot.decorated(&[red, blue]);
+        assert_eq!(
+            decorated.color_lines[0][0].style.fg,
+            Some(UiColor::Red.into())
+        );
+        assert_eq!(
+            decorated.color_lines[0][1].style.fg,
+            Some(UiColor::Blue.into())
+        );
+        assert_eq!(
+            decorated.color_lines[0][2].style.fg,
+            Some(UiColor::Red.into())
+        );
+
+        let labels = snapshot.decorated(&[
+            TerminalDecoration::label(0, 1, Span::new("X")),
+            TerminalDecoration::label(0, 3, Span::new("Y")),
+        ]);
+        let text: String = labels.color_lines[0]
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(text, "aXbcYd");
+    }
+
+    #[test]
+    fn repeated_decorations_have_distinct_sequence_from_single_decoration() {
+        let snapshot = TerminalRenderSnapshot::from_parts(
+            "abc",
+            vec![vec![Span::new("abc")]],
+            0,
+            0,
+            true,
+            CaretShape::Block,
+            true,
+            7,
+            0,
+            0,
+            MouseModeState::default(),
+            TerminalKeyModes::default(),
+        );
+        let decoration = TerminalDecoration::highlight(0, 1..2, Style::new().bold());
+        let once = snapshot.decorated(std::slice::from_ref(&decoration));
+        let twice = snapshot.decorated(&[decoration.clone(), decoration]);
+        let mut different_source = snapshot.clone();
+        different_source.sequence = 8;
+        let same_decoration = TerminalDecoration::highlight(0, 1..2, Style::new().bold());
+        let different = different_source.decorated(std::slice::from_ref(&same_decoration));
+
+        assert_ne!(once.sequence, twice.sequence);
+        assert_ne!(twice.sequence, snapshot.sequence);
+        assert_ne!(once.sequence, different.sequence);
+    }
+
+    #[test]
+    fn export_selection_text_is_char_indexed_and_uses_trimmed_lines() {
+        let mut screen = TerminalScreen::new(1, 20, 10);
+        screen.process_bytes("a界🙂b   ".as_bytes());
+
+        assert_eq!(
+            screen.export_selection_text(
+                GridPos { row: 0, col: 1 },
+                GridPos { row: 0, col: 2 },
+                SelectionEnd::Inclusive,
+            ),
+            "界🙂"
+        );
+        assert_eq!(
+            screen.export_selection_text(
+                GridPos { row: 0, col: 2 },
+                GridPos { row: 0, col: 3 },
+                SelectionEnd::Inclusive,
+            ),
+            "🙂b"
+        );
+    }
+
+    #[test]
     fn bell_count_starts_at_zero() {
         let screen = TerminalScreen::new(2, 8, 10);
 
@@ -1640,6 +2029,71 @@ mod tests {
         assert_eq!(palette.foreground, Some(colors.fg));
         assert_eq!(palette.background, Some(pane_background));
         assert_eq!(palette.ansi, colors.ansi);
+    }
+
+    #[test]
+    fn terminal_palette_from_theme_preserves_host_extension() {
+        let ansi = std::array::from_fn(|i| UiColor::Rgb(i as u8, 10, 20));
+        let colors = HostTerminalColors {
+            ansi,
+            fg: UiColor::Rgb(230, 231, 232),
+            bg: UiColor::Rgb(10, 11, 12),
+        };
+        let theme = Theme::from_host_colors(colors);
+        let palette = TerminalColorPalette::from_theme(&theme, UiColor::Rgb(1, 2, 3));
+
+        assert_eq!(palette.foreground, Some(colors.fg));
+        assert_eq!(palette.background, Some(UiColor::Rgb(1, 2, 3)));
+        assert_eq!(palette.ansi, colors.ansi);
+    }
+
+    #[test]
+    fn terminal_palette_from_theme_derives_ansi_slots() {
+        let foreground = UiColor::Rgb(230, 231, 232);
+        let background = UiColor::Rgb(10, 11, 12);
+        let accent = UiColor::Rgb(30, 80, 210);
+        let theme = Theme::custom(foreground, background, accent);
+        let palette = TerminalColorPalette::from_theme(&theme, background);
+
+        assert_eq!(palette.foreground, Some(foreground));
+        assert_eq!(palette.background, Some(background));
+        assert_eq!(palette.ansi[0], background);
+        assert_eq!(palette.ansi[1], theme.status.error);
+        assert_eq!(palette.ansi[4], theme.status.info);
+        assert_eq!(palette.ansi[12], accent.lighten_by(0.12));
+    }
+
+    #[test]
+    fn terminal_palette_from_theme_resolves_sentinel_derivations() {
+        let mut theme = Theme::custom(UiColor::Backdrop, UiColor::Transparent, UiColor::Reset)
+            .primary(Style::new().fg(UiColor::Backdrop))
+            .accent(Style::new().fg(UiColor::Transparent))
+            .muted(Style::new().fg(UiColor::Reset));
+        theme.border_active = UiColor::Backdrop;
+        theme.surface.menu = UiColor::Transparent;
+        theme.status.error = UiColor::Backdrop;
+        theme.status.success = UiColor::Transparent;
+        theme.status.warning = UiColor::Reset;
+        theme.status.info = UiColor::Backdrop;
+        theme.file_icons.purple = UiColor::Transparent;
+        theme.file_icons.cyan = UiColor::Reset;
+
+        let palette = TerminalColorPalette::from_theme(&theme, UiColor::Backdrop);
+        let colors = palette
+            .foreground
+            .into_iter()
+            .chain(palette.background)
+            .chain(palette.ansi)
+            .collect::<Vec<_>>();
+
+        assert!(colors.iter().all(|color| !color.is_sentinel()));
+        assert_eq!(palette.foreground, Some(UiColor::White));
+        assert_eq!(palette.background, Some(UiColor::Black));
+        assert_eq!(palette.ansi[1], UiColor::Red);
+        assert_eq!(palette.ansi[2], UiColor::Green);
+        assert_eq!(palette.ansi[3], UiColor::Yellow);
+        assert_eq!(palette.ansi[5], UiColor::Magenta);
+        assert_eq!(palette.ansi[6], UiColor::Cyan);
     }
 
     #[test]

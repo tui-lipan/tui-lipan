@@ -29,6 +29,25 @@ While the crate is on `0.x.y`:
   refreshes the rendered tree as needed. Tests can now deterministically step
   `Animated` transitions, smooth scrolls, and `Context::transition` property
   animations using the runner's ordering and 50 ms per-frame clamp.
+- Add sentinel resolution helpers on `Color`, `Style`, and `Theme`, plus
+  `TerminalColorPalette::from_theme`; host-derived themes retain their exact
+  `HostTerminalColors` as a typed theme extension.
+- Add `Badge` segment caps for powerline-style chains: `CapStyle`, `CapSides`,
+  and the `cap`, `cap_sides`, `cap_behind`, and `cap_same_color` builders. The
+  `powerline_bar` example demonstrates cap styles, equal-color seams, and Nerd
+  Font fallback.
+- Add display-column span editing, untrusted display-text sanitization, and
+  dependency-free URL/path/Git hint scanning under `utils`; the optional
+  `hints-regex` feature adds string-configured custom scanners.
+- Add terminal snapshot decorations, display-column selection extraction,
+  `TerminalCopyMode`, cell-cursor text motions, and targeted
+  `Context::flash_copy_feedback` requests.
+- Add `Context::flash_copy_feedback_range` for copy-and-exit flows. The existing
+  `flash_copy_feedback` paints the widget's live selection, forcing callers that
+  leave their selection mode on copy to keep the selection alive purely so the
+  flash has something to draw; the range variant carries the copied range and
+  paints it independently of what the node has selected.
+- Add terminal search, hint, and copy-mode examples.
 - Add `Terminal::caret_color` for setting the focused hardware caret color through OSC 12.
 - Add `TerminalPasteShortcutBehavior::Performable` for terminal hosts that bind direct `Ctrl+V`:
   plain text is emitted through terminal paste input, while file lists, images, and unknown
@@ -75,6 +94,16 @@ While the crate is on `0.x.y`:
 ### Changed
 
 - Remove the unused public `Transition::is_exit` field (breaking).
+- `ManagedTerminal` now coalesces PTY resize bursts over a configurable 16 ms
+  trailing window, preventing transient width changes from repeatedly clearing
+  terminal semantic marks.
+- Display-column helpers and terminal selection rendering preserve joined
+  grapheme clusters instead of measuring or slicing their Unicode scalars
+  independently.
+- `TerminalCopyMode` returns `Ignored` for motions already at a boundary and
+  prompt jumps no longer wrap from one end of the prompt list to the other.
+- Text and virtual-text rendering now drops control characters consistently;
+  virtual text also strips terminal control sequences.
 - Add theme-level `CaretPalette` defaults for `Input`, `TextArea`, and embedded
   `SearchPalette` query inputs; explicit widget caret settings still override the
   theme (breaking)
@@ -152,6 +181,18 @@ While the crate is on `0.x.y`:
 
 - Make `TestBackend::advance(dt)` available to web examples by sharing animation stepping with
   both native and WASM runtimes.
+- Terminal selection copying now uses the same display-column convention as
+  rendering, so CJK, emoji, and other wide cells copy the text that was
+  highlighted rather than a range shifted by the width of each wide cell.
+- Controlled terminal selections no longer disappear after mouse clicks or drags.
+- Control characters no longer consume a zero-column measurement budget while
+  painting visible escape payload bytes into neighboring layout.
+- URL hints are now detected when other text precedes them on the same line.
+  Scheme detection anchored on the first letter of the line, so any prose ahead
+  of a URL consumed its `:` and dropped every match on that line.
+- `assign_labels` no longer returns duplicate labels for a single-character key
+  alphabet, and ignores repeated characters in `keys`. Both cases produced
+  colliding labels that `filter_labels` could never resolve.
 - Mouse release now clears pending command chords and repaints the indicator immediately, preventing a prior key prefix from leaking into subsequent input.
 - `TerminalScreen::export_replay_bytes` now preserves effective Kitty keyboard flags, so attached
   terminal clients keep modified-key input such as `Shift+Enter` after reconnecting.

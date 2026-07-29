@@ -490,6 +490,24 @@ impl Style {
         Self::default()
     }
 
+    /// Return the foreground paint's color, if one is set.
+    ///
+    /// This extracts the color from either an opaque or alpha paint. Alpha is
+    /// intentionally not composited because a style does not own its final
+    /// backdrop; use [`Paint::flatten_over`] when a concrete backdrop is known.
+    pub fn resolved_fg(&self) -> Option<Color> {
+        self.fg.map(Paint::color)
+    }
+
+    /// Return the background paint's color, if one is set.
+    ///
+    /// This extracts the color from either an opaque or alpha paint. Alpha is
+    /// intentionally not composited because a style does not own its final
+    /// backdrop; use [`Paint::flatten_over`] when a concrete backdrop is known.
+    pub fn resolved_bg(&self) -> Option<Color> {
+        self.bg.map(Paint::color)
+    }
+
     /// Set foreground color.
     pub fn fg(mut self, color: impl Into<Paint>) -> Self {
         self.fg = Some(color.into());
@@ -785,6 +803,42 @@ mod tests {
 
     fn p(color: Color) -> Option<Paint> {
         Some(Paint::Solid(color))
+    }
+
+    #[test]
+    fn resolved_style_channels_extract_opaque_and_alpha_colors() {
+        let style = Style::new()
+            .fg(Paint::rgba(10, 20, 30, 128))
+            .bg(Color::Backdrop);
+
+        assert_eq!(style.resolved_fg(), Some(Color::Rgb(10, 20, 30)));
+        assert_eq!(style.resolved_bg(), Some(Color::Backdrop));
+        assert_eq!(Style::default().resolved_fg(), None);
+        assert_eq!(Style::default().resolved_bg(), None);
+    }
+
+    #[test]
+    fn concretize_backdrop_resolves_all_sentinels_and_preserves_colors() {
+        let fallback = Color::Rgb(10, 20, 30);
+
+        for backdrop in [Color::Reset, Color::Backdrop, Color::Transparent] {
+            let mut theme = Theme::default();
+            theme.surface.backdrop = backdrop;
+            assert_eq!(theme.concretize_backdrop(Some(fallback)), fallback);
+        }
+
+        let mut theme = Theme::default();
+        theme.surface.backdrop = Color::Blue;
+        assert_eq!(theme.concretize_backdrop(Some(fallback)), Color::Blue);
+    }
+
+    #[test]
+    fn concretize_backdrop_uses_reset_without_primary_background() {
+        let mut theme = Theme::default();
+        theme.surface.backdrop = Color::Backdrop;
+        theme.surface.panel = Color::Reset;
+
+        assert_eq!(theme.concretize_backdrop(None), Color::Reset);
     }
 
     #[derive(Clone, Debug, PartialEq)]
@@ -1724,6 +1778,7 @@ impl Theme {
             .error(colors.ansi[1])
             .info(colors.ansi[4])
             .into_theme()
+            .with_extension(colors)
     }
 
     /// Return the style associated with a semantic theme role.
@@ -1782,6 +1837,19 @@ impl Theme {
             ThemeRole::SplitterHover => Style::new().fg(self.splitter.hover),
             ThemeRole::SplitterActive => Style::new().fg(self.splitter.active),
         }
+    }
+
+    /// Resolve the surface backdrop to a concrete host-usable color.
+    ///
+    /// Concrete authored backdrops are preserved. Sentinels prefer a concrete
+    /// host background and otherwise fall back to the theme's panel surface.
+    pub fn concretize_backdrop(&self, host_bg: Option<Color>) -> Color {
+        if !self.surface.backdrop.is_sentinel() {
+            return self.surface.backdrop;
+        }
+        host_bg
+            .filter(|color| !color.is_sentinel())
+            .unwrap_or_else(|| self.surface.panel.resolve(Color::Reset))
     }
 
     /// Create a theme from the three core colors most apps care about.

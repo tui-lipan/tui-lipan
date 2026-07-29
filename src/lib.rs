@@ -136,6 +136,7 @@ pub use crate::ui_snapshot::{
     UiWidgetDesc, UiWidgetKind,
 };
 pub use crate::validation::{StringValidator, ValidationError, Validator};
+pub use crate::widgets::{Badge, BadgePosition, CapSides, CapStyle};
 pub use crate::widgets::{
     BorderLabels, Canvas, CanvasItem, ClassDiagram, ClassDiagramTheme, ClassMember, ClassRelation,
     ClassRelationKind, ClassSpec, ClassVisibility, ContextProvider, DEFAULT_PREVIEW_MAX_HEIGHT,
@@ -176,8 +177,9 @@ pub use crate::widgets::{
 pub use crate::widgets::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
-    KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, TerminalColorPalette,
-    TerminalKeyModes, TerminalPasteShortcutBehavior, TerminalRenderSnapshot,
+    CopyModeAction, CopyModeGrid, KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState,
+    TerminalColorPalette, TerminalCopyMode, TerminalDecoration, TerminalKeyModes,
+    TerminalPasteShortcutBehavior, TerminalRenderSnapshot, terminal_selection_text,
 };
 
 #[cfg(feature = "diff-view")]

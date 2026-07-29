@@ -8,7 +8,7 @@ use super::{
     push_render_terminal_bg, render_integrated_hscrollbar, render_integrated_vscrollbar_half_block,
     render_vscrollbar_half_block, render_vscrollbar_with_metrics, resolve_interactive_style,
     resolve_interactive_style_raw, retro_crt_params, style_backdrop, tint_ratatui_color,
-    truncate_end_with_ellipsis,
+    to_ratatui_style_with_terminal_bg, truncate_end_with_ellipsis,
 };
 use crate::app::ContrastPolicy;
 use crate::core::mask::CellMask;
@@ -579,6 +579,20 @@ fn transparent_alpha_paint_leaves_ratatui_channel_unset() {
     assert_eq!(
         blend_paint_over_ratatui(paint, RColor::Rgb(0, 0, 200)),
         None
+    );
+}
+
+#[test]
+fn transparent_and_backdrop_styles_are_noops_without_terminal_backdrop() {
+    let expected = ratatui::style::Style::default();
+
+    assert_eq!(
+        to_ratatui_style_with_terminal_bg(Style::new().fg(Color::Transparent), None),
+        expected
+    );
+    assert_eq!(
+        to_ratatui_style_with_terminal_bg(Style::new().bg(Color::Backdrop), None),
+        expected
     );
 }
 

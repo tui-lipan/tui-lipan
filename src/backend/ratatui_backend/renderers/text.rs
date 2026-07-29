@@ -1,17 +1,15 @@
-use std::sync::Arc;
-
 use crate::backend::ratatui_backend::common::{
     ClipBounds, DrawCellStyledCtx, draw_cell_styled, style_has_alpha_paint,
     to_ratatui_style_with_terminal_bg, truncate_spans, truncate_spans_start,
 };
 use crate::style::{Color, Rect, Span as LipanSpan, Style};
+use crate::utils::spans::{self, display_width};
 use crate::widgets::Overflow;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Alignment;
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget};
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 pub(crate) struct TextRenderCtx {
     pub rect: Rect,
@@ -379,7 +377,10 @@ fn render_lipan_line_clipped(
                 continue;
             }
 
-            let width = UnicodeWidthStr::width(grapheme) as i32;
+            if grapheme.chars().any(char::is_control) {
+                continue;
+            }
+            let width = display_width(grapheme) as i32;
             if width == 0 {
                 continue;
             }
@@ -428,33 +429,22 @@ fn reset_wide_continuation_cells(
 
 fn lipan_line_width(line: &[LipanSpan]) -> usize {
     line.iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .map(|span| display_width(span.content.as_ref()))
         .sum()
 }
 
 fn split_styled_lipan_lines(spans: &[LipanSpan], base_style: Style) -> Vec<Vec<LipanSpan>> {
-    let mut lines = Vec::new();
-    let mut current_line = Vec::new();
-
-    for span in spans {
-        let cell_style = base_style.patch(span.style);
-        let content = span.content.as_ref();
-        for (i, part) in content.split('\n').enumerate() {
-            if i > 0 {
-                lines.push(current_line);
-                current_line = Vec::new();
-            }
-            if !part.is_empty() {
-                current_line.push(LipanSpan {
-                    content: Arc::from(part),
-                    style: cell_style,
-                    row_style_policy: span.row_style_policy,
-                });
-            }
-        }
-    }
-    lines.push(current_line);
-    lines
+    spans::split_spans_on_newlines(spans)
+        .into_iter()
+        .map(|line| {
+            line.into_iter()
+                .map(|mut span| {
+                    span.style = base_style.patch(span.style);
+                    span
+                })
+                .collect()
+        })
+        .collect()
 }
 
 fn wrap_text_spans_lipan(
@@ -484,110 +474,11 @@ fn wrap_text_spans_lipan(
 }
 
 fn truncate_lipan_spans(spans: Vec<LipanSpan>, max_width: u16) -> Vec<LipanSpan> {
-    let max_width = max_width as usize;
-    if max_width == 0 {
-        return Vec::new();
-    }
-
-    let total_width: usize = spans
-        .iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-        .sum();
-    if total_width <= max_width {
-        return spans;
-    }
-
-    let ellipsis = "…";
-    let target_width = max_width.saturating_sub(UnicodeWidthStr::width(ellipsis));
-    let mut out = Vec::new();
-    let mut current_width = 0;
-
-    for span in spans {
-        if current_width >= target_width {
-            break;
-        }
-
-        let content = span.content.as_ref();
-        let width = UnicodeWidthStr::width(content);
-        if current_width + width <= target_width {
-            current_width += width;
-            out.push(span);
-        } else {
-            let available = target_width - current_width;
-            let end = crate::utils::text::end_at_width(content, 0, available);
-            out.push(LipanSpan {
-                content: Arc::from(&content[..end]),
-                style: span.style,
-                row_style_policy: span.row_style_policy,
-            });
-            break;
-        }
-    }
-
-    let style = out.last().map(|span| span.style).unwrap_or_default();
-    out.push(LipanSpan::new(ellipsis).style(style));
-    out
+    spans::truncate_spans(&spans, max_width as usize)
 }
 
 fn truncate_lipan_spans_start(spans: Vec<LipanSpan>, max_width: u16) -> Vec<LipanSpan> {
-    let max_width = max_width as usize;
-    if max_width == 0 {
-        return Vec::new();
-    }
-
-    let total_width: usize = spans
-        .iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-        .sum();
-    if total_width <= max_width {
-        return spans;
-    }
-
-    let mut out_rev = Vec::new();
-    let mut current_width = 0usize;
-
-    for span in spans.into_iter().rev() {
-        if current_width >= max_width {
-            break;
-        }
-
-        let content = span.content.as_ref();
-        let width = UnicodeWidthStr::width(content);
-        if current_width + width <= max_width {
-            current_width += width;
-            out_rev.push(span);
-        } else {
-            let needed = max_width - current_width;
-            let start = start_at_tail_width(content, needed);
-            out_rev.push(LipanSpan {
-                content: Arc::from(&content[start..]),
-                style: span.style,
-                row_style_policy: span.row_style_policy,
-            });
-            break;
-        }
-    }
-
-    out_rev.reverse();
-    out_rev
-}
-
-fn start_at_tail_width(line: &str, width: usize) -> usize {
-    if width == 0 {
-        return line.len();
-    }
-
-    let mut acc = 0usize;
-    let mut start = line.len();
-    for (idx, grapheme) in line.grapheme_indices(true).rev() {
-        let grapheme_width = UnicodeWidthStr::width(grapheme);
-        if acc + grapheme_width > width {
-            break;
-        }
-        acc += grapheme_width;
-        start = idx;
-    }
-    start
+    spans::truncate_spans_start(&spans, max_width as usize)
 }
 
 // ── Word-aware wrapping (delegates to shared wrap_spans_for_budgets) ─
@@ -617,8 +508,9 @@ fn wrap_text_spans(
             let rat_spans: Vec<ratatui::text::Span<'static>> = vline
                 .into_iter()
                 .map(|s| {
+                    let content = crate::utils::text::strip_controls(s.content.as_ref());
                     ratatui::text::Span::styled(
-                        s.content.to_string(),
+                        content.into_owned(),
                         to_ratatui_style_with_terminal_bg(base_style.patch(s.style), terminal_bg),
                     )
                 })
@@ -691,10 +583,25 @@ fn split_styled_lines<'a>(
             }
             if !part.is_empty() {
                 let cell_style = style.patch(span.style);
-                current_line.push(ratatui::text::Span::styled(
-                    part,
-                    to_ratatui_style_with_terminal_bg(cell_style, terminal_bg),
-                ));
+                let mut segment_start = 0usize;
+                for (byte, ch) in part.char_indices() {
+                    if !ch.is_control() {
+                        continue;
+                    }
+                    if segment_start < byte {
+                        current_line.push(ratatui::text::Span::styled(
+                            &part[segment_start..byte],
+                            to_ratatui_style_with_terminal_bg(cell_style, terminal_bg),
+                        ));
+                    }
+                    segment_start = byte + ch.len_utf8();
+                }
+                if segment_start < part.len() {
+                    current_line.push(ratatui::text::Span::styled(
+                        &part[segment_start..],
+                        to_ratatui_style_with_terminal_bg(cell_style, terminal_bg),
+                    ));
+                }
             }
         }
     }
@@ -736,6 +643,40 @@ mod tests {
         assert_eq!(lines[0][0].content.as_ref(), "a");
         assert!(lines[1].is_empty());
         assert_eq!(lines[2][0].content.as_ref(), "b");
+    }
+
+    #[test]
+    fn plain_text_paint_skips_control_characters() {
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 3,
+            h: 1,
+        };
+        let backend = TestBackend::new(rect.w, rect.h);
+        let mut terminal = Terminal::new(backend).expect("terminal should init");
+
+        terminal
+            .draw(|f| {
+                render_text(
+                    f,
+                    &[Span::from("a\0\u{7}b")],
+                    Style::default(),
+                    Overflow::Clip,
+                    TextRenderCtx {
+                        rect,
+                        rrect: to_ratatui_rect(rect),
+                        clip_rect: None,
+                        terminal_bg: None,
+                    },
+                );
+            })
+            .expect("draw should succeed");
+
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(0, 0)].symbol(), "a");
+        assert_eq!(buffer[(1, 0)].symbol(), "b");
+        assert_eq!(buffer[(2, 0)].symbol(), " ");
     }
 
     #[test]

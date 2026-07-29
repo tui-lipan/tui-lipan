@@ -2,8 +2,10 @@ use std::cell::RefCell;
 
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
+use crate::app::copy_feedback::CopyFeedbackRange;
 use crate::backend::ratatui_backend::common::{
     DEFAULT_SCROLLBAR_THUMB, IntegratedScrollbarAppearance, ScrollbarAppearance,
     ScrollbarScrollState, calculate_visible_borders, integrated_vscrollbar_track_char,
@@ -41,16 +43,20 @@ fn clip_spans_no_ellipsis<'a>(
         }
 
         let mut chunk = String::new();
-        for ch in span.content.chars() {
-            let w = UnicodeWidthChar::width(ch).unwrap_or(0) as u16;
+        for grapheme in span.content.graphemes(true) {
+            let w = if grapheme.chars().all(char::is_control) {
+                0
+            } else {
+                UnicodeWidthStr::width(grapheme).min(u16::MAX as usize) as u16
+            };
             if w == 0 {
-                chunk.push(ch);
+                chunk.push_str(grapheme);
                 continue;
             }
             if used.saturating_add(w) > max_width {
                 break;
             }
-            chunk.push(ch);
+            chunk.push_str(grapheme);
             used = used.saturating_add(w);
         }
 
@@ -72,6 +78,9 @@ pub(crate) struct TerminalRenderCtx<'a> {
     pub metrics_cache: Option<&'a RefCell<ScrollbarMetricsCache>>,
     pub node_theme: &'a Theme,
     pub selection_style: Style,
+    /// Range painted with `selection_style` for a copy flash that carries its own
+    /// range, so the flash stays visible after the node's selection is cleared.
+    pub flash_range: Option<CopyFeedbackRange>,
 }
 
 pub(crate) fn render_terminal(
@@ -91,6 +100,7 @@ pub(crate) fn render_terminal(
         metrics_cache,
         node_theme,
         selection_style,
+        flash_range,
     } = ctx;
     let theme = node_theme;
     let style = resolve_base_style(theme, node.style);
@@ -179,16 +189,27 @@ pub(crate) fn render_terminal(
             .saturating_sub(content_rect.y as i32)
             .max(0) as u16;
 
+        // An explicit flash range wins: the caller copied that range and has already
+        // dropped its selection, so there is nothing else left to draw the flash on.
+        let flash_selection = flash_range.as_ref().map(|range| range.selection.clone());
+        let paint_selection = match &flash_selection {
+            Some(_) => &flash_selection,
+            None => &node.selection,
+        };
         let lines: Vec<Line<'_>> = (0..content_rect.h as usize)
             .map(|row| {
-                let mut spans: Vec<ratatui::text::Span<'_>> = node
-                    .lines
-                    .get(row)
+                let source = match flash_range.as_ref() {
+                    Some(range) if range.selection.columns_for_row(row, 0).is_some() => {
+                        range.line(row)
+                    }
+                    _ => node.lines.get(row).map(Vec::as_slice),
+                };
+                let mut spans: Vec<ratatui::text::Span<'_>> = source
                     .map(|line| {
                         apply_selection_to_row(
                             line,
                             row,
-                            &node.selection,
+                            paint_selection,
                             selection_style,
                             content_style,
                         )
@@ -334,7 +355,7 @@ pub(crate) fn render_terminal(
 fn apply_selection_to_row<'a>(
     spans: &'a [Span],
     row: usize,
-    selection: &Option<GridSelection>,
+    selection: &'a Option<GridSelection>,
     selection_style: Style,
     base_style: Style,
 ) -> Vec<ratatui::text::Span<'a>> {
@@ -352,15 +373,7 @@ fn apply_selection_to_row<'a>(
             .collect();
     }
 
-    let line_width: usize = spans
-        .iter()
-        .map(|span| {
-            span.content
-                .chars()
-                .map(|ch| UnicodeWidthChar::width(ch).unwrap_or(0))
-                .sum::<usize>()
-        })
-        .sum();
+    let line_width = crate::utils::spans::line_width(spans);
 
     let Some((col_start, col_end)) = sel.columns_for_row(row, line_width) else {
         return spans
@@ -393,8 +406,12 @@ fn apply_column_selection_to_spans(
 
     for span in spans {
         let span_style = base_style.patch(span.style);
-        for ch in span.content.chars() {
-            let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+        for grapheme in span.content.graphemes(true) {
+            let w = if grapheme.chars().all(char::is_control) {
+                0
+            } else {
+                UnicodeWidthStr::width(grapheme)
+            };
             let selected = if w == 0 {
                 col >= col_start && col < col_end
             } else {
@@ -408,7 +425,7 @@ fn apply_column_selection_to_spans(
             };
 
             if run_style == Some(style) {
-                run_text.push(ch);
+                run_text.push_str(grapheme);
             } else {
                 if let Some(run_style) = run_style.take()
                     && !run_text.is_empty()
@@ -419,7 +436,7 @@ fn apply_column_selection_to_spans(
                     ));
                 }
                 run_style = Some(style);
-                run_text.push(ch);
+                run_text.push_str(grapheme);
             }
 
             if w > 0 {
@@ -466,6 +483,10 @@ pub(crate) fn render_terminal_node(
         node_id,
         resolve_slot(theme, ThemeRole::TextSelection, &term.selection_style),
     );
+    let flash_range = state
+        .ctx
+        .copy_feedback
+        .and_then(|feedback| feedback.active_range(node_id));
     let f = &mut *state.f;
     render_terminal(
         f,
@@ -482,6 +503,7 @@ pub(crate) fn render_terminal_node(
             metrics_cache: Some(scrollbar_cache),
             node_theme: theme,
             selection_style,
+            flash_range,
         },
     );
 }
@@ -517,4 +539,34 @@ pub(crate) fn terminal_cursor_position(
         cursor_x as u16,
         cursor_y as u16,
     ))
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+    use crate::utils::{GridPos, GridSelection};
+    use crate::widgets::terminal_selection_text;
+
+    #[test]
+    fn renderer_and_extractor_agree_for_wide_joined_emoji() {
+        let lines = vec![vec![Span::new("a👩‍💻b")]];
+        let selection = GridSelection {
+            anchor: GridPos { row: 0, col: 1 },
+            cursor: GridPos { row: 0, col: 3 },
+        };
+        let selected_style = Style::new().bg(crate::style::Color::Red);
+        let rendered =
+            apply_column_selection_to_spans(&lines[0], 1, 3, selected_style, Style::default());
+        let selected_render_text: String = rendered
+            .iter()
+            .filter(|span| span.style == to_ratatui_style(selected_style))
+            .map(|span| span.content.as_ref())
+            .collect();
+
+        assert_eq!(selected_render_text, "👩‍💻");
+        assert_eq!(
+            terminal_selection_text(&lines, &selection),
+            selected_render_text
+        );
+    }
 }

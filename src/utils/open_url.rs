@@ -42,7 +42,8 @@ pub fn open_url(url: &str) -> Result<(), OpenUrlError> {
     }
 }
 
-fn parse_scheme(url: &str) -> Option<&str> {
+/// Parse the RFC-like scheme prefix from a URL-shaped string.
+pub(crate) fn parse_scheme(url: &str) -> Option<&str> {
     let (scheme, _rest) = url.split_once(':')?;
     if scheme.is_empty() {
         return None;
@@ -60,7 +61,8 @@ fn parse_scheme(url: &str) -> Option<&str> {
     Some(scheme)
 }
 
-fn is_allowed_scheme(scheme: &str) -> bool {
+/// Return whether a parsed scheme is supported by [`open_url`].
+pub(crate) fn is_allowed_scheme(scheme: &str) -> bool {
     matches!(scheme, "http" | "https" | "mailto")
 }
 

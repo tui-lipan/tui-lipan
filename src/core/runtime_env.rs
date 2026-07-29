@@ -17,8 +17,14 @@ use crate::clipboard::{ClipboardConfig, ClipboardService};
 use crate::core::component::{FocusContext, HoverContext, ScrollContext};
 use crate::core::element::Element;
 use crate::core::element::Key;
+use crate::core::node::NodeId;
 use crate::runtime::FocusRequest;
 use crate::style::{HostTerminalColors, Rect, RichText, Theme};
+use crate::utils::GridSelection;
+
+/// A queued copy-flash request: the target node and, optionally, an explicit range
+/// to paint instead of the node's live selection.
+pub(crate) type CopyFeedbackRequest = (NodeId, Option<GridSelection>);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DevToolsRequest {
@@ -233,6 +239,8 @@ pub(crate) struct RuntimeEnv {
     pub devtools_request: Rc<RefCell<Option<DevToolsRequest>>>,
     /// Pending UI snapshot export/delivery after the next render.
     pub ui_snapshot_request: Rc<RefCell<Option<crate::ui_snapshot::UiSnapshotRequest>>>,
+    /// Pending requests to flash copy feedback on specific nodes.
+    pub copy_feedback_request: Rc<RefCell<Vec<CopyFeedbackRequest>>>,
     pub command_chord_pending: Rc<std::cell::Cell<bool>>,
 }
 
@@ -304,6 +312,16 @@ impl RuntimeEnv {
         if self.host_terminal_color_refresh_enabled {
             self.host_terminal_color_refresh_requested.set(true);
         }
+    }
+
+    pub(crate) fn request_copy_feedback(&self, node_id: NodeId, range: Option<GridSelection>) {
+        self.copy_feedback_request
+            .borrow_mut()
+            .push((node_id, range));
+    }
+
+    pub(crate) fn take_copy_feedback_requests(&self) -> Vec<CopyFeedbackRequest> {
+        std::mem::take(&mut *self.copy_feedback_request.borrow_mut())
     }
 
     pub(crate) fn take_host_terminal_color_refresh_request(&self) -> bool {

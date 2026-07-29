@@ -22,6 +22,10 @@
 //! since that byte still belongs to the current word, the motion re-finds the same word's end
 //! instead of advancing to the next word.
 //!
+//! The cell-cursor adapters below take **character columns**, because they operate on text rows.
+//! Convert those columns to rendered display columns with the span helpers in
+//! [`crate::utils::spans`] before using them against a styled grid.
+//!
 //! ```
 //! use tui_lipan::text_motion::word_end;
 //!
@@ -124,3 +128,214 @@ pub use crate::app::input::text_area_vim::line_end_at;
 /// assert_eq!(first_nonblank_in_line("  bar", 0, 5), 2);
 /// ```
 pub use crate::app::input::text_area_vim::first_nonblank_in_line;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cell-cursor adapters
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Convert a character-column cursor into a UTF-8 byte offset.
+///
+/// These adapters use **character columns**, not rendered display columns. They are for text
+/// rows (`&str`); convert the result with a span helper before using it to index a rendered grid.
+/// Columns past the end of the row map to `row.len()`.
+///
+/// ```
+/// use tui_lipan::text_motion::char_col_to_byte;
+///
+/// assert_eq!(char_col_to_byte("hé", 1), 1);
+/// assert_eq!(char_col_to_byte("hé", 2), 3);
+/// ```
+pub fn char_col_to_byte(row: &str, col: usize) -> usize {
+    row.char_indices()
+        .nth(col)
+        .map(|(byte, _)| byte)
+        .unwrap_or(row.len())
+}
+
+/// Convert a UTF-8 byte offset into a character-column cursor.
+///
+/// The offset is clamped to the preceding UTF-8 character boundary, so callers that receive an
+/// arbitrary byte offset do not panic while converting it.
+///
+/// ```
+/// use tui_lipan::text_motion::byte_to_char_col;
+///
+/// assert_eq!(byte_to_char_col("hél", 3), 2);
+/// ```
+pub fn byte_to_char_col(row: &str, byte: usize) -> usize {
+    let mut byte = byte.min(row.len());
+    while byte > 0 && !row.is_char_boundary(byte) {
+        byte -= 1;
+    }
+    row[..byte].chars().count()
+}
+
+/// Apply a byte-offset motion to a character-column cursor.
+fn cell_motion(row: &str, col: usize, motion: fn(&str, usize) -> usize) -> usize {
+    byte_to_char_col(row, motion(row, char_col_to_byte(row, col)))
+}
+
+/// Apply a word-end byte motion to a character-column cursor.
+///
+/// Word-end motions use an insertion point just after the current character, then map the result
+/// back to the character before it. Without this `e`/`E` would re-find the current word's end
+/// when the cursor is already on its last character.
+fn cell_motion_end(row: &str, col: usize, motion: fn(&str, usize) -> usize) -> usize {
+    let after_col_byte = row
+        .char_indices()
+        .nth(col)
+        .map(|(byte, ch)| byte + ch.len_utf8())
+        .unwrap_or(row.len());
+    byte_to_char_col(row, motion(row, after_col_byte)).saturating_sub(1)
+}
+
+/// Move a character-column cursor to the next vim word start (`w`).
+///
+/// This operates on character columns, not display columns; it is intended for `&str` rows.
+///
+/// ```
+/// use tui_lipan::text_motion::cell_word_forward_start;
+/// assert_eq!(cell_word_forward_start("héllo world", 0), 6);
+/// ```
+pub fn cell_word_forward_start(row: &str, col: usize) -> usize {
+    cell_motion(row, col, word_forward_start)
+}
+
+/// Move a character-column cursor to the previous vim word start (`b`).
+///
+/// This operates on character columns, not display columns; it is intended for `&str` rows.
+///
+/// ```
+/// use tui_lipan::text_motion::cell_word_backward_start;
+/// assert_eq!(cell_word_backward_start("héllo world", 11), 6);
+/// ```
+pub fn cell_word_backward_start(row: &str, col: usize) -> usize {
+    cell_motion(row, col, word_backward_start)
+}
+
+/// Move a character-column cursor to the current or next vim word end (`e`).
+///
+/// This operates on character columns, not display columns. The insertion-point conversion keeps
+/// repeated `e` presses moving forward when the cursor is already on a word's last character.
+///
+/// ```
+/// use tui_lipan::text_motion::cell_word_end;
+/// assert_eq!(cell_word_end("héllo world", 0), 4);
+/// ```
+pub fn cell_word_end(row: &str, col: usize) -> usize {
+    cell_motion_end(row, col, word_end)
+}
+
+/// Move a character-column cursor to the next vim WORD start (`W`).
+///
+/// This operates on character columns, not display columns; it is intended for `&str` rows.
+///
+/// ```
+/// use tui_lipan::text_motion::cell_big_word_forward_start;
+/// assert_eq!(cell_big_word_forward_start("foo.bar baz", 0), 8);
+/// ```
+pub fn cell_big_word_forward_start(row: &str, col: usize) -> usize {
+    cell_motion(row, col, big_word_forward_start)
+}
+
+/// Move a character-column cursor to the previous vim WORD start (`B`).
+///
+/// This operates on character columns, not display columns; it is intended for `&str` rows.
+///
+/// ```
+/// use tui_lipan::text_motion::cell_big_word_backward_start;
+/// assert_eq!(cell_big_word_backward_start("foo.bar baz", 11), 8);
+/// ```
+pub fn cell_big_word_backward_start(row: &str, col: usize) -> usize {
+    cell_motion(row, col, big_word_backward_start)
+}
+
+/// Move a character-column cursor to the current or next vim WORD end (`E`).
+///
+/// This operates on character columns, not display columns. The insertion-point conversion keeps
+/// repeated `E` presses moving forward when the cursor is already on a WORD's last character.
+///
+/// ```
+/// use tui_lipan::text_motion::cell_big_word_end;
+/// assert_eq!(cell_big_word_end("foo.bar baz", 0), 6);
+/// ```
+pub fn cell_big_word_end(row: &str, col: usize) -> usize {
+    cell_motion_end(row, col, big_word_end)
+}
+
+/// Move a character-column cursor to the first non-blank character (`^`).
+///
+/// This operates on character columns, not display columns; it is intended for `&str` rows.
+/// An all-blank row returns its character length.
+///
+/// ```
+/// use tui_lipan::text_motion::cell_line_first_nonblank;
+/// assert_eq!(cell_line_first_nonblank("  hé"), 2);
+/// ```
+pub fn cell_line_first_nonblank(row: &str) -> usize {
+    byte_to_char_col(row, first_nonblank_in_line(row, 0, row.len()))
+}
+
+/// Move a character-column cursor to the last character on the row (`$`).
+///
+/// This operates on character columns, not display columns; it returns `0` for an empty row.
+///
+/// ```
+/// use tui_lipan::text_motion::cell_line_last;
+/// assert_eq!(cell_line_last("hé"), 1);
+/// ```
+pub fn cell_line_last(row: &str) -> usize {
+    row.chars().count().saturating_sub(1)
+}
+
+#[cfg(test)]
+mod cell_cursor_tests {
+    use super::*;
+
+    #[test]
+    fn char_column_byte_conversion_round_trips_multibyte_text() {
+        let row = "héllo wörld";
+        for col in 0..=row.chars().count() {
+            assert_eq!(byte_to_char_col(row, char_col_to_byte(row, col)), col);
+        }
+    }
+
+    #[test]
+    fn byte_to_char_col_clamps_inside_a_character() {
+        assert_eq!(byte_to_char_col("é", 1), 0);
+        assert_eq!(byte_to_char_col("é", 2), 1);
+    }
+
+    #[test]
+    fn word_motions_use_character_columns() {
+        let row = "one two  three";
+        assert_eq!(cell_word_forward_start(row, 0), 4);
+        assert_eq!(cell_word_forward_start(row, 4), 9);
+        assert_eq!(cell_word_backward_start(row, 9), 4);
+        assert_eq!(cell_word_end(row, 0), 2);
+        assert_eq!(cell_word_end(row, 2), 6);
+    }
+
+    #[test]
+    fn word_end_advances_when_cursor_is_on_a_word_end() {
+        let row = "one two  three";
+        assert_eq!(cell_word_end(row, 2), 6);
+        assert_eq!(cell_word_end(row, 6), 13);
+    }
+
+    #[test]
+    fn big_word_motions_use_character_columns() {
+        let row = "foo.bar  baz";
+        assert_eq!(cell_big_word_forward_start(row, 0), 9);
+        assert_eq!(cell_big_word_end(row, 0), 6);
+        assert_eq!(cell_big_word_backward_start(row, 9), 0);
+    }
+
+    #[test]
+    fn line_motions_use_character_columns() {
+        assert_eq!(cell_line_first_nonblank("  hé"), 2);
+        assert_eq!(cell_line_first_nonblank("   "), 3);
+        assert_eq!(cell_line_last("hé"), 1);
+        assert_eq!(cell_line_last(""), 0);
+    }
+}
