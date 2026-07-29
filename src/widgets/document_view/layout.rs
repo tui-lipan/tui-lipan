@@ -160,7 +160,18 @@ pub fn measure_document_view(dv: &DocumentView) -> (u16, u16) {
         dv.line_number_content_gap,
         dv.gutter_col_width,
     );
-    let w = max_line_w.saturating_add(gutter_total_width(gutter, dv.gutter_gap));
+    let border_w: u16 = if dv.border { 2 } else { 0 };
+    let scrollbar_cols = standalone_scrollbar_cols(
+        dv.scrollbar,
+        dv.scrollbar_config.variant,
+        dv.scrollbar_config.gap,
+        dv.border,
+    );
+    let w = max_line_w
+        .saturating_add(gutter_total_width(gutter, dv.gutter_gap))
+        .saturating_add(border_w)
+        .saturating_add(dv.padding.horizontal())
+        .saturating_add(scrollbar_cols);
     let h = line_count as u16;
     (w, h)
 }
@@ -215,18 +226,18 @@ pub fn measure_document_view_constrained(dv: &DocumentView, max_w: Option<u16>) 
     }
 
     // Determine the effective outer width (mirrors reconcile logic).
-    let layout_w = dv.width.resolve(mw, mw).min(mw);
-
     let border_w: u16 = if dv.border { 2 } else { 0 };
-    let inner_w = layout_w
-        .saturating_sub(border_w)
-        .saturating_sub(dv.padding.horizontal());
     let scrollbar_cols = standalone_scrollbar_cols(
         dv.scrollbar,
         dv.scrollbar_config.variant,
         dv.scrollbar_config.gap,
         dv.border,
     );
+    let layout_w = dv.width.resolve(mw, nat_w).min(mw);
+
+    let inner_w = layout_w
+        .saturating_sub(border_w)
+        .saturating_sub(dv.padding.horizontal());
 
     let mut dv_node = super::node::DocumentViewNode::from(dv.clone());
 
@@ -442,7 +453,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::style::{Color, Length, Style};
+    use crate::style::{Color, Length, ScrollbarConfig, Style};
     #[cfg(feature = "markdown")]
     use crate::widgets::document_view::node::{DocumentFlattenCtx, flatten_blocks};
     use crate::widgets::{DocumentView, FormattedBlock, FormattedDocument, FormattedLine};
@@ -473,6 +484,19 @@ mod tests {
     }
 
     #[test]
+    fn constrained_measure_auto_width_includes_scrollbar_chrome() {
+        let dv = DocumentView::new("hello")
+            .width(Length::Auto)
+            .height(Length::Auto)
+            .border(false)
+            .scrollbar_config(ScrollbarConfig::new().gap(2));
+
+        let measured = measure_document_view_constrained(&dv, Some(60));
+
+        assert_eq!(measured, (8, 1));
+    }
+
+    #[test]
     fn gutter_width_respects_min_digits() {
         assert_eq!(gutter_width(9, 0, true, 0), 3);
         assert_eq!(gutter_width(9, 4, true, 0), 6);
@@ -495,7 +519,9 @@ mod tests {
     fn measure_respects_min_line_number_width() {
         let dv = DocumentView::new("x")
             .line_numbers(true)
-            .min_line_number_width(4);
+            .min_line_number_width(4)
+            .border(false)
+            .scrollbar(false);
         let (w, h) = measure_document_view(&dv);
         assert_eq!(w, 7);
         assert_eq!(h, 1);
@@ -525,7 +551,8 @@ mod tests {
             .line_numbers(true)
             .line_number_separator(false)
             .line_number_content_gap(2)
-            .border(false);
+            .border(false)
+            .scrollbar(false);
         let (w, h) = measure_document_view(&dv);
         assert_eq!(w, 4);
         assert_eq!(h, 1);
@@ -568,7 +595,8 @@ mod tests {
         let dv = DocumentView::new("x")
             .line_numbers(true)
             .gutter_inset(1)
-            .border(false);
+            .border(false)
+            .scrollbar(false);
         let (w, h) = measure_document_view(&dv);
         assert_eq!(w, 5);
         assert_eq!(h, 1);
