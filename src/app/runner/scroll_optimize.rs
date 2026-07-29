@@ -196,7 +196,40 @@ pub(super) fn capture_scroll_frames(tree: &NodeTree) -> Vec<ScrollFrameSnapshot>
     snapshots
 }
 
-pub(super) fn shift_buffer_rows(buf: &mut Buffer, rows: &Range<u16>, delta_rows: i16) {
+/// Rebuild `buf` into the frame the app intends to show after an incremental
+/// scroll: rows shifted in place, exposed rows filled with the configured root
+/// viewport background so the surface stays continuous through scroll regions.
+pub(super) fn apply_rendered_scroll(
+    buf: &mut Buffer,
+    scroll_rows: &Range<u16>,
+    delta_rows: i16,
+    exposed_rows: &Range<u16>,
+) {
+    shift_buffer_rows(buf, scroll_rows, delta_rows);
+    fill_buffer_rows(buf, exposed_rows, &screen_background_cell());
+}
+
+/// Rebuild `buf` into what the *terminal* displays after its scroll-region
+/// command: rows shifted in place, exposed rows at the terminal default.
+///
+/// `CSI S`/`CSI T` carry no SGR of their own and the backend resets colors after
+/// every draw, so background-color erase fills the exposed rows with the default
+/// background no matter which screen background is configured. The diff baseline
+/// has to model that. Filling it with the screen background instead — as
+/// [`apply_rendered_scroll`] does — marks every blank cell already-correct, so
+/// the diff skips them and leaves default-background holes on screen wherever
+/// the scroll exposed empty space.
+pub(super) fn apply_terminal_scroll(
+    buf: &mut Buffer,
+    scroll_rows: &Range<u16>,
+    delta_rows: i16,
+    exposed_rows: &Range<u16>,
+) {
+    shift_buffer_rows(buf, scroll_rows, delta_rows);
+    fill_buffer_rows(buf, exposed_rows, &Cell::EMPTY);
+}
+
+fn shift_buffer_rows(buf: &mut Buffer, rows: &Range<u16>, delta_rows: i16) {
     if delta_rows == 0 || rows.start >= rows.end {
         return;
     }
@@ -233,7 +266,18 @@ pub(super) fn shift_buffer_rows(buf: &mut Buffer, rows: &Range<u16>, delta_rows:
     }
 }
 
-pub(super) fn clear_buffer_rows(buf: &mut Buffer, rows: &Range<u16>) {
+fn screen_background_cell() -> Cell {
+    match crate::backend::ratatui_backend::common::current_render_screen_background() {
+        Some(style) => {
+            let mut cell = Cell::EMPTY;
+            cell.set_style(style);
+            cell
+        }
+        None => Cell::EMPTY,
+    }
+}
+
+fn fill_buffer_rows(buf: &mut Buffer, rows: &Range<u16>, fill: &Cell) {
     if rows.start >= rows.end {
         return;
     }
@@ -245,24 +289,11 @@ pub(super) fn clear_buffer_rows(buf: &mut Buffer, rows: &Range<u16>) {
         return;
     }
 
-    // Rows exposed by a scroll must be cleared to the configured root viewport
-    // background (if any), not to blank cells, so the screen background stays
-    // continuous through scroll regions on the incremental draw fast path.
-    let fill_cell =
-        match crate::backend::ratatui_backend::common::current_render_screen_background() {
-            Some(style) => {
-                let mut cell = Cell::EMPTY;
-                cell.set_style(style);
-                cell
-            }
-            None => Cell::EMPTY,
-        };
-
     let width = area.width as usize;
     for row in start..end {
         let row_start = row * width;
         let row_end = row_start + width;
-        buf.content[row_start..row_end].fill(fill_cell.clone());
+        buf.content[row_start..row_end].fill(fill.clone());
     }
 }
 
@@ -276,5 +307,56 @@ pub(super) fn replace_buffer_snapshot(slot: &mut Option<Buffer>, source: &Buffer
             snapshot.content.clone_from(&source.content);
         }
         None => *slot = Some(source.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::buffer::{Buffer, Cell};
+    use ratatui::style::{Color, Style};
+
+    use crate::backend::ratatui_backend::common::push_render_screen_background;
+
+    use super::{apply_rendered_scroll, apply_terminal_scroll};
+
+    /// Model one incremental scroll step over an empty surface and return the
+    /// cells the diff would push to the backend.
+    fn exposed_row_updates(screen_bg: Option<Style>) -> Vec<(u16, u16, Cell)> {
+        let area = ratatui::layout::Rect::new(0, 0, 4, 4);
+        let scroll_rows = 0..4;
+        let exposed = 3..4;
+        let _scope = push_render_screen_background(screen_bg);
+
+        let mut rendered = Buffer::empty(area);
+        apply_rendered_scroll(&mut rendered, &scroll_rows, 1, &exposed);
+
+        let mut shown_by_terminal = Buffer::empty(area);
+        apply_terminal_scroll(&mut shown_by_terminal, &scroll_rows, 1, &exposed);
+
+        shown_by_terminal
+            .diff(&rendered)
+            .into_iter()
+            .map(|(x, y, cell)| (x, y, cell.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn exposed_rows_repaint_the_screen_background_the_terminal_did_not_fill() {
+        let bg = Color::Rgb(20, 20, 20);
+        let updates = exposed_row_updates(Some(Style::new().bg(bg)));
+
+        // Background-color erase fills the exposed rows with the terminal
+        // default, so every cell of the band has to be written back — otherwise
+        // blank cells keep the host background and read as holes in the surface.
+        assert_eq!(updates.len(), 4, "every exposed cell must be repainted");
+        assert!(updates.iter().all(|(_, y, cell)| *y == 3 && cell.bg == bg));
+    }
+
+    #[test]
+    fn exposed_rows_stay_cheap_without_a_screen_background() {
+        assert!(
+            exposed_row_updates(None).is_empty(),
+            "a transparent surface already matches what the terminal scrolled in"
+        );
     }
 }

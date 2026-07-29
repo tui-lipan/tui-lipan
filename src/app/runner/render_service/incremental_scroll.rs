@@ -12,8 +12,8 @@ use crate::core::node::NodeId;
 use crate::style::Rect;
 
 use super::super::scroll_optimize::{
-    IncrementalScrollPlan, clear_buffer_rows, collect_scroll_repaint_regions, shift_buffer_rows,
-    subtree_has_hoverables,
+    IncrementalScrollPlan, apply_rendered_scroll, apply_terminal_scroll,
+    collect_scroll_repaint_regions, subtree_has_hoverables,
 };
 use super::super::{ActiveDrag, ScrollFrameSnapshot};
 use super::{AppRunner, DrawMode};
@@ -196,15 +196,21 @@ impl<C: Component> AppRunner<C> {
             {
                 let rendered = frame.buffer_mut();
                 rendered.clone_from(last_snapshot);
-                shift_buffer_rows(rendered, &plan.scroll_rows, plan.delta_rows);
-                clear_buffer_rows(rendered, &exposed_rows);
+                apply_rendered_scroll(rendered, &plan.scroll_rows, plan.delta_rows, &exposed_rows);
             }
             render_regions(&mut frame, ctx, &plan.repaint_regions);
             last_snapshot.clone_from(frame.buffer_mut());
         }
 
-        shift_buffer_rows(diff_snapshot, &plan.scroll_rows, plan.delta_rows);
-        clear_buffer_rows(diff_snapshot, &exposed_rows);
+        // The diff baseline is what the terminal shows once it has run the
+        // scroll-region command below, which is not the same fill as the frame
+        // above — see `apply_terminal_scroll`.
+        apply_terminal_scroll(
+            diff_snapshot,
+            &plan.scroll_rows,
+            plan.delta_rows,
+            &exposed_rows,
+        );
 
         let updates = diff_snapshot.diff(last_snapshot);
 
