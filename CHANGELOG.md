@@ -13,6 +13,13 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add sentinel resolution helpers on `Color`, `Style`, and `Theme`, plus
+  `TerminalColorPalette::from_theme`; host-derived themes retain their exact
+  `HostTerminalColors` as a typed theme extension.
+- Add `Badge` segment caps for powerline-style chains: `CapStyle`, `CapSides`,
+  and the `cap`, `cap_sides`, `cap_behind`, and `cap_same_color` builders. The
+  `powerline_bar` example demonstrates cap styles, equal-color seams, and Nerd
+  Font fallback.
 - Add display-column span editing, untrusted display-text sanitization, and
   dependency-free URL/path/Git hint scanning under `utils`; the optional
   `hints-regex` feature adds string-configured custom scanners.

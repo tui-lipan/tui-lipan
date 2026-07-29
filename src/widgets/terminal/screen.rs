@@ -24,7 +24,7 @@ use super::osc::{
     SemanticObserver, TerminalCommandPhase, TerminalSemanticEvent, TerminalSemanticState,
 };
 use super::scrollback_ledger::{LedgerTerm, ledger_capacity, settle_history};
-use crate::style::{CaretShape, Color as UiColor, HostTerminalColors, Span, Style};
+use crate::style::{CaretShape, Color as UiColor, HostTerminalColors, Span, Style, Theme};
 use crate::utils::{GridPos, GridSelection, SelectionEnd};
 
 /// Kind of semantic mark anchored to an absolute text line.
@@ -442,6 +442,59 @@ impl TerminalColorPalette {
     /// app-owned surface color for embedded terminal panes.
     pub fn from_host_colors(colors: HostTerminalColors, background: UiColor) -> Self {
         Self::new(colors.fg, background, colors.ansi)
+    }
+
+    /// Create a terminal palette from an application theme.
+    ///
+    /// A [`HostTerminalColors`] theme extension takes precedence so a probed ANSI palette is
+    /// preserved exactly. Otherwise the palette is derived from the theme's semantic status,
+    /// icon, accent, and muted colors. `background` is resolved to black when it is a sentinel,
+    /// matching terminal protocol defaults.
+    pub fn from_theme(theme: &Theme, background: UiColor) -> Self {
+        let resolve_style_fg = |style: Style, fallback: UiColor| {
+            style
+                .resolved_fg()
+                .map(|color| color.resolve(UiColor::Reset))
+                .filter(|color| !color.is_sentinel())
+                .unwrap_or(fallback)
+        };
+        let foreground = resolve_style_fg(theme.primary, UiColor::White);
+        let background = background.resolve(UiColor::Black);
+        if let Some(host_colors) = theme.extension::<HostTerminalColors>() {
+            return Self::from_host_colors(*host_colors, background);
+        }
+
+        let muted = resolve_style_fg(theme.muted, theme.surface.menu.resolve(background));
+        let accent = resolve_style_fg(theme.accent, theme.border_active.resolve(foreground));
+        let error = theme.status.error.resolve(UiColor::Red);
+        let success = theme.status.success.resolve(UiColor::Green);
+        let warning = theme.status.warning.resolve(UiColor::Yellow);
+        let info = theme.status.info.resolve(accent);
+        let purple = theme.file_icons.purple.resolve(UiColor::Magenta);
+        let cyan = theme.file_icons.cyan.resolve(UiColor::Cyan);
+
+        Self::new(
+            foreground,
+            background,
+            [
+                background,
+                error,
+                success,
+                warning,
+                info,
+                purple,
+                cyan,
+                foreground,
+                muted,
+                error.lighten_by(0.18),
+                success.lighten_by(0.18),
+                warning.lighten_by(0.18),
+                accent.lighten_by(0.12),
+                purple.lighten_by(0.18),
+                cyan.lighten_by(0.18),
+                foreground.lighten_by(0.12),
+            ],
+        )
     }
 
     /// Set the terminal default foreground color.
@@ -1976,6 +2029,71 @@ mod tests {
         assert_eq!(palette.foreground, Some(colors.fg));
         assert_eq!(palette.background, Some(pane_background));
         assert_eq!(palette.ansi, colors.ansi);
+    }
+
+    #[test]
+    fn terminal_palette_from_theme_preserves_host_extension() {
+        let ansi = std::array::from_fn(|i| UiColor::Rgb(i as u8, 10, 20));
+        let colors = HostTerminalColors {
+            ansi,
+            fg: UiColor::Rgb(230, 231, 232),
+            bg: UiColor::Rgb(10, 11, 12),
+        };
+        let theme = Theme::from_host_colors(colors);
+        let palette = TerminalColorPalette::from_theme(&theme, UiColor::Rgb(1, 2, 3));
+
+        assert_eq!(palette.foreground, Some(colors.fg));
+        assert_eq!(palette.background, Some(UiColor::Rgb(1, 2, 3)));
+        assert_eq!(palette.ansi, colors.ansi);
+    }
+
+    #[test]
+    fn terminal_palette_from_theme_derives_ansi_slots() {
+        let foreground = UiColor::Rgb(230, 231, 232);
+        let background = UiColor::Rgb(10, 11, 12);
+        let accent = UiColor::Rgb(30, 80, 210);
+        let theme = Theme::custom(foreground, background, accent);
+        let palette = TerminalColorPalette::from_theme(&theme, background);
+
+        assert_eq!(palette.foreground, Some(foreground));
+        assert_eq!(palette.background, Some(background));
+        assert_eq!(palette.ansi[0], background);
+        assert_eq!(palette.ansi[1], theme.status.error);
+        assert_eq!(palette.ansi[4], theme.status.info);
+        assert_eq!(palette.ansi[12], accent.lighten_by(0.12));
+    }
+
+    #[test]
+    fn terminal_palette_from_theme_resolves_sentinel_derivations() {
+        let mut theme = Theme::custom(UiColor::Backdrop, UiColor::Transparent, UiColor::Reset)
+            .primary(Style::new().fg(UiColor::Backdrop))
+            .accent(Style::new().fg(UiColor::Transparent))
+            .muted(Style::new().fg(UiColor::Reset));
+        theme.border_active = UiColor::Backdrop;
+        theme.surface.menu = UiColor::Transparent;
+        theme.status.error = UiColor::Backdrop;
+        theme.status.success = UiColor::Transparent;
+        theme.status.warning = UiColor::Reset;
+        theme.status.info = UiColor::Backdrop;
+        theme.file_icons.purple = UiColor::Transparent;
+        theme.file_icons.cyan = UiColor::Reset;
+
+        let palette = TerminalColorPalette::from_theme(&theme, UiColor::Backdrop);
+        let colors = palette
+            .foreground
+            .into_iter()
+            .chain(palette.background)
+            .chain(palette.ansi)
+            .collect::<Vec<_>>();
+
+        assert!(colors.iter().all(|color| !color.is_sentinel()));
+        assert_eq!(palette.foreground, Some(UiColor::White));
+        assert_eq!(palette.background, Some(UiColor::Black));
+        assert_eq!(palette.ansi[1], UiColor::Red);
+        assert_eq!(palette.ansi[2], UiColor::Green);
+        assert_eq!(palette.ansi[3], UiColor::Yellow);
+        assert_eq!(palette.ansi[5], UiColor::Magenta);
+        assert_eq!(palette.ansi[6], UiColor::Cyan);
     }
 
     #[test]

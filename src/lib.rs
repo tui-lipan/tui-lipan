@@ -135,7 +135,7 @@ pub use crate::ui_snapshot::{
     UiWidgetDesc, UiWidgetKind,
 };
 pub use crate::validation::{StringValidator, ValidationError, Validator};
-pub use crate::widgets::{Badge, BadgePosition};
+pub use crate::widgets::{Badge, BadgePosition, CapSides, CapStyle};
 pub use crate::widgets::{
     BorderLabels, Canvas, CanvasItem, ClassDiagram, ClassDiagramTheme, ClassMember, ClassRelation,
     ClassRelationKind, ClassSpec, ClassVisibility, ContextProvider, DEFAULT_PREVIEW_MAX_HEIGHT,

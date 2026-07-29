@@ -48,6 +48,7 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 | `modal_auto_height` | `Modal` + `List` with `Auto` vs `max_height` constraints |
 | `modal_percent_repro` | Modal height percent and `OverlayScope` behavior |
 | `mouse_region_click` | `MouseRegion`: passthrough vs capturing button/region clicks |
+| `powerline_bar` | Badge cap styles and neighbor-background threading for compact segment chains |
 
 ---
 

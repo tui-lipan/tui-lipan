@@ -183,6 +183,9 @@ serde_json = "1.0.151"
 # ─── Examples ────────────────────────────────────────────────────────────────
 
 [[example]]
+name = "powerline_bar"
+
+[[example]]
 name = "big_text"
 required-features = ["big-text"]
 
