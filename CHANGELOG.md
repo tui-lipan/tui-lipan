@@ -97,6 +97,8 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- Promote alpha-aware `Paint::rgba` backgrounds in the styling guide with practical translucent
+  surface and toast examples.
 - Remove the unused public `Transition::is_exit` field (breaking).
 - `ManagedTerminal` now coalesces PTY resize bursts over a configurable 16 ms
   trailing window, preventing transient width changes from repeatedly clearing

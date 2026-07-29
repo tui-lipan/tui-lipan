@@ -36,6 +36,33 @@ Style::new()
 
 `Style` also exposes a `tint` field (`Option<(Color, f32)>`) for advanced/manual construction, but normal usage should prefer `.tint_by(color, alpha)`.
 
+### Translucent Surfaces
+
+Use alpha-aware background paint when a panel, toast, popover, or other surface
+should blend its chosen color over the content beneath it. `Paint::rgba` takes
+red, green, blue, and an integer alpha in `0..=255`:
+
+```rust
+use tui_lipan::{Color, Paint, Style, Toast};
+
+let toast = Toast::new("Saved")
+    .frame_style(Style::new().bg(Paint::rgba(16, 16, 21, 204)));
+
+// Equivalent normalized-alpha form (0.0..=1.0):
+let surface = Style::new().bg_alpha(Color::rgb(16, 16, 21), 0.8);
+```
+
+`Paint::hex("#101015CC")` expresses the same RGBA paint in hexadecimal. Alpha
+backgrounds are source-over composited with the existing cell background, so
+they are the usual choice for a visibly distinct surface that still reflects
+what is underneath.
+
+This differs from `Color::Transparent`, which does not paint the background at
+all, and `Color::Backdrop`, which preserves the existing background while
+allowing a surface to clear underlying text. It also differs from
+`Style::tint_by`: tint is a compositor effect for modifying already-rendered
+cells, not a replacement for an alpha background on an ordinary widget surface.
+
 Relative transforms are resolved after style patching, so they work well with theme-provided or inherited style values:
 
 ```rust
