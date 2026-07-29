@@ -20,6 +20,7 @@ The recommended starting point: a complete PTY terminal with automatic lifecycle
 | `placeholder` | `Option<Arc<str>>` | Text shown before PTY is ready |
 | `forward_mouse` | `bool` | Forward mouse events to PTY (default: true) |
 | `scroll_wheel` | `bool` | Mouse wheel for scrollback (default: true) |
+| `resize_debounce` | `Duration` | Trailing-edge PTY/screen resize delay (default: 16ms; zero is immediate) |
 | `style` | `Style` | Terminal content style |
 | `focusable` | `bool` | Accept focus (default: true) |
 | `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
@@ -44,8 +45,13 @@ ManagedTerminal::new()
     )
     .scrollback(5000)
     .initial_size(120, 40)
+    .resize_debounce(std::time::Duration::from_millis(16))
     .on_status(ctx.link().callback(Msg::TerminalStatus))
 ```
+
+`ManagedTerminal` coalesces rapid viewport changes at the trailing edge of this delay so the PTY
+and screen emulator are resized once at the settled dimensions. Set it to `Duration::ZERO` to
+apply each resize immediately.
 
 **Status events (`ManagedTerminalStatus`):**
 
@@ -97,13 +103,22 @@ The low-level terminal viewport widget. Use when you need custom PTY handling, m
 | `height` | `Length` | Height |
 | `on_input` | `Callback<TerminalInputEvent>` | Keyboard/paste input from user |
 | `paste_shortcut_behavior` | `TerminalPasteShortcutBehavior` | Direct `Ctrl+V` routing (`Forward` by default; `Performable` pastes text and forwards rich/non-text content) |
-| `on_resize` | `Callback<TerminalViewport>` | Viewport size changed |
+| `on_resize` | `Callback<TerminalViewport>` | Viewport size changed; emitted synchronously during reconciliation |
 | `on_scroll_to` | `Callback<usize>` | Scrollback offset changed |
 | `on_mouse_forward` | `Callback<Vec<u8>>` | Mouse event bytes for PTY |
 | `on_selection` | `Callback<TerminalSelection>` | Selection changed |
 | `on_key` | `KeyHandler` | Low-level key handler |
 
+Calling `selection(...)` makes the selection controlled. Mouse clicks and drags
+still emit `on_selection`, but they do not transiently overwrite the rendered
+selection while the parent remains authoritative.
+
 Use `scrollbar_config` to configure layout variant, gap, and thumb for the vertical scrollbar.
+
+`Terminal::on_resize` runs synchronously when reconciliation observes a changed viewport, before
+the frame is drawn. The native runner may coalesce consecutive host resize events before the next
+reconciliation, so the callback is not a one-for-one notification of every host event; it reports
+the viewport that is actually reconciled.
 
 ---
 
@@ -338,6 +353,42 @@ let replay = screen.export_replay_bytes();
 `TerminalRenderSnapshot::from_parts(...)` rebuilds a snapshot from owned parts. It is intended for
 applications that define their own versioned external snapshot transport. `TerminalRenderSnapshot`
 itself is not a stable wire protocol.
+
+### Selection, decoration, and copy mode
+
+Terminal grid coordinates are display columns. Use
+`snapshot.selection_text(&selection, end_kind, trim_row_end)` to extract exactly
+the cells a selection highlights, including rows containing CJK or emoji.
+`TerminalScreen::export_selection_text` is intentionally different: it reads
+pre-trimmed scrollback text and therefore takes character-indexed positions.
+
+`snapshot.decorated(&decorations)` applies batched `TerminalDecoration::highlight`
+and `TerminalDecoration::label` values to `color_lines`. It deliberately leaves
+the snapshot's plain `text` untouched, so search/hint scanning and selection
+extraction continue to see undecorated terminal output. Decorations are applied
+before the renderer's selection style, so selection remains the final overlay.
+`TerminalDecoration::label(row, col, span)` accepts any display column; pass a
+detected hint's `end_col` to append a label immediately after the match.
+
+`TerminalCopyMode` is navigation state, not a widget. An app owns clipboard and
+screen integration:
+
+```rust
+match mode.handle_key(key, grid) {
+    CopyModeAction::Moved | CopyModeAction::SelectionChanged =>
+        screen.set_scrollback(mode.scrollback_offset()),
+    CopyModeAction::RequestCopy => {
+        if let Some(selection) = mode.selection() {
+            let text = snapshot.selection_text(&selection, SelectionEnd::Inclusive, true);
+            ctx.clipboard().copy(&text)?;
+            // Leaving copy mode here clears the selection, so hand the flash its
+            // own range rather than keeping the selection alive to be painted.
+            ctx.flash_copy_feedback_range(terminal_node_id, selection);
+        }
+    }
+    CopyModeAction::Cancel | CopyModeAction::Ignored => {}
+}
+```
 
 ### Cursor shape and blinking
 

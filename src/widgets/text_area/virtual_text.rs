@@ -1,35 +1,20 @@
 use std::hash::{Hash, Hasher};
 
 use rustc_hash::FxHasher;
-use unicode_width::UnicodeWidthStr;
 
 use crate::style::Span;
+use crate::utils::sanitize::sanitize_display_spans;
+use crate::utils::spans::spans_width;
 use crate::utils::text::{self, VirtualTextInsertion};
 
 use super::{TextAreaVirtualText, TextAreaVisualLine, VirtualTextPlacement};
 
-pub(crate) fn sanitize_virtual_text_spans(spans: Vec<Span>) -> Vec<Span> {
-    spans
-        .into_iter()
-        .filter_map(|mut span| {
-            if span.content.contains('\n') || span.content.contains('\r') {
-                let stripped = span
-                    .content
-                    .chars()
-                    .filter(|ch| *ch != '\n' && *ch != '\r')
-                    .collect::<String>();
-                span.content = stripped.into();
-            }
-            (!span.content.is_empty()).then_some(span)
-        })
-        .collect()
+pub(crate) fn sanitize_virtual_text_spans(spans: &[Span]) -> Vec<Span> {
+    sanitize_display_spans(spans)
 }
 
 pub(crate) fn virtual_text_content_width(vt: &TextAreaVirtualText) -> usize {
-    vt.content
-        .iter()
-        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-        .sum()
+    spans_width(&vt.content)
 }
 
 pub(crate) fn text_area_virtual_text_hash(virtual_texts: &[TextAreaVirtualText]) -> u64 {

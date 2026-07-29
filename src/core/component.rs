@@ -13,11 +13,12 @@ use crate::core::element::{Element, Key};
 use crate::core::event::KeyEvent;
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::core::runtime_env::{
-    DevToolsRequest, MemoDependency, MemoDependencySnapshot, RuntimeEnv, ScrollDependency,
-    ScrollDependencyKind, ScrollIdentity, TranscriptEntry,
+    CopyFeedbackRequest, DevToolsRequest, MemoDependency, MemoDependencySnapshot, RuntimeEnv,
+    ScrollDependency, ScrollDependencyKind, ScrollIdentity, TranscriptEntry,
 };
 use crate::runtime::FocusRequest;
 use crate::style::{HostTerminalColors, Rect, RichText, Theme, ThemeExtension};
+use crate::utils::GridSelection;
 
 /// Side-effect command returned from `Component::update`.
 ///
@@ -1300,6 +1301,34 @@ impl<C: Component> Context<C> {
         self.env.full_repaint.set(true);
     }
 
+    /// Flash the active copy-feedback style on [`NodeId`] `node_id`.
+    ///
+    /// The flash uses the duration and style from [`ClipboardConfig`](crate::ClipboardConfig).
+    /// The request is delivered to the runner at the next animation boundary, so this method is
+    /// safe to call from a component update without mutating renderer-owned state directly. The
+    /// target is captured when this method is called; later focus changes cannot redirect it. The
+    /// request is ignored if the node is no longer valid or copy feedback is disabled with a zero
+    /// duration.
+    pub fn flash_copy_feedback(&self, node_id: NodeId) {
+        self.env.request_copy_feedback(node_id, None);
+    }
+
+    /// Flash the copy-feedback style over an explicit grid `range` on `node_id`.
+    ///
+    /// [`Context::flash_copy_feedback`] paints whatever the node currently has selected, so a
+    /// caller that copies and immediately leaves its selection mode has to keep the selection
+    /// alive purely so the flash has something to draw. Passing the copied range instead lets
+    /// the selection be cleared straight away. When the runner drains the request, it captures
+    /// the terminal rows covered by the range and paints that snapshot for the flash's duration,
+    /// independently of later selection or terminal-content changes.
+    ///
+    /// Columns are display columns, matching the terminal renderer. Only widgets that render a
+    /// grid selection honor the range; elsewhere this behaves like
+    /// [`Context::flash_copy_feedback`].
+    pub fn flash_copy_feedback_range(&self, node_id: NodeId, range: GridSelection) {
+        self.env.request_copy_feedback(node_id, Some(range));
+    }
+
     /// Request that the built-in devtools panel becomes visible.
     pub fn show_devtools(&self) {
         *self.env.devtools_request.borrow_mut() = Some(DevToolsRequest::Show);
@@ -1321,6 +1350,10 @@ impl<C: Component> Context<C> {
 
     pub(crate) fn take_full_repaint_request(&self) -> bool {
         self.env.full_repaint.replace(false)
+    }
+
+    pub(crate) fn take_copy_feedback_requests(&self) -> Vec<CopyFeedbackRequest> {
+        self.env.take_copy_feedback_requests()
     }
 
     pub(crate) fn take_devtools_request(&self) -> Option<DevToolsRequest> {

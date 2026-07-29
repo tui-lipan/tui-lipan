@@ -79,6 +79,7 @@ undo = { version = "0.52", default-features = false, features = ["alloc"] }
 web-time = "1.1"
 
 nucleo = "0.5.0"
+regex-lite = { version = "0.1", optional = true }
 
 rustc-hash = "2"
 
@@ -163,6 +164,7 @@ markdown       = ["dep:pulldown-cmark"]
 terminal      = ["dep:portable-pty", "dep:alacritty_terminal"]
 terminal-serde = ["terminal", "dep:serde"]
 profiling-tracing = ["dep:tracing"]
+hints-regex = ["dep:regex-lite"]
 theme-reload = ["dep:serde", "dep:toml", "dep:notify"]
 ui-snapshot-json = ["dep:serde", "dep:serde_json"]
 ui-snapshot-png = ["dep:image", "dep:font8x8", "dep:fontdb", "dep:fontdue"]
@@ -190,6 +192,18 @@ required-features = ["big-text"]
 
 [[example]]
 name = "terminal_filetree_devtools"
+required-features = ["terminal"]
+
+[[example]]
+name = "terminal_search_highlight"
+required-features = ["terminal"]
+
+[[example]]
+name = "terminal_hints"
+required-features = ["terminal"]
+
+[[example]]
+name = "terminal_copy_mode"
 required-features = ["terminal"]
 
 [[example]]
