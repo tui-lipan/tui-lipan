@@ -48,6 +48,7 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 | `modal_auto_height` | `Modal` + `List` with `Auto` vs `max_height` constraints |
 | `modal_percent_repro` | Modal height percent and `OverlayScope` behavior |
 | `mouse_region_click` | `MouseRegion`: passthrough vs capturing button/region clicks |
+| `powerline_bar` | Badge cap styles and neighbor-background threading for compact segment chains |
 
 ---
 
@@ -250,9 +251,15 @@ demonstrate the extended grammar set.
 | Example | Description |
 |---------|-------------|
 | `terminal_filetree_devtools` | `FileTree` + `ManagedTerminal` devtools split |
+| `terminal_search_highlight` | Display-column search highlighting through snapshot decorations |
+| `terminal_copy_mode` | Vim-style copy-mode navigation, selection copying, and copy feedback |
+| `terminal_hints` | URL/path/Git/custom hint mode with end labels, immediate lowercase-copy/uppercase-open activation, and copy flash |
 
 ```bash
 cargo run --example terminal_filetree_devtools --features terminal
+cargo run --example terminal_search_highlight --features terminal
+cargo run --example terminal_copy_mode --features terminal
+cargo run --example terminal_hints --features terminal
 ```
 
 ### `devtools`

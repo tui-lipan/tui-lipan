@@ -36,6 +36,15 @@ Column encoding for `LineIndex` conversions:
 Snapshot helper for converting between canonical byte offsets and
 `TextPosition` / `TextRange`. Rebuild it when the underlying text changes.
 
+### `SelectionEnd`
+
+Controls how a normalized `GridSelection` endpoint is interpreted:
+
+| Variant | Meaning |
+|---------|---------|
+| `Exclusive` **(default)** | The endpoint is the first grid position not selected |
+| `Inclusive` | The endpoint cell is included, for cell-cursor copy modes |
+
 ---
 
 ## UI Snapshots (agent / design review)
@@ -170,6 +179,24 @@ Behavior when a key fails to complete a pending app command chord.
 | `ForwardPrefixAndCurrent` | Forward both prefix and mismatching key to lower-priority sinks |
 | `CancelOnly` | Cancel pending command state; treat mismatch as unhandled by commands |
 
+### `CopyModeAction`
+
+Result of `TerminalCopyMode::handle_key`:
+
+| Variant | Meaning |
+|---------|---------|
+| `Ignored` | No copy-mode binding handled the key, or a motion was already at its boundary |
+| `Moved` | Cursor or scrollback position changed without an active selection |
+| `SelectionChanged` | Selection anchor or anchored cursor position changed |
+| `RequestCopy` | Copy the current selection |
+| `Cancel` | Leave copy mode without copying |
+
+### `HintKind` and `HintFilter`
+
+`HintKind` identifies scanner output as `Url`, `Path`, `GitSha`, or
+`Custom(u16)`. `HintFilter` reports incremental label filtering as `NoMatch`,
+`Ambiguous`, or `Selected(usize)`.
+
 ---
 
 ## Layout & Sizing
@@ -289,6 +316,22 @@ Strategy used when frame border symbols overlap (e.g. adjacent or overlapping fr
 | `BorderMergeMode::Replace` | Last write wins; no symbol merging (clean overlap override) |
 | `BorderMergeMode::Exact` | Merge only when an exact box-drawing intersection symbol exists **(default)** |
 | `BorderMergeMode::Fuzzy` | Merge using the closest matching symbol when an exact merge symbol is unavailable |
+
+### `CapStyle` and `CapSides`
+
+`Badge` uses these enums for optional segment caps:
+
+| `CapStyle` variant | Effect |
+|--------------------|--------|
+| `CapStyle::Padded` | Keep the segment undecorated **(default)** |
+| `CapStyle::Half` | Font-safe half-block caps (`U+2590` / `U+258C`) |
+| `CapStyle::Round` | Rounded Powerline caps (`U+E0B6` / `U+E0B4`) |
+| `CapStyle::Arrow` | Pointed Powerline caps (`U+E0B2` / `U+E0B0`) |
+
+`CapSides::Both` (default) draws both ends; `Left` and `Right` draw one end,
+while `None` disables both. `CapStyle::requires_nerd_font()` identifies `Round`
+and `Arrow`; `font_safe()` degrades either to `Padded`. An explicitly selected
+`Half` remains unchanged. `CapStyle::all()` returns the canonical style cycle.
 
 ### `Overflow`
 

@@ -90,6 +90,20 @@ impl fmt::Display for Color {
 }
 
 impl Color {
+    /// Whether this color is a semantic sentinel rather than a concrete pigment.
+    ///
+    /// Sentinel colors are [`Color::Reset`], [`Color::Backdrop`], and
+    /// [`Color::Transparent`]. They describe terminal or compositing behavior
+    /// instead of a color that can be converted directly to RGB.
+    pub const fn is_sentinel(self) -> bool {
+        matches!(self, Self::Reset | Self::Backdrop | Self::Transparent)
+    }
+
+    /// Replace a sentinel color with `fallback`, leaving concrete colors unchanged.
+    pub const fn resolve(self, fallback: Self) -> Self {
+        if self.is_sentinel() { fallback } else { self }
+    }
+
     /// Create from a hex string (e.g., `"#FF5733"` or `"FF5733"`).
     ///
     /// Accepted formats (with or without leading `#`):
@@ -164,6 +178,15 @@ impl Color {
             Color::LightCyan => Some((0, 255, 255)),
             Color::White => Some((255, 255, 255)),
         }
+    }
+
+    /// Convert to RGB, resolving a sentinel against `fallback` first.
+    ///
+    /// If both colors are sentinels, black is the final concrete fallback.
+    pub fn to_rgb_or(self, fallback: Color) -> (u8, u8, u8) {
+        self.to_rgb()
+            .or_else(|| fallback.to_rgb())
+            .unwrap_or((0, 0, 0))
     }
 
     /// Dim this color by the default amount.
@@ -535,6 +558,99 @@ fn indexed_to_rgb(index: u8) -> (u8, u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::{Color, Paint};
+
+    #[test]
+    fn sentinel_classification_is_exhaustive() {
+        for color in [Color::Reset, Color::Backdrop, Color::Transparent] {
+            assert!(color.is_sentinel());
+        }
+
+        for color in [
+            Color::Black,
+            Color::Red,
+            Color::Green,
+            Color::Yellow,
+            Color::Blue,
+            Color::Magenta,
+            Color::Cyan,
+            Color::Gray,
+            Color::DarkGray,
+            Color::LightRed,
+            Color::LightGreen,
+            Color::LightYellow,
+            Color::LightBlue,
+            Color::LightMagenta,
+            Color::LightCyan,
+            Color::White,
+            Color::Indexed(42),
+            Color::Rgb(1, 2, 3),
+        ] {
+            assert!(!color.is_sentinel());
+        }
+    }
+
+    #[test]
+    fn resolve_replaces_only_sentinels() {
+        let fallback = Color::Rgb(10, 20, 30);
+
+        for color in [Color::Reset, Color::Backdrop, Color::Transparent] {
+            assert_eq!(color.resolve(fallback), fallback);
+        }
+        for color in [
+            Color::Black,
+            Color::Red,
+            Color::Green,
+            Color::Yellow,
+            Color::Blue,
+            Color::Magenta,
+            Color::Cyan,
+            Color::Gray,
+            Color::DarkGray,
+            Color::LightRed,
+            Color::LightGreen,
+            Color::LightYellow,
+            Color::LightBlue,
+            Color::LightMagenta,
+            Color::LightCyan,
+            Color::White,
+            Color::Indexed(42),
+            Color::Rgb(1, 2, 3),
+        ] {
+            assert_eq!(color.resolve(fallback), color);
+        }
+    }
+
+    #[test]
+    fn to_rgb_or_uses_fallback_only_for_sentinels() {
+        let fallback = Color::Rgb(10, 20, 30);
+
+        for color in [Color::Reset, Color::Backdrop, Color::Transparent] {
+            assert_eq!(color.to_rgb_or(fallback), (10, 20, 30));
+        }
+        for color in [
+            Color::Black,
+            Color::Red,
+            Color::Green,
+            Color::Yellow,
+            Color::Blue,
+            Color::Magenta,
+            Color::Cyan,
+            Color::Gray,
+            Color::DarkGray,
+            Color::LightRed,
+            Color::LightGreen,
+            Color::LightYellow,
+            Color::LightBlue,
+            Color::LightMagenta,
+            Color::LightCyan,
+            Color::White,
+            Color::Indexed(42),
+            Color::Rgb(1, 2, 3),
+        ] {
+            assert_eq!(color.to_rgb_or(fallback), color.to_rgb().unwrap());
+        }
+        assert_eq!(Color::Reset.to_rgb_or(Color::Transparent), (0, 0, 0));
+    }
 
     #[test]
     fn dim_by_zero_keeps_color() {

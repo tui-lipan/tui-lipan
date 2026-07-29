@@ -9,7 +9,7 @@ use crate::core::node::{NodeId, NodeKind};
 use crate::runtime::BubbleKeyResult;
 use crate::style::{Style, ThemeRole};
 #[cfg(feature = "terminal")]
-use crate::widgets::internal::terminal_mouse_content_rect;
+use crate::widgets::internal::{apply_terminal_selection_input, terminal_mouse_content_rect};
 #[cfg(feature = "terminal")]
 use crate::widgets::{MouseMode, mouse_event_to_bytes};
 use std::sync::Arc;
@@ -358,7 +358,11 @@ impl<C: Component> AppRunner<C> {
             #[cfg(feature = "terminal")]
             if let Some(on_selection) = clear_terminal {
                 if let NodeKind::Terminal(node) = &mut self.core.tree.node_mut(id).kind {
-                    node.selection = None;
+                    apply_terminal_selection_input(
+                        &mut node.selection,
+                        node.selection_controlled,
+                        None,
+                    );
                 }
                 if let Some(cb) = on_selection {
                     cb.emit(crate::widgets::TerminalSelectionEvent {

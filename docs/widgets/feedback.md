@@ -230,12 +230,42 @@ Small status indicator overlaid on an element.
 | `padding` | `impl Into<Padding>` | Badge padding |
 | `offset` | `(i16, i16)` | Position offset from corner |
 | `position` | `BadgePosition` | Corner to attach to |
-| `width` | `Length` | Badge width |
+| `width` | `Length` | Inner badge-frame width; caps are composed outside it |
 | `height` | `Length` | Badge height |
+| `cap` | `CapStyle` | Segment treatment (`Padded`, `Half`, `Round`, or `Arrow`) |
+| `cap_sides` | `CapSides` | Which segment ends receive caps (`Both` by default) |
+| `cap_behind` | `Color` | Background painted behind cap glyphs |
+| `cap_same_color` | `bool` | Use a contrasting thin left separator for equal-color neighbors |
 
 ```rust
 Badge::new("New")
     .style(Style::new().fg(Color::White).bg(Color::Red))
-    .position(BadgePosition::TopRight)
+    .cap(CapStyle::Round)
+    .cap_behind(Color::DarkGray)
+    .position(BadgePosition::TopEnd)
     .child(button_element)
 ```
+
+`Round` and `Arrow` require a Powerline/Nerd Font. Call `font_safe()` to
+degrade either to undecorated `Padded`; an explicitly selected `Half` remains.
+Thread the previous segment background through `cap_behind` when composing a
+zero-gap chain. Set `cap_same_color(true)` on a later equal-colored segment to
+draw a thin seam in the left cap cell.
+
+### Cap width semantics
+
+Each visible cap is one cell. With `Length::Auto`, a cap first replaces one cell
+of explicit padding on its side, or one leading/trailing ASCII space in the
+label. That keeps the automatically measured segment width unchanged. If no
+replaceable cell exists, the cap extends the measured segment by one cell.
+
+With an explicit badge `width`, that width belongs to the inner `Frame`; caps
+are composed outside it and therefore add one cell per visible cap to the total
+segment. An outer fixed-width container may clip that overflow. Use `Auto` for
+compact chains, or account for cap cells explicitly when fixing the total width.
+
+`Padded` normally draws no cap cells. When `cap_same_color(true)` and the left
+side is enabled, it draws one thin separator and follows the same width rules.
+
+See `examples/powerline_bar.rs` for compact wrappers, all cap styles,
+equal-color seams, side selection, and Nerd Font fallback.

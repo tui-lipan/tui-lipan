@@ -222,6 +222,7 @@ where
         };
 
         backend.core.init();
+        backend.drain_copy_feedback_requests();
         backend.render();
         backend
     }
@@ -715,6 +716,8 @@ where
             );
         }
 
+        dirty |= self.drain_copy_feedback_requests();
+
         if let Some(request) = self.core.ctx.take_focus_request() {
             self.apply_focus_request(request);
             dirty = true;
@@ -759,6 +762,7 @@ where
 
     /// Recompute the current `Element` tree and layout.
     pub fn render(&mut self) {
+        self.drain_copy_feedback_requests();
         let bounds = self.viewport;
         self.core
             .render_element(bounds, self.focused, self.focused_key.as_ref(), None);
@@ -775,6 +779,40 @@ where
         self.ensure_overlay_focus();
         self.notify_focus_change();
         self.refresh_hover_from_last_mouse();
+    }
+
+    fn drain_copy_feedback_requests(&mut self) -> bool {
+        let requests = self.core.ctx.take_copy_feedback_requests();
+        if requests.is_empty() {
+            return false;
+        }
+
+        let duration = Duration::from_millis(
+            self.core
+                .ctx
+                .env()
+                .clipboard_config
+                .copy_feedback_duration_ms as u64,
+        );
+        if duration.is_zero() {
+            return false;
+        }
+
+        let mut dirty = false;
+        for (id, range) in requests {
+            if self.core.tree.is_valid(id) {
+                let range = range.and_then(|selection| {
+                    crate::app::copy_feedback::capture_terminal_range(
+                        &self.core.tree,
+                        id,
+                        selection,
+                    )
+                });
+                self.copy_feedback.trigger_range(id, duration, range);
+                dirty = true;
+            }
+        }
+        dirty
     }
 
     fn notify_focus_change(&mut self) {
@@ -1395,7 +1433,7 @@ mod tests {
     use crate::core::component::{Component, Context, KeyUpdate, Update};
     use crate::core::element::{Element, ElementKind, IntoElement, Key};
     use crate::core::event::{KeyCode, KeyEvent, KeyMods, MouseButton, MouseEvent, MouseKind};
-    use crate::core::node::NodeKind;
+    use crate::core::node::{NodeId, NodeKind};
     use crate::style::resolve::{resolve_base_style, resolve_muted_style};
     use crate::style::{
         Color, DocumentViewPalette, InputPalette, Paint, Rect, Span, Style, TextAreaPalette, Theme,
@@ -1416,6 +1454,28 @@ mod tests {
 
     struct FocusEventHarness {
         log: Rc<RefCell<Vec<String>>>,
+    }
+
+    struct CopyFeedbackHarness;
+
+    impl Component for CopyFeedbackHarness {
+        type Message = NodeId;
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, node_id: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.flash_copy_feedback(node_id);
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            VStack::new()
+                .child(Button::new("Copy"))
+                .child(Button::new("Other"))
+                .into()
+        }
     }
 
     impl Component for FocusEventHarness {
@@ -1639,6 +1699,21 @@ mod tests {
             log.borrow().as_slice(),
             ["blur:first", "focus:second", "hook:first->second"]
         );
+    }
+
+    #[test]
+    fn context_copy_feedback_request_reaches_test_backend_state() {
+        let mut backend = TestBackend::new(CopyFeedbackHarness);
+        backend.focus_next();
+        let target = backend.focused.expect("copy button should be focusable");
+
+        backend.enqueue(target);
+        backend.focus_next();
+        let redirected_focus = backend.focused.expect("second button should be focusable");
+        backend.pump().unwrap();
+
+        assert!(backend.copy_feedback.is_active(target));
+        assert!(!backend.copy_feedback.is_active(redirected_focus));
     }
 
     #[test]

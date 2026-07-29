@@ -78,6 +78,7 @@ mod radio;
 pub(crate) mod scroll;
 mod scroll_view;
 pub(crate) mod search_palette;
+mod segment_cap;
 mod select;
 mod selection;
 mod sequence_diagram;
@@ -254,6 +255,7 @@ pub use search_palette::{
     SearchHighlight, SearchItem, SearchMatchMode, SearchPalette, rank_search_palette_indices,
     rank_search_palette_indices_with_mode, rank_search_palette_indices_with_score,
 };
+pub use segment_cap::{CapSides, CapStyle};
 pub use select::Select;
 pub use selection::TripleClickSelectionMode;
 pub use sequence_diagram::{
@@ -281,13 +283,15 @@ pub use tabs::{Tab, Tabs, TabsEvent, TabsOverflow};
 pub use terminal::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use terminal::{
-    KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, SemanticMark, SemanticMarkKind,
-    Terminal, TerminalBuffer, TerminalColorPalette, TerminalCommandPhase, TerminalInputEvent,
+    CopyModeAction, CopyModeGrid, KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState,
+    SemanticMark, SemanticMarkKind, Terminal, TerminalBuffer, TerminalColorPalette,
+    TerminalCommandPhase, TerminalCopyMode, TerminalDecoration, TerminalInputEvent,
     TerminalInputKind, TerminalKeyModes, TerminalPasteShortcutBehavior, TerminalPty,
     TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen,
     TerminalSelection, TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState,
     TerminalViewport, TerminalWorkingDirectory, TerminalWorkingDirectorySource, encode_paste,
     focus_sequences, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
+    terminal_selection_text,
 };
 pub use text::{Overflow, Text};
 pub use text_area::{

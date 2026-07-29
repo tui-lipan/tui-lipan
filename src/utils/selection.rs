@@ -18,6 +18,20 @@ pub struct GridSelection {
     pub cursor: GridPos,
 }
 
+/// Whether the normalized selection endpoint is exclusive or inclusive.
+///
+/// Grid rendering and the historical [`GridSelection::extract_text`] API use an exclusive end.
+/// An inclusive end is useful for cell cursors, where the cursor identifies the final cell to
+/// include rather than the gap after it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SelectionEnd {
+    /// The endpoint is the first position not included in the selection.
+    #[default]
+    Exclusive,
+    /// The endpoint itself is included in the selection.
+    Inclusive,
+}
+
 impl GridSelection {
     /// Create a new selection starting at the given position.
     pub fn new(pos: GridPos) -> Self {
@@ -66,6 +80,24 @@ impl GridSelection {
     /// Extract selected text from grid lines.
     /// Handles multi-line selection with newlines between rows.
     pub fn extract_text<S: AsRef<str>>(&self, lines: &[S]) -> String {
+        self.extract_text_with(lines, SelectionEnd::Exclusive, false)
+    }
+
+    /// Extract selected text with an explicit endpoint convention and optional row-end trimming.
+    ///
+    /// Columns are character columns because this method operates on text lines rather than
+    /// rendered spans. Use [`crate::widgets::TerminalRenderSnapshot::selection_text`] when the
+    /// positions came from a rendered terminal grid; that path uses display columns.
+    pub fn extract_text_with<S: AsRef<str>>(
+        &self,
+        lines: &[S],
+        endpoint: SelectionEnd,
+        trim_row_end: bool,
+    ) -> String {
+        if self.is_empty() && matches!(endpoint, SelectionEnd::Exclusive) {
+            return String::new();
+        }
+
         let (start, end) = self.normalized();
         let mut result = String::new();
 
@@ -76,15 +108,19 @@ impl GridSelection {
             let col_start = if row == start.row { start.col } else { 0 };
             let col_end = if row == end.row {
                 end.col
+                    .saturating_add(matches!(endpoint, SelectionEnd::Inclusive) as usize)
             } else {
                 line.chars().count()
             };
 
-            let extracted: String = line
+            let mut extracted: String = line
                 .chars()
                 .skip(col_start)
                 .take(col_end.saturating_sub(col_start))
                 .collect();
+            if trim_row_end {
+                extracted.truncate(extracted.trim_end().len());
+            }
 
             result.push_str(&extracted);
             if row < end.row {
@@ -226,6 +262,34 @@ mod tests {
         let sel = GridSelection::new(pos(0, 3));
 
         assert_eq!(sel.extract_text(&lines), "");
+    }
+
+    #[test]
+    fn extract_text_with_supports_inclusive_endpoints() {
+        let lines = ["hello", "world"];
+        let mut sel = GridSelection::new(pos(0, 1));
+        sel.extend_to(pos(0, 3));
+
+        assert_eq!(
+            sel.extract_text_with(&lines, SelectionEnd::Inclusive, false),
+            "ell"
+        );
+        assert_eq!(
+            GridSelection::new(pos(0, 1)).extract_text_with(&lines, SelectionEnd::Inclusive, false),
+            "e"
+        );
+    }
+
+    #[test]
+    fn extract_text_with_can_trim_each_row_end() {
+        let lines = ["a  ", "b  "];
+        let mut sel = GridSelection::new(pos(0, 0));
+        sel.extend_to(pos(1, 3));
+
+        assert_eq!(
+            sel.extract_text_with(&lines, SelectionEnd::Exclusive, true),
+            "a\nb"
+        );
     }
 
     #[test]

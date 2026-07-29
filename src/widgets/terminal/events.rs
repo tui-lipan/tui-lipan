@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use crate::core::event::{KeyCode, KeyEvent, KeyMods, MouseButton, MouseEvent, MouseKind};
 use crate::style::Span;
-use crate::utils::{GridSelection, GridSelectionEvent};
+use crate::utils::spans::{line_text, line_width, slice_columns};
+use crate::utils::{GridSelection, GridSelectionEvent, SelectionEnd};
 
 /// Terminal input event source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,21 +35,48 @@ pub type TerminalSelection = GridSelection;
 /// Terminal selection event payload.
 pub type TerminalSelectionEvent = GridSelectionEvent;
 
+/// Extract a terminal selection from styled rendered lines.
+///
+/// Terminal selection columns are **display columns**, not character indices. Wide characters and
+/// zero-width combining characters therefore use the same column accounting as the renderer.
+/// The selection endpoint is exclusive, matching mouse drag coordinates.
 pub fn terminal_selection_text(lines: &[Vec<Span>], selection: &GridSelection) -> String {
-    if selection.is_empty() {
+    terminal_selection_text_with(lines, selection, SelectionEnd::Exclusive, false)
+}
+
+/// Extract a terminal selection with an explicit endpoint and row-trimming policy.
+pub(crate) fn terminal_selection_text_with(
+    lines: &[Vec<Span>],
+    selection: &GridSelection,
+    endpoint: SelectionEnd,
+    trim_row_end: bool,
+) -> String {
+    if selection.is_empty() && matches!(endpoint, SelectionEnd::Exclusive) {
         return String::new();
     }
 
-    let mut row_strings = Vec::with_capacity(lines.len());
-    for line in lines {
-        let mut row = String::new();
-        for span in line {
-            row.push_str(span.content.as_ref());
+    let (start, end) = selection.normalized();
+    let mut result = String::new();
+    for row in start.row..=end.row {
+        let Some(line) = lines.get(row) else { continue };
+        let width = line_width(line);
+        let col_start = if row == start.row { start.col } else { 0 };
+        let col_end = if row == end.row {
+            end.col
+                .saturating_add(matches!(endpoint, SelectionEnd::Inclusive) as usize)
+        } else {
+            width
+        };
+        let mut text = line_text(&slice_columns(line, col_start, col_end));
+        if trim_row_end {
+            text.truncate(text.trim_end().len());
         }
-        row_strings.push(row);
+        result.push_str(&text);
+        if row < end.row {
+            result.push('\n');
+        }
     }
-
-    selection.extract_text(&row_strings)
+    result
 }
 
 /// The [Kitty keyboard protocol] enhancement flags a child program has pushed with `CSI > <flags> u`.
@@ -544,4 +572,23 @@ pub fn encode_paste(text: &str, modes: TerminalKeyModes) -> Vec<u8> {
 /// All paste-related sequences.
 pub fn paste_sequences() -> (&'static [u8], &'static [u8]) {
     (b"\x1b[200~", b"\x1b[201~")
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    #[test]
+    fn terminal_selection_text_uses_display_columns_for_wide_characters() {
+        use crate::utils::GridPos;
+
+        let lines = vec![vec![Span::new("a界🙂b")]];
+        let mut cjk = GridSelection::new(GridPos { row: 0, col: 1 });
+        cjk.extend_to(GridPos { row: 0, col: 3 });
+        assert_eq!(terminal_selection_text(&lines, &cjk), "界");
+
+        let mut emoji = GridSelection::new(GridPos { row: 0, col: 3 });
+        emoji.extend_to(GridPos { row: 0, col: 5 });
+        assert_eq!(terminal_selection_text(&lines, &emoji), "🙂");
+    }
 }
