@@ -381,16 +381,25 @@ impl Showcase {
                         header_left: "Tooltip",
                         border: true,
                         Center {
-                            {
-                                Tooltip::new("This is a helpful tip!")
-                                    .open(show_tooltip)
-                                    .placement(PopoverPlacement::RightCenter)
-                                    .child(
-                                        Button::filled("Hover Me (Click to Toggle)")
-                                            .on_click(
-                                                ctx.link().callback(move |_| Msg::ToggleTooltip(!show_tooltip)),
-                                            ),
-                                    )
+                            HStack {
+                                gap: 2,
+                                {
+                                    Tooltip::new("This is a helpful tip!")
+                                        .show_on_focus(false)
+                                        .placement(PopoverPlacement::RightCenter)
+                                        .child(Button::filled("Hover Me"))
+                                },
+                                {
+                                    Tooltip::new("This is a toggled tip!")
+                                        .open(show_tooltip)
+                                        .placement(PopoverPlacement::RightCenter)
+                                        .child(
+                                            Button::filled("Click to Toggle")
+                                                .on_click(
+                                                    ctx.link().callback(move |_| Msg::ToggleTooltip(!show_tooltip)),
+                                                ),
+                                        )
+                                },
                             },
                         },
                     },

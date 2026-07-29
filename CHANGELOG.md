@@ -13,6 +13,8 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add `ToastHandle::renew` to restart an active toast's dismissal countdown without changing its
+  stack order or replaying its enter transition.
 - Add `Animated::auto_exit` and `ExitAnimation` for automatically retaining and
   animating removed keyed children of `VStack`, `HStack`, `Canvas`, and
   `ZStack`. Retained subtrees are inert, suppress descendant transition-end
@@ -181,6 +183,11 @@ While the crate is on `0.x.y`:
 
 - Make constrained `DocumentView` auto width use its intrinsic content and scrollbar chrome instead
   of expanding to the full available width and wrapping content under the scrollbar.
+- Tooltips now open when their trigger is hovered and remain passive, so showing one no longer
+  captures focus or blocks input to the rest of the application. The controlled `open` value now
+  overrides automatic hover/focus behavior, allowing a focused trigger to close its tooltip.
+  `Tooltip::show_on_focus(false)` supports hover-only triggers while focus display remains enabled
+  by default for keyboard accessibility.
 - Blend Toast enter and exit transitions against the rendered cells underneath the toast instead
   of the terminal's default background.
 

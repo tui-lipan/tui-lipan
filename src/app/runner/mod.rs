@@ -178,9 +178,14 @@ fn mouse_dispatch_dirty_level(
     kind: MouseKind,
     before: Option<DirtyLevel>,
     after: Option<DirtyLevel>,
+    has_hover_view_dependencies: bool,
 ) -> DirtyLevel {
     if matches!(kind, MouseKind::Moved) {
-        return DirtyLevel::PaintOnly;
+        return if has_hover_view_dependencies {
+            DirtyLevel::Full
+        } else {
+            DirtyLevel::PaintOnly
+        };
     }
 
     after
@@ -1352,6 +1357,7 @@ impl<C: Component> AppRunner<C> {
                                             mouse.kind,
                                             drag_before,
                                             effective_active_drag_dirty_level(&self.drag),
+                                            self.core.has_hover_view_dependencies(),
                                         );
                                         #[cfg(feature = "devtools")]
                                         self.apply_input_dirty(&mut dirty, level, "input:drag");
@@ -1367,6 +1373,7 @@ impl<C: Component> AppRunner<C> {
                                                 non_drag.kind,
                                                 drag_before,
                                                 effective_active_drag_dirty_level(&self.drag),
+                                                self.core.has_hover_view_dependencies(),
                                             );
                                             #[cfg(feature = "devtools")]
                                             self.apply_input_dirty(&mut dirty, level, "input:drag");
@@ -1391,7 +1398,16 @@ impl<C: Component> AppRunner<C> {
                                                         mouse = next_mouse;
                                                     } else {
                                                         if self.dispatch_mouse(mouse) {
-                                                            dirty.mark_paint();
+                                                            apply_dirty_level(
+                                                                &mut dirty,
+                                                                mouse_dispatch_dirty_level(
+                                                                    mouse.kind,
+                                                                    None,
+                                                                    None,
+                                                                    self.core
+                                                                        .has_hover_view_dependencies(),
+                                                                ),
+                                                            );
                                                         }
                                                         dispatched_coalesced_move = true;
                                                         let drag_before = active_drag_dirty_level(
@@ -1404,6 +1420,8 @@ impl<C: Component> AppRunner<C> {
                                                                 active_drag_dirty_level(
                                                                     &self.drag.active,
                                                                 ),
+                                                                self.core
+                                                                    .has_hover_view_dependencies(),
                                                             );
                                                             #[cfg(feature = "devtools")]
                                                             self.apply_input_dirty(
@@ -1424,7 +1442,15 @@ impl<C: Component> AppRunner<C> {
                                         }
                                         if !dispatched_coalesced_move && self.dispatch_mouse(mouse)
                                         {
-                                            dirty.mark_paint();
+                                            apply_dirty_level(
+                                                &mut dirty,
+                                                mouse_dispatch_dirty_level(
+                                                    mouse.kind,
+                                                    None,
+                                                    None,
+                                                    self.core.has_hover_view_dependencies(),
+                                                ),
+                                            );
                                         }
                                     } else if matches!(
                                         mouse.kind,
@@ -1511,6 +1537,7 @@ impl<C: Component> AppRunner<C> {
                                                 mouse.kind,
                                                 drag_before,
                                                 effective_active_drag_dirty_level(&self.drag),
+                                                self.core.has_hover_view_dependencies(),
                                             );
                                             #[cfg(feature = "devtools")]
                                             self.apply_input_dirty(

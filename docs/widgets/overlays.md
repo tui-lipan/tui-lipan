@@ -146,6 +146,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | Method | Description |
 |--------|-------------|
 | `.push(Toast)` | Show toast, returns `OverlayId` |
+| `.renew(id)` | Restart an active toast's dismissal countdown without redrawing it |
 | `.dismiss(id)` | Dismiss a specific toast |
 | `.dismiss_immediately(id)` | Remove a toast synchronously without its exit transition |
 | `.clear()` | Clear all toasts |
@@ -227,8 +228,9 @@ Help text on hover or focus.
 |------|------|-------------|
 | `text` | `impl Into<String>` | **Constructor** - tooltip text |
 | `child` | `Element` | The element to add tooltip to |
-| `open` | `bool` | Controlled open state |
+| `open` | `bool` | Controlled open state; overrides automatic behavior |
 | `auto` | `bool` | Auto-show on hover/focus |
+| `show_on_focus` | `bool` | Show automatically on focus (default `true`) |
 | `text_style` | `Style` | Tooltip text style |
 | `container_style` | `Style` | Tooltip container style |
 | `border` | `bool` | Show border |
