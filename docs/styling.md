@@ -201,6 +201,17 @@ their normal rendering behavior.
 
 `Color::Backdrop` is intended for surface/background fills. It preserves the background color already in the buffer while still allowing the surface to clear text/foreground content above it. This matches the old modal behavior where the dialog body blanked underlying text without painting a new solid background.
 
+Use the sentinel helpers when code needs a concrete fallback without duplicating
+the sentinel match:
+
+| Method | Effect |
+|--------|--------|
+| `Color::is_sentinel()` | Returns `true` for `Reset`, `Backdrop`, and `Transparent` |
+| `Color::resolve(fallback)` | Replaces a sentinel with `fallback`; concrete colors are unchanged |
+| `Color::to_rgb_or(fallback)` | Returns RGB or resolves against the supplied fallback `Color` |
+| `Style::resolved_fg()` / `Style::resolved_bg()` | Extracts an optional channel color without compositing alpha |
+| `Theme::concretize_backdrop(host_bg)` | Preserves a concrete backdrop, otherwise prefers the host background and then the panel surface |
+
 Named colors: `Black`, `Red`, `Green`, `Yellow`, `Blue`, `Magenta`, `Cyan`, `White`, `Gray`, `DarkGray`, `LightRed`, `LightGreen`, `LightYellow`, `LightBlue`, `LightMagenta`, `LightCyan`.
 
 > **Tip**: Prefer `Color::rgb(...)` for interactive/selection styles when exact contrast matters. Named ANSI colors vary by terminal palette.

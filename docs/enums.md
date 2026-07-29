@@ -290,6 +290,22 @@ Strategy used when frame border symbols overlap (e.g. adjacent or overlapping fr
 | `BorderMergeMode::Exact` | Merge only when an exact box-drawing intersection symbol exists **(default)** |
 | `BorderMergeMode::Fuzzy` | Merge using the closest matching symbol when an exact merge symbol is unavailable |
 
+### `CapStyle` and `CapSides`
+
+`Badge` uses these enums for optional segment caps:
+
+| `CapStyle` variant | Effect |
+|--------------------|--------|
+| `CapStyle::Padded` | Keep the segment undecorated **(default)** |
+| `CapStyle::Half` | Font-safe half-block caps (`U+2590` / `U+258C`) |
+| `CapStyle::Round` | Rounded Powerline caps (`U+E0B6` / `U+E0B4`) |
+| `CapStyle::Arrow` | Pointed Powerline caps (`U+E0B2` / `U+E0B0`) |
+
+`CapSides::Both` (default) draws both ends; `Left` and `Right` draw one end,
+while `None` disables both. `CapStyle::requires_nerd_font()` identifies `Round`
+and `Arrow`; `font_safe()` degrades either to `Padded`. An explicitly selected
+`Half` remains unchanged. `CapStyle::all()` returns the canonical style cycle.
+
 ### `Overflow`
 
 | Variant | Effect |

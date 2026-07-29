@@ -96,7 +96,7 @@ For layout reorders, wrap the moving subtree in `Animated::new(...)`, enable `.p
 | `StatusBar` | Application status line (left/center/right slots) |
 | `PaginationBar` | Composed pagination controls with styled nav buttons |
 | `Breadcrumb` | Navigation trail |
-| `Badge` | Status indicator overlaid on an element |
+| `Badge` | Status indicator overlaid on an element, with optional powerline caps |
 
 ## Overlays & Navigation → [overlays.md](overlays.md)
 

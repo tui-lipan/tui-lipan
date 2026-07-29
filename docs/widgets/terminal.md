@@ -309,6 +309,10 @@ if let Some(colors) = host {
     screen.set_palette(TerminalColorPalette::from_host_colors(colors, pane_bg));
 }
 
+// Or derive semantic ANSI slots from a theme. Themes created with
+// Theme::from_host_colors preserve the probed host ANSI slots automatically.
+screen.set_palette(TerminalColorPalette::from_theme(&theme, pane_bg));
+
 // Scrollback control
 screen.set_scrollback(offset);    // 0 = live view, >0 = history
 screen.scrollback_offset()        // Current offset
@@ -443,6 +447,9 @@ versioned wire format and converted back with `Span::new(...).style(...)` plus
 render snapshots and OSC 4/10/11 color-query responses. Use
 `TerminalColorPalette::from_host_colors(colors, pane_bg)` when embedding terminals that should
 keep the user's real ANSI palette but still paint on an app-controlled pane background.
+`TerminalColorPalette::from_theme(theme, pane_bg)` instead derives slots from semantic theme
+colors; when the theme came from `Theme::from_host_colors`, its `HostTerminalColors` extension
+preserves the probed foreground and ANSI slots while still using `pane_bg`.
 
 ---
 
