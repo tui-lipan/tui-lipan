@@ -13,6 +13,8 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Pause a toast's auto-dismiss countdown while it is hovered, and revive an automatically fading
+  toast with a short post-hover grace period when the pointer catches it during fade-out.
 - Add `ToastHandle::renew` to restart an active toast's dismissal countdown without changing its
   stack order or replaying its enter transition.
 - Add `Animated::auto_exit` and `ExitAnimation` for automatically retaining and
@@ -181,6 +183,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Toast fade transitions now dim foreground-only frame decorations when they are drawn directly
+  over the terminal's default background instead of leaving those glyphs at full intensity.
 - Scrolling a `ScrollView` no longer punches holes of the host terminal background through an
   `App::fill_background` surface. The incremental scroll fast path assumed the terminal's
   scroll-region command left the exposed rows filled with the configured screen background, but

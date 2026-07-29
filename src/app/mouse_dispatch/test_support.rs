@@ -43,6 +43,15 @@ pub(crate) fn update_hover_test_backend<C: Component>(
     y: u16,
     force_recompute: bool,
 ) -> bool {
+    let hovered_toast = crate::overlay::hovered_toast(&backend.core.tree, x, y);
+    if backend
+        .core
+        .overlay_manager
+        .borrow_mut()
+        .set_hovered_toast(hovered_toast)
+    {
+        return true;
+    }
     if !backend.core.tree.has_hoverables() {
         backend.mouse.last_mouse = Some((x, y));
         return false;

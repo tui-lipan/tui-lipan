@@ -188,6 +188,10 @@ right-click copy behavior without showing the glyph. Successful toast copies bri
 `ClipboardConfig::copy_feedback_style` for `copy_feedback_duration_ms`, matching selection-copy
 feedback.
 
+Hovering a toast pauses its auto-dismiss countdown without resetting it. If the pointer catches a
+toast during its automatic fade-out, the toast fades back in and remains paused; after the pointer
+leaves, it stays active for up to one additional second before fading out again.
+
 > Toasts are suppressed in inline mode to avoid terminal history corruption.
 
 ---
