@@ -176,8 +176,9 @@ pub use crate::widgets::{
 pub use crate::widgets::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
-    KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, TerminalColorPalette,
-    TerminalKeyModes, TerminalPasteShortcutBehavior, TerminalRenderSnapshot,
+    CopyModeAction, CopyModeGrid, KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState,
+    TerminalColorPalette, TerminalCopyMode, TerminalDecoration, TerminalKeyModes,
+    TerminalPasteShortcutBehavior, TerminalRenderSnapshot, terminal_selection_text,
 };
 
 #[cfg(feature = "diff-view")]

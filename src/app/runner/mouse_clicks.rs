@@ -24,7 +24,9 @@ use crate::widgets::{InputEvent, ListEvent, TabsEvent};
 #[cfg(feature = "terminal")]
 use crate::utils::{GridPos, GridSelection};
 #[cfg(feature = "terminal")]
-use crate::widgets::internal::{terminal_mouse_content_rect, terminal_selection_text};
+use crate::widgets::internal::{
+    apply_terminal_selection_input, terminal_mouse_content_rect, terminal_selection_text,
+};
 
 use super::AppRunner;
 
@@ -682,7 +684,11 @@ impl<C: Component> AppRunner<C> {
                 };
 
                 if let NodeKind::Terminal(term) = &mut self.core.tree.node_mut(hit).kind {
-                    term.selection = selection.clone();
+                    apply_terminal_selection_input(
+                        &mut term.selection,
+                        term.selection_controlled,
+                        selection.clone(),
+                    );
                 }
                 if let Some(cb) = on_selection {
                     let text = selection

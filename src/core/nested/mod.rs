@@ -2210,6 +2210,7 @@ mod tests {
                 full_repaint: Rc::new(Cell::new(false)),
                 devtools_request: Rc::new(RefCell::new(None)),
                 ui_snapshot_request: Rc::new(RefCell::new(None)),
+                copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
                 command_chord_pending: Rc::new(Cell::new(false)),
             },
         })
@@ -2469,6 +2470,7 @@ mod tests {
                 full_repaint: Rc::new(Cell::new(false)),
                 devtools_request: Rc::new(RefCell::new(None)),
                 ui_snapshot_request: Rc::new(RefCell::new(None)),
+                copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
                 command_chord_pending: Rc::new(Cell::new(false)),
             },
         });
@@ -2669,6 +2671,7 @@ mod tests {
                 full_repaint: Rc::new(Cell::new(false)),
                 devtools_request: Rc::new(RefCell::new(None)),
                 ui_snapshot_request: Rc::new(RefCell::new(None)),
+                copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
                 command_chord_pending: Rc::new(Cell::new(false)),
             },
         });

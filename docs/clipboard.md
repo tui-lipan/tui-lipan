@@ -105,6 +105,16 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 ```
 
 `ClipboardHandle` returned by `ctx.clipboard()` respects the app-level `ClipboardConfig` - it automatically emits OSC 52 when enabled and writes to the primary selection on supported platforms.
+Call `ctx.flash_copy_feedback(node_id)` after a successful programmatic copy to reuse the
+configured selection flash on that exact widget. For the focused widget, obtain `node_id` with
+`ctx.focused_node_id()` before requesting the flash.
+
+`flash_copy_feedback` paints whatever the widget currently has selected. If your app copies and
+then immediately leaves its selection mode, use
+`ctx.flash_copy_feedback_range(node_id, range)` instead: it captures the copied range and paints
+that for the flash duration, so the selection can be cleared straight away rather than being held
+alive purely to give the flash something to draw. Columns are display columns, matching the
+renderer.
 
 ## Image Clipboard *(requires feature `image` or `clipboard-images`)*
 

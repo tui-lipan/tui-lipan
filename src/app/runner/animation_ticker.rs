@@ -189,6 +189,32 @@ impl<C: Component> AppRunner<C> {
             }
         }
 
+        let copy_feedback_requests = self.core.ctx.take_copy_feedback_requests();
+        if !copy_feedback_requests.is_empty() {
+            let duration = Duration::from_millis(
+                self.core
+                    .ctx
+                    .env()
+                    .clipboard_config
+                    .copy_feedback_duration_ms as u64,
+            );
+            if !duration.is_zero() {
+                for (id, range) in copy_feedback_requests {
+                    if self.core.tree.is_valid(id) {
+                        let range = range.and_then(|selection| {
+                            crate::app::copy_feedback::capture_terminal_range(
+                                &self.core.tree,
+                                id,
+                                selection,
+                            )
+                        });
+                        self.copy_feedback.trigger_range(id, duration, range);
+                        dirty.mark_paint();
+                    }
+                }
+            }
+        }
+
         let copy_feedback_tick = self.copy_feedback.tick();
         if let Some(next_due) = copy_feedback_tick.next_due {
             poll_timeout = poll_timeout.min(next_due);

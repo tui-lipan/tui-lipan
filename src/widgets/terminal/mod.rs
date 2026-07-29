@@ -1,6 +1,8 @@
 //! Terminal output view helpers.
 
 mod buffer;
+#[cfg(feature = "terminal")]
+mod copy_mode;
 mod events;
 mod layout;
 mod mod_private;
@@ -12,6 +14,8 @@ mod screen;
 mod scrollback_ledger;
 
 pub use buffer::TerminalBuffer;
+#[cfg(feature = "terminal")]
+pub use copy_mode::{CopyModeAction, CopyModeGrid, TerminalCopyMode};
 pub use events::{
     KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, TerminalInputEvent,
     TerminalInputKind, TerminalKeyModes, TerminalPasteShortcutBehavior, TerminalSelection,
@@ -27,12 +31,12 @@ pub use osc::{
 pub use pty::TerminalPtyHandoff;
 pub use pty::{TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent};
 pub use screen::{
-    SemanticMark, SemanticMarkKind, TerminalColorPalette, TerminalRenderSnapshot, TerminalScreen,
-    TerminalViewport,
+    SemanticMark, SemanticMarkKind, TerminalColorPalette, TerminalDecoration,
+    TerminalRenderSnapshot, TerminalScreen, TerminalViewport,
 };
 
 pub(crate) use layout::{measure_terminal, terminal_content_layout, terminal_mouse_content_rect};
-pub(crate) use node::TerminalNode;
+pub(crate) use node::{TerminalNode, apply_terminal_selection_input};
 pub(crate) use reconcile::reconcile_terminal;
 
 use crate::callback::{Callback, KeyHandler};
@@ -150,6 +154,9 @@ impl Terminal {
     }
 
     /// Set precomputed colored lines (must match `content` line lengths).
+    ///
+    /// `cache_key` is advisory metadata for the caller. Terminal reconciliation does not use it
+    /// to skip work; use [`TerminalRenderSnapshot::decorated`] when deriving styled snapshots.
     pub fn color_lines(mut self, color_lines: Arc<[Vec<Span>]>, cache_key: u64) -> Self {
         self.color_lines = Some(color_lines);
         self.color_cache_key = cache_key;
@@ -354,7 +361,10 @@ impl Terminal {
         self
     }
 
-    /// Set callback fired when the terminal viewport size changes.
+    /// Set callback fired synchronously when reconciliation observes a changed terminal viewport.
+    ///
+    /// The native runner may coalesce consecutive host resize events before reconciliation, so
+    /// this callback reports reconciled viewport sizes rather than one event for every host event.
     pub fn on_resize(mut self, cb: Callback<TerminalViewport>) -> Self {
         self.on_resize = Some(cb);
         self
