@@ -27,6 +27,9 @@ pub struct StackNode {
     pub tab_variant: TabVariant,
     pub title_prefix: Option<Arc<str>>,
     pub layout_cache: Option<StackLayoutCache>,
+    /// Children retained past removal so they can finish an
+    /// [`Animated::auto_exit`](crate::widgets::Animated::auto_exit) collapse.
+    pub exiting: Vec<super::exit_retention::ExitingChild>,
     /// Key of the last child that held real focus within this stack.
     /// Persists across frames; drives sticky accordion expansion automatically.
     pub last_focused_key: Option<Key>,

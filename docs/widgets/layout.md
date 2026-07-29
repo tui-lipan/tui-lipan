@@ -141,6 +141,19 @@ Overlay container - children stack on top of each other. Each child is laid out 
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 
+For decorative overlays, set `ZStack::passthrough(true)` so a non-interactive
+foreground layer does not block the content below it:
+
+```rust
+ZStack::new()
+    .passthrough(true)
+    .child(content)
+    .child(decorative_overlay)
+```
+
+Pointer routing still visits the painted foreground first. Interactive layers
+remain targets; only misses on non-interactive layers fall through.
+
 ---
 
 ## Canvas
@@ -797,10 +810,216 @@ Wrapper for opacity, fg/bg color, height, and opt-in x/y position transitions. `
 | `on_height_transition_end` | `Callback<()>` | Fires once when a height transition reaches its target (including zero-duration jumps) |
 | `on_position_transition_end` | `Callback<()>` | Fires once when a position transition reaches its final layout position (including zero-duration jumps) |
 | `transition` | `TransitionConfig` | Duration and easing |
+| `exit` | `(bool, u64)` | Sets opacity, animated height, and duration for an app-driven appear/disappear |
+| `on_exit_complete` | `Callback<()>` | Alias for `on_height_transition_end`; the safe point to drop the item from state |
+| `auto_exit` | `impl Into<ExitAnimation>` | Animates out and drops the element automatically when a keyed child is removed from its container. A bare `u64` means "fade over this many ms" |
 
 `opacity` applies a post-pass alpha transform that blends rendered fg/bg toward the terminal background by default (unless `opacity_fg_only` or `opacity_target` is set). At `opacity(0.0)`, the wrapper restores the cells that were already rendered underneath it, so fully faded content does not leave invisible glyphs or blank cells blocking lower `ZStack`/overlay layers. With `opacity_target`, fades go to a chosen color (fade-to-black, flash-to-accent) instead of the host backdrop. `fg` and `bg` are explicit color targets that lerp with the same transition timing. You can combine them (for example, fade + tint) in one `Animated` wrapper.
 
 For correct opacity blending when backgrounds use `Color::Reset`, set `App::terminal_bg(query_host_colors().map(|c| c.bg))` before `run()` - see **quick-start.md** (`terminal_bg` / `query_host_colors`).
+
+### Exit transitions
+
+There are two ways to animate an element out. Prefer `auto_exit` unless the
+application genuinely needs to own the lifecycle.
+
+#### Automatic (`auto_exit`)
+
+Add `.auto_exit(..)` and a key to an `Animated` wrapper sitting directly in a
+`VStack`, `HStack`, `ZStack`, or `Canvas`. Removing the element from your state
+is then all you have to do: the container keeps the already-rendered subtree,
+animates it out, and drops it. There is no `removed` flag and no completion
+callback to wire up.
+
+```rust,ignore
+VStack::new().children(
+    ctx.state.rows.iter().map(|row| {
+        Animated::new(render_row(row)).auto_exit(180).key(row.id)
+    }),
+)
+```
+
+The key is what tells the container that a specific child left rather than that
+the list reordered, so it is required. Nothing is cloned: the container keeps
+the existing node it already reconciled.
+
+##### Saying what leaving looks like
+
+`auto_exit` takes anything that converts into an `ExitAnimation`. A bare duration
+is the shorthand for a plain fade; the full type describes the exit:
+
+```rust,ignore
+// A toast: slide up a row, fade, and let the toasts below close the gap.
+Animated::new(toast)
+    .auto_exit(ExitAnimation::slide(180, 0, -1).with_collapse(true))
+    .key(id)
+
+// Flash before going.
+Animated::new(row)
+    .auto_exit(ExitAnimation::new(220).bg(theme.status.error))
+    .key(id)
+
+// Carried entirely by movement.
+Animated::new(chip)
+    .auto_exit(ExitAnimation::slide(140, 8, 0).keep_opacity())
+    .key(id)
+```
+
+| Method | Effect |
+|--------|--------|
+| `ExitAnimation::new(ms)` | Fade to transparent |
+| `ExitAnimation::slide(ms, dx, dy)` | Fade while translating `dx` columns, `dy` rows |
+| `ExitAnimation::collapse(ms)` | Fade while collapsing to zero height |
+| `.opacity(v)` / `.keep_opacity()` | Fade to `v`, or leave opacity alone |
+| `.fg(c)` / `.bg(c)` | Animate colors on the way out |
+| `.offset(dx, dy)` | Translate while leaving |
+| `.easing(e)` | Override the widget's own transition easing |
+| `.with_collapse(bool)` | Collapse height as well |
+
+Unset properties are left alone. `auto_exit` never changes how the element looks
+or lays out while it is alive: the exit carries its own duration and easing, so
+setting one does not disturb the widget's `transition`.
+
+`offset` is **relative to the position the element occupied when it was removed**,
+not to its layout rectangle. If a movement transition was still in flight at that
+moment, the exit starts from wherever the element had actually reached and
+absorbs the remainder, so a row removed mid-reorder slides on from where it was
+rather than snapping back first.
+
+##### What the container decides
+
+Everything visual comes from the `ExitAnimation`. The one thing it does not
+control is whether height collapses, because that is a layout question the parent
+owns.
+
+A `VStack` or `HStack` **always** collapses on its main axis, whatever the exit
+says. The container substitutes a spacer of the collapsing height (`VStack`) or
+width (`HStack`) at the child's former index, so siblings reflow exactly as they
+would if you had kept describing the element. The collapse starts from the size
+the child actually occupied on screen, not from any layout prop you set.
+
+A `Canvas` or `ZStack` collapses **only** if the exit asked for it with
+`.with_collapse(true)`. These children carry their own rectangle and nothing
+reflows around them, so there is no space to reclaim and the collapse is a pure
+effect. It often reads better anyway, an element that recedes is easier to follow
+than one that dissolves in place, but see the ceiling below before reaching for
+it on a bordered box.
+
+The two positioned containers differ in depth. A `ZStack` is explicit layering,
+so an exiting layer keeps the depth it had and fades over whatever is beneath it.
+A `Canvas` places children in space, where overlap is incidental and a ghost
+covering live content is always wrong, so **exiting children are drawn beneath
+every live one**. That is what stops a closing pane from covering the neighbour
+expanding into its space.
+
+##### The ceiling
+
+The retained subtree is **frozen**. The container keeps the node it already
+reconciled and nothing is cloned, re-derived, or re-laid out, which is what makes
+retention nearly free. It is a hard boundary, not a missing feature.
+
+So an exit can change how the already-rendered cells *look*: alpha, color,
+where they are painted, and how much of the element is visible. It can never
+change where the element's **children** sit. There is no scale, no reflow, no
+re-wrap. A collapsing bordered box does not squash to fit: it is clipped, and the
+bottom border is cut away on the first frame rather than travelling up with it.
+
+The rule for choosing:
+
+- Does the exit only change how already-rendered cells look? Use `auto_exit`.
+- Does it change where the element's children sit? Keep describing the element
+  yourself, with `Animated::exit` and `ExitQueue`.
+
+##### Lifecycle and disposal
+
+A retained subtree is a **snapshot**, not a living element. The element stopped
+being described, so on that same frame its component state, hooks, command
+registrations, and scroll state were all disposed by the ordinary sweep. Only the
+resolved node data survives, which is exactly enough to keep painting it.
+
+The framework enforces what follows, so an exit cannot reach into a dropped
+scope:
+
+- The subtree is **inert**: skipped for hit-testing, focus, and key routing. It
+  cannot be clicked, cannot take focus, and receives no keys.
+- Transition-end callbacks (`on_opacity_transition_end` and friends) do **not**
+  fire during an automatic exit.
+- Nothing re-runs `view()`, so no effect, command, or state read happens on its
+  behalf.
+
+Release waits on the transitions **the exit itself started**, not on "nothing is
+animating". Unrelated animation still settling when the element was removed keeps
+ticking and keeps painting, but does not extend retention past the exit it has
+nothing to do with. Retention also ends on a deadline derived from the exit
+duration, so a container that stops being rendered part-way through cannot hold
+the subtree forever. Re-adding the same key before the exit finishes cancels it
+and hands the live element back.
+
+##### Unsupported containers
+
+`Grid`, `Flow`, and `ScrollView` have no automatic retention, and what a collapse
+should mean there is genuinely ambiguous: whether a grid re-packs around the
+hole, whether a wrapping flow should re-wrap on every frame of the animation, and
+how a scroll offset should be anchored while content height changes. Rather than
+guess, `auto_exit` under an unsupported container logs a debug-build warning and
+behaves as if it were not set; use `Animated::exit` with `ExitQueue` there.
+
+#### Manual (`exit` + `ExitQueue`)
+
+Use this when the application must own the lifecycle, for example when an item
+migrates between two collections while leaving, or when removal has to wait on
+work of its own.
+
+Use `Animated::exit` to fade and collapse an item that is still present in
+component state. `Animated::on_exit_complete` fires after the height reaches
+zero, which is the safe point to remove that item from state:
+
+```rust,ignore
+    Animated::new(row)
+        .exit(false, 180)
+        // Keep a non-zero parent allocation while the wrapper collapses.
+        .layout_height(Some(Length::Auto))
+        .on_exit_complete(ctx.link().callback(move |_| Msg::ExitComplete(id)))
+```
+
+For lists, keep an `ExitQueue<Key, Row>` field in component state and synchronize
+it with the live rows. Render each `iter()` entry, using the boolean to choose
+between the live and exiting presentation. Handle `ExitComplete(id)` with
+`finish(&id)`. Re-adding an id before completion automatically resurrects its
+existing entry instead of inserting a duplicate. This state-owned recipe keeps
+keyed identity stable without runtime zombie keep-alive:
+
+```rust,ignore
+// State: `items: Vec<Row>`, `exiting: ExitQueue<Id, Row>`
+ctx.state.exiting.sync(
+    ctx.state.items.iter().map(|row| (row.id, row.clone())),
+);
+for (id, row, visible) in ctx.state.exiting.iter() {
+    let leaving = !visible;
+    render_row(id, row, leaving);
+}
+// In Msg::ExitComplete(id):
+ctx.state.exiting.finish(&id);
+```
+
+Keep a stable key for each exiting row and render the queued row with
+`.exit(false, duration)` until its completion callback arrives.
+
+Exit animations only advance while their host is rendered, so a queue living in
+a hidden tab or an inactive workspace never receives its completion callback.
+Construct it with `ExitQueue::with_exit_timeout(duration)` so those entries are
+released anyway; set the timeout slightly longer than the animation. Repeated
+`sync` calls do not push an existing deadline forward.
+
+When an item moves between collections mid-exit, hand it over with
+`transfer_out` / `adopt` rather than re-inserting it, which would restart its
+exit:
+
+```rust,ignore
+if let Some(moved) = ctx.state.from.transfer_out(&id) {
+    ctx.state.to.adopt(moved);
+}
+```
 
 ### Position transitions
 

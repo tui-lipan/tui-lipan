@@ -18,8 +18,8 @@ pub(crate) fn render_animated(
     terminal_bg: Option<ratatui::style::Color>,
 ) {
     let opacity = node.opacity.clamp(0.0, 1.0);
-    let has_fg_override = node.current_fg.is_some();
-    let has_bg_override = node.current_bg.is_some();
+    let has_fg_override = node.current_fg.is_some() || node.inherited_fg_exit.is_some();
+    let has_bg_override = node.current_bg.is_some() || node.inherited_bg_exit.is_some();
     if opacity >= 1.0 && !has_fg_override && !has_bg_override {
         return;
     }
@@ -35,15 +35,32 @@ pub(crate) fn render_animated(
             if intersection.width > 0 && intersection.height > 0 {
                 let fg = node.current_fg.map(to_ratatui_color);
                 let bg = node.current_bg.map(to_ratatui_color);
+                let inherited_fg = node
+                    .inherited_fg_exit
+                    .as_ref()
+                    .map(|exit| (exit.target, exit.progress.current().clamp(0.0, 1.0)));
+                let inherited_bg = node
+                    .inherited_bg_exit
+                    .as_ref()
+                    .map(|exit| (exit.target, exit.progress.current().clamp(0.0, 1.0)));
                 let buf = f.buffer_mut();
                 for y in intersection.y..intersection.y + intersection.height {
                     for x in intersection.x..intersection.x + intersection.width {
                         if let Some(cell) = buf.cell_mut((x, y)) {
                             if let Some(fg) = fg {
                                 cell.fg = fg;
+                            } else if let Some((target, progress)) = inherited_fg {
+                                cell.fg = to_ratatui_color(
+                                    from_ratatui_color(cell.fg).blend_toward(target, progress),
+                                );
                             }
                             if let Some(bg) = bg {
                                 cell.bg = bg;
+                            } else if let Some((target, progress)) = inherited_bg {
+                                let source = non_reset(cell.bg).or(terminal_bg).unwrap_or(cell.bg);
+                                cell.bg = to_ratatui_color(
+                                    from_ratatui_color(source).blend_toward(target, progress),
+                                );
                             }
                         }
                     }
@@ -187,4 +204,62 @@ fn blend_ratatui_toward(
         return (source, darkened);
     }
     (to_ratatui_color(result), false)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::style::Color as RColor;
+
+    use super::render_animated;
+    use crate::animation::{Easing, ExitAnimation};
+    use crate::style::{Color, Rect};
+    use crate::widgets::{Animated, Text};
+
+    #[test]
+    fn inherited_exit_colors_blend_from_the_rendered_child_colors() {
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 1,
+            h: 1,
+        };
+        let mut node = crate::widgets::internal::AnimatedNode::from(
+            Animated::new(Text::new("x")).auto_exit(
+                ExitAnimation::new(100)
+                    .keep_opacity()
+                    .fg(Color::Rgb(220, 240, 200))
+                    .bg(Color::Rgb(200, 220, 240))
+                    .easing(Easing::Linear),
+            ),
+        );
+        assert!(node.begin_auto_exit(None));
+        node.tick(Duration::from_millis(50));
+        assert!(node.current_fg.is_none() && node.current_bg.is_none());
+
+        let backend = TestBackend::new(1, 1);
+        let mut terminal = Terminal::new(backend).expect("terminal should initialize");
+        terminal
+            .draw(|frame| {
+                let cell = frame.buffer_mut().cell_mut((0, 0)).expect("cell");
+                cell.fg = RColor::Rgb(20, 40, 60);
+                cell.bg = RColor::Reset;
+                render_animated(
+                    frame,
+                    &node,
+                    rect,
+                    None,
+                    None,
+                    Some(RColor::Rgb(60, 40, 20)),
+                );
+            })
+            .expect("draw should succeed");
+
+        let cell = &terminal.backend().buffer()[(0, 0)];
+        assert_eq!(cell.fg, RColor::Rgb(120, 140, 130));
+        assert_eq!(cell.bg, RColor::Rgb(130, 130, 130));
+    }
 }

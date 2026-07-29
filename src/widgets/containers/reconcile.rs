@@ -18,6 +18,7 @@ use crate::widgets::frame::box_metrics::frame_inner_max_size;
 use crate::widgets::internal::StackProps;
 
 use super::super::text_area::{text_area_auto_height_for_width, text_area_pending_vim_search_row};
+use super::exit_retention::{self, ExitSlot};
 use super::node::StackLayoutCache;
 
 pub(crate) fn stack_reuse_plan<T>(
@@ -86,7 +87,30 @@ pub(crate) fn reconcile_stack(
         pinned_key,
     } = args;
     let focus = ctx.focus;
-    let plan = stack_reuse_plan(ctx.tree, old_children, children);
+    let base_plan = stack_reuse_plan(ctx.tree, old_children, children);
+
+    // Children the application stopped describing but that opted into an automatic exit are
+    // re-inserted at their former index as collapsing spacers, so layout still reserves the
+    // shrinking box and siblings reflow instead of snapping into the gap.
+    let exit_plan =
+        exit_retention::plan_exits(ctx.tree, parent, old_children, children, &base_plan, axis);
+    let owned_children;
+    let (children, plan, exit_slots): (&[Element], Vec<Option<NodeId>>, Option<Vec<ExitSlot>>) =
+        match &exit_plan {
+            Some(exits) => {
+                owned_children = exits.elements.clone();
+                let plan = exits
+                    .slots
+                    .iter()
+                    .map(|slot| match slot {
+                        ExitSlot::Live(index) => base_plan[*index],
+                        ExitSlot::Exiting(_) => None,
+                    })
+                    .collect();
+                (&owned_children, plan, Some(exits.slots.clone()))
+            }
+            None => (children, base_plan, None),
+        };
 
     let pending_search_hash = pending_vim_search_layout_hash(ctx.tree, &plan, children, axis);
     let layout_hash =
@@ -172,6 +196,14 @@ pub(crate) fn reconcile_stack(
                 Some(child_ids[i])
             };
             let rect = rects[i];
+            // A retained subtree is adopted into its slot rather than re-derived: its element no
+            // longer exists, and reconciling the layout spacer in its place would destroy the
+            // content the collapse is supposed to show.
+            if let Some(ExitSlot::Exiting(id)) = exit_slots.as_ref().map(|slots| slots[i]) {
+                exit_retention::adopt_exiting(ctx.tree, id, parent, rect, ctx.epoch);
+                next_ids.push(id);
+                continue;
+            }
             let child_id = reconcile_element(
                 ctx,
                 ElementReconcile {
@@ -185,6 +217,12 @@ pub(crate) fn reconcile_stack(
         }
         child_ids = next_ids;
     }
+
+    exit_retention::store_retained(
+        ctx.tree,
+        parent,
+        exit_plan.map(|exits| exits.retained).unwrap_or_default(),
+    );
 
     let node = ctx.tree.node_mut(parent);
     match &mut node.kind {

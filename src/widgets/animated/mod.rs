@@ -8,7 +8,7 @@ pub(crate) use self::reconcile::reconcile_animated;
 
 use std::hash::Hash;
 
-use crate::animation::TransitionConfig;
+use crate::animation::{ExitAnimation, TransitionConfig};
 use crate::callback::Callback;
 use crate::core::element::{Element, ElementKind};
 use crate::layout::hash::LayoutHash;
@@ -28,6 +28,7 @@ pub struct Animated {
     pub(crate) height: Option<Length>,
     pub(crate) layout_height: Option<Length>,
     pub(crate) position_transition: bool,
+    pub(crate) auto_exit: Option<ExitAnimation>,
     pub(crate) on_opacity_transition_end: Option<Callback<()>>,
     pub(crate) on_height_transition_end: Option<Callback<()>>,
     pub(crate) on_position_transition_end: Option<Callback<()>>,
@@ -40,6 +41,7 @@ impl Default for Animated {
             opacity: 1.0,
             opacity_fg_only: false,
             opacity_target: None,
+            auto_exit: None,
             fg: None,
             bg: None,
             transition: TransitionConfig::default(),
@@ -196,6 +198,83 @@ impl Animated {
         self.opacity = if visible { 1.0 } else { 0.0 };
         self.height = Some(if visible { Length::Auto } else { Length::Px(0) });
         self.transition.duration = std::time::Duration::from_millis(duration_ms);
+        self
+    }
+
+    /// Play an exit animation automatically when this element is removed.
+    ///
+    /// [`Animated::exit`] requires the parent to keep the element in its own state until
+    /// [`Animated::on_exit_complete`] fires, because the reconciler frees any node that is not
+    /// re-described during `view()`. `auto_exit` moves that bookkeeping into the framework: the
+    /// element can simply stop being described, and its container retains the already-rendered
+    /// subtree, animates it out, and drops it.
+    ///
+    /// Takes anything that converts into an [`ExitAnimation`]. A bare duration is the common case
+    /// and means "fade out over this many milliseconds":
+    ///
+    /// ```ignore
+    /// // No `removed` flag, no on_exit_complete plumbing: dropping it from the list is enough.
+    /// VStack::new().children(state.rows.iter().map(|row| {
+    ///     Animated::new(row_view(row)).auto_exit(200).key(row.id)
+    /// }))
+    ///
+    /// // Or say what leaving should look like.
+    /// Animated::new(toast)
+    ///     .auto_exit(ExitAnimation::slide(180, 0, -1).with_collapse(true))
+    ///     .key(id)
+    /// ```
+    ///
+    /// # Requirements
+    ///
+    /// The element must carry a [`Key`](crate::Key) and sit directly in a `VStack`, `HStack`,
+    /// `ZStack`, or `Canvas`. Keys are how the container recognizes that a specific child left
+    /// rather than that the list merely reordered. Debug builds log when either is missing.
+    ///
+    /// # What the container decides
+    ///
+    /// Everything visual comes from the [`ExitAnimation`]. The one thing it does not control is
+    /// whether height collapses, because that is a layout question the parent owns:
+    ///
+    /// - A **`VStack` or `HStack`** always collapses, whatever the exit says. The collapse is what
+    ///   lets siblings reflow into the vacated space, so it is part of the container's contract.
+    /// - A **`Canvas` or `ZStack`** collapses only if the exit asked for it with
+    ///   [`ExitAnimation::with_collapse`]. Nothing reflows around a positioned child, so there is
+    ///   no space to reclaim and the collapse is a pure effect.
+    ///
+    /// A `Canvas` additionally draws exiting children *beneath* every live one, so a departing
+    /// element can never cover something the application is still describing.
+    ///
+    /// # Lifecycle and disposal
+    ///
+    /// A retained subtree is a **snapshot**, not a living element. The container keeps the node it
+    /// already reconciled; the element itself stopped being described, so on that same frame its
+    /// component state, hooks, command registrations, and scroll state were all disposed by the
+    /// ordinary sweep. Only the resolved node data survives, which is exactly enough to keep
+    /// painting it.
+    ///
+    /// The framework enforces what follows from that, so an exit cannot reach into a dropped
+    /// scope:
+    ///
+    /// - The subtree is **inert**: skipped for hit-testing, focus, and key routing. It cannot be
+    ///   clicked, cannot take focus, and receives no keys.
+    /// - Transition-end callbacks (`on_opacity_transition_end` and friends) do **not** fire during
+    ///   an automatic exit.
+    /// - Nothing re-runs `view()`, so no effect, command, or state read happens on its behalf.
+    ///
+    /// Retention also ends on a deadline derived from the exit duration, so a container that stops
+    /// being rendered mid-exit cannot hold the subtree indefinitely. Re-adding the same key before
+    /// the exit finishes cancels it and hands the live element back.
+    ///
+    /// Use [`Animated::exit`] with [`ExitQueue`](crate::animation::ExitQueue) instead when the app
+    /// needs to own the lifecycle, or when the exit has to change where the element's *children*
+    /// sit: a retained subtree is never re-laid out, so scaling and reflowing are out of reach.
+    /// See [`ExitAnimation`] for that boundary in full.
+    pub fn auto_exit(mut self, exit: impl Into<ExitAnimation>) -> Self {
+        // Deliberately touches neither `height` nor `transition`. Opting into an exit must not
+        // change how the element looks or lays out while it is alive; the exit carries its own
+        // duration and easing, and the collapse reads the node's real rectangle rather than a
+        // resolved `Length`.
+        self.auto_exit = Some(exit.into());
         self
     }
 

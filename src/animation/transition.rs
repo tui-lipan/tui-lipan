@@ -61,8 +61,6 @@ pub struct Transition<T: Lerp> {
     pub elapsed: Duration,
     /// Easing curve used to map progress.
     pub easing: Easing,
-    /// Marks this as an exit transition.
-    pub is_exit: bool,
 }
 
 impl<T: Lerp> Transition<T> {
@@ -74,7 +72,6 @@ impl<T: Lerp> Transition<T> {
             duration,
             elapsed: Duration::ZERO,
             easing,
-            is_exit: false,
         }
     }
 

@@ -48,6 +48,8 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 | `modal_auto_height` | `Modal` + `List` with `Auto` vs `max_height` constraints |
 | `modal_percent_repro` | Modal height percent and `OverlayScope` behavior |
 | `mouse_region_click` | `MouseRegion`: passthrough vs capturing button/region clicks |
+| `exit_animation` | Keyed `ExitQueue` state retaining removed rows through `Animated` exits |
+| `auto_exit` | Automatic exit animations via `Animated::auto_exit`, with no app-side removal bookkeeping |
 
 ---
 

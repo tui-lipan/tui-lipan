@@ -48,7 +48,9 @@ pub use crate::{CommandBuilder, CommandEntry, CommandId, CommandRegistry};
 // Animation
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub use crate::animation::{Easing, Transition, TransitionConfig};
+pub use crate::animation::{
+    Easing, ExitAnimation, ExitQueue, ExitTransfer, Transition, TransitionConfig,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Macros and helpers

@@ -3,6 +3,7 @@ use crate::layout::reconcile::{
     ElementReconcile, ReconcileCtx, reconcile_element, resolve_rect_with_auto,
 };
 use crate::style::{LayoutConstraints, Rect};
+use crate::widgets::containers::exit_retention;
 use crate::widgets::containers::reconcile::stack_reuse_plan;
 
 use super::layout::measure_canvas;
@@ -43,9 +44,16 @@ pub(crate) fn reconcile_canvas(ctx: &mut ReconcileCtx<'_>, args: CanvasReconcile
     let old_children = {
         let node = ctx.tree.node_mut(id);
         node.rect = rect;
+        // Replacing the kind wholesale would drop the retention list, which must survive
+        // every frame an exit animation is still running.
+        let exiting = match &mut node.kind {
+            NodeKind::Canvas(canvas) => std::mem::take(&mut canvas.exiting),
+            _ => Vec::new(),
+        };
         node.kind = NodeKind::Canvas(super::CanvasNode {
             style: canvas.style,
             passthrough: canvas.passthrough,
+            exiting,
         });
         std::mem::take(&mut node.children)
     };
@@ -54,10 +62,24 @@ pub(crate) fn reconcile_canvas(ctx: &mut ReconcileCtx<'_>, args: CanvasReconcile
         canvas.items.iter().map(|item| &item.element).collect();
     let plan = stack_reuse_plan(ctx.tree, &old_children, &child_refs);
 
-    let mut new_children = old_children;
-    new_children.clear();
+    // Keyed children that opted into an automatic exit and are no longer described keep their own
+    // placement while they fade. Canvas items are absolutely positioned, so unlike a stack there is
+    // no slot to reserve and the surviving children never move.
+    let retained = exit_retention::plan_positioned_exits(ctx.tree, id, &old_children, &plan);
 
-    for (item, reuse_id) in canvas.items.iter().zip(plan) {
+    let mut new_children = Vec::with_capacity(canvas.items.len() + retained.len());
+    // Exiting children go first, which puts them under every live one: Canvas children are layered
+    // in child order, and an element the application has stopped describing must never cover one it
+    // is still describing. Closing a pane whose neighbours expand into its space is the case that
+    // makes this visible. Adopting before reconciling also keeps registration order aligned with
+    // child order, which the incremental animated-widget scan asserts.
+    for entry in retained.iter() {
+        let child_rect = exit_retention::positioned_exit_rect(ctx.tree, entry.id);
+        exit_retention::adopt_exiting(ctx.tree, entry.id, id, child_rect, ctx.epoch);
+        new_children.push(entry.id);
+    }
+
+    for (item, reuse_id) in canvas.items.iter().zip(plan.iter().copied()) {
         let child_id = reconcile_element(
             ctx,
             ElementReconcile {
@@ -69,6 +91,7 @@ pub(crate) fn reconcile_canvas(ctx: &mut ReconcileCtx<'_>, args: CanvasReconcile
         );
         new_children.push(child_id);
     }
+    exit_retention::store_retained(ctx.tree, id, retained);
 
     let node = ctx.tree.node_mut(id);
     node.children = new_children;

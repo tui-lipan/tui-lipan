@@ -13,6 +13,18 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add `Animated::auto_exit` and `ExitAnimation` for automatically retaining and
+  animating removed keyed children of `VStack`, `HStack`, `Canvas`, and
+  `ZStack`. Retained subtrees are inert, suppress descendant transition-end
+  callbacks, preserve simultaneous removal order and Z depth, and expire after
+  the exit completes or its retention deadline. Stacks collapse on their main
+  axis; positioned containers retain their geometry unless collapse is requested.
+- Add keyed `ExitQueue` state for application-owned exit animations.
+  `ExitQueue::with_exit_timeout` bounds retention when a host stops rendering,
+  while `transfer_out` and `adopt` move an `ExitTransfer` between collections
+  without restarting its exit.
+- Add `auto_exit` and `exit_animation` examples for framework-retained and
+  application-owned exit lifecycles.
 - Add `TestBackend::advance(dt)`, which ticks every time-based animation and
   refreshes the rendered tree as needed. Tests can now deterministically step
   `Animated` transitions, smooth scrolls, and `Context::transition` property
@@ -62,6 +74,7 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- Remove the unused public `Transition::is_exit` field (breaking).
 - Add theme-level `CaretPalette` defaults for `Input`, `TextArea`, and embedded
   `SearchPalette` query inputs; explicit widget caret settings still override the
   theme (breaking)

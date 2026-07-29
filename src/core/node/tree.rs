@@ -72,6 +72,12 @@ pub(crate) struct Node {
     pub kind: NodeKind,
     /// Internal mark used for sweep.
     pub epoch: u32,
+    /// Set on subtrees retained purely to play an exit animation.
+    ///
+    /// An inert subtree is skipped by hit-testing, focusable collection, and key routing. It is
+    /// no longer described by the application, so its callbacks may close over a component scope
+    /// that has already been dropped; refusing input is what makes retention safe.
+    pub inert: bool,
     /// Active theme at the point this node was reconciled.
     active_theme: Rc<Theme>,
 }
@@ -164,6 +170,7 @@ impl Node {
             children: Vec::new(),
             kind: NodeKind::Text(crate::widgets::internal::TextNode::default()),
             epoch: 0,
+            inert: false,
             active_theme: default_active_theme(),
         }
     }
@@ -176,6 +183,7 @@ impl Node {
         self.children.clear();
         self.kind = NodeKind::Text(crate::widgets::internal::TextNode::default());
         self.epoch = 0;
+        self.inert = false;
         self.active_theme = default_active_theme();
     }
 
@@ -184,6 +192,7 @@ impl Node {
         self.parent = None;
         self.children.clear();
         self.epoch = 0;
+        self.inert = false;
         self.active_theme = default_active_theme();
     }
 }
@@ -857,7 +866,7 @@ impl NodeTree {
         mode: ScopeMode,
     ) {
         let node = self.node(id);
-        if node.focus_scope() == crate::widgets::FocusScope::Exclude {
+        if node.inert || node.focus_scope() == crate::widgets::FocusScope::Exclude {
             return;
         }
         let is_contain = node.focus_scope() == crate::widgets::FocusScope::Contain;
@@ -1014,7 +1023,7 @@ impl NodeTree {
                 }
 
                 let node = self.node(frame.id);
-                if !node.rect.contains(x, y) {
+                if node.inert || !node.rect.contains(x, y) {
                     stack.pop();
                     continue;
                 }

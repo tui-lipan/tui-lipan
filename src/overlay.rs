@@ -213,14 +213,12 @@ impl OverlayManager {
     }
 
     fn exit_transition(from: f32) -> Transition<f32> {
-        let mut transition = Transition::new(
+        Transition::new(
             from.clamp(0.0, 1.0),
             0.0,
             Duration::from_millis(100),
             Easing::EaseInQuad,
-        );
-        transition.is_exit = true;
-        transition
+        )
     }
 
     fn begin_dismiss(entry: &mut OverlayEntry, now: Instant) -> bool {
