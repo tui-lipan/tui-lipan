@@ -199,6 +199,7 @@ writing any `update()` logic.
 | `syntax-syntect` | Lightweight syntax highlighting in `TextArea`, `DocumentView`, and `DiffView`; native uses Oniguruma and WASM uses pure-Rust `fancy-regex` |
 | `syntax-extra` | Opt-in bat-curated grammar set for broad language coverage; adds about 0.6 MiB to the binary and includes `syntax-syntect` |
 | `terminal` | `Terminal` and `ManagedTerminal`: embedded PTY terminal viewport |
+| `terminal-images` | Kitty graphics protocol in terminal panes: the program running in a pane can draw images, whatever the host terminal supports (includes `terminal` and `image`) |
 | `terminal-serde` | Serde derives for terminal snapshot leaf style/mouse types used by external, versioned snapshot transports; includes `terminal` |
 | `theme-reload` | Live reload of TOML theme files without restarting the app - see [`docs/styling.md`](docs/styling.md) |
 | `web` | Browser/WASM backend - see [`docs/web-backend.md`](docs/web-backend.md) |

@@ -13,6 +13,23 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add the `terminal-images` feature: programs running inside a `Terminal` pane can draw pictures
+  with the Kitty graphics protocol. `TerminalScreen` reads `APC _G` out of the PTY stream and
+  decodes it rather than forwarding it, so the host terminal does not have to speak Kitty — the
+  pixels are re-encoded through the same path the `Image` widget uses, down to half-blocks. That is
+  also what lets two panes pick the same image id, and a half-scrolled pane crop its pixels instead
+  of squashing them. Placements are anchored to absolute scrollback lines, so images scroll,
+  scroll back, and evict with the text they were drawn against, and decoded pixels are held to a
+  per-screen budget (`TerminalScreen::set_image_budget`, 96 MiB by default). New public types
+  `TerminalImage`, `TerminalImagePlacement`, `TerminalImageCrop`, and the snapshot field
+  `TerminalRenderSnapshot::images` (breaking: the struct gained a field). Unsupported requests —
+  file/shared-memory transmission, Unicode placeholders, animation — are answered with the
+  protocol's own `ENOTSUPP` report. See [`docs/widgets/terminal-images.md`](docs/widgets/terminal-images.md).
+- Add `TerminalCellSize`, `host_cell_size()`, `TerminalScreen::set_cell_size`, and
+  `TerminalPtyConfig::cell_size` / `TerminalPty::resize_with_cell_size`. The PTY now reports pixel
+  dimensions in `TIOCGWINSZ` instead of zeroes, and `CSI 14 t` (text-area size in pixels) is
+  answered instead of ignored, so a child that measures itself before drawing no longer waits out
+  its own timeout. `ManagedTerminal` wires the host's real cell size to both ends automatically.
 - Add `Context::animated_color` and `Paint::Animated` for colours that only feed a style. The returned
   paint *names* its transition instead of carrying the current colour, so the element tree holds still
   for the whole fade and the runtime advances it with a repaint: a 160 ms focus fade at 60 fps costs

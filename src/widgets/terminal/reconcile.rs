@@ -140,6 +140,10 @@ pub(crate) fn reconcile_terminal(
         selection_style: terminal.selection_style,
         mouse_mode: live.as_ref().map_or(terminal.mouse_mode, |s| s.mouse_mode),
         key_modes: live.as_ref().map_or(terminal.key_modes, |s| s.key_modes),
+        #[cfg(feature = "terminal-images")]
+        images: live
+            .as_ref()
+            .map_or_else(|| terminal.images.clone(), |s| s.images.clone()),
         screen: terminal.screen.clone(),
         decorations: terminal.decorations.clone(),
         live_sequence: live.as_ref().map(|s| s.sequence),

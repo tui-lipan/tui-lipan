@@ -28,6 +28,16 @@ pub(crate) fn init_image_picker() {
     }
 }
 
+/// The host terminal's cell size in pixels.
+///
+/// Detected on startup by querying the host; falls back to the image encoder's own guess when the
+/// host answers nothing, which is what a test backend and a plain pipe both do.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn host_cell_size() -> crate::widgets::TerminalCellSize {
+    let size = picker_snapshot().font_size();
+    crate::widgets::TerminalCellSize::new(size.width, size.height)
+}
+
 pub(crate) fn picker_snapshot() -> Picker {
     picker_state()
         .read()

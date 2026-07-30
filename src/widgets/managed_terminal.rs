@@ -302,8 +302,16 @@ impl Component for ManagedTerminal {
     type State = ManagedTerminalState;
 
     fn create_state(&self, props: &Self::Properties) -> Self::State {
+        #[cfg_attr(not(feature = "terminal-images"), allow(unused_mut))]
+        let mut screen =
+            TerminalScreen::new(props.initial_rows, props.initial_cols, props.scrollback);
+        // Size images against the host's real cell, and tell the child the same thing through the
+        // PTY, so a picture the child sized for itself lands on the cells it reserved.
+        #[cfg(feature = "terminal-images")]
+        screen.set_cell_size(crate::host_cell_size());
+
         ManagedTerminalState {
-            screen: TerminalScreen::new(props.initial_rows, props.initial_cols, props.scrollback),
+            screen,
             snapshot: TerminalRenderSnapshot::default(),
             pty: None,
             cols: props.initial_cols,
@@ -540,7 +548,12 @@ impl ManagedTerminal {
 impl ManagedTerminal {
     /// Spawn the PTY and set up event handling.
     fn spawn_pty(link: CommandLink<ManagedTerminalMsg>, config: &TerminalPtyConfig) {
-        let config = config.clone();
+        #[cfg_attr(not(feature = "terminal-images"), allow(unused_mut))]
+        let mut config = config.clone();
+        #[cfg(feature = "terminal-images")]
+        {
+            config = config.cell_size(crate::host_cell_size());
+        }
         let event_link = link.clone();
 
         match TerminalPty::spawn(config, move |event| {

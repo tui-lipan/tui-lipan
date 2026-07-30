@@ -710,7 +710,9 @@ Behaviour worth knowing:
 
 ---
 
-## Image passthrough (roadmap)
+## Image passthrough
 
-Kitty graphics / sixel image display is **not implemented**. See the design doc:
+Programs in a pane can draw pictures with the Kitty graphics protocol; enable the
+`terminal-images` feature. The host terminal does not have to speak Kitty - the pane decodes the
+child's escapes and re-encodes for whatever the host supports, down to half-blocks. See
 [terminal-images.md](terminal-images.md).
