@@ -351,8 +351,9 @@ where
     ///
     /// Unlike [`dispatch`](Self::dispatch) this drains nothing and renders nothing: it answers "what
     /// would this message cost?" rather than "what did it do". Worth asserting on for messages that
-    /// arrive per keystroke or per chunk of streamed output, where [`UpdateLevel::Paint`] versus
-    /// [`UpdateLevel::Full`] is the difference between a repaint and rebuilding the whole window.
+    /// arrive per keystroke or per chunk of streamed output, where [`crate::UpdateLevel::Paint`]
+    /// versus [`crate::UpdateLevel::Full`] is the difference between a repaint and rebuilding the
+    /// whole window.
     pub fn update_level(&mut self, msg: C::Message) -> Result<crate::UpdateLevel> {
         self.core
             .update_from_boxed(crate::callback::ScopeId(1), Box::new(msg))
