@@ -549,6 +549,19 @@ impl Style {
     }
 
     /// Override contrast adjustment for this style only.
+    ///
+    /// Evaluated while resolving *this* style, before anything is drawn, so it can only weigh
+    /// the foreground against a background it can name: this style's own `bg`, else the
+    /// containing style's, else the terminal's. An alpha [`Paint`] is flattened against that
+    /// same assumed backdrop.
+    ///
+    /// That assumption is wrong for content floating over unrelated cells - a toast or popover
+    /// above live output. The real background is whatever those cells hold at paint time, which
+    /// no style-time pass can see, so the policy silently passes on a pairing that renders
+    /// unreadable.
+    ///
+    /// For that case use [`crate::widgets::EffectScope::contrast_policy`], which runs per cell
+    /// after compositing and therefore judges the colors actually on screen.
     pub fn contrast_policy(mut self, policy: ContrastPolicy) -> Self {
         self.contrast_policy = Some(policy);
         self
@@ -590,20 +603,32 @@ impl Style {
         self
     }
 
-    /// Tint backdrop by blending existing rendered cell colors toward `color`
-    /// by `alpha` in `[0.0, 1.0]`.
+    /// Blend toward `color` by `alpha` in `[0.0, 1.0]`.
     ///
-    /// - `0.0` leaves cells unchanged.
-    /// - `1.0` replaces all cell colors with `color`.
+    /// - `0.0` leaves colors unchanged.
+    /// - `1.0` replaces them with `color`.
     ///
-    /// Unlike `dim_by`, this blends toward a specific color rather than black,
-    /// making it visible even on terminals that use `Color::Reset` as their
+    /// Unlike [`Self::dim_by`], this blends toward a specific color rather than black,
+    /// making it visible even on terminals that use [`Color::Reset`] as their
     /// background (Reset is treated as black for blending).
     ///
-    /// This sets the compositor hook only and does not modify any explicit
-    /// `fg`/`bg` colors on this style.
+    /// Like `dim_by`, this does two things:
+    ///
+    /// - transforms this style's own explicit `fg`/`bg` colors, which is what applies on an
+    ///   ordinary widget style; and
+    /// - stores a compositor hook so backdrop-style paths
+    ///   ([`crate::widgets::EffectScope`] and overlay backdrops) can blend the *already
+    ///   rendered* cell colors underneath, including cells this style set no color for.
+    ///
+    /// The two never double-apply: the compositor skips a transform that matches its own hook.
+    ///
+    /// Only the backdrop paths re-color cells beneath a widget. Setting this on a plain widget
+    /// style tints that widget's own colors and nothing else - to wash out a whole subtree,
+    /// wrap it in [`crate::widgets::EffectScope`].
     pub fn tint_by(mut self, color: Color, alpha: f32) -> Self {
         let alpha = alpha.clamp(0.0, 1.0);
+        self.fg_transform = Some(ColorTransform::Tint(color, alpha));
+        self.bg_transform = Some(ColorTransform::Tint(color, alpha));
         self.tint = Some((color, alpha));
         self
     }
@@ -807,6 +832,44 @@ mod tests {
 
     fn p(color: Color) -> Option<Paint> {
         Some(Paint::Solid(color))
+    }
+
+    #[test]
+    fn tint_by_transforms_this_styles_own_colors_as_well_as_the_backdrop_hook() {
+        // Regression: `tint_by` used to set only the compositor hook, which nothing outside a
+        // backdrop path reads. On an ordinary widget style it therefore did nothing at all, with
+        // no error - the caller just got an untinted widget.
+        let tinted = Style::new()
+            .fg(Color::Rgb(240, 240, 240))
+            .bg(Color::Rgb(200, 40, 40))
+            .tint_by(Color::Rgb(0, 0, 0), 0.5);
+
+        assert_eq!(
+            tinted.fg_transform,
+            Some(ColorTransform::Tint(Color::Rgb(0, 0, 0), 0.5)),
+        );
+        assert_eq!(
+            tinted.bg_transform,
+            Some(ColorTransform::Tint(Color::Rgb(0, 0, 0), 0.5)),
+        );
+        assert_eq!(tinted.tint, Some((Color::Rgb(0, 0, 0), 0.5)));
+
+        let resolved = tinted.resolve_color_transforms();
+        assert_eq!(resolved.fg, p(Color::Rgb(120, 120, 120)));
+        assert_eq!(resolved.bg, p(Color::Rgb(100, 20, 20)));
+    }
+
+    #[test]
+    fn tint_by_mirrors_dim_by_so_neither_hook_is_silent_on_a_widget() {
+        // The two share a shape: transform this style's colors *and* leave a hook for backdrop
+        // paths. Keeping them aligned is what stops one of them being a no-op in the common case.
+        let dimmed = Style::new().fg(Color::Rgb(200, 200, 200)).dim_by(0.5);
+        let tinted = Style::new()
+            .fg(Color::Rgb(200, 200, 200))
+            .tint_by(Color::Black, 0.5);
+
+        assert!(dimmed.fg_transform.is_some() && dimmed.dim_amount.is_some());
+        assert!(tinted.fg_transform.is_some() && tinted.tint.is_some());
     }
 
     #[test]

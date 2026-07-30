@@ -211,6 +211,7 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
         }
         let overlay_opacity = overlay.opacity.clamp(0.0, 1.0);
         let restore_mode = overlay_clear_restore_mode(tree.node(overlay.id));
+        let surface_alpha = overlay_surface_alpha(tree.node(overlay.id));
         if let Some(style) = overlay.backdrop {
             render_overlay_backdrop(&mut state, content_rect, style, overlay_opacity);
         }
@@ -254,6 +255,24 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
             RenderOffset::ZERO,
         );
         apply_overlay_ancestor_effect_scopes(&mut state, overlay.id, overlay_rect, content_rect);
+
+        // A translucent surface blended against the cleared region, not against what the overlay
+        // covers, so redo that blend per cell now that the subtree has drawn. Runs before the
+        // restore pass: cells the overlay never painted still hold the clear and are skipped here,
+        // then restored below.
+        if let Some(surface) = surface_alpha
+            && clear_rect.width > 0
+            && clear_rect.height > 0
+        {
+            let bg_snapshot = state.ctx.overlay_bg_snapshot.borrow();
+            composite_overlay_surface_alpha(
+                state.f,
+                clear_rect,
+                &bg_snapshot,
+                state.ctx.terminal_bg,
+                surface,
+            );
+        }
 
         // Restore any cell left untouched after the clear so transparent
         // overlays inherit the content already rendered beneath them.

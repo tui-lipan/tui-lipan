@@ -63,6 +63,8 @@ struct ExplicitOverlayForegroundOnlySpacesComponent;
 
 struct ToastTransitionUnderlayComponent;
 
+struct ToastSurfaceBandsComponent;
+
 struct ToastTransitionDefaultUnderlayComponent;
 
 struct TransparentModalBorderOverColoredBackgroundComponent;
@@ -162,6 +164,50 @@ fn style_contrast_policy_overrides_widget_policy() {
 
     assert!(contrast_ratio(adjusted.fg.unwrap().color(), adjusted.bg.unwrap().color()) >= 4.5);
     assert_eq!(adjusted.contrast_policy, None);
+}
+
+#[test]
+fn style_contrast_policy_judges_an_alpha_bg_against_the_supplied_backdrop() {
+    // An alpha background is flattened before the policy weighs it, so the pairing it judges is
+    // the one that will be rendered *given this backdrop* - not the raw pigment.
+    let style = Style::new()
+        .fg(Color::rgb(0, 0, 0))
+        .bg_alpha(Color::rgb(0, 0, 0), 0.5);
+
+    let over_black = finalize_style(style, Some(Color::rgb(0, 0, 0)), ContrastPolicy::Wcag);
+    let over_white = finalize_style(style, Some(Color::rgb(255, 255, 255)), ContrastPolicy::Wcag);
+
+    // Same style, different backdrop, different correction: black-on-black must be lifted, while
+    // black over a half-white blend is already readable and is left alone.
+    assert_ne!(
+        over_black.fg, over_white.fg,
+        "the backdrop must change the verdict",
+    );
+    assert_eq!(
+        over_white.fg,
+        Some(crate::style::Paint::Solid(Color::rgb(0, 0, 0))),
+    );
+    // The alpha paint survives resolution so the renderer still composites it.
+    assert_eq!(over_black.bg, style.bg);
+}
+
+#[test]
+fn style_contrast_policy_cannot_see_content_below_a_floating_overlay() {
+    // Pins the limitation `Style::contrast_policy` documents: with no backdrop to name, it falls
+    // back to the terminal background. Text that is readable against *that* still renders against
+    // whatever cells the overlay happens to cover, which this pass never sees. Content-aware
+    // correction is `EffectScope::contrast_policy`, which runs per cell after compositing.
+    let style = Style::new()
+        .fg(Color::rgb(171, 178, 191))
+        .bg_alpha(Color::rgb(50, 54, 61), 0.82);
+
+    let assumed = finalize_style(style, None, ContrastPolicy::Wcag);
+    let over_white = finalize_style(style, Some(Color::rgb(255, 255, 255)), ContrastPolicy::Wcag);
+
+    assert_ne!(
+        assumed.fg, over_white.fg,
+        "naming the real backdrop is what lets the policy correct this pairing",
+    );
 }
 
 #[test]
@@ -1059,6 +1105,36 @@ impl Component for ToastTransitionUnderlayComponent {
         VStack::new()
             .style(Style::new().bg(Color::rgb(20, 40, 60)))
             .child(Spacer::new())
+            .into()
+    }
+}
+
+impl Component for ToastSurfaceBandsComponent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        // One distinctly coloured row per line, so anything that flattens the underlay is obvious.
+        let band = |color: Color| -> crate::core::element::Element {
+            VStack::new()
+                .style(Style::new().bg(color))
+                .height(Length::Px(3))
+                .child(Spacer::new())
+                .into()
+        };
+        VStack::new()
+            .child(band(Color::rgb(255, 0, 0)))
+            .child(band(Color::rgb(0, 255, 0)))
+            .child(band(Color::rgb(0, 0, 255)))
+            .child(band(Color::rgb(255, 255, 0)))
+            .child(band(Color::rgb(255, 0, 255)))
             .into()
     }
 }
@@ -4623,4 +4699,184 @@ fn animated_position_offset_post_pass_uses_shifted_rect() {
     assert_eq!(faded.symbol(), "X");
     assert_ne!(faded.fg, ratatui::style::Color::White);
     assert_ne!(faded.bg, ratatui::style::Color::Black);
+}
+
+#[test]
+fn translucent_overlay_surface_blends_with_the_cells_it_covers() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 9,
+        h: 5,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        ToastSurfaceBandsComponent,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    // Half-strength black over rows that are each a different colour.
+    runtime.overlay_manager.borrow_mut().push_toast(
+        Toast::new("T")
+            .border(false)
+            .width(Length::Px(3))
+            .height(Length::Px(3))
+            .frame_style(Style::new().bg_alpha(Color::rgb(0, 0, 0), 0.5)),
+    );
+    runtime.render_element(viewport, None, None, None);
+    // A freshly pushed toast starts its fade at zero opacity, which restores the underlay
+    // wholesale; settle it so this measures the surface blend rather than the transition.
+    let mut overlays = runtime.tree.overlay_roots().to_vec();
+    let toast_rect = runtime.tree.node(overlays[0].id).rect;
+    overlays[0].opacity = 1.0;
+    runtime.tree.set_overlay_roots(overlays);
+
+    let backend = TestBackend::new(viewport.w, viewport.h);
+    let mut terminal = Terminal::new(backend).expect("terminal should init");
+    let ctx = RenderContext {
+        tree: &runtime.tree,
+        focused: None,
+        hovered: None,
+        mouse_pos: None,
+        suppress_pointer_item_hover_nodes: None,
+        blink_visible: true,
+        effect_phase: 0,
+        images_enabled: true,
+        contrast_policy: ContrastPolicy::Off,
+        read_only_selection: None,
+        scrollbar_metrics_cache: &RefCell::new(Default::default()),
+        overlay_bg_snapshot: &RefCell::new(Vec::new()),
+        join_index: &build_join_index(&runtime.tree),
+        cursor_position: &Cell::new(None),
+        terminal_bg: Some(ratatui::style::Color::Rgb(0, 0, 0)),
+        drag_preview_label: None,
+        drag_preview_at_mouse: false,
+        drag_preview_snapshot_rect: None,
+        dnd_snapshot_cells: &RefCell::new(None),
+        drag_preview_max_width: None,
+        drag_preview_max_height: None,
+        drop_slot_source_preview_rect: None,
+        paint_glyph_caches: None,
+        copy_feedback: None,
+        copy_feedback_style: Style::default(),
+    };
+    terminal
+        .draw(|f| render(f, &ctx))
+        .expect("render should succeed");
+
+    // Every covered cell must be its own underlying colour at half strength. Blending against the
+    // cleared region instead produced one flat colour for the whole surface, discarding exactly the
+    // variation that makes a translucent panel worth having.
+    let buffer = terminal.backend().buffer();
+    let x = toast_rect.x as u16;
+    let mut seen = Vec::new();
+    for row in 0..toast_rect.h {
+        let y = toast_rect.y as u16 + row;
+        let under = buffer[(0, y)].bg;
+        let over = buffer[(x, y)].bg;
+        let ratatui::style::Color::Rgb(ur, ug, ub) = under else {
+            panic!("underlay row {y} should be a concrete colour, got {under:?}");
+        };
+        assert_eq!(
+            over,
+            ratatui::style::Color::Rgb(ur / 2, ug / 2, ub / 2),
+            "row {y} must keep its own colour at half strength",
+        );
+        seen.push(over);
+    }
+    seen.dedup();
+    assert!(
+        seen.len() > 1,
+        "the surface spans rows of different colours, so it cannot render as one flat colour",
+    );
+}
+
+#[test]
+fn translucent_toast_surface_is_uniform_behind_its_text() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 9,
+        h: 5,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        ToastTransitionUnderlayComponent,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    runtime.overlay_manager.borrow_mut().push_toast(
+        // Mirrors an application toast: bordered, wrapped, with its own message foreground.
+        Toast::new("ab")
+            .border(true)
+            .wrap(true)
+            .max_width(Length::Px(64))
+            .message_style(Style::new().fg(Color::rgb(226, 232, 240)))
+            .padding((0, 0, 0, 0))
+            .frame_style(Style::new().bg_alpha(Color::rgb(200, 40, 40), 0.5)),
+    );
+    runtime.render_element(viewport, None, None, None);
+    let mut overlays = runtime.tree.overlay_roots().to_vec();
+    let toast_rect = runtime.tree.node(overlays[0].id).rect;
+    overlays[0].opacity = 1.0;
+    runtime.tree.set_overlay_roots(overlays);
+
+    let backend = TestBackend::new(viewport.w, viewport.h);
+    let mut terminal = Terminal::new(backend).expect("terminal should init");
+    let ctx = RenderContext {
+        tree: &runtime.tree,
+        focused: None,
+        hovered: None,
+        mouse_pos: None,
+        suppress_pointer_item_hover_nodes: None,
+        blink_visible: true,
+        effect_phase: 0,
+        images_enabled: true,
+        contrast_policy: ContrastPolicy::Off,
+        read_only_selection: None,
+        scrollbar_metrics_cache: &RefCell::new(Default::default()),
+        overlay_bg_snapshot: &RefCell::new(Vec::new()),
+        join_index: &build_join_index(&runtime.tree),
+        cursor_position: &Cell::new(None),
+        terminal_bg: Some(ratatui::style::Color::Rgb(0, 0, 0)),
+        drag_preview_label: None,
+        drag_preview_at_mouse: false,
+        drag_preview_snapshot_rect: None,
+        dnd_snapshot_cells: &RefCell::new(None),
+        drag_preview_max_width: None,
+        drag_preview_max_height: None,
+        drop_slot_source_preview_rect: None,
+        paint_glyph_caches: None,
+        copy_feedback: None,
+        copy_feedback_style: Style::default(),
+    };
+    terminal
+        .draw(|f| render(f, &ctx))
+        .expect("render should succeed");
+
+    // Border and text sit on one surface and must read as one colour. Copying the frame's alpha
+    // paint onto the message style made text cells composite that alpha a second time, leaving a
+    // darker patch behind the words.
+    let buffer = terminal.backend().buffer();
+    let mut sampled = Vec::new();
+    for dy in 0..toast_rect.h {
+        for dx in 0..toast_rect.w {
+            sampled.push((
+                dx,
+                dy,
+                buffer[(toast_rect.x as u16 + dx, toast_rect.y as u16 + dy)].bg,
+            ));
+        }
+    }
+    let first = sampled[0].2;
+    assert!(
+        sampled.iter().all(|(_, _, bg)| *bg == first),
+        "the surface must be one colour across the toast, got {sampled:?}",
+    );
 }

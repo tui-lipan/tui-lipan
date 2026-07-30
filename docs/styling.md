@@ -25,7 +25,7 @@ Style::new()
 | `.not_bold()` | Explicitly disable bold (suppresses renderer fallbacks) |
 | `.dim()` | Dimmed/faint text |
 | `.dim_by(f32)` | Dim resolved `fg`/`bg` and cell backdrop |
-| `.tint_by(Color, f32)` | Tint existing rendered cells toward a color |
+| `.tint_by(Color, f32)` | Blend this style's colors toward a color, and tint rendered cells beneath in backdrop paths |
 | `.lighten_by(f32)` | Lighten resolved `fg`/`bg` colors |
 | `.transform_fg(ColorTransform)` | Transform the resolved foreground color |
 | `.transform_bg(ColorTransform)` | Transform the resolved background color |
@@ -57,11 +57,49 @@ backgrounds are source-over composited with the existing cell background, so
 they are the usual choice for a visibly distinct surface that still reflects
 what is underneath.
 
+On an overlay - a toast, popover, or modal - the surface blends against the
+content the overlay covers, cell by cell. Rows of different colours beneath it
+stay different, each shifted toward the surface colour, rather than collapsing
+into one flat wash.
+
 This differs from `Color::Transparent`, which does not paint the background at
 all, and `Color::Backdrop`, which preserves the existing background while
 allowing a surface to clear underlying text. It also differs from
-`Style::tint_by`: tint is a compositor effect for modifying already-rendered
-cells, not a replacement for an alpha background on an ordinary widget surface.
+`Style::tint_by`, which blends colors rather than painting a surface: on an
+ordinary widget it shifts that widget's own `fg`/`bg`, and only in backdrop
+paths (`EffectScope`, overlay backdrops) does it re-color the cells underneath.
+For a surface that lets content show through, reach for an alpha background.
+
+#### Contrast on a translucent surface
+
+`Style::contrast_policy` is resolved while the style is, before anything is
+drawn. It flattens an alpha background against the only backdrop it can name -
+this style's `bg`, else the containing style's, else the terminal's - and judges
+the foreground against that.
+
+For a surface floating over unrelated content, that guess is wrong. A toast
+above live output covers whatever cells happen to be there, and no style-time
+pass can know them, so the policy approves a pairing that renders unreadable:
+
+```rust
+// Judged against the terminal background, not the pane this toast will cover.
+let text = Style::new()
+    .fg(Color::rgb(171, 178, 191))
+    .contrast_policy(ContrastPolicy::Wcag);
+```
+
+Correct that per cell, after compositing, with `EffectScope`:
+
+```rust
+EffectScope::new()
+    .child(toast_body)
+    .contrast_policy(ContrastPolicy::Wcag)
+```
+
+The trade is that the correction now depends on what is behind, so the same
+text shifts color as content scrolls under it. An opaque background avoids the
+question entirely and is the better default for anything that must stay
+readable; use the translucent form when the effect is worth the variance.
 
 Relative transforms are resolved after style patching, so they work well with theme-provided or inherited style values:
 
@@ -348,7 +386,7 @@ Common variants:
 | Type | Purpose |
 |------|---------|
 | `VisualEffect::ColorTransform` | Apply relative color transforms (Dim, Lighten, Opacity, Tint) to fg/bg of each cell. Constructors: `dim`, `lighten`, `tint`, `transform_fg`, `transform_bg` |
-| `VisualEffect::ContrastPolicy` | Apply `ContrastPolicy` to ensure text legibility |
+| `VisualEffect::ContrastPolicy` | Apply `ContrastPolicy` to ensure text legibility, judged per cell after compositing (see [Contrast on a translucent surface](#contrast-on-a-translucent-surface)) |
 | `VisualEffect::Monochrome` | Desaturation / grayscale conversion |
 | `VisualEffect::PaletteQuantize` | Reduce colors to a preset or custom palette |
 | `VisualEffect::Scanlines` | Static row-based dimming mask |

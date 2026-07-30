@@ -5,7 +5,7 @@ use std::sync::Arc;
 use unicode_width::UnicodeWidthStr;
 
 use crate::core::element::Element;
-use crate::style::{Align, BorderStyle, Length, Padding, Rect, RichText, Span, Style};
+use crate::style::{Align, BorderStyle, Length, Padding, Paint, Rect, RichText, Span, Style};
 use crate::widgets::frame::EdgeDecoration;
 use crate::widgets::text::Overflow;
 use crate::widgets::{BorderLabels, Frame, FrameLabel, Text};
@@ -233,8 +233,18 @@ impl Toast {
     pub fn into_element(self) -> Element {
         let max_width = self.max_width;
 
+        // Give the message the frame's background so it reads as one surface - but never a
+        // translucent one. The frame has already composited that paint against what it covers;
+        // handing the same paint to the text would composite it a second time, over the result,
+        // leaving a darker patch behind the words. Left unset, the text simply keeps the surface
+        // the frame painted.
         let mut message_style = self.message_style;
-        if message_style.bg.is_none() {
+        if message_style.bg.is_none()
+            && !self
+                .frame_style
+                .bg
+                .is_some_and(|bg| matches!(bg, Paint::Alpha { alpha, .. } if alpha < 255))
+        {
             message_style.bg = self.frame_style.bg;
         }
 

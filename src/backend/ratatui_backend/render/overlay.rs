@@ -3,11 +3,11 @@ use ratatui::style::Color as RColor;
 use ratatui::widgets::Block;
 
 use crate::backend::ratatui_backend::common::{
-    apply_effect_style_clipped, from_ratatui_color, paint_to_ratatui_bg, preserve_palette_blend,
-    to_ratatui_color, to_ratatui_rect,
+    apply_effect_style_clipped, blend_paint_over_ratatui, from_ratatui_color, paint_to_ratatui_bg,
+    preserve_palette_blend, to_ratatui_color, to_ratatui_rect,
 };
 use crate::core::node::NodeKind;
-use crate::style::{ColorTransform, Rect, Style};
+use crate::style::{ColorTransform, Paint, Rect, Style};
 
 use super::RenderState;
 
@@ -308,10 +308,9 @@ pub(crate) fn restore_fully_transparent_animated(
     }
 }
 
-pub(crate) fn overlay_clear_restore_mode(
-    node: &crate::core::node::Node,
-) -> OverlayClearRestoreMode {
-    let bg = match &node.kind {
+/// The background paint declared by an overlay's own root node, before resolution.
+fn overlay_root_bg(node: &crate::core::node::Node) -> Option<Paint> {
+    match &node.kind {
         NodeKind::Frame(frame) => frame.style.bg,
         NodeKind::Center(center) => center.style.bg,
         NodeKind::CenterPin(center) => center.style.bg,
@@ -323,9 +322,65 @@ pub(crate) fn overlay_clear_restore_mode(
         NodeKind::Flow(flow) => flow.style.bg,
         NodeKind::Animated(_) => None,
         _ => None,
-    };
+    }
+}
 
-    if matches!(bg, Some(paint) if paint.is_transparent_sentinel()) {
+/// The translucent surface an overlay paints over the content it covers, if it declared one.
+///
+/// An overlay is drawn onto a cleared region, so the alpha flattening that happens while its
+/// subtree renders has nothing to blend with and falls back to one flat backdrop. That turns a
+/// translucent panel into a single opaque colour and throws away the variation underneath, which
+/// is the whole point of making it translucent. Reporting the paint here lets the overlay loop
+/// redo the blend per cell against what was actually there - see
+/// [`composite_overlay_surface_alpha`].
+pub(crate) fn overlay_surface_alpha(node: &crate::core::node::Node) -> Option<Paint> {
+    let bg = overlay_root_bg(node)?;
+    matches!(bg, Paint::Alpha { alpha, .. } if alpha < 255).then_some(bg)
+}
+
+/// Re-blend an overlay's translucent background against the cells it covers.
+///
+/// `underlay` is the pre-clear snapshot, so each cell blends with the colour that was genuinely
+/// beneath it: three differently coloured rows stay three colours, shifted toward the surface
+/// rather than replaced by it.
+///
+/// Only cells still holding the flat colour the subtree painted are touched. A child that set its
+/// own background renders a different colour and is left alone, so this cannot repaint content
+/// layered on top of the surface.
+pub(crate) fn composite_overlay_surface_alpha(
+    f: &mut ratatui::Frame<'_>,
+    rect: ratatui::layout::Rect,
+    underlay: &[BufferCell],
+    terminal_bg: Option<RColor>,
+    surface: Paint,
+) {
+    let Some(flattened) = paint_to_ratatui_bg(surface, terminal_bg.map(from_ratatui_color)) else {
+        return;
+    };
+    let buf = f.buffer_mut();
+    for dy in 0..rect.height {
+        for dx in 0..rect.width {
+            let index = dy as usize * rect.width as usize + dx as usize;
+            let Some(saved) = underlay.get(index) else {
+                continue;
+            };
+            let Some(cell) = buf.cell_mut((rect.x + dx, rect.y + dy)) else {
+                continue;
+            };
+            if cell.bg != flattened {
+                continue;
+            }
+            if let Some(blended) = blend_paint_over_ratatui(surface, saved.bg) {
+                cell.bg = blended;
+            }
+        }
+    }
+}
+
+pub(crate) fn overlay_clear_restore_mode(
+    node: &crate::core::node::Node,
+) -> OverlayClearRestoreMode {
+    if matches!(overlay_root_bg(node), Some(paint) if paint.is_transparent_sentinel()) {
         OverlayClearRestoreMode::PreserveForeground
     } else {
         OverlayClearRestoreMode::PreserveBackgroundOnly

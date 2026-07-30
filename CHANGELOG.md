@@ -202,6 +202,26 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- A `Toast` with a translucent background no longer renders a darker patch behind its own text. The
+  frame's background paint was copied onto the message style, so text cells composited that alpha a
+  second time on top of the surface the frame had already produced. An alpha paint is now left for
+  the frame alone to paint, and the text keeps the surface underneath it.
+- A translucent overlay background now blends against the content the overlay covers, per cell,
+  instead of against one flat backdrop. Overlays draw onto a cleared region, so the alpha flattening
+  that ran while the subtree rendered had nothing to blend with and fell back to the terminal
+  background - a toast with an `rgba` surface came out a single opaque colour and discarded whatever
+  variation was underneath, which is the entire point of making it translucent. The pre-clear
+  snapshot the restore pass already keeps is now reused to redo the blend properly.
+- `Style::tint_by` no longer does nothing on an ordinary widget style. It set only the compositor
+  hook, which nothing outside a backdrop path (`EffectScope`, overlay backdrops) reads, so tinting a
+  plain widget silently changed no colour at all. It now also transforms that style's own `fg`/`bg`,
+  mirroring `dim_by`; the compositor already skipped a transform matching its own hook, so backdrop
+  paths are unaffected and nothing double-applies.
+- Document that `Style::contrast_policy` is resolved before anything is drawn, against this style's
+  `bg`, else the containing style's, else the terminal's. An alpha background is flattened against
+  that same assumed backdrop, so a translucent surface floating over unrelated content — a toast
+  above live output — gets approved on a pairing that renders unreadable. `EffectScope::contrast_policy`
+  judges the composited cells instead and is the fix for that case.
 - A tab strip with a `tab_hover_style` no longer reports a repaint on every pointer-motion event that
   crosses it. Hover now resolves which tab the pointer is over and reports dirt only when that
   changes, so a strip spanning the top of a window stops repainting the whole tree ~60 times a second
