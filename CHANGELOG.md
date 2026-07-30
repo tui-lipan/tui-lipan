@@ -202,6 +202,12 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- A translucent overlay background now blends against the content the overlay covers, per cell,
+  instead of against one flat backdrop. Overlays draw onto a cleared region, so the alpha flattening
+  that ran while the subtree rendered had nothing to blend with and fell back to the terminal
+  background - a toast with an `rgba` surface came out a single opaque colour and discarded whatever
+  variation was underneath, which is the entire point of making it translucent. The pre-clear
+  snapshot the restore pass already keeps is now reused to redo the blend properly.
 - `Style::tint_by` no longer does nothing on an ordinary widget style. It set only the compositor
   hook, which nothing outside a backdrop path (`EffectScope`, overlay backdrops) reads, so tinting a
   plain widget silently changed no colour at all. It now also transforms that style's own `fg`/`bg`,

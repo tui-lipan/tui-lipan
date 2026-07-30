@@ -57,6 +57,11 @@ backgrounds are source-over composited with the existing cell background, so
 they are the usual choice for a visibly distinct surface that still reflects
 what is underneath.
 
+On an overlay - a toast, popover, or modal - the surface blends against the
+content the overlay covers, cell by cell. Rows of different colours beneath it
+stay different, each shifted toward the surface colour, rather than collapsing
+into one flat wash.
+
 This differs from `Color::Transparent`, which does not paint the background at
 all, and `Color::Backdrop`, which preserves the existing background while
 allowing a surface to clear underlying text. It also differs from

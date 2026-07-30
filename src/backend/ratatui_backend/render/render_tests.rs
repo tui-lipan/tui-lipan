@@ -63,6 +63,8 @@ struct ExplicitOverlayForegroundOnlySpacesComponent;
 
 struct ToastTransitionUnderlayComponent;
 
+struct ToastSurfaceBandsComponent;
+
 struct ToastTransitionDefaultUnderlayComponent;
 
 struct TransparentModalBorderOverColoredBackgroundComponent;
@@ -1103,6 +1105,36 @@ impl Component for ToastTransitionUnderlayComponent {
         VStack::new()
             .style(Style::new().bg(Color::rgb(20, 40, 60)))
             .child(Spacer::new())
+            .into()
+    }
+}
+
+impl Component for ToastSurfaceBandsComponent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        // One distinctly coloured row per line, so anything that flattens the underlay is obvious.
+        let band = |color: Color| -> crate::core::element::Element {
+            VStack::new()
+                .style(Style::new().bg(color))
+                .height(Length::Px(3))
+                .child(Spacer::new())
+                .into()
+        };
+        VStack::new()
+            .child(band(Color::rgb(255, 0, 0)))
+            .child(band(Color::rgb(0, 255, 0)))
+            .child(band(Color::rgb(0, 0, 255)))
+            .child(band(Color::rgb(255, 255, 0)))
+            .child(band(Color::rgb(255, 0, 255)))
             .into()
     }
 }
@@ -4667,4 +4699,97 @@ fn animated_position_offset_post_pass_uses_shifted_rect() {
     assert_eq!(faded.symbol(), "X");
     assert_ne!(faded.fg, ratatui::style::Color::White);
     assert_ne!(faded.bg, ratatui::style::Color::Black);
+}
+
+#[test]
+fn translucent_overlay_surface_blends_with_the_cells_it_covers() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 9,
+        h: 5,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        ToastSurfaceBandsComponent,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    // Half-strength black over rows that are each a different colour.
+    runtime.overlay_manager.borrow_mut().push_toast(
+        Toast::new("T")
+            .border(false)
+            .width(Length::Px(3))
+            .height(Length::Px(3))
+            .frame_style(Style::new().bg_alpha(Color::rgb(0, 0, 0), 0.5)),
+    );
+    runtime.render_element(viewport, None, None, None);
+    // A freshly pushed toast starts its fade at zero opacity, which restores the underlay
+    // wholesale; settle it so this measures the surface blend rather than the transition.
+    let mut overlays = runtime.tree.overlay_roots().to_vec();
+    let toast_rect = runtime.tree.node(overlays[0].id).rect;
+    overlays[0].opacity = 1.0;
+    runtime.tree.set_overlay_roots(overlays);
+
+    let backend = TestBackend::new(viewport.w, viewport.h);
+    let mut terminal = Terminal::new(backend).expect("terminal should init");
+    let ctx = RenderContext {
+        tree: &runtime.tree,
+        focused: None,
+        hovered: None,
+        mouse_pos: None,
+        suppress_pointer_item_hover_nodes: None,
+        blink_visible: true,
+        effect_phase: 0,
+        images_enabled: true,
+        contrast_policy: ContrastPolicy::Off,
+        read_only_selection: None,
+        scrollbar_metrics_cache: &RefCell::new(Default::default()),
+        overlay_bg_snapshot: &RefCell::new(Vec::new()),
+        join_index: &build_join_index(&runtime.tree),
+        cursor_position: &Cell::new(None),
+        terminal_bg: Some(ratatui::style::Color::Rgb(0, 0, 0)),
+        drag_preview_label: None,
+        drag_preview_at_mouse: false,
+        drag_preview_snapshot_rect: None,
+        dnd_snapshot_cells: &RefCell::new(None),
+        drag_preview_max_width: None,
+        drag_preview_max_height: None,
+        drop_slot_source_preview_rect: None,
+        paint_glyph_caches: None,
+        copy_feedback: None,
+        copy_feedback_style: Style::default(),
+    };
+    terminal
+        .draw(|f| render(f, &ctx))
+        .expect("render should succeed");
+
+    // Every covered cell must be its own underlying colour at half strength. Blending against the
+    // cleared region instead produced one flat colour for the whole surface, discarding exactly the
+    // variation that makes a translucent panel worth having.
+    let buffer = terminal.backend().buffer();
+    let x = toast_rect.x as u16;
+    let mut seen = Vec::new();
+    for row in 0..toast_rect.h {
+        let y = toast_rect.y as u16 + row;
+        let under = buffer[(0, y)].bg;
+        let over = buffer[(x, y)].bg;
+        let ratatui::style::Color::Rgb(ur, ug, ub) = under else {
+            panic!("underlay row {y} should be a concrete colour, got {under:?}");
+        };
+        assert_eq!(
+            over,
+            ratatui::style::Color::Rgb(ur / 2, ug / 2, ub / 2),
+            "row {y} must keep its own colour at half strength",
+        );
+        seen.push(over);
+    }
+    seen.dedup();
+    assert!(
+        seen.len() > 1,
+        "the surface spans rows of different colours, so it cannot render as one flat colour",
+    );
 }
