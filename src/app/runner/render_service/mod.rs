@@ -566,9 +566,11 @@ impl<C: Component> AppRunner<C> {
         }
 
         if !self.dirty_component_scopes.is_empty()
-            && !self
-                .core
-                .refresh_cached_scopes(&self.dirty_component_scopes, bounds)
+            && !self.core.refresh_cached_scopes(
+                &self.dirty_component_scopes,
+                bounds,
+                self.mouse.hovered,
+            )
         {
             crate::debug::internal_log!(
                 "[tui-lipan] layout-only fallback: refresh_cached_scopes failed for {:?}",
@@ -626,9 +628,11 @@ impl<C: Component> AppRunner<C> {
                     }
                     DirtyLevel::LayoutOnly => {
                         if !self.dirty_component_scopes.is_empty()
-                            && !self
-                                .core
-                                .refresh_cached_scopes(&self.dirty_component_scopes, bounds)
+                            && !self.core.refresh_cached_scopes(
+                                &self.dirty_component_scopes,
+                                bounds,
+                                self.mouse.hovered,
+                            )
                         {
                             crate::debug::internal_log!(
                                 "[tui-lipan] layout-only fallback: render-time refresh_cached_scopes failed for {:?}",

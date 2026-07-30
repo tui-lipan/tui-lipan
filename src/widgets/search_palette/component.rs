@@ -999,7 +999,7 @@ mod tests {
             .expect("palette navigation should update");
 
         assert_eq!(level, UpdateLevel::Layout);
-        assert!(runtime.refresh_cached_scopes(&[palette_scope], bounds));
+        assert!(runtime.refresh_cached_scopes(&[palette_scope], bounds, None));
         assert!(runtime.reconcile_cached_element(bounds, None, None, None));
         assert_eq!(view_count.get(), 1);
     }

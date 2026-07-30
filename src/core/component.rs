@@ -657,13 +657,40 @@ enum HoverQuery {
 
 impl HoverContext {
     pub(crate) fn update_from_tree(&self, tree: &NodeTree, hovered: Option<NodeId>) {
-        // Start of a view pass: the questions asked from here on are this frame's. A paint-only
+        // Start of a full view pass: every question asked from here on is this frame's. A paint-only
         // frame never gets here, so the previous frame's questions stay in force — which is exactly
         // what they must do, since its element tree is still the one on screen.
         self.queries.borrow_mut().clear();
+        self.update_chain(tree, hovered);
+    }
 
+    /// Point the chain at `hovered` without disturbing the recorded questions.
+    ///
+    /// A frame that only reconciles an already-built element tree must land here rather than in
+    /// [`Self::update_from_tree`]: no view ran, so the questions still on file are the ones the tree
+    /// on screen depends on, and dropping them would price the next crossing as a repaint and leave
+    /// that tree stale.
+    pub(crate) fn update_chain(&self, tree: &NodeTree, hovered: Option<NodeId>) {
         let cur = hovered.filter(|id| tree.is_valid(*id));
         self.inner.update_chain(tree, cur);
+    }
+
+    /// Start of a *partial* view pass: only `scopes` are about to run, so only their questions are
+    /// this frame's to re-ask. Every other scope keeps the tree — and the questions — it already had.
+    ///
+    /// The chain has to move here rather than after the refresh: the views being re-run are being
+    /// re-run precisely because their hover answers changed, so they must see the new hover position
+    /// while they build, not the one that made them dirty.
+    pub(crate) fn begin_scoped_view(
+        &self,
+        tree: &NodeTree,
+        hovered: Option<NodeId>,
+        scopes: &[ScopeId],
+    ) {
+        self.queries
+            .borrow_mut()
+            .retain(|(asker, _)| !scopes.contains(asker));
+        self.update_chain(tree, hovered);
     }
 
     fn record(&self, asker: ScopeId, query: HoverQuery) {

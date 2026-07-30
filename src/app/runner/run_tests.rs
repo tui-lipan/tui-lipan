@@ -3234,6 +3234,92 @@ fn a_hover_change_outside_every_queried_key_stays_a_repaint() {
     );
 }
 
+/// The text rendered under the node carrying `key`.
+fn text_under_key<C: Component>(runner: &AppRunner<C>, key: &str) -> String {
+    let tree = &runner.core.tree;
+    let mut out = String::new();
+    let mut stack = vec![node_id_by_key(tree, key)];
+    while let Some(id) = stack.pop() {
+        if !tree.is_valid(id) {
+            continue;
+        }
+        let node = tree.node(id);
+        if let NodeKind::Text(text) = &node.kind {
+            for span in &text.spans {
+                out.push_str(&span.content);
+            }
+        }
+        stack.extend(node.children.iter().rev().copied());
+    }
+    out
+}
+
+/// The frame a `LayoutOnly` hover crossing asks for: refresh the marked scopes, then reconcile.
+fn render_layout_only_frame<C: Component>(runner: &mut AppRunner<C>, viewport: Rect) {
+    let scopes = std::mem::take(&mut runner.dirty_component_scopes);
+    runner.dirty_scope_set.clear();
+    assert!(
+        runner
+            .core
+            .refresh_cached_scopes(&scopes, viewport, runner.mouse.hovered),
+        "the marked scopes should refresh"
+    );
+    assert!(
+        runner.core.reconcile_cached_element(
+            viewport,
+            runner.focus.focused,
+            None,
+            runner.mouse.hovered,
+        ),
+        "the refreshed element should reconcile"
+    );
+}
+
+/// The layout pass a crossing asks for has to actually land, twice over: the view it re-runs must
+/// see the hover position that made it dirty, and the questions asked during that partial pass must
+/// outlive the frame so the *next* crossing is priced as a view pass too.
+///
+/// Losing either half leaves the tree describing where the pointer used to be — in a multiplexer,
+/// a sidebar row whose hover styling drops the moment the pointer reaches the close button nested
+/// inside it, and never comes back until something else forces a full render.
+#[test]
+fn a_hover_layout_frame_sees_the_new_hover_and_keeps_its_questions() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 1,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), KeyedHoverDependencySmoke, ());
+    init_runner(&mut runner, KeyedHoverDependencySmoke, viewport);
+
+    let row = node_id_by_key(&runner.core.tree, "row");
+    let row_x = runner.core.tree.node(row).rect.x as u16;
+    assert_eq!(text_under_key(&runner, "row"), "row  ", "resting");
+
+    assert!(runner.update_hover(row_x, 0), "entering the keyed region");
+    assert_eq!(runner.motion_hover_dirty_level(), DirtyLevel::LayoutOnly);
+    render_layout_only_frame(&mut runner, viewport);
+    assert_eq!(
+        text_under_key(&runner, "row"),
+        "row x",
+        "the refreshed view builds against the hover that dirtied it"
+    );
+
+    assert!(runner.update_hover(1, 0), "leaving for the tab strip");
+    assert_eq!(
+        runner.motion_hover_dirty_level(),
+        DirtyLevel::LayoutOnly,
+        "the question asked during the partial pass still prices the next crossing"
+    );
+    render_layout_only_frame(&mut runner, viewport);
+    assert_eq!(
+        text_under_key(&runner, "row"),
+        "row  ",
+        "and leaving takes the affordance back off"
+    );
+}
+
 struct TabStripHoverSmoke;
 
 impl Component for TabStripHoverSmoke {
@@ -4649,7 +4735,11 @@ fn scroll_dependency_probe_stale_after_edits(mode: ScrollReadMode, edits: &[KeyC
         // cached views became stale.
         let scopes = std::mem::take(&mut runner.dirty_component_scopes);
         runner.dirty_scope_set.clear();
-        assert!(runner.core.refresh_cached_scopes(&scopes, viewport));
+        assert!(
+            runner
+                .core
+                .refresh_cached_scopes(&scopes, viewport, runner.mouse.hovered)
+        );
         assert!(runner.core.reconcile_cached_element(
             viewport,
             runner.focus.focused,
