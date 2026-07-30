@@ -585,12 +585,6 @@ impl ComponentRegistry {
         }
     }
 
-    pub(crate) fn has_hover_view_dependencies(&self) -> bool {
-        self.scope_to_id.values().copied().any(|id| {
-            self.is_valid(id) && self.arena.get(id).memo_deps.dependencies.depends_on_hover()
-        })
-    }
-
     pub(crate) fn mount(
         &mut self,
         element: &ComponentElement,

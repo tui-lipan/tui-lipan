@@ -265,15 +265,22 @@ impl<Msg: 'static> Link<Msg> {
     }
 }
 
-/// Result from a component's `update()` method.
+/// How much refresh work an [`Update`] asks the runtime for.
 ///
-/// `level` refines the minimum refresh work needed by the runtime.
+/// Ordered by cost. Worth asserting on in tests for messages that arrive at high frequency — the
+/// difference between [`Paint`](Self::Paint) and [`Full`](Self::Full) on a message that fires per
+/// keystroke or per chunk of streamed output is the difference between a repaint and rebuilding the
+/// whole window.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum UpdateLevel {
+pub enum UpdateLevel {
+    /// Nothing changed; no frame.
     #[default]
     None,
+    /// Redraw from the node tree as it stands: no `view()`, no layout.
     Paint,
+    /// Re-run `view()` and reconcile layout for the dirty scope.
     Layout,
+    /// Re-run `view()`, expand, reconcile and repaint everything.
     Full,
 }
 
@@ -357,7 +364,8 @@ impl Update {
         }
     }
 
-    pub(crate) fn level(&self) -> UpdateLevel {
+    /// The refresh level this update asks for.
+    pub fn level(&self) -> UpdateLevel {
         self.level
     }
 }
@@ -526,8 +534,8 @@ impl NodeChainState {
         }
     }
 
-    /// Walk the ancestor chain from `node` upward, populating scopes and keys.
-    fn update_chain(&self, tree: &NodeTree, node: Option<NodeId>) {
+    /// Walk the ancestor chain from `node` upward, collecting the scopes and keys that contain it.
+    fn chain_for(tree: &NodeTree, node: Option<NodeId>) -> (Vec<ScopeId>, Vec<Key>) {
         let mut scopes = Vec::new();
         let mut keys = Vec::new();
 
@@ -556,6 +564,12 @@ impl NodeChainState {
             }
         }
 
+        (scopes, keys)
+    }
+
+    /// Walk the ancestor chain from `node` upward, populating scopes and keys.
+    fn update_chain(&self, tree: &NodeTree, node: Option<NodeId>) {
+        let (scopes, keys) = Self::chain_for(tree, node);
         self.replace_snapshot(node, scopes, keys);
     }
 
@@ -616,27 +630,72 @@ impl FocusContext {
 }
 
 /// Shared render-time hover information from the previous frame.
+///
+/// Also records *which* hover questions the last view asked, so a hover change can be answered with
+/// a repaint unless one of those questions would now answer differently. Knowing only that some view
+/// reads hover is far too coarse: a single `has_hover_within_key` call anywhere — one keyed close
+/// button in a sidebar row, say — would otherwise promote every pointer crossing anywhere in the
+/// window to a full rebuild.
 #[derive(Default)]
 pub(crate) struct HoverContext {
     inner: NodeChainState,
+    queried_scopes: RefCell<Vec<ScopeId>>,
+    queried_keys: RefCell<Vec<Key>>,
+    /// A view read the hovered node's identity, so any change of node is a change of answer.
+    queried_node_id: Cell<bool>,
 }
 
 impl HoverContext {
     pub(crate) fn update_from_tree(&self, tree: &NodeTree, hovered: Option<NodeId>) {
+        // Start of a view pass: the questions asked from here on are this frame's. A paint-only
+        // frame never gets here, so the previous frame's questions stay in force — which is exactly
+        // what they must do, since its element tree is still the one on screen.
+        self.queried_scopes.borrow_mut().clear();
+        self.queried_keys.borrow_mut().clear();
+        self.queried_node_id.set(false);
+
         let cur = hovered.filter(|id| tree.is_valid(*id));
         self.inner.update_chain(tree, cur);
     }
 
     pub(crate) fn hovered_node_id(&self) -> Option<NodeId> {
+        self.queried_node_id.set(true);
         self.inner.node_id()
     }
 
     pub(crate) fn has_hover_within_scope(&self, scope: ScopeId) -> bool {
+        NodeChainState::push_scope_if_missing(&mut self.queried_scopes.borrow_mut(), scope);
         self.inner.has_within_scope(scope)
     }
 
     pub(crate) fn has_hover_within_key(&self, key: &Key) -> bool {
+        NodeChainState::push_key_if_missing(&mut self.queried_keys.borrow_mut(), key);
         self.inner.has_within_key(key)
+    }
+
+    /// Whether moving hover to `hovered` would change the answer to any question the last view asked.
+    ///
+    /// Compares against the chain captured at that view pass, so `false` means the element tree it
+    /// produced is still correct and the frame can be a repaint. Both chains are ancestor walks, so
+    /// this costs a walk per call and nothing per queried key.
+    pub(crate) fn change_affects_queries(&self, tree: &NodeTree, hovered: Option<NodeId>) -> bool {
+        let cur = hovered.filter(|id| tree.is_valid(*id));
+        if self.queried_node_id.get() && self.inner.node_id() != cur {
+            return true;
+        }
+        let queried_scopes = self.queried_scopes.borrow();
+        let queried_keys = self.queried_keys.borrow();
+        if queried_scopes.is_empty() && queried_keys.is_empty() {
+            return false;
+        }
+
+        let (scopes, keys) = NodeChainState::chain_for(tree, cur);
+        queried_scopes
+            .iter()
+            .any(|scope| scopes.contains(scope) != self.inner.has_within_scope(*scope))
+            || queried_keys.iter().any(|key| {
+                keys.iter().any(|candidate| candidate == key) != self.inner.has_within_key(key)
+            })
     }
 
     pub(crate) fn generation(&self) -> u64 {

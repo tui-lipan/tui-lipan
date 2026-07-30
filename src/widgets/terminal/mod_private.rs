@@ -9,7 +9,7 @@ use super::events::{
     MouseModeState, TerminalInputEvent, TerminalKeyModes, TerminalPasteShortcutBehavior,
     TerminalSelection, TerminalSelectionEvent,
 };
-use super::screen::TerminalViewport;
+use super::screen::{TerminalDecoration, TerminalScreenHandle, TerminalViewport};
 
 /// Terminal-like widget backed by a read-only `TextArea`.
 #[derive(Clone)]
@@ -23,6 +23,12 @@ pub struct Terminal {
     pub(crate) caret_color: Option<Color>,
     pub(crate) color_lines: Option<Arc<[Vec<Span>]>>,
     pub(crate) color_cache_key: u64,
+    /// Set by [`Terminal::screen`](super::Terminal::screen): the widget reads this screen itself
+    /// instead of being handed a snapshot, so output can repaint without a rebuild.
+    pub(crate) screen: Option<TerminalScreenHandle>,
+    /// Overlays applied on top of whatever the live screen reports. Only meaningful with `screen`;
+    /// a caller passing a snapshot decorates it themselves.
+    pub(crate) decorations: Arc<[TerminalDecoration]>,
     pub(crate) scrollback_offset: usize,
     pub(crate) total_scrollback_rows: usize,
     pub(crate) mouse_mode: MouseModeState,

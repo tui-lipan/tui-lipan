@@ -13,13 +13,16 @@ pub(crate) fn handle_key(
     tree: &mut NodeTree,
     id: NodeId,
     key: KeyEvent,
-    clipboard: &ClipboardService,
-    clipboard_config: &ClipboardConfig,
+    ctx: &mut super::KeyCtx<'_>,
 ) -> bool {
-    if preflight_key(tree, id, key, clipboard, clipboard_config).is_consumed() {
+    if preflight_key(tree, id, key, ctx.clipboard, ctx.clipboard_config).is_consumed() {
         return true;
     }
-    forward_key(tree, id, key)
+    let forward = forward_key(tree, id, key);
+    if let Some(level) = forward.dirty_override() {
+        ctx.dirty_override = Some(level);
+    }
+    forward.handled
 }
 
 /// Performable terminal-local clipboard/paste handling before app commands.
@@ -136,11 +139,33 @@ pub(crate) fn preflight_key(
     TerminalPreflightResult::NotApplicable
 }
 
+/// What forwarding a key to a terminal did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TerminalKeyForward {
+    /// The terminal had an `on_key` handler and it claimed the key.
+    pub handled: bool,
+    /// Node state the renderer reads changed here — only a live selection being dropped.
+    ///
+    /// The key itself changes nothing on screen: it becomes bytes for the child program, and
+    /// whatever the child draws in response arrives later as output. So a forwarded key must not
+    /// claim a frame on its own; the snapshot the output produces is what asks for one.
+    pub mutated: bool,
+}
+
+impl TerminalKeyForward {
+    /// The dirty level a forwarded key deserves, or [`None`] to leave the generic handled-key
+    /// level in place. Mirrors [`crate::app::copy_feedback`]: handled without mutating means
+    /// handled without repainting.
+    pub(crate) fn dirty_override(self) -> Option<crate::app::runner::DirtyLevel> {
+        (self.handled && !self.mutated).then_some(crate::app::runner::DirtyLevel::None)
+    }
+}
+
 /// Forward unmatched keys to terminal callbacks.
-pub(crate) fn forward_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) -> bool {
+pub(crate) fn forward_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) -> TerminalKeyForward {
     let node = tree.node(id);
     let NodeKind::Terminal(node) = &node.kind else {
-        return false;
+        return TerminalKeyForward::default();
     };
 
     let handle_key = |handler: &KeyHandler| -> bool { handler.handle(key) };
@@ -148,10 +173,12 @@ pub(crate) fn forward_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) -> boo
     let on_key_cb = node.on_key.clone();
     let on_selection_cb = node.on_selection.clone();
 
+    let mut mutated = false;
     if has_selection && on_key_cb.is_some() {
         if let NodeKind::Terminal(term) = &mut tree.node_mut(id).kind {
             term.selection = None;
         }
+        mutated = true;
         if let Some(cb) = on_selection_cb {
             cb.emit(crate::widgets::TerminalSelectionEvent {
                 selection: None,
@@ -160,7 +187,10 @@ pub(crate) fn forward_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) -> boo
         }
     }
 
-    on_key_cb.as_ref().map(&handle_key).unwrap_or(false)
+    TerminalKeyForward {
+        handled: on_key_cb.as_ref().map(&handle_key).unwrap_or(false),
+        mutated,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

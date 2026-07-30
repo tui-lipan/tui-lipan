@@ -178,10 +178,13 @@ fn mouse_dispatch_dirty_level(
     kind: MouseKind,
     before: Option<DirtyLevel>,
     after: Option<DirtyLevel>,
-    has_hover_view_dependencies: bool,
+    hover_change_needs_view: bool,
 ) -> DirtyLevel {
     if matches!(kind, MouseKind::Moved) {
-        return if has_hover_view_dependencies {
+        // Motion is a repaint unless a hover question some view asked would now answer differently
+        // (see `Core::hover_change_needs_view`). Widgets that resolve their own hover highlight from
+        // the pointer position — tab strips, lists, tables — need nothing more than the paint.
+        return if hover_change_needs_view {
             DirtyLevel::Full
         } else {
             DirtyLevel::PaintOnly
@@ -1357,7 +1360,7 @@ impl<C: Component> AppRunner<C> {
                                             mouse.kind,
                                             drag_before,
                                             effective_active_drag_dirty_level(&self.drag),
-                                            self.core.has_hover_view_dependencies(),
+                                            self.core.hover_change_needs_view(self.mouse.hovered),
                                         );
                                         #[cfg(feature = "devtools")]
                                         self.apply_input_dirty(&mut dirty, level, "input:drag");
@@ -1373,7 +1376,8 @@ impl<C: Component> AppRunner<C> {
                                                 non_drag.kind,
                                                 drag_before,
                                                 effective_active_drag_dirty_level(&self.drag),
-                                                self.core.has_hover_view_dependencies(),
+                                                self.core
+                                                    .hover_change_needs_view(self.mouse.hovered),
                                             );
                                             #[cfg(feature = "devtools")]
                                             self.apply_input_dirty(&mut dirty, level, "input:drag");
@@ -1405,7 +1409,9 @@ impl<C: Component> AppRunner<C> {
                                                                     None,
                                                                     None,
                                                                     self.core
-                                                                        .has_hover_view_dependencies(),
+                                                                        .hover_change_needs_view(
+                                                                            self.mouse.hovered,
+                                                                        ),
                                                                 ),
                                                             );
                                                         }
@@ -1420,8 +1426,9 @@ impl<C: Component> AppRunner<C> {
                                                                 active_drag_dirty_level(
                                                                     &self.drag.active,
                                                                 ),
-                                                                self.core
-                                                                    .has_hover_view_dependencies(),
+                                                                self.core.hover_change_needs_view(
+                                                                    self.mouse.hovered,
+                                                                ),
                                                             );
                                                             #[cfg(feature = "devtools")]
                                                             self.apply_input_dirty(
@@ -1448,7 +1455,9 @@ impl<C: Component> AppRunner<C> {
                                                     mouse.kind,
                                                     None,
                                                     None,
-                                                    self.core.has_hover_view_dependencies(),
+                                                    self.core.hover_change_needs_view(
+                                                        self.mouse.hovered,
+                                                    ),
                                                 ),
                                             );
                                         }
@@ -1537,7 +1546,8 @@ impl<C: Component> AppRunner<C> {
                                                 mouse.kind,
                                                 drag_before,
                                                 effective_active_drag_dirty_level(&self.drag),
-                                                self.core.has_hover_view_dependencies(),
+                                                self.core
+                                                    .hover_change_needs_view(self.mouse.hovered),
                                             );
                                             #[cfg(feature = "devtools")]
                                             self.apply_input_dirty(

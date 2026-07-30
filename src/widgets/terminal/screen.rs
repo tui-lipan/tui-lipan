@@ -199,6 +199,54 @@ pub struct TerminalScreen {
     semantic_events_seen: usize,
 }
 
+/// A [`TerminalScreen`] an app owns and lets the widget read for itself.
+///
+/// Handing the widget a handle instead of a [`TerminalRenderSnapshot`] takes the screen's contents
+/// out of the element tree, which is what lets new output be a repaint rather than a rebuild: the
+/// element a `view()` produces no longer changes when the child program draws, so an app can answer
+/// output with [`Update::paint`] and the runtime pulls the current snapshot on its way to the
+/// screen. Without this, every chunk of terminal output forces `view()` + layout for the whole
+/// window — which for a multiplexer means the cost of one pane streaming is paid by all of them.
+///
+/// [`Update::paint`]: crate::Update::paint
+#[derive(Clone)]
+pub struct TerminalScreenHandle(Rc<RefCell<TerminalScreen>>);
+
+impl TerminalScreenHandle {
+    /// Share `screen` with the widget.
+    pub fn new(screen: Rc<RefCell<TerminalScreen>>) -> Self {
+        Self(screen)
+    }
+
+    /// The screen's current snapshot, rebuilding it only if the screen took output since the last
+    /// call (see [`TerminalScreen::render_snapshot`]).
+    pub fn snapshot(&self) -> TerminalRenderSnapshot {
+        self.0.borrow_mut().render_snapshot()
+    }
+}
+
+/// Identity, not contents: two handles are the same handle when they share one screen. Comparing
+/// contents would defeat the purpose, since the point is an element that holds still while the
+/// screen behind it moves.
+impl PartialEq for TerminalScreenHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::fmt::Debug for TerminalScreenHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TerminalScreenHandle")
+            .finish_non_exhaustive()
+    }
+}
+
+impl From<Rc<RefCell<TerminalScreen>>> for TerminalScreenHandle {
+    fn from(screen: Rc<RefCell<TerminalScreen>>) -> Self {
+        Self::new(screen)
+    }
+}
+
 /// Renderable terminal snapshot from `TerminalScreen`.
 #[derive(Clone, Debug)]
 pub struct TerminalRenderSnapshot {

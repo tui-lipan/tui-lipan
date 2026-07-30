@@ -1,5 +1,6 @@
 use crate::app::input::focus;
 use crate::app::input::mouse;
+use crate::app::interaction_state::HoverPaintTarget;
 use crate::app::mouse_dispatch;
 use crate::core::component::Component;
 #[cfg(feature = "terminal")]
@@ -7,7 +8,7 @@ use crate::core::event::MouseKind;
 use crate::core::event::{KeyEvent, MouseEvent};
 use crate::core::node::{NodeId, NodeKind};
 use crate::runtime::BubbleKeyResult;
-use crate::style::{Style, ThemeRole};
+use crate::style::ThemeRole;
 #[cfg(feature = "terminal")]
 use crate::widgets::internal::{apply_terminal_selection_input, terminal_mouse_content_rect};
 #[cfg(feature = "terminal")]
@@ -33,9 +34,33 @@ fn node_has_diff_context_separator_hover(kind: &NodeKind) -> bool {
     }
 }
 
+#[cfg(feature = "diff-view")]
+fn diff_context_separator_hover_source_line(kind: &NodeKind, source_line: usize) -> Option<usize> {
+    let config = match kind {
+        NodeKind::TextArea(text_area) => text_area.diff_context_separator_click.as_ref()?,
+        NodeKind::DocumentView(document_view) => {
+            document_view.diff_context_separator_click.as_ref()?
+        }
+        _ => return None,
+    };
+    config.events_by_source_line.get(source_line)?.as_ref()?;
+    config
+        .hover_style
+        .is_some_and(|style| !style.is_empty())
+        .then_some(source_line)
+}
+
 #[cfg(not(feature = "diff-view"))]
 fn node_has_diff_context_separator_hover(_kind: &NodeKind) -> bool {
     false
+}
+
+#[cfg(not(feature = "diff-view"))]
+fn diff_context_separator_hover_source_line(
+    _kind: &NodeKind,
+    _source_line: usize,
+) -> Option<usize> {
+    None
 }
 
 fn sequence_item_hover_key(path: &crate::widgets::SequenceItemPath) -> usize {
@@ -164,6 +189,225 @@ impl<C: Component> AppRunner<C> {
             }
         }
         true
+    }
+
+    /// Which tab of a `Tabs` node the pointer is over, matching what the renderer highlights.
+    ///
+    /// The strip paints its hover from the pointer column itself (`hovered_x` in the tabs renderer),
+    /// so this exists only to tell *movement between tabs* from movement within one — the former
+    /// changes what is painted, the latter does not.
+    fn tabs_hover_index(&self, id: NodeId, x: u16, y: u16) -> Option<usize> {
+        let node = self.core.tree.node(id);
+        let NodeKind::Tabs(tabs) = &node.kind else {
+            return None;
+        };
+        if tabs.disabled || tabs.tabs.is_empty() {
+            return None;
+        }
+        let inner = node.rect.inner(tabs.border, tabs.padding);
+        // One row high, matching the renderer: a tab strip highlights on `inner.y`.
+        if y as i16 != inner.y || !inner.contains(x as i16, y as i16) {
+            return None;
+        }
+        let col = (x as i32).saturating_sub(inner.x as i32).max(0) as usize;
+        crate::widgets::Tabs::index_at_col(
+            &tabs.tabs,
+            tabs.divider,
+            tabs.overflow,
+            inner.w as usize,
+            col,
+        )
+    }
+
+    /// Renderer-level hover target for a draggable tab strip.
+    fn draggable_tab_bar_hover_target(
+        &self,
+        id: NodeId,
+        x: u16,
+        y: u16,
+    ) -> Option<HoverPaintTarget> {
+        let node = self.core.tree.node(id);
+        let NodeKind::DraggableTabBar(tabs) = &node.kind else {
+            return None;
+        };
+        if tabs.disabled || tabs.tabs.is_empty() {
+            return None;
+        }
+        let inner = node.rect.inner(tabs.border, tabs.padding);
+        if y as i16 != inner.y || !inner.contains(x as i16, y as i16) {
+            return None;
+        }
+        let display = tabs.display_options();
+        let viewport = tabs.viewport_options(inner.w as usize);
+        let layout =
+            crate::widgets::DraggableTabBar::viewport_layout(&tabs.tabs, &display, &viewport);
+        let normalized_viewport = crate::widgets::draggable_tab_bar::TabViewportOptions {
+            scroll_offset: layout.offset,
+            viewport_width: inner.w as usize,
+            show_overflow_controls: tabs.show_overflow_controls,
+        };
+        let col = (x as i32).saturating_sub(inner.x as i32).max(0) as usize;
+        crate::widgets::DraggableTabBar::hit_target_at_view_col(
+            &tabs.tabs,
+            &display,
+            &normalized_viewport,
+            col,
+        )
+        .map(HoverPaintTarget::DraggableTabBar)
+    }
+
+    fn text_area_hover_target(&self, id: NodeId, x: u16, y: u16) -> Option<HoverPaintTarget> {
+        let node = self.core.tree.node(id);
+        let NodeKind::TextArea(text_area) = &node.kind else {
+            return None;
+        };
+        if text_area.disabled {
+            return None;
+        }
+
+        let metrics = text_area.metrics(node.rect);
+        if !metrics.content_rect.contains(x as i16, y as i16) {
+            return None;
+        }
+        let visual_lines = text_area.visual_cache.latest_lines()?;
+        let visual_idx = text_area
+            .scroll_offset
+            .saturating_add((y as i16).saturating_sub(metrics.inner_rect.y) as usize);
+        let visual_line = visual_lines.get(visual_idx)?;
+
+        let sentinel_info = crate::widgets::sentinel_info_for(
+            text_area.image_mode,
+            text_area.images.len(),
+            &text_area.image_placeholder,
+            &text_area.sentinels,
+        );
+        let scrollbar_over_border = text_area.scrollbar
+            && matches!(
+                text_area.scrollbar_variant,
+                crate::style::ScrollbarVariant::Integrated
+            )
+            && (text_area.border
+                || self
+                    .core
+                    .tree
+                    .parent_frame_integrated_v_edge(id)
+                    .unwrap_or(false));
+        let h_scrollbar_over_border = text_area.h_scrollbar
+            && matches!(
+                text_area.h_scrollbar_variant,
+                crate::style::ScrollbarVariant::Integrated
+            )
+            && (text_area.border
+                || self
+                    .core
+                    .tree
+                    .parent_frame_integrated_h_edge(id)
+                    .unwrap_or(false));
+        let hovered_byte = crate::app::input::text::textarea_cursor_from_coords(
+            crate::app::input::text::TextAreaCursorParams {
+                value: &text_area.value,
+                current_cursor: text_area.cursor,
+                coords: crate::app::input::text::TextAreaCursorCoords {
+                    x,
+                    y,
+                    inner: metrics.inner_rect,
+                    clamp_to_inner: false,
+                },
+                layout: crate::app::input::text::TextAreaCursorLayout {
+                    line_numbers: text_area.line_numbers,
+                    min_line_number_width: text_area.min_line_number_width,
+                    wrap: text_area.wrap,
+                    scroll_offset: text_area.scroll_offset,
+                    scrollbar: text_area.scrollbar,
+                    scrollbar_variant: text_area.scrollbar_variant,
+                    scrollbar_gap: text_area.scrollbar_gap,
+                    scrollbar_over_border,
+                    h_scrollbar: text_area.h_scrollbar,
+                    h_scrollbar_variant: text_area.h_scrollbar_variant,
+                    h_scrollbar_over_border,
+                    max_line_width: text_area.max_line_width,
+                    h_scroll_offset: text_area.h_scroll_offset,
+                    tab_stop: text_area.tab_display_width as usize,
+                    gutter_col_width: text_area.gutter_col_width,
+                    gutter_gap: text_area.gutter_gap,
+                    logical_lines_count: text_area.logical_lines_count,
+                },
+                read_only: text_area.read_only,
+                sentinel: sentinel_info,
+                visual_lines: Some(visual_lines),
+                virtual_texts: &text_area.virtual_texts,
+            },
+        );
+
+        let sentinel_byte = text_area
+            .value
+            .get(hovered_byte..)
+            .and_then(|tail| tail.chars().next())
+            .and_then(|ch| {
+                let cp = ch as u32;
+                let image_index = cp.checked_sub(crate::widgets::IMAGE_SENTINEL_BASE as u32);
+                if text_area.image_mode == crate::widgets::TextAreaImageMode::Inline
+                    && image_index.is_some_and(|index| index < text_area.images.len() as u32)
+                    && !text_area.image_placeholder_hover_style.is_empty()
+                {
+                    return Some(hovered_byte);
+                }
+                let custom_index = cp.checked_sub(crate::widgets::SENTINEL_BASE as u32)? as usize;
+                text_area
+                    .sentinels
+                    .get(custom_index)
+                    .and_then(|sentinel| sentinel.hover_style)
+                    .is_some_and(|style| !style.is_empty())
+                    .then_some(hovered_byte)
+            });
+        let diff_separator_source_line = diff_context_separator_hover_source_line(
+            &node.kind,
+            visual_line.line_num.saturating_sub(1),
+        );
+
+        (sentinel_byte.is_some() || diff_separator_source_line.is_some()).then_some(
+            HoverPaintTarget::TextArea {
+                sentinel_byte,
+                diff_separator_source_line,
+            },
+        )
+    }
+
+    fn document_view_hover_target(&self, id: NodeId, x: u16, y: u16) -> Option<HoverPaintTarget> {
+        let node = self.core.tree.node(id);
+        let NodeKind::DocumentView(document_view) = &node.kind else {
+            return None;
+        };
+        let inner = node.rect.inner(document_view.border, document_view.padding);
+        let content = document_view.content_layout(inner);
+        let content_rect = crate::style::Rect {
+            x: content.content_x,
+            y: content.content_y,
+            w: content.content_width,
+            h: content.content_height,
+        };
+        if !content_rect.contains(x as i16, y as i16) {
+            return None;
+        }
+        let visual_idx = document_view
+            .scroll_offset
+            .saturating_add((y as i16).saturating_sub(inner.y) as usize);
+        let source_line = document_view
+            .visual_cache
+            .source_line_map
+            .get(visual_idx)
+            .copied()?;
+        diff_context_separator_hover_source_line(&node.kind, source_line)
+            .map(|source_line| HoverPaintTarget::DocumentViewDiffSeparator { source_line })
+    }
+
+    fn hover_paint_target(&self, id: NodeId, x: u16, y: u16) -> Option<HoverPaintTarget> {
+        match self.core.tree.node(id).kind {
+            NodeKind::DraggableTabBar(_) => self.draggable_tab_bar_hover_target(id, x, y),
+            NodeKind::TextArea(_) => self.text_area_hover_target(id, x, y),
+            NodeKind::DocumentView(_) => self.document_view_hover_target(id, x, y),
+            _ => None,
+        }
     }
 
     pub(crate) fn selection_owner_for_node(&self, start: NodeId) -> Option<SelectionOwner> {
@@ -605,6 +849,7 @@ impl<C: Component> AppRunner<C> {
             }
 
             self.mouse.hovered_item_index = None;
+            self.mouse.hover_paint_target = None;
             if let Some(id) = hovered
                 && self.core.tree.is_valid(id)
                 && matches!(
@@ -620,13 +865,32 @@ impl<C: Component> AppRunner<C> {
                     self.update_sequence_item_hover(id, x, y)
                 };
             }
+            // Resolve the tab under the pointer as the strip is entered, so the entering frame
+            // already highlights the right one instead of catching up a motion event later.
+            if let Some(id) = hovered
+                && self.core.tree.is_valid(id)
+                && matches!(self.core.tree.node(id).kind, NodeKind::Tabs(_))
+            {
+                let index = self.tabs_hover_index(id, x, y);
+                self.mouse.hovered_item_index = index;
+            }
+            // Rich hover targets need the same eager entry resolution. The renderer uses the
+            // current pointer position immediately, so retaining `None` here would make the next
+            // motion within that same target look like a visual change.
+            if let Some(id) = hovered
+                && self.core.tree.is_valid(id)
+            {
+                self.mouse.hover_paint_target = self.hover_paint_target(id, x, y);
+            }
             // Repaint only when the node leaving or entering hover actually
-            // renders differently while hovered. A click-only MouseRegion has no
-            // hover visuals, so its `on_hover_change` callback decides via the
-            // `Update` it returns; forcing a paint here repaints the whole tree
-            // on every motion event that crosses such a region's boundary.
+            // renders differently while hovered, or when a view asked a hover
+            // question this crossing changes the answer to. A click-only
+            // MouseRegion has no hover visuals, so its `on_hover_change`
+            // callback decides via the `Update` it returns; forcing a paint here
+            // repaints the whole tree on every motion event that crosses such a
+            // region's boundary.
             return self.hover_transition_affects_paint(prev_hovered, hovered)
-                || self.core.has_hover_view_dependencies();
+                || self.core.hover_change_needs_view(hovered);
         }
         if !force_recompute && prev_mouse == Some((x, y)) {
             return false;
@@ -752,17 +1016,32 @@ impl<C: Component> AppRunner<C> {
                     .tab_hover_style
                     .resolves_non_empty(node.active_theme(), ThemeRole::ItemHover) =>
             {
-                // For tabs, we'd need to compute which tab is hovered based on x position
-                // For now, just track mouse position changes - tabs are typically few
-                true
+                // The strip resolves its own highlight from the pointer column at paint time
+                // (`hovered_x` in the tabs renderer), so the only thing that can change here is
+                // *which* tab that column lands on. Report dirt on that alone: answering every
+                // motion event repaints the whole tree for as long as the pointer crosses the
+                // strip, which is the cost a tab bar spanning the top of a window imposes on
+                // every pointer movement.
+                let index = self.tabs_hover_index(id, x, y);
+                if index != self.mouse.hovered_item_index {
+                    self.mouse.hovered_item_index = index;
+                    return true;
+                }
+                false
             }
             NodeKind::DraggableTabBar(tabs_node)
                 if tabs_node
                     .tab_hover_style
                     .resolves_non_empty(node.active_theme(), ThemeRole::ItemHover)
-                    || !tabs_node.close_hover_style.is_empty() =>
+                    || !tabs_node.close_hover_style.is_empty()
+                    || !tabs_node.overflow_hover_style.is_empty() =>
             {
-                true
+                let target = self.draggable_tab_bar_hover_target(id, x, y);
+                if target != self.mouse.hover_paint_target {
+                    self.mouse.hover_paint_target = target;
+                    return true;
+                }
+                false
             }
             NodeKind::HexArea(hex_node) if !hex_node.hover_style.is_empty() => {
                 let rect = node.rect;
@@ -789,13 +1068,27 @@ impl<C: Component> AppRunner<C> {
                 false
             }
             NodeKind::TextArea(text_area)
-                if text_area.image_placeholder_hover_style != Style::default()
-                    || text_area.sentinels.iter().any(|s| s.hover_style.is_some())
+                if !text_area.image_placeholder_hover_style.is_empty()
+                    || text_area.sentinels.iter().any(|sentinel| {
+                        sentinel.hover_style.is_some_and(|style| !style.is_empty())
+                    })
                     || node_has_diff_context_separator_hover(&node.kind) =>
             {
-                true
+                let target = self.text_area_hover_target(id, x, y);
+                if target != self.mouse.hover_paint_target {
+                    self.mouse.hover_paint_target = target;
+                    return true;
+                }
+                false
             }
-            NodeKind::DocumentView(_) if node_has_diff_context_separator_hover(&node.kind) => true,
+            NodeKind::DocumentView(_) if node_has_diff_context_separator_hover(&node.kind) => {
+                let target = self.document_view_hover_target(id, x, y);
+                if target != self.mouse.hover_paint_target {
+                    self.mouse.hover_paint_target = target;
+                    return true;
+                }
+                false
+            }
             _ => false,
         }
     }

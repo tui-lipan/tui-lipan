@@ -210,6 +210,9 @@ pub(crate) struct NodeTree {
     has_hoverables: bool,
     has_mouse_move_handlers: bool,
     has_terminal_any_event: bool,
+    /// Terminals reading a live screen, so the pre-draw refresh visits only those.
+    #[cfg(feature = "terminal")]
+    live_terminal_ids: Vec<NodeId>,
     has_spinners: bool,
     spinner_ids: Vec<NodeId>,
     has_animated_widgets: bool,
@@ -258,6 +261,8 @@ impl NodeTree {
             has_hoverables: false,
             has_mouse_move_handlers: false,
             has_terminal_any_event: false,
+            #[cfg(feature = "terminal")]
+            live_terminal_ids: Vec::new(),
             has_spinners: false,
             spinner_ids: Vec::new(),
             has_animated_widgets: false,
@@ -310,6 +315,26 @@ impl NodeTree {
 
     pub fn spinner_ids(&self) -> &[NodeId] {
         &self.spinner_ids
+    }
+
+    /// Pull the current snapshot into every terminal reading a live screen.
+    ///
+    /// Returns whether any of them moved. Called immediately before a draw so a paint-only frame
+    /// still shows what the child programs have written since the last one — the whole point of
+    /// [`Terminal::screen`](crate::widgets::Terminal::screen).
+    #[cfg(feature = "terminal")]
+    pub(crate) fn refresh_live_terminals(&mut self) -> bool {
+        let mut changed = false;
+        for index in 0..self.live_terminal_ids.len() {
+            let id = self.live_terminal_ids[index];
+            if !self.is_valid(id) {
+                continue;
+            }
+            if let NodeKind::Terminal(terminal) = &mut self.node_mut(id).kind {
+                changed |= terminal.refresh_from_live_screen();
+            }
+        }
+        changed
     }
 
     /// Returns true if any animated wrapper nodes are currently transitioning.
@@ -913,6 +938,10 @@ impl NodeTree {
         {
             self.has_terminal_any_event = true;
         }
+        #[cfg(feature = "terminal")]
+        if matches!(&node.kind, NodeKind::Terminal(terminal) if terminal.screen.is_some()) {
+            self.live_terminal_ids.push(id);
+        }
         let has_spinner = node_kind_has_spinners(&node.kind);
         if !self.has_spinners && has_spinner {
             self.has_spinners = true;
@@ -965,6 +994,8 @@ impl NodeTree {
         self.has_hoverables = false;
         self.has_mouse_move_handlers = false;
         self.has_terminal_any_event = false;
+        #[cfg(feature = "terminal")]
+        self.live_terminal_ids.clear();
         self.has_spinners = false;
         self.spinner_ids.clear();
         self.has_animated_widgets = false;
@@ -1212,6 +1243,8 @@ impl NodeTree {
         let mut full_mouse_move_handlers = false;
         #[cfg(feature = "terminal")]
         let mut full_terminal_any_event = false;
+        #[cfg(feature = "terminal")]
+        let mut full_live_terminal_ids = Vec::new();
         let mut full_spinners = false;
         let mut full_spinner_ids = Vec::new();
         let mut full_animated_widgets = false;
@@ -1235,6 +1268,9 @@ impl NodeTree {
             {
                 full_terminal_any_event |= matches!(&node.kind, NodeKind::Terminal(terminal)
                     if terminal.mouse_mode.mode == MouseMode::AnyEvent && terminal.on_mouse_forward.is_some());
+                if matches!(&node.kind, NodeKind::Terminal(terminal) if terminal.screen.is_some()) {
+                    full_live_terminal_ids.push(node.id);
+                }
             }
             if node_kind_has_spinners(&node.kind) {
                 full_spinners = true;
@@ -1273,6 +1309,11 @@ impl NodeTree {
         assert_eq!(
             self.has_terminal_any_event, full_terminal_any_event,
             "incremental has_terminal_any_event must match full scan"
+        );
+        #[cfg(feature = "terminal")]
+        assert_eq!(
+            self.live_terminal_ids, full_live_terminal_ids,
+            "incremental live terminal ids must match full scan"
         );
         assert_eq!(
             self.has_spinners, full_spinners,

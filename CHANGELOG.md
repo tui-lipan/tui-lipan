@@ -13,6 +13,16 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add `Terminal::screen` and `TerminalScreenHandle` so a terminal can read a `TerminalScreen` the app
+  owns instead of being handed a `TerminalRenderSnapshot`. This takes the screen's contents out of the
+  element tree, so an app can answer new output with `Update::paint()` rather than a full rebuild; the
+  runtime pulls the current snapshot before each draw. `Terminal::decorations` overlays search hits or
+  hint labels on a live screen, so those survive a paint-only frame.
+- Make `UpdateLevel` and `Update::level` public, and add `TestBackend::update_level` to report the
+  refresh level a message's `update()` asked for. Worth asserting on for messages that arrive per
+  keystroke or per chunk of streamed output.
+- Add `TestBackend::refresh_live_terminals` to model a paint-only frame in tests: it pulls live screen
+  contents into the node tree without running `view()`.
 - Pause a toast's auto-dismiss countdown while it is hovered, and revive an automatically fading
   toast with a short post-hover grace period when the pointer catches it during fade-out.
 - Add `ToastHandle::renew` to restart an active toast's dismissal countdown without changing its
@@ -186,6 +196,27 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- A tab strip with a `tab_hover_style` no longer reports a repaint on every pointer-motion event that
+  crosses it. Hover now resolves which tab the pointer is over and reports dirt only when that
+  changes, so a strip spanning the top of a window stops repainting the whole tree ~60 times a second
+  while the pointer moves along it.
+- `DraggableTabBar`, `TextArea` sentinel placeholders, and diff context separators in `TextArea` and
+  `DocumentView` now likewise report hover dirt only when the painted target changes. Draggable tabs
+  distinguish the tab body, close affordance, and overflow controls, while text widgets track the
+  sentinel byte and separator source row.
+- A hover change is no longer priced as a full rebuild just because *some* view reads hover. The
+  runtime records which hover questions each view pass asked — `has_hover_within`,
+  `has_hover_within_key`, `hovered_node_id` — and rebuilds only when the pointer's new position
+  changes one of those answers; everything else is a repaint. One keyed `has_hover_within_key` call
+  used to promote every pointer crossing anywhere in the window to a full `view()` + layout pass, so
+  an app with a hover-revealed affordance in a sidebar paid a rebuild for merely sweeping across an
+  unrelated tab bar.
+- A key forwarded to a focused `Terminal` no longer claims a frame of its own. Forwarding writes bytes
+  for the child program and changes nothing on screen, so the frame was speculative and doubled the
+  render cost of every keystroke; whatever the child draws in response arrives as output and asks for
+  its own frame. A key that drops a live selection still repaints, since that *is* visible.
+- `dirty_override: Some(DirtyLevel::None)` from a key handler no longer also reports the key as dirty,
+  matching its documented meaning of "handled, and nothing needs redrawing".
 - Toast fade transitions now dim foreground-only frame decorations when they are drawn directly
   over the terminal's default background instead of leaving those glyphs at full intensity.
 - Scrolling a `ScrollView` no longer punches holes of the host terminal background through an

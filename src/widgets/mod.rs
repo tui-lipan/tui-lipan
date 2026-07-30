@@ -288,10 +288,10 @@ pub use terminal::{
     TerminalCommandPhase, TerminalCopyMode, TerminalDecoration, TerminalInputEvent,
     TerminalInputKind, TerminalKeyModes, TerminalPasteShortcutBehavior, TerminalPty,
     TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen,
-    TerminalSelection, TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState,
-    TerminalViewport, TerminalWorkingDirectory, TerminalWorkingDirectorySource, encode_paste,
-    focus_sequences, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
-    terminal_selection_text,
+    TerminalScreenHandle, TerminalSelection, TerminalSelectionEvent, TerminalSemanticEvent,
+    TerminalSemanticState, TerminalViewport, TerminalWorkingDirectory,
+    TerminalWorkingDirectorySource, encode_paste, focus_sequences, key_event_to_bytes,
+    mouse_event_to_bytes, paste_sequences, terminal_selection_text,
 };
 pub use text::{Overflow, Text};
 pub use text_area::{

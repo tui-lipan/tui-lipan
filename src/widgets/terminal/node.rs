@@ -15,6 +15,7 @@ use super::events::{
     TerminalSelection, TerminalSelectionEvent,
 };
 use super::layout::terminal_content_layout;
+use super::screen::{TerminalDecoration, TerminalRenderSnapshot, TerminalScreenHandle};
 
 /// Runtime node for terminal rendering.
 #[derive(Clone)]
@@ -31,6 +32,17 @@ pub(crate) struct TerminalNode {
     pub selection_style: StyleSlot,
     pub mouse_mode: MouseModeState,
     pub key_modes: TerminalKeyModes,
+    /// Present when the app handed over a live screen rather than a snapshot. The runtime refreshes
+    /// the fields above from it before every draw, which is what lets terminal output be a repaint.
+    pub screen: Option<TerminalScreenHandle>,
+    /// Overlays re-applied on each refresh from `screen`.
+    pub decorations: Arc<[TerminalDecoration]>,
+    /// Sequence of the snapshot the fields above were last filled from, so a refresh that finds the
+    /// screen unmoved does nothing.
+    pub live_sequence: Option<u64>,
+    /// Cursor visibility the app asked for, ANDed with what the live screen reports. A pane that is
+    /// exited or wearing hint labels hides its caret no matter what the child program wants.
+    pub show_cursor_requested: bool,
     pub paste_shortcut_behavior: TerminalPasteShortcutBehavior,
     pub on_selection: Option<Callback<TerminalSelectionEvent>>,
     pub on_mouse_forward: Option<Callback<Vec<u8>>>,
@@ -63,6 +75,51 @@ pub(crate) struct TerminalNode {
     pub on_blur: Option<Callback<()>>,
     pub on_key: Option<KeyHandler>,
     pub on_input: Option<Callback<TerminalInputEvent>>,
+}
+
+impl TerminalNode {
+    /// Pull the live screen's current snapshot into this node, if it has moved since the last pull.
+    ///
+    /// Returns whether anything changed, so a caller can tell a repaint is warranted. Terminal
+    /// output is node-local state in exactly the way a scroll offset is: the element that produced
+    /// this node says nothing about it, so refreshing here — rather than by re-running `view()` —
+    /// is what keeps a streaming pane from rebuilding the whole window on every chunk.
+    pub(crate) fn refresh_from_live_screen(&mut self) -> bool {
+        let Some(screen) = self.screen.clone() else {
+            return false;
+        };
+        let snapshot = screen.snapshot();
+        let snapshot = if self.decorations.is_empty() {
+            snapshot
+        } else {
+            snapshot.decorated(&self.decorations)
+        };
+        if self.live_sequence == Some(snapshot.sequence) {
+            return false;
+        }
+        self.live_sequence = Some(snapshot.sequence);
+        self.apply_snapshot(&snapshot);
+        true
+    }
+
+    /// Fill the snapshot-derived fields, keeping the scroll rules `reconcile_terminal` establishes:
+    /// a moved snapshot offset is authoritative and retires an input-driven override.
+    fn apply_snapshot(&mut self, snapshot: &TerminalRenderSnapshot) {
+        self.lines = snapshot.color_lines.clone();
+        self.cursor_row = snapshot.cursor_row;
+        self.cursor_col = snapshot.cursor_col;
+        self.cursor_visible = snapshot.cursor_visible && self.show_cursor_requested;
+        self.cursor_shape = snapshot.cursor_shape;
+        self.cursor_blinking = snapshot.cursor_blinking;
+        self.mouse_mode = snapshot.mouse_mode;
+        self.key_modes = snapshot.key_modes;
+        self.total_scrollback_rows = snapshot.total_scrollback_rows;
+        if snapshot.scrollback_offset != self.snapshot_scrollback_offset {
+            self.snapshot_scrollback_offset = snapshot.scrollback_offset;
+            self.scroll_override = None;
+        }
+        self.scrollback_offset = self.scroll_override.unwrap_or(snapshot.scrollback_offset);
+    }
 }
 
 pub(crate) fn apply_terminal_selection_input(
