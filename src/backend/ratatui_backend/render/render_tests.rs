@@ -21,8 +21,8 @@ use crate::style::{
 };
 use crate::utils::color_contrast::contrast_ratio;
 use crate::widgets::{
-    Animated, BorderLabels, BorderMergeMode, Button, DecorationGlyph, DecorationPlacement,
-    EdgeDecoration, EffectScope, Frame, FrameLabel, HStack, List, ListItem, Modal, Spacer,
+    Animated, BorderLabels, BorderMergeMode, Button, Canvas, DecorationGlyph, DecorationPlacement,
+    Divider, EdgeDecoration, EffectScope, Frame, FrameLabel, HStack, List, ListItem, Modal, Spacer,
     Splitter, SplitterHandleMode, TabVariant, Text, Toast, VStack, ZStack,
 };
 
@@ -3832,6 +3832,160 @@ impl Component for FrameDividerJoin {
     }
 }
 
+struct DividerJunctions;
+
+impl Component for DividerJunctions {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        Canvas::new()
+            .child_at(
+                Rect {
+                    x: 1,
+                    y: 2,
+                    w: 7,
+                    h: 1,
+                },
+                Divider::horizontal(),
+            )
+            .child_at(
+                Rect {
+                    x: 4,
+                    y: 0,
+                    w: 1,
+                    h: 5,
+                },
+                Divider::vertical(),
+            )
+            .child_at(
+                Rect {
+                    x: 9,
+                    y: 2,
+                    w: 4,
+                    h: 1,
+                },
+                Divider::horizontal(),
+            )
+            .child_at(
+                Rect {
+                    x: 12,
+                    y: 0,
+                    w: 1,
+                    h: 5,
+                },
+                Divider::vertical(),
+            )
+            .child_at(
+                Rect {
+                    x: 16,
+                    y: 0,
+                    w: 5,
+                    h: 1,
+                },
+                Divider::horizontal(),
+            )
+            .child_at(
+                Rect {
+                    x: 16,
+                    y: 0,
+                    w: 1,
+                    h: 5,
+                },
+                Divider::vertical(),
+            )
+            .child_at(
+                Rect {
+                    x: 20,
+                    y: 2,
+                    w: 5,
+                    h: 1,
+                },
+                Divider::horizontal(),
+            )
+            .child_at(
+                Rect {
+                    x: 22,
+                    y: 0,
+                    w: 1,
+                    h: 5,
+                },
+                Divider::vertical(),
+            )
+            .child_at(
+                Rect {
+                    x: 22,
+                    y: 2,
+                    w: 1,
+                    h: 1,
+                },
+                Text::new("─"),
+            )
+            .child_at(
+                Rect {
+                    x: 27,
+                    y: 0,
+                    w: 1,
+                    h: 5,
+                },
+                Divider::vertical(),
+            )
+            .child_at(
+                Rect {
+                    x: 25,
+                    y: 2,
+                    w: 3,
+                    h: 1,
+                },
+                Divider::horizontal(),
+            )
+            .child_at(
+                Rect {
+                    x: 27,
+                    y: 2,
+                    w: 3,
+                    h: 1,
+                },
+                Divider::horizontal(),
+            )
+            .child_at(
+                Rect {
+                    x: 31,
+                    y: 2,
+                    w: 5,
+                    h: 1,
+                },
+                Divider::horizontal(),
+            )
+            .child_at(
+                Rect {
+                    x: 33,
+                    y: 2,
+                    w: 1,
+                    h: 1,
+                },
+                Text::new("─").style(Style::new().fg(Color::Red)),
+            )
+            .child_at(
+                Rect {
+                    x: 33,
+                    y: 0,
+                    w: 1,
+                    h: 5,
+                },
+                Divider::vertical(),
+            )
+            .into()
+    }
+}
+
 fn adjacent_frames_seam(runtime: &RuntimeCore<impl Component>) -> (u16, u16) {
     let mut frames = runtime
         .tree
@@ -4287,6 +4441,35 @@ fn divider_join_frame_uses_merged_border_intersections() {
     let buffer = terminal.backend().buffer();
     assert_eq!(buffer[(left_x, y)].symbol(), "├");
     assert_eq!(buffer[(right_x, y)].symbol(), "┤");
+}
+
+#[test]
+fn perpendicular_dividers_form_directional_junctions() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 38,
+        h: 6,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        DividerJunctions,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    runtime.render_element(viewport, None, None, None);
+
+    let buffer = render_runtime_with_hover(&runtime, viewport, None, None);
+
+    assert_eq!(buffer[(4, 2)].symbol(), "┼");
+    assert_eq!(buffer[(12, 2)].symbol(), "┤");
+    assert_eq!(buffer[(16, 0)].symbol(), "┌");
+    assert_eq!(buffer[(22, 2)].symbol(), "─");
+    assert_eq!(buffer[(27, 2)].symbol(), "┼");
+    assert_eq!(buffer[(33, 2)].symbol(), "│");
 }
 
 #[test]

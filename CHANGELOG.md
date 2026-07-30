@@ -97,6 +97,7 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- Compose perpendicular `Divider` intersections into directional box-drawing junctions.
 - Promote alpha-aware `Paint::rgba` backgrounds in the styling guide with practical translucent
   surface and toast examples.
 - Remove the unused public `Transition::is_exit` field (breaking).

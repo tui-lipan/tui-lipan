@@ -464,6 +464,8 @@ fn render_subtree(
     offset: RenderOffset,
 ) {
     let tree = state.ctx.tree;
+    let mut divider_junctions =
+        crate::backend::ratatui_backend::renderers::divider::DividerJunctionState::default();
     enum RenderStackItem {
         Node(NodeId, Option<crate::style::Rect>, RenderOffset),
         EffectScopePost(
@@ -504,6 +506,21 @@ fn render_subtree(
                 } else {
                     (inherited_offset, current_clip)
                 };
+                let prepared_divider = if let NodeKind::Divider(divider) = &node.kind {
+                    let mut rect = node_offset.apply_to_rect(node.rect);
+                    rect.x = rect.x.saturating_add(state.content.x as i16);
+                    rect.y = rect.y.saturating_add(state.content.y as i16);
+                    node_clip
+                        .is_none_or(|clip| !rect.intersection(&clip).is_empty())
+                        .then(|| {
+                            let rendered = crate::backend::ratatui_backend::renderers::divider::rendered_divider(
+                                state, node, divider, rect, node_clip,
+                            );
+                            divider_junctions.prepare(state.f, rendered)
+                        })
+                } else {
+                    None
+                };
                 let (
                     child_clip,
                     defer_effect_scope_render,
@@ -512,6 +529,9 @@ fn render_subtree(
                     defer_drop_overlay,
                     defer_mouse_region_post,
                 ) = render_node(state, node, node_clip, node_offset);
+                if let Some(prepared) = prepared_divider {
+                    divider_junctions.finish(state.f, prepared);
+                }
                 if defer_effect_scope_render {
                     stack.push(RenderStackItem::EffectScopePost(
                         id,

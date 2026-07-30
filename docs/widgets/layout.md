@@ -736,7 +736,9 @@ HStack::new()
 
 ## Divider
 
-Visual separator line.
+Visual separator line. Perpendicular dividers using the standard light or heavy
+line glyphs automatically compose junctions where they meet, including corners,
+T-junctions, and crossings. Custom `ch` glyphs keep last-write-wins rendering.
 
 | Prop | Type | Description |
 |------|------|-------------|
