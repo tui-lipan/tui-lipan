@@ -36,6 +36,7 @@ pub struct AnimatedNode {
     pub auto_exit: Option<ExitAnimation>,
     /// Set once the unsupported-container diagnostic has been emitted for this node, so the
     /// warning does not repeat every frame. Debug builds only; always `false` in release.
+    #[cfg(debug_assertions)]
     pub(crate) auto_exit_warned: bool,
     /// Set while an automatic exit is playing. This is what
     /// [`auto_exit_finished`](Self::auto_exit_finished) keys off, so a widget that merely animates
@@ -514,6 +515,7 @@ impl From<Animated> for AnimatedNode {
             opacity_fg_only: value.opacity_fg_only,
             opacity_target: value.opacity_target,
             auto_exit: value.auto_exit,
+            #[cfg(debug_assertions)]
             auto_exit_warned: false,
             auto_exit_active: false,
             callbacks_suppressed: false,
