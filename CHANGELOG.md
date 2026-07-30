@@ -202,6 +202,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Gate `AnimatedNode::auto_exit_warned` and `supports_auto_exit` behind `#[cfg(debug_assertions)]` to
+  suppress dead-code warnings in release builds where the only call site is compiled out.
 - A `Toast` with a translucent background no longer renders a darker patch behind its own text. The
   frame's background paint was copied onto the message style, so text cells composited that alpha a
   second time on top of the surface the frame had already produced. An alpha paint is now left for

@@ -341,6 +341,7 @@ fn refresh_retained_indices(retained: &mut [ExitingChild], old_children: &[NodeI
 ///
 /// Keep this in step with the containers that call [`plan_exits`] or
 /// [`plan_positioned_exits`]; it is what the unsupported-container diagnostic checks against.
+#[cfg(debug_assertions)]
 pub(crate) fn supports_auto_exit(kind: &NodeKind) -> bool {
     matches!(
         kind,
