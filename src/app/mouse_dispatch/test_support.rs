@@ -66,9 +66,24 @@ pub(crate) fn update_hover_test_backend<C: Component>(
         .tree
         .hover_test(x as i16, y as i16)
         .filter(|id| mouse::should_hover(&backend.core.tree, *id, x, y));
+    let prev_hovered = backend.mouse.hovered;
     let changed = backend.mouse.hovered != hovered;
     backend.mouse.hovered = hovered;
     if changed {
+        if let Some(prev_id) = prev_hovered
+            && backend.core.tree.is_valid(prev_id)
+            && let NodeKind::MouseRegion(region) = &backend.core.tree.node(prev_id).kind
+            && let Some(cb) = region.on_hover_change.clone()
+        {
+            cb.emit(false);
+        }
+        if let Some(new_id) = hovered
+            && backend.core.tree.is_valid(new_id)
+            && let NodeKind::MouseRegion(region) = &backend.core.tree.node(new_id).kind
+            && let Some(cb) = region.on_hover_change.clone()
+        {
+            cb.emit(true);
+        }
         backend.mouse.hovered_item_index = None;
         if let Some(id) = hovered {
             let item_hover_dirty = match &backend.core.tree.node(id).kind {

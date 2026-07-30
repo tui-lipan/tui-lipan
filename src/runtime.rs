@@ -683,7 +683,10 @@ where
         self.ctx.set_viewport(bounds);
         self.focus
             .update_from_tree(&self.tree, focused, focused_key);
-        self.hover.update_from_tree(&self.tree, hovered);
+        // Chain only: any view that had to run for this frame already ran in
+        // `refresh_cached_scopes`, and the questions on file are what keep the next crossing
+        // priced correctly.
+        self.hover.update_chain(&self.tree, hovered);
 
         let overlays = self.overlay_snapshot();
         let base = self
@@ -714,7 +717,12 @@ where
     ///
     /// Callers must provide an already-deduplicated list (the runner deduplicates
     /// at collection time via `dirty_scope_set`).
-    pub(crate) fn refresh_cached_scopes(&mut self, scopes: &[ScopeId], viewport: Rect) -> bool {
+    pub(crate) fn refresh_cached_scopes(
+        &mut self,
+        scopes: &[ScopeId],
+        viewport: Rect,
+        hovered: Option<NodeId>,
+    ) -> bool {
         if self.cached_expanded_element.is_none() && self.cached_overlays.is_none() {
             return false;
         }
@@ -722,6 +730,8 @@ where
         if scopes.is_empty() {
             return true;
         }
+
+        self.hover.begin_scoped_view(&self.tree, hovered, scopes);
 
         if scopes.contains(&ScopeId(1)) {
             self.ctx.set_viewport(viewport);
@@ -1577,7 +1587,7 @@ mod tests {
                 .expect("update should succeed"),
             UpdateLevel::None
         ));
-        assert!(runtime.refresh_cached_scopes(&[scope], bounds));
+        assert!(runtime.refresh_cached_scopes(&[scope], bounds, None));
         assert!(runtime.reconcile_cached_element(bounds, None, None, None));
 
         assert_eq!(root_view_count.get(), 1);
@@ -1724,7 +1734,7 @@ mod tests {
             UpdateLevel::Full
         );
 
-        assert!(runtime.refresh_cached_scopes(&[scope], bounds));
+        assert!(runtime.refresh_cached_scopes(&[scope], bounds, None));
         assert!(runtime.reconcile_cached_element(bounds, None, None, None));
 
         assert_eq!(root_view_count.get(), 1);
@@ -1807,7 +1817,7 @@ mod tests {
             UpdateLevel::Layout
         );
 
-        assert!(runtime.refresh_cached_scopes(&[ScopeId(1)], bounds));
+        assert!(runtime.refresh_cached_scopes(&[ScopeId(1)], bounds, None));
         assert!(runtime.reconcile_cached_element(bounds, None, None, None));
         assert_eq!(root_view_count.get(), 2);
 
@@ -1871,7 +1881,7 @@ mod tests {
                 .expect("update should succeed"),
             UpdateLevel::None
         ));
-        assert!(runtime.refresh_cached_scopes(&[scope], bounds));
+        assert!(runtime.refresh_cached_scopes(&[scope], bounds, None));
         assert!(runtime.reconcile_cached_element(bounds, None, None, None));
 
         assert_eq!(root_view_count.get(), 1);

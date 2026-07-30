@@ -238,6 +238,19 @@ While the crate is on `0.x.y`:
   promote every pointer crossing anywhere in the window to a full `view()` + layout pass, so an app
   with a hover-revealed affordance in a sidebar paid a rebuild for merely sweeping across an
   unrelated tab bar.
+- The layout pass a hover crossing asks for now actually lands. Two halves were missing:
+  `refresh_cached_scopes` re-ran the marked views without first pointing the hover chain at the new
+  position, so a view re-run *because* hover moved was built against where the pointer used to be;
+  and reconciling the refreshed tree then cleared the recorded hover questions, which priced the next
+  crossing as a repaint and left that tree on screen. Together they made a hover-revealed affordance
+  read as broken — a sidebar row whose hover background dropped the moment the pointer reached the
+  close button nested inside it, then lifted twice on the way back out, until an unrelated full
+  render happened to repair it.
+- `TestBackend` now fires `MouseRegion::on_hover_change` on enter and leave, matching the live
+  runner. Synthetic pointer movement updated the hovered node and its hover visuals but never told
+  the component, so an app whose *state* follows hover — anything revealing an affordance on a
+  hovered row — could only be tested by seeding that state by hand, which skips the very transition
+  under test.
 - A key forwarded to a focused `Terminal` no longer claims a frame of its own. Forwarding writes bytes
   for the child program and changes nothing on screen, so the frame was speculative and doubled the
   render cost of every keystroke; whatever the child draws in response arrives as output and asks for
