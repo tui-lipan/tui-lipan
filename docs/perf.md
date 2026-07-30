@@ -58,8 +58,9 @@ assert_eq!(backend.update_level(Msg::PtyOutput(bytes))?, UpdateLevel::Paint);
 Reading hover during `view()` — `has_hover_within`, `has_hover_within_key`,
 `hovered_node_id` — makes that view's output depend on where the pointer is, so
 the runtime must re-run it when the answer changes. It records *which* questions
-each view pass asked and rebuilds only when the pointer's new position changes
-one of those answers; a crossing no view asked about stays a repaint.
+each view pass asked and which scope asked them, then answers a pointer movement
+with the smallest refresh that fits: a repaint when no recorded answer changes,
+and a layout pass over just the scopes whose answers did.
 
 So a hover-revealed affordance in one corner of the UI does not make pointer
 movement expensive everywhere else. Prefer `has_hover_within_key` over

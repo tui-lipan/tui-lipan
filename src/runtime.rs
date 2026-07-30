@@ -655,18 +655,18 @@ where
         // note_kind_set() during reconciliation - no DFS needed.
     }
 
-    /// Whether moving hover to `hovered` invalidates the element tree currently on screen.
+    /// The scopes whose views must run again if hover moves to `hovered`.
     ///
-    /// [`has_hover_view_dependencies`](Self::has_hover_view_dependencies) only says that *some* view
-    /// reads hover, which is far too blunt to price a pointer movement: one keyed
-    /// `has_hover_within_key` call promotes every crossing anywhere in the window to a full rebuild.
-    /// This asks the question that actually matters — would any hover question the last view asked
-    /// now answer differently — so a crossing the views do not care about stays a repaint.
-    pub(crate) fn hover_change_needs_view(&self, hovered: Option<NodeId>) -> bool {
+    /// Empty means the element tree on screen is still correct and the frame can be a repaint.
+    /// Knowing only that *some* view reads hover would be far too blunt to price a pointer
+    /// movement — one keyed `has_hover_within_key` call would make every crossing anywhere in the
+    /// window a full rebuild — and knowing *which* views care lets the frame be a layout pass over
+    /// just those.
+    pub(crate) fn hover_change_scopes(&self, hovered: Option<NodeId>) -> Vec<ScopeId> {
         self.ctx
             .env()
             .hover
-            .change_affects_queries(&self.tree, hovered)
+            .scopes_needing_view(&self.tree, hovered)
     }
 
     pub(crate) fn reconcile_cached_element(

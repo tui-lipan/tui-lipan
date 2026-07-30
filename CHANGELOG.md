@@ -206,10 +206,11 @@ While the crate is on `0.x.y`:
   sentinel byte and separator source row.
 - A hover change is no longer priced as a full rebuild just because *some* view reads hover. The
   runtime records which hover questions each view pass asked — `has_hover_within`,
-  `has_hover_within_key`, `hovered_node_id` — and rebuilds only when the pointer's new position
-  changes one of those answers; everything else is a repaint. One keyed `has_hover_within_key` call
-  used to promote every pointer crossing anywhere in the window to a full `view()` + layout pass, so
-  an app with a hover-revealed affordance in a sidebar paid a rebuild for merely sweeping across an
+  `has_hover_within_key`, `hovered_node_id` — along with the scope that asked, and answers a pointer
+  movement with the smallest refresh that fits: a repaint when no recorded answer changes, and a
+  layout pass over just the scopes whose answers did. One keyed `has_hover_within_key` call used to
+  promote every pointer crossing anywhere in the window to a full `view()` + layout pass, so an app
+  with a hover-revealed affordance in a sidebar paid a rebuild for merely sweeping across an
   unrelated tab bar.
 - A key forwarded to a focused `Terminal` no longer claims a frame of its own. Forwarding writes bytes
   for the child program and changes nothing on screen, so the frame was speculative and doubled the

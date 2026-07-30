@@ -178,17 +178,11 @@ fn mouse_dispatch_dirty_level(
     kind: MouseKind,
     before: Option<DirtyLevel>,
     after: Option<DirtyLevel>,
-    hover_change_needs_view: bool,
+    hover_level: DirtyLevel,
 ) -> DirtyLevel {
     if matches!(kind, MouseKind::Moved) {
-        // Motion is a repaint unless a hover question some view asked would now answer differently
-        // (see `Core::hover_change_needs_view`). Widgets that resolve their own hover highlight from
-        // the pointer position — tab strips, lists, tables — need nothing more than the paint.
-        return if hover_change_needs_view {
-            DirtyLevel::Full
-        } else {
-            DirtyLevel::PaintOnly
-        };
+        // Motion costs exactly what the hover change costs; see `motion_hover_dirty_level`.
+        return hover_level;
     }
 
     after
@@ -1356,11 +1350,13 @@ impl<C: Component> AppRunner<C> {
                                     // terminal PTY applications that have mouse mode enabled.
                                     let drag_before = effective_active_drag_dirty_level(&self.drag);
                                     if self.dispatch_mouse(mouse) {
+                                        let after = effective_active_drag_dirty_level(&self.drag);
+                                        let hover_level = self.motion_hover_dirty_level();
                                         let level = mouse_dispatch_dirty_level(
                                             mouse.kind,
                                             drag_before,
-                                            effective_active_drag_dirty_level(&self.drag),
-                                            self.core.hover_change_needs_view(self.mouse.hovered),
+                                            after,
+                                            hover_level,
                                         );
                                         #[cfg(feature = "devtools")]
                                         self.apply_input_dirty(&mut dirty, level, "input:drag");
@@ -1372,12 +1368,14 @@ impl<C: Component> AppRunner<C> {
                                         let drag_before =
                                             effective_active_drag_dirty_level(&self.drag);
                                         if self.dispatch_mouse(non_drag) {
+                                            let after =
+                                                effective_active_drag_dirty_level(&self.drag);
+                                            let hover_level = self.motion_hover_dirty_level();
                                             let level = mouse_dispatch_dirty_level(
                                                 non_drag.kind,
                                                 drag_before,
-                                                effective_active_drag_dirty_level(&self.drag),
-                                                self.core
-                                                    .hover_change_needs_view(self.mouse.hovered),
+                                                after,
+                                                hover_level,
                                             );
                                             #[cfg(feature = "devtools")]
                                             self.apply_input_dirty(&mut dirty, level, "input:drag");
@@ -1402,16 +1400,15 @@ impl<C: Component> AppRunner<C> {
                                                         mouse = next_mouse;
                                                     } else {
                                                         if self.dispatch_mouse(mouse) {
+                                                            let hover_level =
+                                                                self.motion_hover_dirty_level();
                                                             apply_dirty_level(
                                                                 &mut dirty,
                                                                 mouse_dispatch_dirty_level(
                                                                     mouse.kind,
                                                                     None,
                                                                     None,
-                                                                    self.core
-                                                                        .hover_change_needs_view(
-                                                                            self.mouse.hovered,
-                                                                        ),
+                                                                    hover_level,
                                                                 ),
                                                             );
                                                         }
@@ -1420,15 +1417,16 @@ impl<C: Component> AppRunner<C> {
                                                             &self.drag.active,
                                                         );
                                                         if self.dispatch_mouse(next_mouse) {
+                                                            let after = active_drag_dirty_level(
+                                                                &self.drag.active,
+                                                            );
+                                                            let hover_level =
+                                                                self.motion_hover_dirty_level();
                                                             let level = mouse_dispatch_dirty_level(
                                                                 next_mouse.kind,
                                                                 drag_before,
-                                                                active_drag_dirty_level(
-                                                                    &self.drag.active,
-                                                                ),
-                                                                self.core.hover_change_needs_view(
-                                                                    self.mouse.hovered,
-                                                                ),
+                                                                after,
+                                                                hover_level,
                                                             );
                                                             #[cfg(feature = "devtools")]
                                                             self.apply_input_dirty(
@@ -1449,15 +1447,14 @@ impl<C: Component> AppRunner<C> {
                                         }
                                         if !dispatched_coalesced_move && self.dispatch_mouse(mouse)
                                         {
+                                            let hover_level = self.motion_hover_dirty_level();
                                             apply_dirty_level(
                                                 &mut dirty,
                                                 mouse_dispatch_dirty_level(
                                                     mouse.kind,
                                                     None,
                                                     None,
-                                                    self.core.hover_change_needs_view(
-                                                        self.mouse.hovered,
-                                                    ),
+                                                    hover_level,
                                                 ),
                                             );
                                         }
@@ -1542,12 +1539,14 @@ impl<C: Component> AppRunner<C> {
                                         let drag_before =
                                             effective_active_drag_dirty_level(&self.drag);
                                         if self.dispatch_mouse(mouse) {
+                                            let after =
+                                                effective_active_drag_dirty_level(&self.drag);
+                                            let hover_level = self.motion_hover_dirty_level();
                                             let level = mouse_dispatch_dirty_level(
                                                 mouse.kind,
                                                 drag_before,
-                                                effective_active_drag_dirty_level(&self.drag),
-                                                self.core
-                                                    .hover_change_needs_view(self.mouse.hovered),
+                                                after,
+                                                hover_level,
                                             );
                                             #[cfg(feature = "devtools")]
                                             self.apply_input_dirty(
