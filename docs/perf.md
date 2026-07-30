@@ -46,8 +46,27 @@ handle to app-owned state the widget reads for itself does not.
 `Terminal` shows both shapes: `snapshot` puts the screen's contents in the
 element, so each chunk of PTY output needs `Update::full()`, while
 [`screen`](widgets/terminal.md#live-screens-vs-snapshots) hands over the screen
-and lets the same output be a repaint. Verify the level you actually get with
-`TestBackend::update_level`, which reports what a message's `update()` asked for:
+and lets the same output be a repaint.
+
+Animated colours have the same two shapes. `Context::transition` returns the
+interpolated value, so every frame of a fade must run `view()` for the new colour
+to reach the rendered styles — a 160 ms focus fade at 60 fps is ten rebuilds of
+the window. `Context::animated_color` instead returns a `Paint` naming the
+transition, which the renderer resolves while drawing:
+
+```rust
+// Fades without re-running view(): the element is identical for the whole fade.
+let border = ctx.animated_color("pane-border", target, config);
+Frame::new().border(true).style(Style::new().fg(border))
+```
+
+Use it for chrome that merely fades — focus borders, titles, badges. The trade is
+that the caller never sees the interpolated colour, so it cannot feed layout,
+text, or a decision; that restriction is exactly what makes skipping `view()`
+sound. A value read concretely even once keeps asking for view passes.
+
+Verify the level you actually get with `TestBackend::update_level`, which reports
+what a message's `update()` asked for:
 
 ```rust
 assert_eq!(backend.update_level(Msg::PtyOutput(bytes))?, UpdateLevel::Paint);

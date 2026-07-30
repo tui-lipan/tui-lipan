@@ -766,8 +766,10 @@ where
 
         let (_, _, needs_layout) =
             crate::app::animation::tick_tree_animations(&mut self.core.tree, dt);
-        let property_transitions_changed = self.core.ctx.env().animations.tick(dt);
-        if needs_layout || property_transitions_changed {
+        let transitions = self.core.ctx.env().animations.tick(dt);
+        // Re-render for a concrete value a view reads; a late-bound paint is picked up by the next
+        // capture without one, matching how the runner treats it.
+        if needs_layout || transitions.view_changed {
             self.render();
         }
     }
@@ -942,6 +944,11 @@ where
 
     /// Render and capture the current frame output.
     pub fn capture_frame(&self) -> CapturedFrame {
+        // Matches the runner's draw: late-bound paints name their transitions, and a capture has to
+        // resolve them or an animated colour would show as its fallback.
+        let _animations = crate::animation::registry::set_render_registry(std::rc::Rc::clone(
+            &self.core.ctx.env().animations,
+        ));
         crate::backend::ratatui_backend::capture_render::render_to_captured_frame_with_interaction(
             &self.core.tree,
             self.viewport,

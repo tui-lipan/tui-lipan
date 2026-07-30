@@ -1272,6 +1272,45 @@ impl<C: Component> Context<C> {
         self.env.animations.transition(key, target, config)
     }
 
+    /// Transition a colour that only ever feeds a style, as a [`Paint`] the renderer resolves.
+    ///
+    /// Prefer this over [`transition`](Self::transition) for chrome that merely fades — focus
+    /// borders, titles, badges. Because the returned paint *names* the transition instead of carrying
+    /// its current colour, the element tree holds still for the whole fade, and the runtime advances
+    /// it with a repaint rather than re-running `view()` for every one of its frames. A 160 ms fade at
+    /// 60 fps is ten rebuilds of the window versus ten repaints.
+    ///
+    /// The trade is that the caller never sees the interpolated colour, so it cannot be used for
+    /// anything but a style — which is exactly what makes skipping `view()` sound. Reach for
+    /// [`transition`](Self::transition) when the value has to inform layout, text, or a decision.
+    ///
+    /// ```no_run
+    /// # use tui_lipan::prelude::*;
+    /// # use tui_lipan::animation::TransitionConfig;
+    /// # fn example(ctx: &Context<impl Component>, focused: bool, cfg: TransitionConfig) -> Element {
+    /// let border = ctx.animated_color(
+    ///     "pane-border",
+    ///     if focused { Color::Rgb(120, 200, 255) } else { Color::Rgb(70, 80, 90) },
+    ///     cfg,
+    /// );
+    /// Frame::new().border(true).style(Style::new().fg(border)).into()
+    /// # }
+    /// ```
+    ///
+    /// [`Paint`]: crate::style::Paint
+    pub fn animated_color(
+        &self,
+        key: impl Into<Key>,
+        target: crate::style::Color,
+        config: crate::animation::TransitionConfig,
+    ) -> crate::style::Paint {
+        // Deliberately no `MemoDependency::Transition`: nothing a view produces depends on where this
+        // fade currently is, so a memoized subtree must not be invalidated as it advances.
+        self.env
+            .animations
+            .animated_paint(key.into(), target, config)
+    }
+
     /// Convenience helper for responsive layouts based on viewport width.
     ///
     /// Returns:

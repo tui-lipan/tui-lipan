@@ -140,6 +140,10 @@ impl ColorTransform {
             Paint::Alpha { color, alpha } => {
                 Paint::from_color_alpha_u8(self.apply_with_backdrop(color, backdrop), alpha)
             }
+            // Transform the colour the slot currently holds; a slot is always opaque.
+            Paint::Animated { .. } => {
+                Paint::Solid(self.apply_with_backdrop(paint.resolved().color(), backdrop))
+            }
         }
     }
 

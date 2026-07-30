@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use crate::animation::transition::{Lerp, Transition, TransitionConfig};
 use crate::core::element::Key;
+use crate::style::{Color, Paint};
 
 trait DynEntry: Any {
     fn entry_type_id(&self) -> TypeId;
@@ -20,7 +21,10 @@ trait DynEntry: Any {
     fn is_animating(&self) -> bool;
     fn touched(&self) -> bool;
     fn reset_touched(&self);
+    /// Whether this entry is only ever read while painting, so advancing it needs no `view()` pass.
+    fn paint_resolved(&self) -> bool;
     fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn as_any(&self) -> &dyn Any;
 }
 
 struct TypedEntry<T: Lerp + PartialEq + 'static> {
@@ -28,6 +32,10 @@ struct TypedEntry<T: Lerp + PartialEq + 'static> {
     target: T,
     transition: Option<Transition<T>>,
     touched: Cell<bool>,
+    /// Set when the value is handed out as a late-bound [`Paint`](crate::style::Paint) rather than a
+    /// concrete value. The view then cannot have baked the value into anything but a style, which is
+    /// what makes advancing it a repaint instead of a rebuild.
+    paint_resolved: Cell<bool>,
 }
 
 impl<T: Lerp + PartialEq + 'static> DynEntry for TypedEntry<T> {
@@ -62,9 +70,52 @@ impl<T: Lerp + PartialEq + 'static> DynEntry for TypedEntry<T> {
         self.touched.set(false);
     }
 
+    fn paint_resolved(&self) -> bool {
+        self.paint_resolved.get()
+    }
+
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+thread_local! {
+    /// The registry the current draw resolves late-bound paints against.
+    ///
+    /// Ambient rather than threaded through every renderer for the same reason the render-time
+    /// terminal background is: a `Paint` can surface anywhere in any widget, and the alternative is
+    /// a parameter on every style conversion in the backend.
+    static RENDER_REGISTRY: RefCell<Option<std::rc::Rc<AnimationRegistry>>> =
+        const { RefCell::new(None) };
+}
+
+/// RAII guard restoring the previously installed registry on drop.
+pub(crate) struct RenderRegistryScope(Option<std::rc::Rc<AnimationRegistry>>);
+
+impl Drop for RenderRegistryScope {
+    fn drop(&mut self) {
+        RENDER_REGISTRY.with(|slot| *slot.borrow_mut() = self.0.take());
+    }
+}
+
+/// Make `registry` the one this draw resolves [`Paint::Animated`] against, until the guard drops.
+pub(crate) fn set_render_registry(registry: std::rc::Rc<AnimationRegistry>) -> RenderRegistryScope {
+    let prev = RENDER_REGISTRY.with(|slot| slot.borrow_mut().replace(registry));
+    RenderRegistryScope(prev)
+}
+
+/// The colour a late-bound paint slot currently holds, if a registry is installed and still has it.
+pub(crate) fn resolve_render_paint_slot(slot: u16) -> Option<Color> {
+    RENDER_REGISTRY.with(|installed| {
+        installed
+            .borrow()
+            .as_ref()
+            .and_then(|registry| registry.resolve_paint_slot(slot))
+    })
 }
 
 /// Registry of per-key property transitions.
@@ -74,7 +125,21 @@ impl<T: Lerp + PartialEq + 'static> DynEntry for TypedEntry<T> {
 #[derive(Default)]
 pub(crate) struct AnimationRegistry {
     entries: RefCell<HashMap<Key, Box<dyn DynEntry>>>,
+    /// Keys indexed by the slot id a late-bound [`Paint`](crate::style::Paint) carries. `Paint` must
+    /// stay `Copy`, so it names its entry by slot rather than holding the key.
+    color_slots: RefCell<Vec<Key>>,
+    slot_by_key: RefCell<HashMap<Key, u16>>,
     generation: Cell<u64>,
+}
+
+/// What advancing the registry by one frame requires of the runtime.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TransitionTick {
+    /// A value some `view()` read as a concrete value changed, so the view must run again for it to
+    /// reach the screen.
+    pub(crate) view_changed: bool,
+    /// A late-bound paint changed. The renderer resolves those itself, so a repaint is enough.
+    pub(crate) paint_changed: bool,
 }
 
 impl AnimationRegistry {
@@ -98,6 +163,64 @@ impl AnimationRegistry {
         target: T,
         config: TransitionConfig,
     ) -> T {
+        self.advance(key, target, config, false)
+    }
+
+    /// Like [`transition`](Self::transition), but hands back a [`Paint`] that names the entry instead
+    /// of its current colour.
+    ///
+    /// The renderer resolves the slot while painting, so the element tree holds still for the whole
+    /// fade and the runtime can answer each frame with a repaint. Because the caller never sees the
+    /// interpolated colour, it cannot have used it for anything but a style — which is exactly the
+    /// property that makes skipping `view()` sound.
+    pub(crate) fn animated_paint(
+        &self,
+        key: Key,
+        target: Color,
+        config: TransitionConfig,
+    ) -> Paint {
+        let current = self.advance(key.clone(), target, config, true);
+        match self.slot_for(key) {
+            Some(slot) => Paint::Animated {
+                slot,
+                fallback: current,
+            },
+            None => Paint::Solid(current),
+        }
+    }
+
+    /// The slot id naming `key`, minting one on first use.
+    ///
+    /// Slots are never reused for a different key, so a `Paint` handed out earlier can never resolve
+    /// to an unrelated transition. Returns [`None`] once the id space is exhausted, which asks the
+    /// caller to hand out a plain colour instead — the fade degrades to a snap rather than misbinding.
+    fn slot_for(&self, key: Key) -> Option<u16> {
+        if let Some(slot) = self.slot_by_key.borrow().get(&key) {
+            return Some(*slot);
+        }
+        let mut slots = self.color_slots.borrow_mut();
+        let slot = u16::try_from(slots.len()).ok()?;
+        slots.push(key.clone());
+        self.slot_by_key.borrow_mut().insert(key, slot);
+        Some(slot)
+    }
+
+    /// The current colour behind a late-bound paint, or [`None`] if the slot no longer resolves.
+    pub(crate) fn resolve_paint_slot(&self, slot: u16) -> Option<Color> {
+        let key = self.color_slots.borrow().get(slot as usize)?.clone();
+        let entries = self.entries.borrow();
+        let entry = entries.get(&key)?;
+        let typed = entry.as_any().downcast_ref::<TypedEntry<Color>>()?;
+        Some(typed.current)
+    }
+
+    fn advance<T: Lerp + PartialEq + 'static>(
+        &self,
+        key: Key,
+        target: T,
+        config: TransitionConfig,
+        paint_resolved: bool,
+    ) -> T {
         let mut entries = self.entries.borrow_mut();
         let entry = entries.entry(key).or_insert_with(|| {
             Box::new(TypedEntry::<T> {
@@ -105,6 +228,7 @@ impl AnimationRegistry {
                 target: target.clone(),
                 transition: None,
                 touched: Cell::new(true),
+                paint_resolved: Cell::new(paint_resolved),
             })
         });
 
@@ -120,6 +244,11 @@ impl AnimationRegistry {
             .expect("type id checked above");
 
         typed.touched.set(true);
+        // A key read as a concrete value even once must keep asking for view passes: some view has
+        // baked that value into something the renderer cannot re-derive.
+        if !paint_resolved {
+            typed.paint_resolved.set(false);
+        }
 
         if typed.target != target {
             let from = typed.current.clone();
@@ -140,22 +269,28 @@ impl AnimationRegistry {
         typed.current.clone()
     }
 
-    /// Advance all in-flight transitions by `dt`. Returns `true` if any
-    /// interpolated value changed (callers should mark a full re-render so the
-    /// view function re-reads the new value).
-    pub(crate) fn tick(&self, dt: Duration) -> bool {
+    /// Advance all in-flight transitions by `dt`, reporting what the change requires.
+    ///
+    /// Values a view read concretely need that view to run again; late-bound paints only need the
+    /// screen redrawn. The memo generation is bumped only for the former, so a colour fade does not
+    /// invalidate memoized subtrees that never depended on it.
+    pub(crate) fn tick(&self, dt: Duration) -> TransitionTick {
         let mut entries = self.entries.borrow_mut();
-        let mut any_changed = false;
+        let mut result = TransitionTick::default();
         for entry in entries.values_mut() {
             if entry.tick(dt) {
-                any_changed = true;
+                if entry.paint_resolved() {
+                    result.paint_changed = true;
+                } else {
+                    result.view_changed = true;
+                }
             }
         }
-        if any_changed {
+        if result.view_changed {
             self.generation
                 .set(self.generation.get().wrapping_add(1).max(1));
         }
-        any_changed
+        result
     }
 
     /// Drop entries that were not read during the most recent view. Called once
@@ -164,6 +299,13 @@ impl AnimationRegistry {
         let mut entries = self.entries.borrow_mut();
         let before = entries.len();
         entries.retain(|_, e| e.touched());
+        // Slot ids stay assigned for the life of the runtime: `Paint` values already handed out
+        // carry them, and a key that comes back must resolve to the same slot. Dropped entries make
+        // `resolve_paint_slot` fall through to the paint's own fallback until they are read again.
+        debug_assert!(
+            self.color_slots.borrow().len() >= self.slot_by_key.borrow().len(),
+            "slot table and reverse map must stay consistent"
+        );
         if entries.len() != before {
             self.generation
                 .set(self.generation.get().wrapping_add(1).max(1));
@@ -225,7 +367,7 @@ mod tests {
 
         // Tick halfway. Value should change.
         let changed = reg.tick(Duration::from_millis(50));
-        assert!(changed);
+        assert!(changed.view_changed);
 
         // Read again with same target — should return the interpolated current,
         // not red and not blue.
@@ -272,7 +414,10 @@ mod tests {
     fn tick_with_no_active_returns_false() {
         let reg = AnimationRegistry::default();
         let _ = reg.transition::<Color>("k".into(), Color::Red, cfg(100));
-        assert!(!reg.tick(Duration::from_millis(16)));
+        assert_eq!(
+            reg.tick(Duration::from_millis(16)),
+            TransitionTick::default()
+        );
     }
 
     #[test]

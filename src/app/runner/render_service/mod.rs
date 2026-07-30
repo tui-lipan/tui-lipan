@@ -890,6 +890,12 @@ impl<C: Component> AppRunner<C> {
         #[cfg(feature = "terminal")]
         self.core.tree.refresh_live_terminals();
 
+        // Same reasoning for late-bound paints: the styles in the tree name their transitions, and
+        // this is where those names are resolved. Dropped at the end of the draw.
+        let _animations = crate::animation::registry::set_render_registry(std::rc::Rc::clone(
+            &self.core.ctx.env().animations,
+        ));
+
         self.flush_inline_inserts(terminal)?;
         if !(draw_mode == DrawMode::PaintOnly && self.surface.is_inline()) {
             terminal.autoresize()?;
