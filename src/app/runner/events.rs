@@ -88,6 +88,24 @@ pub(crate) enum SelectionOwner {
 }
 
 impl<C: Component> AppRunner<C> {
+    /// What the current hover position costs, and the bookkeeping to make that price real.
+    ///
+    /// A crossing no view asked about is a repaint. One that changes a recorded hover answer needs
+    /// those views to run — but only those, so this marks them and asks for a layout pass rather
+    /// than a rebuild of the whole tree. Marking is what makes the layout pass legal:
+    /// `render_layout_only` refreshes the scopes recorded here and falls back to a full render if it
+    /// cannot, so returning `LayoutOnly` with nothing marked would leave a stale tree on screen.
+    pub(super) fn motion_hover_dirty_level(&mut self) -> super::DirtyLevel {
+        let scopes = self.core.hover_change_scopes(self.mouse.hovered);
+        if scopes.is_empty() {
+            return super::DirtyLevel::PaintOnly;
+        }
+        for scope in scopes {
+            self.mark_dirty_scope(scope);
+        }
+        super::DirtyLevel::LayoutOnly
+    }
+
     fn update_graph_node_hover(&mut self, id: NodeId, x: u16, y: u16) -> bool {
         let Some((index, event, cb)) = (|| {
             let node = self.core.tree.node(id);
@@ -890,7 +908,7 @@ impl<C: Component> AppRunner<C> {
             // repaints the whole tree on every motion event that crosses such a
             // region's boundary.
             return self.hover_transition_affects_paint(prev_hovered, hovered)
-                || self.core.hover_change_needs_view(hovered);
+                || !self.core.hover_change_scopes(hovered).is_empty();
         }
         if !force_recompute && prev_mouse == Some((x, y)) {
             return false;

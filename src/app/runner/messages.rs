@@ -28,14 +28,7 @@ impl<C: Component> AppRunner<C> {
                     dirty.mark_paint();
                 }
                 UpdateLevel::Layout => {
-                    if scope == ScopeId(1) {
-                        self.dirty_component_scopes.clear();
-                        self.dirty_scope_set.clear();
-                        self.dirty_scope_set.insert(ScopeId(1));
-                        self.dirty_component_scopes.push(ScopeId(1));
-                    } else if self.dirty_scope_set.insert(scope) {
-                        self.dirty_component_scopes.push(scope);
-                    }
+                    self.mark_dirty_scope(scope);
                     dirty.mark_layout();
                 }
                 UpdateLevel::Full => {
@@ -83,6 +76,20 @@ impl<C: Component> AppRunner<C> {
             }
         }
         Ok(())
+    }
+
+    /// Record that `scope`'s view must run again, so a layout-only frame refreshes exactly it.
+    ///
+    /// The root subsumes every other scope, so marking it discards the rest.
+    pub(super) fn mark_dirty_scope(&mut self, scope: ScopeId) {
+        if scope == ScopeId(1) {
+            self.dirty_component_scopes.clear();
+            self.dirty_scope_set.clear();
+            self.dirty_scope_set.insert(ScopeId(1));
+            self.dirty_component_scopes.push(ScopeId(1));
+        } else if self.dirty_scope_set.insert(scope) {
+            self.dirty_component_scopes.push(scope);
+        }
     }
 
     pub(super) fn apply_framework_commands(&mut self) -> bool {

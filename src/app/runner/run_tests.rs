@@ -2077,23 +2077,30 @@ fn animated_position_zero_duration_snaps_and_emits_callback() {
 #[test]
 fn moved_mouse_events_only_need_paint() {
     assert_eq!(
-        mouse_dispatch_dirty_level(MouseKind::Moved, None, None, false),
+        mouse_dispatch_dirty_level(MouseKind::Moved, None, None, DirtyLevel::PaintOnly),
         DirtyLevel::PaintOnly
     );
 }
 
+/// Motion carries whatever the hover change costs, so a crossing that invalidates a view refreshes
+/// that view rather than rebuilding the tree.
 #[test]
 fn moved_mouse_events_refresh_hover_dependent_views() {
     assert_eq!(
-        mouse_dispatch_dirty_level(MouseKind::Moved, None, None, true),
-        DirtyLevel::Full
+        mouse_dispatch_dirty_level(MouseKind::Moved, None, None, DirtyLevel::LayoutOnly),
+        DirtyLevel::LayoutOnly
     );
 }
 
 #[test]
 fn mouse_down_without_widget_dirty_level_requests_full_render() {
     assert_eq!(
-        mouse_dispatch_dirty_level(MouseKind::Down(MouseButton::Left), None, None, false),
+        mouse_dispatch_dirty_level(
+            MouseKind::Down(MouseButton::Left),
+            None,
+            None,
+            DirtyLevel::PaintOnly
+        ),
         DirtyLevel::Full
     );
 }
@@ -2288,7 +2295,7 @@ fn mouse_up_preserves_active_drag_dirty_level() {
             MouseKind::Up(MouseButton::Left),
             Some(DirtyLevel::PaintOnly),
             None,
-            false,
+            DirtyLevel::PaintOnly,
         ),
         DirtyLevel::PaintOnly
     );
@@ -3113,23 +3120,36 @@ fn a_hover_change_outside_every_queried_key_stays_a_repaint() {
     // Crossing between tabs: the strip repaints its own highlight, and the keyed region's answer is
     // unchanged, so no view has to run.
     assert!(runner.update_hover(1, 0), "entering the first tab");
-    assert!(
-        !runner.core.hover_change_needs_view(runner.mouse.hovered),
+    assert_eq!(
+        runner.motion_hover_dirty_level(),
+        DirtyLevel::PaintOnly,
         "a crossing outside every queried key needs no view pass"
     );
     assert!(runner.update_hover(7, 0), "crossing onto the second tab");
-    assert!(
-        !runner.core.hover_change_needs_view(runner.mouse.hovered),
+    assert_eq!(
+        runner.motion_hover_dirty_level(),
+        DirtyLevel::PaintOnly,
         "and neither does the next one"
     );
+    assert!(
+        runner.dirty_component_scopes.is_empty(),
+        "a repaint marks no scope for refresh"
+    );
 
-    // Reaching the keyed region does change what its view would produce.
+    // Reaching the keyed region does change what its view would produce - but only that view, so
+    // the frame is a layout pass over the asking scope rather than a rebuild of everything.
     let row = node_id_by_key(&runner.core.tree, "row");
     let row_x = runner.core.tree.node(row).rect.x as u16;
     assert!(runner.update_hover(row_x, 0), "entering the keyed region");
-    assert!(
-        runner.core.hover_change_needs_view(runner.mouse.hovered),
-        "the queried key now answers differently, so the view must run"
+    assert_eq!(
+        runner.motion_hover_dirty_level(),
+        DirtyLevel::LayoutOnly,
+        "the queried key now answers differently, so its view must run"
+    );
+    assert_eq!(
+        runner.dirty_component_scopes.as_slice(),
+        &[ScopeId(1)],
+        "and the scope that asked is marked, which is what makes the layout pass legal"
     );
 }
 

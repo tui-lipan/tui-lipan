@@ -639,10 +639,20 @@ impl FocusContext {
 #[derive(Default)]
 pub(crate) struct HoverContext {
     inner: NodeChainState,
-    queried_scopes: RefCell<Vec<ScopeId>>,
-    queried_keys: RefCell<Vec<Key>>,
-    /// A view read the hovered node's identity, so any change of node is a change of answer.
-    queried_node_id: Cell<bool>,
+    /// One hover question, and the component scope that asked it. The scope is what makes a changed
+    /// answer refreshable on its own, rather than by rebuilding the whole tree.
+    queries: RefCell<Vec<(ScopeId, HoverQuery)>>,
+}
+
+/// A hover question a view asked, recorded so its answer can be re-evaluated later.
+#[derive(Clone, PartialEq, Eq)]
+enum HoverQuery {
+    /// `has_hover_within`: is hover inside this scope's subtree?
+    WithinScope(ScopeId),
+    /// `has_hover_within_key`: is hover inside the subtree of this key?
+    WithinKey(Key),
+    /// `hovered_node_id`: which node exactly? Any change of node changes this answer.
+    NodeId,
 }
 
 impl HoverContext {
@@ -650,52 +660,71 @@ impl HoverContext {
         // Start of a view pass: the questions asked from here on are this frame's. A paint-only
         // frame never gets here, so the previous frame's questions stay in force — which is exactly
         // what they must do, since its element tree is still the one on screen.
-        self.queried_scopes.borrow_mut().clear();
-        self.queried_keys.borrow_mut().clear();
-        self.queried_node_id.set(false);
+        self.queries.borrow_mut().clear();
 
         let cur = hovered.filter(|id| tree.is_valid(*id));
         self.inner.update_chain(tree, cur);
     }
 
-    pub(crate) fn hovered_node_id(&self) -> Option<NodeId> {
-        self.queried_node_id.set(true);
+    fn record(&self, asker: ScopeId, query: HoverQuery) {
+        let mut queries = self.queries.borrow_mut();
+        if !queries
+            .iter()
+            .any(|(scope, recorded)| *scope == asker && *recorded == query)
+        {
+            queries.push((asker, query));
+        }
+    }
+
+    pub(crate) fn hovered_node_id(&self, asker: ScopeId) -> Option<NodeId> {
+        self.record(asker, HoverQuery::NodeId);
         self.inner.node_id()
     }
 
     pub(crate) fn has_hover_within_scope(&self, scope: ScopeId) -> bool {
-        NodeChainState::push_scope_if_missing(&mut self.queried_scopes.borrow_mut(), scope);
+        self.record(scope, HoverQuery::WithinScope(scope));
         self.inner.has_within_scope(scope)
     }
 
-    pub(crate) fn has_hover_within_key(&self, key: &Key) -> bool {
-        NodeChainState::push_key_if_missing(&mut self.queried_keys.borrow_mut(), key);
+    pub(crate) fn has_hover_within_key(&self, asker: ScopeId, key: &Key) -> bool {
+        self.record(asker, HoverQuery::WithinKey(key.clone()));
         self.inner.has_within_key(key)
     }
 
-    /// Whether moving hover to `hovered` would change the answer to any question the last view asked.
+    /// The scopes whose recorded hover answers would change if hover moved to `hovered`.
     ///
-    /// Compares against the chain captured at that view pass, so `false` means the element tree it
-    /// produced is still correct and the frame can be a repaint. Both chains are ancestor walks, so
-    /// this costs a walk per call and nothing per queried key.
-    pub(crate) fn change_affects_queries(&self, tree: &NodeTree, hovered: Option<NodeId>) -> bool {
+    /// Empty means the element tree on screen is still correct and the frame can be a repaint.
+    /// A non-empty result names exactly the views that have to run, so the frame can be a layout
+    /// pass over those scopes instead of a rebuild of everything. Compares against the chain
+    /// captured at the last view pass; both chains are ancestor walks, so this costs one walk.
+    pub(crate) fn scopes_needing_view(
+        &self,
+        tree: &NodeTree,
+        hovered: Option<NodeId>,
+    ) -> Vec<ScopeId> {
+        let queries = self.queries.borrow();
+        if queries.is_empty() {
+            return Vec::new();
+        }
         let cur = hovered.filter(|id| tree.is_valid(*id));
-        if self.queried_node_id.get() && self.inner.node_id() != cur {
-            return true;
-        }
-        let queried_scopes = self.queried_scopes.borrow();
-        let queried_keys = self.queried_keys.borrow();
-        if queried_scopes.is_empty() && queried_keys.is_empty() {
-            return false;
-        }
-
         let (scopes, keys) = NodeChainState::chain_for(tree, cur);
-        queried_scopes
-            .iter()
-            .any(|scope| scopes.contains(scope) != self.inner.has_within_scope(*scope))
-            || queried_keys.iter().any(|key| {
-                keys.iter().any(|candidate| candidate == key) != self.inner.has_within_key(key)
-            })
+
+        let mut affected = Vec::new();
+        for (asker, query) in queries.iter() {
+            let changed = match query {
+                HoverQuery::WithinScope(scope) => {
+                    scopes.contains(scope) != self.inner.has_within_scope(*scope)
+                }
+                HoverQuery::WithinKey(key) => {
+                    keys.iter().any(|candidate| candidate == key) != self.inner.has_within_key(key)
+                }
+                HoverQuery::NodeId => self.inner.node_id() != cur,
+            };
+            if changed && !affected.contains(asker) {
+                affected.push(*asker);
+            }
+        }
+        affected
     }
 
     pub(crate) fn generation(&self) -> u64 {
@@ -1190,7 +1219,7 @@ impl<C: Component> Context<C> {
     pub fn has_hover_within_key(&self, key: impl Into<Key>) -> bool {
         let key = key.into();
         self.env.note_memo_dependency(MemoDependency::Hover);
-        self.env.hover.has_hover_within_key(&key)
+        self.env.hover.has_hover_within_key(self.scope, &key)
     }
 
     /// Returns the focused node id from the previous frame, if any.
@@ -1202,7 +1231,7 @@ impl<C: Component> Context<C> {
     /// Returns the hovered node id from the previous frame, if any.
     pub fn hovered_node_id(&self) -> Option<NodeId> {
         self.env.note_memo_dependency(MemoDependency::Hover);
-        self.env.hover.hovered_node_id()
+        self.env.hover.hovered_node_id(self.scope)
     }
 
     /// Property-scoped transition for a single style value.
