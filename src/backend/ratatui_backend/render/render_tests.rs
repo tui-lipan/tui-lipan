@@ -4793,3 +4793,90 @@ fn translucent_overlay_surface_blends_with_the_cells_it_covers() {
         "the surface spans rows of different colours, so it cannot render as one flat colour",
     );
 }
+
+#[test]
+fn translucent_toast_surface_is_uniform_behind_its_text() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 9,
+        h: 5,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        ToastTransitionUnderlayComponent,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    runtime.overlay_manager.borrow_mut().push_toast(
+        // Mirrors an application toast: bordered, wrapped, with its own message foreground.
+        Toast::new("ab")
+            .border(true)
+            .wrap(true)
+            .max_width(Length::Px(64))
+            .message_style(Style::new().fg(Color::rgb(226, 232, 240)))
+            .padding((0, 0, 0, 0))
+            .frame_style(Style::new().bg_alpha(Color::rgb(200, 40, 40), 0.5)),
+    );
+    runtime.render_element(viewport, None, None, None);
+    let mut overlays = runtime.tree.overlay_roots().to_vec();
+    let toast_rect = runtime.tree.node(overlays[0].id).rect;
+    overlays[0].opacity = 1.0;
+    runtime.tree.set_overlay_roots(overlays);
+
+    let backend = TestBackend::new(viewport.w, viewport.h);
+    let mut terminal = Terminal::new(backend).expect("terminal should init");
+    let ctx = RenderContext {
+        tree: &runtime.tree,
+        focused: None,
+        hovered: None,
+        mouse_pos: None,
+        suppress_pointer_item_hover_nodes: None,
+        blink_visible: true,
+        effect_phase: 0,
+        images_enabled: true,
+        contrast_policy: ContrastPolicy::Off,
+        read_only_selection: None,
+        scrollbar_metrics_cache: &RefCell::new(Default::default()),
+        overlay_bg_snapshot: &RefCell::new(Vec::new()),
+        join_index: &build_join_index(&runtime.tree),
+        cursor_position: &Cell::new(None),
+        terminal_bg: Some(ratatui::style::Color::Rgb(0, 0, 0)),
+        drag_preview_label: None,
+        drag_preview_at_mouse: false,
+        drag_preview_snapshot_rect: None,
+        dnd_snapshot_cells: &RefCell::new(None),
+        drag_preview_max_width: None,
+        drag_preview_max_height: None,
+        drop_slot_source_preview_rect: None,
+        paint_glyph_caches: None,
+        copy_feedback: None,
+        copy_feedback_style: Style::default(),
+    };
+    terminal
+        .draw(|f| render(f, &ctx))
+        .expect("render should succeed");
+
+    // Border and text sit on one surface and must read as one colour. Copying the frame's alpha
+    // paint onto the message style made text cells composite that alpha a second time, leaving a
+    // darker patch behind the words.
+    let buffer = terminal.backend().buffer();
+    let mut sampled = Vec::new();
+    for dy in 0..toast_rect.h {
+        for dx in 0..toast_rect.w {
+            sampled.push((
+                dx,
+                dy,
+                buffer[(toast_rect.x as u16 + dx, toast_rect.y as u16 + dy)].bg,
+            ));
+        }
+    }
+    let first = sampled[0].2;
+    assert!(
+        sampled.iter().all(|(_, _, bg)| *bg == first),
+        "the surface must be one colour across the toast, got {sampled:?}",
+    );
+}
