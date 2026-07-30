@@ -81,6 +81,19 @@ pub enum Paint {
         /// Alpha channel where `0` is fully transparent and `255` is fully opaque.
         alpha: u8,
     },
+    /// A colour the renderer resolves while painting, from a transition the app owns.
+    ///
+    /// Produced by [`Context::animated_color`](crate::core::component::Context::animated_color).
+    /// Because the value is named rather than embedded, this paint compares equal across a whole
+    /// fade — which is what lets the runtime advance the fade with a repaint instead of re-running
+    /// `view()` for every frame of it.
+    Animated {
+        /// Registry slot naming the transition.
+        slot: u16,
+        /// Colour to use when the slot no longer resolves — a paint outliving its transition, or a
+        /// consumer that never reaches the renderer's resolution step.
+        fallback: Color,
+    },
 }
 
 impl fmt::Display for Color {
@@ -389,7 +402,7 @@ impl Paint {
     /// Return the paint alpha as an exact `0..=255` byte.
     pub const fn alpha_u8(self) -> u8 {
         match self {
-            Self::Solid(_) => 255,
+            Self::Solid(_) | Self::Animated { .. } => 255,
             Self::Alpha { alpha, .. } => alpha,
         }
     }
@@ -400,16 +413,36 @@ impl Paint {
     }
 
     /// Return the base color for this paint.
+    ///
+    /// An [`Animated`](Self::Animated) paint answers with its fallback: the live value needs the
+    /// renderer's transition registry, which only the paint pipeline reaches.
     pub const fn color(self) -> Color {
         match self {
-            Self::Solid(color) | Self::Alpha { color, .. } => color,
+            Self::Solid(color)
+            | Self::Alpha { color, .. }
+            | Self::Animated {
+                fallback: color, ..
+            } => color,
+        }
+    }
+
+    /// Bind an [`Animated`](Self::Animated) paint to the colour its transition currently holds.
+    ///
+    /// A no-op for every other variant. Called at the start of style finalization so the rest of the
+    /// paint pipeline only ever sees concrete colours.
+    pub(crate) fn resolved(self) -> Self {
+        match self {
+            Self::Animated { slot, fallback } => Self::Solid(
+                crate::animation::registry::resolve_render_paint_slot(slot).unwrap_or(fallback),
+            ),
+            other => other,
         }
     }
 
     /// Return whether this paint is fully opaque.
     pub const fn is_opaque(self) -> bool {
         match self {
-            Self::Solid(_) => true,
+            Self::Solid(_) | Self::Animated { .. } => true,
             Self::Alpha { alpha, .. } => alpha == 255,
         }
     }
@@ -420,6 +453,8 @@ impl Paint {
             Self::Solid(Color::Transparent) => true,
             Self::Solid(_) => false,
             Self::Alpha { alpha, .. } => alpha == 0,
+            // Only concrete pigments animate, so a slot is never a transparency sentinel.
+            Self::Animated { .. } => false,
         }
     }
 
@@ -442,6 +477,7 @@ impl Paint {
                 let weight = alpha as f32 / 255.0;
                 backdrop.blend_toward(color, weight)
             }
+            Self::Animated { .. } => self.resolved().flatten_over(backdrop),
         }
     }
 

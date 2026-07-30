@@ -149,6 +149,7 @@ pub(crate) fn paint_to_ratatui_bg(paint: Paint, backdrop: Option<Color>) -> Opti
             paint,
             backdrop.map(to_ratatui_color).unwrap_or(RColor::Reset),
         ),
+        Paint::Animated { .. } => paint_to_ratatui_bg(paint.resolved(), backdrop),
     }
 }
 
@@ -163,6 +164,7 @@ pub(crate) fn paint_to_ratatui_fg(paint: Paint, backdrop: Option<Color>) -> Opti
             paint,
             backdrop.map(to_ratatui_color).unwrap_or(RColor::Reset),
         ),
+        Paint::Animated { .. } => paint_to_ratatui_fg(paint.resolved(), backdrop),
     }
 }
 

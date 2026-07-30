@@ -685,6 +685,7 @@ fn dim_paint_by(paint: Paint, amount: f32) -> Paint {
     match paint {
         Paint::Solid(color) => Paint::Solid(color.dim_by(amount)),
         Paint::Alpha { color, alpha } => Paint::from_color_alpha_u8(color.dim_by(amount), alpha),
+        Paint::Animated { .. } => dim_paint_by(paint.resolved(), amount),
     }
 }
 
@@ -694,6 +695,7 @@ fn blend_paint_toward(paint: Paint, target: Color, amount: f32) -> Paint {
         Paint::Alpha { color, alpha } => {
             Paint::from_color_alpha_u8(color.blend_toward(target, amount), alpha)
         }
+        Paint::Animated { .. } => blend_paint_toward(paint.resolved(), target, amount),
     }
 }
 

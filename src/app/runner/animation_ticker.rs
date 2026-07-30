@@ -250,15 +250,18 @@ impl<C: Component> AppRunner<C> {
             // Property-scoped transitions: advance and mark full re-render when
             // any interpolated value changed (the new value must flow through
             // the next view() into the rendered styles).
-            let property_transitions_changed = self.core.ctx.env().animations.tick(dt);
-            if changed || property_transitions_changed {
+            let transitions = self.core.ctx.env().animations.tick(dt);
+            if changed || transitions.view_changed || transitions.paint_changed {
                 crate::debug::internal_log!("[tui-lipan] dirty: animated widget tick");
             }
-            if property_transitions_changed {
+            // A value a view read concretely has to flow through the next `view()` to reach the
+            // rendered styles. A late-bound paint does not: the renderer resolves it while drawing,
+            // so the whole fade costs repaints.
+            if transitions.view_changed {
                 dirty.mark_full();
             } else if needs_layout {
                 dirty.mark_layout();
-            } else if needs_paint {
+            } else if needs_paint || transitions.paint_changed {
                 dirty.mark_paint();
             }
         }

@@ -261,8 +261,13 @@ fn readable_style_apca_frame_memo(mut style: Style) -> Style {
 }
 
 pub(crate) fn finalize_style(raw: Style, backdrop: Option<Color>, policy: ContrastPolicy) -> Style {
+    // Bind late-bound paints to the colour their transition currently holds before anything else
+    // looks at them, so transforms, alpha flattening and contrast all see a concrete pigment. This is
+    // the step that lets an animated colour reach the screen without `view()` running.
     let mut style = Style {
         contrast_policy: None,
+        fg: raw.fg.map(Paint::resolved),
+        bg: raw.bg.map(Paint::resolved),
         ..raw
     }
     .resolve_color_transforms();

@@ -13,6 +13,12 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add `Context::animated_color` and `Paint::Animated` for colours that only feed a style. The returned
+  paint *names* its transition instead of carrying the current colour, so the element tree holds still
+  for the whole fade and the runtime advances it with a repaint: a 160 ms focus fade at 60 fps costs
+  ten repaints where `Context::transition` costs ten full rebuilds of the window. The renderer
+  resolves the slot while drawing. Reach for `transition` when the interpolated value has to inform
+  layout, text, or a decision — that is the trade that makes skipping `view()` sound.
 - Add `Terminal::screen` and `TerminalScreenHandle` so a terminal can read a `TerminalScreen` the app
   owns instead of being handed a `TerminalRenderSnapshot`. This takes the screen's contents out of the
   element tree, so an app can answer new output with `Update::paint()` rather than a full rebuild; the

@@ -2074,6 +2074,87 @@ fn animated_position_zero_duration_snaps_and_emits_callback() {
     assert_eq!(ended.get(), 1);
 }
 
+struct AnimatedChromeSmoke {
+    focused: Rc<Cell<bool>>,
+    views: Rc<Cell<usize>>,
+}
+
+impl Component for AnimatedChromeSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        self.views.set(self.views.get() + 1);
+        let target = if self.focused.get() {
+            Color::Rgb(255, 255, 255)
+        } else {
+            Color::Rgb(0, 0, 0)
+        };
+        let paint = ctx.animated_color(
+            "chrome",
+            target,
+            crate::animation::TransitionConfig {
+                duration: Duration::from_millis(100),
+                easing: crate::animation::Easing::Linear,
+            },
+        );
+        Text::new("chrome").style(Style::new().fg(paint)).into()
+    }
+}
+
+/// A colour that only feeds a style must fade without re-running `view()`: the element names the
+/// transition, and the renderer resolves it while painting. This is what makes a focus fade cost
+/// repaints instead of one rebuild of the window per frame of it.
+#[test]
+fn an_animated_colour_fades_without_a_view_pass() {
+    let focused = Rc::new(Cell::new(false));
+    let views = Rc::new(Cell::new(0));
+    let mut backend = crate::TestBackend::new(AnimatedChromeSmoke {
+        focused: focused.clone(),
+        views: views.clone(),
+    });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 10,
+        h: 1,
+    });
+    backend.render();
+
+    // Retarget the fade, then let the view run once so the new target is registered.
+    focused.set(true);
+    backend.render();
+    let views_at_start = views.get();
+    let start = backend.capture_frame().cell(0, 0).fg;
+
+    // Advancing the fade is a repaint: the ticker reports no view work, and the painted colour still
+    // moves because the renderer resolves the slot.
+    backend.advance(Duration::from_millis(50));
+    assert_eq!(
+        views.get(),
+        views_at_start,
+        "advancing a style-only fade must not run view()"
+    );
+    let midway = backend.capture_frame().cell(0, 0).fg;
+    assert_ne!(midway, start, "the painted colour moved anyway");
+
+    backend.advance(Duration::from_millis(60));
+    let settled = backend.capture_frame().cell(0, 0).fg;
+    assert_ne!(settled, midway, "and keeps moving to the target");
+    assert_eq!(
+        views.get(),
+        views_at_start,
+        "the whole fade cost no view passes"
+    );
+}
+
 #[test]
 fn moved_mouse_events_only_need_paint() {
     assert_eq!(
