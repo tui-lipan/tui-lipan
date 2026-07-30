@@ -9,6 +9,8 @@ Before opening a PR:
 
 - [ ] `cargo fmt --all` passes
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
+- [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` passes
+      (catches broken intra-doc links, which the other lints do not)
 - [ ] `cargo test --workspace --all-features` passes
 - [ ] Macro-body formatting: `./scripts/format-rust-with-macros --check` passes
 - [ ] User-visible changes are listed in `CHANGELOG.md` under `[Unreleased]`
@@ -48,6 +50,7 @@ cargo fmt --all
 
 # Lint
 cargo clippy --workspace --all-targets --all-features -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 
 # Test
 cargo test --workspace --all-features

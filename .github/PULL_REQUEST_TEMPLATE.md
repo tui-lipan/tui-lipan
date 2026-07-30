@@ -23,6 +23,7 @@ Mirrors `CONTRIBUTING.md` (single source of truth). Run before requesting review
 - [ ] `cargo fmt --all` passes
 - [ ] `./scripts/format-rust-with-macros --check` passes (macro-body formatting)
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
+- [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` passes
 - [ ] `cargo test --workspace --all-features` passes
 - [ ] User-visible changes are recorded in `CHANGELOG.md` under `[Unreleased]`
       (breaking lines suffixed with "(breaking)")
