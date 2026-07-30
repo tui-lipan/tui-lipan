@@ -202,6 +202,16 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `Style::tint_by` no longer does nothing on an ordinary widget style. It set only the compositor
+  hook, which nothing outside a backdrop path (`EffectScope`, overlay backdrops) reads, so tinting a
+  plain widget silently changed no colour at all. It now also transforms that style's own `fg`/`bg`,
+  mirroring `dim_by`; the compositor already skipped a transform matching its own hook, so backdrop
+  paths are unaffected and nothing double-applies.
+- Document that `Style::contrast_policy` is resolved before anything is drawn, against this style's
+  `bg`, else the containing style's, else the terminal's. An alpha background is flattened against
+  that same assumed backdrop, so a translucent surface floating over unrelated content — a toast
+  above live output — gets approved on a pairing that renders unreadable. `EffectScope::contrast_policy`
+  judges the composited cells instead and is the fix for that case.
 - A tab strip with a `tab_hover_style` no longer reports a repaint on every pointer-motion event that
   crosses it. Hover now resolves which tab the pointer is over and reports dirt only when that
   changes, so a strip spanning the top of a window stops repainting the whole tree ~60 times a second

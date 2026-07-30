@@ -165,6 +165,50 @@ fn style_contrast_policy_overrides_widget_policy() {
 }
 
 #[test]
+fn style_contrast_policy_judges_an_alpha_bg_against_the_supplied_backdrop() {
+    // An alpha background is flattened before the policy weighs it, so the pairing it judges is
+    // the one that will be rendered *given this backdrop* - not the raw pigment.
+    let style = Style::new()
+        .fg(Color::rgb(0, 0, 0))
+        .bg_alpha(Color::rgb(0, 0, 0), 0.5);
+
+    let over_black = finalize_style(style, Some(Color::rgb(0, 0, 0)), ContrastPolicy::Wcag);
+    let over_white = finalize_style(style, Some(Color::rgb(255, 255, 255)), ContrastPolicy::Wcag);
+
+    // Same style, different backdrop, different correction: black-on-black must be lifted, while
+    // black over a half-white blend is already readable and is left alone.
+    assert_ne!(
+        over_black.fg, over_white.fg,
+        "the backdrop must change the verdict",
+    );
+    assert_eq!(
+        over_white.fg,
+        Some(crate::style::Paint::Solid(Color::rgb(0, 0, 0))),
+    );
+    // The alpha paint survives resolution so the renderer still composites it.
+    assert_eq!(over_black.bg, style.bg);
+}
+
+#[test]
+fn style_contrast_policy_cannot_see_content_below_a_floating_overlay() {
+    // Pins the limitation `Style::contrast_policy` documents: with no backdrop to name, it falls
+    // back to the terminal background. Text that is readable against *that* still renders against
+    // whatever cells the overlay happens to cover, which this pass never sees. Content-aware
+    // correction is `EffectScope::contrast_policy`, which runs per cell after compositing.
+    let style = Style::new()
+        .fg(Color::rgb(171, 178, 191))
+        .bg_alpha(Color::rgb(50, 54, 61), 0.82);
+
+    let assumed = finalize_style(style, None, ContrastPolicy::Wcag);
+    let over_white = finalize_style(style, Some(Color::rgb(255, 255, 255)), ContrastPolicy::Wcag);
+
+    assert_ne!(
+        assumed.fg, over_white.fg,
+        "naming the real backdrop is what lets the policy correct this pairing",
+    );
+}
+
+#[test]
 fn style_contrast_policy_off_disables_widget_auto_contrast() {
     let style = Style::new()
         .fg(Color::rgb(0, 0, 0))
