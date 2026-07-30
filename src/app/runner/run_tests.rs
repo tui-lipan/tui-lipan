@@ -3060,6 +3060,456 @@ fn hover_transition_between_click_only_regions_is_not_dirty() {
     assert!(runner.update_hover(1, 0), "leaving the hover-styled region");
 }
 
+/// A tab strip beside a keyed region whose look depends on hover — the shape of an app with a tab
+/// bar across the top and a sidebar whose rows reveal a hover-only affordance.
+struct KeyedHoverDependencySmoke;
+
+impl Component for KeyedHoverDependencySmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        // Reading hover for one keyed region must not price motion everywhere else in the window.
+        let row_hovered = ctx.has_hover_within_key("row");
+        HStack::new()
+            .children([
+                crate::widgets::Tabs::new()
+                    .tabs(["one", "two"].map(crate::widgets::Tab::new))
+                    .tab_hover_style(Style::new().bg(Color::Blue))
+                    .width(Length::Px(11))
+                    .into(),
+                MouseRegion::new()
+                    .on_click(ctx.link().callback(|_: MouseEvent| ()))
+                    .child(Text::new(if row_hovered { "row x" } else { "row  " }))
+                    .key("row"),
+            ])
+            .into()
+    }
+}
+
+/// Motion the views do not care about must stay a repaint even when some view reads hover.
+///
+/// The blunt version of this check asked only whether *any* view reads hover, so one keyed
+/// `has_hover_within_key` call promoted every pointer crossing in the window to a full rebuild —
+/// visible in a multiplexer as "opening the sidebar makes hovering the tab bar expensive".
+#[test]
+fn a_hover_change_outside_every_queried_key_stays_a_repaint() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 1,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), KeyedHoverDependencySmoke, ());
+    init_runner(&mut runner, KeyedHoverDependencySmoke, viewport);
+
+    // Crossing between tabs: the strip repaints its own highlight, and the keyed region's answer is
+    // unchanged, so no view has to run.
+    assert!(runner.update_hover(1, 0), "entering the first tab");
+    assert!(
+        !runner.core.hover_change_needs_view(runner.mouse.hovered),
+        "a crossing outside every queried key needs no view pass"
+    );
+    assert!(runner.update_hover(7, 0), "crossing onto the second tab");
+    assert!(
+        !runner.core.hover_change_needs_view(runner.mouse.hovered),
+        "and neither does the next one"
+    );
+
+    // Reaching the keyed region does change what its view would produce.
+    let row = node_id_by_key(&runner.core.tree, "row");
+    let row_x = runner.core.tree.node(row).rect.x as u16;
+    assert!(runner.update_hover(row_x, 0), "entering the keyed region");
+    assert!(
+        runner.core.hover_change_needs_view(runner.mouse.hovered),
+        "the queried key now answers differently, so the view must run"
+    );
+}
+
+struct TabStripHoverSmoke;
+
+impl Component for TabStripHoverSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        // " one " | " two " | " three ": 5, 5 and 7 columns with single-column dividers between.
+        crate::widgets::Tabs::new()
+            .tabs(["one", "two", "three"].map(crate::widgets::Tab::new))
+            .tab_hover_style(Style::new().bg(Color::Blue))
+            .into()
+    }
+}
+
+/// A tab strip must report hover dirt when the pointer moves to a *different* tab, not on every
+/// motion event that happens to be over it. A strip spanning the top of a window otherwise makes
+/// every pointer movement anywhere along it repaint the whole tree.
+#[test]
+fn motion_within_one_tab_is_not_dirty() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 1,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), TabStripHoverSmoke, ());
+    init_runner(&mut runner, TabStripHoverSmoke, viewport);
+
+    assert!(runner.update_hover(1, 0), "entering the first tab");
+    assert_eq!(runner.mouse.hovered_item_index, Some(0));
+    assert!(
+        !runner.update_hover(2, 0),
+        "sliding within the first tab paints nothing new"
+    );
+    assert!(
+        !runner.update_hover(3, 0),
+        "still within the first tab: no repaint"
+    );
+
+    assert!(runner.update_hover(7, 0), "crossing onto the second tab");
+    assert_eq!(runner.mouse.hovered_item_index, Some(1));
+    assert!(!runner.update_hover(8, 0), "sliding within the second tab");
+
+    assert!(runner.update_hover(13, 0), "crossing onto the third tab");
+    assert_eq!(runner.mouse.hovered_item_index, Some(2));
+    assert!(
+        !runner.update_hover(17, 0),
+        "sliding across the whole third tab paints nothing new"
+    );
+
+    assert!(runner.update_hover(1, 0), "jumping back to the first tab");
+    assert_eq!(runner.mouse.hovered_item_index, Some(0));
+}
+
+struct DraggableTabStripHoverSmoke;
+
+impl Component for DraggableTabStripHoverSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        crate::widgets::DraggableTabBar::new()
+            .tabs([
+                crate::widgets::DraggableTab::new("one").closeable(true),
+                crate::widgets::DraggableTab::new("two").closeable(true),
+                crate::widgets::DraggableTab::new("three").closeable(true),
+            ])
+            .show_close_buttons(true)
+            .tab_hover_style(Style::new().bg(Color::Blue))
+            .close_hover_style(Style::new().fg(Color::Red))
+            .into()
+    }
+}
+
+#[test]
+fn draggable_tab_motion_is_dirty_only_when_the_painted_target_changes() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 1,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), DraggableTabStripHoverSmoke, ());
+    init_runner(&mut runner, DraggableTabStripHoverSmoke, viewport);
+
+    let bar_id = runner
+        .core
+        .tree
+        .iter()
+        .find(|node| matches!(node.kind, NodeKind::DraggableTabBar(_)))
+        .map(|node| node.id)
+        .expect("draggable tab bar node");
+    let node = runner.core.tree.node(bar_id);
+    let NodeKind::DraggableTabBar(bar) = &node.kind else {
+        unreachable!();
+    };
+    let inner = node.rect.inner(bar.border, bar.padding);
+    let layout = crate::widgets::DraggableTabBar::viewport_layout(
+        &bar.tabs,
+        &bar.display_options(),
+        &bar.viewport_options(inner.w as usize),
+    );
+    let first = &layout.visible_tabs[0];
+    let second = &layout.visible_tabs[1];
+    let first_close_local = first.metrics.close_start.expect("first close slot");
+    let first_body_x = inner.x as u16 + first.start as u16;
+    let first_close_x = inner.x as u16
+        + first.start as u16
+        + first_close_local.saturating_sub(first.clip_left) as u16;
+    let second_body_x = inner.x as u16 + second.start as u16;
+
+    assert!(runner.update_hover(first_body_x, inner.y as u16));
+    assert_eq!(
+        runner.mouse.hover_paint_target,
+        Some(
+            crate::app::interaction_state::HoverPaintTarget::DraggableTabBar(
+                crate::widgets::draggable_tab_bar::DraggableTabHitTarget::Tab(
+                    crate::widgets::draggable_tab_bar::DraggableTabHit {
+                        index: 0,
+                        part: crate::widgets::DraggableTabHitPart::Body,
+                    },
+                ),
+            ),
+        )
+    );
+    assert!(
+        !runner.update_hover(first_body_x + 1, inner.y as u16),
+        "motion within the first tab body changes no painted state"
+    );
+
+    assert!(
+        runner.update_hover(first_close_x, inner.y as u16),
+        "the close affordance has its own hover style"
+    );
+    assert_eq!(
+        runner.mouse.hover_paint_target,
+        Some(
+            crate::app::interaction_state::HoverPaintTarget::DraggableTabBar(
+                crate::widgets::draggable_tab_bar::DraggableTabHitTarget::Tab(
+                    crate::widgets::draggable_tab_bar::DraggableTabHit {
+                        index: 0,
+                        part: crate::widgets::DraggableTabHitPart::Close,
+                    },
+                ),
+            ),
+        )
+    );
+
+    assert!(runner.update_hover(second_body_x, inner.y as u16));
+    assert_eq!(
+        runner.mouse.hover_paint_target,
+        Some(
+            crate::app::interaction_state::HoverPaintTarget::DraggableTabBar(
+                crate::widgets::draggable_tab_bar::DraggableTabHitTarget::Tab(
+                    crate::widgets::draggable_tab_bar::DraggableTabHit {
+                        index: 1,
+                        part: crate::widgets::DraggableTabHitPart::Body,
+                    },
+                ),
+            ),
+        )
+    );
+}
+
+struct TextAreaSentinelHoverSmoke;
+
+impl Component for TextAreaSentinelHoverSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let mut sentinels = Vec::new();
+        let (value, cursor) = crate::widgets::insert_sentinel(
+            "",
+            0,
+            &mut sentinels,
+            crate::widgets::TextAreaSentinel::new("FIRST")
+                .hover_style(Style::new().bg(Color::Blue)),
+        );
+        let (value, _) = crate::widgets::insert_sentinel(
+            &value,
+            cursor,
+            &mut sentinels,
+            crate::widgets::TextAreaSentinel::new("SECOND")
+                .hover_style(Style::new().bg(Color::Red)),
+        );
+        TextArea::new(value)
+            .sentinels(sentinels)
+            .read_only(true)
+            .into()
+    }
+}
+
+#[test]
+fn text_area_sentinel_motion_is_dirty_only_between_placeholders() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 30,
+        h: 1,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), TextAreaSentinelHoverSmoke, ());
+    init_runner(&mut runner, TextAreaSentinelHoverSmoke, viewport);
+
+    let text_area_id = runner
+        .core
+        .tree
+        .iter()
+        .find(|node| matches!(node.kind, NodeKind::TextArea(_)))
+        .map(|node| node.id)
+        .expect("text area node");
+    let node = runner.core.tree.node(text_area_id);
+    let NodeKind::TextArea(text_area) = &node.kind else {
+        unreachable!();
+    };
+    let content = text_area.metrics(node.rect).content_rect;
+    let second_byte = text_area
+        .value
+        .char_indices()
+        .nth(1)
+        .map(|(byte, _)| byte)
+        .expect("second sentinel byte");
+
+    assert!(runner.update_hover(content.x as u16, content.y as u16));
+    assert_eq!(
+        runner.mouse.hover_paint_target,
+        Some(crate::app::interaction_state::HoverPaintTarget::TextArea {
+            sentinel_byte: Some(0),
+            diff_separator_source_line: None,
+        },)
+    );
+    assert!(
+        !runner.update_hover(content.x as u16 + 3, content.y as u16),
+        "motion within the wide FIRST placeholder changes nothing"
+    );
+
+    assert!(
+        runner.update_hover(content.x as u16 + 5, content.y as u16),
+        "crossing to SECOND changes the painted placeholder"
+    );
+    assert_eq!(
+        runner.mouse.hover_paint_target,
+        Some(crate::app::interaction_state::HoverPaintTarget::TextArea {
+            sentinel_byte: Some(second_byte),
+            diff_separator_source_line: None,
+        },)
+    );
+    assert!(
+        !runner.update_hover(content.x as u16 + 8, content.y as u16),
+        "motion within SECOND is quiet"
+    );
+}
+
+#[cfg(feature = "diff-view")]
+struct DocumentDiffSeparatorHoverSmoke;
+
+#[cfg(feature = "diff-view")]
+impl Component for DocumentDiffSeparatorHoverSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let before: String = (1..=30).map(|line| format!("line {line}\n")).collect();
+        let mut after_lines: Vec<String> = (1..=30).map(|line| format!("line {line}\n")).collect();
+        after_lines[14] = "changed\n".to_owned();
+        crate::widgets::DiffView::with_content(before, after_lines.concat())
+            .mode(crate::widgets::DiffViewMode::Unified)
+            .backend(crate::widgets::DiffViewBackend::DocumentView)
+            .context_lines(1)
+            .context_separator_hover_style(Style::new().bg(Color::Blue))
+            .into()
+    }
+}
+
+#[cfg(feature = "diff-view")]
+#[test]
+fn document_diff_separator_motion_is_dirty_only_between_separator_rows() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 80,
+        h: 30,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), DocumentDiffSeparatorHoverSmoke, ());
+    init_runner(&mut runner, DocumentDiffSeparatorHoverSmoke, viewport);
+
+    let document_id = runner
+        .core
+        .tree
+        .iter()
+        .find(|node| matches!(node.kind, NodeKind::DocumentView(_)))
+        .map(|node| node.id)
+        .expect("document view node");
+    let node = runner.core.tree.node(document_id);
+    let NodeKind::DocumentView(document) = &node.kind else {
+        unreachable!();
+    };
+    let config = document
+        .diff_context_separator_click
+        .as_ref()
+        .expect("separator hover config");
+    let separator_rows: Vec<_> = document
+        .visual_cache
+        .source_line_map
+        .iter()
+        .enumerate()
+        .filter(|(_, source_line)| {
+            config
+                .events_by_source_line
+                .get(**source_line)
+                .is_some_and(Option::is_some)
+        })
+        .map(|(visual_row, source_line)| (visual_row, *source_line))
+        .collect();
+    assert!(separator_rows.len() >= 2, "expected two context separators");
+    let inner = node.rect.inner(document.border, document.padding);
+    let content = document.content_layout(inner);
+    let first = separator_rows[0];
+    let second = separator_rows[1];
+    let first_y = inner.y as u16 + first.0 as u16;
+    let second_y = inner.y as u16 + second.0 as u16;
+    let x = content.content_x as u16;
+
+    assert!(runner.update_hover(x, first_y));
+    assert_eq!(
+        runner.mouse.hover_paint_target,
+        Some(
+            crate::app::interaction_state::HoverPaintTarget::DocumentViewDiffSeparator {
+                source_line: first.1,
+            },
+        )
+    );
+    assert!(
+        !runner.update_hover(x + 5, first_y),
+        "motion within one separator row is quiet"
+    );
+
+    assert!(runner.update_hover(x, second_y));
+    assert_eq!(
+        runner.mouse.hover_paint_target,
+        Some(
+            crate::app::interaction_state::HoverPaintTarget::DocumentViewDiffSeparator {
+                source_line: second.1,
+            },
+        )
+    );
+}
+
 #[test]
 fn refresh_hover_tracks_item_hover_during_scroll() {
     let viewport = Rect {
@@ -4912,6 +5362,183 @@ fn terminal_ctrl_c_with_selection_copies_before_app_command() {
         keys.borrow().is_empty(),
         "terminal on_key must not receive ctrl-c"
     );
+}
+
+#[cfg(feature = "terminal")]
+struct LiveScreenSmoke {
+    screen: Rc<RefCell<crate::widgets::TerminalScreen>>,
+    views: Rc<Cell<usize>>,
+}
+
+#[cfg(feature = "terminal")]
+impl Component for LiveScreenSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        self.views.set(self.views.get() + 1);
+        Terminal::new()
+            .screen(crate::widgets::TerminalScreenHandle::new(
+                self.screen.clone(),
+            ))
+            .key("terminal")
+    }
+}
+
+/// Output written to a screen the widget holds a handle to must reach the node without `view()`
+/// running again. That is what lets a streaming pane cost a repaint instead of a rebuild of every
+/// pane, workbar segment and sidebar row in the window.
+#[cfg(feature = "terminal")]
+#[test]
+fn live_screen_output_reaches_the_node_without_a_view_pass() {
+    let screen = Rc::new(RefCell::new(crate::widgets::TerminalScreen::new(
+        4, 20, 100,
+    )));
+    let views = Rc::new(Cell::new(0));
+    let mut backend = crate::TestBackend::new(LiveScreenSmoke {
+        screen: screen.clone(),
+        views: views.clone(),
+    });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 4,
+    });
+    screen.borrow_mut().process_bytes(b"first");
+    backend.render();
+
+    let views_after_first_frame = views.get();
+    assert!(
+        backend.capture_frame().to_fixed_grid_lines()[0].contains("first"),
+        "the first frame shows what the screen already had"
+    );
+
+    // The child program writes again. No message, no `view()` — just the refresh the runtime does
+    // on its way to the buffer.
+    screen.borrow_mut().process_bytes(b"\r\nsecond");
+    assert!(
+        backend.refresh_live_terminals(),
+        "the refresh reports that the screen moved"
+    );
+
+    let lines = backend.capture_frame().to_fixed_grid_lines();
+    assert!(
+        lines[1].contains("second"),
+        "new output is painted without a view pass: {lines:#?}"
+    );
+    assert_eq!(
+        views.get(),
+        views_after_first_frame,
+        "and `view()` was not run to get it there"
+    );
+
+    assert!(
+        !backend.refresh_live_terminals(),
+        "a refresh that finds the screen unmoved does nothing"
+    );
+}
+
+/// A key forwarded to a terminal changes nothing on screen: it becomes bytes for the child program,
+/// and whatever the child draws in response arrives later as output that asks for its own frame.
+/// Claiming a frame here too means every keystroke costs two — one speculative, one real.
+#[cfg(feature = "terminal")]
+#[test]
+fn a_key_forwarded_to_a_terminal_claims_no_frame() {
+    let keys = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = AppRunner::new(
+        App::new().mouse(false),
+        TerminalDispatchSmoke {
+            keys: keys.clone(),
+            inputs: Rc::new(RefCell::new(Vec::new())),
+        },
+        (),
+    );
+    init_runner(
+        &mut runner,
+        TerminalDispatchSmoke {
+            keys: keys.clone(),
+            inputs: Rc::new(RefCell::new(Vec::new())),
+        },
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 5,
+        },
+    );
+    let terminal = node_id_by_key(&runner.core.tree, "terminal");
+    runner.focus.focused = Some(terminal);
+
+    let result = runner.dispatch_layered_key(key(KeyCode::Char('a')));
+
+    assert!(result.consumed, "the terminal claims the key");
+    assert_eq!(keys.borrow().len(), 1, "and forwards it to the child");
+    assert_eq!(
+        result.dirty_override,
+        Some(DirtyLevel::None),
+        "forwarding asks for no frame of its own"
+    );
+    assert!(
+        !result.mark_full,
+        "the override is what the event loop honors, so it must not also ask for a full frame"
+    );
+}
+
+/// Dropping a live selection *is* a visible change, so that key does owe a frame.
+#[cfg(feature = "terminal")]
+#[test]
+fn a_key_that_clears_a_terminal_selection_still_claims_a_frame() {
+    let keys = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = AppRunner::new(
+        App::new().mouse(false),
+        TerminalDispatchSmoke {
+            keys: keys.clone(),
+            inputs: Rc::new(RefCell::new(Vec::new())),
+        },
+        (),
+    );
+    init_runner(
+        &mut runner,
+        TerminalDispatchSmoke {
+            keys: keys.clone(),
+            inputs: Rc::new(RefCell::new(Vec::new())),
+        },
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 5,
+        },
+    );
+    let terminal = node_id_by_key(&runner.core.tree, "terminal");
+    runner.focus.focused = Some(terminal);
+    if let NodeKind::Terminal(term) = &mut runner.core.tree.node_mut(terminal).kind {
+        term.lines = vec![vec![Span::new("selected")]].into();
+        let mut selection =
+            crate::utils::selection::GridSelection::new(crate::utils::selection::GridPos {
+                row: 0,
+                col: 0,
+            });
+        selection.extend_to(crate::utils::selection::GridPos { row: 0, col: 8 });
+        term.selection = Some(selection);
+    }
+
+    let result = runner.dispatch_layered_key(key(KeyCode::Char('a')));
+
+    assert!(result.consumed);
+    assert_eq!(
+        result.dirty_override, None,
+        "a cleared selection leaves the generic handled-key level in place"
+    );
+    assert!(result.mark_full, "so the frame still happens");
 }
 
 #[cfg(feature = "terminal")]

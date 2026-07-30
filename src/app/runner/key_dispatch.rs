@@ -345,7 +345,11 @@ impl<C: Component> RunnerDispatchOps<'_, '_, C> {
             && self.focused_is_terminal(id)
         {
             use crate::app::input::handlers::terminal::forward_key;
-            return forward_key(&mut self.core.tree, id, key);
+            let forward = forward_key(&mut self.core.tree, id, key);
+            if let Some(level) = forward.dirty_override() {
+                self.key_ctx.dirty_override = Some(level);
+            }
+            return forward.handled;
         }
         keyboard::dispatch_key(&mut self.core.tree, *self.focused, key, self.key_ctx)
     }
@@ -354,7 +358,9 @@ impl<C: Component> RunnerDispatchOps<'_, '_, C> {
         let mut result = outcome_to_dispatch_result(outcome);
 
         if let Some(level) = self.key_ctx.dirty_override {
-            result.dirty = true;
+            // See the sibling `finish` in `app::input::runtime_dispatch`: `DirtyLevel::None` means
+            // handled *and* nothing to redraw.
+            result.dirty = !matches!(level, DirtyLevel::None);
             result.layout_dirty = matches!(level, DirtyLevel::LayoutOnly | DirtyLevel::Full);
         }
 

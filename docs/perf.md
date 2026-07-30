@@ -36,6 +36,40 @@ bookkeeping often need `Update::none()`, not `Update::full()`.
 rerunning `view()` would produce the same element tree. See
 [Components](components.md#the-update-return-type) for the complete update model.
 
+### Keep high-frequency content out of the element tree
+
+`Update::paint()` is only available when the frequent change does not alter what
+`view()` returns — which is a property of how the data reaches the widget, not
+just of the widget. Content passed *by value* forces a rebuild per change; a
+handle to app-owned state the widget reads for itself does not.
+
+`Terminal` shows both shapes: `snapshot` puts the screen's contents in the
+element, so each chunk of PTY output needs `Update::full()`, while
+[`screen`](widgets/terminal.md#live-screens-vs-snapshots) hands over the screen
+and lets the same output be a repaint. Verify the level you actually get with
+`TestBackend::update_level`, which reports what a message's `update()` asked for:
+
+```rust
+assert_eq!(backend.update_level(Msg::PtyOutput(bytes))?, UpdateLevel::Paint);
+```
+
+## Hover queries are priced per question, not per app
+
+Reading hover during `view()` — `has_hover_within`, `has_hover_within_key`,
+`hovered_node_id` — makes that view's output depend on where the pointer is, so
+the runtime must re-run it when the answer changes. It records *which* questions
+each view pass asked and rebuilds only when the pointer's new position changes
+one of those answers; a crossing no view asked about stays a repaint.
+
+So a hover-revealed affordance in one corner of the UI does not make pointer
+movement expensive everywhere else. Prefer `has_hover_within_key` over
+`hovered_node_id` when you only care about one region: reading the hovered node's
+identity makes *every* change of hovered node a change of answer.
+
+Widgets that resolve their own highlight from the pointer position — tab strips,
+lists, tables, draggable tab bars — need no view pass at all for their hover
+feedback, and report dirt only when the highlighted item changes.
+
 ## Let widgets own high-frequency state
 
 Avoid mirroring widget-owned state back into controlled props on every event. In

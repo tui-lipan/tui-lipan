@@ -80,6 +80,8 @@ The low-level terminal viewport widget. Use when you need custom PTY handling, m
 | Prop | Type | Description |
 |------|------|-------------|
 | `snapshot` | `TerminalRenderSnapshot` | Current screen snapshot |
+| `screen` | `TerminalScreenHandle` | Read a live app-owned screen instead of a snapshot, so output repaints rather than rebuilds ([below](#live-screens-vs-snapshots)) |
+| `decorations` | `Arc<[TerminalDecoration]>` | Overlays applied on top of a live screen's snapshot |
 | `show_cursor` | `bool` | Show the hardware caret |
 | `cursor_shape` | `CaretShape` | Hardware caret shape |
 | `cursor_blinking` | `bool` | Child-requested caret blinking preference |
@@ -119,6 +121,49 @@ Use `scrollbar_config` to configure layout variant, gap, and thumb for the verti
 the frame is drawn. The native runner may coalesce consecutive host resize events before the next
 reconciliation, so the callback is not a one-for-one notification of every host event; it reports
 the viewport that is actually reconciled.
+
+### Live screens vs snapshots
+
+`Terminal::snapshot` puts the screen's contents *in the element tree*, so every chunk of PTY output
+produces a different element and the app must answer it with `Update::full()` — re-running `view()`
+and layout for the whole window on each chunk. In an app hosting several terminals, one pane
+streaming makes every other pane pay for it.
+
+`Terminal::screen` avoids that by handing the widget the screen itself:
+
+```rust
+// The app owns the screen and feeds it output.
+let screen: Rc<RefCell<TerminalScreen>> = self.screen.clone();
+
+Terminal::new()
+    .screen(TerminalScreenHandle::new(screen))
+    // Overlays still come from the view, since they depend on app state, not on the child program.
+    .decorations(search_highlights)
+```
+
+The element no longer changes when the child program draws, so output becomes a repaint:
+
+```rust
+fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
+    match msg {
+        Msg::PtyOutput(bytes) => {
+            self.screen.borrow_mut().process_bytes(&bytes);
+            Update::paint()
+        }
+        // Chrome outside the screen — a title from OSC 0/2, a tab's activity dot — still needs
+        // `view()` to run.
+        Msg::PtyTitle(title) => { self.title = title; Update::layout() }
+    }
+}
+```
+
+The runtime pulls each live screen's current snapshot immediately before every draw, and skips
+screens that have not moved. `snapshot` still wins when both are set, so a caller that needs to hand
+over a doctored snapshot can; use `decorations` to overlay a live screen instead.
+
+Cursor visibility is the intersection of both sides: the child program's request from the screen,
+ANDed with `show_cursor`. A pane that has exited, or is wearing hint labels, sets `show_cursor(false)`
+and shows no caret regardless of what the child asked for.
 
 ---
 

@@ -884,6 +884,12 @@ impl<C: Component> AppRunner<C> {
         #[cfg(feature = "profiling-tracing")]
         let _draw_span = trace_span!("app.draw_current_tree").entered();
 
+        // Every render path funnels through here, so this is the one place a live terminal screen
+        // has to be read: a paint-only frame never re-runs `view()`, and the child program's output
+        // still has to reach the buffer.
+        #[cfg(feature = "terminal")]
+        self.core.tree.refresh_live_terminals();
+
         self.flush_inline_inserts(terminal)?;
         if !(draw_mode == DrawMode::PaintOnly && self.surface.is_inline()) {
             terminal.autoresize()?;

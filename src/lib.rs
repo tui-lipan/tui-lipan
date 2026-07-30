@@ -92,6 +92,7 @@ pub use crate::clipboard::{
 };
 pub use crate::core::component::{
     Breakpoint, Command, Component, Context, KeyUpdate, ScrollbarVisibility, TaskPolicy, Update,
+    UpdateLevel,
 };
 pub use crate::core::context_value::ContextValue;
 pub use crate::core::element::{Element, IntoElement, Key};

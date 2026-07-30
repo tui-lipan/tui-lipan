@@ -12,16 +12,40 @@ pub(crate) fn reconcile_terminal(
     rect: Rect,
     constraints: &LayoutConstraints,
 ) -> NodeId {
-    let lines = terminal
-        .color_lines
-        .clone()
-        .unwrap_or_else(|| terminal_lines(terminal.content.as_ref()));
+    // A live screen stands in for the snapshot the caller would otherwise have passed, so layout,
+    // the scrollbar and the scroll rules below all keep working off one code path. The pre-draw
+    // refresh then only has to catch output that arrived since this pass.
+    let live = terminal.screen.as_ref().map(|screen| {
+        let snapshot = screen.snapshot();
+        if terminal.decorations.is_empty() {
+            snapshot
+        } else {
+            snapshot.decorated(&terminal.decorations)
+        }
+    });
+    let lines = match &live {
+        Some(snapshot) => snapshot.color_lines.clone(),
+        None => terminal
+            .color_lines
+            .clone()
+            .unwrap_or_else(|| terminal_lines(terminal.content.as_ref())),
+    };
+    let total_scrollback_rows = live
+        .as_ref()
+        .map_or(terminal.total_scrollback_rows, |snapshot| {
+            snapshot.total_scrollback_rows
+        });
+    let snapshot_scrollback_offset = live
+        .as_ref()
+        .map_or(terminal.scrollback_offset, |snapshot| {
+            snapshot.scrollback_offset
+        });
 
     let avail_w = rect.w;
     let avail_h = rect.h;
     let mut rect = rect;
     let parent_v_edge = tree.parent_frame_integrated_v_edge(id).unwrap_or(false);
-    let scrollbar_visible = terminal.scrollbar && terminal.total_scrollback_rows > 0;
+    let scrollbar_visible = terminal.scrollbar && total_scrollback_rows > 0;
     let scrollbar_integrated = scrollbar_visible
         && matches!(terminal.scrollbar_variant, ScrollbarVariant::Integrated)
         && (terminal.border || parent_v_edge);
@@ -44,7 +68,7 @@ pub(crate) fn reconcile_terminal(
         terminal.scrollbar,
         terminal.scrollbar_variant,
         terminal.scrollbar_gap,
-        terminal.total_scrollback_rows,
+        total_scrollback_rows,
         parent_v_edge,
     );
     let viewport_rows = layout.content_rect.h as usize;
@@ -66,19 +90,19 @@ pub(crate) fn reconcile_terminal(
             old.viewport_cols,
         )
     } else {
-        (None, terminal.scrollback_offset, None, 0, 0)
+        (None, snapshot_scrollback_offset, None, 0, 0)
     };
 
     // Determine effective scrollback offset:
     // - Preserve an input-driven override while the parent snapshot is unchanged.
     // - A changed snapshot is authoritative and clears the override.
-    let snapshot_offset_changed = terminal.scrollback_offset != old_snapshot_scrollback_offset;
+    let snapshot_offset_changed = snapshot_scrollback_offset != old_snapshot_scrollback_offset;
     let scroll_override = if snapshot_offset_changed {
         None
     } else {
         old_scroll_override
     };
-    let scrollback_offset = scroll_override.unwrap_or(terminal.scrollback_offset);
+    let scrollback_offset = scroll_override.unwrap_or(snapshot_scrollback_offset);
     let selection = if terminal.selection_controlled {
         terminal.selection.clone()
     } else {
@@ -98,17 +122,28 @@ pub(crate) fn reconcile_terminal(
     node.children.clear();
     node.kind = NodeKind::Terminal(TerminalNode {
         lines,
-        cursor_row: terminal.cursor_row,
-        cursor_col: terminal.cursor_col,
-        cursor_visible: terminal.show_cursor,
-        cursor_shape: terminal.cursor_shape,
-        cursor_blinking: terminal.cursor_blinking,
+        cursor_row: live.as_ref().map_or(terminal.cursor_row, |s| s.cursor_row),
+        cursor_col: live.as_ref().map_or(terminal.cursor_col, |s| s.cursor_col),
+        // A live screen reports what the child program wants; `show_cursor` is what the app allows.
+        cursor_visible: live.as_ref().map_or(terminal.show_cursor, |s| {
+            s.cursor_visible && terminal.show_cursor
+        }),
+        cursor_shape: live
+            .as_ref()
+            .map_or(terminal.cursor_shape, |s| s.cursor_shape),
+        cursor_blinking: live
+            .as_ref()
+            .map_or(terminal.cursor_blinking, |s| s.cursor_blinking),
         caret_color: terminal.caret_color,
         selection,
         selection_controlled: terminal.selection_controlled,
         selection_style: terminal.selection_style,
-        mouse_mode: terminal.mouse_mode,
-        key_modes: terminal.key_modes,
+        mouse_mode: live.as_ref().map_or(terminal.mouse_mode, |s| s.mouse_mode),
+        key_modes: live.as_ref().map_or(terminal.key_modes, |s| s.key_modes),
+        screen: terminal.screen.clone(),
+        decorations: terminal.decorations.clone(),
+        live_sequence: live.as_ref().map(|s| s.sequence),
+        show_cursor_requested: terminal.show_cursor,
         paste_shortcut_behavior: terminal.paste_shortcut_behavior,
         on_selection: terminal.on_selection.clone(),
         on_mouse_forward: terminal.on_mouse_forward.clone(),
@@ -120,8 +155,8 @@ pub(crate) fn reconcile_terminal(
         border_style: terminal.border_style,
         padding: terminal.padding,
         scrollback_offset,
-        snapshot_scrollback_offset: terminal.scrollback_offset,
-        total_scrollback_rows: terminal.total_scrollback_rows,
+        snapshot_scrollback_offset,
+        total_scrollback_rows,
         viewport_rows,
         viewport_cols,
         scroll_wheel: terminal.scroll_wheel,

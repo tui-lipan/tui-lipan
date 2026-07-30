@@ -74,10 +74,6 @@ impl MemoDependencies {
             MemoDependency::HostTerminalColors => self.host_terminal_colors = true,
         }
     }
-
-    pub(crate) fn depends_on_hover(&self) -> bool {
-        self.hover
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

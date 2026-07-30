@@ -259,11 +259,25 @@ impl Default for AnimationState {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HoverPaintTarget {
+    DraggableTabBar(crate::widgets::draggable_tab_bar::DraggableTabHitTarget),
+    TextArea {
+        sentinel_byte: Option<usize>,
+        diff_separator_source_line: Option<usize>,
+    },
+    DocumentViewDiffSeparator {
+        source_line: usize,
+    },
+}
+
 #[derive(Default)]
 pub(crate) struct MouseTrackingState {
     pub hovered: Option<NodeId>,
     /// For List/Table/Tabs: track which item is hovered to avoid re-renders on same item.
     pub hovered_item_index: Option<usize>,
+    /// Richer renderer-level hover target for widgets where an item index is insufficient.
+    pub hover_paint_target: Option<HoverPaintTarget>,
     /// List/Table nodes where `item_hover_style` is suppressed until the mouse moves.
     pub suppress_pointer_item_hover_nodes: std::collections::HashSet<NodeId>,
     /// Nodes whose row selection changed from a click this frame (not keyboard/programmatic).

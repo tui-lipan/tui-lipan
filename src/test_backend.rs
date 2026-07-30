@@ -347,6 +347,17 @@ where
         self.pump()
     }
 
+    /// Route one message straight to `update()` and report the refresh level it asked for.
+    ///
+    /// Unlike [`dispatch`](Self::dispatch) this drains nothing and renders nothing: it answers "what
+    /// would this message cost?" rather than "what did it do". Worth asserting on for messages that
+    /// arrive per keystroke or per chunk of streamed output, where [`UpdateLevel::Paint`] versus
+    /// [`UpdateLevel::Full`] is the difference between a repaint and rebuilding the whole window.
+    pub fn update_level(&mut self, msg: C::Message) -> Result<crate::UpdateLevel> {
+        self.core
+            .update_from_boxed(crate::callback::ScopeId(1), Box::new(msg))
+    }
+
     /// Inject a key event through the same dispatch pipeline as the real runner.
     ///
     /// 1. Dispatches to the focused widget via `keyboard::dispatch_key`
@@ -760,8 +771,21 @@ where
         }
     }
 
+    /// Pull the current snapshot into every terminal reading a live screen, as the runtime does
+    /// before each draw.
+    ///
+    /// Call this before [`capture_frame`](Self::capture_frame) to model a paint-only frame: no
+    /// `view()`, no layout, just the child program's new output reaching the buffer. Returns whether
+    /// any live screen had moved.
+    #[cfg(feature = "terminal")]
+    pub fn refresh_live_terminals(&mut self) -> bool {
+        self.core.tree.refresh_live_terminals()
+    }
+
     /// Recompute the current `Element` tree and layout.
     pub fn render(&mut self) {
+        #[cfg(feature = "terminal")]
+        self.core.tree.refresh_live_terminals();
         self.drain_copy_feedback_requests();
         let bounds = self.viewport;
         self.core.render_element(
@@ -1148,7 +1172,11 @@ impl<C: Component> TestBackendDispatchOps<'_, C> {
             && self.focused_is_terminal(id)
         {
             use crate::app::input::handlers::terminal::forward_key;
-            return forward_key(&mut self.core.tree, id, key);
+            let forward = forward_key(&mut self.core.tree, id, key);
+            if let Some(level) = forward.dirty_override() {
+                self.key_ctx.dirty_override = Some(level);
+            }
+            return forward.handled;
         }
         keyboard::dispatch_key(&mut self.core.tree, *self.focused, key, self.key_ctx)
     }
@@ -5461,7 +5489,8 @@ mod tests {
     #[test]
     fn tooltip_opens_on_hover_without_capturing_background_input() {
         let mut backend = TestBackend::new(TooltipHoverRoot);
-        assert!(backend.core.has_hover_view_dependencies());
+        // The tooltip reads hover through `has_hover_within_key`, so reaching its trigger is a
+        // change the view has to see. Opening below is what proves that path stayed connected.
 
         backend
             .send_mouse(MouseEvent {

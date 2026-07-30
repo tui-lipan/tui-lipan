@@ -32,7 +32,7 @@ pub use pty::TerminalPtyHandoff;
 pub use pty::{TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent};
 pub use screen::{
     SemanticMark, SemanticMarkKind, TerminalColorPalette, TerminalDecoration,
-    TerminalRenderSnapshot, TerminalScreen, TerminalViewport,
+    TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle, TerminalViewport,
 };
 
 pub(crate) use layout::{measure_terminal, terminal_content_layout, terminal_mouse_content_rect};
@@ -60,6 +60,8 @@ impl Default for Terminal {
             caret_color: None,
             color_lines: None,
             color_cache_key: 0,
+            screen: None,
+            decorations: Arc::from([] as [TerminalDecoration; 0]),
             scrollback_offset: 0,
             total_scrollback_rows: 0,
             mouse_mode: MouseModeState::default(),
@@ -160,6 +162,33 @@ impl Terminal {
     pub fn color_lines(mut self, color_lines: Arc<[Vec<Span>]>, cache_key: u64) -> Self {
         self.color_lines = Some(color_lines);
         self.color_cache_key = cache_key;
+        self
+    }
+
+    /// Read a live [`TerminalScreen`] instead of being handed a snapshot.
+    ///
+    /// Prefer this whenever the app owns the screen and feeds it output: the element stops carrying
+    /// the screen's contents, so output that used to force a `view()` + layout pass can be answered
+    /// with [`Update::paint`]. The runtime pulls the current snapshot immediately before each draw.
+    ///
+    /// [`snapshot`](Self::snapshot) still wins if both are set, so a caller that needs to hand over
+    /// a doctored snapshot can. To overlay a live screen instead, use
+    /// [`decorations`](Self::decorations).
+    ///
+    /// [`TerminalScreen`]: crate::widgets::TerminalScreen
+    /// [`Update::paint`]: crate::Update::paint
+    pub fn screen(mut self, screen: impl Into<TerminalScreenHandle>) -> Self {
+        self.screen = Some(screen.into());
+        self
+    }
+
+    /// Overlay decorations on the live screen's snapshot (search hits, hint labels).
+    ///
+    /// Applied on the way to the node, so they survive the paint-only refresh a live screen enables.
+    /// Ignored unless [`screen`](Self::screen) is set; a caller passing a snapshot applies
+    /// [`TerminalRenderSnapshot::decorated`] itself.
+    pub fn decorations(mut self, decorations: impl Into<Arc<[TerminalDecoration]>>) -> Self {
+        self.decorations = decorations.into();
         self
     }
 

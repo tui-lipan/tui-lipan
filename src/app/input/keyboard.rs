@@ -412,9 +412,7 @@ pub(crate) fn dispatch_key(
         }
         handlers::InteractiveTag::TextArea => handlers::text_area::handle_key(tree, id, key, ctx),
         #[cfg(feature = "terminal")]
-        handlers::InteractiveTag::Terminal => {
-            handlers::terminal::handle_key(tree, id, key, ctx.clipboard, ctx.clipboard_config)
-        }
+        handlers::InteractiveTag::Terminal => handlers::terminal::handle_key(tree, id, key, ctx),
         handlers::InteractiveTag::PanView => handlers::pan_view::handle_key(tree, id, &key),
         handlers::InteractiveTag::ScrollView => handlers::scroll_view::handle_key(tree, id, &key),
         handlers::InteractiveTag::Tabs | handlers::InteractiveTag::DraggableTabBar => {

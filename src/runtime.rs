@@ -655,9 +655,18 @@ where
         // note_kind_set() during reconciliation - no DFS needed.
     }
 
-    pub(crate) fn has_hover_view_dependencies(&self) -> bool {
-        self.root_memo_deps.dependencies.depends_on_hover()
-            || self.components.has_hover_view_dependencies()
+    /// Whether moving hover to `hovered` invalidates the element tree currently on screen.
+    ///
+    /// [`has_hover_view_dependencies`](Self::has_hover_view_dependencies) only says that *some* view
+    /// reads hover, which is far too blunt to price a pointer movement: one keyed
+    /// `has_hover_within_key` call promotes every crossing anywhere in the window to a full rebuild.
+    /// This asks the question that actually matters — would any hover question the last view asked
+    /// now answer differently — so a crossing the views do not care about stays a repaint.
+    pub(crate) fn hover_change_needs_view(&self, hovered: Option<NodeId>) -> bool {
+        self.ctx
+            .env()
+            .hover
+            .change_affects_queries(&self.tree, hovered)
     }
 
     pub(crate) fn reconcile_cached_element(

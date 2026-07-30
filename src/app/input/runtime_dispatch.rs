@@ -198,7 +198,11 @@ impl RuntimeDispatchOps<'_, '_> {
         if let Some(id) = self.env.focused.filter(|id| self.env.tree.is_valid(*id))
             && is_terminal(self.env.tree, id)
         {
-            return forward_key(self.env.tree, id, key);
+            let forward = forward_key(self.env.tree, id, key);
+            if let Some(level) = forward.dirty_override() {
+                self.env.key_ctx.dirty_override = Some(level);
+            }
+            return forward.handled;
         }
         keyboard::dispatch_key(self.env.tree, *self.env.focused, key, self.env.key_ctx)
     }
@@ -207,7 +211,10 @@ impl RuntimeDispatchOps<'_, '_> {
         let mut result = outcome_to_dispatch_result(outcome);
 
         if let Some(level) = self.env.key_ctx.dirty_override {
-            result.dirty = true;
+            // `DirtyLevel::None` is a real answer, not an absent one: the key was handled and
+            // nothing needs redrawing. Reporting dirty anyway would contradict the override the
+            // event loop is about to honor.
+            result.dirty = !matches!(level, DirtyLevel::None);
             result.layout_dirty = matches!(level, DirtyLevel::LayoutOnly | DirtyLevel::Full);
         }
 
