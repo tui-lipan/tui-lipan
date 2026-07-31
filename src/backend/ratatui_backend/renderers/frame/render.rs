@@ -25,6 +25,10 @@ struct BorderCellDraw<'a> {
     clip: &'a ClipBounds,
     buf_bounds: &'a ClipBounds,
     border_merge_mode: BorderMergeMode,
+    /// When true, Fuzzy/Exact may keep non-box glyphs (neighbor border titles) on this seam.
+    /// Computed from the buffer *before* this frame paints its own border, so overlaying a
+    /// modal/frame over ordinary content still replaces those cells.
+    preserve_titles: bool,
 }
 
 struct CapDraw<'a> {
@@ -501,7 +505,10 @@ fn draw_border_cell(buf: &mut Buffer, x: i32, y: i32, symbol: &str, draw: &Borde
     if !draw.clip.contains(x, y) || !draw.buf_bounds.contains(x, y) {
         return;
     }
-    let Some(existing) = buf.cell((x as u16, y as u16)).map(|cell| cell.symbol().to_owned()) else {
+    let Some(existing) = buf
+        .cell((x as u16, y as u16))
+        .map(|cell| cell.symbol().to_owned())
+    else {
         return;
     };
 
@@ -520,9 +527,11 @@ fn draw_border_cell(buf: &mut Buffer, x: i32, y: i32, symbol: &str, draw: &Borde
 
     // Fuzzy/Exact is for composing box-drawing seams. A neighbor's border title must survive an
     // overlapping later edge: keep non-box glyphs, and keep spaces that sit next to that text
-    // (the `icon  title` gap). Plain backdrop spaces - even when a parent painted a fg - still
-    // accept the border. Replace mode still overwrites so occluding frames win.
-    if draw.border_merge_mode != BorderMergeMode::Replace
+    // (the `icon  title` gap). Only when this seam already had box art before we painted - plain
+    // content under a modal/frame border is still replaced. Backdrop spaces still accept borders.
+    // Replace mode still overwrites so occluding frames win.
+    if draw.preserve_titles
+        && draw.border_merge_mode != BorderMergeMode::Replace
         && should_preserve_border_content(buf, x, y, &existing)
     {
         return;
@@ -557,6 +566,40 @@ fn neighbor_is_border_title_content(buf: &Buffer, x: i32, y: i32) -> bool {
     !sym.is_empty() && sym != " " && !is_box_drawing_symbol(sym)
 }
 
+fn row_has_box_drawing(buf: &Buffer, y: i32, x0: i32, x1: i32) -> bool {
+    if y < 0 {
+        return false;
+    }
+    let lo = x0.min(x1).max(0);
+    let hi = x0.max(x1).max(0);
+    for x in lo..=hi {
+        if buf
+            .cell((x as u16, y as u16))
+            .is_some_and(|cell| is_box_drawing_symbol(cell.symbol()))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn col_has_box_drawing(buf: &Buffer, x: i32, y0: i32, y1: i32) -> bool {
+    if x < 0 {
+        return false;
+    }
+    let lo = y0.min(y1).max(0);
+    let hi = y0.max(y1).max(0);
+    for y in lo..=hi {
+        if buf
+            .cell((x as u16, y as u16))
+            .is_some_and(|cell| is_box_drawing_symbol(cell.symbol()))
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn draw_symbol_rect(
     buf: &mut Buffer,
     rect: Rect,
@@ -582,6 +625,7 @@ fn draw_symbol_rect(
         clip,
         buf_bounds,
         border_merge_mode,
+        preserve_titles: false,
     };
 
     for cy in start_y..=end_y {
@@ -976,35 +1020,70 @@ fn render_border_frame(
         .unwrap_or_else(ClipBounds::unbounded);
     let buf_bounds = ClipBounds::from_rrect(buf.area);
     let border_merge_mode = props.border_merge_mode;
-    let border_draw = BorderCellDraw {
+    // Snapshot before we paint: only preserve titles on seams that already carry a neighbor's
+    // border. Detecting after our own corners land would also "preserve" plain underlay text.
+    let top_preserve = row_has_box_drawing(buf, top, left, right);
+    let bottom_preserve = row_has_box_drawing(buf, bottom, left, right);
+    let left_preserve = col_has_box_drawing(buf, left, top, bottom);
+    let right_preserve = col_has_box_drawing(buf, right, top, bottom);
+    let border_draw = |preserve_titles| BorderCellDraw {
         style: border_rstyle,
         clip: &clip,
         buf_bounds: &buf_bounds,
         border_merge_mode,
+        preserve_titles,
     };
 
-    draw_border_cell(buf, left, top, set.top_left, &border_draw);
-    draw_border_cell(buf, right, top, set.top_right, &border_draw);
-    draw_border_cell(buf, left, bottom, set.bottom_left, &border_draw);
-    draw_border_cell(buf, right, bottom, set.bottom_right, &border_draw);
+    draw_border_cell(
+        buf,
+        left,
+        top,
+        set.top_left,
+        &border_draw(top_preserve || left_preserve),
+    );
+    draw_border_cell(
+        buf,
+        right,
+        top,
+        set.top_right,
+        &border_draw(top_preserve || right_preserve),
+    );
+    draw_border_cell(
+        buf,
+        left,
+        bottom,
+        set.bottom_left,
+        &border_draw(bottom_preserve || left_preserve),
+    );
+    draw_border_cell(
+        buf,
+        right,
+        bottom,
+        set.bottom_right,
+        &border_draw(bottom_preserve || right_preserve),
+    );
 
     let h_char = set.horizontal_top;
     let b_char = set.horizontal_bottom;
     let start_x = (left + 1).max(clip.min_x);
     let end_x = right.min(clip.max_x);
+    let top_draw = border_draw(top_preserve);
+    let bottom_draw = border_draw(bottom_preserve);
     for cx in start_x..end_x {
-        draw_border_cell(buf, cx, top, h_char, &border_draw);
-        draw_border_cell(buf, cx, bottom, b_char, &border_draw);
+        draw_border_cell(buf, cx, top, h_char, &top_draw);
+        draw_border_cell(buf, cx, bottom, b_char, &bottom_draw);
     }
 
     let start_y = (top + 1).max(clip.min_y);
     let end_y = bottom.min(clip.max_y);
+    let left_draw = border_draw(left_preserve);
+    let right_draw = border_draw(right_preserve);
     for cy in start_y..end_y {
         if props.border_edges.has_left() {
-            draw_border_cell(buf, left, cy, set.vertical_left, &border_draw);
+            draw_border_cell(buf, left, cy, set.vertical_left, &left_draw);
         }
         if props.border_edges.has_right() {
-            draw_border_cell(buf, right, cy, set.vertical_right, &border_draw);
+            draw_border_cell(buf, right, cy, set.vertical_right, &right_draw);
         }
     }
 
