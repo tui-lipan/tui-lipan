@@ -25,7 +25,6 @@ pub(crate) struct RenderedDivider {
 pub(crate) struct DividerRenderCtx {
     pub clip_rect: Option<Rect>,
     pub label_rect: Option<Rect>,
-    pub label_padding: u16,
 }
 
 pub(crate) fn render_divider(
@@ -39,7 +38,6 @@ pub(crate) fn render_divider(
     let DividerRenderCtx {
         clip_rect,
         label_rect,
-        label_padding,
     } = ctx;
     if rect.w == 0 || rect.h == 0 {
         return;
@@ -61,16 +59,11 @@ pub(crate) fn render_divider(
         return;
     }
 
-    let mut gap_rect = label_rect;
-    if let Some(gap) = &mut gap_rect {
-        let pad = label_padding as i16;
-        gap.x = gap.x.saturating_sub(pad);
-        gap.w = gap.w.saturating_add(label_padding.saturating_mul(2));
-        *gap = gap.intersection(&draw_rect);
-        if gap.is_empty() {
-            gap_rect = None;
-        }
-    }
+    // Only the label's own cells are cleared; padding insets the label but still shows the
+    // divider character, so a left inset of 1 yields `─title` rather than a blank.
+    let gap_rect = label_rect
+        .map(|gap| gap.intersection(&draw_rect))
+        .filter(|gap| !gap.is_empty());
 
     let buf = f.buffer_mut();
     let clip = clip_rect
@@ -149,7 +142,6 @@ pub(crate) fn render_divider_node(
         DividerRenderCtx {
             clip_rect: clip_bounds,
             label_rect,
-            label_padding: divider_node.label_padding,
         },
     );
 
@@ -211,14 +203,7 @@ pub(crate) fn rendered_divider(
             parent_id = parent.parent;
         }
     }
-    let label_gap_rect = divider_label_rect(state, node).map(|mut gap| {
-        let pad = divider.label_padding as i16;
-        gap.x = gap.x.saturating_sub(pad);
-        gap.w = gap
-            .w
-            .saturating_add(divider.label_padding.saturating_mul(2));
-        gap
-    });
+    let label_gap_rect = divider_label_rect(state, node);
 
     RenderedDivider {
         orientation: divider.orientation,
@@ -441,14 +426,7 @@ fn render_frame_junctions(
         }
         if !clip_rect.is_empty() {
             let clip = ClipBounds::from_rect(clip_rect);
-            let mut gap_rect = label_rect;
-            if let Some(gap) = &mut gap_rect {
-                let pad = divider_node.label_padding as i16;
-                gap.x = gap.x.saturating_sub(pad);
-                gap.w = gap
-                    .w
-                    .saturating_add(divider_node.label_padding.saturating_mul(2));
-            }
+            let gap_rect = label_rect;
 
             match divider_node.orientation {
                 crate::widgets::Orientation::Horizontal => {

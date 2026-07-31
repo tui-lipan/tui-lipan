@@ -59,8 +59,8 @@ pub fn reconcile_divider(ctx: &mut ReconcileCtx<'_>, args: DividerReconcile<'_>)
     if divider.orientation == Orientation::Horizontal
         && let Some(label) = divider.label.as_deref()
     {
-        let padding = divider.label_padding;
-        let max_label_w = rect.w.saturating_sub(padding.saturating_mul(2));
+        let (pad_left, pad_right) = divider.label_padding;
+        let max_label_w = rect.w.saturating_sub(pad_left.saturating_add(pad_right));
         if max_label_w > 0 && rect.h > 0 {
             let (min_label_w, _) = min_size_constrained(label, Some(max_label_w), Some(1));
             let label_w = match divider.label_alignment {
@@ -71,7 +71,7 @@ pub fn reconcile_divider(ctx: &mut ReconcileCtx<'_>, args: DividerReconcile<'_>)
             if label_w > 0 {
                 let label_x = match divider.label_alignment {
                     crate::style::Align::Start | crate::style::Align::Stretch => {
-                        rect.x.saturating_add(padding as i16)
+                        rect.x.saturating_add(pad_left as i16)
                     }
                     crate::style::Align::Center => rect
                         .x
@@ -79,7 +79,7 @@ pub fn reconcile_divider(ctx: &mut ReconcileCtx<'_>, args: DividerReconcile<'_>)
                     crate::style::Align::End => rect
                         .x
                         .saturating_add(rect.w.saturating_sub(label_w) as i16)
-                        .saturating_sub(padding as i16),
+                        .saturating_sub(pad_right as i16),
                 };
 
                 let child_rect = Rect {

@@ -755,7 +755,7 @@ T-junctions, and crossings. Custom `ch` glyphs keep last-write-wins rendering.
 | `ch` | `char` | Line glyph character |
 | `label` | `Element` | Label (horizontal only) |
 | `label_alignment` | `Align` | Label position along divider |
-| `label_padding` | `u16` | Padding around label |
+| `label_padding` / `label_padding_axes` | `u16` / `(u16, u16)` | Left/right inset of a horizontal label (default `1`). Inset cells still show the divider character - only the label itself clears the line - so a left inset of `1` yields `─title` rather than a blank. Use `label_padding_axes` when the sides should differ. |
 | `join_frame` | `bool` | Draw junction caps when inside a bordered Frame |
 
 ---
