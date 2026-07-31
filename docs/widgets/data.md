@@ -74,7 +74,8 @@ ListItem::new("Label")
 
 // Left gutter helpers. Spinner gutters animate with the app's spinner ticker.
 // Set List::gutter_gap(1) when the framework should provide label spacing.
-ListItem::new("Building").gutter(Spinner::new())
+// Use `.leading(1)` so a lone spinner lines up with text markers like `" ●"`.
+ListItem::new("Building").gutter(ListItemGutter::spinner(Spinner::new()).leading(1))
 ListItem::new("Changed").gutter(ListItemGutter::text("~ "))
 
 // Status helpers render inside the existing selection/unselected symbol column.
@@ -100,8 +101,11 @@ that alignment when needed.
 `ListItem::gutter(...)` is the canonical row-local leading adornment: use it for
 per-row markers, icons, spinners, or badges that need their own column before the
 label. Gutters reserve a consistent left gutter column across participating rows
-so labels stay aligned even when only some rows have gutter content. The default
-gap between the gutter and label is `0`; opt into spacing with `.gutter_gap(n)`.
+so labels stay aligned even when only some rows have gutter content. Text markers
+usually bake a leading indent into the string (for example `" ●"`); spinner gutters
+are only as wide as the frame, so the renderer lead-pads them inside that reserved
+column to keep the glyph on the same cell as those markers. The default gap between
+the gutter and label is `0`; opt into spacing with `.gutter_gap(n)`.
 By default, only selectable item rows participate, keeping headers left-aligned;
 use `.gutter_for_non_selectable(true)` when headers/spacers should reserve the
 same gutter width.
