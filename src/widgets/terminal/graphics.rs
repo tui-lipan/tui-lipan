@@ -48,14 +48,18 @@ use image::DynamicImage;
 
 use super::screen::TerminalCellSize;
 
-/// Largest single `APC` sequence buffered before it is abandoned.
-///
-/// The protocol caps one escape's payload at 4096 base64 bytes, so this only trips on a child
-/// that is not speaking the protocol at all.
-const MAX_APC_BYTES: usize = 64 * 1024;
-
 /// Largest payload accumulated across `m=1` chunks, before decoding.
 const MAX_TRANSMIT_BYTES: usize = 32 * 1024 * 1024;
+
+/// Largest single `APC` sequence buffered before it is abandoned.
+///
+/// The protocol tells senders to chunk at 4096 base64 bytes, but this is deliberately not held to
+/// that: plenty of senders emit raw pixels in one escape, which clears 64 KiB with a picture only
+/// a few hundred cells wide, and a dropped transmission is indistinguishable - from the sender's
+/// side - from a terminal with no graphics support at all. What this bound is actually for is
+/// stopping an *unterminated* `APC` from growing without end, and the accumulated-payload cap
+/// already decides how much a transmission may total, so matching it costs nothing.
+const MAX_APC_BYTES: usize = MAX_TRANSMIT_BYTES;
 
 /// Default decoded-pixel budget kept per screen, across every stored image.
 ///
@@ -1984,6 +1988,31 @@ mod tests {
         );
         // The placement is sized from the crop, not from the whole image.
         assert_eq!((visible[0].rows, visible[0].cols), (1, 1));
+    }
+
+    #[test]
+    fn a_large_unchunked_transmission_is_not_dropped() {
+        // The protocol tells senders to chunk at 4096 base64 bytes, but plenty do not - anything
+        // emitting raw pixels in one escape clears 64 KiB with a picture barely 300 cells wide.
+        // Dropping those on the floor is indistinguishable, from the sender's side, from the
+        // terminal not supporting graphics at all.
+        let mut graphics = TerminalGraphics::default();
+        let mut scanner = GraphicsScanner::default();
+        let (text, commands) = scan_all(&mut scanner, &rgb_command("a=T,i=1", 280, 160));
+
+        assert!(
+            text.is_empty(),
+            "the escape must not leak into the grid stream"
+        );
+        assert_eq!(
+            commands.len(),
+            1,
+            "a large single-escape transmit must survive scanning"
+        );
+        assert_eq!(
+            graphics.apply(commands[0].clone(), context()).advance,
+            Some((8, 28))
+        );
     }
 
     #[test]

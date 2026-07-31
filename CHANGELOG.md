@@ -28,6 +28,10 @@ While the crate is on `0.x.y`:
   `TerminalRenderSnapshot::images` (breaking: the struct gained a field). Unsupported requests —
   file/shared-memory transmission, the protocol's own animation frames — are answered with the
   protocol's own `ENOTSUPP` report. See [`docs/widgets/terminal-images.md`](docs/widgets/terminal-images.md).
+- Accept a graphics transmission sent as one oversized escape rather than the chunks the protocol
+  asks for. Raw pixels in a single escape clear 64 KiB with a picture only a few hundred cells
+  wide, and the old per-escape bound dropped those silently — indistinguishable, from the sender's
+  side, from a terminal with no graphics support at all.
 - Add `TerminalCellSize`, `host_cell_size()`, `TerminalScreen::set_cell_size`, and
   `TerminalPtyConfig::cell_size` / `TerminalPty::resize_with_cell_size`. The PTY now reports pixel
   dimensions in `TIOCGWINSZ` instead of zeroes, and `CSI 14 t` (text-area size in pixels) is

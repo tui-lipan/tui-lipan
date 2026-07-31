@@ -153,17 +153,37 @@ struct Rgb {
 }
 
 /// Wrap raw pixels in a transmit-and-display command, the way `icat` does.
+///
+/// Chunked at the 4096 base64 bytes the protocol asks for: only the first chunk carries the keys,
+/// every one but the last sets `m=1`, and the terminal reassembles them before decoding. A picture
+/// this size is several chunks, which is exactly what a real sender would produce.
 fn transmit_and_display(id: u32, image: &Rgb) -> Vec<u8> {
+    const CHUNK: usize = 4096;
+
     let Rgb {
         width,
         height,
         data,
     } = image;
-    format!(
-        "\x1b_Ga=T,f=24,s={width},v={height},t=d,i={id};{}\x1b\\",
-        BASE64.encode(data)
-    )
-    .into_bytes()
+    let payload = BASE64.encode(data);
+    let mut out = Vec::new();
+
+    let chunks: Vec<&str> = payload
+        .as_bytes()
+        .chunks(CHUNK)
+        .map(|chunk| std::str::from_utf8(chunk).expect("base64 is ascii"))
+        .collect();
+
+    for (index, chunk) in chunks.iter().enumerate() {
+        let more = u8::from(index + 1 < chunks.len());
+        let keys = if index == 0 {
+            format!("a=T,f=24,s={width},v={height},t=d,i={id},")
+        } else {
+            String::new()
+        };
+        out.extend_from_slice(format!("\x1b_G{keys}m={more};{chunk}\x1b\\").as_bytes());
+    }
+    out
 }
 
 fn canvas(cols: u32, rows: u32, cell: TerminalCellSize) -> Rgb {
