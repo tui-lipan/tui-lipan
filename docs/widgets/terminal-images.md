@@ -17,7 +17,7 @@ cargo run --example terminal_images --features terminal-images
 ## It does not depend on the host terminal
 
 The child's escapes are never forwarded to the host. They are decoded into pixels and re-encoded
-through the same path the [`Image`](image.md) widget uses, so the host renders them with whatever
+through the same path the [`Image`](display.md#image-requires-feature-image) widget uses, so the host renders them with whatever
 *it* supports — Kitty, iTerm2, sixel, or half-blocks. A pane in a plain `xterm` shows pictures.
 
 Decoding rather than forwarding is also what makes the rest work: image ids from two panes cannot
