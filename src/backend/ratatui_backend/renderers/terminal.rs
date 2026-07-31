@@ -316,6 +316,15 @@ pub(crate) fn render_terminal(
     let content_rrect = to_ratatui_rect(content_rect);
     let effective = content_rrect.intersection(rrect);
 
+    let projected = node.selection.as_ref().and_then(|sel| {
+        crate::widgets::to_viewport(
+            sel,
+            node.scrollback_offset,
+            node.total_scrollback_rows,
+            content_rect.h as usize,
+        )
+    });
+
     let mut rendered_content = false;
     if content_rect.w > 0 && content_rect.h > 0 && effective.width > 0 && effective.height > 0 {
         let dx = (effective.x as i32)
@@ -330,7 +339,7 @@ pub(crate) fn render_terminal(
         let flash_selection = flash_range.as_ref().map(|range| range.selection.clone());
         let paint_selection = match &flash_selection {
             Some(_) => &flash_selection,
-            None => &node.selection,
+            None => &projected,
         };
         let lines: Vec<Line<'_>> = (0..content_rect.h as usize)
             .map(|row| {
@@ -472,7 +481,7 @@ pub(crate) fn render_terminal(
     //
     // Only show cursor when at live view (scrollback_offset == 0).
     // Hide cursor when there's an active selection.
-    let has_selection = node.selection.as_ref().is_some_and(|sel| !sel.is_empty());
+    let has_selection = projected.as_ref().is_some_and(|sel| !sel.is_empty());
     let cursor_lit = !node.cursor_blinking || blink_visible;
     if rendered_content
         && is_focused

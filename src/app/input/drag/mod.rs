@@ -352,7 +352,7 @@ pub(crate) struct TerminalDrag {
     /// The node being dragged.
     pub id: NodeId,
     /// The anchor position (where the drag started).
-    pub anchor: crate::utils::GridPos,
+    pub anchor: crate::widgets::TerminalPos,
 }
 
 /// Tracks click state for double/triple-click detection.

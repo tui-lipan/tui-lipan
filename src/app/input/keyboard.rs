@@ -14,7 +14,9 @@ use crate::ui::capabilities::{
     TextAreaClipboardParams, selection_range,
 };
 #[cfg(feature = "terminal")]
-use crate::widgets::internal::terminal_selection_text;
+use crate::utils::SelectionEnd;
+#[cfg(feature = "terminal")]
+use crate::widgets::internal::terminal_node_selection_text;
 
 fn selection_clipboard_cut_requested(keymap: &Keymap, key: KeyEvent) -> Option<bool> {
     let mut has_clipboard_shortcut = false;
@@ -338,7 +340,8 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
                 else {
                     continue;
                 };
-                let text = terminal_selection_text(node.lines.as_ref(), selection);
+                let text =
+                    terminal_node_selection_text(node, selection, SelectionEnd::Exclusive, false);
                 let mut context = ReadOnlyClipboardContext::new(
                     text.as_str(),
                     Some((0, text.len())),
@@ -1372,11 +1375,11 @@ mod tests {
         if let NodeKind::Terminal(term) = &mut tree.node_mut(terminal_id).kind {
             term.lines = vec![vec![crate::style::Span::new("hello")]].into();
             let mut selection =
-                crate::utils::selection::GridSelection::new(crate::utils::selection::GridPos {
-                    row: 0,
+                crate::widgets::TerminalSelection::new(crate::widgets::TerminalPos {
+                    line: 0,
                     col: 0,
                 });
-            selection.extend_to(crate::utils::selection::GridPos { row: 0, col: 5 });
+            selection.extend_to(crate::widgets::TerminalPos { line: 0, col: 5 });
             term.selection = Some(selection);
         }
 

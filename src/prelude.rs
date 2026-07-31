@@ -229,15 +229,16 @@ pub use crate::widgets::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
     CopyModeAction, CopyModeGrid, KittyKeyboardFlags, ManagedTerminal, ManagedTerminalProps,
-    ManagedTerminalStatus, MouseEncoding, MouseMode, MouseModeState, SemanticMark,
-    SemanticMarkKind, Terminal, TerminalBuffer, TerminalCellSize, TerminalColorPalette,
-    TerminalCommandPhase, TerminalCopyMode, TerminalDecoration, TerminalInputEvent,
-    TerminalInputKind, TerminalKeyModes, TerminalPasteShortcutBehavior, TerminalPty,
-    TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen,
-    TerminalScreenHandle, TerminalSelection, TerminalSelectionEvent, TerminalSemanticEvent,
-    TerminalSemanticState, TerminalViewport, TerminalWorkingDirectory,
-    TerminalWorkingDirectorySource, encode_paste, focus_sequences, key_event_to_bytes,
-    mouse_event_to_bytes, paste_sequences, terminal_selection_text,
+    ManagedTerminalStatus, MouseEncoding, MouseMode, MouseModeState, ScrollbackLineage,
+    SemanticMark, SemanticMarkKind, Terminal, TerminalBuffer, TerminalCellSize,
+    TerminalColorPalette, TerminalCommandPhase, TerminalCopyMode, TerminalDecoration,
+    TerminalInputEvent, TerminalInputKind, TerminalKeyModes, TerminalPasteShortcutBehavior,
+    TerminalPos, TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent,
+    TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle, TerminalSelection,
+    TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState, TerminalViewport,
+    TerminalWorkingDirectory, TerminalWorkingDirectorySource, absolute_line, encode_paste,
+    focus_sequences, from_viewport, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
+    terminal_selection_text, to_viewport, viewport_row,
 };
 #[cfg(feature = "terminal-images")]
 pub use crate::widgets::{TerminalImage, TerminalImageCrop, TerminalImagePlacement};

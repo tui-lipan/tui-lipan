@@ -3,17 +3,19 @@ use crate::app::input::scrollbar;
 use crate::core::component::Component;
 use crate::core::node::{NodeId, NodeKind, ScrollbarAxis};
 #[cfg(feature = "terminal")]
-use crate::utils::{GridPos, GridSelection};
+use crate::utils::SelectionEnd;
 use crate::widgets::internal::{ScrollAction, apply_scroll_action, scroll_metrics};
 
 #[cfg(feature = "terminal")]
 use crate::widgets::internal::{
-    apply_terminal_selection_input, terminal_mouse_content_rect, terminal_selection_text,
+    apply_terminal_selection_input, terminal_mouse_content_rect, terminal_node_selection_text,
 };
 use crate::widgets::{
     DocumentSelectEvent, DragCancelEvent, DragOverEvent, InputEvent, ProgressEvent, ScrollEvent,
     ScrollMetrics, TextAreaEvent, calc_scroll_view_window, normalize_input_offset,
 };
+#[cfg(feature = "terminal")]
+use crate::widgets::{TerminalPos, TerminalSelection, absolute_line};
 
 use super::{ActiveDrag, AppRunner};
 
@@ -31,6 +33,14 @@ type ScrollViewDragAutoscrollTarget = (
 );
 
 type TextAreaDragAutoscrollTarget = (
+    usize,
+    ScrollMetrics,
+    Option<crate::callback::Callback<usize>>,
+    Option<crate::callback::Callback<ScrollEvent>>,
+);
+
+#[cfg(feature = "terminal")]
+type TerminalDragAutoscrollTarget = (
     usize,
     ScrollMetrics,
     Option<crate::callback::Callback<usize>>,
@@ -429,6 +439,35 @@ impl<C: Component> AppRunner<C> {
         ))
     }
 
+    #[cfg(feature = "terminal")]
+    fn terminal_edge_autoscroll_target_for(
+        &self,
+        id: NodeId,
+        y: u16,
+    ) -> Option<TerminalDragAutoscrollTarget> {
+        if !self.core.tree.is_valid(id) {
+            return None;
+        }
+        let content_rect = terminal_mouse_content_rect(&self.core.tree, id)?;
+        let action = drag_edge_autoscroll_action(
+            content_rect.y,
+            content_rect.h,
+            y,
+            TEXT_SELECTION_DRAG_AUTOSCROLL_EDGE_MARGIN_ROWS,
+        )?;
+        let NodeKind::Terminal(term) = &self.core.tree.node(id).kind else {
+            return None;
+        };
+        let (next, metrics) =
+            crate::app::input::handlers::terminal::terminal_scroll_target(term, action)?;
+        Some((
+            next,
+            metrics,
+            term.on_scroll_to.clone(),
+            term.on_scroll.clone(),
+        ))
+    }
+
     fn document_view_edge_autoscroll_target_for(
         &self,
         id: NodeId,
@@ -602,6 +641,30 @@ impl<C: Component> AppRunner<C> {
         true
     }
 
+    #[cfg(feature = "terminal")]
+    fn maybe_autoscroll_terminal_drag_edge(&mut self, id: NodeId, y: u16) -> bool {
+        let Some((next, metrics, on_scroll_to, on_scroll)) =
+            self.terminal_edge_autoscroll_target_for(id, y)
+        else {
+            return false;
+        };
+        if let NodeKind::Terminal(term) = &mut self.core.tree.node_mut(id).kind {
+            term.scrollback_offset = next;
+            term.scroll_override = Some(next);
+        } else {
+            return false;
+        }
+        if let Some(cb) = on_scroll_to {
+            cb.emit(next);
+        } else if let Some(cb) = on_scroll {
+            cb.emit(ScrollEvent {
+                offset: next,
+                metrics,
+            });
+        }
+        true
+    }
+
     fn maybe_autoscroll_document_view_drag_edge(&mut self, id: NodeId, y: u16) -> bool {
         let Some((next, metrics, on_scroll)) = self.document_view_edge_autoscroll_target_for(id, y)
         else {
@@ -660,6 +723,13 @@ impl<C: Component> AppRunner<C> {
                 self.scroll_view_edge_autoscroll_target_for(sv_id, y)
                     .is_some()
             }),
+            #[cfg(feature = "terminal")]
+            ActiveDrag::Terminal(drag) => {
+                self.core.tree.is_valid(drag.id)
+                    && self
+                        .terminal_edge_autoscroll_target_for(drag.id, y)
+                        .is_some()
+            }
             _ => false,
         }
     }
@@ -685,6 +755,10 @@ impl<C: Component> AppRunner<C> {
             }
             ActiveDrag::HexArea(drag) if self.core.tree.is_valid(drag.id) => {
                 return self.handle_hex_area_drag(x, y, drag.id, drag.anchor);
+            }
+            #[cfg(feature = "terminal")]
+            ActiveDrag::Terminal(drag) if self.core.tree.is_valid(drag.id) => {
+                return self.handle_terminal_drag(x, y, *drag);
             }
             _ => return false,
         };
@@ -758,6 +832,19 @@ impl<C: Component> AppRunner<C> {
                 } else {
                     false
                 }
+            }
+            #[cfg(feature = "terminal")]
+            ActiveDrag::Terminal(drag) => {
+                let id = drag.id;
+                if !self.core.tree.is_valid(id) {
+                    return false;
+                }
+                let autoscrolled = self.maybe_autoscroll_terminal_drag_edge(id, y);
+                self.drag.last_autoscroll_tick = Some(web_time::Instant::now());
+                if !autoscrolled {
+                    return false;
+                }
+                self.refresh_active_selection_drag_at(x, y) || autoscrolled
             }
             _ => false,
         }
@@ -1456,7 +1543,7 @@ impl<C: Component> AppRunner<C> {
             "[terminal_drag] called x={} y={} anchor=({},{})",
             x,
             y,
-            drag.anchor.row,
+            drag.anchor.line,
             drag.anchor.col
         );
 
@@ -1465,7 +1552,7 @@ impl<C: Component> AppRunner<C> {
             return false;
         }
 
-        let (content_rect, selection, lines, on_selection) = {
+        let (content_rect, selection, on_selection, scrollback_offset, total_scrollback_rows) = {
             let node = self.core.tree.node(drag.id);
             let NodeKind::Terminal(term) = &node.kind else {
                 crate::debug::internal_log!("[terminal_drag] not a terminal node");
@@ -1479,9 +1566,10 @@ impl<C: Component> AppRunner<C> {
 
             (
                 content_rect,
-                term.selection.clone(),
-                term.lines.clone(),
+                term.selection,
                 term.on_selection.clone(),
+                term.scrollback_offset,
+                term.total_scrollback_rows,
             )
         };
 
@@ -1507,7 +1595,14 @@ impl<C: Component> AppRunner<C> {
             content_rect.y.saturating_add(content_rect.h as i16 - 1),
         );
 
-        let grid_col = (clamped_x - content_rect.x) as usize;
+        let y_i16 = y as i16;
+        let grid_col = if y_i16 < content_rect.y {
+            0
+        } else if y_i16 >= content_rect.y.saturating_add(content_rect.h as i16) {
+            content_rect.w as usize
+        } else {
+            (clamped_x - content_rect.x) as usize
+        };
         let grid_row = (clamped_y - content_rect.y) as usize;
 
         crate::debug::internal_log!(
@@ -1516,11 +1611,14 @@ impl<C: Component> AppRunner<C> {
             grid_row
         );
 
-        let mut next = GridSelection::new(drag.anchor);
-        next.extend_to(GridPos {
-            row: grid_row,
-            col: grid_col,
-        });
+        let anchor = selection.as_ref().map_or(drag.anchor, |sel| sel.anchor);
+        let next = TerminalSelection {
+            anchor,
+            cursor: TerminalPos {
+                line: absolute_line(total_scrollback_rows, scrollback_offset, grid_row),
+                col: grid_col,
+            },
+        };
 
         if selection.as_ref() == Some(&next) {
             crate::debug::internal_log!("[terminal_drag] selection unchanged");
@@ -1529,9 +1627,9 @@ impl<C: Component> AppRunner<C> {
 
         crate::debug::internal_log!(
             "[terminal_drag] creating selection: anchor=({},{}) cursor=({},{})",
-            next.anchor.row,
+            next.anchor.line,
             next.anchor.col,
-            next.cursor.row,
+            next.cursor.line,
             next.cursor.col
         );
 
@@ -1539,11 +1637,14 @@ impl<C: Component> AppRunner<C> {
             apply_terminal_selection_input(
                 &mut term.selection,
                 term.selection_controlled,
-                Some(next.clone()),
+                Some(next),
             );
         }
         if let Some(cb) = on_selection {
-            let text = terminal_selection_text(&lines, &next);
+            let NodeKind::Terminal(term) = &self.core.tree.node(drag.id).kind else {
+                return false;
+            };
+            let text = terminal_node_selection_text(term, &next, SelectionEnd::Exclusive, false);
             cb.emit(crate::widgets::TerminalSelectionEvent {
                 selection: Some(next),
                 text: Some(text),
@@ -1740,7 +1841,8 @@ impl<C: Component> AppRunner<C> {
                     self.drag.clear();
                     return Some(false);
                 }
-                Some(self.handle_terminal_drag(x, y, drag))
+                let autoscrolled = self.maybe_autoscroll_terminal_drag_edge(drag.id, y);
+                Some(self.handle_terminal_drag(x, y, drag) || autoscrolled)
             }
             ActiveDrag::None => None,
         }

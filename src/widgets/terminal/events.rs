@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::core::event::{KeyCode, KeyEvent, KeyMods, MouseButton, MouseEvent, MouseKind};
 use crate::style::Span;
 use crate::utils::spans::{line_text, line_width, slice_columns};
-use crate::utils::{GridSelection, GridSelectionEvent, SelectionEnd};
+use crate::utils::{GridSelection, SelectionEnd};
 
 /// Terminal input event source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,12 +28,6 @@ pub struct TerminalInputEvent {
     /// Encoded bytes suitable for PTY stdin.
     pub bytes: Arc<[u8]>,
 }
-
-/// Terminal selection in grid coordinates.
-pub type TerminalSelection = GridSelection;
-
-/// Terminal selection event payload.
-pub type TerminalSelectionEvent = GridSelectionEvent;
 
 /// Extract a terminal selection from styled rendered lines.
 ///

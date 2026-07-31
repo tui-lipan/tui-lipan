@@ -2,6 +2,7 @@ use super::layout::{terminal_content_layout, terminal_lines};
 use super::mod_private::Terminal;
 use super::node::TerminalNode;
 use super::screen::TerminalViewport;
+use super::selection::{ScrollbackLineage, rebase_selection};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::style::{LayoutConstraints, Rect, ScrollbarVariant};
 
@@ -79,18 +80,27 @@ pub(crate) fn reconcile_terminal(
         old_scroll_override,
         old_snapshot_scrollback_offset,
         old_selection,
+        old_lineage,
         old_viewport_rows,
         old_viewport_cols,
     ) = if let NodeKind::Terminal(old) = &tree.node(id).kind {
         (
             old.scroll_override,
             old.snapshot_scrollback_offset,
-            old.selection.clone(),
+            old.selection,
+            old.lineage,
             old.viewport_rows,
             old.viewport_cols,
         )
     } else {
-        (None, snapshot_scrollback_offset, None, 0, 0)
+        (
+            None,
+            snapshot_scrollback_offset,
+            None,
+            ScrollbackLineage::default(),
+            0,
+            0,
+        )
     };
 
     // Determine effective scrollback offset:
@@ -103,10 +113,19 @@ pub(crate) fn reconcile_terminal(
         old_scroll_override
     };
     let scrollback_offset = scroll_override.unwrap_or(snapshot_scrollback_offset);
-    let selection = if terminal.selection_controlled {
-        terminal.selection.clone()
-    } else {
-        old_selection.or(terminal.selection.clone())
+    let snapshot_lineage = live
+        .as_ref()
+        .map_or(ScrollbackLineage::default(), |snapshot| ScrollbackLineage {
+            evicted_lines: snapshot.evicted_lines,
+            history_epoch: snapshot.history_epoch,
+        });
+    let selection = {
+        let candidate = if terminal.selection_controlled {
+            terminal.selection
+        } else {
+            old_selection.or(terminal.selection)
+        };
+        rebase_selection(candidate, old_lineage, snapshot_lineage)
     };
 
     if let Some(cb) = terminal.on_resize.as_ref()
@@ -137,6 +156,7 @@ pub(crate) fn reconcile_terminal(
         caret_color: terminal.caret_color,
         selection,
         selection_controlled: terminal.selection_controlled,
+        lineage: snapshot_lineage,
         selection_style: terminal.selection_style,
         mouse_mode: live.as_ref().map_or(terminal.mouse_mode, |s| s.mouse_mode),
         key_modes: live.as_ref().map_or(terminal.key_modes, |s| s.key_modes),

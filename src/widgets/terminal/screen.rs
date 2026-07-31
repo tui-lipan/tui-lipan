@@ -29,6 +29,7 @@ use super::osc::{
     SemanticObserver, TerminalCommandPhase, TerminalSemanticEvent, TerminalSemanticState,
 };
 use super::scrollback_ledger::{LedgerTerm, ledger_capacity, settle_history};
+use super::selection::{ScrollbackLineage, TerminalSelection};
 use crate::style::{CaretShape, Color as UiColor, HostTerminalColors, Span, Style, Theme};
 use crate::utils::{GridPos, GridSelection, SelectionEnd};
 
@@ -272,6 +273,12 @@ pub struct TerminalScreen {
     /// placements that belonged to it.
     #[cfg(feature = "terminal-images")]
     graphics_alt_screen: bool,
+    /// Cumulative scrollback lines evicted since creation.
+    evicted_lines: u64,
+    /// Bumped when absolute line indices are invalidated.
+    history_epoch: u64,
+    /// Whether the alternate screen was active after the last update.
+    alt_screen: bool,
     /// Host cell size, reported to the child and used to size image placements.
     cell_size: TerminalCellSize,
 }
@@ -299,6 +306,18 @@ impl TerminalScreenHandle {
     /// call (see [`TerminalScreen::render_snapshot`]).
     pub fn snapshot(&self) -> TerminalRenderSnapshot {
         self.0.borrow_mut().render_snapshot()
+    }
+
+    /// Extract selected text across retained scrollback using display columns.
+    pub fn selection_display_text(
+        &self,
+        sel: &TerminalSelection,
+        endpoint: SelectionEnd,
+        trim_row_end: bool,
+    ) -> String {
+        self.0
+            .borrow()
+            .selection_display_text(sel, endpoint, trim_row_end)
     }
 }
 
@@ -347,6 +366,10 @@ pub struct TerminalRenderSnapshot {
     pub scrollback_offset: usize,
     /// Total number of scrollback rows available.
     pub total_scrollback_rows: usize,
+    /// Cumulative scrollback lines evicted since creation.
+    pub evicted_lines: u64,
+    /// Bumped when absolute line indices are invalidated.
+    pub history_epoch: u64,
     /// Current mouse mode state.
     pub mouse_mode: MouseModeState,
     /// Input-affecting DEC private modes the child has enabled (DECCKM, bracketed paste).
@@ -411,6 +434,8 @@ impl Default for TerminalRenderSnapshot {
             sequence: 0,
             scrollback_offset: 0,
             total_scrollback_rows: 0,
+            evicted_lines: 0,
+            history_epoch: 0,
             mouse_mode: MouseModeState::default(),
             key_modes: TerminalKeyModes::default(),
             #[cfg(feature = "terminal-images")]
@@ -440,6 +465,48 @@ impl TerminalRenderSnapshot {
         mouse_mode: MouseModeState,
         key_modes: TerminalKeyModes,
     ) -> Self {
+        Self::from_parts_inner(
+            text,
+            color_lines,
+            cursor_row,
+            cursor_col,
+            cursor_visible,
+            cursor_shape,
+            cursor_blinking,
+            sequence,
+            scrollback_offset,
+            total_scrollback_rows,
+            0,
+            0,
+            mouse_mode,
+            key_modes,
+        )
+    }
+
+    /// Attach scrollback lineage counters to an externally built snapshot.
+    pub fn with_scrollback_lineage(mut self, evicted_lines: u64, history_epoch: u64) -> Self {
+        self.evicted_lines = evicted_lines;
+        self.history_epoch = history_epoch;
+        self
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_parts_inner(
+        text: impl Into<Arc<str>>,
+        color_lines: Vec<Vec<Span>>,
+        cursor_row: u16,
+        cursor_col: u16,
+        cursor_visible: bool,
+        cursor_shape: CaretShape,
+        cursor_blinking: bool,
+        sequence: u64,
+        scrollback_offset: usize,
+        total_scrollback_rows: usize,
+        evicted_lines: u64,
+        history_epoch: u64,
+        mouse_mode: MouseModeState,
+        key_modes: TerminalKeyModes,
+    ) -> Self {
         Self {
             text: text.into(),
             color_lines: Arc::from(color_lines.into_boxed_slice()),
@@ -451,10 +518,10 @@ impl TerminalRenderSnapshot {
             sequence,
             scrollback_offset,
             total_scrollback_rows,
+            evicted_lines,
+            history_epoch,
             mouse_mode,
             key_modes,
-            // Images do not cross an external snapshot transport: the pixels can dwarf the text,
-            // and every client parses the same PTY bytes for itself anyway.
             #[cfg(feature = "terminal-images")]
             images: Arc::from([]),
         }
@@ -700,6 +767,9 @@ impl TerminalScreen {
             graphics: TerminalGraphics::default(),
             #[cfg(feature = "terminal-images")]
             graphics_alt_screen: false,
+            evicted_lines: 0,
+            history_epoch: 0,
+            alt_screen: false,
             cell_size: TerminalCellSize::default(),
         };
         screen.sync_viewport();
@@ -710,9 +780,17 @@ impl TerminalScreen {
     ///
     pub fn process_bytes(&mut self, bytes: &[u8]) {
         let evicted = self.feed_grid(bytes);
+        if evicted > 0 {
+            self.evicted_lines = self.evicted_lines.saturating_add(evicted as u64);
+        }
         self.semantic_parser.advance(&mut self.semantic, bytes);
         self.drop_evicted_semantic_marks(evicted);
         self.settle_graphics(evicted);
+        let alt_screen = self.term.mode().contains(TermMode::ALT_SCREEN);
+        if self.alt_screen != alt_screen {
+            self.history_epoch = self.history_epoch.saturating_add(1);
+            self.alt_screen = alt_screen;
+        }
         if self.term.mode().contains(TermMode::ALT_SCREEN) {
             // Alt-screen programs still emit OSC 133, but those marks belong to a grid
             // with no scrollback and no absolute-line space of its own. Discard them
@@ -958,6 +1036,57 @@ impl TerminalScreen {
         self.semantic.drain_events()
     }
 
+    /// Current scrollback lineage counters for selection rebasing.
+    pub fn scrollback_lineage(&self) -> ScrollbackLineage {
+        ScrollbackLineage {
+            evicted_lines: self.evicted_lines,
+            history_epoch: self.history_epoch,
+        }
+    }
+
+    /// Export an absolute selection using display columns across retained scrollback lines.
+    pub fn selection_display_text(
+        &self,
+        sel: &TerminalSelection,
+        endpoint: SelectionEnd,
+        trim_row_end: bool,
+    ) -> String {
+        if sel.is_empty() && matches!(endpoint, SelectionEnd::Exclusive) {
+            return String::new();
+        }
+
+        let (start, end) = sel.normalized();
+        let total = self.total_text_lines();
+        let row_start = start.line.min(total);
+        let row_end = end.line.min(total.saturating_sub(1));
+        if row_start > row_end {
+            return String::new();
+        }
+
+        let grid = self.term.grid();
+        let top = grid.topmost_line().0;
+        let mut result = String::new();
+        for absolute in row_start..=row_end {
+            let line = Line(top + absolute as i32);
+            let col_start = if absolute == start.line { start.col } else { 0 };
+            let col_end = if absolute == end.line {
+                end.col
+                    .saturating_add(matches!(endpoint, SelectionEnd::Inclusive) as usize)
+            } else {
+                display_line_width(grid, line)
+            };
+            let mut text = display_columns_text(grid, line, col_start, col_end);
+            if trim_row_end {
+                text.truncate(text.trim_end().len());
+            }
+            result.push_str(&text);
+            if absolute < row_end {
+                result.push('\n');
+            }
+        }
+        result
+    }
+
     /// Reapply previously captured semantic state without replaying escape sequences.
     ///
     /// Intended for restoring state across a fresh `TerminalScreen` (e.g. session
@@ -1054,7 +1183,11 @@ impl TerminalScreen {
         // call, so the ledger never sees it; trim and account for it here.
         self.ledger_capacity = ledger_capacity(self.scrollback_len, self.rows);
         let evicted = settle_history(&mut self.term, self.scrollback_len, self.ledger_capacity);
+        if evicted > 0 {
+            self.evicted_lines = self.evicted_lines.saturating_add(evicted as u64);
+        }
         if reflowed {
+            self.history_epoch = self.history_epoch.saturating_add(1);
             // A column change rewraps history, so line indices no longer refer to the
             // text they were recorded against and cannot be corrected by a shift.
             self.semantic_marks.clear();
@@ -1069,6 +1202,11 @@ impl TerminalScreen {
         } else {
             self.drop_evicted_semantic_marks(evicted);
             self.settle_graphics(evicted);
+        }
+        let alt_screen = self.term.mode().contains(TermMode::ALT_SCREEN);
+        if self.alt_screen != alt_screen {
+            self.history_epoch = self.history_epoch.saturating_add(1);
+            self.alt_screen = alt_screen;
         }
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode());
@@ -1136,6 +1274,8 @@ impl TerminalScreen {
                 sequence: self.sequence,
                 scrollback_offset: self.scrollback_offset,
                 total_scrollback_rows: self.term.history_size(),
+                evicted_lines: self.evicted_lines,
+                history_epoch: self.history_epoch,
                 mouse_mode: self.mouse_mode,
                 key_modes: key_modes_from_term(mode),
                 #[cfg(feature = "terminal-images")]
@@ -1405,6 +1545,9 @@ impl TerminalScreen {
         self.cache = TerminalRenderSnapshot::default();
         self.semantic_marks.clear();
         self.semantic_events_seen = 0;
+        self.evicted_lines = 0;
+        self.history_epoch = self.history_epoch.saturating_add(1);
+        self.alt_screen = false;
         // Images, unlike semantic state, are screen contents: a hard reset clears them with the
         // grid they were drawn on.
         #[cfg(feature = "terminal-images")]
@@ -1934,6 +2077,64 @@ fn cell_text(cell: &TermCell) -> String {
         }
     }
     text
+}
+
+fn display_line_width(grid: &alacritty_terminal::grid::Grid<TermCell>, line: Line) -> usize {
+    let wrapline = grid[line][grid.last_column()]
+        .flags
+        .contains(CellFlags::WRAPLINE);
+    if wrapline {
+        return grid.columns();
+    }
+    (0..grid.columns())
+        .rfind(|col| {
+            let cell = &grid[line][Column(*col)];
+            !cell
+                .flags
+                .intersects(CellFlags::WIDE_CHAR_SPACER | CellFlags::LEADING_WIDE_CHAR_SPACER)
+                && !cell.is_empty()
+        })
+        .map_or(0, |col| col + 1)
+}
+
+fn display_columns_text(
+    grid: &alacritty_terminal::grid::Grid<TermCell>,
+    line: Line,
+    start_col: usize,
+    end_col: usize,
+) -> String {
+    let width = display_line_width(grid, line);
+    let col_start = start_col.min(width);
+    let col_end = end_col.min(width);
+    if col_start >= col_end {
+        return String::new();
+    }
+
+    let mut result = String::new();
+    let mut display_col = 0usize;
+    for col in 0..grid.columns() {
+        let cell = &grid[line][Column(col)];
+        if cell
+            .flags
+            .intersects(CellFlags::WIDE_CHAR_SPACER | CellFlags::LEADING_WIDE_CHAR_SPACER)
+        {
+            continue;
+        }
+        let cell_width = if cell.flags.contains(CellFlags::WIDE_CHAR) {
+            2
+        } else {
+            1
+        };
+        let cell_end = display_col.saturating_add(cell_width);
+        if cell_end > col_start && display_col < col_end {
+            result.push_str(&cell_text(cell));
+        }
+        display_col = cell_end;
+        if display_col >= col_end {
+            break;
+        }
+    }
+    result
 }
 
 /// The low 24 bits of the image id a placeholder cell names, from its foreground colour.

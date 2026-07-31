@@ -7,11 +7,11 @@ use std::sync::Arc;
 
 use super::events::{
     MouseModeState, TerminalInputEvent, TerminalKeyModes, TerminalPasteShortcutBehavior,
-    TerminalSelection, TerminalSelectionEvent,
 };
 #[cfg(feature = "terminal-images")]
 use super::graphics::TerminalImagePlacement;
 use super::screen::{TerminalDecoration, TerminalScreenHandle, TerminalViewport};
+use super::selection::{TerminalSelection, TerminalSelectionEvent};
 
 /// Terminal-like widget backed by a read-only `TextArea`.
 #[derive(Clone)]

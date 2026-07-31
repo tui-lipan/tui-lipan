@@ -139,7 +139,7 @@ impl Component for TerminalHints {
         let terminal: Element = Terminal::new()
             .snapshot(snapshot)
             .show_cursor(!ctx.state.active)
-            .selection(ctx.state.copy_flash.clone())
+            .selection(ctx.state.copy_flash)
             .selection_style(Style::new().fg(Color::Black).bg(Color::LightCyan))
             .on_key(ctx.link().key_handler(|key| Some(Msg::Key(key))))
             .into();
@@ -288,17 +288,22 @@ fn matching_indices(labels: &[String], input: &str) -> Vec<usize> {
 }
 
 fn activate_hint(index: usize, open: bool, ctx: &mut Context<TerminalHints>) -> Update {
+    let top_line = ctx
+        .state
+        .snapshot
+        .total_scrollback_rows
+        .saturating_sub(ctx.state.snapshot.scrollback_offset);
     let Some((text, kind, selection)) = ctx.state.matches.get(index).map(|hint| {
         (
             hint.text.clone(),
             hint.kind,
             TerminalSelection {
-                anchor: tui_lipan::utils::GridPos {
-                    row: hint.row,
+                anchor: TerminalPos {
+                    line: top_line.saturating_add(hint.row),
                     col: hint.start_col,
                 },
-                cursor: tui_lipan::utils::GridPos {
-                    row: hint.row,
+                cursor: TerminalPos {
+                    line: top_line.saturating_add(hint.row),
                     col: hint.end_col,
                 },
             },

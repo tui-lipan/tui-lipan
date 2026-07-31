@@ -14,15 +14,17 @@ mod pty;
 mod reconcile;
 mod screen;
 mod scrollback_ledger;
+#[cfg(feature = "terminal")]
+mod selection;
 
 pub use buffer::TerminalBuffer;
 #[cfg(feature = "terminal")]
 pub use copy_mode::{CopyModeAction, CopyModeGrid, TerminalCopyMode};
 pub use events::{
     KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, TerminalInputEvent,
-    TerminalInputKind, TerminalKeyModes, TerminalPasteShortcutBehavior, TerminalSelection,
-    TerminalSelectionEvent, encode_paste, focus_sequences, key_event_to_bytes,
-    mouse_event_to_bytes, paste_sequences, terminal_selection_text,
+    TerminalInputKind, TerminalKeyModes, TerminalPasteShortcutBehavior, encode_paste,
+    focus_sequences, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
+    terminal_selection_text,
 };
 #[cfg(feature = "terminal-images")]
 pub use graphics::{TerminalImage, TerminalImageCrop, TerminalImagePlacement};
@@ -38,10 +40,36 @@ pub use screen::{
     SemanticMark, SemanticMarkKind, TerminalCellSize, TerminalColorPalette, TerminalDecoration,
     TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle, TerminalViewport,
 };
+#[cfg(feature = "terminal")]
+pub use selection::{
+    ScrollbackLineage, TerminalPos, TerminalSelection, TerminalSelectionEvent, absolute_line,
+    from_viewport, to_viewport, viewport_row,
+};
 
 pub(crate) use layout::{measure_terminal, terminal_content_layout, terminal_mouse_content_rect};
 pub(crate) use node::{TerminalNode, apply_terminal_selection_input};
 pub(crate) use reconcile::reconcile_terminal;
+
+#[cfg(feature = "terminal")]
+pub(crate) fn terminal_node_selection_text(
+    node: &TerminalNode,
+    sel: &TerminalSelection,
+    endpoint: crate::utils::SelectionEnd,
+    trim_row_end: bool,
+) -> String {
+    if let Some(screen) = node.screen.as_ref() {
+        return screen.selection_display_text(sel, endpoint, trim_row_end);
+    }
+    let Some(projected) = to_viewport(
+        sel,
+        node.scrollback_offset,
+        node.total_scrollback_rows,
+        node.viewport_rows,
+    ) else {
+        return String::new();
+    };
+    events::terminal_selection_text_with(&node.lines, &projected, endpoint, trim_row_end)
+}
 
 use crate::callback::{Callback, KeyHandler};
 use crate::core::element::{Element, ElementKind};

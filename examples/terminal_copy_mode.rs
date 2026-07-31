@@ -69,7 +69,11 @@ impl Component for TerminalCopyModeDemo {
         let terminal: Element = Terminal::new()
             .snapshot(ctx.state.snapshot.clone())
             .show_cursor(!ctx.state.active)
-            .selection(copy_mode_highlight(&ctx.state.copy_mode, ctx.state.active))
+            .selection(copy_mode_highlight(
+                &ctx.state.copy_mode,
+                ctx.state.active,
+                ctx.state.snapshot.total_scrollback_rows,
+            ))
             .selection_style(Style::new().fg(Color::Black).bg(Color::LightCyan))
             .on_key(ctx.link().key_handler(|key| Some(Msg::Key(key))))
             .into();
@@ -103,27 +107,31 @@ impl Component for TerminalCopyModeDemo {
 /// Render the copy cursor as a one-cell controlled selection when there is no
 /// anchor. With an anchor, normalize the range and extend its final display
 /// column so the cursor cell remains visibly included.
-fn copy_mode_highlight(mode: &TerminalCopyMode, active: bool) -> Option<TerminalSelection> {
+fn copy_mode_highlight(
+    mode: &TerminalCopyMode,
+    active: bool,
+    total_scrollback_rows: usize,
+) -> Option<TerminalSelection> {
     if !active {
         return None;
     }
-    let cursor = mode.cursor();
-    let anchor = mode.anchor().unwrap_or(cursor);
-    let (start, end) = if anchor <= cursor {
-        (anchor, cursor)
-    } else {
-        (cursor, anchor)
+    let (cursor_row, cursor_col) = mode.cursor();
+    let cursor = TerminalPos {
+        line: total_scrollback_rows
+            .saturating_sub(mode.scrollback_offset())
+            .saturating_add(cursor_row),
+        col: cursor_col,
     };
-    Some(TerminalSelection {
-        anchor: tui_lipan::utils::GridPos {
-            row: start.0,
-            col: start.1,
-        },
-        cursor: tui_lipan::utils::GridPos {
-            row: end.0,
-            col: end.1.saturating_add(1),
-        },
-    })
+    let mut selection = mode
+        .selection(total_scrollback_rows)
+        .unwrap_or_else(|| TerminalSelection::new(cursor));
+    let (_, end) = selection.normalized();
+    if selection.anchor == end {
+        selection.anchor.col = selection.anchor.col.saturating_add(1);
+    } else {
+        selection.cursor.col = selection.cursor.col.saturating_add(1);
+    }
+    Some(selection)
 }
 
 impl TerminalCopyModeDemo {
@@ -196,15 +204,19 @@ impl TerminalCopyModeDemo {
     }
 
     fn copy_selection(&mut self, ctx: &mut Context<Self>) -> Update {
-        let Some(selection) = ctx.state.copy_mode.selection() else {
+        let Some(selection) = ctx
+            .state
+            .copy_mode
+            .selection(ctx.state.snapshot.total_scrollback_rows)
+        else {
             ctx.state.status = "No selection — press v, move, then Enter".to_string();
             return Update::full();
         };
 
-        let text = ctx
-            .state
-            .snapshot
-            .selection_text(&selection, SelectionEnd::Inclusive, true);
+        let text =
+            ctx.state
+                .screen
+                .selection_display_text(&selection, SelectionEnd::Inclusive, true);
         if text.is_empty() {
             ctx.state.status = "Selection is empty".to_string();
             return Update::full();
@@ -242,24 +254,36 @@ mod tests {
     #[test]
     fn visual_copy_cursor_tracks_mode_without_an_anchor() {
         let mut mode = TerminalCopyMode::new(2, 4, 0);
-        let initial = copy_mode_highlight(&mode, true).unwrap();
-        assert_eq!((initial.anchor.row, initial.anchor.col), (2, 4));
-        assert_eq!((initial.cursor.row, initial.cursor.col), (2, 5));
+        let initial = copy_mode_highlight(&mode, true, 0).unwrap();
+        assert_eq!((initial.anchor.line, initial.anchor.col), (2, 4));
+        assert_eq!((initial.cursor.line, initial.cursor.col), (2, 5));
 
         mode.goto(1, 9, 0);
-        let moved = copy_mode_highlight(&mode, true).unwrap();
-        assert_eq!((moved.anchor.row, moved.anchor.col), (1, 9));
-        assert_eq!((moved.cursor.row, moved.cursor.col), (1, 10));
+        let moved = copy_mode_highlight(&mode, true, 0).unwrap();
+        assert_eq!((moved.anchor.line, moved.anchor.col), (1, 9));
+        assert_eq!((moved.cursor.line, moved.cursor.col), (1, 10));
     }
 
     #[test]
     fn visual_selection_includes_the_cursor_cell_after_normalization() {
         let mut mode = TerminalCopyMode::new(3, 7, 0);
-        mode.toggle_anchor();
+        mode.handle_key(
+            KeyEvent {
+                code: KeyCode::Char('v'),
+                mods: KeyMods::NONE,
+            },
+            CopyModeGrid {
+                rows: 4,
+                cols: TERMINAL_COLS as usize,
+                total_scrollback_rows: 0,
+                cursor_row_text: "",
+                prompt_lines: &[],
+            },
+        );
         mode.goto(1, 2, 0);
-        let selection = copy_mode_highlight(&mode, true).unwrap();
-        assert_eq!((selection.anchor.row, selection.anchor.col), (1, 2));
-        assert_eq!((selection.cursor.row, selection.cursor.col), (3, 8));
+        let selection = copy_mode_highlight(&mode, true, 0).unwrap();
+        assert_eq!((selection.anchor.line, selection.anchor.col), (3, 8));
+        assert_eq!((selection.cursor.line, selection.cursor.col), (1, 2));
     }
 
     #[test]
