@@ -214,45 +214,110 @@ pub(crate) fn rendered_divider(
     }
 }
 
-fn directional_symbol(divider: RenderedDivider, x: i16, y: i16) -> char {
-    match divider.orientation {
-        Orientation::Horizontal if divider.rect.w > 1 => {
-            let mut start = divider.rect.x;
-            let mut end = divider
-                .rect
-                .x
-                .saturating_add(divider.rect.w as i16)
-                .saturating_sub(1);
-            if let Some(gap) = divider.label_gap_rect {
-                if x < gap.x {
-                    end = end.min(gap.x.saturating_sub(1));
-                } else if x >= gap.x.saturating_add(gap.w as i16) {
-                    start = start.max(gap.x.saturating_add(gap.w as i16));
+/// The continuous `─` run containing `x`, split around a label gap when present.
+fn horizontal_run_bounds(divider: RenderedDivider, x: i16) -> Option<(i16, i16)> {
+    let start = divider.rect.x;
+    let end = divider
+        .rect
+        .x
+        .saturating_add(divider.rect.w as i16)
+        .saturating_sub(1);
+    if let Some(gap) = divider.label_gap_rect {
+        let gap_start = gap.x;
+        let gap_end = gap.x.saturating_add(gap.w as i16).saturating_sub(1);
+        if x < gap_start {
+            return Some((start, gap_start.saturating_sub(1)));
+        }
+        if x > gap_end {
+            return Some((gap_end.saturating_add(1), end));
+        }
+        return None;
+    }
+    Some((start, end))
+}
+
+/// Box-drawing glyph for every divider arm that meets at `(x, y)`.
+///
+/// Same-orientation segments that only meet at this cell (two titled horizontals sharing a
+/// vertical) must combine into a through-line (`─`) rather than each contributing an endpoint
+/// half (`╶`/`╴`); otherwise a vertical that starts here merges into a corner (`┌`) instead of a
+/// tee (`┬`).
+fn junction_symbol(dividers: &[RenderedDivider], x: i16, y: i16) -> char {
+    let mut left = false;
+    let mut right = false;
+    let mut up = false;
+    let mut down = false;
+    let mut heavy_h = false;
+    let mut heavy_v = false;
+
+    for divider in dividers {
+        if !supports_junctions(*divider) {
+            continue;
+        }
+        match divider.orientation {
+            Orientation::Horizontal => {
+                let Some((start, end)) = horizontal_run_bounds(*divider, x) else {
+                    continue;
+                };
+                if start < x {
+                    left = true;
+                }
+                if end > x {
+                    right = true;
+                }
+                if matches!(divider.ch, '━') {
+                    heavy_h = true;
                 }
             }
-            match (divider.ch, x == start, x == end) {
-                ('─', true, false) => '╶',
-                ('─', false, true) => '╴',
-                ('━', true, false) => '╺',
-                ('━', false, true) => '╸',
-                _ => divider.ch,
+            Orientation::Vertical => {
+                let start = divider.rect.y;
+                let end = divider
+                    .rect
+                    .y
+                    .saturating_add(divider.rect.h as i16)
+                    .saturating_sub(1);
+                if start < y {
+                    up = true;
+                }
+                if end > y {
+                    down = true;
+                }
+                if matches!(divider.ch, '┃') {
+                    heavy_v = true;
+                }
             }
         }
-        Orientation::Vertical if divider.rect.h > 1 => {
-            let end = divider
-                .rect
-                .y
-                .saturating_add(divider.rect.h as i16)
-                .saturating_sub(1);
-            match (divider.ch, y == divider.rect.y, y == end) {
-                ('│', true, false) => '╷',
-                ('│', false, true) => '╵',
-                ('┃', true, false) => '╻',
-                ('┃', false, true) => '╹',
-                _ => divider.ch,
-            }
-        }
-        _ => divider.ch,
+    }
+
+    match (left, right, up, down, heavy_h || heavy_v) {
+        (true, true, true, true, false) => '┼',
+        (true, true, true, true, true) => '╋',
+        (true, true, false, true, false) => '┬',
+        (true, true, false, true, true) => '┳',
+        (true, true, true, false, false) => '┴',
+        (true, true, true, false, true) => '┻',
+        (false, true, true, true, false) => '├',
+        (false, true, true, true, true) => '┣',
+        (true, false, true, true, false) => '┤',
+        (true, false, true, true, true) => '┫',
+        (false, true, false, true, false) => '┌',
+        (false, true, false, true, true) => '┏',
+        (true, false, false, true, false) => '┐',
+        (true, false, false, true, true) => '┓',
+        (false, true, true, false, false) => '└',
+        (false, true, true, false, true) => '┗',
+        (true, false, true, false, false) => '┘',
+        (true, false, true, false, true) => '┛',
+        (true, true, false, false, false) => '─',
+        (true, true, false, false, true) => '━',
+        (false, false, true, true, false) => '│',
+        (false, false, true, true, true) => '┃',
+        // Degenerate single-arm leftovers: fall back to a light endpoint.
+        (false, true, false, false, _) => '╶',
+        (true, false, false, false, _) => '╴',
+        (false, false, false, true, _) => '╷',
+        (false, false, true, false, _) => '╵',
+        _ => '─',
     }
 }
 
@@ -347,27 +412,31 @@ impl DividerJunctionState {
                 && let Some(existing) = self.cells.get_mut(&key)
                 && let Some(cell) = buf.cell_mut((x as u16, y as u16))
             {
-                let first = existing.dividers[0];
-                cell.set_char(directional_symbol(first, x, y));
-                for connected in existing.dividers.iter().copied().skip(1) {
-                    let symbol = directional_symbol(connected, x, y).to_string();
-                    cell.merge_symbol(&symbol, ratatui::symbols::merge::MergeStrategy::Exact);
-                }
-                let symbol = directional_symbol(divider, x, y).to_string();
-                cell.merge_symbol(&symbol, ratatui::symbols::merge::MergeStrategy::Exact);
+                let mut arms = existing.dividers.clone();
+                arms.push(divider);
+                cell.set_char(junction_symbol(&arms, x, y));
                 existing.dividers.push(divider);
                 existing.rendered = cell.clone();
                 return;
             }
 
             if let Some(cell) = buf.cell((x as u16, y as u16)) {
-                self.cells.insert(
-                    key,
-                    DividerCell {
-                        dividers: vec![divider],
-                        rendered: cell.clone(),
-                    },
-                );
+                if let Some(existing) = self.cells.get_mut(&key) {
+                    // Same-axis segments that share a cell (two titled horizontals meeting at a
+                    // vertical) must all remain visible to the later perpendicular pass; replacing
+                    // would leave only the last endpoint half and compose a corner (`┌`) instead
+                    // of a tee (`┬`).
+                    existing.dividers.push(divider);
+                    existing.rendered = cell.clone();
+                } else {
+                    self.cells.insert(
+                        key,
+                        DividerCell {
+                            dividers: vec![divider],
+                            rendered: cell.clone(),
+                        },
+                    );
+                }
             }
         });
     }

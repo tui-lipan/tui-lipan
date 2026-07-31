@@ -511,6 +511,10 @@ Main-axis alignment for stacks:
 | `BorderMergeMode::Exact` | Merge only when an exact box-drawing intersection symbol exists (default) |
 | `BorderMergeMode::Fuzzy` | Merge using the closest matching symbol when an exact merge symbol is unavailable |
 
+Fuzzy and Exact only compose box-drawing glyphs. A later overlapping border will not replace a
+neighbor's border-title text (or spaces that sit next to that text). Plain backdrop spaces still
+accept a border. Use `Replace` when an occluding frame should wipe what is underneath.
+
 ## Theme System
 
 ### App-Wide Theme

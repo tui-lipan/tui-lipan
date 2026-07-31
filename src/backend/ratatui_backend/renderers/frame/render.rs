@@ -501,20 +501,60 @@ fn draw_border_cell(buf: &mut Buffer, x: i32, y: i32, symbol: &str, draw: &Borde
     if !draw.clip.contains(x, y) || !draw.buf_bounds.contains(x, y) {
         return;
     }
-    let Some(cell) = buf.cell_mut((x as u16, y as u16)) else {
+    let Some(existing) = buf.cell((x as u16, y as u16)).map(|cell| cell.symbol().to_owned()) else {
         return;
     };
 
     let should_merge = draw.border_merge_mode != BorderMergeMode::Replace
-        && is_box_drawing_symbol(cell.symbol())
+        && is_box_drawing_symbol(&existing)
         && is_box_drawing_symbol(symbol);
 
     if should_merge {
+        let Some(cell) = buf.cell_mut((x as u16, y as u16)) else {
+            return;
+        };
         cell.merge_symbol(symbol, to_merge_strategy(draw.border_merge_mode));
-    } else {
-        cell.set_symbol(symbol);
+        cell.set_style(draw.style);
+        return;
     }
+
+    // Fuzzy/Exact is for composing box-drawing seams. A neighbor's border title must survive an
+    // overlapping later edge: keep non-box glyphs, and keep spaces that sit next to that text
+    // (the `icon  title` gap). Plain backdrop spaces - even when a parent painted a fg - still
+    // accept the border. Replace mode still overwrites so occluding frames win.
+    if draw.border_merge_mode != BorderMergeMode::Replace
+        && should_preserve_border_content(buf, x, y, &existing)
+    {
+        return;
+    }
+
+    let Some(cell) = buf.cell_mut((x as u16, y as u16)) else {
+        return;
+    };
+    cell.set_symbol(symbol);
     cell.set_style(draw.style);
+}
+
+fn should_preserve_border_content(buf: &Buffer, x: i32, y: i32, existing: &str) -> bool {
+    if is_box_drawing_symbol(existing) {
+        return false;
+    }
+    if existing.is_empty() || existing == " " {
+        return neighbor_is_border_title_content(buf, x - 1, y)
+            || neighbor_is_border_title_content(buf, x + 1, y);
+    }
+    true
+}
+
+fn neighbor_is_border_title_content(buf: &Buffer, x: i32, y: i32) -> bool {
+    if x < 0 || y < 0 {
+        return false;
+    }
+    let Some(cell) = buf.cell((x as u16, y as u16)) else {
+        return false;
+    };
+    let sym = cell.symbol();
+    !sym.is_empty() && sym != " " && !is_box_drawing_symbol(sym)
 }
 
 fn draw_symbol_rect(

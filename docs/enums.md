@@ -317,6 +317,10 @@ Strategy used when frame border symbols overlap (e.g. adjacent or overlapping fr
 | `BorderMergeMode::Exact` | Merge only when an exact box-drawing intersection symbol exists **(default)** |
 | `BorderMergeMode::Fuzzy` | Merge using the closest matching symbol when an exact merge symbol is unavailable |
 
+Fuzzy/Exact merge box-drawing glyphs only; they leave a neighbor's border-title text (and spaces
+next to it) alone. Plain backdrop spaces still accept a border. `Replace` still overwrites so an
+occluding frame can wipe the seam.
+
 ### `CapStyle` and `CapSides`
 
 `Badge` uses these enums for optional segment caps:
