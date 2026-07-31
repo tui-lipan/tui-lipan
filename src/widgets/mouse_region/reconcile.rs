@@ -29,6 +29,7 @@ pub(crate) fn reconcile_mouse_region(
             on_drag: region.on_drag.clone(),
             on_drag_end: region.on_drag_end.clone(),
             drag_required_mods: region.drag_required_mods,
+            drag_threshold: region.drag_threshold,
             on_right_drag_start: region.on_right_drag_start.clone(),
             on_right_drag: region.on_right_drag.clone(),
             on_right_drag_end: region.on_right_drag_end.clone(),

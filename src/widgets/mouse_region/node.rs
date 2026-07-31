@@ -18,6 +18,9 @@ pub struct MouseRegionNode {
     pub on_drag: Option<Callback<MouseDragEvent>>,
     pub on_drag_end: Option<Callback<MouseDragEvent>>,
     pub drag_required_mods: Option<KeyMods>,
+    /// Pointer travel in `(columns, rows)` before drag callbacks start; see
+    /// [`MouseRegion::drag_threshold`](super::MouseRegion::drag_threshold).
+    pub drag_threshold: Option<(u16, u16)>,
     pub on_right_drag_start: Option<Callback<MouseDragEvent>>,
     pub on_right_drag: Option<Callback<MouseDragEvent>>,
     pub on_right_drag_end: Option<Callback<MouseDragEvent>>,
@@ -90,6 +93,7 @@ impl From<MouseRegion> for MouseRegionNode {
             on_drag: value.on_drag,
             on_drag_end: value.on_drag_end,
             drag_required_mods: value.drag_required_mods,
+            drag_threshold: value.drag_threshold,
             on_right_drag_start: value.on_right_drag_start,
             on_right_drag: value.on_right_drag,
             on_right_drag_end: value.on_right_drag_end,
