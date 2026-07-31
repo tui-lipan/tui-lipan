@@ -413,8 +413,8 @@ pub enum DescriptionOverflow {
 /// Matching strategy used to rank [`SearchPalette`] results.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SearchMatchMode {
-    /// Plain `nucleo` fuzzy matching (default). The label competes with
-    /// aliases via `max()`, and description text adds to the score.
+    /// Plain `nucleo` fuzzy matching (default). Label matches outrank
+    /// synonym-only alias hits; description text adds to the score.
     #[default]
     Fuzzy,
     /// Evaluate exact, prefix, word-prefix, substring, and fuzzy matching
@@ -427,8 +427,9 @@ pub enum SearchMatchMode {
     ///
     /// Each whitespace-separated query term may match a different field, but
     /// characters within one term never combine across the label, an alias,
-    /// the description, and the right-hand hint. Labels and aliases carry the
-    /// highest weight, descriptions a lower weight, and the right-hand hint
+    /// the description, and the right-hand hint. Labels carry the highest
+    /// weight and a match bonus so any label hit outranks a synonym-only
+    /// alias hit; descriptions have a lower weight, and the right-hand hint
     /// only matches via exact or substring comparison (no fuzzy/prefix
     /// matching), which suits keybinding-style hints.
     Hybrid,

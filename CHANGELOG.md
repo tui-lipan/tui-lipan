@@ -156,6 +156,10 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- `SearchPalette` Hybrid matching prefers visible labels over hidden aliases:
+  any label hit outranks a synonym-only alias hit on another row, while
+  aliases still surface rows the label alone would miss. Fuzzy applies the
+  same label-over-alias preference. See `docs/widgets/overlays.md`.
 - Compose perpendicular `Divider` intersections into directional box-drawing junctions.
 - Promote alpha-aware `Paint::rgba` backgrounds in the styling guide with practical translucent
   surface and toast examples.

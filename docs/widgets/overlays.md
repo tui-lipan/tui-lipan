@@ -549,9 +549,9 @@ field may be omitted, so `switchmodel` matches `Switch model`.
 
 #### `SearchMatchMode`
 
-- **`Fuzzy`** (default) - plain `nucleo` fuzzy matching. The label competes
-  with aliases via `max()`, and description text (left and right) adds to
-  the score. Unchanged from earlier releases.
+- **`Fuzzy`** (default) - plain `nucleo` fuzzy matching. Label matches keep a
+  ranking bonus over synonym-only alias hits; description text (left and
+  right) adds to the score.
 - **`Hybrid`** - evaluates exact, prefix, word-prefix, substring, and fuzzy
   matching together, per field, and ranks results by that priority order
   first: a real substring or prefix match always outranks a fuzzy one, no
@@ -563,11 +563,12 @@ field may be omitted, so `switchmodel` matches `Switch model`.
 
   Fields are matched **independently** - characters never combine across the
   label, an alias, the description, and the right-hand hint to form a single
-  match. Labels and aliases carry the highest weight, the description a
-  lower weight, and the right-hand hint (`ItemDescription::right`) only
-  matches via exact or substring comparison, which suits keybinding-style
-  hints. `Hybrid` ignores the `normalization` prop; matching runs on raw
-  (non-normalized) characters.
+  match. Labels carry the highest weight and a match bonus so **any** label
+  hit outranks a synonym-only alias hit on another row (aliases still surface
+  rows the label alone would miss). The description has a lower weight, and
+  the right-hand hint (`ItemDescription::right`) only matches via exact or
+  substring comparison, which suits keybinding-style hints. `Hybrid` ignores
+  the `normalization` prop; matching runs on raw (non-normalized) characters.
 
   ```rust
   SearchPalette::new()

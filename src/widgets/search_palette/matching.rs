@@ -109,14 +109,14 @@ fn match_items_fuzzy(
 
             let mut score = label_score.unwrap_or(0);
             let mut matched = label_score.is_some();
+            let label_matched = matched;
 
             if matched && is_contiguous_run(&label_hits) {
                 score = score.saturating_add(score / 2);
             }
 
-            // Aliases compete with the label via max(): a strong alias hit can
-            // promote a row whose canonical label barely matches (or doesn't
-            // match at all), but it never penalizes a stronger label match.
+            // Aliases compete with the label via max(), but label-matched rows
+            // keep a large bonus so synonym-only hits cannot outrank them.
             for alias in &item.aliases {
                 let alias_utf32 = Utf32String::from(alias.as_ref());
                 let mut alias_hits = Vec::new();
@@ -131,11 +131,16 @@ fn match_items_fuzzy(
                     if is_contiguous_run(&alias_hits) {
                         alias_score = alias_score.saturating_add(alias_score / 2);
                     }
-                    if alias_score > score {
+                    if !label_matched && alias_score > score {
                         score = alias_score;
                     }
                     matched = true;
                 }
+            }
+
+            if label_matched {
+                // Keep label rows above synonym-only rows regardless of nucleo magnitude.
+                score = score.saturating_add(1 << 28);
             }
 
             if let Some(desc) = &item.description {
@@ -228,8 +233,11 @@ mod hybrid {
     /// only use exact/substring matching.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum FieldRole {
-        /// Label and aliases: the primary identity of the item.
-        Primary,
+        /// Canonical item label: highest weight among primary fields.
+        Label,
+        /// Hidden synonyms. Same tier ladder as labels; label hits carry a
+        /// bonus so any visible-label match outranks a synonym-only hit.
+        Alias,
         /// Description text.
         Description,
         /// Right-hand hint (e.g. a keybinding). Exact/substring only.
@@ -239,7 +247,8 @@ mod hybrid {
     impl FieldRole {
         fn weight(self) -> f64 {
             match self {
-                FieldRole::Primary => 3.0,
+                FieldRole::Label => 3.0,
+                FieldRole::Alias => 2.0,
                 FieldRole::Description => 1.0,
                 FieldRole::Hint => 1.0,
             }
@@ -279,6 +288,11 @@ mod hybrid {
     /// pass while sparse, multi-word matches like `layo` -> `Enable pane
     /// synchronization` are rejected.
     const FUZZY_QUALITY_THRESHOLD: f64 = 0.45;
+
+    /// Added to every label hit so a visible-label match always outranks a
+    /// synonym-only alias hit, regardless of tier. Larger than the Exact→Fuzzy
+    /// tier span (`4 * TIER_UNIT`) plus weight/quality headroom.
+    const LABEL_MATCH_BONUS: f64 = 10.0 * TIER_UNIT;
 
     fn field_total(tier: MatchTier, quality: f64, role: FieldRole) -> f64 {
         tier.rank() as f64 * TIER_UNIT
@@ -575,7 +589,8 @@ mod hybrid {
 
     /// Best field-total across label and aliases: aliases are never
     /// rendered, so they only compete for the score via `max()` and never
-    /// contribute their own hits.
+    /// contribute their own hits. Label hits receive [`LABEL_MATCH_BONUS`] so
+    /// any visible-label match outranks a synonym-only alias hit.
     fn best_primary_total(
         item: &SearchEntry,
         query: &str,
@@ -583,24 +598,30 @@ mod hybrid {
         matcher: &mut FuzzyMatcher,
         label_match: &Option<FieldMatch>,
     ) -> Option<f64> {
-        let mut best = label_match
+        let label_total = label_match
             .as_ref()
-            .map(|m| field_total(m.tier, m.quality, FieldRole::Primary));
+            .map(|m| field_total(m.tier, m.quality, FieldRole::Label) + LABEL_MATCH_BONUS);
+        let mut best_alias = None;
         for alias in &item.aliases {
             if let Some(m) = classify_field(
                 alias.as_ref(),
                 query,
                 case_matching,
-                FieldRole::Primary,
+                FieldRole::Alias,
                 matcher,
             ) {
-                let total = field_total(m.tier, m.quality, FieldRole::Primary);
-                if best.is_none_or(|cur| total > cur) {
-                    best = Some(total);
+                let total = field_total(m.tier, m.quality, FieldRole::Alias);
+                if best_alias.is_none_or(|cur| total > cur) {
+                    best_alias = Some(total);
                 }
             }
         }
-        best
+        match (label_total, best_alias) {
+            (Some(label), Some(alias)) => Some(label.max(alias)),
+            (Some(label), None) => Some(label),
+            (None, Some(alias)) => Some(alias),
+            (None, None) => None,
+        }
     }
 
     fn match_terms_across_fields(
@@ -627,7 +648,7 @@ mod hybrid {
                 item.label.as_ref(),
                 term,
                 case_matching,
-                FieldRole::Primary,
+                FieldRole::Label,
                 matcher,
             );
             let best_primary = best_primary_total(item, term, case_matching, matcher, &label_match);
@@ -699,7 +720,7 @@ mod hybrid {
                 item.label.as_ref(),
                 query,
                 case_matching,
-                FieldRole::Primary,
+                FieldRole::Label,
                 &mut matcher,
             );
             let label_hits = label_match
@@ -938,6 +959,37 @@ mod tests {
     }
 
     #[test]
+    fn hybrid_label_match_outranks_same_query_alias() {
+        // Exact alias "border" on a titlebar row must not beat a real label hit
+        // on "Border mode" / "Focused pane border".
+        let items = vec![
+            SearchItem::new("Titlebar layout", 0).aliases(["border"]),
+            SearchItem::new("Border mode", 1),
+            SearchItem::new("Focused pane border", 2),
+        ];
+        let entries = super::build_search_entries(&items);
+
+        let results = match_items(
+            &entries,
+            "border",
+            SearchMatchMode::Hybrid,
+            CaseMatching::Smart,
+            Normalization::Smart,
+        );
+
+        assert_eq!(results.len(), 3, "{results:?}");
+        assert_eq!(
+            results[0].item_index, 1,
+            "label prefix must outrank exact alias: {results:?}"
+        );
+        assert_eq!(
+            results[1].item_index, 2,
+            "label word-prefix must outrank exact alias: {results:?}"
+        );
+        assert_eq!(results[2].item_index, 0);
+    }
+
+    #[test]
     fn hybrid_prefix_ranks_above_inner_substring() {
         // "logger" starts with "log" (prefix); "catalog" only contains "log"
         // as an inner substring.
@@ -977,6 +1029,7 @@ fn match_items_wasm_fallback(
 
         let mut score = label_score;
         let mut matched = !label_hits.is_empty();
+        let label_matched = matched;
 
         if matched && is_contiguous_run(&label_hits) {
             score = score.saturating_add(score / 2);
@@ -989,11 +1042,15 @@ fn match_items_wasm_fallback(
                 if is_contiguous_run(&alias_hits) {
                     alias_score = alias_score.saturating_add(alias_score / 2);
                 }
-                if alias_score > score {
+                if !label_matched && alias_score > score {
                     score = alias_score;
                 }
                 matched = true;
             }
+        }
+
+        if label_matched {
+            score = score.saturating_add(1 << 28);
         }
 
         let (desc_score, mut desc_hits) = item

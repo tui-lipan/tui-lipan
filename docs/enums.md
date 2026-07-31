@@ -817,8 +817,8 @@ style directly.
 
 | Variant | Description |
 |---------|-------------|
-| `SearchMatchMode::Fuzzy` | Plain `nucleo` fuzzy matching across label, aliases, and description **(default)** |
-| `SearchMatchMode::Hybrid` | Exact/prefix/word-prefix/substring/fuzzy tiers evaluated independently per field (label+aliases, description, right-hand hint) and ranked in that priority order; weak scattered fuzzy matches are quality-gated and rejected. See `docs/widgets/overlays.md` (Matching config). |
+| `SearchMatchMode::Fuzzy` | Plain `nucleo` fuzzy matching across label, aliases, and description; label matches outrank synonym-only alias hits **(default)** |
+| `SearchMatchMode::Hybrid` | Exact/prefix/word-prefix/substring/fuzzy tiers evaluated independently per field (label, aliases, description, right-hand hint) and ranked in that priority order; any label hit outranks a synonym-only alias hit; weak scattered fuzzy matches are quality-gated and rejected. See `docs/widgets/overlays.md` (Matching config). |
 
 ### `MultiSelectDescriptionPlacement`
 
