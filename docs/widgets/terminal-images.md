@@ -74,11 +74,16 @@ semantic marks. That is what makes it behave like the text it was drawn against:
 | Scrolling back | It reappears at the line it was drawn on |
 | A line falls out of scrollback | The image's remaining rows stay; it goes once its last row is evicted |
 | Alternate screen | Placements made there are dropped when the child leaves it |
-| Column resize (reflow) | Placements are dropped — the anchor no longer names the same text |
+| Column resize | Kept, unless the change actually rewraps text — then the anchor stops naming what it named, and placements are dropped |
 | `RIS` / `TerminalScreen::reset` | Everything is cleared |
 
 A placeholder placement needs none of that bookkeeping: it *is* the text, so it does whatever the
 cells do, and it is gone the moment they are.
+
+Each placement carries the `image_id` its transmission used. A renderer must key its encoding on
+that and not on the pixels alone: a host drawing through Kitty identifies a placement by the id of
+its encoding, so two placements sharing one encoding are a single placement to it — and two copies
+of one picture would collapse, the second silently not drawn.
 
 `TerminalRenderSnapshot::images` carries the placements overlapping the visible rows, back to front
 by Kitty z-index. Rows and columns are viewport-relative, and a cursor placement's may be negative

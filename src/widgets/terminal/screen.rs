@@ -892,6 +892,33 @@ impl TerminalScreen {
         self.cell_size
     }
 
+    /// Whether resizing to `new_cols` would move text between lines.
+    ///
+    /// Only two things can: a line already wrapped into the next one, which widening would pull
+    /// back up, and a line reaching past the new width, which narrowing would push down. With
+    /// neither present every line keeps exactly the text it has, and so does anything anchored to
+    /// it. Worth the scan - the alternative is treating every width change as a rewrap, which in a
+    /// tiling multiplexer costs a pane every image in it each time a neighbour opens.
+    #[cfg(feature = "terminal-images")]
+    fn width_change_rewraps(&self, new_cols: u16) -> bool {
+        let grid = self.term.grid();
+        let last_column = grid.last_column();
+        for line in grid.topmost_line().0..=grid.bottommost_line().0 {
+            let line = Line(line);
+            if grid[line][last_column].flags.contains(CellFlags::WRAPLINE) {
+                return true;
+            }
+            // Anything past the new width has to go somewhere once the grid narrows.
+            for column in usize::from(new_cols)..=last_column.0 {
+                let cell = &grid[line][Column(column)];
+                if cell.c != ' ' || cell.bg != TermColor::Named(NamedColor::Background) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Republish the viewport to the listener that answers pixel-size queries.
     fn sync_viewport(&self) {
         self.listener.viewport.set(ViewportGeometry {
@@ -1019,6 +1046,8 @@ impl TerminalScreen {
             rows: self.rows as usize,
             cols: self.cols as usize,
         };
+        #[cfg(feature = "terminal-images")]
+        let rewraps = self.width_change_rewraps(cols.max(1));
         self.term.resize(dimensions);
         self.sync_viewport();
         // `Term::resize` can push lines into history without going through a handler
@@ -1029,8 +1058,14 @@ impl TerminalScreen {
             // A column change rewraps history, so line indices no longer refer to the
             // text they were recorded against and cannot be corrected by a shift.
             self.semantic_marks.clear();
+            // Images are dropped on the same reasoning, but only when the rewrap actually
+            // happened. Treating every width change as a rewrap costs every image in the pane on
+            // every resize, which in a tiling multiplexer is every split - and a pane full of
+            // plots going blank because a neighbour opened is worse than the drift this risks.
             #[cfg(feature = "terminal-images")]
-            self.graphics.clear_placements();
+            if rewraps {
+                self.graphics.clear_placements();
+            }
         } else {
             self.drop_evicted_semantic_marks(evicted);
             self.settle_graphics(evicted);
@@ -3148,13 +3183,59 @@ mod tests {
         }
 
         #[test]
-        fn reflow_drops_placements_whose_anchor_stopped_meaning_anything() {
-            let mut screen = screen(6, 20, 10);
+        fn a_width_change_that_rewraps_drops_placements() {
+            let mut screen = screen(8, 20, 50);
+            // A line long enough to wrap, so widening really does redistribute text and the
+            // absolute line a placement is anchored to stops naming what it named.
+            screen.process_bytes("x".repeat(35).as_bytes());
+            screen.process_bytes(b"\r\n");
             screen.process_bytes(&place(20, 40, "i=1,C=1"));
             assert_eq!(screen.render_snapshot().images.len(), 1);
 
-            screen.resize(6, 40);
+            screen.resize(8, 40);
             assert!(screen.render_snapshot().images.is_empty());
+        }
+
+        /// Resizing a pane must not cost it every picture in it. In a tiling multiplexer a width
+        /// change is what happens every time a neighbour opens, and treating all of them as a
+        /// rewrap made a pane full of plots go blank for it.
+        #[test]
+        fn a_width_change_that_rewraps_nothing_keeps_placements() {
+            let mut screen = screen(8, 40, 50);
+            screen.process_bytes(b"short\r\n");
+            screen.process_bytes(&place(20, 40, "i=1,C=1"));
+            assert_eq!(screen.render_snapshot().images.len(), 1);
+
+            // Nothing on screen is long enough to wrap at either width.
+            screen.resize(8, 60);
+            assert_eq!(
+                screen.render_snapshot().images.len(),
+                1,
+                "no text moved, so nothing anchored to it should have"
+            );
+        }
+
+        /// Two placements holding identical pixels must stay distinguishable to the renderer: a
+        /// host that draws through Kitty keys a placement by its encoding's id, so sharing one
+        /// encoding between them would draw one and silently drop the other.
+        #[test]
+        fn identical_images_keep_separate_ids() {
+            let mut screen = screen(20, 40, 50);
+            screen.process_bytes(&place(20, 40, "i=1,C=1"));
+            screen.process_bytes(b"\r\n\r\n\r\n");
+            screen.process_bytes(&place(20, 40, "i=2,C=1"));
+
+            let snapshot = screen.render_snapshot();
+            assert_eq!(snapshot.images.len(), 2);
+            assert_eq!(
+                snapshot.images[0].image.source_hash(),
+                snapshot.images[1].image.source_hash(),
+                "the pixels really are identical, which is what makes this worth pinning"
+            );
+            assert_ne!(
+                snapshot.images[0].image_id, snapshot.images[1].image_id,
+                "but the placements are not, and the renderer keys on that"
+            );
         }
     }
 

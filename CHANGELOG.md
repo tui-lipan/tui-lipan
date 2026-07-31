@@ -28,6 +28,13 @@ While the crate is on `0.x.y`:
   `TerminalRenderSnapshot::images` (breaking: the struct gained a field). Unsupported requests —
   file/shared-memory transmission, the protocol's own animation frames — are answered with the
   protocol's own `ENOTSUPP` report. See [`docs/widgets/terminal-images.md`](docs/widgets/terminal-images.md).
+- Keep a pane's images across a width change unless the resize actually rewraps text. Treating
+  every column change as a rewrap cost a pane every image in it on each resize, which in a tiling
+  multiplexer is every time a neighbour opens.
+- Give `TerminalImagePlacement` the `image_id` its transmission used, and key the renderer's
+  encoding cache on it. Two placements holding identical pixels shared one encoding and so one
+  Kitty image id, which a host reads as a single placement — it drew one and dropped the other, so
+  repeated copies of a picture vanished as new ones arrived.
 - Accept a graphics transmission sent as one oversized escape rather than the chunks the protocol
   asks for. Raw pixels in a single escape clear 64 KiB with a picture only a few hundred cells
   wide, and the old per-escape bound dropped those silently — indistinguishable, from the sender's

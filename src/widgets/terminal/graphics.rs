@@ -140,6 +140,14 @@ impl std::fmt::Debug for TerminalImage {
 /// crop the pixels instead of squashing them into what is left.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TerminalImagePlacement {
+    /// The image id the child assigned, which is what distinguishes two placements that happen to
+    /// hold identical pixels.
+    ///
+    /// The renderer must key its encoding on this and not on the pixels alone. A host that draws
+    /// through Kitty identifies a placement by image id, so two placements sharing one id are one
+    /// placement to it - and two copies of the same picture would collapse into a single one on
+    /// screen, the other simply not drawn.
+    pub image_id: u32,
     /// The pixels to draw.
     pub image: TerminalImage,
     /// Top row, relative to the top of the viewport.
@@ -1190,6 +1198,7 @@ impl TerminalGraphics {
                     return None;
                 }
                 Some(TerminalImagePlacement {
+                    image_id: placement.image_id,
                     image: self.images.get(&placement.image_id)?.image.clone(),
                     row: row.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
                     col: i32::from(placement.col),
@@ -1234,6 +1243,7 @@ impl TerminalGraphics {
                     height: (u32::from(rect.height) * u32::from(cell.height)).min(height - y),
                 };
                 Some(TerminalImagePlacement {
+                    image_id: rect.image_id,
                     image: stored.image.clone(),
                     row: i32::from(rect.row),
                     col: i32::from(rect.col),

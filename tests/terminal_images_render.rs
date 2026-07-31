@@ -89,12 +89,22 @@ fn painted(frame: &CapturedFrame) -> bool {
 }
 
 fn pane(output: &[u8], rows: u16, cols: u16) -> TestBackend<Pane> {
+    pane_with_screen(output, rows, cols).0
+}
+
+/// A pane, plus the screen behind it for tests that assert on placements as well as pixels.
+fn pane_with_screen(
+    output: &[u8],
+    rows: u16,
+    cols: u16,
+) -> (TestBackend<Pane>, Rc<RefCell<TerminalScreen>>) {
     let mut screen = TerminalScreen::new(rows, cols, 100);
     screen.set_cell_size(CELL);
     screen.process_bytes(output);
 
+    let screen = Rc::new(RefCell::new(screen));
     let mut backend = TestBackend::new(Pane {
-        screen: Rc::new(RefCell::new(screen)),
+        screen: Rc::clone(&screen),
     });
     backend.set_viewport(Rect {
         x: 0,
@@ -102,7 +112,7 @@ fn pane(output: &[u8], rows: u16, cols: u16) -> TestBackend<Pane> {
         w: cols,
         h: rows,
     });
-    backend
+    (backend, screen)
 }
 
 #[test]
@@ -171,6 +181,56 @@ fn stacked_images_all_paint() {
             }
         }
     }
+}
+
+/// Identical pictures stacked down a pane each keep their own encoding.
+///
+/// A host drawing through Kitty keys a placement by its encoding's id, so two placements sharing
+/// one encoding are one placement to it: it draws one and silently drops the other. Half-blocks
+/// cannot show that - they paint cells directly - so this asserts the property the emitter relies
+/// on, that identical pixels under different image ids do not collide.
+#[test]
+fn identical_stacked_images_do_not_share_an_encoding() {
+    let mut output = Vec::new();
+    for id in 1..=3u32 {
+        output.extend_from_slice(&solid_image(id, 4, 2, [255, 0, 0]));
+        output.extend_from_slice(b"\r\n");
+    }
+
+    let (mut backend, screen) = pane_with_screen(&output, 12, 20);
+    // Wait for every one of them, not just the first: each is encoded separately, so a predicate
+    // that only looks at the top image can return before the others have landed.
+    let frame = render_until(&mut backend, |frame| {
+        [0u16, 2, 4].iter().all(|row| frame.cell(0, *row).fg == RED)
+    });
+
+    // All three are on screen, and all three paint.
+    for row in [0u16, 2, 4] {
+        for x in 0..4u16 {
+            assert_eq!(
+                frame.cell(x, row).fg,
+                RED,
+                "the image at row {row} should be painted"
+            );
+        }
+    }
+
+    let images = screen.borrow_mut().render_snapshot().images.to_vec();
+    assert_eq!(images.len(), 3);
+    let ids: Vec<u32> = images.iter().map(|image| image.image_id).collect();
+    assert_eq!(
+        ids,
+        vec![1, 2, 3],
+        "each placement keeps the id its transmit gave it"
+    );
+    let hashes: Vec<u64> = images
+        .iter()
+        .map(|image| image.image.source_hash())
+        .collect();
+    assert!(
+        hashes.windows(2).all(|pair| pair[0] == pair[1]),
+        "the pixels are identical - the ids are what has to keep them apart"
+    );
 }
 
 #[test]
