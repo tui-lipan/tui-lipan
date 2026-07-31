@@ -30,7 +30,11 @@ pub struct Divider {
     pub(crate) style: Style,
     pub(crate) label: Option<Box<Element>>,
     pub(crate) label_alignment: Align,
-    pub(crate) label_padding: u16,
+    /// Left and right inset of a horizontal label, in cells.
+    ///
+    /// The divider character still paints in the inset cells, so a left inset of 1 yields
+    /// `─title` rather than a blank before the title. Only the label's own cells are left clear.
+    pub(crate) label_padding: (u16, u16),
     pub(crate) join_frame: bool,
 }
 
@@ -53,7 +57,7 @@ impl Divider {
             style: Style::default(),
             label: None,
             label_alignment: Align::Start,
-            label_padding: 1,
+            label_padding: (1, 1),
             join_frame: false,
         }
     }
@@ -68,7 +72,7 @@ impl Divider {
             style: Style::default(),
             label: None,
             label_alignment: Align::Start,
-            label_padding: 1,
+            label_padding: (1, 1),
             join_frame: false,
         }
     }
@@ -91,9 +95,20 @@ impl Divider {
         self
     }
 
-    /// Set label padding on both sides (horizontal only).
+    /// Set equal left and right label insets (horizontal only).
+    ///
+    /// Prefer [`Self::label_padding_axes`] when the sides should differ - for example a border
+    /// title that wants one leading `─` and no trailing gap before the line continues.
     pub fn label_padding(mut self, padding: u16) -> Self {
-        self.label_padding = padding;
+        self.label_padding = (padding, padding);
+        self
+    }
+
+    /// Set independent left/right label insets (horizontal only).
+    ///
+    /// Inset cells still show the divider character; only the label itself clears the line.
+    pub fn label_padding_axes(mut self, left: u16, right: u16) -> Self {
+        self.label_padding = (left, right);
         self
     }
 

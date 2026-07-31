@@ -9,7 +9,6 @@ pub struct DividerNode {
     pub ch: char,
     pub style: Style,
     pub join_frame: bool,
-    pub label_padding: u16,
 }
 
 impl WidgetNode for DividerNode {}
@@ -21,7 +20,6 @@ impl From<Divider> for DividerNode {
             ch: divider.ch,
             style: divider.style,
             join_frame: divider.join_frame,
-            label_padding: divider.label_padding,
         }
     }
 }
