@@ -11,6 +11,17 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- Divider junctions now keep every same-axis segment that shares a cell (two titled horizontals
+  meeting a vertical) and pick the glyph from the union of arms, so a descending vertical tees as
+  `┬` instead of cornering as `┌`.
+- Fuzzy/Exact `BorderMergeMode` no longer wipes a neighbor's border-title on a shared seam that
+  already carries box-drawing: non-box glyphs stay put, and spaces that sit next to that text (the
+  `icon  title` gap) are preserved. Borders still replace ordinary underlay content (e.g. a modal
+  over text). Plain backdrop spaces still accept a border so parent fills with a foreground color do
+  not suppress frames. `Replace` still overwrites so occluding frames win.
+
 ### Changed
 
 - Divider `label_padding` no longer clears blank cells around the label. Inset cells keep the

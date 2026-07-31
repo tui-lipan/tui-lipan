@@ -3789,6 +3789,215 @@ fn frame_border_overlap_replace_strategy_keeps_last_symbol() {
     );
 }
 
+struct OverlappingBorderTitlePreserveComponent;
+
+impl Component for OverlappingBorderTitlePreserveComponent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        // Lower titled frame first, untitled upper frame last (bottom edge shares the title row).
+        Canvas::new()
+            .child_at(
+                Rect {
+                    x: 0,
+                    y: 3,
+                    w: 20,
+                    h: 5,
+                },
+                Frame::new()
+                    .border(true)
+                    .border_merge_mode(BorderMergeMode::Fuzzy)
+                    .header(BorderLabels::new().left("KEEP  ME").padding(1))
+                    .child(Text::new("below")),
+            )
+            .child_at(
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 20,
+                    h: 4,
+                },
+                Frame::new()
+                    .border(true)
+                    .border_merge_mode(BorderMergeMode::Fuzzy)
+                    .style(Style::new().fg(Color::Cyan))
+                    .child(Text::new("above")),
+            )
+            .into()
+    }
+}
+
+#[test]
+fn fuzzy_merge_preserves_neighbor_border_title_on_shared_seam() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 8,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        OverlappingBorderTitlePreserveComponent,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    runtime.render_element(viewport, None, None, None);
+
+    let backend = TestBackend::new(viewport.w, viewport.h);
+    let mut terminal = Terminal::new(backend).expect("terminal should init");
+    let ctx = RenderContext {
+        tree: &runtime.tree,
+        focused: None,
+        hovered: None,
+        mouse_pos: None,
+        suppress_pointer_item_hover_nodes: None,
+        blink_visible: true,
+        effect_phase: 0,
+        images_enabled: true,
+        contrast_policy: ContrastPolicy::Wcag,
+        read_only_selection: None,
+        scrollbar_metrics_cache: &RefCell::new(Default::default()),
+        overlay_bg_snapshot: &RefCell::new(Vec::new()),
+        join_index: &build_join_index(&runtime.tree),
+        cursor_position: &Cell::new(None),
+        terminal_bg: None,
+        drag_preview_label: None,
+        drag_preview_at_mouse: false,
+        drag_preview_snapshot_rect: None,
+        dnd_snapshot_cells: &RefCell::new(None),
+        drag_preview_max_width: None,
+        drag_preview_max_height: None,
+        drop_slot_source_preview_rect: None,
+        paint_glyph_caches: None,
+        copy_feedback: None,
+        copy_feedback_style: Style::default(),
+    };
+
+    terminal
+        .draw(|f| render(f, &ctx))
+        .expect("render should succeed");
+
+    let buffer = terminal.backend().buffer();
+    let mut seam = String::new();
+    for x in 0..20 {
+        seam.push_str(buffer[(x, 3)].symbol());
+    }
+    assert!(
+        seam.contains("KEEP  ME"),
+        "later overlapping bottom border must not wipe titled seam spaces: {seam:?}"
+    );
+}
+
+struct BorderOnStyledBackdropComponent;
+
+impl Component for BorderOnStyledBackdropComponent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        // Parent fill with an explicit fg (like hyprmux's theme.primary + backdrop) must not
+        // suppress Fuzzy border drawing on those styled blank cells.
+        ZStack::new()
+            .style(Style::new().fg(Color::Yellow).bg(Color::Black))
+            .child(
+                Frame::new()
+                    .border(true)
+                    .border_merge_mode(BorderMergeMode::Fuzzy)
+                    .header(BorderLabels::new().left("X  Y").padding(1))
+                    .child(Text::new("body")),
+            )
+            .into()
+    }
+}
+
+#[test]
+fn fuzzy_border_still_draws_over_styled_backdrop_spaces() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 12,
+        h: 4,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        BorderOnStyledBackdropComponent,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    runtime.render_element(viewport, None, None, None);
+
+    let backend = TestBackend::new(viewport.w, viewport.h);
+    let mut terminal = Terminal::new(backend).expect("terminal should init");
+    let ctx = RenderContext {
+        tree: &runtime.tree,
+        focused: None,
+        hovered: None,
+        mouse_pos: None,
+        suppress_pointer_item_hover_nodes: None,
+        blink_visible: true,
+        effect_phase: 0,
+        images_enabled: true,
+        contrast_policy: ContrastPolicy::Wcag,
+        read_only_selection: None,
+        scrollbar_metrics_cache: &RefCell::new(Default::default()),
+        overlay_bg_snapshot: &RefCell::new(Vec::new()),
+        join_index: &build_join_index(&runtime.tree),
+        cursor_position: &Cell::new(None),
+        terminal_bg: None,
+        drag_preview_label: None,
+        drag_preview_at_mouse: false,
+        drag_preview_snapshot_rect: None,
+        dnd_snapshot_cells: &RefCell::new(None),
+        drag_preview_max_width: None,
+        drag_preview_max_height: None,
+        drop_slot_source_preview_rect: None,
+        paint_glyph_caches: None,
+        copy_feedback: None,
+        copy_feedback_style: Style::default(),
+    };
+
+    terminal
+        .draw(|f| render(f, &ctx))
+        .expect("render should succeed");
+
+    let buffer = terminal.backend().buffer();
+    let top: String = (0..12).map(|x| buffer[(x, 0)].symbol()).collect();
+    assert!(
+        top.starts_with('┌') || top.starts_with('╭'),
+        "corner must survive a styled backdrop fill: {top:?}"
+    );
+    assert!(
+        top.contains("X  Y"),
+        "title gap spaces must remain: {top:?}"
+    );
+    assert_eq!(
+        buffer[(0, 1)].symbol(),
+        "│",
+        "vertical border must draw over styled backdrop spaces"
+    );
+}
+
 struct AdjacentFramesNoJoin;
 
 impl Component for AdjacentFramesNoJoin {
@@ -4055,6 +4264,40 @@ impl Component for DividerJunctions {
                     y: 0,
                     w: 1,
                     h: 5,
+                },
+                Divider::vertical(),
+            )
+            // Two titled-style horizontals meeting a vertical that starts on their row must tee
+            // (`┬`), not corner (`┌`) - the second horizontal used to replace the first in junction
+            // state and leave only an endpoint half for Exact merge.
+            .child_at(
+                Rect {
+                    x: 0,
+                    y: 5,
+                    w: 6,
+                    h: 1,
+                },
+                Divider::horizontal()
+                    .label(Text::new("L"))
+                    .label_padding_axes(1, 0),
+            )
+            .child_at(
+                Rect {
+                    x: 5,
+                    y: 5,
+                    w: 6,
+                    h: 1,
+                },
+                Divider::horizontal()
+                    .label(Text::new("R"))
+                    .label_padding_axes(2, 0),
+            )
+            .child_at(
+                Rect {
+                    x: 5,
+                    y: 5,
+                    w: 1,
+                    h: 3,
                 },
                 Divider::vertical(),
             )
@@ -4525,7 +4768,7 @@ fn perpendicular_dividers_form_directional_junctions() {
         x: 0,
         y: 0,
         w: 38,
-        h: 6,
+        h: 8,
     };
     let mut runtime = RuntimeCore::new_test(
         DividerJunctions,
@@ -4546,6 +4789,11 @@ fn perpendicular_dividers_form_directional_junctions() {
     assert_eq!(buffer[(22, 2)].symbol(), "─");
     assert_eq!(buffer[(27, 2)].symbol(), "┼");
     assert_eq!(buffer[(33, 2)].symbol(), "│");
+    assert_eq!(
+        buffer[(5, 5)].symbol(),
+        "┬",
+        "titled horizontal segments meeting a descending vertical must tee"
+    );
 }
 
 #[test]
