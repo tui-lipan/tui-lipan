@@ -325,6 +325,8 @@ pub(crate) struct ListItemSpinnerGutter {
     pub auto_frame: bool,
     pub label: Option<Arc<str>>,
     pub gap: u16,
+    /// Blank cells before the glyph, so a 1-cell frame can match text markers like `" ●"`.
+    pub leading: u16,
     pub style: Style,
     pub label_style: Style,
 }
@@ -347,6 +349,16 @@ impl ListItemGutter {
         spinner.into()
     }
 
+    /// Blank cells before a spinner glyph (no-op for text gutters).
+    ///
+    /// Use `1` when the spinner should line up with text markers like `" ●"`.
+    pub fn leading(mut self, leading: u16) -> Self {
+        if let ListItemGutterKind::Spinner(spinner) = &mut self.kind {
+            spinner.leading = leading;
+        }
+        self
+    }
+
     pub(crate) fn width(&self) -> u16 {
         match &self.kind {
             ListItemGutterKind::Text(spans) => spans
@@ -362,8 +374,8 @@ impl ListItemGutter {
                     .unwrap_or(0);
                 let gap = if label_width > 0 { spinner.gap } else { 0 };
                 spinner
-                    .spinner_style
-                    .width()
+                    .leading
+                    .saturating_add(spinner.spinner_style.width())
                     .saturating_add(gap)
                     .saturating_add(label_width)
             }
@@ -392,6 +404,7 @@ impl From<Spinner> for ListItemGutter {
                 auto_frame: spinner.frame.is_none(),
                 label: spinner.label,
                 gap: spinner.gap,
+                leading: 0,
                 style: spinner.style,
                 label_style: spinner.label_style,
             }),
@@ -450,6 +463,7 @@ impl From<Spinner> for ListItemStatus {
                 auto_frame: spinner.frame.is_none(),
                 label: None,
                 gap: 0,
+                leading: 0,
                 style: spinner.style,
                 label_style: spinner.label_style,
             }),

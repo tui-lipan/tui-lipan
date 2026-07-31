@@ -211,6 +211,7 @@ fn push_gutter_spans<'v, 's>(
     item: &ListItem,
     sub_line: usize,
     reserved_gutter_width: usize,
+    gutter_gap: u16,
     ctx: GutterSpanPushCtx<'v, 's>,
 ) {
     let GutterSpanPushCtx {
@@ -241,6 +242,21 @@ fn push_gutter_spans<'v, 's>(
     };
 
     let content_width = gutter.width() as usize;
+    // `reserved` is max(content) + gutter_gap. Keep the gap as trailing space before the
+    // label; only the content column is used to align shorter markers.
+    let gap = usize::from(gutter_gap).min(reserved_gutter_width);
+    let content_column = reserved_gutter_width.saturating_sub(gap);
+    let align_pad = content_column.saturating_sub(content_width);
+    // Text gutters usually bake a leading indent into the marker (`" ●"`). Spinner frames may
+    // also carry an explicit `leading` inset; remaining shorter markers pad in front here.
+    let (align_leading, after_content) = match &gutter.kind {
+        ListItemGutterKind::Spinner(_) => (align_pad, 0),
+        ListItemGutterKind::Text(_) => (0, align_pad),
+    };
+    if align_leading > 0 {
+        item_spans.push(Span::styled(spaces(align_leading), rs_base));
+    }
+
     match &gutter.kind {
         ListItemGutterKind::Text(spans) => {
             for span in spans {
@@ -255,29 +271,54 @@ fn push_gutter_spans<'v, 's>(
             }
         }
         ListItemGutterKind::Spinner(spinner) => {
-            let virtual_x = content_inner.x.saturating_add(*item_spans_width as i16);
+            let inset = usize::from(spinner.leading);
+            if inset > 0 {
+                item_spans.push(Span::styled(spaces(inset), rs_base));
+            }
+            let body_width = content_width.saturating_sub(inset);
+            let virtual_x = content_inner.x.saturating_add(
+                item_spans_width
+                    .saturating_add(align_leading)
+                    .saturating_add(inset) as i16,
+            );
             let virtual_y = content_inner.y.saturating_add(virtual_line_idx as i16);
+            let style = finalize_style(
+                left_base_style
+                    .patch(spinner.style)
+                    .patch(left_style_override),
+                style_backdrop(left_base_style),
+                contrast_policy,
+            );
+            let label_style = finalize_style(
+                left_base_style
+                    .patch(spinner.label_style)
+                    .patch(left_style_override),
+                style_backdrop(left_base_style),
+                contrast_policy,
+            );
             spinner_draws.push(SpinnerGutterDraw {
                 spinner_style: spinner.spinner_style,
                 frame: spinner.frame,
                 label: spinner.label.clone(),
                 gap: spinner.gap,
-                style: left_base_style.patch(spinner.style),
-                label_style: left_base_style.patch(spinner.label_style),
+                style,
+                label_style,
                 rect: Rect {
                     x: virtual_x.saturating_sub(dx as i16),
                     y: virtual_y.saturating_sub(dy as i16),
-                    w: content_width.min(u16::MAX as usize) as u16,
+                    w: body_width.min(u16::MAX as usize) as u16,
                     h: 1,
                 },
             });
-            item_spans.push(Span::styled(spaces(content_width), rs_base));
+            item_spans.push(Span::styled(spaces(body_width), rs_base));
         }
     }
 
-    let trailing = reserved_gutter_width.saturating_sub(content_width);
-    if trailing > 0 {
-        item_spans.push(Span::styled(spaces(trailing), rs_base));
+    if after_content > 0 {
+        item_spans.push(Span::styled(spaces(after_content), rs_base));
+    }
+    if gap > 0 {
+        item_spans.push(Span::styled(spaces(gap), rs_base));
     }
     *item_spans_width += reserved_gutter_width;
 }
@@ -328,13 +369,27 @@ fn push_status_symbol_spans<'v, 's>(
                 .x
                 .saturating_add(item_spans_width.saturating_add(left_pad) as i16);
             let virtual_y = content_inner.y.saturating_add(virtual_line_idx as i16);
+            let style = finalize_style(
+                left_base_style
+                    .patch(spinner.style)
+                    .patch(left_style_override),
+                style_backdrop(left_base_style),
+                contrast_policy,
+            );
+            let label_style = finalize_style(
+                left_base_style
+                    .patch(spinner.label_style)
+                    .patch(left_style_override),
+                style_backdrop(left_base_style),
+                contrast_policy,
+            );
             spinner_draws.push(SpinnerGutterDraw {
                 spinner_style: spinner.spinner_style,
                 frame: spinner.frame,
                 label: None,
                 gap: 0,
-                style: left_base_style.patch(spinner.style),
-                label_style: left_base_style.patch(spinner.label_style),
+                style,
+                label_style,
                 rect: Rect {
                     x: virtual_x.saturating_sub(dx as i16),
                     y: virtual_y.saturating_sub(dy as i16),
@@ -905,6 +960,7 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                 item,
                 sub_line,
                 item_gutter_width,
+                gutter_gap,
                 GutterSpanPushCtx {
                     left_base_style,
                     left_style_override,
@@ -2057,6 +2113,281 @@ mod tests {
 
         assert!(row0.starts_with("⠋ Alpha"), "row0 was {row0:?}");
         assert!(row1.starts_with("  Beta"), "row1 was {row1:?}");
+    }
+
+    #[test]
+    fn spinner_gutter_lead_pads_to_match_text_marker_column() {
+        use crate::widgets::SpinnerStyle;
+
+        let items = [
+            ListItem::new("Current").gutter(ListItemGutter::text(" ●")),
+            ListItem::new("Busy").gutter(Spinner::new().spinner_style(SpinnerStyle::Arc)),
+        ];
+
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 3,
+        };
+        let backend = TestBackend::new(rect.w, rect.h);
+        let mut terminal = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Fixed(ratatui::layout::Rect::new(0, 0, rect.w, rect.h)),
+            },
+        )
+        .expect("terminal");
+
+        terminal
+            .draw(|f| {
+                render_list(ListRenderParams {
+                    f,
+                    items: &items,
+                    selected: Some(0),
+                    offset: 0,
+                    style: Style::default(),
+                    hover_style: Style::default(),
+                    item_hover_style: Style::default(),
+                    active_style: Style::default(),
+                    selection_style: Style::default(),
+                    active_symbol: None,
+                    active_symbol_position: ListSymbolPosition::Left,
+                    active_symbol_style: None,
+                    selection_symbol: None,
+                    selection_symbol_right: None,
+                    selection_symbol_style: None,
+                    unselected_symbol: None,
+                    symbol_column: false,
+                    gutter_gap: 1,
+                    gutter_for_non_selectable: false,
+                    selection_full_width: false,
+                    item_horizontal_padding: Padding::default(),
+                    header_horizontal_padding: Padding::default(),
+                    border: false,
+                    border_style: BorderStyle::Plain,
+                    title: None,
+                    title_style: Style::default(),
+                    padding: Padding::default(),
+                    scrollbar: false,
+                    scrollbar_variant: ScrollbarVariant::Standalone,
+                    scrollbar_gap: 0,
+                    scrollbar_thumb: None,
+                    scrollbar_thumb_style: None,
+                    scrollbar_thumb_focus_style: None,
+                    scrollbar_track_style: None,
+                    show_scroll_indicators: false,
+                    scroll_indicator_style: Style::default(),
+                    top_indicator: false,
+                    bottom_indicator: false,
+                    bottom_count: 0,
+                    empty_text: None,
+                    empty_text_style: Style::default(),
+                    is_focused: true,
+                    is_hovered: false,
+                    mouse_pos: None,
+                    disabled: false,
+                    disabled_style: Style::default(),
+                    rect,
+                    rrect: ratatui::layout::Rect::new(0, 0, rect.w, rect.h),
+                    parent_integrated_v: None,
+                    clip_rect: None,
+                    contrast_policy: ContrastPolicy::Off,
+                });
+            })
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let row0 = (0..rect.w)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect::<String>();
+        let row1 = (0..rect.w)
+            .map(|x| buffer[(x, 1)].symbol())
+            .collect::<String>();
+
+        assert!(row0.starts_with(" ● Current"), "row0 was {row0:?}");
+        // Arc frame 0 is `◜`; leading pad keeps it under the `●` column.
+        assert!(row1.starts_with(" ◜ Busy"), "row1 was {row1:?}");
+    }
+
+    #[test]
+    fn spinner_gutter_applies_selection_style_override() {
+        let items =
+            [ListItem::new("Busy").gutter(Spinner::new().style(Style::new().fg(Color::Red)))];
+
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 2,
+        };
+        let backend = TestBackend::new(rect.w, rect.h);
+        let mut terminal = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Fixed(ratatui::layout::Rect::new(0, 0, rect.w, rect.h)),
+            },
+        )
+        .expect("terminal");
+
+        terminal
+            .draw(|f| {
+                render_list(ListRenderParams {
+                    f,
+                    items: &items,
+                    selected: Some(0),
+                    offset: 0,
+                    style: Style::default(),
+                    hover_style: Style::default(),
+                    item_hover_style: Style::default(),
+                    active_style: Style::default(),
+                    selection_style: Style::new().fg(Color::White).bg(Color::Red),
+                    active_symbol: None,
+                    active_symbol_position: ListSymbolPosition::Left,
+                    active_symbol_style: None,
+                    selection_symbol: None,
+                    selection_symbol_right: None,
+                    selection_symbol_style: None,
+                    unselected_symbol: None,
+                    symbol_column: false,
+                    gutter_gap: 0,
+                    gutter_for_non_selectable: false,
+                    selection_full_width: true,
+                    item_horizontal_padding: Padding::default(),
+                    header_horizontal_padding: Padding::default(),
+                    border: false,
+                    border_style: BorderStyle::Plain,
+                    title: None,
+                    title_style: Style::default(),
+                    padding: Padding::default(),
+                    scrollbar: false,
+                    scrollbar_variant: ScrollbarVariant::Standalone,
+                    scrollbar_gap: 0,
+                    scrollbar_thumb: None,
+                    scrollbar_thumb_style: None,
+                    scrollbar_thumb_focus_style: None,
+                    scrollbar_track_style: None,
+                    show_scroll_indicators: false,
+                    scroll_indicator_style: Style::default(),
+                    top_indicator: false,
+                    bottom_indicator: false,
+                    bottom_count: 0,
+                    empty_text: None,
+                    empty_text_style: Style::default(),
+                    is_focused: true,
+                    is_hovered: false,
+                    mouse_pos: None,
+                    disabled: false,
+                    disabled_style: Style::default(),
+                    rect,
+                    rrect: ratatui::layout::Rect::new(0, 0, rect.w, rect.h),
+                    parent_integrated_v: None,
+                    clip_rect: None,
+                    contrast_policy: ContrastPolicy::Off,
+                });
+            })
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let spinner_cell = &buffer[(0, 0)];
+        assert_eq!(
+            spinner_cell.fg,
+            ratatui::style::Color::White,
+            "selected spinner should take selection fg, got {:?}",
+            spinner_cell.fg
+        );
+    }
+
+    #[test]
+    fn spinner_gutter_contrast_policy_resolves_against_selection_bg() {
+        // A spinner whose fg matches the selection bg must be rewritten by the row
+        // contrast policy, exactly like a text gutter marker would be.
+        let items =
+            [ListItem::new("Busy").gutter(Spinner::new().style(Style::new().fg(Color::Red)))];
+
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 2,
+        };
+        let backend = TestBackend::new(rect.w, rect.h);
+        let mut terminal = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Fixed(ratatui::layout::Rect::new(0, 0, rect.w, rect.h)),
+            },
+        )
+        .expect("terminal");
+
+        terminal
+            .draw(|f| {
+                render_list(ListRenderParams {
+                    f,
+                    items: &items,
+                    selected: Some(0),
+                    offset: 0,
+                    style: Style::default(),
+                    hover_style: Style::default(),
+                    item_hover_style: Style::default(),
+                    active_style: Style::default(),
+                    selection_style: Style::new().bg(Color::Red),
+                    active_symbol: None,
+                    active_symbol_position: ListSymbolPosition::Left,
+                    active_symbol_style: None,
+                    selection_symbol: None,
+                    selection_symbol_right: None,
+                    selection_symbol_style: None,
+                    unselected_symbol: None,
+                    symbol_column: false,
+                    gutter_gap: 0,
+                    gutter_for_non_selectable: false,
+                    selection_full_width: true,
+                    item_horizontal_padding: Padding::default(),
+                    header_horizontal_padding: Padding::default(),
+                    border: false,
+                    border_style: BorderStyle::Plain,
+                    title: None,
+                    title_style: Style::default(),
+                    padding: Padding::default(),
+                    scrollbar: false,
+                    scrollbar_variant: ScrollbarVariant::Standalone,
+                    scrollbar_gap: 0,
+                    scrollbar_thumb: None,
+                    scrollbar_thumb_style: None,
+                    scrollbar_thumb_focus_style: None,
+                    scrollbar_track_style: None,
+                    show_scroll_indicators: false,
+                    scroll_indicator_style: Style::default(),
+                    top_indicator: false,
+                    bottom_indicator: false,
+                    bottom_count: 0,
+                    empty_text: None,
+                    empty_text_style: Style::default(),
+                    is_focused: true,
+                    is_hovered: false,
+                    mouse_pos: None,
+                    disabled: false,
+                    disabled_style: Style::default(),
+                    rect,
+                    rrect: ratatui::layout::Rect::new(0, 0, rect.w, rect.h),
+                    parent_integrated_v: None,
+                    clip_rect: None,
+                    contrast_policy: ContrastPolicy::BlackOrWhite,
+                });
+            })
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let spinner_cell = &buffer[(0, 0)];
+        assert!(
+            matches!(
+                spinner_cell.fg,
+                ratatui::style::Color::White | ratatui::style::Color::Black
+            ),
+            "contrast policy should rewrite red-on-red spinner, got {:?}",
+            spinner_cell.fg
+        );
     }
 
     #[test]

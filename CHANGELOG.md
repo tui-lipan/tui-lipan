@@ -245,6 +245,11 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Apply list selection/hover style overrides and contrast finalization to spinner gutters and
+  status spinners (text markers already did). Narrow spinner gutters also lead-pad inside the
+  reserved column so a 1-cell frame lines up with text markers like `" ●"`. Add
+  `ListItemGutter::leading(n)` for an explicit inset when the spinner is the widest gutter
+  (otherwise a lone 1-cell spinner stays flush left).
 - Gate `AnimatedNode::auto_exit_warned` and `supports_auto_exit` behind `#[cfg(debug_assertions)]` to
   suppress dead-code warnings in release builds where the only call site is compiled out.
 - A `Toast` with a translucent background no longer renders a darker patch behind its own text. The
