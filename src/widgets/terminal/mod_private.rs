@@ -9,6 +9,8 @@ use super::events::{
     MouseModeState, TerminalInputEvent, TerminalKeyModes, TerminalPasteShortcutBehavior,
     TerminalSelection, TerminalSelectionEvent,
 };
+#[cfg(feature = "terminal-images")]
+use super::graphics::TerminalImagePlacement;
 use super::screen::{TerminalDecoration, TerminalScreenHandle, TerminalViewport};
 
 /// Terminal-like widget backed by a read-only `TextArea`.
@@ -33,6 +35,10 @@ pub struct Terminal {
     pub(crate) total_scrollback_rows: usize,
     pub(crate) mouse_mode: MouseModeState,
     pub(crate) key_modes: TerminalKeyModes,
+    /// Images from a handed-in snapshot. The live-screen path refreshes these per draw
+    /// instead, so this stays empty there.
+    #[cfg(feature = "terminal-images")]
+    pub(crate) images: Arc<[TerminalImagePlacement]>,
     pub(crate) paste_shortcut_behavior: TerminalPasteShortcutBehavior,
     pub(crate) selection: Option<TerminalSelection>,
     pub(crate) selection_controlled: bool,

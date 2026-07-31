@@ -222,21 +222,25 @@ pub use crate::widgets::{
     SyntectDocumentFormatter, SyntectStrategy, apply_syntect_strategy_app_theme, language_from_path,
 };
 
+#[cfg(all(feature = "terminal-images", not(target_arch = "wasm32")))]
+pub use crate::host_cell_size;
 #[cfg(all(feature = "terminal", unix))]
 pub use crate::widgets::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
     CopyModeAction, CopyModeGrid, KittyKeyboardFlags, ManagedTerminal, ManagedTerminalProps,
     ManagedTerminalStatus, MouseEncoding, MouseMode, MouseModeState, SemanticMark,
-    SemanticMarkKind, Terminal, TerminalBuffer, TerminalColorPalette, TerminalCommandPhase,
-    TerminalCopyMode, TerminalDecoration, TerminalInputEvent, TerminalInputKind, TerminalKeyModes,
-    TerminalPasteShortcutBehavior, TerminalPty, TerminalPtyConfig, TerminalPtyError,
-    TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle,
-    TerminalSelection, TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState,
-    TerminalViewport, TerminalWorkingDirectory, TerminalWorkingDirectorySource, encode_paste,
-    focus_sequences, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
-    terminal_selection_text,
+    SemanticMarkKind, Terminal, TerminalBuffer, TerminalCellSize, TerminalColorPalette,
+    TerminalCommandPhase, TerminalCopyMode, TerminalDecoration, TerminalInputEvent,
+    TerminalInputKind, TerminalKeyModes, TerminalPasteShortcutBehavior, TerminalPty,
+    TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen,
+    TerminalScreenHandle, TerminalSelection, TerminalSelectionEvent, TerminalSemanticEvent,
+    TerminalSemanticState, TerminalViewport, TerminalWorkingDirectory,
+    TerminalWorkingDirectorySource, encode_paste, focus_sequences, key_event_to_bytes,
+    mouse_event_to_bytes, paste_sequences, terminal_selection_text,
 };
+#[cfg(feature = "terminal-images")]
+pub use crate::widgets::{TerminalImage, TerminalImageCrop, TerminalImagePlacement};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Feature-gated utilities

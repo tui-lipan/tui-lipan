@@ -284,15 +284,17 @@ pub use terminal::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use terminal::{
     CopyModeAction, CopyModeGrid, KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState,
-    SemanticMark, SemanticMarkKind, Terminal, TerminalBuffer, TerminalColorPalette,
-    TerminalCommandPhase, TerminalCopyMode, TerminalDecoration, TerminalInputEvent,
-    TerminalInputKind, TerminalKeyModes, TerminalPasteShortcutBehavior, TerminalPty,
-    TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen,
-    TerminalScreenHandle, TerminalSelection, TerminalSelectionEvent, TerminalSemanticEvent,
-    TerminalSemanticState, TerminalViewport, TerminalWorkingDirectory,
+    SemanticMark, SemanticMarkKind, Terminal, TerminalBuffer, TerminalCellSize,
+    TerminalColorPalette, TerminalCommandPhase, TerminalCopyMode, TerminalDecoration,
+    TerminalInputEvent, TerminalInputKind, TerminalKeyModes, TerminalPasteShortcutBehavior,
+    TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalRenderSnapshot,
+    TerminalScreen, TerminalScreenHandle, TerminalSelection, TerminalSelectionEvent,
+    TerminalSemanticEvent, TerminalSemanticState, TerminalViewport, TerminalWorkingDirectory,
     TerminalWorkingDirectorySource, encode_paste, focus_sequences, key_event_to_bytes,
     mouse_event_to_bytes, paste_sequences, terminal_selection_text,
 };
+#[cfg(feature = "terminal-images")]
+pub use terminal::{TerminalImage, TerminalImageCrop, TerminalImagePlacement};
 pub use text::{Overflow, Text};
 pub use text_area::{
     IMAGE_SENTINEL_BASE, SENTINEL_BASE, SentinelEvent, SentinelId, TextArea,

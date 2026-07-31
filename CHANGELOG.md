@@ -13,6 +13,37 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add the `terminal-images` feature: programs running inside a `Terminal` pane can draw pictures
+  with the Kitty graphics protocol. `TerminalScreen` reads `APC _G` out of the PTY stream and
+  decodes it rather than forwarding it, so the host terminal does not have to speak Kitty — the
+  pixels are re-encoded through the same path the `Image` widget uses, down to half-blocks. That is
+  also what lets two panes pick the same image id, and a half-scrolled pane crop its pixels instead
+  of squashing them. Both ways of placing an image are read: at the cursor, as `icat` does, and
+  through Unicode placeholder cells (`U=1`), as terminal UI toolkits including `ratatui-image` do.
+  Cursor placements are anchored to absolute scrollback lines, so images scroll, scroll back, and
+  evict with the text they were drawn against; placeholder placements are read off the grid and so
+  follow the cells holding them. Decoded pixels are held to a per-screen budget
+  (`TerminalScreen::set_image_budget`, 96 MiB by default). New public types `TerminalImage`,
+  `TerminalImagePlacement`, `TerminalImageCrop`, and the snapshot field
+  `TerminalRenderSnapshot::images` (breaking: the struct gained a field). Unsupported requests —
+  file/shared-memory transmission, the protocol's own animation frames — are answered with the
+  protocol's own `ENOTSUPP` report. See [`docs/widgets/terminal-images.md`](docs/widgets/terminal-images.md).
+- Keep a pane's images across a width change unless the resize actually rewraps text. Treating
+  every column change as a rewrap cost a pane every image in it on each resize, which in a tiling
+  multiplexer is every time a neighbour opens.
+- Give `TerminalImagePlacement` the `image_id` its transmission used, and key the renderer's
+  encoding cache on it. Two placements holding identical pixels shared one encoding and so one
+  Kitty image id, which a host reads as a single placement — it drew one and dropped the other, so
+  repeated copies of a picture vanished as new ones arrived.
+- Accept a graphics transmission sent as one oversized escape rather than the chunks the protocol
+  asks for. Raw pixels in a single escape clear 64 KiB with a picture only a few hundred cells
+  wide, and the old per-escape bound dropped those silently — indistinguishable, from the sender's
+  side, from a terminal with no graphics support at all.
+- Add `TerminalCellSize`, `host_cell_size()`, `TerminalScreen::set_cell_size`, and
+  `TerminalPtyConfig::cell_size` / `TerminalPty::resize_with_cell_size`. The PTY now reports pixel
+  dimensions in `TIOCGWINSZ` instead of zeroes, and `CSI 14 t` (text-area size in pixels) is
+  answered instead of ignored, so a child that measures itself before drawing no longer waits out
+  its own timeout. `ManagedTerminal` wires the host's real cell size to both ends automatically.
 - Add `Context::animated_color` and `Paint::Animated` for colours that only feed a style. The returned
   paint *names* its transition instead of carrying the current colour, so the element tree holds still
   for the whole fade and the runtime advances it with a repaint: a 160 ms focus fade at 60 fps costs

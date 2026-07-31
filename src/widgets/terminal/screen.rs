@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use alacritty_terminal::event::{Event as TermEvent, EventListener};
+use alacritty_terminal::event::{Event as TermEvent, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, GridCell, Scroll};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell as TermCell, Flags as CellFlags};
@@ -19,6 +19,11 @@ use alacritty_terminal::vte::ansi::{
 use super::events::{
     KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, TerminalKeyModes,
     terminal_selection_text_with,
+};
+#[cfg(feature = "terminal-images")]
+use super::graphics::{
+    GraphicsCommand, GraphicsContext, GraphicsScanner, GraphicsSegment, PLACEHOLDER,
+    PlaceholderCell, TerminalGraphics, TerminalImagePlacement,
 };
 use super::osc::{
     SemanticObserver, TerminalCommandPhase, TerminalSemanticEvent, TerminalSemanticState,
@@ -105,6 +110,41 @@ impl Dimensions for TermDimensions {
 
 /// Event listener that captures PtyWrite events for forwarding to the PTY.
 ///
+/// Cell size in pixels, as the host draws it.
+///
+/// A terminal's own contents are cells, but programs that draw pictures need pixels: they read the
+/// PTY's `TIOCGWINSZ` pixel fields or ask with `CSI 14 t`, then size their output against the
+/// answer. Both are reported from the value installed with
+/// [`TerminalScreen::set_cell_size`](TerminalScreen::set_cell_size), so what a child computes and
+/// what this screen lays out agree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerminalCellSize {
+    /// Cell width in pixels.
+    pub width: u16,
+    /// Cell height in pixels.
+    pub height: u16,
+}
+
+impl Default for TerminalCellSize {
+    /// 10x20, the same guess the image encoder falls back to when the host answers no size query.
+    ///
+    /// Apps that can measure the host should install
+    /// [`host_cell_size`](crate::host_cell_size) instead of relying on this.
+    fn default() -> Self {
+        Self::new(10, 20)
+    }
+}
+
+impl TerminalCellSize {
+    /// Clamp both axes to at least one pixel.
+    pub fn new(width: u16, height: u16) -> Self {
+        Self {
+            width: width.max(1),
+            height: height.max(1),
+        }
+    }
+}
+
 /// When the terminal parser encounters escape sequences that require a response
 /// (e.g., device attributes queries, cursor position reports), alacritty_terminal
 /// generates `Event::PtyWrite` events. This listener captures those responses
@@ -120,6 +160,18 @@ struct ResponseCapture {
     /// `OSC 4/10/11 ; ?` color queries so guest programs don't block waiting
     /// for a reply (see [`Self::resolve_query_color`]).
     palette: Rc<RefCell<TerminalColorPalette>>,
+    /// Viewport geometry, shared with [`TerminalScreen`], used to answer `CSI 14 t` (text-area
+    /// size in pixels). Programs that draw images ask this when the PTY reports no pixel
+    /// dimensions, and block on the reply.
+    viewport: Rc<Cell<ViewportGeometry>>,
+}
+
+/// The viewport in both units, which is what a pixel-size report needs.
+#[derive(Clone, Copy, Debug, Default)]
+struct ViewportGeometry {
+    rows: u16,
+    cols: u16,
+    cell: TerminalCellSize,
 }
 
 impl ResponseCapture {
@@ -162,6 +214,19 @@ impl EventListener for ResponseCapture {
                 let response = formatter(self.resolve_query_color(index));
                 self.responses.borrow_mut().push(response.into_bytes());
             }
+            // Report the text area in pixels. Without this a child that measures itself
+            // before drawing an image waits out its own timeout, since alacritty delegates the
+            // reply to the listener.
+            TermEvent::TextAreaSizeRequest(formatter) => {
+                let viewport = self.viewport.get();
+                let response = formatter(WindowSize {
+                    num_lines: viewport.rows,
+                    num_cols: viewport.cols,
+                    cell_width: viewport.cell.width,
+                    cell_height: viewport.cell.height,
+                });
+                self.responses.borrow_mut().push(response.into_bytes());
+            }
             // Ignore other events (Clipboard, etc.) for now
             _ => {}
         }
@@ -197,6 +262,18 @@ pub struct TerminalScreen {
     semantic_marks: VecDeque<SemanticMark>,
     /// How many semantic events have already been turned into marks (reset on drain).
     semantic_events_seen: usize,
+    /// Splits `APC _G` graphics commands out of the byte stream before the grid parser sees it.
+    #[cfg(feature = "terminal-images")]
+    graphics_scanner: GraphicsScanner,
+    /// Decoded images and their placements, anchored to the same absolute lines as the marks.
+    #[cfg(feature = "terminal-images")]
+    graphics: TerminalGraphics,
+    /// Whether the alternate screen was active after the last chunk, so leaving it can drop the
+    /// placements that belonged to it.
+    #[cfg(feature = "terminal-images")]
+    graphics_alt_screen: bool,
+    /// Host cell size, reported to the child and used to size image placements.
+    cell_size: TerminalCellSize,
 }
 
 /// A [`TerminalScreen`] an app owns and lets the widget read for itself.
@@ -274,6 +351,12 @@ pub struct TerminalRenderSnapshot {
     pub mouse_mode: MouseModeState,
     /// Input-affecting DEC private modes the child has enabled (DECCKM, bracketed paste).
     pub key_modes: TerminalKeyModes,
+    /// Images overlapping the visible rows, back to front.
+    ///
+    /// Positions are viewport-relative and may start above or left of it, so a partly scrolled
+    /// image reports the rect it would occupy in full and the renderer crops the pixels.
+    #[cfg(feature = "terminal-images")]
+    pub images: Arc<[TerminalImagePlacement]>,
 }
 
 /// A display-column decoration applied to a terminal render snapshot.
@@ -330,6 +413,8 @@ impl Default for TerminalRenderSnapshot {
             total_scrollback_rows: 0,
             mouse_mode: MouseModeState::default(),
             key_modes: TerminalKeyModes::default(),
+            #[cfg(feature = "terminal-images")]
+            images: Arc::from([]),
         }
     }
 }
@@ -368,6 +453,10 @@ impl TerminalRenderSnapshot {
             total_scrollback_rows,
             mouse_mode,
             key_modes,
+            // Images do not cross an external snapshot transport: the pixels can dwarf the text,
+            // and every client parses the same PTY bytes for itself anyway.
+            #[cfg(feature = "terminal-images")]
+            images: Arc::from([]),
         }
     }
 
@@ -587,7 +676,7 @@ impl TerminalScreen {
         };
         let listener = ResponseCapture::default();
         let term = Term::new(config, &dimensions, listener.clone());
-        Self {
+        let screen = Self {
             processor: VteProcessor::new(),
             term,
             listener,
@@ -605,17 +694,25 @@ impl TerminalScreen {
             sequence: 0,
             semantic_marks: VecDeque::new(),
             semantic_events_seen: 0,
-        }
+            #[cfg(feature = "terminal-images")]
+            graphics_scanner: GraphicsScanner::default(),
+            #[cfg(feature = "terminal-images")]
+            graphics: TerminalGraphics::default(),
+            #[cfg(feature = "terminal-images")]
+            graphics_alt_screen: false,
+            cell_size: TerminalCellSize::default(),
+        };
+        screen.sync_viewport();
+        screen
     }
 
     /// Feed terminal bytes.
     ///
     pub fn process_bytes(&mut self, bytes: &[u8]) {
-        let mut ledger = LedgerTerm::new(&mut self.term, self.scrollback_len, self.ledger_capacity);
-        self.processor.advance(&mut ledger, bytes);
-        let evicted = ledger.evicted();
+        let evicted = self.feed_grid(bytes);
         self.semantic_parser.advance(&mut self.semantic, bytes);
         self.drop_evicted_semantic_marks(evicted);
+        self.settle_graphics(evicted);
         if self.term.mode().contains(TermMode::ALT_SCREEN) {
             // Alt-screen programs still emit OSC 133, but those marks belong to a grid
             // with no scrollback and no absolute-line space of its own. Discard them
@@ -627,6 +724,217 @@ impl TerminalScreen {
         }
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode());
+        self.dirty = true;
+    }
+
+    /// Drive the grid parser, returning how many scrollback lines the chunk evicted.
+    ///
+    /// With image support compiled in, graphics commands are lifted out of the stream first and
+    /// the grid sees only what is left, plus whatever cursor movement each placement implies. The
+    /// VT parser discards `APC` bodies anyway, so removing them changes nothing it would have
+    /// done - what it buys is the cursor position *at* each command, which a parser running
+    /// alongside this one could not observe.
+    #[cfg(feature = "terminal-images")]
+    fn feed_grid(&mut self, bytes: &[u8]) -> usize {
+        if self.graphics_scanner.is_plain(bytes) {
+            return self.advance_vte(bytes);
+        }
+
+        let mut evicted = 0;
+        for segment in self.graphics_scanner.scan(bytes) {
+            evicted += match segment {
+                GraphicsSegment::Text(range) => self.advance_vte(&bytes[range]),
+                GraphicsSegment::HeldEscape => self.advance_vte(&[0x1b]),
+                GraphicsSegment::Command(command) => self.apply_graphics(*command),
+            };
+        }
+        evicted
+    }
+
+    #[cfg(not(feature = "terminal-images"))]
+    fn feed_grid(&mut self, bytes: &[u8]) -> usize {
+        self.advance_vte(bytes)
+    }
+
+    fn advance_vte(&mut self, bytes: &[u8]) -> usize {
+        if bytes.is_empty() {
+            return 0;
+        }
+        let mut ledger = LedgerTerm::new(&mut self.term, self.scrollback_len, self.ledger_capacity);
+        self.processor.advance(&mut ledger, bytes);
+        ledger.evicted()
+    }
+
+    /// Run one graphics command against the store, then apply what it implies to the grid.
+    #[cfg(feature = "terminal-images")]
+    fn apply_graphics(&mut self, command: GraphicsCommand) -> usize {
+        let ctx = GraphicsContext {
+            cursor_line: self.cursor_absolute_line(),
+            cursor_col: u16::try_from(self.term.grid().cursor.point.column.0).unwrap_or(u16::MAX),
+            viewport_top_line: self.term.history_size(),
+            alt_screen: self.term.mode().contains(TermMode::ALT_SCREEN),
+            cell: self.cell_size,
+            cols: self.cols,
+        };
+        let outcome = self.graphics.apply(command, ctx);
+        if let Some(response) = outcome.response {
+            self.listener.responses.borrow_mut().push(response);
+        }
+        let Some((rows, cols)) = outcome.advance else {
+            return 0;
+        };
+
+        // The protocol leaves the cursor just past the image: down by its height minus one, right
+        // by its width. Synthesizing that as real output rather than moving the cursor directly is
+        // what makes the grid scroll to make room, exactly as it would for the same many lines of
+        // text - which in turn is what keeps the placement's absolute-line anchor meaningful.
+        let mut movement = vec![b'\n'; usize::from(rows.saturating_sub(1))];
+        movement.extend_from_slice(format!("\x1b[{cols}C").as_bytes());
+        self.advance_vte(&movement)
+    }
+
+    /// Every image overlapping the viewport: those placed at a cursor, and those the grid names
+    /// with placeholder cells.
+    ///
+    /// Both kinds are wanted at once - a session can have `icat` output scrolled up the pane while
+    /// a TUI below it draws with placeholders - so the two lists are simply concatenated and left
+    /// in back-to-front order.
+    #[cfg(feature = "terminal-images")]
+    fn visible_images(
+        &self,
+        display_offset: usize,
+        alt_screen: bool,
+    ) -> Vec<TerminalImagePlacement> {
+        let mut images = self.graphics.visible(
+            self.term.history_size(),
+            display_offset,
+            self.rows,
+            alt_screen,
+        );
+        images.extend(
+            self.graphics
+                .placeholder_placements(&self.placeholder_cells(display_offset), self.cell_size),
+        );
+        images
+    }
+
+    /// Read the viewport's placeholder cells, left to right and top to bottom.
+    ///
+    /// Walks the grid directly rather than the render iterator: the marks that carry a cell's
+    /// position inside its image are zero-width characters, which the styled-span path folds into
+    /// text and cannot be recovered from.
+    #[cfg(feature = "terminal-images")]
+    fn placeholder_cells(&self, display_offset: usize) -> Vec<PlaceholderCell> {
+        let mut cells = Vec::new();
+        // Nothing can name an image that was never transmitted, so a session that has seen no
+        // graphics never pays for this walk.
+        if !self.graphics.has_images() {
+            return cells;
+        }
+
+        let grid = self.term.grid();
+        for row in 0..self.rows {
+            let line = Line(i32::from(row) - display_offset as i32);
+            if line < grid.topmost_line() || line > grid.bottommost_line() {
+                continue;
+            }
+            for col in 0..self.cols {
+                let cell = &grid[line][Column(col as usize)];
+                if cell.c != PLACEHOLDER {
+                    continue;
+                }
+                let Some(id_low) = placeholder_id(cell) else {
+                    continue;
+                };
+                cells.push(PlaceholderCell::new(
+                    row,
+                    col,
+                    id_low,
+                    cell.zerowidth().unwrap_or(&[]),
+                ));
+            }
+        }
+        cells
+    }
+
+    /// Bring image placements back in line with the grid after a chunk.
+    #[cfg(feature = "terminal-images")]
+    fn settle_graphics(&mut self, evicted: usize) {
+        self.graphics.drop_evicted(evicted);
+        let alt_screen = self.term.mode().contains(TermMode::ALT_SCREEN);
+        if self.graphics_alt_screen && !alt_screen {
+            // The alternate screen is gone, and so is everything drawn on it.
+            self.graphics.clear_alt_screen();
+        }
+        self.graphics_alt_screen = alt_screen;
+    }
+
+    #[cfg(not(feature = "terminal-images"))]
+    fn settle_graphics(&mut self, _evicted: usize) {}
+
+    /// Set the host's cell size in pixels.
+    ///
+    /// This is what `CSI 14 t` reports and, with the `terminal-images` feature, what decides how
+    /// many cells an image covers. Install the same value the child is told through the PTY (see
+    /// [`TerminalPty::resize_with_cell_size`](super::TerminalPty::resize_with_cell_size)), so a
+    /// program that sizes a picture for itself and this screen agree; a mismatch shows up as
+    /// images that overlap the text below them or leave a gap.
+    pub fn set_cell_size(&mut self, cell: TerminalCellSize) {
+        if self.cell_size != cell {
+            self.cell_size = cell;
+            self.sync_viewport();
+            self.dirty = true;
+        }
+    }
+
+    /// The cell size reported to the child.
+    pub fn cell_size(&self) -> TerminalCellSize {
+        self.cell_size
+    }
+
+    /// Whether resizing to `new_cols` would move text between lines.
+    ///
+    /// Only two things can: a line already wrapped into the next one, which widening would pull
+    /// back up, and a line reaching past the new width, which narrowing would push down. With
+    /// neither present every line keeps exactly the text it has, and so does anything anchored to
+    /// it. Worth the scan - the alternative is treating every width change as a rewrap, which in a
+    /// tiling multiplexer costs a pane every image in it each time a neighbour opens.
+    #[cfg(feature = "terminal-images")]
+    fn width_change_rewraps(&self, new_cols: u16) -> bool {
+        let grid = self.term.grid();
+        let last_column = grid.last_column();
+        for line in grid.topmost_line().0..=grid.bottommost_line().0 {
+            let line = Line(line);
+            if grid[line][last_column].flags.contains(CellFlags::WRAPLINE) {
+                return true;
+            }
+            // Anything past the new width has to go somewhere once the grid narrows.
+            for column in usize::from(new_cols)..=last_column.0 {
+                let cell = &grid[line][Column(column)];
+                if cell.c != ' ' || cell.bg != TermColor::Named(NamedColor::Background) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Republish the viewport to the listener that answers pixel-size queries.
+    fn sync_viewport(&self) {
+        self.listener.viewport.set(ViewportGeometry {
+            rows: self.rows,
+            cols: self.cols,
+            cell: self.cell_size,
+        });
+    }
+
+    /// Cap the decoded pixels this screen retains, in bytes.
+    ///
+    /// Images past the cap are dropped least-recently-used, placements included. The default is
+    /// 96 MiB, which is roughly sixteen 1080p frames.
+    #[cfg(feature = "terminal-images")]
+    pub fn set_image_budget(&mut self, bytes: usize) {
+        self.graphics.set_budget(bytes);
         self.dirty = true;
     }
 
@@ -738,7 +1046,10 @@ impl TerminalScreen {
             rows: self.rows as usize,
             cols: self.cols as usize,
         };
+        #[cfg(feature = "terminal-images")]
+        let rewraps = self.width_change_rewraps(cols.max(1));
         self.term.resize(dimensions);
+        self.sync_viewport();
         // `Term::resize` can push lines into history without going through a handler
         // call, so the ledger never sees it; trim and account for it here.
         self.ledger_capacity = ledger_capacity(self.scrollback_len, self.rows);
@@ -747,8 +1058,17 @@ impl TerminalScreen {
             // A column change rewraps history, so line indices no longer refer to the
             // text they were recorded against and cannot be corrected by a shift.
             self.semantic_marks.clear();
+            // Images are dropped on the same reasoning, but only when the rewrap actually
+            // happened. Treating every width change as a rewrap costs every image in the pane on
+            // every resize, which in a tiling multiplexer is every split - and a pane full of
+            // plots going blank because a neighbour opened is worse than the drift this risks.
+            #[cfg(feature = "terminal-images")]
+            if rewraps {
+                self.graphics.clear_placements();
+            }
         } else {
             self.drop_evicted_semantic_marks(evicted);
+            self.settle_graphics(evicted);
         }
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode());
@@ -792,6 +1112,9 @@ impl TerminalScreen {
                 visible.push(vec![Span::new("")]);
             }
 
+            #[cfg(feature = "terminal-images")]
+            let images = self.visible_images(display_offset, mode.contains(TermMode::ALT_SCREEN));
+
             let mut text = String::new();
             for (idx, line) in visible.iter().enumerate() {
                 if idx > 0 {
@@ -815,6 +1138,8 @@ impl TerminalScreen {
                 total_scrollback_rows: self.term.history_size(),
                 mouse_mode: self.mouse_mode,
                 key_modes: key_modes_from_term(mode),
+                #[cfg(feature = "terminal-images")]
+                images: images.into(),
             };
             self.dirty = false;
         }
@@ -1069,6 +1394,7 @@ impl TerminalScreen {
         };
         self.listener = ResponseCapture::default();
         self.term = Term::new(config, &dimensions, self.listener.clone());
+        self.sync_viewport();
         self.processor = VteProcessor::new();
         // Drop any in-flight partial OSC/CSI sequence, but keep accumulated semantic state
         // (cwd/command phase/executable) - a child hard-reset (RIS) does not imply the shell's
@@ -1079,6 +1405,14 @@ impl TerminalScreen {
         self.cache = TerminalRenderSnapshot::default();
         self.semantic_marks.clear();
         self.semantic_events_seen = 0;
+        // Images, unlike semantic state, are screen contents: a hard reset clears them with the
+        // grid they were drawn on.
+        #[cfg(feature = "terminal-images")]
+        {
+            self.graphics_scanner.reset();
+            self.graphics.reset();
+            self.graphics_alt_screen = false;
+        }
         self.dirty = true;
     }
 
@@ -1580,6 +1914,14 @@ fn renderable_content_lines(
 
 fn cell_text(cell: &TermCell) -> String {
     let mut text = String::new();
+    // An image placeholder is not text: it names a picture the renderer paints over these cells.
+    // Passing it through would put a tofu box under every image, and would put the character into
+    // anything that reads the snapshot - a search, a copy, an exported log.
+    #[cfg(feature = "terminal-images")]
+    if cell.c == PLACEHOLDER {
+        text.push(' ');
+        return text;
+    }
     let ch = if cell.flags.contains(CellFlags::HIDDEN) {
         ' '
     } else {
@@ -1592,6 +1934,21 @@ fn cell_text(cell: &TermCell) -> String {
         }
     }
     text
+}
+
+/// The low 24 bits of the image id a placeholder cell names, from its foreground colour.
+///
+/// The protocol puts the id in the colour so a row of placeholders needs one escape sequence
+/// rather than one per cell. A cell with no explicit foreground names no image.
+#[cfg(feature = "terminal-images")]
+fn placeholder_id(cell: &TermCell) -> Option<u32> {
+    match cell.fg {
+        TermColor::Spec(rgb) => {
+            Some((u32::from(rgb.r) << 16) | (u32::from(rgb.g) << 8) | u32::from(rgb.b))
+        }
+        TermColor::Indexed(index) => Some(u32::from(index)),
+        TermColor::Named(_) => None,
+    }
 }
 
 fn plain_line_text(grid: &alacritty_terminal::grid::Grid<TermCell>, line: Line) -> String {
@@ -2529,6 +2886,357 @@ mod tests {
             screen.semantic_marks().is_empty(),
             "reflow invalidates line anchoring; marks must not survive it"
         );
+    }
+
+    #[cfg(feature = "terminal-images")]
+    mod images {
+        use super::*;
+        use crate::widgets::terminal::graphics::TerminalImageCrop;
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD as BASE64;
+
+        /// Transmit-and-display a solid RGB image of `width` x `height` pixels.
+        fn place(width: u32, height: u32, keys: &str) -> Vec<u8> {
+            let payload = BASE64.encode(vec![0x80u8; (width * height * 3) as usize]);
+            format!("\x1b_Ga=T,f=24,s={width},v={height},t=d,{keys};{payload}\x1b\\").into_bytes()
+        }
+
+        fn screen(rows: u16, cols: u16, scrollback: usize) -> TerminalScreen {
+            let mut screen = TerminalScreen::new(rows, cols, scrollback);
+            screen.set_cell_size(TerminalCellSize::new(10, 20));
+            screen
+        }
+
+        #[test]
+        fn graphics_commands_never_reach_the_grid() {
+            let mut screen = screen(6, 20, 10);
+            let mut stream = b"before".to_vec();
+            stream.extend_from_slice(&place(10, 20, "i=1,C=1"));
+            stream.extend_from_slice(b"after");
+            screen.process_bytes(&stream);
+
+            // The escape is consumed whole: no stray payload characters land in the cells.
+            assert!(screen.snapshot().starts_with("beforeafter"));
+        }
+
+        #[test]
+        fn a_placement_lands_at_the_cursor_and_pushes_it_past_the_image() {
+            let mut screen = screen(10, 20, 10);
+            screen.process_bytes(b"x");
+            // 30x60 pixels in 10x20 cells is 3 columns by 3 rows.
+            screen.process_bytes(&place(30, 60, "i=1"));
+
+            let snapshot = screen.render_snapshot();
+            assert_eq!(snapshot.images.len(), 1);
+            let placement = &snapshot.images[0];
+            assert_eq!((placement.row, placement.col), (0, 1));
+            assert_eq!((placement.rows, placement.cols), (3, 3));
+
+            // Kitty leaves the cursor on the image's last row, just past its right edge.
+            assert_eq!((snapshot.cursor_row, snapshot.cursor_col), (2, 4));
+        }
+
+        #[test]
+        fn an_image_scrolls_with_the_text_it_was_drawn_against() {
+            let mut screen = screen(6, 20, 50);
+            // 20x100 pixels in 10x20 cells is 2 columns by 5 rows.
+            screen.process_bytes(&place(20, 100, "i=1,C=1"));
+            assert_eq!(screen.render_snapshot().images[0].row, 0);
+
+            // Three lines still fit on a six-row screen, so nothing moves.
+            screen.process_bytes(b"\r\n".repeat(3).as_slice());
+            assert_eq!(screen.render_snapshot().images[0].row, 0);
+
+            // Past the bottom the grid scrolls, and the image goes up with the text: its top row
+            // is now above the viewport, and it reports a negative row so the renderer can crop.
+            screen.process_bytes(b"\r\n".repeat(3).as_slice());
+            assert_eq!(screen.render_snapshot().images[0].row, -1);
+        }
+
+        #[test]
+        fn scrolling_back_brings_an_image_back_into_view() {
+            let mut screen = screen(4, 20, 50);
+            screen.process_bytes(&place(20, 40, "i=1,C=1"));
+            screen.process_bytes(b"\r\n".repeat(10).as_slice());
+            assert!(screen.render_snapshot().images.is_empty());
+
+            screen.set_scrollback(10);
+            let snapshot = screen.render_snapshot();
+            assert_eq!(snapshot.images.len(), 1);
+            assert_eq!(snapshot.images[0].row, 0);
+        }
+
+        #[test]
+        fn images_do_not_survive_the_alternate_screen_they_were_drawn_on() {
+            let mut screen = screen(6, 20, 10);
+            screen.process_bytes(b"\x1b[?1049h");
+            screen.process_bytes(&place(20, 40, "i=1,C=1"));
+            assert_eq!(screen.render_snapshot().images.len(), 1);
+
+            screen.process_bytes(b"\x1b[?1049l");
+            assert!(screen.render_snapshot().images.is_empty());
+        }
+
+        #[test]
+        fn a_probe_is_answered_on_the_response_channel() {
+            let mut screen = screen(6, 20, 10);
+            let payload = BASE64.encode([1u8, 2, 3]);
+            screen.process_bytes(
+                format!("\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;{payload}\x1b\\").as_bytes(),
+            );
+
+            let responses = screen.drain_responses();
+            assert_eq!(responses.len(), 1);
+            assert_eq!(responses[0], b"\x1b_Gi=31;OK\x1b\\");
+        }
+
+        #[test]
+        fn the_text_area_pixel_size_is_reported_from_the_installed_cell() {
+            let mut screen = screen(24, 80, 10);
+            screen.process_bytes(b"\x1b[14t");
+
+            let responses = screen.drain_responses();
+            // 24 rows of 20px and 80 columns of 10px.
+            assert_eq!(responses, vec![b"\x1b[4;480;800t".to_vec()]);
+        }
+
+        /// A virtual placement plus the placeholder cells that show it - the shape every terminal
+        /// UI toolkit emits, and the one `ratatui_image` writes.
+        fn placeholders(id: u32, cols: u16, rows: u16, cell: TerminalCellSize) -> Vec<u8> {
+            use crate::widgets::terminal::graphics::diacritic;
+
+            let (width, height) = (
+                u32::from(cols) * u32::from(cell.width),
+                u32::from(rows) * u32::from(cell.height),
+            );
+            let payload = BASE64.encode(vec![0x60u8; (width * height * 4) as usize]);
+            let mut out = format!(
+                "\x1b_Gq=2,i={id},a=T,U=1,f=32,t=d,s={width},v={height},m=0;{payload}\x1b\\"
+            )
+            .into_bytes();
+
+            let [id_extra, r, g, b] = id.to_be_bytes();
+            for row in 0..rows {
+                // Absolute placement of each row, the way a full-screen renderer draws.
+                out.extend_from_slice(
+                    format!("\x1b[{};1H\x1b[38;2;{r};{g};{b}m", row + 1).as_bytes(),
+                );
+                let mut first = String::from(PLACEHOLDER);
+                first.push(diacritic(row));
+                first.push(diacritic(0));
+                first.push(diacritic(u16::from(id_extra)));
+                out.extend_from_slice(first.as_bytes());
+                // The rest of the row inherits its position from the cell to its left.
+                for _ in 1..cols {
+                    out.extend_from_slice(PLACEHOLDER.to_string().as_bytes());
+                }
+            }
+            out
+        }
+
+        #[test]
+        fn placeholder_cells_place_a_virtual_image() {
+            let cell = TerminalCellSize::new(10, 20);
+            let mut screen = screen(10, 40, 50);
+            screen.process_bytes(&placeholders(1, 6, 3, cell));
+
+            let snapshot = screen.render_snapshot();
+            // One placement for the whole picture, not one per row of placeholders.
+            assert_eq!(snapshot.images.len(), 1);
+            let placement = &snapshot.images[0];
+            assert_eq!((placement.row, placement.col), (0, 0));
+            assert_eq!((placement.rows, placement.cols), (3, 6));
+            assert_eq!(
+                placement.source_crop,
+                Some(TerminalImageCrop {
+                    x: 0,
+                    y: 0,
+                    width: 60,
+                    height: 60,
+                })
+            );
+        }
+
+        #[test]
+        fn a_virtual_placement_draws_nothing_where_it_was_transmitted() {
+            let mut screen = screen(10, 40, 50);
+            // The transmission alone: no placeholders written yet.
+            let (width, height) = (60u32, 60u32);
+            let payload = BASE64.encode(vec![0x60u8; (width * height * 4) as usize]);
+            screen.process_bytes(
+                format!("\x1b_Gq=2,i=1,a=T,U=1,f=32,t=d,s={width},v={height},m=0;{payload}\x1b\\")
+                    .as_bytes(),
+            );
+
+            let snapshot = screen.render_snapshot();
+            assert!(
+                snapshot.images.is_empty(),
+                "a virtual placement must not draw at the cursor"
+            );
+            // And it must not have moved the cursor either.
+            assert_eq!((snapshot.cursor_row, snapshot.cursor_col), (0, 0));
+        }
+
+        #[test]
+        fn placeholder_cells_are_not_text() {
+            let cell = TerminalCellSize::new(10, 20);
+            let mut screen = screen(10, 40, 50);
+            screen.process_bytes(&placeholders(1, 6, 2, cell));
+
+            let text = screen.snapshot();
+            assert!(
+                !text.contains(PLACEHOLDER),
+                "the placeholder character must not reach text: {text:?}"
+            );
+        }
+
+        #[test]
+        fn scrolling_clips_a_placeholder_image_to_the_cells_still_on_screen() {
+            let cell = TerminalCellSize::new(10, 20);
+            let mut screen = screen(6, 40, 50);
+            screen.process_bytes(&placeholders(1, 4, 2, cell));
+            assert_eq!(screen.render_snapshot().images[0].rows, 2);
+
+            // Placeholders live in the grid, so scrolling needs no bookkeeping of our own: the top
+            // row leaves the viewport and the placement is simply the row that is left, showing
+            // the lower half of the source pixels.
+            screen.process_bytes(b"\x1b[6;1H\r\n");
+            let snapshot = screen.render_snapshot();
+            assert_eq!(snapshot.images.len(), 1);
+            let placement = &snapshot.images[0];
+            assert_eq!((placement.row, placement.rows), (0, 1));
+            assert_eq!(placement.source_crop.unwrap().y, u32::from(cell.height));
+
+            // Scrolling back reaches into history and finds the whole picture again.
+            screen.set_scrollback(1);
+            assert_eq!(screen.render_snapshot().images[0].rows, 2);
+        }
+
+        #[test]
+        fn two_images_side_by_side_stay_separate() {
+            let cell = TerminalCellSize::new(10, 20);
+            let mut screen = screen(10, 40, 50);
+            screen.process_bytes(&placeholders(1, 4, 2, cell));
+            // A second image, drawn to the right of the first on the same rows.
+            let mut second = placeholders(2, 4, 2, cell);
+            let shifted = String::from_utf8(second.clone())
+                .unwrap()
+                .replace("\x1b[1;1H", "\x1b[1;20H")
+                .replace("\x1b[2;1H", "\x1b[2;20H");
+            second = shifted.into_bytes();
+            screen.process_bytes(&second);
+
+            let snapshot = screen.render_snapshot();
+            assert_eq!(snapshot.images.len(), 2);
+            let cols: Vec<i32> = snapshot.images.iter().map(|image| image.col).collect();
+            assert!(cols.contains(&0) && cols.contains(&19), "got {cols:?}");
+        }
+
+        /// The regression that made every placeholder image exactly one column wide.
+        ///
+        /// An id above 24 bits splits between the foreground colour and a third combining mark,
+        /// and a sender writes that mark on the first cell of a row only. A continuation cell that
+        /// defaults the byte to zero instead of inheriting it names a different image, so every
+        /// cell after the first is dropped and the picture collapses to its left edge.
+        #[test]
+        fn a_continuation_cell_inherits_the_high_byte_of_the_image_id() {
+            use crate::widgets::terminal::graphics::diacritic;
+
+            // An id whose top byte is not zero, so the mark actually carries something.
+            let id: u32 = 0x02c5_fd02;
+            let [id_extra, r, g, b] = id.to_be_bytes();
+            assert_ne!(id_extra, 0, "the test is pointless with a small id");
+
+            let mut screen = screen(6, 40, 50);
+            let payload = BASE64.encode(vec![0x40u8; (80 * 20 * 4) as usize]);
+            screen.process_bytes(
+                format!("\x1b_Gq=2,i={id},a=T,U=1,f=32,t=d,s=80,v=20,m=0;{payload}\x1b\\")
+                    .as_bytes(),
+            );
+
+            let mut row = format!("\x1b[1;1H\x1b[38;2;{r};{g};{b}m");
+            row.push(PLACEHOLDER);
+            row.push(diacritic(0));
+            row.push(diacritic(0));
+            row.push(diacritic(u16::from(id_extra)));
+            for _ in 1..8 {
+                row.push(PLACEHOLDER);
+            }
+            screen.process_bytes(row.as_bytes());
+
+            let snapshot = screen.render_snapshot();
+            assert_eq!(snapshot.images.len(), 1);
+            assert_eq!(
+                snapshot.images[0].cols, 8,
+                "the row collapsed to its first cell"
+            );
+        }
+
+        #[test]
+        fn a_hard_reset_clears_stored_images() {
+            let mut screen = screen(6, 20, 10);
+            screen.process_bytes(&place(20, 40, "i=1,C=1"));
+            assert_eq!(screen.render_snapshot().images.len(), 1);
+
+            screen.reset();
+            assert!(screen.render_snapshot().images.is_empty());
+        }
+
+        #[test]
+        fn a_width_change_that_rewraps_drops_placements() {
+            let mut screen = screen(8, 20, 50);
+            // A line long enough to wrap, so widening really does redistribute text and the
+            // absolute line a placement is anchored to stops naming what it named.
+            screen.process_bytes("x".repeat(35).as_bytes());
+            screen.process_bytes(b"\r\n");
+            screen.process_bytes(&place(20, 40, "i=1,C=1"));
+            assert_eq!(screen.render_snapshot().images.len(), 1);
+
+            screen.resize(8, 40);
+            assert!(screen.render_snapshot().images.is_empty());
+        }
+
+        /// Resizing a pane must not cost it every picture in it. In a tiling multiplexer a width
+        /// change is what happens every time a neighbour opens, and treating all of them as a
+        /// rewrap made a pane full of plots go blank for it.
+        #[test]
+        fn a_width_change_that_rewraps_nothing_keeps_placements() {
+            let mut screen = screen(8, 40, 50);
+            screen.process_bytes(b"short\r\n");
+            screen.process_bytes(&place(20, 40, "i=1,C=1"));
+            assert_eq!(screen.render_snapshot().images.len(), 1);
+
+            // Nothing on screen is long enough to wrap at either width.
+            screen.resize(8, 60);
+            assert_eq!(
+                screen.render_snapshot().images.len(),
+                1,
+                "no text moved, so nothing anchored to it should have"
+            );
+        }
+
+        /// Two placements holding identical pixels must stay distinguishable to the renderer: a
+        /// host that draws through Kitty keys a placement by its encoding's id, so sharing one
+        /// encoding between them would draw one and silently drop the other.
+        #[test]
+        fn identical_images_keep_separate_ids() {
+            let mut screen = screen(20, 40, 50);
+            screen.process_bytes(&place(20, 40, "i=1,C=1"));
+            screen.process_bytes(b"\r\n\r\n\r\n");
+            screen.process_bytes(&place(20, 40, "i=2,C=1"));
+
+            let snapshot = screen.render_snapshot();
+            assert_eq!(snapshot.images.len(), 2);
+            assert_eq!(
+                snapshot.images[0].image.source_hash(),
+                snapshot.images[1].image.source_hash(),
+                "the pixels really are identical, which is what makes this worth pinning"
+            );
+            assert_ne!(
+                snapshot.images[0].image_id, snapshot.images[1].image_id,
+                "but the placements are not, and the renderer keys on that"
+            );
+        }
     }
 
     #[test]

@@ -14,6 +14,8 @@ use super::events::{
     MouseModeState, TerminalInputEvent, TerminalKeyModes, TerminalPasteShortcutBehavior,
     TerminalSelection, TerminalSelectionEvent,
 };
+#[cfg(feature = "terminal-images")]
+use super::graphics::TerminalImagePlacement;
 use super::layout::terminal_content_layout;
 use super::screen::{TerminalDecoration, TerminalRenderSnapshot, TerminalScreenHandle};
 
@@ -32,6 +34,9 @@ pub(crate) struct TerminalNode {
     pub selection_style: StyleSlot,
     pub mouse_mode: MouseModeState,
     pub key_modes: TerminalKeyModes,
+    /// Images to paint over the content rect, back to front.
+    #[cfg(feature = "terminal-images")]
+    pub images: Arc<[TerminalImagePlacement]>,
     /// Present when the app handed over a live screen rather than a snapshot. The runtime refreshes
     /// the fields above from it before every draw, which is what lets terminal output be a repaint.
     pub screen: Option<TerminalScreenHandle>,
@@ -113,6 +118,10 @@ impl TerminalNode {
         self.cursor_blinking = snapshot.cursor_blinking;
         self.mouse_mode = snapshot.mouse_mode;
         self.key_modes = snapshot.key_modes;
+        #[cfg(feature = "terminal-images")]
+        {
+            self.images = snapshot.images.clone();
+        }
         self.total_scrollback_rows = snapshot.total_scrollback_rows;
         if snapshot.scrollback_offset != self.snapshot_scrollback_offset {
             self.snapshot_scrollback_offset = snapshot.scrollback_offset;

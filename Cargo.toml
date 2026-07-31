@@ -125,6 +125,8 @@ similar = { version = "3.1.1", optional = true }
 pulldown-cmark = { version = "0.13", optional = true, default-features = false }
 portable-pty = { version = "0.9", optional = true }
 alacritty_terminal = { version = "0.26.0", optional = true }
+# Kitty graphics `o=z` payloads; already in the tree via `image`'s PNG decoder.
+flate2 = { version = "1.1", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "scrolling-regions", "layout-cache", "underline-color"] }
@@ -162,6 +164,7 @@ syntax-syntect = ["dep:syntect"]
 syntax-extra = ["syntax-syntect", "dep:two-face"]
 markdown       = ["dep:pulldown-cmark"]
 terminal      = ["dep:portable-pty", "dep:alacritty_terminal"]
+terminal-images = ["terminal", "image", "dep:flate2"]
 terminal-serde = ["terminal", "dep:serde"]
 profiling-tracing = ["dep:tracing"]
 hints-regex = ["dep:regex-lite"]
@@ -196,6 +199,10 @@ required-features = ["big-text"]
 [[example]]
 name = "terminal_filetree_devtools"
 required-features = ["terminal"]
+
+[[example]]
+name = "terminal_images"
+required-features = ["terminal-images"]
 
 [[example]]
 name = "terminal_search_highlight"

@@ -3,7 +3,7 @@
 use std::io::{Read, Write};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
 };
 use std::thread::JoinHandle;
 
@@ -15,6 +15,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use super::events::{TerminalKeyModes, key_event_to_bytes};
+use super::screen::TerminalCellSize;
 use crate::core::event::KeyEvent;
 
 /// PTY launch error.
@@ -83,6 +84,7 @@ pub struct TerminalPtyConfig {
     pub(crate) cwd: Option<Arc<str>>,
     pub(crate) term: Arc<str>,
     pub(crate) env: Vec<(Arc<str>, Arc<str>)>,
+    pub(crate) cell: TerminalCellSize,
 }
 
 impl Default for TerminalPtyConfig {
@@ -97,11 +99,22 @@ impl Default for TerminalPtyConfig {
             cwd: None,
             term: Arc::from("xterm-256color"),
             env: vec![(Arc::from("COLORTERM"), Arc::from("truecolor"))],
+            cell: TerminalCellSize::default(),
         }
     }
 }
 
 impl TerminalPtyConfig {
+    /// Report `cell` as the host's cell size in the PTY's `TIOCGWINSZ` pixel fields.
+    ///
+    /// A program that draws pictures reads those fields to learn how many pixels a cell is worth.
+    /// Pass [`host_cell_size`](crate::host_cell_size), and give the same value to
+    /// [`TerminalScreen::set_cell_size`](super::TerminalScreen::set_cell_size) so both ends agree.
+    pub fn cell_size(mut self, cell: TerminalCellSize) -> Self {
+        self.cell = cell;
+        self
+    }
+
     /// Create config with an explicit executable.
     pub fn new(command: impl Into<Arc<str>>) -> Self {
         Self {
@@ -185,6 +198,43 @@ struct TerminalPtyInner {
     handle_count: AtomicUsize,
     /// OS process id of the spawned child, captured at spawn time (`None` if unavailable).
     pid: Option<u32>,
+    /// Cell size last reported to the child, so a plain `resize` keeps it.
+    cell: AtomicCellSize,
+}
+
+/// The cell size a PTY last reported, kept lock-free because a resize can come from any thread.
+///
+/// Packed as `width << 16 | height`; both axes are `u16` and neither is ever zero.
+struct AtomicCellSize(AtomicU32);
+
+impl AtomicCellSize {
+    fn new(cell: TerminalCellSize) -> Self {
+        let slot = Self(AtomicU32::new(0));
+        slot.store(cell);
+        slot
+    }
+
+    fn load(&self) -> TerminalCellSize {
+        let packed = self.0.load(Ordering::Acquire);
+        TerminalCellSize::new((packed >> 16) as u16, packed as u16)
+    }
+
+    fn store(&self, cell: TerminalCellSize) {
+        let packed = (u32::from(cell.width) << 16) | u32::from(cell.height);
+        self.0.store(packed, Ordering::Release);
+    }
+}
+
+/// A PTY window size that carries the pixel dimensions a graphics-drawing child needs.
+fn pty_size(cols: u16, rows: u16, cell: TerminalCellSize) -> PtySize {
+    let cols = cols.max(1);
+    let rows = rows.max(1);
+    PtySize {
+        rows,
+        cols,
+        pixel_width: cols.saturating_mul(cell.width),
+        pixel_height: rows.saturating_mul(cell.height),
+    }
 }
 
 enum TerminalPtyBackend {
@@ -209,12 +259,7 @@ impl TerminalPty {
     ) -> Result<Self, TerminalPtyError> {
         let pty_system = native_pty_system();
         let pair = pty_system
-            .openpty(PtySize {
-                rows: config.rows,
-                cols: config.cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
+            .openpty(pty_size(config.cols, config.rows, config.cell))
             .map_err(|err| TerminalPtyError::Setup(err.to_string()))?;
 
         #[cfg(unix)]
@@ -269,6 +314,7 @@ impl TerminalPty {
             kill_on_drop: AtomicBool::new(true),
             handle_count: AtomicUsize::new(1),
             pid,
+            cell: AtomicCellSize::new(config.cell),
         });
 
         let on_event = Arc::new(on_event);
@@ -426,8 +472,26 @@ impl TerminalPty {
         Ok(true)
     }
 
-    /// Resize PTY dimensions.
+    /// Resize PTY dimensions, keeping the cell size the child was last told.
+    ///
+    /// Equivalent to [`resize_with_cell_size`](Self::resize_with_cell_size) with the size from
+    /// [`TerminalPtyConfig::cell_size`].
     pub fn resize(&self, cols: u16, rows: u16) -> std::io::Result<()> {
+        self.resize_with_cell_size(cols, rows, self.inner.cell.load())
+    }
+
+    /// Resize PTY dimensions and report the host's cell size in pixels.
+    ///
+    /// The pixel fields of `TIOCGWINSZ` are how a program that draws pictures learns how big a
+    /// cell is; a terminal that leaves them zero forces it to guess or to fall back to `CSI 14 t`.
+    /// Pass the same size the screen was given through
+    /// [`TerminalScreen::set_cell_size`](super::TerminalScreen::set_cell_size).
+    pub fn resize_with_cell_size(
+        &self,
+        cols: u16,
+        rows: u16,
+        cell: TerminalCellSize,
+    ) -> std::io::Result<()> {
         if !self.inner.active.load(Ordering::Acquire) {
             return Err(std::io::Error::other("pty has been handed off"));
         }
@@ -437,14 +501,12 @@ impl TerminalPty {
             .lock()
             .map_err(|_| std::io::Error::other("pty master lock poisoned"))?;
         match &*backend {
-            TerminalPtyBackend::Portable(master) => master
-                .resize(PtySize {
-                    rows: rows.max(1),
-                    cols: cols.max(1),
-                    pixel_width: 0,
-                    pixel_height: 0,
-                })
-                .map_err(|err| std::io::Error::other(err.to_string())),
+            TerminalPtyBackend::Portable(master) => {
+                self.inner.cell.store(cell);
+                master
+                    .resize(pty_size(cols, rows, cell))
+                    .map_err(|err| std::io::Error::other(err.to_string()))
+            }
         }
     }
 

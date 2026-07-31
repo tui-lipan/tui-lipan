@@ -24,6 +24,8 @@ use crate::style::resolve::{
 use crate::style::{Rect, ScrollbarVariant, Span, Style, Theme, ThemeRole, resolve_slot};
 use crate::utils::GridSelection;
 use crate::utils::scrollbar::ScrollbarMetricsCache;
+#[cfg(feature = "terminal-images")]
+use crate::widgets::TerminalImageCrop;
 use crate::widgets::internal::terminal_content_layout;
 
 fn clip_spans_no_ellipsis<'a>(
@@ -66,6 +68,140 @@ fn clip_spans_no_ellipsis<'a>(
     }
 
     out
+}
+
+/// Paint the child program's images over the text that was just drawn.
+///
+/// A placement carries the rect it would occupy in full, even when most of that rect is off the
+/// pane, so the pixels are cropped to what is actually visible rather than squashed into it. That
+/// is what makes an image scroll: each row that leaves the content rect takes a strip of source
+/// pixels with it, and the rest keeps its scale.
+#[cfg(feature = "terminal-images")]
+fn render_terminal_images(
+    f: &mut ratatui::Frame<'_>,
+    node: &crate::widgets::internal::TerminalNode,
+    content_rect: Rect,
+    effective: ratatui::layout::Rect,
+) {
+    use std::sync::Arc;
+
+    use crate::backend::ratatui_backend::renderers::image::draw_encoded_image;
+
+    let clip_left = i32::from(effective.x);
+    let clip_top = i32::from(effective.y);
+    let clip_right = clip_left + i32::from(effective.width);
+    let clip_bottom = clip_top + i32::from(effective.height);
+
+    for placement in node.images.iter() {
+        let left = i32::from(content_rect.x) + placement.col;
+        let top = i32::from(content_rect.y) + placement.row;
+        let cols = i32::from(placement.cols);
+        let rows = i32::from(placement.rows);
+        if cols <= 0 || rows <= 0 {
+            continue;
+        }
+
+        let vis_left = left.max(clip_left);
+        let vis_top = top.max(clip_top);
+        let vis_right = (left + cols).min(clip_right);
+        let vis_bottom = (top + rows).min(clip_bottom);
+        if vis_right <= vis_left || vis_bottom <= vis_top {
+            continue;
+        }
+
+        let pixels = placement.image.pixels();
+        let source = placement.source_crop.unwrap_or(TerminalImageCrop {
+            x: 0,
+            y: 0,
+            width: pixels.width(),
+            height: pixels.height(),
+        });
+        let Some(crop) = crop_for_visible_cells(
+            source,
+            (cols as u32, rows as u32),
+            (
+                (vis_left - left) as u32,
+                (vis_top - top) as u32,
+                (vis_right - vis_left) as u32,
+                (vis_bottom - vis_top) as u32,
+            ),
+        ) else {
+            continue;
+        };
+
+        let whole = crop.x == 0
+            && crop.y == 0
+            && crop.width == pixels.width()
+            && crop.height == pixels.height();
+        let area = ratatui::layout::Rect {
+            x: vis_left as u16,
+            y: vis_top as u16,
+            width: (vis_right - vis_left) as u16,
+            height: (vis_bottom - vis_top) as u16,
+        };
+
+        draw_encoded_image(
+            f,
+            area,
+            placement_source_hash(placement.image_id, placement.image.source_hash(), crop),
+            || {
+                if whole {
+                    Arc::clone(pixels)
+                } else {
+                    Arc::new(pixels.crop_imm(crop.x, crop.y, crop.width, crop.height))
+                }
+            },
+        );
+    }
+}
+
+/// Map the visible cells of a placement back onto the source pixels they show.
+#[cfg(feature = "terminal-images")]
+fn crop_for_visible_cells(
+    source: TerminalImageCrop,
+    placement_cells: (u32, u32),
+    visible_cells: (u32, u32, u32, u32),
+) -> Option<TerminalImageCrop> {
+    let (cols, rows) = placement_cells;
+    let (skip_x, skip_y, keep_w, keep_h) = visible_cells;
+    if source.width == 0 || source.height == 0 || cols == 0 || rows == 0 {
+        return None;
+    }
+
+    let x = source.x + skip_x * source.width / cols;
+    let y = source.y + skip_y * source.height / rows;
+    // Round up, so a partly covered cell still gets pixels rather than a seam.
+    let width = (keep_w * source.width)
+        .div_ceil(cols)
+        .min(source.x + source.width - x);
+    let height = (keep_h * source.height)
+        .div_ceil(rows)
+        .min(source.y + source.height - y);
+
+    (width > 0 && height > 0).then_some(TerminalImageCrop {
+        x,
+        y,
+        width,
+        height,
+    })
+}
+
+/// The identity an encoded placement caches under: which image, which part of it, whose placement.
+///
+/// The crop is in there so two crops of one image cache separately. The *image id* is in there for
+/// a subtler reason: a host drawing through Kitty identifies a placement by the id of its encoding,
+/// so two placements sharing one encoding are one placement to it. Keying on the pixels alone would
+/// hand two copies of the same picture a single id, and the host would draw one of them and drop
+/// the other - which looks exactly like images vanishing as new ones arrive.
+#[cfg(feature = "terminal-images")]
+fn placement_source_hash(image_id: u32, source_hash: u64, crop: TerminalImageCrop) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    image_id.hash(&mut hasher);
+    source_hash.hash(&mut hasher);
+    (crop.x, crop.y, crop.width, crop.height).hash(&mut hasher);
+    hasher.finish()
 }
 
 pub(crate) struct TerminalRenderCtx<'a> {
@@ -229,6 +365,9 @@ pub(crate) fn render_terminal(
 
         f.render_widget(Paragraph::new(lines).scroll((dy, dx)), effective);
         rendered_content = true;
+
+        #[cfg(feature = "terminal-images")]
+        render_terminal_images(f, node, content_rect, effective);
     }
 
     // Render vertical scrollbar when scrollback is available.

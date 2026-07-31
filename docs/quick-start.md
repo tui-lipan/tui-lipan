@@ -81,6 +81,7 @@ tui-lipan = { version = "*", features = ["image", "big-text"] }
 | `syntax-syntect` | No | Lightweight syntax highlighting in `TextArea`, `DocumentView`, and `DiffView` via syntect; WASM uses pure-Rust `fancy-regex` |
 | `syntax-extra` | No | Opt-in bat-curated syntax set with broad grammar coverage; adds about 0.6 MiB and includes `syntax-syntect` |
 | `terminal` | No | Embedded PTY / terminal viewport - `Terminal`, `ManagedTerminal` |
+| `terminal-images` | No | Kitty graphics in terminal panes: the program running in a pane can draw images, whatever the host terminal supports; includes `terminal` and `image` |
 | `terminal-serde` | No | Serde derives for terminal snapshot leaf style/mouse types used by external, versioned snapshot transports; includes `terminal` |
 | `theme-reload` | No | Live reload of TOML theme files without restarting the app - see [Styling](styling.md) |
 | `web` | No | Browser/WASM backend - see [Web / WASM Backend](web-backend.md) |
@@ -129,6 +130,7 @@ Examples requiring specific features:
 | `markdown_editor_sync` | `markdown`, `syntax-syntect` |
 | `yazi` | `syntax-extra` |
 | `terminal_filetree_devtools` | `terminal` |
+| `terminal_images` | `terminal-images` |
 | `devtools` | `devtools` |
 | `theme_hot_reload` | `theme-reload` |
 

@@ -50,6 +50,21 @@ pub mod utils;
 pub mod validation;
 mod widgets;
 
+/// The host terminal's cell size in pixels.
+///
+/// A terminal deals in cells, but a program drawing a picture needs pixels: it reads the PTY's
+/// `TIOCGWINSZ` pixel fields, or asks with `CSI 14 t`, and sizes its output against the answer.
+/// Feed this to [`TerminalPtyConfig::cell_size`](crate::widgets::TerminalPtyConfig::cell_size) and
+/// [`TerminalScreen::set_cell_size`](crate::widgets::TerminalScreen::set_cell_size) so the child's
+/// arithmetic and the pane's layout agree.
+///
+/// Detected once at startup. Hosts that answer no size query get the image encoder's fallback
+/// guess rather than a refusal, so this always names a usable cell.
+#[cfg(all(feature = "terminal-images", not(target_arch = "wasm32")))]
+pub fn host_cell_size() -> crate::widgets::TerminalCellSize {
+    crate::backend::ratatui_backend::image_support::host_cell_size()
+}
+
 /// Temporarily release the interactive terminal for an external program (e.g. `$EDITOR`).
 ///
 /// Run suspend/resume on the **UI thread** (see [`Command::new`](crate::core::component::Command::new));
@@ -179,9 +194,11 @@ pub use crate::widgets::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use crate::widgets::{
     CopyModeAction, CopyModeGrid, KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState,
-    TerminalColorPalette, TerminalCopyMode, TerminalDecoration, TerminalKeyModes,
+    TerminalCellSize, TerminalColorPalette, TerminalCopyMode, TerminalDecoration, TerminalKeyModes,
     TerminalPasteShortcutBehavior, TerminalRenderSnapshot, terminal_selection_text,
 };
+#[cfg(feature = "terminal-images")]
+pub use crate::widgets::{TerminalImage, TerminalImageCrop, TerminalImagePlacement};
 
 #[cfg(feature = "diff-view")]
 pub use crate::widgets::{

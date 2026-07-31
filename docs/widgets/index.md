@@ -127,4 +127,4 @@ For layout reorders, wrap the moving subtree in `Animated::new(...)`, enable `.p
 | `TerminalPty` | PTY spawner and I/O bridge |
 | `TerminalScreen` | VT100/VT220 screen emulator |
 
-Design (not implemented): [terminal-images.md](terminal-images.md) — Kitty/sixel image passthrough.
+Images in a pane *(feature: `terminal-images`)*: [terminal-images.md](terminal-images.md) — Kitty graphics passthrough.

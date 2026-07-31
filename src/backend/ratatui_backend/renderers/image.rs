@@ -640,6 +640,62 @@ fn resolve_protocol_async(
     }
 }
 
+/// Resolve an encoded protocol for pixels the caller already holds.
+///
+/// Terminal panes come through here rather than through an [`ImageNode`]: their pixels arrive as
+/// the child program's own graphics escapes, but the encode queue, worker pool, and cache are the
+/// ones the [`Image`](crate::widgets::Image) widget already uses, so a pane full of plots competes
+/// for that budget instead of standing up a second one beside it.
+///
+/// `source_hash` must cover everything about the pixels, cropping included - it is the cache's
+/// only notion of identity. `pixels` is called only on a miss, which is what keeps a cropped
+/// placement from re-cropping on every frame once its encode has landed.
+///
+/// Nothing is drawn while the first encode for these pixels is still running; a stale encode at a
+/// different size is preferred over nothing, so a resize does not blink. Returns whether the frame
+/// was given something to draw.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn draw_encoded_image(
+    f: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    source_hash: u64,
+    pixels: impl FnOnce() -> Arc<image::DynamicImage>,
+) -> bool {
+    if area.width == 0 || area.height == 0 || image_support::image_rendering_suspended() {
+        return false;
+    }
+
+    let key = RenderCacheKey {
+        source_hash,
+        frame_index: 0,
+        width: area.width,
+        height: area.height,
+        background_rgb: None,
+        fit: ImageFit::Scale,
+        protocol: ImageProtocol::Auto,
+        resolved_protocol: protocol_type_to_public(
+            image_support::picker_snapshot().protocol_type(),
+        ),
+    };
+
+    let encoder = async_encoder();
+    let protocol = encoder.cache_get(&key).or_else(|| {
+        let stale = encoder.cache_get_latest_compatible(&key);
+        encoder.enqueue(EncodeRequest {
+            source_hash,
+            key,
+            image: pixels(),
+        });
+        stale
+    });
+
+    let Some(protocol) = protocol else {
+        return false;
+    };
+    f.render_widget(RatatuiImageWidget::new(protocol.as_ref()), area);
+    true
+}
+
 pub(crate) fn render_image(
     f: &mut ratatui::Frame<'_>,
     node: &ImageNode,

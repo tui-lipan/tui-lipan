@@ -4,6 +4,8 @@ mod buffer;
 #[cfg(feature = "terminal")]
 mod copy_mode;
 mod events;
+#[cfg(feature = "terminal-images")]
+mod graphics;
 mod layout;
 mod mod_private;
 mod node;
@@ -22,6 +24,8 @@ pub use events::{
     TerminalSelectionEvent, encode_paste, focus_sequences, key_event_to_bytes,
     mouse_event_to_bytes, paste_sequences, terminal_selection_text,
 };
+#[cfg(feature = "terminal-images")]
+pub use graphics::{TerminalImage, TerminalImageCrop, TerminalImagePlacement};
 pub use mod_private::Terminal;
 pub use osc::{
     TerminalCommandPhase, TerminalSemanticEvent, TerminalSemanticState, TerminalWorkingDirectory,
@@ -31,7 +35,7 @@ pub use osc::{
 pub use pty::TerminalPtyHandoff;
 pub use pty::{TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent};
 pub use screen::{
-    SemanticMark, SemanticMarkKind, TerminalColorPalette, TerminalDecoration,
+    SemanticMark, SemanticMarkKind, TerminalCellSize, TerminalColorPalette, TerminalDecoration,
     TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle, TerminalViewport,
 };
 
@@ -66,6 +70,8 @@ impl Default for Terminal {
             total_scrollback_rows: 0,
             mouse_mode: MouseModeState::default(),
             key_modes: TerminalKeyModes::default(),
+            #[cfg(feature = "terminal-images")]
+            images: Arc::from([]),
             paste_shortcut_behavior: TerminalPasteShortcutBehavior::Forward,
             selection: None,
             selection_controlled: false,
@@ -206,6 +212,10 @@ impl Terminal {
         self.total_scrollback_rows = snapshot.total_scrollback_rows;
         self.mouse_mode = snapshot.mouse_mode;
         self.key_modes = snapshot.key_modes;
+        #[cfg(feature = "terminal-images")]
+        {
+            self.images = snapshot.images;
+        }
         self
     }
 

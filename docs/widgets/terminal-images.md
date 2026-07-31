@@ -1,111 +1,149 @@
-# Terminal image passthrough (design)
+# Terminal image passthrough
 
-Status: **roadmap / design only** — not implemented.
-Scope: Kitty graphics protocol first; sixel later.
-Primary owner: `tui-lipan` (`TerminalScreen` + renderer). `hyprmux` follows with
-pane clipping, multi-client attach, and memory budgets.
+*(feature: `terminal-images`)*
 
-## Goals
+Programs running inside a `Terminal` pane can draw pictures. `TerminalScreen` reads the
+[Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) out of the PTY byte
+stream, decodes it, and the renderer paints the result over the pane's text.
 
-- Allow programs that emit Kitty graphics (`APC _G …`) to show images inside a
-  `Terminal` / `TerminalScreen` pane when the **host** terminal supports it.
-- Preserve the cell-diff snapshot pipeline for text; images are a parallel layer
-  that must not force full-frame text redraws on every scroll.
-- Keep the same-bytes client model (server owns PTY bytes; each client parses
-  locally), matching how semantic marks work today.
-
-## Non-goals (v1)
-
-- Sixel (follow-up once Kitty path is stable).
-- Editing / screenshotting image contents from the app.
-- Guaranteeing images survive resurrect / export_replay (may accept loss).
-- Perfect multi-client fidelity when clients have different host capabilities.
-
-## Proposed architecture
-
-```text
-PTY bytes
-  │
-  ├─► existing VTE / alacritty grid (cells)
-  └─► Kitty APC `_G` parser ──► ImageStore on TerminalScreen
-                                    │
-                                    ▼
-                            placements (id, z, x, y, w, h, pixel refs)
-                                    │
-Render snapshot (cells) ────────────┤
-                                    ▼
-Host renderer: capability detect → passthrough / remap ids → clip to pane
+```toml
+tui-lipan = { version = "0.1", features = ["terminal-images"] }
 ```
 
-### Parsing & storage (`TerminalScreen`)
+```bash
+cargo run --example terminal_images --features terminal-images
+```
 
-1. Extend the byte ingest path to recognize APC `_G` (Kitty) without disturbing
-   the cell grid when the image is a floating placement.
-2. `ImageStore`:
-   - keyed by Kitty image id (and optionally placement id);
-   - holds compressed/raw pixel payloads with a hard memory budget;
-   - tracks which absolute lines / cells a placement occupies for eviction.
-3. Cell placeholders: when a placement uses Unicode placeholders, mark those
-   cells so scroll/clear/reflow can evict or move placements coherently.
-4. Eviction triggers: scroll into history past retention, `ED`/`EL` clears,
-   RIS/alt-screen swap, explicit Kitty delete actions, memory pressure.
+## It does not depend on the host terminal
 
-### Renderer
+The child's escapes are never forwarded to the host. They are decoded into pixels and re-encoded
+through the same path the [`Image`](display.md#image-requires-feature-image) widget uses, so the host renders them with whatever
+*it* supports — Kitty, iTerm2, sixel, or half-blocks. A pane in a plain `xterm` shows pictures.
 
-1. **Capability detection** once per host backend (Kitty / iTerm2 / none).
-2. **Passthrough**: re-emit Kitty APC sequences for still-visible placements,
-   remapping ids per pane so overlapping panes do not collide.
-3. **Damage / z-order**: image layer composites above/below cells according to
-   Kitty z; must not invalidate the entire cell-diff cache when only an
-   off-screen image changes.
-4. **Fallback**: if the host cannot display graphics, leave placeholders (or
-   blank cells) and skip APC emission — never corrupt the text stream.
+Decoding rather than forwarding is also what makes the rest work: image ids from two panes cannot
+collide, a pane that is half scrolled off gets its pixels cropped instead of squashed, and the
+cell-diff render pipeline is untouched.
 
-### hyprmux concerns
+## Setting the cell size
 
-- Clip image emission to each pane’s on-screen rect (and under overlays).
-- Multi-client attach: each client’s host capability may differ; same-bytes
-  parsing still runs, but passthrough is local.
-- Attach replay: either extend `export_replay_bytes` to re-emit image payloads
-  (expensive) or **accept loss** of pre-attach images (documented).
-- Resurrect snapshots: image payloads can dominate size — default omit, with an
-  explicit opt-in later if needed.
-- Memory budgets: global + per-pane caps; drop oldest / largest first.
+A terminal deals in cells; a program drawing a picture needs pixels. It learns the conversion from
+the PTY's `TIOCGWINSZ` pixel fields or by asking with `CSI 14 t`. Give both ends the same answer:
 
-## Open questions (must answer before coding)
+```rust
+use tui_lipan::prelude::*;
 
-| Topic | Options / notes |
+let cell = host_cell_size();
+
+let mut screen = TerminalScreen::new(rows, cols, scrollback);
+screen.set_cell_size(cell);
+
+let config = TerminalPtyConfig::default().cell_size(cell);
+```
+
+[`ManagedTerminal`](terminal.md) does this for you. A raw `TerminalScreen` defaults to a 10x20
+cell, which is a guess: a mismatch shows up as images that overlap the text below them or leave a
+gap, because the child reserved a different number of rows than the pane drew.
+
+Pass the cell size to later resizes too, with `TerminalPty::resize_with_cell_size`; plain `resize`
+keeps the last one it was given.
+
+## Where images live
+
+### Two ways an image gets placed
+
+**At the cursor** (`a=T` without `U=1`) is what `icat` and friends do: the image lands where the
+cursor is, the cursor moves past it, and the placement is anchored to that scrollback line.
+
+**Through placeholder cells** (`a=T,U=1`) is what terminal UI toolkits do, `ratatui-image` among
+them: the transmission draws nothing, and the program then writes the placeholder character
+`U+10EEEE` into the cells the image should cover, tagging them with the image id (in the cell's
+foreground colour) and the position inside the image (in combining marks). Those placements are
+read back off the grid on every snapshot rather than stored, so they scroll, clear, and reflow with
+the cells holding them, for free. A cell may leave any of that out and inherit it from its
+left-hand neighbour — including the high byte of the image id — which is what keeps a row of
+placeholders down to a single escape sequence.
+
+### Cursor placements
+
+A cursor placement is anchored to an absolute scrollback line, in the same space as `OSC 133`
+semantic marks. That is what makes it behave like the text it was drawn against:
+
+| Event | What happens |
 | --- | --- |
-| Host support matrix | Kitty, Ghostty, WezTerm, iTerm2, Contour, Windows Terminal — which ship Kitty `_G`? Fallback UX? |
-| Compositing vs cell-diff | Can we emit images only for damaged placements, or does Kitty require full re-place after scroll? |
-| Scrollback semantics | Do images scroll with history lines, freeze at the live edge, or drop when leaving the viewport? |
-| Resurrect size | Omit images by default vs size-capped inclusion. |
-| Mixed-capability multi-client | Controller with graphics + follower without — acceptable divergence? |
-| Payload limits | Max bytes / max dimension / max placements per pane. |
-| Sixel | Separate parser + different host capability; do not block Kitty MVP. |
+| Output scrolls | The image scrolls with it, cropped row by row as it leaves the viewport |
+| Scrolling back | It reappears at the line it was drawn on |
+| A line falls out of scrollback | The image's remaining rows stay; it goes once its last row is evicted |
+| Alternate screen | Placements made there are dropped when the child leaves it |
+| Column resize | Kept, unless the change actually rewraps text — then the anchor stops naming what it named, and placements are dropped |
+| `RIS` / `TerminalScreen::reset` | Everything is cleared |
 
-## Suggested first implementation slices
+A placeholder placement needs none of that bookkeeping: it *is* the text, so it does whatever the
+cells do, and it is gone the moment they are.
 
-1. **Design spike (this doc)** — lock answers to the open questions above.
-2. **tui-lipan**: APC `_G` parse → `ImageStore` → no renderer yet (tests on
-   placement/eviction only).
-3. **tui-lipan**: host capability + passthrough in the ratatui/crossterm backend
-   behind a feature flag.
-4. **hyprmux**: pane clip + id remapping + memory budget config.
-5. **Docs / examples**: knobs, limitations, attach/resurrect behavior.
-6. **Sixel** as a separate design + implementation track.
+Each placement carries the `image_id` its transmission used. A renderer must key its encoding on
+that and not on the pixels alone: a host drawing through Kitty identifies a placement by the id of
+its encoding, so two placements sharing one encoding are a single placement to it — and two copies
+of one picture would collapse, the second silently not drawn.
 
-## Risks
+`TerminalRenderSnapshot::images` carries the placements overlapping the visible rows, back to front
+by Kitty z-index. Rows and columns are viewport-relative, and a cursor placement's may be negative
+when the image starts above or to the left of the pane.
 
-- Highest: interaction with the cell-diff snapshot pipeline and scroll/reflow.
-- Memory: unbounded image retention will OOM agent-heavy sessions.
-- Attach/replay: without payload re-emission, images vanish on reattach — must
-  be documented as accepted if chosen.
-- Two-repo lockstep: framework feature lands and is published before hyprmux
-  depends on it in CI.
+## Memory
 
-## References
+Decoded pixels are capped per screen, 96 MiB by default, and evicted least-recently-used once the
+cap is passed — placed images included, since leaving old plots on screen must not pin memory. One
+image larger than the whole budget is kept anyway; that is a budget set too low, not a picture that
+should silently fail to appear.
 
-- Kitty graphics protocol: https://sw.kovidgoyal.net/kitty/graphics-protocol/
-- Existing `TerminalScreen` replay / semantic mark patterns in
-  `src/widgets/terminal/screen.rs` (same-bytes, client-local derived state).
+```rust
+screen.set_image_budget(16 * 1024 * 1024);
+```
+
+Payloads are bounded before decoding as well: 32 MiB per transmission, 16384 pixels per axis.
+
+## What is supported
+
+| Key | Support |
+| --- | --- |
+| `a=t`, `a=T`, `a=p`, `a=d`, `a=q` | Transmit, transmit-and-display, display, delete, query |
+| `t=d` | Direct transmission, chunked with `m=1` |
+| `f=24`, `f=32`, `f=100` | RGB, RGBA, PNG |
+| `o=z` | zlib-compressed payloads |
+| `s`, `v` | Pixel dimensions for the raw formats |
+| `i`, `I`, `p` | Image id, image number, placement id |
+| `x`, `y`, `w`, `h` | Source rectangle to display |
+| `c`, `r` | Explicit placement size in cells |
+| `z` | Stacking order against the text layer |
+| `C=1` | Leave the cursor where it is |
+| `q=1`, `q=2` | Suppress success reports / all reports |
+| `d=` | `a`/`A`, `i`/`I`, `n`/`N`, `c`/`C`, `z`/`Z`, `p`/`P`, `x`/`X`, `y`/`Y` |
+| `U=1` | Virtual placements shown through Unicode placeholder cells |
+
+Not supported, and answered with the protocol's own `ENOTSUPP` report so a child that probes first
+gets a clean answer rather than silence:
+
+- **File and shared-memory transmission** (`t=f`, `t=t`, `t=s`). A pane can be attached from a
+  different machine than the one that wrote the file, so a path is meaningless often enough that
+  refusing is more honest than reading it sometimes. Tools that fall back to `t=d` still work.
+- **The protocol's animation frames** (`a=a`, `a=f`, `a=c`). A sender that animates by
+  re-transmitting under the same image id — which is what `ratatui-image` does for GIFs — works
+  regardless: the new pixels replace the old and the placeholders keep pointing at them.
+- **Relative placements** (parent references).
+
+Sixel input from the child is a separate protocol and is not read.
+
+## Known limits
+
+- **Reattaching to a session loses images drawn before the attach.** `export_replay_bytes` is a
+  text replay stream and does not re-emit image payloads.
+- **A partly visible image is cropped, not scaled.** That is what makes scrolling look right, but
+  it also means an image wider than its pane shows its left part rather than shrinking to fit.
+- **Encoding is asynchronous.** The first frame after a new image has no pixels in it yet; the
+  encode lands a frame or two later and the pane repaints.
+
+## Testing
+
+The half-block encoder is the fallback path, which makes images assertable without a real terminal:
+render through `TestBackend` and read the colors back out of `capture_frame()`. See
+`tests/terminal_images_render.rs`.
