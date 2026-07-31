@@ -18,12 +18,15 @@ While the crate is on `0.x.y`:
   decodes it rather than forwarding it, so the host terminal does not have to speak Kitty — the
   pixels are re-encoded through the same path the `Image` widget uses, down to half-blocks. That is
   also what lets two panes pick the same image id, and a half-scrolled pane crop its pixels instead
-  of squashing them. Placements are anchored to absolute scrollback lines, so images scroll,
-  scroll back, and evict with the text they were drawn against, and decoded pixels are held to a
-  per-screen budget (`TerminalScreen::set_image_budget`, 96 MiB by default). New public types
-  `TerminalImage`, `TerminalImagePlacement`, `TerminalImageCrop`, and the snapshot field
+  of squashing them. Both ways of placing an image are read: at the cursor, as `icat` does, and
+  through Unicode placeholder cells (`U=1`), as terminal UI toolkits including `ratatui-image` do.
+  Cursor placements are anchored to absolute scrollback lines, so images scroll, scroll back, and
+  evict with the text they were drawn against; placeholder placements are read off the grid and so
+  follow the cells holding them. Decoded pixels are held to a per-screen budget
+  (`TerminalScreen::set_image_budget`, 96 MiB by default). New public types `TerminalImage`,
+  `TerminalImagePlacement`, `TerminalImageCrop`, and the snapshot field
   `TerminalRenderSnapshot::images` (breaking: the struct gained a field). Unsupported requests —
-  file/shared-memory transmission, Unicode placeholders, animation — are answered with the
+  file/shared-memory transmission, the protocol's own animation frames — are answered with the
   protocol's own `ENOTSUPP` report. See [`docs/widgets/terminal-images.md`](docs/widgets/terminal-images.md).
 - Add `TerminalCellSize`, `host_cell_size()`, `TerminalScreen::set_cell_size`, and
   `TerminalPtyConfig::cell_size` / `TerminalPty::resize_with_cell_size`. The PTY now reports pixel

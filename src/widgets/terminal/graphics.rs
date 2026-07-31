@@ -404,6 +404,8 @@ pub(super) struct GraphicsCommand {
     z: i32,
     /// `C=1` - leave the cursor where it is.
     no_cursor_move: bool,
+    /// `U=1` - a virtual placement, shown wherever placeholder cells name it rather than here.
+    virtual_placement: bool,
     /// `d=` - what a delete applies to.
     delete: u8,
     /// `q=` - 1 suppresses success reports, 2 suppresses failures too.
@@ -433,6 +435,7 @@ impl Default for GraphicsCommand {
             rows: 0,
             z: 0,
             no_cursor_move: false,
+            virtual_placement: false,
             delete: b'a',
             quiet: 0,
             payload: Vec::new(),
@@ -498,6 +501,7 @@ impl GraphicsCommand {
             b'r' => self.rows = text.parse().unwrap_or(0),
             b'z' => self.z = text.parse().unwrap_or(0),
             b'C' => self.no_cursor_move = text.parse().unwrap_or(0) == 1,
+            b'U' => self.virtual_placement = text.parse().unwrap_or(0) == 1,
             b'd' => self.delete = first,
             b'q' => self.quiet = text.parse().unwrap_or(0),
             _ => {}
@@ -512,6 +516,493 @@ impl GraphicsCommand {
             _ => false,
         }
     }
+}
+
+// ─── Unicode placeholders ────────────────────────────────────────────────────
+
+/// The character a virtual placement is drawn with.
+///
+/// A program that wants an image to sit in the text flow - which is what every terminal UI
+/// toolkit wants - transmits it with `U=1` and then writes this character into the cells the image
+/// should cover, tagging each with the image id (in the cell's foreground colour) and its position
+/// inside the image (in combining marks). Nothing is drawn where the *transmission* happened, so a
+/// virtual placement is stored and then found again by reading the grid.
+pub(super) const PLACEHOLDER: char = '\u{10EEEE}';
+
+/// The Kitty protocol's row/column diacritics, in the order the protocol assigns them.
+///
+/// A placeholder cell names its position inside the image with up to three of these: the first is
+/// the image row, the second the column, and the third the most significant byte of the image id.
+/// The list is the one in the protocol specification, and is sorted by code point so a lookup can
+/// binary-search it.
+static ROWCOLUMN_DIACRITICS: [char; 297] = [
+    '\u{305}',
+    '\u{30d}',
+    '\u{30e}',
+    '\u{310}',
+    '\u{312}',
+    '\u{33d}',
+    '\u{33e}',
+    '\u{33f}',
+    '\u{346}',
+    '\u{34a}',
+    '\u{34b}',
+    '\u{34c}',
+    '\u{350}',
+    '\u{351}',
+    '\u{352}',
+    '\u{357}',
+    '\u{35b}',
+    '\u{363}',
+    '\u{364}',
+    '\u{365}',
+    '\u{366}',
+    '\u{367}',
+    '\u{368}',
+    '\u{369}',
+    '\u{36a}',
+    '\u{36b}',
+    '\u{36c}',
+    '\u{36d}',
+    '\u{36e}',
+    '\u{36f}',
+    '\u{483}',
+    '\u{484}',
+    '\u{485}',
+    '\u{486}',
+    '\u{487}',
+    '\u{592}',
+    '\u{593}',
+    '\u{594}',
+    '\u{595}',
+    '\u{597}',
+    '\u{598}',
+    '\u{599}',
+    '\u{59c}',
+    '\u{59d}',
+    '\u{59e}',
+    '\u{59f}',
+    '\u{5a0}',
+    '\u{5a1}',
+    '\u{5a8}',
+    '\u{5a9}',
+    '\u{5ab}',
+    '\u{5ac}',
+    '\u{5af}',
+    '\u{5c4}',
+    '\u{610}',
+    '\u{611}',
+    '\u{612}',
+    '\u{613}',
+    '\u{614}',
+    '\u{615}',
+    '\u{616}',
+    '\u{617}',
+    '\u{657}',
+    '\u{658}',
+    '\u{659}',
+    '\u{65a}',
+    '\u{65b}',
+    '\u{65d}',
+    '\u{65e}',
+    '\u{6d6}',
+    '\u{6d7}',
+    '\u{6d8}',
+    '\u{6d9}',
+    '\u{6da}',
+    '\u{6db}',
+    '\u{6dc}',
+    '\u{6df}',
+    '\u{6e0}',
+    '\u{6e1}',
+    '\u{6e2}',
+    '\u{6e4}',
+    '\u{6e7}',
+    '\u{6e8}',
+    '\u{6eb}',
+    '\u{6ec}',
+    '\u{730}',
+    '\u{732}',
+    '\u{733}',
+    '\u{735}',
+    '\u{736}',
+    '\u{73a}',
+    '\u{73d}',
+    '\u{73f}',
+    '\u{740}',
+    '\u{741}',
+    '\u{743}',
+    '\u{745}',
+    '\u{747}',
+    '\u{749}',
+    '\u{74a}',
+    '\u{7eb}',
+    '\u{7ec}',
+    '\u{7ed}',
+    '\u{7ee}',
+    '\u{7ef}',
+    '\u{7f0}',
+    '\u{7f1}',
+    '\u{7f3}',
+    '\u{816}',
+    '\u{817}',
+    '\u{818}',
+    '\u{819}',
+    '\u{81b}',
+    '\u{81c}',
+    '\u{81d}',
+    '\u{81e}',
+    '\u{81f}',
+    '\u{820}',
+    '\u{821}',
+    '\u{822}',
+    '\u{823}',
+    '\u{825}',
+    '\u{826}',
+    '\u{827}',
+    '\u{829}',
+    '\u{82a}',
+    '\u{82b}',
+    '\u{82c}',
+    '\u{82d}',
+    '\u{951}',
+    '\u{953}',
+    '\u{954}',
+    '\u{f82}',
+    '\u{f83}',
+    '\u{f86}',
+    '\u{f87}',
+    '\u{135d}',
+    '\u{135e}',
+    '\u{135f}',
+    '\u{17dd}',
+    '\u{193a}',
+    '\u{1a17}',
+    '\u{1a75}',
+    '\u{1a76}',
+    '\u{1a77}',
+    '\u{1a78}',
+    '\u{1a79}',
+    '\u{1a7a}',
+    '\u{1a7b}',
+    '\u{1a7c}',
+    '\u{1b6b}',
+    '\u{1b6d}',
+    '\u{1b6e}',
+    '\u{1b6f}',
+    '\u{1b70}',
+    '\u{1b71}',
+    '\u{1b72}',
+    '\u{1b73}',
+    '\u{1cd0}',
+    '\u{1cd1}',
+    '\u{1cd2}',
+    '\u{1cda}',
+    '\u{1cdb}',
+    '\u{1ce0}',
+    '\u{1dc0}',
+    '\u{1dc1}',
+    '\u{1dc3}',
+    '\u{1dc4}',
+    '\u{1dc5}',
+    '\u{1dc6}',
+    '\u{1dc7}',
+    '\u{1dc8}',
+    '\u{1dc9}',
+    '\u{1dcb}',
+    '\u{1dcc}',
+    '\u{1dd1}',
+    '\u{1dd2}',
+    '\u{1dd3}',
+    '\u{1dd4}',
+    '\u{1dd5}',
+    '\u{1dd6}',
+    '\u{1dd7}',
+    '\u{1dd8}',
+    '\u{1dd9}',
+    '\u{1dda}',
+    '\u{1ddb}',
+    '\u{1ddc}',
+    '\u{1ddd}',
+    '\u{1dde}',
+    '\u{1ddf}',
+    '\u{1de0}',
+    '\u{1de1}',
+    '\u{1de2}',
+    '\u{1de3}',
+    '\u{1de4}',
+    '\u{1de5}',
+    '\u{1de6}',
+    '\u{1dfe}',
+    '\u{20d0}',
+    '\u{20d1}',
+    '\u{20d4}',
+    '\u{20d5}',
+    '\u{20d6}',
+    '\u{20d7}',
+    '\u{20db}',
+    '\u{20dc}',
+    '\u{20e1}',
+    '\u{20e7}',
+    '\u{20e9}',
+    '\u{20f0}',
+    '\u{2cef}',
+    '\u{2cf0}',
+    '\u{2cf1}',
+    '\u{2de0}',
+    '\u{2de1}',
+    '\u{2de2}',
+    '\u{2de3}',
+    '\u{2de4}',
+    '\u{2de5}',
+    '\u{2de6}',
+    '\u{2de7}',
+    '\u{2de8}',
+    '\u{2de9}',
+    '\u{2dea}',
+    '\u{2deb}',
+    '\u{2dec}',
+    '\u{2ded}',
+    '\u{2dee}',
+    '\u{2def}',
+    '\u{2df0}',
+    '\u{2df1}',
+    '\u{2df2}',
+    '\u{2df3}',
+    '\u{2df4}',
+    '\u{2df5}',
+    '\u{2df6}',
+    '\u{2df7}',
+    '\u{2df8}',
+    '\u{2df9}',
+    '\u{2dfa}',
+    '\u{2dfb}',
+    '\u{2dfc}',
+    '\u{2dfd}',
+    '\u{2dfe}',
+    '\u{2dff}',
+    '\u{a66f}',
+    '\u{a67c}',
+    '\u{a67d}',
+    '\u{a6f0}',
+    '\u{a6f1}',
+    '\u{a8e0}',
+    '\u{a8e1}',
+    '\u{a8e2}',
+    '\u{a8e3}',
+    '\u{a8e4}',
+    '\u{a8e5}',
+    '\u{a8e6}',
+    '\u{a8e7}',
+    '\u{a8e8}',
+    '\u{a8e9}',
+    '\u{a8ea}',
+    '\u{a8eb}',
+    '\u{a8ec}',
+    '\u{a8ed}',
+    '\u{a8ee}',
+    '\u{a8ef}',
+    '\u{a8f0}',
+    '\u{a8f1}',
+    '\u{aab0}',
+    '\u{aab2}',
+    '\u{aab3}',
+    '\u{aab7}',
+    '\u{aab8}',
+    '\u{aabe}',
+    '\u{aabf}',
+    '\u{aac1}',
+    '\u{fe20}',
+    '\u{fe21}',
+    '\u{fe22}',
+    '\u{fe23}',
+    '\u{fe24}',
+    '\u{fe25}',
+    '\u{fe26}',
+    '\u{10a0f}',
+    '\u{10a38}',
+    '\u{1d185}',
+    '\u{1d186}',
+    '\u{1d187}',
+    '\u{1d188}',
+    '\u{1d189}',
+    '\u{1d1aa}',
+    '\u{1d1ab}',
+    '\u{1d1ac}',
+    '\u{1d1ad}',
+    '\u{1d242}',
+    '\u{1d243}',
+    '\u{1d244}',
+];
+
+/// The diacritic that encodes `index`, saturating at the last one the protocol defines.
+///
+/// The decoder never needs this - it only reads marks - but building the sequences a real sender
+/// emits is how the placeholder path is tested, so it lives next to the table it indexes.
+#[cfg(test)]
+pub(super) fn diacritic(index: u16) -> char {
+    ROWCOLUMN_DIACRITICS[usize::from(index).min(ROWCOLUMN_DIACRITICS.len() - 1)]
+}
+
+/// The position a row/column diacritic encodes, or `None` if the character is not one.
+fn diacritic_value(mark: char) -> Option<u16> {
+    ROWCOLUMN_DIACRITICS
+        .binary_search(&mark)
+        .ok()
+        .map(|index| index as u16)
+}
+
+/// One placeholder cell, as read off the grid.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PlaceholderCell {
+    /// Viewport row.
+    pub(super) row: u16,
+    /// Viewport column.
+    pub(super) col: u16,
+    /// The low 24 bits of the image id, carried by the cell's foreground colour.
+    pub(super) id_low: u32,
+    /// Image row, when the cell spelled one out.
+    pub(super) image_row: Option<u16>,
+    /// Image column, when the cell spelled one out.
+    pub(super) image_col: Option<u16>,
+    /// High byte of the image id, for ids that do not fit in a colour.
+    pub(super) id_high: Option<u16>,
+}
+
+impl PlaceholderCell {
+    /// Read the position marks off a cell's combining characters.
+    ///
+    /// The protocol lets a cell omit any of them, in which case it continues the cell to its left:
+    /// that is what keeps a row of placeholders down to one escape sequence instead of one per
+    /// cell, and it is why these are resolved in a left-to-right pass rather than per cell.
+    pub(super) fn new(row: u16, col: u16, id_low: u32, marks: &[char]) -> Self {
+        let mut values = marks.iter().filter_map(|mark| diacritic_value(*mark));
+        Self {
+            row,
+            col,
+            id_low,
+            image_row: values.next(),
+            image_col: values.next(),
+            id_high: values.next(),
+        }
+    }
+}
+
+/// A resolved run of placeholder cells: one screen row of one image.
+#[derive(Clone, Copy, Debug)]
+struct PlaceholderRun {
+    image_id: u32,
+    /// High byte of the image id, kept so the cells continuing this run can inherit it.
+    id_high: u16,
+    row: u16,
+    col: u16,
+    width: u16,
+    image_row: u16,
+    image_col: u16,
+}
+
+/// Resolve placeholder cells into runs, applying the protocol's inheritance rules.
+///
+/// Everything a cell can leave out is inherited from the cell to its left: its row, its column
+/// (which advances by one), and the high byte of the image id. Inheriting the id byte matters as
+/// much as the position - ids above 24 bits split across the foreground colour and a third
+/// combining mark, and a sender writes that mark on the first cell of a row only. Defaulting it
+/// to zero instead of inheriting makes every cell after the first name a *different* image, which
+/// looks exactly like an image one column wide.
+fn placeholder_runs(cells: &[PlaceholderCell]) -> Vec<PlaceholderRun> {
+    let mut runs: Vec<PlaceholderRun> = Vec::new();
+    let mut open: Option<PlaceholderRun> = None;
+
+    for cell in cells {
+        // Adjacency has to be settled before the id, since the id is what may be inherited.
+        let adjacent =
+            open.is_some_and(|run| run.row == cell.row && run.col + run.width == cell.col);
+        let inherited_high = match (adjacent, open) {
+            (true, Some(run)) => run.id_high,
+            _ => 0,
+        };
+        let id_high = cell.id_high.unwrap_or(inherited_high);
+        let image_id = (u32::from(id_high) << 24) | (cell.id_low & 0x00ff_ffff);
+
+        let continues = adjacent
+            && open.is_some_and(|run| {
+                run.image_id == image_id
+                    && cell.image_row.is_none_or(|value| value == run.image_row)
+                    && cell
+                        .image_col
+                        .is_none_or(|value| value == run.image_col + run.width)
+            });
+
+        if continues {
+            if let Some(run) = open.as_mut() {
+                run.width += 1;
+            }
+            continue;
+        }
+
+        if let Some(run) = open.take() {
+            runs.push(run);
+        }
+        open = Some(PlaceholderRun {
+            image_id,
+            id_high,
+            row: cell.row,
+            col: cell.col,
+            width: 1,
+            image_row: cell.image_row.unwrap_or(0),
+            image_col: cell.image_col.unwrap_or(0),
+        });
+    }
+
+    runs.extend(open);
+    runs
+}
+
+/// A rectangle of one image, assembled from the rows of placeholders covering it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PlaceholderRect {
+    image_id: u32,
+    row: u16,
+    col: u16,
+    width: u16,
+    height: u16,
+    image_row: u16,
+    image_col: u16,
+}
+
+/// Stack runs into rectangles, so a whole image is one placement instead of one per row.
+///
+/// It matters: each placement is separately cropped and encoded, so leaving a 40-row picture as 40
+/// strips would mean 40 encodes and 40 sequences on the wire for what the sender meant as one
+/// image. Rows that do not line up stay separate rather than being forced together.
+fn merge_placeholder_runs(runs: &[PlaceholderRun]) -> Vec<PlaceholderRect> {
+    let mut rects: Vec<PlaceholderRect> = Vec::new();
+
+    for run in runs {
+        let stackable = rects.iter_mut().find(|rect| {
+            rect.image_id == run.image_id
+                && rect.col == run.col
+                && rect.width == run.width
+                && rect.image_col == run.image_col
+                && rect.row + rect.height == run.row
+                && rect.image_row + rect.height == run.image_row
+        });
+        if let Some(rect) = stackable {
+            rect.height += 1;
+            continue;
+        }
+        rects.push(PlaceholderRect {
+            image_id: run.image_id,
+            row: run.row,
+            col: run.col,
+            width: run.width,
+            height: 1,
+            image_row: run.image_row,
+            image_col: run.image_col,
+        });
+    }
+
+    rects
 }
 
 // ─── Store ───────────────────────────────────────────────────────────────────
@@ -618,6 +1109,12 @@ impl Default for TerminalGraphics {
 }
 
 impl TerminalGraphics {
+    /// Whether any image has been transmitted, so a session with none can skip the grid walk
+    /// that looks for placeholder cells.
+    pub(super) fn has_images(&self) -> bool {
+        !self.images.is_empty()
+    }
+
     /// Replace the decoded-pixel budget, evicting immediately if it shrank.
     pub(super) fn set_budget(&mut self, bytes: usize) {
         self.budget = bytes;
@@ -701,6 +1198,48 @@ impl TerminalGraphics {
             .collect();
         visible.sort_by_key(|placement| placement.z);
         visible
+    }
+
+    /// Turn the placeholder cells on screen into placements.
+    ///
+    /// Unlike a direct placement, a virtual one is not anchored to a scrollback line: it *is* the
+    /// text, so it scrolls, clears, and reflows for free, and it disappears the moment the cells
+    /// holding it do. That is why these are derived per snapshot rather than stored.
+    pub(super) fn placeholder_placements(
+        &self,
+        cells: &[PlaceholderCell],
+        cell: TerminalCellSize,
+    ) -> Vec<TerminalImagePlacement> {
+        merge_placeholder_runs(&placeholder_runs(cells))
+            .into_iter()
+            .filter_map(|rect| {
+                let stored = self.images.get(&rect.image_id)?;
+                let (width, height) = (stored.image.width(), stored.image.height());
+                // The source region a rect covers, in the cell grid the sender laid the image out
+                // on. Clamped rather than scaled: a rect that runs past the pixels it names is a
+                // sender that rounded up, not an image that should stretch.
+                let x = u32::from(rect.image_col) * u32::from(cell.width);
+                let y = u32::from(rect.image_row) * u32::from(cell.height);
+                if x >= width || y >= height {
+                    return None;
+                }
+                let crop = TerminalImageCrop {
+                    x,
+                    y,
+                    width: (u32::from(rect.width) * u32::from(cell.width)).min(width - x),
+                    height: (u32::from(rect.height) * u32::from(cell.height)).min(height - y),
+                };
+                Some(TerminalImagePlacement {
+                    image: stored.image.clone(),
+                    row: i32::from(rect.row),
+                    col: i32::from(rect.col),
+                    rows: rect.height,
+                    cols: rect.width,
+                    z: 0,
+                    source_crop: Some(crop),
+                })
+            })
+            .collect()
     }
 
     /// Handle one command.
@@ -860,6 +1399,11 @@ impl TerminalGraphics {
             stored.used = clock;
             (stored.image.width(), stored.image.height())
         };
+        // A virtual placement draws nothing here and moves nothing: the sender goes on to write
+        // placeholder cells naming this image, and those are what put it on screen.
+        if command.virtual_placement {
+            return None;
+        }
         if image_w == 0 || image_h == 0 {
             return None;
         }

@@ -49,8 +49,24 @@ keeps the last one it was given.
 
 ## Where images live
 
-Placements are anchored to absolute scrollback lines, in the same space as `OSC 133` semantic
-marks. That is what makes them behave like the text they were drawn against:
+### Two ways an image gets placed
+
+**At the cursor** (`a=T` without `U=1`) is what `icat` and friends do: the image lands where the
+cursor is, the cursor moves past it, and the placement is anchored to that scrollback line.
+
+**Through placeholder cells** (`a=T,U=1`) is what terminal UI toolkits do, `ratatui-image` among
+them: the transmission draws nothing, and the program then writes the placeholder character
+`U+10EEEE` into the cells the image should cover, tagging them with the image id (in the cell's
+foreground colour) and the position inside the image (in combining marks). Those placements are
+read back off the grid on every snapshot rather than stored, so they scroll, clear, and reflow with
+the cells holding them, for free. A cell may leave any of that out and inherit it from its
+left-hand neighbour — including the high byte of the image id — which is what keeps a row of
+placeholders down to a single escape sequence.
+
+### Cursor placements
+
+A cursor placement is anchored to an absolute scrollback line, in the same space as `OSC 133`
+semantic marks. That is what makes it behave like the text it was drawn against:
 
 | Event | What happens |
 | --- | --- |
@@ -61,9 +77,12 @@ marks. That is what makes them behave like the text they were drawn against:
 | Column resize (reflow) | Placements are dropped — the anchor no longer names the same text |
 | `RIS` / `TerminalScreen::reset` | Everything is cleared |
 
+A placeholder placement needs none of that bookkeeping: it *is* the text, so it does whatever the
+cells do, and it is gone the moment they are.
+
 `TerminalRenderSnapshot::images` carries the placements overlapping the visible rows, back to front
-by Kitty z-index. Rows and columns are viewport-relative and may be negative for an image that
-starts above or to the left of the pane.
+by Kitty z-index. Rows and columns are viewport-relative, and a cursor placement's may be negative
+when the image starts above or to the left of the pane.
 
 ## Memory
 
@@ -94,6 +113,7 @@ Payloads are bounded before decoding as well: 32 MiB per transmission, 16384 pix
 | `C=1` | Leave the cursor where it is |
 | `q=1`, `q=2` | Suppress success reports / all reports |
 | `d=` | `a`/`A`, `i`/`I`, `n`/`N`, `c`/`C`, `z`/`Z`, `p`/`P`, `x`/`X`, `y`/`Y` |
+| `U=1` | Virtual placements shown through Unicode placeholder cells |
 
 Not supported, and answered with the protocol's own `ENOTSUPP` report so a child that probes first
 gets a clean answer rather than silence:
@@ -101,8 +121,9 @@ gets a clean answer rather than silence:
 - **File and shared-memory transmission** (`t=f`, `t=t`, `t=s`). A pane can be attached from a
   different machine than the one that wrote the file, so a path is meaningless often enough that
   refusing is more honest than reading it sometimes. Tools that fall back to `t=d` still work.
-- **Unicode placeholders** (`U=1`).
-- **Animation** (`a=a`, `a=f`, `a=c`).
+- **The protocol's animation frames** (`a=a`, `a=f`, `a=c`). A sender that animates by
+  re-transmitting under the same image id — which is what `ratatui-image` does for GIFs — works
+  regardless: the new pixels replace the old and the placeholders keep pointing at them.
 - **Relative placements** (parent references).
 
 Sixel input from the child is a separate protocol and is not read.
