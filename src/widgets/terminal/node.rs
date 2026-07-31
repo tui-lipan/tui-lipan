@@ -246,10 +246,10 @@ mod tests {
     #[test]
     fn controlled_selection_ignores_mouse_selection_input() {
         let original = selection(4);
-        let mut current = Some(original.clone());
+        let mut current = Some(original);
 
         apply_terminal_selection_input(&mut current, true, None);
-        assert_eq!(current, Some(original.clone()));
+        assert_eq!(current, Some(original));
 
         apply_terminal_selection_input(&mut current, true, Some(selection(8)));
         assert_eq!(current, Some(original));

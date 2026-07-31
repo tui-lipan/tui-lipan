@@ -139,7 +139,7 @@ impl Component for TerminalHints {
         let terminal: Element = Terminal::new()
             .snapshot(snapshot)
             .show_cursor(!ctx.state.active)
-            .selection(ctx.state.copy_flash.clone())
+            .selection(ctx.state.copy_flash)
             .selection_style(Style::new().fg(Color::Black).bg(Color::LightCyan))
             .on_key(ctx.link().key_handler(|key| Some(Msg::Key(key))))
             .into();
