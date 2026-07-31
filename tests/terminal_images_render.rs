@@ -22,18 +22,23 @@ const CELL: TerminalCellSize = TerminalCellSize {
 
 const RED: Color = Color::Rgb(255, 0, 0);
 
-/// A transmit-and-display command for a solid red image, in cells rather than pixels.
-fn red_image(cols: u32, rows: u32) -> Vec<u8> {
+/// A transmit-and-display command for a solid image, sized in cells rather than pixels.
+fn solid_image(id: u32, cols: u32, rows: u32, colour: [u8; 3]) -> Vec<u8> {
     let (width, height) = (cols * u32::from(CELL.width), rows * u32::from(CELL.height));
     let mut pixels = Vec::with_capacity((width * height * 3) as usize);
     for _ in 0..width * height {
-        pixels.extend_from_slice(&[255, 0, 0]);
+        pixels.extend_from_slice(&colour);
     }
     format!(
-        "\x1b_Ga=T,f=24,s={width},v={height},t=d,i=1;{}\x1b\\",
+        "\x1b_Ga=T,f=24,s={width},v={height},t=d,i={id};{}\x1b\\",
         BASE64.encode(pixels)
     )
     .into_bytes()
+}
+
+/// A solid red image, the shape most of these tests want.
+fn red_image(cols: u32, rows: u32) -> Vec<u8> {
+    solid_image(1, cols, rows, [255, 0, 0])
 }
 
 struct Pane {
@@ -132,6 +137,38 @@ fn an_image_taller_than_the_pane_is_cropped_rather_than_squashed() {
                 RED,
                 "cell ({x},{y}) should be inside the cropped image"
             );
+        }
+    }
+}
+
+/// Several images stacked down one pane all reach the frame, not just the newest.
+///
+/// Worth pinning: each placement is encoded and drawn separately, and images that decode from the
+/// same bytes share one cached encoding, so a bug here shows up as a pane that paints only the
+/// last picture a program drew.
+#[test]
+fn stacked_images_all_paint() {
+    const GREEN: Color = Color::Rgb(0, 255, 0);
+
+    // Three 4x2-cell images down the pane, the outer two identical so they share an encoding.
+    let mut output = Vec::new();
+    for (id, colour) in [(1u32, [255, 0, 0]), (2, [0, 255, 0]), (3, [255, 0, 0])] {
+        output.extend_from_slice(&solid_image(id, 4, 2, colour));
+        output.extend_from_slice(b"\r\n");
+    }
+    let frame = render_until(&mut pane(&output, 10, 20), |frame| {
+        painted(frame) && frame.cell(0, 2).fg == GREEN && frame.cell(0, 4).fg == RED
+    });
+
+    for (row, colour) in [(0u16, RED), (2, GREEN), (4, RED)] {
+        for y in row..row + 2 {
+            for x in 0..4u16 {
+                assert_eq!(
+                    frame.cell(x, y).fg,
+                    colour,
+                    "cell ({x},{y}) belongs to the image at row {row}"
+                );
+            }
         }
     }
 }

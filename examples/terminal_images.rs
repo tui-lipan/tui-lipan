@@ -18,6 +18,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use tui_lipan::prelude::*;
 
+/// Starting size only. The screen is resized to the widget as soon as it reports a viewport, the
+/// way a PTY-backed pane tracks its own geometry - without that the screen stays this tall no
+/// matter how big the window is, and images stop appearing once these rows are used up.
 const ROWS: u16 = 20;
 const COLS: u16 = 92;
 
@@ -27,6 +30,8 @@ struct State {
     screen: TerminalScreen,
     snapshot: TerminalRenderSnapshot,
     cell: TerminalCellSize,
+    cols: u16,
+    rows: u16,
     drawn: usize,
 }
 
@@ -36,6 +41,7 @@ enum Msg {
     Plot,
     Clear,
     Quit,
+    Resize(u16, u16),
 }
 
 impl Component for TerminalImages {
@@ -59,6 +65,8 @@ impl Component for TerminalImages {
             screen,
             snapshot,
             cell,
+            cols: COLS,
+            rows: ROWS,
             drawn: 0,
         }
     }
@@ -103,6 +111,14 @@ impl Component for TerminalImages {
                     .process_bytes(b"\x1b_Ga=d,d=A;\x1b\\\x1b[2J\x1b[H");
                 ctx.state.drawn = 0;
             }
+            Msg::Resize(cols, rows) => {
+                if (cols, rows) == (ctx.state.cols, ctx.state.rows) {
+                    return Update::none();
+                }
+                ctx.state.cols = cols;
+                ctx.state.rows = rows;
+                ctx.state.screen.resize(rows, cols);
+            }
             Msg::Quit => {
                 ctx.quit();
                 return Update::none();
@@ -132,6 +148,9 @@ impl Component for TerminalImages {
                         Terminal::new()
                             .snapshot(ctx.state.snapshot.clone())
                             .focusable(false)
+                            .on_resize(ctx.link().callback(|viewport: TerminalViewport| {
+                                Msg::Resize(viewport.cols, viewport.rows)
+                            }))
                             .width(Length::Flex(1))
                             .height(Length::Flex(1)),
                     )
