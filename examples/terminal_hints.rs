@@ -288,17 +288,22 @@ fn matching_indices(labels: &[String], input: &str) -> Vec<usize> {
 }
 
 fn activate_hint(index: usize, open: bool, ctx: &mut Context<TerminalHints>) -> Update {
+    let top_line = ctx
+        .state
+        .snapshot
+        .total_scrollback_rows
+        .saturating_sub(ctx.state.snapshot.scrollback_offset);
     let Some((text, kind, selection)) = ctx.state.matches.get(index).map(|hint| {
         (
             hint.text.clone(),
             hint.kind,
             TerminalSelection {
-                anchor: tui_lipan::utils::GridPos {
-                    row: hint.row,
+                anchor: TerminalPos {
+                    line: top_line.saturating_add(hint.row),
                     col: hint.start_col,
                 },
-                cursor: tui_lipan::utils::GridPos {
-                    row: hint.row,
+                cursor: TerminalPos {
+                    line: top_line.saturating_add(hint.row),
                     col: hint.end_col,
                 },
             },

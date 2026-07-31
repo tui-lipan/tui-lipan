@@ -13,6 +13,10 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Anchor terminal selections to absolute retained scrollback lines, preserving selection and copy
+  behavior while scrolling, receiving output, and edge-autoscrolling a mouse drag. Replace the
+  viewport-based `TerminalSelection` alias with terminal-specific `TerminalPos`,
+  `TerminalSelection`, and `TerminalSelectionEvent` types (breaking).
 - Add the `terminal-images` feature: programs running inside a `Terminal` pane can draw pictures
   with the Kitty graphics protocol. `TerminalScreen` reads `APC _G` out of the PTY stream and
   decodes it rather than forwarding it, so the host terminal does not have to speak Kitty — the

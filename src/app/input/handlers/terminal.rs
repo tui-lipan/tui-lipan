@@ -4,7 +4,8 @@ use crate::callback::KeyHandler;
 use crate::clipboard::{ClipboardConfig, ClipboardPasteContent, ClipboardService, write_osc52};
 use crate::core::event::{KeyCode, KeyEvent};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
-use crate::widgets::internal::apply_scroll_action;
+use crate::utils::SelectionEnd;
+use crate::widgets::internal::{apply_scroll_action, terminal_node_selection_text};
 use crate::widgets::{ScrollEvent, ScrollMetrics};
 use crate::widgets::{TerminalInputKind, TerminalPasteShortcutBehavior, encode_paste};
 
@@ -76,18 +77,7 @@ pub(crate) fn preflight_key(
         if let Some(sel) = node.selection.as_ref()
             && !sel.is_empty()
         {
-            let line_texts: Vec<String> = node
-                .lines
-                .iter()
-                .map(|spans| {
-                    let mut line = String::new();
-                    for span in spans {
-                        line.push_str(span.content.as_ref());
-                    }
-                    line
-                })
-                .collect();
-            let text = sel.extract_text(&line_texts);
+            let text = terminal_node_selection_text(node, sel, SelectionEnd::Exclusive, false);
             if !text.is_empty() {
                 if let Err(err) = clipboard.write_clipboard_text(&text) {
                     clipboard.report_error(err);
@@ -236,31 +226,9 @@ pub(crate) fn handle_scroll(
         return false;
     };
 
-    let total = term.viewport_rows + term.total_scrollback_rows;
-    let visible = term.viewport_rows;
-    let can_scroll =
-        term.scroll_wheel && term.total_scrollback_rows > 0 && visible > 0 && total > visible;
-
-    if !can_scroll {
+    let Some((next_scrollback, metrics)) = terminal_scroll_target(term, action) else {
         return false;
-    }
-
-    // Terminal scrollback is inverted: offset 0 = live view (bottom),
-    // higher values = scrolled into history.
-    let metrics = ScrollMetrics {
-        len: total,
-        visible,
-        max_offset: term.total_scrollback_rows,
     };
-    let std_offset = term
-        .total_scrollback_rows
-        .saturating_sub(term.scrollback_offset);
-    let next_std = apply_scroll_action(std_offset, metrics, action).min(metrics.max_offset);
-    let next_scrollback = term.total_scrollback_rows.saturating_sub(next_std);
-
-    if next_scrollback == term.scrollback_offset {
-        return false;
-    }
 
     term.scrollback_offset = next_scrollback;
     term.scroll_override = Some(next_scrollback);
@@ -273,6 +241,28 @@ pub(crate) fn handle_scroll(
         });
     }
     true
+}
+
+pub(crate) fn terminal_scroll_target(
+    term: &crate::widgets::internal::TerminalNode,
+    action: crate::widgets::internal::ScrollAction,
+) -> Option<(usize, ScrollMetrics)> {
+    let total = term.viewport_rows + term.total_scrollback_rows;
+    let visible = term.viewport_rows;
+    if !term.scroll_wheel || term.total_scrollback_rows == 0 || visible == 0 || total <= visible {
+        return None;
+    }
+    let metrics = ScrollMetrics {
+        len: total,
+        visible,
+        max_offset: term.total_scrollback_rows,
+    };
+    let std_offset = term
+        .total_scrollback_rows
+        .saturating_sub(term.scrollback_offset);
+    let next_std = apply_scroll_action(std_offset, metrics, action).min(metrics.max_offset);
+    let next_scrollback = term.total_scrollback_rows.saturating_sub(next_std);
+    (next_scrollback != term.scrollback_offset).then_some((next_scrollback, metrics))
 }
 
 /// Truncate a paste string to at most `max_bytes`, ensuring we don't split a

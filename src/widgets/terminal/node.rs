@@ -12,12 +12,14 @@ use crate::widgets::ScrollEvent;
 
 use super::events::{
     MouseModeState, TerminalInputEvent, TerminalKeyModes, TerminalPasteShortcutBehavior,
-    TerminalSelection, TerminalSelectionEvent,
 };
 #[cfg(feature = "terminal-images")]
 use super::graphics::TerminalImagePlacement;
 use super::layout::terminal_content_layout;
 use super::screen::{TerminalDecoration, TerminalRenderSnapshot, TerminalScreenHandle};
+use super::selection::{
+    ScrollbackLineage, TerminalSelection, TerminalSelectionEvent, rebase_selection,
+};
 
 /// Runtime node for terminal rendering.
 #[derive(Clone)]
@@ -31,6 +33,7 @@ pub(crate) struct TerminalNode {
     pub caret_color: Option<Color>,
     pub selection: Option<TerminalSelection>,
     pub selection_controlled: bool,
+    pub lineage: ScrollbackLineage,
     pub selection_style: StyleSlot,
     pub mouse_mode: MouseModeState,
     pub key_modes: TerminalKeyModes,
@@ -110,6 +113,12 @@ impl TerminalNode {
     /// Fill the snapshot-derived fields, keeping the scroll rules `reconcile_terminal` establishes:
     /// a moved snapshot offset is authoritative and retires an input-driven override.
     fn apply_snapshot(&mut self, snapshot: &TerminalRenderSnapshot) {
+        let to = ScrollbackLineage {
+            evicted_lines: snapshot.evicted_lines,
+            history_epoch: snapshot.history_epoch,
+        };
+        self.selection = rebase_selection(self.selection, self.lineage, to);
+        self.lineage = to;
         self.lines = snapshot.color_lines.clone();
         self.cursor_row = snapshot.cursor_row;
         self.cursor_col = snapshot.cursor_col;
@@ -225,12 +234,12 @@ impl WidgetNode for TerminalNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::{GridPos, GridSelection};
+    use crate::widgets::terminal::selection::TerminalPos;
 
     fn selection(col: usize) -> TerminalSelection {
-        GridSelection {
-            anchor: GridPos { row: 1, col },
-            cursor: GridPos { row: 1, col },
+        TerminalSelection {
+            anchor: TerminalPos { line: 1, col },
+            cursor: TerminalPos { line: 1, col },
         }
     }
 

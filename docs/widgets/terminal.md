@@ -97,7 +97,7 @@ The low-level terminal viewport widget. Use when you need custom PTY handling, m
 | `scroll_wheel` | `bool` | Mouse wheel scrollback |
 | `selection_style` | `Style` | Text selection style |
 | `extend_selection_style` / `inherit_selection_style` | `Style` / `()` | Extend or inherit the text-selection theme role instead of replacing it |
-| `selection` | `Option<TerminalSelection>` | Controlled selection |
+| `selection` | `Option<TerminalSelection>` | Controlled selection in absolute retained-line coordinates |
 | `border` | `bool` | Show border |
 | `border_style` | `BorderStyle` | Border style |
 | `padding` | `impl Into<Padding>` | Padding |
@@ -108,7 +108,7 @@ The low-level terminal viewport widget. Use when you need custom PTY handling, m
 | `on_resize` | `Callback<TerminalViewport>` | Viewport size changed; emitted synchronously during reconciliation |
 | `on_scroll_to` | `Callback<usize>` | Scrollback offset changed |
 | `on_mouse_forward` | `Callback<Vec<u8>>` | Mouse event bytes for PTY |
-| `on_selection` | `Callback<TerminalSelection>` | Selection changed |
+| `on_selection` | `Callback<TerminalSelectionEvent>` | Selection and extracted text changed |
 | `on_key` | `KeyHandler` | Low-level key handler |
 
 Calling `selection(...)` makes the selection controlled. Mouse clicks and drags
@@ -405,9 +405,11 @@ itself is not a stable wire protocol.
 
 ### Selection, decoration, and copy mode
 
-Terminal grid coordinates are display columns. Use
-`snapshot.selection_text(&selection, end_kind, trim_row_end)` to extract exactly
-the cells a selection highlights, including rows containing CJK or emoji.
+`TerminalSelection` uses absolute retained-line indices from the oldest available line, while its
+columns are display columns. It therefore remains attached to the same text as the viewport scrolls.
+Use `screen.selection_display_text(&selection, end_kind, trim_row_end)` to extract a selection
+across scrollback, including rows containing CJK or emoji. Snapshot-only hosts can project with
+`to_viewport` and use `snapshot.selection_text`, which is limited to visible rows.
 `TerminalScreen::export_selection_text` is intentionally different: it reads
 pre-trimmed scrollback text and therefore takes character-indexed positions.
 
@@ -427,8 +429,12 @@ match mode.handle_key(key, grid) {
     CopyModeAction::Moved | CopyModeAction::SelectionChanged =>
         screen.set_scrollback(mode.scrollback_offset()),
     CopyModeAction::RequestCopy => {
-        if let Some(selection) = mode.selection() {
-            let text = snapshot.selection_text(&selection, SelectionEnd::Inclusive, true);
+        if let Some(selection) = mode.selection(screen.total_scrollback_rows()) {
+            let text = screen.selection_display_text(
+                &selection,
+                SelectionEnd::Inclusive,
+                true,
+            );
             ctx.clipboard().copy(&text)?;
             // Leaving copy mode here clears the selection, so hand the flash its
             // own range rather than keeping the selection alive to be painted.

@@ -5502,12 +5502,9 @@ fn set_terminal_selection(
     if let NodeKind::Terminal(term) = &mut backend.core.tree.node_mut(terminal_id).kind {
         term.lines = vec![vec![Span::new(line)]].into();
         let mut selection =
-            crate::utils::selection::GridSelection::new(crate::utils::selection::GridPos {
-                row: 0,
-                col: 0,
-            });
-        selection.extend_to(crate::utils::selection::GridPos {
-            row: 0,
+            crate::widgets::TerminalSelection::new(crate::widgets::TerminalPos { line: 0, col: 0 });
+        selection.extend_to(crate::widgets::TerminalPos {
+            line: 0,
             col: end_col,
         });
         term.selection = Some(selection);
@@ -5714,11 +5711,8 @@ fn a_key_that_clears_a_terminal_selection_still_claims_a_frame() {
     if let NodeKind::Terminal(term) = &mut runner.core.tree.node_mut(terminal).kind {
         term.lines = vec![vec![Span::new("selected")]].into();
         let mut selection =
-            crate::utils::selection::GridSelection::new(crate::utils::selection::GridPos {
-                row: 0,
-                col: 0,
-            });
-        selection.extend_to(crate::utils::selection::GridPos { row: 0, col: 8 });
+            crate::widgets::TerminalSelection::new(crate::widgets::TerminalPos { line: 0, col: 0 });
+        selection.extend_to(crate::widgets::TerminalPos { line: 0, col: 8 });
         term.selection = Some(selection);
     }
 

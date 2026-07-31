@@ -4,6 +4,7 @@
 //! scrollback application, runtime updates, or copy feedback. Applications compose it with a
 //! [`crate::widgets::TerminalScreen`] and [`crate::widgets::TerminalRenderSnapshot`].
 
+use super::{TerminalPos, TerminalSelection};
 use crate::core::event::{KeyCode, KeyEvent, KeyMods};
 use crate::text_motion::{
     byte_to_char_col, cell_big_word_backward_start, cell_big_word_end, cell_big_word_forward_start,
@@ -11,7 +12,6 @@ use crate::text_motion::{
     cell_word_forward_start, char_col_to_byte,
 };
 use crate::utils::spans::{byte_at_display_column, display_column};
-use crate::utils::{GridPos, GridSelection};
 
 /// The terminal grid data needed to handle one copy-mode key.
 ///
@@ -50,15 +50,12 @@ pub enum CopyModeAction {
 
 /// Stateful keyboard navigation for terminal copy mode.
 ///
-/// Cursor and anchor coordinates are viewport coordinates with display-column `col` values. A
-/// selection returned by [`Self::selection`] keeps the cursor cell as its endpoint; pass it to
-/// [`TerminalRenderSnapshot::selection_text`](crate::widgets::TerminalRenderSnapshot::selection_text)
-/// with [`crate::utils::SelectionEnd::Inclusive`] when copying.
+/// Cursor coordinates are viewport-relative while the anchor is an absolute retained-line position.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalCopyMode {
     cursor_row: usize,
     cursor_col: usize,
-    anchor: Option<(usize, usize)>,
+    anchor: Option<TerminalPos>,
     scrollback_offset: usize,
 }
 
@@ -86,6 +83,12 @@ impl TerminalCopyMode {
         self.cursor_row = self.cursor_row.min(rows - 1);
         self.cursor_col = self.cursor_col.min(cols - 1);
         self.scrollback_offset = self.scrollback_offset.min(grid.total_scrollback_rows);
+        if let Some(anchor) = self.anchor.as_mut() {
+            anchor.line = anchor
+                .line
+                .min(grid.total_scrollback_rows.saturating_add(rows - 1));
+            anchor.col = anchor.col.min(cols - 1);
+        }
 
         let shifted_upper =
             key.mods == KeyMods::SHIFT && matches!(key.code, KeyCode::Char('G' | 'W' | 'B' | 'E'));
@@ -102,7 +105,7 @@ impl TerminalCopyMode {
             return CopyModeAction::RequestCopy;
         }
         if key.mods.is_empty() && (key.is(KeyCode::Char('v')) || key.is(KeyCode::Char(' '))) {
-            self.toggle_anchor();
+            self.toggle_anchor(grid.total_scrollback_rows);
             return CopyModeAction::SelectionChanged;
         }
 
@@ -235,7 +238,7 @@ impl TerminalCopyMode {
     /// Return the current selection endpoints, if an anchor is active.
     ///
     /// Both columns in the returned point are display-column coordinates.
-    pub fn anchor(&self) -> Option<(usize, usize)> {
+    pub fn anchor(&self) -> Option<TerminalPos> {
         self.anchor
     }
 
@@ -245,15 +248,12 @@ impl TerminalCopyMode {
     }
 
     /// Return the selection from the anchor to the cursor.
-    pub fn selection(&self) -> Option<GridSelection> {
+    pub fn selection(&self, total_scrollback_rows: usize) -> Option<TerminalSelection> {
         let anchor = self.anchor?;
-        Some(GridSelection {
-            anchor: GridPos {
-                row: anchor.0,
-                col: anchor.1,
-            },
-            cursor: GridPos {
-                row: self.cursor_row,
+        Some(TerminalSelection {
+            anchor,
+            cursor: TerminalPos {
+                line: current_absolute_line(self, total_scrollback_rows),
                 col: self.cursor_col,
             },
         })
@@ -269,10 +269,13 @@ impl TerminalCopyMode {
     }
 
     /// Toggle the selection anchor at the current cursor position.
-    pub fn toggle_anchor(&mut self) {
+    fn toggle_anchor(&mut self, total_scrollback_rows: usize) {
         self.anchor = match self.anchor {
             Some(_) => None,
-            None => Some((self.cursor_row, self.cursor_col)),
+            None => Some(TerminalPos {
+                line: current_absolute_line(self, total_scrollback_rows),
+                col: self.cursor_col,
+            }),
         };
     }
 
@@ -396,6 +399,30 @@ mod tests {
     }
 
     #[test]
+    fn anchor_stays_absolute_while_scrolling_at_viewport_edges() {
+        let mut mode = TerminalCopyMode::new(0, 2, 0);
+        assert_eq!(
+            mode.handle_key(key(KeyCode::Char('v')), GRID),
+            CopyModeAction::SelectionChanged
+        );
+        let anchor = mode.anchor().expect("anchor");
+        assert_eq!(anchor, TerminalPos { line: 10, col: 2 });
+        assert_eq!(
+            mode.handle_key(key(KeyCode::Up), GRID),
+            CopyModeAction::SelectionChanged
+        );
+        assert_eq!(mode.scrollback_offset(), 1);
+        assert_eq!(mode.anchor(), Some(anchor));
+        assert_eq!(
+            mode.selection(GRID.total_scrollback_rows)
+                .expect("selection")
+                .cursor
+                .line,
+            9
+        );
+    }
+
+    #[test]
     fn movement_at_a_boundary_is_ignored() {
         let mut mode = TerminalCopyMode::new(0, 0, GRID.total_scrollback_rows);
         assert_eq!(
@@ -456,16 +483,17 @@ mod tests {
             mode.handle_key(key(KeyCode::Char('e')), GRID),
             CopyModeAction::SelectionChanged
         );
-        assert_eq!(mode.anchor(), Some((0, 4)));
+        assert_eq!(mode.anchor(), Some(TerminalPos { line: 10, col: 4 }));
         assert_eq!(
-            mode.selection().map(|s| (s.anchor.col, s.cursor.col)),
+            mode.selection(GRID.total_scrollback_rows)
+                .map(|s| (s.anchor.col, s.cursor.col)),
             Some((4, 6))
         );
         assert_eq!(
             mode.handle_key(key(KeyCode::Char(' ')), GRID),
             CopyModeAction::SelectionChanged
         );
-        assert_eq!(mode.selection(), None);
+        assert_eq!(mode.selection(GRID.total_scrollback_rows), None);
     }
 
     #[test]
@@ -499,9 +527,11 @@ mod tests {
             mode.handle_key(key(KeyCode::Char('w')), grid),
             CopyModeAction::SelectionChanged
         );
-        let selection = mode.selection().expect("anchor should create a selection");
+        let selection = mode
+            .selection(grid.total_scrollback_rows)
+            .expect("anchor should create a selection");
         assert_eq!((selection.anchor.col, selection.cursor.col), (1, 3));
-        mode.toggle_anchor();
+        mode.handle_key(key(KeyCode::Char(' ')), grid);
 
         let combining = CopyModeGrid {
             cursor_row_text: "  e\u{301} foo",

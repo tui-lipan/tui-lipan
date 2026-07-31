@@ -22,11 +22,13 @@ use crate::style::ScrollbarVariant;
 use crate::widgets::{InputEvent, ListEvent, TabsEvent};
 
 #[cfg(feature = "terminal")]
-use crate::utils::{GridPos, GridSelection};
+use crate::utils::{GridPos, GridSelection, SelectionEnd};
 #[cfg(feature = "terminal")]
 use crate::widgets::internal::{
-    apply_terminal_selection_input, terminal_mouse_content_rect, terminal_selection_text,
+    apply_terminal_selection_input, terminal_mouse_content_rect, terminal_node_selection_text,
 };
+#[cfg(feature = "terminal")]
+use crate::widgets::{TerminalPos, from_viewport};
 
 use super::AppRunner;
 
@@ -558,7 +560,7 @@ impl<C: Component> AppRunner<C> {
         hover_dirty: bool,
     ) -> bool {
         if let NodeKind::Terminal(_) = &self.core.tree.node(hit).kind {
-            let (inner, lines, on_selection, scrollback_offset) = {
+            let (inner, lines, on_selection, scrollback_offset, total_scrollback_rows) = {
                 let node = self.core.tree.node(hit);
                 let NodeKind::Terminal(term) = &node.kind else {
                     return hover_dirty;
@@ -573,6 +575,7 @@ impl<C: Component> AppRunner<C> {
                     term.lines.clone(),
                     term.on_selection.clone(),
                     term.scrollback_offset,
+                    term.total_scrollback_rows,
                 )
             };
 
@@ -587,10 +590,7 @@ impl<C: Component> AppRunner<C> {
                 // Get click count for double/triple click detection
                 let click_count = mouse::click_count_at(&mut self.mouse.last_click, x, y, true);
 
-                // Calculate the actual row in the scrollback buffer
-                let _actual_row = scrollback_offset.saturating_add(grid_row);
-
-                let (selection, anchor) = match click_count {
+                let (viewport_selection, viewport_anchor) = match click_count {
                     2 => {
                         // Double-click: select word (skip empty lines and whitespace)
                         let line_text: String = if let Some(line) = lines.get(grid_row) {
@@ -682,22 +682,44 @@ impl<C: Component> AppRunner<C> {
                         (None, pos)
                     }
                 };
+                let anchor = TerminalPos {
+                    line: crate::widgets::absolute_line(
+                        total_scrollback_rows,
+                        scrollback_offset,
+                        viewport_anchor.row,
+                    ),
+                    col: viewport_anchor.col,
+                };
+                let selection = viewport_selection.map(|sel| {
+                    from_viewport(
+                        sel.anchor,
+                        sel.cursor,
+                        scrollback_offset,
+                        total_scrollback_rows,
+                    )
+                });
 
                 if let NodeKind::Terminal(term) = &mut self.core.tree.node_mut(hit).kind {
                     apply_terminal_selection_input(
                         &mut term.selection,
                         term.selection_controlled,
-                        selection.clone(),
+                        selection,
                     );
                 }
                 if let Some(cb) = on_selection {
-                    let text = selection
-                        .as_ref()
-                        .map(|sel| terminal_selection_text(&lines, sel));
+                    let text = selection.as_ref().map(|sel| {
+                        let NodeKind::Terminal(term) = &self.core.tree.node(hit).kind else {
+                            return String::new();
+                        };
+                        terminal_node_selection_text(term, sel, SelectionEnd::Exclusive, false)
+                    });
                     cb.emit(crate::widgets::TerminalSelectionEvent { selection, text });
                 }
                 // Only start drag tracking if we have a selection (double/triple click)
                 // or if the user starts dragging (handled in Drag events)
+                self.drag.last_pointer_pos = None;
+                self.drag.last_autoscroll_tick = None;
+                self.drag.autoscroll_layout_dirty = false;
                 self.drag.active =
                     ActiveDrag::Terminal(crate::app::input::drag::TerminalDrag { id: hit, anchor });
                 return true;
