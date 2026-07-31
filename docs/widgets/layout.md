@@ -608,6 +608,7 @@ Wraps any subtree to handle pointer movement, clicks, and hover visuals.
 | `on_mouse_move` | `Callback<MouseMoveEvent>` | Emits on pointer movement |
 | `on_drag_start` / `on_drag` / `on_drag_end` | `Callback<MouseDragEvent>` | Left-button drag lifecycle after threshold |
 | `drag_requires_mods` | `KeyMods` | Require modifiers before left-button drag callbacks can start |
+| `drag_threshold` | `u16, u16` | Pointer travel in cells before drag callbacks start; default `(3, 1)` |
 | `on_right_drag_start` / `on_right_drag` / `on_right_drag_end` | `Callback<MouseDragEvent>` | Right-button drag lifecycle after threshold |
 | `right_drag_requires_mods` | `KeyMods` | Require modifiers before right-button drag callbacks can start |
 | `bubble_mouse_down` | `bool` | Also emit `on_mouse_down` for descendant presses without consuming them |
@@ -634,6 +635,13 @@ must learn about descendant presses but the child should still receive its click
 Use `drag_requires_mods(KeyMods::ALT)` or
 `right_drag_requires_mods(KeyMods::ALT)` for compositor-style gestures that
 should only start while Alt is held.
+A drag starts once the pointer travels `DEFAULT_DRAG_THRESHOLD` — 3 columns or 1
+row — from the press, which keeps a jittery click from selecting text or picking
+up a list item. Columns are looser because a cell is about twice as tall as it is
+wide. A region with no click gesture to disambiguate from — a resize handle, a
+split divider, a slider thumb — should set `drag_threshold(1, 1)` so the pointer
+is tracked from its first step; otherwise a horizontal gesture stalls for two
+cells and then arrives three cells out in one jump.
 Pair those with `capture_requires_mods(KeyMods::ALT)` when the wrapped child is a
 terminal or text widget, so Alt-click/Alt-drag is fully consumed by the wrapper.
 

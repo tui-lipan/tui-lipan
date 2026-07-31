@@ -1,6 +1,7 @@
 use crate::core::component::Component;
 use crate::core::event::{KeyMods, MouseButton, MouseDragEvent, MouseEvent, MouseKind};
 use crate::core::node::NodeKind;
+use crate::widgets::DEFAULT_DRAG_THRESHOLD;
 
 use super::MouseDispatchCtx;
 
@@ -33,19 +34,57 @@ pub(crate) fn transition_drag_threshold<C: Component, T: MouseDispatchCtx<C>>(
         state.pending_drag_source = None;
         state.mouse_region_drag = None;
         state.pan_view_drag = None;
-    } else if is_drag {
-        let threshold_hit = ctx
-            .mouse_state()
-            .left_down_pos
-            .is_some_and(|(dx, dy)| x.abs_diff(dx) >= 3 || y.abs_diff(dy) >= 1);
-        if threshold_hit {
-            ctx.mouse_state().drag_threshold_exceeded = true;
-        }
+    } else if is_drag && drag_travel_exceeds(ctx, DEFAULT_DRAG_THRESHOLD, x, y) {
+        ctx.mouse_state().drag_threshold_exceeded = true;
     }
 }
 
 pub(crate) fn drag_delta(current: u16, previous: u16) -> i16 {
     (current as i32 - previous as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16
+}
+
+/// Whether the pointer has travelled `threshold` cells on either axis since the button went down.
+fn drag_travel_exceeds<C: Component, T: MouseDispatchCtx<C>>(
+    ctx: &mut T,
+    threshold: (u16, u16),
+    x: u16,
+    y: u16,
+) -> bool {
+    ctx.mouse_state()
+        .left_down_pos
+        .is_some_and(|(from_x, from_y)| {
+            x.abs_diff(from_x) >= threshold.0 || y.abs_diff(from_y) >= threshold.1
+        })
+}
+
+/// The drag threshold a mouse region's own drag gesture has to clear.
+///
+/// A region that sets [`MouseRegion::drag_threshold`] is measured against it directly rather
+/// than against the shared `drag_threshold_exceeded` flag, which carries the default. Clearing a
+/// lower threshold still raises that flag, so the release is treated as the end of a drag and not
+/// as a click.
+fn mouse_region_drag_threshold_met<C: Component, T: MouseDispatchCtx<C>>(
+    ctx: &mut T,
+    node_id: crate::core::node::NodeId,
+    x: u16,
+    y: u16,
+) -> bool {
+    let threshold = ctx
+        .tree()
+        .is_valid(node_id)
+        .then(|| match &ctx.tree().node(node_id).kind {
+            NodeKind::MouseRegion(region) => region.drag_threshold,
+            _ => None,
+        })
+        .flatten();
+    let Some(threshold) = threshold else {
+        return ctx.mouse_state().drag_threshold_exceeded;
+    };
+    if !drag_travel_exceeds(ctx, threshold, x, y) {
+        return false;
+    }
+    ctx.mouse_state().drag_threshold_exceeded = true;
+    true
 }
 
 #[cfg(feature = "image")]
@@ -402,7 +441,7 @@ pub(crate) fn transition_mouse_region_drag<C: Component, T: MouseDispatchCtx<C>>
             if state.button != button {
                 return None;
             }
-            if !ctx.mouse_state().drag_threshold_exceeded {
+            if !mouse_region_drag_threshold_met(ctx, state.node_id, x, y) {
                 return None;
             }
 

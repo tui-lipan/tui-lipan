@@ -826,7 +826,10 @@ Quick lookup - which callbacks does each widget support?
 | `on_right_drag_end` | `MouseDragEvent` | Right-button release after drag start |
 
 Use `drag_requires_mods(...)` and `right_drag_requires_mods(...)` to require
-modifiers before drag callbacks can start. Use `bubble_mouse_down(true)` when an
+modifiers before drag callbacks can start. The threshold above is
+`DEFAULT_DRAG_THRESHOLD` — 3 columns or 1 row of pointer travel from the press;
+override it per region with `drag_threshold(columns, rows)`, and use `(1, 1)` for
+handles that exist only to be dragged. Use `bubble_mouse_down(true)` when an
 ancestor should receive `on_mouse_down` for descendant presses without consuming
 the descendant's click. Use `capture_requires_mods(...)` when modifier-owned
 gestures must be fully consumed before a terminal/input descendant can select text

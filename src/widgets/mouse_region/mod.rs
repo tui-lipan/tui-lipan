@@ -15,6 +15,13 @@ use crate::core::mask::CellMask;
 use crate::style::{LayoutConstraints, Length, Style, StyleSlot, VisualEffect};
 use std::sync::Arc;
 
+/// Pointer travel, in `(columns, rows)`, a drag must exceed before its callbacks start.
+///
+/// Columns are looser than rows because a cell is roughly twice as tall as it is wide, so the
+/// same hand tremor covers more of them. Override per region with
+/// [`MouseRegion::drag_threshold`].
+pub const DEFAULT_DRAG_THRESHOLD: (u16, u16) = (3, 1);
+
 /// A wrapper that handles pointer interactions for its subtree.
 #[derive(Clone, Default)]
 pub struct MouseRegion {
@@ -28,6 +35,7 @@ pub struct MouseRegion {
     pub(crate) on_drag: Option<Callback<MouseDragEvent>>,
     pub(crate) on_drag_end: Option<Callback<MouseDragEvent>>,
     pub(crate) drag_required_mods: Option<KeyMods>,
+    pub(crate) drag_threshold: Option<(u16, u16)>,
     pub(crate) on_right_drag_start: Option<Callback<MouseDragEvent>>,
     pub(crate) on_right_drag: Option<Callback<MouseDragEvent>>,
     pub(crate) on_right_drag_end: Option<Callback<MouseDragEvent>>,
@@ -87,6 +95,20 @@ impl MouseRegion {
     /// held", not "Alt and no other modifiers".
     pub fn drag_requires_mods(mut self, mods: KeyMods) -> Self {
         self.drag_required_mods = Some(mods);
+        self
+    }
+
+    /// Pointer travel, in cells, that must be exceeded before drag callbacks start.
+    ///
+    /// Defaults to [`DEFAULT_DRAG_THRESHOLD`]: 3 columns or 1 row, which keeps a jittery
+    /// click from selecting text or dragging a list item. A region whose whole purpose is
+    /// dragging - a resize handle, a split divider, a slider thumb - has no click gesture to
+    /// disambiguate from, so it wants `(1, 1)` and the pointer tracked from its first step.
+    ///
+    /// Applies to both buttons. Either axis satisfies it, so `(1, 1)` reacts to the first
+    /// movement in any direction.
+    pub fn drag_threshold(mut self, columns: u16, rows: u16) -> Self {
+        self.drag_threshold = Some((columns, rows));
         self
     }
 
@@ -261,6 +283,7 @@ impl crate::layout::hash::LayoutHash for MouseRegion {
         self.on_drag.is_some().hash(hasher);
         self.on_drag_end.is_some().hash(hasher);
         self.drag_required_mods.hash(hasher);
+        self.drag_threshold.hash(hasher);
         self.on_right_drag_start.is_some().hash(hasher);
         self.on_right_drag.is_some().hash(hasher);
         self.on_right_drag_end.is_some().hash(hasher);

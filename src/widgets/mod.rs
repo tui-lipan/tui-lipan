@@ -226,7 +226,7 @@ pub use log_view::{LogBuffer, LogEntry, LogFilterMode, LogLevel, LogView, LogVie
 #[cfg(feature = "terminal")]
 pub use managed_terminal::{ManagedTerminal, ManagedTerminalProps, ManagedTerminalStatus};
 pub use modal::Modal;
-pub use mouse_region::MouseRegion;
+pub use mouse_region::{DEFAULT_DRAG_THRESHOLD, MouseRegion};
 pub use multi_select::{
     MultiSelect, MultiSelectChangeEvent, MultiSelectCommitEvent, MultiSelectDescriptionOverflow,
     MultiSelectDescriptionPlacement, MultiSelectItem, MultiSelectToggleEvent,

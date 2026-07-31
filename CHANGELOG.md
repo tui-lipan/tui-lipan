@@ -13,6 +13,14 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add `MouseRegion::drag_threshold(columns, rows)`, overriding how far the pointer must travel
+  from the press before drag callbacks start. The default is unchanged and now named
+  `DEFAULT_DRAG_THRESHOLD` (3 columns or 1 row) — loose on columns because a cell is about twice
+  as tall as it is wide, so the same tremor covers more of them. That asymmetry is wrong for a
+  region whose only gesture is dragging: a horizontal drag on a resize handle or split divider
+  ignored the first two columns and then arrived three cells out in a single jump. Such regions
+  can now ask for `(1, 1)` and be tracked from the pointer's first step. Clearing a lowered
+  threshold still marks the gesture as a drag, so the release is not also delivered as a click.
 - Anchor terminal selections to absolute retained scrollback lines, preserving selection and copy
   behavior while scrolling, receiving output, and edge-autoscrolling a mouse drag. Replace the
   viewport-based `TerminalSelection` alias with terminal-specific `TerminalPos`,
