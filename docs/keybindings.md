@@ -154,6 +154,11 @@ See [`focus.md`](focus.md) for the full keyboard dispatch order and [`widgets/te
 
 So `ctrl+x b, ctrl+q` means: *(Ctrl+X then B)* **or** *Ctrl+Q*.
 
+Within a step, `-` and `+` are interchangeable modifier separators (`ctrl+c` ≡ `ctrl-c`).
+A step that is only the plus key is special: bare `+`, the name `plus`, or a trailing
+`…-plus` / `…-+` bind `Char('+')`. Crokey's `hyphen` / `minus` names both mean `-`;
+formatted output shows `-` rather than `Hyphen`.
+
 ### Matching
 
 - **`KeyBinding::matches_sequence(&[KeyEvent])`** - true when the slice length equals the binding’s step count and each event matches the corresponding step (same normalization as the keymap: legacy raw ctrl characters, BackTab, etc.).
