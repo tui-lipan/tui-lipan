@@ -297,7 +297,14 @@ pub fn format_bindings_lowercase(raw: &str) -> Result<String, KeyBindingParseErr
 }
 
 pub(crate) fn normalize_binding(raw: &str) -> String {
-    let mut normalized = raw.trim().replace('+', "-").to_ascii_lowercase();
+    // Chord steps are whitespace-separated. Within a step, `+` is a modifier
+    // separator (`ctrl+c` → `ctrl-c`), except when the step is the plus key itself
+    // (`+` / `plus` / `alt-plus` / `alt-+`) which must stay `Char('+')` for crokey.
+    let mut normalized = raw
+        .split_whitespace()
+        .map(normalize_chord_step)
+        .collect::<Vec<_>>()
+        .join(" ");
     normalized = normalized.replace("super-", "cmd-");
     normalized = normalized.replace("command-", "cmd-");
     normalized = normalized.replace("meta-", "cmd-");
@@ -308,6 +315,36 @@ pub(crate) fn normalize_binding(raw: &str) -> String {
     normalized = normalized.replace("page-up", "pageup");
     normalized = normalized.replace("page-down", "pagedown");
     normalized
+}
+
+fn normalize_chord_step(step: &str) -> String {
+    let step = step.to_ascii_lowercase();
+    if step == "+" || step == "plus" {
+        return "+".to_string();
+    }
+
+    let (mods, plus_key) = if let Some(rest) = step.strip_suffix("-plus") {
+        (rest, true)
+    } else if let Some(rest) = step.strip_suffix("+plus") {
+        (rest, true)
+    } else if let Some(rest) = step.strip_suffix("-+") {
+        (rest, true)
+    } else if let Some(rest) = step.strip_suffix("++") {
+        (rest, true)
+    } else {
+        (step.as_str(), false)
+    };
+
+    let mods = mods.replace('+', "-");
+    if plus_key {
+        if mods.is_empty() {
+            "+".to_string()
+        } else {
+            format!("{mods}-+")
+        }
+    } else {
+        mods
+    }
 }
 
 pub(crate) fn is_none_binding(raw: &str) -> bool {
@@ -454,9 +491,20 @@ fn key_event_from_combination(
 // being exercised on wasm.
 #[cfg(any(target_arch = "wasm32", test))]
 fn key_event_from_canonical(canonical: &str) -> Result<KeyEvent, KeyEventExpansionError> {
+    // Canonical form joins mods with '+', so Char('+') renders as "+" / "Alt++".
+    // Detect that before splitting so the key is not eaten as a separator.
+    let plus_key = canonical == "+" || canonical.ends_with("++");
+    let body = if canonical == "+" {
+        ""
+    } else if let Some(rest) = canonical.strip_suffix("++") {
+        rest
+    } else {
+        canonical
+    };
+
     let mut mods = KeyMods::NONE;
     let mut key_token = None;
-    for part in canonical.split('+').filter(|part| !part.is_empty()) {
+    for part in body.split('+').filter(|part| !part.is_empty()) {
         match part.to_ascii_lowercase().as_str() {
             "ctrl" => mods.ctrl = true,
             "alt" => mods.alt = true,
@@ -469,6 +517,9 @@ fn key_event_from_canonical(canonical: &str) -> Result<KeyEvent, KeyEventExpansi
                 ));
             }
         }
+    }
+    if plus_key {
+        key_token = Some("+".to_string());
     }
     let Some(token) = key_token else {
         return Err(KeyEventExpansionError::UnsupportedKeyCode(
@@ -498,6 +549,8 @@ fn key_event_from_canonical(canonical: &str) -> Result<KeyEvent, KeyEventExpansi
         "left" => KeyCode::Left,
         "right" => KeyCode::Right,
         "space" => KeyCode::Char(' '),
+        "hyphen" | "minus" => KeyCode::Char('-'),
+        "plus" => KeyCode::Char('+'),
         token if token.len() >= 2 && token.starts_with('f') && token[1..].parse::<u8>().is_ok() => {
             KeyCode::F(token[1..].parse().unwrap_or(1))
         }
@@ -596,6 +649,10 @@ fn parse_key_combination(raw: &str) -> Result<KeyStep, KeyBindingParseError> {
 
 #[cfg(target_arch = "wasm32")]
 fn wasm_normalized_has_key(normalized: &str) -> bool {
+    // Lone `-` / `+` split away under `-` tokenization; treat them as keys.
+    if matches!(normalized, "-" | "+" | "minus" | "hyphen" | "plus") {
+        return true;
+    }
     const MODS: &[&str] = &["ctrl", "alt", "cmd", "shift"];
     let mut saw_non_mod = false;
     for token in normalized
@@ -691,6 +748,8 @@ fn display_key_name(raw: &str) -> String {
         "left" => "Left".to_string(),
         "right" => "Right".to_string(),
         "space" => "Space".to_string(),
+        "hyphen" | "minus" => "-".to_string(),
+        "plus" => "+".to_string(),
         _ if raw.chars().count() == 1 => {
             let ch = raw.chars().next().unwrap_or_default();
             if ch.is_ascii_alphabetic() {
@@ -891,6 +950,67 @@ mod tests {
     }
 
     #[test]
+    fn parses_and_displays_plus_and_minus_keys() {
+        let plus = KeyBinding::from_str("+").expect("bare + parses");
+        let plus_name = KeyBinding::from_str("plus").expect("plus name parses");
+        let alt_plus = KeyBinding::from_str("alt-plus").expect("alt-plus parses");
+        let alt_plus_glyph = KeyBinding::from_str("alt-+").expect("alt-+ parses");
+        let minus = KeyBinding::from_str("-").expect("bare - parses");
+        let minus_name = KeyBinding::from_str("minus").expect("minus parses");
+        let hyphen = KeyBinding::from_str("hyphen").expect("hyphen parses");
+        let shift_eq = KeyBinding::from_str("shift-=").expect("shift-= parses");
+
+        assert_eq!(plus, plus_name);
+        assert_eq!(alt_plus, alt_plus_glyph);
+        assert_eq!(minus, minus_name);
+        assert_eq!(minus, hyphen);
+
+        assert_eq!(plus.canonical(), "+");
+        assert_eq!(alt_plus.canonical(), "Alt++");
+        assert_eq!(minus.canonical(), "-");
+        assert_eq!(shift_eq.canonical(), "Shift+=");
+
+        assert!(plus.matches_sequence(&[KeyEvent {
+            code: KeyCode::Char('+'),
+            mods: KeyMods::default(),
+        }]));
+        assert!(alt_plus.matches_sequence(&[KeyEvent {
+            code: KeyCode::Char('+'),
+            mods: KeyMods {
+                alt: true,
+                ..KeyMods::default()
+            },
+        }]));
+        assert!(minus.matches_sequence(&[KeyEvent {
+            code: KeyCode::Char('-'),
+            mods: KeyMods::default(),
+        }]));
+        assert!(shift_eq.matches_sequence(&[KeyEvent {
+            code: KeyCode::Char('='),
+            mods: KeyMods {
+                shift: true,
+                ..KeyMods::default()
+            },
+        }]));
+        assert!(!plus.matches_sequence(&[KeyEvent {
+            code: KeyCode::Char('='),
+            mods: KeyMods {
+                shift: true,
+                ..KeyMods::default()
+            },
+        }]));
+    }
+
+    #[test]
+    fn plus_keeps_modifier_separator_behavior() {
+        assert_eq!(format_binding("ctrl+c").unwrap(), "Ctrl+C");
+        assert_eq!(
+            KeyBinding::from_str("ctrl+c").unwrap(),
+            KeyBinding::from_str("ctrl-c").unwrap()
+        );
+    }
+
+    #[test]
     fn key_binding_matches_function_key() {
         let binding = KeyBinding::from_str("f12").expect("binding parses");
         let key = KeyEvent {
@@ -967,6 +1087,12 @@ mod tests {
             "space",
             "up",
             "pagedown",
+            "+",
+            "plus",
+            "alt-plus",
+            "-",
+            "minus",
+            "shift-=",
         ] {
             let binding = KeyBinding::from_str(raw).expect("parses");
             let native = binding.key_events().expect("native expands");

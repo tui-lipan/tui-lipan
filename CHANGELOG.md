@@ -11,6 +11,12 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- `KeyBinding` parsing accepts the plus key as a bare `+` chord step or the name `plus`
+  (including `alt-plus` / `alt-+`), while `+` inside a mixed step remains a modifier separator
+  (`ctrl+c`). Canonical display maps crokey's `Hyphen`/`minus` labels to `-`.
+
 ### Fixed
 
 - Divider junctions now keep every same-axis segment that shares a cell (two titled horizontals
