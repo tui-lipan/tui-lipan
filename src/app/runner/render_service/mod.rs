@@ -1286,6 +1286,12 @@ mod tests {
 
     struct TextAreaRerenderOnScroll;
 
+    #[cfg(feature = "devtools")]
+    struct MemoMetricsRoot;
+
+    #[cfg(feature = "devtools")]
+    struct MemoMetricsChild;
+
     enum ViewportChangeMsg {
         Viewport(ScrollViewportEvent),
     }
@@ -1293,6 +1299,44 @@ mod tests {
     #[derive(Clone, Debug)]
     enum TextAreaScrollMsg {
         Scroll(ScrollEvent),
+    }
+
+    #[cfg(feature = "devtools")]
+    impl Component for MemoMetricsRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+            crate::child::<MemoMetricsChild, _>(|| MemoMetricsChild, 7)
+        }
+    }
+
+    #[cfg(feature = "devtools")]
+    impl Component for MemoMetricsChild {
+        type Message = ();
+        type Properties = u64;
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn memo_key(&self, props: &Self::Properties, _ctx: &Context<Self>) -> Option<u64> {
+            Some(*props)
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+            Text::new("memoized").into()
+        }
     }
 
     impl Component for ScrollWithInput {
@@ -2019,5 +2063,47 @@ mod tests {
             runner.devtools_state.borrow().frame_history.len(),
             baseline + 1
         );
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn memo_component_hit_reaches_devtools_frame_history() {
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 10,
+        };
+        let mut runner = AppRunner::new(App::new().mouse(false), MemoMetricsRoot, ());
+        runner.core = RuntimeCore::new_test(
+            MemoMetricsRoot,
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        );
+        runner.core.init();
+        runner.core.render_element(viewport, None, None, None);
+        let _ = crate::core::nested::take_memo_frame_stats();
+
+        runner.devtools_state.borrow_mut().set_visible(true);
+        crate::core::nested::set_frame_diagnostics_enabled(true);
+        runner.core.render_element(viewport, None, None, None);
+        runner.record_devtools_frame_metrics(
+            DrawMode::Full,
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+            Duration::ZERO,
+        );
+        crate::core::nested::set_frame_diagnostics_enabled(false);
+
+        let frame = runner
+            .devtools_state
+            .borrow()
+            .latest_frame()
+            .cloned()
+            .expect("visible metrics should record a frame");
+        assert_eq!((frame.memo_hits, frame.memo_misses), (1, 0));
     }
 }
