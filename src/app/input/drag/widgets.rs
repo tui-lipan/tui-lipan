@@ -126,10 +126,6 @@ pub(crate) fn handle_draggable_tab_bar_drag(
     let NodeKind::DraggableTabBar(target_bar) = &target_node.kind else {
         return Some((drag, None));
     };
-    if target_bar.tabs.is_empty() {
-        return Some((drag, None));
-    }
-
     let target_inner = target_node
         .rect
         .inner(target_bar.border, target_bar.padding);
@@ -148,23 +144,24 @@ pub(crate) fn handle_draggable_tab_bar_drag(
     let view_col = rel.clamp(0, max_col as i32) as usize;
     let target_disp_opts = target_bar.display_options();
     let target_vp_opts = target_bar.viewport_options(target_inner.w as usize);
-    if DraggableTabBar::global_col_from_view_col(
-        &target_bar.tabs,
-        &target_disp_opts,
-        &target_vp_opts,
-        view_col,
-    )
-    .is_none()
-    {
-        return Some((drag, None));
-    }
-
     let can_transfer = target_id != drag.id
         && drag.on_transfer.is_some()
         && drag.drag_group.is_some()
         && drag.drag_group == target_bar.drag_group
         && drag.bar_id.is_some()
         && target_bar.bar_id.is_some();
+
+    if !can_transfer
+        && DraggableTabBar::global_col_from_view_col(
+            &target_bar.tabs,
+            &target_disp_opts,
+            &target_vp_opts,
+            view_col,
+        )
+        .is_none()
+    {
+        return Some((drag, None));
+    }
 
     if can_transfer {
         let to_index = DraggableTabBar::reorder_index_at_view_col(

@@ -1100,6 +1100,64 @@ pub(crate) fn dispatch_active_drag_test_backend<C: Component>(
     }
     match backend.drag.active.clone() {
         ActiveDrag::DragDrop(_) => Some(handle_drag_drop_move_test_backend(backend, x, y)),
+        ActiveDrag::DraggableTabBar(drag_state) => {
+            let Some((next_drag, event)) =
+                drag::handle_draggable_tab_bar_drag(&backend.core.tree, x, y, drag_state)
+            else {
+                return Some(false);
+            };
+            backend.drag.active = ActiveDrag::DraggableTabBar(next_drag.clone());
+            match event {
+                Some(drag::DraggableTabDragEvent::Reorder(event)) => {
+                    if backend.core.tree.is_valid(next_drag.id)
+                        && let NodeKind::DraggableTabBar(node) =
+                            &backend.core.tree.node(next_drag.id).kind
+                        && let Some(callback) = &node.on_reorder
+                    {
+                        callback.emit(event);
+                        Some(true)
+                    } else {
+                        Some(false)
+                    }
+                }
+                Some(drag::DraggableTabDragEvent::Transfer {
+                    event,
+                    on_transfer,
+                    on_change,
+                }) => {
+                    let selected = event.to;
+                    on_transfer.emit(event);
+                    if let Some(on_change) = on_change {
+                        on_change.emit(crate::widgets::TabsEvent { index: selected });
+                    }
+                    Some(true)
+                }
+                None => Some(false),
+            }
+        }
+        ActiveDrag::Splitter(drag_state) => {
+            let mut changed = drag::apply_splitter_drag_target(
+                &mut backend.core.tree,
+                x,
+                y,
+                drag_state.id,
+                drag_state.handle,
+                drag_state.start_pos,
+                &drag_state.start_sizes,
+            );
+            if let Some(secondary) = &drag_state.secondary {
+                changed |= drag::apply_splitter_drag_target(
+                    &mut backend.core.tree,
+                    x,
+                    y,
+                    secondary.id,
+                    secondary.handle,
+                    secondary.start_pos,
+                    &secondary.start_sizes,
+                );
+            }
+            Some(changed)
+        }
         ActiveDrag::TextArea(drag_state) => {
             if let Some((value, cursor, anchor_opt, on_change, read_only)) =
                 drag::handle_textarea_drag(
@@ -1336,10 +1394,11 @@ pub(crate) fn dispatch_active_drag_test_backend<C: Component>(
             }
             Some(handled)
         }
-        ActiveDrag::None => None,
-        _ => {
+        #[cfg(feature = "terminal")]
+        ActiveDrag::Terminal(_) => {
             backend.drag.clear();
             Some(false)
         }
+        ActiveDrag::None => None,
     }
 }

@@ -1,6 +1,6 @@
 use crate::backend::ratatui_backend::common::{ClipBounds, to_ratatui_style};
 use crate::backend::ratatui_backend::render::RenderState;
-use crate::core::node::NodeId;
+use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::style::resolve::{
     resolve_base_style, resolve_splitter_active_style, resolve_splitter_hover_style,
 };
@@ -16,8 +16,179 @@ pub(crate) struct SplitterHandleRender<'a> {
     pub active_style: Style,
     pub hovered_handle: Option<usize>,
     pub active_handle: Option<usize>,
+    pub junctions: &'a [SplitterJunction],
     pub preserve_existing_symbols: bool,
     pub clip_rect: Option<Rect>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct SplitterJunction {
+    x: i32,
+    y: i32,
+    symbol: char,
+}
+
+#[derive(Clone, Copy, Default)]
+struct JunctionArms {
+    left: bool,
+    right: bool,
+    up: bool,
+    down: bool,
+}
+
+#[derive(Clone, Copy)]
+enum JunctionCharset {
+    BoxDrawing,
+    Ascii,
+}
+
+fn compatible_junction_charset(
+    orientation: Orientation,
+    symbol: char,
+    other_symbol: char,
+) -> Option<JunctionCharset> {
+    match (orientation, symbol, other_symbol) {
+        (Orientation::Vertical, '│', '─') | (Orientation::Horizontal, '─', '│') => {
+            Some(JunctionCharset::BoxDrawing)
+        }
+        (Orientation::Vertical, '|', '-') | (Orientation::Horizontal, '-', '|') => {
+            Some(JunctionCharset::Ascii)
+        }
+        _ => None,
+    }
+}
+
+fn junction_symbol(arms: JunctionArms, charset: JunctionCharset) -> char {
+    if matches!(charset, JunctionCharset::Ascii) {
+        return '+';
+    }
+    match (arms.left, arms.right, arms.up, arms.down) {
+        (true, true, true, true) => '┼',
+        (true, false, true, true) => '┤',
+        (false, true, true, true) => '├',
+        (true, true, true, false) => '┴',
+        (true, true, false, true) => '┬',
+        (false, true, false, true) => '┌',
+        (true, false, false, true) => '┐',
+        (false, true, true, false) => '└',
+        (true, false, true, false) => '┘',
+        (true, true, false, false) => '─',
+        (false, false, true, true) => '│',
+        _ => '+',
+    }
+}
+
+fn rect_end_x(rect: Rect) -> i32 {
+    i32::from(rect.x) + i32::from(rect.w) - 1
+}
+
+fn rect_end_y(rect: Rect) -> i32 {
+    i32::from(rect.y) + i32::from(rect.h) - 1
+}
+
+fn splitter_junctions(
+    tree: &NodeTree,
+    node_id: NodeId,
+    splitter: &crate::widgets::internal::SplitterNode,
+    offset_x: i32,
+    offset_y: i32,
+) -> Vec<SplitterJunction> {
+    let mut junctions = Vec::new();
+    for rect in &splitter.handle_rects {
+        if rect.w == 0 || rect.h == 0 {
+            continue;
+        }
+        let end_x = rect_end_x(*rect);
+        let end_y = rect_end_y(*rect);
+        for y in i32::from(rect.y)..=end_y {
+            for x in i32::from(rect.x)..=end_x {
+                let mut arms = match splitter.orientation {
+                    Orientation::Horizontal => JunctionArms {
+                        left: x > i32::from(rect.x),
+                        right: x < end_x,
+                        ..JunctionArms::default()
+                    },
+                    Orientation::Vertical => JunctionArms {
+                        up: y > i32::from(rect.y),
+                        down: y < end_y,
+                        ..JunctionArms::default()
+                    },
+                };
+                let base = arms;
+                let mut charset = None;
+
+                for node in tree.iter() {
+                    if node.id == node_id {
+                        continue;
+                    }
+                    let NodeKind::Splitter(other) = &node.kind else {
+                        continue;
+                    };
+                    if other.orientation == splitter.orientation {
+                        continue;
+                    }
+                    let Some(other_charset) = compatible_junction_charset(
+                        splitter.orientation,
+                        splitter.handle_symbol,
+                        other.handle_symbol,
+                    ) else {
+                        continue;
+                    };
+
+                    for other_rect in &other.handle_rects {
+                        if other_rect.w == 0 || other_rect.h == 0 {
+                            continue;
+                        }
+                        let other_end_x = rect_end_x(*other_rect);
+                        let other_end_y = rect_end_y(*other_rect);
+                        match splitter.orientation {
+                            Orientation::Vertical
+                                if y >= i32::from(other_rect.y) && y <= other_end_y =>
+                            {
+                                arms.left |= other_end_x + 1 == x
+                                    || (i32::from(other_rect.x) < x && other_end_x >= x);
+                                arms.right |= i32::from(other_rect.x) == x + 1
+                                    || (i32::from(other_rect.x) <= x && other_end_x > x);
+                            }
+                            Orientation::Horizontal
+                                if x >= i32::from(other_rect.x) && x <= other_end_x =>
+                            {
+                                arms.up |= other_end_y + 1 == y
+                                    || (i32::from(other_rect.y) < y && other_end_y >= y);
+                                arms.down |= i32::from(other_rect.y) == y + 1
+                                    || (i32::from(other_rect.y) <= y && other_end_y > y);
+                            }
+                            _ => continue,
+                        }
+                        if arms.left != base.left
+                            || arms.right != base.right
+                            || arms.up != base.up
+                            || arms.down != base.down
+                        {
+                            charset = Some(other_charset);
+                        }
+                    }
+                }
+
+                if let Some(charset) = charset {
+                    junctions.push(SplitterJunction {
+                        x: x.saturating_add(offset_x),
+                        y: y.saturating_add(offset_y),
+                        symbol: junction_symbol(arms, charset),
+                    });
+                }
+            }
+        }
+    }
+    junctions
+}
+
+fn splitter_symbol_at(render: &SplitterHandleRender<'_>, x: i32, y: i32) -> char {
+    render
+        .junctions
+        .iter()
+        .find(|junction| junction.x == x && junction.y == y)
+        .map_or(render.symbol, |junction| junction.symbol)
 }
 
 #[inline]
@@ -112,8 +283,6 @@ pub(crate) fn render_splitter_handles(
         }
 
         let rstyle = to_ratatui_style(style);
-        let ch = render.symbol.to_string();
-
         match render.orientation {
             Orientation::Horizontal => {
                 let end_x = rect.x.saturating_add(rect.w as i16).saturating_sub(1);
@@ -128,11 +297,13 @@ pub(crate) fn render_splitter_handles(
                         {
                             continue;
                         }
+                        let mut symbol_buf = [0; 4];
+                        let symbol = splitter_symbol_at(&render, x, y).encode_utf8(&mut symbol_buf);
                         draw_splitter_cell(
                             buf,
                             x,
                             y,
-                            &ch,
+                            symbol,
                             rstyle,
                             SplitterCellDrawCtx {
                                 clip: &clip,
@@ -156,11 +327,13 @@ pub(crate) fn render_splitter_handles(
                         {
                             continue;
                         }
+                        let mut symbol_buf = [0; 4];
+                        let symbol = splitter_symbol_at(&render, x, y).encode_utf8(&mut symbol_buf);
                         draw_splitter_cell(
                             buf,
                             x,
                             y,
-                            &ch,
+                            symbol,
                             rstyle,
                             SplitterCellDrawCtx {
                                 clip: &clip,
@@ -200,6 +373,13 @@ pub(crate) fn render_splitter_node(
                 .iter()
                 .position(|rect| rect.contains(mx as i16, my as i16))
         });
+    let junctions = splitter_junctions(
+        state.ctx.tree,
+        node_id,
+        splitter,
+        i32::from(state.content.x),
+        i32::from(state.content.y),
+    );
     render_splitter_handles(
         state.f,
         SplitterHandleRender {
@@ -220,6 +400,7 @@ pub(crate) fn render_splitter_node(
             ),
             hovered_handle,
             active_handle: splitter.active_handle,
+            junctions: &junctions,
             preserve_existing_symbols: splitter.rides_border(),
             clip_rect: clip_bounds,
         },

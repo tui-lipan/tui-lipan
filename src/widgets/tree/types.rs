@@ -1,8 +1,7 @@
 //! Tree widget types.
 
 use crate::callback::{Callback, KeyHandler};
-use crate::core::event::KeyCode;
-use crate::core::event::KeyEvent;
+use crate::core::event::{KeyCode, KeyEvent, KeyMods};
 use crate::style::{Length, Style, StyleSlot};
 use crate::utils::gradient::ColorGradient;
 use crate::widgets::ScrollKeymap;
@@ -124,6 +123,9 @@ pub(crate) enum TreeAction {
 }
 
 pub(crate) fn tree_action_from_key(key: &KeyEvent, keymap: TreeKeymap) -> Option<TreeAction> {
+    if key.mods != KeyMods::NONE {
+        return None;
+    }
     match key.code {
         KeyCode::Left if keymap.contains(TreeKeymap::ARROWS) => Some(TreeAction::Collapse),
         KeyCode::Right if keymap.contains(TreeKeymap::ARROWS) => Some(TreeAction::Expand),
@@ -131,6 +133,37 @@ pub(crate) fn tree_action_from_key(key: &KeyEvent, keymap: TreeKeymap) -> Option
         KeyCode::Char('l') if keymap.contains(TreeKeymap::VIM) => Some(TreeAction::Expand),
         KeyCode::Char(' ') if keymap.contains(TreeKeymap::TOGGLE) => Some(TreeAction::Toggle),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(code: KeyCode, mods: KeyMods) -> KeyEvent {
+        KeyEvent { code, mods }
+    }
+
+    #[test]
+    fn tree_navigation_ignores_modified_keys() {
+        let keymap = TreeKeymap::DEFAULT;
+        assert_eq!(
+            tree_action_from_key(&key(KeyCode::Left, KeyMods::NONE), keymap),
+            Some(TreeAction::Collapse)
+        );
+        assert_eq!(
+            tree_action_from_key(
+                &key(
+                    KeyCode::Left,
+                    KeyMods {
+                        ctrl: true,
+                        ..KeyMods::NONE
+                    }
+                ),
+                keymap
+            ),
+            None
+        );
     }
 }
 
@@ -246,6 +279,7 @@ pub(crate) struct TreeProps {
     pub on_toggle: Option<Callback<TreeToggleEvent>>,
     pub keymap: TreeKeymap,
     pub focus_policy: Option<FocusAccordion>,
+    pub focus_key: Option<Arc<str>>,
     pub indent_style: IndentStyle,
     pub indent_guide_style: Style,
     pub indent_gradient: Option<ColorGradient>,

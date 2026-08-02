@@ -1926,7 +1926,8 @@ fn tabs_prefix_width_from_metrics(
         .take(upto)
         .map(|metrics| metrics.width)
         .sum::<usize>();
-    tabs_width.saturating_add(separator_width(opts.variant, opts.divider) * upto.saturating_sub(1))
+    let separators = upto.min(metrics.len().saturating_sub(1));
+    tabs_width.saturating_add(separator_width(opts.variant, opts.divider) * separators)
 }
 
 #[cfg(test)]
@@ -2233,6 +2234,33 @@ mod tests {
         let target = DraggableTabBar::adjacent_reorder_target(&tabs, &opts, 1, action_mid);
 
         assert_eq!(target, None);
+    }
+
+    #[test]
+    fn tab_prefix_includes_the_separator_before_the_target() {
+        let tabs = vec![DraggableTab::new("alpha"), DraggableTab::new("beta")];
+        let overrides = HashMap::new();
+        let opts = super::TabDisplayOptions {
+            variant: DraggableTabBarVariant::Bordered,
+            divider: '|',
+            accent_symbol: '|',
+            close_symbol: "x",
+            show_close_buttons: false,
+            tab_max_width: None,
+            overflow: super::DraggableTabBarOverflow::Scroll,
+            show_file_icons: false,
+            file_icon_style: FileIconStyle::NerdFont,
+            file_icon_palette: &FileIconPalette::default(),
+            file_icon_overrides: &overrides,
+            width_lock: None,
+        };
+        let first =
+            super::tab_metrics(&tabs[0], DraggableTabBarVariant::Bordered, '|', "x", false).width;
+
+        assert_eq!(
+            super::tabs_prefix_width(&tabs, &opts, 1),
+            first + super::separator_width(DraggableTabBarVariant::Bordered, '|')
+        );
     }
 
     #[test]

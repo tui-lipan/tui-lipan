@@ -402,15 +402,27 @@ pub(crate) fn gather_hit_actions(tree: &NodeTree, hit: NodeId, x: u16, y: u16) -
         _ => None,
     };
 
-    let splitter_grab = match &node.kind {
-        NodeKind::Splitter(splitter) => {
-            splitter.handle_at(x_i16, y_i16).map(|handle| SplitterGrab {
-                node_id: node.id,
-                handle,
-            })
+    // Splitter handles can ride a child's border, and a child may also paint into a gutter. The
+    // deepest hit is therefore not necessarily the Splitter node even though the pointer is on its
+    // handle. Walk ancestors so those composed cases remain draggable.
+    let mut splitter_grab = None;
+    let mut cur = Some(hit);
+    while let Some(id) = cur {
+        if !tree.is_valid(id) {
+            break;
         }
-        _ => None,
-    };
+        let candidate = tree.node(id);
+        if let NodeKind::Splitter(splitter) = &candidate.kind
+            && let Some(handle) = splitter.handle_at(x_i16, y_i16)
+        {
+            splitter_grab = Some(SplitterGrab {
+                node_id: id,
+                handle,
+            });
+            break;
+        }
+        cur = candidate.parent;
+    }
 
     let mut drag_source_grab = None;
     let mut cur = Some(hit);

@@ -35,7 +35,7 @@ pub enum SplitterHandleMode {
     Border,
 }
 
-/// Emitted when a splitter drag finishes and pane weights changed.
+/// Emitted by splitter resize callbacks with normalized pane weights.
 #[derive(Clone, Debug)]
 pub struct SplitterResizeEvent {
     /// Matches [`Splitter::split_id`] when set.
@@ -52,6 +52,7 @@ pub struct Splitter {
     pub(crate) weights: Vec<f32>,
     pub(crate) weights_nonce: u32,
     pub(crate) split_id: Option<Arc<str>>,
+    pub(crate) on_resize_live: Option<Callback<SplitterResizeEvent>>,
     pub(crate) on_resize: Option<Callback<SplitterResizeEvent>>,
     pub(crate) min_size: u16,
     pub(crate) handle_size: u16,
@@ -81,6 +82,7 @@ impl Splitter {
             weights: Vec::new(),
             weights_nonce: 0,
             split_id: None,
+            on_resize_live: None,
             on_resize: None,
             min_size: 3,
             handle_size: 1,
@@ -102,6 +104,7 @@ impl Splitter {
             weights: Vec::new(),
             weights_nonce: 0,
             split_id: None,
+            on_resize_live: None,
             on_resize: None,
             min_size: 3,
             handle_size: 1,
@@ -158,6 +161,12 @@ impl Splitter {
     /// Optional id included in [`SplitterResizeEvent`] after a drag.
     pub fn split_id(mut self, id: impl Into<Arc<str>>) -> Self {
         self.split_id = Some(id.into());
+        self
+    }
+
+    /// Called while a drag resize changes pane weights.
+    pub fn on_resize_live(mut self, cb: Callback<SplitterResizeEvent>) -> Self {
+        self.on_resize_live = Some(cb);
         self
     }
 

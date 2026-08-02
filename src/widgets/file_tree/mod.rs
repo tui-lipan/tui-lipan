@@ -8,10 +8,15 @@ mod git;
 mod mod_private;
 
 pub use crate::style::FileIconPalette;
-pub use events::{FileTreeEntryRequest, FileTreeEvent, FileTreeToggleEvent};
+pub use events::{
+    FileTreeEntryRequest, FileTreeEvent, FileTreeExplorerFocusOrigin, FileTreeToggleEvent,
+};
 pub use fs::{FileIconStyle, FileKind};
 pub use git::{GitChangeState, GitFileStatus, GitIconStyle};
 pub(crate) use mod_private::FileTreeProps;
+
+pub(crate) const EXPLORER_INPUT_KEY: &str = "__ft_input";
+pub(crate) const TREE_INPUT_KEY: &str = "__ft_tree";
 use mod_private::{
     default_git_style_added, default_git_style_conflicted, default_git_style_deleted,
     default_git_style_modified, default_git_style_renamed, default_git_style_untracked,
@@ -385,6 +390,8 @@ impl FileTree {
                 empty_text: Some("Directory is empty".into()),
                 empty_text_style: Style::default(),
                 explorer: false,
+                tree_focus_key: TREE_INPUT_KEY.into(),
+                explorer_focus_key: EXPLORER_INPUT_KEY.into(),
                 explorer_placeholder: "Find files...".into(),
                 explorer_prefix: " ".into(),
                 explorer_input_border: false,
@@ -405,6 +412,9 @@ impl FileTree {
                 explorer_divider_join_frame: true,
                 explorer_divider_char: '─',
                 explorer_divider_style: Style::default(),
+                on_explorer_focus: None,
+                on_explorer_blur: None,
+                on_explorer_escape: None,
                 activate_on_click: true,
                 focusable: true,
                 tab_stop: true,
@@ -834,6 +844,18 @@ impl FileTree {
         self
     }
 
+    /// Set the key used to focus the tree inside this composite widget.
+    pub fn tree_focus_key(mut self, key: impl Into<Arc<str>>) -> Self {
+        self.props.tree_focus_key = key.into();
+        self
+    }
+
+    /// Set the key used to focus the explorer input inside this composite widget.
+    pub fn explorer_focus_key(mut self, key: impl Into<Arc<str>>) -> Self {
+        self.props.explorer_focus_key = key.into();
+        self
+    }
+
     /// Set explorer placeholder text.
     pub fn explorer_placeholder(mut self, text: impl Into<Arc<str>>) -> Self {
         self.props.explorer_placeholder = text.into();
@@ -939,6 +961,28 @@ impl FileTree {
     /// Set explorer divider style.
     pub fn explorer_divider_style(mut self, style: Style) -> Self {
         self.props.explorer_divider_style = style;
+        self
+    }
+
+    /// Set the callback fired when the explorer input receives focus.
+    pub fn on_explorer_focus(mut self, cb: Callback<FileTreeExplorerFocusOrigin>) -> Self {
+        self.props.on_explorer_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the explorer input loses focus.
+    pub fn on_explorer_blur(mut self, cb: Callback<()>) -> Self {
+        self.props.on_explorer_blur = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when Escape or an outside tree/divider click leaves an explorer
+    /// focused directly by pointer.
+    ///
+    /// Explorer focus entered from the tree with `/` returns to the tree instead and does not emit
+    /// this callback. Without a callback, pointer-entered explorer focus also returns to the tree.
+    pub fn on_explorer_escape(mut self, cb: Callback<()>) -> Self {
+        self.props.on_explorer_escape = Some(cb);
         self
     }
 

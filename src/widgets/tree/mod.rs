@@ -64,6 +64,7 @@ impl Tree {
                 on_toggle: None,
                 keymap: TreeKeymap::default(),
                 focus_policy: None,
+                focus_key: None,
                 indent_style: IndentStyle::None,
                 indent_guide_style: Style::default(),
                 indent_gradient: None,
@@ -413,6 +414,12 @@ impl Tree {
     /// Configure focus-aware collapsing for large trees.
     pub fn focus_policy(mut self, policy: FocusAccordion) -> Self {
         self.props.focus_policy = Some(policy);
+        self
+    }
+
+    /// Assign a stable key to the tree's focusable list node.
+    pub fn focus_key(mut self, key: impl Into<Arc<str>>) -> Self {
+        self.props.focus_key = Some(key.into());
         self
     }
 
