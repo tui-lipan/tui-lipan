@@ -8,9 +8,11 @@ use crate::core::component::{Command, Component, Context, Update};
 use crate::core::element::{Element, IntoElement};
 use crate::style::Style;
 use crate::text::input::TextInput;
-use crate::widgets::{Divider, Input, InputEvent, ListItem, Tree, TreeNode, VStack};
+use crate::widgets::{Divider, Input, InputEvent, ListItem, MouseRegion, Tree, TreeNode, VStack};
 
-use super::events::{FileTreeEntryRequest, FileTreeEvent, FileTreeToggleEvent};
+use super::events::{
+    FileTreeEntryRequest, FileTreeEvent, FileTreeExplorerFocusOrigin, FileTreeToggleEvent,
+};
 use super::explorer::{ExplorerCandidate, ExplorerFilter, search_candidates, search_filesystem};
 use super::fs::{FileIconStyle, FileKind, FsNode, read_directory, root_node};
 use super::git::{
@@ -37,6 +39,8 @@ pub(crate) struct FileTreeState {
     pub(crate) explorer_input: TextInput,
     pub(crate) explorer_query_id: u64,
     pub(crate) explorer_filter: ExplorerFilter,
+    pub(crate) explorer_entered_from_tree: bool,
+    pub(crate) explorer_focused: bool,
     pub(crate) search_expanded_snapshot: Option<HashSet<Arc<str>>>,
     pub(crate) search_found_dir: Option<Arc<str>>,
     pub(crate) requested_entry_paths: HashSet<Arc<str>>,
@@ -67,8 +71,13 @@ pub(crate) enum FileTreeMsg {
     SyncRootMode,
     EnsureChangedOnlyExpanded,
     EnsureRevealPaths,
-    FocusExplorer,
+    FocusExplorer {
+        from_tree: bool,
+    },
     FocusTree,
+    TreePointerDown,
+    ExplorerBlurred,
+    EscapeExplorer,
 }
 
 pub(crate) struct FileTreeComponent;
@@ -121,6 +130,8 @@ impl Component for FileTreeComponent {
             explorer_input: TextInput::new(""),
             explorer_query_id: 0,
             explorer_filter: ExplorerFilter::default(),
+            explorer_entered_from_tree: false,
+            explorer_focused: false,
             search_expanded_snapshot: None,
             search_found_dir: None,
             requested_entry_paths: HashSet::new(),
@@ -208,6 +219,7 @@ impl Component for FileTreeComponent {
             .activate_on_click(ctx.props.activate_on_click)
             .focusable(ctx.props.focusable)
             .tab_stop(ctx.props.tab_stop)
+            .focus_key(ctx.props.tree_focus_key.clone())
             .keymap(ctx.props.keymap)
             .on_select(
                 ctx.link()
@@ -240,7 +252,9 @@ impl Component for FileTreeComponent {
         // When explorer is enabled, "/" on the tree focuses the search input
         if has_explorer {
             tree = tree.key_interceptor(ctx.link().key_handler(|key| match key.code {
-                crate::core::event::KeyCode::Char('/') => Some(FileTreeMsg::FocusExplorer),
+                crate::core::event::KeyCode::Char('/') => {
+                    Some(FileTreeMsg::FocusExplorer { from_tree: true })
+                }
                 _ => None,
             }));
         }
@@ -288,26 +302,43 @@ impl Component for FileTreeComponent {
             .placeholder_style(ctx.props.explorer_placeholder_style)
             .focus_placeholder_style(ctx.props.explorer_focus_placeholder_style)
             .on_change(ctx.link().callback(FileTreeMsg::ExplorerQueryChanged))
+            .on_click(
+                ctx.link()
+                    .callback(|_| FileTreeMsg::FocusExplorer { from_tree: false }),
+            )
+            .on_blur(ctx.link().callback(|_| FileTreeMsg::ExplorerBlurred))
             .tab_stop(false)
             .key_interceptor(ctx.link().key_handler(|key| match key.code {
-                crate::core::event::KeyCode::Esc => Some(FileTreeMsg::FocusTree),
+                crate::core::event::KeyCode::Enter => Some(FileTreeMsg::FocusTree),
+                crate::core::event::KeyCode::Esc => Some(FileTreeMsg::EscapeExplorer),
                 _ => None,
             }));
 
         let mut layout = VStack::new()
             .width(ctx.props.width)
             .height(ctx.props.height)
-            .child(input.key("__ft_input"));
+            .child(input.key(ctx.props.explorer_focus_key.clone()));
 
         if ctx.props.explorer_divider {
             let divider = Divider::horizontal()
                 .join_frame(ctx.props.explorer_divider_join_frame)
                 .ch(ctx.props.explorer_divider_char)
                 .style(ctx.props.explorer_divider_style);
-            layout = layout.child(divider);
+            layout = layout.child(
+                MouseRegion::new()
+                    .on_mouse_down(ctx.link().callback(|_| FileTreeMsg::TreePointerDown))
+                    .child(divider),
+            );
         }
 
-        layout.child(tree.key("__ft_tree")).into()
+        layout
+            .child(
+                MouseRegion::new()
+                    .on_mouse_down(ctx.link().callback(|_| FileTreeMsg::TreePointerDown))
+                    .bubble_mouse_down(true)
+                    .child(tree),
+            )
+            .into()
     }
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -535,12 +566,54 @@ impl Component for FileTreeComponent {
                 }
                 Update::none()
             }
-            FileTreeMsg::FocusExplorer => {
-                ctx.request_focus("__ft_input");
+            FileTreeMsg::FocusExplorer { from_tree } => {
+                ctx.state.explorer_entered_from_tree = from_tree;
+                ctx.state.explorer_focused = true;
+                ctx.request_focus(ctx.props.explorer_focus_key.clone());
+                if let Some(callback) = ctx.props.on_explorer_focus.as_ref() {
+                    callback.emit(if from_tree {
+                        FileTreeExplorerFocusOrigin::Tree
+                    } else {
+                        FileTreeExplorerFocusOrigin::Pointer
+                    });
+                }
                 Update::none()
             }
             FileTreeMsg::FocusTree => {
-                ctx.request_focus("__ft_tree");
+                ctx.state.explorer_entered_from_tree = false;
+                ctx.state.explorer_focused = false;
+                ctx.request_focus(ctx.props.tree_focus_key.clone());
+                Update::none()
+            }
+            FileTreeMsg::TreePointerDown => {
+                if !ctx.state.explorer_focused {
+                    return Update::none();
+                }
+
+                ctx.state.explorer_entered_from_tree = false;
+                ctx.state.explorer_focused = false;
+                if let Some(callback) = ctx.props.on_explorer_escape.as_ref() {
+                    callback.emit(());
+                } else {
+                    ctx.request_focus(ctx.props.tree_focus_key.clone());
+                }
+                Update::none()
+            }
+            FileTreeMsg::ExplorerBlurred => {
+                ctx.state.explorer_focused = false;
+                if let Some(callback) = ctx.props.on_explorer_blur.as_ref() {
+                    callback.emit(());
+                }
+                Update::none()
+            }
+            FileTreeMsg::EscapeExplorer => {
+                ctx.state.explorer_focused = false;
+                if ctx.state.explorer_entered_from_tree || ctx.props.on_explorer_escape.is_none() {
+                    ctx.state.explorer_entered_from_tree = false;
+                    ctx.request_focus(ctx.props.tree_focus_key.clone());
+                } else if let Some(callback) = ctx.props.on_explorer_escape.as_ref() {
+                    callback.emit(());
+                }
                 Update::none()
             }
         }
@@ -2168,6 +2241,8 @@ mod tests {
             explorer_input: TextInput::new(""),
             explorer_query_id: 0,
             explorer_filter: ExplorerFilter::default(),
+            explorer_entered_from_tree: false,
+            explorer_focused: false,
             search_expanded_snapshot: None,
             search_found_dir: None,
             requested_entry_paths: HashSet::new(),
@@ -3524,6 +3599,8 @@ mod tests {
             explorer_input: TextInput::new(""),
             explorer_query_id: 0,
             explorer_filter: ExplorerFilter::default(),
+            explorer_entered_from_tree: false,
+            explorer_focused: false,
             search_expanded_snapshot: None,
             search_found_dir: None,
             requested_entry_paths: HashSet::new(),

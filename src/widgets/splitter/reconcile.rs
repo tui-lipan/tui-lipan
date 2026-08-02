@@ -87,6 +87,7 @@ pub(crate) fn reconcile_splitter(
         weights,
         weights_nonce: splitter.weights_nonce,
         split_id: splitter.split_id.clone(),
+        on_resize_live: splitter.on_resize_live.clone(),
         on_resize: splitter.on_resize.clone(),
         min_size: splitter.min_size,
         handle_mode: splitter.handle_mode,

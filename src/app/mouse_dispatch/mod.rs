@@ -903,6 +903,57 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
             self.drag.clear();
             return Some(true);
         }
+        if let ActiveDrag::DraggableTabBar(drag_state) = self.drag.active.clone() {
+            let event = crate::app::input::drag::finish_draggable_tab_bar_drag(drag_state.clone());
+            self.drag.clear();
+            match event {
+                Some(crate::app::input::drag::DraggableTabDragEvent::Reorder(event)) => {
+                    if self.core.tree.is_valid(drag_state.source_id)
+                        && let NodeKind::DraggableTabBar(node) =
+                            &self.core.tree.node(drag_state.source_id).kind
+                        && let Some(callback) = &node.on_reorder
+                    {
+                        callback.emit(event);
+                    }
+                }
+                Some(crate::app::input::drag::DraggableTabDragEvent::Transfer {
+                    event,
+                    on_transfer,
+                    on_change,
+                }) => {
+                    let selected = event.to;
+                    on_transfer.emit(event);
+                    if let Some(on_change) = on_change {
+                        on_change.emit(crate::widgets::TabsEvent { index: selected });
+                    }
+                }
+                None => {}
+            }
+            return Some(true);
+        }
+        if let ActiveDrag::Splitter(drag_state) = self.drag.active.clone() {
+            let mut ids = vec![drag_state.id];
+            if let Some(secondary) = &drag_state.secondary {
+                ids.push(secondary.id);
+            }
+            let mut resizes = Vec::new();
+            for id in ids {
+                if !self.core.tree.is_valid(id) {
+                    continue;
+                }
+                if let NodeKind::Splitter(node) = &mut self.core.tree.node_mut(id).kind {
+                    node.active_handle = None;
+                    if let Some(callback) = node.on_resize.clone() {
+                        resizes.push((callback, node.split_id.clone(), node.weights.clone()));
+                    }
+                }
+            }
+            self.drag.clear();
+            for (callback, split_id, weights) in resizes {
+                callback.emit(crate::widgets::SplitterResizeEvent { split_id, weights });
+            }
+            return Some(true);
+        }
         if let ActiveDrag::TextArea(drag_state) = self.drag.active.clone()
             && self.core.tree.is_valid(drag_state.id)
             && let NodeKind::TextArea(node) = &self.core.tree.node(drag_state.id).kind

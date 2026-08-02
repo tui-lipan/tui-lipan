@@ -1,6 +1,15 @@
 use super::fs::FileKind;
 use std::sync::Arc;
 
+/// How the `FileTree` explorer input received focus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileTreeExplorerFocusOrigin {
+    /// The focused tree handled its `/` shortcut.
+    Tree,
+    /// The explorer input was clicked directly.
+    Pointer,
+}
+
 /// Request emitted when an application-provided entry source needs a directory listing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileTreeEntryRequest {

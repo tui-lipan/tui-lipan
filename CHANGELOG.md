@@ -13,6 +13,12 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Add `FileTree::on_explorer_focus`, `FileTree::on_explorer_blur`, and
+  `FileTree::on_explorer_escape` for routing explorer focus by its pointer/tree origin. Explorer
+  focus entered from the tree with `/` still returns to the tree on Escape.
+- Add configurable `FileTree::tree_focus_key` and `FileTree::explorer_focus_key` targets for
+  composite focus routing and multiple simultaneously mounted trees.
+- Add `Tree::focus_key` for assigning a focus key directly to the tree's focusable list node.
 - `DraggableTabBar` now keeps successive close buttons under the pointer by temporarily giving a
   deleted tab's width to its replacement until the mouse leaves the bar.
 - `KeyBinding` parsing accepts the plus key as a bare `+` chord step or the name `plus`
@@ -21,6 +27,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Clicking a `FileTree` explorer input now focuses it even when the tree is inside an excluded focus
+  scope.
 - Cross-bar `DraggableTabBar` drops now select the transferred tab on the destination bar by
   emitting its `on_change` callback after `on_transfer`, restoring the expected active style.
 - Divider junctions now keep every same-axis segment that shares a cell (two titled horizontals

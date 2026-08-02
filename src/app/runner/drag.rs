@@ -1021,7 +1021,8 @@ impl<C: Component> AppRunner<C> {
         y: u16,
         drag: crate::app::input::drag::SplitterDrag,
     ) -> bool {
-        let mut changed = self.apply_splitter_drag_target(
+        let mut changed = drag::apply_splitter_drag_target(
+            &mut self.core.tree,
             x,
             y,
             drag.id,
@@ -1030,7 +1031,8 @@ impl<C: Component> AppRunner<C> {
             &drag.start_sizes,
         );
         if let Some(sec) = &drag.secondary {
-            changed |= self.apply_splitter_drag_target(
+            changed |= drag::apply_splitter_drag_target(
+                &mut self.core.tree,
                 x,
                 y,
                 sec.id,
@@ -1040,62 +1042,6 @@ impl<C: Component> AppRunner<C> {
             );
         }
         changed
-    }
-
-    /// Apply one splitter's share of a drag update. A corner (junction) drag
-    /// calls this twice: the primary splitter follows its own axis and the
-    /// perpendicular secondary follows the other.
-    fn apply_splitter_drag_target(
-        &mut self,
-        x: u16,
-        y: u16,
-        id: crate::core::node::NodeId,
-        handle: usize,
-        start_pos: i16,
-        start_sizes: &[u16],
-    ) -> bool {
-        if !self.core.tree.is_valid(id) {
-            return false;
-        }
-
-        let node = self.core.tree.node_mut(id);
-        let NodeKind::Splitter(splitter) = &mut node.kind else {
-            return false;
-        };
-
-        if handle + 1 >= start_sizes.len() {
-            return false;
-        }
-
-        let delta = match splitter.orientation {
-            crate::widgets::Orientation::Vertical => x as i16 - start_pos,
-            crate::widgets::Orientation::Horizontal => y as i16 - start_pos,
-        };
-
-        let mut sizes = start_sizes.to_vec();
-        let total = sizes[handle].saturating_add(sizes[handle + 1]);
-        if total == 0 {
-            return false;
-        }
-
-        let min = splitter.min_size.min(total);
-        let max_left = total.saturating_sub(min);
-        let min_left = min.min(max_left);
-
-        let new_left =
-            (sizes[handle] as i32 + delta as i32).clamp(min_left as i32, max_left as i32) as u16;
-        let new_right = total.saturating_sub(new_left);
-
-        if new_left == sizes[handle] && new_right == sizes[handle + 1] {
-            return false;
-        }
-
-        sizes[handle] = new_left;
-        sizes[handle + 1] = new_right;
-        splitter.set_drag_sizes(sizes);
-        splitter.active_handle = Some(handle);
-
-        true
     }
 
     pub(crate) fn handle_draggable_tab_bar_drag(

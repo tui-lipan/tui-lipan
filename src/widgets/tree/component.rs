@@ -2,7 +2,7 @@
 
 use super::types::*;
 use crate::core::component::{Component, Context, Update};
-use crate::core::element::Element;
+use crate::core::element::{Element, IntoElement};
 use crate::style::{Span, Style};
 use crate::widgets::ListItem;
 use std::borrow::Cow;
@@ -291,6 +291,11 @@ impl Component for TreeComponent {
         }
 
         let mut stack = crate::widgets::VStack::new().gap(ctx.props.gap);
+        let list: Element = if let Some(key) = ctx.props.focus_key.clone() {
+            list.key(key)
+        } else {
+            list.into()
+        };
         stack = stack.child(list);
         stack.into()
     }

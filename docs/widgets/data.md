@@ -339,6 +339,7 @@ Hierarchical tree view with expand/collapse.
 | `activate_on_click` | `bool` | Single-click activates |
 | `keymap` | `TreeKeymap` | Keyboard expand/collapse mapping |
 | `focus_policy` | `FocusAccordion` | Tree accordion behavior |
+| `focus_key` | `String` | Stable key assigned to the inner focusable list node |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_select` | `Callback<TreeEvent>` | Node selected |
@@ -424,11 +425,16 @@ entries and git-backed or application-provided change projections.
 | `symlink_icon` | `String` | Symlink icon |
 | `other_icon` | `String` | Other entry icon |
 | `explorer` | `bool` | Show fuzzy search input |
+| `tree_focus_key` | `String` | Key used for direct focus of the inner tree |
+| `explorer_focus_key` | `String` | Key used for direct focus of the explorer input |
 | `explorer_placeholder` | `String` | Search input placeholder |
 | `explorer_prefix` | `String` | Search input prefix |
 | `explorer_input_border` | `bool` | Search input border |
 | `explorer_match_style` | `Style` | Fuzzy match highlight |
 | `explorer_divider` | `bool` | Show divider between search and tree |
+| `on_explorer_focus` | `Callback<FileTreeExplorerFocusOrigin>` | Explorer input focused from the tree or pointer |
+| `on_explorer_blur` | `Callback<()>` | Explorer input lost focus |
+| `on_explorer_escape` | `Callback<()>` | Leave pointer-focused explorer input on Escape or an outside tree/divider click |
 | `focusable` | `bool` | Accept focus |
 | `tab_stop` | `bool` | Include the tree target in sequential Tab traversal (default: `true`) |
 | `on_focus` / `on_blur` | `Callback<()>` | Tree focus gained / lost |
@@ -465,6 +471,11 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
 - Filesystem fuzzy matching respects `.gitignore`/`.ignore` rules.
 - In changed-only mode, fuzzy matching is scoped to the changed-path projection instead of the whole filesystem.
 - Auto-expands ancestor directories to reveal search matches.
+- Clicking the explorer input focuses it. Enter commits the query and focuses the tree; Escape
+  entered from the tree with `/` also returns to the tree. Pointer-entered Escape and outside tree
+  or divider clicks emit `on_explorer_escape` when configured.
+- `on_explorer_focus` reports `FileTreeExplorerFocusOrigin::Tree` or `Pointer`, and
+  `on_explorer_blur` reports when the input releases focus for app-level key routing.
 - `selected_path`, `reveal_path`, and `select_path` normalize absolute paths under the root or paths relative to the root. They are no-ops for paths outside the root, paths hidden by `show_hidden(false)`, absent/unreadable/capped entries, or rows filtered out by the current all-files/changed-only projection. `selected_path` only selects an already-visible row; `reveal_path` expands/loads ancestors when possible; `select_path` combines reveal + selection and scrolls to the selected row. With controlled `expanded_paths`, app-provided expansion remains authoritative, so reveal/select can only display rows made available by the controlled expansion set plus the reveal request during rendering.
 - Restores pre-search expansion state when query clears.
 - Queries containing file extensions (e.g. `layout.rs`) prioritize filename matches.

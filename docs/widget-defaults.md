@@ -256,7 +256,7 @@ Source: `src/widgets/text_area/mod.rs:451` (`TextArea`).
 
 ## List
 
-Source: `src/widgets/list/mod.rs:1288` (`List`).
+Source: `src/widgets/list/mod.rs:1302` (`List`).
 
 | Field | Default initializer |
 |---|---|
@@ -375,7 +375,7 @@ Source: `src/widgets/scroll_view/mod.rs:92` (`ScrollView`).
 
 ## VStack/HStack shared StackProps
 
-Source: `src/widgets/containers/mod.rs:208` (`StackProps`).
+Source: `src/widgets/containers/mod.rs:209` (`StackProps`).
 
 Note: Applies to the shared props backing stack container defaults.
 
@@ -402,8 +402,8 @@ Note: `Frame` is the public builder; these defaults come from its `FrameNode` ba
 
 | Field | Default initializer |
 |---|---|
-| `header` | `crate::widgets::frame::BorderLabels::default()` |
-| `footer` | `crate::widgets::frame::BorderLabels::default()` |
+| `header` | `Box::new(crate::widgets::frame::BorderLabels::default())` |
+| `footer` | `Box::new(crate::widgets::frame::BorderLabels::default())` |
 | `tab_titles` | `Vec::new()` |
 | `active_tab` | `0` |
 | `active_tab_style` | `Style::default()` |
@@ -845,7 +845,7 @@ Source: `src/widgets/tabs/mod.rs:108` (`Tabs`).
 
 ## DraggableTabBar
 
-Source: `src/widgets/draggable_tab_bar/mod.rs:461` (`DraggableTabBar`).
+Source: `src/widgets/draggable_tab_bar/mod.rs:468` (`DraggableTabBar`).
 
 | Field | Default initializer |
 |---|---|
@@ -982,7 +982,7 @@ Source: `src/widgets/document_view/mod.rs:329` (`DocumentView`).
 
 ## FileTree
 
-Source: `src/widgets/file_tree/mod.rs:341` (`FileTree`).
+Source: `src/widgets/file_tree/mod.rs:346` (`FileTree`).
 
 | Field | Default initializer |
 |---|---|
@@ -1032,6 +1032,8 @@ Source: `src/widgets/file_tree/mod.rs:341` (`FileTree`).
 | `empty_text` | `Some("Directory is empty".into())` |
 | `empty_text_style` | `Style::default()` |
 | `explorer` | `false` |
+| `tree_focus_key` | `TREE_INPUT_KEY.into()` |
+| `explorer_focus_key` | `EXPLORER_INPUT_KEY.into()` |
 | `explorer_placeholder` | `"Find files...".into()` |
 | `explorer_prefix` | `" ".into()` |
 | `explorer_input_border` | `false` |
@@ -1047,6 +1049,9 @@ Source: `src/widgets/file_tree/mod.rs:341` (`FileTree`).
 | `explorer_divider_join_frame` | `true` |
 | `explorer_divider_char` | `'─'` |
 | `explorer_divider_style` | `Style::default()` |
+| `on_explorer_focus` | `None` |
+| `on_explorer_blur` | `None` |
+| `on_explorer_escape` | `None` |
 | `activate_on_click` | `true` |
 | `focusable` | `true` |
 | `tab_stop` | `true` |
@@ -1082,7 +1087,7 @@ Source: `src/widgets/file_tree/mod.rs:341` (`FileTree`).
 
 ## SearchPalette
 
-Source: `src/widgets/search_palette/mod.rs:742` (`SearchPalette`).
+Source: `src/widgets/search_palette/mod.rs:743` (`SearchPalette`).
 
 | Field | Default initializer |
 |---|---|
@@ -1203,6 +1208,7 @@ Source: `src/widgets/tree/mod.rs:27` (`Tree`).
 | `on_toggle` | `None` |
 | `keymap` | `TreeKeymap::default()` |
 | `focus_policy` | `None` |
+| `focus_key` | `None` |
 | `indent_style` | `IndentStyle::None` |
 | `indent_guide_style` | `Style::default()` |
 | `indent_gradient` | `None` |
@@ -1213,7 +1219,7 @@ Source: `src/widgets/tree/mod.rs:27` (`Tree`).
 
 ## Terminal
 
-Source: `src/widgets/terminal/mod.rs:49` (`Terminal`).
+Source: `src/widgets/terminal/mod.rs:85` (`Terminal`).
 
 | Field | Default initializer |
 |---|---|
@@ -1223,12 +1229,16 @@ Source: `src/widgets/terminal/mod.rs:49` (`Terminal`).
 | `show_cursor` | `true` |
 | `cursor_shape` | `CaretShape::Block` |
 | `cursor_blinking` | `true` |
+| `caret_color` | `None` |
 | `color_lines` | `None` |
 | `color_cache_key` | `0` |
+| `screen` | `None` |
+| `decorations` | `Arc::from([] as [TerminalDecoration; 0])` |
 | `scrollback_offset` | `0` |
 | `total_scrollback_rows` | `0` |
 | `mouse_mode` | `MouseModeState::default()` |
 | `key_modes` | `TerminalKeyModes::default()` |
+| `images` | `Arc::from([])` |
 | `paste_shortcut_behavior` | `TerminalPasteShortcutBehavior::Forward` |
 | `selection` | `None` |
 | `selection_controlled` | `false` |
@@ -1323,7 +1333,7 @@ Note: `DiffView::new()` delegates to `new_internal("", "", None)`; argument-back
 
 ## ManagedTerminal
 
-Source: `src/widgets/managed_terminal.rs:95` (`ManagedTerminalProps`).
+Source: `src/widgets/managed_terminal.rs:100` (`ManagedTerminalProps`).
 
 Note: `ManagedTerminal` is a component; defaults come from `ManagedTerminalProps`.
 
@@ -1338,6 +1348,7 @@ Note: `ManagedTerminal` is a component; defaults come from `ManagedTerminalProps
 | `placeholder` | `Some(Arc::from("Starting terminal..."))` |
 | `forward_mouse` | `true` |
 | `scroll_wheel` | `true` |
+| `resize_debounce` | `Duration::from_millis(16)` |
 | `style` | `crate::style::Style::default()` |
 | `focusable` | `true` |
 | `tab_stop` | `true` |

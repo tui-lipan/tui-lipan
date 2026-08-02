@@ -142,6 +142,59 @@ pub(crate) struct SplitterDragTarget {
     pub start_sizes: Vec<u16>,
 }
 
+pub(crate) fn apply_splitter_drag_target(
+    tree: &mut crate::core::node::NodeTree,
+    x: u16,
+    y: u16,
+    id: NodeId,
+    handle: usize,
+    start_pos: i16,
+    start_sizes: &[u16],
+) -> bool {
+    if !tree.is_valid(id) {
+        return false;
+    }
+    let node = tree.node_mut(id);
+    let crate::core::node::NodeKind::Splitter(splitter) = &mut node.kind else {
+        return false;
+    };
+    if handle + 1 >= start_sizes.len() {
+        return false;
+    }
+
+    let delta = match splitter.orientation {
+        crate::widgets::Orientation::Vertical => x as i16 - start_pos,
+        crate::widgets::Orientation::Horizontal => y as i16 - start_pos,
+    };
+    let mut sizes = start_sizes.to_vec();
+    let total = sizes[handle].saturating_add(sizes[handle + 1]);
+    if total == 0 {
+        return false;
+    }
+
+    let min = splitter.min_size.min(total);
+    let max_left = total.saturating_sub(min);
+    let min_left = min.min(max_left);
+    let new_left =
+        (sizes[handle] as i32 + delta as i32).clamp(min_left as i32, max_left as i32) as u16;
+    let new_right = total.saturating_sub(new_left);
+    if new_left == sizes[handle] && new_right == sizes[handle + 1] {
+        return false;
+    }
+
+    sizes[handle] = new_left;
+    sizes[handle + 1] = new_right;
+    splitter.set_drag_sizes(sizes);
+    splitter.active_handle = Some(handle);
+    if let Some(callback) = &splitter.on_resize_live {
+        callback.emit(crate::widgets::SplitterResizeEvent {
+            split_id: splitter.split_id.clone(),
+            weights: splitter.weights.clone(),
+        });
+    }
+    true
+}
+
 /// Find a perpendicular splitter whose handle touches `(x, y)`, i.e. the
 /// click landed on a junction where a vertical and a horizontal handle meet,
 /// so the drag should resize both splitters at once.
