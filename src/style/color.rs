@@ -309,14 +309,14 @@ impl Color {
     ///
     /// Elevation takes the lightness of the equivalent endpoint-blended RGB
     /// color, then applies that lightness in OKLab while preserving the source
-    /// hue and chroma as far as the sRGB gamut allows. This keeps established
-    /// elevation amounts visible, avoids washing very dark tinted surfaces into
-    /// gray, and remains well-defined at pure black and white.
+    /// hue and relative chroma as far as the sRGB gamut allows. This keeps
+    /// established elevation amounts visible, avoids washing very dark tinted
+    /// surfaces into gray, and remains well-defined at pure black and white.
     ///
     /// `amount` is in `[0.0, 1.0]`; `Color::Reset` and similar are returned
     /// unchanged.
     pub fn elevate(self, amount: f32) -> Self {
-        let Some((r, g, b)) = self.to_rgb() else {
+        let Some((r, g, blue)) = self.to_rgb() else {
             return self;
         };
         let amount = amount.clamp(0.0, 1.0);
@@ -324,14 +324,29 @@ impl Color {
             return self;
         }
 
-        let (_, a, b) = rgb_to_oklab(r, g, b);
+        let (lightness, a, b) = rgb_to_oklab(r, g, blue);
         let endpoint_target = if self.is_dark() {
             self.lighten_by(amount)
         } else {
             self.dim_by(amount)
         };
         let (target_lightness, _, _) = rgb_to_oklab_or_black(endpoint_target);
-        oklab_to_color(target_lightness, a, b)
+        let relative_chroma_scale = if lightness > f32::EPSILON {
+            target_lightness / lightness
+        } else {
+            1.0
+        };
+        // A one-step tint away from black does not carry enough signal to
+        // justify scaling its relative chroma all the way to the elevated
+        // lightness. Fade that behavior in over a small absolute channel range
+        // so terminal quantization remains continuous near neutral black.
+        let channel_chroma = r.max(g).max(blue) - r.min(g).min(blue);
+        let chroma_confidence = (channel_chroma as f32 / 8.0).clamp(0.0, 1.0);
+        let chroma_confidence = chroma_confidence * chroma_confidence;
+        let elevation_weight = (amount / 0.10).clamp(0.0, 1.0);
+        let chroma_retention = 1.0 - elevation_weight * (1.0 - chroma_confidence);
+        let chroma_scale = relative_chroma_scale * chroma_retention;
+        oklab_to_color(target_lightness, a * chroma_scale, b * chroma_scale)
     }
 }
 
@@ -862,6 +877,30 @@ mod tests {
         assert!(
             Color::Rgb(elevated.0, elevated.1, elevated.2).luminance() > lipan_backdrop.luminance()
         );
+    }
+
+    #[test]
+    fn elevate_preserves_near_black_relative_chroma() {
+        let elevated = Color::hex_u24(0x04090D).elevate(0.02);
+
+        assert_eq!(elevated, Color::Rgb(7, 14, 19));
+    }
+
+    #[test]
+    fn elevate_fades_chroma_in_continuously_next_to_black() {
+        let black = Color::Black.elevate(0.10).to_rgb().unwrap();
+        let tinted = Color::rgb(0, 0, 1).elevate(0.10).to_rgb().unwrap();
+
+        assert!(black.0.abs_diff(tinted.0) <= 3, "{black:?} -> {tinted:?}");
+        assert!(black.1.abs_diff(tinted.1) <= 3, "{black:?} -> {tinted:?}");
+        assert!(black.2.abs_diff(tinted.2) <= 3, "{black:?} -> {tinted:?}");
+    }
+
+    #[test]
+    fn elevate_tiny_amount_keeps_low_chroma_color_stable() {
+        let color = Color::rgb(20, 21, 22);
+
+        assert_eq!(color.elevate(0.001), color);
     }
 
     #[test]
