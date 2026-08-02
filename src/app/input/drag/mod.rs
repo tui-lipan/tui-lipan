@@ -9,7 +9,7 @@ use crate::core::node::NodeId;
 use crate::style::Rect;
 use crate::widgets::{
     DragCancelEvent, DragPayload, DragPreview, DragReorderMode, DraggableTabReorderEvent,
-    DraggableTabTransferEvent,
+    DraggableTabTransferEvent, TabsEvent,
 };
 
 /// Progress bar drag state.
@@ -36,6 +36,7 @@ pub(crate) struct DraggableTabBarDrag {
     pub pending_id: NodeId,
     pub pending_bar_id: Option<Arc<str>>,
     pub pending_index: usize,
+    pub pending_on_change: Option<Callback<TabsEvent>>,
     pub drag_group: Option<Arc<str>>,
     pub on_transfer: Option<Callback<DraggableTabTransferEvent>>,
     pub reorder_mode: DragReorderMode,
@@ -110,7 +111,11 @@ impl std::fmt::Debug for DragDropDrag {
 
 pub(crate) enum DraggableTabDragEvent {
     Reorder(DraggableTabReorderEvent),
-    Transfer(DraggableTabTransferEvent),
+    Transfer {
+        event: DraggableTabTransferEvent,
+        on_transfer: Callback<DraggableTabTransferEvent>,
+        on_change: Option<Callback<TabsEvent>>,
+    },
 }
 
 /// Splitter drag state.

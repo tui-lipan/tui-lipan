@@ -191,6 +191,10 @@ pub(crate) fn handle_draggable_tab_bar_drag(
                     from: drag.current_index,
                     to: to_index,
                 };
+                let on_transfer = drag
+                    .on_transfer
+                    .clone()
+                    .expect("can_transfer guarantees source on_transfer");
 
                 drag.id = target_id;
                 drag.bar_id = target_bar.bar_id.clone();
@@ -198,14 +202,23 @@ pub(crate) fn handle_draggable_tab_bar_drag(
                 drag.pending_id = target_id;
                 drag.pending_bar_id = target_bar.bar_id.clone();
                 drag.pending_index = to_index;
+                drag.pending_on_change = target_bar.on_change.clone();
                 drag.on_transfer = target_bar.on_transfer.clone().or(drag.on_transfer);
 
-                Some((drag, Some(DraggableTabDragEvent::Transfer(event))))
+                Some((
+                    drag,
+                    Some(DraggableTabDragEvent::Transfer {
+                        event,
+                        on_transfer,
+                        on_change: target_bar.on_change.clone(),
+                    }),
+                ))
             }
             DragReorderMode::OnDrop => {
                 drag.pending_id = target_id;
                 drag.pending_bar_id = target_bar.bar_id.clone();
                 drag.pending_index = to_index;
+                drag.pending_on_change = target_bar.on_change.clone();
                 Some((drag, None))
             }
         }
@@ -324,17 +337,21 @@ pub(crate) fn finish_draggable_tab_bar_drag(
                 } else {
                     None
                 }
-            } else if let (Some(from_bar), Some(to_bar), Some(_)) = (
+            } else if let (Some(from_bar), Some(to_bar), Some(on_transfer)) = (
                 drag.source_bar_id.clone(),
                 drag.pending_bar_id.clone(),
                 drag.on_transfer.clone(),
             ) {
-                Some(DraggableTabDragEvent::Transfer(DraggableTabTransferEvent {
-                    from_bar,
-                    to_bar,
-                    from: drag.source_index,
-                    to: drag.pending_index,
-                }))
+                Some(DraggableTabDragEvent::Transfer {
+                    event: DraggableTabTransferEvent {
+                        from_bar,
+                        to_bar,
+                        from: drag.source_index,
+                        to: drag.pending_index,
+                    },
+                    on_transfer,
+                    on_change: drag.pending_on_change,
+                })
             } else {
                 None
             }

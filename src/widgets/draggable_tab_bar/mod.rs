@@ -384,6 +384,13 @@ pub(crate) struct TabDisplayOptions<'a> {
     pub file_icon_style: FileIconStyle,
     pub file_icon_palette: &'a FileIconPalette,
     pub file_icon_overrides: &'a HashMap<Arc<str>, FileIconOverride>,
+    pub width_lock: Option<TabWidthLock>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TabWidthLock {
+    pub index: usize,
+    pub width: usize,
 }
 
 pub(crate) struct TabViewportOptions {
@@ -535,6 +542,7 @@ impl DraggableTabBar {
             file_icon_style: self.file_icon_style,
             file_icon_palette: &self.file_icon_palette,
             file_icon_overrides: &self.file_icon_overrides,
+            width_lock: None,
         }
     }
 
@@ -955,6 +963,7 @@ impl DraggableTabBar {
                 file_icon_style: FileIconStyle::NerdFont,
                 file_icon_palette: &FileIconPalette::default(),
                 file_icon_overrides: &HashMap::new(),
+                width_lock: None,
             },
         )
     }
@@ -1006,6 +1015,7 @@ impl DraggableTabBar {
                 file_icon_style: FileIconStyle::NerdFont,
                 file_icon_palette: &FileIconPalette::default(),
                 file_icon_overrides: &HashMap::new(),
+                width_lock: None,
             },
             col,
         )
@@ -1081,6 +1091,7 @@ impl DraggableTabBar {
                 file_icon_style: FileIconStyle::NerdFont,
                 file_icon_palette: &FileIconPalette::default(),
                 file_icon_overrides: &HashMap::new(),
+                width_lock: None,
             },
             col,
         )
@@ -1632,6 +1643,7 @@ pub(crate) fn tab_metrics(
             file_icon_style: FileIconStyle::NerdFont,
             file_icon_palette: &FileIconPalette::default(),
             file_icon_overrides: &HashMap::new(),
+            width_lock: None,
         },
     )
 }
@@ -1746,20 +1758,20 @@ fn tab_metrics_for_viewport(
 ) -> Vec<TabMetrics> {
     let natural = natural_tab_metrics(tabs, opts);
     let Some(viewport_width) = viewport_width else {
-        return natural;
+        return apply_tab_width_lock(tabs, opts, natural);
     };
 
     let DraggableTabBarOverflow::ShrinkThenScroll { min_tab_width } = opts.overflow else {
-        return natural;
+        return apply_tab_width_lock(tabs, opts, natural);
     };
 
     if tabs.is_empty() || viewport_width == 0 {
-        return natural;
+        return apply_tab_width_lock(tabs, opts, natural);
     }
 
     let natural_total = total_width_for_metrics(&natural, opts);
     if natural_total <= viewport_width {
-        return natural;
+        return apply_tab_width_lock(tabs, opts, natural);
     }
 
     let min_tab_width = (min_tab_width as usize).max(1);
@@ -1780,15 +1792,16 @@ fn tab_metrics_for_viewport(
     let min_total = fixed_total.saturating_add(min_label_widths.iter().sum::<usize>());
 
     if min_total >= natural_total {
-        return natural;
+        return apply_tab_width_lock(tabs, opts, natural);
     }
 
     if min_total > viewport_width {
-        return tabs
+        let metrics = tabs
             .iter()
             .zip(min_label_widths)
             .map(|(tab, label_width)| tab_metrics_with_label_width(tab, opts, label_width))
             .collect();
+        return apply_tab_width_lock(tabs, opts, metrics);
     }
 
     let max_label_width = natural
@@ -1828,10 +1841,29 @@ fn tab_metrics_for_viewport(
         }
     }
 
-    tabs.iter()
+    let metrics = tabs
+        .iter()
         .zip(label_widths)
         .map(|(tab, label_width)| tab_metrics_with_label_width(tab, opts, label_width))
-        .collect()
+        .collect();
+    apply_tab_width_lock(tabs, opts, metrics)
+}
+
+fn apply_tab_width_lock(
+    tabs: &[DraggableTab],
+    opts: &TabDisplayOptions<'_>,
+    mut metrics: Vec<TabMetrics>,
+) -> Vec<TabMetrics> {
+    let Some(lock) = opts.width_lock else {
+        return metrics;
+    };
+    let (Some(tab), Some(current)) = (tabs.get(lock.index), metrics.get(lock.index)) else {
+        return metrics;
+    };
+    let fixed_width = current.width.saturating_sub(current.label_width);
+    let label_width = lock.width.saturating_sub(fixed_width);
+    metrics[lock.index] = tab_metrics_with_label_width(tab, opts, label_width);
+    metrics
 }
 
 fn total_width_for_label_cap(
@@ -2158,6 +2190,7 @@ mod tests {
             file_icon_style: FileIconStyle::NerdFont,
             file_icon_palette: &FileIconPalette::default(),
             file_icon_overrides: &HashMap::new(),
+            width_lock: None,
         };
         let target = DraggableTabBar::adjacent_reorder_target(&tabs, &opts, 0, at_divider);
         assert!(target.is_none());
@@ -2191,6 +2224,7 @@ mod tests {
             file_icon_style: FileIconStyle::NerdFont,
             file_icon_palette: &FileIconPalette::default(),
             file_icon_overrides: &HashMap::new(),
+            width_lock: None,
         };
         let action_mid = super::tabs_prefix_width(&tabs, &opts, 2)
             + super::tab_metrics(&tabs[2], DraggableTabBarVariant::Bordered, '|', "x", false).width
@@ -2220,6 +2254,7 @@ mod tests {
             file_icon_style: FileIconStyle::NerdFont,
             file_icon_palette: &FileIconPalette::default(),
             file_icon_overrides: &HashMap::new(),
+            width_lock: None,
         };
         let action_col = super::tabs_prefix_width(&tabs, &opts, 2);
 
@@ -2260,6 +2295,7 @@ mod tests {
                 file_icon_style: crate::widgets::FileIconStyle::NerdFont,
                 file_icon_palette: &FileIconPalette::default(),
                 file_icon_overrides: &overrides,
+                width_lock: None,
             },
             &super::TabViewportOptions {
                 scroll_offset: 0,
@@ -2302,6 +2338,7 @@ mod tests {
                 file_icon_style: crate::widgets::FileIconStyle::NerdFont,
                 file_icon_palette: &FileIconPalette::default(),
                 file_icon_overrides: &overrides,
+                width_lock: None,
             },
             &super::TabViewportOptions {
                 scroll_offset: 1,
@@ -2336,6 +2373,7 @@ mod tests {
             file_icon_style: crate::widgets::FileIconStyle::NerdFont,
             file_icon_palette: &FileIconPalette::default(),
             file_icon_overrides: &overrides,
+            width_lock: None,
         };
 
         let layout = DraggableTabBar::viewport_layout(
@@ -2377,6 +2415,7 @@ mod tests {
             file_icon_style: crate::widgets::FileIconStyle::NerdFont,
             file_icon_palette: &FileIconPalette::default(),
             file_icon_overrides: &overrides,
+            width_lock: None,
         };
 
         let layout = DraggableTabBar::viewport_layout(
@@ -2416,6 +2455,7 @@ mod tests {
             file_icon_style: crate::widgets::FileIconStyle::NerdFont,
             file_icon_palette: &FileIconPalette::default(),
             file_icon_overrides: &overrides,
+            width_lock: None,
         };
 
         let hit = DraggableTabBar::hit_target_at_view_col(
@@ -2470,6 +2510,7 @@ mod tests {
             file_icon_style: crate::widgets::FileIconStyle::NerdFont,
             file_icon_palette: &FileIconPalette::default(),
             file_icon_overrides: &overrides,
+            width_lock: None,
         };
 
         for _ in 0..64 {

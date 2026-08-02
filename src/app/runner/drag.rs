@@ -11,8 +11,9 @@ use crate::widgets::internal::{
     apply_terminal_selection_input, terminal_mouse_content_rect, terminal_node_selection_text,
 };
 use crate::widgets::{
-    DocumentSelectEvent, DragCancelEvent, DragOverEvent, InputEvent, ProgressEvent, ScrollEvent,
-    ScrollMetrics, TextAreaEvent, calc_scroll_view_window, normalize_input_offset,
+    DocumentSelectEvent, DragCancelEvent, DragOverEvent, DraggableTabTransferEvent, InputEvent,
+    ProgressEvent, ScrollEvent, ScrollMetrics, TabsEvent, TextAreaEvent, calc_scroll_view_window,
+    normalize_input_offset,
 };
 #[cfg(feature = "terminal")]
 use crate::widgets::{TerminalPos, TerminalSelection, absolute_line};
@@ -38,6 +39,18 @@ type TextAreaDragAutoscrollTarget = (
     Option<crate::callback::Callback<usize>>,
     Option<crate::callback::Callback<ScrollEvent>>,
 );
+
+fn emit_draggable_tab_transfer(
+    on_transfer: &crate::callback::Callback<DraggableTabTransferEvent>,
+    event: DraggableTabTransferEvent,
+    on_change: Option<crate::callback::Callback<TabsEvent>>,
+) {
+    let selected = event.to;
+    on_transfer.emit(event);
+    if let Some(on_change) = on_change {
+        on_change.emit(TabsEvent { index: selected });
+    }
+}
 
 #[cfg(feature = "terminal")]
 type TerminalDragAutoscrollTarget = (
@@ -1111,11 +1124,13 @@ impl<C: Component> AppRunner<C> {
                         return (true, next_drag);
                     }
                 }
-                drag::DraggableTabDragEvent::Transfer(event) => {
-                    if let Some(cb) = &next_drag.on_transfer {
-                        cb.emit(event);
-                        return (true, next_drag);
-                    }
+                drag::DraggableTabDragEvent::Transfer {
+                    event,
+                    on_transfer,
+                    on_change,
+                } => {
+                    emit_draggable_tab_transfer(&on_transfer, event, on_change);
+                    return (true, next_drag);
                 }
             }
         }
@@ -1144,11 +1159,13 @@ impl<C: Component> AppRunner<C> {
                     return true;
                 }
             }
-            drag::DraggableTabDragEvent::Transfer(event) => {
-                if let Some(cb) = &drag_state.on_transfer {
-                    cb.emit(event);
-                    return true;
-                }
+            drag::DraggableTabDragEvent::Transfer {
+                event,
+                on_transfer,
+                on_change,
+            } => {
+                emit_draggable_tab_transfer(&on_transfer, event, on_change);
+                return true;
             }
         }
 
@@ -1846,5 +1863,46 @@ impl<C: Component> AppRunner<C> {
             }
             ActiveDrag::None => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod draggable_tab_transfer_tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    use crate::callback::Callback;
+    use crate::widgets::{DraggableTabTransferEvent, TabsEvent};
+
+    use super::emit_draggable_tab_transfer;
+
+    #[test]
+    fn transfer_updates_destination_selection_after_insertion_callback() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let transfer_calls = calls.clone();
+        let on_transfer = Callback::new(move |event: DraggableTabTransferEvent| {
+            transfer_calls
+                .borrow_mut()
+                .push(format!("transfer:{}", event.to));
+        });
+        let change_calls = calls.clone();
+        let on_change = Callback::new(move |event: TabsEvent| {
+            change_calls
+                .borrow_mut()
+                .push(format!("select:{}", event.index));
+        });
+
+        emit_draggable_tab_transfer(
+            &on_transfer,
+            DraggableTabTransferEvent {
+                from_bar: Arc::from("left"),
+                to_bar: Arc::from("right"),
+                from: 0,
+                to: 2,
+            },
+            Some(on_change),
+        );
+        assert_eq!(&*calls.borrow(), &["transfer:2", "select:2"]);
     }
 }

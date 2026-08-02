@@ -3499,6 +3499,40 @@ fn draggable_tab_motion_is_dirty_only_when_the_painted_target_changes() {
     );
 }
 
+#[test]
+fn draggable_tab_width_lock_clears_when_pointer_leaves_bar() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 2,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), DraggableTabStripHoverSmoke, ());
+    init_runner(&mut runner, DraggableTabStripHoverSmoke, viewport);
+
+    let bar_id = runner
+        .core
+        .tree
+        .iter()
+        .find(|node| matches!(node.kind, NodeKind::DraggableTabBar(_)))
+        .map(|node| node.id)
+        .expect("draggable tab bar node");
+    assert!(runner.update_hover(1, 0));
+    let NodeKind::DraggableTabBar(bar) = &mut runner.core.tree.node_mut(bar_id).kind else {
+        unreachable!();
+    };
+    bar.width_lock = Some(crate::widgets::draggable_tab_bar::TabWidthLock {
+        index: 0,
+        width: 12,
+    });
+
+    assert!(runner.update_hover(1, 1));
+    let NodeKind::DraggableTabBar(bar) = &runner.core.tree.node(bar_id).kind else {
+        unreachable!();
+    };
+    assert_eq!(bar.width_lock, None);
+}
+
 struct TextAreaSentinelHoverSmoke;
 
 impl Component for TextAreaSentinelHoverSmoke {

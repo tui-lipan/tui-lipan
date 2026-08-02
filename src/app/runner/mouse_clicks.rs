@@ -202,6 +202,15 @@ impl<C: Component> AppRunner<C> {
             }
         } else if action.close_hit {
             if let Some(cb) = action.on_close {
+                if self.core.tree.is_valid(action.node_id) {
+                    let rect = self.core.tree.node(action.node_id).rect;
+                    if let NodeKind::DraggableTabBar(node_tabs) =
+                        &mut self.core.tree.node_mut(action.node_id).kind
+                    {
+                        let inner = rect.inner(node_tabs.border, node_tabs.padding);
+                        node_tabs.lock_closed_tab_width(action.tab_index, inner.w as usize);
+                    }
+                }
                 cb.emit(crate::widgets::DraggableTabCloseEvent {
                     index: action.tab_index,
                 });
@@ -253,6 +262,7 @@ impl<C: Component> AppRunner<C> {
                         pending_id: action.node_id,
                         pending_bar_id: action.bar_id.clone(),
                         pending_index: action.tab_index,
+                        pending_on_change: None,
                         drag_group: action.drag_group,
                         on_transfer: action.on_transfer,
                         reorder_mode: action.reorder_mode,

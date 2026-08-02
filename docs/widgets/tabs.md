@@ -68,6 +68,11 @@ Tab::new("Label")
 
 Editor-style tab bar with drag reordering, per-tab close buttons, file icons, and cross-bar transfer.
 
+When a close button is clicked with the mouse, the tab that moves into the
+closed tab's position temporarily inherits its width. This keeps the next close
+button under the pointer for rapid repeated closing. Natural or shrink-to-fit
+widths are restored as soon as the pointer leaves the tab bar.
+
 | Prop | Type | Description |
 |------|------|-------------|
 | `tabs` | `Vec<DraggableTab>` | Tab items |
@@ -269,7 +274,7 @@ DraggableTabBar::new()
     .on_transfer(ctx.link().callback(Msg::TransferFromRight))
 ```
 
-Tabs can be dragged between bars that share the same `drag_group`. The `on_transfer` callback fires on the **source** bar and reports `from_bar`, `to_bar`, `from` index, and `to` index.
+Tabs can be dragged between bars that share the same `drag_group`. The `on_transfer` callback fires on the **source** bar and reports `from_bar`, `to_bar`, `from` index, and `to` index. After that callback queues the transfer, the destination bar's `on_change` callback fires with `to`, selecting the transferred tab through the same controlled-state path as a mouse click.
 
 ### Full Example
 

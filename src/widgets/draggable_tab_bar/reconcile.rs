@@ -19,15 +19,17 @@ pub fn reconcile_draggable_tab_bar(
         rect.h = h.min(rect.h);
     }
 
-    let (old_offset, old_override, old_previous_active, old_tabs) = match &tree.node(id).kind {
-        NodeKind::DraggableTabBar(node) => (
-            node.scroll_offset,
-            node.scroll_override,
-            node.previous_active,
-            Some(node.tabs.clone()),
-        ),
-        _ => (bar.scroll_offset, None, bar.active, None),
-    };
+    let (old_offset, old_override, old_previous_active, old_tabs, old_width_lock) =
+        match &tree.node(id).kind {
+            NodeKind::DraggableTabBar(node) => (
+                node.scroll_offset,
+                node.scroll_override,
+                node.previous_active,
+                Some(node.tabs.clone()),
+                node.width_lock,
+            ),
+            _ => (bar.scroll_offset, None, bar.active, None, None),
+        };
 
     let active_changed =
         !bar.tabs.is_empty() && bar.active < bar.tabs.len() && bar.active != old_previous_active;
@@ -85,10 +87,68 @@ pub fn reconcile_draggable_tab_bar(
     next_node.previous_active = bar.active;
     next_node.scroll_offset = next_offset;
     next_node.scroll_override = old_override.map(|_| next_offset);
+    next_node.width_lock = old_width_lock.filter(|lock| lock.index < next_node.tabs.len());
 
     let node = tree.node_mut(id);
     node.rect = rect;
     node.children.clear();
     node.kind = NodeKind::DraggableTabBar(next_node);
     id
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::element::Element;
+    use crate::core::node::{NodeKind, NodeTree};
+    use crate::layout::LayoutEngine;
+    use crate::style::Rect;
+    use crate::widgets::{DraggableTab, DraggableTabBar};
+
+    fn bar(tabs: &[&str]) -> Element {
+        DraggableTabBar::new()
+            .tabs(
+                tabs.iter()
+                    .map(|label| DraggableTab::new(*label).closeable(true)),
+            )
+            .into()
+    }
+
+    #[test]
+    fn reconcile_keeps_closed_tab_width_for_its_replacement() {
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 80,
+            h: 1,
+        };
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &bar(&["a-very-wide-tab", "x", "tail"]),
+            bounds,
+            None,
+        );
+
+        let NodeKind::DraggableTabBar(node) = &mut tree.node_mut(tree.root).kind else {
+            panic!("expected draggable tab bar");
+        };
+        node.lock_closed_tab_width(0, bounds.w as usize);
+        let locked_width = node.width_lock.expect("width lock").width;
+
+        LayoutEngine::reconcile_with_focus(&mut tree, &bar(&["x", "tail"]), bounds, None);
+
+        let NodeKind::DraggableTabBar(node) = &tree.node(tree.root).kind else {
+            panic!("expected draggable tab bar");
+        };
+        let layout = DraggableTabBar::viewport_layout(
+            &node.tabs,
+            &node.display_options(),
+            &node.viewport_options(bounds.w as usize),
+        );
+        assert_eq!(layout.visible_tabs[0].metrics.width, locked_width);
+        assert_eq!(
+            layout.visible_tabs[0].metrics.close_end,
+            Some(locked_width.saturating_sub(1))
+        );
+    }
 }

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::app::context::SurfaceMode;
 use crate::core::component::{Component, Context, Update};
+use crate::core::node::NodeId;
 use crate::core::node::NodeKind;
 use crate::runtime::RuntimeCore;
 use crate::style::BorderStyle;
@@ -12,9 +13,47 @@ use crate::widgets::document_view::node::{DocumentVisualLine, VisualLineKind};
 use crate::widgets::{DocumentView, Text, VStack};
 
 use super::{
-    TableTsvRangeParams, document_view_cursor_from_coords, document_view_selected_text_from_node,
-    table_tsv_for_range,
+    DragReorderMode, DraggableTabBarDrag, DraggableTabDragEvent, TableTsvRangeParams,
+    document_view_cursor_from_coords, document_view_selected_text_from_node,
+    finish_draggable_tab_bar_drag, table_tsv_for_range,
 };
+
+#[test]
+fn on_drop_transfer_carries_destination_selection_callback() {
+    let on_change = crate::callback::Callback::new(|_: crate::widgets::TabsEvent| {});
+    let event = finish_draggable_tab_bar_drag(DraggableTabBarDrag {
+        source_id: NodeId::INVALID,
+        source_bar_id: Some(Arc::from("left")),
+        source_index: 1,
+        id: NodeId::new(1, 0),
+        bar_id: Some(Arc::from("left")),
+        current_index: 1,
+        pending_id: NodeId::new(2, 0),
+        pending_bar_id: Some(Arc::from("right")),
+        pending_index: 3,
+        pending_on_change: Some(on_change.clone()),
+        drag_group: Some(Arc::from("editors")),
+        on_transfer: Some(crate::callback::Callback::new(|_| {})),
+        reorder_mode: DragReorderMode::OnDrop,
+        threshold: 1,
+        start_x: 0,
+        started: true,
+        preview_label: None,
+        preview_snapshot_anchor: None,
+    })
+    .expect("transfer event");
+
+    let DraggableTabDragEvent::Transfer {
+        event,
+        on_change: selected,
+        ..
+    } = event
+    else {
+        panic!("expected transfer");
+    };
+    assert_eq!(event.to, 3);
+    assert!(selected.as_ref() == Some(&on_change));
+}
 
 struct DocumentViewDragSmoke;
 

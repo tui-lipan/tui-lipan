@@ -180,6 +180,7 @@ pub(crate) struct DraggableTabBarRenderCtx<'a> {
     pub file_icon_style: FileIconStyle,
     pub file_icon_palette: &'a FileIconPalette,
     pub file_icon_overrides: &'a HashMap<std::sync::Arc<str>, FileIconOverride>,
+    pub width_lock: Option<crate::widgets::draggable_tab_bar::TabWidthLock>,
     pub is_focused: bool,
     pub is_hovered: bool,
     pub mouse_pos: Option<(u16, u16)>,
@@ -227,6 +228,7 @@ pub(crate) fn render_draggable_tab_bar(
         file_icon_style,
         file_icon_palette,
         file_icon_overrides,
+        width_lock,
         is_focused,
         is_hovered,
         mouse_pos,
@@ -321,6 +323,7 @@ pub(crate) fn render_draggable_tab_bar(
         file_icon_style,
         file_icon_palette,
         file_icon_overrides,
+        width_lock,
     };
     let vp_opts = crate::widgets::draggable_tab_bar::TabViewportOptions {
         scroll_offset,
@@ -469,11 +472,14 @@ pub(crate) fn render_draggable_tab_bar(
                         tab_spans.push(Span::styled(" ", to_ratatui_style(tab_style)));
                     }
 
-                    let label = truncate_end_with_ellipsis(
+                    let mut label = truncate_end_with_ellipsis(
                         tab.label.as_ref(),
                         vis.metrics.label_width.min(u16::MAX as usize) as u16,
                     )
                     .into_owned();
+                    let label_width = unicode_width::UnicodeWidthStr::width(label.as_str());
+                    label
+                        .push_str(&" ".repeat(vis.metrics.label_width.saturating_sub(label_width)));
                     tab_spans.push(Span::styled(label, to_ratatui_style(tab_style)));
 
                     if let Some(badge) = &tab.right_badge {
@@ -556,11 +562,14 @@ pub(crate) fn render_draggable_tab_bar(
                         tab_spans.push(Span::styled(" ", to_ratatui_style(tab_style)));
                     }
 
-                    let label = truncate_end_with_ellipsis(
+                    let mut label = truncate_end_with_ellipsis(
                         tab.label.as_ref(),
                         vis.metrics.label_width.min(u16::MAX as usize) as u16,
                     )
                     .into_owned();
+                    let label_width = unicode_width::UnicodeWidthStr::width(label.as_str());
+                    label
+                        .push_str(&" ".repeat(vis.metrics.label_width.saturating_sub(label_width)));
                     tab_spans.push(Span::styled(label, to_ratatui_style(tab_style)));
 
                     if let Some(badge) = &tab.right_badge {
@@ -732,6 +741,7 @@ pub(crate) fn render_draggable_tab_bar_node(
             file_icon_style: node.file_icon_style,
             file_icon_palette,
             file_icon_overrides: &node.file_icon_overrides,
+            width_lock: node.width_lock,
             is_focused,
             is_hovered,
             mouse_pos: state.ctx.mouse_pos,

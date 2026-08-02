@@ -72,6 +72,13 @@ pub(crate) fn update_hover_test_backend<C: Component>(
     if changed {
         if let Some(prev_id) = prev_hovered
             && backend.core.tree.is_valid(prev_id)
+            && let NodeKind::DraggableTabBar(tab_bar) =
+                &mut backend.core.tree.node_mut(prev_id).kind
+        {
+            tab_bar.width_lock = None;
+        }
+        if let Some(prev_id) = prev_hovered
+            && backend.core.tree.is_valid(prev_id)
             && let NodeKind::MouseRegion(region) = &backend.core.tree.node(prev_id).kind
             && let Some(cb) = region.on_hover_change.clone()
         {
@@ -439,6 +446,15 @@ pub(crate) fn handle_draggable_tab_bar_click_test_backend<C: Component>(
         }
     } else if action.close_hit {
         if let Some(cb) = action.on_close {
+            if backend.core.tree.is_valid(action.node_id) {
+                let rect = backend.core.tree.node(action.node_id).rect;
+                if let NodeKind::DraggableTabBar(node_tabs) =
+                    &mut backend.core.tree.node_mut(action.node_id).kind
+                {
+                    let inner = rect.inner(node_tabs.border, node_tabs.padding);
+                    node_tabs.lock_closed_tab_width(action.tab_index, inner.w as usize);
+                }
+            }
             cb.emit(crate::widgets::DraggableTabCloseEvent {
                 index: action.tab_index,
             });
@@ -493,6 +509,7 @@ pub(crate) fn handle_draggable_tab_bar_click_test_backend<C: Component>(
                     pending_id: action.node_id,
                     pending_bar_id: action.bar_id.clone(),
                     pending_index: action.tab_index,
+                    pending_on_change: None,
                     drag_group: action.drag_group,
                     on_transfer: action.on_transfer,
                     reorder_mode: action.reorder_mode,
