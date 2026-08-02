@@ -307,18 +307,122 @@ impl Color {
     /// and light themes, where a one-directional lighten would collapse on a
     /// near-white background.
     ///
+    /// Elevation takes the lightness of the equivalent endpoint-blended RGB
+    /// color, then applies that lightness in OKLab while preserving the source
+    /// hue and chroma as far as the sRGB gamut allows. This keeps established
+    /// elevation amounts visible, avoids washing very dark tinted surfaces into
+    /// gray, and remains well-defined at pure black and white.
+    ///
     /// `amount` is in `[0.0, 1.0]`; `Color::Reset` and similar are returned
     /// unchanged.
     pub fn elevate(self, amount: f32) -> Self {
-        if self.to_rgb().is_none() {
+        let Some((r, g, b)) = self.to_rgb() else {
+            return self;
+        };
+        let amount = amount.clamp(0.0, 1.0);
+        if amount == 0.0 {
             return self;
         }
-        if self.is_dark() {
+
+        let (_, a, b) = rgb_to_oklab(r, g, b);
+        let endpoint_target = if self.is_dark() {
             self.lighten_by(amount)
         } else {
             self.dim_by(amount)
+        };
+        let (target_lightness, _, _) = rgb_to_oklab_or_black(endpoint_target);
+        oklab_to_color(target_lightness, a, b)
+    }
+}
+
+fn rgb_to_oklab_or_black(color: Color) -> (f32, f32, f32) {
+    color
+        .to_rgb()
+        .map_or((0.0, 0.0, 0.0), |(r, g, b)| rgb_to_oklab(r, g, b))
+}
+
+fn srgb_to_linear(channel: u8) -> f32 {
+    let channel = channel as f32 / 255.0;
+    if channel <= 0.04045 {
+        channel / 12.92
+    } else {
+        ((channel + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb(channel: f32) -> f32 {
+    if channel <= 0.003_130_8 {
+        12.92 * channel
+    } else {
+        1.055 * channel.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+fn rgb_to_oklab(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let r = srgb_to_linear(r);
+    let g = srgb_to_linear(g);
+    let b = srgb_to_linear(b);
+
+    let l = (0.412_221_46 * r + 0.536_332_55 * g + 0.051_445_995 * b).cbrt();
+    let m = (0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b).cbrt();
+    let s = (0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b).cbrt();
+
+    (
+        0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s,
+        1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s,
+        0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s,
+    )
+}
+
+fn oklab_to_linear_rgb(lightness: f32, a: f32, b: f32) -> (f32, f32, f32) {
+    let l = (lightness + 0.396_337_78 * a + 0.215_803_76 * b).powi(3);
+    let m = (lightness - 0.105_561_346 * a - 0.063_854_17 * b).powi(3);
+    let s = (lightness - 0.089_484_18 * a - 1.291_485_5 * b).powi(3);
+
+    (
+        4.076_741_7 * l - 3.307_711_6 * m + 0.230_969_94 * s,
+        -1.268_438 * l + 2.609_757_4 * m - 0.341_319_4 * s,
+        -0.004_196_086_3 * l - 0.703_418_6 * m + 1.707_614_7 * s,
+    )
+}
+
+fn linear_rgb_in_gamut((r, g, b): (f32, f32, f32)) -> bool {
+    (0.0..=1.0).contains(&r) && (0.0..=1.0).contains(&g) && (0.0..=1.0).contains(&b)
+}
+
+fn linear_rgb_to_color((r, g, b): (f32, f32, f32)) -> Color {
+    let channel = |value: f32| -> u8 {
+        (linear_to_srgb(value.clamp(0.0, 1.0)) * 255.0)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    Color::rgb(channel(r), channel(g), channel(b))
+}
+
+fn oklab_to_color(lightness: f32, a: f32, b: f32) -> Color {
+    let lightness = lightness.clamp(0.0, 1.0);
+    let direct = oklab_to_linear_rgb(lightness, a, b);
+    if linear_rgb_in_gamut(direct) {
+        return linear_rgb_to_color(direct);
+    }
+
+    // Keep the requested perceptual lightness and hue, reducing only chroma
+    // until the color fits sRGB. The neutral color at this lightness is always
+    // in gamut, so the search has a valid lower bound.
+    let mut low = 0.0;
+    let mut high = 1.0;
+    let mut best = oklab_to_linear_rgb(lightness, 0.0, 0.0);
+    for _ in 0..16 {
+        let scale = (low + high) * 0.5;
+        let candidate = oklab_to_linear_rgb(lightness, a * scale, b * scale);
+        if linear_rgb_in_gamut(candidate) {
+            low = scale;
+            best = candidate;
+        } else {
+            high = scale;
         }
     }
+    linear_rgb_to_color(best)
 }
 
 impl Paint {
@@ -739,17 +843,48 @@ mod tests {
 
     #[test]
     fn elevate_lightens_dark_and_darkens_light() {
-        // Dark surface elevates toward white (channels increase).
         let dark = Color::hex_u24(0x0B121F);
         let dark_up = dark.elevate(0.10);
-        assert_eq!(dark_up, dark.lighten_by(0.10));
         assert!(dark_up.luminance() > dark.luminance());
 
-        // Light surface elevates toward black (channels decrease).
         let light = Color::White;
         let light_up = light.elevate(0.10);
-        assert_eq!(light_up, light.dim_by(0.10));
         assert!(light_up.luminance() < light.luminance());
+    }
+
+    #[test]
+    fn elevate_preserves_near_black_surface_cast() {
+        let lipan_backdrop = Color::hex_u24(0x04090D);
+        let elevated = lipan_backdrop.elevate(0.10).to_rgb().unwrap();
+
+        assert!(elevated.0 < elevated.1 && elevated.1 < elevated.2);
+        assert_ne!(elevated.0, elevated.2);
+        assert!(
+            Color::Rgb(elevated.0, elevated.1, elevated.2).luminance() > lipan_backdrop.luminance()
+        );
+    }
+
+    #[test]
+    fn elevate_is_continuous_around_old_near_black_cutoff() {
+        let below = Color::rgb(4, 11, 14).elevate(0.10).to_rgb().unwrap();
+        let above = Color::rgb(4, 12, 14).elevate(0.10).to_rgb().unwrap();
+
+        assert!(below.0.abs_diff(above.0) <= 2);
+        assert!(below.1.abs_diff(above.1) <= 2);
+        assert!(below.2.abs_diff(above.2) <= 2);
+    }
+
+    #[test]
+    fn elevate_handles_black_and_white_endpoints() {
+        assert_eq!(Color::Black.elevate(1.0), Color::Rgb(255, 255, 255));
+        assert_eq!(Color::White.elevate(1.0), Color::Rgb(0, 0, 0));
+    }
+
+    #[test]
+    fn elevate_keeps_small_neutral_surfaces_visible() {
+        assert_eq!(Color::Black.elevate(0.04), Color::Rgb(10, 10, 10));
+        assert_eq!(Color::Black.elevate(0.07), Color::Rgb(18, 18, 18));
+        assert_eq!(Color::White.elevate(0.04), Color::Rgb(245, 245, 245));
     }
 
     #[test]
