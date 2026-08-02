@@ -353,6 +353,7 @@ Use these for direct color manipulation:
 | `Color::dim_by(f32)` | Dim by explicit amount `0.0..=1.0` |
 | `Color::lighten()` | Lighten by default amount (`0.35`) |
 | `Color::lighten_by(f32)` | Lighten by explicit amount `0.0..=1.0` |
+| `Color::elevate(f32)` | Move perceptual lightness away from the backdrop while preserving hue/chroma in gamut |
 | `Color::blend_toward(Color, f32)` | Blend toward target color by alpha |
 
 ```rust

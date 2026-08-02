@@ -42,6 +42,8 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- `Color::elevate` now applies its endpoint-blended lightness in OKLab with gamut-mapped chroma,
+  preserving the authored cast of very dark and light surfaces without weakening elevation.
 - Divider `label_padding` no longer clears blank cells around the label. Inset cells keep the
   divider character (so a left inset of `1` reads as `─title`, matching Frame border titles), and
   only the label's own cells interrupt the line. The value is now independent left/right insets
