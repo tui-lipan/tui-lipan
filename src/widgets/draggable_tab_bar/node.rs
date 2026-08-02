@@ -11,6 +11,7 @@ use super::{
     DragReorderMode, DraggableTab, DraggableTabActionEvent, DraggableTabBar,
     DraggableTabBarOverflow, DraggableTabBarVariant, DraggableTabCloseEvent,
     DraggableTabReorderEvent, DraggableTabTransferEvent, TabDisplayOptions, TabViewportOptions,
+    TabWidthLock,
 };
 use crate::utils::file_icons::FileIconOverride;
 use crate::widgets::file_tree::FileIconStyle;
@@ -47,6 +48,7 @@ pub struct DraggableTabBarNode {
     pub scroll_offset: usize,
     pub scroll_override: Option<usize>,
     pub previous_active: usize,
+    pub width_lock: Option<TabWidthLock>,
     pub show_file_icons: bool,
     pub file_icon_style: FileIconStyle,
     pub file_icon_palette: FileIconPalette,
@@ -86,6 +88,7 @@ impl DraggableTabBarNode {
             file_icon_style: self.file_icon_style,
             file_icon_palette: &self.file_icon_palette,
             file_icon_overrides: &self.file_icon_overrides,
+            width_lock: self.width_lock,
         }
     }
 
@@ -95,6 +98,26 @@ impl DraggableTabBarNode {
             viewport_width,
             show_overflow_controls: self.show_overflow_controls,
         }
+    }
+
+    pub(crate) fn lock_closed_tab_width(&mut self, index: usize, viewport_width: usize) {
+        if index + 1 >= self.tabs.len() {
+            self.width_lock = None;
+            return;
+        }
+        let layout = DraggableTabBar::viewport_layout(
+            &self.tabs,
+            &self.display_options(),
+            &self.viewport_options(viewport_width),
+        );
+        self.width_lock = layout
+            .visible_tabs
+            .iter()
+            .find(|tab| tab.index == index)
+            .map(|tab| TabWidthLock {
+                index,
+                width: tab.metrics.width,
+            });
     }
 }
 
@@ -133,6 +156,7 @@ impl WidgetNode for DraggableTabBarNode {
         }
         self.on_click.is_some()
             || self.on_action.is_some()
+            || self.on_close.is_some()
             || self.show_overflow_controls
             || self.hover_style.resolves_non_empty(theme, ThemeRole::Hover)
             || self
@@ -175,6 +199,7 @@ impl From<DraggableTabBar> for DraggableTabBarNode {
             scroll_offset: value.scroll_offset,
             scroll_override: None,
             previous_active: value.active,
+            width_lock: None,
             show_file_icons: value.show_file_icons,
             file_icon_style: value.file_icon_style,
             file_icon_palette: value.file_icon_palette,

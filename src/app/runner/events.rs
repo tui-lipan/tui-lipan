@@ -848,6 +848,16 @@ impl<C: Component> AppRunner<C> {
             // Fire on_hover_change callbacks for enter/leave transitions
             use crate::core::node::NodeKind;
 
+            let width_lock_cleared = if let Some(prev_id) = prev_hovered
+                && self.core.tree.is_valid(prev_id)
+                && let NodeKind::DraggableTabBar(tab_bar) =
+                    &mut self.core.tree.node_mut(prev_id).kind
+            {
+                tab_bar.width_lock.take().is_some()
+            } else {
+                false
+            };
+
             // Fire leave callback for previously hovered node
             if let Some(prev_id) = prev_hovered
                 && self.core.tree.is_valid(prev_id)
@@ -907,7 +917,8 @@ impl<C: Component> AppRunner<C> {
             // callback decides via the `Update` it returns; forcing a paint here
             // repaints the whole tree on every motion event that crosses such a
             // region's boundary.
-            return self.hover_transition_affects_paint(prev_hovered, hovered)
+            return width_lock_cleared
+                || self.hover_transition_affects_paint(prev_hovered, hovered)
                 || !self.core.hover_change_scopes(hovered).is_empty();
         }
         if !force_recompute && prev_mouse == Some((x, y)) {
