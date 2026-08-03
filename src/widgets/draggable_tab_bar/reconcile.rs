@@ -87,7 +87,12 @@ pub fn reconcile_draggable_tab_bar(
     next_node.previous_active = bar.active;
     next_node.scroll_offset = next_offset;
     next_node.scroll_override = old_override.map(|_| next_offset);
-    next_node.width_lock = old_width_lock.filter(|lock| lock.index < next_node.tabs.len());
+    next_node.width_lock = old_width_lock.filter(|lock| {
+        next_node
+            .tabs
+            .get(lock.index)
+            .is_some_and(super::is_reorderable_tab)
+    });
 
     let node = tree.node_mut(id);
     node.rect = rect;
@@ -150,5 +155,64 @@ mod tests {
             layout.visible_tabs[0].metrics.close_end,
             Some(locked_width.saturating_sub(1))
         );
+    }
+
+    fn bar_with_action(tabs: &[&str]) -> Element {
+        DraggableTabBar::new()
+            .tabs(
+                tabs.iter()
+                    .map(|label| DraggableTab::new(*label).closeable(true)),
+            )
+            .tab(DraggableTab::action("+"))
+            .into()
+    }
+
+    #[test]
+    fn lock_closed_tab_width_skips_trailing_action_tab() {
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 80,
+            h: 1,
+        };
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &bar_with_action(&["a-very-wide-tab"]),
+            bounds,
+            None,
+        );
+
+        let NodeKind::DraggableTabBar(node) = &mut tree.node_mut(tree.root).kind else {
+            panic!("expected draggable tab bar");
+        };
+        let natural_action_width = {
+            let layout = DraggableTabBar::viewport_layout(
+                &node.tabs,
+                &node.display_options(),
+                &node.viewport_options(bounds.w as usize),
+            );
+            layout.visible_tabs[1].metrics.width
+        };
+        node.lock_closed_tab_width(0, bounds.w as usize);
+        assert_eq!(node.width_lock, None);
+
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &DraggableTabBar::new().tab(DraggableTab::action("+")).into(),
+            bounds,
+            None,
+        );
+
+        let NodeKind::DraggableTabBar(node) = &tree.node(tree.root).kind else {
+            panic!("expected draggable tab bar");
+        };
+        assert_eq!(node.width_lock, None);
+        let layout = DraggableTabBar::viewport_layout(
+            &node.tabs,
+            &node.display_options(),
+            &node.viewport_options(bounds.w as usize),
+        );
+        assert_eq!(layout.visible_tabs[0].metrics.width, natural_action_width);
     }
 }

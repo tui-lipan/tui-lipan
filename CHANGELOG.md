@@ -20,7 +20,8 @@ While the crate is on `0.x.y`:
   composite focus routing and multiple simultaneously mounted trees.
 - Add `Tree::focus_key` for assigning a focus key directly to the tree's focusable list node.
 - `DraggableTabBar` now keeps successive close buttons under the pointer by temporarily giving a
-  deleted tab's width to its replacement until the mouse leaves the bar.
+  deleted tab's width to its replacement until the mouse leaves the bar. Action tabs (for example a
+  trailing `+`) are excluded from that width lock.
 - `KeyBinding` parsing accepts the plus key as a bare `+` chord step or the name `plus`
   (including `alt-plus` / `alt-+`), while `+` inside a mixed step remains a modifier separator
   (`ctrl+c`). Canonical display maps crokey's `Hyphen`/`minus` labels to `-`.
