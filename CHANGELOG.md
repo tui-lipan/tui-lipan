@@ -13,6 +13,8 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Toast::min_width` sets a minimum width constraint on toast overlays (alongside existing
+  `max_width`).
 - Add `FileTree::on_explorer_focus`, `FileTree::on_explorer_blur`, and
   `FileTree::on_explorer_escape` for routing explorer focus by its pointer/tree origin. Explorer
   focus entered from the tree with `/` still returns to the tree on Escape.

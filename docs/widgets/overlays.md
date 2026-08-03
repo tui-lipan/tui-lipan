@@ -176,6 +176,7 @@ its exit transition.
 | `border_style` | `BorderStyle` | Border style |
 | `padding` | `impl Into<Padding>` | Padding |
 | `width` | `Length` | Width |
+| `min_width` | `Length` | Minimum width |
 | `max_width` | `Length` | Maximum width |
 | `wrap` | `bool` | Wrap long messages |
 | `decoration` / `decorations` | `FrameDecoration` | Edge decorations |
