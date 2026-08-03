@@ -58,6 +58,7 @@ pub struct Toast {
     pub(crate) decorations: Vec<EdgeDecoration>,
     pub(crate) width: Length,
     pub(crate) height: Length,
+    pub(crate) min_width: Option<Length>,
     pub(crate) max_width: Option<Length>,
     pub(crate) wrap: bool,
 }
@@ -94,6 +95,7 @@ impl Toast {
             decorations: Vec::new(),
             width: Length::Auto,
             height: Length::Auto,
+            min_width: None,
             max_width: None,
             wrap: true,
         }
@@ -195,6 +197,12 @@ impl Toast {
         self
     }
 
+    /// Set minimum width.
+    pub fn min_width(mut self, width: Length) -> Self {
+        self.min_width = Some(width);
+        self
+    }
+
     /// Set maximum width (wraps content when exceeded).
     pub fn max_width(mut self, width: Length) -> Self {
         self.max_width = Some(width);
@@ -231,6 +239,7 @@ impl Toast {
 
     /// Convert to element.
     pub fn into_element(self) -> Element {
+        let min_width = self.min_width;
         let max_width = self.max_width;
 
         // Give the message the frame's background so it reads as one surface - but never a
@@ -316,6 +325,9 @@ impl Toast {
         }
 
         let mut element: Element = frame.into();
+        if let Some(min_width) = min_width {
+            element = element.min_width(min_width);
+        }
         if let Some(max_width) = max_width {
             element = element.max_width(max_width);
         }
