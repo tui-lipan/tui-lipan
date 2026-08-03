@@ -1860,6 +1860,9 @@ fn apply_tab_width_lock(
     let (Some(tab), Some(current)) = (tabs.get(lock.index), metrics.get(lock.index)) else {
         return metrics;
     };
+    if !is_reorderable_tab(tab) {
+        return metrics;
+    }
     let fixed_width = current.width.saturating_sub(current.label_width);
     let label_width = lock.width.saturating_sub(fixed_width);
     metrics[lock.index] = tab_metrics_with_label_width(tab, opts, label_width);

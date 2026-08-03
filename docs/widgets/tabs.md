@@ -71,7 +71,8 @@ Editor-style tab bar with drag reordering, per-tab close buttons, file icons, an
 When a close button is clicked with the mouse, the tab that moves into the
 closed tab's position temporarily inherits its width. This keeps the next close
 button under the pointer for rapid repeated closing. Natural or shrink-to-fit
-widths are restored as soon as the pointer leaves the tab bar.
+widths are restored as soon as the pointer leaves the tab bar. Action tabs such
+as a trailing `+` never inherit this lock.
 
 | Prop | Type | Description |
 |------|------|-------------|

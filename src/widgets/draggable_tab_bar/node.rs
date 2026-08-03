@@ -101,7 +101,12 @@ impl DraggableTabBarNode {
     }
 
     pub(crate) fn lock_closed_tab_width(&mut self, index: usize, viewport_width: usize) {
-        if index + 1 >= self.tabs.len() {
+        let Some(replacement) = self.tabs.get(index + 1) else {
+            self.width_lock = None;
+            return;
+        };
+        // Action tabs (e.g. trailing `+`) must not inherit a closed tab's width.
+        if !super::is_reorderable_tab(replacement) {
             self.width_lock = None;
             return;
         }
