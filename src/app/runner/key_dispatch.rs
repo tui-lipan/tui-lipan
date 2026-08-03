@@ -369,6 +369,12 @@ impl<C: Component> RunnerDispatchOps<'_, '_, C> {
         if pending_cell.get() != command_chord_pending {
             pending_cell.set(command_chord_pending);
             result.dirty = true;
+            // Chord chrome (PREFIX badge) changed. A terminal-forward `DirtyLevel::None` would
+            // otherwise win in the event loop over `mark_full` and leave the badge painted after
+            // the chord already ended (mismatch / Esc cancel while a terminal has focus).
+            if matches!(self.key_ctx.dirty_override, Some(DirtyLevel::None)) {
+                self.key_ctx.dirty_override = None;
+            }
         }
 
         result

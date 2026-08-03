@@ -5668,6 +5668,65 @@ fn live_screen_output_reaches_the_node_without_a_view_pass() {
     );
 }
 
+/// Chord mismatch under `AppCommandsThenTerminal` forwards the key (no frame for the key itself)
+/// but must still claim a frame so PREFIX chrome can clear. Without that, a busy child TUI keeps
+/// painting the pane while the stale badge stays until an unrelated full `view()` pass.
+#[cfg(feature = "terminal")]
+#[test]
+fn chord_mismatch_while_terminal_focused_claims_a_frame_for_prefix_chrome() {
+    let keys = Rc::new(RefCell::new(Vec::new()));
+    let app = App::new()
+        .mouse(false)
+        .key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst)
+        .terminal_key_policy(crate::TerminalKeyPolicy::AppCommandsThenTerminal);
+    let mut runner = AppRunner::new(
+        app,
+        TerminalDispatchSmoke {
+            keys: keys.clone(),
+            inputs: Rc::new(RefCell::new(Vec::new())),
+        },
+        (),
+    );
+    init_runner(
+        &mut runner,
+        TerminalDispatchSmoke {
+            keys: keys.clone(),
+            inputs: Rc::new(RefCell::new(Vec::new())),
+        },
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 5,
+        },
+    );
+    runner.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("mux.detach")
+            .shortcut(crate::KeyBinding::from_str("ctrl-a d").expect("binding"))
+            .handler(Callback::new(|_| {}))
+            .build(),
+    );
+    let terminal = node_id_by_key(&runner.core.tree, "terminal");
+    runner.focus.focused = Some(terminal);
+
+    let prefix = runner.dispatch_layered_key(ctrl_char('a'));
+    assert!(prefix.consumed);
+    assert!(runner.core.ctx.env().command_chord_pending.get());
+    assert!(
+        prefix.mark_full && prefix.dirty_override.is_none(),
+        "entering a leader chord must claim a frame for PREFIX chrome"
+    );
+
+    let mismatch = runner.dispatch_layered_key(key(KeyCode::Char('x')));
+    assert!(mismatch.consumed);
+    assert_eq!(keys.borrow().as_slice(), &[key(KeyCode::Char('x'))]);
+    assert!(!runner.core.ctx.env().command_chord_pending.get());
+    assert!(
+        mismatch.mark_full && mismatch.dirty_override.is_none(),
+        "clearing PREFIX after a forwarded mismatch must claim a frame: {mismatch:?}"
+    );
+}
+
 /// A key forwarded to a terminal changes nothing on screen: it becomes bytes for the child program,
 /// and whatever the child draws in response arrives later as output that asks for its own frame.
 /// Claiming a frame here too means every keystroke costs two — one speculative, one real.
