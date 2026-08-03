@@ -54,6 +54,7 @@ pub fn reconcile_draggable_tab_bar(
                     scroll_offset: 0,
                     viewport_width: viewport_w,
                     show_overflow_controls: bar.show_overflow_controls,
+                    overflow_labels: bar.overflow_labels.clone(),
                 },
                 bar.active,
             );

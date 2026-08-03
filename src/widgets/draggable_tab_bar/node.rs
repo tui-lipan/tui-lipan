@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use super::{
     DragReorderMode, DraggableTab, DraggableTabActionEvent, DraggableTabBar,
     DraggableTabBarOverflow, DraggableTabBarVariant, DraggableTabCloseEvent,
-    DraggableTabReorderEvent, DraggableTabTransferEvent, TabDisplayOptions, TabViewportOptions,
-    TabWidthLock,
+    DraggableTabReorderEvent, DraggableTabTransferEvent, OverflowLabels, TabDisplayOptions,
+    TabViewportOptions, TabWidthLock,
 };
 use crate::utils::file_icons::FileIconOverride;
 use crate::widgets::file_tree::FileIconStyle;
@@ -45,6 +45,7 @@ pub struct DraggableTabBarNode {
     pub show_overflow_controls: bool,
     pub overflow_style: Style,
     pub overflow_hover_style: Style,
+    pub overflow_labels: OverflowLabels,
     pub scroll_offset: usize,
     pub scroll_override: Option<usize>,
     pub previous_active: usize,
@@ -97,6 +98,7 @@ impl DraggableTabBarNode {
             scroll_offset: self.scroll_offset,
             viewport_width,
             show_overflow_controls: self.show_overflow_controls,
+            overflow_labels: self.overflow_labels.clone(),
         }
     }
 
@@ -201,6 +203,7 @@ impl From<DraggableTabBar> for DraggableTabBarNode {
             show_overflow_controls: value.show_overflow_controls,
             overflow_style: value.overflow_style,
             overflow_hover_style: value.overflow_hover_style,
+            overflow_labels: value.overflow_labels,
             scroll_offset: value.scroll_offset,
             scroll_override: None,
             previous_active: value.active,

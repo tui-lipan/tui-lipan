@@ -124,6 +124,7 @@ pub(crate) fn handle_tab_bar_scroll(
             scroll_offset: layout.offset,
             viewport_width: inner.w as usize,
             show_overflow_controls: tab_bar.show_overflow_controls,
+            overflow_labels: tab_bar.overflow_labels.clone(),
         },
         step_right,
         crate::widgets::draggable_tab_bar::TAB_SCROLL_STEP_CHARS,

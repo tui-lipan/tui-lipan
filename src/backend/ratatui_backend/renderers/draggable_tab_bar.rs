@@ -15,7 +15,9 @@ use crate::core::node::NodeId;
 use crate::style::resolve::{Durability, StateLayer, resolve_state_cascade};
 use crate::style::{BorderStyle, FileIconPalette, Padding, Style, ThemeRole, resolve_slot};
 use crate::utils::file_icons::FileIconOverride;
-use crate::widgets::draggable_tab_bar::{DraggableTabHitTarget, OverflowControlSide};
+use crate::widgets::draggable_tab_bar::{
+    DraggableTabHitTarget, OverflowControlSide, OverflowLabels,
+};
 use crate::widgets::{
     DraggableTab, DraggableTabBar, DraggableTabBarOverflow, DraggableTabBarVariant,
     DraggableTabHitPart, DraggableTabKind, FileIconStyle,
@@ -176,6 +178,7 @@ pub(crate) struct DraggableTabBarRenderCtx<'a> {
     pub show_overflow_controls: bool,
     pub overflow_style: Style,
     pub overflow_hover_style: Style,
+    pub overflow_labels: &'a OverflowLabels,
     pub show_file_icons: bool,
     pub file_icon_style: FileIconStyle,
     pub file_icon_palette: &'a FileIconPalette,
@@ -224,6 +227,7 @@ pub(crate) fn render_draggable_tab_bar(
         show_overflow_controls,
         overflow_style,
         overflow_hover_style,
+        overflow_labels,
         show_file_icons,
         file_icon_style,
         file_icon_palette,
@@ -329,6 +333,7 @@ pub(crate) fn render_draggable_tab_bar(
         scroll_offset,
         viewport_width: inner.w as usize,
         show_overflow_controls,
+        overflow_labels: overflow_labels.clone(),
     };
     let layout = DraggableTabBar::viewport_layout(tabs, &disp_opts, &vp_opts);
 
@@ -346,6 +351,7 @@ pub(crate) fn render_draggable_tab_bar(
                         scroll_offset: layout.offset,
                         viewport_width: inner.w as usize,
                         show_overflow_controls,
+                        overflow_labels: overflow_labels.clone(),
                     },
                     col,
                 )
@@ -737,6 +743,7 @@ pub(crate) fn render_draggable_tab_bar_node(
                 ThemeRole::Hover,
                 node.overflow_hover_style,
             ),
+            overflow_labels: &node.overflow_labels,
             show_file_icons: node.show_file_icons,
             file_icon_style: node.file_icon_style,
             file_icon_palette,
