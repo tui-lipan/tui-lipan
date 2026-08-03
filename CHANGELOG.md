@@ -28,6 +28,9 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Clearing or entering an app-command chord while a terminal has focus now claims a frame for chord
+  chrome (`command_chord_pending`), even when the key itself is forwarded with `DirtyLevel::None`.
+  A mismatch or Esc cancel no longer leaves a stale PREFIX indicator painted over a busy child TUI.
 - Clicking a `FileTree` explorer input now focuses it even when the tree is inside an excluded focus
   scope.
 - Cross-bar `DraggableTabBar` drops now select the transferred tab on the destination bar by
