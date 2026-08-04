@@ -48,7 +48,18 @@ pub(crate) struct SearchState {
     /// Index into `results` - always refers to a real matched item.
     selected: usize,
     query_id: u64,
-    last_notified_selection: Option<(usize, usize)>,
+    /// Query whose eventual results must apply the initial selection seed.
+    ///
+    /// Explicit navigation clears this so a queued completion cannot roll the
+    /// selection back after the user moves.
+    pending_selection_reset: Option<u64>,
+    last_notified_selection: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectionRefresh {
+    PreserveCurrent,
+    ResetToInitial,
 }
 
 #[derive(Clone, Debug)]
@@ -150,6 +161,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
             results_query,
             selected,
             query_id: 0,
+            pending_selection_reset: None,
             last_notified_selection: None,
         }
     }
@@ -169,6 +181,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
         let query = Arc::from(ctx.state.query_source.query_str().to_owned());
         let query_id = ctx.state.query_id + 1;
         ctx.state.query_id = query_id;
+        ctx.state.pending_selection_reset = Some(query_id);
         Some(spawn_search(
             ctx.link().clone(),
             query_id,
@@ -221,13 +234,14 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
         }
 
         if should_refresh {
-            // `initial_selected_item_index` acts as a controlled selection driver. Re-resolve
-            // it whenever matching inputs refresh because fresh items can insert a
-            // higher-ranked result before the same source item. Also preserve the existing
-            // reset when the prop changes to `None`.
-            let resolve_controlled_selection = ctx.props.initial_selected_item_index.is_some()
-                || old_props.initial_selected_item_index != ctx.props.initial_selected_item_index;
-            return refresh_results(ctx, reset_selection || resolve_controlled_selection);
+            let selection = if reset_selection
+                || old_props.initial_selected_item_index != ctx.props.initial_selected_item_index
+            {
+                SelectionRefresh::ResetToInitial
+            } else {
+                SelectionRefresh::PreserveCurrent
+            };
+            return refresh_results(ctx, selection);
         }
 
         if old_props.sync_selection != ctx.props.sync_selection {
@@ -243,6 +257,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                 ctx.props.initial_selected_item_index,
                 &ctx.state.results,
             );
+            ctx.state.pending_selection_reset = None;
             sync_current_selection(&ctx.props, &mut ctx.state);
             return Update::layout();
         }
@@ -528,7 +543,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     cb.emit(query.clone());
                 }
 
-                refresh_results(ctx, true)
+                refresh_results(ctx, SelectionRefresh::ResetToInitial)
             }
             SearchPaletteMsg::ResultsReady {
                 query_id,
@@ -537,29 +552,29 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                 if query_id != ctx.state.query_id {
                     return Update::none();
                 }
-                let prev_len = ctx.state.results.len();
+                let selected_item_index = current_selected_item_index(&ctx.state);
                 let query_empty = ctx.state.query_source.query_str().is_empty();
-                let expanded_sync_results =
-                    query_empty && prev_len < results.len() && !results.is_empty();
                 if ctx.props.preserve_groups && !ctx.props.entries.is_empty() && !query_empty {
                     results.sort_by_key(|r| r.item_index);
                 }
                 ctx.state.results = results;
                 ctx.state.results_query = Arc::from(ctx.state.query_source.query_str().to_owned());
-                if ctx.props.initial_selected_item_index.is_some()
-                    || expanded_sync_results
-                    || ctx.state.selected >= ctx.state.results.len()
-                {
+                if ctx.state.pending_selection_reset == Some(query_id) {
                     ctx.state.selected = resolve_initial_result_index(
                         ctx.props.initial_selected_item_index,
                         &ctx.state.results,
                     );
+                } else {
+                    ctx.state.selected =
+                        resolve_source_result_index(selected_item_index, &ctx.state.results);
                 }
+                ctx.state.pending_selection_reset = None;
                 sync_current_selection(&ctx.props, &mut ctx.state);
                 Update::layout()
             }
             SearchPaletteMsg::Selected(result_idx) => {
                 ctx.state.selected = result_idx;
+                ctx.state.pending_selection_reset = None;
                 emit_search_event(&ctx.props, &ctx.state.results, result_idx, true);
                 remember_current_selection(&mut ctx.state);
                 Update::layout()
@@ -569,45 +584,57 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                 Update::none()
             }
             SearchPaletteMsg::NavigateUp => {
+                let selected_item_index = current_selected_item_index(&ctx.state);
                 navigate_up(&ctx.props, &mut ctx.state);
+                clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
                 Update::layout()
             }
             SearchPaletteMsg::NavigateDown => {
+                let selected_item_index = current_selected_item_index(&ctx.state);
                 navigate_down(&ctx.props, &mut ctx.state);
+                clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
                 Update::layout()
             }
             SearchPaletteMsg::NavigateFirst => {
                 if !ctx.state.results.is_empty() {
+                    let selected_item_index = current_selected_item_index(&ctx.state);
                     ctx.state.selected = 0;
                     emit_search_event(&ctx.props, &ctx.state.results, 0, true);
                     remember_current_selection(&mut ctx.state);
+                    clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
                 }
                 Update::layout()
             }
             SearchPaletteMsg::NavigateLast => {
                 let len = ctx.state.results.len();
                 if len > 0 {
+                    let selected_item_index = current_selected_item_index(&ctx.state);
                     ctx.state.selected = len - 1;
                     emit_search_event(&ctx.props, &ctx.state.results, len - 1, true);
                     remember_current_selection(&mut ctx.state);
+                    clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
                 }
                 Update::layout()
             }
             SearchPaletteMsg::NavigatePageUp => {
                 let len = ctx.state.results.len();
                 if len > 0 {
+                    let selected_item_index = current_selected_item_index(&ctx.state);
                     ctx.state.selected = ctx.state.selected.saturating_sub(10);
                     emit_search_event(&ctx.props, &ctx.state.results, ctx.state.selected, true);
                     remember_current_selection(&mut ctx.state);
+                    clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
                 }
                 Update::layout()
             }
             SearchPaletteMsg::NavigatePageDown => {
                 let len = ctx.state.results.len();
                 if len > 0 {
+                    let selected_item_index = current_selected_item_index(&ctx.state);
                     ctx.state.selected = (ctx.state.selected + 10).min(len - 1);
                     emit_search_event(&ctx.props, &ctx.state.results, ctx.state.selected, true);
                     remember_current_selection(&mut ctx.state);
+                    clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
                 }
                 Update::layout()
             }
@@ -623,10 +650,14 @@ fn resolve_initial_result_index(
     initial_item_index: Option<usize>,
     results: &[SearchResult],
 ) -> usize {
+    resolve_source_result_index(initial_item_index, results)
+}
+
+fn resolve_source_result_index(item_index: Option<usize>, results: &[SearchResult]) -> usize {
     if results.is_empty() {
         return 0;
     }
-    if let Some(idx) = initial_item_index
+    if let Some(idx) = item_index
         && let Some(r) = results.iter().position(|res| res.item_index == idx)
     {
         return r;
@@ -659,28 +690,27 @@ fn initial_results<T>(props: &SearchPaletteProps<T>, query: &str) -> Vec<SearchR
 
 fn refresh_results<T: Clone + PartialEq + 'static>(
     ctx: &mut Context<SearchPaletteComponent<T>>,
-    reset_selection: bool,
+    selection: SelectionRefresh,
 ) -> Update {
     let query: Arc<str> = Arc::from(ctx.state.query_source.query_str().to_owned());
+    let selected_item_index = current_selected_item_index(&ctx.state);
+    let query_id = ctx.state.query_id + 1;
+    ctx.state.query_id = query_id;
+    ctx.state.pending_selection_reset = None;
 
     if query.is_empty() {
         ctx.state.results = initial_results(&ctx.props, query.as_ref());
         ctx.state.results_query = query.clone();
+        ctx.state.selected = resolve_refreshed_selection(
+            selection,
+            selected_item_index,
+            ctx.props.initial_selected_item_index,
+            &ctx.state.results,
+        );
         if ctx.props.items.len() <= sync_match_limit(&ctx.props) {
-            if reset_selection {
-                ctx.state.selected = resolve_initial_result_index(
-                    ctx.props.initial_selected_item_index,
-                    &ctx.state.results,
-                );
-            }
+            ctx.state.pending_selection_reset = None;
             sync_current_selection(&ctx.props, &mut ctx.state);
             return Update::layout();
-        }
-        if reset_selection {
-            ctx.state.selected = resolve_initial_result_index(
-                ctx.props.initial_selected_item_index,
-                &ctx.state.results,
-            );
         }
     } else if ctx.props.items.len() <= sync_match_limit(&ctx.props) {
         let mut results = initial_results(&ctx.props, query.as_ref());
@@ -689,18 +719,22 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
         }
         ctx.state.results = results;
         ctx.state.results_query = query.clone();
-        if reset_selection {
-            ctx.state.selected = resolve_initial_result_index(
-                ctx.props.initial_selected_item_index,
-                &ctx.state.results,
-            );
-        }
+        ctx.state.selected = resolve_refreshed_selection(
+            selection,
+            selected_item_index,
+            ctx.props.initial_selected_item_index,
+            &ctx.state.results,
+        );
+        ctx.state.pending_selection_reset = None;
         sync_current_selection(&ctx.props, &mut ctx.state);
         return Update::layout();
+    } else if selection == SelectionRefresh::ResetToInitial {
+        ctx.state.selected =
+            resolve_initial_result_index(ctx.props.initial_selected_item_index, &ctx.state.results);
     }
 
-    let query_id = ctx.state.query_id + 1;
-    ctx.state.query_id = query_id;
+    ctx.state.pending_selection_reset =
+        (selection == SelectionRefresh::ResetToInitial).then_some(query_id);
     layout_with_command(spawn_search(
         ctx.link().clone(),
         query_id,
@@ -710,6 +744,22 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
         ctx.props.case_matching,
         ctx.props.normalization,
     ))
+}
+
+fn resolve_refreshed_selection(
+    selection: SelectionRefresh,
+    selected_item_index: Option<usize>,
+    initial_item_index: Option<usize>,
+    results: &[SearchResult],
+) -> usize {
+    match selection {
+        SelectionRefresh::PreserveCurrent => {
+            resolve_source_result_index(selected_item_index, results)
+        }
+        SelectionRefresh::ResetToInitial => {
+            resolve_initial_result_index(initial_item_index, results)
+        }
+    }
 }
 
 fn layout_with_command(command: crate::core::component::Command) -> Update {
@@ -774,19 +824,28 @@ fn sync_match_limit<T>(props: &SearchPaletteProps<T>) -> usize {
     props.sync_match_limit.max(1)
 }
 
-fn current_selection_signature(state: &SearchState) -> Option<(usize, usize)> {
+fn current_selected_item_index(state: &SearchState) -> Option<usize> {
     state
         .results
         .get(state.selected)
-        .map(|result| (state.selected, result.item_index))
+        .map(|result| result.item_index)
+}
+
+fn clear_pending_reset_after_navigation(
+    state: &mut SearchState,
+    previous_item_index: Option<usize>,
+) {
+    if current_selected_item_index(state) != previous_item_index {
+        state.pending_selection_reset = None;
+    }
 }
 
 fn remember_current_selection(state: &mut SearchState) {
-    state.last_notified_selection = current_selection_signature(state);
+    state.last_notified_selection = current_selected_item_index(state);
 }
 
 fn sync_current_selection<T: Clone>(props: &SearchPaletteProps<T>, state: &mut SearchState) {
-    let current = current_selection_signature(state);
+    let current = current_selected_item_index(state);
 
     if !props.sync_selection {
         state.last_notified_selection = current;
@@ -1128,6 +1187,7 @@ mod tests {
             results_query: Arc::from(""),
             selected: 0,
             query_id: 0,
+            pending_selection_reset: None,
             last_notified_selection: None,
         };
 
@@ -1161,6 +1221,7 @@ mod tests {
                 &initial_results(&palette.props, ""),
             ),
             query_id: 0,
+            pending_selection_reset: None,
             last_notified_selection: None,
         };
 
@@ -1205,21 +1266,21 @@ mod tests {
         assert!(*user_seen.borrow());
     }
 
-    struct ControlledSelectionRoot {
+    struct SelectionSeedChangeRoot {
         selections: Rc<RefCell<Vec<usize>>>,
     }
 
-    struct ControlledSelectionState {
+    struct SelectionSeedChangeState {
         prepend: bool,
     }
 
-    impl Component for ControlledSelectionRoot {
+    impl Component for SelectionSeedChangeRoot {
         type Message = ();
-        type State = ControlledSelectionState;
+        type State = SelectionSeedChangeState;
         type Properties = ();
 
         fn create_state(&self, _props: &Self::Properties) -> Self::State {
-            ControlledSelectionState { prepend: false }
+            SelectionSeedChangeState { prepend: false }
         }
 
         fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
@@ -1255,13 +1316,13 @@ mod tests {
         }
     }
 
-    // Regression: when a controlled `initial_selected_item_index` moves in the same
+    // Regression: when `initial_selected_item_index` moves in the same
     // render that also changes the items (e.g. a session list gaining rows from a
-    // background fetch), the internal selection must follow the controlled index
+    // background fetch), the internal selection must follow the changed seed
     // instead of staying pinned to the old numeric row. Otherwise the palette
     // highlight and the caller's selection diverge into two highlighted rows.
     #[test]
-    fn controlled_selection_follows_index_when_items_also_change() {
+    fn changed_selection_seed_is_honored_when_items_also_change() {
         let selections = Rc::new(RefCell::new(Vec::new()));
         let bounds = Rect {
             x: 0,
@@ -1270,7 +1331,7 @@ mod tests {
             h: 10,
         };
         let mut runtime = RuntimeCore::new_test(
-            ControlledSelectionRoot {
+            SelectionSeedChangeRoot {
                 selections: Rc::clone(&selections),
             },
             (),
@@ -1282,30 +1343,32 @@ mod tests {
 
         runtime.init();
         runtime.render_element(bounds, None, None, None);
-        // Initial controlled selection points at the target row (item index 0).
+        // Initial selection seed points at the target row (item index 0).
         assert_eq!(selections.borrow().last().copied(), Some(0));
 
-        // Prepend four rows and move the controlled index to the target's new slot.
+        // Prepend four rows and move the seed to the target's new slot.
         let level = runtime
             .update_from_boxed(ScopeId(1), Box::new(()))
             .expect("root update should succeed");
         assert_eq!(level, UpdateLevel::Layout);
         runtime.render_element(bounds, None, None, None);
 
-        // The palette's internal selection must follow the controlled index (4),
+        // The palette's internal selection must follow the changed seed (4),
         // not stay on the old numeric row (0) just because the items changed too.
         assert_eq!(selections.borrow().last().copied(), Some(4));
     }
 
-    const RANK_SHIFT_TARGET_INDEX: usize = 100;
+    const RANK_SHIFT_SEED_INDEX: usize = 100;
+    const RANK_SHIFT_NAVIGATED_INDEX: usize = 101;
 
     fn rank_shift_items(grown: bool) -> Vec<SearchItem<usize>> {
-        let mut items = (0..RANK_SHIFT_TARGET_INDEX)
+        let mut items = (0..RANK_SHIFT_SEED_INDEX)
             .map(|i| SearchItem::new(format!("noise-{i}"), i))
             .collect::<Vec<_>>();
-        items.push(SearchItem::new("target candidate", RANK_SHIFT_TARGET_INDEX));
+        items.push(SearchItem::new("target alpha", RANK_SHIFT_SEED_INDEX));
+        items.push(SearchItem::new("target bravo", RANK_SHIFT_NAVIGATED_INDEX));
         if grown {
-            items.push(SearchItem::new("target", RANK_SHIFT_TARGET_INDEX + 1));
+            items.push(SearchItem::new("target", RANK_SHIFT_NAVIGATED_INDEX + 1));
         }
         items
     }
@@ -1339,7 +1402,7 @@ mod tests {
                 .match_mode(SearchMatchMode::Hybrid)
                 .sync_match_limit(self.sync_match_limit)
                 .sync_selection(true)
-                .initial_selected_item_index(Some(RANK_SHIFT_TARGET_INDEX))
+                .initial_selected_item_index(Some(RANK_SHIFT_SEED_INDEX))
                 .height(Length::Px(6))
                 .on_select(Callback::new(move |event: SearchEvent<usize>| {
                     selections
@@ -1397,7 +1460,7 @@ mod tests {
     }
 
     #[test]
-    fn controlled_selection_stays_on_source_item_when_sync_results_shift() {
+    fn unchanged_selection_seed_does_not_override_navigation_on_sync_rerank() {
         let selections = Rc::new(RefCell::new(Vec::new()));
         let activations = Rc::new(RefCell::new(Vec::new()));
         let (mut runtime, bounds) =
@@ -1405,7 +1468,15 @@ mod tests {
 
         assert_eq!(
             selections.borrow().last().copied(),
-            Some((0, RANK_SHIFT_TARGET_INDEX))
+            Some((0, RANK_SHIFT_SEED_INDEX))
+        );
+
+        runtime
+            .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::NavigateDown))
+            .expect("palette navigation should succeed");
+        assert_eq!(
+            selections.borrow().last().copied(),
+            Some((1, RANK_SHIFT_NAVIGATED_INDEX))
         );
 
         runtime
@@ -1414,20 +1485,21 @@ mod tests {
         runtime.render_element(bounds, None, None, None);
 
         assert_eq!(
-            selections.borrow().last().copied(),
-            Some((1, RANK_SHIFT_TARGET_INDEX))
+            selections.borrow().as_slice(),
+            [(0, RANK_SHIFT_SEED_INDEX), (1, RANK_SHIFT_NAVIGATED_INDEX),],
+            "reranking the selected source item must not emit a duplicate selection"
         );
         runtime
             .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::ActivateSelected))
             .expect("palette activation should succeed");
         assert_eq!(
             activations.borrow().last().copied(),
-            Some((1, RANK_SHIFT_TARGET_INDEX))
+            Some((2, RANK_SHIFT_NAVIGATED_INDEX))
         );
     }
 
     #[test]
-    fn controlled_selection_stays_on_source_item_after_async_results_shift() {
+    fn async_results_preserve_navigation_that_happened_after_request() {
         let selections = Rc::new(RefCell::new(Vec::new()));
         let activations = Rc::new(RefCell::new(Vec::new()));
         let (mut runtime, bounds) =
@@ -1444,20 +1516,37 @@ mod tests {
             .expect("initial async results should succeed");
         assert_eq!(
             selections.borrow().last().copied(),
-            Some((0, RANK_SHIFT_TARGET_INDEX))
+            Some((0, RANK_SHIFT_SEED_INDEX))
         );
 
+        // Growing the >100-item source starts query 2 while the prior results
+        // remain visible.
         runtime
             .update_from_boxed(ScopeId(1), Box::new(()))
             .expect("root update should succeed");
         runtime.render_element(bounds, None, None, None);
+
+        // Navigate after query 2 was queued. Its completion must preserve this
+        // source item rather than reasserting the unchanged initial seed.
+        runtime
+            .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::NavigateDown))
+            .expect("palette navigation should succeed");
+        assert_eq!(
+            selections.borrow().last().copied(),
+            Some((1, RANK_SHIFT_NAVIGATED_INDEX))
+        );
+
         let results = ranked_results(rank_shift_items(true));
         assert_eq!(
             results
                 .iter()
                 .map(|result| result.item_index)
                 .collect::<Vec<_>>(),
-            [RANK_SHIFT_TARGET_INDEX + 1, RANK_SHIFT_TARGET_INDEX]
+            [
+                RANK_SHIFT_NAVIGATED_INDEX + 1,
+                RANK_SHIFT_SEED_INDEX,
+                RANK_SHIFT_NAVIGATED_INDEX,
+            ]
         );
         runtime
             .update_from_boxed(
@@ -1470,15 +1559,16 @@ mod tests {
             .expect("refreshed async results should succeed");
 
         assert_eq!(
-            selections.borrow().last().copied(),
-            Some((1, RANK_SHIFT_TARGET_INDEX))
+            selections.borrow().as_slice(),
+            [(0, RANK_SHIFT_SEED_INDEX), (1, RANK_SHIFT_NAVIGATED_INDEX),],
+            "async reranking must not duplicate or roll back the navigated selection"
         );
         runtime
             .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::ActivateSelected))
             .expect("palette activation should succeed");
         assert_eq!(
             activations.borrow().last().copied(),
-            Some((1, RANK_SHIFT_TARGET_INDEX))
+            Some((2, RANK_SHIFT_NAVIGATED_INDEX))
         );
     }
 }
