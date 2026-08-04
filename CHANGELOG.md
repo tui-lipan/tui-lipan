@@ -13,6 +13,9 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `DraggableTabBar::empty_text` / `empty_text_style` show a left-aligned placeholder when the bar
+  has no tabs. The placeholder truncates with an ellipsis to the available width, patches onto the
+  resolved bar style, and stays non-interactive. Defaults keep the empty bar blank.
 - `ColorTransform::Elevate(f32)` is the relative form of `Color::elevate`: luminance-aware, so it
   lightens a dark color and dims a light one, and hue- and chroma-preserving rather than washing
   toward white. Use it where a transform has to land on the same color an absolute `Color::elevate`
