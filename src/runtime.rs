@@ -187,6 +187,8 @@ where
         let transcript_history: TranscriptHistory = Rc::new(RefCell::new(Vec::new()));
         let full_repaint = Rc::new(Cell::new(false));
         let devtools_request = Rc::new(RefCell::new(None));
+        #[cfg(feature = "devtools")]
+        let devtools_metrics = Rc::new(crate::core::runtime_env::DevToolsMetrics::default());
         let ui_snapshot_request = Rc::new(RefCell::new(None));
         let copy_feedback_request = Rc::new(RefCell::new(Vec::new()));
         let active_theme = Rc::new(RefCell::new(theme.clone()));
@@ -229,6 +231,8 @@ where
             memo_dependency_recorder,
             full_repaint,
             devtools_request,
+            #[cfg(feature = "devtools")]
+            devtools_metrics,
             ui_snapshot_request,
             copy_feedback_request,
             command_chord_pending,

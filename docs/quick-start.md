@@ -134,7 +134,10 @@ Examples requiring specific features:
 | `devtools` | `devtools` |
 | `theme_hot_reload` | `theme-reload` |
 
-With `devtools` enabled, the built-in panel uses fixed default dimensions per tab; use `Context` (`show_devtools`, `hide_devtools`, `toggle_devtools`) for visibility.
+With `devtools` enabled, the built-in panel uses compact defaults for Stats and
+Logs. The App tab sizes to host-provided metric content within the viewport and
+scrolls vertically when its rows are capped. Use `Context` (`show_devtools`, `hide_devtools`,
+`toggle_devtools`) for visibility.
 
 ### DevTools runtime configuration
 

@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::core::component::{Component, Context, KeyUpdate, Update};
 use crate::core::element::{Element, IntoElement};
@@ -8,8 +9,8 @@ use crate::style::{Align, BorderStyle, Justify, Length, Paint, ScrollbarConfig, 
 use crate::utils::gradient::ColorGradient;
 use crate::widgets::{
     BorderMergeMode, Button, ButtonVariant, Frame, FrameLabel, HStack, Input, InputEvent,
-    LogFilterMode, LogView, LogViewEvent, Overflow, Spacer, Sparkline, SparklineBarsPreset,
-    SparklineVariant, SparklineZeroPolicy, TabsEvent, Text, VStack,
+    LogFilterMode, LogView, LogViewEvent, Overflow, ScrollKeymap, ScrollView, Spacer, Sparkline,
+    SparklineBarsPreset, SparklineVariant, SparklineZeroPolicy, TabsEvent, Text, VStack,
 };
 
 use super::state::DevToolsState;
@@ -17,6 +18,8 @@ use super::state::DevToolsState;
 pub(crate) const DEVTOOLS_KEY: &str = "devtools-panel";
 const DEVTOOLS_FILTER_KEY: &str = "devtools-filter";
 const DEVTOOLS_TAB_LOGS: usize = 1;
+const DEVTOOLS_TAB_APP: usize = 2;
+const DEVTOOLS_APP_METRICS_KEY: &str = "devtools-app-metrics";
 
 pub(crate) struct DevToolsPanel;
 
@@ -129,12 +132,13 @@ impl Component for DevToolsPanel {
         // background and read as transparent.
         let frame_style = fg_style(theme.primary.fg).bg(theme.surface.menu);
         let secondary_style = fg_style(theme.muted.fg.or(theme.primary.fg));
-        let (panel_width, panel_height) = state.resolved_panel_size();
+        let viewport = ctx.viewport();
+        let (panel_width, panel_height) = state.resolved_panel_size(viewport.w, viewport.h);
 
-        let body = if state.active_tab == DEVTOOLS_TAB_LOGS {
-            logs_body(ctx, &state)
-        } else {
-            stats_body(ctx, &state)
+        let body = match state.active_tab {
+            DEVTOOLS_TAB_LOGS => logs_body(ctx, &state),
+            DEVTOOLS_TAB_APP => app_body(ctx, &state, state.app_label_width(viewport.w)),
+            _ => stats_body(ctx, &state),
         };
 
         VStack::new()
@@ -148,8 +152,8 @@ impl Component for DevToolsPanel {
                     // DevTools is painted as a separate top layer; its border must not
                     // merge with app-layer borders that happen to occupy the same cells.
                     .border_merge_mode(BorderMergeMode::Replace)
-                    .tab_titles(["Stats", "Logs"])
-                    .active_tab(state.active_tab.min(DEVTOOLS_TAB_LOGS))
+                    .tab_titles(["Stats", "Logs", "App"])
+                    .active_tab(state.active_tab.min(DEVTOOLS_TAB_APP))
                     .on_tab_change(ctx.link().callback(DevToolsMsg::TabChanged))
                     .style(frame_style)
                     .header_right(FrameLabel::new("DevTools").style(secondary_style))
@@ -539,6 +543,68 @@ fn logs_body(ctx: &Context<DevToolsPanel>, state: &DevToolsState) -> Element {
         .into()
 }
 
+fn app_body(ctx: &Context<DevToolsPanel>, state: &DevToolsState, label_width: u16) -> Element {
+    let theme = ctx.theme();
+    let label_style = fg_style(theme.primary.fg).bold();
+    let value_style = fg_style(theme.muted.fg.or(theme.primary.fg));
+    let dim_style = fg_style(
+        theme
+            .muted
+            .fg
+            .map(|paint| Paint::solid(paint.color().dim())),
+    );
+    let metrics = state.app_metrics.rows.borrow();
+    let mut rows = Vec::with_capacity(metrics.len().max(1));
+
+    if metrics.is_empty() {
+        rows.push(
+            HStack::new()
+                .height(Length::Auto)
+                .child(
+                    Text::new("Metrics")
+                        .overflow(Overflow::Ellipsis)
+                        .width(Length::Px(label_width))
+                        .style(label_style),
+                )
+                .child(
+                    Text::new("none")
+                        .overflow(Overflow::Ellipsis)
+                        .width(Length::Flex(1))
+                        .style(dim_style),
+                )
+                .into(),
+        );
+    } else {
+        rows.extend(metrics.iter().map(|metric| {
+            HStack::new()
+                .height(Length::Auto)
+                .child(
+                    Text::new(Arc::clone(&metric.label))
+                        .overflow(Overflow::Ellipsis)
+                        .width(Length::Px(label_width))
+                        .style(label_style),
+                )
+                .child(
+                    Text::new(Arc::clone(&metric.value))
+                        .overflow(Overflow::Ellipsis)
+                        .width(Length::Flex(1))
+                        .style(value_style),
+                )
+                .into()
+        }));
+    }
+
+    ScrollView::new()
+        .height(Length::Flex(1))
+        .scrollbar(true)
+        .scrollbar_config(ScrollbarConfig::new())
+        .focusable(true)
+        .scroll_keys(ScrollKeymap::DEFAULT)
+        .estimated_child_height(1)
+        .children(rows)
+        .key(DEVTOOLS_APP_METRICS_KEY)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -793,6 +859,130 @@ mod tests {
             markdown.contains("none"),
             "Miss/Slow rows should show none placeholder"
         );
+    }
+
+    #[test]
+    fn app_panel_renders_metrics_in_host_order() {
+        let mut state = DevToolsState::default();
+        state.set_visible(true);
+        state.set_active_tab(DEVTOOLS_TAB_APP);
+        state.app_metrics.rows.borrow_mut().extend([
+            crate::DevToolsMetric::new("Panes", "4"),
+            crate::DevToolsMetric::new("Clients", "2"),
+            crate::DevToolsMetric::new("Queue", "idle"),
+        ]);
+        let props = DevToolsProps {
+            state: Rc::new(RefCell::new(state)),
+        };
+        let mut backend = TestBackend::new_with_props(DevToolsPanel, props);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 52,
+            h: 12,
+        });
+        backend.render();
+
+        let text = backend.capture_frame().plain_text();
+        let panes = text.find("Panes").expect("Panes row");
+        let clients = text.find("Clients").expect("Clients row");
+        let queue = text.find("Queue").expect("Queue row");
+        assert!(panes < clients && clients < queue);
+        assert!(text.contains("4"));
+        assert!(text.contains("idle"));
+    }
+
+    #[test]
+    fn app_panel_uses_wide_viewport_to_render_full_values() {
+        let value = "x".repeat(60);
+        let mut state = DevToolsState::default();
+        state.set_visible(true);
+        state.set_active_tab(DEVTOOLS_TAB_APP);
+        state
+            .app_metrics
+            .rows
+            .borrow_mut()
+            .push(crate::DevToolsMetric::new("Heap", value.clone()));
+        let props = DevToolsProps {
+            state: Rc::new(RefCell::new(state)),
+        };
+        let mut backend = TestBackend::new_with_props(DevToolsPanel, props);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 8,
+        });
+        backend.render();
+
+        assert!(backend.capture_frame().plain_text().contains(&value));
+        let panel = backend
+            .core
+            .tree
+            .iter()
+            .find(|node| {
+                node.key
+                    .as_ref()
+                    .is_some_and(|key| key.as_ref() == DEVTOOLS_KEY)
+            })
+            .expect("devtools panel frame");
+        assert_eq!(panel.rect.w, 67);
+    }
+
+    #[test]
+    fn app_panel_caps_to_viewport_and_scrolls_overflow_rows() {
+        let mut state = DevToolsState::default();
+        state.set_visible(true);
+        state.set_active_tab(DEVTOOLS_TAB_APP);
+        state.app_metrics.rows.borrow_mut().extend((0..24).map(|i| {
+            crate::DevToolsMetric::new(
+                format!("Metric{i}"),
+                format!("value-{i}-{}", "x".repeat(40)),
+            )
+        }));
+        let props = DevToolsProps {
+            state: Rc::new(RefCell::new(state)),
+        };
+        let mut backend = TestBackend::new_with_props(DevToolsPanel, props);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 32,
+            h: 8,
+        });
+        backend.render();
+
+        let panel = backend
+            .core
+            .tree
+            .iter()
+            .find(|node| {
+                node.key
+                    .as_ref()
+                    .is_some_and(|key| key.as_ref() == DEVTOOLS_KEY)
+            })
+            .expect("devtools panel frame");
+        assert_eq!(panel.rect.w, 32);
+
+        let scroll = backend
+            .core
+            .tree
+            .iter()
+            .find_map(|node| match &node.kind {
+                crate::core::node::NodeKind::ScrollView(scroll)
+                    if node
+                        .key
+                        .as_ref()
+                        .is_some_and(|key| key.as_ref() == DEVTOOLS_APP_METRICS_KEY) =>
+                {
+                    Some(scroll)
+                }
+                _ => None,
+            })
+            .expect("app metrics ScrollView");
+        assert!(scroll.scrollbar);
+        assert!(scroll.content_height > scroll.viewport_height);
+        assert!(scroll.max_offset > 0);
     }
 
     #[test]

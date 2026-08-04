@@ -1483,6 +1483,60 @@ impl<C: Component> Context<C> {
         self.env.request_copy_feedback(node_id, Some(range));
     }
 
+    /// Lazily replace the host-application metric rows shown in the DevTools `App` tab.
+    ///
+    /// The factory is invoked only when the `devtools` feature is enabled. Its
+    /// input order is preserved, and returning an empty iterator clears all
+    /// application rows. This stores only the supplied values; it never invokes
+    /// host callbacks while DevTools renders.
+    ///
+    /// Publishing is render-neutral: it does not schedule a frame. Calls made
+    /// from `view()` are consumed by the DevTools extra root later in that same
+    /// frame. Calls made elsewhere remain stored until a host-requested frame
+    /// rebuilds the panel.
+    ///
+    /// Without the `devtools` feature this is a no-op, so the same application
+    /// code continues to compile without constructing or formatting metrics.
+    pub fn set_devtools_metrics<F, I>(&self, metrics: F)
+    where
+        F: FnOnce() -> I,
+        I: IntoIterator<Item = crate::DevToolsMetric>,
+    {
+        #[cfg(feature = "devtools")]
+        {
+            self.env
+                .devtools_metrics
+                .replace(metrics().into_iter().collect());
+        }
+        #[cfg(not(feature = "devtools"))]
+        {
+            let _ = metrics;
+        }
+    }
+
+    #[cfg(feature = "devtools")]
+    pub(crate) fn devtools_metrics(
+        &self,
+    ) -> std::rc::Rc<crate::core::runtime_env::DevToolsMetrics> {
+        std::rc::Rc::clone(&self.env.devtools_metrics)
+    }
+
+    /// Return whether the built-in DevTools panel is currently visible.
+    ///
+    /// This reports the runner-synchronized state after panel key handling and
+    /// queued visibility requests have been applied. It returns `false` when
+    /// the `devtools` feature is disabled.
+    pub fn devtools_visible(&self) -> bool {
+        #[cfg(feature = "devtools")]
+        {
+            self.env.devtools_metrics.is_visible()
+        }
+        #[cfg(not(feature = "devtools"))]
+        {
+            false
+        }
+    }
+
     /// Request that the built-in devtools panel becomes visible.
     pub fn show_devtools(&self) {
         *self.env.devtools_request.borrow_mut() = Some(DevToolsRequest::Show);

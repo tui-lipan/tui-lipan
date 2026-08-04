@@ -33,6 +33,28 @@ pub(crate) enum DevToolsRequest {
     Toggle,
 }
 
+#[cfg(feature = "devtools")]
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct DevToolsMetrics {
+    pub(crate) rows: RefCell<Vec<crate::app::DevToolsMetric>>,
+    visible: Cell<bool>,
+}
+
+#[cfg(feature = "devtools")]
+impl DevToolsMetrics {
+    pub(crate) fn replace(&self, rows: Vec<crate::app::DevToolsMetric>) {
+        *self.rows.borrow_mut() = rows;
+    }
+
+    pub(crate) fn set_visible(&self, visible: bool) {
+        self.visible.set(visible);
+    }
+
+    pub(crate) fn is_visible(&self) -> bool {
+        self.visible.get()
+    }
+}
+
 #[derive(Clone)]
 pub(crate) enum TranscriptEntry {
     Lines(Vec<RichText>),
@@ -237,6 +259,9 @@ pub(crate) struct RuntimeEnv {
     pub full_repaint: Rc<Cell<bool>>,
     /// Pending request to change devtools visibility on the UI thread.
     pub devtools_request: Rc<RefCell<Option<DevToolsRequest>>>,
+    /// Host-application metric rows shown by the DevTools App tab.
+    #[cfg(feature = "devtools")]
+    pub devtools_metrics: Rc<DevToolsMetrics>,
     /// Pending UI snapshot export/delivery after the next render.
     pub ui_snapshot_request: Rc<RefCell<Option<crate::ui_snapshot::UiSnapshotRequest>>>,
     /// Pending requests to flash copy feedback on specific nodes.

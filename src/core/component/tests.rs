@@ -22,7 +22,6 @@ use crate::overlay::OverlayManager;
 use crate::style::{Rect, Theme};
 use crate::widgets::{Frame, Splitter, Text, VStack};
 
-#[cfg(feature = "ui-snapshot-png")]
 use crate::test_backend::TestBackend;
 
 fn new_registry() -> ComponentRegistry {
@@ -62,6 +61,8 @@ fn new_registry() -> ComponentRegistry {
             memo_dependency_recorder: Rc::new(RefCell::new(None)),
             full_repaint: Rc::new(Cell::new(false)),
             devtools_request: Rc::new(RefCell::new(None)),
+            #[cfg(feature = "devtools")]
+            devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
             ui_snapshot_request: Rc::new(RefCell::new(None)),
             copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
             command_chord_pending: Rc::new(Cell::new(false)),
@@ -87,6 +88,79 @@ struct Counter;
 
 enum CounterMsg {
     Inc,
+}
+
+#[cfg(feature = "devtools")]
+struct DevToolsMetricsProbe;
+
+#[cfg(feature = "devtools")]
+enum DevToolsMetricsMsg {
+    Replace,
+    Clear,
+}
+
+#[cfg(feature = "devtools")]
+impl Component for DevToolsMetricsProbe {
+    type Message = DevToolsMetricsMsg;
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        match msg {
+            DevToolsMetricsMsg::Replace => {
+                ctx.set_devtools_metrics(|| [crate::DevToolsMetric::new("Queue", "3")]);
+            }
+            DevToolsMetricsMsg::Clear => {
+                ctx.set_devtools_metrics(std::iter::empty);
+            }
+        }
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        ctx.set_devtools_metrics(|| {
+            [
+                crate::DevToolsMetric::new("Panes", "4"),
+                crate::DevToolsMetric::new("Clients", "2"),
+            ]
+        });
+        Text::new("metrics").into()
+    }
+}
+
+#[cfg(not(feature = "devtools"))]
+struct DisabledDevToolsMetricsProbe;
+
+#[cfg(not(feature = "devtools"))]
+impl Component for DisabledDevToolsMetricsProbe {
+    type Message = ();
+    type Properties = Rc<Cell<bool>>;
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let invoked = Rc::clone(&ctx.props);
+        ctx.set_devtools_metrics(move || {
+            invoked.set(true);
+            [crate::DevToolsMetric::new(
+                "Built",
+                format!("{}", expensive_metric()),
+            )]
+        });
+        Text::new("metrics disabled").into()
+    }
+}
+
+#[cfg(not(feature = "devtools"))]
+fn expensive_metric() -> usize {
+    42
 }
 
 #[cfg(feature = "ui-snapshot-png")]
@@ -161,6 +235,54 @@ fn update_constructors_set_expected_levels() {
     let full2 = Update::full();
     assert!(full2.dirty);
     assert_eq!(full2.level(), super::UpdateLevel::Full);
+}
+
+#[cfg(feature = "devtools")]
+#[test]
+fn context_devtools_metrics_set_replace_and_clear() {
+    let mut backend = TestBackend::new(DevToolsMetricsProbe);
+    backend.render();
+    let metrics = backend.core.ctx.devtools_metrics();
+
+    assert_eq!(
+        metrics.rows.borrow().as_slice(),
+        [
+            crate::DevToolsMetric::new("Panes", "4"),
+            crate::DevToolsMetric::new("Clients", "2"),
+        ]
+    );
+
+    backend
+        .update_level(DevToolsMetricsMsg::Replace)
+        .expect("replace update should succeed");
+    assert_eq!(
+        metrics.rows.borrow().as_slice(),
+        [crate::DevToolsMetric::new("Queue", "3")]
+    );
+
+    backend
+        .update_level(DevToolsMetricsMsg::Clear)
+        .expect("clear update should succeed");
+    assert!(metrics.rows.borrow().is_empty());
+}
+
+#[cfg(not(feature = "devtools"))]
+#[test]
+fn context_devtools_metrics_factory_is_not_invoked_without_feature() {
+    let invoked = Rc::new(Cell::new(false));
+    let mut backend =
+        TestBackend::new_with_props(DisabledDevToolsMetricsProbe, Rc::clone(&invoked));
+    backend.render();
+
+    assert!(!invoked.get());
+}
+
+#[cfg(not(feature = "devtools"))]
+#[test]
+fn context_devtools_visible_is_false_without_feature() {
+    let backend = TestBackend::new_with_props(Counter, 0);
+
+    assert!(!backend.core.ctx.devtools_visible());
 }
 
 #[test]

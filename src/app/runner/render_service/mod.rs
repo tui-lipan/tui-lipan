@@ -1292,6 +1292,11 @@ mod tests {
     #[cfg(feature = "devtools")]
     struct MemoMetricsChild;
 
+    #[cfg(feature = "devtools")]
+    struct ViewMetricsPublisher {
+        publications: Rc<Cell<usize>>,
+    }
+
     enum ViewportChangeMsg {
         Viewport(ScrollViewportEvent),
     }
@@ -1336,6 +1341,31 @@ mod tests {
 
         fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
             Text::new("memoized").into()
+        }
+    }
+
+    #[cfg(feature = "devtools")]
+    impl Component for ViewMetricsPublisher {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> crate::core::element::Element {
+            let publication = self.publications.get() + 1;
+            self.publications.set(publication);
+            ctx.set_devtools_metrics(|| {
+                [crate::DevToolsMetric::new(
+                    "Age",
+                    format!("{publication} ms"),
+                )]
+            });
+            Text::new("metrics").into()
         }
     }
 
@@ -1463,6 +1493,18 @@ mod tests {
     fn make_hover_runner() -> AppRunner<ScrollWithHoverableFrame> {
         let app = App::new().mouse(false);
         AppRunner::new(app, ScrollWithHoverableFrame, ())
+    }
+
+    #[cfg(feature = "devtools")]
+    fn tree_contains_text(tree: &crate::core::node::NodeTree, expected: &str) -> bool {
+        tree.iter().any(|node| {
+            let crate::core::node::NodeKind::Text(text) = &node.kind else {
+                return false;
+            };
+            text.spans
+                .iter()
+                .any(|span| span.content.as_ref() == expected)
+        })
     }
 
     #[test]
@@ -1966,6 +2008,88 @@ mod tests {
         );
 
         assert!(runner.devtools_state.borrow().frame_history.is_empty());
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn app_metric_rows_share_context_storage_with_panel_state() {
+        let runner = AppRunner::new(App::new().mouse(false), ScrollWithInput, ());
+        runner.core.ctx.set_devtools_metrics(|| {
+            [
+                crate::DevToolsMetric::new("Panes", "4"),
+                crate::DevToolsMetric::new("Clients", "2"),
+            ]
+        });
+
+        let metrics = Rc::clone(&runner.devtools_state.borrow().app_metrics);
+        assert_eq!(
+            metrics.rows.borrow().as_slice(),
+            [
+                crate::DevToolsMetric::new("Panes", "4"),
+                crate::DevToolsMetric::new("Clients", "2"),
+            ]
+        );
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn view_published_app_metrics_render_in_same_frame_without_requesting_another() {
+        let publications = Rc::new(Cell::new(0));
+        let mut runner = AppRunner::new(
+            App::new().mouse(false),
+            ViewMetricsPublisher {
+                publications: Rc::clone(&publications),
+            },
+            (),
+        );
+        assert!(runner.set_devtools_visible(true));
+        runner.devtools_state.borrow_mut().set_active_tab(2);
+        runner.install_devtools_overlay();
+
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 10,
+        };
+        runner.core.init();
+        runner.core.render_element(viewport, None, None, None);
+        assert_eq!(publications.get(), 1);
+        assert!(tree_contains_text(&runner.core.tree, "1 ms"));
+        assert!(!runner.apply_pending_devtools_request());
+
+        runner.core.render_element(viewport, None, None, None);
+        assert_eq!(publications.get(), 2);
+        assert!(tree_contains_text(&runner.core.tree, "2 ms"));
+        assert!(!runner.apply_pending_devtools_request());
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn context_devtools_visible_tracks_panel_and_runner_controls() {
+        let mut runner = AppRunner::new(App::new().mouse(false), ScrollWithInput, ());
+        assert!(!runner.core.ctx.devtools_visible());
+
+        // The framework F12 path uses this runner-owned visibility transition.
+        assert!(runner.set_devtools_visible(true));
+        assert!(runner.core.ctx.devtools_visible());
+
+        // Esc closes the panel through DevToolsState itself.
+        runner.devtools_state.borrow_mut().set_visible(false);
+        assert!(!runner.core.ctx.devtools_visible());
+
+        runner.core.ctx.show_devtools();
+        assert!(!runner.core.ctx.devtools_visible());
+        assert!(runner.apply_pending_devtools_request());
+        assert!(runner.core.ctx.devtools_visible());
+
+        runner.core.ctx.hide_devtools();
+        assert!(runner.apply_pending_devtools_request());
+        assert!(!runner.core.ctx.devtools_visible());
+
+        runner.core.ctx.toggle_devtools();
+        assert!(runner.apply_pending_devtools_request());
+        assert!(runner.core.ctx.devtools_visible());
     }
 
     #[cfg(feature = "devtools")]
