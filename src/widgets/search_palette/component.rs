@@ -221,16 +221,13 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
         }
 
         if should_refresh {
-            // A simultaneous items change must not swallow a controlled selection move.
-            // `initial_selected_item_index` acts as a controlled selection driver, so when
-            // it changes in the same render that also changes the items, re-resolve the
-            // selection against the freshly computed results (a query-driven reset already
-            // does this via `reset_selection`). Without this, `state.selected` keeps its old
-            // numeric row while callers move `initial_selected_item_index` elsewhere, so the
-            // list highlight and the caller's selection diverge.
-            let selection_index_changed =
-                old_props.initial_selected_item_index != ctx.props.initial_selected_item_index;
-            return refresh_results(ctx, reset_selection || selection_index_changed);
+            // `initial_selected_item_index` acts as a controlled selection driver. Re-resolve
+            // it whenever matching inputs refresh because fresh items can insert a
+            // higher-ranked result before the same source item. Also preserve the existing
+            // reset when the prop changes to `None`.
+            let resolve_controlled_selection = ctx.props.initial_selected_item_index.is_some()
+                || old_props.initial_selected_item_index != ctx.props.initial_selected_item_index;
+            return refresh_results(ctx, reset_selection || resolve_controlled_selection);
         }
 
         if old_props.sync_selection != ctx.props.sync_selection {
@@ -549,7 +546,10 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                 }
                 ctx.state.results = results;
                 ctx.state.results_query = Arc::from(ctx.state.query_source.query_str().to_owned());
-                if expanded_sync_results || ctx.state.selected >= ctx.state.results.len() {
+                if ctx.props.initial_selected_item_index.is_some()
+                    || expanded_sync_results
+                    || ctx.state.selected >= ctx.state.results.len()
+                {
                     ctx.state.selected = resolve_initial_result_index(
                         ctx.props.initial_selected_item_index,
                         &ctx.state.results,
@@ -901,6 +901,7 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Arc;
 
+    use super::super::matching::{build_search_entries, match_items};
     use super::{
         QuerySource, SearchPaletteMsg, SearchState, initial_results, navigate_down, navigate_up,
         resolve_initial_result_index, search_input_key_interceptor, sync_current_selection,
@@ -912,7 +913,9 @@ mod tests {
     use crate::core::node::NodeKind;
     use crate::runtime::RuntimeCore;
     use crate::style::{CaretShape, Length, Rect, Theme};
-    use crate::widgets::{ListConfig, SearchEvent, SearchItem, SearchPalette, ThemeProvider};
+    use crate::widgets::{
+        ListConfig, SearchEvent, SearchItem, SearchMatchMode, SearchPalette, ThemeProvider,
+    };
 
     struct PaletteRoot {
         view_count: Rc<Cell<usize>>,
@@ -1292,5 +1295,190 @@ mod tests {
         // The palette's internal selection must follow the controlled index (4),
         // not stay on the old numeric row (0) just because the items changed too.
         assert_eq!(selections.borrow().last().copied(), Some(4));
+    }
+
+    const RANK_SHIFT_TARGET_INDEX: usize = 100;
+
+    fn rank_shift_items(grown: bool) -> Vec<SearchItem<usize>> {
+        let mut items = (0..RANK_SHIFT_TARGET_INDEX)
+            .map(|i| SearchItem::new(format!("noise-{i}"), i))
+            .collect::<Vec<_>>();
+        items.push(SearchItem::new("target candidate", RANK_SHIFT_TARGET_INDEX));
+        if grown {
+            items.push(SearchItem::new("target", RANK_SHIFT_TARGET_INDEX + 1));
+        }
+        items
+    }
+
+    struct RankShiftRoot {
+        sync_match_limit: usize,
+        selections: Rc<RefCell<Vec<(usize, usize)>>>,
+        activations: Rc<RefCell<Vec<(usize, usize)>>>,
+    }
+
+    impl Component for RankShiftRoot {
+        type Message = ();
+        type State = bool;
+        type Properties = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            false
+        }
+
+        fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state = true;
+            Update::layout()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let selections = Rc::clone(&self.selections);
+            let activations = Rc::clone(&self.activations);
+            SearchPalette::<usize>::new()
+                .items(rank_shift_items(ctx.state))
+                .query("target")
+                .match_mode(SearchMatchMode::Hybrid)
+                .sync_match_limit(self.sync_match_limit)
+                .sync_selection(true)
+                .initial_selected_item_index(Some(RANK_SHIFT_TARGET_INDEX))
+                .height(Length::Px(6))
+                .on_select(Callback::new(move |event: SearchEvent<usize>| {
+                    selections
+                        .borrow_mut()
+                        .push((event.match_index, event.item_index));
+                }))
+                .on_activate(Callback::new(move |event: SearchEvent<usize>| {
+                    activations
+                        .borrow_mut()
+                        .push((event.match_index, event.item_index));
+                }))
+                .into()
+        }
+    }
+
+    fn rank_shift_runtime(
+        sync_match_limit: usize,
+        selections: Rc<RefCell<Vec<(usize, usize)>>>,
+        activations: Rc<RefCell<Vec<(usize, usize)>>>,
+    ) -> (RuntimeCore<RankShiftRoot>, Rect) {
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 10,
+        };
+        let mut runtime = RuntimeCore::new_test(
+            RankShiftRoot {
+                sync_match_limit,
+                selections,
+                activations,
+            },
+            (),
+            Rect::default(),
+            Theme::default(),
+            crate::app::context::SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(true)),
+        );
+        runtime.init();
+        runtime.render_element(bounds, None, None, None);
+        (runtime, bounds)
+    }
+
+    fn ranked_results(items: Vec<SearchItem<usize>>) -> Vec<super::super::matching::SearchResult> {
+        let palette = SearchPalette::<usize>::new()
+            .items(items)
+            .match_mode(SearchMatchMode::Hybrid);
+        match_items(
+            &build_search_entries(&palette.props.items),
+            "target",
+            palette.props.match_mode,
+            palette.props.case_matching,
+            palette.props.normalization,
+        )
+    }
+
+    #[test]
+    fn controlled_selection_stays_on_source_item_when_sync_results_shift() {
+        let selections = Rc::new(RefCell::new(Vec::new()));
+        let activations = Rc::new(RefCell::new(Vec::new()));
+        let (mut runtime, bounds) =
+            rank_shift_runtime(200, Rc::clone(&selections), Rc::clone(&activations));
+
+        assert_eq!(
+            selections.borrow().last().copied(),
+            Some((0, RANK_SHIFT_TARGET_INDEX))
+        );
+
+        runtime
+            .update_from_boxed(ScopeId(1), Box::new(()))
+            .expect("root update should succeed");
+        runtime.render_element(bounds, None, None, None);
+
+        assert_eq!(
+            selections.borrow().last().copied(),
+            Some((1, RANK_SHIFT_TARGET_INDEX))
+        );
+        runtime
+            .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::ActivateSelected))
+            .expect("palette activation should succeed");
+        assert_eq!(
+            activations.borrow().last().copied(),
+            Some((1, RANK_SHIFT_TARGET_INDEX))
+        );
+    }
+
+    #[test]
+    fn controlled_selection_stays_on_source_item_after_async_results_shift() {
+        let selections = Rc::new(RefCell::new(Vec::new()));
+        let activations = Rc::new(RefCell::new(Vec::new()));
+        let (mut runtime, bounds) =
+            rank_shift_runtime(100, Rc::clone(&selections), Rc::clone(&activations));
+
+        runtime
+            .update_from_boxed(
+                ScopeId(2),
+                Box::new(SearchPaletteMsg::ResultsReady {
+                    query_id: 1,
+                    results: ranked_results(rank_shift_items(false)),
+                }),
+            )
+            .expect("initial async results should succeed");
+        assert_eq!(
+            selections.borrow().last().copied(),
+            Some((0, RANK_SHIFT_TARGET_INDEX))
+        );
+
+        runtime
+            .update_from_boxed(ScopeId(1), Box::new(()))
+            .expect("root update should succeed");
+        runtime.render_element(bounds, None, None, None);
+        let results = ranked_results(rank_shift_items(true));
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.item_index)
+                .collect::<Vec<_>>(),
+            [RANK_SHIFT_TARGET_INDEX + 1, RANK_SHIFT_TARGET_INDEX]
+        );
+        runtime
+            .update_from_boxed(
+                ScopeId(2),
+                Box::new(SearchPaletteMsg::ResultsReady {
+                    query_id: 2,
+                    results,
+                }),
+            )
+            .expect("refreshed async results should succeed");
+
+        assert_eq!(
+            selections.borrow().last().copied(),
+            Some((1, RANK_SHIFT_TARGET_INDEX))
+        );
+        runtime
+            .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::ActivateSelected))
+            .expect("palette activation should succeed");
+        assert_eq!(
+            activations.borrow().last().copied(),
+            Some((1, RANK_SHIFT_TARGET_INDEX))
+        );
     }
 }

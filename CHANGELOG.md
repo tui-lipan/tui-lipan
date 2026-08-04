@@ -907,14 +907,13 @@ While the crate is on `0.x.y`:
 - Clarify that `theme-reload` supports live TOML theme customization for app
   users as well as theme authors, not just development workflows
   (`README.md`, `docs/quick-start.md`, `docs/styling.md`).
-- `SearchPalette` now honors a change to the controlled
-  `initial_selected_item_index` even when the `items`/`entries` set changes in
-  the same render. Previously a simultaneous items change took an early refresh
-  path that reset the selection only on query changes, so the palette's internal
-  highlight stayed pinned to the old numeric row while the caller moved the
-  controlled index elsewhere — leaving the palette highlight and the caller's
-  selection on two different rows (visible, for example, in a session/command
-  list that gains rows from a background fetch while open).
+- `SearchPalette` keeps controlled `initial_selected_item_index` selection
+  anchored to its source item whenever `items` or matching inputs refresh,
+  including asynchronous completion. Previously a refresh could preserve the
+  old numeric result row when the source index itself stayed unchanged, so
+  newly added higher-ranked matches could make the highlight, `on_select`, and
+  activation point at a different item. Changes to the controlled index during
+  the same refresh remain synchronized as well.
 
 ## [0.1.0] - 2026-07-05
 
