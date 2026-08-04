@@ -314,6 +314,7 @@ Hierarchical tree view with expand/collapse.
 | `icon_style` | `Style` | Icon style |
 | `indent_style` | `IndentStyle` | Indent guide glyph variant: `None`, `Line`, `Short`, `Long`, `ShortRounded`, or `LongRounded` |
 | `indent_guide_style` | `Style` | Vertical indent guide |
+| `indent_guide_start_depth` | `usize` | First non-root depth that renders guides (default: `1`) |
 | `indent_gradient` | `ColorGradient` | Gradient for indent depth |
 | `style` | `Style` | Base style |
 | `hover_style` | `Style` | Hover style |
@@ -371,6 +372,9 @@ TreeNode::new(ListItem::from_spans(vec![
 ]))
 ```
 
+Use `TreeNode::expandable(true)` when a node must retain expand/collapse behavior while its current
+child list is empty, such as an asynchronously loaded directory.
+
 ### Events
 
 ```rust
@@ -420,6 +424,7 @@ entries and git-backed or application-provided change projections.
 | `select_path` | `impl Into<Arc<str>>` | Reveal and select a path, forcing the tree to scroll to the row when visible |
 | `force_scroll_to_selected` | `bool` | Force the tree to reveal the selected row on next render |
 | `expanded_paths` | `impl IntoIterator<Item = impl Into<Arc<str>>>` | Controlled expanded directory paths; the root path is kept expanded automatically |
+| `indent_width` | `u16` | Indentation cells per hierarchy level (default: `2`); use `1` with short guides for compact `├item` rows |
 | `directory_icon` | `String` | Directory icon |
 | `file_icon` | `String` | File icon |
 | `symlink_icon` | `String` | Symlink icon |

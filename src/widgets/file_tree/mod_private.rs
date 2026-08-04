@@ -52,6 +52,8 @@ pub(crate) struct FileTreeProps {
     pub(crate) show_arrows: bool,
     pub(crate) indent_style: crate::widgets::IndentStyle,
     pub(crate) indent_guide_style: Style,
+    pub(crate) indent_guide_start_depth: usize,
+    pub(crate) indent_width: u16,
     pub(crate) directory_icon: Arc<str>,
     pub(crate) opened_directory_icon: Arc<str>,
     pub(crate) file_icon: Arc<str>,

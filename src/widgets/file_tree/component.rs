@@ -200,6 +200,7 @@ impl Component for FileTreeComponent {
             .solid_indent_connector_gap(file_tree_uses_guide_aware_nerd_arrows(&ctx.props))
             .indent_style(ctx.props.indent_style)
             .indent_guide_style(ctx.props.indent_guide_style)
+            .indent_guide_start_depth(ctx.props.indent_guide_start_depth)
             .style(ctx.props.style)
             .hover_style_slot(ctx.props.hover_style)
             .item_hover_style_slot(ctx.props.item_hover_style)
@@ -1603,18 +1604,33 @@ fn build_projected_tree_node(
         item = item.description_spans(description_spans);
     }
 
-    let mut tree = TreeNode::new(item).expanded(is_expanded);
+    let mut tree = TreeNode::new(item)
+        .expanded(is_expanded)
+        .expandable(
+            node.is_dir()
+                && (is_expanded
+                    || !node.loaded
+                    || node.loading
+                    || node.error.is_some()
+                    || !node.children.is_empty()),
+        )
+        .indent(ctx.props.indent_width);
     if file_tree_needs_nerd_arrow_placeholder(node, is_root, ctx.props) {
         tree = tree.leading_guide_fill_cells(2);
     }
 
     if node.is_dir() {
         if node.loading {
-            tree = tree.child(TreeNode::new(ctx.props.loading_label.clone()));
+            tree = tree.child(
+                TreeNode::new(ctx.props.loading_label.clone()).indent(ctx.props.indent_width),
+            );
         } else if !node.loaded {
-            tree = tree.child(TreeNode::new(" "));
+            tree = tree.child(TreeNode::new(" ").indent(ctx.props.indent_width));
         } else if let Some(error) = node.error.as_ref() {
-            tree = tree.child(TreeNode::new(format!("{} {error}", ctx.props.error_prefix)));
+            tree = tree.child(
+                TreeNode::new(format!("{} {error}", ctx.props.error_prefix))
+                    .indent(ctx.props.indent_width),
+            );
         } else if !is_expanded && ctx.explorer_filter.is_none() && !node.children.is_empty() {
             // A collapsed directory contributes no visible rows, so materializing its
             // subtree is wasted work on every frame. Emit the same single placeholder
@@ -1626,7 +1642,7 @@ fn build_projected_tree_node(
             // Explorer search keeps the full walk: its filter decides visibility per
             // child, so a collapsed directory's toggleability depends on how many of
             // its children survive the filter.
-            tree = tree.child(TreeNode::new(" "));
+            tree = tree.child(TreeNode::new(" ").indent(ctx.props.indent_width));
         } else {
             let mut display_index = 0usize;
             for child in &node.children {
@@ -2333,7 +2349,7 @@ mod tests {
     }
 
     #[test]
-    fn a_loaded_empty_directory_stays_a_leaf() {
+    fn a_collapsed_loaded_empty_directory_stays_a_leaf() {
         let props = collapsed_projection_props();
         let state = FileTreeComponent::new().create_state(&props);
 
@@ -2344,6 +2360,21 @@ mod tests {
         // directory with no entries must keep that shape, or it would grow a
         // toggle arrow that opens onto nothing.
         assert!(empty.children.is_empty());
+        assert!(!empty.is_expandable());
+    }
+
+    #[test]
+    fn an_expanded_loaded_empty_directory_remains_collapsible() {
+        let props = collapsed_projection_props();
+        let mut state = FileTreeComponent::new().create_state(&props);
+        state.expanded.insert(Arc::from("/remote/repo/empty"));
+
+        let projection = build_projection(&props, &state, None);
+        let empty = projected_child(&projection.root, "empty");
+
+        assert!(empty.children.is_empty());
+        assert!(empty.expanded);
+        assert!(empty.is_expandable());
     }
 
     #[test]
@@ -3014,6 +3045,7 @@ mod tests {
         let props = crate::widgets::file_tree::FileTree::new("/repo")
             .icon_style(FileIconStyle::NerdFont)
             .indent_style(crate::widgets::IndentStyle::Long)
+            .indent_width(1)
             .props;
         let node = FsNode {
             name: Arc::from("main.rs"),
@@ -3039,6 +3071,7 @@ mod tests {
 
         let tree = build_projected_tree_node(&node, false, vec![0], &mut ctx);
 
+        assert_eq!(tree.indent, 1);
         assert_eq!(tree.leading_guide_fill_cells, 2);
         assert!(!tree.item.spans[0].content.starts_with(' '));
         assert_eq!(tree.item.spans[1].content.as_ref(), " ");
