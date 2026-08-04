@@ -19,6 +19,15 @@ pub enum ColorTransform {
     Dim(f32),
     /// Lighten toward white by an amount in `[0.0, 1.0]`.
     Lighten(f32),
+    /// Raise a surface off its own background by an amount in `[0.0, 1.0]`.
+    ///
+    /// The relative form of [`Color::elevate`]: luminance-aware, so it lightens a
+    /// dark color and dims a light one, and hue- and chroma-preserving rather
+    /// than washing toward white or black. Reach for this over [`Self::Lighten`]
+    /// whenever the transform has to match an absolute `Color::elevate` step
+    /// elsewhere in the same UI - a hover lift over a row whose keyboard-cursor
+    /// counterpart is an elevated background, for instance.
+    Elevate(f32),
     /// Blend toward the resolved background by alpha `(1.0 - opacity)`.
     ///
     /// `1.0` keeps the original color unchanged, while `0.0` fully washes it
@@ -41,6 +50,7 @@ impl PartialEq for ColorTransform {
         match (*self, *other) {
             (Self::Dim(a), Self::Dim(b))
             | (Self::Lighten(a), Self::Lighten(b))
+            | (Self::Elevate(a), Self::Elevate(b))
             | (Self::Opacity(a), Self::Opacity(b)) => a.to_bits() == b.to_bits(),
             (
                 Self::OpacityToward {
@@ -87,6 +97,10 @@ impl Hash for ColorTransform {
                 color.hash(state);
                 alpha.to_bits().hash(state);
             }
+            Self::Elevate(amount) => {
+                5u8.hash(state);
+                amount.to_bits().hash(state);
+            }
         }
     }
 }
@@ -105,6 +119,7 @@ impl ColorTransform {
         match self {
             Self::Dim(amount) => color.dim_by(amount),
             Self::Lighten(amount) => color.lighten_by(amount),
+            Self::Elevate(amount) => color.elevate(amount),
             Self::Opacity(opacity) => backdrop.map_or(color, |bg| {
                 color.blend_toward(bg, (1.0 - opacity).clamp(0.0, 1.0))
             }),
@@ -155,6 +170,7 @@ impl ColorTransform {
         match self {
             Self::Dim(amount) => Self::Dim(amount.clamp(0.0, 1.0)),
             Self::Lighten(amount) => Self::Lighten(amount.clamp(0.0, 1.0)),
+            Self::Elevate(amount) => Self::Elevate(amount.clamp(0.0, 1.0)),
             Self::Opacity(opacity) => Self::Opacity(opacity.clamp(0.0, 1.0)),
             Self::OpacityToward { factor, target } => Self::OpacityToward {
                 factor: factor.clamp(0.0, 1.0),
@@ -857,6 +873,34 @@ mod tests {
         let resolved = tinted.resolve_color_transforms();
         assert_eq!(resolved.fg, p(Color::Rgb(120, 120, 120)));
         assert_eq!(resolved.bg, p(Color::Rgb(100, 20, 20)));
+    }
+
+    #[test]
+    fn elevate_transform_matches_the_absolute_elevate_step() {
+        // The point of the variant: a hover lift expressed as a transform has to land on exactly
+        // the color an absolute `Color::elevate` produces, so the same surface reached either way
+        // reads as one thing. `Lighten` cannot do that - it washes the surface cast out.
+        let surface = Color::Rgb(6, 14, 19);
+
+        assert_eq!(
+            ColorTransform::Elevate(0.08).apply(surface),
+            surface.elevate(0.08),
+        );
+        assert_ne!(
+            ColorTransform::Elevate(0.08).apply(surface),
+            ColorTransform::Lighten(0.08).apply(surface),
+        );
+    }
+
+    #[test]
+    fn elevate_transform_reverses_direction_on_a_light_surface() {
+        let light = Color::Rgb(245, 245, 245);
+        let lifted = ColorTransform::Elevate(0.08).apply(light);
+
+        assert!(
+            lifted.luminance() < light.luminance(),
+            "elevating a light surface dims it, got {lifted:?}",
+        );
     }
 
     #[test]

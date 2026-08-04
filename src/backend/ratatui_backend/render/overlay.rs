@@ -25,6 +25,7 @@ pub(super) fn scale_transform_for_opacity(
     match transform {
         ColorTransform::Dim(amount) => ColorTransform::Dim(amount * overlay_opacity),
         ColorTransform::Lighten(amount) => ColorTransform::Lighten(amount * overlay_opacity),
+        ColorTransform::Elevate(amount) => ColorTransform::Elevate(amount * overlay_opacity),
         ColorTransform::Opacity(opacity) => {
             let washout = (1.0 - opacity).clamp(0.0, 1.0) * overlay_opacity;
             ColorTransform::Opacity(1.0 - washout)
