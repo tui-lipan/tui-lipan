@@ -102,7 +102,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `ctx.hide_devtools()` | Hide the built-in DevTools panel on the next tick |
 | `ctx.toggle_devtools()` | Toggle the built-in DevTools panel on the next tick |
 | `ctx.devtools_visible()` | Read the current runner-synchronized DevTools panel visibility |
-| `ctx.set_devtools_metrics(factory)` | Lazily replace the ordered label/value rows in the DevTools App tab; an empty iterator clears them |
+| `ctx.set_devtools_metrics(factory)` | Lazily replace the ordered label/value rows in the DevTools App tab without scheduling a frame; an empty iterator clears them |
 | `ctx.has_focus_within_key(key)` | Check if focus is within a subtree |
 | `ctx.text_area_scrollbars(key)` | Read resolved vertical/horizontal scrollbar visibility for a keyed `TextArea` from the previous frame |
 | `ctx.has_focus_within_scope(id)` | Check focus within a scope |
@@ -165,8 +165,10 @@ ctx.set_devtools_metrics(std::iter::empty);
 
 The closure runs immediately when `devtools` is enabled; the panel later reads
 stored values only and never calls back into the host app while rendering.
-Changed rows invalidate a visible App tab even when the surrounding update
-returns `Update::none()`. The tab sizes to its content within the viewport and
+Publishing does not schedule a frame: values published from `view()` are read
+by the DevTools extra root later in that same frame. Calls made elsewhere are
+stored until a later frame rebuilds the panel; the host update is responsible
+for requesting that frame. The tab sizes to its content within the viewport and
 becomes vertically scrollable when rows do not fit. Without the `devtools`
 feature, the closure is not invoked, so formatting and allocation are skipped
 while the same source keeps compiling.

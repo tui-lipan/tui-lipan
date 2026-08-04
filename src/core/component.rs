@@ -1488,8 +1488,12 @@ impl<C: Component> Context<C> {
     /// The factory is invoked only when the `devtools` feature is enabled. Its
     /// input order is preserved, and returning an empty iterator clears all
     /// application rows. This stores only the supplied values; it never invokes
-    /// host callbacks while DevTools renders. Replacing rows with equal values
-    /// does not request another frame.
+    /// host callbacks while DevTools renders.
+    ///
+    /// Publishing is render-neutral: it does not schedule a frame. Calls made
+    /// from `view()` are consumed by the DevTools extra root later in that same
+    /// frame. Calls made elsewhere remain stored until a host-requested frame
+    /// rebuilds the panel.
     ///
     /// Without the `devtools` feature this is a no-op, so the same application
     /// code continues to compile without constructing or formatting metrics.
@@ -1515,11 +1519,6 @@ impl<C: Component> Context<C> {
         &self,
     ) -> std::rc::Rc<crate::core::runtime_env::DevToolsMetrics> {
         std::rc::Rc::clone(&self.env.devtools_metrics)
-    }
-
-    #[cfg(feature = "devtools")]
-    pub(crate) fn take_devtools_metrics_dirty(&self) -> bool {
-        self.env.devtools_metrics.take_dirty()
     }
 
     /// Return whether the built-in DevTools panel is currently visible.

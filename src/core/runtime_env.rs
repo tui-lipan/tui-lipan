@@ -38,35 +38,20 @@ pub(crate) enum DevToolsRequest {
 pub(crate) struct DevToolsMetrics {
     pub(crate) rows: RefCell<Vec<crate::app::DevToolsMetric>>,
     visible: Cell<bool>,
-    dirty: Cell<bool>,
 }
 
 #[cfg(feature = "devtools")]
 impl DevToolsMetrics {
     pub(crate) fn replace(&self, rows: Vec<crate::app::DevToolsMetric>) {
-        let mut current = self.rows.borrow_mut();
-        if *current == rows {
-            return;
-        }
-        *current = rows;
-        if self.visible.get() {
-            self.dirty.set(true);
-        }
+        *self.rows.borrow_mut() = rows;
     }
 
     pub(crate) fn set_visible(&self, visible: bool) {
         self.visible.set(visible);
-        if !visible {
-            self.dirty.set(false);
-        }
     }
 
     pub(crate) fn is_visible(&self) -> bool {
         self.visible.get()
-    }
-
-    pub(crate) fn take_dirty(&self) -> bool {
-        self.dirty.replace(false)
     }
 }
 

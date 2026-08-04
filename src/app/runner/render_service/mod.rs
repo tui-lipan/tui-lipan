@@ -1293,12 +1293,8 @@ mod tests {
     struct MemoMetricsChild;
 
     #[cfg(feature = "devtools")]
-    struct AppMetricsNoneUpdate;
-
-    #[cfg(feature = "devtools")]
-    enum AppMetricsNoneMsg {
-        Set(&'static str),
-        Clear,
+    struct ViewMetricsPublisher {
+        publications: Rc<Cell<usize>>,
     }
 
     enum ViewportChangeMsg {
@@ -1349,26 +1345,26 @@ mod tests {
     }
 
     #[cfg(feature = "devtools")]
-    impl Component for AppMetricsNoneUpdate {
-        type Message = AppMetricsNoneMsg;
+    impl Component for ViewMetricsPublisher {
+        type Message = ();
         type Properties = ();
         type State = ();
 
         fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
-        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
-            match msg {
-                AppMetricsNoneMsg::Set(value) => {
-                    ctx.set_devtools_metrics(|| [crate::DevToolsMetric::new("Queue", value)]);
-                }
-                AppMetricsNoneMsg::Clear => {
-                    ctx.set_devtools_metrics(std::iter::empty);
-                }
-            }
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
             Update::none()
         }
 
-        fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        fn view(&self, ctx: &Context<Self>) -> crate::core::element::Element {
+            let publication = self.publications.get() + 1;
+            self.publications.set(publication);
+            ctx.set_devtools_metrics(|| {
+                [crate::DevToolsMetric::new(
+                    "Age",
+                    format!("{publication} ms"),
+                )]
+            });
             Text::new("metrics").into()
         }
     }
@@ -1497,6 +1493,18 @@ mod tests {
     fn make_hover_runner() -> AppRunner<ScrollWithHoverableFrame> {
         let app = App::new().mouse(false);
         AppRunner::new(app, ScrollWithHoverableFrame, ())
+    }
+
+    #[cfg(feature = "devtools")]
+    fn tree_contains_text(tree: &crate::core::node::NodeTree, expected: &str) -> bool {
+        tree.iter().any(|node| {
+            let crate::core::node::NodeKind::Text(text) = &node.kind else {
+                return false;
+            };
+            text.spans
+                .iter()
+                .any(|span| span.content.as_ref() == expected)
+        })
     }
 
     #[test]
@@ -2025,54 +2033,41 @@ mod tests {
 
     #[cfg(feature = "devtools")]
     #[test]
-    fn changed_app_metrics_invalidate_visible_panel_after_none_update() {
-        let mut runner = AppRunner::new(App::new().mouse(false), AppMetricsNoneUpdate, ());
+    fn view_published_app_metrics_render_in_same_frame_without_requesting_another() {
+        let publications = Rc::new(Cell::new(0));
+        let mut runner = AppRunner::new(
+            App::new().mouse(false),
+            ViewMetricsPublisher {
+                publications: Rc::clone(&publications),
+            },
+            (),
+        );
         assert!(runner.set_devtools_visible(true));
+        runner.devtools_state.borrow_mut().set_active_tab(2);
+        runner.install_devtools_overlay();
 
-        let level = runner
-            .core
-            .update_from_boxed(
-                crate::callback::ScopeId(1),
-                Box::new(AppMetricsNoneMsg::Set("3")),
-            )
-            .expect("metrics update should succeed");
-        assert_eq!(level, crate::UpdateLevel::None);
-        assert!(runner.apply_pending_devtools_request());
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 10,
+        };
+        runner.core.init();
+        runner.core.render_element(viewport, None, None, None);
+        assert_eq!(publications.get(), 1);
+        assert!(tree_contains_text(&runner.core.tree, "1 ms"));
         assert!(!runner.apply_pending_devtools_request());
 
-        runner
-            .core
-            .update_from_boxed(
-                crate::callback::ScopeId(1),
-                Box::new(AppMetricsNoneMsg::Set("3")),
-            )
-            .expect("equal metrics update should succeed");
-        assert!(!runner.apply_pending_devtools_request());
-
-        runner
-            .core
-            .update_from_boxed(
-                crate::callback::ScopeId(1),
-                Box::new(AppMetricsNoneMsg::Clear),
-            )
-            .expect("clear metrics update should succeed");
-        assert!(runner.apply_pending_devtools_request());
-
-        assert!(runner.set_devtools_visible(false));
-        runner
-            .core
-            .update_from_boxed(
-                crate::callback::ScopeId(1),
-                Box::new(AppMetricsNoneMsg::Set("4")),
-            )
-            .expect("hidden metrics update should succeed");
+        runner.core.render_element(viewport, None, None, None);
+        assert_eq!(publications.get(), 2);
+        assert!(tree_contains_text(&runner.core.tree, "2 ms"));
         assert!(!runner.apply_pending_devtools_request());
     }
 
     #[cfg(feature = "devtools")]
     #[test]
     fn context_devtools_visible_tracks_panel_and_runner_controls() {
-        let mut runner = AppRunner::new(App::new().mouse(false), AppMetricsNoneUpdate, ());
+        let mut runner = AppRunner::new(App::new().mouse(false), ScrollWithInput, ());
         assert!(!runner.core.ctx.devtools_visible());
 
         // The framework F12 path uses this runner-owned visibility transition.

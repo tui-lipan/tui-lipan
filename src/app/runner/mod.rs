@@ -898,7 +898,7 @@ impl<C: Component> AppRunner<C> {
 
     #[cfg(feature = "devtools")]
     fn apply_pending_devtools_request(&mut self) -> bool {
-        let visibility_changed = match self.core.ctx.take_devtools_request() {
+        match self.core.ctx.take_devtools_request() {
             Some(crate::core::runtime_env::DevToolsRequest::Show) => {
                 self.set_devtools_visible(true)
             }
@@ -910,9 +910,7 @@ impl<C: Component> AppRunner<C> {
                 self.set_devtools_visible(!visible)
             }
             None => false,
-        };
-        let metrics_dirty = self.core.ctx.take_devtools_metrics_dirty();
-        visibility_changed || metrics_dirty
+        }
     }
 
     #[cfg(not(feature = "devtools"))]
