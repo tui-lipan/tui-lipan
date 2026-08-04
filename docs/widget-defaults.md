@@ -880,6 +880,8 @@ Source: `src/widgets/draggable_tab_bar/mod.rs:468` (`DraggableTabBar`).
 | `overflow_hover_style` | `Style::default()` |
 | `overflow_left_label` | Nerd Font `` + hidden count |
 | `overflow_right_label` | Nerd Font `` + hidden count |
+| `empty_text` | `None` |
+| `empty_text_style` | `Style::default()` |
 | `scroll_offset` | `0` |
 | `show_file_icons` | `false` |
 | `file_icon_style` | `FileIconStyle::NerdFont` |

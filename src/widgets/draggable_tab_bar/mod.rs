@@ -469,6 +469,8 @@ pub struct DraggableTabBar {
     pub(crate) overflow_style: Style,
     pub(crate) overflow_hover_style: Style,
     pub(crate) overflow_labels: OverflowLabels,
+    pub(crate) empty_text: Option<Arc<str>>,
+    pub(crate) empty_text_style: Style,
     pub(crate) scroll_offset: usize,
     pub(crate) show_file_icons: bool,
     pub(crate) file_icon_style: FileIconStyle,
@@ -528,6 +530,8 @@ impl Default for DraggableTabBar {
             overflow_style: Style::default(),
             overflow_hover_style: Style::default(),
             overflow_labels: OverflowLabels::default(),
+            empty_text: None,
+            empty_text_style: Style::default(),
             scroll_offset: 0,
             show_file_icons: false,
             file_icon_style: FileIconStyle::NerdFont,
@@ -836,6 +840,24 @@ impl DraggableTabBar {
         F: Fn(usize) -> Arc<str> + 'static,
     {
         self.overflow_labels.right = Some(Arc::new(formatter));
+        self
+    }
+
+    /// Set placeholder text shown when the bar has no tabs.
+    ///
+    /// The placeholder is left-aligned inside the bar's padding, truncated with an
+    /// ellipsis when wider than the available width, and is not interactive. Leave
+    /// unset (`None`) to keep the empty bar blank aside from its border/background.
+    pub fn empty_text(mut self, text: impl Into<Arc<str>>) -> Self {
+        self.empty_text = Some(text.into());
+        self
+    }
+
+    /// Set style for the empty-state placeholder text.
+    ///
+    /// Patched onto the resolved bar style (including disabled/focus/hover).
+    pub fn empty_text_style(mut self, style: Style) -> Self {
+        self.empty_text_style = style;
         self
     }
 
@@ -2113,6 +2135,7 @@ impl crate::layout::hash::LayoutHash for DraggableTabBar {
         self.show_overflow_controls.hash(hasher);
         self.overflow_labels.left.is_some().hash(hasher);
         self.overflow_labels.right.is_some().hash(hasher);
+        self.empty_text.hash(hasher);
         self.scroll_offset.hash(hasher);
         self.show_file_icons.hash(hasher);
         self.file_icon_style.hash(hasher);
@@ -2130,7 +2153,7 @@ impl crate::layout::hash::LayoutHash for DraggableTabBar {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::style::{FileIconPalette, Span};
+    use crate::style::{FileIconPalette, Span, Style};
 
     use super::{
         DraggableTab, DraggableTabBar, DraggableTabBarOverflow, DraggableTabBarVariant,
@@ -2682,6 +2705,17 @@ mod tests {
                 .as_ref(),
             "4]"
         );
+    }
+
+    #[test]
+    fn empty_text_builders_feed_the_node() {
+        let bar = DraggableTabBar::new()
+            .empty_text("No open tabs")
+            .empty_text_style(Style::default().dim());
+        let node: crate::widgets::internal::DraggableTabBarNode = bar.into();
+
+        assert_eq!(node.empty_text.as_deref(), Some("No open tabs"));
+        assert_eq!(node.empty_text_style, Style::default().dim());
     }
 
     #[test]

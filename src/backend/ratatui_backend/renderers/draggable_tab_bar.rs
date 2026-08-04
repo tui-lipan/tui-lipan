@@ -179,6 +179,8 @@ pub(crate) struct DraggableTabBarRenderCtx<'a> {
     pub overflow_style: Style,
     pub overflow_hover_style: Style,
     pub overflow_labels: &'a OverflowLabels,
+    pub empty_text: Option<&'a str>,
+    pub empty_text_style: Style,
     pub show_file_icons: bool,
     pub file_icon_style: FileIconStyle,
     pub file_icon_palette: &'a FileIconPalette,
@@ -228,6 +230,8 @@ pub(crate) fn render_draggable_tab_bar(
         overflow_style,
         overflow_hover_style,
         overflow_labels,
+        empty_text,
+        empty_text_style,
         show_file_icons,
         file_icon_style,
         file_icon_palette,
@@ -311,6 +315,17 @@ pub(crate) fn render_draggable_tab_bar(
 
     let len = tabs.len();
     if len == 0 {
+        if let Some(text) = empty_text {
+            let style = finalize_style(
+                base_style.patch(empty_text_style),
+                style_backdrop(base_style),
+                contrast_policy,
+            );
+            let content = truncate_end_with_ellipsis(text, inner_rrect.width);
+            let paragraph =
+                Paragraph::new(Span::styled(content.to_string(), to_ratatui_style(style)));
+            f.render_widget(paragraph, inner_rrect);
+        }
         return;
     }
     let active = active.min(len.saturating_sub(1));
@@ -744,6 +759,8 @@ pub(crate) fn render_draggable_tab_bar_node(
                 node.overflow_hover_style,
             ),
             overflow_labels: &node.overflow_labels,
+            empty_text: node.empty_text.as_deref(),
+            empty_text_style: with_theme_muted(theme, node.empty_text_style),
             show_file_icons: node.show_file_icons,
             file_icon_style: node.file_icon_style,
             file_icon_palette,

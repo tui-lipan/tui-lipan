@@ -96,6 +96,8 @@ as a trailing `+` never inherit this lock.
 | `overflow_hover_style` | `Style` | Overflow button hover style |
 | `overflow_left_label` | `Fn(usize) -> Arc<str>` | Custom left overflow label from the hidden count |
 | `overflow_right_label` | `Fn(usize) -> Arc<str>` | Custom right overflow label from the hidden count |
+| `empty_text` | `impl Into<Arc<str>>` | Placeholder when the bar has no tabs |
+| `empty_text_style` | `Style` | Empty-placeholder style |
 | `scroll_offset` | `usize` | Controlled scroll offset |
 | `show_file_icons` | `bool` | Show file type icons |
 | `file_icon_style` | `FileIconStyle` | Icon style (`Nerd`, `NerdColored`, `Emoji`) |
@@ -272,6 +274,20 @@ DraggableTabBar::new()
 Each formatter receives the number of tabs hidden on that side. Padding is part
 of the returned string, and the control's width and hit target are measured from
 it, so a wider label shrinks the visible tab area by the same amount.
+
+When the bar has no tabs, it stays blank by default (border/background still
+paint). Set a left-aligned placeholder with `empty_text` — useful for editor
+sidebars that temporarily have nothing open:
+
+```rust
+DraggableTabBar::new()
+    .empty_text("No open tabs")
+    .empty_text_style(Style::default().dim())
+```
+
+The placeholder truncates with an ellipsis when wider than the bar and is not
+interactive. Prefer an action tab (for example `+`) when the empty state should
+accept clicks.
 
 ### Cross-Bar Drag (Drag Groups)
 
