@@ -2071,6 +2071,34 @@ mod tests {
 
     #[cfg(feature = "devtools")]
     #[test]
+    fn context_devtools_visible_tracks_panel_and_runner_controls() {
+        let mut runner = AppRunner::new(App::new().mouse(false), AppMetricsNoneUpdate, ());
+        assert!(!runner.core.ctx.devtools_visible());
+
+        // The framework F12 path uses this runner-owned visibility transition.
+        assert!(runner.set_devtools_visible(true));
+        assert!(runner.core.ctx.devtools_visible());
+
+        // Esc closes the panel through DevToolsState itself.
+        runner.devtools_state.borrow_mut().set_visible(false);
+        assert!(!runner.core.ctx.devtools_visible());
+
+        runner.core.ctx.show_devtools();
+        assert!(!runner.core.ctx.devtools_visible());
+        assert!(runner.apply_pending_devtools_request());
+        assert!(runner.core.ctx.devtools_visible());
+
+        runner.core.ctx.hide_devtools();
+        assert!(runner.apply_pending_devtools_request());
+        assert!(!runner.core.ctx.devtools_visible());
+
+        runner.core.ctx.toggle_devtools();
+        assert!(runner.apply_pending_devtools_request());
+        assert!(runner.core.ctx.devtools_visible());
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
     fn disabled_metrics_config_skips_frame_history_even_when_visible() {
         let mut runner = AppRunner::new(
             App::new().mouse(false).devtools_config(DevToolsConfig {

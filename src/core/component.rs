@@ -1522,6 +1522,22 @@ impl<C: Component> Context<C> {
         self.env.devtools_metrics.take_dirty()
     }
 
+    /// Return whether the built-in DevTools panel is currently visible.
+    ///
+    /// This reports the runner-synchronized state after panel key handling and
+    /// queued visibility requests have been applied. It returns `false` when
+    /// the `devtools` feature is disabled.
+    pub fn devtools_visible(&self) -> bool {
+        #[cfg(feature = "devtools")]
+        {
+            self.env.devtools_metrics.is_visible()
+        }
+        #[cfg(not(feature = "devtools"))]
+        {
+            false
+        }
+    }
+
     /// Request that the built-in devtools panel becomes visible.
     pub fn show_devtools(&self) {
         *self.env.devtools_request.borrow_mut() = Some(DevToolsRequest::Show);

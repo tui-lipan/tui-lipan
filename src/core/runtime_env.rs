@@ -61,6 +61,10 @@ impl DevToolsMetrics {
         }
     }
 
+    pub(crate) fn is_visible(&self) -> bool {
+        self.visible.get()
+    }
+
     pub(crate) fn take_dirty(&self) -> bool {
         self.dirty.replace(false)
     }

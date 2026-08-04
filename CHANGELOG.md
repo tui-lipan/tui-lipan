@@ -15,7 +15,8 @@ While the crate is on `0.x.y`:
 
 - `Context::set_devtools_metrics` lazily replaces ordered host-application label/value rows in a
   content-sized, viewport-capped DevTools App tab. Changed rows invalidate a visible panel, and the
-  factory is not invoked without the `devtools` feature.
+  factory is not invoked without the `devtools` feature. `Context::devtools_visible` reads the
+  runner-synchronized panel state and returns `false` when the feature is disabled.
 - `TerminalScreen::try_for_each_text_line` streams clamped absolute line ranges through one reused
   scratch buffer with immediate early exit. Existing plain-text exports and terminal snapshots now
   append cell text directly instead of allocating a `String` per cell.

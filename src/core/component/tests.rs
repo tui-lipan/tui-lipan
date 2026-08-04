@@ -277,6 +277,14 @@ fn context_devtools_metrics_factory_is_not_invoked_without_feature() {
     assert!(!invoked.get());
 }
 
+#[cfg(not(feature = "devtools"))]
+#[test]
+fn context_devtools_visible_is_false_without_feature() {
+    let backend = TestBackend::new_with_props(Counter, 0);
+
+    assert!(!backend.core.ctx.devtools_visible());
+}
+
 #[test]
 fn scroll_view_dependency_ignores_another_scope_with_the_same_key() {
     let scroll = ScrollContext::default();

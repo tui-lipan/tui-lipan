@@ -101,6 +101,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `ctx.show_devtools()` | Show the built-in DevTools panel on the next tick |
 | `ctx.hide_devtools()` | Hide the built-in DevTools panel on the next tick |
 | `ctx.toggle_devtools()` | Toggle the built-in DevTools panel on the next tick |
+| `ctx.devtools_visible()` | Read the current runner-synchronized DevTools panel visibility |
 | `ctx.set_devtools_metrics(factory)` | Lazily replace the ordered label/value rows in the DevTools App tab; an empty iterator clears them |
 | `ctx.has_focus_within_key(key)` | Check if focus is within a subtree |
 | `ctx.text_area_scrollbars(key)` | Read resolved vertical/horizontal scrollbar visibility for a keyed `TextArea` from the previous frame |
@@ -142,6 +143,11 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
     Update::none()
 }
 ```
+
+`ctx.devtools_visible()` reports the applied panel state, including closes from
+Esc or the global toggle. A queued show/hide/toggle request is reflected after
+the runner applies it on the next tick. It always returns `false` without the
+`devtools` feature.
 
 Apps can also publish a small ordered set of structured metrics. Each call
 replaces the previous set, so call it from `view()` or `update()` with the
