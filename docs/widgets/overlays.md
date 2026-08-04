@@ -393,9 +393,9 @@ You can also mark rows active with `.active(true)` on `SearchItem` or `SearchEnt
 | `items` | `impl IntoIterator<Item = SearchItem<T>>` / `items_arc` | Flat searchable items (clears entries; prefer `items_arc` when sharing) |
 | `entries` | `impl IntoIterator<Item = SearchEntry<T>>` / `entries_arc` | Grouped entries via item/header/spacer rows (prefer `entries_arc` when sharing) |
 | `sync_match_limit` | `usize` | Max item count that still matches synchronously (default: `100`) |
-| `sync_selection` | `bool` | Keep `on_select` synced with the current visible row |
+| `sync_selection` | `bool` | Keep `on_select` synced with the selected source item; reranking that item alone does not emit again |
 | `initial_query` | `impl Into<Arc<str>>` | Pre-populate search field |
-| `initial_selected_item_index` | `Option<usize>` | Start selection on this `items` index when it appears in results (else first row) |
+| `initial_selected_item_index` | `Option<usize>` | Seed selection from this `items` index (else first row); changing the prop reseeds, while an unchanged value does not override navigation during refresh/reranking |
 | `placeholder` | `impl Into<Arc<str>>` | Input placeholder (default: `"Search..."`) |
 | `width` | `Length` | Requested palette width (default: `Flex(1)`) |
 | `height` | `Length` | Requested palette height (default: `Flex(1)`) |
@@ -407,7 +407,7 @@ You can also mark rows active with `.active(true)` on `SearchItem` or `SearchEnt
 | Prop | Type | Description |
 |------|------|-------------|
 | `on_query_change` | `Callback<Arc<str>>` | Fired when the query text changes |
-| `on_select` | `Callback<SearchEvent<T>>` | Fired when selection moves; with `sync_selection(true)` also fires for initial/result-driven selection |
+| `on_select` | `Callback<SearchEvent<T>>` | Fired when selection moves; with `sync_selection(true)` also fires for initial/result-driven source-item changes |
 | `on_activate` | `Callback<SearchEvent<T>>` | Fired on Enter or double-click |
 
 ### Input forwarding

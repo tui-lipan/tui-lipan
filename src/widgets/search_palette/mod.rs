@@ -493,9 +493,9 @@ pub(crate) struct SearchPaletteProps<T> {
     sync_match_limit: usize,
     sync_selection: bool,
     initial_query: Arc<str>,
-    /// Index into [`SearchPaletteProps::items`]. When this item appears in the
-    /// current result list, keyboard selection starts on that row; otherwise the
-    /// first result is selected.
+    /// Index into [`SearchPaletteProps::items`]. Seeds keyboard selection and
+    /// reseeds it when the prop changes; otherwise navigation remains
+    /// authoritative across result refreshes.
     initial_selected_item_index: Option<usize>,
     /// Controlled mode: when `Some`, the query is driven by the caller, not by
     /// an internal `TextInput`. The `Input` widget is not rendered.
@@ -926,7 +926,8 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     ///
     /// When enabled, the palette also emits `on_select` when it establishes an
     /// initial selection or when query/result changes move the internal
-    /// selection to a different row.
+    /// selection to a different source item. Reranking the same selected source
+    /// item does not emit a duplicate callback.
     pub fn sync_selection(mut self, sync: bool) -> Self {
         self.props.sync_selection = sync;
         self
@@ -943,7 +944,9 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// Start with the result row that corresponds to this index in [`items`](Self::items).
     ///
     /// The item must be present in the current match list; otherwise selection falls back to the
-    /// first row. Ignored when `None` (default).
+    /// first row. Changing this prop later reseeds the selection, but leaving it unchanged does
+    /// not override keyboard or mouse navigation when items are refreshed or reranked. Ignored
+    /// when `None` (default).
     pub fn initial_selected_item_index(mut self, index: Option<usize>) -> Self {
         self.props.initial_selected_item_index = index;
         self
