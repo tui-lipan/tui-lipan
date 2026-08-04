@@ -386,7 +386,7 @@ Common variants:
 
 | Type | Purpose |
 |------|---------|
-| `VisualEffect::ColorTransform` | Apply relative color transforms (Dim, Lighten, Opacity, Tint) to fg/bg of each cell. Constructors: `dim`, `lighten`, `tint`, `transform_fg`, `transform_bg` |
+| `VisualEffect::ColorTransform` | Apply relative color transforms (Dim, Lighten, Elevate, Opacity, Tint) to fg/bg of each cell. Constructors: `dim`, `lighten`, `tint`, `transform_fg`, `transform_bg` |
 | `VisualEffect::ContrastPolicy` | Apply `ContrastPolicy` to ensure text legibility, judged per cell after compositing (see [Contrast on a translucent surface](#contrast-on-a-translucent-surface)) |
 | `VisualEffect::Monochrome` | Desaturation / grayscale conversion |
 | `VisualEffect::PaletteQuantize` | Reduce colors to a preset or custom palette |

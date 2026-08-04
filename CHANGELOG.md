@@ -13,6 +13,11 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `ColorTransform::Elevate(f32)` is the relative form of `Color::elevate`: luminance-aware, so it
+  lightens a dark color and dims a light one, and hue- and chroma-preserving rather than washing
+  toward white. Use it where a transform has to land on the same color an absolute `Color::elevate`
+  step produces elsewhere in the UI, which `ColorTransform::Lighten` no longer does.
+
 - `Context::set_devtools_metrics` lazily replaces ordered host-application label/value rows in a
   content-sized, viewport-capped DevTools App tab. Publication is render-neutral: host-view rows
   are consumed by the panel later in the same frame, and no frame is scheduled by replacing them.
