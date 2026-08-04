@@ -651,6 +651,7 @@ Lines are addressed by **absolute index**, counting from the oldest line still r
 | Method | Returns |
 |--------|---------|
 | `total_text_lines()` | Retained line count (scrollback history + visible screen) |
+| `try_for_each_text_line(start, end, visitor)` | Streams `(absolute_line_index, &str)` until the range ends or the visitor breaks |
 | `text_lines(start, end)` | `Vec<String>` for the half-open range `[start, end)` |
 | `export_text(start, end)` | The same range joined with `\n` |
 | `absolute_line_to_viewport(abs)` | `Option<(scrollback_offset, viewport_row)>` |
@@ -660,13 +661,29 @@ Out-of-range bounds are clamped and empty ranges yield empty output. Trailing bl
 are trimmed per line, and wide-character spacer cells are skipped, so exported text
 matches what is on screen rather than the raw cell grid.
 
+`try_for_each_text_line` passes each line's absolute retained-line index, reuses one scratch string
+for the whole range, and stops immediately when the visitor returns `ControlFlow::Break(())`. The
+callback's `&str` is valid only for that callback invocation; copy it only when it must outlive the
+visit.
+
 ```rust
+use std::ops::ControlFlow;
+
 // Copy the whole buffer.
 let all = screen.export_text(0, screen.total_text_lines());
 
 // Copy just the last 20 lines.
 let total = screen.total_text_lines();
 let tail = screen.export_text(total.saturating_sub(20), total);
+
+// Scan without allocating one String per line.
+let _ = screen.try_for_each_text_line(0, total, |absolute, line| {
+    if line.contains("needle") {
+        println!("found on retained line {absolute}");
+        return ControlFlow::Break(());
+    }
+    ControlFlow::Continue(())
+});
 ```
 
 > **Absolute indices are not stable across output.** They are relative to the oldest
