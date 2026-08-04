@@ -13,6 +13,9 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `TerminalScreen::try_for_each_text_line` streams clamped absolute line ranges through one reused
+  scratch buffer with immediate early exit. Existing plain-text exports and terminal snapshots now
+  append cell text directly instead of allocating a `String` per cell.
 - `DraggableTabBar::overflow_left_label` and `DraggableTabBar::overflow_right_label` take a
   formatter over the hidden tab count, so apps can replace the Nerd Font overflow indicators.
   Control widths and hit targets are measured from the custom label; defaults are unchanged.

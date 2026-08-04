@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::ops::ControlFlow;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -1340,6 +1341,33 @@ impl TerminalScreen {
         usize::try_from(bottom.saturating_sub(top).saturating_add(1)).unwrap_or(0)
     }
 
+    /// Visit plain-text grid lines in `[start, end)`, addressed from the oldest retained line.
+    ///
+    /// Bounds are clamped to the retained line count. Each visit receives its absolute retained-line
+    /// index and text. The same scratch allocation is reused for every line, so the `&str` passed
+    /// to `visitor` is valid only for that callback invocation. Returning [`ControlFlow::Break`]
+    /// stops before any later line is extracted.
+    pub fn try_for_each_text_line(
+        &self,
+        start: usize,
+        end: usize,
+        mut visitor: impl FnMut(usize, &str) -> ControlFlow<()>,
+    ) -> ControlFlow<()> {
+        let total = self.total_text_lines();
+        let start = start.min(total);
+        let end = end.min(total).max(start);
+        let grid = self.term.grid();
+        let top = grid.topmost_line().0;
+        let mut scratch = String::with_capacity(grid.columns());
+
+        for absolute in start..end {
+            scratch.clear();
+            push_plain_line_text(grid, Line(top + absolute as i32), &mut scratch);
+            visitor(absolute, &scratch)?;
+        }
+        ControlFlow::Continue(())
+    }
+
     /// Plain text of grid lines in `[start, end)`, addressed from the oldest retained line.
     ///
     /// Does not mutate display offset or go through the render pipeline. Out-of-range bounds
@@ -1348,30 +1376,34 @@ impl TerminalScreen {
         let total = self.total_text_lines();
         let start = start.min(total);
         let end = end.min(total).max(start);
-        if start == end {
-            return Vec::new();
-        }
-
-        let grid = self.term.grid();
-        let top = grid.topmost_line().0;
         let mut lines = Vec::with_capacity(end - start);
-        for absolute in start..end {
-            let line = Line(top + absolute as i32);
-            lines.push(plain_line_text(grid, line));
-        }
+        let _ = self.try_for_each_text_line(start, end, |_, line| {
+            lines.push(line.to_owned());
+            ControlFlow::Continue(())
+        });
         lines
     }
 
     /// Newline-joined plain text for an absolute line range. See [`text_lines`](Self::text_lines).
     pub fn export_text(&self, start: usize, end: usize) -> String {
-        self.text_lines(start, end).join("\n")
+        let mut text = String::new();
+        let mut first = true;
+        let _ = self.try_for_each_text_line(start, end, |_, line| {
+            if !first {
+                text.push('\n');
+            }
+            first = false;
+            text.push_str(line);
+            ControlFlow::Continue(())
+        });
+        text
     }
 
     /// Export a selection across retained scrollback lines.
     ///
     /// This path is intentionally **character-indexed** and uses the pre-trimmed text returned by
     /// [`text_lines`](Self::text_lines). It is separate from the display-column snapshot path:
-    /// changing `plain_line_text` here would alter [`Self::export_text`] and semantic output
+    /// changing `push_plain_line_text` here would alter [`Self::export_text`] and semantic output
     /// exports. With [`SelectionEnd::Inclusive`], both the start and end character positions are
     /// included.
     pub fn export_selection_text(
@@ -2030,16 +2062,13 @@ fn renderable_content_lines(
         }
 
         let style = style_from_term_cell(cell, &palette);
-        let content = cell_text(cell);
-        if run_style == Some(style) {
-            run_text.push_str(&content);
-        } else {
+        if run_style != Some(style) {
             if let Some(prev_row) = current_row {
                 flush_run(prev_row, &mut run_style, &mut run_text, &mut lines);
             }
             run_style = Some(style);
-            run_text.push_str(&content);
         }
+        push_cell_text_str(&mut run_text, cell);
     }
 
     if let Some(row) = current_row {
@@ -2055,28 +2084,26 @@ fn renderable_content_lines(
     lines
 }
 
-fn cell_text(cell: &TermCell) -> String {
-    let mut text = String::new();
+fn push_cell_text_str(out: &mut String, cell: &TermCell) {
     // An image placeholder is not text: it names a picture the renderer paints over these cells.
     // Passing it through would put a tofu box under every image, and would put the character into
     // anything that reads the snapshot - a search, a copy, an exported log.
     #[cfg(feature = "terminal-images")]
     if cell.c == PLACEHOLDER {
-        text.push(' ');
-        return text;
+        out.push(' ');
+        return;
     }
     let ch = if cell.flags.contains(CellFlags::HIDDEN) {
         ' '
     } else {
         cell.c
     };
-    text.push(ch);
+    out.push(ch);
     if let Some(zerowidth) = cell.zerowidth() {
         for ch in zerowidth {
-            text.push(*ch);
+            out.push(*ch);
         }
     }
-    text
 }
 
 fn display_line_width(grid: &alacritty_terminal::grid::Grid<TermCell>, line: Line) -> usize {
@@ -2127,7 +2154,7 @@ fn display_columns_text(
         };
         let cell_end = display_col.saturating_add(cell_width);
         if cell_end > col_start && display_col < col_end {
-            result.push_str(&cell_text(cell));
+            push_cell_text_str(&mut result, cell);
         }
         display_col = cell_end;
         if display_col >= col_end {
@@ -2152,7 +2179,11 @@ fn placeholder_id(cell: &TermCell) -> Option<u32> {
     }
 }
 
-fn plain_line_text(grid: &alacritty_terminal::grid::Grid<TermCell>, line: Line) -> String {
+fn push_plain_line_text(
+    grid: &alacritty_terminal::grid::Grid<TermCell>,
+    line: Line,
+    out: &mut String,
+) {
     let wrapline = grid[line][grid.last_column()]
         .flags
         .contains(CellFlags::WRAPLINE);
@@ -2163,7 +2194,6 @@ fn plain_line_text(grid: &alacritty_terminal::grid::Grid<TermCell>, line: Line) 
             .rfind(|col| !grid[line][Column(*col)].is_empty())
             .map_or(0, |col| col + 1)
     };
-    let mut text = String::new();
     for col in 0..end_col {
         let cell = &grid[line][Column(col)];
         if cell
@@ -2172,9 +2202,8 @@ fn plain_line_text(grid: &alacritty_terminal::grid::Grid<TermCell>, line: Line) 
         {
             continue;
         }
-        text.push_str(&cell_text(cell));
+        push_cell_text_str(out, cell);
     }
-    text
 }
 
 fn key_modes_from_term(mode: TermMode) -> TerminalKeyModes {
@@ -2957,6 +2986,81 @@ mod tests {
         assert!(screen.text_lines(total, total + 10).is_empty());
         assert_eq!(screen.export_text(0, 0), "");
         assert_eq!(screen.text_lines(0, total).len(), total);
+    }
+
+    #[test]
+    fn text_line_visitor_clamps_ranges_and_stops_immediately() {
+        let mut screen = TerminalScreen::new(3, 8, 10);
+        screen.process_bytes(b"one\r\ntwo\r\nthree");
+        let total = screen.total_text_lines();
+        let mut visited = Vec::new();
+
+        let flow = screen.try_for_each_text_line(1, usize::MAX, |absolute, line| {
+            visited.push((absolute, line.to_owned()));
+            ControlFlow::Break(())
+        });
+        assert_eq!(flow, ControlFlow::Break(()));
+        assert_eq!(visited, [(1, "two".to_string())]);
+
+        let flow = screen.try_for_each_text_line(total + 10, usize::MAX, |_, _| {
+            panic!("a fully clamped range must not invoke the visitor")
+        });
+        assert_eq!(flow, ControlFlow::Continue(()));
+
+        let flow = screen.try_for_each_text_line(2, 1, |_, _| {
+            panic!("a reversed half-open range must be empty")
+        });
+        assert_eq!(flow, ControlFlow::Continue(()));
+    }
+
+    #[test]
+    fn streaming_text_lines_match_owned_exports_for_special_cells() {
+        let mut screen = TerminalScreen::new(5, 20, 0);
+        screen.process_bytes("\r\nwide 漢e\u{301}\r\n\r\n".as_bytes());
+        screen.process_bytes(b"\x1b[8mH\x1b[0mX");
+        let total = screen.total_text_lines();
+        let expected = vec![
+            String::new(),
+            "wide 漢e\u{301}".to_string(),
+            String::new(),
+            " X".to_string(),
+            String::new(),
+        ];
+        let mut streamed = Vec::new();
+        let mut streamed_indices = Vec::new();
+
+        let flow = screen.try_for_each_text_line(0, total, |absolute, line| {
+            streamed_indices.push(absolute);
+            streamed.push(line.to_owned());
+            ControlFlow::Continue(())
+        });
+
+        assert_eq!(flow, ControlFlow::Continue(()));
+        assert_eq!(streamed_indices, (0..total).collect::<Vec<_>>());
+        assert_eq!(streamed, expected);
+        assert_eq!(screen.text_lines(0, total), expected);
+        assert_eq!(screen.export_text(0, total), "\nwide 漢e\u{301}\n\n X\n");
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn streaming_text_lines_match_owned_exports_for_image_placeholders() {
+        let mut screen = TerminalScreen::new(1, 8, 0);
+        screen.process_bytes(format!("{PLACEHOLDER}X").as_bytes());
+        let mut streamed = Vec::new();
+        let mut streamed_indices = Vec::new();
+
+        let flow = screen.try_for_each_text_line(0, usize::MAX, |absolute, line| {
+            streamed_indices.push(absolute);
+            streamed.push(line.to_owned());
+            ControlFlow::Continue(())
+        });
+
+        assert_eq!(flow, ControlFlow::Continue(()));
+        assert_eq!(streamed_indices, [0]);
+        assert_eq!(streamed, [" X"]);
+        assert_eq!(screen.text_lines(0, usize::MAX), streamed);
+        assert_eq!(screen.export_text(0, usize::MAX), " X");
     }
 
     #[test]
