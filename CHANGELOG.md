@@ -13,6 +13,9 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `DraggableTabBar::overflow_left_label` and `DraggableTabBar::overflow_right_label` take a
+  formatter over the hidden tab count, so apps can replace the Nerd Font overflow indicators.
+  Control widths and hit targets are measured from the custom label; defaults are unchanged.
 - `Toast::min_width` sets a minimum width constraint on toast overlays (alongside existing
   `max_width`).
 - Add `FileTree::on_explorer_focus`, `FileTree::on_explorer_blur`, and

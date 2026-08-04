@@ -348,6 +348,35 @@ pub(crate) struct OverflowControl {
     pub label: Arc<str>,
 }
 
+/// Builds the label rendered on an overflow control from the hidden tab count.
+pub(crate) type OverflowLabelFormatter = Arc<dyn Fn(usize) -> Arc<str>>;
+
+/// Label formatters for the left/right overflow controls.
+///
+/// `None` on a side keeps the default Nerd Font label for that side.
+#[derive(Clone, Default)]
+pub(crate) struct OverflowLabels {
+    pub left: Option<OverflowLabelFormatter>,
+    pub right: Option<OverflowLabelFormatter>,
+}
+
+impl OverflowLabels {
+    pub(crate) fn label(&self, side: OverflowControlSide, hidden_count: usize) -> Arc<str> {
+        let custom = match side {
+            OverflowControlSide::Left => self.left.as_ref(),
+            OverflowControlSide::Right => self.right.as_ref(),
+        };
+        match custom {
+            Some(format) => format(hidden_count),
+            None => default_overflow_control_label(side, hidden_count),
+        }
+    }
+
+    pub(crate) fn width(&self, side: OverflowControlSide, hidden_count: usize) -> usize {
+        UnicodeWidthStr::width(self.label(side, hidden_count).as_ref())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct VisibleTab {
     pub index: usize,
@@ -393,10 +422,12 @@ pub(crate) struct TabWidthLock {
     pub width: usize,
 }
 
+#[derive(Clone, Default)]
 pub(crate) struct TabViewportOptions {
     pub scroll_offset: usize,
     pub viewport_width: usize,
     pub show_overflow_controls: bool,
+    pub overflow_labels: OverflowLabels,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -437,6 +468,7 @@ pub struct DraggableTabBar {
     pub(crate) show_overflow_controls: bool,
     pub(crate) overflow_style: Style,
     pub(crate) overflow_hover_style: Style,
+    pub(crate) overflow_labels: OverflowLabels,
     pub(crate) scroll_offset: usize,
     pub(crate) show_file_icons: bool,
     pub(crate) file_icon_style: FileIconStyle,
@@ -495,6 +527,7 @@ impl Default for DraggableTabBar {
             show_overflow_controls: true,
             overflow_style: Style::default(),
             overflow_hover_style: Style::default(),
+            overflow_labels: OverflowLabels::default(),
             scroll_offset: 0,
             show_file_icons: false,
             file_icon_style: FileIconStyle::NerdFont,
@@ -778,6 +811,31 @@ impl DraggableTabBar {
     /// Set hover style for overflow controls.
     pub fn overflow_hover_style(mut self, style: Style) -> Self {
         self.overflow_hover_style = style;
+        self
+    }
+
+    /// Set a custom label for the left overflow control.
+    ///
+    /// The formatter receives the number of tabs hidden to the left. Any padding
+    /// around the glyphs must be part of the returned string, and the rendered
+    /// width is measured from it, so wider labels shrink the tab area accordingly.
+    pub fn overflow_left_label<F>(mut self, formatter: F) -> Self
+    where
+        F: Fn(usize) -> Arc<str> + 'static,
+    {
+        self.overflow_labels.left = Some(Arc::new(formatter));
+        self
+    }
+
+    /// Set a custom label for the right overflow control.
+    ///
+    /// The formatter receives the number of tabs hidden to the right. See
+    /// [`DraggableTabBar::overflow_left_label`] for padding and width semantics.
+    pub fn overflow_right_label<F>(mut self, formatter: F) -> Self
+    where
+        F: Fn(usize) -> Arc<str> + 'static,
+    {
+        self.overflow_labels.right = Some(Arc::new(formatter));
         self
     }
 
@@ -1316,12 +1374,14 @@ impl DraggableTabBar {
             }
 
             let next_left = if vp.show_overflow_controls && hidden_left > 0 {
-                overflow_control_width(OverflowControlSide::Left, hidden_left)
+                vp.overflow_labels
+                    .width(OverflowControlSide::Left, hidden_left)
             } else {
                 0
             };
             let next_right = if vp.show_overflow_controls && hidden_right > 0 {
-                overflow_control_width(OverflowControlSide::Right, hidden_right)
+                vp.overflow_labels
+                    .width(OverflowControlSide::Right, hidden_right)
             } else {
                 0
             };
@@ -1350,7 +1410,9 @@ impl DraggableTabBar {
             Some(OverflowControl {
                 start: 0,
                 end: left_width,
-                label: overflow_control_label(OverflowControlSide::Left, hidden_left),
+                label: vp
+                    .overflow_labels
+                    .label(OverflowControlSide::Left, hidden_left),
             })
         } else {
             None
@@ -1361,7 +1423,9 @@ impl DraggableTabBar {
             Some(OverflowControl {
                 start,
                 end: vp.viewport_width,
-                label: overflow_control_label(OverflowControlSide::Right, hidden_right),
+                label: vp
+                    .overflow_labels
+                    .label(OverflowControlSide::Right, hidden_right),
             })
         } else {
             None
@@ -1496,8 +1560,7 @@ impl DraggableTabBar {
             opts,
             &TabViewportOptions {
                 scroll_offset: requested,
-                viewport_width: vp.viewport_width,
-                show_overflow_controls: vp.show_overflow_controls,
+                ..vp.clone()
             },
         )
         .offset;
@@ -1513,8 +1576,7 @@ impl DraggableTabBar {
                 opts,
                 &TabViewportOptions {
                     scroll_offset: total_width.saturating_sub(1),
-                    viewport_width: vp.viewport_width,
-                    show_overflow_controls: vp.show_overflow_controls,
+                    ..vp.clone()
                 },
             )
             .offset;
@@ -1545,8 +1607,7 @@ impl DraggableTabBar {
                 opts,
                 &TabViewportOptions {
                     scroll_offset: offset,
-                    viewport_width: vp.viewport_width,
-                    show_overflow_controls: vp.show_overflow_controls,
+                    ..vp.clone()
                 },
             );
             let view_start = layout.offset;
@@ -1956,15 +2017,11 @@ pub(crate) fn tab_fully_visible_at_offset(
     tab_start >= offset && tab_end <= offset.saturating_add(viewport_width)
 }
 
-fn overflow_control_label(side: OverflowControlSide, hidden_count: usize) -> Arc<str> {
+fn default_overflow_control_label(side: OverflowControlSide, hidden_count: usize) -> Arc<str> {
     match side {
         OverflowControlSide::Left => Arc::from(format!(" {} ", hidden_count)),
         OverflowControlSide::Right => Arc::from(format!("  {}", hidden_count)),
     }
-}
-
-fn overflow_control_width(side: OverflowControlSide, hidden_count: usize) -> usize {
-    UnicodeWidthStr::width(overflow_control_label(side, hidden_count).as_ref())
 }
 
 fn lookup_icon_override<'a>(
@@ -2054,6 +2111,8 @@ impl crate::layout::hash::LayoutHash for DraggableTabBar {
         self.tab_max_width.hash(hasher);
         self.overflow.hash(hasher);
         self.show_overflow_controls.hash(hasher);
+        self.overflow_labels.left.is_some().hash(hasher);
+        self.overflow_labels.right.is_some().hash(hasher);
         self.scroll_offset.hash(hasher);
         self.show_file_icons.hash(hasher);
         self.file_icon_style.hash(hasher);
@@ -2332,6 +2391,7 @@ mod tests {
                 scroll_offset: 0,
                 viewport_width,
                 show_overflow_controls: true,
+                overflow_labels: Default::default(),
             },
         );
 
@@ -2375,6 +2435,7 @@ mod tests {
                 scroll_offset: 1,
                 viewport_width: 10,
                 show_overflow_controls: true,
+                overflow_labels: Default::default(),
             },
         );
 
@@ -2414,6 +2475,7 @@ mod tests {
                 scroll_offset: 0,
                 viewport_width: 20,
                 show_overflow_controls: true,
+                overflow_labels: Default::default(),
             },
         );
 
@@ -2456,6 +2518,7 @@ mod tests {
                 scroll_offset: 0,
                 viewport_width: 14,
                 show_overflow_controls: true,
+                overflow_labels: Default::default(),
             },
         );
 
@@ -2496,6 +2559,7 @@ mod tests {
                 scroll_offset: 0,
                 viewport_width: 20,
                 show_overflow_controls: true,
+                overflow_labels: Default::default(),
             },
             7,
         );
@@ -2512,8 +2576,111 @@ mod tests {
     #[test]
     fn overflow_right_label_has_left_padding() {
         assert_eq!(
-            super::overflow_control_label(super::OverflowControlSide::Right, 1).as_ref(),
+            super::OverflowLabels::default()
+                .label(super::OverflowControlSide::Right, 1)
+                .as_ref(),
             "  1"
+        );
+    }
+
+    #[test]
+    fn custom_overflow_labels_replace_defaults() {
+        let labels = super::OverflowLabels {
+            left: Some(std::sync::Arc::new(|hidden| {
+                std::sync::Arc::from(format!("<{hidden}"))
+            })),
+            right: None,
+        };
+
+        assert_eq!(
+            labels.label(super::OverflowControlSide::Left, 3).as_ref(),
+            "<3"
+        );
+        assert_eq!(labels.width(super::OverflowControlSide::Left, 3), 2);
+        assert_eq!(
+            labels.label(super::OverflowControlSide::Right, 3).as_ref(),
+            super::OverflowLabels::default()
+                .label(super::OverflowControlSide::Right, 3)
+                .as_ref()
+        );
+    }
+
+    #[test]
+    fn custom_overflow_labels_drive_layout_and_hit_testing() {
+        let tabs = vec![
+            DraggableTab::new("abcdef"),
+            DraggableTab::new("abcdef"),
+            DraggableTab::new("abcdef"),
+        ];
+        let overrides: HashMap<std::sync::Arc<str>, super::FileIconOverride> = HashMap::new();
+        let opts = super::TabDisplayOptions {
+            variant: DraggableTabBarVariant::Bordered,
+            divider: '|',
+            accent_symbol: '|',
+            close_symbol: "x",
+            show_close_buttons: false,
+            tab_max_width: None,
+            overflow: super::DraggableTabBarOverflow::Scroll,
+            show_file_icons: false,
+            file_icon_style: crate::widgets::FileIconStyle::NerdFont,
+            file_icon_palette: &FileIconPalette::default(),
+            file_icon_overrides: &overrides,
+            width_lock: None,
+        };
+        // Five columns wide, versus three for the default right label.
+        let viewport = super::TabViewportOptions {
+            scroll_offset: 0,
+            viewport_width: 20,
+            show_overflow_controls: true,
+            overflow_labels: super::OverflowLabels {
+                left: None,
+                right: Some(std::sync::Arc::new(|hidden| {
+                    std::sync::Arc::from(format!(" +{hidden}> "))
+                })),
+            },
+        };
+
+        let layout = DraggableTabBar::viewport_layout(&tabs, &opts, &viewport);
+        let right = layout.right_control.clone().expect("right control");
+        assert_eq!(right.label.as_ref(), " +2> ");
+        assert_eq!(right.start, 15);
+        assert_eq!(right.end, 20);
+        assert_eq!(layout.content_width, 15);
+
+        assert!(matches!(
+            DraggableTabBar::hit_target_at_view_col(&tabs, &opts, &viewport, 15),
+            Some(super::DraggableTabHitTarget::Overflow(
+                super::OverflowControlSide::Right
+            ))
+        ));
+        // The wider label pushes the hit target left; the default label would not reach here.
+        assert!(!matches!(
+            DraggableTabBar::hit_target_at_view_col(&tabs, &opts, &viewport, 14),
+            Some(super::DraggableTabHitTarget::Overflow(_))
+        ));
+    }
+
+    #[test]
+    fn overflow_label_builders_feed_the_node() {
+        let bar = DraggableTabBar::new()
+            .overflow_left_label(|hidden| std::sync::Arc::from(format!("[{hidden}")))
+            .overflow_right_label(|hidden| std::sync::Arc::from(format!("{hidden}]")));
+        let node: crate::widgets::internal::DraggableTabBarNode = bar.into();
+        let viewport = node.viewport_options(20);
+
+        assert_eq!(
+            viewport
+                .overflow_labels
+                .label(super::OverflowControlSide::Left, 4)
+                .as_ref(),
+            "[4"
+        );
+        assert_eq!(
+            viewport
+                .overflow_labels
+                .label(super::OverflowControlSide::Right, 4)
+                .as_ref(),
+            "4]"
         );
     }
 
@@ -2552,6 +2719,7 @@ mod tests {
                     scroll_offset: offset,
                     viewport_width,
                     show_overflow_controls: true,
+                    overflow_labels: Default::default(),
                 },
                 true,
                 super::TAB_SCROLL_STEP_CHARS,
@@ -2569,6 +2737,7 @@ mod tests {
                 scroll_offset: offset,
                 viewport_width,
                 show_overflow_controls: true,
+                overflow_labels: Default::default(),
             },
         );
 

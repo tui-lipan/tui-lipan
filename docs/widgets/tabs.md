@@ -94,6 +94,8 @@ as a trailing `+` never inherit this lock.
 | `show_overflow_controls` | `bool` | Show `<` `>` overflow buttons |
 | `overflow_style` | `Style` | Overflow button style |
 | `overflow_hover_style` | `Style` | Overflow button hover style |
+| `overflow_left_label` | `Fn(usize) -> Arc<str>` | Custom left overflow label from the hidden count |
+| `overflow_right_label` | `Fn(usize) -> Arc<str>` | Custom right overflow label from the hidden count |
 | `scroll_offset` | `usize` | Controlled scroll offset |
 | `show_file_icons` | `bool` | Show file type icons |
 | `file_icon_style` | `FileIconStyle` | Icon style (`Nerd`, `NerdColored`, `Emoji`) |
@@ -256,6 +258,20 @@ Tabs shrink only after their natural widths no longer fit the bar. If all tabs
 still cannot fit at `min_tab_width`, horizontal scrolling and overflow controls
 work as usual. Fixed tab affordances such as icons, badges, and close buttons
 are preserved even when they exceed the configured minimum.
+
+The overflow controls render Nerd Font arrows with the hidden tab count. Apps
+that cannot rely on a Nerd Font (or that want a different shape) can replace
+either label:
+
+```rust
+DraggableTabBar::new()
+    .overflow_left_label(|hidden| Arc::from(format!(" <{hidden} ")))
+    .overflow_right_label(|hidden| Arc::from(format!(" {hidden}> ")))
+```
+
+Each formatter receives the number of tabs hidden on that side. Padding is part
+of the returned string, and the control's width and hit target are measured from
+it, so a wider label shrinks the visible tab area by the same amount.
 
 ### Cross-Bar Drag (Drag Groups)
 

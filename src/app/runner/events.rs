@@ -263,6 +263,7 @@ impl<C: Component> AppRunner<C> {
             scroll_offset: layout.offset,
             viewport_width: inner.w as usize,
             show_overflow_controls: tabs.show_overflow_controls,
+            overflow_labels: tabs.overflow_labels.clone(),
         };
         let col = (x as i32).saturating_sub(inner.x as i32).max(0) as usize;
         crate::widgets::DraggableTabBar::hit_target_at_view_col(
