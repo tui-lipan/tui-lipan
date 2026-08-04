@@ -72,6 +72,7 @@ impl Tree {
                 selection_full_width: false,
                 unselected_symbol: None,
                 key_interceptor: None,
+                indent_guide_start_depth: 1,
             },
         }
     }
@@ -85,6 +86,12 @@ impl Tree {
     /// Set style for indent guides.
     pub fn indent_guide_style(mut self, style: Style) -> Self {
         self.props.indent_guide_style = style;
+        self
+    }
+
+    /// Set the first non-root depth that renders indentation guides (default 1).
+    pub fn indent_guide_start_depth(mut self, depth: usize) -> Self {
+        self.props.indent_guide_start_depth = depth.max(1);
         self
     }
 

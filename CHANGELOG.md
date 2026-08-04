@@ -26,6 +26,13 @@ While the crate is on `0.x.y`:
   Control widths and hit targets are measured from the custom label; defaults are unchanged.
 - `Toast::min_width` sets a minimum width constraint on toast overlays (alongside existing
   `max_width`).
+- `Tree::indent_width` / `FileTree::indent_width` set indentation cells per hierarchy level
+  (default `2`), and `Tree::indent_guide_start_depth` / `FileTree::indent_guide_start_depth` set the
+  first non-root depth that renders guides (default `1`). Width `1` with short guides produces
+  compact `├item` rows.
+- `TreeNode::expandable` keeps expand/collapse behavior on a node whose child list is currently
+  empty, for a directory whose contents load asynchronously. Toggling a node that is neither
+  expandable nor populated is now a no-op rather than emitting `on_toggle`.
 - Add `FileTree::on_explorer_focus`, `FileTree::on_explorer_blur`, and
   `FileTree::on_explorer_escape` for routing explorer focus by its pointer/tree origin. Explorer
   focus entered from the tree with `/` still returns to the tree on Escape.

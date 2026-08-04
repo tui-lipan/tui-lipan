@@ -173,6 +173,7 @@ pub struct TreeNode {
     pub(crate) item: ListItem,
     pub(crate) children: Vec<TreeNode>,
     pub(crate) expanded: bool,
+    pub(crate) expandable: bool,
     pub(crate) indent: u16,
     pub(crate) leading_guide_fill_cells: u16,
 }
@@ -184,6 +185,7 @@ impl TreeNode {
             item: item.into(),
             children: Vec::new(),
             expanded: false,
+            expandable: false,
             indent: 2,
             leading_guide_fill_cells: 0,
         }
@@ -206,6 +208,16 @@ impl TreeNode {
     pub fn expanded(mut self, expanded: bool) -> Self {
         self.expanded = expanded;
         self
+    }
+
+    /// Set whether this node can expand even when it currently has no children.
+    pub fn expandable(mut self, expandable: bool) -> Self {
+        self.expandable = expandable;
+        self
+    }
+
+    pub(crate) fn is_expandable(&self) -> bool {
+        self.expandable || !self.children.is_empty()
     }
 
     /// Set indentation per level (default 2).
@@ -287,4 +299,5 @@ pub(crate) struct TreeProps {
     pub selection_full_width: bool,
     pub unselected_symbol: Option<Arc<str>>,
     pub key_interceptor: Option<KeyHandler>,
+    pub indent_guide_start_depth: usize,
 }

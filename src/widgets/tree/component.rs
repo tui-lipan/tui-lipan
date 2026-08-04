@@ -100,7 +100,7 @@ impl Component for TreeComponent {
                     });
                 }
 
-                if entry.node.children.is_empty() {
+                if !entry.node.is_expandable() {
                     return Update::full();
                 }
 
@@ -128,6 +128,9 @@ impl Component for TreeComponent {
 
                 match action {
                     TreeAction::Toggle => {
+                        if !entry.node.is_expandable() {
+                            return Update::none();
+                        }
                         let next = toggle_path(&mut ctx.state.expanded, &entry.path);
                         if let Some(cb) = ctx.props.on_toggle.as_ref() {
                             cb.emit(TreeToggleEvent {
@@ -139,7 +142,7 @@ impl Component for TreeComponent {
                     }
                     TreeAction::Expand => {
                         if !is_currently_expanded {
-                            if !entry.node.children.is_empty() {
+                            if entry.node.is_expandable() {
                                 ctx.state.expanded.insert(entry.path.clone());
                                 if let Some(cb) = ctx.props.on_toggle.as_ref() {
                                     cb.emit(TreeToggleEvent {
@@ -462,9 +465,9 @@ fn toggle_path(expanded: &mut HashSet<TreePath>, path: &TreePath) -> bool {
 fn build_item(entry: &TreeEntry<'_>, props: &TreeProps, max_depth: usize) -> ListItem {
     let mut spans = Vec::new();
 
-    if props.indent_style != IndentStyle::None && entry.depth > 0 {
+    if props.indent_style != IndentStyle::None && entry.depth >= props.indent_guide_start_depth {
         for i in 0..entry.depth - 1 {
-            if entry.continued_depths[i] {
+            if i + 1 >= props.indent_guide_start_depth && entry.continued_depths[i] {
                 spans.push(Span::new("│").style(depth_guide_style(props, i + 1, max_depth)));
             } else {
                 spans.push(Span::new(" "));
@@ -565,7 +568,7 @@ fn build_item(entry: &TreeEntry<'_>, props: &TreeProps, max_depth: usize) -> Lis
     }
 
     if props.show_icons {
-        let icon = if entry.node.children.is_empty() {
+        let icon = if !entry.node.is_expandable() {
             props.leaf_icon.clone().unwrap_or_else(|| "".into())
         } else if entry.expanded {
             props.expanded_icon.clone()
@@ -763,6 +766,30 @@ mod tests {
         assert_eq!(state.selected, Some(2));
     }
 
+    #[test]
+    fn activation_collapses_an_expandable_node_without_children() {
+        let root = TreeNode::new("empty").expanded(true).expandable(true);
+        let tree = crate::widgets::Tree::new(root);
+        let mut backend = crate::TestBackend::new_with_props(TreeComponent::new(), tree.props);
+
+        assert!(
+            backend
+                .state()
+                .expanded
+                .contains(&TreePath::from(Vec::new()))
+        );
+        backend
+            .dispatch(TreeMsg::Activate(0))
+            .expect("activate empty expandable node");
+
+        assert!(
+            !backend
+                .state()
+                .expanded
+                .contains(&TreePath::from(Vec::new()))
+        );
+    }
+
     /// Render a `Tree` through the real component and report the selection the
     /// inner `List` ended up with.
     fn inner_list_selection(tree: crate::widgets::Tree) -> Option<usize> {
@@ -886,6 +913,51 @@ mod tests {
         assert_eq!(content, vec!["├", "─", "─", " ", "leaf"]);
         assert_eq!(out.spans[1].style, props.indent_guide_style);
         assert_eq!(out.spans[2].style, props.indent_guide_style);
+    }
+
+    #[test]
+    fn one_cell_indent_places_short_connector_against_content() {
+        let child = TreeNode::new("leaf").indent(1);
+        let props = crate::widgets::Tree::new(child.clone())
+            .show_icons(false)
+            .indent_style(IndentStyle::Short)
+            .props;
+        let entry = TreeEntry {
+            path: TreePath::from(vec![0]),
+            depth: 1,
+            node: &child,
+            expanded: false,
+            continued_depths: vec![false],
+            is_last_child: false,
+        };
+
+        let out = build_item(&entry, &props, 1);
+        let content: Vec<&str> = out.spans.iter().map(|span| span.content.as_ref()).collect();
+
+        assert_eq!(content, vec!["├", "leaf"]);
+    }
+
+    #[test]
+    fn indent_guide_start_depth_leaves_root_children_unadorned() {
+        let child = TreeNode::new("leaf");
+        let props = crate::widgets::Tree::new(child.clone())
+            .show_icons(false)
+            .indent_style(IndentStyle::Short)
+            .indent_guide_start_depth(2)
+            .props;
+        let entry = TreeEntry {
+            path: TreePath::from(vec![0]),
+            depth: 1,
+            node: &child,
+            expanded: false,
+            continued_depths: vec![false],
+            is_last_child: false,
+        };
+
+        let out = build_item(&entry, &props, 1);
+        let content: Vec<&str> = out.spans.iter().map(|span| span.content.as_ref()).collect();
+
+        assert_eq!(content, vec!["  ", "leaf"]);
     }
 
     #[test]

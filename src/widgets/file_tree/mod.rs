@@ -355,6 +355,8 @@ impl FileTree {
                 show_arrows: true,
                 indent_style: crate::widgets::IndentStyle::None,
                 indent_guide_style: Style::default(),
+                indent_guide_start_depth: 1,
+                indent_width: 2,
                 directory_icon: "[D]".into(),
                 opened_directory_icon: "[D]".into(),
                 file_icon: "[F]".into(),
@@ -528,6 +530,18 @@ impl FileTree {
     /// Set style for indent guides.
     pub fn indent_guide_style(mut self, style: Style) -> Self {
         self.props.indent_guide_style = style;
+        self
+    }
+
+    /// Set the first non-root depth that renders indentation guides (default 1).
+    pub fn indent_guide_start_depth(mut self, depth: usize) -> Self {
+        self.props.indent_guide_start_depth = depth.max(1);
+        self
+    }
+
+    /// Set indentation cells per hierarchy level (default 2).
+    pub fn indent_width(mut self, width: u16) -> Self {
+        self.props.indent_width = width;
         self
     }
 
@@ -1330,6 +1344,12 @@ mod tests {
 
         let tree = tree.git_changed_only(false);
         assert_eq!(tree.props.change_view, FileTreeChangeView::AllFiles);
+    }
+
+    #[test]
+    fn indent_width_defaults_to_two_and_can_be_compacted() {
+        assert_eq!(FileTree::new(".").props.indent_width, 2);
+        assert_eq!(FileTree::new(".").indent_width(1).props.indent_width, 1);
     }
 
     #[test]
