@@ -572,6 +572,13 @@ impl<C: Component> AppRunner<C> {
 
         #[cfg(feature = "devtools")]
         let devtools_log_queue = Arc::new(Mutex::new(VecDeque::new()));
+        #[cfg(feature = "devtools")]
+        let devtools_state = Rc::new(RefCell::new({
+            let mut state =
+                crate::devtools::DevToolsState::with_app_metrics(core.ctx.devtools_metrics());
+            state.set_hide_framework_logs(!app.devtools_config.show_framework_logs);
+            state
+        }));
 
         let focus = FocusState {
             policy: app.focus_policy,
@@ -625,11 +632,7 @@ impl<C: Component> AppRunner<C> {
             screen_background: app.screen_background,
             system_theme: app.system_theme,
             #[cfg(feature = "devtools")]
-            devtools_state: Rc::new(RefCell::new({
-                let mut state = crate::devtools::DevToolsState::default();
-                state.set_hide_framework_logs(!app.devtools_config.show_framework_logs);
-                state
-            })),
+            devtools_state,
             #[cfg(feature = "devtools")]
             devtools_log_queue,
             #[cfg(feature = "devtools")]
@@ -895,7 +898,7 @@ impl<C: Component> AppRunner<C> {
 
     #[cfg(feature = "devtools")]
     fn apply_pending_devtools_request(&mut self) -> bool {
-        match self.core.ctx.take_devtools_request() {
+        let visibility_changed = match self.core.ctx.take_devtools_request() {
             Some(crate::core::runtime_env::DevToolsRequest::Show) => {
                 self.set_devtools_visible(true)
             }
@@ -907,7 +910,9 @@ impl<C: Component> AppRunner<C> {
                 self.set_devtools_visible(!visible)
             }
             None => false,
-        }
+        };
+        let metrics_dirty = self.core.ctx.take_devtools_metrics_dirty();
+        visibility_changed || metrics_dirty
     }
 
     #[cfg(not(feature = "devtools"))]

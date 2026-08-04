@@ -299,6 +299,14 @@ Rows top to bottom:
 - `Input`: `ok`, or the input-pressure warning when input-driven full frames
   repeatedly blow the frame budget.
 
+The App tab shows host-defined `DevToolsMetric` label/value rows in the order
+returned by the factory passed to `Context::set_devtools_metrics`. Publishing
+replaces the whole small snapshot; returning no rows clears it. The factory is
+not invoked without the `devtools` feature. The tab fits its width and height to
+content within the viewport, then scrolls vertically instead of truncating
+rows. Keep values preformatted and cheap to clone—DevTools never invokes host
+callbacks while rendering.
+
 The overlay and sampling slightly perturb the workload, so use tracing or a
 benchmark for final comparisons.
 

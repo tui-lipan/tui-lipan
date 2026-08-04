@@ -1292,6 +1292,15 @@ mod tests {
     #[cfg(feature = "devtools")]
     struct MemoMetricsChild;
 
+    #[cfg(feature = "devtools")]
+    struct AppMetricsNoneUpdate;
+
+    #[cfg(feature = "devtools")]
+    enum AppMetricsNoneMsg {
+        Set(&'static str),
+        Clear,
+    }
+
     enum ViewportChangeMsg {
         Viewport(ScrollViewportEvent),
     }
@@ -1336,6 +1345,31 @@ mod tests {
 
         fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
             Text::new("memoized").into()
+        }
+    }
+
+    #[cfg(feature = "devtools")]
+    impl Component for AppMetricsNoneUpdate {
+        type Message = AppMetricsNoneMsg;
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                AppMetricsNoneMsg::Set(value) => {
+                    ctx.set_devtools_metrics(|| [crate::DevToolsMetric::new("Queue", value)]);
+                }
+                AppMetricsNoneMsg::Clear => {
+                    ctx.set_devtools_metrics(std::iter::empty);
+                }
+            }
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+            Text::new("metrics").into()
         }
     }
 
@@ -1966,6 +2000,73 @@ mod tests {
         );
 
         assert!(runner.devtools_state.borrow().frame_history.is_empty());
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn app_metric_rows_share_context_storage_with_panel_state() {
+        let runner = AppRunner::new(App::new().mouse(false), ScrollWithInput, ());
+        runner.core.ctx.set_devtools_metrics(|| {
+            [
+                crate::DevToolsMetric::new("Panes", "4"),
+                crate::DevToolsMetric::new("Clients", "2"),
+            ]
+        });
+
+        let metrics = Rc::clone(&runner.devtools_state.borrow().app_metrics);
+        assert_eq!(
+            metrics.rows.borrow().as_slice(),
+            [
+                crate::DevToolsMetric::new("Panes", "4"),
+                crate::DevToolsMetric::new("Clients", "2"),
+            ]
+        );
+    }
+
+    #[cfg(feature = "devtools")]
+    #[test]
+    fn changed_app_metrics_invalidate_visible_panel_after_none_update() {
+        let mut runner = AppRunner::new(App::new().mouse(false), AppMetricsNoneUpdate, ());
+        assert!(runner.set_devtools_visible(true));
+
+        let level = runner
+            .core
+            .update_from_boxed(
+                crate::callback::ScopeId(1),
+                Box::new(AppMetricsNoneMsg::Set("3")),
+            )
+            .expect("metrics update should succeed");
+        assert_eq!(level, crate::UpdateLevel::None);
+        assert!(runner.apply_pending_devtools_request());
+        assert!(!runner.apply_pending_devtools_request());
+
+        runner
+            .core
+            .update_from_boxed(
+                crate::callback::ScopeId(1),
+                Box::new(AppMetricsNoneMsg::Set("3")),
+            )
+            .expect("equal metrics update should succeed");
+        assert!(!runner.apply_pending_devtools_request());
+
+        runner
+            .core
+            .update_from_boxed(
+                crate::callback::ScopeId(1),
+                Box::new(AppMetricsNoneMsg::Clear),
+            )
+            .expect("clear metrics update should succeed");
+        assert!(runner.apply_pending_devtools_request());
+
+        assert!(runner.set_devtools_visible(false));
+        runner
+            .core
+            .update_from_boxed(
+                crate::callback::ScopeId(1),
+                Box::new(AppMetricsNoneMsg::Set("4")),
+            )
+            .expect("hidden metrics update should succeed");
+        assert!(!runner.apply_pending_devtools_request());
     }
 
     #[cfg(feature = "devtools")]

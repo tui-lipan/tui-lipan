@@ -1,10 +1,12 @@
 use std::collections::VecDeque;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use web_time::Instant;
 
 use chrono::{DateTime, Local, Timelike, Utc};
 use nucleo::pattern::{CaseMatching, Normalization};
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::FocusPolicy;
 use crate::app::interaction_state::DirtyLevel;
@@ -22,6 +24,7 @@ const FRAME_HISTORY_CAP: usize = 300;
 const LOG_BUFFER_CAP: usize = 1000;
 const FPS_WINDOW: Duration = Duration::from_secs(2);
 const LOGS_TAB_INDEX: usize = 1;
+const APP_TAB_INDEX: usize = 2;
 const ATTRIBUTION_PENDING_CAP: usize = 16;
 const ATTRIBUTION_FRAME_CAP: usize = 6;
 
@@ -39,6 +42,9 @@ const INPUT_PRESSURE_THRESHOLD: u32 = 8;
 pub(crate) const FRAME_BUDGET_US: u64 = 16_667;
 const DEFAULT_LOGS_PANEL_WIDTH: Length = Length::Flex(1);
 const DEFAULT_LOGS_PANEL_HEIGHT: Length = Length::Px(26);
+const DEFAULT_APP_PANEL_MIN_WIDTH: u16 = 32;
+const APP_PANEL_CHROME_WIDTH: u16 = 3;
+const APP_VALUE_MIN_WIDTH: u16 = 8;
 
 /// Origin of a dirty-level request recorded for DevTools frame metrics.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -222,6 +228,7 @@ pub(crate) struct DevToolsState {
     pub(crate) hide_framework_logs: bool,
     pub(crate) fps_samples: VecDeque<Instant>,
     pub(crate) focus: FocusMetrics,
+    pub(crate) app_metrics: Rc<crate::core::runtime_env::DevToolsMetrics>,
 }
 
 impl Default for DevToolsState {
@@ -241,31 +248,45 @@ impl Default for DevToolsState {
             hide_framework_logs: false,
             fps_samples: VecDeque::new(),
             focus: FocusMetrics::default(),
+            app_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
         }
     }
 }
 
 impl DevToolsState {
+    pub(crate) fn with_app_metrics(
+        app_metrics: Rc<crate::core::runtime_env::DevToolsMetrics>,
+    ) -> Self {
+        Self {
+            app_metrics,
+            ..Self::default()
+        }
+    }
+
     pub(crate) fn set_visible(&mut self, visible: bool) {
         self.visible = visible;
+        self.app_metrics.set_visible(visible);
     }
 
     pub(crate) fn set_active_tab(&mut self, tab: usize) {
-        self.active_tab = tab.min(LOGS_TAB_INDEX);
+        self.active_tab = tab.min(APP_TAB_INDEX);
     }
 
     pub(crate) fn is_logs_tab_active(&self) -> bool {
         self.active_tab == LOGS_TAB_INDEX
     }
 
-    pub(crate) fn resolved_panel_size(&self) -> (Length, Length) {
+    pub(crate) fn resolved_panel_size(&self, viewport_w: u16, viewport_h: u16) -> (Length, Length) {
         let use_default_width = self.panel_width == DEFAULT_CONFIG_PANEL_WIDTH;
         let use_default_height = self.panel_height == DEFAULT_CONFIG_PANEL_HEIGHT;
         let showing_logs = self.active_tab == LOGS_TAB_INDEX;
+        let showing_app = self.active_tab == APP_TAB_INDEX;
 
         let width = if use_default_width {
             if showing_logs {
                 DEFAULT_LOGS_PANEL_WIDTH
+            } else if showing_app {
+                Length::Px(self.app_panel_width(viewport_w))
             } else {
                 DEFAULT_STATS_PANEL_WIDTH
             }
@@ -276,6 +297,12 @@ impl DevToolsState {
         let height = if use_default_height {
             if showing_logs {
                 DEFAULT_LOGS_PANEL_HEIGHT
+            } else if showing_app {
+                let body_rows = self.app_metrics.rows.borrow().len().max(1);
+                let desired = u16::try_from(body_rows)
+                    .unwrap_or(u16::MAX)
+                    .saturating_add(2);
+                Length::Px(desired.min(viewport_h.max(1)))
             } else {
                 DEFAULT_STATS_PANEL_HEIGHT
             }
@@ -284,6 +311,48 @@ impl DevToolsState {
         };
 
         (width, height)
+    }
+
+    pub(crate) fn app_label_width(&self, viewport_w: u16) -> u16 {
+        let (label, value) = self.app_natural_widths();
+        let available = self
+            .app_panel_width(viewport_w)
+            .saturating_sub(APP_PANEL_CHROME_WIDTH);
+        if label.saturating_add(value) <= available {
+            return label;
+        }
+
+        let reserve = APP_VALUE_MIN_WIDTH.min(available.saturating_sub(1));
+        label.min(available.saturating_sub(reserve)).max(1)
+    }
+
+    fn app_panel_width(&self, viewport_w: u16) -> u16 {
+        let (label, value) = self.app_natural_widths();
+        label
+            .saturating_add(value)
+            .saturating_add(APP_PANEL_CHROME_WIDTH)
+            .max(DEFAULT_APP_PANEL_MIN_WIDTH)
+            .min(viewport_w.max(1))
+    }
+
+    fn app_natural_widths(&self) -> (u16, u16) {
+        let metrics = self.app_metrics.rows.borrow();
+        if metrics.is_empty() {
+            return (7, 4);
+        }
+
+        metrics.iter().fold((1, 1), |(label, value), metric| {
+            (
+                label.max(
+                    u16::try_from(UnicodeWidthStr::width(metric.label.as_ref()))
+                        .unwrap_or(u16::MAX),
+                ),
+                value.max(
+                    u16::try_from(UnicodeWidthStr::width(metric.value.as_ref()))
+                        .unwrap_or(u16::MAX),
+                ),
+            )
+        })
     }
 
     pub(crate) fn push_frame_metrics(&mut self, metrics: FrameMetrics) {
@@ -529,7 +598,7 @@ impl DevToolsState {
     /// the bars in the wider content area.
     pub(crate) fn sparkline_columns(&self, viewport_w: u16) -> usize {
         const FRAME_OVERHEAD: u16 = 2; // left + right border
-        match self.resolved_panel_size().0 {
+        match self.resolved_panel_size(viewport_w, u16::MAX).0 {
             Length::Px(w) => w.saturating_sub(FRAME_OVERHEAD) as usize,
             _ => viewport_w.saturating_sub(FRAME_OVERHEAD) as usize,
         }
@@ -820,7 +889,7 @@ mod tests {
         let state = DevToolsState::default();
 
         assert_eq!(
-            state.resolved_panel_size(),
+            state.resolved_panel_size(80, 40),
             (Length::Px(48), Length::Px(15))
         );
     }
@@ -831,9 +900,48 @@ mod tests {
         state.set_active_tab(LOGS_TAB_INDEX);
 
         assert_eq!(
-            state.resolved_panel_size(),
+            state.resolved_panel_size(80, 40),
             (Length::Flex(1), Length::Px(26))
         );
+    }
+
+    #[test]
+    fn resolved_panel_size_fits_app_rows_and_caps_to_viewport() {
+        let mut state = DevToolsState::default();
+        state.set_active_tab(APP_TAB_INDEX);
+
+        state.app_metrics.rows.borrow_mut().extend([
+            crate::app::DevToolsMetric::new("Panes", "4"),
+            crate::app::DevToolsMetric::new("Clients", "2"),
+        ]);
+        assert_eq!(
+            state.resolved_panel_size(80, 20),
+            (Length::Px(32), Length::Px(4))
+        );
+
+        state.app_metrics.rows.borrow_mut().extend(
+            (0..20).map(|i| crate::app::DevToolsMetric::new(format!("M{i}"), i.to_string())),
+        );
+        assert_eq!(
+            state.resolved_panel_size(80, 10),
+            (Length::Px(32), Length::Px(10))
+        );
+    }
+
+    #[test]
+    fn app_panel_width_fits_values_and_caps_to_viewport() {
+        let mut state = DevToolsState::default();
+        state.set_active_tab(APP_TAB_INDEX);
+        state
+            .app_metrics
+            .rows
+            .borrow_mut()
+            .push(crate::app::DevToolsMetric::new("Heap", "x".repeat(60)));
+
+        assert_eq!(state.resolved_panel_size(100, 20).0, Length::Px(67));
+        assert_eq!(state.app_label_width(100), 4);
+        assert_eq!(state.resolved_panel_size(40, 20).0, Length::Px(40));
+        assert_eq!(state.app_label_width(40), 4);
     }
 
     #[test]
@@ -846,7 +954,7 @@ mod tests {
         state.set_active_tab(LOGS_TAB_INDEX);
 
         assert_eq!(
-            state.resolved_panel_size(),
+            state.resolved_panel_size(40, 40),
             (Length::Px(72), Length::Px(12))
         );
     }

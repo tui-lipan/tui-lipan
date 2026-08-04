@@ -2184,6 +2184,8 @@ mod tests {
                 memo_dependency_recorder: Rc::new(RefCell::new(None)),
                 full_repaint: Rc::new(Cell::new(false)),
                 devtools_request: Rc::new(RefCell::new(None)),
+                #[cfg(feature = "devtools")]
+                devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
                 ui_snapshot_request: Rc::new(RefCell::new(None)),
                 copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
                 command_chord_pending: Rc::new(Cell::new(false)),
@@ -2444,6 +2446,8 @@ mod tests {
                 memo_dependency_recorder: Rc::new(RefCell::new(None)),
                 full_repaint: Rc::new(Cell::new(false)),
                 devtools_request: Rc::new(RefCell::new(None)),
+                #[cfg(feature = "devtools")]
+                devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
                 ui_snapshot_request: Rc::new(RefCell::new(None)),
                 copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
                 command_chord_pending: Rc::new(Cell::new(false)),
@@ -2645,6 +2649,8 @@ mod tests {
                 memo_dependency_recorder: Rc::new(RefCell::new(None)),
                 full_repaint: Rc::new(Cell::new(false)),
                 devtools_request: Rc::new(RefCell::new(None)),
+                #[cfg(feature = "devtools")]
+                devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
                 ui_snapshot_request: Rc::new(RefCell::new(None)),
                 copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
                 command_chord_pending: Rc::new(Cell::new(false)),

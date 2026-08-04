@@ -13,6 +13,7 @@ use crate::overlay::ToastPlacement;
 use crate::style::Padding;
 use crate::style::{Color, Paint, Style, Theme};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// How the app occupies terminal space.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -189,6 +190,29 @@ pub struct FocusChanged {
 }
 
 pub(crate) type FocusChangedHook = std::rc::Rc<dyn Fn(&FocusChanged)>;
+
+/// One host-application metric displayed by the built-in DevTools panel.
+///
+/// Rows are intentionally just a terse label/value pair. The application
+/// supplies their display order when calling
+/// [`Context::set_devtools_metrics`](crate::Context::set_devtools_metrics).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DevToolsMetric {
+    /// Short metric label, such as `"Panes"` or `"Queue"`.
+    pub label: Arc<str>,
+    /// Already-formatted metric value, such as `"12"` or `"3.2 MiB"`.
+    pub value: Arc<str>,
+}
+
+impl DevToolsMetric {
+    /// Create a metric row from a label and its formatted value.
+    pub fn new(label: impl Into<Arc<str>>, value: impl Into<Arc<str>>) -> Self {
+        Self {
+            label: label.into(),
+            value: value.into(),
+        }
+    }
+}
 
 /// Controls automatic foreground contrast adjustments for widget text.
 #[cfg_attr(
