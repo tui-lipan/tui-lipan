@@ -373,6 +373,70 @@ BigText::new()
 
 ---
 
+## QrCode *(requires feature `qr-code`)*
+
+Scannable QR code rendered as terminal cells.
+
+Use it to hand something off to a phone: device-flow login URLs, WiFi
+credentials, TOTP enrollment secrets, or a link the user wants on another screen.
+
+| Prop | Type | Description |
+|------|------|-------------|
+| `data` | `impl Into<Arc<str>>` | **Constructor** - payload to encode |
+| `ecc` | `QrEcc` | Error correction level (default: `Medium`) |
+| `render` | `QrRender` | Module-to-cell mapping (default: `HalfBlock`) |
+| `quiet_zone` | `u16` | Light margin in modules (default: `4`, capped at `32`) |
+| `dark` | `Color` | Dark module color (default: `Color::Black`) |
+| `light` | `Color` | Light module color (default: `Color::White`) |
+| `invert` | | Swap `dark` and `light` |
+| `fallback` | `impl IntoElement` | Rendered when the payload exceeds QR capacity |
+
+Two read-only helpers report the symbol's fixed geometry: `module_count()` gives
+the symbol width in modules, and `size()` gives the `(width, height)` cell
+footprint including the quiet zone. Both return `None` when the payload is too
+long to encode.
+
+```rust
+QrCode::new("https://tui-lipan.dev")
+    .ecc(QrEcc::Quartile)
+```
+
+**Render modes**: terminal cells are roughly twice as tall as they are wide, so a
+naive one-cell-per-module symbol comes out at a 1:2 aspect ratio that most
+scanners reject. Both modes correct for this and differ only in module size:
+
+| Mode | Footprint for `n` modules | Notes |
+|------|---------------------------|-------|
+| `HalfBlock` | `n` x `n / 2` cells | Compact. Two module rows per cell row via `▀ ▄ █` |
+| `Wide` | `2n` x `n` cells | Twice the physical size, reads better on low-resolution cameras |
+
+### Sizing
+
+Unlike every other widget, a QR symbol cannot reflow - its size is fixed by the
+payload length and error correction level. A clipped symbol still *looks* like a
+QR code but will not scan, so check `size()` against the viewport and substitute
+a fallback when the terminal is too small:
+
+```rust
+let qr = QrCode::new("https://tui-lipan.dev");
+let viewport = ctx.viewport();
+
+match qr.size() {
+    Some((w, h)) if w <= viewport.w && h <= viewport.h => qr.into(),
+    _ => Text::new("https://tui-lipan.dev").into(),
+}
+```
+
+> Scanners expect dark modules on a light background, so the default styling
+> paints explicit black on white rather than inheriting the terminal palette. A
+> symbol rendered on a dark background is inverted and many readers will not
+> decode it - reach for `invert()` only when you know the target scanner handles
+> it.
+
+See `cargo run --example qr_code --features qr-code`.
+
+---
+
 ## Image *(requires feature `image`)*
 
 Protocol-aware image rendering.

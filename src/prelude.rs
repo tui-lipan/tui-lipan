@@ -205,6 +205,9 @@ pub use crate::widgets::{
 #[cfg(feature = "big-text")]
 pub use crate::widgets::{BigFont, BigText, GlyphLayout, Shadow};
 
+#[cfg(feature = "qr-code")]
+pub use crate::widgets::{QrCode, QrEcc, QrRender};
+
 #[cfg(feature = "diff-view")]
 pub use crate::widgets::{
     DiffContextExpansion, DiffContextRange, DiffContextSeparatorDirection,

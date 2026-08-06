@@ -77,6 +77,7 @@ tui-lipan = { version = "*", features = ["image", "big-text"] }
 | `image-full-formats` | No | Restores the broad `image` crate default codec set for `image`, `clipboard-images`, or `ui-snapshot-png` builds |
 | `hints-regex` | No | `regex-lite` scanner for string-configured custom text hints; the dependency-free `HintScanner` trait and URL/path/Git scanners are always available |
 | `markdown` | No | Markdown formatter for `DocumentView` + markdown preview example |
+| `qr-code` | No | Scannable QR symbols rendered as terminal cells - `QrCode` |
 | `profiling-tracing` | No | `tracing` spans/events around render loop and `DocumentView` formatting/reconcile hot paths |
 | `syntax-syntect` | No | Lightweight syntax highlighting in `TextArea`, `DocumentView`, and `DiffView` via syntect; WASM uses pure-Rust `fancy-regex` |
 | `syntax-extra` | No | Opt-in bat-curated syntax set with broad grammar coverage; adds about 0.6 MiB and includes `syntax-syntect` |
@@ -125,6 +126,7 @@ Examples requiring specific features:
 |---------|-----------------|
 | `big_text`, `figlet_editor` | `big-text` |
 | `diff_hub` | `diff-view` |
+| `qr_code` | `qr-code` |
 | `image`, `image_modes`, `messenger` | `image` |
 | `markdown_hub` | `markdown` |
 | `markdown_editor_sync` | `markdown`, `syntax-syntect` |

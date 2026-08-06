@@ -195,6 +195,7 @@ writing any `update()` logic.
 | `image-full-formats` | Restores the broad `image` crate default codec set for image-backed features |
 | `hints-regex` | `regex-lite` scanner for string-configured custom text hints; core hint scanning stays dependency-free |
 | `markdown` | Markdown formatter for `DocumentView` |
+| `qr-code` | `QrCode` widget: scannable QR symbols rendered as terminal cells |
 | `profiling-tracing` | `tracing` spans/events for render loop and `DocumentView` hot paths |
 | `syntax-syntect` | Lightweight syntax highlighting in `TextArea`, `DocumentView`, and `DiffView`; native uses Oniguruma and WASM uses pure-Rust `fancy-regex` |
 | `syntax-extra` | Opt-in bat-curated grammar set for broad language coverage; adds about 0.6 MiB to the binary and includes `syntax-syntect` |
@@ -339,6 +340,7 @@ cargo run --example <name>
 cargo run --example big_text   --features big-text
 cargo run --example image      --features image
 cargo run --example diff_hub  --features diff-view
+cargo run --example qr_code   --features qr-code
 cargo run --example terminal_filetree_devtools --features terminal
 cargo run --example devtools --features devtools
 ```
