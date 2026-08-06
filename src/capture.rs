@@ -187,18 +187,9 @@ impl CapturedFrame {
     ///
     /// With [`PngTextRenderer::Auto`], text is rendered with a discovered system
     /// font when available and falls back to the built-in bitmap renderer.
-    ///
-    /// If PNG encoding fails, returns an empty buffer. Use [`Self::try_to_png`] when the
-    /// encoding error should be surfaced to the caller.
     #[cfg(feature = "ui-snapshot-png")]
-    pub fn to_png(&self, options: &PngOptions) -> Vec<u8> {
+    pub fn to_png(&self, options: &PngOptions) -> crate::Result<Vec<u8>> {
         png::encode_frame(self, options)
-    }
-
-    /// Encode this frame as PNG bytes and return any encoder error.
-    #[cfg(feature = "ui-snapshot-png")]
-    pub fn try_to_png(&self, options: &PngOptions) -> crate::Result<Vec<u8>> {
-        png::try_encode_frame(self, options)
             .map_err(|err| std::io::Error::other(err.to_string()).into())
     }
 

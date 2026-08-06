@@ -667,8 +667,11 @@ mod tests {
 
         #[cfg(feature = "ui-snapshot-png")]
         if std::env::var_os("TUI_LIPAN_CAPTURE_YAZI").is_some() {
-            std::fs::write("/tmp/tui-lipan-yazi.png", snapshot.to_png_default())
-                .expect("write yazi preview capture");
+            std::fs::write(
+                "/tmp/tui-lipan-yazi.png",
+                snapshot.to_png_default().expect("encode yazi preview"),
+            )
+            .expect("write yazi preview capture");
 
             backend.set_viewport(Rect {
                 x: 0,
@@ -678,8 +681,11 @@ mod tests {
             });
             backend.render();
             let narrow = backend.capture_ui_snapshot();
-            std::fs::write("/tmp/tui-lipan-yazi-narrow.png", narrow.to_png_default())
-                .expect("write narrow yazi preview capture");
+            std::fs::write(
+                "/tmp/tui-lipan-yazi-narrow.png",
+                narrow.to_png_default().expect("encode narrow yazi preview"),
+            )
+            .expect("write narrow yazi preview capture");
 
             if let Some(index) = backend
                 .state()
@@ -696,7 +702,9 @@ mod tests {
                 let directory = backend.capture_ui_snapshot();
                 std::fs::write(
                     "/tmp/tui-lipan-yazi-directory.png",
-                    directory.to_png_default(),
+                    directory
+                        .to_png_default()
+                        .expect("encode directory yazi preview"),
                 )
                 .expect("write directory yazi preview capture");
             }

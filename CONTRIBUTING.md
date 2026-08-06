@@ -17,9 +17,39 @@ Before opening a PR:
 - [ ] Docs in `docs/` are updated if the behavior or API surface changed
 - [ ] If you added a new widget, all checklist steps in
       [`docs/widget-authoring.md`](docs/widget-authoring.md) are completed
+- [ ] If `tests/visual_baseline.rs` failed, the rendering change was intended and
+      the re-recorded images in `tests/ui-baselines/` are committed
+      (see [Visual baselines](#visual-baselines))
 
 Opening the PR fills in [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md)
 automatically - keep its checklist.
+
+## Visual baselines
+
+`tests/visual_baseline.rs` renders core widget chrome - frame borders and
+headers, focus chrome, input placeholders and masking, list selection - and
+compares it against committed reference images in `tests/ui-baselines/`. It
+exists so a refactor that quietly moves a border or drops a focus highlight fails
+in CI instead of shipping.
+
+A failure is not automatically a bug. Read the `*.diff.png` path named in the
+failure message: unchanged pixels are dimmed, changed pixels are magenta, so what
+moved is obvious. Then decide.
+
+- **The change was intended** (you restyled a widget): re-record and commit the
+  updated images in the same PR.
+
+  ```bash
+  TUI_LIPAN_UPDATE_BASELINES=1 cargo test --all-features --test visual_baseline
+  ```
+
+- **The change was not intended**: you found a rendering regression. Fix it
+  rather than updating the baseline.
+
+Diff images are gitignored; only the baselines themselves are committed.
+Comparison always uses the crate's built-in bitmap font rather than a system
+font, so results are identical on CI and on every contributor's machine - a
+baseline never fails because of which fonts you have installed.
 
 ## Pull request titles
 

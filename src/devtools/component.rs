@@ -719,7 +719,7 @@ mod tests {
             #[cfg(feature = "ui-snapshot-png")]
             let _ = std::fs::write(
                 format!("{dir}/devtools-stats.png"),
-                snapshot.to_png_default(),
+                snapshot.to_png_default().unwrap_or_default(),
             );
         }
 
@@ -803,7 +803,7 @@ mod tests {
             #[cfg(feature = "ui-snapshot-png")]
             let _ = std::fs::write(
                 format!("{dir}/devtools-logs.png"),
-                snapshot.to_png_default(),
+                snapshot.to_png_default().unwrap_or_default(),
             );
         }
 
@@ -839,7 +839,7 @@ mod tests {
         if let Ok(dir) = std::env::var("DEVTOOLS_SNAPSHOT_DIR") {
             let _ = std::fs::write(
                 format!("{dir}/devtools-stats-empty.png"),
-                snapshot.to_png_default(),
+                snapshot.to_png_default().unwrap_or_default(),
             );
         }
         for label in [

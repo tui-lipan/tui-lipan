@@ -375,6 +375,31 @@ TUI_LIPAN_DEBUG=1 cargo run                         # Print to stderr
 TUI_LIPAN_DEBUG_FILE=/tmp/tui.log cargo run          # Also append to file
 ```
 
+### Headless snapshots
+
+Capture what an app looks like without a terminal, and without editing its
+source. `TUI_LIPAN_SNAPSHOT` makes `run()` render one frame off-screen, write it,
+and exit:
+
+```sh
+TUI_LIPAN_SNAPSHOT=/tmp/app.png cargo run --features ui-snapshot-png
+TUI_LIPAN_SNAPSHOT=/tmp/app.md TUI_LIPAN_SNAPSHOT_VIEWPORT=140x40 cargo run
+```
+
+Companion variables: `TUI_LIPAN_SNAPSHOT_VIEWPORT` (`WIDTHxHEIGHT`, default
+`100x30`), `TUI_LIPAN_SNAPSHOT_FRAMES`, `TUI_LIPAN_SNAPSHOT_FOCUS`,
+`TUI_LIPAN_SNAPSHOT_KEYS`, and `TUI_LIPAN_SNAPSHOT_DIAGNOSTIC=1`.
+
+`TUI_LIPAN_SNAPSHOT_KEYS` scripts input so states behind a keystroke can be
+captured without writing code:
+
+```sh
+TUI_LIPAN_SNAPSHOT=/tmp/modal.png TUI_LIPAN_SNAPSHOT_KEYS="tab,enter" cargo run
+```
+
+See [`docs/components.md`](components.md) for the full table, the `Sketch` API,
+and visual regression baselines.
+
 Use the `debug_log!` macro in your own code to emit messages through the same channel:
 
 ```rust

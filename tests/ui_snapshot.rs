@@ -317,7 +317,10 @@ fn png_default_starts_with_png_signature() {
     });
     backend.render();
 
-    let png = backend.capture_ui_snapshot().to_png_default();
+    let png = backend
+        .capture_ui_snapshot()
+        .to_png_default()
+        .expect("png encodes");
 
     assert!(png.starts_with(PNG_SIGNATURE));
 }
@@ -336,7 +339,7 @@ fn png_try_default_surfaces_successful_encoding() {
 
     let png = backend
         .capture_ui_snapshot()
-        .try_to_png_default()
+        .to_png_default()
         .expect("png should encode");
 
     assert!(png.starts_with(PNG_SIGNATURE));
@@ -355,7 +358,10 @@ fn png_default_uses_default_cell_and_scale_dimensions() {
     backend.set_viewport(viewport);
     backend.render();
 
-    let png = backend.capture_ui_snapshot().to_png_default();
+    let png = backend
+        .capture_ui_snapshot()
+        .to_png_default()
+        .expect("png encodes");
     let (width, height) = png_dimensions(&png);
     let options = tui_lipan::capture::PngOptions::default();
 
@@ -582,4 +588,191 @@ fn json_uses_stable_color_wire_format() {
     assert!(json.contains("\"fg\":\"rgb(1,2,3)\""));
     assert!(json.contains("\"bg\":\"indexed(42)\""));
     assert!(!json.contains("Rgb(1, 2, 3)"));
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+mod baseline_flow {
+    use tui_lipan::prelude::*;
+    use tui_lipan::{BaselineOutcome, Sketch};
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "tui-lipan-sketch-baseline-{tag}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir
+    }
+
+    fn view_with(label: &'static str) -> impl Fn() -> Element + 'static {
+        move || Frame::new().child(Text::new(label)).into()
+    }
+
+    #[test]
+    fn first_run_creates_a_baseline_and_a_rerun_matches_it() {
+        let dir = temp_dir("stable");
+        let baselines = dir.join("baselines");
+
+        let created = Sketch::view("stable", view_with("hello"))
+            .viewport(24, 4)
+            .dir(dir.join("out"))
+            .baseline(&baselines)
+            .quiet(true)
+            .check()
+            .expect("first run");
+
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].outcome, BaselineOutcome::Created);
+
+        let rerun = Sketch::view("stable", view_with("hello"))
+            .viewport(24, 4)
+            .dir(dir.join("out"))
+            .baseline(&baselines)
+            .quiet(true)
+            .check()
+            .expect("second run");
+
+        assert_eq!(rerun[0].outcome, BaselineOutcome::Match { ratio: 0.0 });
+        assert!(!rerun[0].outcome.is_regression());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_changed_view_regresses_and_writes_a_diff_image() {
+        let dir = temp_dir("changed");
+        let baselines = dir.join("baselines");
+
+        Sketch::view("shifting", view_with("before"))
+            .viewport(24, 4)
+            .dir(dir.join("out"))
+            .baseline(&baselines)
+            .quiet(true)
+            .check()
+            .expect("seed baseline");
+
+        let changed = Sketch::view("shifting", view_with("after"))
+            .viewport(24, 4)
+            .dir(dir.join("out"))
+            .baseline(&baselines)
+            .quiet(true)
+            .check()
+            .expect("compare");
+
+        match &changed[0].outcome {
+            BaselineOutcome::Changed {
+                changed_pixels,
+                diff_path,
+                ..
+            } => {
+                assert!(*changed_pixels > 0);
+                assert!(diff_path.exists(), "diff image should be written");
+            }
+            other => panic!("expected Changed, got {other:?}"),
+        }
+        assert!(changed[0].outcome.is_regression());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn assert_baseline_fails_on_a_changed_view() {
+        let dir = temp_dir("assert");
+        let baselines = dir.join("baselines");
+
+        Sketch::view("guarded", view_with("original"))
+            .viewport(24, 4)
+            .dir(dir.join("out"))
+            .baseline(&baselines)
+            .quiet(true)
+            .assert_baseline()
+            .expect("baseline creation is not a regression");
+
+        let err = Sketch::view("guarded", view_with("modified"))
+            .viewport(24, 4)
+            .dir(dir.join("out"))
+            .baseline(&baselines)
+            .quiet(true)
+            .assert_baseline()
+            .expect_err("a changed view must fail the assertion");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("TUI_LIPAN_UPDATE_BASELINES"),
+            "the failure should say how to accept the change: {message}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_key_script_changes_what_gets_captured() {
+        let dir = temp_dir("keys");
+
+        let plain = Sketch::component("keys-plain", KeyEcho)
+            .viewport(30, 4)
+            .dir(dir.join("plain"))
+            .quiet(true)
+            .write()
+            .expect("plain capture");
+
+        let typed = Sketch::component("keys-typed", KeyEcho)
+            .viewport(30, 4)
+            .dir(dir.join("typed"))
+            .keys("h,i")
+            .quiet(true)
+            .write()
+            .expect("typed capture");
+
+        let plain_md = std::fs::read_to_string(&plain[0]).expect("plain markdown");
+        let typed_md = std::fs::read_to_string(&typed[0]).expect("typed markdown");
+
+        assert!(plain_md.contains("typed:"), "{plain_md}");
+        assert!(
+            typed_md.contains("typed:hi"),
+            "the key script should reach the component: {typed_md}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_invalid_key_script_is_reported() {
+        let err = Sketch::component("bad-keys", KeyEcho)
+            .viewport(20, 3)
+            .dir(std::env::temp_dir())
+            .keys("tab,not-a-real-key")
+            .quiet(true)
+            .write()
+            .expect_err("an unparseable script must fail loudly");
+        assert!(err.to_string().contains("not-a-real-key"), "{err}");
+    }
+
+    struct KeyEcho;
+
+    impl Component for KeyEcho {
+        type Message = ();
+        type Properties = ();
+        type State = String;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            String::new()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
+            if let KeyCode::Char(ch) = key.code {
+                ctx.state.push(ch);
+                return KeyUpdate::handled(Update::full());
+            }
+            KeyUpdate::unhandled(Update::none())
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            Text::new(format!("typed:{}", ctx.state)).into()
+        }
+    }
 }

@@ -138,7 +138,7 @@ impl<C: Component> AppRunner<C> {
     /// step, matching key dispatch.
     ///
     /// [`FocusPolicy::Manual`]: crate::FocusPolicy::Manual
-    fn framework_focus_step(&mut self, direction: focus::FocusDirection) -> bool {
+    pub(super) fn framework_focus_step(&mut self, direction: focus::FocusDirection) -> bool {
         let before = self.focus.focused;
         let overlay_handled = match direction {
             focus::FocusDirection::Next => self.focus_overlay_next(),

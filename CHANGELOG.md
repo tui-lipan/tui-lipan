@@ -13,6 +13,44 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `tests/visual_baseline.rs` guards core widget chrome (frame borders and headers, focus chrome,
+  input placeholders and masking, list selection) against unintended pixel changes, with reference
+  images committed in `tests/ui-baselines/`. Intended rendering changes are re-recorded with
+  `TUI_LIPAN_UPDATE_BASELINES=1 cargo test --all-features --test visual_baseline` and committed in
+  the same PR; see `CONTRIBUTING.md`.
+- Visual regression baselines: `Sketch::baseline(dir)` stores one image per capture, compares the
+  next render against it pixel by pixel, and writes a highlighted `*.diff.png` beside any baseline
+  that changed (unchanged pixels dimmed, changed pixels magenta). `check()` returns
+  `Vec<BaselineComparison>`; `assert_baseline()` fails listing every regression at once.
+  `tolerance(ratio)` sets the maximum differing-pixel fraction still counted as a match (default
+  `0.0`). `TUI_LIPAN_UPDATE_BASELINES=1` accepts current output as the new baseline. Baseline
+  captures force `PngTextRenderer::Bitmap`, because default font discovery resolves differently per
+  machine and makes pixel comparison meaningless across CI and local checkouts.
+- `TUI_LIPAN_SNAPSHOT_KEYS` and `Sketch::keys` dispatch a key script (`"tab,tab,enter"`) before
+  capturing, so states behind a keystroke - an open modal, a submitted form, an error - are
+  reachable without writing a harness. Entries use ordinary keybinding syntax. Each key is
+  dispatched, its messages drained, and the tree re-rendered before the next, matching the event
+  loop; batching them instead collapses typed text to its last character. An unparseable script
+  fails the capture rather than being skipped.
+- `TUI_LIPAN_SNAPSHOT=<path>` makes `AppRunner::run()` render one frame off-screen, write a
+  snapshot artifact, and return without entering raw mode or opening a terminal. This captures an
+  existing app or example without editing its source, and works with no tty (CI runners, agent
+  sessions). Format follows the path extension, matching `Context::request_ui_snapshot_to`.
+  Companion variables: `TUI_LIPAN_SNAPSHOT_VIEWPORT` (`WIDTHxHEIGHT`, default `100x30`),
+  `TUI_LIPAN_SNAPSHOT_FRAMES`, `TUI_LIPAN_SNAPSHOT_FOCUS`, and `TUI_LIPAN_SNAPSHOT_DIAGNOSTIC=1`.
+- `Sketch` renders a view function or `Component` at one or more viewports and writes markdown,
+  PNG, and JSON artifacts in a single call, so a design capture is small enough to keep in the
+  repository rather than be written and deleted. `Sketch::view` mounts any `Fn() -> Element`
+  through `Mockup`; `viewport`, `fit`, `focus_next`, `options`, `dir`, and the per-format toggles
+  configure it. Defaults to `80x24` plus a fit-to-content pass, written to `target/ui-sketches/`
+  (override with `TUI_LIPAN_SKETCH_DIR`).
+- `UiSnapshotFileFormat::from_path` routes a snapshot path to a format by extension. Previously
+  this logic was private to `Context::request_ui_snapshot_to`.
+- `examples/sketches/` holds kept design sketches, registered in that directory's `main.rs` so a
+  new sketch needs no `Cargo.toml` change. Run with `cargo snap sketches`.
+- `cargo snap <example>` alias runs an example with `ui-snapshot-png,ui-snapshot-json` enabled, so
+  capture runs and ordinary `cargo check`/`cargo test` stop invalidating each other's build
+  artifacts.
 - `QrCode` (feature `qr-code`) renders a scannable QR symbol as terminal cells. Defaults to
   half-block mapping so the symbol stays square despite the 1:2 terminal cell aspect ratio, a
   spec-mandated 4-module quiet zone, and explicit black-on-white so a dark terminal palette cannot
@@ -88,6 +126,17 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- `CapturedFrame::to_png` and `UiSnapshot::to_png` / `to_png_default` now return
+  `Result<Vec<u8>>`, and `try_to_png` / `try_to_png_default` are removed (breaking). The infallible
+  forms returned an **empty buffer** when encoding failed, which wrote a zero-byte file that only
+  failed later, when something tried to read it. Migration: add `?` (or `.expect(...)`) at the call
+  site, and rename any `try_to_png*` call to `to_png*`.
+- The `tui-lipan-ui-sketch` and `tui-lipan-visual-design` agent skills are merged into a single
+  `tui-lipan-visual` skill (breaking, for anyone who copied them into their own skills directory).
+  They overlapped and gave contradictory advice: one told agents to delete their snapshot harness
+  when finished, the other told them to keep it. The merged skill ranks captures by cost - env-var
+  capture of a running app, then a kept `Sketch`, then a real test - and drops the throwaway
+  harness pattern entirely.
 - `Color::elevate` now applies its endpoint-blended lightness in OKLab with stable, gamut-mapped
   relative chroma, preserving authored casts without weakening elevation or amplifying one-step
   near-black tints.

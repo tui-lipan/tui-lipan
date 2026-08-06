@@ -470,7 +470,7 @@ fn png_bytes_signature_and_dimensions_match_options() {
         scale: 2,
         ..Default::default()
     };
-    let png = captured.to_png(&options);
+    let png = captured.to_png(&options).expect("png should encode");
 
     assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
     let decoded = image::load_from_memory(&png).expect("png should decode");
@@ -482,22 +482,26 @@ fn png_bytes_signature_and_dimensions_match_options() {
 #[test]
 fn png_bitmap_renderer_forces_legacy_bitmap_output() {
     let frame = single_cell_frame("A", Color::White, Color::Black);
-    let bitmap = frame.to_png(&tui_lipan::PngOptions {
-        cell_width: 8,
-        cell_height: 16,
-        scale: 1,
-        text_renderer: tui_lipan::PngTextRenderer::Bitmap,
-        ..Default::default()
-    });
-    let bitmap_with_font_preferences = frame.to_png(&tui_lipan::PngOptions {
-        cell_width: 8,
-        cell_height: 16,
-        scale: 1,
-        text_renderer: tui_lipan::PngTextRenderer::Bitmap,
-        font_family: Some(std::sync::Arc::from("Definitely Missing Font Family")),
-        font_path: Some(std::path::PathBuf::from("/definitely/missing/font.ttf")),
-        ..Default::default()
-    });
+    let bitmap = frame
+        .to_png(&tui_lipan::PngOptions {
+            cell_width: 8,
+            cell_height: 16,
+            scale: 1,
+            text_renderer: tui_lipan::PngTextRenderer::Bitmap,
+            ..Default::default()
+        })
+        .expect("png should encode");
+    let bitmap_with_font_preferences = frame
+        .to_png(&tui_lipan::PngOptions {
+            cell_width: 8,
+            cell_height: 16,
+            scale: 1,
+            text_renderer: tui_lipan::PngTextRenderer::Bitmap,
+            font_family: Some(std::sync::Arc::from("Definitely Missing Font Family")),
+            font_path: Some(std::path::PathBuf::from("/definitely/missing/font.ttf")),
+            ..Default::default()
+        })
+        .expect("png should encode");
 
     assert_eq!(bitmap, bitmap_with_font_preferences);
 }
@@ -517,11 +521,13 @@ fn png_font_renderer_uses_system_font_when_available() {
         font_family: Some(std::sync::Arc::from(font_family.as_str())),
         ..Default::default()
     };
-    let font_png = frame.to_png(&options);
-    let bitmap_png = frame.to_png(&tui_lipan::PngOptions {
-        text_renderer: tui_lipan::PngTextRenderer::Bitmap,
-        ..options.clone()
-    });
+    let font_png = frame.to_png(&options).expect("png should encode");
+    let bitmap_png = frame
+        .to_png(&tui_lipan::PngOptions {
+            text_renderer: tui_lipan::PngTextRenderer::Bitmap,
+            ..options.clone()
+        })
+        .expect("png should encode");
 
     assert!(font_png.starts_with(b"\x89PNG\r\n\x1a\n"));
     assert_ne!(font_png, bitmap_png);
@@ -554,8 +560,8 @@ fn png_zero_options_are_clamped_and_scale_keeps_legacy_dimensions() {
         ..Default::default()
     };
 
-    let zero_png = captured.to_png(&zero_options);
-    let scaled_png = captured.to_png(&scaled_options);
+    let zero_png = captured.to_png(&zero_options).expect("png should encode");
+    let scaled_png = captured.to_png(&scaled_options).expect("png should encode");
     let zero_decoded = image::load_from_memory(&zero_png).expect("png should decode");
     let scaled_decoded = image::load_from_memory(&scaled_png).expect("png should decode");
 
@@ -576,7 +582,9 @@ fn png_wide_character_rendering_does_not_panic() {
     backend.render();
 
     let captured = backend.capture_frame();
-    let png = captured.to_png(&tui_lipan::PngOptions::default());
+    let png = captured
+        .to_png(&tui_lipan::PngOptions::default())
+        .expect("png should encode");
 
     assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
 }
@@ -595,7 +603,9 @@ fn png_grapheme_and_multi_codepoint_symbols_do_not_panic() {
         modifiers: tui_lipan::CellModifiers::default(),
     });
 
-    let png = frame.to_png(&tui_lipan::PngOptions::default());
+    let png = frame
+        .to_png(&tui_lipan::PngOptions::default())
+        .expect("png should encode");
     let decoded = image::load_from_memory(&png).expect("png should decode");
 
     assert_eq!(decoded.width(), u32::from(frame.width) * 8 * 2);
@@ -611,8 +621,12 @@ fn png_private_use_placeholder_differs_from_literal_question_mark() {
         text_renderer: tui_lipan::PngTextRenderer::Bitmap,
         ..Default::default()
     };
-    let pua = single_cell_frame("\u{e000}", Color::White, Color::Black).to_png(&options);
-    let question = single_cell_frame("?", Color::White, Color::Black).to_png(&options);
+    let pua = single_cell_frame("\u{e000}", Color::White, Color::Black)
+        .to_png(&options)
+        .expect("png should encode");
+    let question = single_cell_frame("?", Color::White, Color::Black)
+        .to_png(&options)
+        .expect("png should encode");
     let decoded = image::load_from_memory(&pua)
         .expect("png should decode")
         .to_rgb8();
@@ -643,13 +657,15 @@ fn png_common_tui_symbol_fallbacks_are_visible() {
             }),
     );
 
-    let png = frame.to_png(&tui_lipan::PngOptions {
-        cell_width: 8,
-        cell_height: 16,
-        scale: 1,
-        text_renderer: tui_lipan::PngTextRenderer::Bitmap,
-        ..Default::default()
-    });
+    let png = frame
+        .to_png(&tui_lipan::PngOptions {
+            cell_width: 8,
+            cell_height: 16,
+            scale: 1,
+            text_renderer: tui_lipan::PngTextRenderer::Bitmap,
+            ..Default::default()
+        })
+        .expect("png should encode");
     let decoded = image::load_from_memory(&png)
         .expect("png should decode")
         .to_rgb8();
@@ -671,12 +687,14 @@ fn png_common_tui_symbol_fallbacks_are_visible() {
 #[test]
 fn png_frame_border_cell_contains_foreground_pixels() {
     let frame = single_cell_frame("─", Color::Rgb(7, 200, 9), Color::Black);
-    let png = frame.to_png(&tui_lipan::PngOptions {
-        cell_width: 10,
-        cell_height: 9,
-        scale: 1,
-        ..Default::default()
-    });
+    let png = frame
+        .to_png(&tui_lipan::PngOptions {
+            cell_width: 10,
+            cell_height: 9,
+            scale: 1,
+            ..Default::default()
+        })
+        .expect("png should encode");
     let decoded = image::load_from_memory(&png)
         .expect("png should decode")
         .to_rgb8();
@@ -721,12 +739,15 @@ fn png_cursor_render_on_and_off_changes_output() {
         ..Default::default()
     };
 
-    assert_ne!(captured.to_png(&options_on), captured.to_png(&options_off));
+    assert_ne!(
+        captured.to_png(&options_on).expect("png should encode"),
+        captured.to_png(&options_off).expect("png should encode")
+    );
 }
 
 #[cfg(feature = "ui-snapshot-png")]
 #[test]
-fn png_try_to_png_returns_bytes_and_cursor_uses_cell_foreground() {
+fn png_encoding_returns_bytes_and_cursor_uses_cell_foreground() {
     let frame = tui_lipan::CapturedFrame {
         viewport: Rect {
             x: 0,
@@ -757,7 +778,7 @@ fn png_try_to_png_returns_bytes_and_cursor_uses_cell_foreground() {
         ..Default::default()
     };
 
-    let png = frame.try_to_png(&options).expect("png should encode");
+    let png = frame.to_png(&options).expect("png should encode");
     let decoded = image::load_from_memory(&png)
         .expect("png should decode")
         .to_rgb8();

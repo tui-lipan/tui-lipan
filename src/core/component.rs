@@ -1578,28 +1578,7 @@ impl<C: Component> Context<C> {
     /// repaint so idle apps still deliver the snapshot.
     pub fn request_ui_snapshot_to(&self, path: impl AsRef<std::path::Path>) {
         let path = path.as_ref().to_path_buf();
-        let extension = path.extension();
-        let format = if extension.is_some_and(|ext| ext == "json" || ext == "JSON") {
-            #[cfg(feature = "ui-snapshot-json")]
-            {
-                crate::ui_snapshot::UiSnapshotFileFormat::Json
-            }
-            #[cfg(not(feature = "ui-snapshot-json"))]
-            {
-                crate::ui_snapshot::UiSnapshotFileFormat::Markdown
-            }
-        } else if extension.is_some_and(|ext| ext == "png" || ext == "PNG") {
-            #[cfg(feature = "ui-snapshot-png")]
-            {
-                crate::ui_snapshot::UiSnapshotFileFormat::Png
-            }
-            #[cfg(not(feature = "ui-snapshot-png"))]
-            {
-                crate::ui_snapshot::UiSnapshotFileFormat::Markdown
-            }
-        } else {
-            crate::ui_snapshot::UiSnapshotFileFormat::Markdown
-        };
+        let format = crate::ui_snapshot::UiSnapshotFileFormat::from_path(&path);
         *self.env.ui_snapshot_request.borrow_mut() =
             Some(crate::ui_snapshot::UiSnapshotRequest::Write { path, format });
         self.request_full_repaint();

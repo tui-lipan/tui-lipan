@@ -67,3 +67,30 @@ impl Default for UiSnapshotFileFormat {
         }
     }
 }
+
+impl UiSnapshotFileFormat {
+    /// Route a snapshot path to a format by file extension.
+    ///
+    /// Returns [`Self::Json`] for `.json` and [`Self::Png`] for `.png` when the
+    /// matching feature is enabled, and [`Self::Markdown`] for anything else -
+    /// including a `.png` path in a build without `ui-snapshot-png`, so a missing
+    /// feature degrades to a readable report instead of failing.
+    pub fn from_path(path: &std::path::Path) -> Self {
+        let Some(extension) = path.extension() else {
+            return Self::Markdown;
+        };
+        if extension.eq_ignore_ascii_case("json") {
+            #[cfg(feature = "ui-snapshot-json")]
+            {
+                return Self::Json;
+            }
+        }
+        if extension.eq_ignore_ascii_case("png") {
+            #[cfg(feature = "ui-snapshot-png")]
+            {
+                return Self::Png;
+            }
+        }
+        Self::Markdown
+    }
+}

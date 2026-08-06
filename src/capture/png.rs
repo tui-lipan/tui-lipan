@@ -53,11 +53,7 @@ enum ResolvedBitmapGlyph {
     Fallback(BitmapGlyphFallback),
 }
 
-pub(super) fn encode_frame(frame: &CapturedFrame, options: &PngOptions) -> Vec<u8> {
-    try_encode_frame(frame, options).unwrap_or_default()
-}
-
-pub(super) fn try_encode_frame(
+pub(super) fn encode_frame(
     frame: &CapturedFrame,
     options: &PngOptions,
 ) -> image::ImageResult<Vec<u8>> {

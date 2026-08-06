@@ -89,6 +89,24 @@ If `scripts/generate-node-kind-delegate-arms.py` fails, regenerate the checked-i
 delegate block with `python3 scripts/generate-node-kind-delegate-arms.py --write`
 and rerun the check.
 
+### Visual baselines
+
+`tests/visual_baseline.rs` compares rendered widget chrome against committed
+reference images in `tests/ui-baselines/`. It fails when frame borders, focus
+chrome, input placeholders/masking, or list selection change pixels.
+
+When it fails, read the `*.diff.png` it names (unchanged pixels dimmed, changed
+pixels magenta) and decide whether the change was intended. If it was, re-record
+and **commit the updated images in the same PR**:
+
+```bash
+TUI_LIPAN_UPDATE_BASELINES=1 cargo test --all-features --test visual_baseline
+```
+
+Diff images are gitignored; only the baselines themselves are committed.
+Comparison always uses the built-in bitmap font, never a system font, so results
+are identical on CI and on any contributor's machine.
+
 ### CI environment notes
 
 - CI runners have **no tty**. Library and test code paths must never query the

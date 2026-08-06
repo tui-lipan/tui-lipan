@@ -238,7 +238,7 @@ fn render(name: &str, theme: Theme) {
     #[cfg(feature = "ui-snapshot-png")]
     {
         let path = dir.join(format!("tokens_{name}.png"));
-        fs::write(&path, snapshot.to_png_default()).unwrap();
+        fs::write(&path, snapshot.to_png_default().unwrap()).unwrap();
         println!("Wrote {}", path.display());
     }
     #[cfg(not(feature = "ui-snapshot-png"))]
