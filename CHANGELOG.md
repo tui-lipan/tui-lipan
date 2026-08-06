@@ -63,6 +63,13 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `SearchPalette` no longer swallows its navigation keys when nothing matches. The internal input
+  interceptor claimed `Enter` (and the arrows, `PageUp`/`PageDown`, `Home`/`End`) unconditionally,
+  so an empty result list still sent an activation for a row that does not exist and reported the
+  key handled — `input_key_interceptor` never saw it. Those keys now fall through to the caller
+  where the palette has no row to act on, which is what lets `Enter` mean "create what was typed"
+  or "start something new" in an empty list. Navigation still outranks the caller everywhere the
+  palette can act on it.
 - Clearing or entering an app-command chord while a terminal has focus now claims a frame for chord
   chrome (`command_chord_pending`), even when the key itself is forwarded with `DirtyLevel::None`.
   A mismatch or Esc cancel no longer leaves a stale PREFIX indicator painted over a busy child TUI.
