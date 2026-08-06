@@ -739,6 +739,7 @@ TUI_LIPAN_RECORD=/tmp/demo.cast TUI_LIPAN_RECORD_KEYS="tab,enter" cargo run --ex
 | `TUI_LIPAN_RECORD_KEYS` | unset | Key script to play, e.g. `tab,tab,enter` |
 | `TUI_LIPAN_RECORD_KEY_DELAY_MS` | `400` | Pause after each key, so a viewer can follow |
 | `TUI_LIPAN_RECORD_SETTLE_MS` | `1200` | Hold on the final frame |
+| `TUI_LIPAN_RECORD_FRAMES` | unset | Directory for truecolor PNG frames (needs `ui-snapshot-png`) |
 
 In code, `Recording` mirrors `Sketch`:
 
@@ -761,9 +762,11 @@ Recording::view("demo", login_screen)   // or Recording::component(...)
 | `keys(script)` | Key script to play |
 | `key_delay(duration)` | Pause after each key |
 | `settle(duration)` | Hold on the final frame |
+| `png_options(opts)` | Rendering options for frame export |
 | `quiet(b)` | Suppress the written-path line |
 | `record()` | Return a `CastRecording` without writing |
 | `write(path)` | Write the cast; returns the path |
+| `write_frames(dir)` | Write one truecolor PNG per frame; returns the paths |
 
 **Timing is a synthetic fixed step.** The recorder advances a clock in `1/fps`
 increments and ticks animations by the same amount, so the same view and script
@@ -776,6 +779,78 @@ Identical frames are dropped, so a still stretch costs nothing. Because that
 would otherwise end the file at the last visible change, the recorder writes a
 final zero-length event to hold the closing frame for the intended duration
 (`CastRecording::mark_time`).
+
+### Choosing an output format
+
+| Format | Size (7s demo) | Best for | Cost |
+|--------|----------------|----------|------|
+| `.cast` | **9 KB** | Docs sites, PR links, committing to the repo | Needs a player |
+| `.mp4` via GIF | 26 KB | Slack, quick shares | 256-colour quantisation |
+| `.gif` | 44 KB | READMEs - auto-plays inline with no player | 256 colours, largest |
+| `.mp4` truecolor | 55 KB | Marketing, high-DPI, real colour fidelity | Needs frame export + ffmpeg |
+
+Sizes are from the same recording of `examples/todo`; a busier UI widens the gap
+in the cast's favour, since it transmits only changed cells while video re-encodes
+whole frames.
+
+Start with `.cast`. Reach for video only when the destination cannot play one.
+
+#### GIF
+
+[`agg`](https://github.com/asciinema/agg) converts a cast:
+
+```sh
+agg --theme dracula --idle-time-limit 1 --speed 1.5 demo.cast demo.gif
+```
+
+`--idle-time-limit` is the biggest size win - it caps dead air between keystrokes.
+Themes: `asciinema`, `dracula`, `github-dark`, `github-light`, `kanagawa`,
+`monokai`, `nord`, `solarized-dark`, `solarized-light`, `gruvbox-dark`.
+
+#### MP4, the quick way
+
+```sh
+ffmpeg -i demo.gif -pix_fmt yuv420p -movflags +faststart \
+       -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" demo.mp4
+```
+
+Both filters earn their place: `yuv420p` is what makes the file play in browsers
+and chat clients, and the `scale` filter forces even dimensions, which H.264
+requires - without it an odd-sized terminal fails to encode.
+
+This route inherits GIF's 256-colour palette. For a flat theme that is invisible;
+for gradients it bands.
+
+#### MP4, truecolor
+
+Export PNG frames instead, skipping GIF entirely:
+
+```sh
+TUI_LIPAN_RECORD=demo.cast TUI_LIPAN_RECORD_FRAMES=frames \
+  cargo run --features ui-snapshot-png --example todo
+
+ffmpeg -framerate 30 -i frames/frame_%05d.png \
+       -pix_fmt yuv420p -movflags +faststart demo.mp4
+```
+
+`write_frames` and `TUI_LIPAN_RECORD_FRAMES` print that exact `ffmpeg` line with
+the right paths and frame rate filled in, so it can be pasted straight back.
+
+Frames are written at a **constant rate**, one per `1/fps` tick including
+unchanged ones, because an encoder reconstructs timing from a numbered sequence.
+That costs disk: a 7-second capture at 30fps is ~200 files and ~19 MB. They are
+an intermediate - delete them after encoding. Unchanged frames reuse the previous
+encode rather than paying for it twice.
+
+Raise `PngOptions::scale` (via `Recording::png_options`) for a higher-resolution
+video; the default 2x gives 16x32 pixels per cell.
+
+```rust
+Recording::view("demo", view)
+    .viewport(90, 26)
+    .keys("tab,enter")
+    .write_frames("target/recordings/frames")?;
+```
 
 ### Design sketches
 

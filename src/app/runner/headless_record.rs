@@ -25,6 +25,8 @@ const KEYS_ENV: &str = "TUI_LIPAN_RECORD_KEYS";
 const KEY_DELAY_ENV: &str = "TUI_LIPAN_RECORD_KEY_DELAY_MS";
 /// Hold on the final frame, in milliseconds.
 const SETTLE_ENV: &str = "TUI_LIPAN_RECORD_SETTLE_MS";
+/// Directory for truecolor PNG frame export, for encoding to video.
+const FRAMES_ENV: &str = "TUI_LIPAN_RECORD_FRAMES";
 
 /// Viewport used when `TUI_LIPAN_RECORD_VIEWPORT` is unset.
 const DEFAULT_VIEWPORT: Rect = Rect {
@@ -55,6 +57,8 @@ pub(super) struct HeadlessRecordConfig {
     pub(super) key_delay: Duration,
     /// Hold on the final frame.
     pub(super) settle: Duration,
+    /// Optional directory receiving one PNG per frame.
+    pub(super) frames_dir: Option<PathBuf>,
 }
 
 impl HeadlessRecordConfig {
@@ -90,6 +94,9 @@ impl HeadlessRecordConfig {
                 env_u64(KEY_DELAY_ENV).unwrap_or(DEFAULT_KEY_DELAY_MS),
             ),
             settle: Duration::from_millis(env_u64(SETTLE_ENV).unwrap_or(DEFAULT_SETTLE_MS)),
+            frames_dir: std::env::var_os(FRAMES_ENV)
+                .filter(|dir| !dir.is_empty())
+                .map(PathBuf::from),
         }))
     }
 
@@ -116,6 +123,80 @@ fn env_u64(key: &str) -> Option<u64> {
     std::env::var(key).ok()?.trim().parse().ok()
 }
 
+/// Writes one PNG per captured frame, when frame export is requested.
+///
+/// Frames land at a constant rate - one per tick, including unchanged ones -
+/// because an encoder reproduces timing from a numbered sequence. Unchanged
+/// frames reuse the previous encode rather than paying for it again.
+pub(super) struct FrameSink {
+    dir: Option<PathBuf>,
+    #[cfg(feature = "ui-snapshot-png")]
+    written: usize,
+    #[cfg(feature = "ui-snapshot-png")]
+    previous: Option<(crate::capture::CapturedFrame, Vec<u8>)>,
+}
+
+impl FrameSink {
+    /// Create a sink writing into `dir`, or an inert one when `dir` is `None`.
+    pub(super) fn new(dir: Option<PathBuf>) -> crate::Result<Self> {
+        if let Some(dir) = dir.as_ref() {
+            std::fs::create_dir_all(dir)?;
+        }
+        Ok(Self {
+            dir,
+            #[cfg(feature = "ui-snapshot-png")]
+            written: 0,
+            #[cfg(feature = "ui-snapshot-png")]
+            previous: None,
+        })
+    }
+
+    /// Write `frame` as the next numbered PNG, if frame export is on.
+    #[cfg(feature = "ui-snapshot-png")]
+    pub(super) fn capture(&mut self, frame: &crate::capture::CapturedFrame) -> crate::Result<()> {
+        let Some(dir) = self.dir.as_ref() else {
+            return Ok(());
+        };
+        let bytes = match self.previous.as_ref() {
+            Some((last, bytes)) if last == frame => bytes.clone(),
+            _ => frame.to_png(&crate::capture::PngOptions::default())?,
+        };
+        std::fs::write(dir.join(format!("frame_{:05}.png", self.written)), &bytes)?;
+        self.previous = Some((frame.clone(), bytes));
+        self.written += 1;
+        Ok(())
+    }
+
+    /// Frame export needs `ui-snapshot-png`; without it this is a no-op.
+    #[cfg(not(feature = "ui-snapshot-png"))]
+    pub(super) fn capture(&mut self, _frame: &crate::capture::CapturedFrame) -> crate::Result<()> {
+        Ok(())
+    }
+
+    /// Print the written frame count and a ready-to-run encode command.
+    pub(super) fn report(&self, fps: u16) {
+        let Some(dir) = self.dir.as_ref() else {
+            return;
+        };
+        #[cfg(not(feature = "ui-snapshot-png"))]
+        {
+            let _ = fps;
+            eprintln!(
+                "warning: no frames written to {}; frame export needs `--features ui-snapshot-png`",
+                dir.display()
+            );
+        }
+        #[cfg(feature = "ui-snapshot-png")]
+        {
+            println!("wrote {} frames to {}", self.written, dir.display());
+            println!(
+                "  ffmpeg -framerate {fps} -i {}/frame_%05d.png -pix_fmt yuv420p -movflags +faststart out.mp4",
+                dir.display()
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,7 +209,30 @@ mod tests {
             keys: Vec::new(),
             key_delay: Duration::from_millis(DEFAULT_KEY_DELAY_MS),
             settle: Duration::from_millis(DEFAULT_SETTLE_MS),
+            frames_dir: None,
         }
+    }
+
+    #[test]
+    fn a_sink_without_a_directory_is_inert() {
+        let mut sink = FrameSink::new(None).expect("inert sink");
+        // Capturing into an inert sink must be a silent no-op, not an error:
+        // the recorder always feeds it, whether or not frames were requested.
+        let frame = crate::capture::CapturedFrame {
+            viewport: DEFAULT_VIEWPORT,
+            width: 1,
+            height: 1,
+            cells: vec![crate::capture::CapturedCell {
+                symbol: " ".to_owned(),
+                fg: crate::style::Color::Reset,
+                bg: crate::style::Color::Reset,
+                underline_color: crate::style::Color::Reset,
+                modifiers: crate::capture::CellModifiers::default(),
+            }],
+            cursor: None,
+        };
+        sink.capture(&frame).expect("inert capture succeeds");
+        sink.report(30);
     }
 
     #[test]

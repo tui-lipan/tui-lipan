@@ -411,7 +411,12 @@ TUI_LIPAN_RECORD=/tmp/demo.cast TUI_LIPAN_RECORD_KEYS="tab,enter" cargo run
 ```
 
 Companion variables: `TUI_LIPAN_RECORD_VIEWPORT`, `_FPS`, `_KEY_DELAY_MS`,
-`_SETTLE_MS`. The `Recording` builder is the in-code equivalent.
+`_SETTLE_MS`, and `_FRAMES`. The `Recording` builder is the in-code equivalent.
+
+`TUI_LIPAN_RECORD_FRAMES=<dir>` additionally writes one truecolor PNG per frame
+(needs `ui-snapshot-png`) and prints a ready-to-run `ffmpeg` command for encoding
+them to MP4. See [`docs/components.md`](components.md#choosing-an-output-format)
+for a size and quality comparison of `.cast`, GIF, and MP4.
 
 Use the `debug_log!` macro in your own code to emit messages through the same channel:
 

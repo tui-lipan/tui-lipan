@@ -1051,6 +1051,7 @@ impl<C: Component> AppRunner<C> {
     fn headless_hold(
         &mut self,
         cast: &mut crate::capture::CastRecording,
+        frames: &mut headless_record::FrameSink,
         clock: &mut std::time::Duration,
         total: std::time::Duration,
         step: std::time::Duration,
@@ -1060,20 +1061,34 @@ impl<C: Component> AppRunner<C> {
 
         let mut remaining = total;
         while !remaining.is_zero() {
-            let tick = step.min(remaining).min(MAX_TICK);
-            let (_, _, needs_layout) =
-                crate::app::animation::tick_tree_animations(&mut self.core.tree, tick);
-            let transitions = self.core.ctx.env().animations.tick(tick);
+            let frame_span = step.min(remaining);
+
+            // Animations tick in clamped sub-steps so a long frame cannot skip a
+            // transition, but exactly one frame is emitted per `step`. Tying the
+            // two together would emit frames at the clamp rate rather than the
+            // requested rate.
+            let mut advanced = std::time::Duration::ZERO;
+            let mut dirty_view = false;
+            while advanced < frame_span {
+                let tick = (frame_span - advanced).min(MAX_TICK);
+                let (_, _, needs_layout) =
+                    crate::app::animation::tick_tree_animations(&mut self.core.tree, tick);
+                let transitions = self.core.ctx.env().animations.tick(tick);
+                dirty_view |= needs_layout || transitions.view_changed;
+                advanced += tick;
+            }
 
             let mut dirty = DirtyTracker::default();
             self.drain_messages_and_commands(&mut dirty)?;
-            if needs_layout || transitions.view_changed {
+            if dirty_view {
                 self.headless_render(bounds);
             }
 
-            *clock += tick;
-            cast.push_frame(clock.as_secs_f64(), &self.headless_frame(bounds));
-            remaining = remaining.saturating_sub(tick);
+            *clock += frame_span;
+            let frame = self.headless_frame(bounds);
+            cast.push_frame(clock.as_secs_f64(), &frame);
+            frames.capture(&frame)?;
+            remaining = remaining.saturating_sub(frame_span);
         }
         Ok(())
     }
@@ -1105,27 +1120,47 @@ impl<C: Component> AppRunner<C> {
         let mut cast = crate::capture::CastRecording::new(bounds.w, bounds.h).title(title);
         let step = config.step();
         let mut clock = std::time::Duration::ZERO;
-        cast.push_frame(0.0, &self.headless_frame(bounds));
+        let mut frames = headless_record::FrameSink::new(config.frames_dir.clone())?;
+        let first = self.headless_frame(bounds);
+        cast.push_frame(0.0, &first);
+        frames.capture(&first)?;
 
         for key in &config.keys {
             self.headless_dispatch_key(*key, bounds)?;
             clock += step;
-            cast.push_frame(clock.as_secs_f64(), &self.headless_frame(bounds));
-            self.headless_hold(&mut cast, &mut clock, config.key_delay, step, bounds)?;
+            let frame = self.headless_frame(bounds);
+            cast.push_frame(clock.as_secs_f64(), &frame);
+            frames.capture(&frame)?;
+            self.headless_hold(
+                &mut cast,
+                &mut frames,
+                &mut clock,
+                config.key_delay,
+                step,
+                bounds,
+            )?;
         }
 
-        self.headless_hold(&mut cast, &mut clock, config.settle, step, bounds)?;
+        self.headless_hold(
+            &mut cast,
+            &mut frames,
+            &mut clock,
+            config.settle,
+            step,
+            bounds,
+        )?;
         // Identical frames are dropped, so without this the cast would end at the
         // last visible change and a player would cut the final hold short.
         cast.mark_time(clock.as_secs_f64());
 
         cast.write(&config.path)?;
         println!(
-            "wrote {} ({} frames, {:.1}s)",
+            "wrote {} ({} events, {:.1}s)",
             config.path.display(),
             cast.len(),
             cast.duration_secs()
         );
+        frames.report(config.fps);
 
         Ok(())
     }

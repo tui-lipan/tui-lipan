@@ -247,6 +247,33 @@ cargo run --example todo
 | `TUI_LIPAN_RECORD_KEYS` | unset | Key script to play |
 | `TUI_LIPAN_RECORD_KEY_DELAY_MS` | `400` | Pause after each key |
 | `TUI_LIPAN_RECORD_SETTLE_MS` | `1200` | Hold on the final frame |
+| `TUI_LIPAN_RECORD_FRAMES` | unset | Directory for truecolor PNG frames (needs `ui-snapshot-png`) |
+
+### Turning a recording into GIF or MP4
+
+Hand the user a `.cast` by default. Convert only when the destination cannot play
+one — a README needs a GIF, Slack needs an MP4.
+
+```bash
+# GIF (agg); --idle-time-limit is the biggest size win
+agg --theme dracula --idle-time-limit 1 demo.cast demo.gif
+
+# MP4, quick: via GIF, so 256 colours
+ffmpeg -i demo.gif -pix_fmt yuv420p -movflags +faststart \
+       -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" demo.mp4
+
+# MP4, truecolor: PNG frames straight from the renderer
+TUI_LIPAN_RECORD=demo.cast TUI_LIPAN_RECORD_FRAMES=frames \
+  cargo snap todo
+ffmpeg -framerate 30 -i frames/frame_%05d.png \
+       -pix_fmt yuv420p -movflags +faststart demo.mp4
+```
+
+Frame export prints the exact `ffmpeg` line with paths filled in — paste it back.
+
+Rough sizes for the same 7-second demo: `.cast` 9 KB, MP4-via-GIF 26 KB, GIF
+44 KB, truecolor MP4 55 KB. Frames are a bulky intermediate (~200 files, ~19 MB
+at 30fps); delete them after encoding.
 
 In code, `Recording` mirrors `Sketch` (`Recording::view(title, fn).keys("tab").write(path)?`).
 
