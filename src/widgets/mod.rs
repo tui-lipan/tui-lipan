@@ -74,6 +74,8 @@ mod pagination;
 mod pan_view;
 mod popover;
 mod progress;
+#[cfg(feature = "qr-code")]
+mod qr_code;
 mod radio;
 pub(crate) mod scroll;
 mod scroll_view;
@@ -239,6 +241,8 @@ pub use pagination::{
 pub use pan_view::{PanEvent, PanKeymap, PanMetrics, PanView};
 pub use popover::{Popover, PopoverOffset, PopoverPlacement};
 pub use progress::{ProgressBar, ProgressEvent, ProgressStyle, ProgressTextPosition, ProgressZone};
+#[cfg(feature = "qr-code")]
+pub use qr_code::{QrCode, QrEcc, QrRender};
 pub use radio::{Radio, RadioLayout};
 pub use scroll::ScrollAxis;
 pub(crate) use scroll_view::node::{

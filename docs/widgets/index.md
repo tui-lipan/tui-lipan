@@ -41,6 +41,7 @@ For layout reorders, wrap the moving subtree in `Animated::new(...)`, enable `.p
 | `AsciiCanvas` | - | ASCII art, cell grids, sprite sheets |
 | `BigText` | `big-text` | Large text via FIGlet/pixel fonts |
 | `Image` | `image` | Protocol-aware image (Kitty, iTerm2, Sixel, halfblocks) |
+| `QrCode` | `qr-code` | Scannable QR symbol rendered as terminal cells |
 | `Sparkline` | - | Inline time-series chart |
 | `Chart` | - | Multi-series chart with axes and legend |
 | `Heatmap` | - | 2D matrix with gradient-colored cells |

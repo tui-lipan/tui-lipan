@@ -13,6 +13,13 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `QrCode` (feature `qr-code`) renders a scannable QR symbol as terminal cells. Defaults to
+  half-block mapping so the symbol stays square despite the 1:2 terminal cell aspect ratio, a
+  spec-mandated 4-module quiet zone, and explicit black-on-white so a dark terminal palette cannot
+  invert it out of scanning range. `QrRender::Wide` trades columns for physically larger modules.
+  Because a QR symbol cannot reflow, `size()` and `module_count()` report the fixed footprint up
+  front so callers can swap in a fallback rather than render a clipped, unscannable symbol;
+  `fallback` covers payloads past QR capacity.
 - `DraggableTabBar::empty_text` / `empty_text_style` show a left-aligned placeholder when the bar
   has no tabs. The placeholder truncates with an ellipsis to the available width, patches onto the
   resolved bar style, and stays non-interactive. Defaults keep the empty bar blank.

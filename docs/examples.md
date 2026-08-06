@@ -195,6 +195,16 @@ cargo run --example diff_hub --features diff-view
 cargo run --example diff_hunk_navigation --features diff-view
 ```
 
+### `qr-code`
+
+| Example | Description |
+|---------|-------------|
+| `qr_code` | `QrCode` across render modes, error correction levels, quiet zones, and payload sizes, with a viewport fit check that swaps in a fallback rather than clipping the symbol |
+
+```bash
+cargo run --example qr_code --features qr-code
+```
+
 ### `image`
 
 | Example | Description |

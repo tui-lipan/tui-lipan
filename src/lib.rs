@@ -188,6 +188,8 @@ pub use crate::widgets::{
     VirtualTextPlacement, insert_sentinel, rank_search_palette_indices,
     rank_search_palette_indices_with_mode, rank_search_palette_indices_with_score,
 };
+#[cfg(feature = "qr-code")]
+pub use crate::widgets::{QrCode, QrEcc, QrRender};
 
 #[cfg(all(feature = "terminal", unix))]
 pub use crate::widgets::TerminalPtyHandoff;
