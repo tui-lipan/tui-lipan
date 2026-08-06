@@ -147,12 +147,13 @@ pub use crate::test_backend::TestBackend;
 pub use crate::text::edit::{TextEditEvent, TextEditKind};
 pub use crate::text::editor::TextEditor;
 pub use crate::text::line_index::{LineIndex, TextEncoding, TextPosition, TextRange};
+pub use crate::ui_snapshot::{
+    Action, FocusStep, Recording, ScrollDirection, Sketch, Target, UiSnapshot,
+    UiSnapshotFileFormat, UiSnapshotFormatOptions, UiSnapshotOptions, UiSnapshotSlot, UiWidgetDesc,
+    UiWidgetKind,
+};
 #[cfg(feature = "ui-snapshot-png")]
 pub use crate::ui_snapshot::{BaselineComparison, BaselineOutcome};
-pub use crate::ui_snapshot::{
-    Recording, Sketch, UiSnapshot, UiSnapshotFileFormat, UiSnapshotFormatOptions,
-    UiSnapshotOptions, UiSnapshotSlot, UiWidgetDesc, UiWidgetKind,
-};
 pub use crate::validation::{StringValidator, ValidationError, Validator};
 pub use crate::widgets::{Badge, BadgePosition, CapSides, CapStyle};
 pub use crate::widgets::{

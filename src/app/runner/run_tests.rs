@@ -6249,7 +6249,7 @@ fn headless_snapshot_config(
         },
         frames: 1,
         focus_steps,
-        keys: Vec::new(),
+        actions: Vec::new(),
         diagnostic: false,
     }
 }
@@ -6354,6 +6354,10 @@ fn key_script_config(
     path: std::path::PathBuf,
     keys: Vec<KeyEvent>,
 ) -> super::headless_snapshot::HeadlessSnapshotConfig {
+    let actions = keys
+        .into_iter()
+        .map(crate::ui_snapshot::Action::Key)
+        .collect();
     super::headless_snapshot::HeadlessSnapshotConfig {
         format: crate::ui_snapshot::UiSnapshotFileFormat::from_path(&path),
         path,
@@ -6365,7 +6369,7 @@ fn key_script_config(
         },
         frames: 1,
         focus_steps: 0,
-        keys,
+        actions,
         diagnostic: false,
     }
 }

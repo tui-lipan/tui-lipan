@@ -65,6 +65,7 @@ pub struct Recording<C: Component> {
     viewport: (u16, u16),
     fps: u16,
     key_script: Option<String>,
+    action_script: Option<String>,
     key_delay: Duration,
     settle: Duration,
     quiet: bool,
@@ -94,6 +95,7 @@ where
             viewport: DEFAULT_VIEWPORT,
             fps: DEFAULT_FPS,
             key_script: None,
+            action_script: None,
             key_delay: DEFAULT_KEY_DELAY,
             settle: DEFAULT_SETTLE,
             quiet: false,
@@ -120,9 +122,22 @@ where
     }
 
     /// Keys to play, in ordinary keybinding syntax, e.g. `"tab,tab,enter"`.
+    ///
+    /// Shorthand for a keys-only [`Self::script`]; use that when the recording
+    /// also needs to click, hover, focus, scroll, drag, or wait.
     #[must_use]
     pub fn keys(mut self, script: impl AsRef<str>) -> Self {
         self.key_script = Some(script.as_ref().to_owned());
+        self
+    }
+
+    /// Actions to play, e.g. `"click:#open; wait:300; key:esc"`.
+    ///
+    /// Widgets are targeted by reconciliation key. Takes precedence over
+    /// [`Self::keys`]. See [`Action`](crate::Action) for the full syntax.
+    #[must_use]
+    pub fn script(mut self, script: impl AsRef<str>) -> Self {
+        self.action_script = Some(script.as_ref().to_owned());
         self
     }
 
@@ -174,6 +189,7 @@ where
             viewport,
             fps,
             key_script,
+            action_script,
             key_delay,
             settle,
             quiet: _,
@@ -181,10 +197,7 @@ where
                 png_options: _,
         } = self;
 
-        let keys = match key_script.as_deref() {
-            Some(script) => super::keys::parse_key_script(script)?,
-            None => Vec::new(),
-        };
+        let actions = resolve_actions(action_script.as_deref(), key_script.as_deref())?;
 
         let (w, h) = viewport;
         let mut backend = TestBackend::new(component);
@@ -196,8 +209,15 @@ where
 
         sink(clock.as_secs_f64(), &backend.capture_frame())?;
 
-        for key in &keys {
-            backend.send_key(*key)?;
+        for action in &actions {
+            // A wait is timeline, not input: it spends its own duration rather
+            // than taking a step and then the usual pause.
+            if let super::Action::Wait(dt) = action {
+                hold(&mut backend, &mut sink, &mut clock, *dt, step)?;
+                continue;
+            }
+
+            super::execute(&mut backend, action)?;
             clock += step;
             sink(clock.as_secs_f64(), &backend.capture_frame())?;
             hold(&mut backend, &mut sink, &mut clock, key_delay, step)?;
@@ -302,6 +322,26 @@ where
     }
 }
 
+/// Turn the configured scripts into actions.
+///
+/// An action script wins when both are set; `keys` remains as the shorthand for
+/// the common typing-only case.
+pub(crate) fn resolve_actions(
+    action_script: Option<&str>,
+    key_script: Option<&str>,
+) -> Result<Vec<super::Action>> {
+    if let Some(script) = action_script {
+        return super::parse_script(script);
+    }
+    match key_script {
+        Some(script) => Ok(super::keys::parse_key_script(script)?
+            .into_iter()
+            .map(super::Action::Key)
+            .collect()),
+        None => Ok(Vec::new()),
+    }
+}
+
 /// Advance the synthetic clock by `total`, capturing a frame every `step`.
 ///
 /// Animations are ticked in clamped increments so a long hold cannot skip a
@@ -339,6 +379,7 @@ fn hold<C: Component>(
 mod tests {
     use super::*;
     use crate::core::component::{Context, KeyUpdate, Update};
+    use crate::core::element::IntoElement;
     use crate::core::event::{KeyCode, KeyEvent};
     use crate::widgets::Text;
 
@@ -578,6 +619,84 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_click_action_reaches_the_widget_it_targets() {
+        // Clicking by key must hit the button even though the script never
+        // mentions a coordinate.
+        let cast = Recording::component("click", Clicker)
+            .viewport(30, 5)
+            .script("click:#go")
+            .key_delay(Duration::ZERO)
+            .settle(Duration::ZERO)
+            .quiet(true)
+            .record()
+            .expect("records");
+
+        let text = cast.to_cast();
+        assert!(
+            text.contains("clicked"),
+            "the click should reach the button"
+        );
+    }
+
+    #[test]
+    fn a_click_on_a_missing_key_fails_loudly() {
+        let err = Recording::component("missing", Clicker)
+            .viewport(30, 5)
+            .script("click:#nope")
+            .quiet(true)
+            .record()
+            .expect_err("a missing key must not silently click nothing");
+        assert!(err.to_string().contains("nope"), "{err}");
+    }
+
+    #[test]
+    fn wait_actions_spend_timeline_rather_than_input() {
+        let cast = Recording::view("waiting", static_view)
+            .viewport(20, 3)
+            .fps(10)
+            .script("wait:500")
+            .settle(Duration::ZERO)
+            .quiet(true)
+            .record()
+            .expect("records");
+        assert!(
+            cast.duration_secs() >= 0.5,
+            "a wait should advance the clock: {}",
+            cast.duration_secs()
+        );
+    }
+
+    /// Button that records having been clicked, for click-targeting tests.
+    struct Clicker;
+
+    impl Component for Clicker {
+        type Message = ();
+        type Properties = ();
+        type State = bool;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            false
+        }
+
+        fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state = true;
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let label = if ctx.state { "clicked" } else { "idle" };
+            crate::widgets::VStack::new()
+                .child(Text::new(label))
+                .child(
+                    crate::widgets::Button::new("Go")
+                        .on_click(ctx.link().callback(|_| ()))
+                        .key("go"),
+                )
+                .into()
+        }
     }
 
     #[test]
