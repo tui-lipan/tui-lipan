@@ -10,6 +10,7 @@ mod kind;
 mod options;
 mod recording;
 mod request;
+mod script;
 mod sketch;
 mod slot;
 
@@ -19,11 +20,13 @@ use describe::{describe_widgets, key_for_node};
 pub use baseline::{BaselineComparison, BaselineOutcome};
 pub use describe::UiWidgetDesc;
 pub use format::UiSnapshot;
-pub(crate) use keys::parse_key_script;
 pub use kind::UiWidgetKind;
 pub use options::{UiSnapshotFileFormat, UiSnapshotFormatOptions, UiSnapshotOptions};
 pub use recording::Recording;
+pub(crate) use recording::resolve_actions;
 pub(crate) use request::UiSnapshotRequest;
+pub use script::{Action, FocusStep, ScrollDirection, Target};
+pub(crate) use script::{ActionHost, execute, parse_script};
 pub use sketch::Sketch;
 pub use slot::UiSnapshotSlot;
 

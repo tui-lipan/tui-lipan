@@ -1457,6 +1457,77 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
     }
 }
 
+impl<C: Component> TestBackend<C> {
+    /// Rect of the widget carrying `key`, if it is in the current tree.
+    ///
+    /// Layout coordinates, so this is what an action script resolves `#key`
+    /// against before clicking.
+    pub fn rect_of_key(&self, key: &Key) -> Option<Rect> {
+        self.core
+            .tree
+            .iter()
+            .find(|node| node.key.as_ref() == Some(key))
+            .map(|node| node.rect)
+    }
+
+    /// Focus the widget carrying `key`. Returns whether focus moved.
+    pub fn focus_key(&mut self, key: &Key) -> bool {
+        let Some(id) = self
+            .core
+            .tree
+            .iter()
+            .find(|node| node.key.as_ref() == Some(key))
+            .map(|node| node.id)
+        else {
+            return false;
+        };
+        if !self.core.tree.node(id).is_focusable() {
+            return false;
+        }
+        if self.focused == Some(id) {
+            // Already focused counts as success: a script asking for focus wants
+            // the end state, not a transition.
+            return true;
+        }
+        self.set_focused(id);
+        self.notify_focus_change();
+        true
+    }
+}
+
+impl<C: Component> crate::ui_snapshot::ActionHost for TestBackend<C> {
+    fn rect_of_key(&self, key: &Key) -> Option<Rect> {
+        TestBackend::rect_of_key(self, key)
+    }
+
+    fn perform_key(&mut self, key: KeyEvent) -> Result<()> {
+        self.send_key(key)?;
+        Ok(())
+    }
+
+    fn perform_mouse(&mut self, event: MouseEvent) -> Result<()> {
+        self.send_mouse(event)?;
+        Ok(())
+    }
+
+    fn perform_focus_key(&mut self, key: &Key) -> Result<bool> {
+        Ok(TestBackend::focus_key(self, key))
+    }
+
+    fn perform_focus_step(&mut self, step: crate::ui_snapshot::FocusStep) -> Result<()> {
+        match step {
+            crate::ui_snapshot::FocusStep::Next => self.focus_next(),
+            crate::ui_snapshot::FocusStep::Prev => self.focus_prev(),
+        }
+        Ok(())
+    }
+
+    fn perform_wait(&mut self, dt: Duration) -> Result<()> {
+        self.advance(dt);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;

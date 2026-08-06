@@ -13,6 +13,16 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Action scripts drive a UI beyond typing: `click`, `rclick`, `mclick`, `hover`, `focus`, `scroll`,
+  `drag`, `type`, `key`, and `wait`, separated by `;` or newlines. Available as
+  `TUI_LIPAN_SNAPSHOT_SCRIPT`, `TUI_LIPAN_RECORD_SCRIPT`, and `Recording::script`, so a modal
+  behind a button or a row behind a scroll is reachable without writing a harness. Widgets are
+  targeted by reconciliation key (`click:#submit`), which resolves through the current tree and
+  **fails loudly** when the key is absent - a coordinate would silently click empty space after a
+  layout change. Raw `col,row` targets remain available. `TestBackend::rect_of_key` and
+  `TestBackend::focus_key` are public, and one executor backs the headless backend and the live
+  runner so a script means the same thing everywhere.
+
 - `Recording::write_frames(dir)` and `TUI_LIPAN_RECORD_FRAMES=<dir>` export one truecolor PNG per
   frame (feature `ui-snapshot-png`), for encoding to MP4 without GIF's 256-colour quantisation.
   Frames are written at a constant rate - one per `1/fps` tick including unchanged ones - because

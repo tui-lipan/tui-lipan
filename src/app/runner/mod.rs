@@ -980,6 +980,30 @@ impl<C: Component> AppRunner<C> {
         Ok(())
     }
 
+    /// Rect of the widget carrying `key`, if it is in the current tree.
+    fn rect_for_key(&self, key: &crate::core::element::Key) -> Option<crate::style::Rect> {
+        self.core
+            .tree
+            .iter()
+            .find(|node| node.key.as_ref() == Some(key))
+            .map(|node| node.rect)
+    }
+
+    /// Run one scripted action, then settle the frame it produced.
+    fn headless_action(
+        &mut self,
+        action: &crate::ui_snapshot::Action,
+        bounds: crate::style::Rect,
+    ) -> Result<()> {
+        crate::ui_snapshot::execute(
+            &mut HeadlessActionHost {
+                runner: self,
+                bounds,
+            },
+            action,
+        )
+    }
+
     /// Lay out and resolve focus for one off-screen frame.
     ///
     /// Mirrors the root-init sequence of [`Self::run`] without touching a
@@ -1125,8 +1149,13 @@ impl<C: Component> AppRunner<C> {
         cast.push_frame(0.0, &first);
         frames.capture(&first)?;
 
-        for key in &config.keys {
-            self.headless_dispatch_key(*key, bounds)?;
+        for action in &config.actions {
+            // A wait spends timeline rather than taking a step plus a pause.
+            if let crate::ui_snapshot::Action::Wait(dt) = action {
+                self.headless_hold(&mut cast, &mut frames, &mut clock, *dt, step, bounds)?;
+                continue;
+            }
+            self.headless_action(action, bounds)?;
             clock += step;
             let frame = self.headless_frame(bounds);
             cast.push_frame(clock.as_secs_f64(), &frame);
@@ -1189,8 +1218,8 @@ impl<C: Component> AppRunner<C> {
                 for _ in 0..config.focus_steps {
                     self.framework_focus_step(focus::FocusDirection::Next);
                 }
-                for key in &config.keys {
-                    self.headless_dispatch_key(*key, bounds)?;
+                for action in &config.actions {
+                    self.headless_action(action, bounds)?;
                 }
             }
 
@@ -2220,3 +2249,88 @@ pub(super) fn image_layout_stabilize_ms() -> u32 {
 
 #[cfg(test)]
 mod run_tests;
+
+/// Adapts [`AppRunner`] to the shared action executor.
+///
+/// The runner needs the viewport to re-render after each action, which the trait
+/// does not carry, so it is bound here for the duration of one script.
+struct HeadlessActionHost<'a, C: Component> {
+    runner: &'a mut AppRunner<C>,
+    bounds: crate::style::Rect,
+}
+
+impl<C: Component> crate::ui_snapshot::ActionHost for HeadlessActionHost<'_, C> {
+    fn rect_of_key(&self, key: &crate::core::element::Key) -> Option<crate::style::Rect> {
+        self.runner.rect_for_key(key)
+    }
+
+    fn perform_key(&mut self, key: crate::core::event::KeyEvent) -> Result<()> {
+        self.runner.headless_dispatch_key(key, self.bounds)
+    }
+
+    fn perform_mouse(&mut self, event: MouseEvent) -> Result<()> {
+        match event.kind {
+            crate::core::event::MouseKind::Moved => {
+                self.runner.dispatch_mouse_move(event);
+            }
+            crate::core::event::MouseKind::ScrollUp | crate::core::event::MouseKind::ScrollDown => {
+                let lines = self.runner.scroll_wheel_multiplier.max(1);
+                self.runner.dispatch_mouse_scroll(event, lines);
+            }
+            _ => {
+                self.runner.dispatch_mouse(event);
+            }
+        }
+        self.runner.notify_focus_change();
+
+        let mut dirty = DirtyTracker::default();
+        self.runner.drain_messages_and_commands(&mut dirty)?;
+        self.runner.headless_render(self.bounds);
+        Ok(())
+    }
+
+    fn perform_focus_key(&mut self, key: &crate::core::element::Key) -> Result<bool> {
+        let Some(id) = self
+            .runner
+            .core
+            .tree
+            .iter()
+            .find(|node| node.key.as_ref() == Some(key))
+            .map(|node| node.id)
+        else {
+            return Ok(false);
+        };
+        if !self.runner.core.tree.node(id).is_focusable() {
+            return Ok(false);
+        }
+        self.runner.focus.focused = Some(id);
+        self.runner.focus.focused_key = Some(key.clone());
+        self.runner.notify_focus_change();
+        self.runner.headless_render(self.bounds);
+        Ok(true)
+    }
+
+    fn perform_focus_step(&mut self, step: crate::ui_snapshot::FocusStep) -> Result<()> {
+        let direction = match step {
+            crate::ui_snapshot::FocusStep::Next => focus::FocusDirection::Next,
+            crate::ui_snapshot::FocusStep::Prev => focus::FocusDirection::Prev,
+        };
+        self.runner.framework_focus_step(direction);
+        self.runner.notify_focus_change();
+        self.runner.headless_render(self.bounds);
+        Ok(())
+    }
+
+    fn perform_wait(&mut self, dt: std::time::Duration) -> Result<()> {
+        let (_, _, needs_layout) =
+            crate::app::animation::tick_tree_animations(&mut self.runner.core.tree, dt);
+        let transitions = self.runner.core.ctx.env().animations.tick(dt);
+
+        let mut dirty = DirtyTracker::default();
+        self.runner.drain_messages_and_commands(&mut dirty)?;
+        if needs_layout || transitions.view_changed {
+            self.runner.headless_render(self.bounds);
+        }
+        Ok(())
+    }
+}

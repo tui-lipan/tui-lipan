@@ -24,6 +24,8 @@ const FRAMES_ENV: &str = "TUI_LIPAN_SNAPSHOT_FRAMES";
 const FOCUS_ENV: &str = "TUI_LIPAN_SNAPSHOT_FOCUS";
 /// Comma-separated key script dispatched before capturing.
 const KEYS_ENV: &str = "TUI_LIPAN_SNAPSHOT_KEYS";
+/// Full action script (`click:#go; wait:200`), taking precedence over keys.
+const SCRIPT_ENV: &str = "TUI_LIPAN_SNAPSHOT_SCRIPT";
 /// Set to `1` to capture with [`UiSnapshotOptions::diagnostic`].
 const DIAGNOSTIC_ENV: &str = "TUI_LIPAN_SNAPSHOT_DIAGNOSTIC";
 
@@ -51,8 +53,8 @@ pub(super) struct HeadlessSnapshotConfig {
     pub(super) frames: usize,
     /// Focus advances before capture.
     pub(super) focus_steps: usize,
-    /// Key events dispatched before capture, in order.
-    pub(super) keys: Vec<crate::core::event::KeyEvent>,
+    /// Actions performed before capture, in order.
+    pub(super) actions: Vec<crate::ui_snapshot::Action>,
     /// Whether to capture with diagnostic describe options.
     pub(super) diagnostic: bool,
 }
@@ -70,14 +72,14 @@ impl HeadlessSnapshotConfig {
         let path = PathBuf::from(raw);
         let format = UiSnapshotFileFormat::from_path(&path);
 
-        // A bad key script is reported rather than ignored: capturing the wrong
+        // A bad script is reported rather than ignored: capturing the wrong
         // state silently is worse than refusing to capture.
-        let keys = match std::env::var(KEYS_ENV) {
-            Ok(script) => match crate::ui_snapshot::parse_key_script(&script) {
-                Ok(keys) => keys,
-                Err(err) => return Some(Err(err)),
-            },
-            Err(_) => Vec::new(),
+        let actions = match crate::ui_snapshot::resolve_actions(
+            std::env::var(SCRIPT_ENV).ok().as_deref(),
+            std::env::var(KEYS_ENV).ok().as_deref(),
+        ) {
+            Ok(actions) => actions,
+            Err(err) => return Some(Err(err)),
         };
 
         Some(Ok(Self {
@@ -86,7 +88,7 @@ impl HeadlessSnapshotConfig {
             viewport: env_viewport().unwrap_or(DEFAULT_VIEWPORT),
             frames: env_usize(FRAMES_ENV).unwrap_or(1).max(1),
             focus_steps: env_usize(FOCUS_ENV).unwrap_or(0),
-            keys,
+            actions,
             diagnostic: std::env::var(DIAGNOSTIC_ENV).as_deref() == Ok("1"),
         }))
     }
@@ -174,7 +176,7 @@ mod tests {
             viewport: DEFAULT_VIEWPORT,
             frames: 1,
             focus_steps: 0,
-            keys: Vec::new(),
+            actions: Vec::new(),
             diagnostic: true,
         };
         assert_eq!(config.snapshot_options(), UiSnapshotOptions::diagnostic());

@@ -21,6 +21,8 @@ const VIEWPORT_ENV: &str = "TUI_LIPAN_RECORD_VIEWPORT";
 const FPS_ENV: &str = "TUI_LIPAN_RECORD_FPS";
 /// Comma-separated key script to play.
 const KEYS_ENV: &str = "TUI_LIPAN_RECORD_KEYS";
+/// Full action script (`click:#go; wait:200`), taking precedence over keys.
+const SCRIPT_ENV: &str = "TUI_LIPAN_RECORD_SCRIPT";
 /// Pause held after each key, in milliseconds.
 const KEY_DELAY_ENV: &str = "TUI_LIPAN_RECORD_KEY_DELAY_MS";
 /// Hold on the final frame, in milliseconds.
@@ -51,8 +53,8 @@ pub(super) struct HeadlessRecordConfig {
     pub(super) viewport: Rect,
     /// Capture rate, at least 1.
     pub(super) fps: u16,
-    /// Key events to play, in order.
-    pub(super) keys: Vec<crate::core::event::KeyEvent>,
+    /// Actions to play, in order.
+    pub(super) actions: Vec<crate::ui_snapshot::Action>,
     /// Pause held after each key.
     pub(super) key_delay: Duration,
     /// Hold on the final frame.
@@ -72,14 +74,14 @@ impl HeadlessRecordConfig {
             return None;
         }
 
-        // A bad key script is reported rather than ignored: recording the wrong
+        // A bad script is reported rather than ignored: recording the wrong
         // sequence silently is worse than refusing to record.
-        let keys = match std::env::var(KEYS_ENV) {
-            Ok(script) => match crate::ui_snapshot::parse_key_script(&script) {
-                Ok(keys) => keys,
-                Err(err) => return Some(Err(err)),
-            },
-            Err(_) => Vec::new(),
+        let actions = match crate::ui_snapshot::resolve_actions(
+            std::env::var(SCRIPT_ENV).ok().as_deref(),
+            std::env::var(KEYS_ENV).ok().as_deref(),
+        ) {
+            Ok(actions) => actions,
+            Err(err) => return Some(Err(err)),
         };
 
         Some(Ok(Self {
@@ -89,7 +91,7 @@ impl HeadlessRecordConfig {
                 .and_then(|fps| u16::try_from(fps).ok())
                 .unwrap_or(DEFAULT_FPS)
                 .max(1),
-            keys,
+            actions,
             key_delay: Duration::from_millis(
                 env_u64(KEY_DELAY_ENV).unwrap_or(DEFAULT_KEY_DELAY_MS),
             ),
@@ -206,7 +208,7 @@ mod tests {
             path: PathBuf::from("out.cast"),
             viewport: DEFAULT_VIEWPORT,
             fps,
-            keys: Vec::new(),
+            actions: Vec::new(),
             key_delay: Duration::from_millis(DEFAULT_KEY_DELAY_MS),
             settle: Duration::from_millis(DEFAULT_SETTLE_MS),
             frames_dir: None,

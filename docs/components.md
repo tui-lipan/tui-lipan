@@ -698,6 +698,7 @@ TUI_LIPAN_SNAPSHOT=/tmp/app.png cargo run --example todo --features ui-snapshot-
 | `TUI_LIPAN_SNAPSHOT_FRAMES` | `1` | Render/message passes before capture; raise when `init()` starts work |
 | `TUI_LIPAN_SNAPSHOT_FOCUS` | `0` | Focus advances before capture, for visible focus chrome |
 | `TUI_LIPAN_SNAPSHOT_KEYS` | unset | Comma-separated key script dispatched before capture, e.g. `tab,tab,enter` |
+| `TUI_LIPAN_SNAPSHOT_SCRIPT` | unset | Full action script (see below); takes precedence over `_KEYS` |
 | `TUI_LIPAN_SNAPSHOT_DIAGNOSTIC` | unset | `1` captures with `UiSnapshotOptions::diagnostic()` |
 
 `TUI_LIPAN_SNAPSHOT_KEYS` uses ordinary keybinding syntax (`ctrl+n`, `esc`,
@@ -740,6 +741,7 @@ TUI_LIPAN_RECORD=/tmp/demo.cast TUI_LIPAN_RECORD_KEYS="tab,enter" cargo run --ex
 | `TUI_LIPAN_RECORD_KEY_DELAY_MS` | `400` | Pause after each key, so a viewer can follow |
 | `TUI_LIPAN_RECORD_SETTLE_MS` | `1200` | Hold on the final frame |
 | `TUI_LIPAN_RECORD_FRAMES` | unset | Directory for truecolor PNG frames (needs `ui-snapshot-png`) |
+| `TUI_LIPAN_RECORD_SCRIPT` | unset | Full action script (see below); takes precedence over `_KEYS` |
 
 In code, `Recording` mirrors `Sketch`:
 
@@ -851,6 +853,53 @@ Recording::view("demo", view)
     .keys("tab,enter")
     .write_frames("target/recordings/frames")?;
 ```
+
+### Action scripts
+
+A key script can only type. An action script can also click, hover, focus,
+scroll, drag, and wait - enough to reach a modal behind a button or a row behind
+a scroll.
+
+```sh
+TUI_LIPAN_SNAPSHOT=/tmp/after.png \
+TUI_LIPAN_SNAPSHOT_SCRIPT="focus:#draft; type:buy milk; click:#add; wait:200" \
+  cargo run --example todo --features ui-snapshot-png
+```
+
+Steps are separated by `;` or newlines.
+
+| Step | Effect |
+|------|--------|
+| `key:ctrl+n` | One key event, in keybinding syntax |
+| `type:hello world` | Literal text, one key event per character |
+| `click:#submit` | Left click the centre of the widget keyed `submit` |
+| `click:12,7` | Left click a cell |
+| `rclick:` / `mclick:` | Right / middle click |
+| `hover:#sidebar` | Move the pointer over a widget |
+| `focus:#email` | Focus a widget directly |
+| `focus:next` / `focus:prev` | Move focus one step |
+| `scroll:#list,down` | Scroll over a widget (`up` / `down`) |
+| `scroll:down` | Scroll at the current pointer position |
+| `drag:#card>#column` | Press, move, release |
+| `wait:500` | Advance the clock 500ms, ticking animations |
+
+**Target widgets by key, not by coordinate.** `#submit` resolves through the
+current tree to that widget's rect and clicks its centre, so it survives the
+widget moving and **fails loudly** when the key is absent:
+
+```
+Error: no widget with key `does-not-exist` is currently rendered
+```
+
+A coordinate cannot do that - a layout change silently turns `click:42,7` into a
+click on empty space while the script still reports success. Coordinates remain
+available for what keys cannot express.
+
+Give widgets stable keys (`.key("add")`) to make them scriptable; the keys a
+running app exposes are listed in any markdown snapshot.
+
+In code, `Recording::script(...)` takes the same syntax, and `Recording::keys(...)`
+remains the shorthand for the typing-only case.
 
 ### Design sketches
 
