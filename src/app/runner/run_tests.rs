@@ -6424,3 +6424,131 @@ fn headless_snapshot_key_script_settles_between_keys() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// Component with a clickable button, for exercising control commands.
+struct ControlSmoke;
+
+impl Component for ControlSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = bool;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        false
+    }
+
+    fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        ctx.state = true;
+        Update::full()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let label = if ctx.state { "clicked" } else { "idle" };
+        VStack::new()
+            .child(Text::new(label).key("label"))
+            .child(
+                crate::widgets::Button::new("Go")
+                    .on_click(ctx.link().callback(|_| ()))
+                    .key("go"),
+            )
+            .into()
+    }
+}
+
+/// Drive one control command against a laid-out runner and return the reply.
+fn control_exchange(
+    runner: &mut AppRunner<ControlSmoke>,
+    command: &str,
+) -> std::result::Result<String, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    runner.handle_control(super::control::ControlRequest {
+        command: command.to_owned(),
+        reply: tx,
+    });
+    match rx.recv().expect("a reply is always sent") {
+        super::control::ControlReply::Ok(payload) => Ok(payload),
+        super::control::ControlReply::Err(message) => Err(message),
+    }
+}
+
+/// A runner with an initialised, laid-out tree, as the live loop would have.
+fn control_runner() -> AppRunner<ControlSmoke> {
+    let mut runner = AppRunner::new(App::new(), ControlSmoke, ());
+    let bounds = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 8,
+    };
+    runner.core.ctx.set_viewport(bounds);
+    runner.last_bounds = bounds;
+    runner.core.init();
+    runner.headless_render(bounds);
+    runner
+}
+
+#[test]
+fn control_ping_answers_pong() {
+    let mut runner = control_runner();
+    assert_eq!(control_exchange(&mut runner, "ping"), Ok("pong".to_owned()));
+}
+
+#[test]
+fn control_keys_lists_rendered_widget_keys() {
+    let mut runner = control_runner();
+    let keys = control_exchange(&mut runner, "keys").expect("keys");
+    let listed: Vec<&str> = keys.lines().collect();
+    assert!(listed.contains(&"go"), "{keys}");
+    assert!(listed.contains(&"label"), "{keys}");
+}
+
+#[test]
+fn control_snapshot_reflects_the_live_viewport() {
+    let mut runner = control_runner();
+    let markdown = control_exchange(&mut runner, "snapshot").expect("snapshot");
+    assert!(
+        markdown.contains("40x8"),
+        "snapshot should use the laid-out viewport, not 0x0: {markdown}"
+    );
+    assert!(markdown.contains("idle"), "{markdown}");
+}
+
+#[test]
+fn control_act_clicks_a_widget_by_key() {
+    let mut runner = control_runner();
+    assert_eq!(
+        control_exchange(&mut runner, "act click:#go"),
+        Ok(String::new())
+    );
+
+    let markdown = control_exchange(&mut runner, "snapshot").expect("snapshot");
+    assert!(
+        markdown.contains("clicked"),
+        "the click should have reached the button: {markdown}"
+    );
+}
+
+#[test]
+fn control_act_on_a_missing_key_reports_an_error() {
+    let mut runner = control_runner();
+    let err = control_exchange(&mut runner, "act click:#nope").expect_err("must fail");
+    assert!(err.contains("nope"), "{err}");
+}
+
+#[test]
+fn control_rejects_unknown_commands_without_touching_the_ui() {
+    let mut runner = control_runner();
+    let err = control_exchange(&mut runner, "frobnicate").expect_err("must fail");
+    assert!(err.contains("expected"), "{err}");
+    // The UI must be untouched by a rejected command.
+    let markdown = control_exchange(&mut runner, "snapshot").expect("snapshot");
+    assert!(markdown.contains("idle"), "{markdown}");
+}
+
+#[test]
+fn control_quit_asks_the_app_to_exit() {
+    let mut runner = control_runner();
+    assert!(!runner.core.ctx.should_quit());
+    assert_eq!(control_exchange(&mut runner, "quit"), Ok(String::new()));
+    assert!(runner.core.ctx.should_quit());
+}

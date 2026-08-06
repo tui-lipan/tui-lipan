@@ -13,6 +13,16 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Live control channel: `TUI_LIPAN_CONTROL=<path>` makes a running app listen on a Unix socket, so
+  an agent can inspect and drive a live TUI - `snapshot` for the widget tree, `keys` for what can be
+  targeted, `act <script>` to click or type, `quit` to exit. Replies are a status line plus a
+  length-prefixed payload, which keeps markdown and JSON newline-safe without escaping and makes a
+  client a few lines in any language. Unix only; the socket is created `0600`. Runtime state stays
+  single-threaded: the listener thread queues requests and the event loop answers them, matching how
+  the terminal reader already feeds the loop.
+- `AppRunner` records the bounds of its latest layout pass, so a capture taken between frames uses
+  the real viewport instead of a zero-sized one.
+
 - Action scripts drive a UI beyond typing: `click`, `rclick`, `mclick`, `hover`, `focus`, `scroll`,
   `drag`, `type`, `key`, and `wait`, separated by `;` or newlines. Available as
   `TUI_LIPAN_SNAPSHOT_SCRIPT`, `TUI_LIPAN_RECORD_SCRIPT`, and `Recording::script`, so a modal

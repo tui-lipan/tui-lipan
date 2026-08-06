@@ -61,6 +61,7 @@ use crate::app::input::runtime_dispatch::{
 
 mod animation;
 mod animation_ticker;
+mod control;
 mod drag;
 pub(crate) mod events;
 mod exit_view;
@@ -89,6 +90,8 @@ pub(crate) use terminal::TerminalManager;
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RunnerEvent {
     Terminal(CEvent),
+    /// Wakeup for a queued live-control request.
+    Control,
     HostTerminalColors(HostTerminalColors),
     InputError(String),
 }
@@ -300,6 +303,22 @@ impl PlatformInputCoordinator {
         fallback
     }
 
+    /// A sender into whichever channel [`Self::receiver`] will drain.
+    ///
+    /// The control channel must reach the loop's *actual* receiver; on the
+    /// fullscreen Unix path that is the platform coordinator's own channel, not
+    /// the crossterm reader's.
+    fn sender(
+        &self,
+        fallback: Option<&mpsc::Sender<RunnerEvent>>,
+    ) -> Option<mpsc::Sender<RunnerEvent>> {
+        #[cfg(unix)]
+        if let Some(coordinator) = &self.termina {
+            return Some(coordinator.sender());
+        }
+        fallback.cloned()
+    }
+
     fn route_host_color_refresh(&self, requested: bool) -> bool {
         #[cfg(unix)]
         if let Some(coordinator) = &self.termina {
@@ -359,6 +378,13 @@ pub struct AppRunner<C: Component> {
     >,
     /// Reusable overlay cell snapshot buffer for transparent overlays.
     pub(crate) overlay_bg_snapshot: std::cell::RefCell<Vec<ratatui::buffer::Cell>>,
+    /// Live-control requests waiting to be answered on the UI thread.
+    control_queue: control::ControlQueue,
+    /// Bounds of the most recent layout pass.
+    ///
+    /// The control channel captures between frames, where the context's viewport
+    /// is not a dependable source, so the runner records what it last laid out at.
+    last_bounds: crate::style::Rect,
     /// Cached terminal cells for `DragPreview::SourceSnapshot` after the source subtree is collapsed.
     pub(crate) dnd_snapshot_cells:
         std::cell::RefCell<Option<(u16, u16, Vec<ratatui::buffer::Cell>)>>,
@@ -620,6 +646,8 @@ impl<C: Component> AppRunner<C> {
             scrollbar_metrics_cache: std::cell::RefCell::new(Default::default()),
             paint_glyph_caches: std::rc::Rc::new(std::cell::RefCell::new(Default::default())),
             overlay_bg_snapshot: std::cell::RefCell::new(Vec::new()),
+            control_queue: control::ControlQueue::default(),
+            last_bounds: crate::style::Rect::default(),
             dnd_snapshot_cells: std::cell::RefCell::new(None),
             last_frame_snapshot: None,
             scroll_diff_snapshot: None,
@@ -1004,6 +1032,146 @@ impl<C: Component> AppRunner<C> {
         )
     }
 
+    /// Answer every queued control request. Returns whether the UI changed.
+    fn drain_control_requests(&mut self) -> bool {
+        let mut dirty = false;
+        loop {
+            let Some(request) = self
+                .control_queue
+                .lock()
+                .ok()
+                .and_then(|mut queue| queue.pop_front())
+            else {
+                return dirty;
+            };
+            dirty |= self.handle_control(request);
+        }
+    }
+
+    /// Run one control command on the UI thread and reply to the client.
+    ///
+    /// Returns whether the UI changed and needs repainting.
+    fn handle_control(&mut self, request: control::ControlRequest) -> bool {
+        use control::{ControlCommand, ControlReply};
+
+        let command = match control::parse_command(&request.command) {
+            Ok(command) => command,
+            Err(message) => {
+                let _ = request.reply.send(ControlReply::Err(message));
+                return false;
+            }
+        };
+
+        let mut dirty = false;
+        let reply = match command {
+            ControlCommand::Ping => ControlReply::Ok("pong".into()),
+            ControlCommand::Keys => ControlReply::Ok(self.control_keys()),
+            ControlCommand::Quit => {
+                self.core.ctx.request_quit();
+                ControlReply::Ok(String::new())
+            }
+            ControlCommand::Act(script) => match self.control_act(&script) {
+                Ok(()) => {
+                    dirty = true;
+                    ControlReply::Ok(String::new())
+                }
+                Err(err) => ControlReply::Err(err.to_string()),
+            },
+            ControlCommand::Snapshot(format) => match self.control_snapshot(format) {
+                Ok(payload) => ControlReply::Ok(payload),
+                Err(err) => ControlReply::Err(err.to_string()),
+            },
+        };
+
+        let _ = request.reply.send(reply);
+        dirty
+    }
+
+    /// Newline-separated reconciliation keys currently in the tree.
+    ///
+    /// This is the client's index of what it can target, the way a browser tool
+    /// lists element refs.
+    fn control_keys(&self) -> String {
+        let mut keys: Vec<String> = self
+            .core
+            .tree
+            .iter()
+            .filter_map(|node| node.key.as_ref().map(|key| key.as_ref().to_owned()))
+            .collect();
+        keys.sort();
+        keys.dedup();
+        keys.join("\n")
+    }
+
+    /// Run an action script against the live tree.
+    fn control_act(&mut self, script: &str) -> Result<()> {
+        let actions = crate::ui_snapshot::parse_script(script)?;
+        let bounds = self.last_bounds;
+        for action in &actions {
+            self.control_action(action, bounds)?;
+        }
+        Ok(())
+    }
+
+    /// Run one action against the live tree.
+    fn control_action(
+        &mut self,
+        action: &crate::ui_snapshot::Action,
+        bounds: crate::style::Rect,
+    ) -> Result<()> {
+        crate::ui_snapshot::execute(
+            &mut HeadlessActionHost {
+                runner: self,
+                bounds,
+            },
+            action,
+        )
+    }
+
+    /// Capture the live UI in the requested format.
+    fn control_snapshot(&mut self, format: control::SnapshotFormat) -> Result<String> {
+        let snapshot = crate::ui_snapshot::build_ui_snapshot(
+            &self.core.tree,
+            self.last_bounds,
+            self.headless_interaction(),
+            self.core.ctx.env().effect_phase.get(),
+            self.resolved_screen_background(),
+            &crate::ui_snapshot::UiSnapshotOptions::default(),
+        );
+
+        match format {
+            control::SnapshotFormat::Markdown => Ok(snapshot.to_markdown()),
+            control::SnapshotFormat::Json => {
+                #[cfg(feature = "ui-snapshot-json")]
+                {
+                    Ok(snapshot.to_json_pretty())
+                }
+                #[cfg(not(feature = "ui-snapshot-json"))]
+                {
+                    Err(
+                        std::io::Error::other("JSON snapshots need `--features ui-snapshot-json`")
+                            .into(),
+                    )
+                }
+            }
+            control::SnapshotFormat::Png(path) => {
+                #[cfg(feature = "ui-snapshot-png")]
+                {
+                    std::fs::write(&path, snapshot.to_png_default()?)?;
+                    Ok(path.display().to_string())
+                }
+                #[cfg(not(feature = "ui-snapshot-png"))]
+                {
+                    let _ = path;
+                    Err(
+                        std::io::Error::other("PNG snapshots need `--features ui-snapshot-png`")
+                            .into(),
+                    )
+                }
+            }
+        }
+    }
+
     /// Lay out and resolve focus for one off-screen frame.
     ///
     /// Mirrors the root-init sequence of [`Self::run`] without touching a
@@ -1123,6 +1291,7 @@ impl<C: Component> AppRunner<C> {
 
         let bounds = config.viewport;
         self.core.ctx.set_viewport(bounds);
+        self.last_bounds = bounds;
         self.core.init();
         self.headless_render(bounds);
 
@@ -1207,6 +1376,7 @@ impl<C: Component> AppRunner<C> {
 
         let bounds = config.viewport;
         self.core.ctx.set_viewport(bounds);
+        self.last_bounds = bounds;
         self.core.init();
 
         for frame in 0..config.frames {
@@ -1330,6 +1500,7 @@ impl<C: Component> AppRunner<C> {
 
                 let bounds = self.content_bounds(size.width, size.height);
                 self.core.ctx.set_viewport(bounds);
+                self.last_bounds = bounds;
                 self.core.init();
 
                 if self.apply_pending_devtools_request() {
@@ -1366,6 +1537,7 @@ impl<C: Component> AppRunner<C> {
             // crossterm reader thread can consume cursor-report bytes and cause
             // viewport desync/timeouts during resize.
             let mut crossterm_event_rx: Option<mpsc::Receiver<RunnerEvent>> = None;
+            let mut control_reader_tx: Option<mpsc::Sender<RunnerEvent>> = None;
             if !self.surface.is_inline() && !platform_input.owns_fullscreen_input() {
                 // Fullscreen path keeps the background reader for low-latency wakeups.
                 let (event_tx, rx) = mpsc::channel::<RunnerEvent>();
@@ -1400,9 +1572,37 @@ impl<C: Component> AppRunner<C> {
                             }
                         }
                     })?;
-                // Drop our copy so the channel closes when the loop ends.
+                // Keep one copy for control fan-in; dropping the rest closes the
+                // channel when the loop ends.
+                control_reader_tx = Some(event_tx.clone());
                 drop(event_tx);
                 crossterm_event_rx = Some(rx);
+            }
+
+            // Held only for its Drop, which unlinks the socket when run() ends.
+            let mut _control_guard = None;
+            if let Some(path) = control::control_path() {
+                // Send into the channel the loop actually drains. On the
+                // fullscreen Unix path that is the platform coordinator's, so a
+                // private channel here would be read by nobody.
+                match platform_input.sender(control_reader_tx.as_ref()) {
+                    Some(sender) => {
+                        _control_guard = Some(control::spawn(
+                            path.clone(),
+                            Arc::clone(&self.control_queue),
+                            sender,
+                        )?);
+                        crate::debug::internal_log!(
+                            "[tui-lipan] control socket at {}",
+                            path.display()
+                        );
+                    }
+                    None => {
+                        crate::debug::internal_log!(
+                            "[tui-lipan] control socket disabled: no input channel to wake"
+                        );
+                    }
+                }
             }
 
             let event_rx = platform_input.receiver(crossterm_event_rx.as_ref());
@@ -1483,6 +1683,12 @@ impl<C: Component> AppRunner<C> {
                     }
                     Some(RunnerEvent::InputError(message)) => {
                         return Err(std::io::Error::other(message).into());
+                    }
+                    Some(RunnerEvent::Control) => {
+                        if self.drain_control_requests() {
+                            dirty.mark_full();
+                        }
+                        None
                     }
                     Some(RunnerEvent::Terminal(event)) => Some(event),
                     None => None,
