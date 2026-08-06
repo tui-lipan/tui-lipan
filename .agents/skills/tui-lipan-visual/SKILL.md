@@ -227,6 +227,37 @@ fn dashboard_shows_the_active_route() {
 This is a kept test with an assertion, not a print-and-delete harness. If you
 only want to *look* at the output, use row 1 or row 2 instead.
 
+## Record a demo instead of a still
+
+When the thing you need to show is a *flow* rather than a screen, record it.
+A recording is text (asciinema cast v2), so a few seconds is usually smaller
+than one PNG frame, and it needs no feature flag:
+
+```bash
+TUI_LIPAN_RECORD=/tmp/demo.cast \
+TUI_LIPAN_RECORD_KEYS="tab,enter" \
+cargo run --example todo
+```
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `TUI_LIPAN_RECORD` | unset | Output path; enables headless recording |
+| `TUI_LIPAN_RECORD_VIEWPORT` | `100x30` | Recorded terminal size |
+| `TUI_LIPAN_RECORD_FPS` | `30` | Capture rate |
+| `TUI_LIPAN_RECORD_KEYS` | unset | Key script to play |
+| `TUI_LIPAN_RECORD_KEY_DELAY_MS` | `400` | Pause after each key |
+| `TUI_LIPAN_RECORD_SETTLE_MS` | `1200` | Hold on the final frame |
+
+In code, `Recording` mirrors `Sketch` (`Recording::view(title, fn).keys("tab").write(path)?`).
+
+**You cannot read a `.cast` with the `Read` tool** - it is a timeline, not an
+image. Use a recording to *hand the user something to watch*; use a PNG when you
+need to judge the result yourself. If you need both, capture a snapshot at the
+interesting moment with the same key script.
+
+Recordings use a synthetic clock, so they are reproducible but do not wait for
+real-time work (PTY output, network responses).
+
 ## Look at the PNG
 
 Use the `Read` tool on each `.png` path; the image renders inline.

@@ -13,6 +13,19 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Terminal recording: `TUI_LIPAN_RECORD=<path>` plays a key script against an app off-screen and
+  writes an asciinema cast v2 file, so any existing app or example becomes a recordable demo with
+  no source change. `Recording` is the in-code equivalent and mirrors `Sketch`. Companion
+  variables: `TUI_LIPAN_RECORD_VIEWPORT`, `_FPS`, `_KEYS`, `_KEY_DELAY_MS`, `_SETTLE_MS`.
+  A recording is text rather than video - a few seconds of a real app is typically smaller than a
+  single PNG frame of it - and needs **no feature flag and no new dependency**, because the cast
+  JSON is written directly rather than through `serde_json`.
+- `CastRecording` builds asciinema casts frame by frame, encoding each frame as an ANSI diff
+  against the previous one via the existing `CapturedFrame::to_ansi_diff`. Identical frames are
+  dropped so a still stretch costs nothing; `mark_time` then holds the closing frame, without which
+  a recording would end at its last visible change and players would cut the ending short.
+  Timestamps use a synthetic fixed step and no wall-clock header field, so the same script always
+  produces identical bytes and a committed recording stays diffable.
 - `tests/visual_baseline.rs` guards core widget chrome (frame borders and headers, focus chrome,
   input placeholders and masking, list selection) against unintended pixel changes, with reference
   images committed in `tests/ui-baselines/`. Intended rendering changes are re-recorded with

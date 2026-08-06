@@ -98,7 +98,7 @@ pub use crate::mockup::Mockup;
 
 pub use crate::animation::{ExitAnimation, ExitQueue, ExitTransfer};
 pub use crate::callback::{Callback, CancellationToken, CommandLink, KeyHandler, Link};
-pub use crate::capture::{CapturedCell, CapturedFrame, CellModifiers, CursorState};
+pub use crate::capture::{CapturedCell, CapturedFrame, CastRecording, CellModifiers, CursorState};
 #[cfg(feature = "ui-snapshot-png")]
 pub use crate::capture::{PngOptions, PngTextRenderer};
 pub use crate::clipboard::{
@@ -150,8 +150,8 @@ pub use crate::text::line_index::{LineIndex, TextEncoding, TextPosition, TextRan
 #[cfg(feature = "ui-snapshot-png")]
 pub use crate::ui_snapshot::{BaselineComparison, BaselineOutcome};
 pub use crate::ui_snapshot::{
-    Sketch, UiSnapshot, UiSnapshotFileFormat, UiSnapshotFormatOptions, UiSnapshotOptions,
-    UiSnapshotSlot, UiWidgetDesc, UiWidgetKind,
+    Recording, Sketch, UiSnapshot, UiSnapshotFileFormat, UiSnapshotFormatOptions,
+    UiSnapshotOptions, UiSnapshotSlot, UiWidgetDesc, UiWidgetKind,
 };
 pub use crate::validation::{StringValidator, ValidationError, Validator};
 pub use crate::widgets::{Badge, BadgePosition, CapSides, CapStyle};

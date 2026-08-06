@@ -716,6 +716,67 @@ keystroke silently captures the wrong state.
 Format follows the path extension, matching `request_ui_snapshot_to`: `.json`
 with `ui-snapshot-json`, `.png` with `ui-snapshot-png`, markdown otherwise.
 
+### Terminal recordings
+
+A recording is text, not video: an asciinema cast v2 file is a JSON header plus
+one `[time, "o", data]` line per output chunk, and `CapturedFrame::to_ansi_diff`
+already produces that `data`. A few seconds of a real app is typically smaller
+than a single PNG frame of it, and the result scrubs, selects as text, and plays
+in a browser.
+
+Recording needs **no feature flag and no extra dependency** - the cast JSON is
+written directly, so it works in any build.
+
+```sh
+TUI_LIPAN_RECORD=/tmp/demo.cast TUI_LIPAN_RECORD_KEYS="tab,enter" cargo run --example todo
+```
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `TUI_LIPAN_RECORD` | unset | Output path; setting it enables headless recording |
+| `TUI_LIPAN_RECORD_VIEWPORT` | `100x30` | Recorded terminal size, `WIDTHxHEIGHT` |
+| `TUI_LIPAN_RECORD_FPS` | `30` | Capture rate |
+| `TUI_LIPAN_RECORD_KEYS` | unset | Key script to play, e.g. `tab,tab,enter` |
+| `TUI_LIPAN_RECORD_KEY_DELAY_MS` | `400` | Pause after each key, so a viewer can follow |
+| `TUI_LIPAN_RECORD_SETTLE_MS` | `1200` | Hold on the final frame |
+
+In code, `Recording` mirrors `Sketch`:
+
+```rust
+use tui_lipan::Recording;
+
+Recording::view("demo", login_screen)   // or Recording::component(...)
+    .viewport(100, 30)
+    .keys("tab,enter")
+    .fps(30)
+    .write("docs/demo.cast")?;
+```
+
+| Method | Effect |
+|--------|--------|
+| `Recording::view(title, fn)` | Record a plain `Fn() -> Element` |
+| `Recording::component(title, c)` | Record a `Component` with default properties |
+| `viewport(w, h)` | Recorded terminal size |
+| `fps(n)` | Capture rate |
+| `keys(script)` | Key script to play |
+| `key_delay(duration)` | Pause after each key |
+| `settle(duration)` | Hold on the final frame |
+| `quiet(b)` | Suppress the written-path line |
+| `record()` | Return a `CastRecording` without writing |
+| `write(path)` | Write the cast; returns the path |
+
+**Timing is a synthetic fixed step.** The recorder advances a clock in `1/fps`
+increments and ticks animations by the same amount, so the same view and script
+always produce identical bytes - a committed recording stays diffable, and
+animations are captured at full rate. The trade is that work depending on real
+elapsed time (a PTY child's output, a network response) does not arrive on a
+synthetic clock: recordings capture an app's own rendering, not a live session.
+
+Identical frames are dropped, so a still stretch costs nothing. Because that
+would otherwise end the file at the last visible change, the recorder writes a
+final zero-length event to hold the closing frame for the intended duration
+(`CastRecording::mark_time`).
+
 ### Design sketches
 
 `Sketch` renders a view at one or more viewports and writes every artifact in a
