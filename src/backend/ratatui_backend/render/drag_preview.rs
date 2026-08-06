@@ -21,6 +21,22 @@ pub(crate) fn drag_preview_origin(
     (px, py)
 }
 
+/// Top-left of a `SourceSnapshot` float in buffer space (may be outside the terminal).
+///
+/// The grabbed cell stays under the cursor; cells outside the terminal are simply not painted.
+pub(crate) fn drag_snapshot_preview_origin(
+    cursor_x: u16,
+    cursor_y: u16,
+    grab_offset: (u16, u16),
+    at_mouse: bool,
+) -> (i32, i32) {
+    let offset = i32::from(!at_mouse);
+    (
+        i32::from(cursor_x) - i32::from(grab_offset.0) + offset,
+        i32::from(cursor_y) - i32::from(grab_offset.1) + offset,
+    )
+}
+
 pub(crate) fn render_drag_preview(
     state: &mut RenderState<'_, '_, '_>,
     ctx: &RenderContext<'_>,
@@ -69,13 +85,6 @@ pub(crate) fn render_drag_snapshot_preview(
     cursor_x: u16,
     cursor_y: u16,
 ) {
-    let max_preview_w = ctx
-        .drag_preview_max_width
-        .unwrap_or(crate::widgets::DEFAULT_PREVIEW_MAX_WIDTH);
-    let max_preview_h = ctx
-        .drag_preview_max_height
-        .unwrap_or(crate::widgets::DEFAULT_PREVIEW_MAX_HEIGHT);
-
     let area = state.f.area();
     if area.width == 0 || area.height == 0 || src_rect.width == 0 || src_rect.height == 0 {
         return;
@@ -110,20 +119,36 @@ pub(crate) fn render_drag_snapshot_preview(
         (*w, *h, cells.clone())
     };
 
-    let preview_w = src_w.min(max_preview_w);
-    let preview_h = src_h.min(max_preview_h);
-
-    let (px, py) = drag_preview_origin(ctx, cursor_x, cursor_y, area, preview_w, preview_h);
+    // `None` means no artificial cap — paint the full source snapshot. Optional max_* values
+    // only shrink; viewport edges still clip cells that leave the terminal.
+    let preview_w = ctx
+        .drag_preview_max_width
+        .map_or(src_w, |max| src_w.min(max));
+    let preview_h = ctx
+        .drag_preview_max_height
+        .map_or(src_h, |max| src_h.min(max));
+    let (origin_x, origin_y) = drag_snapshot_preview_origin(
+        cursor_x,
+        cursor_y,
+        ctx.drag_preview_grab_offset.unwrap_or((0, 0)),
+        ctx.drag_preview_at_mouse,
+    );
 
     let buf = state.f.buffer_mut();
+    let left = i32::from(area.x);
+    let top = i32::from(area.y);
+    let right = i32::from(area.right());
+    let bottom = i32::from(area.bottom());
     for dy in 0..preview_h {
         for dx in 0..preview_w {
-            let dst_x = px + dx;
-            let dst_y = py + dy;
-            if dst_x >= area.right() || dst_y >= area.bottom() {
+            let dst_x = origin_x + i32::from(dx);
+            let dst_y = origin_y + i32::from(dy);
+            if dst_x < left || dst_y < top || dst_x >= right || dst_y >= bottom {
                 continue;
             }
-            if let Some(dst) = buf.cell_mut(ratatui::layout::Position::new(dst_x, dst_y)) {
+            if let Some(dst) =
+                buf.cell_mut(ratatui::layout::Position::new(dst_x as u16, dst_y as u16))
+            {
                 let src_i = (dy as usize) * (src_w as usize) + (dx as usize);
                 *dst = snapshot[src_i].clone();
             }
@@ -190,5 +215,33 @@ pub(crate) fn render_drag_snapshot_at_target(
                 *dst = snapshot[src_i].clone();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::drag_snapshot_preview_origin;
+
+    #[test]
+    fn snapshot_origin_follows_grab_and_may_leave_viewport() {
+        assert_eq!(drag_snapshot_preview_origin(1, 1, (4, 2), true), (-3, -1));
+        assert_eq!(drag_snapshot_preview_origin(10, 8, (0, 0), true), (10, 8));
+        assert_eq!(drag_snapshot_preview_origin(5, 5, (3, 1), false), (3, 5));
+    }
+
+    #[test]
+    fn preview_size_defaults_to_full_source_when_uncapped() {
+        let src_w = 80u16;
+        let src_h = 12u16;
+        let preview_w = Option::<u16>::None.map_or(src_w, |max| src_w.min(max));
+        let preview_h = Option::<u16>::None.map_or(src_h, |max| src_h.min(max));
+        assert_eq!((preview_w, preview_h), (80, 12));
+        assert_eq!(
+            (
+                Some(60u16).map_or(src_w, |max| src_w.min(max)),
+                Some(20u16).map_or(src_h, |max| src_h.min(max)),
+            ),
+            (60, 12)
+        );
     }
 }

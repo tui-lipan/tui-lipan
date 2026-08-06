@@ -66,7 +66,7 @@ Wrapper that turns a single child into a generic drag source.
 | `on_drag_started` | `Callback<DragStartedEvent>` | Fired once when the drag activates (after the movement threshold); includes `payload` |
 | `drag_group` | `impl Into<Arc<str>>` | Optional compatibility group |
 | `clear_drag_group` | `()` | Remove group restriction |
-| `preview` | `DragPreview` | `Label` text near pointer, `SourceSnapshot` (layout slot collapses per `drag_slot`; float preview copies cells), or `None` |
+| `preview` | `DragPreview` | `Label` text near pointer, `SourceSnapshot` (layout slot collapses per `drag_slot`; float preview copies cells and may leave the viewport, clipped at the edges), or `None` |
 | `preview_label` | `impl Into<Arc<str>>` | Convenience for `DragPreview::Label` |
 | `preview_snapshot` | `()` | Convenience for `DragPreview::SourceSnapshot` |
 | `no_preview` | `()` | Convenience for `DragPreview::None` |
@@ -76,9 +76,9 @@ Wrapper that turns a single child into a generic drag source.
 | `drag_slot_axis` | `DragSlotAxis` | `Vertical` or `Horizontal`: which axis `Fixed`/`Collapse` apply to when measured outside a stack (default: vertical) |
 | `dragging_style` | `Style` | Overlay while dragging: first-frame tint, reserved slot fill when using `SourceSnapshot`, and label/none preview modes |
 | `extend_dragging_style` / `inherit_dragging_style` | `Style` / `()` | Extend or inherit the drag-source theme role for the dragging overlay |
-| `preview_max_width` | `Option<u16>` | Max width of the floating `SourceSnapshot` preview (`None` → `DEFAULT_PREVIEW_MAX_WIDTH`) |
-| `preview_max_height` | `Option<u16>` | Max height of the floating preview (`None` → `DEFAULT_PREVIEW_MAX_HEIGHT`) |
-| `preview_max_size` | `(Option<u16>, Option<u16>)` | Set both max dimensions |
+| `preview_max_width` | `Option<u16>` | Optional width cap for the floating `SourceSnapshot` (`None` = full source width) |
+| `preview_max_height` | `Option<u16>` | Optional height cap for the floating preview (`None` = full source height) |
+| `preview_max_size` | `(Option<u16>, Option<u16>)` | Set both optional caps (`None` per axis = uncapped) |
 | `threshold` | `u16` | Pointer movement threshold before drag starts (default: `3`) |
 | `enabled` | `bool` | Enable/disable drag behavior |
 
