@@ -220,6 +220,7 @@ impl<C: Component> AppRunner<C> {
             dnd_snapshot_cells: &dnd_snapshot_cells,
             drag_preview_max_width: None,
             drag_preview_max_height: None,
+            drag_preview_grab_offset: None,
             drop_slot_source_preview_rect: None,
             paint_glyph_caches: Some(self.paint_glyph_caches.clone()),
             copy_feedback: None,
