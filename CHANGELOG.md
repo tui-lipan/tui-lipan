@@ -139,9 +139,9 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
-- The `todo` / `todo_ui` examples drop the outer "Todo App" bordered frame, size the New Task input
-  row with `Length::Auto`, and nest Tips in a flex `VStack` so tip text yields space instead of
-  collapsing the bordered input in short terminals.
+- The `todo` / `todo_ui` examples drop the outer "Todo App" bordered frame, give the New Task input
+  row `height: Length::Auto` (input stays `Flex` width), and nest Tips in a flex `VStack` so tip
+  text yields space instead of collapsing the bordered input in short terminals.
 - Floating `DragPreview::SourceSnapshot` previews are no longer forced to stay fully inside the
   terminal. They stay anchored to the grab point under the cursor and cells that leave the
   viewport are clipped, so large cards can slide partially off-screen (as in
@@ -149,6 +149,7 @@ While the crate is on `0.x.y`:
 - `DragSource` `preview_max_width` / `preview_max_height` of `None` no longer apply the old
   60×20 defaults (breaking). Unset means paint the full source snapshot; pass
   `Some(DEFAULT_PREVIEW_MAX_WIDTH)` / `Some(DEFAULT_PREVIEW_MAX_HEIGHT)` to keep the previous caps.
+
 - `CapturedFrame::to_png` and `UiSnapshot::to_png` / `to_png_default` now return
   `Result<Vec<u8>>`, and `try_to_png` / `try_to_png_default` are removed (breaking). The infallible
   forms returned an **empty buffer** when encoding failed, which wrote a zero-byte file that only

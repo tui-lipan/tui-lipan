@@ -171,7 +171,6 @@ impl Component for TodoApp {
                         gap: 1,
                         HStack {
                             gap: 1,
-                            width: Length::Auto,
                             height: Length::Auto,
                             Input {
                                 value: ctx.state.draft.text().to_owned(),
@@ -181,7 +180,6 @@ impl Component for TodoApp {
                                 border_style: BorderStyle::Rounded,
                                 hover_border_style: BorderStyle::Thick,
                                 focus_style: Style::new().fg(Color::LightCyan),
-                                width: Length::Auto,
                                 on_change: ctx.link().callback(Msg::DraftChanged),
                                 on_key: ctx.link()
                                     .key_handler(|k: KeyEvent| match k.code {

@@ -178,7 +178,7 @@ impl Component for TodoApp {
                     .style(panel_style(main_active))
                     .padding(1) @ "main" => {
                     VStack::new().gap(1) => {
-                        HStack::new().gap(1).width(Length::Auto).height(Length::Auto) => {
+                        HStack::new().gap(1).height(Length::Auto) => {
                             Input::new(ctx.state.draft.text().to_owned())
                                 .cursor(ctx.state.draft.cursor())
                                 .placeholder("Add a task...")
@@ -186,7 +186,6 @@ impl Component for TodoApp {
                                 .border_style(BorderStyle::Rounded)
                                 .hover_border_style(BorderStyle::Thick)
                                 .focus_style(Style::new().fg(Color::LightCyan))
-                                .width(Length::Auto)
                                 .on_change(ctx.link().callback(Msg::DraftChanged))
                                 .on_key(
                                     ctx
