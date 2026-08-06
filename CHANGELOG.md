@@ -13,6 +13,15 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Recording::write_frames(dir)` and `TUI_LIPAN_RECORD_FRAMES=<dir>` export one truecolor PNG per
+  frame (feature `ui-snapshot-png`), for encoding to MP4 without GIF's 256-colour quantisation.
+  Frames are written at a constant rate - one per `1/fps` tick including unchanged ones - because
+  an encoder reconstructs timing from a numbered sequence; unchanged frames reuse the previous
+  encode rather than paying for it twice. Both print a ready-to-run `ffmpeg` command with paths and
+  frame rate filled in. `Recording::png_options` controls rendering (raise `scale` for a
+  higher-resolution video). `docs/components.md` gains a format comparison with example commands
+  for `.cast`, GIF, and both MP4 routes.
+
 - Terminal recording: `TUI_LIPAN_RECORD=<path>` plays a key script against an app off-screen and
   writes an asciinema cast v2 file, so any existing app or example becomes a recordable demo with
   no source change. `Recording` is the in-code equivalent and mirrors `Sketch`. Companion

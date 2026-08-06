@@ -68,6 +68,8 @@ pub struct Recording<C: Component> {
     key_delay: Duration,
     settle: Duration,
     quiet: bool,
+    #[cfg(feature = "ui-snapshot-png")]
+    png_options: Option<crate::capture::PngOptions>,
 }
 
 impl<F> Recording<Mockup<F>>
@@ -95,6 +97,8 @@ where
             key_delay: DEFAULT_KEY_DELAY,
             settle: DEFAULT_SETTLE,
             quiet: false,
+            #[cfg(feature = "ui-snapshot-png")]
+            png_options: None,
         }
     }
 
@@ -143,10 +147,29 @@ where
         self
     }
 
-    /// Play the script and return the recording without writing it.
-    pub fn record(self) -> Result<CastRecording> {
+    /// Rendering options for [`Self::write_frames`].
+    ///
+    /// Defaults to [`PngOptions::default`](crate::PngOptions); raise `scale` for
+    /// a higher-resolution video, or force a font for consistent glyphs.
+    #[cfg(feature = "ui-snapshot-png")]
+    #[must_use]
+    pub fn png_options(mut self, options: crate::capture::PngOptions) -> Self {
+        self.png_options = Some(options);
+        self
+    }
+
+    /// Drive the timeline, handing every captured frame to `sink`.
+    ///
+    /// One driver serves both outputs so a cast and a frame sequence recorded
+    /// from the same script stay in step. The sink sees *every* tick, including
+    /// unchanged ones; dropping duplicates is the cast's business, while video
+    /// needs a frame per tick to hold a constant rate.
+    fn play(
+        self,
+        mut sink: impl FnMut(f64, &crate::capture::CapturedFrame) -> Result<()>,
+    ) -> Result<()> {
         let Self {
-            title,
+            title: _,
             component,
             viewport,
             fps,
@@ -154,6 +177,8 @@ where
             key_delay,
             settle,
             quiet: _,
+            #[cfg(feature = "ui-snapshot-png")]
+                png_options: _,
         } = self;
 
         let keys = match key_script.as_deref() {
@@ -166,26 +191,89 @@ where
         backend.set_viewport(Rect { x: 0, y: 0, w, h });
         backend.render();
 
-        let mut cast = CastRecording::new(w, h).title(title);
         let step = Duration::from_secs_f64(1.0 / f64::from(fps));
         let mut clock = Duration::ZERO;
 
-        cast.push_frame(clock.as_secs_f64(), &backend.capture_frame());
+        sink(clock.as_secs_f64(), &backend.capture_frame())?;
 
         for key in &keys {
             backend.send_key(*key)?;
             clock += step;
-            cast.push_frame(clock.as_secs_f64(), &backend.capture_frame());
-
-            hold(&mut backend, &mut cast, &mut clock, key_delay, step);
+            sink(clock.as_secs_f64(), &backend.capture_frame())?;
+            hold(&mut backend, &mut sink, &mut clock, key_delay, step)?;
         }
 
-        hold(&mut backend, &mut cast, &mut clock, settle, step);
+        hold(&mut backend, &mut sink, &mut clock, settle, step)?;
+        Ok(())
+    }
+
+    /// Play the script and return the recording without writing it.
+    pub fn record(self) -> Result<CastRecording> {
+        let (w, h) = self.viewport;
+        let title = self.title.clone();
+        let mut cast = CastRecording::new(w, h).title(title);
+
+        let mut last_time = 0.0;
+        self.play(|time, frame| {
+            last_time = time;
+            cast.push_frame(time, frame);
+            Ok(())
+        })?;
+
         // Identical frames were dropped, so without this the cast would end at
         // the last visible change and a player would cut the settle short.
-        cast.mark_time(clock.as_secs_f64());
-
+        cast.mark_time(last_time);
         Ok(cast)
+    }
+
+    /// Play the script and write one PNG per frame into `dir`.
+    ///
+    /// Frames are written at a constant rate, one per `1/fps` tick including
+    /// unchanged ones, which is what an encoder needs to reproduce the original
+    /// timing from a numbered sequence. Unchanged frames reuse the previously
+    /// encoded bytes rather than re-encoding.
+    ///
+    /// Returns the written paths in order. Unlike a cast, these are truecolor -
+    /// use them when GIF's 256-color quantization would hurt.
+    ///
+    /// ```sh
+    /// ffmpeg -framerate 30 -i frames/frame_%05d.png \
+    ///        -pix_fmt yuv420p -movflags +faststart demo.mp4
+    /// ```
+    #[cfg(feature = "ui-snapshot-png")]
+    pub fn write_frames(self, dir: impl AsRef<Path>) -> Result<Vec<PathBuf>> {
+        let dir = dir.as_ref().to_path_buf();
+        std::fs::create_dir_all(&dir)?;
+
+        let quiet = self.quiet;
+        let fps = self.fps;
+        let options = self.png_options.clone().unwrap_or_default();
+
+        let mut written: Vec<PathBuf> = Vec::new();
+        let mut previous: Option<(crate::capture::CapturedFrame, Vec<u8>)> = None;
+
+        self.play(|_, frame| {
+            let bytes = match previous.as_ref() {
+                // Re-encoding an unchanged frame costs real time at 30fps and
+                // produces identical bytes, so reuse them.
+                Some((last, bytes)) if last == frame => bytes.clone(),
+                _ => frame.to_png(&options)?,
+            };
+            let path = dir.join(format!("frame_{:05}.png", written.len()));
+            std::fs::write(&path, &bytes)?;
+            previous = Some((frame.clone(), bytes));
+            written.push(path);
+            Ok(())
+        })?;
+
+        if !quiet {
+            println!("wrote {} frames to {}", written.len(), dir.display());
+            println!(
+                "  ffmpeg -framerate {fps} -i {}/frame_%05d.png -pix_fmt yuv420p -movflags +faststart out.mp4",
+                dir.display()
+            );
+        }
+        Ok(written)
     }
 
     /// Play the script and write the cast to `path`.
@@ -220,19 +308,31 @@ where
 /// transition, matching how the runner paces its own frames.
 fn hold<C: Component>(
     backend: &mut TestBackend<C>,
-    cast: &mut CastRecording,
+    sink: &mut impl FnMut(f64, &crate::capture::CapturedFrame) -> Result<()>,
     clock: &mut Duration,
     total: Duration,
     step: Duration,
-) {
+) -> Result<()> {
     let mut remaining = total;
     while !remaining.is_zero() {
-        let tick = step.min(remaining).min(MAX_TICK);
-        backend.advance(tick);
-        *clock += tick;
-        cast.push_frame(clock.as_secs_f64(), &backend.capture_frame());
-        remaining = remaining.saturating_sub(tick);
+        let frame_span = step.min(remaining);
+
+        // Animations tick in clamped sub-steps so a long frame cannot skip a
+        // transition, but exactly one frame is emitted per `step`. Tying the two
+        // together would emit frames at the clamp rate instead of the requested
+        // rate, and a numbered sequence would then play back at the wrong speed.
+        let mut advanced = Duration::ZERO;
+        while advanced < frame_span {
+            let tick = (frame_span - advanced).min(MAX_TICK);
+            backend.advance(tick);
+            advanced += tick;
+        }
+
+        *clock += frame_span;
+        sink(clock.as_secs_f64(), &backend.capture_frame())?;
+        remaining = remaining.saturating_sub(frame_span);
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -359,6 +459,125 @@ mod tests {
                 .to_cast()
         };
         assert_eq!(run(), run(), "same script must produce identical bytes");
+    }
+
+    #[cfg(feature = "ui-snapshot-png")]
+    #[test]
+    fn frames_are_written_at_a_constant_rate() {
+        let dir = std::env::temp_dir().join(format!(
+            "tui-lipan-frames-rate-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+
+        // 10fps for 1s of settle, plus the opening frame: an encoder needs one
+        // frame per tick even though the view never changes.
+        let frames = Recording::view("rate", static_view)
+            .viewport(16, 2)
+            .fps(10)
+            .settle(Duration::from_millis(1000))
+            .quiet(true)
+            .write_frames(&dir)
+            .expect("writes frames");
+
+        assert_eq!(
+            frames.len(),
+            11,
+            "expected 1 opening frame + 10 ticks, got {}",
+            frames.len()
+        );
+        assert!(frames.iter().all(|path| path.exists()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(feature = "ui-snapshot-png")]
+    #[test]
+    fn frames_are_zero_padded_and_ordered_for_ffmpeg() {
+        let dir = std::env::temp_dir().join(format!(
+            "tui-lipan-frames-order-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+
+        let frames = Recording::view("order", static_view)
+            .viewport(16, 2)
+            .fps(4)
+            .settle(Duration::from_millis(500))
+            .quiet(true)
+            .write_frames(&dir)
+            .expect("writes frames");
+
+        let names: Vec<String> = frames
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names[0], "frame_00000.png");
+        assert_eq!(names[1], "frame_00001.png");
+        // Lexical order must match capture order, or `-i frame_%05d.png` scrambles.
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(feature = "ui-snapshot-png")]
+    #[test]
+    fn frames_are_real_pngs_and_changed_frames_differ() {
+        let dir = std::env::temp_dir().join(format!(
+            "tui-lipan-frames-content-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+
+        let frames = Recording::component("content", Echo)
+            .viewport(20, 2)
+            .fps(4)
+            .keys("a,b")
+            .key_delay(Duration::ZERO)
+            .settle(Duration::ZERO)
+            .quiet(true)
+            .write_frames(&dir)
+            .expect("writes frames");
+
+        assert_eq!(frames.len(), 3, "opening frame plus one per key");
+        let bytes: Vec<Vec<u8>> = frames.iter().map(|p| std::fs::read(p).unwrap()).collect();
+        for (i, b) in bytes.iter().enumerate() {
+            assert!(
+                b.starts_with(&[0x89, b'P', b'N', b'G']),
+                "frame {i} is not a PNG"
+            );
+        }
+        assert_ne!(bytes[0], bytes[1], "typing should change the frame");
+        assert_ne!(bytes[1], bytes[2]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(feature = "ui-snapshot-png")]
+    #[test]
+    fn unchanged_frames_reuse_identical_bytes() {
+        let dir = std::env::temp_dir().join(format!(
+            "tui-lipan-frames-reuse-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+
+        let frames = Recording::view("reuse", static_view)
+            .viewport(16, 2)
+            .fps(4)
+            .settle(Duration::from_millis(750))
+            .quiet(true)
+            .write_frames(&dir)
+            .expect("writes frames");
+
+        let first = std::fs::read(&frames[0]).unwrap();
+        for path in &frames[1..] {
+            assert_eq!(
+                std::fs::read(path).unwrap(),
+                first,
+                "a still view must produce byte-identical frames"
+            );
+        }
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
