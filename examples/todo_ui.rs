@@ -96,133 +96,129 @@ impl Component for TodoApp {
         };
 
         let main_content: Element = ui! {
-            Frame::new()
-                .header_left("Todo App")
-                .footer_left("Tab to focus • Enter adds • Ctrl+Q quits")
-                .padding(1)
-                .border(true)
-                .border_style(BorderStyle::Rounded) => {
-                HStack::new().gap(1) => {
-                    Frame::new()
-                        .header_left("Todos")
-                        .border(true)
-                        .border_style(panel_border_style(sidebar_active))
-                        .style(panel_style(sidebar_active))
-                        .padding(1) @ "sidebar" => {
-                        ScrollView::new()
-                            .scrollbar(true)
-                            .gap(0)
-                            .offset(ctx.state.scroll)
-                            .on_scroll(ctx.link().callback(Msg::Scrolled)) => {
-                            for (_idx, todo) in ctx.state.todos.iter().enumerate() {
-                                HStack::new().gap(1).height(Length::Auto) @ format!("todo-{}", todo.id) => {
-                                    Button::new(if todo.done { format!("✓ {}", todo.text) } else { todo.text.clone() })
-                                        .full_width(true)
-                                        .style(
-                                            if todo.done {
-                                                Style::new().fg(Color::DarkGray)
-                                            } else {
-                                                Style::new().fg(Color::White)
-                                            },
-                                        )
-                                        .hover_style(Style::new().fg(Color::LightCyan))
-                                        .focus_style(Style::new().fg(Color::LightBlue).bold())
-                                        .on_click(
-                                            ctx
-                                                .link()
-                                                .callback({
-                                                    let id = todo.id;
-                                                    move |_| Msg::Toggle(id)
-                                                }),
-                                        )
-                                        .on_key(
-                                            ctx
-                                                .link()
-                                                .key_handler({
-                                                    let id = todo.id;
-                                                    move |k: KeyEvent| {
-                                                        if k.is(KeyCode::Enter) { Some(Msg::Toggle(id)) } else { None }
+            HStack::new().gap(1) => {
+                Frame::new()
+                    .header_left("Todos")
+                    .footer_left("Tab to focus • Enter adds • Ctrl+Q quits")
+                    .border(true)
+                    .border_style(panel_border_style(sidebar_active))
+                    .style(panel_style(sidebar_active))
+                    .padding(1) @ "sidebar" => {
+                    ScrollView::new()
+                        .scrollbar(true)
+                        .gap(0)
+                        .offset(ctx.state.scroll)
+                        .on_scroll(ctx.link().callback(Msg::Scrolled)) => {
+                        for (_idx, todo) in ctx.state.todos.iter().enumerate() {
+                            HStack::new().gap(1).height(Length::Auto) @ format!("todo-{}", todo.id) => {
+                                Button::new(if todo.done { format!("✓ {}", todo.text) } else { todo.text.clone() })
+                                    .full_width(true)
+                                    .style(
+                                        if todo.done {
+                                            Style::new().fg(Color::DarkGray)
+                                        } else {
+                                            Style::new().fg(Color::White)
+                                        },
+                                    )
+                                    .hover_style(Style::new().fg(Color::LightCyan))
+                                    .focus_style(Style::new().fg(Color::LightBlue).bold())
+                                    .on_click(
+                                        ctx
+                                            .link()
+                                            .callback({
+                                                let id = todo.id;
+                                                move |_| Msg::Toggle(id)
+                                            }),
+                                    )
+                                    .on_key(
+                                        ctx
+                                            .link()
+                                            .key_handler({
+                                                let id = todo.id;
+                                                move |k: KeyEvent| {
+                                                    if k.is(KeyCode::Enter) { Some(Msg::Toggle(id)) } else { None }
+                                                }
+                                            }),
+                                    ),
+                                Button::new("✕")
+                                    .width(Length::Px(5))
+                                    .style(Style::new().fg(Color::indexed(203)))
+                                    .hover_style(Style::new().fg(Color::LightRed).bg(Color::indexed(52)))
+                                    .focus_style(Style::new().fg(Color::White).bg(Color::LightRed))
+                                    .on_click(
+                                        ctx
+                                            .link()
+                                            .callback({
+                                                let id = todo.id;
+                                                move |_| Msg::RequestDelete(id)
+                                            }),
+                                    )
+                                    .on_key(
+                                        ctx
+                                            .link()
+                                            .key_handler({
+                                                let id = todo.id;
+                                                move |k: KeyEvent| {
+                                                    if k.is(KeyCode::Enter) {
+                                                        Some(Msg::RequestDelete(id))
+                                                    } else {
+                                                        None
                                                     }
-                                                }),
-                                        ),
-                                    Button::new("✕")
-                                        .width(Length::Px(5))
-                                        .style(Style::new().fg(Color::indexed(203)))
-                                        .hover_style(Style::new().fg(Color::LightRed).bg(Color::indexed(52)))
-                                        .focus_style(Style::new().fg(Color::White).bg(Color::LightRed))
-                                        .on_click(
-                                            ctx
-                                                .link()
-                                                .callback({
-                                                    let id = todo.id;
-                                                    move |_| Msg::RequestDelete(id)
-                                                }),
-                                        )
-                                        .on_key(
-                                            ctx
-                                                .link()
-                                                .key_handler({
-                                                    let id = todo.id;
-                                                    move |k: KeyEvent| {
-                                                        if k.is(KeyCode::Enter) {
-                                                            Some(Msg::RequestDelete(id))
-                                                        } else {
-                                                            None
-                                                        }
-                                                    }
-                                                }),
-                                        ),
-                                },
+                                                }
+                                            }),
+                                    ),
                             },
                         },
                     },
-                    Frame::new()
-                        .header_left("New Task")
-                        .border(true)
-                        .border_style(panel_border_style(main_active))
-                        .style(panel_style(main_active))
-                        .padding(1) @ "main" => {
+                },
+                Frame::new()
+                    .header_left("New Task")
+                    .border(true)
+                    .border_style(panel_border_style(main_active))
+                    .style(panel_style(main_active))
+                    .padding(1) @ "main" => {
+                    VStack::new().gap(1) => {
+                        HStack::new().gap(1).height(Length::Auto) => {
+                            Input::new(ctx.state.draft.text().to_owned())
+                                .cursor(ctx.state.draft.cursor())
+                                .placeholder("Add a task...")
+                                .border(true)
+                                .border_style(BorderStyle::Rounded)
+                                .hover_border_style(BorderStyle::Thick)
+                                .focus_style(Style::new().fg(Color::LightCyan))
+                                .on_change(ctx.link().callback(Msg::DraftChanged))
+                                .on_key(
+                                    ctx
+                                        .link()
+                                        .key_handler(|k: KeyEvent| {
+                                            if k.is(KeyCode::Enter) { Some(Msg::Add) } else { None }
+                                        }),
+                                ) @ "draft",
+                            Button::new("Add")
+                                .width(Length::Px(10))
+                                .height(Length::Auto)
+                                .variant(ButtonVariant::Filled)
+                                .style(Style::new().bg(Color::indexed(30)).fg(Color::White))
+                                .hover_style(Style::new().bg(Color::indexed(37)).fg(Color::White))
+                                .focus_style(Style::new().bg(Color::LightCyan).fg(Color::Black))
+                                .on_click(ctx.link().callback(|_| Msg::Add))
+                                .on_key(
+                                    ctx
+                                        .link()
+                                        .key_handler(|k: KeyEvent| {
+                                            if k.is(KeyCode::Enter) { Some(Msg::Add) } else { None }
+                                        }),
+                                ) @ "add",
+                        },
+                        Divider::horizontal().style(Style::new().fg(Color::indexed(239))),
+                        Text::new(
+                                format!(
+                                    "{} todos • {} done", ctx.state.todos.len(), ctx.state.todos.iter()
+                                    .filter(| t | t.done).count()
+                                ),
+                            )
+                            .style(Style::new().fg(Color::DarkGray)),
                         VStack::new().gap(1) => {
-                            HStack::new().gap(1) => {
-                                Input::new(ctx.state.draft.text().to_owned())
-                                    .cursor(ctx.state.draft.cursor())
-                                    .placeholder("Add a task...")
-                                    .border(true)
-                                    .border_style(BorderStyle::Rounded)
-                                    .hover_border_style(BorderStyle::Thick)
-                                    .focus_style(Style::new().fg(Color::LightCyan))
-                                    .on_change(ctx.link().callback(Msg::DraftChanged))
-                                    .on_key(
-                                        ctx
-                                            .link()
-                                            .key_handler(|k: KeyEvent| {
-                                                if k.is(KeyCode::Enter) { Some(Msg::Add) } else { None }
-                                            }),
-                                    ) @ "draft",
-                                Button::new("Add")
-                                    .width(Length::Px(10))
-                                    .variant(ButtonVariant::Filled)
-                                    .style(Style::new().bg(Color::indexed(30)).fg(Color::White))
-                                    .hover_style(Style::new().bg(Color::indexed(37)).fg(Color::White))
-                                    .focus_style(Style::new().bg(Color::LightCyan).fg(Color::Black))
-                                    .on_click(ctx.link().callback(|_| Msg::Add))
-                                    .on_key(
-                                        ctx
-                                            .link()
-                                            .key_handler(|k: KeyEvent| {
-                                                if k.is(KeyCode::Enter) { Some(Msg::Add) } else { None }
-                                            }),
-                                    ) @ "add",
-                            },
-                            Divider::horizontal().style(Style::new().fg(Color::indexed(239))),
-                            Text::new(
-                                    format!(
-                                        "{} todos • {} done", ctx.state.todos.len(), ctx.state.todos.iter()
-                                        .filter(| t | t.done).count()
-                                    ),
-                                )
-                                .style(Style::new().fg(Color::DarkGray)),
-                            Spacer::new().height(Length::Px(1)),
                             Text::new("Tips:").style(Style::new().fg(Color::indexed(245)).bold()),
                             Text::new("• Active panel border follows focus")
                                 .style(Style::new().fg(Color::indexed(240))),
