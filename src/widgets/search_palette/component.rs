@@ -102,13 +102,20 @@ fn nav_key_to_msg(code: KeyCode) -> Option<SearchPaletteMsg> {
 fn search_input_key_interceptor(
     link: crate::callback::Link<SearchPaletteMsg>,
     user_interceptor: Option<KeyHandler>,
+    has_results: bool,
 ) -> KeyHandler {
     KeyHandler::new(move |key| {
         if key.mods == crate::core::event::KeyMods::default()
             && let Some(msg) = nav_key_to_msg(key.code)
         {
-            link.send(msg);
-            return true;
+            // Navigation outranks the caller's interceptor, but only where the palette can act on
+            // it. With no matching row there is nothing to move to or open, so claiming the key
+            // would swallow it for nothing — and the caller loses the one state where giving Enter
+            // another meaning (create what was typed, start something new) is most useful.
+            if has_results {
+                link.send(msg);
+                return true;
+            }
         }
 
         user_interceptor
@@ -436,6 +443,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
             let input_key_interceptor = search_input_key_interceptor(
                 ctx.link().clone(),
                 ctx.props.input_key_interceptor.clone(),
+                !ctx.state.results.is_empty(),
             );
 
             let default_suffix = format!("{}/{}", ctx.state.results.len(), ctx.props.items.len());
@@ -1252,7 +1260,7 @@ mod tests {
             true
         });
 
-        let handler = search_input_key_interceptor(link, Some(user_interceptor));
+        let handler = search_input_key_interceptor(link, Some(user_interceptor), true);
 
         assert!(handler.handle(key(KeyCode::Down)));
         assert!(matches!(
@@ -1264,6 +1272,43 @@ mod tests {
         assert!(handler.handle(key(KeyCode::Char(' '))));
         assert_eq!(messages.borrow().len(), 1);
         assert!(*user_seen.borrow());
+    }
+
+    /// Navigation only outranks the caller's interceptor where the palette can act on it. An empty
+    /// result list has nothing to move to or open, so consuming Enter there would swallow the key
+    /// and leave the caller no way to give it a meaning.
+    #[test]
+    fn internal_input_interceptor_yields_navigation_keys_with_no_results() {
+        let messages = Rc::new(RefCell::new(Vec::new()));
+        let messages_for_dispatch = Rc::clone(&messages);
+        let dispatcher = Dispatcher::new(move |_scope, msg| {
+            messages_for_dispatch
+                .borrow_mut()
+                .push(*msg.downcast::<SearchPaletteMsg>().expect("search message"));
+        });
+        let link = Link::new(ScopeId(1), dispatcher);
+
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen_for_handler = Rc::clone(&seen);
+        let user_interceptor = KeyHandler::new(move |key| {
+            seen_for_handler.borrow_mut().push(key.code);
+            key.code == KeyCode::Enter
+        });
+
+        let handler = search_input_key_interceptor(link, Some(user_interceptor), false);
+
+        assert!(
+            handler.handle(key(KeyCode::Enter)),
+            "the caller claims Enter once the palette declines it"
+        );
+        assert!(
+            messages.borrow().is_empty(),
+            "no activation is sent for a row that does not exist"
+        );
+
+        // Declined by the caller too: unhandled, rather than silently eaten by the palette.
+        assert!(!handler.handle(key(KeyCode::Down)));
+        assert_eq!(&*seen.borrow(), &[KeyCode::Enter, KeyCode::Down]);
     }
 
     struct SelectionSeedChangeRoot {
