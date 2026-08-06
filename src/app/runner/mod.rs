@@ -65,6 +65,7 @@ mod drag;
 pub(crate) mod events;
 mod exit_view;
 mod focus_events;
+mod headless_record;
 mod headless_snapshot;
 #[cfg(unix)]
 pub(crate) mod input_coordinator;
@@ -979,81 +980,11 @@ impl<C: Component> AppRunner<C> {
         Ok(())
     }
 
-    /// Render one off-screen snapshot, write it, and return without opening a terminal.
+    /// Lay out and resolve focus for one off-screen frame.
     ///
-    /// Mirrors the root-init sequence of [`Self::run`] - set viewport, `init()`,
-    /// render, resolve focus - then settles for the requested number of frames so
-    /// work started in `init()` lands before the capture.
-    fn run_headless_snapshot(
-        mut self,
-        config: headless_snapshot::HeadlessSnapshotConfig,
-    ) -> Result<()> {
-        crate::debug::init_logging();
-
-        let bounds = config.viewport;
-        self.core.ctx.set_viewport(bounds);
-        self.core.init();
-
-        for frame in 0..config.frames {
-            self.push_drag_layout_collapse_hint();
-            self.core.render_element(
-                bounds,
-                None,
-                self.focus.focused_key.as_ref(),
-                self.mouse.hovered,
-            );
-            self.pop_drag_layout_collapse_hint();
-            self.apply_pending_focus_request();
-            focus::restore_focus(
-                &self.core.tree,
-                &mut self.focus.focused,
-                &mut self.focus.focused_key,
-                &mut self.focus.focused_tag,
-                self.focus.policy,
-            );
-
-            // Focus stepping and the key script need a laid-out tree, so they run
-            // after the first render rather than before the loop.
-            if frame == 0 {
-                for _ in 0..config.focus_steps {
-                    self.framework_focus_step(focus::FocusDirection::Next);
-                }
-                // Each key gets its own settle pass, mirroring the event loop:
-                // dispatch, drain the messages it produced, re-render. Batching
-                // them instead makes every keystroke act on a stale tree, so a
-                // typed string collapses to its last character.
-                for key in &config.keys {
-                    self.dispatch_layered_key(*key);
-                    self.notify_focus_change();
-
-                    let mut key_dirty = DirtyTracker::default();
-                    self.drain_messages_and_commands(&mut key_dirty)?;
-
-                    self.push_drag_layout_collapse_hint();
-                    self.core.render_element(
-                        bounds,
-                        None,
-                        self.focus.focused_key.as_ref(),
-                        self.mouse.hovered,
-                    );
-                    self.pop_drag_layout_collapse_hint();
-                    self.apply_pending_focus_request();
-                    focus::restore_focus(
-                        &self.core.tree,
-                        &mut self.focus.focused,
-                        &mut self.focus.focused_key,
-                        &mut self.focus.focused_tag,
-                        self.focus.policy,
-                    );
-                }
-            }
-
-            let mut dirty = DirtyTracker::default();
-            self.drain_messages_and_commands(&mut dirty)?;
-        }
-
-        // Settle once more so state changed by the key script or by drained
-        // messages is reflected in the tree that gets captured.
+    /// Mirrors the root-init sequence of [`Self::run`] without touching a
+    /// terminal, and is the unit both headless capture paths build on.
+    fn headless_render(&mut self, bounds: crate::style::Rect) {
         self.push_drag_layout_collapse_hint();
         self.core.render_element(
             bounds,
@@ -1070,16 +1001,176 @@ impl<C: Component> AppRunner<C> {
             &mut self.focus.focused_tag,
             self.focus.policy,
         );
+    }
 
-        let interaction = crate::backend::ratatui_backend::capture_render::CaptureInteraction {
+    /// Dispatch one scripted key and settle the frame it produced.
+    ///
+    /// Each key gets its own dispatch, message drain, and re-render, mirroring
+    /// the event loop. Batching them instead makes every keystroke act on a stale
+    /// tree, so a typed string collapses to its last character.
+    fn headless_dispatch_key(
+        &mut self,
+        key: crate::core::event::KeyEvent,
+        bounds: crate::style::Rect,
+    ) -> Result<()> {
+        self.dispatch_layered_key(key);
+        self.notify_focus_change();
+
+        let mut dirty = DirtyTracker::default();
+        self.drain_messages_and_commands(&mut dirty)?;
+        self.headless_render(bounds);
+        Ok(())
+    }
+
+    /// Focus and pointer state for an off-screen capture.
+    fn headless_interaction(
+        &self,
+    ) -> crate::backend::ratatui_backend::capture_render::CaptureInteraction {
+        crate::backend::ratatui_backend::capture_render::CaptureInteraction {
             focused: self.focus.focused,
             hovered: self.mouse.hovered,
             mouse_pos: self.mouse.last_mouse,
-        };
+        }
+    }
+
+    /// Capture the current tree as a frame, without a terminal.
+    fn headless_frame(&self, bounds: crate::style::Rect) -> crate::capture::CapturedFrame {
+        crate::backend::ratatui_backend::capture_render::render_to_captured_frame_with_interaction(
+            &self.core.tree,
+            bounds,
+            self.headless_interaction(),
+            self.core.ctx.env().effect_phase.get(),
+            self.resolved_screen_background(),
+        )
+    }
+
+    /// Advance the synthetic clock by `total`, capturing a frame every `step`.
+    ///
+    /// Animations tick in clamped increments so a long hold cannot skip a
+    /// transition, matching how the event loop paces its own frames.
+    fn headless_hold(
+        &mut self,
+        cast: &mut crate::capture::CastRecording,
+        clock: &mut std::time::Duration,
+        total: std::time::Duration,
+        step: std::time::Duration,
+        bounds: crate::style::Rect,
+    ) -> Result<()> {
+        const MAX_TICK: std::time::Duration = std::time::Duration::from_millis(50);
+
+        let mut remaining = total;
+        while !remaining.is_zero() {
+            let tick = step.min(remaining).min(MAX_TICK);
+            let (_, _, needs_layout) =
+                crate::app::animation::tick_tree_animations(&mut self.core.tree, tick);
+            let transitions = self.core.ctx.env().animations.tick(tick);
+
+            let mut dirty = DirtyTracker::default();
+            self.drain_messages_and_commands(&mut dirty)?;
+            if needs_layout || transitions.view_changed {
+                self.headless_render(bounds);
+            }
+
+            *clock += tick;
+            cast.push_frame(clock.as_secs_f64(), &self.headless_frame(bounds));
+            remaining = remaining.saturating_sub(tick);
+        }
+        Ok(())
+    }
+
+    /// Play a key script off-screen and write an asciinema cast, without a terminal.
+    fn run_headless_record(mut self, config: headless_record::HeadlessRecordConfig) -> Result<()> {
+        crate::debug::init_logging();
+
+        let bounds = config.viewport;
+        self.core.ctx.set_viewport(bounds);
+        self.core.init();
+        self.headless_render(bounds);
+
+        let mut dirty = DirtyTracker::default();
+        self.drain_messages_and_commands(&mut dirty)?;
+        self.headless_render(bounds);
+
+        let title = self
+            .title
+            .clone()
+            .or_else(|| {
+                config
+                    .path
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "recording".to_owned());
+
+        let mut cast = crate::capture::CastRecording::new(bounds.w, bounds.h).title(title);
+        let step = config.step();
+        let mut clock = std::time::Duration::ZERO;
+        cast.push_frame(0.0, &self.headless_frame(bounds));
+
+        for key in &config.keys {
+            self.headless_dispatch_key(*key, bounds)?;
+            clock += step;
+            cast.push_frame(clock.as_secs_f64(), &self.headless_frame(bounds));
+            self.headless_hold(&mut cast, &mut clock, config.key_delay, step, bounds)?;
+        }
+
+        self.headless_hold(&mut cast, &mut clock, config.settle, step, bounds)?;
+        // Identical frames are dropped, so without this the cast would end at the
+        // last visible change and a player would cut the final hold short.
+        cast.mark_time(clock.as_secs_f64());
+
+        cast.write(&config.path)?;
+        println!(
+            "wrote {} ({} frames, {:.1}s)",
+            config.path.display(),
+            cast.len(),
+            cast.duration_secs()
+        );
+
+        Ok(())
+    }
+
+    /// Render one off-screen snapshot, write it, and return without opening a terminal.
+    ///
+    /// Mirrors the root-init sequence of [`Self::run`] - set viewport, `init()`,
+    /// render, resolve focus - then settles for the requested number of frames so
+    /// work started in `init()` lands before the capture.
+    fn run_headless_snapshot(
+        mut self,
+        config: headless_snapshot::HeadlessSnapshotConfig,
+    ) -> Result<()> {
+        crate::debug::init_logging();
+
+        let bounds = config.viewport;
+        self.core.ctx.set_viewport(bounds);
+        self.core.init();
+
+        for frame in 0..config.frames {
+            self.headless_render(bounds);
+
+            // Focus stepping and the key script need a laid-out tree, so they run
+            // after the first render rather than before the loop.
+            if frame == 0 {
+                for _ in 0..config.focus_steps {
+                    self.framework_focus_step(focus::FocusDirection::Next);
+                }
+                for key in &config.keys {
+                    self.headless_dispatch_key(*key, bounds)?;
+                }
+            }
+
+            let mut dirty = DirtyTracker::default();
+            self.drain_messages_and_commands(&mut dirty)?;
+        }
+
+        // Settle once more so state changed by the key script or by drained
+        // messages is reflected in the tree that gets captured.
+        self.headless_render(bounds);
+
         let snapshot = crate::ui_snapshot::build_ui_snapshot(
             &self.core.tree,
             bounds,
-            interaction,
+            self.headless_interaction(),
             self.core.ctx.env().effect_phase.get(),
             self.resolved_screen_background(),
             &config.snapshot_options(),
@@ -1103,6 +1194,9 @@ impl<C: Component> AppRunner<C> {
     /// mode. `TUI_LIPAN_SNAPSHOT_VIEWPORT`, `_FRAMES`, `_FOCUS`, and
     /// `_DIAGNOSTIC` tune the capture; see `docs/components.md`.
     pub fn run(mut self) -> Result<()> {
+        if let Some(config) = headless_record::HeadlessRecordConfig::from_env() {
+            return self.run_headless_record(config?);
+        }
         if let Some(config) = headless_snapshot::HeadlessSnapshotConfig::from_env() {
             return self.run_headless_snapshot(config?);
         }

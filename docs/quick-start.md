@@ -400,6 +400,19 @@ TUI_LIPAN_SNAPSHOT=/tmp/modal.png TUI_LIPAN_SNAPSHOT_KEYS="tab,enter" cargo run
 See [`docs/components.md`](components.md) for the full table, the `Sketch` API,
 and visual regression baselines.
 
+### Terminal recordings
+
+`TUI_LIPAN_RECORD` plays a key script and writes an asciinema cast - a text
+recording that scrubs and plays in a browser, typically smaller than one PNG
+frame of the same app. It needs no feature flag:
+
+```sh
+TUI_LIPAN_RECORD=/tmp/demo.cast TUI_LIPAN_RECORD_KEYS="tab,enter" cargo run
+```
+
+Companion variables: `TUI_LIPAN_RECORD_VIEWPORT`, `_FPS`, `_KEY_DELAY_MS`,
+`_SETTLE_MS`. The `Recording` builder is the in-code equivalent.
+
 Use the `debug_log!` macro in your own code to emit messages through the same channel:
 
 ```rust

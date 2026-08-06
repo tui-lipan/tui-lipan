@@ -9,8 +9,11 @@ use std::sync::Arc;
 use crate::style::ansi::write_cell_style_sgr;
 use crate::style::{Color, Rect, Style};
 
+mod cast;
 #[cfg(feature = "ui-snapshot-png")]
 mod png;
+
+pub use cast::CastRecording;
 
 /// Captured terminal cell data converted to crate-owned style primitives.
 #[derive(Clone, Debug, PartialEq, Eq)]
