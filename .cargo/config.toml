@@ -1,6 +1,9 @@
 [alias]
 rsx-fmt = "run -p tui-lipan-macro --bin rsx-fmt --"
 ui-fmt = "run -p tui-lipan-macro --bin ui-fmt --"
+# Snapshot/PNG work: one fixed feature set, so capture runs and normal `cargo
+# check`/`cargo test` stop invalidating each other's build artifacts.
+snap = "run --features ui-snapshot-png,ui-snapshot-json --example"
 dev-check = "check --all-features"
 dev-build = "build --all-features"
 dev-test = "test --all-features"

@@ -6210,3 +6210,213 @@ fn terminal_only_forwards_ctrl_q_and_f12_without_framework_actions() {
         ]
     );
 }
+
+/// Component with two focusables, so focus stepping has somewhere to land.
+struct HeadlessSnapshotSmoke;
+
+impl Component for HeadlessSnapshotSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        VStack::new()
+            .child(Text::new("headless capture"))
+            .child(Input::new("").key("first"))
+            .child(Input::new("").key("second"))
+            .into()
+    }
+}
+
+fn headless_snapshot_config(
+    path: std::path::PathBuf,
+    focus_steps: usize,
+) -> super::headless_snapshot::HeadlessSnapshotConfig {
+    super::headless_snapshot::HeadlessSnapshotConfig {
+        format: crate::ui_snapshot::UiSnapshotFileFormat::from_path(&path),
+        path,
+        viewport: Rect {
+            x: 0,
+            y: 0,
+            w: 48,
+            h: 12,
+        },
+        frames: 1,
+        focus_steps,
+        keys: Vec::new(),
+        diagnostic: false,
+    }
+}
+
+#[test]
+fn headless_snapshot_writes_markdown_at_the_requested_viewport() {
+    let dir = std::env::temp_dir().join(format!("tui-lipan-headless-md-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("snapshot.md");
+
+    let runner = AppRunner::new(App::new(), HeadlessSnapshotSmoke, ());
+    runner
+        .run_headless_snapshot(headless_snapshot_config(path.clone(), 0))
+        .expect("headless snapshot succeeds");
+
+    let written = std::fs::read_to_string(&path).expect("snapshot file exists");
+    assert!(
+        written.contains("headless capture"),
+        "rendered text should reach the report: {written}"
+    );
+    assert!(
+        written.contains("48x12") || written.contains("w: 48"),
+        "report should record the requested viewport: {written}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn headless_snapshot_focus_steps_move_focus_off_the_first_widget() {
+    let dir = std::env::temp_dir().join(format!("tui-lipan-headless-focus-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+
+    let first = dir.join("first.md");
+    AppRunner::new(App::new(), HeadlessSnapshotSmoke, ())
+        .run_headless_snapshot(headless_snapshot_config(first.clone(), 0))
+        .expect("headless snapshot succeeds");
+
+    let stepped = dir.join("stepped.md");
+    AppRunner::new(App::new(), HeadlessSnapshotSmoke, ())
+        .run_headless_snapshot(headless_snapshot_config(stepped.clone(), 1))
+        .expect("headless snapshot succeeds");
+
+    let first = std::fs::read_to_string(&first).expect("first report");
+    let stepped = std::fs::read_to_string(&stepped).expect("stepped report");
+    assert_ne!(
+        first, stepped,
+        "advancing focus should change the captured focus state"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+#[test]
+fn headless_snapshot_writes_a_real_png() {
+    let dir = std::env::temp_dir().join(format!("tui-lipan-headless-png-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("snapshot.png");
+
+    AppRunner::new(App::new(), HeadlessSnapshotSmoke, ())
+        .run_headless_snapshot(headless_snapshot_config(path.clone(), 0))
+        .expect("headless snapshot succeeds");
+
+    let bytes = std::fs::read(&path).expect("png file exists");
+    assert!(
+        bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
+        "expected a PNG signature, got {} bytes",
+        bytes.len()
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Appends typed characters to state, so a key script's effect is observable.
+struct KeyScriptSmoke;
+
+impl Component for KeyScriptSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = String;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        String::new()
+    }
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> crate::KeyUpdate {
+        if let KeyCode::Char(ch) = key.code {
+            ctx.state.push(ch);
+            return crate::KeyUpdate::handled(Update::full());
+        }
+        crate::KeyUpdate::unhandled(Update::none())
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        Text::new(format!("typed:{}", ctx.state)).into()
+    }
+}
+
+fn key_script_config(
+    path: std::path::PathBuf,
+    keys: Vec<KeyEvent>,
+) -> super::headless_snapshot::HeadlessSnapshotConfig {
+    super::headless_snapshot::HeadlessSnapshotConfig {
+        format: crate::ui_snapshot::UiSnapshotFileFormat::from_path(&path),
+        path,
+        viewport: Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 6,
+        },
+        frames: 1,
+        focus_steps: 0,
+        keys,
+        diagnostic: false,
+    }
+}
+
+fn char_key(ch: char) -> KeyEvent {
+    KeyEvent {
+        code: KeyCode::Char(ch),
+        mods: KeyMods::default(),
+    }
+}
+
+#[test]
+fn headless_snapshot_key_script_reaches_the_component() {
+    let dir = std::env::temp_dir().join(format!("tui-lipan-keyscript-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("typed.md");
+
+    AppRunner::new(App::new(), KeyScriptSmoke, ())
+        .run_headless_snapshot(key_script_config(
+            path.clone(),
+            vec![char_key('h'), char_key('i')],
+        ))
+        .expect("headless snapshot succeeds");
+
+    let written = std::fs::read_to_string(&path).expect("snapshot file exists");
+    assert!(
+        written.contains("typed:hi"),
+        "every scripted key should reach the component in order: {written}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn headless_snapshot_key_script_settles_between_keys() {
+    // Regression guard: dispatching the whole script before re-rendering makes
+    // each key act on a stale tree, collapsing typed text to its last character.
+    let dir = std::env::temp_dir().join(format!("tui-lipan-keysettle-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("typed.md");
+
+    AppRunner::new(App::new(), KeyScriptSmoke, ())
+        .run_headless_snapshot(key_script_config(
+            path.clone(),
+            "abcd".chars().map(char_key).collect(),
+        ))
+        .expect("headless snapshot succeeds");
+
+    let written = std::fs::read_to_string(&path).expect("snapshot file exists");
+    assert!(
+        written.contains("typed:abcd"),
+        "expected the full typed string, not just the last key: {written}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}

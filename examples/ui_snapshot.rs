@@ -79,7 +79,7 @@ fn main() -> tui_lipan::Result<()> {
         // PNG uses real-font text when available, with bitmap-cell rendering as
         // the deterministic fallback.
         let png_path = dir.join("ui-snapshot.png");
-        fs::write(&png_path, snapshot.to_png_default())?;
+        fs::write(&png_path, snapshot.to_png_default()?)?;
         println!("Wrote {}", png_path.display());
     }
 

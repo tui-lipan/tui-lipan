@@ -65,6 +65,7 @@ mod drag;
 pub(crate) mod events;
 mod exit_view;
 mod focus_events;
+mod headless_snapshot;
 #[cfg(unix)]
 pub(crate) mod input_coordinator;
 mod key_dispatch;
@@ -978,8 +979,133 @@ impl<C: Component> AppRunner<C> {
         Ok(())
     }
 
+    /// Render one off-screen snapshot, write it, and return without opening a terminal.
+    ///
+    /// Mirrors the root-init sequence of [`Self::run`] - set viewport, `init()`,
+    /// render, resolve focus - then settles for the requested number of frames so
+    /// work started in `init()` lands before the capture.
+    fn run_headless_snapshot(
+        mut self,
+        config: headless_snapshot::HeadlessSnapshotConfig,
+    ) -> Result<()> {
+        crate::debug::init_logging();
+
+        let bounds = config.viewport;
+        self.core.ctx.set_viewport(bounds);
+        self.core.init();
+
+        for frame in 0..config.frames {
+            self.push_drag_layout_collapse_hint();
+            self.core.render_element(
+                bounds,
+                None,
+                self.focus.focused_key.as_ref(),
+                self.mouse.hovered,
+            );
+            self.pop_drag_layout_collapse_hint();
+            self.apply_pending_focus_request();
+            focus::restore_focus(
+                &self.core.tree,
+                &mut self.focus.focused,
+                &mut self.focus.focused_key,
+                &mut self.focus.focused_tag,
+                self.focus.policy,
+            );
+
+            // Focus stepping and the key script need a laid-out tree, so they run
+            // after the first render rather than before the loop.
+            if frame == 0 {
+                for _ in 0..config.focus_steps {
+                    self.framework_focus_step(focus::FocusDirection::Next);
+                }
+                // Each key gets its own settle pass, mirroring the event loop:
+                // dispatch, drain the messages it produced, re-render. Batching
+                // them instead makes every keystroke act on a stale tree, so a
+                // typed string collapses to its last character.
+                for key in &config.keys {
+                    self.dispatch_layered_key(*key);
+                    self.notify_focus_change();
+
+                    let mut key_dirty = DirtyTracker::default();
+                    self.drain_messages_and_commands(&mut key_dirty)?;
+
+                    self.push_drag_layout_collapse_hint();
+                    self.core.render_element(
+                        bounds,
+                        None,
+                        self.focus.focused_key.as_ref(),
+                        self.mouse.hovered,
+                    );
+                    self.pop_drag_layout_collapse_hint();
+                    self.apply_pending_focus_request();
+                    focus::restore_focus(
+                        &self.core.tree,
+                        &mut self.focus.focused,
+                        &mut self.focus.focused_key,
+                        &mut self.focus.focused_tag,
+                        self.focus.policy,
+                    );
+                }
+            }
+
+            let mut dirty = DirtyTracker::default();
+            self.drain_messages_and_commands(&mut dirty)?;
+        }
+
+        // Settle once more so state changed by the key script or by drained
+        // messages is reflected in the tree that gets captured.
+        self.push_drag_layout_collapse_hint();
+        self.core.render_element(
+            bounds,
+            None,
+            self.focus.focused_key.as_ref(),
+            self.mouse.hovered,
+        );
+        self.pop_drag_layout_collapse_hint();
+        self.apply_pending_focus_request();
+        focus::restore_focus(
+            &self.core.tree,
+            &mut self.focus.focused,
+            &mut self.focus.focused_key,
+            &mut self.focus.focused_tag,
+            self.focus.policy,
+        );
+
+        let interaction = crate::backend::ratatui_backend::capture_render::CaptureInteraction {
+            focused: self.focus.focused,
+            hovered: self.mouse.hovered,
+            mouse_pos: self.mouse.last_mouse,
+        };
+        let snapshot = crate::ui_snapshot::build_ui_snapshot(
+            &self.core.tree,
+            bounds,
+            interaction,
+            self.core.ctx.env().effect_phase.get(),
+            self.resolved_screen_background(),
+            &config.snapshot_options(),
+        );
+        crate::ui_snapshot::write_snapshot(&snapshot, &config.path, config.format)?;
+        println!("wrote {}", config.path.display());
+        if let Some(feature) = config.missing_format_feature() {
+            eprintln!(
+                "warning: wrote markdown to {} - rebuild with `--features {feature}` for that format",
+                config.path.display()
+            );
+        }
+
+        Ok(())
+    }
+
     /// Run the application event loop.
+    ///
+    /// With `TUI_LIPAN_SNAPSHOT` set, this instead renders one frame off-screen,
+    /// writes a snapshot artifact to that path, and returns without entering raw
+    /// mode. `TUI_LIPAN_SNAPSHOT_VIEWPORT`, `_FRAMES`, `_FOCUS`, and
+    /// `_DIAGNOSTIC` tune the capture; see `docs/components.md`.
     pub fn run(mut self) -> Result<()> {
+        if let Some(config) = headless_snapshot::HeadlessSnapshotConfig::from_env() {
+            return self.run_headless_snapshot(config?);
+        }
         crate::debug::init_logging();
         #[cfg(feature = "devtools")]
         {

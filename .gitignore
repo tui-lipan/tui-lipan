@@ -11,6 +11,9 @@ docs/.vitepress/cache/
 docs/.vitepress/dist/
 docs/node_modules/
 
+# Visual baseline diffs are generated on failure, never committed
+*.diff.png
+
 # IDEs
 .vscode/
 .idea/

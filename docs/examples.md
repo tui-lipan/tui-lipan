@@ -30,6 +30,7 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 | `form_validation` | Login-style validation: `Validator`, `Input::error(...)`, Enter-to-submit |
 | `mockup` | Dashboard-style layout prototyping with `mockup!` (no `Component` code) |
 | `ui_snapshot` | Agent-oriented UI snapshot export via `TestBackend::capture_ui_snapshot()` |
+| `sketches` | Kept design sketches driven by `Sketch`; run all with `cargo snap sketches`, or one with `cargo snap sketches -- login` |
 | `network_client_sketch` | Design-first `Mockup` sketch for a TUI Postman/Insomnia-style HTTP + GraphQL client; writes markdown plus font-backed PNG variants with `ui-snapshot-png` |
 | `lazygit` | Lazygit-style multi-panel layout with focus hints and number-key switching |
 | `showcase` | Broad demo: tabs, accordion, fuzzy palette, context menu, tree, toast, tooltip |

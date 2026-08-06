@@ -244,6 +244,28 @@ app and look at it*. tui-lipan removes it. Any component can be rendered
 headlessly - no terminal, no PTY - and exported in formats that an AI coding
 agent, a snapshot test, or a CI job can actually read:
 
+The cheapest capture needs **no code at all**. Point an environment variable at
+an output path and run any existing app or example - the runner renders
+off-screen, writes the artifact, and exits without opening a terminal:
+
+```sh
+TUI_LIPAN_SNAPSHOT=/tmp/app.png cargo snap todo
+```
+
+For a screen that does not exist yet, `Sketch` renders a plain view function at
+several viewports in one call:
+
+```rust
+use tui_lipan::{Result, Sketch};
+
+Sketch::view("login", login_screen)
+    .viewport(80, 24)
+    .fit(20, 8)          // content minimum + margin, exposes flex surprises
+    .write()?;
+```
+
+And the full headless runtime is there when a test needs to assert on it:
+
 ```rust
 use tui_lipan::prelude::*;
 use tui_lipan::TestBackend;
@@ -253,8 +275,8 @@ backend.set_viewport(Rect { x: 0, y: 0, w: 80, h: 24 });
 backend.render();
 
 let snapshot = backend.capture_ui_snapshot();
-std::fs::write("ui.md", snapshot.to_markdown())?;       // always available
-std::fs::write("ui.png", snapshot.to_png_default())?;   // feature "ui-snapshot-png"
+std::fs::write("ui.md", snapshot.to_markdown())?;            // always available
+std::fs::write("ui.png", snapshot.try_to_png_default()?)?;   // feature "ui-snapshot-png"
 ```
 
 - **Markdown snapshots** (always available) - layout tree, widget geometry, text,
@@ -268,7 +290,9 @@ std::fs::write("ui.png", snapshot.to_png_default())?;   // feature "ui-snapshot-
   log console for live sessions.
 
 This loop - *write view code → render headlessly → look at the PNG → refine* -
-is how the apps below were built. See [`examples/ui_snapshot.rs`](examples/ui_snapshot.rs).
+is how the apps below were built. See [`examples/sketches/`](examples/sketches/)
+for kept design sketches and [`examples/ui_snapshot.rs`](examples/ui_snapshot.rs)
+for the full snapshot API.
 
 ### Agent skills included
 
@@ -278,8 +302,7 @@ opencode, Cursor, and compatible) in [`.agents/skills/`](.agents/skills/):
 | Skill | For |
 |-------|-----|
 | `tui-lipan-app-builder` | Structuring full stateful apps: components, messages, props, focus, async |
-| `tui-lipan-ui-sketch` | Design-first screen sketching with `mockup!` + PNG inspection |
-| `tui-lipan-visual-design` | Snapshot-driven visual review and polish of existing UIs |
+| `tui-lipan-visual` | Designing, capturing, and reviewing how a UI looks: kept sketches + PNG inspection |
 | `tui-lipan-layout-debug` | Diagnosing measurement, rect, and caching issues |
 | `tui-lipan-widget` | Framework maintainers: authoring primitive widgets |
 

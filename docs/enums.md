@@ -71,13 +71,13 @@ Typed widget tag on each `UiWidgetDesc` entry (`Frame`, `List`, `Input`, …). I
 
 ### `UiSnapshot`
 
-Combined `CapturedFrame` + `widgets` + `focus_key` / `hover_key`. Methods: `to_markdown()`; with `ui-snapshot-json` feature: `to_json()`, `to_json_pretty()`; with `ui-snapshot-png` feature: `to_png(&PngOptions)`, `to_png_default()`, `try_to_png(&PngOptions)`, `try_to_png_default()`.
+Combined `CapturedFrame` + `widgets` + `focus_key` / `hover_key`. Methods: `to_markdown()`; with `ui-snapshot-json` feature: `to_json()`, `to_json_pretty()`; with `ui-snapshot-png` feature: `to_png(&PngOptions)`, `to_png_default()` (both return `Result<Vec<u8>>`).
 
 Headless: `TestBackend::capture_ui_snapshot()` after `render()`. Live: `Context::request_ui_snapshot_to(path)` and `request_ui_snapshot_to_slot(&UiSnapshotSlot)` — delivered **after the next paint**.
 
 ### `PngOptions` (`ui-snapshot-png`)
 
-Options for `CapturedFrame::to_png(&PngOptions)` / `try_to_png(&PngOptions)` and `UiSnapshot::to_png(&PngOptions)` / `try_to_png(&PngOptions)`.
+Options for `CapturedFrame::to_png(&PngOptions)` and `UiSnapshot::to_png(&PngOptions)`.
 
 `PngOptions` and `PngTextRenderer` are exported from the crate root, not the prelude:
 

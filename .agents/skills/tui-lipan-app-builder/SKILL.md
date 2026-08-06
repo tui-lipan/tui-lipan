@@ -5,9 +5,8 @@ description: >-
   repository. Use when a task needs Component/State/Message structure, props,
   callback boundaries, focus routing, async commands, reusable shells,
   app-specific styled widget helpers, app-author docs/examples, or integration
-  with project patterns. Use `tui-lipan-ui-sketch` first for design-only new
-  screens whose look is not settled; use `tui-lipan-visual-design` for rendered
-  snapshot review or polish of existing UIs.
+  with project patterns. Use `tui-lipan-visual` for anything about how a screen
+  looks: sketching a new one, or reviewing and polishing a rendered UI.
 ---
 
 # TUI-lipan App Building
@@ -19,8 +18,7 @@ If this skill conflicts with the current workspace docs or source, follow the wo
 ## Scope and handoffs
 
 - Use this skill for the application layer: `Component`, `State`, `Message`, props, callbacks, focus routing, commands, composition, and project integration.
-- Hand off to `tui-lipan-ui-sketch` when the user wants a brand-new screen and the visual composition is still undecided. Bring the stable view helper back here for promotion.
-- Hand off to `tui-lipan-visual-design` when a screen already exists and the task is to review, compare, or polish its rendered appearance.
+- Hand off to `tui-lipan-visual` for anything visual: sketching a brand-new screen whose composition is undecided, or reviewing, comparing, and polishing a rendered UI. Bring the stable view helper back here for promotion.
 - If the rendered result points to wrong rects, measurement, or allocation, treat it as a sizing-usage bug first: re-check `Length` choices (`Auto` vs `Flex` vs fixed), container-vs-leaf defaults, padding, and gaps before suspecting the framework. Confirm a widget's documented `Length` defaults before overriding them.
 
 ## Start With Project Truth
@@ -57,7 +55,7 @@ Read bundled references only when needed:
 
 1. Inspect the nearest existing app entry point, screen module, or example before introducing new structure.
 2. Decide whether the task is a design sketch, a reusable app shell, or a full stateful component.
-3. If the look is unsettled, sketch first with `tui-lipan-ui-sketch`; do not bury layout experiments inside state/message plumbing.
+3. If the look is unsettled, sketch first with `tui-lipan-visual`; do not bury layout experiments inside state/message plumbing.
 4. Convert the stable sketch or view helper to a `Component` only when state, messages, lifecycle, keyboard handling, or async work are needed.
 5. Write view code in `ui!` by default; use builder helpers where parameterized reuse is clearer.
 6. Extract repeated chrome and configured widgets into named helper functions or composite widgets that return `Element`.
@@ -82,11 +80,12 @@ as core development infrastructure, not optional polish.
 
 Do not judge a visible UI change from source alone when tui-lipan can render the result headlessly.
 
-- For a brand-new screen whose visual shape is still moving, switch to `tui-lipan-ui-sketch` and iterate on a `Mockup` view plus PNGs before adding state plumbing.
-- For an existing or newly implemented screen, switch to `tui-lipan-visual-design` and inspect snapshot/PNG artifacts at realistic, narrow, and roomy viewports.
+- For a brand-new screen whose visual shape is still moving, switch to `tui-lipan-visual` and iterate on a kept `Sketch` plus PNGs before adding state plumbing.
+- For an existing or newly implemented screen, capture it with no code at all: `TUI_LIPAN_SNAPSHOT=/tmp/app.png cargo snap <example>`, then inspect artifacts at realistic, narrow, and roomy viewports.
 - When layout vanishes or a bar/panel is suspiciously sized, capture with `UiSnapshotOptions::diagnostic()` so zero-area nodes and chrome appear in markdown snapshots.
 - Bring stable view helpers and app-specific styled helpers back here for `Component`, props, callback, focus, command, and integration work.
-- Keep this skill focused on app structure. Let the sketch/review skills own the detailed `TestBackend`, `UiSnapshot`, and PNG workflow.
+- Never write a snapshot harness you intend to delete. Capture a running app through `TUI_LIPAN_SNAPSHOT`, or keep the sketch file.
+- Keep this skill focused on app structure. Let `tui-lipan-visual` own the detailed `Sketch`, `TestBackend`, `UiSnapshot`, and PNG workflow.
 
 ## Prefer These App-Building Rules
 

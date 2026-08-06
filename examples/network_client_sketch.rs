@@ -148,19 +148,21 @@ fn render_scenario(out_dir: &Path, scenario: SketchScenario) -> Result<()> {
         let png_options = PngOptions::default();
 
         let tight_path = out_dir.join(format!("{}-tight.png", scenario.slug()));
-        let tight = backend.capture_frame_with_margin(0, 0).to_png(&png_options);
+        let tight = backend
+            .capture_frame_with_margin(0, 0)
+            .to_png(&png_options)?;
         fs::write(&tight_path, tight)?;
         println!("Wrote {}", tight_path.display());
 
         let roomy_path = out_dir.join(format!("{}-roomy.png", scenario.slug()));
         let roomy = backend
             .capture_frame_with_margin(20, 8)
-            .to_png(&png_options);
+            .to_png(&png_options)?;
         fs::write(&roomy_path, roomy)?;
         println!("Wrote {}", roomy_path.display());
 
         let real_path = out_dir.join(format!("{}-118x34.png", scenario.slug()));
-        let real = backend.capture_frame().to_png(&png_options);
+        let real = backend.capture_frame().to_png(&png_options)?;
         fs::write(&real_path, real)?;
         println!("Wrote {}", real_path.display());
     }

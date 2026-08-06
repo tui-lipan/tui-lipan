@@ -93,26 +93,14 @@ impl UiSnapshot {
 
     /// Returns PNG bytes when the `ui-snapshot-png` feature is enabled.
     #[cfg(feature = "ui-snapshot-png")]
-    pub fn to_png(&self, options: &PngOptions) -> Vec<u8> {
+    pub fn to_png(&self, options: &PngOptions) -> crate::Result<Vec<u8>> {
         self.frame.to_png(options)
-    }
-
-    /// Returns PNG bytes or an encoder error when the `ui-snapshot-png` feature is enabled.
-    #[cfg(feature = "ui-snapshot-png")]
-    pub fn try_to_png(&self, options: &PngOptions) -> crate::Result<Vec<u8>> {
-        self.frame.try_to_png(options)
     }
 
     /// Returns PNG bytes with default rendering options when the feature is enabled.
     #[cfg(feature = "ui-snapshot-png")]
-    pub fn to_png_default(&self) -> Vec<u8> {
+    pub fn to_png_default(&self) -> crate::Result<Vec<u8>> {
         self.to_png(&PngOptions::default())
-    }
-
-    /// Returns PNG bytes with default rendering options, surfacing encoder errors.
-    #[cfg(feature = "ui-snapshot-png")]
-    pub fn try_to_png_default(&self) -> crate::Result<Vec<u8>> {
-        self.try_to_png(&PngOptions::default())
     }
 }
 

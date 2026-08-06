@@ -615,8 +615,7 @@ assert_eq!(frame.height, 10);
 | `to_fixed_grid()` | `String` | Full-width rows without trailing trim (layout-faithful) |
 | `to_ansi()` | `String` | ANSI styled frame (full terminal repaint prelude) |
 | `to_ansi_diff(prev)` | `String` | Incremental ANSI update from a previous frame |
-| `to_png(&PngOptions)` | `Vec<u8>` | PNG bytes with font-backed or bitmap rendering (`ui-snapshot-png`) |
-| `try_to_png(&PngOptions)` | `Result<Vec<u8>>` | PNG bytes with encoder errors surfaced (`ui-snapshot-png`) |
+| `to_png(&PngOptions)` | `Result<Vec<u8>>` | PNG bytes with font-backed or bitmap rendering (`ui-snapshot-png`) |
 
 `CapturedCell` fields: `symbol`, `fg`, `bg`, `underline_color`, `modifiers` (`CellModifiers` with bool fields `bold`, `dim`, `italic`, `underline`, `reverse`, `strikethrough`).
 
@@ -626,9 +625,10 @@ assert_eq!(frame.height, 10);
 `CapturedFrame` plus semantic `UiWidgetDesc` entries (widget kind, keys, rects,
 focus/hover, selection, values). Use `to_markdown()` for agent-readable reports.
 Enable the `ui-snapshot-json` feature for `to_json()` / `to_json_pretty()`.
-Enable `ui-snapshot-png` for `to_png()` / `to_png_default()` or `try_to_png()` /
-`try_to_png_default()` when layout, color, focus chrome, and visual hierarchy
-matter; PNG complements markdown/JSON rather than replacing them.
+Enable `ui-snapshot-png` for `to_png()` / `to_png_default()` when layout, color,
+focus chrome, and visual hierarchy matter; PNG complements markdown/JSON rather
+than replacing them. Both return `Result`, so an encoder failure surfaces at the
+call rather than as a zero-byte file.
 
 The PNG renderer uses antialiased real-font text by default when a system font is
 available, with font8x8 bitmap rendering as the fallback. `PngOptions` is a
@@ -645,7 +645,7 @@ let snapshot = backend.capture_ui_snapshot();
 println!("{}", snapshot.to_markdown());
 
 #[cfg(feature = "ui-snapshot-png")]
-std::fs::write("/tmp/ui-snapshot.png", snapshot.to_png_default())?;
+std::fs::write("/tmp/ui-snapshot.png", snapshot.to_png_default()?)?;
 ```
 
 For design review captures, prefer fit-to-content margin helpers so flex space is visible without hand-tuning a viewport. The recommended default margin is `(20, 8)`:
@@ -679,6 +679,124 @@ if let Some(snap) = ctx.state.slot.take() {
 ```
 
 See `examples/ui_snapshot.rs`.
+
+### Headless snapshots from the environment
+
+Set `TUI_LIPAN_SNAPSHOT` and `AppRunner::run()` renders one frame off-screen,
+writes the artifact, and returns - without entering raw mode or opening a
+terminal. This captures an existing app or example without editing its source,
+and works where there is no tty (CI runners, agent sessions).
+
+```sh
+TUI_LIPAN_SNAPSHOT=/tmp/app.png cargo run --example todo --features ui-snapshot-png
+```
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `TUI_LIPAN_SNAPSHOT` | unset | Output path; setting it enables headless mode. Format routed by extension |
+| `TUI_LIPAN_SNAPSHOT_VIEWPORT` | `100x30` | Layout viewport, `WIDTHxHEIGHT` |
+| `TUI_LIPAN_SNAPSHOT_FRAMES` | `1` | Render/message passes before capture; raise when `init()` starts work |
+| `TUI_LIPAN_SNAPSHOT_FOCUS` | `0` | Focus advances before capture, for visible focus chrome |
+| `TUI_LIPAN_SNAPSHOT_KEYS` | unset | Comma-separated key script dispatched before capture, e.g. `tab,tab,enter` |
+| `TUI_LIPAN_SNAPSHOT_DIAGNOSTIC` | unset | `1` captures with `UiSnapshotOptions::diagnostic()` |
+
+`TUI_LIPAN_SNAPSHOT_KEYS` uses ordinary keybinding syntax (`ctrl+n`, `esc`,
+`f12`), the same spelling as keymaps. Each key is dispatched, its messages
+drained, and the tree re-rendered before the next one - the same sequence as the
+event loop - so typed text accumulates instead of collapsing to its last
+character. This is how states behind a keystroke are captured without a harness:
+
+```sh
+TUI_LIPAN_SNAPSHOT=/tmp/modal.png TUI_LIPAN_SNAPSHOT_KEYS="tab,enter" cargo snap myapp
+```
+
+An unparseable script fails the run rather than being skipped, because a dropped
+keystroke silently captures the wrong state.
+
+Format follows the path extension, matching `request_ui_snapshot_to`: `.json`
+with `ui-snapshot-json`, `.png` with `ui-snapshot-png`, markdown otherwise.
+
+### Design sketches
+
+`Sketch` renders a view at one or more viewports and writes every artifact in a
+single call, so a design capture is small enough to keep in the repository
+instead of being written and deleted:
+
+```rust
+use tui_lipan::{Result, Sketch};
+
+Sketch::view("login", login_screen)   // any Fn() -> Element
+    .viewport(80, 24)
+    .fit(20, 8)                       // content minimum + margin
+    .focus_next(1)                    // visible focus chrome
+    .write()?;
+```
+
+| Method | Effect |
+|--------|--------|
+| `Sketch::view(name, fn)` | Sketch a plain `Fn() -> Element` (mounted through `Mockup`) |
+| `Sketch::component(name, c)` | Sketch a `Component` with default properties |
+| `viewport(w, h)` | Capture at an exact size; repeat for breakpoints |
+| `fit(margin_w, margin_h)` | Capture at content minimum size plus margin |
+| `focus_next(n)` | Advance focus `n` times before capturing |
+| `options(opts)` | Describe options, e.g. `UiSnapshotOptions::diagnostic()` |
+| `keys(script)` | Dispatch a key script before capturing, e.g. `"tab,enter"` |
+| `markdown(b)` / `png(b)` / `json(b)` | Toggle formats; markdown and PNG default on |
+| `dir(path)` | Output directory override |
+| `baseline(dir)` | Compare each capture against a stored baseline image |
+| `tolerance(ratio)` | Max fraction of differing pixels still counted as a match (default `0.0`) |
+| `quiet(b)` | Suppress printing written paths |
+| `write()` | Run every pass; returns `Result<Vec<PathBuf>>` |
+| `check()` | Run and return `Vec<BaselineComparison>` |
+| `assert_baseline()` | Run and fail if any capture regressed |
+
+With no explicit viewport, `Sketch` captures `80x24` plus a fit-to-content pass -
+the pairing that exposes flex-distribution bugs a single viewport hides. Output
+defaults to `target/ui-sketches/` (override with `TUI_LIPAN_SKETCH_DIR`), so
+sketches need no `.gitignore` entry.
+
+Keep sketches in `examples/sketches/`; see that directory's `main.rs` for how new
+ones register without a `Cargo.toml` change.
+
+### Visual regression baselines
+
+A kept sketch only protects against regressions if something notices when the
+picture changes. `baseline(dir)` stores one PNG per capture, compares the next
+render against it pixel by pixel, and writes a highlighted `*.diff.png` beside
+any baseline that changed - unchanged pixels dimmed for context, changed pixels
+in magenta.
+
+```rust
+#[test]
+fn login_screen_has_not_drifted() -> Result<()> {
+    Sketch::view("login", login_screen)
+        .viewport(80, 24)
+        .baseline("tests/ui-baselines")
+        .assert_baseline()
+}
+```
+
+The first run records baselines and passes. Later runs fail with every changed
+capture listed at once, each naming its diff image. Accept new output with:
+
+```sh
+TUI_LIPAN_UPDATE_BASELINES=1 cargo test
+```
+
+**Baseline captures force `PngTextRenderer::Bitmap`.** The default `Auto`
+renderer picks whichever system font it discovers, so the same UI produces
+different pixels on CI than on a laptop and comparison becomes meaningless. The
+built-in bitmap font ships with the crate, so it renders identically everywhere.
+Font-rendered artifacts are still written for human review - they are simply not
+what gets compared.
+
+`BaselineOutcome` distinguishes `Created` (first run, not a failure), `Match`,
+`Updated`, `Changed` (with pixel counts, ratio, and diff path), and `SizeChanged`
+(dimensions differ, so pixels cannot be compared). `is_regression()` is the
+single check for whether an outcome should fail a build.
+
+Prefer removing nondeterminism over raising `tolerance`; a tolerance that hides
+a real change is worse than no baseline.
 
 ---
 

@@ -1,19 +1,28 @@
 //! Agent-oriented UI snapshots combining rendered frames and semantic widget metadata.
 
+#[cfg(feature = "ui-snapshot-png")]
+mod baseline;
 mod describe;
 mod format;
+mod keys;
 mod kind;
+
 mod options;
 mod request;
+mod sketch;
 mod slot;
 
 use describe::{describe_widgets, key_for_node};
 
+#[cfg(feature = "ui-snapshot-png")]
+pub use baseline::{BaselineComparison, BaselineOutcome};
 pub use describe::UiWidgetDesc;
 pub use format::UiSnapshot;
+pub(crate) use keys::parse_key_script;
 pub use kind::UiWidgetKind;
 pub use options::{UiSnapshotFileFormat, UiSnapshotFormatOptions, UiSnapshotOptions};
 pub(crate) use request::UiSnapshotRequest;
+pub use sketch::Sketch;
 pub use slot::UiSnapshotSlot;
 
 use crate::backend::ratatui_backend::capture_render::{
@@ -62,7 +71,7 @@ pub(crate) fn write_snapshot(
         #[cfg(feature = "ui-snapshot-json")]
         UiSnapshotFileFormat::Json => snapshot.to_json_pretty().into_bytes(),
         #[cfg(feature = "ui-snapshot-png")]
-        UiSnapshotFileFormat::Png => snapshot.try_to_png_default()?,
+        UiSnapshotFileFormat::Png => snapshot.to_png_default()?,
     };
     std::fs::write(path, content).map_err(crate::Error::from)
 }
