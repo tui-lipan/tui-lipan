@@ -108,9 +108,12 @@ pub(crate) struct RenderContext<'a> {
     /// Filled on the first paint after the drag source is fully rendered; used when the
     /// source subtree is collapsed while the float preview still shows the card.
     pub dnd_snapshot_cells: &'a RefCell<Option<(u16, u16, Vec<ratatui::buffer::Cell>)>>,
-    /// Max dimensions for the floating `SourceSnapshot` preview (`None` = framework defaults).
+    /// Optional caps for the floating `SourceSnapshot` preview (`None` = full source size).
     pub drag_preview_max_width: Option<u16>,
     pub drag_preview_max_height: Option<u16>,
+    /// Grab point inside the source snapshot (`(0, 0)` = top-left). Anchors the float so the
+    /// grabbed cell stays under the cursor; the preview may leave the viewport.
+    pub drag_preview_grab_offset: Option<(u16, u16)>,
     /// When `Some`, a `DropTarget` with `DropSlot::SourcePreview` is hovered: render the snapshot
     /// at this rect instead of near the cursor, and suppress the cursor float.
     pub drop_slot_source_preview_rect: Option<ratatui::layout::Rect>,

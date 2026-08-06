@@ -1034,6 +1034,30 @@ impl<C: Component> AppRunner<C> {
             (r.x >= 0 && r.y >= 0)
                 .then(|| ratatui::layout::Rect::new(r.x as u16, r.y as u16, r.w, r.h))
         });
+        let drag_preview_grab_offset = match &self.drag.active {
+            ActiveDrag::DragDrop(d) if d.started => d.preview_snapshot_anchor.and_then(|r| {
+                if r.x < 0 || r.y < 0 || r.w == 0 || r.h == 0 {
+                    return None;
+                }
+                let gx = (i32::from(d.start_x) - i32::from(r.x))
+                    .clamp(0, i32::from(r.w.saturating_sub(1))) as u16;
+                let gy = (i32::from(d.start_y) - i32::from(r.y))
+                    .clamp(0, i32::from(r.h.saturating_sub(1))) as u16;
+                Some((gx, gy))
+            }),
+            ActiveDrag::DraggableTabBar(d) if d.started => {
+                d.preview_snapshot_anchor.and_then(|r| {
+                    if r.x < 0 || r.y < 0 || r.w == 0 || r.h == 0 {
+                        return None;
+                    }
+                    let gx = (i32::from(d.start_x) - i32::from(r.x))
+                        .clamp(0, i32::from(r.w.saturating_sub(1)))
+                        as u16;
+                    Some((gx, 0))
+                })
+            }
+            _ => None,
+        };
         let drag_preview_label = drag_preview_label_owned.as_deref();
         if scroll_plan.is_some() && self.focused_node_requests_cursor() {
             cursor_position.set(self.incremental_cursor_position());
@@ -1063,6 +1087,7 @@ impl<C: Component> AppRunner<C> {
             dnd_snapshot_cells: &self.dnd_snapshot_cells,
             drag_preview_max_width,
             drag_preview_max_height,
+            drag_preview_grab_offset,
             drop_slot_source_preview_rect,
             paint_glyph_caches: Some(self.paint_glyph_caches.clone()),
             copy_feedback: Some(&self.copy_feedback),

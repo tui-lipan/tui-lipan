@@ -139,6 +139,13 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- Floating `DragPreview::SourceSnapshot` previews are no longer forced to stay fully inside the
+  terminal. They stay anchored to the grab point under the cursor and cells that leave the
+  viewport are clipped, so large cards can slide partially off-screen (as in
+  `examples/drag_drop_kanban.rs`).
+- `DragSource` `preview_max_width` / `preview_max_height` of `None` no longer apply the old
+  60×20 defaults (breaking). Unset means paint the full source snapshot; pass
+  `Some(DEFAULT_PREVIEW_MAX_WIDTH)` / `Some(DEFAULT_PREVIEW_MAX_HEIGHT)` to keep the previous caps.
 - `CapturedFrame::to_png` and `UiSnapshot::to_png` / `to_png_default` now return
   `Result<Vec<u8>>`, and `try_to_png` / `try_to_png_default` are removed (breaking). The infallible
   forms returned an **empty buffer** when encoding failed, which wrote a zero-byte file that only

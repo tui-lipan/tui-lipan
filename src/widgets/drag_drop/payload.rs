@@ -114,9 +114,15 @@ pub enum DragPreview {
     None,
 }
 
-/// Default maximum width (cells) for a [`DragPreview::SourceSnapshot`] float preview.
+/// Suggested maximum width (cells) when capping a [`DragPreview::SourceSnapshot`] float preview.
+///
+/// Not applied automatically — pass `Some(DEFAULT_PREVIEW_MAX_WIDTH)` to
+/// [`crate::widgets::DragSource::preview_max_width`] if you want this limit.
 pub const DEFAULT_PREVIEW_MAX_WIDTH: u16 = 60;
-/// Default maximum height (cells) for a [`DragPreview::SourceSnapshot`] float preview.
+/// Suggested maximum height (cells) when capping a [`DragPreview::SourceSnapshot`] float preview.
+///
+/// Not applied automatically — pass `Some(DEFAULT_PREVIEW_MAX_HEIGHT)` to
+/// [`crate::widgets::DragSource::preview_max_height`] if you want this limit.
 pub const DEFAULT_PREVIEW_MAX_HEIGHT: u16 = 20;
 
 /// Which axis [`DragSlot`] main-axis sizes apply to when measuring a drag source outside a stack

@@ -65,6 +65,7 @@ pub(crate) fn render(
         dnd_snapshot_cells: &RefCell::new(None),
         drag_preview_max_width: None,
         drag_preview_max_height: None,
+        drag_preview_grab_offset: None,
         drop_slot_source_preview_rect: None,
         paint_glyph_caches: None,
         copy_feedback: None,

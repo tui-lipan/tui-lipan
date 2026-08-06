@@ -79,6 +79,7 @@ pub(crate) fn render_to_captured_frame_with_interaction(
         dnd_snapshot_cells: &dnd_snapshot_cells,
         drag_preview_max_width: None,
         drag_preview_max_height: None,
+        drag_preview_grab_offset: None,
         drop_slot_source_preview_rect: None,
         paint_glyph_caches: None,
         copy_feedback: None,

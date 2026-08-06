@@ -171,19 +171,19 @@ impl DragSource {
         self
     }
 
-    /// `None` uses [`crate::DEFAULT_PREVIEW_MAX_WIDTH`].
+    /// Cap floating `SourceSnapshot` width. `None` paints the full source width.
     pub fn preview_max_width(mut self, max_width: Option<u16>) -> Self {
         self.preview_max_width = max_width;
         self
     }
 
-    /// `None` uses [`crate::DEFAULT_PREVIEW_MAX_HEIGHT`].
+    /// Cap floating `SourceSnapshot` height. `None` paints the full source height.
     pub fn preview_max_height(mut self, max_height: Option<u16>) -> Self {
         self.preview_max_height = max_height;
         self
     }
 
-    /// Set both floating preview max dimensions (`None` per axis uses the framework default).
+    /// Cap both floating preview axes. `None` per axis means no cap on that axis.
     pub fn preview_max_size(mut self, max_width: Option<u16>, max_height: Option<u16>) -> Self {
         self.preview_max_width = max_width;
         self.preview_max_height = max_height;
