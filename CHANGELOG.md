@@ -139,6 +139,10 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- The `todo` / `todo_ui` examples drop the outer "Todo App" bordered frame, size the New Task input
+  row with `Length::Auto`, and nest Tips in a flex `VStack` so tip text yields space instead of
+  collapsing the bordered input in short terminals.
+
 - `CapturedFrame::to_png` and `UiSnapshot::to_png` / `to_png_default` now return
   `Result<Vec<u8>>`, and `try_to_png` / `try_to_png_default` are removed (breaking). The infallible
   forms returned an **empty buffer** when encoding failed, which wrote a zero-byte file that only
