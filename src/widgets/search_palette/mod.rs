@@ -1022,6 +1022,12 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// key is consumed and no character is inserted. Use this to remap keys
     /// like spacebar to a different action (e.g. toggle) in the palette.
     ///
+    /// The palette's own navigation keys (arrows, `PageUp`/`PageDown`, `Home`/`End`, and `Enter`
+    /// to activate) are claimed first and never reach this handler — *while there is a matching
+    /// row to act on*. With no matches the palette has nothing to navigate to or open, so those
+    /// keys fall through here instead of being swallowed: that is what lets `Enter` mean "create
+    /// what was typed" or "start something new" in an empty list.
+    ///
     /// Only effective in uncontrolled mode (when [`query`](Self::query) is not set).
     pub fn input_key_interceptor(mut self, handler: KeyHandler) -> Self {
         self.props.input_key_interceptor = Some(handler);

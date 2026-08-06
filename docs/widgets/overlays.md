@@ -433,6 +433,13 @@ You can also mark rows active with `.active(true)` on `SearchItem` or `SearchEnt
 | `input_focus_prefix_style` | `Style` | Prefix style when focused |
 | `input_suffix_style` | `Style` | Suffix style |
 | `input_focus_suffix_style` | `Style` | Suffix style when focused |
+| `input_key_interceptor` | `KeyHandler` | Runs before text insertion; return `true` to consume the key (uncontrolled mode only) |
+
+The palette claims its own navigation keys first - arrows, `PageUp`/`PageDown`, `Home`/`End`, and
+`Enter` to activate - so `input_key_interceptor` never sees them *while a matching row exists*.
+With no matches there is nothing to navigate to or open, and those keys fall through to the
+interceptor instead of being swallowed: that is what lets `Enter` mean "create what was typed" or
+"start something new" in an empty list.
 
 ### List forwarding
 
