@@ -6552,3 +6552,66 @@ fn control_quit_asks_the_app_to_exit() {
     assert_eq!(control_exchange(&mut runner, "quit"), Ok(String::new()));
     assert!(runner.core.ctx.should_quit());
 }
+
+#[test]
+fn control_highlight_by_key_reports_the_widget_rect() {
+    let mut runner = control_runner();
+    let rect = control_exchange(&mut runner, "highlight go").expect("highlight");
+    assert!(rect.contains('x'), "should report a rect, got {rect}");
+    assert!(runner.highlight().is_some());
+}
+
+#[test]
+fn control_highlight_by_cell_picks_the_smallest_widget() {
+    let mut runner = control_runner();
+    // The button is a small leaf inside a full-width stack; an inspector should
+    // land on the leaf, not the container that happens to contain the cell.
+    let button = runner
+        .rect_for_key(&crate::core::element::Key::from("go".to_owned()))
+        .expect("button is rendered");
+    let cell = format!("highlight {},{}", button.x, button.y);
+
+    control_exchange(&mut runner, &cell).expect("highlight by cell");
+    assert_eq!(
+        runner.highlight(),
+        Some(button),
+        "cell targeting should resolve to the smallest covering widget"
+    );
+}
+
+#[test]
+fn control_highlight_clear_removes_the_outline() {
+    let mut runner = control_runner();
+    control_exchange(&mut runner, "highlight go").expect("highlight");
+    assert!(runner.highlight().is_some());
+
+    control_exchange(&mut runner, "highlight clear").expect("clear");
+    assert!(runner.highlight().is_none());
+}
+
+#[test]
+fn control_highlight_on_a_missing_key_reports_an_error() {
+    let mut runner = control_runner();
+    let err = control_exchange(&mut runner, "highlight nope").expect_err("must fail");
+    assert!(err.contains("nope"), "{err}");
+    assert!(
+        runner.highlight().is_none(),
+        "a failed highlight sets nothing"
+    );
+}
+
+#[test]
+fn control_highlight_marks_cells_in_the_captured_frame() {
+    // The outline has to reach captures, not just the live paint, or an agent
+    // cannot see what it highlighted.
+    let mut runner = control_runner();
+    let plain = runner.headless_frame(runner.last_bounds);
+
+    control_exchange(&mut runner, "highlight go").expect("highlight");
+    let marked = runner.headless_frame(runner.last_bounds);
+
+    assert_ne!(
+        plain.cells, marked.cells,
+        "highlighting should change the rendered frame"
+    );
+}

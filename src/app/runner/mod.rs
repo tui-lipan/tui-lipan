@@ -380,6 +380,8 @@ pub struct AppRunner<C: Component> {
     pub(crate) overlay_bg_snapshot: std::cell::RefCell<Vec<ratatui::buffer::Cell>>,
     /// Live-control requests waiting to be answered on the UI thread.
     control_queue: control::ControlQueue,
+    /// Widget outlined by the inspector highlight, if any.
+    highlight: Option<crate::style::Rect>,
     /// Bounds of the most recent layout pass.
     ///
     /// The control channel captures between frames, where the context's viewport
@@ -647,6 +649,7 @@ impl<C: Component> AppRunner<C> {
             paint_glyph_caches: std::rc::Rc::new(std::cell::RefCell::new(Default::default())),
             overlay_bg_snapshot: std::cell::RefCell::new(Vec::new()),
             control_queue: control::ControlQueue::default(),
+            highlight: None,
             last_bounds: crate::style::Rect::default(),
             dnd_snapshot_cells: std::cell::RefCell::new(None),
             last_frame_snapshot: None,
@@ -1070,6 +1073,13 @@ impl<C: Component> AppRunner<C> {
                 self.core.ctx.request_quit();
                 ControlReply::Ok(String::new())
             }
+            ControlCommand::Highlight(target) => match self.control_highlight(target.as_ref()) {
+                Ok(message) => {
+                    dirty = true;
+                    ControlReply::Ok(message)
+                }
+                Err(err) => ControlReply::Err(err.to_string()),
+            },
             ControlCommand::Act(script) => match self.control_act(&script) {
                 Ok(()) => {
                     dirty = true;
@@ -1128,8 +1138,60 @@ impl<C: Component> AppRunner<C> {
         )
     }
 
+    /// The inspector highlight rect, if one is set.
+    pub(crate) fn highlight(&self) -> Option<crate::style::Rect> {
+        self.highlight
+    }
+
+    /// Outline a widget by key, or clear the outline when `key` is `None`.
+    fn control_highlight(&mut self, target: Option<&control::HighlightTarget>) -> Result<String> {
+        let Some(target) = target else {
+            self.highlight = None;
+            return Ok(String::new());
+        };
+        let rect = match target {
+            control::HighlightTarget::Key(key) => {
+                let key = crate::core::element::Key::from(key.clone());
+                self.rect_for_key(&key).ok_or_else(|| {
+                    std::io::Error::other(format!(
+                        "no widget with key `{}` is currently rendered",
+                        key.as_ref()
+                    ))
+                })?
+            }
+            control::HighlightTarget::Cell(x, y) => self
+                .smallest_rect_at(*x, *y)
+                .ok_or_else(|| std::io::Error::other(format!("no widget covers cell {x},{y}")))?,
+        };
+        self.highlight = Some(rect);
+        Ok(format!("{},{} {}x{}", rect.x, rect.y, rect.w, rect.h))
+    }
+
+    /// Rect of the smallest widget covering a cell.
+    ///
+    /// Smallest rather than topmost: an inspector should land on the leaf a user
+    /// would say they are pointing at, not the panel that happens to contain it.
+    fn smallest_rect_at(&self, x: u16, y: u16) -> Option<crate::style::Rect> {
+        let (x, y) = (i16::try_from(x).ok()?, i16::try_from(y).ok()?);
+        self.core
+            .tree
+            .iter()
+            .map(|node| node.rect)
+            .filter(|rect| {
+                rect.w > 0
+                    && rect.h > 0
+                    && x >= rect.x
+                    && y >= rect.y
+                    && x < rect.x.saturating_add(rect.w as i16)
+                    && y < rect.y.saturating_add(rect.h as i16)
+            })
+            .min_by_key(|rect| u32::from(rect.w) * u32::from(rect.h))
+    }
+
     /// Capture the live UI in the requested format.
     fn control_snapshot(&mut self, format: control::SnapshotFormat) -> Result<String> {
+        let _highlight =
+            crate::backend::ratatui_backend::common::push_render_highlight(self.highlight);
         let snapshot = crate::ui_snapshot::build_ui_snapshot(
             &self.core.tree,
             self.last_bounds,
@@ -1227,6 +1289,8 @@ impl<C: Component> AppRunner<C> {
 
     /// Capture the current tree as a frame, without a terminal.
     fn headless_frame(&self, bounds: crate::style::Rect) -> crate::capture::CapturedFrame {
+        let _highlight =
+            crate::backend::ratatui_backend::common::push_render_highlight(self.highlight);
         crate::backend::ratatui_backend::capture_render::render_to_captured_frame_with_interaction(
             &self.core.tree,
             bounds,

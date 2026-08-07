@@ -1103,6 +1103,9 @@ impl<C: Component> AppRunner<C> {
             crate::backend::ratatui_backend::common::push_render_screen_background(
                 self.resolved_screen_background(),
             );
+        // Inspector outline, so what a client highlights is what the operator sees.
+        let _highlight_scope =
+            crate::backend::ratatui_backend::common::push_render_highlight(self.highlight());
 
         if let Some(plan) = scroll_plan.as_ref() {
             let previous_snapshot = self.last_frame_snapshot.as_ref().expect("snapshot exists");

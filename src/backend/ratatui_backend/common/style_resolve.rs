@@ -324,3 +324,36 @@ pub(crate) fn style_backdrop(style: Style) -> Option<Color> {
         .filter(|bg| !bg.is_transparent_paint() && !bg.is_backdrop_sentinel())
         .map(|bg| bg.flatten_over(render_terminal_bg_color()))
 }
+
+thread_local! {
+    /// Inspector highlight rect for the current draw, if any.
+    static RENDER_HIGHLIGHT: StdCell<Option<crate::style::Rect>> = const { StdCell::new(None) };
+}
+
+/// RAII guard restoring the previous inspector highlight on drop.
+pub(crate) struct HighlightScope(Option<crate::style::Rect>);
+
+impl Drop for HighlightScope {
+    fn drop(&mut self) {
+        RENDER_HIGHLIGHT.with(|slot| slot.set(self.0));
+    }
+}
+
+/// Install the inspector highlight rect for the current draw.
+///
+/// Drawn as an outline over the finished frame, so it marks a widget whether or
+/// not that widget styles itself for hover or focus. This is a debugging aid,
+/// like a browser's element inspector, not part of any widget's own appearance.
+pub(crate) fn push_render_highlight(rect: Option<crate::style::Rect>) -> HighlightScope {
+    let prev = RENDER_HIGHLIGHT.with(|slot| {
+        let prev = slot.get();
+        slot.set(rect);
+        prev
+    });
+    HighlightScope(prev)
+}
+
+/// The inspector highlight rect for the current draw, if any.
+pub(crate) fn current_render_highlight() -> Option<crate::style::Rect> {
+    RENDER_HIGHLIGHT.with(|slot| slot.get())
+}

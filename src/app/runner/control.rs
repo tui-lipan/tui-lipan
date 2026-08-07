@@ -25,6 +25,9 @@
 //! snapshot json             JSON snapshot (needs `ui-snapshot-json`)
 //! snapshot png <path>       write a PNG to <path> (needs `ui-snapshot-png`)
 //! act <script>              run an action script (`click:#add; type:hi`)
+//! highlight <key>           outline a widget by key
+//! highlight <col>,<row>     outline the widget under a cell
+//! highlight clear           remove the outline
 //! quit                      ask the app to exit
 //! ```
 //!
@@ -213,8 +216,19 @@ pub(crate) enum ControlCommand {
     Snapshot(SnapshotFormat),
     /// Run an action script.
     Act(String),
+    /// Outline a widget, or clear the outline.
+    Highlight(Option<HighlightTarget>),
     /// Ask the app to quit.
     Quit,
+}
+
+/// What a `highlight` command points at.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum HighlightTarget {
+    /// The widget carrying this reconciliation key.
+    Key(String),
+    /// The smallest widget covering this cell, the way an inspector picks.
+    Cell(u16, u16),
 }
 
 /// Format requested by a `snapshot` command.
@@ -240,6 +254,27 @@ pub(crate) fn parse_command(line: &str) -> Result<ControlCommand, String> {
         "ping" => Ok(ControlCommand::Ping),
         "keys" => Ok(ControlCommand::Keys),
         "quit" => Ok(ControlCommand::Quit),
+        "highlight" => match rest {
+            "" | "clear" | "off" | "none" => Ok(ControlCommand::Highlight(None)),
+            target => match target.split_once(',') {
+                // `col,row` picks whatever is under the cell, so unkeyed widgets
+                // are still inspectable.
+                Some((x, y)) => {
+                    let x = x
+                        .trim()
+                        .parse()
+                        .map_err(|_| format!("invalid highlight column in `{target}`"))?;
+                    let y = y
+                        .trim()
+                        .parse()
+                        .map_err(|_| format!("invalid highlight row in `{target}`"))?;
+                    Ok(ControlCommand::Highlight(Some(HighlightTarget::Cell(x, y))))
+                }
+                None => Ok(ControlCommand::Highlight(Some(HighlightTarget::Key(
+                    target.trim_start_matches('#').to_owned(),
+                )))),
+            },
+        },
         "act" => {
             if rest.is_empty() {
                 return Err("act needs a script, e.g. `act click:#submit`".into());
@@ -259,7 +294,7 @@ pub(crate) fn parse_command(line: &str) -> Result<ControlCommand, String> {
             },
         },
         other => Err(format!(
-            "unknown command `{other}`; expected ping, keys, snapshot, act, or quit"
+            "unknown command `{other}`; expected ping, keys, snapshot, act, highlight, or quit"
         )),
     }
 }
@@ -323,6 +358,38 @@ mod tests {
             parse_command("act click:#add; type:buy milk"),
             Ok(ControlCommand::Act("click:#add; type:buy milk".into()))
         );
+    }
+
+    #[test]
+    fn highlight_takes_a_key_or_clears() {
+        assert_eq!(
+            parse_command("highlight add"),
+            Ok(ControlCommand::Highlight(Some(HighlightTarget::Key(
+                "add".into()
+            ))))
+        );
+        // A leading `#` is accepted for symmetry with action-script targets.
+        assert_eq!(
+            parse_command("highlight #add"),
+            Ok(ControlCommand::Highlight(Some(HighlightTarget::Key(
+                "add".into()
+            ))))
+        );
+        // Unkeyed widgets are still inspectable by cell.
+        assert_eq!(
+            parse_command("highlight 61,2"),
+            Ok(ControlCommand::Highlight(Some(HighlightTarget::Cell(
+                61, 2
+            ))))
+        );
+        assert!(parse_command("highlight x,2").is_err());
+        for clearing in ["highlight", "highlight clear", "highlight off"] {
+            assert_eq!(
+                parse_command(clearing),
+                Ok(ControlCommand::Highlight(None)),
+                "{clearing}"
+            );
+        }
     }
 
     #[test]
