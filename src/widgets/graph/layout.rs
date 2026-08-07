@@ -485,6 +485,50 @@ mod tests {
     }
 
     #[test]
+    fn focus_offset_for_clamps_edge_nodes_to_content_bounds() {
+        let graph = Graph::new()
+            .root(GraphNode::new("root").child(GraphNode::new("mid").child(GraphNode::new("leaf"))))
+            .direction(GraphDirection::LeftRight)
+            .gap_x(8);
+        let (content_w, content_h) = measure_graph(&graph);
+        let viewport_w = content_w.saturating_sub(6).max(10);
+        let viewport_h = content_h.saturating_add(4);
+        let output = build_graph_output(&graph);
+        let root = &output.nodes[0];
+        let leaf = output.nodes.last().expect("leaf");
+
+        let root_focus = graph
+            .focus_offset_for(&root.path, viewport_w, viewport_h)
+            .expect("root");
+        let root_center = graph
+            .center_offset_for(&root.path, viewport_w, viewport_h)
+            .expect("root center");
+        assert_ne!(root_focus, root_center);
+        assert_eq!(root_focus.0, 0);
+
+        let leaf_focus = graph
+            .focus_offset_for(&leaf.path, viewport_w, viewport_h)
+            .expect("leaf");
+        let leaf_center = graph
+            .center_offset_for(&leaf.path, viewport_w, viewport_h)
+            .expect("leaf center");
+        let max_x = i32::from(content_w.saturating_sub(viewport_w));
+        assert_eq!(leaf_focus.0, leaf_center.0.clamp(0, max_x));
+        assert!(leaf_focus.0 <= max_x);
+
+        let mid = &output.nodes[1];
+        let mid_focus = graph
+            .focus_offset_for(&mid.path, viewport_w, viewport_h)
+            .expect("mid");
+        let mid_center = graph
+            .center_offset_for(&mid.path, viewport_w, viewport_h)
+            .expect("mid center");
+        if (0..=max_x).contains(&mid_center.0) {
+            assert_eq!(mid_focus, mid_center);
+        }
+    }
+
+    #[test]
     fn parent_child_emits_edge_cells() {
         let output =
             build_graph_output(&Graph::new().root(GraphNode::new("A").child(GraphNode::new("B"))));
