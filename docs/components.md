@@ -901,6 +901,63 @@ running app exposes are listed in any markdown snapshot.
 In code, `Recording::script(...)` takes the same syntax, and `Recording::keys(...)`
 remains the shorthand for the typing-only case.
 
+### Live control channel
+
+`TUI_LIPAN_CONTROL=<path>` makes a running app listen on a Unix socket, so an
+agent can inspect and drive a live TUI the way a browser tool drives a page:
+snapshot, pick a widget by key, act, look again.
+
+```sh
+TUI_LIPAN_CONTROL=/tmp/app.sock cargo run --example todo
+```
+
+Requests are single `\n`-terminated lines:
+
+| Command | Reply |
+|---------|-------|
+| `ping` | `pong` |
+| `keys` | Newline-separated reconciliation keys currently rendered |
+| `snapshot` | Markdown snapshot |
+| `snapshot json` | JSON snapshot (needs `ui-snapshot-json`) |
+| `snapshot png <path>` | Writes a PNG, replies with the path (needs `ui-snapshot-png`) |
+| `act <script>` | Runs an action script; empty payload on success |
+| `highlight <key>` | Outlines a widget; replies with the resolved rect |
+| `highlight <col>,<row>` | Outlines the smallest widget covering a cell |
+| `highlight clear` | Removes the outline |
+| `quit` | Asks the app to exit |
+
+Replies are a status line plus exactly that many bytes:
+
+```text
+ok <byte-length>\n<payload>
+err <byte-length>\n<message>
+```
+
+Length prefixing keeps payloads newline- and binary-safe without escaping, so a
+client is a few lines in any language. `keys` is the index of what `act` can
+target - the equivalent of a browser tool's element refs.
+
+`highlight` is an inspector marker, drawn over the finished frame in magenta. It
+does not depend on the widget styling itself for hover or focus, so it marks
+anything - including widgets with no interactive styling at all. Large rects are
+outlined so the content underneath stays readable; rects one or two cells thick
+are filled, having no interior to preserve. The outline reaches captures as well
+as the live paint, so `snapshot png` shows what the operator sees.
+
+Cell targeting resolves to the **smallest** widget covering that cell rather than
+the topmost, which lands on the leaf a user would say they are pointing at
+instead of the panel containing it. That is how unkeyed widgets stay
+inspectable.
+
+**Notes:**
+
+- Unix only. The socket is created `0600`, because anything that can reach it can
+  type into your application. Do not place it on a shared filesystem.
+- `AF_UNIX` paths are limited to about 100 bytes; a long path fails to bind.
+- Connections are served one at a time - the UI is a single shared surface.
+- Runtime state stays single-threaded: the listener thread queues requests and
+  the event loop answers them, the same pattern the terminal reader uses.
+
 ### Design sketches
 
 `Sketch` renders a view at one or more viewports and writes every artifact in a

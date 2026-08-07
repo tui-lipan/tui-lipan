@@ -37,6 +37,8 @@ const MAX_COALESCED_COLOR_QUERIES: usize = 4;
 
 pub(super) struct TerminaInputCoordinator {
     events: mpsc::Receiver<RunnerEvent>,
+    /// Spare sender so other producers (the control channel) can wake this loop.
+    sender: mpsc::Sender<RunnerEvent>,
     control: Arc<WorkerControl>,
     worker: Option<JoinHandle<()>>,
     panic_control: InputHandoffSlot,
@@ -51,6 +53,7 @@ impl TerminaInputCoordinator {
         let waker = reader.waker();
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, events) = mpsc::channel();
+        let spare_sender = event_tx.clone();
         let control = Arc::new(WorkerControl {
             commands: command_tx,
             wake: Mutex::new(Box::new(move || waker.wake())),
@@ -76,6 +79,7 @@ impl TerminaInputCoordinator {
         }
         Ok(Self {
             events,
+            sender: spare_sender,
             control,
             worker: Some(worker),
             panic_control,
@@ -84,6 +88,11 @@ impl TerminaInputCoordinator {
 
     pub(super) fn receiver(&self) -> &mpsc::Receiver<RunnerEvent> {
         &self.events
+    }
+
+    /// A sender into the channel this coordinator's receiver drains.
+    pub(super) fn sender(&self) -> mpsc::Sender<RunnerEvent> {
+        self.sender.clone()
     }
 
     pub(super) fn request_host_color_refresh(&self) {

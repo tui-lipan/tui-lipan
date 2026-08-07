@@ -369,6 +369,49 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
     {
         render_subtree(&mut state, extra, Some(content_rect), RenderOffset::ZERO);
     }
+
+    // Last, so the inspector outline sits above overlays and chrome alike. It is
+    // a debugging marker, not part of any widget's appearance.
+    if let Some(rect) = crate::backend::ratatui_backend::common::current_render_highlight() {
+        draw_inspector_highlight(state.f, rect);
+    }
+}
+
+/// Colour of the inspector highlight outline.
+///
+/// Deliberately loud and unlike any theme accent, so it reads as an annotation
+/// rather than as UI a widget drew for itself.
+const INSPECTOR_HIGHLIGHT: ratatui::style::Color = ratatui::style::Color::Rgb(255, 0, 128);
+
+/// Outline `rect` on top of the finished frame.
+///
+/// Draws on the border cells of the rect rather than filling it, so the widget
+/// underneath stays readable while being marked. A one-cell-tall or -wide rect
+/// is marked in full, since it has no interior to preserve.
+fn draw_inspector_highlight(f: &mut ratatui::Frame<'_>, rect: crate::style::Rect) {
+    let area = f.area();
+    let style = ratatui::style::Style::default()
+        .fg(INSPECTOR_HIGHLIGHT)
+        .add_modifier(ratatui::style::Modifier::REVERSED);
+
+    let x0 = rect.x.max(0) as u16;
+    let y0 = rect.y.max(0) as u16;
+    let x1 = x0.saturating_add(rect.w).min(area.x + area.width);
+    let y1 = y0.saturating_add(rect.h).min(area.y + area.height);
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+
+    let buf = f.buffer_mut();
+    let thin = (y1 - y0) <= 2 || (x1 - x0) <= 2;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let edge = thin || y == y0 || y == y1 - 1 || x == x0 || x == x1 - 1;
+            if edge && let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_style(style);
+            }
+        }
+    }
 }
 
 fn extra_root_wrapper_children(tree: &NodeTree) -> Option<(NodeId, NodeId)> {

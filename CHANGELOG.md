@@ -13,6 +13,25 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Live control channel: `TUI_LIPAN_CONTROL=<path>` makes a running app listen on a Unix socket, so
+  an agent can inspect and drive a live TUI - `snapshot` for the widget tree, `keys` for what can be
+  targeted, `act <script>` to click or type, `quit` to exit. Replies are a status line plus a
+  length-prefixed payload, which keeps markdown and JSON newline-safe without escaping and makes a
+  client a few lines in any language. Unix only; the socket is created `0600`. Runtime state stays
+  single-threaded: the listener thread queues requests and the event loop answers them, matching how
+  the terminal reader already feeds the loop.
+- `highlight <key>`, `highlight <col>,<row>`, and `highlight clear` on the control channel outline a
+  widget for inspection, the way a browser's element inspector does. Drawn over the finished frame,
+  so it marks a widget whether or not that widget styles itself for hover or focus - the gap hover
+  alone left. Large rects are outlined and thin ones filled; the outline reaches captures as well as
+  the live paint, so a PNG shows what the operator sees. Cell targeting resolves to the smallest
+  covering widget, keeping unkeyed widgets inspectable.
+- `hover:` actions now update hover state. Hover tracking and `on_mouse_move` handlers are separate
+  paths, and a bare move only reached the latter - which returns early when a widget has no move
+  handler, so hovering silently did nothing while a click (which moves, presses, releases) worked.
+- `AppRunner` records the bounds of its latest layout pass, so a capture taken between frames uses
+  the real viewport instead of a zero-sized one.
+
 - Action scripts drive a UI beyond typing: `click`, `rclick`, `mclick`, `hover`, `focus`, `scroll`,
   `drag`, `type`, `key`, and `wait`, separated by `;` or newlines. Available as
   `TUI_LIPAN_SNAPSHOT_SCRIPT`, `TUI_LIPAN_RECORD_SCRIPT`, and `Recording::script`, so a modal

@@ -1423,6 +1423,14 @@ impl<C: Component> Context<C> {
         self.env.quit.set(true);
     }
 
+    /// Request shutdown without holding a unique borrow.
+    ///
+    /// [`Self::quit`] is the app-facing form; the runner holds its context
+    /// shared and needs the same effect from `&self`.
+    pub(crate) fn request_quit(&self) {
+        self.env.quit.set(true);
+    }
+
     /// Request focus to move to the focusable node with `key`.
     ///
     /// This takes effect on the next event loop tick / render.
