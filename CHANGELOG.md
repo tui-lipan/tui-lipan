@@ -13,6 +13,9 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Graph::focus_offset_for(path, viewport_w, viewport_h)` for controlled `PanView` focusing: same
+  coordinate space as `center_offset_for`, but clamps to content bounds so edge nodes only move far
+  enough to stay visible instead of scrolling empty space past the diagram.
 - Live control channel: `TUI_LIPAN_CONTROL=<path>` makes a running app listen on a Unix socket, so
   an agent can inspect and drive a live TUI - `snapshot` for the widget tree, `keys` for what can be
   targeted, `act <script>` to click or type, `quit` to exit. Replies are a status line plus a

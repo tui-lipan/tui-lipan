@@ -82,6 +82,12 @@ Keyboard navigation follows the rendered tree direction:
 lives inside a `PanView`, navigation auto-pans the nearest ancestor `PanView` to
 keep the newly focused graph node visible.
 
+For controlled `PanView` offsets, `Graph::center_offset_for(path, viewport_w,
+viewport_h)` returns the pan that places a node in the middle of the viewport.
+`Graph::focus_offset_for(...)` starts from that center target, then clamps to
+the graph content bounds so edge nodes only move far enough to stay visible
+instead of scrolling empty space past the diagram.
+
 ```rust
 let tree = GraphNode::new("A")
     .child(

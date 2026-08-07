@@ -421,6 +421,10 @@ impl Graph {
     /// view. The node layout is computed from the graph definition alone, so
     /// this works before the graph is mounted. Returns `None` when `path` does
     /// not resolve to a laid-out node (e.g. an empty graph).
+    ///
+    /// Prefer [`Self::focus_offset_for`] when the graph sits in a bounded
+    /// pan viewport and edge nodes should only move far enough to stay
+    /// visible without scrolling empty space past the content bounds.
     pub fn center_offset_for(
         &self,
         path: &GraphNodePath,
@@ -442,6 +446,38 @@ impl Graph {
             node_center_x - i32::from(viewport_w) / 2,
             node_center_y - i32::from(viewport_h) / 2,
         ))
+    }
+
+    /// Pan offset that brings `path` into focus: centers when the node has
+    /// surrounding content room, otherwise clamps so the node stays visible
+    /// without scrolling empty space past the graph bounds.
+    ///
+    /// Same coordinate space and pre-mount behavior as
+    /// [`Self::center_offset_for`].
+    pub fn focus_offset_for(
+        &self,
+        path: &GraphNodePath,
+        viewport_w: u16,
+        viewport_h: u16,
+    ) -> Option<(i32, i32)> {
+        let (x, y) = self.center_offset_for(path, viewport_w, viewport_h)?;
+        let (content_w, content_h) = layout::measure_graph(self);
+        Some((
+            clamp_focus_axis(x, content_w, viewport_w),
+            clamp_focus_axis(y, content_h, viewport_h),
+        ))
+    }
+}
+
+/// Prefer centering, but keep the content filling the viewport when possible:
+/// clamp into `[0, content - viewport]` when content is larger, or into
+/// `[content - viewport, 0]` when content fits inside the viewport.
+fn clamp_focus_axis(desired: i32, content: u16, viewport: u16) -> i32 {
+    let diff = i32::from(content) - i32::from(viewport);
+    if diff >= 0 {
+        desired.clamp(0, diff)
+    } else {
+        desired.clamp(diff, 0)
     }
 }
 
