@@ -18,7 +18,7 @@ and developer tools - anything that runs in a terminal.
 [![Context7](https://img.shields.io/badge/Context7-indexed-8A2BE2)](https://context7.com/websites/tui-lipan_dev)
 [![CI](https://github.com/tui-lipan/tui-lipan/actions/workflows/ci.yml/badge.svg)](https://github.com/tui-lipan/tui-lipan/actions/workflows/ci.yml)
 [![License: MPL-2.0](https://img.shields.io/badge/license-MPL--2.0-blue.svg)](#license)
-[![MSRV](https://img.shields.io/badge/MSRV-1.85-blue)](#)
+[![MSRV](https://img.shields.io/badge/MSRV-1.90-blue)](#)
 [![Sponsor](https://img.shields.io/github/sponsors/Razuer?logo=githubsponsors&label=sponsor)](https://github.com/sponsors/Razuer)
 
 [Website](https://tui-lipan.dev) ·

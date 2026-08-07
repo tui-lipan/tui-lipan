@@ -190,6 +190,12 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- MSRV raised to Rust 1.90 (breaking). The manifest declared `1.88` while the `image` feature family
+  resolves `ratatui-image → icy_sixel → quantette`, and `quantette 0.5.1` requires `1.90`;
+  `icy_sixel 0.5.0` pins that exact version, so no older resolution avoids it. `README.md` and
+  `CONTRIBUTING.md` had also drifted to a stale `1.85`, so all three now agree. The crate's own code
+  and its default features still build on 1.88 - update your toolchain (`rustup update stable`) if
+  you enable `image`, `terminal-images`, `image-full-formats`, or `ui-snapshot-png`.
 - The `todo` / `todo_ui` examples drop the outer "Todo App" bordered frame, give the New Task input
   row `height: Length::Auto` (input stays `Flex` width), and nest Tips in a flex `VStack` so tip
   text yields space instead of collapsing the bordered input in short terminals.
