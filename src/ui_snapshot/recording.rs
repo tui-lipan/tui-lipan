@@ -379,7 +379,7 @@ fn hold<C: Component>(
 mod tests {
     use super::*;
     use crate::core::component::{Context, KeyUpdate, Update};
-    use crate::core::element::IntoElement;
+    use crate::core::element::{IntoElement, Key};
     use crate::core::event::{KeyCode, KeyEvent};
     use crate::widgets::Text;
 
@@ -638,6 +638,36 @@ mod tests {
         assert!(
             text.contains("clicked"),
             "the click should reach the button"
+        );
+    }
+
+    #[test]
+    fn hover_marks_the_widget_under_the_pointer() {
+        // Regression guard: hover once routed only to `on_mouse_move` handlers,
+        // which most widgets lack, so `hover:` silently did nothing.
+        let mut backend = TestBackend::new(Clicker);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 30,
+            h: 5,
+        });
+        backend.render();
+        assert!(backend.hovered().is_none(), "nothing hovered initially");
+
+        crate::ui_snapshot::execute(
+            &mut backend,
+            &crate::ui_snapshot::Action::Hover(crate::ui_snapshot::Target::Key(Key::from(
+                "go".to_owned(),
+            ))),
+        )
+        .expect("hover succeeds");
+
+        let snapshot = backend.capture_ui_snapshot();
+        assert_eq!(
+            snapshot.hover_key.as_ref().map(|key| key.as_ref()),
+            Some("go"),
+            "the hovered widget should be reported in the snapshot"
         );
     }
 

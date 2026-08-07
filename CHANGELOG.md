@@ -20,6 +20,9 @@ While the crate is on `0.x.y`:
   client a few lines in any language. Unix only; the socket is created `0600`. Runtime state stays
   single-threaded: the listener thread queues requests and the event loop answers them, matching how
   the terminal reader already feeds the loop.
+- `hover:` actions now update hover state. Hover tracking and `on_mouse_move` handlers are separate
+  paths, and a bare move only reached the latter - which returns early when a widget has no move
+  handler, so hovering silently did nothing while a click (which moves, presses, releases) worked.
 - `AppRunner` records the bounds of its latest layout pass, so a capture taken between frames uses
   the real viewport instead of a zero-sized one.
 

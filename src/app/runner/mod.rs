@@ -2477,6 +2477,12 @@ impl<C: Component> crate::ui_snapshot::ActionHost for HeadlessActionHost<'_, C> 
     fn perform_mouse(&mut self, event: MouseEvent) -> Result<()> {
         match event.kind {
             crate::core::event::MouseKind::Moved => {
+                // Hover tracking and `on_mouse_move` handlers are separate
+                // paths: dispatch_mouse_move only serves explicit handlers and
+                // returns early when none exist, so hovering alone would never
+                // update hover state.
+                self.runner.update_hover(event.x, event.y);
+                self.runner.mouse.last_mouse = Some((event.x, event.y));
                 self.runner.dispatch_mouse_move(event);
             }
             crate::core::event::MouseKind::ScrollUp | crate::core::event::MouseKind::ScrollDown => {

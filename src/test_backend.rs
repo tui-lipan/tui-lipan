@@ -1506,6 +1506,14 @@ impl<C: Component> crate::ui_snapshot::ActionHost for TestBackend<C> {
     }
 
     fn perform_mouse(&mut self, event: MouseEvent) -> Result<()> {
+        // A bare move must still update hover: send_mouse routes moves to
+        // `on_mouse_move` handlers, which most widgets do not have.
+        if matches!(event.kind, crate::core::event::MouseKind::Moved) {
+            use crate::app::mouse_dispatch::MouseDispatchCtx;
+            self.update_hover(event.x, event.y);
+            self.mouse.last_mouse = Some((event.x, event.y));
+            self.render();
+        }
         self.send_mouse(event)?;
         Ok(())
     }
