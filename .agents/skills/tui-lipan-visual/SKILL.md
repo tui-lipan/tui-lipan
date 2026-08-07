@@ -1,12 +1,15 @@
 ---
 name: tui-lipan-visual
 description: >-
-  See what a tui-lipan UI actually looks like, and act on it. Use when designing
+  See what a tui-lipan UI actually looks like, and drive it. Use when designing
   a new screen, dashboard, form, panel, or visual variant; when reviewing or
-  polishing an existing UI after a change; and when checking chrome, spacing,
-  truncation, focus, contrast, colour, or viewport behavior without a live
-  terminal. Covers headless capture, PNG inspection, and kept design sketches.
-  Use tui-lipan-app-builder for state, messages, props, and async wiring.
+  polishing an existing UI after a change; when checking chrome, spacing,
+  truncation, focus, contrast, colour, or viewport behavior; and when
+  investigating how a running app behaves - clicking, typing, opening a modal,
+  reproducing a UI bug, or inspecting which widget is where. Covers headless
+  capture, PNG inspection, kept design sketches, recordings, and live
+  agent-driven sessions over the control channel. Use tui-lipan-app-builder for
+  state, messages, props, and async wiring.
 ---
 
 # TUI-lipan Visual Work
@@ -38,9 +41,12 @@ regression check.
 | An app, example, or binary already runs | `TUI_LIPAN_SNAPSHOT` env var | none |
 | A new screen whose layout is not settled | `Sketch` in `examples/sketches/` | one kept file |
 | You need an assertion that runs in CI | `TestBackend` in a real test | one kept test |
+| You need to *explore* a running app | control channel (below) | none, but a human must start it |
 
 Work down that list. Most visual questions about existing code are answered by
-the first row without touching a single source file.
+the first row without touching a single source file. Reach for the control
+channel only when one-shot capture genuinely cannot answer the question -
+because you need to look, decide, then act on what you saw.
 
 ## 1. Capture a running app or example — no code at all
 
@@ -63,28 +69,52 @@ your normal `cargo check` / `cargo test` build artifacts.
 | `TUI_LIPAN_SNAPSHOT_VIEWPORT` | `100x30` | Layout size, `WIDTHxHEIGHT` |
 | `TUI_LIPAN_SNAPSHOT_FRAMES` | `1` | Render/message passes before capture; raise it when `init()` starts work |
 | `TUI_LIPAN_SNAPSHOT_FOCUS` | `0` | Focus advances before capture, for visible focus chrome |
-| `TUI_LIPAN_SNAPSHOT_KEYS` | unset | Key script dispatched before capture, e.g. `tab,tab,enter` |
+| `TUI_LIPAN_SNAPSHOT_KEYS` | unset | Keys-only shorthand, e.g. `tab,tab,enter` |
+| `TUI_LIPAN_SNAPSHOT_SCRIPT` | unset | Full action script (below); wins over `_KEYS` |
 | `TUI_LIPAN_SNAPSHOT_DIAGNOSTIC` | unset | `1` captures with `UiSnapshotOptions::diagnostic()` |
 
-### Reaching states behind a keystroke
+### Reaching states behind a click or a keystroke
 
-`TUI_LIPAN_SNAPSHOT_KEYS` scripts input, so a modal, an error, or a filled-in
-form is capturable without writing anything:
+An action script drives the UI before the capture, so a modal behind a button, a
+filled-in form, or a scrolled list is reachable without writing anything:
 
 ```bash
-# Type into the focused input and submit
 TUI_LIPAN_SNAPSHOT=/tmp/filled.png \
-TUI_LIPAN_SNAPSHOT_KEYS="b,u,y,space,m,i,l,k,enter" \
+TUI_LIPAN_SNAPSHOT_SCRIPT="focus:#draft; type:buy milk; click:#add; wait:200" \
 cargo snap todo
 ```
 
-Entries use ordinary keybinding syntax (`ctrl+n`, `esc`, `f12`). Each key is
-dispatched, its messages drained, and the tree re-rendered before the next -
-exactly what the event loop does - so typed text accumulates properly.
+Steps are separated by `;` or newlines:
+
+| Step | Effect |
+|------|--------|
+| `key:ctrl+n` | One key event, in keybinding syntax |
+| `type:hello world` | Literal text, one key event per character |
+| `click:#submit` | Left click the widget keyed `submit` |
+| `click:12,7` | Left click a cell |
+| `rclick:` / `mclick:` | Right / middle click |
+| `hover:#sidebar` | Move the pointer over a widget |
+| `focus:#email` | Focus a widget directly |
+| `focus:next` / `focus:prev` | Move focus one step |
+| `scroll:#list,down` | Scroll over a widget (`up` / `down`) |
+| `drag:#card>#column` | Press, move, release |
+| `wait:500` | Advance the clock 500ms, ticking animations |
+
+**Target by key, not coordinate.** `click:#submit` resolves through the current
+tree and *fails loudly* when the key is absent; `click:42,7` silently clicks
+empty space after a layout change and still reports success. Use coordinates
+only for widgets that have no key of their own.
+
+**Give widgets keys to make them scriptable.** A markdown snapshot lists every
+key an app exposes - read it first to learn what you can target.
 
 **Check where focus starts before scripting `tab`.** Many apps focus their
 primary input on mount, so a leading `tab` moves focus *off* the thing you meant
 to type into. Capture markdown first and read `focus_key`.
+
+**`hover_key` only reports keyed widgets.** An unkeyed widget can be hovered
+while `hover_key` stays empty - read the per-widget `[hovered]` flag instead.
+The same applies to containers, whose centre usually lands on an unkeyed child.
 
 ```bash
 # Roomy viewport, focus moved once, diagnostic markdown for a vanishing widget
@@ -285,6 +315,64 @@ interesting moment with the same key script.
 Recordings use a synthetic clock, so they are reproducible but do not wait for
 real-time work (PTY output, network responses).
 
+## Drive a running app — live sessions
+
+A capture replays a fixed script from process start. When the question is
+*"what happens if I click this, and then what?"*, that is not enough: you need to
+look, decide, and act on what you saw. `TUI_LIPAN_CONTROL` opens a socket for
+exactly that.
+
+**You cannot start the app yourself.** It needs a real terminal, which an agent
+session does not have. Ask the operator to run it and tell you when it is up:
+
+```bash
+TUI_LIPAN_CONTROL=/tmp/app.sock cargo run --example todo
+```
+
+Use a **short** socket path - `AF_UNIX` caps them near 100 bytes. Then talk to it
+with `examples/control/client.py` in the framework repo, or a few lines of your
+own; the protocol is one command per line and a length-prefixed reply.
+
+| Command | Reply |
+|---------|-------|
+| `ping` | `pong` |
+| `keys` | Reconciliation keys currently rendered |
+| `snapshot` / `snapshot json` / `snapshot png <path>` | The widget tree |
+| `act <script>` | Runs an action script (same syntax as above) |
+| `highlight <key>` / `highlight <col>,<row>` / `highlight clear` | Outline a widget |
+| `quit` | Ask the app to exit |
+
+### The loop that makes this work
+
+`keys` after every action. Widgets that appear announce themselves - opening a
+confirm dialog adds `modal-cancel` and `modal-delete` to the list, so you learn
+the app's structure by acting on it rather than by reading its source.
+
+```
+act click:61,3     # the row's ✕ has no key, so target its cell
+keys               # → modal-cancel, modal-delete appeared
+act click:#modal-delete
+keys               # → both modal keys gone, and the row with them
+```
+
+### Highlighting
+
+`highlight` marks a widget for the operator, drawn over the finished frame. It
+does **not** depend on the widget styling itself, so it marks anything - static
+text, layout containers, widgets with no hover style at all. Hover only marks
+widgets that style themselves for it.
+
+Cell targeting resolves to the *smallest* widget covering that cell, which is how
+unkeyed widgets stay inspectable. The reply is the resolved rect, so you learn
+what you actually hit. Clear it when you are done - a forgotten outline is
+confusing to whoever is watching the screen.
+
+### Etiquette
+
+- The operator is watching. Narrate what you are about to do before doing it.
+- `quit` closes their app. Ask first unless they told you to.
+- Leave the UI as you found it: clear highlights, close modals you opened.
+
 ## Look at the PNG
 
 Use the `Read` tool on each `.png` path; the image renders inline.
@@ -376,6 +464,9 @@ wiring.
   and alignment bugs a 4-character string never will.
 - **Writing a `Component` before the layout is settled.** You will wire messages
   for a layout that gets rejected in thirty seconds. Sketch first.
+- **Reaching for a live session when a capture would do.** It needs a human to
+  start the app and watch it. Use it when you must act on what you just saw, not
+  as a default.
 - **Raising tolerance to make a baseline pass.** That is deleting the check while
   keeping the ceremony. Find the nondeterminism, or update the baseline
   deliberately.
@@ -389,6 +480,7 @@ wiring.
 
 - API reference: `references/snapshot-api.md`
 - Kept sketch template: `examples/sketches/login.rs`
+- Control-channel client: `examples/control/client.py`
 - App structure, state, and async: `tui-lipan-app-builder`
 - Measurement and rect bugs: `tui-lipan-layout-debug`
 - Framework repo reference: `docs/components.md`, `tests/ui_snapshot.rs`

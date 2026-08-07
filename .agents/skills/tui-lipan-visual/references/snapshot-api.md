@@ -18,7 +18,8 @@ TUI_LIPAN_SNAPSHOT=/tmp/app.png cargo snap todo
 | `TUI_LIPAN_SNAPSHOT_VIEWPORT` | `100x30` | `WIDTHxHEIGHT` layout size |
 | `TUI_LIPAN_SNAPSHOT_FRAMES` | `1` | Render/message passes before capture |
 | `TUI_LIPAN_SNAPSHOT_FOCUS` | `0` | Focus advances before capture |
-| `TUI_LIPAN_SNAPSHOT_KEYS` | unset | Key script, e.g. `tab,tab,enter` |
+| `TUI_LIPAN_SNAPSHOT_KEYS` | unset | Keys-only shorthand, e.g. `tab,tab,enter` |
+| `TUI_LIPAN_SNAPSHOT_SCRIPT` | unset | Action script; wins over `_KEYS` |
 | `TUI_LIPAN_SNAPSHOT_DIAGNOSTIC` | unset | `1` uses `UiSnapshotOptions::diagnostic()` |
 
 `cargo snap <example>` = `cargo run --features ui-snapshot-png,ui-snapshot-json --example`.
@@ -216,3 +217,38 @@ Pending requests are last-writer-wins. Both request methods schedule a full repa
 - User strings escaped for backticks; embedded newlines shown as `\n` inside inline code
 - `item_labels` rendered as nested bullet list
 - `## Render` contains a fenced fixed grid
+
+## Action scripts
+
+Steps separated by `;` or newlines. `#name` targets a key; `col,row` a cell.
+
+| Step | Effect |
+|------|--------|
+| `key:ctrl+n` | One key event |
+| `type:hello world` | Literal text |
+| `click:#submit` / `click:12,7` | Left click |
+| `rclick:` / `mclick:` | Right / middle click |
+| `hover:#sidebar` | Move the pointer |
+| `focus:#email` / `focus:next` / `focus:prev` | Focus |
+| `scroll:#list,down` / `scroll:down` | Scroll |
+| `drag:#a>#b` | Press, move, release |
+| `wait:500` | Advance the clock |
+
+Keys fail loudly when absent; coordinates do not. Prefer keys.
+
+## Control channel (live sessions)
+
+`TUI_LIPAN_CONTROL=/tmp/app.sock` — Unix only, socket is `0600`, path capped
+near 100 bytes. The app needs a real terminal, so an operator must start it.
+
+| Command | Reply |
+|---------|-------|
+| `ping` | `pong` |
+| `keys` | Rendered reconciliation keys |
+| `snapshot` / `snapshot json` / `snapshot png <path>` | Widget tree |
+| `act <script>` | Runs an action script |
+| `highlight <key>` / `highlight <col>,<row>` / `highlight clear` | Inspector outline |
+| `quit` | Ask the app to exit |
+
+Wire format: one command per line; reply is `ok <len>\n<payload>` or
+`err <len>\n<message>`. Client: `examples/control/client.py`.
