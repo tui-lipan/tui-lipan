@@ -2,10 +2,11 @@
 
 use std::io::{Read, Write};
 use std::sync::{
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
     atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
 };
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 #[cfg(unix)]
 use std::fs::File;
@@ -187,11 +188,105 @@ impl Clone for TerminalPty {
     }
 }
 
+/// How long the exit-wait thread lets the reader thread finish draining before it delivers
+/// [`TerminalPtyEvent::Exited`] itself.
+///
+/// Only a backstop: on every platform the reader delivers the exit itself as soon as the stream is
+/// drained, so this elapses only when the reader can neither reach end-of-stream nor observe an
+/// idle master - a child that exited while a grandchild still holds the PTY open on a platform
+/// without readiness polling. Generous on purpose, because expiring early is what truncates output.
+const EXIT_DRAIN_GRACE: Duration = Duration::from_secs(2);
+
+/// Handshake that keeps [`TerminalPtyEvent::Exited`] behind the output the child already wrote.
+///
+/// `child.wait()` returns the moment the child dies, which is typically *before* the reader thread
+/// has been scheduled to pick up the bytes still sitting in the master's buffer. Consumers
+/// reasonably treat `Exited` as "this PTY is finished" and drop the handle, and dropping kills the
+/// reader - so an unordered exit event silently truncates the output of any command that writes and
+/// exits immediately. Whichever thread can prove the stream is drained emits the event; this pairs
+/// them so it is emitted exactly once.
+#[derive(Default)]
+struct ExitSync {
+    state: Mutex<ExitState>,
+    signal: Condvar,
+}
+
+#[derive(Default)]
+struct ExitState {
+    /// Set once `child.wait()` has returned.
+    code: Option<i32>,
+    /// Set once `Exited` has been handed to the callback, so only one thread ever emits it.
+    emitted: bool,
+    /// Set when the PTY is being torn down (`kill`/`handoff`). Both waits below give up on it,
+    /// because a deactivated reader will never reach the end of the stream to report a drain.
+    stopped: bool,
+}
+
+impl ExitSync {
+    /// Publish the child's status and wake whoever is waiting on it.
+    fn publish(&self, code: i32) {
+        if let Ok(mut state) = self.state.lock() {
+            state.code = Some(code);
+        }
+        self.signal.notify_all();
+    }
+
+    /// Release both waits: the PTY is being torn down, so no drain is coming.
+    fn stop(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.stopped = true;
+        }
+        self.signal.notify_all();
+    }
+
+    /// Take ownership of emitting `Exited`, if the status is known and nobody has emitted it yet.
+    ///
+    /// Returns the code to emit; the caller must emit it *outside* the lock, because the event
+    /// callback can block on a full consumer queue.
+    fn claim(&self) -> Option<i32> {
+        let mut state = self.state.lock().ok()?;
+        let code = state.code?;
+        if state.emitted {
+            return None;
+        }
+        state.emitted = true;
+        Some(code)
+    }
+
+    /// Reader side: the stream is drained, so wait (briefly) for the status and claim it.
+    fn claim_when_known(&self, timeout: Duration) -> Option<i32> {
+        self.claim_when(timeout, |state| state.code.is_none())
+    }
+
+    /// Wait side: give the reader a chance to claim the exit once it has drained, then step in.
+    fn claim_after_drain(&self, timeout: Duration) -> Option<i32> {
+        self.claim_when(timeout, |state| !state.emitted)
+    }
+
+    fn claim_when(
+        &self,
+        timeout: Duration,
+        mut keep_waiting: impl FnMut(&mut ExitState) -> bool,
+    ) -> Option<i32> {
+        let state = self.state.lock().ok()?;
+        let (state, _) = self
+            .signal
+            .wait_timeout_while(state, timeout, |state| {
+                !state.stopped && keep_waiting(state)
+            })
+            .ok()?;
+        drop(state);
+        self.claim()
+    }
+}
+
 struct TerminalPtyInner {
     backend: Mutex<TerminalPtyBackend>,
     writer: Mutex<Option<Box<dyn Write + Send>>>,
     killer: Mutex<Option<Box<dyn portable_pty::ChildKiller + Send + Sync>>>,
     reader_thread: Mutex<Option<JoinHandle<()>>>,
+    /// Orders `Exited` behind the child's final output; see [`ExitSync`].
+    exit: ExitSync,
     active: AtomicBool,
     kill_on_drop: AtomicBool,
     /// Number of live `TerminalPty` handles sharing this child (see [`Clone`] above).
@@ -310,6 +405,7 @@ impl TerminalPty {
             writer: Mutex::new(Some(writer)),
             killer: Mutex::new(Some(child.clone_killer())),
             reader_thread: Mutex::new(None),
+            exit: ExitSync::default(),
             active: AtomicBool::new(true),
             kill_on_drop: AtomicBool::new(true),
             handle_count: AtomicUsize::new(1),
@@ -326,16 +422,32 @@ impl TerminalPty {
             let reader_thread = std::thread::spawn(move || {
                 let mut reader = reader;
                 let mut buffer = [0u8; 8192];
+                // Whether the loop ended because the stream itself ended, as opposed to the PTY
+                // being deactivated under it. Only the former proves there is nothing left to read.
+                let mut stream_ended = false;
                 loop {
                     if !thread_inner.active.load(Ordering::Acquire) {
                         break;
                     }
                     #[cfg(unix)]
-                    if !unix_wait_readable(reader.as_raw_fd(), &thread_inner.active) {
-                        break;
+                    match unix_wait_readable(reader.as_raw_fd(), &thread_inner.active) {
+                        PtyReadiness::Readable => {}
+                        PtyReadiness::Idle => {
+                            // The master has nothing pending. If the child is already gone, every
+                            // byte it wrote has been delivered, so its status can be released now.
+                            // Keep reading afterwards: a grandchild may still hold the PTY open.
+                            if let Some(code) = thread_inner.exit.claim() {
+                                on_event(TerminalPtyEvent::Exited(code));
+                            }
+                            continue;
+                        }
+                        PtyReadiness::Stop => break,
                     }
                     match reader.read(&mut buffer) {
-                        Ok(0) => break,
+                        Ok(0) => {
+                            stream_ended = true;
+                            break;
+                        }
                         Ok(read) => {
                             if !thread_inner.active.load(Ordering::Acquire) {
                                 break;
@@ -346,10 +458,11 @@ impl TerminalPty {
                         }
                         Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
                         Err(err) => {
+                            stream_ended = true;
                             // On Linux a PTY master read returns EIO once the slave side has been
                             // fully closed (the child exited); that is the normal end-of-stream
-                            // signal for a master, not a fault. Treat it like EOF and let the wait
-                            // thread deliver the real exit code instead of a spurious error.
+                            // signal for a master, not a fault. Treat it like EOF - the exit code
+                            // is delivered below, not as an error.
                             #[cfg(unix)]
                             if err.raw_os_error() == Some(libc::EIO) {
                                 break;
@@ -359,6 +472,15 @@ impl TerminalPty {
                         }
                     }
                 }
+                // End of stream: no further output can arrive on this PTY, so deliver the exit as
+                // soon as the status is known rather than making the consumer wait out the exit
+                // thread's grace. This is the ordering guarantee - `Exited` is emitted from the
+                // same thread as, and after, the child's last `Output`.
+                if stream_ended
+                    && let Some(code) = thread_inner.exit.claim_when_known(EXIT_DRAIN_GRACE)
+                {
+                    on_event(TerminalPtyEvent::Exited(code));
+                }
             });
             if let Ok(mut slot) = inner.reader_thread.lock() {
                 *slot = Some(reader_thread);
@@ -367,13 +489,21 @@ impl TerminalPty {
 
         {
             let on_event = on_event.clone();
+            let thread_inner = inner.clone();
             std::thread::spawn(move || {
                 let exit_code = child
                     .wait()
                     .ok()
                     .map(|status| status.exit_code() as i32)
                     .unwrap_or(-1);
-                on_event(TerminalPtyEvent::Exited(exit_code));
+                // Publish rather than emit: `wait` returns the instant the child dies, which is
+                // usually before the reader has picked up the bytes it left behind. The reader
+                // emits the exit once it has drained them; this thread only steps in when the
+                // reader cannot get there (see `EXIT_DRAIN_GRACE`) or when the PTY was killed.
+                thread_inner.exit.publish(exit_code);
+                if let Some(code) = thread_inner.exit.claim_after_drain(EXIT_DRAIN_GRACE) {
+                    on_event(TerminalPtyEvent::Exited(code));
+                }
             });
         }
 
@@ -384,6 +514,9 @@ impl TerminalPty {
     /// Prepare this PTY for transfer to another process.
     pub fn handoff(&self) -> std::io::Result<TerminalPtyHandoff> {
         self.inner.active.store(false, Ordering::Release);
+        // The reader is about to stop without reaching end of stream, so nothing will ever report
+        // a drain; release the exit waits so joining it below cannot stall on the drain grace.
+        self.inner.exit.stop();
         self.inner.kill_on_drop.store(false, Ordering::Release);
         if let Some(handle) = self
             .inner
@@ -516,6 +649,9 @@ impl TerminalPty {
             return Ok(());
         }
         self.inner.active.store(false, Ordering::Release);
+        // An explicit kill stops the reader mid-stream, so the exit must not wait for a drain that
+        // will never be reported - it is delivered as soon as the child is reaped.
+        self.inner.exit.stop();
         let mut killer = self
             .inner
             .killer
@@ -547,29 +683,54 @@ fn unix_dup_raw_fd(fd: RawFd) -> std::io::Result<OwnedFd> {
     Ok(unsafe { OwnedFd::from_raw_fd(dup) })
 }
 
+/// What [`unix_wait_readable`] observed about the master.
 #[cfg(unix)]
-fn unix_wait_readable(fd: RawFd, active: &AtomicBool) -> bool {
-    while active.load(Ordering::Acquire) {
-        let mut pollfd = libc::pollfd {
-            fd,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        let rc = unsafe { libc::poll(&mut pollfd, 1, 100) };
-        if rc > 0 {
-            return pollfd.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0;
-        }
-        if rc == 0 {
-            continue;
-        }
-        if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
-            return false;
-        }
+enum PtyReadiness {
+    /// Data (or a hangup) is pending; read it.
+    Readable,
+    /// Nothing is pending right now - which, once the child has exited, means fully drained.
+    Idle,
+    /// The PTY was deactivated, or the master can no longer be polled.
+    Stop,
+}
+
+#[cfg(unix)]
+fn unix_wait_readable(fd: RawFd, active: &AtomicBool) -> PtyReadiness {
+    if !active.load(Ordering::Acquire) {
+        return PtyReadiness::Stop;
     }
-    false
+    let mut pollfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let rc = unsafe { libc::poll(&mut pollfd, 1, 100) };
+    if rc > 0 {
+        if pollfd.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0 {
+            return PtyReadiness::Readable;
+        }
+        // `POLLNVAL` means the master is no longer a valid descriptor: it would be signalled again
+        // immediately, so reporting it as idle would spin.
+        if pollfd.revents & libc::POLLNVAL != 0 {
+            return PtyReadiness::Stop;
+        }
+        return PtyReadiness::Idle;
+    }
+    if rc == 0 {
+        return PtyReadiness::Idle;
+    }
+    if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+        return PtyReadiness::Idle;
+    }
+    PtyReadiness::Stop
 }
 
 /// PTY runtime event.
+///
+/// `Exited` is delivered after every `Output` the child produced, so a consumer can treat it as
+/// "this PTY is finished" and drop the handle without losing bytes still in flight. An explicit
+/// [`TerminalPty::kill`] is the exception: it stops the reader deliberately, so anything buffered
+/// at that moment is discarded and the exit is reported as soon as the child is reaped.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TerminalPtyEvent {
     /// Raw bytes emitted by PTY stdout/stderr stream.
@@ -616,6 +777,92 @@ mod tests {
         );
 
         drop(pty);
+    }
+
+    /// A consumer that treats `Exited` as "this PTY is done" and drops the handle - the natural
+    /// way to use this API, and what `hyprmux` does - must still have been given everything the
+    /// child wrote. Dropping kills the reader, so an exit event emitted ahead of the reader used
+    /// to discard whatever was still sitting in the master's buffer: a command that wrote and
+    /// exited immediately could lose its output entirely.
+    #[test]
+    fn a_fast_command_s_output_arrives_before_its_exit() {
+        // The race needs the child to write and exit in one breath, so retry: a single run that
+        // happens to schedule the reader first would pass either way.
+        for attempt in 0..40 {
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let sink = events.clone();
+            let mut pty = Some(
+                TerminalPty::spawn(
+                    TerminalPtyConfig::new("/bin/sh")
+                        .arg("-c")
+                        .arg("printf 'fast output\\n'; exit 3"),
+                    move |event| sink.lock().expect("events").push(event),
+                )
+                .expect("spawn"),
+            );
+
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while std::time::Instant::now() < deadline {
+                let exited = events
+                    .lock()
+                    .expect("events")
+                    .iter()
+                    .any(|event| matches!(event, TerminalPtyEvent::Exited(_)));
+                if exited {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            // Exactly what a consumer does on exit, and exactly what used to truncate the output.
+            drop(pty.take());
+
+            let events = events.lock().expect("events");
+            let text: String = events
+                .iter()
+                .filter_map(|event| match event {
+                    TerminalPtyEvent::Output(bytes) => Some(String::from_utf8_lossy(bytes)),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                text.contains("fast output"),
+                "attempt {attempt}: the command's output was lost; events: {events:?}"
+            );
+            assert!(
+                matches!(events.last(), Some(TerminalPtyEvent::Exited(3))),
+                "attempt {attempt}: the exit must come last and carry the real status; \
+                 events: {events:?}"
+            );
+        }
+    }
+
+    /// The exit event must still be delivered promptly when the reader cannot observe the end of
+    /// the stream, rather than waiting out the drain grace or being lost.
+    #[test]
+    fn killing_a_pty_reports_the_exit_without_waiting_for_a_drain() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let pty = TerminalPty::spawn(
+            TerminalPtyConfig::new("/bin/sh").arg("-c").arg("sleep 30"),
+            move |event| sink.lock().expect("events").push(event),
+        )
+        .expect("spawn");
+
+        let started = std::time::Instant::now();
+        pty.kill().expect("kill");
+        let deadline = started + EXIT_DRAIN_GRACE;
+        while std::time::Instant::now() < deadline {
+            if events
+                .lock()
+                .expect("events")
+                .iter()
+                .any(|event| matches!(event, TerminalPtyEvent::Exited(_)))
+            {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("a killed pty must report its exit without waiting out the drain grace");
     }
 
     #[test]
