@@ -487,10 +487,7 @@ mod tests {
     #[test]
     fn focus_offset_for_clamps_edge_nodes_to_content_bounds() {
         let graph = Graph::new()
-            .root(
-                GraphNode::new("root")
-                    .child(GraphNode::new("mid").child(GraphNode::new("leaf"))),
-            )
+            .root(GraphNode::new("root").child(GraphNode::new("mid").child(GraphNode::new("leaf"))))
             .direction(GraphDirection::LeftRight)
             .gap_x(8);
         let (content_w, content_h) = measure_graph(&graph);
