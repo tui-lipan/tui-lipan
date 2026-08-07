@@ -155,6 +155,16 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `TerminalPty` no longer loses the output of a command that writes and exits immediately.
+  `TerminalPtyEvent::Exited` came from a thread blocked on `child.wait()`, which returns the instant
+  the child dies — usually before the reader thread has been scheduled to pick up the bytes still
+  buffered on the master. Consumers reasonably treat `Exited` as "this PTY is finished" and drop the
+  handle, and dropping kills the reader, so those bytes were discarded rather than delivered late: a
+  fast command could show its exit status and none of its output. The exit event is now emitted by
+  whichever side can prove the stream is drained — the reader on end-of-stream or on an idle master
+  after the child is gone, with the wait thread stepping in only if the reader cannot get there — so
+  `Output` always precedes `Exited`. A killed PTY still reports its exit immediately.
+
 - `SearchPalette` no longer swallows its navigation keys when nothing matches. The internal input
   interceptor claimed `Enter` (and the arrows, `PageUp`/`PageDown`, `Home`/`End`) unconditionally,
   so an empty result list still sent an activation for a row that does not exist and reported the

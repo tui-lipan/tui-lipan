@@ -313,6 +313,11 @@ let pid = pty.pid();
 pty.resize(cols, rows)?;
 ```
 
+**Event ordering**: `Exited` is delivered *after* every `Output` the child produced, so it is safe
+to treat it as "this PTY is finished" and drop the handle — nothing the command wrote is still in
+flight. An explicit `kill()` is the exception: it stops the reader deliberately, so output in the
+buffer at that moment is discarded and the exit is reported as soon as the child is reaped.
+
 **PTY env defaults**: `TERM=xterm-256color`, `COLORTERM=truecolor` (overridable via `.env(...)`).
 
 `TerminalPty::pid()` returns the OS process id reported by the platform at spawn time, or `None` when unavailable.
