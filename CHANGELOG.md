@@ -11,8 +11,22 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- Table headers no longer underline the selection-gutter spaces, so labels like `PID` do not pick
+  up a long underscore from `unselected_symbol` padding.
+
 ### Added
 
+- `ChartSeriesMode::Braille` renders dense chart traces on a 2x4 subcell grid instead of limiting
+  connected samples to one glyph position per terminal cell.
+- `ChartAxis::tick_labels(...)` labels an axis with domain values instead of sample indices, so a
+  time series reads `22:40:00 … 22:40:59` rather than `0 … 59`. Labels spread evenly across the
+  axis with the ends anchored flush; any label that would collide with its neighbour is skipped, so
+  a dense set thins out in a narrow plot instead of overprinting. Axes without tick labels keep the
+  existing numeric endpoints.
+- `process_monitor` example recreates a compact desktop process inspector with live metric cards,
+  a selectable telemetry table, memory graph, event ledger, and keyboard command bar.
 - `Graph::focus_offset_for(path, viewport_w, viewport_h)` for controlled `PanView` focusing: same
   coordinate space as `center_offset_for`, but clamps to content bounds so edge nodes only move far
   enough to stay visible instead of scrolling empty space past the diagram.

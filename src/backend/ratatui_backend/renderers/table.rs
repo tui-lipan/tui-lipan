@@ -368,6 +368,12 @@ pub(crate) fn render_table(
                     } else {
                         None
                     };
+                    let symbol_style = Style {
+                        underline: Some(false),
+                        underline_color: None,
+                        strikethrough: Some(false),
+                        ..cell_style
+                    };
                     let text = build_cell_text(
                         None,
                         cell.content.as_ref(),
@@ -375,7 +381,7 @@ pub(crate) fn render_table(
                         row_height,
                         symbol,
                         cell_style,
-                        cell_style,
+                        symbol_style,
                     );
                     let p = Paragraph::new(text).scroll((dy, dx));
                     f.render_widget(p, effective_cell);

@@ -694,6 +694,14 @@ style directly.
 
 ## Widget Variants
 
+### `ChartSeriesMode`
+
+| Variant | Description |
+|---------|-------------|
+| `ChartSeriesMode::Line` **(default)** | Connected whole-cell glyphs configured by `point_char` and `line_char` |
+| `ChartSeriesMode::Braille` | Dense connected trace using a 2x4 subcell grid per terminal cell |
+| `ChartSeriesMode::Bars` | Vertical bars configured by `bar_char` |
+
 ### `SpinnerStyle`
 
 | Variant | Frames |
