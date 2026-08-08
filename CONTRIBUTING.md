@@ -68,8 +68,17 @@ relevant `CHANGELOG.md` line.
 
 ## Toolchain
 
-- **MSRV:** Rust 1.85 (`edition = "2024"`)
+- **MSRV:** Rust 1.90 (`edition = "2024"`)
 - Stable toolchain is expected for all CI jobs
+
+The crate's own code and its default features build on 1.88, but the `image`
+feature (and everything that enables it — `terminal-images`,
+`image-full-formats`, `clipboard-images` + `ratatui-image`) pulls
+`ratatui-image → icy_sixel → quantette`, and `quantette 0.5.1` declares
+`rust-version = "1.90"`. `icy_sixel 0.5.0` pins `quantette = "0.5.1"`, so there
+is no older resolution that avoids it. `rust-version` is a single
+package-level value with no per-feature form, so the manifest declares the
+ceiling the full feature set actually needs.
 
 ## Local development
 
