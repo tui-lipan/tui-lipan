@@ -536,6 +536,9 @@ Sparkline::new(metrics.clone())
 
 Multi-series chart with axes, legend, thresholds, and viewport windowing.
 
+`ChartSeriesMode::Line` draws one glyph per terminal cell, `Braille` uses a dense 2x4 subcell
+grid, and `Bars` draws vertical columns. Custom `point_char` and `line_char` apply to `Line` mode.
+
 | Prop | Type | Description |
 |------|------|-------------|
 | `series` | `Arc<[ChartSeries]>` / `series_arc` | Data series (`series(...)` collects into `Arc`; prefer `series_arc` when sharing) |
@@ -557,7 +560,7 @@ Multi-series chart with axes, legend, thresholds, and viewport windowing.
 
 ```rust
 let series = ChartSeries::new("CPU", cpu_data)
-    .mode(ChartSeriesMode::Line)
+    .mode(ChartSeriesMode::Braille)
     .style(Style::new().fg(Color::Cyan));
 
 Chart::new()
@@ -566,6 +569,25 @@ Chart::new()
     .show_grid(true)
     .thresholds(vec![ChartThreshold::new(80.0).style(Style::new().fg(Color::Red))])
 ```
+
+### Axis tick labels
+
+An axis labels its ends with sample indices by default (`0` … `59`). When the samples stand for
+something else — clock times, dates, bucket names — pass the labels explicitly:
+
+```rust
+Chart::new()
+    .series(vec![series])
+    .x_axis(ChartAxis::new().tick_labels([
+        "22:40:00", "22:40:15", "22:40:30", "22:40:45", "22:40:59",
+    ]))
+```
+
+Labels spread evenly across the axis: the first sits flush at the low end, the last flush at the
+high end, the rest centre on their fractional position. A label that would collide with the one
+before it is skipped, so the same list thins from five entries to three in a narrow plot rather
+than overprinting. `tick_labels` works on `y_axis` too, where labels run bottom-to-top and are
+right-aligned in the axis gutter.
 
 ---
 

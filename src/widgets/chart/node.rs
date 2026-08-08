@@ -186,6 +186,7 @@ fn hash_axis_range(axis: &ChartAxis, hasher: &mut impl Hasher) {
 }
 
 fn hash_axis_style(axis: &ChartAxis, hasher: &mut impl Hasher) {
+    axis.tick_labels.hash(hasher);
     axis.label.hash(hasher);
     axis.style.hash(hasher);
 }

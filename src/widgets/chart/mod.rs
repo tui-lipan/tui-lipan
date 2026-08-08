@@ -19,6 +19,8 @@ pub enum ChartSeriesMode {
     /// Draw connected trend points.
     #[default]
     Line,
+    /// Draw a connected high-resolution trace using a 2x4 braille subcell grid.
+    Braille,
     /// Draw vertical bars.
     Bars,
 }
@@ -93,6 +95,7 @@ pub struct ChartAxis {
     pub(crate) min: Option<f64>,
     pub(crate) max: Option<f64>,
     pub(crate) ticks: u16,
+    pub(crate) tick_labels: Arc<[Arc<str>]>,
     pub(crate) label: Option<Arc<str>>,
     pub(crate) style: Style,
 }
@@ -104,6 +107,7 @@ impl Default for ChartAxis {
             min: None,
             max: None,
             ticks: 4,
+            tick_labels: Arc::from([]),
             label: None,
             style: Style::default(),
         }
@@ -132,6 +136,17 @@ impl ChartAxis {
     /// Set preferred tick count.
     pub fn ticks(mut self, ticks: u16) -> Self {
         self.ticks = ticks.max(2);
+        self
+    }
+
+    /// Replace the numeric endpoint labels with explicit tick labels.
+    ///
+    /// Labels are spread evenly across the axis: the first sits at the low end,
+    /// the last at the high end, the rest centred on their fractional position.
+    /// A label that would collide with the previous one is skipped, so a dense
+    /// set degrades gracefully in a narrow plot instead of overprinting.
+    pub fn tick_labels<S: Into<Arc<str>>>(mut self, labels: impl IntoIterator<Item = S>) -> Self {
+        self.tick_labels = labels.into_iter().map(Into::into).collect();
         self
     }
 

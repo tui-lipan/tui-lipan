@@ -26,6 +26,7 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 |---------|-------------|
 | `todo` | Classic todo app: text input, add, toggle, scroll, delete confirmation |
 | `dashboard` | Multi-panel dashboard: `Grid`, `Sparkline`, `StatusBar`, `Badge` |
+| `process_monitor` | Dense process inspector with metric cards, selectable process table, memory chart, and command bar |
 | `forms` | Form patterns: `Radio`, `Select`, `ComboBox`, `Slider`, `DatePicker` |
 | `form_validation` | Login-style validation: `Validator`, `Input::error(...)`, Enter-to-submit |
 | `mockup` | Dashboard-style layout prototyping with `mockup!` (no `Component` code) |

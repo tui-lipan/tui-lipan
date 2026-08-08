@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::style::resolve::{resolve_accent_style, resolve_base_style, resolve_muted_style};
 use crate::style::{Rect, Theme};
+use crate::utils::braille::{braille_char, line_pixels, set_pixel};
 use crate::widgets::ChartSeriesMode;
 use crate::widgets::internal::ChartNode;
 
@@ -127,6 +128,7 @@ fn render_legend(
         let style = to_ratatui_style(node.legend_style.patch(series.style));
         let marker = match series.mode {
             ChartSeriesMode::Line => series.point_char,
+            ChartSeriesMode::Braille => '⠒',
             ChartSeriesMode::Bars => series.bar_char,
         };
         let label = format!("{marker} {}", series.name);
@@ -217,6 +219,9 @@ fn render_series(
                     }
                 }
             }
+            ChartSeriesMode::Braille => {
+                render_braille_series(f, plot_rect, &series.points, style, clip, bounds);
+            }
             ChartSeriesMode::Line => {
                 let mut prev = None;
                 for (x_norm, y_norm) in series.points.iter().copied() {
@@ -245,6 +250,68 @@ fn render_series(
     }
 }
 
+fn render_braille_series(
+    f: &mut ratatui::Frame<'_>,
+    plot_rect: Rect,
+    points: &[(f64, f64)],
+    style: ratatui::style::Style,
+    clip: &ClipBounds,
+    bounds: &ClipBounds,
+) {
+    let cells = braille_cells(points, plot_rect.w, plot_rect.h);
+    for (index, dots) in cells.into_iter().enumerate() {
+        if dots == 0 {
+            continue;
+        }
+        let x = plot_rect
+            .x
+            .saturating_add((index % plot_rect.w as usize) as i16);
+        let y = plot_rect
+            .y
+            .saturating_add((index / plot_rect.w as usize) as i16);
+        draw_char(f, x, y, braille_char(dots), style, clip, bounds);
+    }
+}
+
+fn braille_cells(points: &[(f64, f64)], width: u16, height: u16) -> Vec<u8> {
+    let mut cells = vec![0; width as usize * height as usize];
+    if width == 0 || height == 0 || points.is_empty() {
+        return cells;
+    }
+
+    let sub_width = i32::from(width) * 2;
+    let sub_height = i32::from(height) * 4;
+    let map = |x_norm: f64, y_norm: f64| {
+        let x = (x_norm.clamp(0.0, 1.0) * f64::from(sub_width - 1)).round() as i32;
+        let y = ((1.0 - y_norm.clamp(0.0, 1.0)) * f64::from(sub_height - 1)).round() as i32;
+        (x, y)
+    };
+
+    let mut previous = map(points[0].0, points[0].1);
+    set_braille_dot(&mut cells, width, previous.0, previous.1);
+    for &(x_norm, y_norm) in &points[1..] {
+        let current = map(x_norm, y_norm);
+        line_pixels(previous, current, |x, y| {
+            set_braille_dot(&mut cells, width, x, y);
+        });
+        previous = current;
+    }
+    cells
+}
+
+fn set_braille_dot(cells: &mut [u8], width: u16, x: i32, y: i32) {
+    if x < 0 || y < 0 || width == 0 {
+        return;
+    }
+    let cell_x = x as usize / 2;
+    let cell_y = y as usize / 4;
+    let index = cell_y.saturating_mul(width as usize).saturating_add(cell_x);
+    let Some(cell) = cells.get_mut(index) else {
+        return;
+    };
+    *cell = set_pixel(*cell, (x as usize % 2) as u8, (y as usize % 4) as u8);
+}
+
 fn render_axes(
     f: &mut ratatui::Frame<'_>,
     node: &ChartNode,
@@ -261,29 +328,45 @@ fn render_axes(
             draw_char(f, axis_x, y, '│', axis_style, clip, bounds);
         }
 
-        let top = format!("{:>7.2}", node.output.y_max);
-        let bottom = format!("{:>7.2}", node.output.y_min);
-        let _ = draw_text(
-            f,
-            inner.x,
-            plot_rect.y,
-            &top,
-            to_ratatui_style(node.style.patch(node.axis_style).patch(node.y_axis.style)),
-            clip,
-            bounds,
-        );
-        let _ = draw_text(
-            f,
-            inner.x,
-            plot_rect
+        let label_style =
+            to_ratatui_style(node.style.patch(node.axis_style).patch(node.y_axis.style));
+        let gutter = plot_rect.x.saturating_sub(inner.x).max(1);
+        // Top row is the high end of the range, so labels run last-to-first.
+        let mut last_row: Option<i16> = None;
+        for (label, offset) in tick_positions(&node.y_axis.tick_labels, plot_rect.h) {
+            let y = plot_rect
                 .y
                 .saturating_add(plot_rect.h as i16)
-                .saturating_sub(1),
-            &bottom,
-            to_ratatui_style(node.style.patch(node.axis_style).patch(node.y_axis.style)),
-            clip,
-            bounds,
-        );
+                .saturating_sub(1)
+                .saturating_sub(offset);
+            if last_row == Some(y) {
+                continue;
+            }
+            last_row = Some(y);
+            let x = inner
+                .x
+                .saturating_add(gutter)
+                .saturating_sub(label.chars().count() as i16);
+            let _ = draw_text(f, x.max(inner.x), y, label, label_style, clip, bounds);
+        }
+
+        if node.y_axis.tick_labels.is_empty() {
+            let top = format!("{:>7.2}", node.output.y_max);
+            let bottom = format!("{:>7.2}", node.output.y_min);
+            let _ = draw_text(f, inner.x, plot_rect.y, &top, label_style, clip, bounds);
+            let _ = draw_text(
+                f,
+                inner.x,
+                plot_rect
+                    .y
+                    .saturating_add(plot_rect.h as i16)
+                    .saturating_sub(1),
+                &bottom,
+                label_style,
+                clip,
+                bounds,
+            );
+        }
     }
 
     if node.x_axis.show {
@@ -292,34 +375,78 @@ fn render_axes(
             draw_char(f, x, y, '─', axis_style, clip, bounds);
         }
 
-        let start = node.viewport_start;
-        let end = if node.output.sample_count == 0 {
-            start
-        } else {
-            start + node.output.sample_count.saturating_sub(1)
-        };
-        let _ = draw_text(
-            f,
-            plot_rect.x,
-            y,
-            &format!("{start}"),
-            to_ratatui_style(node.style.patch(node.axis_style).patch(node.x_axis.style)),
-            clip,
-            bounds,
-        );
-        let _ = draw_text(
-            f,
-            plot_rect
-                .x
-                .saturating_add(plot_rect.w as i16)
-                .saturating_sub(end.to_string().len() as i16),
-            y,
-            &format!("{end}"),
-            to_ratatui_style(node.style.patch(node.axis_style).patch(node.x_axis.style)),
-            clip,
-            bounds,
-        );
+        let label_style =
+            to_ratatui_style(node.style.patch(node.axis_style).patch(node.x_axis.style));
+
+        if node.x_axis.tick_labels.is_empty() {
+            let start = node.viewport_start;
+            let end = if node.output.sample_count == 0 {
+                start
+            } else {
+                start + node.output.sample_count.saturating_sub(1)
+            };
+            let _ = draw_text(
+                f,
+                plot_rect.x,
+                y,
+                &format!("{start}"),
+                label_style,
+                clip,
+                bounds,
+            );
+            let _ = draw_text(
+                f,
+                plot_rect
+                    .x
+                    .saturating_add(plot_rect.w as i16)
+                    .saturating_sub(end.to_string().len() as i16),
+                y,
+                &format!("{end}"),
+                label_style,
+                clip,
+                bounds,
+            );
+            return;
+        }
+
+        let right_edge = plot_rect.x.saturating_add(plot_rect.w as i16);
+        let mut next_free = plot_rect.x;
+        for (label, offset) in tick_positions(&node.x_axis.tick_labels, plot_rect.w) {
+            let width = label.chars().count() as i16;
+            let centre = plot_rect.x.saturating_add(offset);
+            // Anchor the ends flush so the axis reads edge to edge, centre the rest.
+            let x = if offset == 0 {
+                plot_rect.x
+            } else if centre >= right_edge.saturating_sub(1) {
+                right_edge.saturating_sub(width)
+            } else {
+                centre.saturating_sub(width / 2)
+            };
+            let x = x.clamp(
+                plot_rect.x,
+                right_edge.saturating_sub(width).max(plot_rect.x),
+            );
+            if x < next_free || x.saturating_add(width) > right_edge {
+                continue;
+            }
+            next_free = draw_text(f, x, y, label, label_style, clip, bounds).saturating_add(1);
+        }
     }
+}
+
+/// Pair each label with its cell offset from the low end of a `span`-wide axis.
+fn tick_positions<'a>(
+    labels: &'a [Arc<str>],
+    span: u16,
+) -> impl Iterator<Item = (&'a str, i16)> + 'a {
+    let last = labels.len().saturating_sub(1);
+    labels.iter().enumerate().map(move |(index, label)| {
+        // A lone label has no span to distribute over, so it sits at the low end.
+        let offset = (index * usize::from(span.saturating_sub(1)))
+            .checked_div(last)
+            .unwrap_or(0);
+        (label.as_ref(), offset as i16)
+    })
 }
 
 struct LineDrawCtx {
@@ -422,4 +549,56 @@ fn scale_index(idx: i16, max_idx: i16, span: u16) -> i16 {
         return 0;
     }
     ((idx as f64 / max_idx as f64) * (span.saturating_sub(1) as f64)).round() as i16
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{braille_cells, tick_positions};
+    use std::sync::Arc;
+
+    fn labels(names: &[&str]) -> Vec<Arc<str>> {
+        names.iter().copied().map(Arc::from).collect()
+    }
+
+    #[test]
+    fn tick_positions_anchor_both_ends_of_the_span() {
+        let labels = labels(&["a", "b", "c"]);
+
+        let placed: Vec<_> = tick_positions(&labels, 21).collect();
+
+        assert_eq!(placed, vec![("a", 0), ("b", 10), ("c", 20)]);
+    }
+
+    #[test]
+    fn tick_positions_place_a_lone_label_at_the_low_end() {
+        let labels = labels(&["only"]);
+
+        let placed: Vec<_> = tick_positions(&labels, 40).collect();
+
+        assert_eq!(placed, vec![("only", 0)]);
+    }
+
+    #[test]
+    fn tick_positions_stay_inside_a_degenerate_span() {
+        let labels = labels(&["a", "b"]);
+
+        let placed: Vec<_> = tick_positions(&labels, 0).collect();
+
+        assert_eq!(placed, vec![("a", 0), ("b", 0)]);
+    }
+
+    #[test]
+    fn braille_line_uses_both_horizontal_subcells() {
+        let cells = braille_cells(&[(0.0, 0.5), (1.0, 0.5)], 3, 1);
+
+        assert_eq!(cells.len(), 3);
+        assert!(cells.iter().all(|dots| dots.count_ones() >= 2));
+    }
+
+    #[test]
+    fn braille_line_connects_vertical_extremes() {
+        let cells = braille_cells(&[(0.5, 0.0), (0.5, 1.0)], 1, 2);
+
+        assert_eq!(cells, vec![0xb8, 0xb8]);
+    }
 }
