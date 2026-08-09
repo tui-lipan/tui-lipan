@@ -118,6 +118,20 @@ impl KeyBinding {
         self.canonical.to_ascii_lowercase()
     }
 
+    /// Returns a compact display string with lowercase ordinary keys and modifiers.
+    ///
+    /// Shift-only ASCII letters and US-layout punctuation are shown as the glyph they produce
+    /// (`shift-m` → `M`, `shift-/` → `?`). Shift remains explicit for special keys and for
+    /// letters combined with another modifier. This changes display text only; matching and
+    /// binding identity remain unchanged.
+    pub fn compact_display(&self) -> String {
+        self.canonical_lowercase()
+            .split_whitespace()
+            .map(compact_display_step)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     pub(crate) fn from_key_event(key: KeyEvent) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -238,6 +252,18 @@ impl KeyBindings {
         }
         out
     }
+
+    /// Returns compact display text for alternatives, stable-deduplicated after normalization.
+    pub fn compact_display(&self) -> String {
+        let mut unique = Vec::with_capacity(self.bindings.len());
+        for binding in &self.bindings {
+            let compact = binding.compact_display();
+            if !unique.contains(&compact) {
+                unique.push(compact);
+            }
+        }
+        unique.join(" / ")
+    }
 }
 
 impl FromStr for KeyBindings {
@@ -286,6 +312,11 @@ pub fn format_binding_lowercase(raw: &str) -> Result<String, KeyBindingParseErro
     Ok(KeyBinding::from_str(raw)?.canonical_lowercase())
 }
 
+/// Parse and compactly format one binding string.
+pub fn format_binding_compact(raw: &str) -> Result<String, KeyBindingParseError> {
+    Ok(KeyBinding::from_str(raw)?.compact_display())
+}
+
 /// Parse and canonicalize comma-separated binding alternatives.
 pub fn format_bindings(raw: &str) -> Result<String, KeyBindingParseError> {
     Ok(KeyBindings::from_str(raw)?.to_string())
@@ -294,6 +325,92 @@ pub fn format_bindings(raw: &str) -> Result<String, KeyBindingParseError> {
 /// Parse and canonicalize comma-separated binding alternatives, then lowercase them.
 pub fn format_bindings_lowercase(raw: &str) -> Result<String, KeyBindingParseError> {
     Ok(KeyBindings::from_str(raw)?.canonical_lowercase())
+}
+
+/// Parse and compactly format comma-separated binding alternatives.
+pub fn format_bindings_compact(raw: &str) -> Result<String, KeyBindingParseError> {
+    Ok(KeyBindings::from_str(raw)?.compact_display())
+}
+
+fn compact_display_step(step: &str) -> String {
+    let mut rest = step;
+    let mut modifiers = Vec::with_capacity(4);
+    for modifier in ["ctrl", "alt", "cmd", "shift"] {
+        let prefix = format!("{modifier}+");
+        if let Some(stripped) = rest.strip_prefix(&prefix) {
+            modifiers.push(modifier);
+            rest = stripped;
+        }
+    }
+
+    if !modifiers.contains(&"shift") {
+        return step.to_string();
+    }
+
+    let has_other_modifier = modifiers.iter().any(|modifier| *modifier != "shift");
+    if let Some(glyph) = shifted_us_layout_glyph(rest) {
+        return if has_other_modifier {
+            compact_join_modifiers(&modifiers, "shift", &glyph.to_string())
+        } else {
+            glyph.to_string()
+        };
+    }
+
+    if !has_other_modifier && rest.len() == 1 {
+        let key = rest.as_bytes()[0] as char;
+        if key.is_ascii_alphabetic() {
+            return key.to_ascii_uppercase().to_string();
+        }
+    }
+
+    compact_join_modifiers(&modifiers, "", rest)
+}
+
+fn compact_join_modifiers(modifiers: &[&str], omitted: &str, key: &str) -> String {
+    let mut out = String::new();
+    for modifier in modifiers {
+        if *modifier == omitted {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('+');
+        }
+        out.push_str(modifier);
+    }
+    if !key.is_empty() {
+        if !out.is_empty() {
+            out.push('+');
+        }
+        out.push_str(key);
+    }
+    out
+}
+
+fn shifted_us_layout_glyph(key: &str) -> Option<char> {
+    Some(match key {
+        "`" => '~',
+        "1" => '!',
+        "2" => '@',
+        "3" => '#',
+        "4" => '$',
+        "5" => '%',
+        "6" => '^',
+        "7" => '&',
+        "8" => '*',
+        "9" => '(',
+        "0" => ')',
+        "-" => '_',
+        "=" => '+',
+        "[" => '{',
+        "]" => '}',
+        "\\" => '|',
+        ";" => ':',
+        "'" => '"',
+        "," => '<',
+        "." => '>',
+        "/" => '?',
+        _ => return None,
+    })
 }
 
 pub(crate) fn normalize_binding(raw: &str) -> String {
@@ -1154,6 +1271,60 @@ mod tests {
             format_bindings_lowercase("ctrl+d, super+q").unwrap(),
             "ctrl+d / cmd+q"
         );
+    }
+
+    #[test]
+    fn compact_display_uses_shifted_letters_and_punctuation() {
+        assert_eq!(KeyBinding::from_str("m").unwrap().compact_display(), "m");
+        assert_eq!(
+            KeyBinding::from_str("shift-m").unwrap().compact_display(),
+            "M"
+        );
+        assert_eq!(format_binding_compact("m").unwrap(), "m");
+        assert_eq!(format_binding_compact("shift-m").unwrap(), "M");
+        assert_eq!(format_binding_compact("shift-/").unwrap(), "?");
+        assert_eq!(format_binding_compact("shift-1").unwrap(), "!");
+        assert_eq!(format_binding_compact("shift-0").unwrap(), ")");
+        assert_eq!(format_binding_compact("shift-`").unwrap(), "~");
+        assert_eq!(format_binding_compact("shift-=").unwrap(), "+");
+        assert_eq!(format_binding_compact("shift-\\").unwrap(), "|");
+    }
+
+    #[test]
+    fn compact_display_keeps_shift_for_modified_letters_but_collapses_punctuation() {
+        assert_eq!(
+            format_binding_compact("ctrl-shift-x").unwrap(),
+            "ctrl+shift+x"
+        );
+        assert_eq!(format_binding_compact("ctrl-shift-3").unwrap(), "ctrl+#");
+        assert_eq!(format_binding_compact("alt-shift-/").unwrap(), "alt+?");
+    }
+
+    #[test]
+    fn compact_display_deduplicates_aliases_and_preserves_chords() {
+        let aliases = KeyBindings::from_str("?, shift-/ , shift-m, m").unwrap();
+        assert_eq!(aliases.compact_display(), "? / M / m");
+        assert_eq!(
+            format_bindings_compact("?, shift-/ , shift-m, m").unwrap(),
+            "? / M / m"
+        );
+        assert_eq!(
+            format_bindings_compact("ctrl-#, ctrl-shift-3").unwrap(),
+            "ctrl+#"
+        );
+        assert_eq!(
+            format_binding_compact("shift-m ctrl-shift-x").unwrap(),
+            "M ctrl+shift+x"
+        );
+    }
+
+    #[test]
+    fn compact_display_keeps_special_shift_and_literal_plus_minus_keys() {
+        assert_eq!(format_binding_compact("shift-tab").unwrap(), "shift+tab");
+        assert_eq!(format_binding_compact("shift-left").unwrap(), "shift+left");
+        assert_eq!(format_binding_compact("+").unwrap(), "+");
+        assert_eq!(format_binding_compact("minus").unwrap(), "-");
+        assert_eq!(format_binding_compact("ctrl-plus -").unwrap(), "ctrl++ -");
     }
 
     // --- Chord support ---

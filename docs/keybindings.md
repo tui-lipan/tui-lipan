@@ -185,8 +185,10 @@ use tui_lipan::input::{
     KeyBinding,
     KeyBindings,
     format_binding,
+    format_binding_compact,
     format_binding_lowercase,
     format_bindings,
+    format_bindings_compact,
     format_bindings_lowercase,
 };
 
@@ -204,10 +206,20 @@ assert_eq!(format_binding("control-shift-up")?, "Ctrl+Shift+Up");
 assert_eq!(format_bindings("super-c, ctrl-insert")?, "Cmd+C / Ctrl+Insert");
 assert_eq!(format_binding_lowercase("Esc")?, "esc");
 assert_eq!(format_bindings_lowercase("ctrl+d, super+q")?, "ctrl+d / cmd+q");
+assert_eq!(format_binding_compact("shift-m")?, "M");
+assert_eq!(format_bindings_compact("?, shift-/, ctrl-#, ctrl-shift-3")?, "? / ctrl+#");
 
 assert_eq!(one.canonical_lowercase(), "cmd+p");
 assert_eq!(many.canonical_lowercase(), "ctrl+d / ctrl+q");
 ```
+
+`compact_display()` is an opt-in hint format. It lowercases ordinary keys and modifiers, renders
+shift-only ASCII letters and US-layout punctuation as their produced glyphs (`shift-m` → `M`,
+`shift-/` → `?`), and stable-deduplicates equivalent alternatives. Shift stays explicit for
+special keys and letters combined with another modifier (`shift-tab` → `shift+tab`,
+`ctrl-shift-x` → `ctrl+shift+x`); shifted punctuation can collapse with other modifiers
+(`ctrl-shift-3` → `ctrl+#`). Chord steps remain separated by spaces, and this formatting never
+changes binding equality, parsing, or matching.
 
 ### Expanding a binding into key events
 

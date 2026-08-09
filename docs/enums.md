@@ -968,18 +968,22 @@ Public shortcut binding types from `tui_lipan::input`. Parsing: **whitespace** =
 
 | Type | Description |
 |------|-------------|
-| `KeyBinding` | One shortcut or chord (`FromStr`, `Display`, `matches_sequence`, `is_chord`, `step_count`, `canonical_lowercase`) |
-| `KeyBindings` | Comma-separated alternatives (`FromStr`, `Display`, `canonical_lowercase`, `iter`, `primary`, `is_empty`, `len`) |
+| `KeyBinding` | One shortcut or chord (`FromStr`, `Display`, `matches_sequence`, `is_chord`, `step_count`, `canonical_lowercase`, `compact_display`) |
+| `KeyBindings` | Comma-separated alternatives (`FromStr`, `Display`, `canonical_lowercase`, `compact_display`, `iter`, `primary`, `is_empty`, `len`) |
 | `ChordMatcher<T>` | Stateful incremental matcher for chords (`feed`, `reset`, `is_pending`) |
 | `ChordResult<T>` | `None` / `Pending` / `Matched` from `ChordMatcher::feed` |
 | `KeyBindingParseError` | Parse error type for invalid binding strings |
 
-Lowercase helpers are also available:
+Lowercase and compact display helpers are also available:
 
 - `KeyBinding::canonical_lowercase()`
 - `KeyBindings::canonical_lowercase()`
+- `KeyBinding::compact_display()`
+- `KeyBindings::compact_display()`
 - `format_binding_lowercase(...)`
 - `format_bindings_lowercase(...)`
+- `format_binding_compact(...)`
+- `format_bindings_compact(...)`
 
 ### `SentinelId`
 

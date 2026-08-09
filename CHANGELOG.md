@@ -54,6 +54,11 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Opt-in compact keybinding display via `KeyBinding::compact_display()` and
+  `KeyBindings::compact_display()`, plus `format_binding_compact` and
+  `format_bindings_compact` helpers. Shift-only letters and US-layout punctuation render as
+  produced glyphs, equivalent alternatives are stable-deduplicated, and executable binding
+  identity is unchanged.
 - Interaction API parity for `Slider`, `DatePicker`, and `Radio`: `disabled` /
   `disabled_style`, focus props (`focusable`, `tab_stop`, `on_focus`, `on_blur`),
   and `on_key` where applicable. `Slider` also gains track `hover_style` (with
