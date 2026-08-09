@@ -68,6 +68,8 @@ pub(crate) fn reconcile_with_overlays_mode(
     tree.set_overlay_roots(overlay_state.roots);
 
     tree.sweep(epoch);
+    #[cfg(debug_assertions)]
+    tree.assert_unique_focus_keys();
     #[cfg(test)]
     tree.assert_tree_sane();
 }

@@ -119,8 +119,9 @@ fn interaction_chain_radio() {
         .focus_style_slot(StyleSlot::Inherit)
         .focusable(true)
         .tab_stop(true)
-        .on_focus(Callback::new(|_| {}))
-        .on_blur(Callback::new(|_| {}))
+        .focus_key("radio-test")
+        .on_focus(Callback::new(|_i| {}))
+        .on_blur(Callback::new(|_i| {}))
         .on_key(KeyHandler::new(|_key| false));
 }
 
@@ -130,8 +131,10 @@ fn interaction_chain_date_picker() {
         .disabled_style(Style::default())
         .focusable(true)
         .tab_stop(true)
-        .on_focus(Callback::new(|_| {}))
-        .on_blur(Callback::new(|_| {}));
+        .focus_key("datepicker-test")
+        .on_focus(Callback::new(|_ev| {}))
+        .on_blur(Callback::new(|_ev| {}))
+        .on_key(KeyHandler::new(|_key| false));
 }
 
 fn interaction_chain_select() {

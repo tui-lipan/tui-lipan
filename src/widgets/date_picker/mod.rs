@@ -6,14 +6,26 @@ mod utils;
 pub use types::*;
 pub(crate) use utils::*;
 
-use crate::callback::Callback;
-use crate::core::element::Element;
-use crate::core::event::MouseEvent;
+use crate::callback::{Callback, KeyHandler};
+use crate::core::element::{Element, IntoElement};
+use crate::core::event::{KeyCode, KeyEvent, MouseEvent};
 use crate::style::{BorderStyle, Length, Padding, Style, StyleSlot};
 use crate::widgets::{BorderLabels, Button, Center, Frame, FrameLabel, HStack, Text, VStack};
 use std::sync::Arc;
 
 /// A simple calendar-based date selection widget.
+///
+/// Keyboard model (WAI-ARIA grid / roving tabindex):
+/// - The selected day is the sole tab stop and focus entry.
+/// - Other in-month days stay mouse-activatable but are not focusable, so Tab
+///   cannot walk cell-by-cell.
+/// - Left/Right move ±1 day, Up/Down ±7 days (emitting [`DateEvent`] via
+///   `on_select`, including across month boundaries).
+/// - PageUp / PageDown move to the previous / next month with the day clamped
+///   to that month's length (via `on_select` when set, otherwise the month
+///   callbacks).
+/// - Home / End go to the first / last day of the **month** (a picker-oriented
+///   variant of the ARIA grid pattern, which uses week bounds).
 #[derive(Clone)]
 pub struct DatePicker {
     pub(crate) year: i32,
@@ -41,11 +53,20 @@ pub struct DatePicker {
     pub(crate) disabled_style: Style,
     pub(crate) focusable: bool,
     pub(crate) tab_stop: bool,
-    pub(crate) on_focus: Option<Callback<()>>,
-    pub(crate) on_blur: Option<Callback<()>>,
+    pub(crate) focus_key: Option<Arc<str>>,
+    pub(crate) on_focus: Option<Callback<DateEvent>>,
+    pub(crate) on_blur: Option<Callback<DateEvent>>,
     pub(crate) on_select: Option<Callback<DateEvent>>,
     pub(crate) on_prev_month: Option<Callback<()>>,
     pub(crate) on_next_month: Option<Callback<()>>,
+    pub(crate) on_key: Option<KeyHandler>,
+}
+
+fn derived_focus_key(title: Option<&str>) -> Arc<str> {
+    match title {
+        Some(title) if !title.is_empty() => Arc::from(format!("__tui_lipan_datepicker:{title}")),
+        _ => Arc::from("__tui_lipan_datepicker"),
+    }
 }
 
 impl DatePicker {
@@ -77,11 +98,13 @@ impl DatePicker {
             disabled_style: Style::default(),
             focusable: true,
             tab_stop: true,
+            focus_key: None,
             on_focus: None,
             on_blur: None,
             on_select: None,
             on_prev_month: None,
             on_next_month: None,
+            on_key: None,
         }
     }
 
@@ -259,26 +282,39 @@ impl DatePicker {
         self
     }
 
-    /// Control whether day cells are focusable.
+    /// Control whether the selected day cell is focusable.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.focusable = focusable;
         self
     }
 
-    /// Control whether day cells participate in tab traversal.
+    /// Control whether the selected day participates in tab traversal.
+    ///
+    /// Non-selected days are never tab stops (roving focus).
     pub fn tab_stop(mut self, tab_stop: bool) -> Self {
         self.tab_stop = tab_stop;
         self
     }
 
-    /// Set the callback fired when a day cell gains focus.
-    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+    /// Key applied to the selected day so focus follows arrow-driven selection.
+    ///
+    /// When omitted, the key is derived from `title` when set (so distinct titled
+    /// pickers do not collide), otherwise a shared default. The key must stay
+    /// stable across month changes — do not encode year/month. Override when
+    /// two untitled pickers share a tree (or to give the picker an app-owned key).
+    pub fn focus_key(mut self, key: impl Into<Arc<str>>) -> Self {
+        self.focus_key = Some(key.into());
+        self
+    }
+
+    /// Set the callback fired when the selected day cell gains focus.
+    pub fn on_focus(mut self, cb: Callback<DateEvent>) -> Self {
         self.on_focus = Some(cb);
         self
     }
 
-    /// Set the callback fired when a day cell loses focus.
-    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+    /// Set the callback fired when the selected day cell loses focus.
+    pub fn on_blur(mut self, cb: Callback<DateEvent>) -> Self {
         self.on_blur = Some(cb);
         self
     }
@@ -298,6 +334,12 @@ impl DatePicker {
     /// Set next-month callback.
     pub fn on_next_month(mut self, cb: Callback<()>) -> Self {
         self.on_next_month = Some(cb);
+        self
+    }
+
+    /// Set focused key handler on the selected day (runs before built-in arrows).
+    pub fn on_key(mut self, handler: KeyHandler) -> Self {
+        self.on_key = Some(handler);
         self
     }
 }
@@ -328,6 +370,10 @@ impl From<DatePicker> for Element {
         let year = picker.year;
         let month = picker.month.clamp(1, 12);
         let day = picker.day.clamp(1, days_in_month(year, month));
+        let focus_key = picker
+            .focus_key
+            .clone()
+            .unwrap_or_else(|| derived_focus_key(picker.title.as_deref()));
 
         let header_label = format!(
             "{} {}",
@@ -339,12 +385,16 @@ impl From<DatePicker> for Element {
             .padding(0)
             .style(picker.nav_style)
             .hover_style_slot(picker.nav_hover_style)
-            .width(Length::Px(2));
+            .width(Length::Px(2))
+            .focusable(false)
+            .tab_stop(false);
         let mut next_button = Button::filled("▶")
             .padding(0)
             .style(picker.nav_style)
             .hover_style_slot(picker.nav_hover_style)
-            .width(Length::Px(2));
+            .width(Length::Px(2))
+            .focusable(false)
+            .tab_stop(false);
 
         if picker.disabled {
             prev_button = prev_button
@@ -446,41 +496,70 @@ impl From<DatePicker> for Element {
                 }
 
                 if day_counter <= days_in_current_month {
+                    let is_selected = day_counter == day;
                     let label = format!("{:>2}", day_counter);
+                    let cell_event = DateEvent {
+                        year,
+                        month,
+                        day: day_counter,
+                    };
                     let mut button = Button::filled(label)
                         .padding(0)
                         .width(Length::Px(2))
-                        .style(picker.day_style)
+                        .style(if is_selected {
+                            picker.selected_style
+                        } else {
+                            picker.day_style
+                        })
                         .hover_style_slot(picker.day_hover_style)
-                        .focusable(picker.focusable)
-                        .tab_stop(picker.tab_stop);
+                        // Only the selected day is focusable so arrow-driven
+                        // selection can reclaim focus via `focus_key`.
+                        .focusable(picker.focusable && is_selected && !picker.disabled)
+                        .tab_stop(picker.tab_stop && is_selected && !picker.disabled);
 
-                    if day_counter == day {
-                        button = button.style(picker.selected_style);
-                    }
-
-                    if let Some(cb) = picker.on_focus.clone() {
-                        button = button.on_focus(cb);
-                    }
-                    if let Some(cb) = picker.on_blur.clone() {
-                        button = button.on_blur(cb);
+                    if is_selected {
+                        if let Some(cb) = picker.on_focus.clone() {
+                            button = button.on_focus(Callback::new(move |_| cb.emit(cell_event)));
+                        }
+                        if let Some(cb) = picker.on_blur.clone() {
+                            button = button.on_blur(Callback::new(move |_| cb.emit(cell_event)));
+                        }
                     }
 
                     if picker.disabled {
                         button = button.disabled(true).disabled_style(picker.disabled_style);
                     } else if let Some(cb) = picker.on_select.clone() {
-                        let event = DateEvent {
-                            year,
-                            month,
-                            day: day_counter,
-                        };
+                        let event = cell_event;
                         button =
                             button.on_click(Callback::new(move |_: MouseEvent| cb.emit(event)));
                     } else {
                         button = button.disabled(true).disabled_style(picker.day_style);
                     }
 
-                    row = row.child(button);
+                    if is_selected && !picker.disabled {
+                        let on_select = picker.on_select.clone();
+                        let on_prev = picker.on_prev_month.clone();
+                        let on_next = picker.on_next_month.clone();
+                        let caller_on_key = picker.on_key.clone();
+                        button = button.on_key(KeyHandler::new(move |key: KeyEvent| {
+                            if caller_on_key
+                                .as_ref()
+                                .is_some_and(|handler| handler.handle(key))
+                            {
+                                return true;
+                            }
+                            handle_datepicker_key(
+                                key, year, month, day, &on_select, &on_prev, &on_next,
+                            )
+                        }));
+                    }
+
+                    let cell: Element = if is_selected {
+                        button.key(focus_key.clone())
+                    } else {
+                        button.into()
+                    };
+                    row = row.child(cell);
                     day_counter = day_counter.saturating_add(1);
                 } else if picker.show_outside_days {
                     let label = format!("{:>2}", next_day);
@@ -518,4 +597,107 @@ impl From<DatePicker> for Element {
 
         frame.into()
     }
+}
+
+fn handle_datepicker_key(
+    key: KeyEvent,
+    year: i32,
+    month: u32,
+    day: u32,
+    on_select: &Option<Callback<DateEvent>>,
+    on_prev: &Option<Callback<()>>,
+    on_next: &Option<Callback<()>>,
+) -> bool {
+    if key.mods.ctrl || key.mods.alt || key.mods.super_key {
+        return false;
+    }
+
+    match key.code {
+        KeyCode::Left => {
+            emit_day_delta(year, month, day, -1, on_select);
+            true
+        }
+        KeyCode::Right => {
+            emit_day_delta(year, month, day, 1, on_select);
+            true
+        }
+        KeyCode::Up => {
+            emit_day_delta(year, month, day, -7, on_select);
+            true
+        }
+        KeyCode::Down => {
+            emit_day_delta(year, month, day, 7, on_select);
+            true
+        }
+        KeyCode::PageUp => {
+            let (y, m) = prev_month(year, month);
+            let d = day.min(days_in_month(y, m));
+            if let Some(cb) = on_select {
+                cb.emit(DateEvent {
+                    year: y,
+                    month: m,
+                    day: d,
+                });
+            } else if let Some(cb) = on_prev {
+                cb.emit(());
+            }
+            true
+        }
+        KeyCode::PageDown => {
+            let (y, m) = next_month(year, month);
+            let d = day.min(days_in_month(y, m));
+            if let Some(cb) = on_select {
+                cb.emit(DateEvent {
+                    year: y,
+                    month: m,
+                    day: d,
+                });
+            } else if let Some(cb) = on_next {
+                cb.emit(());
+            }
+            true
+        }
+        KeyCode::Home => {
+            if let Some(cb) = on_select {
+                cb.emit(DateEvent {
+                    year,
+                    month,
+                    day: 1,
+                });
+            }
+            true
+        }
+        KeyCode::End => {
+            if let Some(cb) = on_select {
+                cb.emit(DateEvent {
+                    year,
+                    month,
+                    day: days_in_month(year, month),
+                });
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+fn emit_day_delta(
+    year: i32,
+    month: u32,
+    day: u32,
+    delta: i32,
+    on_select: &Option<Callback<DateEvent>>,
+) {
+    let Some(cb) = on_select else {
+        return;
+    };
+    let (y, m, d) = shift_day(year, month, day, delta);
+    if y == year && m == month && d == day {
+        return;
+    }
+    cb.emit(DateEvent {
+        year: y,
+        month: m,
+        day: d,
+    });
 }

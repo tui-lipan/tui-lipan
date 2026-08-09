@@ -1,10 +1,13 @@
 //! Radio widget.
 
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use rustc_hash::FxHasher;
+
 use crate::callback::{Callback, KeyHandler};
-use crate::core::element::Element;
-use crate::core::event::MouseEvent;
+use crate::core::element::{Element, IntoElement};
+use crate::core::event::{KeyCode, KeyEvent, MouseEvent};
 use crate::style::{Length, Padding, Style, StyleSlot};
 use crate::widgets::{Checkbox, CheckboxEvent, CheckboxVariant, HStack, VStack};
 
@@ -19,6 +22,12 @@ pub enum RadioLayout {
 }
 
 /// A radio button group.
+///
+/// Keyboard model (WAI-ARIA radio group / roving tabindex):
+/// - The selected option (or the first option when none is selected) is the
+///   sole tab stop and focus entry.
+/// - Other options stay mouse-activatable but are not focusable.
+/// - Arrow keys move the selection (and focus follows via [`Radio::focus_key`]).
 #[derive(Clone)]
 pub struct Radio {
     options: Vec<Arc<str>>,
@@ -40,9 +49,19 @@ pub struct Radio {
     disabled_style: Style,
     focusable: bool,
     tab_stop: bool,
-    on_focus: Option<Callback<()>>,
-    on_blur: Option<Callback<()>>,
+    focus_key: Option<Arc<str>>,
+    on_focus: Option<Callback<usize>>,
+    on_blur: Option<Callback<usize>>,
     on_key: Option<KeyHandler>,
+}
+
+fn derived_focus_key(options: &[Arc<str>]) -> Arc<str> {
+    let mut hasher = FxHasher::default();
+    options.len().hash(&mut hasher);
+    for option in options {
+        option.hash(&mut hasher);
+    }
+    Arc::from(format!("__tui_lipan_radio:{:016x}", hasher.finish()))
 }
 
 impl Radio {
@@ -68,6 +87,7 @@ impl Radio {
             disabled_style: Style::default(),
             focusable: true,
             tab_stop: true,
+            focus_key: None,
             on_focus: None,
             on_blur: None,
             on_key: None,
@@ -206,31 +226,43 @@ impl Radio {
         self
     }
 
-    /// Control whether each option is focusable.
+    /// Control whether the active option is focusable.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.focusable = focusable;
         self
     }
 
-    /// Control whether each option participates in tab traversal.
+    /// Control whether the active option participates in tab traversal.
+    ///
+    /// Non-active options are never tab stops (roving focus).
     pub fn tab_stop(mut self, tab_stop: bool) -> Self {
         self.tab_stop = tab_stop;
         self
     }
 
-    /// Set the callback fired when an option gains focus.
-    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+    /// Key applied to the active option so focus follows arrow-driven selection.
+    ///
+    /// When omitted, a key is derived from the option labels so distinct groups
+    /// in the same tree do not collide. Override when two groups share the same
+    /// labels (or to give the group a stable app-owned key).
+    pub fn focus_key(mut self, key: impl Into<Arc<str>>) -> Self {
+        self.focus_key = Some(key.into());
+        self
+    }
+
+    /// Set the callback fired when the active option gains focus.
+    pub fn on_focus(mut self, cb: Callback<usize>) -> Self {
         self.on_focus = Some(cb);
         self
     }
 
-    /// Set the callback fired when an option loses focus.
-    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+    /// Set the callback fired when the active option loses focus.
+    pub fn on_blur(mut self, cb: Callback<usize>) -> Self {
         self.on_blur = Some(cb);
         self
     }
 
-    /// Set focused key handler forwarded to each option.
+    /// Set focused key handler on the active option (runs before built-in arrows).
     pub fn on_key(mut self, handler: KeyHandler) -> Self {
         self.on_key = Some(handler);
         self
@@ -239,12 +271,23 @@ impl Radio {
 
 impl From<Radio> for Element {
     fn from(radio: Radio) -> Self {
+        let len = radio.options.len();
+        let active = radio
+            .selected
+            .filter(|&i| i < len)
+            .or_else(|| (len > 0).then_some(0));
+        let focus_key = radio
+            .focus_key
+            .clone()
+            .unwrap_or_else(|| derived_focus_key(&radio.options));
+
         let items: Vec<Element> = radio
             .options
             .into_iter()
             .enumerate()
             .map(|(i, option)| {
                 let is_selected = radio.selected == Some(i);
+                let is_active = active == Some(i);
                 let on_change = radio.on_change.clone();
 
                 let mut checkbox = Checkbox::new(is_selected)
@@ -262,17 +305,31 @@ impl From<Radio> for Element {
                     .height(radio.height)
                     .disabled(radio.disabled)
                     .disabled_style(radio.disabled_style)
-                    .focusable(radio.focusable)
-                    .tab_stop(radio.tab_stop);
+                    .focusable(radio.focusable && is_active && !radio.disabled)
+                    .tab_stop(radio.tab_stop && is_active && !radio.disabled);
 
-                if let Some(cb) = radio.on_focus.clone() {
-                    checkbox = checkbox.on_focus(cb);
+                if is_active {
+                    if let Some(cb) = radio.on_focus.clone() {
+                        checkbox = checkbox.on_focus(Callback::new(move |_| cb.emit(i)));
+                    }
+                    if let Some(cb) = radio.on_blur.clone() {
+                        checkbox = checkbox.on_blur(Callback::new(move |_| cb.emit(i)));
+                    }
                 }
-                if let Some(cb) = radio.on_blur.clone() {
-                    checkbox = checkbox.on_blur(cb);
-                }
-                if let Some(handler) = radio.on_key.clone() {
-                    checkbox = checkbox.on_key(handler);
+
+                if is_active && !radio.disabled {
+                    let change_cb = radio.on_change.clone();
+                    let caller_on_key = radio.on_key.clone();
+                    let layout = radio.layout;
+                    checkbox = checkbox.on_key(KeyHandler::new(move |key: KeyEvent| {
+                        if caller_on_key
+                            .as_ref()
+                            .is_some_and(|handler| handler.handle(key))
+                        {
+                            return true;
+                        }
+                        handle_radio_key(key, i, len, layout, &change_cb)
+                    }));
                 }
 
                 if let Some(cb) = on_change
@@ -290,7 +347,11 @@ impl From<Radio> for Element {
                     }));
                 }
 
-                checkbox.into()
+                if is_active {
+                    checkbox.key(focus_key.clone())
+                } else {
+                    checkbox.into()
+                }
             })
             .collect();
 
@@ -311,4 +372,39 @@ impl From<Radio> for Element {
             }
         }
     }
+}
+
+fn handle_radio_key(
+    key: KeyEvent,
+    current: usize,
+    len: usize,
+    layout: RadioLayout,
+    on_change: &Option<Callback<usize>>,
+) -> bool {
+    if len == 0 || key.mods.ctrl || key.mods.alt || key.mods.super_key {
+        return false;
+    }
+
+    let next = match (layout, key.code) {
+        (RadioLayout::Vertical, KeyCode::Up | KeyCode::Left)
+        | (RadioLayout::Horizontal, KeyCode::Left | KeyCode::Up) => {
+            Some(current.checked_sub(1).unwrap_or(len - 1))
+        }
+        (RadioLayout::Vertical, KeyCode::Down | KeyCode::Right)
+        | (RadioLayout::Horizontal, KeyCode::Right | KeyCode::Down) => Some((current + 1) % len),
+        (_, KeyCode::Home) => Some(0),
+        (_, KeyCode::End) => Some(len - 1),
+        _ => None,
+    };
+
+    let Some(next) = next else {
+        return false;
+    };
+
+    if next != current
+        && let Some(cb) = on_change
+    {
+        cb.emit(next);
+    }
+    true
 }
