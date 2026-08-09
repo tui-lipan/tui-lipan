@@ -482,7 +482,7 @@ Source: `src/widgets/spinner/mod.rs:184` (`Spinner`).
 
 ## Select
 
-Source: `src/widgets/select/mod.rs:51` (`Select`).
+Source: `src/widgets/select/mod.rs:56` (`Select`).
 
 | Field | Default initializer |
 |---|---|
@@ -514,10 +514,15 @@ Source: `src/widgets/select/mod.rs:51` (`Select`).
 | `match_button_width` | `false` |
 | `list_empty_text` | `None` |
 | `list_disabled_style` | `Style::default()` |
+| `focusable` | `true` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
+| `on_key` | `None` |
 
 ## ComboBox
 
-Source: `src/widgets/combo_box.rs:66` (`ComboBox`).
+Source: `src/widgets/combo_box.rs:71` (`ComboBox`).
 
 | Field | Default initializer |
 |---|---|
@@ -555,10 +560,15 @@ Source: `src/widgets/combo_box.rs:66` (`ComboBox`).
 | `on_open_change` | `None` |
 | `on_active_index_change` | `None` |
 | `on_commit` | `None` |
+| `focusable` | `true` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
+| `on_key` | `None` |
 
 ## MultiSelect
 
-Source: `src/widgets/multi_select.rs:138` (`MultiSelect`).
+Source: `src/widgets/multi_select.rs:143` (`MultiSelect`).
 
 | Field | Default initializer |
 |---|---|
@@ -582,6 +592,11 @@ Source: `src/widgets/multi_select.rs:138` (`MultiSelect`).
 | `disabled` | `false` |
 | `disabled_style` | `Style::default()` |
 | `empty_text` | `None` |
+| `focusable` | `true` |
+| `tab_stop` | `true` |
+| `on_focus` | `None` |
+| `on_blur` | `None` |
+| `on_key` | `None` |
 | `on_active_index_change` | `None` |
 | `on_toggle` | `None` |
 | `on_change` | `None` |

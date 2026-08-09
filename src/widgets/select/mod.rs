@@ -44,6 +44,11 @@ pub struct Select {
     pub(crate) match_button_width: bool,
     pub(crate) list_empty_text: Option<Arc<str>>,
     pub(crate) list_disabled_style: Style,
+    pub(crate) focusable: bool,
+    pub(crate) tab_stop: bool,
+    pub(crate) on_focus: Option<Callback<()>>,
+    pub(crate) on_blur: Option<Callback<()>>,
+    pub(crate) on_key: Option<KeyHandler>,
 }
 
 impl Default for Select {
@@ -98,6 +103,11 @@ impl Default for Select {
             match_button_width: false,
             list_empty_text: None,
             list_disabled_style: Style::default(),
+            focusable: true,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
+            on_key: None,
         }
     }
 }
@@ -159,6 +169,36 @@ impl Select {
     /// Set disabled state.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// Control whether the trigger button is focusable.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
+    }
+
+    /// Control whether the trigger button participates in tab traversal.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the trigger button gains focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the trigger button loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
+        self
+    }
+
+    /// Set focused key handler. Returning `true` consumes the key before built-in navigation.
+    pub fn on_key(mut self, handler: KeyHandler) -> Self {
+        self.on_key = Some(handler);
         self
     }
 
@@ -477,7 +517,16 @@ impl From<Select> for Element {
             .hover_style_slot(select.button_hover_style)
             .focus_style_slot(select.button_focus_style)
             .disabled_style(select.button_disabled_style)
-            .disabled(select.disabled);
+            .disabled(select.disabled)
+            .focusable(select.focusable)
+            .tab_stop(select.tab_stop);
+
+        if let Some(cb) = select.on_focus.clone() {
+            button = button.on_focus(cb);
+        }
+        if let Some(cb) = select.on_blur.clone() {
+            button = button.on_blur(cb);
+        }
 
         if matches!(select.button_variant, ButtonVariant::Outlined) {
             button = button.border_style(select.button_border_style);
@@ -516,7 +565,15 @@ impl From<Select> for Element {
             let change_cb = select.on_change.clone().or(select.on_select.clone());
             let on_select = select.on_select.clone();
             let on_toggle = select.on_toggle.clone();
+            let caller_on_key = select.on_key.clone();
             button = button.on_key(KeyHandler::new(move |key: KeyEvent| {
+                if caller_on_key
+                    .as_ref()
+                    .is_some_and(|handler| handler.handle(key))
+                {
+                    return true;
+                }
+
                 if key.code == KeyCode::Esc
                     && let Some(toggle) = &on_toggle
                 {
@@ -554,6 +611,8 @@ impl From<Select> for Element {
 
                 true
             }));
+        } else if let Some(handler) = select.on_key {
+            button = button.on_key(handler);
         }
 
         let list_hover_slot = select

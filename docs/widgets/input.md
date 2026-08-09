@@ -5,6 +5,34 @@ State-style setters in this file use [StyleSlot semantics](../styling.md#state-s
 theme roles by default; matching `extend_*_style` setters patch over the scoped
 theme role and `inherit_*_style` setters delegate to it.
 
+## Shared interaction contract
+
+Focusable input widgets share one interaction surface. Learn it on `Button`; it
+holds on the other focusable widgets below (enforced by
+`tests/interaction_parity.rs`):
+
+| Prop | Meaning |
+|------|---------|
+| `disabled` | Reject pointer/keyboard interaction and mute chrome |
+| `disabled_style` | Style patched when disabled (theme-muted by default) |
+| `hover_style` | Hover overlay (`extend_*` / `inherit_*` / `*_style_slot`) |
+| `focus_style` | Focus overlay (same slot family) |
+| `focusable` | May own focus (default `true`; `Hyperlink` defaults to `false`) |
+| `tab_stop` | Participates in Tab / Shift+Tab (default `true`) |
+| `on_focus` / `on_blur` | Fired when focus enters / leaves the control |
+| `on_key` | Focused key handler |
+
+**`on_key` ordering:** the caller's handler runs first. Returning `true` consumes
+the key; built-in navigation/activation runs only when it did not. Composites
+(`Select`, `ComboBox`, `MultiSelect`, `Hyperlink`) compose the same way.
+
+**Part-scoped styles:** composites keep honest `<part>_<state>_style` names
+(`button_hover_style`, `input_focus_style`, `day_hover_style`, …) for chrome that
+targets an inner part. Whole-control props above are separate from those prefixes.
+
+**Group focus:** for "did focus enter this composite?" without holding local
+state, use `ctx.has_focus_within()` / `has_focus_within_key()`.
+
 ## Button
 
 Interactive button.
@@ -206,7 +234,7 @@ Clickable text link built on top of `Button` with link-style defaults.
 | `disabled` | `bool` | Disable interaction |
 | `visited` | `bool` | Mark link as visited |
 | `on_activate` | `Callback<HyperlinkEvent>` | Emits on click, `Enter`, and `Space` |
-| `on_key` | `KeyHandler` | Fallback key handler |
+| `on_key` | `KeyHandler` | Caller-first key handler (returning `true` skips activation) |
 
 ```rust
 Hyperlink::new("Open docs")
@@ -941,6 +969,10 @@ Dropdown select widget.
 | `expanded` | `bool` | Controlled expanded state |
 | `width` | `Length` | Width |
 | `disabled` | `bool` | Disable interaction |
+| `focusable` | `bool` | Accept focus |
+| `tab_stop` | `bool` | Include trigger in Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Trigger focus gained / lost |
+| `on_key` | `KeyHandler` | Key while trigger focused (caller-first) |
 | `on_select` | `Callback<usize>` | Item selected |
 | `on_change` | `Callback<usize>` | Selection changed |
 | `on_toggle` | `Callback<bool>` | Dropdown opened/closed |
@@ -1011,6 +1043,10 @@ Controlled input + dropdown list for searchable selection.
 | `list_unfocused_selection_symbol_style` | `Style` | Active dropdown item symbol style while dropdown list is not focused; defaults to `list_selection_symbol_style` |
 | `match_input_width` | `bool` | Force dropdown width to match input width |
 | `disabled` | `bool` | Disable interaction |
+| `focusable` | `bool` | Accept focus |
+| `tab_stop` | `bool` | Include input in Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Input focus gained / lost |
+| `on_key` | `KeyHandler` | Key while input focused (caller-first) |
 | `input_hover_style` | `Style` | Input hover style |
 | `extend_input_hover_style` / `inherit_input_hover_style` | `Style` / `()` | Extend or inherit the input hover theme role |
 | `input_focus_style` | `Style` | Input focus style |
@@ -1066,6 +1102,10 @@ Controlled list for selecting multiple items with `Space` toggle and `Enter` com
 | `selection_full_width` | `bool` | Expand selection style across row width |
 | `disabled` | `bool` | Disable interaction |
 | `disabled_style` | `Style` | Style when disabled |
+| `focusable` | `bool` | Accept focus |
+| `tab_stop` | `bool` | Include in Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
+| `on_key` | `KeyHandler` | Key while focused (caller-first; returning `true` skips Space toggle) |
 | `empty_text` | `String` | Text when list is empty |
 | `empty_text_style` | `Style` | Empty-text style |
 | `on_active_index_change` | `Callback<usize>` | Active row changed |

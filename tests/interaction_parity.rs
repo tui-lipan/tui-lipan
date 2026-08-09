@@ -134,6 +134,52 @@ fn interaction_chain_date_picker() {
         .on_blur(Callback::new(|_| {}));
 }
 
+fn interaction_chain_select() {
+    let _ = Select::new()
+        .focusable(true)
+        .tab_stop(true)
+        .on_focus(Callback::new(|_| {}))
+        .on_blur(Callback::new(|_| {}))
+        .on_key(KeyHandler::new(|_key| false));
+}
+
+fn interaction_chain_combo_box() {
+    let _ = ComboBox::new()
+        .focusable(true)
+        .tab_stop(true)
+        .on_focus(Callback::new(|_| {}))
+        .on_blur(Callback::new(|_| {}))
+        .on_key(KeyHandler::new(|_key| false));
+}
+
+fn interaction_chain_multi_select() {
+    let _ = MultiSelect::new()
+        .focusable(true)
+        .tab_stop(true)
+        .on_focus(Callback::new(|_| {}))
+        .on_blur(Callback::new(|_| {}))
+        .on_key(KeyHandler::new(|_key| false));
+}
+
+fn interaction_chain_hyperlink() {
+    let _ = Hyperlink::new("link")
+        .disabled(false)
+        .disabled_style(Style::default())
+        .hover_style(Style::default())
+        .extend_hover_style(Style::default())
+        .inherit_hover_style()
+        .hover_style_slot(StyleSlot::Inherit)
+        .focus_style(Style::default())
+        .extend_focus_style(Style::default())
+        .inherit_focus_style()
+        .focus_style_slot(StyleSlot::Inherit)
+        .focusable(true)
+        .tab_stop(true)
+        .on_focus(Callback::new(|_| {}))
+        .on_blur(Callback::new(|_| {}))
+        .on_key(KeyHandler::new(|_key| false));
+}
+
 #[test]
 fn interaction_parity_builders_compile() {
     interaction_chain_button();
@@ -143,4 +189,8 @@ fn interaction_parity_builders_compile() {
     interaction_chain_slider();
     interaction_chain_radio();
     interaction_chain_date_picker();
+    interaction_chain_select();
+    interaction_chain_combo_box();
+    interaction_chain_multi_select();
+    interaction_chain_hyperlink();
 }
