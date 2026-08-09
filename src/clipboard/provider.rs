@@ -141,7 +141,7 @@ pub trait ClipboardProvider {
     /// Write a file list to the system clipboard.
     ///
     /// Paths are expected to be absolute and to exist; callers going through
-    /// [`ClipboardHandle::copy_files`](crate::clipboard::ClipboardHandle::copy_files)
+    /// [`ClipboardHandle::copy_files`](crate::ClipboardHandle::copy_files)
     /// get that guaranteed for them.
     fn write_clipboard_files(&mut self, _paths: &[PathBuf]) -> Result<(), ClipboardError> {
         Err(ClipboardError::unsupported(

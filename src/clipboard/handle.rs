@@ -61,7 +61,7 @@ impl ClipboardHandle {
     ///
     /// Paths are resolved to absolute form first, so relative paths are taken
     /// against the current working directory. A path that does not exist is a
-    /// [`ClipboardError::InvalidInput`](super::error::ClipboardError::InvalidInput)
+    /// [`ClipboardError::InvalidInput`](crate::ClipboardError::InvalidInput)
     /// naming that path - the underlying platform clipboards drop unresolvable
     /// entries silently, which would otherwise copy a shorter list than asked
     /// for without saying so.
@@ -112,7 +112,7 @@ impl ClipboardHandle {
     ///
     /// An empty vector means the clipboard holds no file list; a provider that
     /// cannot read file lists at all returns
-    /// [`ClipboardError::Unsupported`](super::error::ClipboardError::Unsupported).
+    /// [`ClipboardError::Unsupported`](crate::ClipboardError::Unsupported).
     pub fn read_files(&self) -> Result<Vec<PathBuf>, super::error::ClipboardError> {
         self.service.read_clipboard_files()
     }
