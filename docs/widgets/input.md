@@ -899,7 +899,7 @@ Toggle widget for boolean values.
 | `state` | `CheckboxState` | Full state (overrides `checked`) |
 | `indeterminate` | `bool` | Show indeterminate state |
 | `label` | `String` | Label text |
-| `variant` | `CheckboxVariant` | Visual variant |
+| `variant` | `CheckboxVariant` | Visual variant (`Bracket`, `Circle`, `Box`, `Switch`, or `Custom`) |
 | `gap` | `u16` | Space between box and label |
 | `style` | `Style` | Idle style |
 | `hover_style` | `Style` | Hover style |

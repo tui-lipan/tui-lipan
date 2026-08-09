@@ -777,6 +777,7 @@ style directly.
 | `CheckboxVariant::Bracket` **(default)** | `[x]` | `[ ]` | `[-]` |
 | `CheckboxVariant::Circle` | `◉` | `○` | `◍` |
 | `CheckboxVariant::Box` | `✓` | `☐` | `▣` |
+| `CheckboxVariant::Switch` | `●` | `○` | `◐` |
 | `CheckboxVariant::Custom { checked, unchecked, indeterminate }` | Custom strings | | |
 
 ### `CheckboxState`

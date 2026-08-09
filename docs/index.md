@@ -18,7 +18,8 @@ and is rebuilt on every push to `main`. If a page looks out of date, click the
 - **App feels slow?** See [Performance](./perf.md) for update granularity,
   scrolling, memoization, tracing, and repeatable benchmarks.
 - **Reference?** Jump straight into [Components](./components.md),
-  [UI Macros](./macros.md), or the [widget reference](./widgets/index.md).
+  [Testing](./testing.md), [UI Macros](./macros.md), or the
+  [widget reference](./widgets/index.md).
 
 ## What's outside this site
 
