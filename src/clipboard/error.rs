@@ -9,6 +9,8 @@ pub enum ClipboardOperation {
     WritePrimarySelection,
     ReadImageClipboard,
     WriteImageClipboard,
+    ReadFileClipboard,
+    WriteFileClipboard,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +26,16 @@ pub enum ClipboardError {
         /// Operation that failed.
         operation: ClipboardOperation,
         /// Provider error message.
+        message: Arc<str>,
+    },
+    /// Caller supplied arguments the operation cannot represent.
+    ///
+    /// Distinct from [`Self::Provider`]: the platform clipboard was never asked
+    /// to do anything, so retrying without changing the input cannot succeed.
+    InvalidInput {
+        /// Operation that was rejected.
+        operation: ClipboardOperation,
+        /// What was wrong with the input.
         message: Arc<str>,
     },
 }
@@ -42,11 +54,20 @@ impl ClipboardError {
         }
     }
 
+    /// Create an invalid input error with a message.
+    pub fn invalid_input(operation: ClipboardOperation, message: impl Into<Arc<str>>) -> Self {
+        Self::InvalidInput {
+            operation,
+            message: message.into(),
+        }
+    }
+
     /// Return the clipboard operation associated with the error.
     pub fn operation(&self) -> ClipboardOperation {
         match self {
             Self::Unsupported { operation } => *operation,
             Self::Provider { operation, .. } => *operation,
+            Self::InvalidInput { operation, .. } => *operation,
         }
     }
 }
@@ -59,6 +80,13 @@ impl fmt::Display for ClipboardError {
             }
             Self::Provider { operation, message } => {
                 write!(f, "clipboard operation {:?} failed: {}", operation, message)
+            }
+            Self::InvalidInput { operation, message } => {
+                write!(
+                    f,
+                    "clipboard operation {:?} rejected: {}",
+                    operation, message
+                )
             }
         }
     }

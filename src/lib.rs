@@ -102,8 +102,8 @@ pub use crate::capture::{CapturedCell, CapturedFrame, CastRecording, CellModifie
 #[cfg(feature = "ui-snapshot-png")]
 pub use crate::capture::{PngOptions, PngTextRenderer};
 pub use crate::clipboard::{
-    ClipboardConfig, ClipboardError, ClipboardPasteContent, ClipboardProvider, ImageContent,
-    ImageFormat, PasteShiftInsertBehavior,
+    ClipboardConfig, ClipboardError, ClipboardHandle, ClipboardPasteContent, ClipboardProvider,
+    ImageContent, ImageFormat, PasteShiftInsertBehavior,
 };
 pub use crate::core::component::{
     Breakpoint, Command, Component, Context, KeyUpdate, ScrollbarVisibility, TaskPolicy, Update,

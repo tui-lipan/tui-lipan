@@ -5,6 +5,18 @@
 //! ```text
 //! cargo run --example yazi --features syntax-extra
 //! ```
+//!
+//! Keys: `j`/`k` move, `l`/`Enter` enter a directory, `h` go up, `q` quit.
+//!
+//! `y` yanks the selection onto the system clipboard as a real file, so pasting
+//! into a file manager, a file dialog, or a browser upload target gives you the
+//! file rather than its path as text.
+//!
+//! `D` is the drag-out escape hatch. A TUI cannot begin a native drag: the OS
+//! drag protocols belong to the terminal emulator's window, not to the process
+//! drawing inside it, so `D` shells out to a GUI helper (`ripdrag` or
+//! `dragon-drop`) that owns a window and can act as the drag source. `y` needs
+//! no helper and also works over SSH, so prefer it.
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -47,7 +59,6 @@ struct State {
     parent_selected: usize,
     preview: Preview,
     split_weights: Vec<f32>,
-    split_nonce: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -61,7 +72,7 @@ impl State {
     fn new() -> Self {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let entries = read_entries(&cwd);
-        let selected = entries.iter().position(|entry| !entry.is_dir).unwrap_or(0);
+        let selected = 0;
         let preview = preview_for(entries.get(selected));
         let (parent_entries, parent_selected) = parent_pane_for(&cwd);
         Self {
@@ -72,7 +83,6 @@ impl State {
             parent_selected,
             preview,
             split_weights: vec![1.0, 1.0, 2.0],
-            split_nonce: 0,
         }
     }
 
@@ -125,7 +135,7 @@ impl State {
     fn open_path(&mut self, path: PathBuf) {
         self.cwd = path;
         self.entries = read_entries(&self.cwd);
-        self.selected = preferred_selection(&self.entries);
+        self.selected = 0;
         self.refresh_parent_pane();
         self.refresh_preview();
     }
@@ -178,6 +188,35 @@ impl Component for Yazi {
                 ctx.state.go_parent();
                 KeyUpdate::handled(Update::full())
             }
+            // Yank the selection onto the system clipboard as a *file*, not as
+            // its path in text form, so pasting into a file manager or a file
+            // dialog yields the file itself. Directories work too.
+            KeyCode::Char('y') => {
+                let Some(entry) = ctx.state.selected_entry() else {
+                    return KeyUpdate::unhandled(Update::none());
+                };
+                let (name, path) = (entry.name.clone(), entry.path.clone());
+                let message = match ctx.clipboard().copy_files(&[path]) {
+                    Ok(()) => format!("Yanked {name} - paste it into a file manager"),
+                    Err(err) => format!("Yank failed: {err}"),
+                };
+                ctx.toast().push(Toast::new(message));
+                KeyUpdate::handled(Update::full())
+            }
+            // A TUI cannot start a native drag itself, so this hands the
+            // selection to a small GUI helper that owns a real window and can
+            // act as the drag source. App-side glue, not framework API.
+            KeyCode::Char('D') => {
+                let Some(entry) = ctx.state.selected_entry() else {
+                    return KeyUpdate::unhandled(Update::none());
+                };
+                let (name, path) = (entry.name.clone(), entry.path.clone());
+                ctx.toast().push(Toast::new(match spawn_drag_helper(&path) {
+                    Some(helper) => format!("Dragging {name} via {helper}"),
+                    None => "No drag helper found - install ripdrag or dragon-drop".to_string(),
+                }));
+                KeyUpdate::handled(Update::full())
+            }
             _ => KeyUpdate::unhandled(Update::none()),
         }
     }
@@ -191,10 +230,11 @@ impl Component for Yazi {
                 }
             }
             Msg::SelectParent(index) => ctx.state.open_parent_selection(index),
-            Msg::Resize(event) => {
-                ctx.state.split_weights = event.weights;
-                ctx.state.split_nonce = ctx.state.split_nonce.wrapping_add(1);
-            }
+            // Record the layout without bumping a nonce. The nonce means
+            // "override whatever the splitter currently has", so echoing it
+            // back on every drag tick would force the splitter to re-derive its
+            // exact columns from rounded weights each frame.
+            Msg::Resize(event) => ctx.state.split_weights = event.weights,
         }
         Update::full()
     }
@@ -221,7 +261,6 @@ impl Component for Yazi {
             .child(
                 Splitter::vertical()
                     .weights(ctx.state.split_weights.clone())
-                    .weights_nonce(ctx.state.split_nonce)
                     .handle_style(Style::new().fg(Color::DarkGray))
                     .handle_hover_style(
                         Style::new().fg(theme.accent.fg.map(Paint::color).unwrap_or(Color::White)),
@@ -245,6 +284,31 @@ impl Component for Yazi {
             .child(footer(&ctx.state))
             .into()
     }
+}
+
+/// Hand `path` to a GUI drag-source helper, returning the one that was launched.
+///
+/// The OS drag protocols (XDND, `wl_data_device`, `NSDraggingSession`, OLE) are
+/// driven by the terminal emulator's window, so a process drawing inside that
+/// window has no way to begin a drag of its own. Spawning a helper that owns its
+/// own window is the standard workaround, and is what ranger, lf, and nnn do.
+fn spawn_drag_helper(path: &Path) -> Option<&'static str> {
+    use std::process::{Command, Stdio};
+
+    // `-x -a`: exit once the drop completes rather than lingering on screen.
+    const HELPERS: &[(&str, &[&str])] =
+        &[("ripdrag", &["-x", "-a"]), ("dragon-drop", &["-x", "-a"])];
+
+    HELPERS.iter().find_map(|(program, args)| {
+        Command::new(program)
+            .args(*args)
+            .arg(path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()
+            .map(|_| *program)
+    })
 }
 
 fn outer_pill_bg() -> Color {
@@ -377,10 +441,16 @@ fn footer(state: &State) -> Element {
     let size = entry
         .map(|entry| compact_size(entry.len))
         .unwrap_or_else(|| "0B".to_string());
-    let percent = if state.entries.is_empty() {
-        0
+    // Yazi labels the ends of the list rather than showing 0% / 100%.
+    let progress = if state.entries.is_empty() || state.selected == 0 {
+        "Top".to_string()
+    } else if state.selected + 1 >= state.entries.len() {
+        "Bot".to_string()
     } else {
-        ((state.selected + 1) * 100 / state.entries.len()).min(100)
+        format!(
+            "{}%",
+            ((state.selected + 1) * 100 / state.entries.len()).min(100)
+        )
     };
     let position = if state.entries.is_empty() {
         "0/0".to_string()
@@ -399,10 +469,11 @@ fn footer(state: &State) -> Element {
         .selected_entry()
         .map(|entry| entry.name.as_str())
         .unwrap_or("-");
-    let mut right = vec![Span::new(format!("{} ", permission_string(entry))).fg(Color::DarkGray)];
+    let mut right = permission_spans(entry);
+    right.push(Span::new(" "));
     add_connected_pills(
         &mut right,
-        &format!("{percent}%"),
+        &progress,
         percent_bg,
         &position,
         position_bg,
@@ -469,8 +540,22 @@ fn short_path(path: &Path) -> String {
     }
 }
 
-fn preferred_selection(entries: &[Entry]) -> usize {
-    entries.iter().position(|entry| !entry.is_dir).unwrap_or(0)
+/// Colour each permission bit by what it grants, the way `eza` and `lsd` do, so
+/// the mode reads at a glance instead of as one grey run.
+fn permission_spans(entry: Option<&Entry>) -> Vec<Span> {
+    permission_string(entry)
+        .chars()
+        .map(|bit| {
+            let color = match bit {
+                'd' => Color::rgb(137, 180, 250), // blue - directory
+                'r' => Color::rgb(249, 226, 175), // yellow - read
+                'w' => Color::rgb(243, 139, 168), // red - write
+                'x' => Color::rgb(166, 227, 161), // green - execute
+                _ => Color::DarkGray,             // '-' - absent
+            };
+            Span::new(bit.to_string()).fg(color)
+        })
+        .collect()
 }
 
 fn permission_string(entry: Option<&Entry>) -> String {
@@ -646,9 +731,12 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     use super::*;
     use tui_lipan::core::event::{KeyMods, MouseButton, MouseEvent, MouseKind};
-    use tui_lipan::{TestBackend, UiSnapshotOptions};
+    use tui_lipan::{ClipboardError, ClipboardProvider, TestBackend, UiSnapshotOptions};
 
     #[test]
     fn renders_three_pane_layout() {
@@ -771,6 +859,142 @@ mod tests {
         // Parent and current panes keep a cursor; the preview pane is read-only.
         assert!(lists[1].selected_index.is_some());
         assert_eq!(lists[2].selected_index, None);
+    }
+
+    /// Captures what `copy_files` hands to the platform clipboard, so the test
+    /// never touches the real one.
+    #[derive(Clone, Default)]
+    struct RecordingClipboard(Rc<RefCell<Vec<Vec<PathBuf>>>>);
+
+    impl ClipboardProvider for RecordingClipboard {
+        fn read_clipboard_text(&mut self) -> std::result::Result<String, ClipboardError> {
+            Ok(String::new())
+        }
+
+        fn write_clipboard_text(&mut self, _text: &str) -> std::result::Result<(), ClipboardError> {
+            Ok(())
+        }
+
+        fn write_clipboard_files(
+            &mut self,
+            paths: &[PathBuf],
+        ) -> std::result::Result<(), ClipboardError> {
+            self.0.borrow_mut().push(paths.to_vec());
+            Ok(())
+        }
+
+        fn supports_file_clipboard(&self) -> bool {
+            true
+        }
+    }
+
+    fn press(backend: &mut TestBackend<Yazi>, c: char) {
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Char(c),
+                mods: KeyMods::NONE,
+            })
+            .expect("dispatch key");
+    }
+
+    #[test]
+    fn yank_copies_the_selected_file_as_an_absolute_path() {
+        let fixture = fixture();
+        let recorder = RecordingClipboard::default();
+        let mut backend =
+            TestBackend::new_with_app(App::new().clipboard_provider(recorder.clone()), Yazi, ());
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 30,
+        });
+
+        {
+            let state = backend.state_mut();
+            state.open_path(fixture.0.clone());
+            // Entries sort directories first, so index 1 is `a_file.txt`.
+            state.selected = 1;
+            assert!(!state.entries[1].is_dir, "expected a file at index 1");
+            state.refresh_preview();
+        }
+        backend.render();
+
+        press(&mut backend, 'y');
+
+        let copied = recorder.0.borrow();
+        assert_eq!(copied.len(), 1, "expected exactly one clipboard write");
+        assert_eq!(copied[0].len(), 1);
+        assert!(
+            copied[0][0].is_absolute(),
+            "clipboard needs absolute paths, got {:?}",
+            copied[0][0]
+        );
+        assert!(copied[0][0].ends_with("a_file.txt"));
+    }
+
+    /// Directories are valid clipboard payloads, so yanking one is not special-cased.
+    #[test]
+    fn yank_copies_a_selected_directory() {
+        let fixture = fixture();
+        let recorder = RecordingClipboard::default();
+        let mut backend =
+            TestBackend::new_with_app(App::new().clipboard_provider(recorder.clone()), Yazi, ());
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 30,
+        });
+
+        {
+            let state = backend.state_mut();
+            state.open_path(fixture.0.clone());
+            state.selected = 0;
+            assert!(state.entries[0].is_dir, "expected a directory first");
+            state.refresh_preview();
+        }
+        backend.render();
+
+        press(&mut backend, 'y');
+
+        let copied = recorder.0.borrow();
+        assert_eq!(copied.len(), 1);
+        assert!(copied[0][0].ends_with("child_dir"));
+    }
+
+    /// An entry deleted after it was listed must not reach the clipboard: the
+    /// platform clipboards drop unresolvable paths silently, so the failure has
+    /// to surface here instead.
+    #[test]
+    fn yank_reports_a_vanished_entry_instead_of_copying_nothing() {
+        let fixture = fixture();
+        let recorder = RecordingClipboard::default();
+        let mut backend =
+            TestBackend::new_with_app(App::new().clipboard_provider(recorder.clone()), Yazi, ());
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 30,
+        });
+
+        {
+            let state = backend.state_mut();
+            state.open_path(fixture.0.clone());
+            state.selected = 1;
+            state.refresh_preview();
+        }
+        backend.render();
+
+        // The listing still holds the entry; the file is gone underneath it.
+        fs::remove_file(fixture.0.join("a_file.txt")).expect("remove fixture file");
+        press(&mut backend, 'y');
+
+        assert!(
+            recorder.0.borrow().is_empty(),
+            "a missing path must not reach the clipboard"
+        );
     }
 
     #[test]

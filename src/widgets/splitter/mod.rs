@@ -323,17 +323,38 @@ pub(crate) fn sizes_from_weights(weights: &[f32], available: u16, min_size: u16)
     };
 
     let mut sizes = Vec::with_capacity(count);
+    let mut fractions = Vec::with_capacity(count);
     for weight in weights {
-        let size = ((available as f32) * (*weight / total_weight)).floor() as u16;
-        sizes.push(size);
+        let exact = (available as f32) * (*weight / total_weight);
+        let floored = exact.floor();
+        sizes.push(floored as u16);
+        fractions.push(exact - floored);
     }
 
+    // Largest-remainder apportionment: each leftover column goes to the pane
+    // with the biggest dropped fraction, ties resolving to the lower index.
+    //
+    // Handing them out in plain index order instead would park a column on the
+    // leftmost pane that a later pane actually earned. Because a drag round
+    // trips through sizes -> weights -> sizes every frame, that misplacement
+    // reappears each tick and a pane the drag never touched visibly bounces by
+    // a column. Largest remainder makes the round trip exact, so panes only
+    // move when the drag moves them.
+    let mut order: Vec<usize> = (0..count).collect();
+    order.sort_by(|a, b| {
+        fractions[*b]
+            .partial_cmp(&fractions[*a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.cmp(b))
+    });
+
     let used: u16 = sizes.iter().sum();
-    let mut remaining = available.saturating_sub(used);
+    let mut remaining = available.saturating_sub(used) as usize;
     let mut idx = 0usize;
     while remaining > 0 {
-        sizes[idx % count] = sizes[idx % count].saturating_add(1);
-        remaining = remaining.saturating_sub(1);
+        let target = order[idx % count];
+        sizes[target] = sizes[target].saturating_add(1);
+        remaining -= 1;
         idx += 1;
     }
 
@@ -384,4 +405,72 @@ pub(crate) fn sizes_to_weights(sizes: &[u16]) -> Vec<f32> {
         .iter()
         .map(|size| (*size as f32) / (total as f32))
         .collect()
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::{sizes_from_weights, sizes_to_weights};
+
+    /// A drag stores exact column counts, publishes them as weights, and the
+    /// next layout turns them back into columns. That round trip has to be the
+    /// identity, or panes drift by a column every frame while dragging.
+    #[test]
+    fn sizes_survive_a_round_trip_through_weights() {
+        let cases: &[&[u16]] = &[
+            &[39, 39, 79],
+            &[40, 38, 79],
+            &[1, 1, 155],
+            &[52, 52, 53],
+            &[10, 20, 30, 40],
+            &[7, 11, 13, 17, 19],
+            &[100, 1, 1],
+            &[3, 3],
+        ];
+
+        for sizes in cases {
+            let available: u16 = sizes.iter().sum();
+            let weights = sizes_to_weights(sizes);
+            let restored = sizes_from_weights(&weights, available, 0);
+            assert_eq!(
+                restored, *sizes,
+                "round trip changed {sizes:?} (available {available})"
+            );
+        }
+    }
+
+    /// The leftover column belongs to the pane that earned it, not to pane 0.
+    #[test]
+    fn leftover_columns_follow_the_largest_fraction() {
+        // Exact shares are 3.33, 3.33, 3.33 -> one leftover column, and with
+        // equal fractions the lowest index wins.
+        assert_eq!(sizes_from_weights(&[1.0, 1.0, 1.0], 10, 0), vec![4, 3, 3]);
+
+        // Exact shares are 1.0, 4.0, 5.0 - nothing is dropped, so nothing moves.
+        assert_eq!(sizes_from_weights(&[0.1, 0.4, 0.5], 10, 0), vec![1, 4, 5]);
+
+        // Exact shares are 0.9, 4.5, 4.6: floors 0, 4, 4 leave two columns for
+        // the two largest fractions (.9 and .6), not for the first two panes.
+        assert_eq!(
+            sizes_from_weights(&[0.09, 0.45, 0.46], 10, 0),
+            vec![1, 4, 5]
+        );
+    }
+
+    #[test]
+    fn sizes_always_fill_the_available_space() {
+        for available in [1u16, 7, 13, 80, 157, 999] {
+            for weights in [
+                vec![1.0, 1.0, 2.0],
+                vec![0.3333, 0.3333, 0.3334],
+                vec![0.01, 0.98, 0.01],
+            ] {
+                let sizes = sizes_from_weights(&weights, available, 0);
+                assert_eq!(
+                    sizes.iter().sum::<u16>(),
+                    available,
+                    "weights {weights:?} at {available} left a gap"
+                );
+            }
+        }
+    }
 }

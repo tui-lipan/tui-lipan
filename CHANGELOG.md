@@ -11,13 +11,45 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Changed
+
+- `ClipboardError` gained an `InvalidInput { operation, message }` variant for arguments the
+  clipboard cannot represent, distinct from `Provider` (the platform clipboard failed) and
+  `Unsupported` (the operation does not exist here). Retrying `InvalidInput` without changing the
+  input cannot succeed. **(breaking)** Only exhaustive `match` over `ClipboardError` needs
+  updating - add an `InvalidInput` arm, or match `{ .. }` as the existing call sites do.
+
 ### Fixed
 
+- `Splitter` hands each leftover column to the pane with the largest dropped fraction instead of to
+  the leftmost panes in index order. Sizes are floored from weights, so the spare columns were
+  landing on pane 0 regardless of which pane earned them - `[0.09, 0.45, 0.46]` across 10 columns
+  gave `[1, 5, 4]` rather than `[1, 4, 5]`. A drag round trips sizes through weights every frame,
+  so the misplacement could shift a pane the drag never touched. The weights-to-sizes round trip is
+  now exact.
+- `yazi` example no longer bumps `weights_nonce` on every splitter resize. The nonce means
+  "override whatever the splitter currently holds", so echoing it back each drag tick forced the
+  splitter to re-derive its exact columns from rounded weights instead of keeping its own.
 - Table headers no longer underline the selection-gutter spaces, so labels like `PID` do not pick
   up a long underscore from `unselected_symbol` padding.
 
 ### Added
 
+- File clipboard support: `ctx.clipboard().copy_files(&[path])` places real files on the system
+  clipboard, so pasting into a file manager, file dialog, or browser upload target yields the files
+  rather than their paths as text. `read_files()` reads a file list back (empty `Vec` when the
+  clipboard holds none) and `supports_files()` reports whether the provider can exchange them at
+  all, for hiding the affordance on the web backend or in builds without the `clipboard` feature.
+  A path that does not exist fails the whole call with `ClipboardError::InvalidInput` naming it,
+  rather than silently copying a shorter list the way the platform clipboards do on their own.
+  `copy_files` deliberately does not emit OSC 52, which is text-only and would downgrade a file
+  copy to a path string. `ClipboardProvider` gained `read_clipboard_files`, `write_clipboard_files`,
+  and `supports_file_clipboard`, all defaulted to unsupported so existing providers keep compiling.
+  This is also the answer to dragging files out of a terminal, which is not possible: the OS drag
+  protocols belong to the terminal emulator's window, not to the process drawing inside it. See
+  `docs/clipboard.md` for the full explanation and the GUI-helper workaround.
+- `yazi` example yanks the selected file or directory onto the clipboard with `y`, and demonstrates
+  the app-side drag-source helper (`ripdrag`/`dragon-drop`) behind `D`.
 - `ChartSeriesMode::Braille` renders dense chart traces on a 2x4 subcell grid instead of limiting
   connected samples to one glyph position per terminal cell.
 - `ChartAxis::tick_labels(...)` labels an axis with domain values instead of sample indices, so a
