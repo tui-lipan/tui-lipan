@@ -426,6 +426,13 @@ For widgets like `MouseRegion`, these form two distinct layers:
 
 Containers (`VStack`, `HStack`) default to `Flex(1)` for both axes.
 
+Measurement and reconcile both honor explicit `Px` / `Percent` on a widget's
+`.width` / `.height`, so an `Auto` or `Center` parent can shrink-wrap to
+`Input::new(...).width(Length::Px(40))`. `Flex` still measures as content so it
+does not inflate Auto parents; the flex share is assigned when the parent has a
+concrete size. `Percent` falls back to content while the parent size is still
+unknown.
+
 ### Layout Constraints
 
 `LayoutConstraints` and `Element::{min_width,min_height,max_width,max_height}` use `Length`:

@@ -43,6 +43,11 @@ While the crate is on `0.x.y`:
   splitter to re-derive its exact columns from rounded weights instead of keeping its own.
 - Table headers no longer underline the selection-gutter spaces, so labels like `PID` do not pick
   up a long underscore from `unselected_symbol` padding.
+- Measurement honors explicit `.width(Length::Px/Percent)` / `.height(...)` for every widget.
+  Auto/`Center` parents previously shrink-wrapped to content-only measure, so a child
+  `Input::…width(Length::Px(40))` (and the same pattern on `Button`, `Text`, `Checkbox`,
+  `Spacer`, …) was clamped away at reconcile. `Flex` still shrink-wraps so it does not
+  inflate Auto parents; `Percent` still falls back to content when the parent size is unknown.
 
 ### Added
 

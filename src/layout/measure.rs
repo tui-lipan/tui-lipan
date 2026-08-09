@@ -22,8 +22,34 @@ use crate::widgets::internal::{
     measure_text_area, measure_text_area_constrained,
 };
 
-use super::axis::Axis;
+use crate::style::Length;
+
+use super::axis::{Axis, requested_main_axis};
 use super::hash::element_layout_hash;
+
+/// Resolve a widget's requested [`Length`] against measured content during measurement.
+///
+/// - `Auto` / `Flex`: keep content size (flex share is assigned at reconcile).
+/// - `Px`: use the fixed size so Auto parents can shrink-wrap to it.
+/// - `Percent`: resolve against parent-available space when known; otherwise keep content.
+fn resolve_requested_measure(len: Length, content: u16, available: u16) -> u16 {
+    match len {
+        Length::Auto | Length::Flex(_) => content,
+        Length::Px(px) => px,
+        Length::Percent(_) if available == u16::MAX => content,
+        Length::Percent(percent) => Length::Percent(percent).resolve(available, content),
+    }
+}
+
+/// Bound used to tighten content measurement for wrapping widgets (`Text`, `TextArea`, …).
+fn requested_measure_bound(len: Length, available: u16) -> Option<u16> {
+    match len {
+        Length::Px(px) => Some(px),
+        Length::Percent(_) if available == u16::MAX => None,
+        Length::Percent(percent) => Some(Length::Percent(percent).resolve(available, available)),
+        Length::Auto | Length::Flex(_) => None,
+    }
+}
 
 type GlobalMeasureCacheKey = (u64, Option<u16>, Option<u16>);
 type GlobalMeasureCache = crate::utils::gen_cache::GenerationalCache<
@@ -159,18 +185,26 @@ pub(crate) fn min_size_constrained(
     let avail_w = max_w.unwrap_or(u16::MAX);
     let avail_h = max_h.unwrap_or(u16::MAX);
 
+    // Explicit `.width(Length::Px/Percent)` / `.height(...)` must participate in
+    // measurement, not only reconcile. Otherwise Auto/Center parents shrink-wrap to
+    // content and the requested size is clamped away (see Input in form_validation).
+    let req_w = requested_main_axis(el, Axis::Horizontal, None);
+    let req_h = requested_main_axis(el, Axis::Vertical, None);
+    let requested_max_w = requested_measure_bound(req_w, avail_w);
+    let requested_max_h = requested_measure_bound(req_h, avail_h);
+
     // Resolve the element's own max constraints to pixels, then take the tighter of
-    // the element's resolved max and the parent's offered width/height.
+    // the element's resolved max, requested size, and the parent's offered size.
     let element_max_w = constraints.max_w.and_then(|l| l.resolve_as_max(avail_w));
     let element_max_h = constraints.max_h.and_then(|l| l.resolve_as_max(avail_h));
-    let effective_max_w: Option<u16> = match (element_max_w, max_w) {
-        (Some(em), Some(pm)) => Some(em.min(pm)),
-        (em, pm) => em.or(pm),
-    };
-    let effective_max_h: Option<u16> = match (element_max_h, max_h) {
-        (Some(em), Some(pm)) => Some(em.min(pm)),
-        (em, pm) => em.or(pm),
-    };
+    let effective_max_w = [element_max_w, max_w, requested_max_w]
+        .into_iter()
+        .flatten()
+        .min();
+    let effective_max_h = [element_max_h, max_h, requested_max_h]
+        .into_iter()
+        .flatten()
+        .min();
 
     let (w, h) = if let ElementKind::TextArea(t) = &el.kind {
         measure_text_area_constrained(t, effective_max_w)
@@ -181,6 +215,9 @@ pub(crate) fn min_size_constrained(
         // both the parent's available space and this element's own max constraints.
         min_size_unconstrained_constrained(el, effective_max_w, effective_max_h)
     };
+
+    let w = resolve_requested_measure(req_w, w, avail_w);
+    let h = resolve_requested_measure(req_h, h, avail_h);
 
     let size = (
         constraints.clamp_width(w, avail_w),
@@ -287,8 +324,8 @@ mod tests {
     use crate::layout::axis::Axis;
     use crate::style::Length;
     use crate::widgets::{
-        ContentFormatter, DocumentView, Flow, FormatInput, FormattedBlock, FormattedDocument,
-        FormattedLine, Overflow, Text,
+        Button, Center, Checkbox, ContentFormatter, DocumentView, Flow, FormatInput,
+        FormattedBlock, FormattedDocument, FormattedLine, Input, Overflow, Spacer, Text, VStack,
     };
 
     use super::{intrinsic_main, min_size_constrained};
@@ -409,5 +446,81 @@ mod tests {
         assert_eq!(calls.get(), 1);
         assert!(a.measure_cache.get()[0].is_some());
         assert!(b.measure_cache.get()[0].is_some());
+    }
+
+    #[test]
+    fn explicit_px_width_is_honored_for_leaf_widgets() {
+        let input: Element = Input::new("")
+            .placeholder("Enter username")
+            .width(Length::Px(40))
+            .into();
+        assert_eq!(min_size_constrained(&input, None, None).0, 40);
+
+        let button: Element = Button::new("Go").width(Length::Px(24)).into();
+        assert_eq!(min_size_constrained(&button, None, None).0, 24);
+
+        let text: Element = Text::new("hi").width(Length::Px(12)).into();
+        assert_eq!(min_size_constrained(&text, None, None).0, 12);
+
+        let checkbox: Element = Checkbox::new(false)
+            .label("Remember me")
+            .width(Length::Px(30))
+            .into();
+        assert_eq!(min_size_constrained(&checkbox, None, None).0, 30);
+
+        let spacer: Element = Spacer::new()
+            .width(Length::Px(8))
+            .height(Length::Px(3))
+            .into();
+        assert_eq!(min_size_constrained(&spacer, None, None), (8, 3));
+    }
+
+    #[test]
+    fn explicit_percent_width_resolves_when_parent_bound_is_known() {
+        let input: Element = Input::new("x").width(Length::Percent(50)).into();
+        assert_eq!(min_size_constrained(&input, Some(80), None).0, 40);
+    }
+
+    #[test]
+    fn unconstrained_percent_width_falls_back_to_content() {
+        let input: Element = Input::new("hello").width(Length::Percent(50)).into();
+        let (w, _) = min_size_constrained(&input, None, None);
+        // placeholder/value content (+ caret), not a huge percent of u16::MAX
+        assert!(w < 20, "expected content-sized width, got {w}");
+    }
+
+    #[test]
+    fn flex_width_still_shrink_wraps_to_content() {
+        let input: Element = Input::new("")
+            .placeholder("Enter username")
+            .width(Length::Flex(1))
+            .into();
+        let (w, _) = min_size_constrained(&input, None, None);
+        assert!(w < 40, "Flex must not expand Auto parents, got {w}");
+    }
+
+    #[test]
+    fn auto_vstack_and_center_expand_to_child_px_width() {
+        let input: Element = Input::new("")
+            .placeholder("Enter username")
+            .width(Length::Px(40))
+            .into();
+        let vstack: Element = VStack::new()
+            .width(Length::Auto)
+            .child(input.clone())
+            .into();
+        assert_eq!(min_size_constrained(&vstack, None, None).0, 40);
+
+        let centered: Element = Center::new().child(input).into();
+        assert_eq!(min_size_constrained(&centered, None, None).0, 40);
+    }
+
+    #[test]
+    fn text_px_width_tightens_wrap_measurement() {
+        let text: Element = Text::new("abcdefghij")
+            .overflow(Overflow::Wrap)
+            .width(Length::Px(5))
+            .into();
+        assert_eq!(min_size_constrained(&text, None, None), (5, 2));
     }
 }
