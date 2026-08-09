@@ -25,6 +25,8 @@ pub enum CheckboxVariant {
     Circle,
     /// Rendered as `☐` with `✓` when checked - modern box style.
     Box,
+    /// Rendered as `●` / `○` - switch-style glyph pair.
+    Switch,
     /// Custom variant with user-defined strings.
     Custom {
         /// String for checked state.
@@ -43,6 +45,7 @@ impl CheckboxVariant {
             Self::Bracket => "[x]",
             Self::Circle => "◉",
             Self::Box => "✓",
+            Self::Switch => "●",
             Self::Custom { checked, .. } => checked,
         }
     }
@@ -53,6 +56,7 @@ impl CheckboxVariant {
             Self::Bracket => "[ ]",
             Self::Circle => "○",
             Self::Box => "☐",
+            Self::Switch => "○",
             Self::Custom { unchecked, .. } => unchecked,
         }
     }
@@ -63,6 +67,7 @@ impl CheckboxVariant {
             Self::Bracket => "[-]",
             Self::Circle => "◍",
             Self::Box => "▣",
+            Self::Switch => "◐",
             Self::Custom { indeterminate, .. } => indeterminate,
         }
     }
@@ -72,7 +77,7 @@ impl CheckboxVariant {
         use unicode_width::UnicodeWidthStr;
         match self {
             Self::Bracket => 3,
-            Self::Circle | Self::Box => 1,
+            Self::Circle | Self::Box | Self::Switch => 1,
             Self::Custom {
                 checked,
                 unchecked,

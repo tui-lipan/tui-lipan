@@ -483,4 +483,4 @@ wiring.
 - Control-channel client: `examples/control/client.py`
 - App structure, state, and async: `tui-lipan-app-builder`
 - Measurement and rect bugs: `tui-lipan-layout-debug`
-- Framework repo reference: `docs/components.md`, `tests/ui_snapshot.rs`
+- Framework repo reference: `docs/testing.md`, `tests/ui_snapshot.rs`

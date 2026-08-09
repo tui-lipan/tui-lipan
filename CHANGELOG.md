@@ -55,6 +55,11 @@ While the crate is on `0.x.y`:
 - Visual regression baselines for Modal, Tabs, TextArea (line numbers + caret),
   Table (header + selection gutter), expanded Select dropdown, and Splitter
   handle chrome in `tests/visual_baseline.rs` / `tests/ui-baselines/`.
+- `CheckboxVariant::Switch` (`●` / `○` / `◐`) for switch-style checkbox glyphs
+  without a separate Switch widget.
+- Extracted snapshot / visual testing docs into `docs/testing.md` (linked from
+  the docs index and VitePress sidebar); fixed `docs/examples.md` drift
+  (removed duplicate scroll-view rows, catalogued missing examples).
 - File clipboard support: `ctx.clipboard().copy_files(&[path])` places real files on the system
   clipboard, so pasting into a file manager, file dialog, or browser upload target yields the files
   rather than their paths as text. `read_files()` reads a file list back (empty `Vec` when the

@@ -25,6 +25,7 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 | Example | Description |
 |---------|-------------|
 | `todo` | Classic todo app: text input, add, toggle, scroll, delete confirmation |
+| `todo_ui` | Same todo app expressed with the `ui!` macro instead of `rsx!` |
 | `dashboard` | Multi-panel dashboard: `Grid`, `Sparkline`, `StatusBar`, `Badge` |
 | `process_monitor` | Dense process inspector with metric cards, selectable process table, memory chart, and command bar |
 | `forms` | Form patterns: `Radio`, `Select`, `ComboBox`, `Slider`, `DatePicker` |
@@ -36,6 +37,8 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 | `lazygit` | Lazygit-style multi-panel layout with focus hints and number-key switching |
 | `showcase` | Broad demo: tabs, accordion, fuzzy palette, context menu, tree, toast, tooltip |
 | `whack_a_mole` | Whack-a-mole arcade (terminal); same layout and rules as the WASM showcase tab |
+| `opencode_home` | Opencode-inspired home shell layout |
+| `tui-lipan` | Braille logo showcase with Hero/Void/Neon/CRT/Quad visual modes |
 
 ---
 
@@ -44,6 +47,7 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 | Example | Description |
 |---------|-------------|
 | `length_percent` | `Length::Percent` for horizontal and vertical sizing |
+| `grid_basic` | `Grid`: column/row tracks, auto-flow, gap, and spanning cells |
 | `frame_hub` | Frame demos hub: border merge, decorations, and divider/tab features |
 | `splitter` | `Splitter` classic vs frame-join modes with resizable panes |
 | `window_manager` | Hyprland-style tiling/floating window manager showcase with `Canvas`, `Transition<FloatRect>` geometry, workspaces, hover/framework focus integration, animated focus chrome, Alt-only keybindings, fullscreen, configurable title/focus/animation policy, smart local split-axis toggles, animated tiled drag/drop reflow, remembered floating geometry, position-aware float-to-tile toggles, persistent dwindle-tree target splitting for tiled windows, and corner-aware resize |
@@ -53,6 +57,8 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 | `exit_animation` | Keyed `ExitQueue` state retaining removed rows through `Animated` exits |
 | `auto_exit` | Automatic exit animations via `Animated::auto_exit`, with no app-side removal bookkeeping |
 | `powerline_bar` | Badge cap styles and neighbor-background threading for compact segment chains |
+| `flow_badges` | `Flow` chip/badge wrapping |
+| `context_provider` | `ContextProvider` DI example |
 
 ---
 
@@ -144,6 +150,8 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 | `native_scroll_chat` | Claude Code / Gemini CLI style transcript using `ctx.append_transcript_element` + native scrollback |
 | `inline_choices` | Inline theme/target pickers and apply-to-insert summary |
 | `inline_list_picker` | Inline list picker over command list |
+| `inline_auto_height` | Inline viewport auto-height behavior |
+| `inline_autowrap` | Inline viewport autowrap behavior |
 
 ---
 
@@ -168,6 +176,12 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 | `widget_gallery` | Built-in widgets: checkboxes, progress bars, spinners, sliders |
 | `widgets` | Filterable demo: tabs, list, table, scroll, border toggles |
 | `auto_height_test` | `TextArea` + `DocumentView` with `Length::Auto` height behavior |
+| `ansi_passthrough` | Render styled text from raw ANSI escape strings |
+| `ascii_canvas_exporter` | Materialize `AsciiCanvas` art + effects into `FrameSequence` JSON |
+| `paint` | Braille paint canvas demo |
+| `theme_audit` | Render a console UI across built-in theme presets for visual audit |
+| `theme_tokens` | Showcase syntax/diff/markdown theme token palettes |
+| `transition_color` | Property-scoped `ctx.transition(...)` color/value interpolation |
 
 ---
 
@@ -179,10 +193,12 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 |---------|-------------|
 | `big_text` | `BigText`: FIGlet fonts, horizontal/vertical/rainbow gradients |
 | `figlet_editor` | FIGlet editor: per-character glyphs, font selection, import/export |
+| `burst_effects` | Charge-and-release burst effects on BigText glyphs |
 
 ```bash
 cargo run --example big_text --features big-text
 cargo run --example figlet_editor --features big-text
+cargo run --example burst_effects --features big-text
 ```
 
 ### `diff-view`
@@ -227,8 +243,6 @@ cargo run --example messenger --features image
 |---------|-------------|
 | `markdown_hub` | Markdown hub: preview, table rendering options, and hyperlink handling |
 | `document_view_mermaid` | Markdown `DocumentView` rendering Mermaid fenced blocks, including Gantt schedules, for supported diagram types |
-| `scroll_view_stress` | Stress: `Frame` + `DocumentView` children in `ScrollView` |
-| `scroll_view_opencode_repro` | Opencode-like session with sidebar and overlays |
 
 ```bash
 cargo run --example markdown_hub --features markdown
@@ -274,6 +288,26 @@ cargo run --example terminal_filetree_devtools --features terminal
 cargo run --example terminal_search_highlight --features terminal
 cargo run --example terminal_copy_mode --features terminal
 cargo run --example terminal_hints --features terminal
+```
+
+### `terminal-images`
+
+| Example | Description |
+|---------|-------------|
+| `terminal_images` | Kitty graphics escapes drawn inside a terminal pane child's output |
+
+```bash
+cargo run --example terminal_images --features terminal-images
+```
+
+### `theme-reload`
+
+| Example | Description |
+|---------|-------------|
+| `theme_hot_reload` | Live theme reload from a watched TOML file |
+
+```bash
+cargo run --example theme_hot_reload --features theme-reload
 ```
 
 ### `devtools`

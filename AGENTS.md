@@ -264,6 +264,7 @@ The docs are split into focused files. **Update the right file.**
 | New pattern or anti-pattern | `docs/patterns.md` |
 | Application performance guidance | `docs/perf.md` |
 | Runtime architecture or module-level design | `docs/DESIGN.md` |
+| Snapshot / visual testing / control channel | `docs/testing.md` |
 | Adding a new widget (contributor) | `docs/widget-authoring.md` (checklist + wiring guide) |
 
 ### File overview

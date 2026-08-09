@@ -397,7 +397,7 @@ captured without writing code:
 TUI_LIPAN_SNAPSHOT=/tmp/modal.png TUI_LIPAN_SNAPSHOT_KEYS="tab,enter" cargo run
 ```
 
-See [`docs/components.md`](components.md) for the full table, the `Sketch` API,
+See [`docs/testing.md`](testing.md) for the full table, the `Sketch` API,
 and visual regression baselines.
 
 ### Terminal recordings

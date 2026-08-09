@@ -57,6 +57,7 @@ export default defineConfig({
         collapsed: false,
         items: [
           { text: "Components", link: "/components" },
+          { text: "Testing", link: "/testing" },
           { text: "UI Macros", link: "/macros" },
           { text: "Events & Callbacks", link: "/events" },
           { text: "Focus System", link: "/focus" },
