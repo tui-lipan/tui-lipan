@@ -1042,6 +1042,40 @@ impl NodeTree {
         }
     }
 
+    /// Panic in debug builds when two focusable nodes share the same key.
+    ///
+    /// Focus restore resolves keys with a tree-wide first match
+    /// (`iter_with_overlays().find(...)`), so colliding focusable keys silently
+    /// teleport focus. Non-focusable keys stay sibling-scoped for reconcile and
+    /// are ignored here.
+    #[cfg(debug_assertions)]
+    pub(crate) fn assert_unique_focus_keys(&self) {
+        use rustc_hash::FxHashSet;
+
+        // `iter_with_overlays` can visit overlay-hosted nodes twice (main DFS +
+        // overlay roots). Deduplicate by id before checking keys.
+        let mut seen_ids: FxHashSet<NodeId> = FxHashSet::default();
+        let mut seen: FxHashMap<&Key, NodeId> = FxHashMap::default();
+        for node in self.iter_with_overlays() {
+            if !seen_ids.insert(node.id) {
+                continue;
+            }
+            if !node.is_focusable() {
+                continue;
+            }
+            let Some(key) = node.key.as_ref() else {
+                continue;
+            };
+            if let Some(prev) = seen.insert(key, node.id) {
+                panic!(
+                    "duplicate focusable element key {key}: nodes {prev:?} and {:?} — \
+                     focus restore picks the first match and will teleport focus",
+                    node.id
+                );
+            }
+        }
+    }
+
     fn depth_first_test(&self, start: NodeId, x: i16, y: i16, kind: TestKind) -> Option<NodeId> {
         let mut stack = vec![TraversalFrame::new(start)];
 

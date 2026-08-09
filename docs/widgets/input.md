@@ -33,6 +33,9 @@ targets an inner part. Whole-control props above are separate from those prefixe
 **Group focus:** for "did focus enter this composite?" without holding local
 state, use `ctx.has_focus_within()` / `has_focus_within_key()`.
 
+**Roving focus:** `DatePicker` and `Radio` are one tab stop each (selected day /
+active option). Arrows move within the control; see those widget sections.
+
 ## Button
 
 Interactive button.
@@ -942,11 +945,18 @@ Radio button group.
 | `label_style` | `Style` | Label style |
 | `disabled` | `bool` | Disable interaction |
 | `disabled_style` | `Style` | Style when disabled |
-| `focusable` | `bool` | Accept focus |
-| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
-| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
-| `on_key` | `KeyHandler` | Key while an option is focused |
+| `focusable` | `bool` | Whether the active option accepts focus |
+| `tab_stop` | `bool` | Include the active option in Tab traversal (default: `true`) |
+| `focus_key` | `impl Into<Arc<str>>` | Key on the active option so focus follows arrows. Default: derived from option labels |
+| `on_focus` / `on_blur` | `Callback<usize>` | Active option gained / lost focus (payload = option index) |
+| `on_key` | `KeyHandler` | Key while the active option is focused (runs before arrows) |
 | `on_change` | `Callback<usize>` | Selection changed callback |
+
+Roving focus: only the selected option (or the first option when none is
+selected) is focusable and a tab stop. Other options remain mouse-activatable
+but are not focusable. Arrow keys (and Home/End) move the selection; focus
+follows via `focus_key`. The default key is hashed from the option labels so
+distinct groups rarely collide; override when two groups share the same labels.
 
 ```rust
 Radio::new(vec!["Option A".into(), "Option B".into(), "Option C".into()])
@@ -1279,11 +1289,25 @@ Calendar-based date selection.
 | `nav_disabled_style` | `Style` | Disabled navigation style |
 | `disabled` | `bool` | Disable the whole picker (nav + day cells) |
 | `disabled_style` | `Style` | Style applied to day cells when disabled |
-| `focusable` | `bool` | Whether day cells accept focus |
-| `tab_stop` | `bool` | Include day cells in sequential Tab traversal (default: `true`) |
-| `on_focus` / `on_blur` | `Callback<()>` | Forwarded to day cells |
+| `focusable` | `bool` | Whether the selected day accepts focus |
+| `tab_stop` | `bool` | Include the selected day in Tab traversal (default: `true`) |
+| `focus_key` | `impl Into<Arc<str>>` | Key on the selected day so focus follows arrows. Default: derived from `title` when set |
+| `on_focus` / `on_blur` | `Callback<DateEvent>` | Selected day gained / lost focus |
+| `on_key` | `KeyHandler` | Key while the selected day is focused (runs before arrows) |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
-| `on_select` | `Callback<(i32, u32, u32)>` | Day selected (year, month, day) |
-| `on_prev_month` | `Callback<()>` | Previous month navigation |
-| `on_next_month` | `Callback<()>` | Next month navigation |
+| `on_select` | `Callback<DateEvent>` | Day selected (year, month, day) |
+| `on_prev_month` | `Callback<()>` | Previous month navigation (header buttons; also PageUp/PageDown when `on_select` is unset) |
+| `on_next_month` | `Callback<()>` | Next month navigation (header buttons; also PageUp/PageDown when `on_select` is unset) |
+
+Roving focus (WAI-ARIA calendar grid): only the selected day is focusable and a
+tab stop. Other in-month days remain mouse-activatable but are not focusable, so
+Tab cannot walk cell-by-cell. Month nav buttons are mouse-only (not focusable).
+Keyboard: Left/Right ±1 day, Up/Down ±7 days (via `on_select`, including across
+months), PageUp/PageDown move a month with the day clamped to that month's
+length (prefer `on_select` so year/month/day stay coherent; otherwise the month
+callbacks — clamp `day` in the app if you only wire those), Home/End → first /
+last day of the **month** (picker-oriented; the ARIA grid pattern uses week
+bounds). The default `focus_key` is derived from `title` when set so titled
+pickers do not collide; override for untitled duplicates. The key must stay
+stable across month changes.

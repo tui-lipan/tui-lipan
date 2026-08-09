@@ -13,6 +13,13 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- `DatePicker` and `Radio` use roving focus (one tab stop) instead of making every
+  day cell / option a tab stop. Only the selected day / active option is
+  focusable; arrows move selection and focus follows via `focus_key` (derived by
+  default from `DatePicker` title / `Radio` option labels). `DatePicker::on_focus`
+  / `on_blur` are now `Callback<DateEvent>` and `Radio::on_focus` / `on_blur` are
+  `Callback<usize>`. Debug builds assert unique focusable keys after reconcile.
+  **(breaking)** Update handlers that expected `Callback<()>`.
 - `Hyperlink` `on_key` now runs **caller-first**: returning `true` consumes the key
   before built-in Enter/Space activation. Previously activation ran first and the
   custom handler was a fallback. **(breaking)** Migration: if your `on_key` should

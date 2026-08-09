@@ -63,6 +63,15 @@ literal-tab display width is configured with `.tab_display_width(...)`, not `.ta
 Remap or unbind `focus_next` and `focus_prev` in `keymap.conf`; see
 [`keybindings.md`](keybindings.md).
 
+## Unique Focusable Keys
+
+Focus restore matches by key with a tree-wide first hit. Two focusable nodes that
+share a key therefore teleport focus silently. Debug builds assert unique
+focusable keys after reconcile; colliding non-focusable keys (reconcile siblings)
+are allowed. Prefer distinct derived defaults (`Radio` hashes labels;
+`DatePicker` uses `title`) or an explicit `.focus_key(...)` when duplicates are
+possible.
+
 ## Programmatic Focus
 
 Focus APIs are available from `update()` and `on_key()`:
@@ -202,6 +211,8 @@ normal tree without taking focus from its trigger, such as autocomplete suggesti
 `Accordion`, `Button`, `Checkbox`, `DocumentView`, `DraggableTabBar`, `FileTree`, `HexArea`,
 `Hyperlink`, `Input`, `List`, `ManagedTerminal`, `PanView`, `SearchPalette`, `Slider`, `Table`,
 `Tabs`, `Terminal`, `TextArea`, and `Tree` expose `tab_stop`, `on_focus`, and `on_blur`.
+`DatePicker` and `Radio` also expose them, but use roving focus: only the selected day /
+active option is a tab stop (see [`widgets/input.md`](widgets/input.md)).
 
 ## Focus Events
 

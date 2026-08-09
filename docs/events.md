@@ -726,8 +726,8 @@ Quick lookup - which callbacks does each widget support?
 | Callback | Payload | When |
 |----------|---------|------|
 | `on_change` | `usize` | Selection changed (new index) |
-| `on_focus` / `on_blur` | `()` | Option gained / lost focus |
-| `on_key` | `KeyHandler` | Key while an option is focused |
+| `on_focus` / `on_blur` | `usize` | Active option gained / lost focus |
+| `on_key` | `KeyHandler` | Key while the active option is focused |
 
 ### Select
 
@@ -774,10 +774,11 @@ Quick lookup - which callbacks does each widget support?
 
 | Callback | Payload | When |
 |----------|---------|------|
-| `on_select` | `(i32, u32, u32)` | Day selected (year, month, day) |
+| `on_select` | `DateEvent` | Day selected |
 | `on_prev_month` | `()` | Navigate to previous month |
 | `on_next_month` | `()` | Navigate to next month |
-| `on_focus` / `on_blur` | `()` | Day cell gained / lost focus |
+| `on_focus` / `on_blur` | `DateEvent` | Selected day gained / lost focus |
+| `on_key` | `KeyHandler` | Key while the selected day is focused |
 
 ### Tabs
 
@@ -878,8 +879,10 @@ anchor, the current value, an optional `TextEditEvent` when the existing edit
 path produced one, and an optional Vim mode when a mode transition occurred.
 ## Focus Events
 
-Widgets documented with focus-event props expose `on_focus(Callback<()>)` and
-`on_blur(Callback<()>)`. App-wide observation is available through `App::on_focus_changed`, which
+Most widgets with focus-event props expose `on_focus(Callback<()>)` and
+`on_blur(Callback<()>)`. Exceptions with useful payloads: `DatePicker` uses
+`Callback<DateEvent>`, and `Radio` uses `Callback<usize>` (active option index).
+App-wide observation is available through `App::on_focus_changed`, which
 receives a `FocusChanged` with optional `old` and `new` `FocusEntry` values. Each entry contains
 the widget's optional `Key` and public `Tag`.
 

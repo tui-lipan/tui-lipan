@@ -37,6 +37,42 @@ pub fn prev_month(year: i32, month: u32) -> (i32, u32) {
     }
 }
 
+pub fn next_month(year: i32, month: u32) -> (i32, u32) {
+    if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    }
+}
+
+/// Shift a calendar day by `delta` days, wrapping across month boundaries.
+pub fn shift_day(year: i32, month: u32, day: u32, delta: i32) -> (i32, u32, u32) {
+    let month = month.clamp(1, 12);
+    let mut y = year;
+    let mut m = month;
+    let dim = days_in_month(y, m);
+    let mut d = i64::from(day.clamp(1, dim)) + i64::from(delta);
+
+    while d < 1 {
+        let (py, pm) = prev_month(y, m);
+        y = py;
+        m = pm;
+        d += i64::from(days_in_month(y, m));
+    }
+    loop {
+        let dim = i64::from(days_in_month(y, m));
+        if d <= dim {
+            break;
+        }
+        d -= dim;
+        let (ny, nm) = next_month(y, m);
+        y = ny;
+        m = nm;
+    }
+
+    (y, m, d as u32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,5 +112,21 @@ mod tests {
     fn prev_month_handles_year_rollover_and_regular_case() {
         assert_eq!(prev_month(2024, 1), (2023, 12));
         assert_eq!(prev_month(2024, 5), (2024, 4));
+    }
+
+    #[test]
+    fn next_month_handles_year_rollover_and_regular_case() {
+        assert_eq!(next_month(2024, 12), (2025, 1));
+        assert_eq!(next_month(2024, 5), (2024, 6));
+    }
+
+    #[test]
+    fn shift_day_moves_within_and_across_months() {
+        assert_eq!(shift_day(2024, 1, 15, 1), (2024, 1, 16));
+        assert_eq!(shift_day(2024, 1, 15, -1), (2024, 1, 14));
+        assert_eq!(shift_day(2024, 1, 31, 1), (2024, 2, 1));
+        assert_eq!(shift_day(2024, 3, 1, -1), (2024, 2, 29));
+        assert_eq!(shift_day(2024, 1, 10, -7), (2024, 1, 3));
+        assert_eq!(shift_day(2024, 1, 3, -7), (2023, 12, 27));
     }
 }
