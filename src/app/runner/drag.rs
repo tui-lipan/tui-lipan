@@ -971,6 +971,9 @@ impl<C: Component> AppRunner<C> {
         {
             // Only emit if value actually changed
             let current_value = if let NodeKind::Slider(node) = &self.core.tree.node(id).kind {
+                if node.disabled {
+                    return false;
+                }
                 node.value
             } else {
                 return false;

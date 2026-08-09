@@ -908,10 +908,16 @@ Radio button group.
 | `checked_style` | `Style` | Selected item style |
 | `unchecked_style` | `Style` | Unselected item style |
 | `hover_style` | `Style` | Hover style |
+| `extend_hover_style` / `inherit_hover_style` | `Style` / `()` | Extend or inherit the hover theme role instead of replacing it |
 | `focus_style` | `Style` | Focus style |
+| `extend_focus_style` / `inherit_focus_style` | `Style` / `()` | Extend or inherit the focus theme role instead of replacing it |
 | `label_style` | `Style` | Label style |
 | `disabled` | `bool` | Disable interaction |
 | `disabled_style` | `Style` | Style when disabled |
+| `focusable` | `bool` | Accept focus |
+| `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
+| `on_key` | `KeyHandler` | Key while an option is focused |
 | `on_change` | `Callback<usize>` | Selection changed callback |
 
 ```rust
@@ -1182,6 +1188,10 @@ Numeric selection slider.
 | `filled_track_gradient` | `ColorGradient` | Filled portion gradient |
 | `thumb_style` | `Style` | Thumb style |
 | `thumb_gradient` | `ColorGradient` | Thumb gradient |
+| `disabled` | `bool` | Disable interaction |
+| `disabled_style` | `Style` | Style when disabled |
+| `hover_style` | `Style` | Track hover style |
+| `extend_hover_style` / `inherit_hover_style` | `Style` / `()` | Extend or inherit the hover theme role for the track |
 | `focus_style` | `Style` | Focus style |
 | `extend_focus_style` / `inherit_focus_style` | `Style` / `()` | Extend or inherit the focus theme role instead of replacing it |
 | `focus_thumb_style` | `Style` | Thumb when focused |
@@ -1195,6 +1205,7 @@ Numeric selection slider.
 | `focusable` | `bool` | Accept focus |
 | `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
 | `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
+| `on_key` | `KeyHandler` | Key while focused (caller-first; returning `true` skips default stepping) |
 | `on_change` | `Callback<f64>` | Value changed |
 | `on_click` | `Callback<f64>` | Click / Enter |
 
@@ -1226,6 +1237,11 @@ Calendar-based date selection.
 | `nav_hover_style` | `Style` | Navigation button hover |
 | `extend_nav_hover_style` / `inherit_nav_hover_style` | `Style` / `()` | Extend or inherit the hover theme role for navigation buttons |
 | `nav_disabled_style` | `Style` | Disabled navigation style |
+| `disabled` | `bool` | Disable the whole picker (nav + day cells) |
+| `disabled_style` | `Style` | Style applied to day cells when disabled |
+| `focusable` | `bool` | Whether day cells accept focus |
+| `tab_stop` | `bool` | Include day cells in sequential Tab traversal (default: `true`) |
+| `on_focus` / `on_blur` | `Callback<()>` | Forwarded to day cells |
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_select` | `Callback<(i32, u32, u32)>` | Day selected (year, month, day) |

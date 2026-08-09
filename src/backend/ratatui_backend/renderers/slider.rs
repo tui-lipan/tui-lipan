@@ -21,6 +21,9 @@ pub(crate) struct SliderRenderCtx<'a> {
     pub padding: Padding,
     pub is_focused: bool,
     pub is_hovered: bool,
+    pub disabled: bool,
+    pub disabled_style: Style,
+    pub hover_style: Style,
     pub focus_style: Style,
     pub focus_thumb_style: Style,
     pub hover_thumb_style: Style,
@@ -51,6 +54,9 @@ pub(crate) fn render_slider(
         padding,
         is_focused,
         is_hovered,
+        disabled,
+        disabled_style,
+        hover_style,
         focus_style,
         focus_thumb_style,
         hover_thumb_style,
@@ -68,6 +74,17 @@ pub(crate) fn render_slider(
 
     if w <= 0 {
         return;
+    }
+
+    let mut style = style;
+    let mut filled_track_style = filled_track_style;
+    let mut thumb_style = thumb_style;
+    let mut label_style = label_style;
+    if disabled {
+        style = style.patch(disabled_style);
+        filled_track_style = filled_track_style.patch(disabled_style);
+        thumb_style = thumb_style.patch(disabled_style);
+        label_style = label_style.patch(disabled_style);
     }
 
     if let Some(label_text) = label {
@@ -114,22 +131,26 @@ pub(crate) fn render_slider(
     let thumb_pos = (progress * track_len).round() as i32;
 
     let mut current_thumb_style = thumb_style;
-    if is_hovered {
-        current_thumb_style = current_thumb_style.patch(hover_thumb_style);
-    }
-    if is_focused {
-        current_thumb_style = current_thumb_style.patch(focus_thumb_style);
-    }
-
     let mut current_track_style = style;
     let mut current_filled_track_style = filled_track_style;
-    if is_focused {
-        current_track_style = current_track_style.patch(focus_style);
-        current_filled_track_style = current_filled_track_style.patch(focus_style);
+    if !disabled {
+        if is_hovered {
+            current_thumb_style = current_thumb_style.patch(hover_thumb_style);
+            current_track_style = current_track_style.patch(hover_style);
+            current_filled_track_style = current_filled_track_style.patch(hover_style);
+        }
+        if is_focused {
+            current_thumb_style = current_thumb_style.patch(focus_thumb_style);
+            current_track_style = current_track_style.patch(focus_style);
+            current_filled_track_style = current_filled_track_style.patch(focus_style);
+        }
     }
 
     let mut current_thumb_char = thumb_symbol;
-    if is_hovered && let Some(hover_sym) = hover_thumb_symbol {
+    if !disabled
+        && is_hovered
+        && let Some(hover_sym) = hover_thumb_symbol
+    {
         current_thumb_char = hover_sym;
     }
 
@@ -212,8 +233,8 @@ pub(crate) fn render_slider_node(
     _rrect: ratatui::layout::Rect,
     clip_bounds: Option<Rect>,
 ) {
-    let is_focused = Some(node_id) == state.ctx.focused;
-    let is_hovered = Some(node_id) == state.ctx.hovered;
+    let is_focused = Some(node_id) == state.ctx.focused && !node.disabled;
+    let is_hovered = Some(node_id) == state.ctx.hovered && !node.disabled;
     let theme = state.ctx.tree.node(node_id).active_theme();
     render_slider(
         state.f.buffer_mut(),
@@ -233,6 +254,12 @@ pub(crate) fn render_slider_node(
             padding: node.padding,
             is_focused,
             is_hovered,
+            disabled: node.disabled,
+            disabled_style: crate::backend::ratatui_backend::renderers::theme::with_theme_muted(
+                theme,
+                node.disabled_style,
+            ),
+            hover_style: resolve_slot(theme, ThemeRole::Hover, &node.hover_style),
             focus_style: resolve_slot(theme, ThemeRole::Focus, &node.focus_style),
             focus_thumb_style: resolve_slot(theme, ThemeRole::Focus, &node.focus_thumb_style),
             hover_thumb_style: resolve_slot(theme, ThemeRole::Hover, &node.hover_thumb_style),

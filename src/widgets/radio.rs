@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use crate::callback::Callback;
+use crate::callback::{Callback, KeyHandler};
 use crate::core::element::Element;
 use crate::core::event::MouseEvent;
-use crate::style::{Length, Padding, Style};
+use crate::style::{Length, Padding, Style, StyleSlot};
 use crate::widgets::{Checkbox, CheckboxEvent, CheckboxVariant, HStack, VStack};
 
 /// Layout direction for radio groups.
@@ -29,8 +29,8 @@ pub struct Radio {
     layout: RadioLayout,
     variant: CheckboxVariant,
     style: Style,
-    hover_style: Style,
-    focus_style: Style,
+    hover_style: StyleSlot,
+    focus_style: StyleSlot,
     checked_style: Style,
     unchecked_style: Style,
     label_style: Style,
@@ -38,6 +38,11 @@ pub struct Radio {
     width: Length,
     height: Length,
     disabled_style: Style,
+    focusable: bool,
+    tab_stop: bool,
+    on_focus: Option<Callback<()>>,
+    on_blur: Option<Callback<()>>,
+    on_key: Option<KeyHandler>,
 }
 
 impl Radio {
@@ -52,8 +57,8 @@ impl Radio {
             layout: RadioLayout::Vertical,
             variant: CheckboxVariant::Circle,
             style: Style::default(),
-            hover_style: Style::default(),
-            focus_style: Style::default(),
+            hover_style: StyleSlot::Inherit,
+            focus_style: StyleSlot::Inherit,
             checked_style: Style::default(),
             unchecked_style: Style::default(),
             label_style: Style::default(),
@@ -61,6 +66,11 @@ impl Radio {
             width: Length::Auto,
             height: Length::Auto,
             disabled_style: Style::default(),
+            focusable: true,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
+            on_key: None,
         }
     }
 
@@ -108,13 +118,49 @@ impl Radio {
 
     /// Set hover style.
     pub fn hover_style(mut self, style: Style) -> Self {
-        self.hover_style = style;
+        self.hover_style = StyleSlot::Replace(style);
+        self
+    }
+
+    /// Extend the themed hover style with the given style.
+    pub fn extend_hover_style(mut self, style: Style) -> Self {
+        self.hover_style = StyleSlot::Extend(style);
+        self
+    }
+
+    /// Inherit hover style from the active theme.
+    pub fn inherit_hover_style(mut self) -> Self {
+        self.hover_style = StyleSlot::Inherit;
+        self
+    }
+
+    /// Set hover style slot directly for composite forwarding.
+    pub fn hover_style_slot(mut self, slot: StyleSlot) -> Self {
+        self.hover_style = slot;
         self
     }
 
     /// Set focus style.
     pub fn focus_style(mut self, style: Style) -> Self {
-        self.focus_style = style;
+        self.focus_style = StyleSlot::Replace(style);
+        self
+    }
+
+    /// Extend the themed focus style with the given style.
+    pub fn extend_focus_style(mut self, style: Style) -> Self {
+        self.focus_style = StyleSlot::Extend(style);
+        self
+    }
+
+    /// Inherit focus style from the active theme.
+    pub fn inherit_focus_style(mut self) -> Self {
+        self.focus_style = StyleSlot::Inherit;
+        self
+    }
+
+    /// Set focus style slot directly for composite forwarding.
+    pub fn focus_style_slot(mut self, slot: StyleSlot) -> Self {
+        self.focus_style = slot;
         self
     }
 
@@ -159,6 +205,36 @@ impl Radio {
         self.disabled_style = style;
         self
     }
+
+    /// Control whether each option is focusable.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
+    }
+
+    /// Control whether each option participates in tab traversal.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when an option gains focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when an option loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
+        self
+    }
+
+    /// Set focused key handler forwarded to each option.
+    pub fn on_key(mut self, handler: KeyHandler) -> Self {
+        self.on_key = Some(handler);
+        self
+    }
 }
 
 impl From<Radio> for Element {
@@ -176,8 +252,8 @@ impl From<Radio> for Element {
                     .variant(radio.variant)
                     .gap(1)
                     .style(radio.style)
-                    .hover_style(radio.hover_style)
-                    .focus_style(radio.focus_style)
+                    .hover_style_slot(radio.hover_style)
+                    .focus_style_slot(radio.focus_style)
                     .checked_style(radio.checked_style)
                     .unchecked_style(radio.unchecked_style)
                     .label_style(radio.label_style)
@@ -185,7 +261,19 @@ impl From<Radio> for Element {
                     .width(radio.width)
                     .height(radio.height)
                     .disabled(radio.disabled)
-                    .disabled_style(radio.disabled_style);
+                    .disabled_style(radio.disabled_style)
+                    .focusable(radio.focusable)
+                    .tab_stop(radio.tab_stop);
+
+                if let Some(cb) = radio.on_focus.clone() {
+                    checkbox = checkbox.on_focus(cb);
+                }
+                if let Some(cb) = radio.on_blur.clone() {
+                    checkbox = checkbox.on_blur(cb);
+                }
+                if let Some(handler) = radio.on_key.clone() {
+                    checkbox = checkbox.on_key(handler);
+                }
 
                 if let Some(cb) = on_change
                     && !radio.disabled

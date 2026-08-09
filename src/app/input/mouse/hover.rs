@@ -6,6 +6,9 @@ pub(crate) fn should_hover(tree: &NodeTree, id: NodeId, x: u16, y: u16) -> bool 
 
     // Special case for Slider: only hover when over the track, not label/value
     if let NodeKind::Slider(slider) = &node.kind {
+        if slider.disabled {
+            return false;
+        }
         if let Some(track) = crate::app::input::geometry::slider_track_geometry(slider, node.rect) {
             return (y as i16) == track.track_y
                 && (x as i16) >= track.track_x

@@ -27,6 +27,9 @@ pub(crate) fn handle_slider_drag(
     let node = tree.node(id);
     match &node.kind {
         NodeKind::Slider(slider) => {
+            if slider.disabled {
+                return None;
+            }
             let track = crate::app::input::geometry::slider_track_geometry(slider, node.rect)?;
 
             if require_track_y && y as i16 != track.track_y {

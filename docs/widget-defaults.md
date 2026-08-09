@@ -724,7 +724,7 @@ Source: `src/widgets/pan_view/mod.rs:238` (`PanView`).
 
 ## Slider
 
-Source: `src/widgets/slider/mod.rs:85` (`Slider`).
+Source: `src/widgets/slider/mod.rs:93` (`Slider`).
 
 | Field | Default initializer |
 |---|---|
@@ -734,6 +734,7 @@ Source: `src/widgets/slider/mod.rs:85` (`Slider`).
 | `step` | `1.0` |
 | `on_change` | `None` |
 | `on_click` | `None` |
+| `on_key` | `None` |
 | `style` | `Style::default()` |
 | `filled_track_style` | `Style::default()` |
 | `filled_track_gradient` | `None` |
@@ -745,10 +746,13 @@ Source: `src/widgets/slider/mod.rs:85` (`Slider`).
 | `width` | `Length::Flex(1)` |
 | `height` | `Length::Px(1)` |
 | `padding` | `Padding::default()` |
+| `disabled` | `false` |
+| `disabled_style` | `Style::default()` |
 | `focusable` | `true` |
 | `tab_stop` | `true` |
 | `on_focus` | `None` |
 | `on_blur` | `None` |
+| `hover_style` | `StyleSlot::Inherit` |
 | `focus_style` | `StyleSlot::Inherit` |
 | `focus_thumb_style` | `StyleSlot::Inherit` |
 | `hover_thumb_style` | `StyleSlot::Inherit` |
@@ -845,7 +849,7 @@ Source: `src/widgets/tabs/mod.rs:108` (`Tabs`).
 
 ## DraggableTabBar
 
-Source: `src/widgets/draggable_tab_bar/mod.rs:468` (`DraggableTabBar`).
+Source: `src/widgets/draggable_tab_bar/mod.rs:502` (`DraggableTabBar`).
 
 | Field | Default initializer |
 |---|---|
@@ -878,8 +882,7 @@ Source: `src/widgets/draggable_tab_bar/mod.rs:468` (`DraggableTabBar`).
 | `show_overflow_controls` | `true` |
 | `overflow_style` | `Style::default()` |
 | `overflow_hover_style` | `Style::default()` |
-| `overflow_left_label` | Nerd Font `` + hidden count |
-| `overflow_right_label` | Nerd Font `` + hidden count |
+| `overflow_labels` | `OverflowLabels::default()` |
 | `empty_text` | `None` |
 | `empty_text_style` | `Style::default()` |
 | `scroll_offset` | `0` |
@@ -1001,6 +1004,8 @@ Source: `src/widgets/file_tree/mod.rs:346` (`FileTree`).
 | `show_arrows` | `true` |
 | `indent_style` | `crate::widgets::IndentStyle::None` |
 | `indent_guide_style` | `Style::default()` |
+| `indent_guide_start_depth` | `1` |
+| `indent_width` | `2` |
 | `directory_icon` | `"[D]".into()` |
 | `opened_directory_icon` | `"[D]".into()` |
 | `file_icon` | `"[F]".into()` |
@@ -1220,6 +1225,7 @@ Source: `src/widgets/tree/mod.rs:27` (`Tree`).
 | `selection_full_width` | `false` |
 | `unselected_symbol` | `None` |
 | `key_interceptor` | `None` |
+| `indent_guide_start_depth` | `1` |
 
 ## Terminal
 

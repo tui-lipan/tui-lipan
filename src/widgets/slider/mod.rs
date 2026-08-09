@@ -10,7 +10,7 @@ pub use reconcile::reconcile_slider;
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::callback::Callback;
+use crate::callback::{Callback, KeyHandler};
 use crate::core::element::Element;
 use crate::style::{Length, Padding, Style, StyleSlot};
 use crate::utils::gradient::ColorGradient;
@@ -30,6 +30,8 @@ pub struct Slider {
     pub on_change: Option<Callback<f64>>,
     /// Callback when clicked.
     pub on_click: Option<Callback<f64>>,
+    /// Focused key handler. Returning `true` consumes the key before default stepping.
+    pub on_key: Option<KeyHandler>,
     /// Track style.
     pub style: Style,
     /// Style for the filled portion of the track.
@@ -55,6 +57,10 @@ pub struct Slider {
     /// Padding.
     /// Default: `Padding::default()`.
     pub padding: Padding,
+    /// Whether the slider is disabled.
+    pub disabled: bool,
+    /// Style when disabled.
+    pub disabled_style: Style,
     /// Whether the slider is focusable.
     pub focusable: bool,
     /// Whether the slider participates in sequential focus navigation.
@@ -63,6 +69,8 @@ pub struct Slider {
     pub on_focus: Option<Callback<()>>,
     /// Callback fired when the slider loses focus.
     pub on_blur: Option<Callback<()>>,
+    /// Hover style for the track.
+    pub hover_style: StyleSlot,
     /// Style when focused.
     pub focus_style: StyleSlot,
     /// Thumb style when focused.
@@ -89,6 +97,7 @@ impl Slider {
             step: 1.0,
             on_change: None,
             on_click: None,
+            on_key: None,
             style: Style::default(),
             filled_track_style: Style::default(),
             filled_track_gradient: None,
@@ -100,10 +109,13 @@ impl Slider {
             width: Length::Flex(1),
             height: Length::Px(1),
             padding: Padding::default(),
+            disabled: false,
+            disabled_style: Style::default(),
             focusable: true,
             tab_stop: true,
             on_focus: None,
             on_blur: None,
+            hover_style: StyleSlot::Inherit,
             focus_style: StyleSlot::Inherit,
             focus_thumb_style: StyleSlot::Inherit,
             hover_thumb_style: StyleSlot::Inherit,
@@ -147,6 +159,12 @@ impl Slider {
     /// Set on-click callback.
     pub fn on_click(mut self, cb: Callback<f64>) -> Self {
         self.on_click = Some(cb);
+        self
+    }
+
+    /// Set focused key handler. Returning `true` consumes the key before default stepping.
+    pub fn on_key(mut self, handler: KeyHandler) -> Self {
+        self.on_key = Some(handler);
         self
     }
 
@@ -204,6 +222,18 @@ impl Slider {
         self
     }
 
+    /// Set disabled state.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    /// Set disabled style.
+    pub fn disabled_style(mut self, style: Style) -> Self {
+        self.disabled_style = style;
+        self
+    }
+
     /// Set whether the slider is focusable.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.focusable = focusable;
@@ -225,6 +255,30 @@ impl Slider {
     /// Set the callback fired when the slider loses focus.
     pub fn on_blur(mut self, cb: Callback<()>) -> Self {
         self.on_blur = Some(cb);
+        self
+    }
+
+    /// Set hover style for the track.
+    pub fn hover_style(mut self, style: Style) -> Self {
+        self.hover_style = StyleSlot::Replace(style);
+        self
+    }
+
+    /// Extend the themed hover style with the given style.
+    pub fn extend_hover_style(mut self, style: Style) -> Self {
+        self.hover_style = StyleSlot::Extend(style);
+        self
+    }
+
+    /// Inherit hover style from the active theme.
+    pub fn inherit_hover_style(mut self) -> Self {
+        self.hover_style = StyleSlot::Inherit;
+        self
+    }
+
+    /// Set the hover style slot directly.
+    pub fn hover_style_slot(mut self, slot: StyleSlot) -> Self {
+        self.hover_style = slot;
         self
     }
 
