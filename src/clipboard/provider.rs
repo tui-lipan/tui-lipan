@@ -5,6 +5,8 @@
 ))]
 use std::io::Cursor;
 
+use std::path::PathBuf;
+
 use crate::clipboard::error::{ClipboardError, ClipboardOperation};
 
 /// Supported image formats for clipboard operations.
@@ -124,6 +126,32 @@ pub trait ClipboardProvider {
         Err(ClipboardError::unsupported(
             ClipboardOperation::WriteImageClipboard,
         ))
+    }
+
+    /// Read a file list from the system clipboard.
+    ///
+    /// Returns an empty vector when the clipboard holds no file list, which is
+    /// distinct from the provider being unable to read one at all.
+    fn read_clipboard_files(&mut self) -> Result<Vec<PathBuf>, ClipboardError> {
+        Err(ClipboardError::unsupported(
+            ClipboardOperation::ReadFileClipboard,
+        ))
+    }
+
+    /// Write a file list to the system clipboard.
+    ///
+    /// Paths are expected to be absolute and to exist; callers going through
+    /// [`ClipboardHandle::copy_files`](crate::clipboard::ClipboardHandle::copy_files)
+    /// get that guaranteed for them.
+    fn write_clipboard_files(&mut self, _paths: &[PathBuf]) -> Result<(), ClipboardError> {
+        Err(ClipboardError::unsupported(
+            ClipboardOperation::WriteFileClipboard,
+        ))
+    }
+
+    /// Returns true when the provider can exchange file lists.
+    fn supports_file_clipboard(&self) -> bool {
+        false
     }
 }
 
@@ -304,6 +332,30 @@ impl ClipboardProvider for SystemClipboardProvider {
 
     fn supports_primary_selection(&self) -> bool {
         cfg!(target_os = "linux")
+    }
+
+    fn read_clipboard_files(&mut self) -> Result<Vec<PathBuf>, ClipboardError> {
+        let clipboard = self.ensure_clipboard(ClipboardOperation::ReadFileClipboard)?;
+        match clipboard.get().file_list() {
+            Ok(paths) => Ok(paths),
+            // An absent file list is an empty result, not a failure.
+            Err(arboard::Error::ContentNotAvailable) => Ok(Vec::new()),
+            Err(err) => Err(ClipboardError::provider(
+                ClipboardOperation::ReadFileClipboard,
+                err.to_string(),
+            )),
+        }
+    }
+
+    fn write_clipboard_files(&mut self, paths: &[PathBuf]) -> Result<(), ClipboardError> {
+        let clipboard = self.ensure_clipboard(ClipboardOperation::WriteFileClipboard)?;
+        clipboard.set().file_list(paths).map_err(|err| {
+            ClipboardError::provider(ClipboardOperation::WriteFileClipboard, err.to_string())
+        })
+    }
+
+    fn supports_file_clipboard(&self) -> bool {
+        true
     }
 
     #[cfg(feature = "clipboard-images")]

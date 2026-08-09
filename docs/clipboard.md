@@ -116,6 +116,58 @@ that for the flash duration, so the selection can be cleared straight away rathe
 alive purely to give the flash something to draw. Columns are display columns, matching the
 renderer.
 
+## File Clipboard
+
+`copy_files` puts real files on the clipboard rather than their paths as text. Pasting into a file
+manager, a file dialog, or a browser upload target yields the files themselves:
+
+```rust
+match ctx.clipboard().copy_files(&["src/main.rs", "Cargo.toml"]) {
+    Ok(()) => ctx.toast().push(Toast::new("Copied - paste into a file manager")),
+    Err(e) => ctx.toast().push(Toast::new(format!("Copy failed: {e}"))),
+}
+
+// Read a file list someone else put on the clipboard.
+let paths: Vec<PathBuf> = ctx.clipboard().read_files()?;  // empty vec = no file list
+```
+
+| Method | Purpose |
+|--------|---------|
+| `copy_files(&[impl AsRef<Path>])` | Place files on the clipboard |
+| `read_files()` | Read a file list; empty `Vec` means the clipboard holds none |
+| `supports_files()` | Whether the provider can exchange file lists at all |
+
+Paths are resolved to absolute form, so relative paths resolve against the current working
+directory. A path that does not exist fails the **whole** call with
+`ClipboardError::InvalidInput` naming it - the platform clipboards drop unresolvable entries
+silently, which would otherwise copy a shorter list than you asked for without telling you.
+
+Unlike `copy`, this never emits OSC 52: that escape carries plain text only and cannot express a
+file list, so emitting it would silently downgrade the copy to a path string. Over SSH, copy the
+path with `copy` and accept that it lands as text.
+
+Gate any "copy file" affordance on `supports_files()` - it is `false` on the web backend and in
+builds without the `clipboard` feature, so you can hide the option instead of surfacing an error
+after the user asks for it.
+
+### Why there is no drag-and-drop out of the terminal
+
+A common follow-up is whether a file can be *dragged* out of a TUI into another application. It
+cannot. The OS drag protocols - XDND on X11, `wl_data_device` on Wayland, `NSDraggingSession` on
+macOS, OLE on Windows - are driven by the window that owns the pointer grab, and that window
+belongs to the terminal emulator, not to the process drawing inside it. A TUI receives mouse input
+as escape sequences carrying **cell** coordinates, and reporting stops entirely once the pointer
+leaves the terminal. No terminal protocol exposes a "begin a native drag" request.
+
+Dragging *in* works because the emulator acts as the drop target and pastes the path for you; the
+source side has no equivalent. `copy_files` is the closest portable substitute, and it also works
+where a GUI helper cannot, such as over SSH to a machine with no display.
+
+If you specifically need the drag *gesture*, spawn a small GUI helper that owns its own window and
+can act as the drag source - `ripdrag` or `dragon-drop`, which is what `ranger`, `lf`, and `nnn`
+do. That is application-level glue rather than framework API; see `examples/lazygit.rs` for a
+working version behind the `D` key.
+
 ## Image Clipboard *(requires feature `image` or `clipboard-images`)*
 
 ```rust

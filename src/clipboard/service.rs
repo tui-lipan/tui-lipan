@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::clipboard::error::ClipboardError;
@@ -118,6 +119,18 @@ impl ClipboardService {
         self.provider.borrow_mut().write_clipboard_image(content)
     }
 
+    pub fn read_clipboard_files(&self) -> Result<Vec<PathBuf>, ClipboardError> {
+        self.provider.borrow_mut().read_clipboard_files()
+    }
+
+    pub fn write_clipboard_files(&self, paths: &[PathBuf]) -> Result<(), ClipboardError> {
+        self.provider.borrow_mut().write_clipboard_files(paths)
+    }
+
+    pub fn supports_file_clipboard(&self) -> bool {
+        self.provider.borrow().supports_file_clipboard()
+    }
+
     pub fn report_error(&self, error: ClipboardError) {
         let reporter = self.reporter.borrow().clone();
         reporter(error);
@@ -138,6 +151,7 @@ pub fn default_clipboard_reporter() -> ClipboardReporter {
         let message = match error {
             ClipboardError::Unsupported { .. } => "unsupported clipboard operation".to_string(),
             ClipboardError::Provider { message, .. } => message.to_string(),
+            ClipboardError::InvalidInput { message, .. } => message.to_string(),
         };
         crate::debug::internal_log!("[tui-lipan] clipboard {:?}: {}", op, message);
     })
