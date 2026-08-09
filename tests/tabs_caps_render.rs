@@ -3,7 +3,10 @@
 //! widths or hit regions. Tabs that are inactive, truncated, background-matched to the strip, or
 //! capped with a wide glyph all keep flat space padding.
 
-use tui_lipan::core::event::MouseKind;
+use std::cell::Cell;
+use std::rc::Rc;
+
+use tui_lipan::core::event::{MouseButton, MouseKind};
 use tui_lipan::prelude::*;
 use tui_lipan::{CapturedFrame, MouseEvent, TestBackend};
 
@@ -201,4 +204,134 @@ fn wide_caps_fall_back_to_flat_padding() {
         row(&uncapped, 20),
         "wide caps must not shift tab columns"
     );
+}
+
+struct WideUnicodeTabsApp {
+    changes: Rc<Cell<Option<usize>>>,
+}
+
+impl Component for WideUnicodeTabsApp {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let changes = self.changes.clone();
+        Tabs::new()
+            .tabs([Tab::new("你好"), Tab::new("你好")])
+            .overflow(TabsOverflow::Ellipsis)
+            .divider('|')
+            .style(Style::new().bg(PANEL))
+            .hover_style(Style::new())
+            .tab_hover_style(Style::new().bg(HOVER))
+            .active_style(Style::new())
+            .on_change(Callback::new(move |event: TabsEvent| {
+                changes.set(Some(event.index));
+            }))
+            .into()
+    }
+}
+
+fn wide_unicode_tabs_backend(changes: Rc<Cell<Option<usize>>>) -> TestBackend<WideUnicodeTabsApp> {
+    let mut backend = TestBackend::new(WideUnicodeTabsApp { changes });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 10,
+        h: 1,
+    });
+    backend.render();
+    backend
+}
+
+#[test]
+fn wide_unicode_tabs_keep_divider_clicks_inert_and_hover_repaints_symmetric() {
+    let changes = Rc::new(Cell::new(None));
+    let mut backend = wide_unicode_tabs_backend(changes.clone());
+
+    // Ellipsis gives the first "你好" tab a nominal five-cell budget, but the rendered " 你…"
+    // segment is four cells wide. The divider is consequently rendered at column 4.
+    let initial = backend.capture_frame();
+    assert_eq!(initial.cell(4, 0).symbol, "|");
+    assert_eq!(initial.cell(4, 0).bg, PANEL);
+
+    backend
+        .send_mouse(MouseEvent {
+            x: 4,
+            y: 0,
+            kind: MouseKind::Down(MouseButton::Left),
+            mods: Default::default(),
+        })
+        .expect("divider mouse down");
+    backend
+        .send_mouse(MouseEvent {
+            x: 4,
+            y: 0,
+            kind: MouseKind::Up(MouseButton::Left),
+            mods: Default::default(),
+        })
+        .expect("divider mouse up");
+    assert_eq!(
+        changes.get(),
+        None,
+        "rendered divider must not select tab 1"
+    );
+
+    backend
+        .send_mouse(MouseEvent {
+            x: 1,
+            y: 0,
+            kind: MouseKind::Moved,
+            mods: Default::default(),
+        })
+        .expect("hover first tab");
+    assert_eq!(backend.capture_frame().cell(1, 0).bg, HOVER);
+
+    backend
+        .send_mouse(MouseEvent {
+            x: 4,
+            y: 0,
+            kind: MouseKind::Moved,
+            mods: Default::default(),
+        })
+        .expect("hover divider");
+    let divider = backend.capture_frame();
+    assert_eq!(divider.cell(4, 0).symbol, "|");
+    assert_eq!(divider.cell(4, 0).bg, PANEL);
+
+    backend
+        .send_mouse(MouseEvent {
+            x: 5,
+            y: 0,
+            kind: MouseKind::Moved,
+            mods: Default::default(),
+        })
+        .expect("hover second tab");
+    assert_eq!(backend.capture_frame().cell(5, 0).bg, HOVER);
+
+    backend
+        .send_mouse(MouseEvent {
+            x: 4,
+            y: 0,
+            kind: MouseKind::Moved,
+            mods: Default::default(),
+        })
+        .expect("return to divider");
+    assert_eq!(backend.capture_frame().cell(5, 0).bg, PANEL);
+
+    backend
+        .send_mouse(MouseEvent {
+            x: 1,
+            y: 0,
+            kind: MouseKind::Moved,
+            mods: Default::default(),
+        })
+        .expect("return to first tab");
+    assert_eq!(backend.capture_frame().cell(1, 0).bg, HOVER);
 }

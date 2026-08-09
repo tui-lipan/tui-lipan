@@ -282,8 +282,8 @@ pub use status_bar::StatusBar;
 pub use table::{
     ColumnWidth, Table, TableCell, TableDisclosureState, TableEvent, TableRow, TableRowRole,
 };
-pub(crate) use tabs::tab_width_budgets;
 pub use tabs::{Tab, Tabs, TabsEvent, TabsOverflow};
+pub(crate) use tabs::{tab_divider_width, tab_segment_width, tab_width_budgets};
 #[cfg(all(feature = "terminal", unix))]
 pub use terminal::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]

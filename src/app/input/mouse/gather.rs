@@ -959,7 +959,7 @@ mod tests {
     use crate::layout::LayoutEngine;
     use crate::style::Rect;
     use crate::widgets::internal::{MouseRegionNode, TextNode};
-    use crate::widgets::{BorderLabels, Frame, Graph, GraphNode, TabVariant, Text};
+    use crate::widgets::{BorderLabels, Frame, Graph, GraphNode, Tab, TabVariant, Tabs, Text};
 
     #[test]
     fn frame_tab_hit_region_accounts_for_grouped_header_padding() {
@@ -996,6 +996,41 @@ mod tests {
         let change = super::gather_border_tabs_change(&tree, tree.node(tree.root), 6, 0)
             .expect("clicking the first rendered tab should gather a tab change");
         assert_eq!(change.next, 0);
+    }
+
+    #[test]
+    fn tabs_divider_click_does_not_gather_tab_change() {
+        let root: crate::Element = Tabs::new()
+            .tabs([Tab::new("one"), Tab::new("two")])
+            .divider('|')
+            .on_change(Callback::new(|_| {}))
+            .into();
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 20,
+                h: 1,
+            },
+            None,
+        );
+
+        assert!(
+            gather_hit_actions(&tree, tree.root, 5, 0)
+                .tabs_change
+                .is_none(),
+            "the divider between `one` and `two` is not a tab"
+        );
+        assert_eq!(
+            gather_hit_actions(&tree, tree.root, 6, 0)
+                .tabs_change
+                .expect("the second tab should remain clickable")
+                .next,
+            1
+        );
     }
 
     fn noop_mouse_cb() -> Callback<MouseEvent> {

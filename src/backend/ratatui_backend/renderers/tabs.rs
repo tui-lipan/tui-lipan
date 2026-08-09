@@ -1,19 +1,18 @@
 use ratatui::text::{Line, Span, Text as RText};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthChar;
 
 use crate::app::ContrastPolicy;
 use crate::backend::ratatui_backend::common::{
     calculate_visible_borders, finalize_style, style_backdrop, style_paints_bg,
     to_ratatui_border_set, to_ratatui_border_type, to_ratatui_rect, to_ratatui_style,
-    truncate_end_with_ellipsis,
 };
 use crate::backend::ratatui_backend::render::RenderState;
 use crate::backend::ratatui_backend::renderers::theme::{with_theme_muted, with_theme_primary};
 use crate::core::node::NodeId;
 use crate::style::resolve::{Durability, StateLayer, resolve_state_cascade};
 use crate::style::{BorderStyle, Padding, Style, ThemeRole, resolve_slot};
-use crate::widgets::{Tab, TabsOverflow, tab_width_budgets};
+use crate::widgets::{Tab, TabsOverflow, tab_divider_width, tab_segment_width, tab_width_budgets};
 
 fn resolve_tabs_base_style(
     style: Style,
@@ -250,13 +249,14 @@ pub(crate) fn render_tabs(
             break;
         }
 
-        let full_seg = format!(" {} ", tab.label.as_ref());
         let remaining = budgets.as_ref().map_or_else(
-            || max_w.saturating_sub(used).min(u16::MAX as usize) as u16,
-            |budgets| budgets.get(idx).copied().unwrap_or(0),
+            || max_w.saturating_sub(used).min(u16::MAX as usize),
+            |budgets| budgets.get(idx).copied().unwrap_or(0) as usize,
         );
-        let seg = truncate_end_with_ellipsis(&full_seg, remaining).into_owned();
-        let seg_w = UnicodeWidthStr::width(seg.as_str()) as u16;
+        let full_seg = format!(" {} ", tab.label.as_ref());
+        let seg = crate::utils::text::truncate_end_with_ellipsis(&full_seg, remaining).into_owned();
+        let seg_w = tab_segment_width(tab.label.as_ref(), remaining) as u16;
+        let segment_is_full = seg == full_seg;
         let start_x = used.min(u16::MAX as usize) as u16;
 
         let is_tab_hovered =
@@ -287,7 +287,7 @@ pub(crate) fn render_tabs(
         // `Tabs::index_at_col` hit-tests against, so those degrade to flat padding.
         let cap_glyphs = caps.filter(|caps| {
             (is_active || is_tab_hovered)
-                && seg == full_seg
+                && segment_is_full
                 && tab_style.bg != base_style.bg
                 && caps_fit_padding(*caps)
         });
@@ -308,11 +308,14 @@ pub(crate) fn render_tabs(
         }
 
         if idx + 1 < len {
-            let div = divider.to_string();
-            let remaining = max_w.saturating_sub(used).min(u16::MAX as usize) as u16;
-            let div = truncate_end_with_ellipsis(&div, remaining).into_owned();
-            used = used.saturating_add(UnicodeWidthStr::width(div.as_str()));
-            spans.push(Span::styled(div, to_ratatui_style(base_style)));
+            let remaining = max_w.saturating_sub(used);
+            let divider_text = divider.to_string();
+            let divider_text =
+                crate::utils::text::truncate_end_with_ellipsis(&divider_text, remaining)
+                    .into_owned();
+            let divider_width = tab_divider_width(divider, remaining);
+            used = used.saturating_add(divider_width);
+            spans.push(Span::styled(divider_text, to_ratatui_style(base_style)));
         }
     }
 

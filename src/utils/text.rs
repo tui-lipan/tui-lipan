@@ -541,6 +541,55 @@ pub(crate) fn end_at_width_sentinel_tabs(
     end
 }
 
+/// Truncate `line` to `width` cells, replacing the omitted tail with an ellipsis.
+pub(crate) fn truncate_end_with_ellipsis<'a>(line: &'a str, width: usize) -> Cow<'a, str> {
+    let shape = truncate_end_shape(line, width);
+    if !shape.ellipsis {
+        return Cow::Borrowed(&line[..shape.prefix_end]);
+    }
+
+    let mut out = String::with_capacity(shape.prefix_end.saturating_add('…'.len_utf8()));
+    out.push_str(&line[..shape.prefix_end]);
+    out.push('…');
+    Cow::Owned(out)
+}
+
+struct TruncatedEndShape {
+    prefix_end: usize,
+    ellipsis: bool,
+}
+
+fn truncate_end_shape(line: &str, width: usize) -> TruncatedEndShape {
+    if width == 0 {
+        return TruncatedEndShape {
+            prefix_end: 0,
+            ellipsis: false,
+        };
+    }
+
+    let line_width = UnicodeWidthStr::width(line);
+    if line_width <= width {
+        return TruncatedEndShape {
+            prefix_end: line.len(),
+            ellipsis: false,
+        };
+    }
+
+    let ellipsis_width = UnicodeWidthChar::width('…').unwrap_or(1).max(1);
+    if width <= ellipsis_width {
+        return TruncatedEndShape {
+            prefix_end: 0,
+            ellipsis: true,
+        };
+    }
+
+    let prefix_end = end_at_width(line, 0, width.saturating_sub(ellipsis_width));
+    TruncatedEndShape {
+        prefix_end,
+        ellipsis: true,
+    }
+}
+
 pub(crate) fn input_viewport_start(line: &str, cursor: usize, width: u16) -> usize {
     let width = width as usize;
     if width == 0 {

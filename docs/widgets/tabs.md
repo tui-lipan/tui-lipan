@@ -36,7 +36,7 @@ inherit scoped theme roles.
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_change` | `Callback<TabsEvent>` | Active tab changed |
-| `on_click` | `Callback<TabsEvent>` | Tab clicked |
+| `on_click` | `Callback<MouseEvent>` | Raw tab-bar click |
 | `on_key` | `KeyHandler` | Key handler |
 
 ```rust

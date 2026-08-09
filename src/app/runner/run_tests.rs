@@ -3346,7 +3346,7 @@ impl Component for TabStripHoverSmoke {
 /// motion event that happens to be over it. A strip spanning the top of a window otherwise makes
 /// every pointer movement anywhere along it repaint the whole tree.
 #[test]
-fn motion_within_one_tab_is_not_dirty() {
+fn tab_hover_repaints_across_dividers_in_both_directions() {
     let viewport = Rect {
         x: 0,
         y: 0,
@@ -3367,18 +3367,49 @@ fn motion_within_one_tab_is_not_dirty() {
         "still within the first tab: no repaint"
     );
 
-    assert!(runner.update_hover(7, 0), "crossing onto the second tab");
+    assert!(runner.update_hover(5, 0), "crossing onto the first divider");
+    assert_eq!(runner.mouse.hovered_item_index, None);
+    assert!(
+        runner.update_hover(6, 0),
+        "crossing from the first divider onto the second tab"
+    );
     assert_eq!(runner.mouse.hovered_item_index, Some(1));
     assert!(!runner.update_hover(8, 0), "sliding within the second tab");
 
-    assert!(runner.update_hover(13, 0), "crossing onto the third tab");
+    assert!(
+        runner.update_hover(11, 0),
+        "crossing onto the second divider"
+    );
+    assert_eq!(runner.mouse.hovered_item_index, None);
+    assert!(
+        runner.update_hover(12, 0),
+        "crossing from the second divider onto the third tab"
+    );
     assert_eq!(runner.mouse.hovered_item_index, Some(2));
     assert!(
         !runner.update_hover(17, 0),
         "sliding across the whole third tab paints nothing new"
     );
 
-    assert!(runner.update_hover(1, 0), "jumping back to the first tab");
+    assert!(
+        runner.update_hover(11, 0),
+        "crossing back onto the second divider"
+    );
+    assert_eq!(runner.mouse.hovered_item_index, None);
+    assert!(
+        runner.update_hover(10, 0),
+        "crossing back from the second divider onto the second tab"
+    );
+    assert_eq!(runner.mouse.hovered_item_index, Some(1));
+    assert!(
+        runner.update_hover(5, 0),
+        "crossing back onto the first divider"
+    );
+    assert_eq!(runner.mouse.hovered_item_index, None);
+    assert!(
+        runner.update_hover(4, 0),
+        "crossing back from the first divider onto the first tab"
+    );
     assert_eq!(runner.mouse.hovered_item_index, Some(0));
 }
 

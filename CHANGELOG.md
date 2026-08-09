@@ -32,6 +32,9 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Tabs hit-testing now follows actual rendered widths through Unicode truncation and ellipsis;
+  divider cells are inert for selection and per-tab hover, with symmetric repainting in either
+  direction.
 - `Splitter` hands each leftover column to the pane with the largest dropped fraction instead of to
   the leftmost panes in index order. Sizes are floored from weights, so the spare columns were
   landing on pane 0 regardless of which pane earned them - `[0.09, 0.45, 0.46]` across 10 columns

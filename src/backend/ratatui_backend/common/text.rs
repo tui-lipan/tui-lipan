@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use ratatui::buffer::Buffer;
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 use crate::style::{Rect, Style};
 use crate::utils::text;
@@ -173,29 +173,7 @@ pub(crate) fn border_tabs_title_line<'a>(
 }
 
 pub(crate) fn truncate_end_with_ellipsis<'a>(line: &'a str, width: u16) -> Cow<'a, str> {
-    let width = width as usize;
-    if width == 0 {
-        return Cow::Borrowed("");
-    }
-
-    if UnicodeWidthStr::width(line) <= width {
-        return Cow::Borrowed(line);
-    }
-
-    let ell = '…';
-    let ell_w = UnicodeWidthChar::width(ell).unwrap_or(1).max(1);
-
-    if width <= ell_w {
-        return Cow::Owned(ell.to_string());
-    }
-
-    let target = width.saturating_sub(ell_w);
-    let end = text::end_at_width(line, 0, target);
-
-    let mut out = String::with_capacity(end.saturating_add(ell.len_utf8()));
-    out.push_str(&line[..end]);
-    out.push(ell);
-    Cow::Owned(out)
+    text::truncate_end_with_ellipsis(line, width as usize)
 }
 
 pub(crate) fn spaces(width: usize) -> Cow<'static, str> {
