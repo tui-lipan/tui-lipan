@@ -274,6 +274,7 @@ docs/tutorial.md          End-to-end tutorial: build a complete multi-panel app
 docs/quick-start.md       Import map, feature flags, minimal example, App config
 docs/macros.md            ui! and rsx! macro reference
 docs/components.md        Component lifecycle, update(), commands, async
+docs/testing.md           Snapshot / visual testing, recordings, control channel, baselines
 docs/text-editing.md      TextEditor, TextInput, undo/redo, widget integration
 docs/events.md            Event/callback types for all widgets (payload structs)
 docs/enums.md             Enum & type reference (all variants with defaults)
