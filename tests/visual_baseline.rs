@@ -106,6 +106,195 @@ fn form_chrome_matches_baseline() -> Result<()> {
         .assert_baseline()
 }
 
+/// Modal overlay chrome over a backdrop of body text.
+fn modal_chrome() -> Element {
+    ZStack::new()
+        .child(
+            Frame::new()
+                .header_left("Backdrop")
+                .border(true)
+                .padding(1)
+                .child(Text::new(
+                    "Underlying content stays visible under the modal tint.",
+                )),
+        )
+        .child(
+            Modal::new()
+                .title("Confirm")
+                .width(Length::Px(28))
+                .height(Length::Auto)
+                .border_style(BorderStyle::Rounded)
+                .backdrop_style(Style::new().dim())
+                .child(
+                    VStack::new()
+                        .gap(1)
+                        .child(Text::new("Delete this item?"))
+                        .child(
+                            HStack::new()
+                                .gap(2)
+                                .child(Button::new("Cancel"))
+                                .child(Button::new("Delete")),
+                        ),
+                ),
+        )
+        .into()
+}
+
+/// Active/inactive tab chrome.
+fn tabs_chrome() -> Element {
+    Frame::new()
+        .header_left("Tabs")
+        .border(true)
+        .padding(1)
+        .child(
+            Tabs::new()
+                .tab("Overview")
+                .tab("Details")
+                .tab("History")
+                .active(1)
+                .border(true)
+                .key("tabs"),
+        )
+        .into()
+}
+
+/// TextArea line-number gutter and caret.
+fn text_area_chrome() -> Element {
+    Frame::new()
+        .header_left("Editor")
+        .border(true)
+        .child(
+            TextArea::new("fn main() {\n    println!(\"hi\");\n}\n")
+                .line_numbers(true)
+                .cursor(14)
+                .border(false)
+                .key("editor"),
+        )
+        .into()
+}
+
+/// Table header row plus selection gutter.
+fn table_chrome() -> Element {
+    Frame::new()
+        .header_left("Processes")
+        .border(true)
+        .child(
+            Table::new()
+                .header(TableRow::new(["PID", "Name", "CPU"]).style(Style::new().bold()))
+                .rows([
+                    TableRow::new(["1204", "lipan", "2.1"]),
+                    TableRow::new(["2048", "cargo", "18.4"]),
+                    TableRow::new(["4096", "rustc", "41.0"]),
+                ])
+                .selected(Some(1))
+                .selection_symbol(Some("> "))
+                .unselected_symbol(Some("  "))
+                .key("table"),
+        )
+        .into()
+}
+
+/// Select with the dropdown popover open.
+fn select_expanded_chrome() -> Element {
+    Frame::new()
+        .header_left("Select")
+        .border(true)
+        .padding(1)
+        .child(
+            Select::new()
+                .options(["Alpha", "Beta", "Gamma"])
+                .selected(Some(1))
+                .expanded(true)
+                .width(Length::Px(16))
+                .list_height(Length::Px(5))
+                .key("select"),
+        )
+        .into()
+}
+
+/// Splitter drag-handle glyph between two panes.
+fn splitter_chrome() -> Element {
+    Splitter::horizontal()
+        .weights([1.0, 1.0])
+        .handle_symbol('│')
+        .child(
+            Frame::new()
+                .header_left("Left")
+                .border(true)
+                .padding(1)
+                .child(Text::new("Pane A")),
+        )
+        .child(
+            Frame::new()
+                .header_left("Right")
+                .border(true)
+                .padding(1)
+                .child(Text::new("Pane B")),
+        )
+        .into()
+}
+
+#[test]
+fn modal_chrome_matches_baseline() -> Result<()> {
+    Sketch::view("chrome-modal", modal_chrome)
+        .viewport(48, 12)
+        .dir(std::env::temp_dir().join("tui-lipan-baseline-artifacts"))
+        .baseline(BASELINE_DIR)
+        .quiet(true)
+        .assert_baseline()
+}
+
+#[test]
+fn tabs_chrome_matches_baseline() -> Result<()> {
+    Sketch::view("chrome-tabs", tabs_chrome)
+        .viewport(40, 8)
+        .dir(std::env::temp_dir().join("tui-lipan-baseline-artifacts"))
+        .baseline(BASELINE_DIR)
+        .quiet(true)
+        .assert_baseline()
+}
+
+#[test]
+fn text_area_chrome_matches_baseline() -> Result<()> {
+    Sketch::view("chrome-textarea", text_area_chrome)
+        .viewport(40, 10)
+        .focus_next(1)
+        .dir(std::env::temp_dir().join("tui-lipan-baseline-artifacts"))
+        .baseline(BASELINE_DIR)
+        .quiet(true)
+        .assert_baseline()
+}
+
+#[test]
+fn table_chrome_matches_baseline() -> Result<()> {
+    Sketch::view("chrome-table", table_chrome)
+        .viewport(40, 10)
+        .dir(std::env::temp_dir().join("tui-lipan-baseline-artifacts"))
+        .baseline(BASELINE_DIR)
+        .quiet(true)
+        .assert_baseline()
+}
+
+#[test]
+fn select_expanded_chrome_matches_baseline() -> Result<()> {
+    Sketch::view("chrome-select-expanded", select_expanded_chrome)
+        .viewport(40, 14)
+        .dir(std::env::temp_dir().join("tui-lipan-baseline-artifacts"))
+        .baseline(BASELINE_DIR)
+        .quiet(true)
+        .assert_baseline()
+}
+
+#[test]
+fn splitter_chrome_matches_baseline() -> Result<()> {
+    Sketch::view("chrome-splitter", splitter_chrome)
+        .viewport(40, 8)
+        .dir(std::env::temp_dir().join("tui-lipan-baseline-artifacts"))
+        .baseline(BASELINE_DIR)
+        .quiet(true)
+        .assert_baseline()
+}
+
 #[test]
 fn focused_form_chrome_matches_baseline() -> Result<()> {
     // Focus chrome is the easiest thing to break without noticing, since it only
