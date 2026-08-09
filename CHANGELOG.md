@@ -35,6 +35,14 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Interaction API parity for `Slider`, `DatePicker`, and `Radio`: `disabled` /
+  `disabled_style`, focus props (`focusable`, `tab_stop`, `on_focus`, `on_blur`),
+  and `on_key` where applicable. `Slider` also gains track `hover_style` (with
+  `extend_*` / `inherit_*` / `*_style_slot`) and a keyboard handler (arrows /
+  Home / End). `Radio` stores `hover_style` / `focus_style` as `StyleSlot` so it
+  participates in theme slot inheritance; existing `hover_style(Style)` /
+  `focus_style(Style)` call sites keep working via `StyleSlot::Replace`.
+  Compile-time guardrail: `tests/interaction_parity.rs`.
 - File clipboard support: `ctx.clipboard().copy_files(&[path])` places real files on the system
   clipboard, so pasting into a file manager, file dialog, or browser upload target yields the files
   rather than their paths as text. `read_files()` reads a file list back (empty `Vec` when the

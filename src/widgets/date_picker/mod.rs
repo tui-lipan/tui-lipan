@@ -37,6 +37,12 @@ pub struct DatePicker {
     pub(crate) padding: Padding,
     pub(crate) width: Length,
     pub(crate) height: Length,
+    pub(crate) disabled: bool,
+    pub(crate) disabled_style: Style,
+    pub(crate) focusable: bool,
+    pub(crate) tab_stop: bool,
+    pub(crate) on_focus: Option<Callback<()>>,
+    pub(crate) on_blur: Option<Callback<()>>,
     pub(crate) on_select: Option<Callback<DateEvent>>,
     pub(crate) on_prev_month: Option<Callback<()>>,
     pub(crate) on_next_month: Option<Callback<()>>,
@@ -67,6 +73,12 @@ impl DatePicker {
             padding: Padding::default(),
             width: Length::Auto,
             height: Length::Auto,
+            disabled: false,
+            disabled_style: Style::default(),
+            focusable: true,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
             on_select: None,
             on_prev_month: None,
             on_next_month: None,
@@ -235,6 +247,42 @@ impl DatePicker {
         self
     }
 
+    /// Set disabled state.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    /// Set disabled style.
+    pub fn disabled_style(mut self, style: Style) -> Self {
+        self.disabled_style = style;
+        self
+    }
+
+    /// Control whether day cells are focusable.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
+    }
+
+    /// Control whether day cells participate in tab traversal.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when a day cell gains focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when a day cell loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
+        self
+    }
+
     /// Set day selection callback.
     pub fn on_select(mut self, cb: Callback<DateEvent>) -> Self {
         self.on_select = Some(cb);
@@ -298,7 +346,14 @@ impl From<DatePicker> for Element {
             .hover_style_slot(picker.nav_hover_style)
             .width(Length::Px(2));
 
-        if let Some(cb) = picker.on_prev_month.clone() {
+        if picker.disabled {
+            prev_button = prev_button
+                .disabled(true)
+                .disabled_style(picker.nav_disabled_style);
+            next_button = next_button
+                .disabled(true)
+                .disabled_style(picker.nav_disabled_style);
+        } else if let Some(cb) = picker.on_prev_month.clone() {
             prev_button = prev_button.on_click(Callback::new(move |_: MouseEvent| cb.emit(())));
         } else {
             prev_button = prev_button
@@ -306,12 +361,14 @@ impl From<DatePicker> for Element {
                 .disabled_style(picker.nav_disabled_style);
         }
 
-        if let Some(cb) = picker.on_next_month.clone() {
-            next_button = next_button.on_click(Callback::new(move |_: MouseEvent| cb.emit(())));
-        } else {
-            next_button = next_button
-                .disabled(true)
-                .disabled_style(picker.nav_disabled_style);
+        if !picker.disabled {
+            if let Some(cb) = picker.on_next_month.clone() {
+                next_button = next_button.on_click(Callback::new(move |_: MouseEvent| cb.emit(())));
+            } else {
+                next_button = next_button
+                    .disabled(true)
+                    .disabled_style(picker.nav_disabled_style);
+            }
         }
 
         let header = HStack::new()
@@ -394,13 +451,24 @@ impl From<DatePicker> for Element {
                         .padding(0)
                         .width(Length::Px(2))
                         .style(picker.day_style)
-                        .hover_style_slot(picker.day_hover_style);
+                        .hover_style_slot(picker.day_hover_style)
+                        .focusable(picker.focusable)
+                        .tab_stop(picker.tab_stop);
 
                     if day_counter == day {
                         button = button.style(picker.selected_style);
                     }
 
-                    if let Some(cb) = picker.on_select.clone() {
+                    if let Some(cb) = picker.on_focus.clone() {
+                        button = button.on_focus(cb);
+                    }
+                    if let Some(cb) = picker.on_blur.clone() {
+                        button = button.on_blur(cb);
+                    }
+
+                    if picker.disabled {
+                        button = button.disabled(true).disabled_style(picker.disabled_style);
+                    } else if let Some(cb) = picker.on_select.clone() {
                         let event = DateEvent {
                             year,
                             month,

@@ -29,6 +29,7 @@ pub mod input_widget;
 pub mod list_table;
 pub mod pan_view;
 pub mod scroll_view;
+pub mod slider;
 pub mod tabs;
 #[cfg(feature = "terminal")]
 pub mod terminal;
@@ -86,6 +87,7 @@ pub(crate) enum InteractiveTag {
     List,
     Table,
     TextArea,
+    Slider,
     #[cfg(feature = "terminal")]
     Terminal,
     PanView,
@@ -108,6 +110,7 @@ pub(crate) fn classify_interactive(kind: &NodeKind) -> InteractiveTag {
         NodeKind::List(_) => InteractiveTag::List,
         NodeKind::Table(_) => InteractiveTag::Table,
         NodeKind::TextArea(_) => InteractiveTag::TextArea,
+        NodeKind::Slider(_) => InteractiveTag::Slider,
         #[cfg(feature = "terminal")]
         NodeKind::Terminal(_) => InteractiveTag::Terminal,
         NodeKind::PanView(_) => InteractiveTag::PanView,

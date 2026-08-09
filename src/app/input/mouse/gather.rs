@@ -378,7 +378,7 @@ pub(crate) fn gather_hit_actions(tree: &NodeTree, hit: NodeId, x: u16, y: u16) -
 
     let slider_change = match &node.kind {
         NodeKind::Slider(slider) => {
-            if slider.on_change.is_some() || slider.on_click.is_some() {
+            if !slider.disabled && (slider.on_change.is_some() || slider.on_click.is_some()) {
                 if node.rect.contains(x_i16, y_i16) {
                     let track =
                         crate::app::input::geometry::slider_track_geometry(slider, node.rect);

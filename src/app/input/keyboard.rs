@@ -414,6 +414,7 @@ pub(crate) fn dispatch_key(
             handlers::list_table::handle_table_key(tree, id, key, rect)
         }
         handlers::InteractiveTag::TextArea => handlers::text_area::handle_key(tree, id, key, ctx),
+        handlers::InteractiveTag::Slider => handlers::slider::handle_key(tree, id, key),
         #[cfg(feature = "terminal")]
         handlers::InteractiveTag::Terminal => handlers::terminal::handle_key(tree, id, key, ctx),
         handlers::InteractiveTag::PanView => handlers::pan_view::handle_key(tree, id, &key),

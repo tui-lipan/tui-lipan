@@ -726,6 +726,8 @@ Quick lookup - which callbacks does each widget support?
 | Callback | Payload | When |
 |----------|---------|------|
 | `on_change` | `usize` | Selection changed (new index) |
+| `on_focus` / `on_blur` | `()` | Option gained / lost focus |
+| `on_key` | `KeyHandler` | Key while an option is focused |
 
 ### Select
 
@@ -759,6 +761,8 @@ Quick lookup - which callbacks does each widget support?
 |----------|---------|------|
 | `on_change` | `f64` | Value changed (drag or keyboard) |
 | `on_click` | `f64` | Click or Enter |
+| `on_focus` / `on_blur` | `()` | Focus gained / lost |
+| `on_key` | `KeyHandler` | Key while focused |
 
 ### DatePicker
 
@@ -767,6 +771,7 @@ Quick lookup - which callbacks does each widget support?
 | `on_select` | `(i32, u32, u32)` | Day selected (year, month, day) |
 | `on_prev_month` | `()` | Navigate to previous month |
 | `on_next_month` | `()` | Navigate to next month |
+| `on_focus` / `on_blur` | `()` | Day cell gained / lost focus |
 
 ### Tabs
 
