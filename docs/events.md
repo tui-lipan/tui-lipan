@@ -736,6 +736,8 @@ Quick lookup - which callbacks does each widget support?
 | `on_select` | `usize` | Item selected |
 | `on_change` | `usize` | Selection changed |
 | `on_toggle` | `bool` | Dropdown opened/closed |
+| `on_focus` / `on_blur` | `()` | Trigger focus gained / lost |
+| `on_key` | `KeyHandler` | Key while trigger focused |
 
 ### ComboBox
 
@@ -745,6 +747,8 @@ Quick lookup - which callbacks does each widget support?
 | `on_open_change` | `bool` | Dropdown open/close requested |
 | `on_active_index_change` | `Option<usize>` | Active row changed |
 | `on_commit` | `ComboBoxCommitEvent` | Enter/activate commit |
+| `on_focus` / `on_blur` | `()` | Input focus gained / lost |
+| `on_key` | `KeyHandler` | Key while input focused |
 
 ### MultiSelect
 
@@ -754,6 +758,8 @@ Quick lookup - which callbacks does each widget support?
 | `on_toggle` | `MultiSelectToggleEvent` | Row toggled |
 | `on_change` | `MultiSelectChangeEvent` | Selected set changed |
 | `on_commit` | `MultiSelectCommitEvent` | Enter pressed |
+| `on_focus` / `on_blur` | `()` | Focus gained / lost |
+| `on_key` | `KeyHandler` | Key while focused |
 
 ### Slider
 

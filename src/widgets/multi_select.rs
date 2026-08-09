@@ -127,6 +127,11 @@ pub struct MultiSelect {
     disabled: bool,
     disabled_style: Style,
     empty_text: Option<Arc<str>>,
+    focusable: bool,
+    tab_stop: bool,
+    on_focus: Option<Callback<()>>,
+    on_blur: Option<Callback<()>>,
+    on_key: Option<KeyHandler>,
     on_active_index_change: Option<Callback<usize>>,
     on_toggle: Option<Callback<MultiSelectToggleEvent>>,
     on_change: Option<Callback<MultiSelectChangeEvent>>,
@@ -177,6 +182,11 @@ impl Default for MultiSelect {
             disabled: false,
             disabled_style: Style::default(),
             empty_text: None,
+            focusable: true,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
+            on_key: None,
             on_active_index_change: None,
             on_toggle: None,
             on_change: None,
@@ -476,6 +486,36 @@ impl MultiSelect {
         self
     }
 
+    /// Control whether the list is focusable.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
+    }
+
+    /// Control whether the list participates in tab traversal.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the list gains focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the list loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
+        self
+    }
+
+    /// Set focused key handler. Returning `true` consumes the key before built-in toggle.
+    pub fn on_key(mut self, handler: KeyHandler) -> Self {
+        self.on_key = Some(handler);
+        self
+    }
+
     /// Enable scrollbar.
     pub fn scrollbar(mut self, scrollbar: bool) -> Self {
         self.list_config.scrollbar = scrollbar;
@@ -572,6 +612,8 @@ impl From<MultiSelect> for Element {
             .height(multi.height)
             .disabled(multi.disabled)
             .disabled_style(multi.disabled_style)
+            .focusable(multi.focusable)
+            .tab_stop(multi.tab_stop)
             .item_horizontal_padding(multi.list_config.item_horizontal_padding)
             .header_horizontal_padding(multi.list_config.header_horizontal_padding)
             .empty_text_style(multi.list_config.empty_text_style);
@@ -584,6 +626,13 @@ impl From<MultiSelect> for Element {
                     .item_hover_style
                     .unwrap_or(multi.list_config.selection_style),
             );
+
+        if let Some(cb) = multi.on_focus.clone() {
+            list = list.on_focus(cb);
+        }
+        if let Some(cb) = multi.on_blur.clone() {
+            list = list.on_blur(cb);
+        }
 
         if let Some(style) = multi.list_config.selection_symbol_style {
             list = list.selection_symbol_style(style);
@@ -646,7 +695,14 @@ impl From<MultiSelect> for Element {
                 }
             }));
 
+            let caller_on_key = multi.on_key.clone();
             list = list.on_key(KeyHandler::new(move |key: KeyEvent| {
+                if caller_on_key
+                    .as_ref()
+                    .is_some_and(|handler| handler.handle(key))
+                {
+                    return true;
+                }
                 if key.code != KeyCode::Char(' ') {
                     return false;
                 }
@@ -672,6 +728,8 @@ impl From<MultiSelect> for Element {
 
                 true
             }));
+        } else if let Some(handler) = multi.on_key {
+            list = list.on_key(handler);
         }
 
         list.into()

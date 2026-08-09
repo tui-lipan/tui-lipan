@@ -59,6 +59,11 @@ pub struct ComboBox {
     on_open_change: Option<Callback<bool>>,
     on_active_index_change: Option<Callback<Option<usize>>>,
     on_commit: Option<Callback<ComboBoxCommitEvent>>,
+    focusable: bool,
+    tab_stop: bool,
+    on_focus: Option<Callback<()>>,
+    on_blur: Option<Callback<()>>,
+    on_key: Option<KeyHandler>,
 }
 
 impl Default for ComboBox {
@@ -119,6 +124,11 @@ impl Default for ComboBox {
             on_open_change: None,
             on_active_index_change: None,
             on_commit: None,
+            focusable: true,
+            tab_stop: true,
+            on_focus: None,
+            on_blur: None,
+            on_key: None,
         }
     }
 }
@@ -198,6 +208,36 @@ impl ComboBox {
     /// Set disabled state.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// Control whether the input is focusable.
+    pub fn focusable(mut self, focusable: bool) -> Self {
+        self.focusable = focusable;
+        self
+    }
+
+    /// Control whether the input participates in tab traversal.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the callback fired when the input gains focus.
+    pub fn on_focus(mut self, cb: Callback<()>) -> Self {
+        self.on_focus = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when the input loses focus.
+    pub fn on_blur(mut self, cb: Callback<()>) -> Self {
+        self.on_blur = Some(cb);
+        self
+    }
+
+    /// Set focused key handler. Returning `true` consumes the key before built-in navigation.
+    pub fn on_key(mut self, handler: KeyHandler) -> Self {
+        self.on_key = Some(handler);
         self
     }
 
@@ -542,7 +582,16 @@ impl From<ComboBox> for Element {
             .suffix_style(combo.input_suffix_style)
             .focus_suffix_style(combo.input_focus_suffix_style)
             .read_only(combo.disabled)
-            .disabled(combo.disabled);
+            .disabled(combo.disabled)
+            .focusable(combo.focusable)
+            .tab_stop(combo.tab_stop);
+
+        if let Some(cb) = combo.on_focus.clone() {
+            input = input.on_focus(cb);
+        }
+        if let Some(cb) = combo.on_blur.clone() {
+            input = input.on_blur(cb);
+        }
 
         if let Some(hover_border_style) = combo.input_hover_border_style {
             input = input.hover_border_style(hover_border_style);
@@ -575,75 +624,84 @@ impl From<ComboBox> for Element {
             let on_open_change = combo.on_open_change.clone();
             let on_active_index_change = combo.on_active_index_change.clone();
             let on_commit = combo.on_commit.clone();
-            input = input.on_key(KeyHandler::new(move |key: KeyEvent| match key.code {
-                KeyCode::Esc if open => {
-                    if let Some(cb) = on_open_change.as_ref() {
-                        cb.emit(false);
-                        true
-                    } else {
-                        false
-                    }
+            let caller_on_key = combo.on_key.clone();
+            input = input.on_key(KeyHandler::new(move |key: KeyEvent| {
+                if caller_on_key
+                    .as_ref()
+                    .is_some_and(|handler| handler.handle(key))
+                {
+                    return true;
                 }
-                KeyCode::Down | KeyCode::Up => {
-                    if filtered_indices.is_empty() {
-                        return true;
-                    }
-
-                    let current_pos = effective_highlight
-                        .and_then(|source_index| {
-                            filtered_indices
-                                .iter()
-                                .position(|&candidate| candidate == source_index)
-                        })
-                        .unwrap_or(0);
-                    let next_pos = if key.code == KeyCode::Down {
-                        (current_pos + 1).min(filtered_indices.len().saturating_sub(1))
-                    } else {
-                        current_pos.saturating_sub(1)
-                    };
-                    if let Some(cb) = on_active_index_change.as_ref() {
-                        cb.emit(Some(filtered_indices[next_pos]));
-                    }
-                    if let Some(cb) = on_open_change.as_ref() {
-                        cb.emit(true);
-                    }
-                    true
-                }
-                KeyCode::Enter => {
-                    let mut handled = false;
-
-                    let active_index = effective_highlight
-                        .filter(|source_index| filtered_indices.contains(source_index));
-                    let selected =
-                        selected.filter(|source_index| filtered_indices.contains(source_index));
-                    let picked_index = active_index.or(selected);
-
-                    if let Some(cb) = on_commit.as_ref() {
-                        if let Some(index) = picked_index {
-                            cb.emit(ComboBoxCommitEvent {
-                                index: Some(index),
-                                value: items[index].clone(),
-                                from_custom_value: false,
-                            });
-                            handled = true;
-                        } else if allow_custom_value && !query.is_empty() {
-                            cb.emit(ComboBoxCommitEvent {
-                                index: None,
-                                value: query.clone(),
-                                from_custom_value: true,
-                            });
-                            handled = true;
+                match key.code {
+                    KeyCode::Esc if open => {
+                        if let Some(cb) = on_open_change.as_ref() {
+                            cb.emit(false);
+                            true
+                        } else {
+                            false
                         }
                     }
+                    KeyCode::Down | KeyCode::Up => {
+                        if filtered_indices.is_empty() {
+                            return true;
+                        }
 
-                    if open && let Some(cb) = on_open_change.as_ref() {
-                        cb.emit(false);
-                        handled = true;
+                        let current_pos = effective_highlight
+                            .and_then(|source_index| {
+                                filtered_indices
+                                    .iter()
+                                    .position(|&candidate| candidate == source_index)
+                            })
+                            .unwrap_or(0);
+                        let next_pos = if key.code == KeyCode::Down {
+                            (current_pos + 1).min(filtered_indices.len().saturating_sub(1))
+                        } else {
+                            current_pos.saturating_sub(1)
+                        };
+                        if let Some(cb) = on_active_index_change.as_ref() {
+                            cb.emit(Some(filtered_indices[next_pos]));
+                        }
+                        if let Some(cb) = on_open_change.as_ref() {
+                            cb.emit(true);
+                        }
+                        true
                     }
+                    KeyCode::Enter => {
+                        let mut handled = false;
 
-                    handled
+                        let active_index = effective_highlight
+                            .filter(|source_index| filtered_indices.contains(source_index));
+                        let selected =
+                            selected.filter(|source_index| filtered_indices.contains(source_index));
+                        let picked_index = active_index.or(selected);
+
+                        if let Some(cb) = on_commit.as_ref() {
+                            if let Some(index) = picked_index {
+                                cb.emit(ComboBoxCommitEvent {
+                                    index: Some(index),
+                                    value: items[index].clone(),
+                                    from_custom_value: false,
+                                });
+                                handled = true;
+                            } else if allow_custom_value && !query.is_empty() {
+                                cb.emit(ComboBoxCommitEvent {
+                                    index: None,
+                                    value: query.clone(),
+                                    from_custom_value: true,
+                                });
+                                handled = true;
+                            }
+                        }
+
+                        if open && let Some(cb) = on_open_change.as_ref() {
+                            cb.emit(false);
+                            handled = true;
+                        }
+
+                        handled
+                    }
+                    _ => false,
                 }
-                _ => false,
             }));
         }
 

@@ -13,6 +13,10 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- `Hyperlink` `on_key` now runs **caller-first**: returning `true` consumes the key
+  before built-in Enter/Space activation. Previously activation ran first and the
+  custom handler was a fallback. **(breaking)** Migration: if your `on_key` should
+  not block activation, return `false` for Enter/Space (or omit those keys).
 - `ClipboardError` gained an `InvalidInput { operation, message }` variant for arguments the
   clipboard cannot represent, distinct from `Provider` (the platform clipboard failed) and
   `Unsupported` (the operation does not exist here). Retrying `InvalidInput` without changing the
@@ -43,6 +47,11 @@ While the crate is on `0.x.y`:
   participates in theme slot inheritance; existing `hover_style(Style)` /
   `focus_style(Style)` call sites keep working via `StyleSlot::Replace`.
   Compile-time guardrail: `tests/interaction_parity.rs`.
+- `Select`, `ComboBox`, and `MultiSelect` surface whole-control `focusable`,
+  `tab_stop`, `on_focus`, `on_blur`, and `on_key`, forwarded to their inner
+  trigger/input/list. Caller `on_key` runs before built-in navigation
+  (same rule as `Hyperlink`). Documented as the shared interaction contract in
+  `docs/widgets/input.md`.
 - File clipboard support: `ctx.clipboard().copy_files(&[path])` places real files on the system
   clipboard, so pasting into a file manager, file dialog, or browser upload target yields the files
   rather than their paths as text. `read_files()` reads a file list back (empty `Vec` when the

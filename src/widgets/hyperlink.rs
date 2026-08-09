@@ -281,6 +281,9 @@ impl From<Hyperlink> for Element {
                 let event_label = label;
                 let event_href = href;
                 button = button.on_key(KeyHandler::new(move |key: KeyEvent| {
+                    if custom_key.as_ref().is_some_and(|h| h.handle(key)) {
+                        return true;
+                    }
                     if is_activation_key(key) {
                         cb.emit(HyperlinkEvent {
                             label: event_label.clone(),
@@ -288,7 +291,7 @@ impl From<Hyperlink> for Element {
                         });
                         return true;
                     }
-                    custom_key.as_ref().map(|h| h.handle(key)).unwrap_or(false)
+                    false
                 }));
             }
             (None, Some(custom_key)) => {
