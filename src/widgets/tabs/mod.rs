@@ -368,23 +368,35 @@ impl Tabs {
         inner_w: usize,
         col: usize,
     ) -> Option<usize> {
-        let mut x = 0usize;
-        let pad_w = 2; // " " + " "
-        let div_w = UnicodeWidthChar::width(divider).unwrap_or(1);
         let budgets = tab_width_budgets(tabs, divider, inner_w, overflow);
+        let mut used = 0usize;
 
         for (i, tab) in tabs.iter().enumerate() {
-            let w = budgets.as_ref().map_or_else(
-                || UnicodeWidthStr::width(tab.label.as_ref()).saturating_add(pad_w),
+            if used >= inner_w {
+                break;
+            }
+
+            let remaining = budgets.as_ref().map_or_else(
+                || inner_w.saturating_sub(used).min(u16::MAX as usize),
                 |budgets| budgets.get(i).copied().unwrap_or(0) as usize,
             );
-            if col < x.saturating_add(w) {
+            let tab_width = tab_segment_width(tab.label.as_ref(), remaining);
+            if col < used.saturating_add(tab_width) {
                 return Some(i);
             }
-            x = x.saturating_add(w);
+            used = used.saturating_add(tab_width);
+
+            if used >= inner_w {
+                break;
+            }
 
             if i + 1 < tabs.len() {
-                x = x.saturating_add(div_w);
+                let remaining = inner_w.saturating_sub(used);
+                let divider_width = tab_divider_width(divider, remaining);
+                if col < used.saturating_add(divider_width) {
+                    return None;
+                }
+                used = used.saturating_add(divider_width);
             }
         }
 
@@ -546,12 +558,161 @@ fn allocate_proportional(caps: &[usize], weights: &[usize], budget: usize) -> Ve
     out
 }
 
+/// Width of the segment rendered from one tab label, without allocating its text.
+pub(crate) fn tab_segment_width(label: &str, max_w: usize) -> usize {
+    let full_w = UnicodeWidthStr::width(label).saturating_add(2);
+    if full_w <= max_w {
+        return full_w;
+    }
+    if max_w == 0 {
+        return 0;
+    }
+
+    let ellipsis_w = UnicodeWidthChar::width('…').unwrap_or(1).max(1);
+    if max_w <= ellipsis_w {
+        return ellipsis_w;
+    }
+
+    let target = max_w.saturating_sub(ellipsis_w);
+    let mut consumed: usize = 1; // The leading padding cell always fits because target is non-zero.
+    let mut label_end = 0;
+    let mut label_complete = true;
+    for (offset, ch) in label.char_indices() {
+        let char_w = crate::utils::text::char_visual_width(ch, None);
+        if consumed.saturating_add(char_w) > target {
+            label_complete = false;
+            break;
+        }
+        consumed = consumed.saturating_add(char_w);
+        label_end = offset.saturating_add(ch.len_utf8());
+    }
+
+    let trailing_padding = label_complete && consumed < target;
+    1usize
+        .saturating_add(UnicodeWidthStr::width(&label[..label_end]))
+        .saturating_add(usize::from(trailing_padding))
+        .saturating_add(ellipsis_w)
+}
+
+pub(crate) fn tab_divider_width(divider: char, max_w: usize) -> usize {
+    let divider_w = UnicodeWidthChar::width(divider).unwrap_or(1);
+    if divider_w <= max_w {
+        return divider_w;
+    }
+    if max_w == 0 {
+        return 0;
+    }
+    UnicodeWidthChar::width('…').unwrap_or(1).max(1)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Tab, TabsOverflow, tab_width_budgets};
+    use super::{Tab, Tabs, TabsOverflow, tab_divider_width, tab_segment_width, tab_width_budgets};
+    use unicode_width::UnicodeWidthStr;
 
     fn mk_tabs(labels: &[&str]) -> Vec<Tab> {
         labels.iter().map(|l| Tab::new(*l)).collect()
+    }
+
+    #[test]
+    fn index_at_col_rejects_divider_cells_for_clip_and_ellipsis() {
+        let tabs = mk_tabs(&["a", "b"]);
+
+        // Each tab is three cells wide; the wide divider occupies columns 3 and 4.
+        assert_eq!(
+            Tabs::index_at_col(&tabs, '好', TabsOverflow::Clip, 8, 2),
+            Some(0)
+        );
+        assert_eq!(
+            Tabs::index_at_col(&tabs, '好', TabsOverflow::Clip, 8, 3),
+            None
+        );
+        assert_eq!(
+            Tabs::index_at_col(&tabs, '好', TabsOverflow::Clip, 8, 4),
+            None
+        );
+        assert_eq!(
+            Tabs::index_at_col(&tabs, '好', TabsOverflow::Clip, 8, 5),
+            Some(1)
+        );
+
+        // With ellipsis budgets below the minimum tab width, the clipped divider remains inert.
+        let tabs = mk_tabs(&["a", "b", "c"]);
+        assert_eq!(
+            Tabs::index_at_col(&tabs, '好', TabsOverflow::Ellipsis, 5, 0),
+            Some(0)
+        );
+        assert_eq!(
+            Tabs::index_at_col(&tabs, '好', TabsOverflow::Ellipsis, 5, 1),
+            None
+        );
+        assert_eq!(
+            Tabs::index_at_col(&tabs, '好', TabsOverflow::Ellipsis, 5, 2),
+            None
+        );
+        assert_eq!(
+            Tabs::index_at_col(&tabs, '好', TabsOverflow::Ellipsis, 5, 3),
+            Some(1)
+        );
+        assert_eq!(
+            Tabs::index_at_col(&tabs, '好', TabsOverflow::Ellipsis, 5, 4),
+            None
+        );
+    }
+
+    #[test]
+    fn index_at_col_uses_actual_width_of_wide_segments() {
+        let tabs = mk_tabs(&["你", "b"]);
+
+        // Clip truncates the wide label to " …", leaving the divider at column 2.
+        assert_eq!(
+            Tabs::index_at_col(&tabs, '|', TabsOverflow::Clip, 3, 1),
+            Some(0)
+        );
+        assert_eq!(
+            Tabs::index_at_col(&tabs, '|', TabsOverflow::Clip, 3, 2),
+            None
+        );
+
+        let tabs = mk_tabs(&["你好", "你好"]);
+
+        // The first budget is five cells, but " 你好 " truncates to " 你…" at four cells.
+        // The rendered divider is therefore at column 4, not at the nominal budget boundary 5.
+        assert_eq!(
+            Tabs::index_at_col(&tabs, '|', TabsOverflow::Ellipsis, 10, 4),
+            None
+        );
+        assert_eq!(
+            Tabs::index_at_col(&tabs, '|', TabsOverflow::Ellipsis, 10, 5),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn allocation_free_segment_widths_match_materialized_truncation() {
+        for label in ["a", "你", "你好", "e\u{301}", "👩‍💻"] {
+            for width in 0..=8 {
+                let full = format!(" {label} ");
+                let rendered = crate::utils::text::truncate_end_with_ellipsis(&full, width);
+                assert_eq!(
+                    tab_segment_width(label, width),
+                    UnicodeWidthStr::width(rendered.as_ref()),
+                    "segment width mismatch for {label:?} at width {width}"
+                );
+            }
+        }
+
+        for divider in ['|', '好', '\u{301}'] {
+            let text = divider.to_string();
+            for width in 0..=3 {
+                let rendered = crate::utils::text::truncate_end_with_ellipsis(&text, width);
+                assert_eq!(
+                    tab_divider_width(divider, width),
+                    UnicodeWidthStr::width(rendered.as_ref()),
+                    "divider width mismatch for {divider:?} at width {width}"
+                );
+            }
+        }
     }
 
     #[test]
