@@ -120,8 +120,8 @@ pub use crate::core::nested::any_props::ThemableProps;
 pub use crate::core::node::NodeId;
 pub use crate::input::{
     ChordMatcher, ChordResult, KeyBinding, KeyBindingParseError, KeyBindings,
-    KeyEventExpansionError, format_binding, format_binding_lowercase, format_bindings,
-    format_bindings_lowercase,
+    KeyEventExpansionError, format_binding, format_binding_compact, format_binding_lowercase,
+    format_bindings, format_bindings_compact, format_bindings_lowercase,
 };
 pub use crate::layout::tag::Tag;
 pub use crate::overlay::{OverlayId, OverlayScope, ToastHandle, ToastPlacement};
