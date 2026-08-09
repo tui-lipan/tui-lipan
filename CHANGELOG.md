@@ -52,6 +52,9 @@ While the crate is on `0.x.y`:
   trigger/input/list. Caller `on_key` runs before built-in navigation
   (same rule as `Hyperlink`). Documented as the shared interaction contract in
   `docs/widgets/input.md`.
+- Visual regression baselines for Modal, Tabs, TextArea (line numbers + caret),
+  Table (header + selection gutter), expanded Select dropdown, and Splitter
+  handle chrome in `tests/visual_baseline.rs` / `tests/ui-baselines/`.
 - File clipboard support: `ctx.clipboard().copy_files(&[path])` places real files on the system
   clipboard, so pasting into a file manager, file dialog, or browser upload target yields the files
   rather than their paths as text. `read_files()` reads a file list back (empty `Vec` when the
