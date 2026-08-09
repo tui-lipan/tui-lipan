@@ -342,6 +342,8 @@ pub(crate) fn measure_stack(
 
             constraint_min.max(content_size)
         } else {
+            // `min_size_constrained` honors the child's requested Px/Percent, so
+            // Auto parents expand to an explicit cross-axis size.
             let (cw, ch) = match axis {
                 Axis::Vertical => min_size_constrained(child, inner_cross, Some(measured_main)),
                 Axis::Horizontal => min_size_constrained(child, Some(measured_main), inner_cross),

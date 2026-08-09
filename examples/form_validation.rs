@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use tui_lipan::prelude::*;
 
-const LOGIN_MIN_WIDTH: u16 = 60;
+const LOGIN_WIDTH: u16 = 50;
 
 struct LoginForm {
     username: Arc<str>,
@@ -212,9 +212,8 @@ impl Component for LoginForm {
                 }))
                 .error(self.username_error.clone())
                 .reserve_error_row(true)
-                .width(Length::Auto),
-        )
-        .min_width(Length::Px(LOGIN_MIN_WIDTH));
+                .width(Length::Px(LOGIN_WIDTH)),
+        );
 
         let password_input = Element::from(
             Input::new(&*self.password)
@@ -229,9 +228,8 @@ impl Component for LoginForm {
                 }))
                 .error(self.password_error.clone())
                 .reserve_error_row(true)
-                .width(Length::Auto),
-        )
-        .min_width(Length::Px(LOGIN_MIN_WIDTH));
+                .width(Length::Px(LOGIN_WIDTH)),
+        );
 
         Center::new()
             .child(
