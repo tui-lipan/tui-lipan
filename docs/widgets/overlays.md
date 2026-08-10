@@ -373,7 +373,8 @@ Items can be provided flat via `.items()` or grouped via `.entries()` using `Sea
 Headers and spacers are **display-only** rows (not searchable/selectable). Group rendering rules:
 
 - With an empty query, all item rows are shown and headers/spacers render in entry order.
-- With a non-empty query, grouped chrome is hidden and matches render as a flat ranked list.
+- With a non-empty query, grouped chrome is hidden and matches render as a flat list, ranked by
+  score unless `preserve_item_order(true)` is set.
 
 Item text is typically built from `SearchItem::new(label, value)` and optional
 `.description("...")`. By default, description renders inline as
@@ -394,6 +395,7 @@ You can also mark rows active with `.active(true)` on `SearchItem` or `SearchEnt
 | `entries` | `impl IntoIterator<Item = SearchEntry<T>>` / `entries_arc` | Grouped entries via item/header/spacer rows (prefer `entries_arc` when sharing) |
 | `sync_match_limit` | `usize` | Max item count that still matches synchronously (default: `100`) |
 | `sync_selection` | `bool` | Keep `on_select` synced with the selected source item; reranking that item alone does not emit again |
+| `preserve_item_order` | `bool` | Keep matched rows in source order instead of fuzzy-score order; applies to synchronous and asynchronous results |
 | `initial_query` | `impl Into<Arc<str>>` | Pre-populate search field |
 | `initial_selected_item_index` | `Option<usize>` | Seed selection from this `items` index (else first row); changing the prop reseeds, while an unchanged value does not override navigation during refresh/reranking |
 | `placeholder` | `impl Into<Arc<str>>` | Input placeholder (default: `"Search..."`) |
@@ -497,6 +499,7 @@ to extend or inherit the scoped theme roles.
 | `description_placement` | `DescriptionPlacement` | Description placement: `Inline`, `Right`, `Above`, `Below` |
 | `description_selection` | `bool` | Whether selection highlight applies to description text |
 | `description_overflow` | `DescriptionOverflow` | Description overflow policy: `Truncate` or `Wrap` (`Wrap` applies to `Above`/`Below`) |
+| `primary_truncate_description_first` | `bool` | Truncate right-aligned primary description before the label (default: `true`); set `false` to keep metadata visible and truncate the label first |
 | `match_style` | `Style` | Matched character style |
 | `show_scores` | `bool` | Show numeric match scores |
 | `score_gradient` | `ColorGradient` | Gradient for score coloring |

@@ -1111,7 +1111,7 @@ Source: `src/widgets/file_tree/mod.rs:346` (`FileTree`).
 
 ## SearchPalette
 
-Source: `src/widgets/search_palette/mod.rs:743` (`SearchPalette`).
+Source: `src/widgets/search_palette/mod.rs:750` (`SearchPalette`).
 
 | Field | Default initializer |
 |---|---|
@@ -1170,11 +1170,13 @@ Source: `src/widgets/search_palette/mod.rs:743` (`SearchPalette`).
 | `description_separator` | `None` |
 | `description_selection` | `true` |
 | `description_overflow` | `DescriptionOverflow::Truncate` |
+| `primary_truncate_description_first` | `true` |
 | `match_style` | `Style::default()` |
 | `show_scores` | `false` |
 | `score_gradient` | `None` |
 | `score_range` | `None` |
 | `preserve_groups` | `false` |
+| `preserve_item_order` | `false` |
 | `navigation_wrap` | `true` |
 | `match_mode` | `SearchMatchMode::default()` |
 | `case_matching` | `CaseMatching::Smart` |

@@ -29,6 +29,7 @@ pub(super) struct RenderStyles {
     pub description_separator: Option<Arc<str>>,
     pub description_selection: bool,
     pub description_overflow: DescriptionOverflow,
+    pub primary_truncate_description_first: bool,
     pub line_width: Option<u16>,
     pub highlight: Style,
 }
@@ -373,15 +374,19 @@ fn default_render<T>(
                 }
             }
             DescriptionPlacement::Right => {
-                primary_truncate_description_first = true;
+                primary_truncate_description_first = styles.primary_truncate_description_first;
                 let mut desc_right = desc_spans;
                 if let Some(width) = styles.line_width {
-                    let label_width = spans_width(&label_spans) as u16;
-                    let mut desc_budget = width.saturating_sub(label_width);
-                    if score_width > 0 {
-                        desc_budget = desc_budget.saturating_sub(score_width.saturating_add(2));
+                    if primary_truncate_description_first {
+                        let label_width = spans_width(&label_spans) as u16;
+                        let mut desc_budget = width.saturating_sub(label_width);
+                        if score_width > 0 {
+                            desc_budget = desc_budget.saturating_sub(score_width.saturating_add(2));
+                        }
+                        desc_right = truncate_spans_with_ellipsis(&desc_right, desc_budget);
+                    } else {
+                        desc_right = truncate_spans_with_ellipsis(&desc_right, width);
                     }
-                    desc_right = truncate_spans_with_ellipsis(&desc_right, desc_budget);
                 }
                 if !desc_right.is_empty() {
                     primary_right_spans.push(
@@ -442,7 +447,7 @@ fn default_render<T>(
             description_style,
             styles.highlight,
         );
-        if !desc_right_spans.is_empty() {
+        if !desc_right_spans.is_empty() && styles.primary_truncate_description_first {
             primary_truncate_description_first = true;
         }
         if explicit_description_override.is_some() {
@@ -466,9 +471,15 @@ fn default_render<T>(
     if matches!(styles.description_placement, DescriptionPlacement::Right)
         && let Some(width) = styles.line_width
     {
-        let label_width = spans_width(&label_spans) as u16;
-        let right_budget = width.saturating_sub(label_width);
-        primary_right_spans = truncate_spans_with_ellipsis(&primary_right_spans, right_budget);
+        if styles.primary_truncate_description_first {
+            let label_width = spans_width(&label_spans) as u16;
+            let right_budget = width.saturating_sub(label_width);
+            primary_right_spans = truncate_spans_with_ellipsis(&primary_right_spans, right_budget);
+        } else {
+            // Keep the metadata available to List's label-first allocator. Only cap the metadata
+            // itself when it cannot fit on a row even without a label.
+            primary_right_spans = truncate_spans_with_ellipsis(&primary_right_spans, width);
+        }
     }
 
     if !top_lines.is_empty() {
@@ -746,6 +757,7 @@ mod tests {
             description_placement: DescriptionPlacement::Inline,
             description_selection: true,
             description_overflow: DescriptionOverflow::Truncate,
+            primary_truncate_description_first: true,
             line_width: None,
             highlight: Style::default(),
         }
@@ -828,6 +840,7 @@ mod tests {
                 description_placement: DescriptionPlacement::Right,
                 description_selection: false,
                 description_overflow: DescriptionOverflow::Truncate,
+                primary_truncate_description_first: true,
                 line_width: Some(20),
                 highlight: Style::default(),
             },
@@ -862,6 +875,7 @@ mod tests {
                 description_placement: DescriptionPlacement::Above,
                 description_selection: false,
                 description_overflow: DescriptionOverflow::Truncate,
+                primary_truncate_description_first: true,
                 line_width: Some(20),
                 highlight: Style::default(),
             },
@@ -910,6 +924,7 @@ mod tests {
                 description_placement: DescriptionPlacement::Right,
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Truncate,
+                primary_truncate_description_first: true,
                 line_width: Some(20),
                 highlight: Style::default(),
             },
@@ -943,6 +958,7 @@ mod tests {
                 description_placement: DescriptionPlacement::Inline,
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Truncate,
+                primary_truncate_description_first: true,
                 line_width: Some(11),
                 highlight: Style::default(),
             },
@@ -982,6 +998,7 @@ mod tests {
                 description_placement: DescriptionPlacement::Inline,
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Truncate,
+                primary_truncate_description_first: true,
                 line_width: Some(10),
                 highlight: Style::default(),
             },
@@ -996,6 +1013,46 @@ mod tests {
 
         assert!(rendered.primary_truncate_description_first);
         assert!(!rendered.description_spans.is_empty());
+    }
+
+    #[test]
+    fn right_metadata_can_take_priority_over_a_long_label() {
+        let item = SearchItem::new("a very long terminal line", ())
+            .description(ItemDescription::new().right("pane 1 · row 2 · col 3"));
+        let rendered = default_render(
+            0,
+            &item,
+            &SearchHighlight::default(),
+            &RenderStyles {
+                active_item: None,
+                item: Style::default(),
+                description: Style::default(),
+                active_description: None,
+                focused_description: None,
+                description_separator: None,
+                description_placement: DescriptionPlacement::Right,
+                description_selection: true,
+                description_overflow: DescriptionOverflow::Truncate,
+                primary_truncate_description_first: false,
+                line_width: Some(30),
+                highlight: Style::default(),
+            },
+            0,
+            ScoreRender {
+                show: false,
+                gradient: None,
+                range: None,
+            },
+            None,
+        );
+
+        let right: String = rendered
+            .description_spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert!(!rendered.primary_truncate_description_first);
+        assert!(right.contains("pane 1 · row 2 · col 3"));
     }
 
     #[test]
@@ -1019,6 +1076,7 @@ mod tests {
                 description_placement: DescriptionPlacement::Above,
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Truncate,
+                primary_truncate_description_first: true,
                 line_width: Some(10),
                 highlight: Style::default(),
             },
@@ -1053,6 +1111,7 @@ mod tests {
                 description_placement: DescriptionPlacement::Inline,
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Wrap,
+                primary_truncate_description_first: true,
                 line_width: Some(11),
                 highlight: Style::default(),
             },
@@ -1092,6 +1151,7 @@ mod tests {
                 description_placement: DescriptionPlacement::Right,
                 description_selection: false,
                 description_overflow: DescriptionOverflow::Truncate,
+                primary_truncate_description_first: true,
                 line_width: Some(20),
                 highlight: Style::default(),
             },
@@ -1125,6 +1185,7 @@ mod tests {
                 description_placement: DescriptionPlacement::Right,
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Wrap,
+                primary_truncate_description_first: true,
                 line_width: Some(10),
                 highlight: Style::default(),
             },
@@ -1166,6 +1227,7 @@ mod tests {
                 description_placement: DescriptionPlacement::Right,
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Truncate,
+                primary_truncate_description_first: true,
                 line_width: Some(5),
                 highlight: Style::default(),
             },
@@ -1198,6 +1260,7 @@ mod tests {
                 description_placement: DescriptionPlacement::Below,
                 description_selection: false,
                 description_overflow: DescriptionOverflow::Truncate,
+                primary_truncate_description_first: true,
                 line_width: Some(20),
                 highlight: Style::default(),
             },
@@ -1232,6 +1295,7 @@ mod tests {
                 description_placement: DescriptionPlacement::Below,
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Wrap,
+                primary_truncate_description_first: true,
                 line_width: Some(4),
                 highlight: Style::default(),
             },
@@ -1267,6 +1331,7 @@ mod tests {
                 description_placement: DescriptionPlacement::Inline,
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Truncate,
+                primary_truncate_description_first: true,
                 line_width: Some(20),
                 highlight: Style::default(),
             },
@@ -1304,6 +1369,7 @@ mod tests {
                 description_placement: DescriptionPlacement::Below,
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Truncate,
+                primary_truncate_description_first: true,
                 line_width: Some(20),
                 highlight: Style::default(),
             },

@@ -32,6 +32,9 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `SearchPalette` can preserve the caller's matched-item order and can prioritize right-aligned
+  metadata over long labels through `preserve_item_order` and
+  `primary_truncate_description_first(false)`.
 - Terminal-native paste now cancels any pending app-command chord and repaints the cleared prefix
   indicator, rather than leaving stale chord state visible.
 - Tabs hit-testing now follows actual rendered widths through Unicode truncation and ellipsis;
@@ -56,6 +59,8 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `SearchPalette::preserve_item_order` keeps prefiltered results in source order across synchronous
+  and asynchronous matching paths.
 - Opt-in compact keybinding display via `KeyBinding::compact_display()` and
   `KeyBindings::compact_display()`, plus `format_binding_compact` and
   `format_bindings_compact` helpers. Shift-only letters and US-layout punctuation render as

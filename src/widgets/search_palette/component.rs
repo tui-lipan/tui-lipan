@@ -236,6 +236,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
             || old_props.match_mode != ctx.props.match_mode
             || old_props.case_matching != ctx.props.case_matching
             || old_props.normalization != ctx.props.normalization
+            || old_props.preserve_item_order != ctx.props.preserve_item_order
         {
             should_refresh = true;
         }
@@ -253,6 +254,12 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
 
         if old_props.sync_selection != ctx.props.sync_selection {
             sync_current_selection(&ctx.props, &mut ctx.state);
+            return Update::layout();
+        }
+
+        if old_props.primary_truncate_description_first
+            != ctx.props.primary_truncate_description_first
+        {
             return Update::layout();
         }
 
@@ -317,6 +324,9 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     description_separator: ctx.props.description_separator.clone(),
                     description_selection: ctx.props.description_selection,
                     description_overflow: ctx.props.description_overflow,
+                    primary_truncate_description_first: ctx
+                        .props
+                        .primary_truncate_description_first,
                     line_width: effective_search_line_width(ctx),
                     highlight: ctx.props.match_style,
                 },
@@ -561,10 +571,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     return Update::none();
                 }
                 let selected_item_index = current_selected_item_index(&ctx.state);
-                let query_empty = ctx.state.query_source.query_str().is_empty();
-                if ctx.props.preserve_groups && !ctx.props.entries.is_empty() && !query_empty {
-                    results.sort_by_key(|r| r.item_index);
-                }
+                sort_results_for_display(&ctx.props, &mut results);
                 ctx.state.results = results;
                 ctx.state.results_query = Arc::from(ctx.state.query_source.query_str().to_owned());
                 if ctx.state.pending_selection_reset == Some(query_id) {
@@ -684,13 +691,15 @@ fn initial_results<T>(props: &SearchPaletteProps<T>, query: &str) -> Vec<SearchR
 
     if props.items.len() <= sync_match_limit(props) {
         let entries = build_search_entries(&props.items);
-        return match_items(
+        let mut results = match_items(
             &entries,
             query,
             props.match_mode,
             props.case_matching,
             props.normalization,
         );
+        sort_results_for_display(props, &mut results);
+        return results;
     }
 
     Vec::new()
@@ -721,10 +730,7 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
             return Update::layout();
         }
     } else if ctx.props.items.len() <= sync_match_limit(&ctx.props) {
-        let mut results = initial_results(&ctx.props, query.as_ref());
-        if ctx.props.preserve_groups && !ctx.props.entries.is_empty() {
-            results.sort_by_key(|r| r.item_index);
-        }
+        let results = initial_results(&ctx.props, query.as_ref());
         ctx.state.results = results;
         ctx.state.results_query = query.clone();
         ctx.state.selected = resolve_refreshed_selection(
@@ -830,6 +836,12 @@ fn effective_search_line_width<T: Clone + PartialEq + 'static>(
 
 fn sync_match_limit<T>(props: &SearchPaletteProps<T>) -> usize {
     props.sync_match_limit.max(1)
+}
+
+fn sort_results_for_display<T>(props: &SearchPaletteProps<T>, results: &mut [SearchResult]) {
+    if props.preserve_item_order || (props.preserve_groups && !props.entries.is_empty()) {
+        results.sort_unstable_by_key(|result| result.item_index);
+    }
 }
 
 fn current_selected_item_index(state: &SearchState) -> Option<usize> {
@@ -1420,6 +1432,7 @@ mod tests {
 
     struct RankShiftRoot {
         sync_match_limit: usize,
+        preserve_item_order: bool,
         selections: Rc<RefCell<Vec<(usize, usize)>>>,
         activations: Rc<RefCell<Vec<(usize, usize)>>>,
     }
@@ -1446,6 +1459,7 @@ mod tests {
                 .query("target")
                 .match_mode(SearchMatchMode::Hybrid)
                 .sync_match_limit(self.sync_match_limit)
+                .preserve_item_order(self.preserve_item_order)
                 .sync_selection(true)
                 .initial_selected_item_index(Some(RANK_SHIFT_SEED_INDEX))
                 .height(Length::Px(6))
@@ -1465,6 +1479,7 @@ mod tests {
 
     fn rank_shift_runtime(
         sync_match_limit: usize,
+        preserve_item_order: bool,
         selections: Rc<RefCell<Vec<(usize, usize)>>>,
         activations: Rc<RefCell<Vec<(usize, usize)>>>,
     ) -> (RuntimeCore<RankShiftRoot>, Rect) {
@@ -1477,6 +1492,7 @@ mod tests {
         let mut runtime = RuntimeCore::new_test(
             RankShiftRoot {
                 sync_match_limit,
+                preserve_item_order,
                 selections,
                 activations,
             },
@@ -1509,7 +1525,7 @@ mod tests {
         let selections = Rc::new(RefCell::new(Vec::new()));
         let activations = Rc::new(RefCell::new(Vec::new()));
         let (mut runtime, bounds) =
-            rank_shift_runtime(200, Rc::clone(&selections), Rc::clone(&activations));
+            rank_shift_runtime(200, false, Rc::clone(&selections), Rc::clone(&activations));
 
         assert_eq!(
             selections.borrow().last().copied(),
@@ -1548,7 +1564,7 @@ mod tests {
         let selections = Rc::new(RefCell::new(Vec::new()));
         let activations = Rc::new(RefCell::new(Vec::new()));
         let (mut runtime, bounds) =
-            rank_shift_runtime(100, Rc::clone(&selections), Rc::clone(&activations));
+            rank_shift_runtime(100, false, Rc::clone(&selections), Rc::clone(&activations));
 
         runtime
             .update_from_boxed(
@@ -1615,5 +1631,86 @@ mod tests {
             activations.borrow().last().copied(),
             Some((2, RANK_SHIFT_NAVIGATED_INDEX))
         );
+    }
+
+    #[test]
+    fn preserve_item_order_keeps_sync_and_async_rows_aligned_with_selection() {
+        let labels = |runtime: &RuntimeCore<RankShiftRoot>| {
+            runtime
+                .tree
+                .iter()
+                .find_map(|node| match &node.kind {
+                    NodeKind::List(list) => Some(
+                        list.items
+                            .iter()
+                            .map(|item| {
+                                item.spans
+                                    .iter()
+                                    .map(|span| span.content.as_ref())
+                                    .collect::<String>()
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    _ => None,
+                })
+                .expect("search palette list")
+        };
+
+        let sync_selections = Rc::new(RefCell::new(Vec::new()));
+        let sync_activations = Rc::new(RefCell::new(Vec::new()));
+        let (mut sync, _sync_bounds) = rank_shift_runtime(
+            200,
+            true,
+            Rc::clone(&sync_selections),
+            Rc::clone(&sync_activations),
+        );
+        assert_eq!(
+            labels(&sync),
+            vec!["target alpha", "target bravo"],
+            "synchronous rows must retain source order"
+        );
+        sync.update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::NavigateDown))
+            .expect("sync navigation");
+        assert_eq!(sync_selections.borrow().last().copied(), Some((1, 101)));
+        sync.update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::ActivateSelected))
+            .expect("sync activation");
+        assert_eq!(sync_activations.borrow().last().copied(), Some((1, 101)));
+
+        let async_selections = Rc::new(RefCell::new(Vec::new()));
+        let async_activations = Rc::new(RefCell::new(Vec::new()));
+        let (mut asynchronous, bounds) = rank_shift_runtime(
+            100,
+            true,
+            Rc::clone(&async_selections),
+            Rc::clone(&async_activations),
+        );
+        asynchronous
+            .update_from_boxed(ScopeId(1), Box::new(()))
+            .expect("grow async source");
+        asynchronous.render_element(bounds, None, None, None);
+        let results = ranked_results(rank_shift_items(true));
+        asynchronous
+            .update_from_boxed(
+                ScopeId(2),
+                Box::new(SearchPaletteMsg::ResultsReady {
+                    query_id: 2,
+                    results,
+                }),
+            )
+            .expect("async results");
+        asynchronous.render_element(bounds, None, None, None);
+        assert_eq!(
+            labels(&asynchronous),
+            vec!["target alpha", "target bravo", "target"],
+            "asynchronous rows must retain source order"
+        );
+        asynchronous
+            .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::NavigateDown))
+            .expect("async navigation");
+        assert_eq!(async_selections.borrow().last().copied(), Some((1, 101)));
+        asynchronous
+            .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::ActivateSelected))
+            .expect("async activation");
+        assert_eq!(async_activations.borrow().last().copied(), Some((1, 101)));
     }
 }
