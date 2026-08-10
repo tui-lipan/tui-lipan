@@ -5282,6 +5282,124 @@ fn forward_prefix_replays_swallowed_prefix_on_pending_chord_mismatch() {
     );
 }
 
+#[cfg(feature = "terminal")]
+struct TerminalWheelForwardSmoke {
+    forwarded: Rc<RefCell<Vec<Vec<u8>>>>,
+}
+
+#[cfg(feature = "terminal")]
+impl Component for TerminalWheelForwardSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let forwarded = self.forwarded.clone();
+        Terminal::new()
+            .snapshot(crate::widgets::TerminalRenderSnapshot {
+                mouse_mode: crate::widgets::MouseModeState {
+                    mode: crate::widgets::MouseMode::Normal,
+                    encoding: crate::widgets::MouseEncoding::Sgr,
+                    focus_events_enabled: false,
+                },
+                ..Default::default()
+            })
+            .width(Length::Flex(1))
+            .height(Length::Flex(1))
+            .on_mouse_forward(Callback::new(move |bytes: Vec<u8>| {
+                forwarded.borrow_mut().push(bytes);
+            }))
+            .into()
+    }
+}
+
+#[cfg(feature = "terminal")]
+fn wheel_forward_runner(
+    forwarded: &Rc<RefCell<Vec<Vec<u8>>>>,
+    app: App,
+) -> AppRunner<TerminalWheelForwardSmoke> {
+    let mut runner = AppRunner::new(
+        app,
+        TerminalWheelForwardSmoke {
+            forwarded: forwarded.clone(),
+        },
+        (),
+    );
+    init_runner(
+        &mut runner,
+        TerminalWheelForwardSmoke {
+            forwarded: forwarded.clone(),
+        },
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 5,
+        },
+    );
+    runner
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn coalesced_wheel_ticks_forward_one_sequence_per_tick() {
+    let forwarded = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = wheel_forward_runner(&forwarded, App::new().mouse(false));
+
+    // The runner batches a burst of same-direction wheel events into one dispatch. A child in
+    // mouse-tracking mode must still see every raw tick, or a host that emits several events per
+    // physical notch scrolls the child a fraction of what the user asked for.
+    assert!(runner.dispatch_mouse_scroll(
+        MouseEvent {
+            x: 2,
+            y: 1,
+            kind: MouseKind::ScrollDown,
+            mods: KeyMods::default(),
+        },
+        6,
+    ));
+
+    let emitted = forwarded.borrow();
+    assert_eq!(emitted.len(), 1, "a batch should cost one callback");
+    assert_eq!(
+        emitted[0],
+        "\x1b[<65;3;2M".repeat(6).into_bytes(),
+        "six coalesced ticks should reach the child as six wheel reports"
+    );
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn forwarded_wheel_ticks_ignore_app_scroll_wheel_multiplier() {
+    let forwarded = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = wheel_forward_runner(
+        &forwarded,
+        App::new().mouse(false).scroll_wheel_multiplier(3),
+    );
+
+    assert!(runner.dispatch_mouse_scroll(
+        MouseEvent {
+            x: 2,
+            y: 1,
+            kind: MouseKind::ScrollUp,
+            mods: KeyMods::default(),
+        },
+        1,
+    ));
+
+    // Forwarding is a passthrough of what the host sent; the child applies its own scroll step, so
+    // scaling here would multiply the two together.
+    let emitted = forwarded.borrow();
+    assert_eq!(emitted.len(), 1);
+    assert_eq!(emitted[0], b"\x1b[<64;3;2M".to_vec());
+}
+
 /// End-to-end check of the tmux-style leader model a terminal mux (hyprmux)
 /// relies on: `AppCommandsFirst` + `AppCommandsThenTerminal` + the default
 /// `SwallowPrefixReplayCurrent`. The leader prefix is swallowed, a completing
