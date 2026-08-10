@@ -32,6 +32,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Terminal-native paste now cancels any pending app-command chord and repaints the cleared prefix
+  indicator, rather than leaving stale chord state visible.
 - Tabs hit-testing now follows actual rendered widths through Unicode truncation and ellipsis;
   divider cells are inert for selection and per-tab hover, with symmetric repainting in either
   direction.
