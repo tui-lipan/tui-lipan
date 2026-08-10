@@ -267,6 +267,10 @@ impl DispatchOps for RuntimeDispatchOps<'_, '_> {
         }
     }
 
+    fn reset_command_chord(&mut self) {
+        self.env.dispatch_state.reset_command_chord();
+    }
+
     fn dispatch_widget(&mut self, key: KeyEvent) -> bool {
         if should_dispatch_focus_key_to_widget_first(self.env.tree, *self.env.focused, key)
             && keyboard::dispatch_key(self.env.tree, *self.env.focused, key, self.env.key_ctx)

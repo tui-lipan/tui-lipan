@@ -5966,6 +5966,62 @@ fn terminal_performable_ctrl_v_pastes_text_before_app_command() {
 }
 
 #[cfg(feature = "terminal")]
+#[test]
+fn terminal_native_ctrl_v_clears_a_pending_command_chord_and_prefix_state() {
+    let command_hit = Rc::new(Cell::new(false));
+    let keys = Rc::new(RefCell::new(Vec::new()));
+    let inputs = Rc::new(RefCell::new(Vec::new()));
+    let app = App::new()
+        .mouse(false)
+        .key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst)
+        .terminal_key_policy(crate::TerminalKeyPolicy::AppCommandsThenTerminal)
+        .clipboard_provider(StaticReadClipboardProvider("pasted-text"));
+    let mut backend = crate::TestBackend::new_with_app(
+        app,
+        TerminalDispatchSmoke {
+            keys,
+            inputs: inputs.clone(),
+        },
+        (),
+    );
+    backend.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("mux.detach")
+            .shortcut(crate::KeyBinding::from_str("ctrl-a d").expect("binding"))
+            .handler(Callback::new({
+                let command_hit = command_hit.clone();
+                move |_| command_hit.set(true)
+            }))
+            .build(),
+    );
+    let terminal_id = node_id_by_key(&backend.core.tree, "terminal");
+    backend.set_focused(terminal_id);
+
+    assert!(backend.send_key(ctrl_char('a')).expect("prefix succeeds"));
+    assert!(
+        backend.core.ctx.env().command_chord_pending.get(),
+        "the prefix indicator must be visible while the chord waits"
+    );
+
+    assert!(
+        backend
+            .send_key(ctrl_char('v'))
+            .expect("native paste succeeds")
+    );
+    assert_eq!(
+        inputs.borrow().as_slice(),
+        &[crate::widgets::TerminalInputKind::Paste]
+    );
+    assert!(
+        !command_hit.get(),
+        "native paste must not run the pending command"
+    );
+    assert!(
+        !backend.core.ctx.env().command_chord_pending.get(),
+        "native paste must clear the visible PREFIX state"
+    );
+}
+
+#[cfg(feature = "terminal")]
 fn assert_performable_forwarded(result: &PasteDispatchResult, modes: crate::TerminalKeyModes) {
     let key = ctrl_char('v');
     assert_eq!(result.keys.borrow().as_slice(), &[key]);

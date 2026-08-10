@@ -121,6 +121,7 @@ impl DispatchRequest {
 
 pub(crate) trait DispatchOps {
     fn continue_command_chord(&mut self, key: KeyEvent) -> CommandDispatchState;
+    fn reset_command_chord(&mut self);
     fn dispatch_widget(&mut self, key: KeyEvent) -> bool;
     fn dispatch_bubble(&mut self, key: KeyEvent) -> bool;
     fn dispatch_command(&mut self, key: KeyEvent) -> bool;
@@ -187,7 +188,10 @@ fn dispatch_terminal_focus(
         },
         TerminalKeyPolicy::AppCommandsThenTerminal => {
             match ops.dispatch_terminal_preflight(request.key) {
-                TerminalPreflightDispatch::Consumed => return DispatchOutcome::TerminalPreflight,
+                TerminalPreflightDispatch::Consumed => {
+                    ops.reset_command_chord();
+                    return DispatchOutcome::TerminalPreflight;
+                }
                 TerminalPreflightDispatch::Forward => {
                     return dispatch_terminal_forward(request.key, ops);
                 }
@@ -207,7 +211,10 @@ fn dispatch_terminal_focus(
         }
         TerminalKeyPolicy::TerminalFirst => {
             match ops.dispatch_terminal_preflight(request.key) {
-                TerminalPreflightDispatch::Consumed => return DispatchOutcome::TerminalPreflight,
+                TerminalPreflightDispatch::Consumed => {
+                    ops.reset_command_chord();
+                    return DispatchOutcome::TerminalPreflight;
+                }
                 TerminalPreflightDispatch::Forward => {
                     return dispatch_terminal_forward(request.key, ops);
                 }
@@ -226,7 +233,10 @@ fn dispatch_terminal_focus(
             dispatch_framework_only(request.key, ops)
         }
         TerminalKeyPolicy::TerminalOnly => match ops.dispatch_terminal_preflight(request.key) {
-            TerminalPreflightDispatch::Consumed => DispatchOutcome::TerminalPreflight,
+            TerminalPreflightDispatch::Consumed => {
+                ops.reset_command_chord();
+                DispatchOutcome::TerminalPreflight
+            }
             TerminalPreflightDispatch::Forward => dispatch_terminal_forward(request.key, ops),
             TerminalPreflightDispatch::NotApplicable | TerminalPreflightDispatch::NotConsumed => {
                 dispatch_terminal_forward(request.key, ops)
@@ -366,6 +376,10 @@ mod tests {
             self.command_chord_match
                 .map(|id| CommandDispatchState::Matched(id.into()))
                 .unwrap_or(CommandDispatchState::None)
+        }
+
+        fn reset_command_chord(&mut self) {
+            self.calls.push("reset-chord");
         }
 
         fn dispatch_widget(&mut self, _key: KeyEvent) -> bool {
@@ -674,7 +688,7 @@ mod tests {
                 framework_quit: true,
                 framework_handles: false,
                 ambient_handles: false,
-                expected_calls: &["terminal-preflight"],
+                expected_calls: &["terminal-preflight", "reset-chord"],
                 expected: DispatchOutcome::TerminalPreflight,
             },
             Case {
