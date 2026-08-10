@@ -41,7 +41,7 @@ jobs:
               echo "::error title=Missing DCO signoff::Commit $commit is missing a Signed-off-by trailer."
               missing=1
             fi
-          done < <(git rev-list --reverse "${base_sha}..${head_sha}")
+          done < <(git rev-list --reverse --no-merges "${base_sha}..${head_sha}")
 
           if [[ "$missing" -ne 0 ]]; then
             echo "Add signoffs with: git commit --amend -s --no-edit"
