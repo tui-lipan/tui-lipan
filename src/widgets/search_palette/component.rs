@@ -1,5 +1,6 @@
 #![allow(private_interfaces)]
 
+use std::cmp::Reverse;
 use std::sync::Arc;
 
 use nucleo::pattern::{CaseMatching, Normalization};
@@ -682,11 +683,10 @@ fn resolve_source_result_index(item_index: Option<usize>, results: &[SearchResul
 
 fn initial_results<T>(props: &SearchPaletteProps<T>, query: &str) -> Vec<SearchResult> {
     if query.trim().is_empty() {
-        if props.items.len() <= sync_match_limit(props) {
-            return all_item_results(props.items.len());
-        }
         let cap = props.items.len().min(sync_match_limit(props));
-        return all_item_results(cap);
+        let mut results = all_item_results(cap);
+        sort_results_for_display(props, &mut results);
+        return results;
     }
 
     if props.items.len() <= sync_match_limit(props) {
@@ -842,6 +842,31 @@ fn sort_results_for_display<T>(props: &SearchPaletteProps<T>, results: &mut [Sea
     if props.preserve_item_order || (props.preserve_groups && !props.entries.is_empty()) {
         results.sort_unstable_by_key(|result| result.item_index);
     }
+    prioritize_results(props, results);
+}
+
+/// Stable-sort matched rows so higher [`SearchItem::priority`] values lead,
+/// leaving equal priorities in the order the rules above produced.
+///
+/// Skipped while `preserve_groups` keeps rows under their headers: there the
+/// result order is the visual order that navigation walks, so reordering it
+/// would move the selection off the row the user sees.
+fn prioritize_results<T>(props: &SearchPaletteProps<T>, results: &mut [SearchResult]) {
+    if props.preserve_groups && !props.entries.is_empty() {
+        return;
+    }
+    if props.items.iter().all(|item| item.priority == 0) {
+        return;
+    }
+
+    results.sort_by_key(|result| {
+        Reverse(
+            props
+                .items
+                .get(result.item_index)
+                .map_or(0, |item| item.priority),
+        )
+    });
 }
 
 fn current_selected_item_index(state: &SearchState) -> Option<usize> {
@@ -993,7 +1018,8 @@ mod tests {
     use crate::runtime::RuntimeCore;
     use crate::style::{CaretShape, Length, Rect, Theme};
     use crate::widgets::{
-        ListConfig, SearchEvent, SearchItem, SearchMatchMode, SearchPalette, ThemeProvider,
+        ListConfig, SearchEntry, SearchEvent, SearchItem, SearchMatchMode, SearchPalette,
+        ThemeProvider,
     };
 
     struct PaletteRoot {
@@ -1172,6 +1198,76 @@ mod tests {
 
         assert_eq!(input.0.caret_shape, None);
         assert_eq!(input.1, CaretShape::Underline);
+    }
+
+    /// Three rows that all match "target" with different scores, so priority has
+    /// something to reorder and ties have an order worth preserving.
+    fn priority_items(priorities: [i32; 3]) -> Vec<SearchItem<usize>> {
+        ["target alpha", "bravo target", "target charlie"]
+            .into_iter()
+            .zip(priorities)
+            .enumerate()
+            .map(|(index, (label, priority))| SearchItem::new(label, index).priority(priority))
+            .collect()
+    }
+
+    fn result_order(palette: &SearchPalette<usize>, query: &str) -> Vec<usize> {
+        initial_results(&palette.props, query)
+            .iter()
+            .map(|result| result.item_index)
+            .collect()
+    }
+
+    #[test]
+    fn priority_leads_results_and_leaves_ties_in_score_order() {
+        let baseline = result_order(
+            &SearchPalette::<usize>::new().items(priority_items([0, 0, 0])),
+            "target",
+        );
+        let prioritized = result_order(
+            &SearchPalette::<usize>::new().items(priority_items([0, 5, 0])),
+            "target",
+        );
+
+        // The prioritized row does not lead on score alone, so the move is the flag's doing.
+        assert_ne!(baseline.first(), Some(&1));
+        assert_eq!(prioritized.first(), Some(&1));
+
+        let ties: Vec<usize> = prioritized[1..].to_vec();
+        let scored: Vec<usize> = baseline.into_iter().filter(|index| *index != 1).collect();
+        assert_eq!(ties, scored);
+    }
+
+    #[test]
+    fn priority_leads_the_unfiltered_list() {
+        let palette = SearchPalette::<usize>::new().items(priority_items([0, 5, 0]));
+
+        assert_eq!(result_order(&palette, ""), vec![1, 0, 2]);
+    }
+
+    /// Under `preserve_groups` the result order is the visual order navigation
+    /// walks, so priority must not reshuffle it.
+    #[test]
+    fn priority_leaves_grouped_results_in_visual_order() {
+        let palette = SearchPalette::<usize>::new()
+            .entries([
+                SearchEntry::header("Models"),
+                SearchEntry::item("target alpha", 0),
+                SearchEntry::item("bravo target", 1).priority(5),
+                SearchEntry::item("target charlie", 2),
+            ])
+            .preserve_groups(true);
+
+        assert_eq!(result_order(&palette, "target"), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn priority_leads_within_preserved_item_order() {
+        let palette = SearchPalette::<usize>::new()
+            .items(priority_items([0, 5, 0]))
+            .preserve_item_order(true);
+
+        assert_eq!(result_order(&palette, "target"), vec![1, 0, 2]);
     }
 
     #[test]

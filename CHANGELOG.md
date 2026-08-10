@@ -67,6 +67,12 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `SearchItem::priority` (and `SearchEntry::priority`) pins matched rows ahead of the rest of a
+  `SearchPalette` result list: higher values lead, ties keep the order matching produced (score
+  order, or source order under `preserve_item_order`). It applies to the unfiltered list and to
+  search results, and is skipped under `preserve_groups`, where result order is the visual order
+  navigation walks. Callers that build `SearchItem` with a struct literal instead of
+  `SearchItem::new` need the new field. **(breaking)**
 - `SearchPalette::preserve_item_order` keeps prefiltered results in source order across synchronous
   and asynchronous matching paths.
 - Opt-in compact keybinding display via `KeyBinding::compact_display()` and
