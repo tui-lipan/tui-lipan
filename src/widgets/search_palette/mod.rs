@@ -552,6 +552,8 @@ pub(crate) struct SearchPaletteProps<T> {
     description_separator: Option<Arc<str>>,
     description_selection: bool,
     description_overflow: DescriptionOverflow,
+    /// Prefer truncating the primary description before the primary label.
+    primary_truncate_description_first: bool,
     match_style: Style,
     show_scores: bool,
     score_gradient: Option<ColorGradient>,
@@ -562,6 +564,9 @@ pub(crate) struct SearchPaletteProps<T> {
     /// visual (definition) order rather than score order so that arrow keys
     /// move sequentially through the visible rows.
     preserve_groups: bool,
+    /// When `true`, keep matched items in source order instead of sorting them by match score.
+    /// Useful when the caller has already established a meaningful result order.
+    preserve_item_order: bool,
     navigation_wrap: bool,
     // Matching config
     match_mode: SearchMatchMode,
@@ -634,7 +639,9 @@ impl<T: PartialEq> PartialEq for SearchPaletteProps<T> {
             && self.description_separator == other.description_separator
             && self.description_selection == other.description_selection
             && self.description_overflow == other.description_overflow
+            && self.primary_truncate_description_first == other.primary_truncate_description_first
             && self.preserve_groups == other.preserve_groups
+            && self.preserve_item_order == other.preserve_item_order
             && self.navigation_wrap == other.navigation_wrap
             && self.match_style == other.match_style
             && self.show_scores == other.show_scores
@@ -822,11 +829,13 @@ impl<T: Clone + PartialEq> Default for SearchPalette<T> {
                 description_separator: None,
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Truncate,
+                primary_truncate_description_first: true,
                 match_style: Style::default(),
                 show_scores: false,
                 score_gradient: None,
                 score_range: None,
                 preserve_groups: false,
+                preserve_item_order: false,
                 navigation_wrap: true,
                 match_mode: SearchMatchMode::default(),
                 case_matching: CaseMatching::Smart,
@@ -1554,6 +1563,16 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
         self
     }
 
+    /// Control which side of a primary row is truncated first when it has right-aligned content.
+    ///
+    /// Defaults to `true`, preserving the usual palette behavior of truncating descriptions before
+    /// labels. Set to `false` when the right-aligned description is metadata that should remain
+    /// visible while a long label is shortened.
+    pub fn primary_truncate_description_first(mut self, truncate: bool) -> Self {
+        self.props.primary_truncate_description_first = truncate;
+        self
+    }
+
     /// Set match highlight style.
     pub fn match_style(mut self, style: Style) -> Self {
         self.props.match_style = style;
@@ -1587,6 +1606,17 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// (definition) order rather than score order.
     pub fn preserve_groups(mut self, preserve: bool) -> Self {
         self.props.preserve_groups = preserve;
+        self
+    }
+
+    /// Keep matched items in their source order instead of reranking them by fuzzy score.
+    ///
+    /// Matching still filters the items for the current query, but the surviving rows retain the
+    /// order supplied to [`Self::items`] or [`Self::entries`]. This is useful when the caller has
+    /// already searched or ordered the data (for example, scrollback results). The setting applies
+    /// to both synchronous and asynchronous result updates.
+    pub fn preserve_item_order(mut self, preserve: bool) -> Self {
+        self.props.preserve_item_order = preserve;
         self
     }
 
