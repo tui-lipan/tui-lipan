@@ -105,6 +105,10 @@ pub struct SearchItem<T> {
     pub aliases: Vec<Arc<str>>,
     /// Whether the row should render in the list active state.
     pub active: bool,
+    /// Sort weight applied after matching. Higher values lead; ties keep the
+    /// order matching produced (score order, or source order under
+    /// [`SearchPalette::preserve_item_order`]). Defaults to `0`.
+    pub priority: i32,
     /// User data.
     pub value: T,
 }
@@ -117,6 +121,7 @@ impl<T> SearchItem<T> {
             description: None,
             aliases: Vec::new(),
             active: false,
+            priority: 0,
             value,
         }
     }
@@ -146,6 +151,16 @@ impl<T> SearchItem<T> {
     /// Mark this item as active.
     pub fn active(mut self, active: bool) -> Self {
         self.active = active;
+        self
+    }
+
+    /// Set the sort weight applied after matching.
+    ///
+    /// Higher values lead. Items sharing a priority keep the order matching
+    /// produced, so a pinned subset (favorites, recents) can float to the top
+    /// of otherwise score-ordered results without disturbing the rest.
+    pub fn priority(mut self, priority: i32) -> Self {
+        self.priority = priority;
         self
     }
 }
@@ -480,6 +495,14 @@ impl<T> SearchEntry<T> {
     pub fn active(self, active: bool) -> Self {
         match self {
             Self::Item(item) => Self::Item(item.active(active)),
+            other => other,
+        }
+    }
+
+    /// Set the sort weight on an item entry. No-op for header and spacer entries.
+    pub fn priority(self, priority: i32) -> Self {
+        match self {
+            Self::Item(item) => Self::Item(item.priority(priority)),
             other => other,
         }
     }

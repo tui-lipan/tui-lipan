@@ -374,7 +374,8 @@ Headers and spacers are **display-only** rows (not searchable/selectable). Group
 
 - With an empty query, all item rows are shown and headers/spacers render in entry order.
 - With a non-empty query, grouped chrome is hidden and matches render as a flat list, ranked by
-  score unless `preserve_item_order(true)` is set.
+  score unless `preserve_item_order(true)` is set. Rows carrying `SearchItem::priority` lead
+  that list regardless of which ordering rule applies to the rest.
 
 Item text is typically built from `SearchItem::new(label, value)` and optional
 `.description("...")`. By default, description renders inline as
@@ -386,6 +387,14 @@ but they are never rendered, which makes them useful for abbreviations,
 legacy names, or alternate command titles.
 
 You can also mark rows active with `.active(true)` on `SearchItem` or `SearchEntry::item(...)`.
+
+`.priority(n)` on `SearchItem` or `SearchEntry::item(...)` pins a subset of rows
+ahead of the rest: higher values lead, and rows sharing a priority keep the order
+matching produced. It is how a "favorites first" list keeps favorites at the top
+of otherwise score-ranked results without hard-coding an order for everything
+else. Priority applies to the flat result list — both the unfiltered list and
+search results — and is ignored under `preserve_groups(true)`, where the result
+order is the visual order navigation walks.
 
 ### Core props
 

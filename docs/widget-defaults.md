@@ -76,7 +76,7 @@ Source: `src/widgets/button/mod.rs:100` (`Button`).
 
 ## Checkbox
 
-Source: `src/widgets/checkbox/mod.rs:182` (`Checkbox`).
+Source: `src/widgets/checkbox/mod.rs:187` (`Checkbox`).
 
 | Field | Default initializer |
 |---|---|
@@ -1111,7 +1111,7 @@ Source: `src/widgets/file_tree/mod.rs:346` (`FileTree`).
 
 ## SearchPalette
 
-Source: `src/widgets/search_palette/mod.rs:750` (`SearchPalette`).
+Source: `src/widgets/search_palette/mod.rs:773` (`SearchPalette`).
 
 | Field | Default initializer |
 |---|---|
