@@ -35,6 +35,8 @@ While the crate is on `0.x.y`:
 - `SearchPalette` can preserve the caller's matched-item order and can prioritize right-aligned
   metadata over long labels through `preserve_item_order` and
   `primary_truncate_description_first(false)`.
+- Terminal-native paste now cancels any pending app-command chord and repaints the cleared prefix
+  indicator, rather than leaving stale chord state visible.
 - Tabs hit-testing now follows actual rendered widths through Unicode truncation and ellipsis;
   divider cells are inert for selection and per-tab hover, with symmetric repainting in either
   direction.

@@ -430,6 +430,10 @@ impl<C: Component> DispatchOps for RunnerDispatchOps<'_, '_, C> {
         }
     }
 
+    fn reset_command_chord(&mut self) {
+        self.key_dispatch_state.reset_command_chord();
+    }
+
     fn dispatch_widget(&mut self, key: KeyEvent) -> bool {
         use crate::app::input::runtime_dispatch::dispatch_widget_with_policy;
         dispatch_widget_with_policy(

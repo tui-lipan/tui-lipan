@@ -1261,6 +1261,10 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
         }
     }
 
+    fn reset_command_chord(&mut self) {
+        self.key_dispatch_state.reset_command_chord();
+    }
+
     fn dispatch_widget(&mut self, key: KeyEvent) -> bool {
         crate::app::input::runtime_dispatch::dispatch_widget_with_policy(
             &mut self.core.tree,
