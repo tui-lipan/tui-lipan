@@ -2550,8 +2550,10 @@ impl<C: Component> crate::ui_snapshot::ActionHost for HeadlessActionHost<'_, C> 
                 self.runner.dispatch_mouse_move(event);
             }
             crate::core::event::MouseKind::ScrollUp | crate::core::event::MouseKind::ScrollDown => {
-                let lines = self.runner.scroll_wheel_multiplier.max(1);
-                self.runner.dispatch_mouse_scroll(event, lines);
+                // A scripted wheel action is one raw tick; `dispatch_mouse_scroll` takes ticks and
+                // applies `scroll_wheel_multiplier` itself, so passing the multiplier here would
+                // square it.
+                self.runner.dispatch_mouse_scroll(event, 1);
             }
             _ => {
                 self.runner.dispatch_mouse(event);

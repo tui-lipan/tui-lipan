@@ -32,6 +32,14 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Wheel events forwarded to a `Terminal` whose child has mouse tracking on no longer lose ticks.
+  The runner coalesces a burst of same-direction wheel events into one dispatch, but the terminal
+  forwarding path emitted a single mouse report and dropped the count, so the child saw one tick
+  where the host sent several. Hosts that emit several wheel events per physical notch made this
+  permanent rather than merely bursty: a TUI running inside a `Terminal` scrolled a fraction of
+  what the same TUI scrolled outside it. Forwarding stays a passthrough - the app-level
+  `scroll_wheel_multiplier` applies to local scrolling only, never to reports sent to a child.
+- Scripted `ui_snapshot` wheel actions apply `scroll_wheel_multiplier` once instead of squaring it.
 - `SearchPalette` can preserve the caller's matched-item order and can prioritize right-aligned
   metadata over long labels through `preserve_item_order` and
   `primary_truncate_description_first(false)`.

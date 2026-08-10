@@ -762,13 +762,34 @@ impl<C: Component> AppRunner<C> {
 
     #[cfg(feature = "terminal")]
     pub(crate) fn forward_terminal_mouse(&mut self, mouse: MouseEvent) -> bool {
+        self.forward_terminal_mouse_ticks(mouse, 1)
+    }
+
+    /// Forward a mouse event to a tracking terminal, replaying it `ticks` times.
+    ///
+    /// Only wheel events arrive with `ticks > 1`: the runner coalesces a burst of same-direction
+    /// wheel events into one dispatch, so a tracking child must still be handed one wheel sequence
+    /// per raw tick or it scrolls a fraction of what the host terminal actually reported. Hosts
+    /// that emit several wheel events per physical notch make that shortfall permanent rather than
+    /// merely bursty.
+    ///
+    /// The app-level `scroll_wheel_multiplier` stays out of this deliberately - forwarding is a
+    /// passthrough of what the host sent, and the child program applies its own scroll step.
+    #[cfg(feature = "terminal")]
+    pub(crate) fn forward_terminal_mouse_ticks(&mut self, mouse: MouseEvent, ticks: u16) -> bool {
         let Some(plan) = terminal_mouse_forward_plan(&self.core.tree, mouse) else {
             return false;
         };
         if plan.focus {
             let _ = self.focus_for_node(plan.hit);
         }
-        plan.callback.emit(plan.bytes);
+        // One callback carrying the repeated sequence rather than one callback per tick: the bytes
+        // reaching the child are identical either way, and the consumer sees a single write.
+        let bytes = match ticks {
+            0 | 1 => plan.bytes,
+            n => plan.bytes.repeat(usize::from(n)),
+        };
+        plan.callback.emit(bytes);
         true
     }
 
@@ -1137,13 +1158,16 @@ impl<C: Component> AppRunner<C> {
 
     /// Optimised dispatch path for (coalesced) scroll-wheel events.
     ///
+    /// `scroll_ticks` is the number of raw wheel events the runner coalesced into this dispatch,
+    /// not a line count - each consumer scales it by its own multiplier.
+    ///
     /// Compared to the generic `dispatch_mouse`:
     /// * hover is only updated when the mouse has actually moved,
-    /// * terminal forwarding is attempted only once (with the coalesced
-    ///   count carried as `scroll_lines`),
-    /// * the scroll count is forwarded to the tree handler so that a burst
-    ///   of events results in a single tree mutation.
-    pub(crate) fn dispatch_mouse_scroll(&mut self, mouse: MouseEvent, scroll_lines: u16) -> bool {
+    /// * terminal forwarding resolves its plan once and replays the wheel sequence `scroll_ticks`
+    ///   times, so a tracking child sees every tick the host sent,
+    /// * the tick count is forwarded to the tree handler so that a burst of events results in a
+    ///   single tree mutation.
+    pub(crate) fn dispatch_mouse_scroll(&mut self, mouse: MouseEvent, scroll_ticks: u16) -> bool {
         let (x, y) = self.to_content_coords(mouse.x, mouse.y);
         let adjusted_mouse = MouseEvent { x, y, ..mouse };
         let hovered_toast = crate::overlay::hovered_toast(&self.core.tree, x, y);
@@ -1154,14 +1178,14 @@ impl<C: Component> AppRunner<C> {
             .set_hovered_toast(hovered_toast);
 
         #[cfg(feature = "terminal")]
-        if self.forward_terminal_mouse(adjusted_mouse) {
+        if self.forward_terminal_mouse_ticks(adjusted_mouse, scroll_ticks) {
             return true;
         }
 
         let scroll_dirty = mouse::handle_scroll_wheel_n(
             &mut self.core.tree,
             adjusted_mouse,
-            usize::from(scroll_lines),
+            usize::from(scroll_ticks),
             self.scroll_wheel_multiplier,
         );
         let selection_dirty = if scroll_dirty && self.drag.is_active() {

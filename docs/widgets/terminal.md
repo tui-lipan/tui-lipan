@@ -642,6 +642,21 @@ The cursor is hidden while scrolled into history. Typing input snaps back to liv
 
 `TerminalScreen::process_bytes()` automatically preserves the user's scrollback position when new output arrives while scrolled up - the offset is adjusted for newly added rows.
 
+### Wheel forwarding under mouse tracking
+
+Once the child enables mouse tracking (`mouse_mode.mode` is not `MouseMode::None`), the wheel stops
+driving local scrollback and is reported to the child through `on_mouse_forward` instead. Hold
+`Shift` to keep scrolling the widget's own scrollback over a tracking child.
+
+The runner coalesces a burst of same-direction wheel events into one dispatch, so a single
+`on_mouse_forward` payload may carry **several** mouse reports back to back - one per raw wheel
+event the host sent. Write the payload to the PTY as-is; do not deduplicate it. Many terminals emit
+more than one wheel event per physical notch, and collapsing them makes the child scroll less than
+the user asked for.
+
+Forwarding is a passthrough: the app-level `scroll_wheel_multiplier` scales local scrolling only and
+is never applied to reports sent to a child, which applies its own scroll step.
+
 ---
 
 ## Plain-text export
