@@ -2,6 +2,9 @@
 use std::sync::Arc;
 
 use crate::Result;
+use crate::backend::ratatui_backend::terminal_handoff::{
+    resume_after_external_process, suspend_for_external_process,
+};
 use crate::core::component::Component;
 #[cfg(feature = "terminal")]
 use crate::core::node::{NodeId, NodeKind};
@@ -11,6 +14,37 @@ use crate::widgets::{TerminalInputEvent, TerminalInputKind, focus_sequences};
 use super::AppRunner;
 
 impl<C: Component> AppRunner<C> {
+    /// Run a pending suspend request — `Context::suspend_to_shell` or an
+    /// external `SIGTSTP` — and report whether the process was stopped.
+    ///
+    /// Called between frames so the terminal is in a known state: hand it back
+    /// to the shell, stop until the job is foregrounded, then take it again.
+    /// `resume_after_external_process` asks for the full repaint that redraws
+    /// over whatever the shell left on screen.
+    pub(super) fn run_pending_suspend(&mut self) -> bool {
+        if !crate::app::job_control::take_suspend_request() {
+            return false;
+        }
+
+        let surface_mode = self.surface.mode();
+        if let Err(err) = suspend_for_external_process(surface_mode) {
+            // The terminal is still ours (the release rolls itself back), so
+            // stopping now would strand the shell in raw mode. Skip the stop.
+            crate::debug::internal_log!(
+                "[tui-lipan] suspend: releasing the terminal failed, staying up: {}",
+                err
+            );
+            return false;
+        }
+
+        crate::app::job_control::stop_until_continued();
+
+        if let Err(err) = resume_after_external_process(surface_mode, self.mouse_enabled) {
+            crate::debug::internal_log!("[tui-lipan] suspend: resume failed: {}", err);
+        }
+        true
+    }
+
     pub(super) fn sync_mouse_capture_preference(
         &mut self,
         terminal: &mut crate::backend::ratatui_backend::Terminal,

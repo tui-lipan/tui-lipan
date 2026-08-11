@@ -115,6 +115,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `ctx.mouse_capture_enabled()` | Current mouse capture state |
 | `ctx.set_mouse_capture(bool)` | Change mouse capture at runtime |
 | `ctx.toggle_mouse_capture()` | Toggle mouse capture, returns new state |
+| `ctx.suspend_to_shell()` | Stop the app to the shell like `ctrl+z`, releasing and restoring the terminal around the stop (see [External programs](external-programs.md#suspending-to-the-shell-ctrlz)) |
 | `ctx.theme()` | Clone the active theme for this subtree |
 | `ctx.theme_extension::<T>()` | Clone a typed app-specific theme extension |
 | `ctx.host_terminal_colors()` | Read the runner-managed `HostTerminalColors` cache when live host colors are enabled |

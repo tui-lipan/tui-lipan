@@ -1542,6 +1542,9 @@ impl<C: Component> AppRunner<C> {
                 panic_keyboard_enhancement.as_ref(),
             )?;
             let mut guard = guard;
+            // Route SIGTSTP through the loop for as long as we own the terminal,
+            // so a stop — ours or an external `kill -TSTP` — releases it first.
+            let _stop_signal_guard = crate::app::job_control::install_stop_handler();
             self.refresh_host_terminal_colors(false, false);
 
             // Fullscreen Unix apps that opted into live host colors use Termina
@@ -2207,9 +2210,22 @@ impl<C: Component> AppRunner<C> {
                     }
                 };
 
+                // Suspend between frames, before anything is drawn. The resume
+                // arms the handoff repaint, so the next iteration redraws over
+                // whatever the shell left behind.
+                if self.run_pending_suspend() {
+                    continue;
+                }
+
                 let ctx_repaint = self.core.take_full_repaint_request();
                 let devtools_request = self.apply_pending_devtools_request();
                 let handoff_repaint = take_handoff_full_repaint_request();
+                if handoff_repaint {
+                    // Basic capture comes back with the terminal, but all-motion
+                    // tracking (1003) does not: forget it so the next render
+                    // re-enables it and hover keeps working.
+                    self.mouse_all_motion_enabled = false;
+                }
                 let force_host_redraw =
                     ctx_repaint || handoff_repaint || devtools_request || host_color_refresh;
                 if force_host_redraw {
