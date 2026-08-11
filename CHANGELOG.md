@@ -13,6 +13,8 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- Root components can implement `Component::on_window_focus_changed` to observe host
+  terminal/window focus transitions, with deterministic `TestBackend::set_window_focused` support.
 - `Tab::capped(bool)`, opting an inactive, unhovered tab into `Tabs::caps` end caps. A tab that
   carries its own background for an app-specific reason — an unsaved marker, an error state — is
   emphasized in a way the widget cannot infer, and previously read as a flat colored block beside

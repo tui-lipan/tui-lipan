@@ -12,7 +12,7 @@ use crate::app::input::focus;
 use crate::callback::{CommandRx, CommandTx, Dispatcher, ScopeId};
 use crate::core::component::{
     CommandRuntime, Component, Context, FocusContext, HoverContext, KeyUpdate, ScrollContext,
-    UpdateLevel,
+    Update, UpdateLevel,
 };
 use crate::core::element::{Element, ElementKind, Key};
 use crate::core::event::KeyEvent;
@@ -416,7 +416,7 @@ where
         scope: ScopeId,
         msg: Box<dyn Any>,
     ) -> Result<UpdateLevel> {
-        let update = if scope == ScopeId(1) {
+        if scope == ScopeId(1) {
             self.ctx.set_active_theme(self.theme.clone());
             let actual = std::any::type_name_of_val(msg.as_ref());
             let expected = std::any::type_name::<C::Message>();
@@ -428,11 +428,11 @@ where
                         expected,
                         actual,
                     })?;
-            self.component.update(*msg, &mut self.ctx)
-        } else {
-            self.components.update_by_scope(scope, msg)?
-        };
+            let update = self.component.update(*msg, &mut self.ctx);
+            return Ok(self.run_root_update(update));
+        }
 
+        let update = self.components.update_by_scope(scope, msg)?;
         let update_level = update.level();
         if let Some(cmd) = update.command {
             cmd.run(CommandRuntime {
@@ -442,6 +442,26 @@ where
         }
 
         Ok(update_level)
+    }
+
+    /// Invoke the root-only host window focus lifecycle callback.
+    pub(crate) fn on_window_focus_changed(&mut self, focused: bool) -> UpdateLevel {
+        self.ctx.set_active_theme(self.theme.clone());
+        let update = self
+            .component
+            .on_window_focus_changed(focused, &mut self.ctx);
+        self.run_root_update(update)
+    }
+
+    fn run_root_update(&mut self, update: Update) -> UpdateLevel {
+        let update_level = update.level();
+        if let Some(cmd) = update.command {
+            cmd.run(CommandRuntime {
+                scope: ScopeId(1),
+                tx: self.command_tx.clone(),
+            });
+        }
+        update_level
     }
 
     /// Bubble a key event up through component scopes, starting from the scope

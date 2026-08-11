@@ -80,6 +80,7 @@ pub struct TestBackend<C: Component> {
     pub(crate) focused_key: Option<Key>,
     pub(crate) focused_tag: Option<Tag>,
     pub(crate) focus_policy: FocusPolicy,
+    window_focused: bool,
     keymap: Keymap,
     keymap_runtime: KeymapRuntime,
     text_area_newline_binding: TextAreaNewlineBinding,
@@ -200,6 +201,7 @@ where
             focused_key: None,
             focused_tag: None,
             focus_policy: app.focus_policy,
+            window_focused: true,
             keymap,
             keymap_runtime,
             text_area_newline_binding: app.text_area_newline_binding,
@@ -238,6 +240,34 @@ where
     /// Returns the current viewport used for layout.
     pub fn viewport(&self) -> Rect {
         self.viewport
+    }
+
+    /// Returns whether the simulated host terminal/window has focus.
+    pub fn window_focused(&self) -> bool {
+        self.window_focused
+    }
+
+    /// Simulate a host terminal/window focus transition.
+    ///
+    /// Calls the root component's [`Component::on_window_focus_changed`] callback once per
+    /// changed value, runs its returned command, drains messages already available, and renders
+    /// when an update requests it. Background commands remain asynchronous; call [`Self::pump`]
+    /// later to process messages they produce. This does not affect widget focus.
+    pub fn set_window_focused(&mut self, focused: bool) -> Result<bool> {
+        if self.window_focused == focused {
+            return Ok(false);
+        }
+
+        self.window_focused = focused;
+        let lifecycle_dirty = !matches!(
+            self.core.on_window_focus_changed(focused),
+            crate::UpdateLevel::None
+        );
+        let pump_dirty = self.pump()?;
+        if lifecycle_dirty && !pump_dirty {
+            self.render();
+        }
+        Ok(true)
     }
 
     #[allow(missing_docs)]
@@ -1542,7 +1572,7 @@ impl<C: Component> crate::ui_snapshot::ActionHost for TestBackend<C> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::str::FromStr;
     use std::time::Duration;
@@ -5861,6 +5891,115 @@ mod tests {
         }
 
         panic!("expected background command to update state");
+    }
+
+    struct WindowFocusHarness {
+        calls: Rc<RefCell<Vec<bool>>>,
+        views: Rc<Cell<usize>>,
+    }
+
+    #[derive(Clone, Copy)]
+    enum WindowFocusMsg {
+        CommandFinished,
+    }
+
+    impl Component for WindowFocusHarness {
+        type Message = WindowFocusMsg;
+        type Properties = ();
+        type State = usize;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            0
+        }
+
+        fn on_window_focus_changed(&mut self, focused: bool, ctx: &mut Context<Self>) -> Update {
+            self.calls.borrow_mut().push(focused);
+            if focused {
+                Update::with_command(ctx.link().command(|link| {
+                    link.send(WindowFocusMsg::CommandFinished);
+                }))
+            } else {
+                Update::layout()
+            }
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                WindowFocusMsg::CommandFinished => {
+                    ctx.state += 1;
+                    Update::full()
+                }
+            }
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            self.views.set(self.views.get() + 1);
+            Text::new(format!("{}", ctx.state)).into()
+        }
+    }
+
+    #[test]
+    fn window_focus_transitions_are_ordered_idempotent_and_render_when_dirty() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let views = Rc::new(Cell::new(0));
+        let mut backend = TestBackend::new(WindowFocusHarness {
+            calls: Rc::clone(&calls),
+            views: Rc::clone(&views),
+        });
+        let initial_views = views.get();
+
+        assert!(backend.window_focused());
+        assert!(
+            backend
+                .set_window_focused(false)
+                .expect("focus loss should succeed")
+        );
+        assert!(!backend.window_focused());
+        assert_eq!(views.get(), initial_views + 1);
+
+        assert!(
+            !backend
+                .set_window_focused(false)
+                .expect("repeated focus loss should succeed")
+        );
+        assert_eq!(views.get(), initial_views + 1);
+
+        assert!(
+            backend
+                .set_window_focused(true)
+                .expect("focus gain should succeed")
+        );
+        assert!(backend.window_focused());
+        assert!(
+            !backend
+                .set_window_focused(true)
+                .expect("repeated focus gain should succeed")
+        );
+        assert_eq!(*calls.borrow(), vec![false, true]);
+    }
+
+    #[test]
+    fn window_focus_lifecycle_commands_send_messages_back() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let views = Rc::new(Cell::new(0));
+        let mut backend = TestBackend::new(WindowFocusHarness { calls, views });
+
+        backend
+            .set_window_focused(false)
+            .expect("focus loss should succeed");
+        backend
+            .set_window_focused(true)
+            .expect("focus gain should succeed");
+
+        for _ in 0..100 {
+            backend.pump().expect("command message should pump");
+            if *backend.state() == 1 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        panic!("expected focus lifecycle command to update state");
     }
 
     struct ThemedText;

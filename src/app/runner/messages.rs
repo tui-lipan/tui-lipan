@@ -18,64 +18,84 @@ impl<C: Component> AppRunner<C> {
     pub(super) fn process_pending_messages(&mut self, dirty: &mut DirtyTracker) -> Result<()> {
         while let Some((scope, msg)) = { self.core.queue.borrow_mut().pop_front() } {
             let update_level = self.core.update_from_boxed(scope, msg)?;
-            match update_level {
-                UpdateLevel::None => {}
-                UpdateLevel::Paint => {
-                    #[cfg(debug_assertions)]
-                    if scope == ScopeId(1) {
-                        self.debug_paint_claim_root = true;
-                    }
-                    dirty.mark_paint();
-                }
-                UpdateLevel::Layout => {
-                    self.mark_dirty_scope(scope);
-                    dirty.mark_layout();
-                }
-                UpdateLevel::Full => {
-                    if scope == ScopeId(1) {
-                        self.dirty_component_scopes.clear();
-                        self.dirty_scope_set.clear();
-                    }
-                    dirty.mark_full();
-                }
-            }
-
-            #[cfg(feature = "devtools")]
-            if !matches!(update_level, UpdateLevel::None)
-                && self.devtools_config.metrics
-                && self.devtools_state.borrow().visible
-                && !self.devtools_metrics_suppressed
-            {
-                let level = match update_level {
-                    UpdateLevel::Paint => super::DirtyLevel::PaintOnly,
-                    UpdateLevel::Layout => super::DirtyLevel::LayoutOnly,
-                    UpdateLevel::Full => super::DirtyLevel::Full,
-                    UpdateLevel::None => unreachable!(),
-                };
-                let name = if scope == ScopeId(1) {
-                    self.root_component_display_name
-                        .get_or_insert_with(|| {
-                            std::sync::Arc::from(
-                                crate::core::nested::short_type_name(
-                                    self.core.root_component_name(),
-                                )
-                                .as_str(),
-                            )
-                        })
-                        .clone()
-                } else {
-                    self.core
-                        .components
-                        .display_name_for_scope(scope)
-                        .unwrap_or_else(|| std::sync::Arc::from("?"))
-                };
-                self.note_attribution(
-                    crate::devtools::state::UpdateSource::Component { scope, name },
-                    level,
-                );
+            if scope == ScopeId(1) {
+                self.apply_root_update(dirty, update_level);
+            } else {
+                self.apply_component_update(dirty, scope, update_level);
             }
         }
         Ok(())
+    }
+
+    /// Apply an [`UpdateLevel`] returned by a root lifecycle or message callback.
+    pub(super) fn apply_root_update(
+        &mut self,
+        dirty: &mut DirtyTracker,
+        update_level: UpdateLevel,
+    ) {
+        self.apply_component_update(dirty, ScopeId(1), update_level);
+    }
+
+    fn apply_component_update(
+        &mut self,
+        dirty: &mut DirtyTracker,
+        scope: ScopeId,
+        update_level: UpdateLevel,
+    ) {
+        match update_level {
+            UpdateLevel::None => {}
+            UpdateLevel::Paint => {
+                #[cfg(debug_assertions)]
+                if scope == ScopeId(1) {
+                    self.debug_paint_claim_root = true;
+                }
+                dirty.mark_paint();
+            }
+            UpdateLevel::Layout => {
+                self.mark_dirty_scope(scope);
+                dirty.mark_layout();
+            }
+            UpdateLevel::Full => {
+                if scope == ScopeId(1) {
+                    self.dirty_component_scopes.clear();
+                    self.dirty_scope_set.clear();
+                }
+                dirty.mark_full();
+            }
+        }
+
+        #[cfg(feature = "devtools")]
+        if !matches!(update_level, UpdateLevel::None)
+            && self.devtools_config.metrics
+            && self.devtools_state.borrow().visible
+            && !self.devtools_metrics_suppressed
+        {
+            let level = match update_level {
+                UpdateLevel::Paint => super::DirtyLevel::PaintOnly,
+                UpdateLevel::Layout => super::DirtyLevel::LayoutOnly,
+                UpdateLevel::Full => super::DirtyLevel::Full,
+                UpdateLevel::None => unreachable!(),
+            };
+            let name = if scope == ScopeId(1) {
+                self.root_component_display_name
+                    .get_or_insert_with(|| {
+                        std::sync::Arc::from(
+                            crate::core::nested::short_type_name(self.core.root_component_name())
+                                .as_str(),
+                        )
+                    })
+                    .clone()
+            } else {
+                self.core
+                    .components
+                    .display_name_for_scope(scope)
+                    .unwrap_or_else(|| std::sync::Arc::from("?"))
+            };
+            self.note_attribution(
+                crate::devtools::state::UpdateSource::Component { scope, name },
+                level,
+            );
+        }
     }
 
     /// Record that `scope`'s view must run again, so a layout-only frame refreshes exactly it.

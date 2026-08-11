@@ -38,6 +38,16 @@ fn snapshot_my_widget() {
 
 `plain_text()` returns newline-joined rows with trailing spaces trimmed - the output is stable and deterministic across runs.
 
+### Host window focus
+
+`TestBackend` starts with host-window focus set to `true`. Use
+`set_window_focused(bool) -> Result<bool>` to simulate a transition without crossterm; it returns
+`false` for an unchanged value, invokes the root component's
+`on_window_focus_changed`, runs its returned command, drains messages already available, and
+renders when the returned update is dirty. Background commands remain asynchronous; call `pump()`
+later to process messages they produce. `window_focused()` exposes the current simulated value.
+This is independent of widget focus and `focused_key()`.
+
 ### Per-cell style assertions
 
 ```rust
