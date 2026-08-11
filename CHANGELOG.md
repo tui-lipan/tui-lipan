@@ -13,6 +13,11 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Tab::capped(bool)`, opting an inactive, unhovered tab into `Tabs::caps` end caps. A tab that
+  carries its own background for an app-specific reason — an unsaved marker, an error state — is
+  emphasized in a way the widget cannot infer, and previously read as a flat colored block beside
+  shaped peers. The remaining cap conditions are unchanged: untruncated, a background distinct from
+  the strip, and caps that fit the padding cells they replace.
 - `Style::elevate_by(f32)`, the `Style` form of `ColorTransform::Elevate`. Prefer it over
   `Style::lighten_by` on hover/focus/active state styles: elevation is luminance-aware, so it lifts
   a dark surface and dims a light one instead of washing both toward white, and being a transform it

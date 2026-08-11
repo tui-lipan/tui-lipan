@@ -14,6 +14,8 @@ const PANEL: Color = Color::Rgb(40, 44, 60);
 const BACKDROP: Color = Color::Rgb(12, 12, 18);
 const ACCENT: Color = Color::Rgb(120, 200, 255);
 const HOVER: Color = Color::Rgb(70, 80, 100);
+// An app-specific emphasis color on an otherwise ordinary tab.
+const MARK: Color = Color::Rgb(150, 60, 65);
 
 // Round (pill) caps, both single-width (Private Use Area).
 const LEFT_CAP: char = '\u{e0b6}';
@@ -27,6 +29,8 @@ struct TabsApp {
     caps: Option<(char, char)>,
     /// When false, the active tab is styled fg-only and inherits the strip background.
     active_bg: bool,
+    /// Marks the first (inactive, unhovered) tab with its own background and `Tab::capped`.
+    mark_first: bool,
 }
 
 impl TabsApp {
@@ -34,6 +38,16 @@ impl TabsApp {
         Self {
             caps,
             active_bg: true,
+            mark_first: false,
+        }
+    }
+
+    /// An inactive tab carrying its own background, opted into caps.
+    fn marked(caps: Option<(char, char)>) -> Self {
+        Self {
+            caps,
+            active_bg: true,
+            mark_first: true,
         }
     }
 }
@@ -58,7 +72,17 @@ impl Component for TabsApp {
             Style::new().fg(ACCENT).bold()
         };
         Tabs::new()
-            .tabs(vec![Tab::new("A"), Tab::new("B"), Tab::new("C")])
+            .tabs(vec![
+                Tab::new("A")
+                    .style(if self.mark_first {
+                        Style::new().fg(BACKDROP).bg(MARK)
+                    } else {
+                        Style::default()
+                    })
+                    .capped(self.mark_first),
+                Tab::new("B"),
+                Tab::new("C"),
+            ])
             .active(1)
             .focusable(false)
             .divider(' ')
@@ -175,6 +199,7 @@ fn tab_matching_the_strip_background_falls_back_to_flat_padding() {
     let frame = render(TabsApp {
         caps: Some((LEFT_CAP, RIGHT_CAP)),
         active_bg: false,
+        mark_first: false,
     });
     assert_eq!(frame.cell(4, 0).symbol, " ", "leading pad stays a space");
     assert_eq!(frame.cell(5, 0).symbol, "B", "label unshifted");
@@ -334,4 +359,46 @@ fn wide_unicode_tabs_keep_divider_clicks_inert_and_hover_repaints_symmetric() {
         })
         .expect("return to first tab");
     assert_eq!(backend.capture_frame().cell(1, 0).bg, HOVER);
+}
+
+/// `Tab::capped` is the opt-in for a tab the widget cannot know is emphasized: it is neither active
+/// nor hovered, but carries its own background for an app-specific reason and should be shaped like
+/// its highlighted peers rather than reading as a flat block.
+#[test]
+fn a_capped_inactive_tab_gets_caps() {
+    let frame = render(TabsApp::marked(Some((LEFT_CAP, RIGHT_CAP))));
+
+    let left = frame.cell(0, 0);
+    assert_eq!(
+        left.symbol,
+        LEFT_CAP.to_string(),
+        "an opted-in inactive tab gets caps"
+    );
+    assert_eq!(left.fg, MARK, "left cap fills with the tab's own color");
+    assert_eq!(left.bg, PANEL, "left cap rounds off over the strip");
+
+    assert_eq!(
+        frame.cell(1, 0).symbol,
+        "A",
+        "label unshifted under the caps"
+    );
+
+    let right = frame.cell(2, 0);
+    assert_eq!(right.symbol, RIGHT_CAP.to_string());
+    assert_eq!(right.fg, MARK);
+    assert_eq!(right.bg, PANEL);
+
+    // The active tab is unaffected, so opting one tab in does not disturb the strip.
+    assert_eq!(frame.cell(4, 0).symbol, LEFT_CAP.to_string());
+}
+
+/// Opting in does not bypass the correctness guards: a cap wider than the padding cell it replaces
+/// would shift every later tab away from the columns `Tabs::index_at_col` hit-tests against, so an
+/// opted-in tab degrades to flat padding just like a highlighted one.
+#[test]
+fn a_capped_tab_still_degrades_when_the_caps_do_not_fit() {
+    let frame = render(TabsApp::marked(Some((WIDE_LEFT_CAP, WIDE_RIGHT_CAP))));
+    assert_eq!(frame.cell(0, 0).symbol, " ", "leading pad stays a space");
+    assert_eq!(frame.cell(1, 0).symbol, "A", "label unshifted");
+    assert_eq!(frame.cell(2, 0).symbol, " ", "trailing pad stays a space");
 }

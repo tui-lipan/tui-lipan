@@ -38,6 +38,7 @@ pub struct TabsEvent {
 pub struct Tab {
     pub(crate) label: Arc<str>,
     pub(crate) style: Style,
+    pub(crate) capped: bool,
 }
 
 impl Tab {
@@ -46,12 +47,28 @@ impl Tab {
         Self {
             label: label.into(),
             style: Style::default(),
+            capped: false,
         }
     }
 
     /// Set style.
     pub fn style(mut self, style: Style) -> Self {
         self.style = style;
+        self
+    }
+
+    /// Draw this tab's end caps even when it is neither active nor hovered.
+    ///
+    /// [`Tabs::caps`] normally shapes only the active and hovered tabs, because those are the two
+    /// the widget knows are emphasized. A tab carrying its own background for an app-specific reason
+    /// — an unsaved marker, an error state, a workspace waiting on input — is emphasized too, and
+    /// without this reads as a flat colored block beside shaped peers.
+    ///
+    /// The remaining cap conditions still apply: the tab must be untruncated, its background must
+    /// differ from the strip's (there has to be a color to fill the glyph with), and the caps must
+    /// fit the padding cells they replace.
+    pub fn capped(mut self, capped: bool) -> Self {
+        self.capped = capped;
         self
     }
 }
