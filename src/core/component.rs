@@ -1124,6 +1124,24 @@ impl<C: Component> Context<C> {
         next
     }
 
+    /// Stop the app to the shell, the way `ctrl+z` does in an ordinary program.
+    ///
+    /// Wire this to whatever key your app uses for suspend: raw mode clears the
+    /// tty's `ISIG` flag, so the terminal driver never generates `SIGTSTP`
+    /// while the app runs and nothing happens unless the app asks for it.
+    ///
+    /// At the next frame boundary the runner hands the terminal back — raw
+    /// mode, alternate screen, mouse tracking — stops the process group with
+    /// `SIGTSTP`, and restores the terminal with a full repaint once the job is
+    /// foregrounded again. An external `SIGTSTP` (`kill -TSTP`, a parent shell)
+    /// takes the same path, so the shell never inherits a terminal that is
+    /// still in raw mode.
+    ///
+    /// No-op on targets without POSIX job control (Windows, wasm).
+    pub fn suspend_to_shell(&self) {
+        crate::app::job_control::request_suspend();
+    }
+
     /// Append plain rich-text lines to transcript history above the inline viewport.
     ///
     /// This is a no-op outside inline transcript mode.

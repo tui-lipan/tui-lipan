@@ -6,6 +6,7 @@ pub(crate) mod copy_feedback;
 pub(crate) mod focus_service;
 pub mod input;
 pub(crate) mod interaction_state;
+pub(crate) mod job_control;
 pub(crate) mod mouse_dispatch;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod runner;

@@ -32,6 +32,14 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- A `SIGTSTP` from outside the app (`kill -TSTP`, a parent shell) no longer stops the process with
+  the terminal still in raw mode, on the alternate screen and with mouse tracking on - which left
+  the shell prompt drawing over the frozen UI while mouse motion printed escape sequences into it.
+  The runner now takes the signal, releases the terminal at a frame boundary, and stops for real
+  with the default disposition back in place, so the shell still sees the job stop.
+- Mouse all-motion tracking (`1003`) is re-armed after the terminal comes back from an external
+  program or a suspend. Only basic capture is part of the resume sequence, so hover stayed dead
+  after returning from `$EDITOR` until something else toggled motion tracking.
 - Wheel events forwarded to a `Terminal` whose child has mouse tracking on no longer lose ticks.
   The runner coalesces a burst of same-direction wheel events into one dispatch, but the terminal
   forwarding path emitted a single mouse report and dropped the count, so the child saw one tick
@@ -67,6 +75,12 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Context::suspend_to_shell` stops the app to the shell the way `ctrl+z` does in an ordinary
+  program. Raw mode clears the tty's `ISIG` flag, so the terminal driver never generates `SIGTSTP`
+  while a TUI runs and an app that wants that keybinding has to ask for it. At the next frame
+  boundary the runner hands the terminal back (raw mode, alternate screen, mouse tracking), stops
+  the process group, and restores the terminal with a full repaint once the job is foregrounded.
+  No-op on targets without POSIX job control (Windows, wasm).
 - `SearchItem::priority` (and `SearchEntry::priority`) pins matched rows ahead of the rest of a
   `SearchPalette` result list: higher values lead, ties keep the order matching produced (score
   order, or source order under `preserve_item_order`). It applies to the unfiltered list and to

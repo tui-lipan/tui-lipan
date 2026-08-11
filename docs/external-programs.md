@@ -75,6 +75,27 @@ fn run_editor(
 
 ---
 
+## Suspending to the shell (`ctrl+z`)
+
+Handing the terminal to the user's shell is the same problem with a different subprocess, so the framework owns it end to end. Call **`Context::suspend_to_shell()`** from whatever key your app uses for suspend:
+
+```rust
+Msg::Suspend => {
+    ctx.suspend_to_shell();
+    Update::none()
+}
+```
+
+Raw mode clears the tty's `ISIG` flag, so the terminal driver never turns `ctrl+z` into `SIGTSTP` while your app runs - nothing happens unless the app asks for it. At the next frame boundary the runner releases the terminal, stops the process group with `SIGTSTP`, and restores raw mode, the alternate screen, and mouse capture with a full repaint once the job is foregrounded again.
+
+Do **not** raise `SIGTSTP` yourself. Stopping with the terminal still in raw mode leaves the shell prompt drawing over the frozen UI, with mouse motion printing escape sequences into it.
+
+A `SIGTSTP` that arrives from anywhere else - `kill -TSTP`, a parent shell - takes the same path while the runner owns the terminal, so those stops are clean too. The signal is sent to the whole process group, matching what a `ctrl+z` at the tty does; children that must keep running while the TUI sleeps belong in their own process group (`std::process::Command::process_group(0)`).
+
+No-op on targets without POSIX job control (Windows, wasm), so the keybinding can be wired unconditionally.
+
+---
+
 ## Streaming non-interactive processes (`process`)
 
 `tui_lipan::process` is available only on native targets
@@ -172,3 +193,4 @@ On the next loop iteration the runner promotes the frame to a **full** render, i
 1. Use `suspend_for_external_process` / `resume_after_external_process` with correct `surface_mode` and `mouse_enabled`.
 2. Run that sequence on the UI thread via `Command::new`, not `Command::spawn` / `link.command`.
 3. After returning to the TUI, call `ctx.request_full_repaint()` when a full frame repaint is required (especially for nested components).
+4. For `ctrl+z`, call `ctx.suspend_to_shell()` instead of doing any of the above yourself.
