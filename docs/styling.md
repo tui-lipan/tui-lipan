@@ -27,6 +27,7 @@ Style::new()
 | `.dim_by(f32)` | Dim resolved `fg`/`bg` and cell backdrop |
 | `.tint_by(Color, f32)` | Blend this style's colors toward a color, and tint rendered cells beneath in backdrop paths |
 | `.lighten_by(f32)` | Lighten resolved `fg`/`bg` colors |
+| `.elevate_by(f32)` | Elevate resolved `fg`/`bg` colors off their background — luminance-aware, so prefer it over `.lighten_by(...)` on hover/focus state styles |
 | `.transform_fg(ColorTransform)` | Transform the resolved foreground color |
 | `.transform_bg(ColorTransform)` | Transform the resolved background color |
 | `.contrast_policy(ContrastPolicy)` | Override contrast adjustment for this style |
@@ -110,7 +111,14 @@ let washed_out = Style::new().transform_fg(ColorTransform::Opacity(0.6));
 let forced_readable = Style::new().contrast_policy(ContrastPolicy::Apca);
 ```
 
-> Note: `Style` has `.lighten_by(...)` but no `.lighten()`, and `.tint_by(...)` but no `.tint()` convenience method.
+> Note: `Style`'s color transforms are explicit-amount only — `.lighten_by(...)`, `.elevate_by(...)`,
+> and `.tint_by(...)` have no no-argument forms. `.dim()` is unrelated: it sets the SGR dim
+> *attribute*, not a default-amount `.dim_by(...)`.
+>
+> On a state layer (hover, focus, active), prefer `.elevate_by(...)` over `.lighten_by(...)`:
+> elevation lifts a dark surface and dims a light one, so it keeps working on light themes,
+> and being a transform it composes with a color the element already carries instead of
+> replacing it the way an explicit `.bg(...)` would.
 
 ## Style Inheritance
 
@@ -353,7 +361,8 @@ Use these for direct color manipulation:
 | `Color::dim_by(f32)` | Dim by explicit amount `0.0..=1.0` |
 | `Color::lighten()` | Lighten by default amount (`0.35`) |
 | `Color::lighten_by(f32)` | Lighten by explicit amount `0.0..=1.0` |
-| `Color::elevate(f32)` | Move perceptual lightness away from the backdrop while preserving hue/relative chroma in gamut |
+| `Color::elevate()` | Elevate by the default step (`0.08`) — one surface step, deliberately smaller than the `dim`/`lighten` defaults |
+| `Color::elevate_by(f32)` | Move perceptual lightness away from the backdrop while preserving hue/relative chroma in gamut |
 | `Color::blend_toward(Color, f32)` | Blend toward target color by alpha |
 
 ```rust

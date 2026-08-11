@@ -11,8 +11,22 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- `Style::elevate_by(f32)`, the `Style` form of `ColorTransform::Elevate`. Prefer it over
+  `Style::lighten_by` on hover/focus/active state styles: elevation is luminance-aware, so it lifts
+  a dark surface and dims a light one instead of washing both toward white, and being a transform it
+  composes with a color the element already carries rather than replacing it the way an explicit
+  `bg(..)` does. Previously reachable only as `transform_bg(ColorTransform::Elevate(..))`.
+- `Color::elevate()`, elevating by the default `0.08` step, completing the
+  `dim`/`dim_by`, `lighten`/`lighten_by` pairing. The default is deliberately much smaller than the
+  `0.35` those use: one surface step, not a wash.
+
 ### Changed
 
+- `Color::elevate(f32)` is renamed `Color::elevate_by(f32)`, so every amount-taking color modifier
+  ends in `_by` and the bare name is free for the default-amount form. **(breaking)** Migration:
+  rename `.elevate(x)` to `.elevate_by(x)`; `.elevate()` now means the default step.
 - `DatePicker` and `Radio` use roving focus (one tab stop) instead of making every
   day cell / option a tab stop. Only the selected day / active option is
   focusable; arrows move selection and focus follows via `focus_key` (derived by

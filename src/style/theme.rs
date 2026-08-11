@@ -119,7 +119,7 @@ impl ColorTransform {
         match self {
             Self::Dim(amount) => color.dim_by(amount),
             Self::Lighten(amount) => color.lighten_by(amount),
-            Self::Elevate(amount) => color.elevate(amount),
+            Self::Elevate(amount) => color.elevate_by(amount),
             Self::Opacity(opacity) => backdrop.map_or(color, |bg| {
                 color.blend_toward(bg, (1.0 - opacity).clamp(0.0, 1.0))
             }),
@@ -662,6 +662,31 @@ impl Style {
         self
     }
 
+    /// Elevate the resolved `fg`/`bg` colors by an amount in `[0.0, 1.0]`.
+    ///
+    /// The [`Style`] form of [`ColorTransform::Elevate`], and the one to reach for over
+    /// [`Self::lighten_by`] on a state layer such as a hover or focus style. Elevation is
+    /// luminance-aware, so it lifts a dark surface and dims a light one rather than washing both
+    /// toward white — a hover built on `lighten_by` loses contrast on light themes.
+    ///
+    /// Being a transform rather than an explicit color, it also composes with whatever the target
+    /// already resolved to. A hover style of `Style::new().bg(surface.elevate())` overwrites the
+    /// background of any element carrying its own — a marked row, a colored tab — while
+    /// `Style::new().elevate_by(0.08)` lifts that color instead of replacing it.
+    ///
+    /// ```
+    /// use tui_lipan::style::Style;
+    ///
+    /// // Hover lifts whatever this element already paints, including a per-item color.
+    /// let hover = Style::new().elevate_by(0.08);
+    /// ```
+    pub fn elevate_by(mut self, amount: f32) -> Self {
+        let amount = amount.clamp(0.0, 1.0);
+        self.fg_transform = Some(ColorTransform::Elevate(amount));
+        self.bg_transform = Some(ColorTransform::Elevate(amount));
+        self
+    }
+
     /// Enable italic.
     pub fn italic(mut self) -> Self {
         self.italic = Some(true);
@@ -884,7 +909,7 @@ mod tests {
 
         assert_eq!(
             ColorTransform::Elevate(0.08).apply(surface),
-            surface.elevate(0.08),
+            surface.elevate_by(0.08),
         );
         assert_ne!(
             ColorTransform::Elevate(0.08).apply(surface),
@@ -1122,6 +1147,66 @@ mod tests {
         let overlay = Style::new().underline_color(Color::Transparent);
         let patched = base.patch(overlay);
         assert_eq!(patched.underline_color, p(Color::Red));
+    }
+
+    /// The reason `elevate_by` exists next to `lighten_by`: on a light surface a lighten pushes
+    /// toward white and loses contrast, while an elevate moves away from the background. A hover
+    /// or focus layer built on `lighten_by` is therefore wrong on light themes.
+    #[test]
+    fn style_elevate_by_moves_away_from_the_surface_on_both_polarities() {
+        let dark = Color::rgb(20, 22, 30);
+        let light = Color::rgb(235, 235, 240);
+
+        let dark_lifted = Style::new()
+            .bg(dark)
+            .elevate_by(0.08)
+            .resolve_color_transforms()
+            .bg;
+        let light_lifted = Style::new()
+            .bg(light)
+            .elevate_by(0.08)
+            .resolve_color_transforms()
+            .bg;
+
+        assert_eq!(dark_lifted, p(ColorTransform::Elevate(0.08).apply(dark)));
+        assert_eq!(light_lifted, p(ColorTransform::Elevate(0.08).apply(light)));
+
+        let lighter = |paint: Option<Paint>, base: Color| match paint {
+            Some(Paint::Solid(color)) => color.luminance() > base.luminance(),
+            other => panic!("expected a solid color, got {other:?}"),
+        };
+        assert!(lighter(dark_lifted, dark), "a dark surface must lift");
+        assert!(!lighter(light_lifted, light), "a light surface must darken");
+    }
+
+    /// `elevate_by` is a transform, so a state layer composes with whatever color the base already
+    /// carries instead of replacing it — the property an explicit `bg(..)` hover style cannot have.
+    #[test]
+    fn style_elevate_by_lifts_the_base_color_rather_than_replacing_it() {
+        let marked = Color::rgb(120, 40, 45);
+        let plain = Color::rgb(30, 32, 40);
+        let hover = Style::new().elevate_by(0.08);
+
+        let marked_hovered = Style::new()
+            .bg(marked)
+            .patch(hover)
+            .resolve_color_transforms()
+            .bg;
+        let plain_hovered = Style::new()
+            .bg(plain)
+            .patch(hover)
+            .resolve_color_transforms()
+            .bg;
+
+        assert_ne!(
+            marked_hovered,
+            p(marked),
+            "hover did not lift the base color"
+        );
+        assert_ne!(
+            marked_hovered, plain_hovered,
+            "hovering a marked surface collapsed it onto the plain hover color"
+        );
     }
 
     #[test]
@@ -1992,9 +2077,9 @@ impl Theme {
             border: Style::new().fg(primary_fg.blend_toward(primary_bg, 0.40)),
             muted: Style::new().fg(muted),
             surface: SurfacePalette {
-                panel: primary_bg.elevate(0.07),
-                element: primary_bg.elevate(0.04),
-                menu: primary_bg.elevate(0.12),
+                panel: primary_bg.elevate_by(0.07),
+                element: primary_bg.elevate_by(0.04),
+                menu: primary_bg.elevate_by(0.12),
                 backdrop: primary_bg,
             },
             status: StatusPalette {
@@ -2081,8 +2166,8 @@ impl Theme {
             },
             terminal: TerminalPalette::default(),
             scrollbar: ScrollbarPalette {
-                track: Some(primary_bg.elevate(0.05)),
-                thumb: primary_bg.elevate(0.20),
+                track: Some(primary_bg.elevate_by(0.05)),
+                thumb: primary_bg.elevate_by(0.20),
                 thumb_focus: Some(accent.lighten_by(0.08)),
             },
             splitter: SplitterPalette {
@@ -2493,7 +2578,7 @@ impl From<ThemePalette> for Theme {
         let muted_color = p
             .muted
             .unwrap_or_else(|| p.text.blend_toward(p.background, 0.42));
-        let scrollbar_thumb = p.scrollbar.unwrap_or_else(|| p.background.elevate(0.20));
+        let scrollbar_thumb = p.scrollbar.unwrap_or_else(|| p.background.elevate_by(0.20));
 
         let success = p.success.unwrap_or(Color::hex_u24(0x34D399));
         let warning = p.warning.unwrap_or(Color::hex_u24(0xFBBF24));
@@ -2519,9 +2604,9 @@ impl From<ThemePalette> for Theme {
             border: Style::new().fg(border_color),
             muted: Style::new().fg(muted_color),
             surface: SurfacePalette {
-                panel: p.background.elevate(0.07),
-                element: p.background.elevate(0.04),
-                menu: p.background.elevate(0.12),
+                panel: p.background.elevate_by(0.07),
+                element: p.background.elevate_by(0.04),
+                menu: p.background.elevate_by(0.12),
                 backdrop: p.background,
             },
             status: StatusPalette {
@@ -2618,7 +2703,7 @@ impl From<ThemePalette> for Theme {
             },
             terminal: TerminalPalette::default(),
             scrollbar: ScrollbarPalette {
-                track: Some(p.background.elevate(0.05)),
+                track: Some(p.background.elevate_by(0.05)),
                 thumb: scrollbar_thumb,
                 thumb_focus: Some(p.accent.lighten_by(0.08)),
             },
