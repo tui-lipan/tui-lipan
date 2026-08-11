@@ -1,5 +1,6 @@
 use std::io::{self, Write};
 
+use crossterm::cursor::{Hide, Show};
 use crossterm::event::{
     DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
     EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
@@ -29,6 +30,8 @@ pub(crate) enum TerminalOp {
     DisableFocusChange,
     DisableAutoWrap,
     EnableAutoWrap,
+    ShowCursor,
+    HideCursor,
     ClearScreen,
     PushKeyboardEnhancement,
     PopKeyboardEnhancement,
@@ -52,6 +55,8 @@ impl TerminalOp {
             Self::DisableFocusChange => Some(Self::EnableFocusChange),
             Self::DisableAutoWrap => Some(Self::EnableAutoWrap),
             Self::EnableAutoWrap => Some(Self::DisableAutoWrap),
+            Self::ShowCursor => Some(Self::HideCursor),
+            Self::HideCursor => Some(Self::ShowCursor),
             Self::PushKeyboardEnhancement => Some(Self::PopKeyboardEnhancement),
             Self::PopKeyboardEnhancement => Some(Self::PushKeyboardEnhancement),
             Self::EnableThemeNotifications => Some(Self::DisableThemeNotifications),
@@ -134,6 +139,12 @@ pub(crate) fn suspend_plan(policy: SurfaceTerminalPolicy) -> TerminalTransitionP
     ops.push(TerminalOp::DisableBracketedPaste);
     ops.push(TerminalOp::DisableMouseCapture);
     ops.push(TerminalOp::DisableFocusChange);
+    // Ratatui hides the cursor on every frame that draws without one, and
+    // `Terminal` only shows it again when it is dropped - which does not happen
+    // here, because the app is coming back. Whoever gets the terminal next (a
+    // shell prompt, `read`, a pager) would otherwise inherit `?25l` and show no
+    // cursor at all.
+    ops.push(TerminalOp::ShowCursor);
     ops.push(TerminalOp::Flush);
     TerminalTransitionPlan::new(ops)
 }
@@ -238,6 +249,8 @@ impl<W: Write> TerminalTransitionExecutor for CrosstermTransitionExecutor<W> {
             TerminalOp::DisableFocusChange => execute!(self.writer, DisableFocusChange),
             TerminalOp::DisableAutoWrap => execute!(self.writer, DisableAutoWrap),
             TerminalOp::EnableAutoWrap => execute!(self.writer, EnableAutoWrap),
+            TerminalOp::ShowCursor => execute!(self.writer, Show),
+            TerminalOp::HideCursor => execute!(self.writer, Hide),
             TerminalOp::ClearScreen => execute!(self.writer, Print("\x1b[2J\x1b[H")),
             TerminalOp::PushKeyboardEnhancement => {
                 execute!(self.writer, PushKeyboardEnhancementFlags(flags))
@@ -295,6 +308,27 @@ mod tests {
                 TerminalOp::EnableMouseCapture,
                 TerminalOp::EnableBracketedPaste,
                 TerminalOp::EnableFocusChange,
+                TerminalOp::Flush,
+            ]
+        );
+    }
+
+    #[test]
+    fn handoff_suspend_plan_hands_back_a_visible_cursor() {
+        // Ratatui leaves `?25l` set while the app draws frames without a cursor
+        // and only undoes it when `Terminal` drops, which a handoff never does.
+        // Whatever runs next - a shell prompt, a pager - gets the terminal with
+        // no visible cursor unless the plan shows it here.
+        let plan = suspend_plan(fullscreen_policy());
+        assert_eq!(
+            plan.ops(),
+            &[
+                TerminalOp::DisableRawMode,
+                TerminalOp::LeaveAlternateScreen,
+                TerminalOp::DisableBracketedPaste,
+                TerminalOp::DisableMouseCapture,
+                TerminalOp::DisableFocusChange,
+                TerminalOp::ShowCursor,
                 TerminalOp::Flush,
             ]
         );

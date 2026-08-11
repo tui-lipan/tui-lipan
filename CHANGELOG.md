@@ -51,6 +51,10 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Handing the terminal to another program - a `ctrl+z` suspend, `$EDITOR`, a pager - now restores
+  the cursor. Ratatui hides it on every frame drawn without one and shows it again only when
+  `Terminal` drops, which a handoff never does, so the shell prompt came back with no visible
+  cursor until something else turned it on.
 - A `SIGTSTP` from outside the app (`kill -TSTP`, a parent shell) no longer stops the process with
   the terminal still in raw mode, on the alternate screen and with mouse tracking on - which left
   the shell prompt drawing over the frozen UI while mouse motion printed escape sequences into it.
