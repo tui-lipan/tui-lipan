@@ -280,13 +280,15 @@ pub(crate) fn render_tabs(
         used = used.saturating_add(seg_w as usize);
 
         // Caps replace the tab's two padding cells with rounded/pointed glyphs painted
-        // in the tab's own background over the strip background. Only the highlighted
-        // tabs get them, and only when the tab is fully visible (untruncated) and has a
-        // background distinct from the strip to fill the glyph with. A cap wider than the
-        // padding cell it replaces would shift every later tab away from the columns
-        // `Tabs::index_at_col` hit-tests against, so those degrade to flat padding.
+        // in the tab's own background over the strip background. The active and hovered
+        // tabs get them, plus any tab that opted in via `Tab::capped` because it carries
+        // its own emphasis. They also require the tab to be fully visible (untruncated)
+        // and to have a background distinct from the strip to fill the glyph with. A cap
+        // wider than the padding cell it replaces would shift every later tab away from
+        // the columns `Tabs::index_at_col` hit-tests against, so those degrade to flat
+        // padding.
         let cap_glyphs = caps.filter(|caps| {
-            (is_active || is_tab_hovered)
+            (is_active || is_tab_hovered || tab.capped)
                 && segment_is_full
                 && tab_style.bg != base_style.bg
                 && caps_fit_padding(*caps)

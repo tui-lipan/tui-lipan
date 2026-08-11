@@ -15,7 +15,7 @@ inherit scoped theme roles.
 | `tab(Tab)` | method | Add a single tab |
 | `active` | `usize` | Active tab index |
 | `divider` | `char` | Separator between tabs |
-| `caps` | `Option<(char, char)>` | End-cap glyphs drawn around the active and hovered tabs. Each cap replaces one padding cell (the tab keeps its measured width), painted in the tab's own background over the strip background, so the tab reads as a rounded/pointed pill. `None` (default) keeps flat padding. A tab falls back to flat padding when it overflow-truncates, when its background matches the strip's, or when either cap is not single-width. |
+| `caps` | `Option<(char, char)>` | End-cap glyphs drawn around the active and hovered tabs, plus any tab opted in with `Tab::capped(true)`. Each cap replaces one padding cell (the tab keeps its measured width), painted in the tab's own background over the strip background, so the tab reads as a rounded/pointed pill. `None` (default) keeps flat padding. A tab falls back to flat padding when it overflow-truncates, when its background matches the strip's, or when either cap is not single-width. |
 | `border` | `bool` | Show border |
 | `border_style` | `BorderStyle` | Border style |
 | `padding` | `impl Into<Padding>` | Padding |
@@ -58,6 +58,14 @@ Tabs::new()
 Tab::new("Label")
     .style(Style::new().fg(Color::White))
     .disabled(false)
+
+// A tab the widget cannot know is emphasized — an unsaved marker, an error state — carrying its own
+// background. `capped(true)` shapes it like the active and hovered tabs instead of leaving it a flat
+// colored block. The other cap conditions still apply: untruncated, a background distinct from the
+// strip, and caps that fit the padding cells they replace.
+Tab::new("Draft")
+    .style(Style::new().fg(Color::Black).bg(Color::Yellow))
+    .capped(true)
 ```
 
 **`TabsEvent` fields:** `index: usize`
