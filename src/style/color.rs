@@ -299,6 +299,16 @@ impl Color {
         self.luminance() < 0.5
     }
 
+    /// Raise a surface off its own background by the default elevation step.
+    ///
+    /// One step, matching the amounts the built-in themes use for panel and menu
+    /// surfaces. Elevation steps are small by nature, so this default is much
+    /// smaller than [`Self::dim`] / [`Self::lighten`]: those wash a color, while
+    /// this lifts a surface off the one behind it.
+    pub fn elevate(self) -> Self {
+        self.elevate_by(0.08)
+    }
+
     /// Raise a surface off its own background by a perceptually even amount.
     ///
     /// Unlike [`Self::lighten_by`], this is luminance-aware: dark backgrounds are
@@ -315,7 +325,7 @@ impl Color {
     ///
     /// `amount` is in `[0.0, 1.0]`; `Color::Reset` and similar are returned
     /// unchanged.
-    pub fn elevate(self, amount: f32) -> Self {
+    pub fn elevate_by(self, amount: f32) -> Self {
         let Some((r, g, blue)) = self.to_rgb() else {
             return self;
         };
@@ -859,18 +869,18 @@ mod tests {
     #[test]
     fn elevate_lightens_dark_and_darkens_light() {
         let dark = Color::hex_u24(0x0B121F);
-        let dark_up = dark.elevate(0.10);
+        let dark_up = dark.elevate_by(0.10);
         assert!(dark_up.luminance() > dark.luminance());
 
         let light = Color::White;
-        let light_up = light.elevate(0.10);
+        let light_up = light.elevate_by(0.10);
         assert!(light_up.luminance() < light.luminance());
     }
 
     #[test]
     fn elevate_preserves_near_black_surface_cast() {
         let lipan_backdrop = Color::hex_u24(0x04090D);
-        let elevated = lipan_backdrop.elevate(0.10).to_rgb().unwrap();
+        let elevated = lipan_backdrop.elevate_by(0.10).to_rgb().unwrap();
 
         assert!(elevated.0 < elevated.1 && elevated.1 < elevated.2);
         assert_ne!(elevated.0, elevated.2);
@@ -881,15 +891,15 @@ mod tests {
 
     #[test]
     fn elevate_preserves_near_black_relative_chroma() {
-        let elevated = Color::hex_u24(0x04090D).elevate(0.02);
+        let elevated = Color::hex_u24(0x04090D).elevate_by(0.02);
 
         assert_eq!(elevated, Color::Rgb(7, 14, 19));
     }
 
     #[test]
     fn elevate_fades_chroma_in_continuously_next_to_black() {
-        let black = Color::Black.elevate(0.10).to_rgb().unwrap();
-        let tinted = Color::rgb(0, 0, 1).elevate(0.10).to_rgb().unwrap();
+        let black = Color::Black.elevate_by(0.10).to_rgb().unwrap();
+        let tinted = Color::rgb(0, 0, 1).elevate_by(0.10).to_rgb().unwrap();
 
         assert!(black.0.abs_diff(tinted.0) <= 3, "{black:?} -> {tinted:?}");
         assert!(black.1.abs_diff(tinted.1) <= 3, "{black:?} -> {tinted:?}");
@@ -900,13 +910,13 @@ mod tests {
     fn elevate_tiny_amount_keeps_low_chroma_color_stable() {
         let color = Color::rgb(20, 21, 22);
 
-        assert_eq!(color.elevate(0.001), color);
+        assert_eq!(color.elevate_by(0.001), color);
     }
 
     #[test]
     fn elevate_is_continuous_around_old_near_black_cutoff() {
-        let below = Color::rgb(4, 11, 14).elevate(0.10).to_rgb().unwrap();
-        let above = Color::rgb(4, 12, 14).elevate(0.10).to_rgb().unwrap();
+        let below = Color::rgb(4, 11, 14).elevate_by(0.10).to_rgb().unwrap();
+        let above = Color::rgb(4, 12, 14).elevate_by(0.10).to_rgb().unwrap();
 
         assert!(below.0.abs_diff(above.0) <= 2);
         assert!(below.1.abs_diff(above.1) <= 2);
@@ -915,20 +925,20 @@ mod tests {
 
     #[test]
     fn elevate_handles_black_and_white_endpoints() {
-        assert_eq!(Color::Black.elevate(1.0), Color::Rgb(255, 255, 255));
-        assert_eq!(Color::White.elevate(1.0), Color::Rgb(0, 0, 0));
+        assert_eq!(Color::Black.elevate_by(1.0), Color::Rgb(255, 255, 255));
+        assert_eq!(Color::White.elevate_by(1.0), Color::Rgb(0, 0, 0));
     }
 
     #[test]
     fn elevate_keeps_small_neutral_surfaces_visible() {
-        assert_eq!(Color::Black.elevate(0.04), Color::Rgb(10, 10, 10));
-        assert_eq!(Color::Black.elevate(0.07), Color::Rgb(18, 18, 18));
-        assert_eq!(Color::White.elevate(0.04), Color::Rgb(245, 245, 245));
+        assert_eq!(Color::Black.elevate_by(0.04), Color::Rgb(10, 10, 10));
+        assert_eq!(Color::Black.elevate_by(0.07), Color::Rgb(18, 18, 18));
+        assert_eq!(Color::White.elevate_by(0.04), Color::Rgb(245, 245, 245));
     }
 
     #[test]
     fn elevate_leaves_non_rgb_colors_unchanged() {
-        assert_eq!(Color::Reset.elevate(0.2), Color::Reset);
+        assert_eq!(Color::Reset.elevate_by(0.2), Color::Reset);
     }
 
     #[test]

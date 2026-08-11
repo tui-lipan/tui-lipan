@@ -473,7 +473,7 @@ Used with `Style::transform_fg(...)` and `Style::transform_bg(...)`.
 |---------|-------------|
 | `ColorTransform::Dim(f32)` | Dim the resolved color toward black by `0.0..=1.0` |
 | `ColorTransform::Lighten(f32)` | Lighten the resolved color toward white by `0.0..=1.0` |
-| `ColorTransform::Elevate(f32)` | Raise the resolved color off its own background by `0.0..=1.0`, the relative form of `Color::elevate`: lightens a dark color, dims a light one, and preserves hue and chroma |
+| `ColorTransform::Elevate(f32)` | Raise the resolved color off its own background by `0.0..=1.0`, the relative form of `Color::elevate_by`, and available on `Style` as `.elevate_by(f32)`: lightens a dark color, dims a light one, and preserves hue and chroma |
 | `ColorTransform::Opacity(f32)` | Compose the resolved paint alpha with the factor; `1.0` keeps the paint, `0.0` resolves to the backdrop for that channel |
 | `ColorTransform::OpacityToward { factor, target }` | Same factor semantics as `Opacity`, but blend toward `target` instead of the backdrop |
 | `ColorTransform::Tint(Color, f32)` | Blend the resolved color toward a target color by alpha |

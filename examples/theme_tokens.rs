@@ -140,7 +140,7 @@ impl Component for Screen {
                 d.added_marker,
                 "42 ",
                 d.added_line_number,
-                "let panel = bg.elevate(0.07);",
+                "let panel = bg.elevate_by(0.07);",
                 d.added,
             ))
             .child(diff_line(
@@ -148,7 +148,7 @@ impl Component for Screen {
                 d.added_marker,
                 "43 ",
                 d.added_line_number,
-                "let menu = bg.elevate(0.12);",
+                "let menu = bg.elevate_by(0.12);",
                 d.added,
             ))
             .child(diff_line(
