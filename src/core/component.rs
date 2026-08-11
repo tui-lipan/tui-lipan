@@ -442,6 +442,13 @@ pub trait Component: Sized + 'static {
         KeyUpdate::unhandled(Update::none())
     }
 
+    /// Called on the root component when the host terminal/window gains or loses focus.
+    ///
+    /// This is distinct from widget focus and is never delivered to nested components.
+    fn on_window_focus_changed(&mut self, _focused: bool, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
     /// Update state in response to a message.
     ///
     /// Returns `(dirty, command)`.

@@ -22,8 +22,14 @@ impl Component for MyApp {
 | `update` | Yes | `(&mut self, Msg, &mut Context<Self>) -> Update` | Handle messages |
 | `init` | No | `(&mut self, &mut Context<Self>) -> Option<Command>` | One-time setup on mount |
 | `on_key` | No | `(&mut self, KeyEvent, &mut Context<Self>) -> KeyUpdate` | Handle unhandled key events |
+| `on_window_focus_changed` | No, root only | `(&mut self, bool, &mut Context<Self>) -> Update` | React to host terminal/window focus transitions |
 | `on_props_changed` | No | `(&mut self, &Props, &mut Context<Self>) -> Update` | React to property changes |
 | `unmount` | No | `(&mut self, &mut Context<Self>)` | Teardown before removal |
+
+`on_window_focus_changed` runs only on the mounted root when the host reports an actual
+focus transition. It is not widget focus: use widget `.on_focus` / `.on_blur` callbacks and the
+focus APIs for keyboard routing. It is also separate from a child `Terminal` requesting CSI
+`?1004` focus reporting; the runner continues to send those sequences only to that terminal.
 
 ## State Flow
 

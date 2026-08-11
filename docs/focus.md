@@ -4,6 +4,14 @@ Focus controls keyboard routing, traversal, pointer focus, focus scopes, and foc
 notifications. Configurable bindings and chords are documented in
 [`keybindings.md`](keybindings.md).
 
+## Host Window Focus
+
+Host terminal/window focus is separate from widget focus. The root `Component` can observe host
+transitions with `on_window_focus_changed(focused, ctx)`; nested components do not receive it.
+Widget `.on_focus` / `.on_blur`, `ctx.request_focus`, and traversal still describe which framework
+widget receives keyboard input. A child `Terminal` that enables CSI `?1004` receives its own focus
+sequences from the runner and is not the root lifecycle callback.
+
 ## Focus Policy
 
 Configure framework-initiated focus movement on `App`:

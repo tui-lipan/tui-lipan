@@ -929,6 +929,18 @@ impl<C: Component> AppRunner<C> {
         self.note_attribution(crate::devtools::state::UpdateSource::Input(label), level);
     }
 
+    /// Update host-window focus and invoke the root lifecycle exactly once per transition.
+    fn set_window_focused(&mut self, focused: bool, dirty: &mut DirtyTracker) -> bool {
+        if self.focus.window_focused == focused {
+            return false;
+        }
+
+        self.focus.window_focused = focused;
+        let update_level = self.core.on_window_focus_changed(focused);
+        self.apply_root_update(dirty, update_level);
+        true
+    }
+
     #[cfg(feature = "devtools")]
     fn apply_pending_devtools_request(&mut self) -> bool {
         match self.core.ctx.take_devtools_request() {
@@ -1763,7 +1775,7 @@ impl<C: Component> AppRunner<C> {
                 if let Some(event) = maybe_event {
                     match event {
                         CEvent::FocusGained => {
-                            self.focus.window_focused = true;
+                            self.set_window_focused(true, &mut dirty);
                             self.animation.reset_blink();
                             host_color_refresh_quiet_until =
                                 Some(deferred_host_color_refresh_deadline(Instant::now()));
@@ -1771,7 +1783,7 @@ impl<C: Component> AppRunner<C> {
                             dirty.mark_paint();
                         }
                         CEvent::FocusLost => {
-                            self.focus.window_focused = false;
+                            self.set_window_focused(false, &mut dirty);
                             self.animation.reset_blink();
                             dirty.mark_paint();
                         }

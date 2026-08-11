@@ -4647,6 +4647,91 @@ fn process_pending_messages_routes_root_layout_to_layout_scope_refresh() {
 }
 
 #[test]
+fn root_window_focus_lifecycle_applies_each_update_level_once_per_transition() {
+    #[derive(Clone, Copy)]
+    enum RequestedUpdate {
+        None,
+        Paint,
+        Layout,
+        Full,
+    }
+
+    struct FocusLifecycleProbe {
+        requested: RequestedUpdate,
+        calls: Rc<Cell<usize>>,
+    }
+
+    impl Component for FocusLifecycleProbe {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn on_window_focus_changed(&mut self, _focused: bool, _ctx: &mut Context<Self>) -> Update {
+            self.calls.set(self.calls.get() + 1);
+            match self.requested {
+                RequestedUpdate::None => Update::none(),
+                RequestedUpdate::Paint => Update::paint(),
+                RequestedUpdate::Layout => Update::layout(),
+                RequestedUpdate::Full => Update::full(),
+            }
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            Text::new("focus").into()
+        }
+    }
+
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 4,
+    };
+    for (requested, expected) in [
+        (RequestedUpdate::None, DirtyLevel::None),
+        (RequestedUpdate::Paint, DirtyLevel::PaintOnly),
+        (RequestedUpdate::Layout, DirtyLevel::LayoutOnly),
+        (RequestedUpdate::Full, DirtyLevel::Full),
+    ] {
+        let calls = Rc::new(Cell::new(0));
+        let probe = FocusLifecycleProbe {
+            requested,
+            calls: Rc::clone(&calls),
+        };
+        let mut runner = AppRunner::new(App::new().mouse(false), probe, ());
+        init_runner(
+            &mut runner,
+            FocusLifecycleProbe {
+                requested,
+                calls: Rc::clone(&calls),
+            },
+            viewport,
+        );
+
+        let mut dirty = DirtyTracker::default();
+        assert!(runner.set_window_focused(false, &mut dirty));
+        assert_eq!(dirty.level(), expected);
+        assert_eq!(calls.get(), 1);
+        assert!(!runner.set_window_focused(false, &mut dirty));
+        assert_eq!(calls.get(), 1);
+        assert_eq!(
+            runner.dirty_component_scopes,
+            if matches!(expected, DirtyLevel::LayoutOnly) {
+                vec![ScopeId(1)]
+            } else {
+                Vec::new()
+            }
+        );
+    }
+}
+
+#[test]
 fn controlled_text_area_input_remains_layout_only() {
     #[derive(Clone)]
     enum Msg {
