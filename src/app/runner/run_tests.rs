@@ -7062,3 +7062,68 @@ fn esc_cancelling_a_pending_chord_is_not_forwarded_to_the_terminal() {
     );
     assert_eq!(keys.borrow().as_slice(), &[key(KeyCode::Esc)]);
 }
+
+/// `CancelOnly` must actually swallow the mismatching key, not merely stop replaying the prefix:
+/// once the prefix has been pressed the user is in the app's command state, and an unbound key
+/// there means "nothing", not "type this into the pane".
+#[cfg(feature = "terminal")]
+#[test]
+fn cancel_only_swallows_an_unbound_key_after_the_prefix() {
+    let keys = Rc::new(RefCell::new(Vec::new()));
+    let app = App::new()
+        .mouse(false)
+        .key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst)
+        .terminal_key_policy(crate::TerminalKeyPolicy::AppCommandsThenTerminal)
+        .chord_mismatch_policy(crate::ChordMismatchPolicy::CancelOnly);
+    let mut runner = AppRunner::new(
+        app,
+        TerminalDispatchSmoke {
+            keys: keys.clone(),
+            inputs: Rc::new(RefCell::new(Vec::new())),
+        },
+        (),
+    );
+    init_runner(
+        &mut runner,
+        TerminalDispatchSmoke {
+            keys: keys.clone(),
+            inputs: Rc::new(RefCell::new(Vec::new())),
+        },
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 5,
+        },
+    );
+    runner.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("mux.detach")
+            .shortcut(crate::KeyBinding::from_str("ctrl-a d").expect("binding"))
+            .handler(Callback::new(|_| {}))
+            .build(),
+    );
+    let terminal = node_id_by_key(&runner.core.tree, "terminal");
+    runner.focus.focused = Some(terminal);
+
+    assert!(runner.dispatch_layered_key(ctrl_char('a')).consumed);
+    runner.dispatch_layered_key(key(KeyCode::Char('x')));
+    assert!(
+        keys.borrow().is_empty(),
+        "an unbound key after the prefix must not reach the pane: {:?}",
+        keys.borrow()
+    );
+    assert!(
+        runner
+            .core
+            .ctx
+            .env()
+            .command_chord_pending_since
+            .get()
+            .is_none(),
+        "and the chord must end"
+    );
+
+    // The following key is ordinary again.
+    runner.dispatch_layered_key(key(KeyCode::Char('x')));
+    assert_eq!(keys.borrow().as_slice(), &[key(KeyCode::Char('x'))]);
+}
