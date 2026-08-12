@@ -6933,3 +6933,72 @@ fn control_highlight_marks_cells_in_the_captured_frame() {
         "highlighting should change the rendered frame"
     );
 }
+
+/// Esc cancels a pending chord, and a keystroke that cancels a chord must not also reach the pane.
+/// A leaked `Esc` is not a harmless extra byte: terminals read `ESC` followed by a key as `Alt+key`,
+/// so cancelling the prefix silently turns the *next* keystroke into a meta chord.
+#[cfg(feature = "terminal")]
+#[test]
+fn esc_cancelling_a_pending_chord_is_not_forwarded_to_the_terminal() {
+    let keys = Rc::new(RefCell::new(Vec::new()));
+    let app = App::new()
+        .mouse(false)
+        .key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst)
+        .terminal_key_policy(crate::TerminalKeyPolicy::AppCommandsThenTerminal);
+    let mut runner = AppRunner::new(
+        app,
+        TerminalDispatchSmoke {
+            keys: keys.clone(),
+            inputs: Rc::new(RefCell::new(Vec::new())),
+        },
+        (),
+    );
+    init_runner(
+        &mut runner,
+        TerminalDispatchSmoke {
+            keys: keys.clone(),
+            inputs: Rc::new(RefCell::new(Vec::new())),
+        },
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 5,
+        },
+    );
+    runner.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("mux.detach")
+            .shortcut(crate::KeyBinding::from_str("ctrl-a d").expect("binding"))
+            .handler(Callback::new(|_| {}))
+            .build(),
+    );
+    let terminal = node_id_by_key(&runner.core.tree, "terminal");
+    runner.focus.focused = Some(terminal);
+
+    assert!(runner.dispatch_layered_key(ctrl_char('a')).consumed);
+    let cancel = runner.dispatch_layered_key(key(KeyCode::Esc));
+    assert!(cancel.consumed, "the cancelling Esc is spent on the cancel");
+    assert!(
+        runner
+            .core
+            .ctx
+            .env()
+            .command_chord_pending_since
+            .get()
+            .is_none()
+    );
+    assert!(
+        keys.borrow().is_empty(),
+        "Esc must not reach the pane: {:?}",
+        keys.borrow()
+    );
+
+    // With no chord pending, Esc is an ordinary key and must still reach the pane - a vim user in a
+    // pane presses it constantly.
+    let plain = runner.dispatch_layered_key(key(KeyCode::Esc));
+    assert!(
+        plain.consumed,
+        "forwarded to the terminal counts as handled"
+    );
+    assert_eq!(keys.borrow().as_slice(), &[key(KeyCode::Esc)]);
+}

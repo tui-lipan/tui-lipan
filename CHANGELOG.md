@@ -37,6 +37,13 @@ While the crate is on `0.x.y`:
   `dim`/`dim_by`, `lighten`/`lighten_by` pairing. The default is deliberately much smaller than the
   `0.35` those use: one surface step, not a wash.
 
+### Fixed
+
+- `Esc` cancelling a pending command chord is no longer also delivered to the focused widget. One
+  press did two things, and for a terminal that was not a harmless extra byte: terminals read `ESC`
+  followed by a key as `Alt+<key>`, so cancelling a leader chord silently turned the next keystroke
+  into a meta chord. With no chord pending, `Esc` is untouched and still reaches whatever has focus.
+
 ### Changed
 
 - `RuntimeEnv::command_chord_pending: Rc<Cell<bool>>` becomes

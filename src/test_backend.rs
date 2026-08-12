@@ -411,8 +411,11 @@ where
         let clipboard_config = self.core.ctx.env().clipboard_config.clone();
         self.framework_effects.clear();
 
-        if matches!(key.code, KeyCode::Esc) {
-            self.key_dispatch_state.reset_command_chord();
+        // Mirrors `AppRunner::dispatch_layered_key`: a cancelling Esc is consumed, so tests see the
+        // same thing production does rather than a stray `ESC` reaching the focused widget.
+        if matches!(key.code, KeyCode::Esc) && self.reset_command_chord() {
+            self.render();
+            return Ok(true);
         }
 
         let selection_handled = {
