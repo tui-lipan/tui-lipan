@@ -117,6 +117,8 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `ctx.quit()` | Exit the application |
 | `ctx.is_inline()` | Whether running in inline mode |
 | `ctx.command_chord_pending()` | Whether an app command chord is currently pending completion (e.g., after a leader prefix key). Entering or leaving pending always dirties a frame so chrome like a PREFIX badge updates even when the completing/mismatch key is forwarded to a focused terminal with no paint of its own. |
+| `ctx.command_chord_pending_since()` | When the pending chord started, or `None` when none is pending |
+| `ctx.command_chord_revealed()` | Whether the pending chord has been held for at least [`App::command_chord_reveal_delay`](#deferring-chord-chrome); the signal for a which-key panel |
 | `ctx.effect_phase()` | Current renderer animation phase; capture it when starting one-shot phase-based effects |
 | `ctx.mouse_capture_enabled()` | Current mouse capture state |
 | `ctx.set_mouse_capture(bool)` | Change mouse capture at runtime |
@@ -181,6 +183,32 @@ feature, the closure is not invoked, so formatting and allocation are skipped
 while the same source keeps compiling.
 
 To opt out of individual subsystems (logs, metrics) at app start time, see [DevTools runtime configuration](quick-start.md#devtools-runtime-configuration) in the Quick Start.
+
+### Deferring chord chrome
+
+A panel that lists what a pending chord can do next — a which-key panel — should not flash on every
+chord the user completes from muscle memory. `App::command_chord_reveal_delay` sets how long a chord
+must be held before `ctx.command_chord_revealed()` reports it:
+
+```rust
+App::new().command_chord_reveal_delay(Duration::from_millis(350))
+```
+
+```rust
+fn view(&self, ctx: &Context<Self>) -> Element {
+    let mut root = ZStack::new().child(self.workspace(ctx));
+    if ctx.command_chord_revealed() {
+        root = root.child(which_key_panel(ctx));
+    }
+    root.into()
+}
+```
+
+The runtime schedules the frame at which the delay elapses, so the view needs no timer: a chord
+completed or cancelled first simply never reveals. Keep using `ctx.command_chord_pending()` for
+chrome that must react on the first keystroke — a mode badge, or suppressing a caret that would
+otherwise suggest the next key goes to the focused widget. The default delay is zero, which makes
+the two identical.
 
 ## Component Mounting
 

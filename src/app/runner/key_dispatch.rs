@@ -38,7 +38,12 @@ pub(crate) struct LayeredKeyEventResult {
 impl<C: Component> AppRunner<C> {
     pub(crate) fn reset_command_chord(&mut self) -> bool {
         self.key_dispatch_state.reset_command_chord();
-        self.core.ctx.env().command_chord_pending.replace(false)
+        self.core
+            .ctx
+            .env()
+            .command_chord_pending_since
+            .replace(None)
+            .is_some()
     }
 
     pub(crate) fn dispatch_layered_key(&mut self, key: KeyEvent) -> LayeredKeyEventResult {
@@ -365,9 +370,12 @@ impl<C: Component> RunnerDispatchOps<'_, '_, C> {
         }
 
         let command_chord_pending = self.key_dispatch_state.command_runtime.is_pending();
-        let pending_cell = &self.core.ctx.env().command_chord_pending;
-        if pending_cell.get() != command_chord_pending {
-            pending_cell.set(command_chord_pending);
+        if self
+            .core
+            .ctx
+            .env()
+            .set_command_chord_pending(command_chord_pending)
+        {
             result.dirty = true;
             // Chord chrome (PREFIX badge) changed. A terminal-forward `DirtyLevel::None` would
             // otherwise win in the event loop over `mark_full` and leave the badge painted after

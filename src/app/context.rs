@@ -14,6 +14,7 @@ use crate::style::Padding;
 use crate::style::{Color, Paint, Style, Theme};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// How the app occupies terminal space.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -363,6 +364,7 @@ pub struct App {
     pub(crate) terminal_key_policy: TerminalKeyPolicy,
     pub(crate) command_conflict_policy: CommandConflictPolicy,
     pub(crate) chord_mismatch_policy: ChordMismatchPolicy,
+    pub(crate) command_chord_reveal_delay: Duration,
     pub(crate) text_area_newline_binding: TextAreaNewlineBinding,
     pub(crate) contrast_policy: ContrastPolicy,
     pub(crate) clipboard_provider: Option<Box<dyn ClipboardProvider>>,
@@ -397,6 +399,7 @@ impl Default for App {
             terminal_key_policy: TerminalKeyPolicy::FrameworkFirst,
             command_conflict_policy: CommandConflictPolicy::default(),
             chord_mismatch_policy: ChordMismatchPolicy::default(),
+            command_chord_reveal_delay: Duration::ZERO,
             text_area_newline_binding: TextAreaNewlineBinding::default(),
             contrast_policy: ContrastPolicy::default(),
             clipboard_provider: None,
@@ -590,6 +593,18 @@ impl App {
     /// Configure app command versus widget key dispatch ordering.
     pub fn key_dispatch_policy(mut self, policy: KeyDispatchPolicy) -> Self {
         self.key_dispatch_policy = policy;
+        self
+    }
+
+    /// Delay before a pending command chord is reported as *revealed*.
+    ///
+    /// [`Context::command_chord_pending`](crate::Context::command_chord_pending) stays immediate;
+    /// this governs [`Context::command_chord_revealed`](crate::Context::command_chord_revealed)
+    /// only, which is the signal a which-key panel or similar chord affordance should read. The
+    /// runtime schedules a frame at the moment the delay elapses, so such a view needs no timer of
+    /// its own. The default is [`Duration::ZERO`] - revealed as soon as it is pending.
+    pub fn command_chord_reveal_delay(mut self, delay: Duration) -> Self {
+        self.command_chord_reveal_delay = delay;
         self
     }
 

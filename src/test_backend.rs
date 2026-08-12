@@ -185,6 +185,10 @@ where
         let command_registry = core.ctx.command_registry();
         let key_dispatch_state =
             RuntimeKeyDispatchState::new(&command_registry, app.command_conflict_policy);
+        core.ctx
+            .env()
+            .command_chord_reveal_delay
+            .set(app.command_chord_reveal_delay);
         let key_dispatch_config = RuntimeKeyDispatchConfig {
             focus_policy: app.focus_policy,
             key_dispatch_policy: app.key_dispatch_policy,
@@ -668,7 +672,12 @@ where
 
     pub(crate) fn reset_command_chord(&mut self) -> bool {
         self.key_dispatch_state.reset_command_chord();
-        self.core.ctx.env().command_chord_pending.replace(false)
+        self.core
+            .ctx
+            .env()
+            .command_chord_pending_since
+            .replace(None)
+            .is_some()
     }
 
     /// Focus the node at `id` or the first focusable descendant beneath it.
@@ -1232,9 +1241,12 @@ impl<C: Component> TestBackendDispatchOps<'_, C> {
         }
 
         let command_chord_pending = self.key_dispatch_state.command_runtime.is_pending();
-        let pending_cell = &self.core.ctx.env().command_chord_pending;
-        if pending_cell.get() != command_chord_pending {
-            pending_cell.set(command_chord_pending);
+        if self
+            .core
+            .ctx
+            .env()
+            .set_command_chord_pending(command_chord_pending)
+        {
             result.dirty = true;
         }
 
@@ -2442,6 +2454,79 @@ mod tests {
         assert!(!backend.core.ctx.should_quit());
     }
 
+    fn chord_reveal_backend(delay: std::time::Duration) -> TestBackend<CommandChordIndicatorRoot> {
+        let app = crate::App::new()
+            .key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst)
+            .command_chord_reveal_delay(delay);
+        let backend = TestBackend::new_with_app(app, CommandChordIndicatorRoot, ());
+        backend.core.ctx.command_registry().register(
+            crate::CommandEntry::builder("test.chord")
+                .shortcut(crate::KeyBinding::from_str("ctrl-x q").expect("binding"))
+                .handler(Callback::new(|_| {}))
+                .build(),
+        );
+        backend
+    }
+
+    #[test]
+    fn a_zero_reveal_delay_reveals_a_chord_as_soon_as_it_is_pending() {
+        let mut backend = chord_reveal_backend(std::time::Duration::ZERO);
+        assert!(!backend.core.ctx.command_chord_revealed());
+        assert!(backend.send_key(ctrl_key('x')).expect("prefix succeeds"));
+        assert!(backend.core.ctx.command_chord_pending());
+        assert!(backend.core.ctx.command_chord_revealed());
+    }
+
+    #[test]
+    fn a_reveal_delay_holds_the_chord_unrevealed_until_it_elapses() {
+        let delay = std::time::Duration::from_millis(40);
+        let mut backend = chord_reveal_backend(delay);
+
+        assert!(backend.send_key(ctrl_key('x')).expect("prefix succeeds"));
+        // Pending is immediate so instant chrome still reacts; only the reveal waits.
+        assert!(backend.core.ctx.command_chord_pending());
+        assert!(!backend.core.ctx.command_chord_revealed());
+        let since = backend
+            .core
+            .ctx
+            .command_chord_pending_since()
+            .expect("a pending chord records when it started");
+
+        std::thread::sleep(delay + std::time::Duration::from_millis(20));
+        assert!(backend.core.ctx.command_chord_revealed());
+        assert_eq!(
+            backend.core.ctx.command_chord_pending_since(),
+            Some(since),
+            "the reveal must not restart the clock"
+        );
+
+        // Completing the chord clears both.
+        assert!(backend.send_key(plain_key('q')).expect("suffix succeeds"));
+        assert!(!backend.core.ctx.command_chord_pending());
+        assert!(!backend.core.ctx.command_chord_revealed());
+        assert_eq!(backend.core.ctx.command_chord_pending_since(), None);
+    }
+
+    #[test]
+    fn a_cancelled_chord_never_reveals() {
+        let delay = std::time::Duration::from_millis(40);
+        let mut backend = chord_reveal_backend(delay);
+
+        assert!(backend.send_key(ctrl_key('x')).expect("prefix succeeds"));
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Esc,
+                mods: KeyMods::default(),
+            })
+            .expect("esc cancels");
+        std::thread::sleep(delay + std::time::Duration::from_millis(20));
+        assert!(!backend.core.ctx.command_chord_pending());
+        assert!(
+            !backend.core.ctx.command_chord_revealed(),
+            "a chord that ended before the delay must never count as revealed"
+        );
+    }
+
     #[test]
     fn mouse_release_clears_pending_command_chord_and_repaints() {
         let command_hit = Rc::new(std::cell::Cell::new(false));
@@ -2458,7 +2543,15 @@ mod tests {
         );
 
         assert!(backend.send_key(ctrl_key('x')).expect("prefix succeeds"));
-        assert!(backend.core.ctx.env().command_chord_pending.get());
+        assert!(
+            backend
+                .core
+                .ctx
+                .env()
+                .command_chord_pending_since
+                .get()
+                .is_some()
+        );
         assert!(backend.capture_frame().to_fixed_grid_lines()[0].starts_with("PENDING"));
 
         assert!(
@@ -2471,7 +2564,15 @@ mod tests {
                 })
                 .expect("mouse release succeeds")
         );
-        assert!(!backend.core.ctx.env().command_chord_pending.get());
+        assert!(
+            backend
+                .core
+                .ctx
+                .env()
+                .command_chord_pending_since
+                .get()
+                .is_none()
+        );
         assert!(backend.capture_frame().to_fixed_grid_lines()[0].starts_with("IDLE"));
 
         backend

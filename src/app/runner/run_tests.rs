@@ -5945,7 +5945,15 @@ fn chord_mismatch_while_terminal_focused_claims_a_frame_for_prefix_chrome() {
 
     let prefix = runner.dispatch_layered_key(ctrl_char('a'));
     assert!(prefix.consumed);
-    assert!(runner.core.ctx.env().command_chord_pending.get());
+    assert!(
+        runner
+            .core
+            .ctx
+            .env()
+            .command_chord_pending_since
+            .get()
+            .is_some()
+    );
     assert!(
         prefix.mark_full && prefix.dirty_override.is_none(),
         "entering a leader chord must claim a frame for PREFIX chrome"
@@ -5954,7 +5962,15 @@ fn chord_mismatch_while_terminal_focused_claims_a_frame_for_prefix_chrome() {
     let mismatch = runner.dispatch_layered_key(key(KeyCode::Char('x')));
     assert!(mismatch.consumed);
     assert_eq!(keys.borrow().as_slice(), &[key(KeyCode::Char('x'))]);
-    assert!(!runner.core.ctx.env().command_chord_pending.get());
+    assert!(
+        runner
+            .core
+            .ctx
+            .env()
+            .command_chord_pending_since
+            .get()
+            .is_none()
+    );
     assert!(
         mismatch.mark_full && mismatch.dirty_override.is_none(),
         "clearing PREFIX after a forwarded mismatch must claim a frame: {mismatch:?}"
@@ -6201,7 +6217,13 @@ fn terminal_native_ctrl_v_clears_a_pending_command_chord_and_prefix_state() {
 
     assert!(backend.send_key(ctrl_char('a')).expect("prefix succeeds"));
     assert!(
-        backend.core.ctx.env().command_chord_pending.get(),
+        backend
+            .core
+            .ctx
+            .env()
+            .command_chord_pending_since
+            .get()
+            .is_some(),
         "the prefix indicator must be visible while the chord waits"
     );
 
@@ -6219,7 +6241,13 @@ fn terminal_native_ctrl_v_clears_a_pending_command_chord_and_prefix_state() {
         "native paste must not run the pending command"
     );
     assert!(
-        !backend.core.ctx.env().command_chord_pending.get(),
+        backend
+            .core
+            .ctx
+            .env()
+            .command_chord_pending_since
+            .get()
+            .is_none(),
         "native paste must clear the visible PREFIX state"
     );
 }

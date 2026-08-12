@@ -201,7 +201,8 @@ where
         let host_terminal_color_refresh_requested = Rc::new(Cell::new(false));
         let mouse_capture_generation = Rc::new(Cell::new(1));
         let memo_dependency_recorder = Rc::new(RefCell::new(None));
-        let command_chord_pending = Rc::new(Cell::new(false));
+        let command_chord_pending_since = Rc::new(Cell::new(None));
+        let command_chord_reveal_delay = Rc::new(Cell::new(std::time::Duration::ZERO));
 
         let env = RuntimeEnv {
             command_registry: CommandRegistry::default(),
@@ -235,7 +236,8 @@ where
             devtools_metrics,
             ui_snapshot_request,
             copy_feedback_request,
-            command_chord_pending,
+            command_chord_pending_since,
+            command_chord_reveal_delay,
         };
 
         let components = crate::core::nested::ComponentRegistry::new(

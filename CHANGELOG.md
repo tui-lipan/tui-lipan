@@ -13,6 +13,14 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `App::command_chord_reveal_delay(Duration)` and `Context::command_chord_revealed()`, for chord
+  affordances that should appear only when the user hesitates — a which-key panel, a hint bar. The
+  runtime schedules the frame at which the delay elapses, so a view reading `command_chord_revealed`
+  needs no timer of its own; a chord completed or cancelled before then never reveals.
+  `Context::command_chord_pending()` is unchanged and still flips the instant the chord starts,
+  which is what instant chrome (a mode badge, suppressing a caret) should keep using.
+  `Context::command_chord_pending_since()` exposes the underlying instant for apps that want their
+  own policy. The default delay is zero, so behavior is unchanged unless the delay is set.
 - Root components can implement `Component::on_window_focus_changed` to observe host
   terminal/window focus transitions, with deterministic `TestBackend::set_window_focused` support.
 - `Tab::capped(bool)`, opting an inactive, unhovered tab into `Tabs::caps` end caps. A tab that
@@ -31,6 +39,11 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- `RuntimeEnv::command_chord_pending: Rc<Cell<bool>>` becomes
+  `command_chord_pending_since: Rc<Cell<Option<Instant>>>`, so the pending chord carries its start
+  time rather than duplicating it in a second cell that could drift. **(breaking)** Migration: read
+  `Context::command_chord_pending()` as before; code touching the field directly replaces
+  `.get()` with `.get().is_some()`.
 - `Color::elevate(f32)` is renamed `Color::elevate_by(f32)`, so every amount-taking color modifier
   ends in `_by` and the bare name is free for the default-amount form. **(breaking)** Migration:
   rename `.elevate(x)` to `.elevate_by(x)`; `.elevate()` now means the default step.

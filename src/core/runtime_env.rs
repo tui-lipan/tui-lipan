@@ -6,6 +6,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
+use web_time::Instant;
 
 use smallvec::SmallVec;
 
@@ -266,10 +268,41 @@ pub(crate) struct RuntimeEnv {
     pub ui_snapshot_request: Rc<RefCell<Option<crate::ui_snapshot::UiSnapshotRequest>>>,
     /// Pending requests to flash copy feedback on specific nodes.
     pub copy_feedback_request: Rc<RefCell<Vec<CopyFeedbackRequest>>>,
-    pub command_chord_pending: Rc<std::cell::Cell<bool>>,
+    /// When the currently pending multi-step command chord started, or `None` when no chord is
+    /// pending. Carrying the instant rather than a flag is what lets an app defer chord chrome
+    /// (a which-key panel, a hint bar) until the chord has been held for a while, instead of
+    /// flashing it on every chord the user completes from muscle memory.
+    pub command_chord_pending_since: Rc<std::cell::Cell<Option<Instant>>>,
+    /// How long a chord must stay pending before [`Context::command_chord_revealed`] reports it.
+    /// Zero (the default) reveals immediately.
+    pub command_chord_reveal_delay: Rc<std::cell::Cell<Duration>>,
 }
 
 impl RuntimeEnv {
+    /// Record whether a command chord is pending, stamping the start instant on the rising edge.
+    ///
+    /// Returns whether the state changed, which is what tells the caller that chord chrome needs a
+    /// redraw. Re-asserting the same state keeps the original instant, so a chord that advances
+    /// through several steps is timed from the first one.
+    pub(crate) fn set_command_chord_pending(&self, pending: bool) -> bool {
+        if self.command_chord_pending_since.get().is_some() == pending {
+            return false;
+        }
+        self.command_chord_pending_since
+            .set(pending.then(Instant::now));
+        true
+    }
+
+    /// How long until a pending chord becomes revealed, or `None` when nothing is pending or it is
+    /// revealed already. The event loop uses this to schedule the frame that draws the reveal.
+    pub(crate) fn command_chord_reveal_due_in(&self) -> Option<Duration> {
+        let since = self.command_chord_pending_since.get()?;
+        self.command_chord_reveal_delay
+            .get()
+            .checked_sub(since.elapsed())
+            .filter(|remaining| !remaining.is_zero())
+    }
+
     pub(crate) fn set_effect_phase(&self, phase: u64) {
         self.effect_phase.set(phase);
     }

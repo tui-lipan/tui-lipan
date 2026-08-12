@@ -3,6 +3,7 @@ use std::any::TypeId;
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::sync::Arc;
+use web_time::Instant;
 
 use crate::app::context::SurfaceMode;
 use crate::app::input::command_registry::CommandEntry;
@@ -997,8 +998,33 @@ impl<C: Component> Context<C> {
     }
 
     /// Check if an app command chord is currently pending.
+    ///
+    /// True from the moment the first chord step is accepted. Use this for chrome that must react
+    /// instantly - a mode badge, suppressing a caret - and
+    /// [`command_chord_revealed`](Self::command_chord_revealed) for chrome that should wait out a
+    /// quickly completed chord.
     pub fn command_chord_pending(&self) -> bool {
-        self.env.command_chord_pending.get()
+        self.env.command_chord_pending_since.get().is_some()
+    }
+
+    /// When the currently pending command chord started, or `None` when none is pending.
+    pub fn command_chord_pending_since(&self) -> Option<Instant> {
+        self.env.command_chord_pending_since.get()
+    }
+
+    /// Whether a command chord has been pending for at least
+    /// [`App::command_chord_reveal_delay`](crate::App::command_chord_reveal_delay).
+    ///
+    /// This is the signal for a which-key panel or any other chord affordance that should appear
+    /// only when the user hesitates: with the default zero delay it matches
+    /// [`command_chord_pending`](Self::command_chord_pending) exactly, and with a delay set the
+    /// runtime schedules a frame at the moment it becomes true, so a view reading it does not need
+    /// a timer of its own.
+    pub fn command_chord_revealed(&self) -> bool {
+        self.env
+            .command_chord_pending_since
+            .get()
+            .is_some_and(|since| since.elapsed() >= self.env.command_chord_reveal_delay.get())
     }
 
     /// Register a command scoped to this component instance.
