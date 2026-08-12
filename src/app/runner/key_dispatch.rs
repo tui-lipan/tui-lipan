@@ -50,7 +50,19 @@ impl<C: Component> AppRunner<C> {
         self.framework_effects.clear();
 
         if matches!(key.code, KeyCode::Esc) {
-            self.key_dispatch_state.reset_command_chord();
+            // A keystroke that cancels a chord is spent on the cancel. Forwarding it as well would
+            // let one press do two things, and for a terminal sink the second one is not harmless:
+            // terminals read `ESC` followed by a key as `Alt+<key>`, so a leaked cancel silently
+            // turns the *next* keystroke into a meta chord. `reset_command_chord` reports whether
+            // anything was actually pending, so with no chord in flight Esc stays an ordinary key
+            // and still reaches whatever has focus.
+            if self.reset_command_chord() {
+                return LayeredKeyEventResult {
+                    consumed: true,
+                    mark_full: true,
+                    ..Default::default()
+                };
+            }
         }
 
         let selection = self.dispatch_selection_clipboard_shortcut(key);
