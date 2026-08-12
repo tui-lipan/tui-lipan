@@ -2749,6 +2749,66 @@ fn copy_feedback_expiry_marks_paint_only() {
     assert_eq!(dirty.level(), DirtyLevel::PaintOnly);
 }
 
+/// The reveal frame has to reconcile, not just repaint. A panel that appears on reveal is a subtree
+/// the view did not previously return, and `DirtyLevel::PaintOnly` redraws the existing tree without
+/// re-running `view` - so a paint-only reveal renders nothing at all, forever.
+#[test]
+fn a_chord_reveal_marks_a_full_frame_so_the_view_runs_again() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 4,
+    };
+    let delay = Duration::from_millis(20);
+    let mut runner = AppRunner::new(
+        App::new()
+            .mouse(false)
+            .key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst)
+            .command_chord_reveal_delay(delay),
+        RunnerKeymapSmoke,
+        (),
+    );
+    // The production path: `AppRunner::new` puts the app's delay in the env it built.
+    assert_eq!(
+        runner.core.ctx.env().command_chord_reveal_delay.get(),
+        delay,
+        "AppRunner::new must carry the configured delay into the runtime env"
+    );
+    // `init_runner` then swaps in a fresh `RuntimeCore`, and with it a fresh env, so the delay has
+    // to be re-applied to the env actually under test below.
+    init_runner(&mut runner, RunnerKeymapSmoke, viewport);
+    runner.core.ctx.env().command_chord_reveal_delay.set(delay);
+    runner.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("test.chord")
+            .shortcut(crate::KeyBinding::from_str("ctrl-x q").expect("binding"))
+            .handler(Callback::new(|_| {}))
+            .build(),
+    );
+
+    runner.dispatch_layered_key(KeyEvent {
+        code: KeyCode::Char('x'),
+        mods: KeyMods::CTRL,
+    });
+    assert!(runner.core.ctx.command_chord_pending());
+
+    // Before the delay: nothing to redraw, but the loop must wake in time to draw the reveal.
+    let mut dirty = DirtyTracker::default();
+    let poll_timeout = runner.update_animation_cycle(&mut dirty);
+    assert_eq!(dirty.level(), DirtyLevel::None);
+    assert!(poll_timeout <= delay);
+
+    std::thread::sleep(delay + Duration::from_millis(10));
+    let mut dirty = DirtyTracker::default();
+    runner.update_animation_cycle(&mut dirty);
+    assert_eq!(dirty.level(), DirtyLevel::Full);
+
+    // Idempotent once revealed - the reveal is an edge, not a per-frame repaint.
+    let mut dirty = DirtyTracker::default();
+    runner.update_animation_cycle(&mut dirty);
+    assert_eq!(dirty.level(), DirtyLevel::None);
+}
+
 #[cfg(feature = "devtools")]
 #[test]
 fn devtools_stats_panel_uses_compact_default_size() {
