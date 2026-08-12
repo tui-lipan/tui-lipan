@@ -31,8 +31,8 @@ workspace.
 Every capture below is either zero new code or a kept file. Writing a throwaway
 `main()` to render something once, then deleting it, produces code that appears
 and disappears across commits for no lasting benefit. If a capture was worth
-running, it is worth keeping as a sketch — it costs three lines and becomes a
-regression check.
+running, it is worth keeping as a sketch — it costs three lines. Add
+`.baseline()` when it should fail CI; without that it is a viewer, not a check.
 
 ## Pick the cheapest capture that answers your question
 
@@ -40,7 +40,7 @@ regression check.
 |-----------|---------|----------|
 | An app, example, or binary already runs | `TUI_LIPAN_SNAPSHOT` env var | none |
 | A new screen whose layout is not settled | `Sketch` in `examples/sketches/` | one kept file |
-| You need an assertion that runs in CI | `TestBackend` in a real test | one kept test |
+| You need a regression that can fail CI | `TestBackend` or `Sketch` with `.baseline()` | one kept test + committed PNG |
 | You need to *explore* a running app | control channel (below) | none, but a human must start it |
 
 Work down that list. Most visual questions about existing code are answered by
@@ -67,10 +67,12 @@ your normal `cargo check` / `cargo test` build artifacts.
 |----------|---------|--------|
 | `TUI_LIPAN_SNAPSHOT` | unset | Output path. Setting it enables headless mode. `.png`, `.json`, or markdown by extension |
 | `TUI_LIPAN_SNAPSHOT_VIEWPORT` | `100x30` | Layout size, `WIDTHxHEIGHT` |
+| `TUI_LIPAN_SNAPSHOT_VIEWPORTS` | unset | Comma-separated sizes, e.g. `80x24,120x30,160x40`. Writes suffixed files. Wins over `_VIEWPORT`. A malformed entry fails the run |
 | `TUI_LIPAN_SNAPSHOT_FRAMES` | `1` | Render/message passes before capture; raise it when `init()` starts work |
 | `TUI_LIPAN_SNAPSHOT_FOCUS` | `0` | Focus advances before capture, for visible focus chrome |
 | `TUI_LIPAN_SNAPSHOT_KEYS` | unset | Keys-only shorthand, e.g. `tab,tab,enter` |
 | `TUI_LIPAN_SNAPSHOT_SCRIPT` | unset | Full action script (below); wins over `_KEYS` |
+| `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` | `0` | Virtual-clock advance before capture, ticking animations. Use for which-key, spinners, settled transitions |
 | `TUI_LIPAN_SNAPSHOT_DIAGNOSTIC` | unset | `1` captures with `UiSnapshotOptions::diagnostic()` |
 
 ### Reaching states behind a click or a keystroke
@@ -125,8 +127,54 @@ TUI_LIPAN_SNAPSHOT_DIAGNOSTIC=1 \
 cargo snap dashboard
 ```
 
-This is also the way to capture a *user's* app: it needs no cooperation from
-their source.
+This is also the way to capture a *user's* app: rendering needs no cooperation
+from their source. **State is a different matter.** Apps that write config,
+cache, or session files will still touch the developer's live directories unless
+you isolate them. Redirect `XDG_*` at the **child process**, then run the
+already-built binary:
+
+```bash
+cargo build --features ui-snapshot
+S=/tmp/app-snap && mkdir -p $S/config
+env XDG_CONFIG_HOME=$S/config XDG_STATE_HOME=$S/state XDG_CACHE_HOME=$S/cache \
+    XDG_RUNTIME_DIR=$S/run TUI_LIPAN_SNAPSHOT=$S/out.png ./target/debug/<bin>
+```
+
+Two gotchas:
+
+- Run the **built binary**, not `cargo run` / `cargo snap`. Redirecting `XDG_*`
+  also redirects mise's trust store, and the wrapper refuses to start.
+- This is not the "never mutate `HOME` / `XDG_*` in tests" rule. That rule is
+  about `std::env::set_var` being unsound beside parallel test threads. It has
+  nothing to do with environment variables you pass to a child process.
+
+Time-gated UI (a which-key panel behind `App::command_chord_reveal_delay`, a
+spinner, a settled transition) needs a clock, not more frames.
+`TUI_LIPAN_SNAPSHOT_FRAMES` renders back to back with no wall clock. Advance
+virtual time instead:
+
+```bash
+TUI_LIPAN_SNAPSHOT=/tmp/which-key.png \
+TUI_LIPAN_SNAPSHOT_KEYS="ctrl+a" \
+TUI_LIPAN_SNAPSHOT_ADVANCE_MS=400 \
+cargo snap myapp
+```
+
+Virtual advancement affects tui-lipan-managed time and animation state.
+Application-owned wall-clock timers and `Instant::now()` are not advanced.
+Headless `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` runs the live runner ticker (blink,
+spinner, images, chord reveal). `TestBackend::advance` / `Sketch::advance` share
+the clock but a thinner ticker — tree animations, transitions, overlays, chord
+reveal — and captures force the cursor visible. Photograph a specific spinner or
+blink phase with the env-var path.
+
+Several breakpoints in one run:
+
+```bash
+TUI_LIPAN_SNAPSHOT=/tmp/app.png \
+TUI_LIPAN_SNAPSHOT_VIEWPORTS=80x24,120x30,160x40 \
+cargo snap myapp
+```
 
 ## 2. Sketch a new screen — one kept file
 
@@ -186,6 +234,7 @@ control. `write()` prints every path it wrote; `Read` those paths.
 | `.fit(margin_w, margin_h)` | Capture at content minimum size plus margin |
 | `.focus_next(n)` | Advance focus `n` times, for visible focus chrome |
 | `.keys(script)` | Dispatch a key script before capturing, e.g. `"tab,enter"` |
+| `.advance(dt)` | Advance the virtual clock by `dt` before capturing, ticking animations |
 | `.options(opts)` | Describe options, e.g. `UiSnapshotOptions::diagnostic()` |
 | `.markdown(b)` / `.png(b)` / `.json(b)` | Toggle formats (md + png on by default) |
 | `.dir(path)` | Write somewhere other than `target/ui-sketches/` |
@@ -238,24 +287,48 @@ Notes that matter:
 - Prefer removing nondeterminism over raising `.tolerance()`. A tolerance wide
   enough to hide a real regression is worse than no baseline at all.
 
-## 3. Assert in a test — for CI, not for looking
+## 3. Baselined TestBackend or Sketch — a check that can fail
 
-When the goal is a regression that fails the build, write a real test:
+Row 3 is a **regression check**: a kept test whose capture is compared against a
+committed baseline PNG, so a visual change fails CI. Colour, density, and
+proportion decisions have no string assertion to write; the baseline *is* the
+assertion.
 
 ```rust
 #[test]
-fn dashboard_shows_the_active_route() {
-    let mut backend = TestBackend::new(Dashboard);
-    backend.set_viewport(Rect { x: 0, y: 0, w: 80, h: 24 });
-    backend.render();
-
-    let snapshot = backend.capture_ui_snapshot();
-    assert!(snapshot.to_markdown().contains("Overview"));
+fn login_screen_has_not_drifted() -> Result<()> {
+    Sketch::view("login", login_screen)
+        .viewport(80, 24)
+        .baseline("tests/ui-baselines")
+        .assert_baseline()
 }
 ```
 
-This is a kept test with an assertion, not a print-and-delete harness. If you
-only want to *look* at the output, use row 1 or row 2 instead.
+Apps that need real state use the same affordance on `TestBackend`:
+
+```rust
+#[test]
+fn dashboard_has_not_drifted() -> Result<()> {
+    let mut backend = TestBackend::new(Dashboard);
+    backend.set_viewport(Rect { x: 0, y: 0, w: 80, h: 24 });
+    backend.render();
+    backend.advance(Duration::from_millis(400)); // if the UI is time-gated
+
+    backend
+        .baseline("tests/ui-baselines")
+        .name("dashboard-80x24")
+        .assert_baseline()
+}
+```
+
+`TUI_LIPAN_UPDATE_BASELINES=1 cargo test` accepts the current render. Commit the
+baselines; a baseline that only exists on your machine protects nothing.
+
+Assertion-less `*_visual.rs` files that only emit PNGs (this repo's examples,
+downstream apps) are **viewers**, not checks. They belong in row 1 or row 2.
+Looking at a PNG is how you judge colour and proportion; `.baseline()` is how
+that judgment survives the next refactor. Do not treat a print-and-keep dump as
+row 3.
 
 ## Record a demo instead of a still
 

@@ -784,34 +784,74 @@ where
         Ok(dirty)
     }
 
-    /// Advance every time-based animation by `dt`, then update layout or re-render as needed.
+    /// Advance the virtual clock by `dt`, ticking animations in runner-sized steps.
     ///
-    /// The real runner ticks animations from wall-clock time inside its event loop, which a test
-    /// has no way to drive. Without this, anything time-based renders only at its starting value:
+    /// The real runner ticks from wall-clock time inside its event loop, which a test has no way
+    /// to drive. Without this, anything time-based renders only at its starting value:
     /// [`Animated`](crate::widgets::Animated) transitions, smooth scrolls, and the property
     /// transitions behind [`Context::transition`](crate::core::component::Context::transition) all
-    /// look frozen, so an app cannot assert that its animation actually moves.
+    /// look frozen.
     ///
-    /// Ticks in the same order and with the same clamping as the runner, so a single large `dt`
-    /// behaves like one long frame rather than fast-forwarding to the end. Call it repeatedly to
-    /// step through an animation:
+    /// Consumes the full duration in 50 ms steps, the same clamp the runner applies per frame.
+    /// That is the equivalent of `TUI_LIPAN_SNAPSHOT_ADVANCE_MS`: a which-key panel behind
+    /// [`App::command_chord_reveal_delay`](crate::App::command_chord_reveal_delay), a settled
+    /// transition, or overlay chrome that expires become visible without sleeping.
+    ///
+    /// Use [`Self::advance_frame`] when you need one clamped frame so a large `dt` cannot skip
+    /// an entire transition.
+    ///
+    /// ```ignore
+    /// backend.send_key(ctrl_x)?;
+    /// backend.advance(Duration::from_millis(400));
+    /// let snapshot = backend.capture_ui_snapshot();
+    /// ```
+    ///
+    /// This path ticks tree animations, property transitions, overlays, copy-feedback, and
+    /// chord reveal. It does not run the live runner's blink / spinner / image cycle; see
+    /// `docs/testing.md`. Application-owned `Instant::now()` timers are not advanced.
+    pub fn advance(&mut self, dt: Duration) {
+        const MAX_TICK: Duration = Duration::from_millis(50);
+        let mut remaining = dt;
+        while !remaining.is_zero() {
+            let tick = remaining.min(MAX_TICK);
+            self.advance_frame_step(tick);
+            remaining = remaining.saturating_sub(tick);
+        }
+        self.render();
+    }
+
+    /// Advance every time-based animation by at most one runner frame (50 ms).
+    ///
+    /// A single large `dt` behaves like one long frame rather than fast-forwarding to the end.
+    /// Call it repeatedly to step through an animation; use [`Self::advance`] to consume a
+    /// full duration before a capture.
     ///
     /// ```ignore
     /// backend.render();
     /// let start = rect_of(&backend);
-    /// backend.advance(Duration::from_millis(60));
+    /// backend.advance_frame(Duration::from_millis(60));
     /// assert_ne!(rect_of(&backend), start, "the close animation should have moved");
     /// ```
-    pub fn advance(&mut self, dt: Duration) {
-        // Matches the runner's per-frame clamp, so one call cannot skip an entire transition.
-        let dt = dt.min(Duration::from_millis(50));
+    pub fn advance_frame(&mut self, dt: Duration) {
+        self.advance_frame_step(dt.min(Duration::from_millis(50)));
+    }
+
+    fn advance_frame_step(&mut self, dt: Duration) {
+        if dt.is_zero() {
+            return;
+        }
+        let was_revealed = self.core.ctx.command_chord_revealed();
+        self.core.ctx.env().advance_clock(dt);
 
         let (_, _, needs_layout) =
             crate::app::animation::tick_tree_animations(&mut self.core.tree, dt);
         let transitions = self.core.ctx.env().animations.tick(dt);
-        // Re-render for a concrete value a view reads; a late-bound paint is picked up by the next
-        // capture without one, matching how the runner treats it.
-        if needs_layout || transitions.view_changed {
+        let now = self.core.ctx.env().now();
+        let overlay_dirty = self.core.overlay_manager.borrow_mut().tick_at(now).dirty;
+        self.copy_feedback.tick_at(now);
+
+        let revealed = self.core.ctx.command_chord_revealed();
+        if needs_layout || transitions.view_changed || overlay_dirty || revealed != was_revealed {
             self.render();
         }
     }
@@ -1046,6 +1086,20 @@ where
         self.capture_with_margin(margin_w, margin_h, |backend| {
             backend.capture_ui_snapshot_with_options(options)
         })
+    }
+
+    /// Compare this capture against a stored baseline image in `dir`.
+    ///
+    /// Same affordance as [`Sketch::baseline`](crate::Sketch::baseline): the first run records,
+    /// later runs compare, and `TUI_LIPAN_UPDATE_BASELINES=1` accepts the current render.
+    /// Call [`SnapshotBaseline::assert_baseline`](crate::SnapshotBaseline::assert_baseline) to
+    /// fail on a regression.
+    #[cfg(feature = "ui-snapshot-png")]
+    pub fn baseline(
+        &self,
+        dir: impl Into<std::path::PathBuf>,
+    ) -> crate::ui_snapshot::SnapshotBaseline {
+        crate::ui_snapshot::SnapshotBaseline::new(self.capture_ui_snapshot(), dir)
     }
 
     fn capture_with_margin<T>(
@@ -2382,7 +2436,9 @@ mod tests {
         }
 
         fn view(&self, ctx: &Context<Self>) -> Element {
-            Text::new(if ctx.command_chord_pending() {
+            Text::new(if ctx.command_chord_revealed() {
+                "REVEALED"
+            } else if ctx.command_chord_pending() {
                 "PENDING"
             } else {
                 "IDLE"
@@ -2553,6 +2609,33 @@ mod tests {
     }
 
     #[test]
+    fn advance_reveals_a_time_gated_command_chord_without_sleeping() {
+        let delay = std::time::Duration::from_millis(300);
+        let mut backend = chord_reveal_backend(delay);
+
+        assert!(backend.send_key(ctrl_key('x')).expect("prefix succeeds"));
+        assert!(backend.core.ctx.command_chord_pending());
+        assert!(!backend.core.ctx.command_chord_revealed());
+        let pending = backend.capture_ui_snapshot().to_markdown();
+        assert!(
+            pending.contains("PENDING"),
+            "before the delay the which-key chrome must stay hidden: {pending}"
+        );
+        assert!(!pending.contains("REVEALED"));
+
+        backend.advance(std::time::Duration::from_millis(400));
+        assert!(
+            backend.core.ctx.command_chord_revealed(),
+            "virtual time must satisfy the reveal delay without wall-clock sleep"
+        );
+        let revealed = backend.capture_ui_snapshot().to_markdown();
+        assert!(
+            revealed.contains("REVEALED"),
+            "the view must rebuild after the clock advance: {revealed}"
+        );
+    }
+
+    #[test]
     fn mouse_release_clears_pending_command_chord_and_repaints() {
         let command_hit = Rc::new(std::cell::Cell::new(false));
         let app = crate::App::new().key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst);
@@ -2577,7 +2660,7 @@ mod tests {
                 .get()
                 .is_some()
         );
-        assert!(backend.capture_frame().to_fixed_grid_lines()[0].starts_with("PENDING"));
+        assert!(backend.capture_frame().to_fixed_grid_lines()[0].starts_with("REVEALED"));
 
         assert!(
             backend
@@ -4879,11 +4962,32 @@ mod tests {
         assert_eq!(document_offset_by_key(&backend, "smooth-scroll"), 0);
         assert!(backend.core.tree.has_animated_scrolls());
 
-        backend.advance(Duration::from_millis(50));
+        backend.advance_frame(Duration::from_millis(50));
 
         let offset = document_offset_by_key(&backend, "smooth-scroll");
         assert!(offset > 0, "smooth scroll should move after one tick");
         assert!(offset < 6, "one tick should not complete the transition");
+    }
+
+    #[test]
+    fn advance_frame_clamps_a_large_dt_to_one_runner_frame() {
+        let mut backend = TestBackend::new(AdvanceSmoothScrollHarness);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 4,
+        });
+        backend.render();
+
+        backend.advance_frame(Duration::from_millis(400));
+
+        let offset = document_offset_by_key(&backend, "smooth-scroll");
+        assert!(offset > 0, "one frame should still move");
+        assert!(
+            offset < 6,
+            "advance_frame must not consume a 400ms duration: {offset}"
+        );
     }
 
     #[test]
@@ -4893,7 +4997,7 @@ mod tests {
             .dispatch(AdvanceTransitionsMessage::Start)
             .expect("transition update should succeed");
 
-        backend.advance(Duration::from_millis(50));
+        backend.advance_frame(Duration::from_millis(50));
 
         let animated_opacity = backend
             .core

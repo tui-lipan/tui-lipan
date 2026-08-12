@@ -276,6 +276,9 @@ pub(crate) struct RuntimeEnv {
     /// How long a chord must stay pending before [`Context::command_chord_revealed`] reports it.
     /// Zero (the default) reveals immediately.
     pub command_chord_reveal_delay: Rc<std::cell::Cell<Duration>>,
+    /// Offset added to [`Instant::now`] for headless capture and tests, so time-gated UI
+    /// (chord reveal, animations, blink) can be settled without waiting on the wall clock.
+    pub clock_offset: Rc<Cell<Duration>>,
 }
 
 impl RuntimeEnv {
@@ -289,8 +292,30 @@ impl RuntimeEnv {
             return false;
         }
         self.command_chord_pending_since
-            .set(pending.then(Instant::now));
+            .set(pending.then(|| self.now()));
         true
+    }
+
+    /// Current time as seen by the runtime, including any virtual-clock offset.
+    ///
+    /// Live apps keep the offset at zero, so this is wall-clock time. Headless capture and
+    /// [`TestBackend::advance`](crate::TestBackend::advance) shift it forward so delays can
+    /// elapse without sleeping.
+    pub(crate) fn now(&self) -> Instant {
+        Instant::now()
+            .checked_add(self.clock_offset.get())
+            .unwrap_or_else(Instant::now)
+    }
+
+    /// Elapsed time since `start`, honouring the virtual-clock offset.
+    pub(crate) fn elapsed(&self, start: Instant) -> Duration {
+        self.now().saturating_duration_since(start)
+    }
+
+    /// Shift the virtual clock forward by `dt`.
+    pub(crate) fn advance_clock(&self, dt: Duration) {
+        self.clock_offset
+            .set(self.clock_offset.get().saturating_add(dt));
     }
 
     /// How long until a pending chord becomes revealed, or `None` when nothing is pending or it is
@@ -299,7 +324,7 @@ impl RuntimeEnv {
         let since = self.command_chord_pending_since.get()?;
         self.command_chord_reveal_delay
             .get()
-            .checked_sub(since.elapsed())
+            .checked_sub(self.elapsed(since))
             .filter(|remaining| !remaining.is_zero())
     }
 

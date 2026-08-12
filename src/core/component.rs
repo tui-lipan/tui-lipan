@@ -1032,7 +1032,9 @@ impl<C: Component> Context<C> {
         self.env
             .command_chord_pending_since
             .get()
-            .is_some_and(|since| since.elapsed() >= self.env.command_chord_reveal_delay.get())
+            .is_some_and(|since| {
+                self.env.elapsed(since) >= self.env.command_chord_reveal_delay.get()
+            })
     }
 
     /// Register a command scoped to this component instance.

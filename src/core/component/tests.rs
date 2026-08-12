@@ -67,6 +67,7 @@ fn new_registry() -> ComponentRegistry {
             copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
             command_chord_pending_since: Rc::new(Cell::new(None)),
             command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),
+            clock_offset: Rc::new(Cell::new(std::time::Duration::ZERO)),
         },
     })
 }

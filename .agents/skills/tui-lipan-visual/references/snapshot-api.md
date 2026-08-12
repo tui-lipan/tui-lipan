@@ -16,10 +16,12 @@ TUI_LIPAN_SNAPSHOT=/tmp/app.png cargo snap todo
 |----------|---------|--------|
 | `TUI_LIPAN_SNAPSHOT` | unset | Output path; enables headless mode. Format from extension |
 | `TUI_LIPAN_SNAPSHOT_VIEWPORT` | `100x30` | `WIDTHxHEIGHT` layout size |
+| `TUI_LIPAN_SNAPSHOT_VIEWPORTS` | unset | Comma-separated sizes; writes suffixed files. Wins over `_VIEWPORT`. Malformed entries fail the run |
 | `TUI_LIPAN_SNAPSHOT_FRAMES` | `1` | Render/message passes before capture |
 | `TUI_LIPAN_SNAPSHOT_FOCUS` | `0` | Focus advances before capture |
 | `TUI_LIPAN_SNAPSHOT_KEYS` | unset | Keys-only shorthand, e.g. `tab,tab,enter` |
 | `TUI_LIPAN_SNAPSHOT_SCRIPT` | unset | Action script; wins over `_KEYS` |
+| `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` | `0` | Virtual-clock advance before capture, ticking animations |
 | `TUI_LIPAN_SNAPSHOT_DIAGNOSTIC` | unset | `1` uses `UiSnapshotOptions::diagnostic()` |
 
 `cargo snap <example>` = `cargo run --features ui-snapshot-png,ui-snapshot-json --example`.
@@ -44,6 +46,7 @@ Sketch::view("login", view)      // Fn() -> Element, via Mockup
 | `.fit(margin_w, margin_h)` | Content-minimum plus margin capture |
 | `.focus_next(n)` | Advance focus `n` times before capturing |
 | `.keys(script)` | Dispatch a key script, e.g. `"tab,enter"` |
+| `.advance(dt)` | Advance the virtual clock by `dt` before capturing |
 | `.options(opts)` | Describe options (e.g. `diagnostic()`) |
 | `.markdown(b)` / `.png(b)` / `.json(b)` | Toggle formats; md + png default on |
 | `.dir(path)` | Override output directory |
@@ -66,6 +69,15 @@ Sketch::view("login", view)
 `TUI_LIPAN_UPDATE_BASELINES=1` accepts current output as the new baseline.
 Changed captures write a `*.diff.png` beside the baseline: unchanged pixels
 dimmed, changed pixels magenta.
+
+The same affordance exists on `TestBackend` and `UiSnapshot`:
+
+```rust
+backend
+    .baseline("tests/ui-baselines")
+    .name("dashboard-80x24")
+    .assert_baseline()?;
+```
 
 Baseline captures force `PngTextRenderer::Bitmap` - the default font discovery
 differs per machine, which makes pixel comparison meaningless across CI and
@@ -100,6 +112,9 @@ let frame = backend.capture_frame();
 | `capture_ui_snapshot()` | `UiSnapshot` | Visual + semantic |
 | `capture_ui_snapshot_with_options(&opts)` | `UiSnapshot` | Truncation/chrome toggles |
 | `capture_ui_snapshot_with_margin(20, 8, &opts)` | `UiSnapshot` | Fit-to-content plus design-review margin |
+| `advance(dt)` | - | Advance virtual time for the full duration and tick animations |
+| `advance_frame(dt)` | - | One clamped runner frame (50 ms) |
+| `baseline(dir)` | `SnapshotBaseline` | Compare capture against a stored PNG (`ui-snapshot-png`) |
 | `capture_frame()` | `CapturedFrame` | Pixel buffer only |
 | `capture_frame_with_margin(20, 8)` | `CapturedFrame` | Fit-to-content plus design-review margin |
 | `focused_key()` / `hovered()` | `Option<Key>` | Interaction helpers |

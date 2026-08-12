@@ -238,6 +238,7 @@ where
             copy_feedback_request,
             command_chord_pending_since,
             command_chord_reveal_delay,
+            clock_offset: Rc::new(Cell::new(std::time::Duration::ZERO)),
         };
 
         let components = crate::core::nested::ComponentRegistry::new(

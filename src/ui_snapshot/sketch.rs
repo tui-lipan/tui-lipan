@@ -6,6 +6,7 @@
 //! a viewport, renders, captures, and writes each artifact by hand.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::Result;
 use crate::core::component::Component;
@@ -80,6 +81,7 @@ pub struct Sketch<C: Component> {
     focus_steps: usize,
     options: UiSnapshotOptions,
     key_script: Option<String>,
+    advance: Duration,
     #[cfg(feature = "ui-snapshot-png")]
     baseline_dir: Option<PathBuf>,
     #[cfg(feature = "ui-snapshot-png")]
@@ -117,6 +119,7 @@ where
             focus_steps: 0,
             options: UiSnapshotOptions::default(),
             key_script: None,
+            advance: Duration::ZERO,
             #[cfg(feature = "ui-snapshot-png")]
             baseline_dir: None,
             #[cfg(feature = "ui-snapshot-png")]
@@ -217,6 +220,19 @@ where
         self
     }
 
+    /// Advance the virtual clock by `dt` before capturing, ticking animations to
+    /// quiescence.
+    ///
+    /// Equivalent of `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` for a kept sketch: a which-key
+    /// panel behind a reveal delay or a settled transition become visible without
+    /// waiting on the wall clock. Uses [`TestBackend::advance`](crate::TestBackend::advance),
+    /// which does not drive the live runner's blink or spinner cycle.
+    #[must_use]
+    pub fn advance(mut self, dt: Duration) -> Self {
+        self.advance = dt;
+        self
+    }
+
     /// Compare each capture against a stored baseline image in `dir`.
     ///
     /// The first run records baselines; later runs compare against them and write
@@ -304,6 +320,7 @@ where
             focus_steps,
             options,
             key_script,
+            advance,
             #[cfg(feature = "ui-snapshot-png")]
             baseline_dir,
             #[cfg(feature = "ui-snapshot-png")]
@@ -371,6 +388,9 @@ where
             // resolved focus target.
             for key in &keys {
                 backend.send_key(*key)?;
+            }
+            if !advance.is_zero() {
+                backend.advance(advance);
             }
 
             let snapshot = match viewport {

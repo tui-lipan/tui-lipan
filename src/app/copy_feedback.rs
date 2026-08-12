@@ -151,12 +151,10 @@ impl CopyFeedbackState {
         self.flashes.get(&id).and_then(|flash| flash.range.clone())
     }
 
-    pub fn tick(&mut self) -> CopyFeedbackTick {
+    pub fn tick_at(&mut self, now: Instant) -> CopyFeedbackTick {
         if self.flashes.is_empty() {
             return CopyFeedbackTick::default();
         }
-
-        let now = Instant::now();
         let mut tick = CopyFeedbackTick::default();
 
         self.flashes.retain(|_, flash| match flash.phase {
@@ -270,7 +268,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(5));
 
         assert!(feedback.is_active(id));
-        let tick = feedback.tick();
+        let tick = feedback.tick_at(Instant::now());
         assert!(!tick.needs_paint);
         assert!(tick.next_due.is_some());
         assert!(feedback.is_active(id));

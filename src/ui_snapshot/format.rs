@@ -102,6 +102,16 @@ impl UiSnapshot {
     pub fn to_png_default(&self) -> crate::Result<Vec<u8>> {
         self.to_png(&PngOptions::default())
     }
+
+    /// Compare this capture against a stored baseline image in `dir`.
+    ///
+    /// Same semantics as [`Sketch::baseline`](crate::Sketch::baseline). Name the capture with
+    /// [`SnapshotBaseline::name`](super::SnapshotBaseline::name); the default is
+    /// `snapshot-{width}x{height}`.
+    #[cfg(feature = "ui-snapshot-png")]
+    pub fn baseline(&self, dir: impl Into<std::path::PathBuf>) -> super::SnapshotBaseline {
+        super::SnapshotBaseline::new(self.clone(), dir)
+    }
 }
 
 fn append_widget_markdown(out: &mut String, widget: &UiWidgetDesc) {

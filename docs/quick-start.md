@@ -387,8 +387,10 @@ TUI_LIPAN_SNAPSHOT=/tmp/app.md TUI_LIPAN_SNAPSHOT_VIEWPORT=140x40 cargo run
 ```
 
 Companion variables: `TUI_LIPAN_SNAPSHOT_VIEWPORT` (`WIDTHxHEIGHT`, default
-`100x30`), `TUI_LIPAN_SNAPSHOT_FRAMES`, `TUI_LIPAN_SNAPSHOT_FOCUS`,
-`TUI_LIPAN_SNAPSHOT_KEYS`, and `TUI_LIPAN_SNAPSHOT_DIAGNOSTIC=1`.
+`100x30`), `TUI_LIPAN_SNAPSHOT_VIEWPORTS` (comma-separated list, writes suffixed
+files), `TUI_LIPAN_SNAPSHOT_FRAMES`, `TUI_LIPAN_SNAPSHOT_FOCUS`,
+`TUI_LIPAN_SNAPSHOT_KEYS`, `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` (virtual-clock
+advance for time-gated UI), and `TUI_LIPAN_SNAPSHOT_DIAGNOSTIC=1`.
 
 `TUI_LIPAN_SNAPSHOT_KEYS` scripts input so states behind a keystroke can be
 captured without writing code:

@@ -624,7 +624,7 @@ mod tests {
         assert!(animated.height_anim.is_none());
         assert_eq!(backend.core.tree.node(trailing).rect.x, original_trailing_x);
 
-        backend.advance(std::time::Duration::from_millis(50));
+        backend.advance_frame(std::time::Duration::from_millis(50));
         let collapsed_width = match &backend.core.tree.node(exiting).kind {
             NodeKind::Animated(animated) => animated.auto_exit_width(),
             _ => unreachable!(),

@@ -13,6 +13,24 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `TUI_LIPAN_SNAPSHOT_ADVANCE_MS`, `Sketch::advance(Duration)`, and
+  `TestBackend::advance(Duration)`, so a headless capture can settle time-gated UI
+  without sleeping: a which-key panel behind `App::command_chord_reveal_delay`, a finished
+  transition. The virtual clock is honoured by chord reveal and the animation ticker, which
+  runs in frame-sized steps for the requested duration. Action-script `wait:` uses the same
+  path. Default remains zero, so existing captures are unchanged. Virtual advancement
+  affects tui-lipan-managed time and animation state; application-owned wall-clock timers
+  and `Instant::now()` are not advanced. Headless capture runs the live runner ticker;
+  `TestBackend` / `Sketch` tick tree animations, transitions, overlays, and chord reveal,
+  not blink or spinner frames.
+- `TestBackend::baseline(dir)` and `UiSnapshot::baseline(dir)`, the Sketch baseline
+  affordance for apps that need real state. `.name()`, `.tolerance()`, `.check()`, and
+  `.assert_baseline()` match Sketch; `TUI_LIPAN_UPDATE_BASELINES=1` accepts the current
+  render. Baseline captures still force bitmap rendering.
+- `TUI_LIPAN_SNAPSHOT_VIEWPORTS=80x24,120x30,160x40`, capturing a breakpoint matrix in one
+  run and writing suffixed files (`app-80x24.png`, …). `TUI_LIPAN_SNAPSHOT_VIEWPORT` still
+  writes to the exact path when `_VIEWPORTS` is unset. A malformed entry fails the run
+  rather than being skipped.
 - `App::command_chord_reveal_delay(Duration)` and `Context::command_chord_revealed()`, for chord
   affordances that should appear only when the user hesitates — a which-key panel, a hint bar. The
   runtime schedules the frame at which the delay elapses, so a view reading `command_chord_revealed`
@@ -48,6 +66,10 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- `TestBackend::advance(Duration)` now consumes the full duration in 50 ms steps rather than
+  clamping to one frame. **(breaking)** The previous one-frame clamp is
+  `TestBackend::advance_frame(Duration)`. `backend.advance(400ms)` no longer silently means
+  50 ms. `Sketch::advance` is unchanged (it already consumed the full duration).
 - `RuntimeEnv::command_chord_pending: Rc<Cell<bool>>` becomes
   `command_chord_pending_since: Rc<Cell<Option<Instant>>>`, so the pending chord carries its start
   time rather than duplicating it in a second cell that could drift. **(breaking)** Migration: read

@@ -17,7 +17,7 @@ mod slot;
 use describe::{describe_widgets, key_for_node};
 
 #[cfg(feature = "ui-snapshot-png")]
-pub use baseline::{BaselineComparison, BaselineOutcome};
+pub use baseline::{BaselineComparison, BaselineOutcome, SnapshotBaseline};
 pub use describe::UiWidgetDesc;
 pub use format::UiSnapshot;
 pub use kind::UiWidgetKind;

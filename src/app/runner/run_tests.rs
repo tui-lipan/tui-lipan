@@ -2136,7 +2136,7 @@ fn an_animated_colour_fades_without_a_view_pass() {
 
     // Advancing the fade is a repaint: the ticker reports no view work, and the painted colour still
     // moves because the renderer resolves the slot.
-    backend.advance(Duration::from_millis(50));
+    backend.advance_frame(Duration::from_millis(50));
     assert_eq!(
         views.get(),
         views_at_start,
@@ -2145,7 +2145,7 @@ fn an_animated_colour_fades_without_a_view_pass() {
     let midway = backend.capture_frame().cell(0, 0).fg;
     assert_ne!(midway, start, "the painted colour moved anyway");
 
-    backend.advance(Duration::from_millis(60));
+    backend.advance_frame(Duration::from_millis(60));
     let settled = backend.capture_frame().cell(0, 0).fg;
     assert_ne!(settled, midway, "and keeps moving to the target");
     assert_eq!(
@@ -6619,16 +6619,18 @@ fn headless_snapshot_config(
     super::headless_snapshot::HeadlessSnapshotConfig {
         format: crate::ui_snapshot::UiSnapshotFileFormat::from_path(&path),
         path,
-        viewport: Rect {
+        viewports: vec![Rect {
             x: 0,
             y: 0,
             w: 48,
             h: 12,
-        },
+        }],
+        suffix_viewports: false,
         frames: 1,
         focus_steps,
         actions: Vec::new(),
         diagnostic: false,
+        advance: Duration::ZERO,
     }
 }
 
@@ -6739,16 +6741,18 @@ fn key_script_config(
     super::headless_snapshot::HeadlessSnapshotConfig {
         format: crate::ui_snapshot::UiSnapshotFileFormat::from_path(&path),
         path,
-        viewport: Rect {
+        viewports: vec![Rect {
             x: 0,
             y: 0,
             w: 40,
             h: 6,
-        },
+        }],
+        suffix_viewports: false,
         frames: 1,
         focus_steps: 0,
         actions,
         diagnostic: false,
+        advance: Duration::ZERO,
     }
 }
 
@@ -6800,6 +6804,160 @@ fn headless_snapshot_key_script_settles_between_keys() {
         written.contains("typed:abcd"),
         "expected the full typed string, not just the last key: {written}"
     );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+struct ChordRevealSnapshotSmoke;
+
+impl Component for ChordRevealSnapshotSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        Text::new(if ctx.command_chord_revealed() {
+            "REVEALED"
+        } else if ctx.command_chord_pending() {
+            "PENDING"
+        } else {
+            "IDLE"
+        })
+        .into()
+    }
+}
+
+fn chord_reveal_snapshot_config(
+    path: std::path::PathBuf,
+    advance: Duration,
+) -> super::headless_snapshot::HeadlessSnapshotConfig {
+    super::headless_snapshot::HeadlessSnapshotConfig {
+        format: crate::ui_snapshot::UiSnapshotFileFormat::from_path(&path),
+        path,
+        viewports: vec![Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 4,
+        }],
+        suffix_viewports: false,
+        frames: 1,
+        focus_steps: 0,
+        actions: vec![crate::ui_snapshot::Action::Key(KeyEvent {
+            code: KeyCode::Char('x'),
+            mods: KeyMods::CTRL,
+        })],
+        diagnostic: false,
+        advance,
+    }
+}
+
+fn chord_reveal_snapshot_runner() -> AppRunner<ChordRevealSnapshotSmoke> {
+    let runner = AppRunner::new(
+        App::new()
+            .key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst)
+            .command_chord_reveal_delay(Duration::from_millis(300)),
+        ChordRevealSnapshotSmoke,
+        (),
+    );
+    runner.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("test.chord")
+            .shortcut(crate::KeyBinding::from_str("ctrl-x q").expect("binding"))
+            .handler(Callback::new(|_| {}))
+            .build(),
+    );
+    runner
+}
+
+#[test]
+fn headless_snapshot_advance_reveals_a_time_gated_chord() {
+    let dir =
+        std::env::temp_dir().join(format!("tui-lipan-headless-advance-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+
+    let pending_path = dir.join("pending.md");
+    chord_reveal_snapshot_runner()
+        .run_headless_snapshot(chord_reveal_snapshot_config(
+            pending_path.clone(),
+            Duration::ZERO,
+        ))
+        .expect("pending capture succeeds");
+    let pending = std::fs::read_to_string(&pending_path).expect("pending report");
+    assert!(
+        pending.contains("PENDING"),
+        "without a clock advance the reveal delay must still hide the panel: {pending}"
+    );
+    assert!(!pending.contains("REVEALED"), "{pending}");
+
+    let revealed_path = dir.join("revealed.md");
+    chord_reveal_snapshot_runner()
+        .run_headless_snapshot(chord_reveal_snapshot_config(
+            revealed_path.clone(),
+            Duration::from_millis(400),
+        ))
+        .expect("revealed capture succeeds");
+    let revealed = std::fs::read_to_string(&revealed_path).expect("revealed report");
+    assert!(
+        revealed.contains("REVEALED"),
+        "advancing the virtual clock must rebuild the view with the panel: {revealed}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn headless_snapshot_viewports_write_suffixed_files() {
+    let dir = std::env::temp_dir().join(format!(
+        "tui-lipan-headless-viewports-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("shot.md");
+
+    AppRunner::new(App::new(), HeadlessSnapshotSmoke, ())
+        .run_headless_snapshot(super::headless_snapshot::HeadlessSnapshotConfig {
+            format: crate::ui_snapshot::UiSnapshotFileFormat::from_path(&path),
+            path: path.clone(),
+            viewports: vec![
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 40,
+                    h: 8,
+                },
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 60,
+                    h: 10,
+                },
+            ],
+            suffix_viewports: true,
+            frames: 1,
+            focus_steps: 0,
+            actions: Vec::new(),
+            diagnostic: false,
+            advance: Duration::ZERO,
+        })
+        .expect("multi-viewport snapshot succeeds");
+
+    let first = std::fs::read_to_string(dir.join("shot-40x8.md")).expect("40x8 capture");
+    let second = std::fs::read_to_string(dir.join("shot-60x10.md")).expect("60x10 capture");
+    assert!(
+        first.contains("40x8") || first.contains("w: 40"),
+        "first capture should record 40x8: {first}"
+    );
+    assert!(
+        second.contains("60x10") || second.contains("w: 60"),
+        "second capture should record 60x10: {second}"
+    );
+    assert!(!path.exists(), "the unsuffixed path must not be written");
+
     std::fs::remove_dir_all(&dir).ok();
 }
 
