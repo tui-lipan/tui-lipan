@@ -519,6 +519,10 @@ impl<C: Component> AppRunner<C> {
             .user_keymap_policy(app.user_keymap_policy);
         let keymap = Keymap::new(keymap_config);
         let keymap_runtime = KeymapRuntime::new(&keymap);
+        core.ctx
+            .env()
+            .command_chord_reveal_delay
+            .set(app.command_chord_reveal_delay);
         let key_dispatch_config = RuntimeKeyDispatchConfig {
             focus_policy: app.focus_policy,
             key_dispatch_policy: app.key_dispatch_policy,

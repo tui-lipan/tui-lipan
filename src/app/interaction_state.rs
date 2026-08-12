@@ -220,6 +220,9 @@ pub(crate) struct AnimationState {
     pub last_image_layout_hash: Option<u64>,
     pub last_overlay_tick: Instant,
     pub effect_phase_tick: u64,
+    /// Whether the pending command chord counted as revealed on the previous cycle, so the frame
+    /// that crosses `command_chord_reveal_delay` repaints exactly once.
+    pub command_chord_revealed: bool,
     /// Whether image rendering was suspended during the previous cycle.
     /// Used to detect the suspension-expired transition and trigger a repaint.
     #[cfg(feature = "image")]
@@ -243,6 +246,7 @@ impl Default for AnimationState {
             spinner_frame: 0,
             last_animated_tick: Instant::now(),
             last_effect_tick: Instant::now(),
+            command_chord_revealed: false,
             #[cfg(feature = "image")]
             last_image_tick: Instant::now(),
             #[cfg(feature = "image")]

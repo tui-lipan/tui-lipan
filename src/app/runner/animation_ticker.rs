@@ -189,6 +189,29 @@ impl<C: Component> AppRunner<C> {
             }
         }
 
+        // A deferred chord reveal is the one piece of chord chrome no key event can schedule: the
+        // chord went pending on a keystroke, and the frame that reveals it has to come from the
+        // loop instead. Skipped entirely at the default zero delay, where the key dispatch that
+        // set the chord already painted everything there is to paint.
+        if !self
+            .core
+            .ctx
+            .env()
+            .command_chord_reveal_delay
+            .get()
+            .is_zero()
+        {
+            let revealed = self.core.ctx.command_chord_revealed();
+            if revealed != self.animation.command_chord_revealed {
+                self.animation.command_chord_revealed = revealed;
+                crate::debug::internal_log!("[tui-lipan] dirty: command chord reveal");
+                dirty.mark_paint();
+            }
+            if let Some(remaining) = self.core.ctx.env().command_chord_reveal_due_in() {
+                poll_timeout = poll_timeout.min(remaining);
+            }
+        }
+
         let copy_feedback_requests = self.core.ctx.take_copy_feedback_requests();
         if !copy_feedback_requests.is_empty() {
             let duration = Duration::from_millis(

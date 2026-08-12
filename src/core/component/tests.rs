@@ -65,7 +65,8 @@ fn new_registry() -> ComponentRegistry {
             devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
             ui_snapshot_request: Rc::new(RefCell::new(None)),
             copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
-            command_chord_pending: Rc::new(Cell::new(false)),
+            command_chord_pending_since: Rc::new(Cell::new(None)),
+            command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),
         },
     })
 }
