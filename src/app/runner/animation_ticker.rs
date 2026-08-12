@@ -205,7 +205,10 @@ impl<C: Component> AppRunner<C> {
             if revealed != self.animation.command_chord_revealed {
                 self.animation.command_chord_revealed = revealed;
                 crate::debug::internal_log!("[tui-lipan] dirty: command chord reveal");
-                dirty.mark_paint();
+                // `mark_full`, not `mark_paint`: revealing chord chrome means the view returns a
+                // subtree it did not return before, and a paint-only frame redraws the existing
+                // tree without ever re-running `view`. This fires once per chord, not per frame.
+                dirty.mark_full();
             }
             if let Some(remaining) = self.core.ctx.env().command_chord_reveal_due_in() {
                 poll_timeout = poll_timeout.min(remaining);
