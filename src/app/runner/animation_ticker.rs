@@ -16,6 +16,14 @@ thread_local! {
 }
 
 impl<C: Component> AppRunner<C> {
+    fn clock_now(&self) -> Instant {
+        self.core.ctx.env().now()
+    }
+
+    fn clock_elapsed(&self, since: Instant) -> Duration {
+        self.core.ctx.env().elapsed(since)
+    }
+
     pub(super) fn update_animation_cycle(&mut self, dirty: &mut DirtyTracker) -> Duration {
         // Suppress framework-internal debug_log! entries (cursor blink, spinner
         // tick, etc.) from appearing in the devtools panel — they are not useful
@@ -66,7 +74,7 @@ impl<C: Component> AppRunner<C> {
             let until_due = self
                 .drag
                 .last_autoscroll_tick
-                .map(|last| interval.saturating_sub(last.elapsed()))
+                .map(|last| interval.saturating_sub(self.clock_elapsed(last)))
                 .unwrap_or(Duration::ZERO);
             poll_timeout = poll_timeout.min(until_due);
         }
@@ -78,7 +86,7 @@ impl<C: Component> AppRunner<C> {
             if self.devtools_state.borrow().visible {
                 let logs_active = self.devtools_state.borrow().is_logs_tab_active();
                 LAST_DEVTOOLS_PAINT_TICK.with(|last_tick| {
-                    let now = Instant::now();
+                    let now = self.clock_now();
                     match last_tick.get() {
                         Some(last) => {
                             let elapsed = now.saturating_duration_since(last);
@@ -112,7 +120,7 @@ impl<C: Component> AppRunner<C> {
         if self.core.tree.has_spinners() {
             poll_timeout = poll_timeout.min(
                 Duration::from_millis(50)
-                    .saturating_sub(self.animation.last_spinner_tick.elapsed()),
+                    .saturating_sub(self.clock_elapsed(self.animation.last_spinner_tick)),
             );
         }
 
@@ -122,13 +130,13 @@ impl<C: Component> AppRunner<C> {
         {
             poll_timeout = poll_timeout.min(
                 Duration::from_millis(16)
-                    .saturating_sub(self.animation.last_animated_tick.elapsed()),
+                    .saturating_sub(self.clock_elapsed(self.animation.last_animated_tick)),
             );
         }
 
         if let Some(interval) = self.core.tree.animated_effect_scope_interval() {
             poll_timeout = poll_timeout
-                .min(interval.saturating_sub(self.animation.last_effect_tick.elapsed()));
+                .min(interval.saturating_sub(self.clock_elapsed(self.animation.last_effect_tick)));
         }
 
         #[cfg(feature = "image")]
@@ -145,11 +153,11 @@ impl<C: Component> AppRunner<C> {
         #[cfg(feature = "image")]
         if let Some(due_ms) = next_image_due_ms {
             let until_due = Duration::from_millis(due_ms as u64)
-                .saturating_sub(self.animation.last_image_tick.elapsed());
+                .saturating_sub(self.clock_elapsed(self.animation.last_image_tick));
             poll_timeout = poll_timeout.min(until_due);
         } else {
             // Avoid large catch-up jumps when playback is paused.
-            self.animation.last_image_tick = Instant::now();
+            self.animation.last_image_tick = self.clock_now();
         }
 
         // Cursor blink: only tick when a blinking text widget is focused.
@@ -175,10 +183,10 @@ impl<C: Component> AppRunner<C> {
             };
 
             if has_blinking_cursor {
-                let blink_elapsed = self.animation.last_blink.elapsed();
+                let blink_elapsed = self.clock_elapsed(self.animation.last_blink);
                 if blink_elapsed >= Duration::from_millis(500) {
                     self.animation.blink_visible = !self.animation.blink_visible;
-                    self.animation.last_blink = Instant::now();
+                    self.animation.last_blink = self.clock_now();
                     crate::debug::internal_log!("[tui-lipan] dirty: cursor blink toggle");
                     dirty.mark_paint();
                     poll_timeout = poll_timeout.min(Duration::from_millis(500));
@@ -241,7 +249,7 @@ impl<C: Component> AppRunner<C> {
             }
         }
 
-        let copy_feedback_tick = self.copy_feedback.tick();
+        let copy_feedback_tick = self.copy_feedback.tick_at(self.clock_now());
         if let Some(next_due) = copy_feedback_tick.next_due {
             poll_timeout = poll_timeout.min(next_due);
         }
@@ -252,10 +260,10 @@ impl<C: Component> AppRunner<C> {
 
         // Spinner tick every 50ms - only if spinners exist.
         if self.core.tree.has_spinners()
-            && self.animation.last_spinner_tick.elapsed() >= Duration::from_millis(50)
+            && self.clock_elapsed(self.animation.last_spinner_tick) >= Duration::from_millis(50)
         {
             self.animation.spinner_frame = self.animation.spinner_frame.wrapping_add(1);
-            self.animation.last_spinner_tick = Instant::now();
+            self.animation.last_spinner_tick = self.clock_now();
             self.update_spinner_frames();
             crate::debug::internal_log!("[tui-lipan] dirty: spinner tick");
             dirty.mark_paint();
@@ -264,10 +272,10 @@ impl<C: Component> AppRunner<C> {
         if (self.core.tree.has_animated_widgets()
             || self.core.tree.has_animated_scrolls()
             || self.core.ctx.env().animations.has_active())
-            && self.animation.last_animated_tick.elapsed() >= Duration::from_millis(16)
+            && self.clock_elapsed(self.animation.last_animated_tick) >= Duration::from_millis(16)
         {
-            let dt = self.animation.last_animated_tick.elapsed();
-            self.animation.last_animated_tick = Instant::now();
+            let dt = self.clock_elapsed(self.animation.last_animated_tick);
+            self.animation.last_animated_tick = self.clock_now();
             // Wall-clock gaps (idle, first tick after startup) must not advance a full
             // transition in one step - Transition::tick clamps elapsed to duration.
             let dt = dt.min(Duration::from_millis(50));
@@ -293,9 +301,9 @@ impl<C: Component> AppRunner<C> {
         }
 
         if let Some(interval) = self.core.tree.animated_effect_scope_interval()
-            && self.animation.last_effect_tick.elapsed() >= interval
+            && self.clock_elapsed(self.animation.last_effect_tick) >= interval
         {
-            self.animation.last_effect_tick = Instant::now();
+            self.animation.last_effect_tick = self.clock_now();
             self.animation.effect_phase_tick = self.animation.effect_phase_tick.wrapping_add(1);
             self.core.set_effect_phase(self.animation.effect_phase_tick);
             self.core.tree.refresh_animated_effect_scope_activity();
@@ -309,7 +317,7 @@ impl<C: Component> AppRunner<C> {
             let due = self
                 .drag
                 .last_autoscroll_tick
-                .is_none_or(|last| last.elapsed() >= interval);
+                .is_none_or(|last| self.clock_elapsed(last) >= interval);
             if due && self.tick_stationary_drag_autoscroll() {
                 crate::debug::internal_log!("[tui-lipan] dirty: stationary drag autoscroll");
                 if self.drag.autoscroll_layout_dirty {
@@ -322,12 +330,15 @@ impl<C: Component> AppRunner<C> {
 
         #[cfg(feature = "image")]
         if let Some(due_ms) = next_image_due_ms
-            && self.animation.last_image_tick.elapsed() >= Duration::from_millis(due_ms as u64)
+            && self.clock_elapsed(self.animation.last_image_tick)
+                >= Duration::from_millis(due_ms as u64)
         {
-            let delta_ms = self.animation.last_image_tick.elapsed().as_millis();
+            let delta_ms = self
+                .clock_elapsed(self.animation.last_image_tick)
+                .as_millis();
             let delta_ms = delta_ms.min(u32::MAX as u128) as u32;
             let delta_ms = delta_ms.min(super::image_tick_catchup_cap_ms()).max(1);
-            self.animation.last_image_tick = Instant::now();
+            self.animation.last_image_tick = self.clock_now();
 
             if self.update_image_frames(delta_ms.max(1)) {
                 crate::debug::internal_log!("[tui-lipan] dirty: image animation tick");
@@ -344,13 +355,17 @@ impl<C: Component> AppRunner<C> {
             }
         };
 
-        if self.animation.last_overlay_tick.elapsed() >= overlay_tick_interval {
-            let tick_result = self.core.overlay_manager.borrow_mut().tick();
+        if self.clock_elapsed(self.animation.last_overlay_tick) >= overlay_tick_interval {
+            let tick_result = self
+                .core
+                .overlay_manager
+                .borrow_mut()
+                .tick_at(self.clock_now());
             if tick_result.dirty {
                 crate::debug::internal_log!("[tui-lipan] dirty: overlay tick");
                 dirty.mark_full();
             }
-            self.animation.last_overlay_tick = Instant::now();
+            self.animation.last_overlay_tick = self.clock_now();
         }
 
         {
@@ -361,8 +376,9 @@ impl<C: Component> AppRunner<C> {
                 } else {
                     Duration::from_millis(100)
                 };
-                poll_timeout = poll_timeout
-                    .min(interval.saturating_sub(self.animation.last_overlay_tick.elapsed()));
+                poll_timeout = poll_timeout.min(
+                    interval.saturating_sub(self.clock_elapsed(self.animation.last_overlay_tick)),
+                );
             }
         }
 

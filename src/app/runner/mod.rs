@@ -1343,10 +1343,16 @@ impl<C: Component> AppRunner<C> {
             let mut dirty_view = false;
             while advanced < frame_span {
                 let tick = (frame_span - advanced).min(MAX_TICK);
+                self.core.ctx.env().advance_clock(tick);
                 let (_, _, needs_layout) =
                     crate::app::animation::tick_tree_animations(&mut self.core.tree, tick);
                 let transitions = self.core.ctx.env().animations.tick(tick);
                 dirty_view |= needs_layout || transitions.view_changed;
+                let revealed = self.core.ctx.command_chord_revealed();
+                if revealed != self.animation.command_chord_revealed {
+                    self.animation.command_chord_revealed = revealed;
+                    dirty_view = true;
+                }
                 advanced += tick;
             }
 
@@ -1443,6 +1449,38 @@ impl<C: Component> AppRunner<C> {
         Ok(())
     }
 
+    /// Advance the virtual clock by `total`, running the animation ticker in
+    /// frame-sized steps so time-gated UI (chord reveal, transitions, spinners)
+    /// settles before a headless capture.
+    fn headless_advance_clock(
+        &mut self,
+        total: std::time::Duration,
+        bounds: crate::style::Rect,
+    ) -> Result<()> {
+        const STEP: std::time::Duration = std::time::Duration::from_millis(16);
+
+        let mut remaining = total;
+        while !remaining.is_zero() {
+            let step = remaining.min(STEP);
+            self.core.ctx.env().advance_clock(step);
+            let mut dirty = DirtyTracker::default();
+            self.update_animation_cycle(&mut dirty);
+            self.drain_messages_and_commands(&mut dirty)?;
+            if dirty.is_dirty() {
+                self.headless_render(bounds);
+            }
+            remaining = remaining.saturating_sub(step);
+        }
+
+        // One more ticker pass so a reveal that landed on the last step still
+        // rebuilds the view, then a settle render for the capture.
+        let mut dirty = DirtyTracker::default();
+        self.update_animation_cycle(&mut dirty);
+        self.drain_messages_and_commands(&mut dirty)?;
+        self.headless_render(bounds);
+        Ok(())
+    }
+
     /// Render one off-screen snapshot, write it, and return without opening a terminal.
     ///
     /// Mirrors the root-init sequence of [`Self::run`] - set viewport, `init()`,
@@ -1454,7 +1492,8 @@ impl<C: Component> AppRunner<C> {
     ) -> Result<()> {
         crate::debug::init_logging();
 
-        let bounds = config.viewport;
+        let viewports = config.viewports.clone();
+        let bounds = config.primary_viewport();
         self.core.ctx.set_viewport(bounds);
         self.last_bounds = bounds;
         self.core.init();
@@ -1477,20 +1516,36 @@ impl<C: Component> AppRunner<C> {
             self.drain_messages_and_commands(&mut dirty)?;
         }
 
-        // Settle once more so state changed by the key script or by drained
-        // messages is reflected in the tree that gets captured.
+        if !config.advance.is_zero() {
+            self.headless_advance_clock(config.advance, bounds)?;
+        }
+
+        // Settle once more so state changed by the key script, drained messages,
+        // or the virtual-clock advance is reflected in the tree that gets captured.
         self.headless_render(bounds);
 
-        let snapshot = crate::ui_snapshot::build_ui_snapshot(
-            &self.core.tree,
-            bounds,
-            self.headless_interaction(),
-            self.core.ctx.env().effect_phase.get(),
-            self.resolved_screen_background(),
-            &config.snapshot_options(),
-        );
-        crate::ui_snapshot::write_snapshot(&snapshot, &config.path, config.format)?;
-        println!("wrote {}", config.path.display());
+        let mut wrote = Vec::new();
+        for viewport in &viewports {
+            if *viewport != self.last_bounds {
+                self.core.ctx.set_viewport(*viewport);
+                self.last_bounds = *viewport;
+                self.headless_render(*viewport);
+            }
+            let snapshot = crate::ui_snapshot::build_ui_snapshot(
+                &self.core.tree,
+                *viewport,
+                self.headless_interaction(),
+                self.core.ctx.env().effect_phase.get(),
+                self.resolved_screen_background(),
+                &config.snapshot_options(),
+            );
+            let path = config.output_path(*viewport);
+            crate::ui_snapshot::write_snapshot(&snapshot, &path, config.format)?;
+            wrote.push(path);
+        }
+        for path in &wrote {
+            println!("wrote {}", path.display());
+        }
         if let Some(feature) = config.missing_format_feature() {
             eprintln!(
                 "warning: wrote markdown to {} - rebuild with `--features {feature}` for that format",
@@ -1505,8 +1560,8 @@ impl<C: Component> AppRunner<C> {
     ///
     /// With `TUI_LIPAN_SNAPSHOT` set, this instead renders one frame off-screen,
     /// writes a snapshot artifact to that path, and returns without entering raw
-    /// mode. `TUI_LIPAN_SNAPSHOT_VIEWPORT`, `_FRAMES`, `_FOCUS`, and
-    /// `_DIAGNOSTIC` tune the capture; see `docs/components.md`.
+    /// mode. `TUI_LIPAN_SNAPSHOT_VIEWPORT`, `_VIEWPORTS`, `_FRAMES`, `_FOCUS`,
+    /// `_ADVANCE_MS`, and `_DIAGNOSTIC` tune the capture; see `docs/testing.md`.
     pub fn run(mut self) -> Result<()> {
         if let Some(config) = headless_record::HeadlessRecordConfig::from_env() {
             return self.run_headless_record(config?);
@@ -2632,15 +2687,6 @@ impl<C: Component> crate::ui_snapshot::ActionHost for HeadlessActionHost<'_, C> 
     }
 
     fn perform_wait(&mut self, dt: std::time::Duration) -> Result<()> {
-        let (_, _, needs_layout) =
-            crate::app::animation::tick_tree_animations(&mut self.runner.core.tree, dt);
-        let transitions = self.runner.core.ctx.env().animations.tick(dt);
-
-        let mut dirty = DirtyTracker::default();
-        self.runner.drain_messages_and_commands(&mut dirty)?;
-        if needs_layout || transitions.view_changed {
-            self.runner.headless_render(self.bounds);
-        }
-        Ok(())
+        self.runner.headless_advance_clock(dt, self.bounds)
     }
 }

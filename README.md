@@ -252,6 +252,11 @@ off-screen, writes the artifact, and exits without opening a terminal:
 TUI_LIPAN_SNAPSHOT=/tmp/app.png cargo snap todo
 ```
 
+Companion variables include `TUI_LIPAN_SNAPSHOT_VIEWPORT`,
+`TUI_LIPAN_SNAPSHOT_VIEWPORTS` (several sizes in one run),
+`TUI_LIPAN_SNAPSHOT_KEYS`, and `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` (virtual clock
+for time-gated UI such as a which-key panel). See [`docs/testing.md`](docs/testing.md).
+
 For a screen that does not exist yet, `Sketch` renders a plain view function at
 several viewports in one call:
 

@@ -87,26 +87,54 @@ assert_eq!(cursor.y, 0);
 ### Animations
 
 `render()` recomputes the tree but does not advance time, so anything time-based
-renders at its starting value. `advance(dt)` ticks every animation and refreshes
-layout or the rendered tree as needed, which lets a test assert that an animation
-actually moves rather than that it merely exists. It covers `Animated` transitions,
-smooth scrolls, and the property transitions behind `Context::transition`.
+renders at its starting value. `advance(dt)` shifts the virtual clock by `dt`
+and ticks animations in runner-sized steps (50 ms), which lets a test settle
+time-gated UI without `thread::sleep`. It covers `Animated` transitions, smooth
+scrolls, the property transitions behind `Context::transition`, overlay
+`tick_at`, copy-feedback, and command-chord reveal.
 
 ```rust
 backend.render();
 let start = width_of(&backend, "panel");
 
-backend.advance(Duration::from_millis(25));
+backend.advance_frame(Duration::from_millis(25));
 assert!(width_of(&backend, "panel") < start, "the panel should be shrinking");
 
 backend.advance(Duration::from_millis(200));
 assert_eq!(width_of(&backend, "panel"), 0);
 ```
 
-Each call is clamped to one frame's worth of time (50 ms), the same clamp the
-runner applies, so a single large `dt` behaves like one long frame instead of
-jumping to the end of the animation. Step through with repeated calls when you
-need intermediate states.
+`advance_frame(dt)` is the one-frame clamp: a single large `dt` still behaves
+like one long frame, the same clamp the live runner applies. Use it to step
+through intermediate states. `advance(dt)` consumes the full duration — the
+equivalent of `TUI_LIPAN_SNAPSHOT_ADVANCE_MS`:
+
+```rust
+backend.send_key(ctrl_x)?;
+backend.advance(Duration::from_millis(400));
+let snapshot = backend.capture_ui_snapshot();
+assert!(snapshot.to_markdown().contains("which-key"));
+```
+
+That is what makes a which-key panel behind `App::command_chord_reveal_delay`
+visible in a capture. `Sketch::advance(dt)` is the same hook for a kept sketch.
+
+**Virtual advancement affects tui-lipan-managed time and animation state.
+Application-owned wall-clock timers and `Instant::now()` are not advanced.**
+
+The three virtual-advance surfaces share the `RuntimeEnv` clock, but they do
+not share ticker fidelity:
+
+| Surface | API | What ticks |
+|---------|-----|------------|
+| Headless capture | `TUI_LIPAN_SNAPSHOT_ADVANCE_MS`, script `wait:` | The live runner's animation cycle (16 ms steps): chord reveal, tree animations, blink, spinner frames, image frames, effect scopes, overlays, message drain |
+| `TestBackend` | `advance(dt)` / `advance_frame(dt)`, script `wait:` | Tree animations, property transitions, overlays, copy-feedback, chord reveal. Not blink, spinner frames, or image frames. Captures force the cursor visible |
+| `Sketch` | `.advance(dt)` | The `TestBackend` path |
+
+Sharing the runner ticker with `TestBackend` is not a small change: that cycle
+is coupled to `AppRunner` (animation state, drag autoscroll, DevTools, image
+suspension). Photographing a specific spinner or blink phase belongs on the
+env-var / headless path until a later deterministic-time project.
 
 ### Viewport resize
 
@@ -210,10 +238,12 @@ TUI_LIPAN_SNAPSHOT=/tmp/app.png cargo run --example todo --features ui-snapshot-
 |----------|---------|--------|
 | `TUI_LIPAN_SNAPSHOT` | unset | Output path; setting it enables headless mode. Format routed by extension |
 | `TUI_LIPAN_SNAPSHOT_VIEWPORT` | `100x30` | Layout viewport, `WIDTHxHEIGHT` |
+| `TUI_LIPAN_SNAPSHOT_VIEWPORTS` | unset | Comma-separated viewport list, e.g. `80x24,120x30`. Writes suffixed files (`app-80x24.png`, …). Wins over `_VIEWPORT`. A malformed entry fails the run |
 | `TUI_LIPAN_SNAPSHOT_FRAMES` | `1` | Render/message passes before capture; raise when `init()` starts work |
 | `TUI_LIPAN_SNAPSHOT_FOCUS` | `0` | Focus advances before capture, for visible focus chrome |
 | `TUI_LIPAN_SNAPSHOT_KEYS` | unset | Comma-separated key script dispatched before capture, e.g. `tab,tab,enter` |
 | `TUI_LIPAN_SNAPSHOT_SCRIPT` | unset | Full action script (see below); takes precedence over `_KEYS` |
+| `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` | `0` | Virtual-clock advance before capture, ticking animations to quiescence. Use this for a which-key panel behind `command_chord_reveal_delay`, a settled transition, or a spinner mid-spin |
 | `TUI_LIPAN_SNAPSHOT_DIAGNOSTIC` | unset | `1` captures with `UiSnapshotOptions::diagnostic()` |
 
 `TUI_LIPAN_SNAPSHOT_KEYS` uses ordinary keybinding syntax (`ctrl+n`, `esc`,
@@ -226,8 +256,53 @@ character. This is how states behind a keystroke are captured without a harness:
 TUI_LIPAN_SNAPSHOT=/tmp/modal.png TUI_LIPAN_SNAPSHOT_KEYS="tab,enter" cargo snap myapp
 ```
 
+Time-gated chrome needs a clock, not more frames. `TUI_LIPAN_SNAPSHOT_FRAMES`
+renders back to back with no wall clock, so a which-key panel behind
+`App::command_chord_reveal_delay(300ms)` never appears. Advance virtual time
+instead:
+
+```sh
+TUI_LIPAN_SNAPSHOT=/tmp/which-key.png \
+TUI_LIPAN_SNAPSHOT_KEYS="ctrl+a" \
+TUI_LIPAN_SNAPSHOT_ADVANCE_MS=400 \
+cargo snap myapp
+```
+
+Several breakpoints in one run:
+
+```sh
+TUI_LIPAN_SNAPSHOT=/tmp/app.png \
+TUI_LIPAN_SNAPSHOT_VIEWPORTS=80x24,120x30,160x40 \
+cargo snap myapp
+```
+
+writes `/tmp/app-80x24.png`, `/tmp/app-120x30.png`, and `/tmp/app-160x40.png`.
+`TUI_LIPAN_SNAPSHOT_VIEWPORT` still writes to the exact path when `_VIEWPORTS`
+is unset. A malformed size fails the run rather than being skipped, because a
+dropped breakpoint in a screenshot matrix is easy to miss.
+
 An unparseable script fails the run rather than being skipped, because a dropped
 keystroke silently captures the wrong state.
+
+This path captures **rendering** without editing the app. **State is a different
+matter.** Apps that write config, cache, or session files will still touch the
+developer's live directories unless you isolate them. Redirect `XDG_*` at the
+**child process**, then run the already-built binary:
+
+```sh
+cargo build --features ui-snapshot
+S=/tmp/app-snap && mkdir -p $S/config
+env XDG_CONFIG_HOME=$S/config XDG_STATE_HOME=$S/state XDG_CACHE_HOME=$S/cache \
+    XDG_RUNTIME_DIR=$S/run TUI_LIPAN_SNAPSHOT=$S/out.png ./target/debug/<bin>
+```
+
+Two gotchas:
+
+- Run the **built binary**, not `cargo run` / `cargo snap`. Redirecting `XDG_*`
+  also redirects mise's trust store, and the wrapper refuses to start.
+- This is not the "never mutate `HOME` / `XDG_*` in tests" rule. That rule is
+  about `std::env::set_var` being unsound beside parallel test threads. It has
+  nothing to do with environment variables you pass to a child process.
 
 Format follows the path extension, matching `request_ui_snapshot_to`: `.json`
 with `ui-snapshot-json`, `.png` with `ui-snapshot-png`, markdown otherwise.
@@ -498,6 +573,7 @@ Sketch::view("login", login_screen)   // any Fn() -> Element
 | `focus_next(n)` | Advance focus `n` times before capturing |
 | `options(opts)` | Describe options, e.g. `UiSnapshotOptions::diagnostic()` |
 | `keys(script)` | Dispatch a key script before capturing, e.g. `"tab,enter"` |
+| `advance(dt)` | Advance the virtual clock by `dt` before capturing, ticking animations |
 | `markdown(b)` / `png(b)` / `json(b)` | Toggle formats; markdown and PNG default on |
 | `dir(path)` | Output directory override |
 | `baseline(dir)` | Compare each capture against a stored baseline image |
@@ -529,6 +605,23 @@ fn login_screen_has_not_drifted() -> Result<()> {
     Sketch::view("login", login_screen)
         .viewport(80, 24)
         .baseline("tests/ui-baselines")
+        .assert_baseline()
+}
+```
+
+Apps that need real state use the same affordance on `TestBackend` (or on the
+`UiSnapshot` that `capture_ui_snapshot()` returns):
+
+```rust
+#[test]
+fn dashboard_has_not_drifted() -> Result<()> {
+    let mut backend = TestBackend::new(Dashboard);
+    backend.set_viewport(Rect { x: 0, y: 0, w: 80, h: 24 });
+    backend.render();
+
+    backend
+        .baseline("tests/ui-baselines")
+        .name("dashboard-80x24")
         .assert_baseline()
 }
 ```

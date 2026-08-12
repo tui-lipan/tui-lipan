@@ -364,7 +364,7 @@ fn hold<C: Component>(
         let mut advanced = Duration::ZERO;
         while advanced < frame_span {
             let tick = (frame_span - advanced).min(MAX_TICK);
-            backend.advance(tick);
+            backend.advance_frame(tick);
             advanced += tick;
         }
 

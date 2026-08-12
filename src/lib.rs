@@ -153,7 +153,7 @@ pub use crate::ui_snapshot::{
     UiWidgetKind,
 };
 #[cfg(feature = "ui-snapshot-png")]
-pub use crate::ui_snapshot::{BaselineComparison, BaselineOutcome};
+pub use crate::ui_snapshot::{BaselineComparison, BaselineOutcome, SnapshotBaseline};
 pub use crate::validation::{StringValidator, ValidationError, Validator};
 pub use crate::widgets::{Badge, BadgePosition, CapSides, CapStyle};
 pub use crate::widgets::{

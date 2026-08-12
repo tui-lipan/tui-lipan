@@ -113,6 +113,82 @@ pub struct BaselineComparison {
     pub outcome: BaselineOutcome,
 }
 
+/// Compare a single [`UiSnapshot`](super::UiSnapshot) against a stored baseline image.
+///
+/// This is the [`TestBackend`](crate::TestBackend) / [`UiSnapshot`](super::UiSnapshot)
+/// counterpart of [`Sketch::baseline`](super::Sketch::baseline): first run records, later
+/// runs compare, and `TUI_LIPAN_UPDATE_BASELINES=1` accepts the current render.
+pub struct SnapshotBaseline {
+    snapshot: super::UiSnapshot,
+    dir: PathBuf,
+    name: Option<String>,
+    tolerance: f64,
+}
+
+impl SnapshotBaseline {
+    pub(crate) fn new(snapshot: super::UiSnapshot, dir: impl Into<PathBuf>) -> Self {
+        Self {
+            snapshot,
+            dir: dir.into(),
+            name: None,
+            tolerance: 0.0,
+        }
+    }
+
+    /// Filename stem for the baseline image, without `.png`.
+    ///
+    /// Defaults to `snapshot-{width}x{height}` from the capture viewport.
+    #[must_use]
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Maximum fraction of differing pixels still counted as a match.
+    ///
+    /// Defaults to `0.0`, demanding an exact image.
+    #[must_use]
+    pub fn tolerance(mut self, ratio: f64) -> Self {
+        self.tolerance = ratio.clamp(0.0, 1.0);
+        self
+    }
+
+    fn capture_name(&self) -> String {
+        self.name.clone().unwrap_or_else(|| {
+            format!(
+                "snapshot-{}x{}",
+                self.snapshot.viewport.w, self.snapshot.viewport.h
+            )
+        })
+    }
+
+    /// Compare against the stored baseline and return the outcome.
+    pub fn check(self) -> Result<BaselineComparison> {
+        let name = self.capture_name();
+        let baseline_path = self.dir.join(format!("{name}.png"));
+        let deterministic = crate::capture::PngOptions {
+            text_renderer: crate::capture::PngTextRenderer::Bitmap,
+            ..crate::capture::PngOptions::default()
+        };
+        let current = self.snapshot.to_png(&deterministic)?;
+        compare_or_create(&name, &baseline_path, &current, self.tolerance)
+    }
+
+    /// Compare and fail if the capture regressed against its baseline.
+    pub fn assert_baseline(self) -> Result<()> {
+        let comparison = self.check()?;
+        if !comparison.outcome.is_regression() {
+            return Ok(());
+        }
+        Err(std::io::Error::other(format!(
+            "1 visual baseline regression(s):\n  {}\n\nRe-run with `{}=1` to accept them.",
+            comparison.outcome.summary(&comparison.name),
+            UPDATE_ENV,
+        ))
+        .into())
+    }
+}
+
 /// Returns `true` when baselines should be rewritten rather than compared.
 pub(crate) fn update_mode() -> bool {
     std::env::var(UPDATE_ENV).as_deref() == Ok("1")

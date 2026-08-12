@@ -593,7 +593,7 @@ fn json_uses_stable_color_wire_format() {
 #[cfg(feature = "ui-snapshot-png")]
 mod baseline_flow {
     use tui_lipan::prelude::*;
-    use tui_lipan::{BaselineOutcome, Sketch};
+    use tui_lipan::{BaselineOutcome, Sketch, TestBackend};
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -706,6 +706,109 @@ mod baseline_flow {
     }
 
     #[test]
+    fn test_backend_baseline_records_and_matches() {
+        let dir = temp_dir("tb-stable");
+        let baselines = dir.join("baselines");
+        let mut backend = TestBackend::new(Mockup::new(view_with("hello")));
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 24,
+            h: 4,
+        });
+        backend.render();
+
+        let created = backend
+            .baseline(&baselines)
+            .name("dash")
+            .check()
+            .expect("first run");
+        assert_eq!(created.outcome, BaselineOutcome::Created);
+
+        let rerun = backend
+            .capture_ui_snapshot()
+            .baseline(&baselines)
+            .name("dash")
+            .check()
+            .expect("second run");
+        assert_eq!(rerun.outcome, BaselineOutcome::Match { ratio: 0.0 });
+        assert!(!rerun.outcome.is_regression());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_backend_assert_baseline_fails_on_a_changed_view() {
+        let dir = temp_dir("tb-assert");
+        let baselines = dir.join("baselines");
+
+        let mut original = TestBackend::new(Mockup::new(view_with("original")));
+        original.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 24,
+            h: 4,
+        });
+        original.render();
+        original
+            .baseline(&baselines)
+            .name("guarded")
+            .assert_baseline()
+            .expect("baseline creation is not a regression");
+
+        let mut changed = TestBackend::new(Mockup::new(view_with("modified")));
+        changed.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 24,
+            h: 4,
+        });
+        changed.render();
+        let err = changed
+            .capture_ui_snapshot()
+            .baseline(&baselines)
+            .name("guarded")
+            .assert_baseline()
+            .expect_err("a changed view must fail the assertion");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("TUI_LIPAN_UPDATE_BASELINES"),
+            "the failure should say how to accept the change: {message}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn sketch_advance_settles_a_time_gated_scroll() {
+        let dir = temp_dir("advance");
+
+        let frozen = Sketch::component("scroll-frozen", SmoothScrollSketch)
+            .viewport(40, 6)
+            .dir(dir.join("frozen"))
+            .quiet(true)
+            .write()
+            .expect("frozen capture");
+        let settled = Sketch::component("scroll-settled", SmoothScrollSketch)
+            .viewport(40, 6)
+            .dir(dir.join("settled"))
+            .advance(std::time::Duration::from_millis(200))
+            .quiet(true)
+            .write()
+            .expect("settled capture");
+
+        let frozen_md = std::fs::read_to_string(&frozen[0]).expect("frozen markdown");
+        let settled_md = std::fs::read_to_string(&settled[0]).expect("settled markdown");
+        assert_ne!(
+            frozen_md, settled_md,
+            "advancing the clock should move a time-gated scroll:\n{frozen_md}\n---\n{settled_md}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn a_key_script_changes_what_gets_captured() {
         let dir = temp_dir("keys");
 
@@ -773,6 +876,37 @@ mod baseline_flow {
 
         fn view(&self, ctx: &Context<Self>) -> Element {
             Text::new(format!("typed:{}", ctx.state)).into()
+        }
+    }
+
+    struct SmoothScrollSketch;
+
+    impl Component for SmoothScrollSketch {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            DocumentView::new(
+                (0..10)
+                    .map(|index| format!("line {index}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+            .border(false)
+            .height(Length::Px(4))
+            .scroll_to_source_line(8)
+            .scroll_transition(TransitionConfig {
+                duration: std::time::Duration::from_millis(100),
+                easing: Easing::Linear,
+            })
+            .key("smooth-scroll")
         }
     }
 }

@@ -386,9 +386,7 @@ impl OverlayManager {
         dirty
     }
 
-    pub(crate) fn tick(&mut self) -> TickResult {
-        let now = Instant::now();
-
+    pub(crate) fn tick_at(&mut self, now: Instant) -> TickResult {
         let mut result = TickResult::default();
 
         self.entries.retain_mut(|entry| {
@@ -631,7 +629,7 @@ mod tests {
 
         assert!(manager.trigger_copy_feedback(id, Duration::from_millis(1)));
         thread::sleep(Duration::from_millis(5));
-        let tick = manager.tick();
+        let tick = manager.tick_at(Instant::now());
 
         assert!(tick.dirty);
         assert!(!manager.entries[0].copy_feedback_active());
@@ -666,7 +664,7 @@ mod tests {
         thread::sleep(Duration::from_millis(5));
         assert!(manager.renew(id));
         thread::sleep(Duration::from_millis(7));
-        manager.tick();
+        manager.tick_at(Instant::now());
 
         assert!(
             !manager.entries[0].pending_dismiss,
@@ -718,7 +716,7 @@ mod tests {
         assert!(remaining <= Duration::from_millis(500));
 
         age_entry_timeout(&mut manager.entries[0], Duration::from_secs(10));
-        manager.tick();
+        manager.tick_at(Instant::now());
         assert!(!manager.entries[0].pending_dismiss);
 
         assert!(!manager.set_hovered_toast(None));
@@ -726,7 +724,7 @@ mod tests {
             &mut manager.entries[0],
             remaining + Duration::from_millis(1),
         );
-        manager.tick();
+        manager.tick_at(Instant::now());
         assert!(manager.entries[0].pending_dismiss);
     }
 
@@ -736,9 +734,9 @@ mod tests {
         let id = manager.push_toast(Toast::new("caught").duration(3.0));
         settle_entry_transition(&mut manager.entries[0]);
         age_entry_timeout(&mut manager.entries[0], Duration::from_secs(3));
-        manager.tick();
+        manager.tick_at(Instant::now());
         age_entry_transition(&mut manager.entries[0], Duration::from_millis(50));
-        manager.tick();
+        manager.tick_at(Instant::now());
         let faded_opacity = manager.entries[0].opacity();
 
         assert!(manager.set_hovered_toast(Some(id)));
@@ -751,10 +749,10 @@ mod tests {
 
         assert!(!manager.set_hovered_toast(None));
         age_entry_timeout(&mut manager.entries[0], Duration::from_millis(999));
-        manager.tick();
+        manager.tick_at(Instant::now());
         assert!(!manager.entries[0].pending_dismiss);
         age_entry_timeout(&mut manager.entries[0], Duration::from_millis(2));
-        manager.tick();
+        manager.tick_at(Instant::now());
         assert!(manager.entries[0].pending_dismiss);
     }
 
@@ -782,13 +780,13 @@ mod tests {
         assert_eq!(entry.opacity(), 1.0);
 
         age_entry_transition(&mut manager.entries[0], Duration::from_millis(50));
-        manager.tick();
+        manager.tick_at(Instant::now());
         assert_eq!(manager.entries.len(), 1);
         assert!(manager.entries[0].opacity() > 0.0);
         assert!(manager.entries[0].opacity() < 1.0);
 
         age_entry_transition(&mut manager.entries[0], Duration::from_millis(100));
-        manager.tick();
+        manager.tick_at(Instant::now());
         assert!(manager.entries.is_empty());
     }
 
@@ -798,7 +796,7 @@ mod tests {
         manager.push_toast(Toast::new("message").duration(0.0));
         settle_entry_transition(&mut manager.entries[0]);
 
-        manager.tick();
+        manager.tick_at(Instant::now());
 
         assert_eq!(manager.entries.len(), 1);
         assert!(manager.entries[0].pending_dismiss);

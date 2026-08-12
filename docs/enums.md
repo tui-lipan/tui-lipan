@@ -71,9 +71,9 @@ Typed widget tag on each `UiWidgetDesc` entry (`Frame`, `List`, `Input`, …). I
 
 ### `UiSnapshot`
 
-Combined `CapturedFrame` + `widgets` + `focus_key` / `hover_key`. Methods: `to_markdown()`; with `ui-snapshot-json` feature: `to_json()`, `to_json_pretty()`; with `ui-snapshot-png` feature: `to_png(&PngOptions)`, `to_png_default()` (both return `Result<Vec<u8>>`).
+Combined `CapturedFrame` + `widgets` + `focus_key` / `hover_key`. Methods: `to_markdown()`; with `ui-snapshot-json` feature: `to_json()`, `to_json_pretty()`; with `ui-snapshot-png` feature: `to_png(&PngOptions)`, `to_png_default()` (both return `Result<Vec<u8>>`), `baseline(dir)` → `SnapshotBaseline`.
 
-Headless: `TestBackend::capture_ui_snapshot()` after `render()`. Live: `Context::request_ui_snapshot_to(path)` and `request_ui_snapshot_to_slot(&UiSnapshotSlot)` — delivered **after the next paint**.
+Headless: `TestBackend::capture_ui_snapshot()` after `render()`. Live: `Context::request_ui_snapshot_to(path)` and `request_ui_snapshot_to_slot(&UiSnapshotSlot)` — delivered **after the next paint**. `TestBackend::baseline(dir)` and `UiSnapshot::baseline(dir)` compare a capture against a stored PNG (`name`, `tolerance`, `check`, `assert_baseline`); `TUI_LIPAN_UPDATE_BASELINES=1` accepts the current render. `TestBackend::advance(dt)` / `Sketch::advance(dt)` / `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` settle time-gated UI before capture. `TestBackend::advance_frame(dt)` is the one-frame clamp. Virtual advancement affects tui-lipan-managed time only; application `Instant::now()` is not advanced.
 
 ### `PngOptions` (`ui-snapshot-png`)
 
