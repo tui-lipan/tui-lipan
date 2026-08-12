@@ -1012,6 +1012,14 @@ impl<C: Component> Context<C> {
         self.env.command_chord_pending_since.get()
     }
 
+    /// Change the reveal delay set by
+    /// [`App::command_chord_reveal_delay`](crate::App::command_chord_reveal_delay) at runtime, for
+    /// an app whose delay comes from a config file it reloads while running. Takes effect on the
+    /// next chord; a chord already pending keeps being measured against the new value.
+    pub fn set_command_chord_reveal_delay(&self, delay: std::time::Duration) {
+        self.env.command_chord_reveal_delay.set(delay);
+    }
+
     /// Whether a command chord has been pending for at least
     /// [`App::command_chord_reveal_delay`](crate::App::command_chord_reveal_delay).
     ///

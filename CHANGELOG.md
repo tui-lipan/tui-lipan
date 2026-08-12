@@ -20,7 +20,9 @@ While the crate is on `0.x.y`:
   `Context::command_chord_pending()` is unchanged and still flips the instant the chord starts,
   which is what instant chrome (a mode badge, suppressing a caret) should keep using.
   `Context::command_chord_pending_since()` exposes the underlying instant for apps that want their
-  own policy. The default delay is zero, so behavior is unchanged unless the delay is set.
+  own policy, and `Context::set_command_chord_reveal_delay()` retimes it at runtime for an app whose
+  delay comes from a config file it reloads while running. The default delay is zero, so behavior is
+  unchanged unless the delay is set.
 - Root components can implement `Component::on_window_focus_changed` to observe host
   terminal/window focus transitions, with deterministic `TestBackend::set_window_focused` support.
 - `Tab::capped(bool)`, opting an inactive, unhovered tab into `Tabs::caps` end caps. A tab that
