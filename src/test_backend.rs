@@ -2528,6 +2528,28 @@ mod tests {
     }
 
     #[test]
+    fn the_reveal_delay_can_be_retimed_at_runtime() {
+        let mut backend = chord_reveal_backend(std::time::Duration::from_secs(60));
+
+        assert!(backend.send_key(ctrl_key('x')).expect("prefix succeeds"));
+        assert!(!backend.core.ctx.command_chord_revealed());
+
+        // A config reload lowering the delay applies to the chord already in flight.
+        backend
+            .core
+            .ctx
+            .set_command_chord_reveal_delay(std::time::Duration::ZERO);
+        assert!(backend.core.ctx.command_chord_revealed());
+
+        // And raising it again withdraws the reveal rather than latching.
+        backend
+            .core
+            .ctx
+            .set_command_chord_reveal_delay(std::time::Duration::from_secs(60));
+        assert!(!backend.core.ctx.command_chord_revealed());
+    }
+
+    #[test]
     fn mouse_release_clears_pending_command_chord_and_repaints() {
         let command_hit = Rc::new(std::cell::Cell::new(false));
         let app = crate::App::new().key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst);
