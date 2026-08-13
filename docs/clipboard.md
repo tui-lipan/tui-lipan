@@ -46,7 +46,7 @@ App::new()
 | `enable_primary_selection` | `bool` | platform | Enable X11 primary (middle-click) clipboard |
 | `paste_shift_insert_behavior` | `PasteShiftInsertBehavior` | platform | `PrimarySelection` or `Clipboard` |
 | `paste_max_bytes` | `usize` | unbounded | Clamp large text pastes to avoid stalls |
-| `enable_osc52` | `bool` | `false` | Emit OSC52 escape on copy/cut (useful over SSH) |
+| `enable_osc52` | `bool` | `true` | Emit OSC52 escape on copy/cut (useful over SSH) |
 | `paste_max_image_bytes` | `usize` | 10MB | Clamp large image pastes |
 | `copy_feedback_duration_ms` | `u16` | `150` | Brief paint-only selection flash after successful copy (`0` disables) |
 | `copy_feedback_style` | `Style` | lighten | Style merged onto the selection during the flash |
@@ -105,6 +105,11 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 ```
 
 `ClipboardHandle` returned by `ctx.clipboard()` respects the app-level `ClipboardConfig` - it automatically emits OSC 52 when enabled and writes to the primary selection on supported platforms.
+When OSC 52 is enabled, a native clipboard-provider failure does not fail `copy()`: the outer
+terminal still received the copy request. Terminal hosts that already applied their own policy to a
+parsed child request can call `relay_osc52()` to emit only the outer-terminal sequence.
+`accept_osc52_store()` applies a parsed child request only when `enable_osc52` is enabled, returning
+`Ok(false)` without touching the native clipboard otherwise. `ManagedTerminal` uses this policy.
 Call `ctx.flash_copy_feedback(node_id)` after a successful programmatic copy to reuse the
 configured selection flash on that exact widget. For the focused widget, obtain `node_id` with
 `ctx.focused_node_id()` before requesting the flash.

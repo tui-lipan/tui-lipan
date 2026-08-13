@@ -9,7 +9,9 @@ use alacritty_terminal::event::{Event as TermEvent, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, GridCell, Scroll};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell as TermCell, Flags as CellFlags};
-use alacritty_terminal::term::{self, Config as TermConfig, Term, TermMode};
+use alacritty_terminal::term::{
+    self, ClipboardType as TermClipboardType, Config as TermConfig, Term, TermMode,
+};
 use alacritty_terminal::vte::Parser as SemanticVteParser;
 use alacritty_terminal::vte::ansi::Processor as VteProcessor;
 use alacritty_terminal::vte::ansi::{
@@ -43,6 +45,24 @@ pub enum SemanticMarkKind {
     OutputStart,
     /// `OSC 133;D` — command output ended.
     OutputEnd,
+}
+
+/// Clipboard destination requested by a child through OSC 52.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalClipboardTarget {
+    /// The regular clipboard (`OSC 52;c`).
+    Clipboard,
+    /// The primary selection (`OSC 52;p` or `OSC 52;s`).
+    Selection,
+}
+
+/// A decoded request from a child to store text in a clipboard through OSC 52.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalClipboardEvent {
+    /// Clipboard destination requested by the child.
+    pub target: TerminalClipboardTarget,
+    /// Decoded UTF-8 text supplied by the child.
+    pub text: String,
 }
 
 /// A semantic mark recorded against the absolute text-line space used by
@@ -154,6 +174,8 @@ impl TerminalCellSize {
 #[derive(Clone, Default)]
 struct ResponseCapture {
     responses: Rc<RefCell<Vec<Vec<u8>>>>,
+    /// Decoded OSC 52 store requests for the host application to apply according to its policy.
+    clipboard_events: Rc<RefCell<Vec<TerminalClipboardEvent>>>,
     /// Number of BEL events emitted by the terminal parser.
     bell_count: Rc<Cell<u64>>,
     /// Latest window title set by the program via OSC 0/2; `None` once reset.
@@ -209,6 +231,15 @@ impl EventListener for ResponseCapture {
             TermEvent::Bell => self.bell_count.set(self.bell_count.get().saturating_add(1)),
             TermEvent::Title(title) => *self.title.borrow_mut() = Some(title),
             TermEvent::ResetTitle => *self.title.borrow_mut() = None,
+            TermEvent::ClipboardStore(target, text) => {
+                let target = match target {
+                    TermClipboardType::Clipboard => TerminalClipboardTarget::Clipboard,
+                    TermClipboardType::Selection => TerminalClipboardTarget::Selection,
+                };
+                self.clipboard_events
+                    .borrow_mut()
+                    .push(TerminalClipboardEvent { target, text });
+            }
             // Answer color queries from the active palette. Without this the
             // guest blocks until its own timeout (e.g. tui-lipan's host-color
             // refresh), since alacritty delegates the reply to the listener.
@@ -229,7 +260,7 @@ impl EventListener for ResponseCapture {
                 });
                 self.responses.borrow_mut().push(response.into_bytes());
             }
-            // Ignore other events (Clipboard, etc.) for now
+            // OSC 52 loads stay disabled by the parser's default OnlyCopy policy.
             _ => {}
         }
     }
@@ -1105,6 +1136,15 @@ impl TerminalScreen {
     /// the PTY stdin.
     pub fn drain_responses(&mut self) -> Vec<Vec<u8>> {
         std::mem::take(&mut *self.listener.responses.borrow_mut())
+    }
+
+    /// Drain decoded OSC 52 clipboard-store requests emitted by the child.
+    ///
+    /// Applying these requests is deliberately host policy: an application can ignore them,
+    /// write them to a local clipboard, or relay them through an outer terminal. OSC 52 clipboard
+    /// loads remain disabled, so a child cannot read clipboard contents through this parser.
+    pub fn drain_clipboard_events(&mut self) -> Vec<TerminalClipboardEvent> {
+        std::mem::take(&mut *self.listener.clipboard_events.borrow_mut())
     }
 
     /// Return the number of BEL events received since this screen was created.
@@ -2616,6 +2656,38 @@ mod tests {
         screen.process_bytes(b"text\r\n\x1b[31mred\x1b[0m");
 
         assert_eq!(screen.bell_count(), 0);
+    }
+
+    #[test]
+    fn osc52_stores_are_decoded_and_drained() {
+        let mut screen = TerminalScreen::new(2, 8, 10);
+
+        screen.process_bytes(b"\x1b]52;c;aGVsbG8=\x07\x1b]52;p;d29ybGQ=\x1b\\");
+
+        assert_eq!(
+            screen.drain_clipboard_events(),
+            vec![
+                TerminalClipboardEvent {
+                    target: TerminalClipboardTarget::Clipboard,
+                    text: "hello".to_string(),
+                },
+                TerminalClipboardEvent {
+                    target: TerminalClipboardTarget::Selection,
+                    text: "world".to_string(),
+                },
+            ]
+        );
+        assert!(screen.drain_clipboard_events().is_empty());
+    }
+
+    #[test]
+    fn osc52_loads_remain_disabled() {
+        let mut screen = TerminalScreen::new(2, 8, 10);
+
+        screen.process_bytes(b"\x1b]52;c;?\x07");
+
+        assert!(screen.drain_clipboard_events().is_empty());
+        assert!(screen.drain_responses().is_empty());
     }
 
     #[test]
