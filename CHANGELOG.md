@@ -13,6 +13,13 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `FileTree::initial_expanded_paths`, seeding expansion the tree then owns, so an app can restore
+  what the user had open after the tree unmounts or re-roots — a file panel following the focused
+  document, a sidebar whose tab was switched away and back. Paths may be absolute under the root or
+  relative to it, apply on mount and on every root change, and never disturb expansion the user has
+  since changed. Ancestors are deliberately not expanded along with a seeded path, so a directory
+  the user collapsed keeps its contents' expansion without being reopened by it. Pair with
+  `on_toggle` to record the set; ignored when controlled `expanded_paths` is set.
 - `TUI_LIPAN_SNAPSHOT_ADVANCE_MS`, `Sketch::advance(Duration)`, and
   `TestBackend::advance(Duration)`, so a headless capture can settle time-gated UI
   without sleeping: a which-key panel behind `App::command_chord_reveal_delay`, a finished

@@ -77,6 +77,7 @@ pub(crate) struct FileTreeProps {
     pub(crate) select_path: Option<Arc<str>>,
     pub(crate) force_scroll_to_selected: bool,
     pub(crate) expanded_paths: Option<HashSet<Arc<str>>>,
+    pub(crate) initial_expanded_paths: HashSet<Arc<str>>,
     pub(crate) selection_symbol: Option<Arc<str>>,
     pub(crate) selection_symbol_style: Option<Style>,
     pub(crate) unfocused_selection_symbol_style: Option<Style>,
