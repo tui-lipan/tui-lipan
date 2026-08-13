@@ -32,8 +32,8 @@ use crate::core::component::{Component, Context, Update};
 use crate::core::element::Element;
 use crate::style::Length;
 use crate::widgets::terminal::{
-    Terminal, TerminalInputEvent, TerminalPty, TerminalPtyConfig, TerminalPtyEvent,
-    TerminalRenderSnapshot, TerminalScreen, TerminalViewport,
+    Terminal, TerminalClipboardTarget, TerminalInputEvent, TerminalPty, TerminalPtyConfig,
+    TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen, TerminalViewport,
 };
 use crate::widgets::{Text, VStack};
 
@@ -366,6 +366,11 @@ impl Component for ManagedTerminal {
                                     ctx.state.status = ManagedTerminalStatus::Error(Arc::from(msg));
                                     break;
                                 }
+                            }
+                        }
+                        for event in ctx.state.screen.drain_clipboard_events() {
+                            if matches!(event.target, TerminalClipboardTarget::Clipboard) {
+                                let _ = ctx.clipboard().accept_osc52_store(&event.text);
                             }
                         }
                         ctx.state.snapshot = ctx.state.screen.render_snapshot();

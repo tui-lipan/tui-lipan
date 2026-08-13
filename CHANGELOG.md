@@ -11,6 +11,14 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- `TerminalScreen::drain_clipboard_events()` exposes decoded OSC 52 clipboard-store requests so
+  terminal hosts can apply or relay child clipboard copies while retaining control of clipboard
+  policy. `ClipboardHandle::accept_osc52_store()` applies that policy for managed hosts, and
+  `relay_osc52()` relays an already-approved request without requiring a native clipboard provider.
+  OSC 52 clipboard loads remain disabled.
+
 ### Changed
 
 - Docs site: navbar version reads `Cargo.toml`, headings/links/outline match the
