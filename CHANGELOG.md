@@ -22,8 +22,9 @@ While the crate is on `0.x.y`:
   Because the overshoot is a fraction of the animated *distance*, a fixed amplitude flings a
   long-distance animation proportionally far; the amplitude lets a caller ask for a bounded nudge
   instead (`permille = 1000 * wanted_units / distance_units`). The requested amplitude is what you
-  get: the curve Newton-solves the tension for it, since pinning both endpoints of the cubic family
-  leaves no closed-form inverse. `0` degenerates to a plain cubic ease-out.
+  get up to the documented `MAX_BACK_OVERSHOOT_PERMILLE` ceiling of `500`: the curve Newton-solves
+  the tension for it, since pinning both endpoints of the cubic family leaves no closed-form
+  inverse. Larger requests saturate at the ceiling, and `0` degenerates to a plain cubic ease-out.
 
   Adds a variant to the public `Easing` enum, so an exhaustive `match` on it now needs another arm.
   (breaking)

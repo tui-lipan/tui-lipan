@@ -62,9 +62,11 @@ pub fn ease_out_elastic(t: f32) -> f32 {
 const STANDARD_BACK_TENSION: f32 = 1.701_58;
 /// Peak overshoot of the standard `easeOutBack`, in thousandths of the animated distance.
 pub const STANDARD_BACK_OVERSHOOT_PERMILLE: u16 = 100;
-/// Ceiling on the requested overshoot. Past roughly half the animated distance the "settle" stops
-/// reading as a settle, and the curve dips far enough below its start to look like a wind-up.
-const MAX_BACK_OVERSHOOT_PERMILLE: u16 = 500;
+/// Maximum peak overshoot delivered by [`ease_out_back`], in thousandths of the distance.
+///
+/// Larger requests saturate at this value because greater amplitudes stop reading as a settle and
+/// begin to look like a wind-up.
+pub const MAX_BACK_OVERSHOOT_PERMILLE: u16 = 500;
 
 /// Back ease-out curve: overshoots past 1.0 exactly once, then settles.
 ///
@@ -79,7 +81,7 @@ const MAX_BACK_OVERSHOOT_PERMILLE: u16 = 500;
 /// long distance and wanting a bounded nudge should scale the request down:
 /// `permille = 1000 * wanted_units / distance_units`. Requesting `0` degenerates
 /// to a plain cubic ease-out, which is the natural floor rather than a special
-/// case.
+/// case. Requests above [`MAX_BACK_OVERSHOOT_PERMILLE`] saturate at that ceiling.
 pub fn ease_out_back(t: f32, overshoot_permille: u16) -> f32 {
     let t = t.clamp(0.0, 1.0);
     // Both endpoints are algebraically exact but cancel to a few ULPs in f32, and a transition that
@@ -100,8 +102,8 @@ pub fn ease_out_back(t: f32, overshoot_permille: u16) -> f32 {
 ///
 /// Forcing `f(0) = 0` and `f(1) = 1` on the cubic `1 + c3·u³ + c1·u²` pins `c3 = c1 + 1`, which leaves
 /// the peak overshoot as `4c1³ / (27(c1 + 1)²)` — a cubic in `c1` with no usable closed-form inverse.
-/// Newton from a power-law seed reaches f32 precision in a couple of steps across the whole range, so
-/// the amplitude a caller asks for is the amplitude it gets.
+/// Newton from a power-law seed reaches f32 precision in a couple of steps across the supported
+/// range, so the amplitude a caller asks for is the amplitude it gets up to the documented ceiling.
 fn back_tension(overshoot_permille: u16) -> f32 {
     let target = f32::from(overshoot_permille.min(MAX_BACK_OVERSHOOT_PERMILLE)) / 1000.0;
     if target <= 0.0 {
@@ -139,7 +141,8 @@ pub enum Easing {
     /// Back ease-out with a single overshoot, sized as thousandths of the animated distance
     /// (easings.net `easeOutBack` at [`Easing::EASE_OUT_BACK`]).
     EaseOutBack {
-        /// Peak overshoot in thousandths of the animated distance. `0` is a plain cubic ease-out.
+        /// Peak overshoot in thousandths of the animated distance. `0` is a plain cubic ease-out;
+        /// values above [`MAX_BACK_OVERSHOOT_PERMILLE`] saturate at that ceiling.
         overshoot_permille: u16,
     },
 }
