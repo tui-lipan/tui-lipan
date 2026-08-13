@@ -31,6 +31,7 @@
 //! scroll:down          scroll wherever the pointer is
 //! drag:#a>#b           press on one widget, move to another, release
 //! wait:500             advance the clock 500ms, ticking animations
+//! sleep:500            wait 500ms of real time, pumping messages, for async work
 //! ```
 
 use std::time::Duration;
@@ -110,6 +111,11 @@ pub enum Action {
     },
     /// Advance the clock, ticking animations.
     Wait(Duration),
+    /// Wait in *real* time, pumping messages, so asynchronous work can land.
+    ///
+    /// The counterpart to [`Wait`](Self::Wait), which moves a virtual clock and therefore cannot make
+    /// a subprocess answer or a socket deliver.
+    Sleep(Duration),
 }
 
 /// Parse an action script into ordered steps.
@@ -184,11 +190,22 @@ fn parse_action(step: &str) -> Result<Action> {
             };
             Ok(Action::Wait(Duration::from_millis(ms)))
         }
+        "sleep" => {
+            let ms = if arg.is_empty() {
+                DEFAULT_WAIT_MS
+            } else {
+                arg.trim_end_matches("ms")
+                    .trim()
+                    .parse()
+                    .map_err(|_| invalid(step, "expected milliseconds"))?
+            };
+            Ok(Action::Sleep(Duration::from_millis(ms)))
+        }
         other => Err(invalid(
             step,
             &format!(
                 "unknown action `{other}`; expected one of key, type, click, rclick, mclick, \
-                 hover, focus, scroll, drag, wait"
+                 hover, focus, scroll, drag, wait, sleep"
             ),
         )),
     }
@@ -275,6 +292,8 @@ pub(crate) trait ActionHost {
     fn perform_focus_step(&mut self, step: FocusStep) -> Result<()>;
     /// Advance the clock, ticking animations.
     fn perform_wait(&mut self, dt: Duration) -> Result<()>;
+    /// Wait in real time, pumping messages, so asynchronous work can land.
+    fn perform_sleep(&mut self, dt: Duration) -> Result<()>;
 }
 
 /// Resolve a target to a cell, erroring when a key is not on screen.
@@ -395,6 +414,7 @@ pub(crate) fn execute(host: &mut impl ActionHost, action: &Action) -> Result<()>
             host.perform_mouse(mouse_at(tx, ty, MouseKind::Up(MouseButton::Left)))
         }
         Action::Wait(dt) => host.perform_wait(*dt),
+        Action::Sleep(dt) => host.perform_sleep(*dt),
     }
 }
 

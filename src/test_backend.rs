@@ -820,6 +820,39 @@ where
         self.render();
     }
 
+    /// Wait `dt` of *real* time, pumping messages, so asynchronous work can land.
+    ///
+    /// The counterpart to [`Self::advance`], and the one to reach for when what you are waiting on is
+    /// a background task, a spawned process, or a socket read: no amount of virtual time makes another
+    /// thread finish, so a test that only advances the clock sees the pre-arrival state forever.
+    ///
+    /// Prefer [`Self::advance`] whenever the wait is for an animation or a `Command::after` timer -
+    /// it is instant and deterministic, while this one really does spend the wall time.
+    ///
+    /// Only messages are pumped; animations are left to [`Self::advance`], so a test settles for the
+    /// arrival and then advances for the motion rather than having one call guess at both.
+    ///
+    /// ```ignore
+    /// backend.dispatch(Msg::LoadFile)?;   // spawns a background read
+    /// backend.settle(Duration::from_millis(200));
+    /// assert!(backend.capture_frame().to_fixed_grid_lines().join("\n").contains("loaded"));
+    /// ```
+    pub fn settle(&mut self, dt: Duration) -> Result<()> {
+        const STEP: Duration = Duration::from_millis(16);
+
+        let deadline = std::time::Instant::now() + dt;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            std::thread::sleep(remaining.min(STEP));
+            self.pump()?;
+        }
+        self.render();
+        Ok(())
+    }
+
     /// Advance every time-based animation by at most one runner frame (50 ms).
     ///
     /// A single large `dt` behaves like one long frame rather than fast-forwarding to the end.
@@ -1636,6 +1669,10 @@ impl<C: Component> crate::ui_snapshot::ActionHost for TestBackend<C> {
     fn perform_wait(&mut self, dt: Duration) -> Result<()> {
         self.advance(dt);
         Ok(())
+    }
+
+    fn perform_sleep(&mut self, dt: Duration) -> Result<()> {
+        self.settle(dt)
     }
 }
 

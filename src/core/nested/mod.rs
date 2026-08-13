@@ -636,6 +636,7 @@ impl ComponentRegistry {
                         cmd.run(crate::core::component::CommandRuntime {
                             scope: entry.scope,
                             tx: self.command_tx.clone(),
+                            runtime_id: self.env.runtime_id,
                         });
                     }
                 }
@@ -813,6 +814,7 @@ impl ComponentRegistry {
                     cmd.run(crate::core::component::CommandRuntime {
                         scope: entry.scope,
                         tx: self.command_tx.clone(),
+                        runtime_id: self.env.runtime_id,
                     });
                 }
                 entry.initialized = true;
@@ -2157,6 +2159,7 @@ mod tests {
             dispatcher,
             command_tx,
             env: RuntimeEnv {
+                runtime_id: crate::core::component::RuntimeId::next(),
                 command_registry: CommandRegistry::default(),
                 quit,
                 focus: Rc::new(FocusContext::default()),
@@ -2421,6 +2424,7 @@ mod tests {
             dispatcher,
             command_tx,
             env: RuntimeEnv {
+                runtime_id: crate::core::component::RuntimeId::next(),
                 command_registry: CommandRegistry::default(),
                 quit,
                 focus: Rc::new(FocusContext::default()),
@@ -2626,6 +2630,7 @@ mod tests {
             dispatcher,
             command_tx,
             env: RuntimeEnv {
+                runtime_id: crate::core::component::RuntimeId::next(),
                 command_registry: CommandRegistry::default(),
                 quit,
                 focus: Rc::new(FocusContext::default()),

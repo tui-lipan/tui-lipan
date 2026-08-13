@@ -205,6 +205,7 @@ where
         let command_chord_reveal_delay = Rc::new(Cell::new(std::time::Duration::ZERO));
 
         let env = RuntimeEnv {
+            runtime_id: crate::core::component::RuntimeId::next(),
             command_registry: CommandRegistry::default(),
             quit,
             focus: focus.clone(),
@@ -363,6 +364,7 @@ where
             cmd.run(CommandRuntime {
                 scope: ScopeId(1),
                 tx: self.command_tx.clone(),
+                runtime_id: self.ctx.env().runtime_id,
             });
         }
     }
@@ -441,6 +443,7 @@ where
             cmd.run(CommandRuntime {
                 scope,
                 tx: self.command_tx.clone(),
+                runtime_id: self.ctx.env().runtime_id,
             });
         }
 
@@ -462,6 +465,7 @@ where
             cmd.run(CommandRuntime {
                 scope: ScopeId(1),
                 tx: self.command_tx.clone(),
+                runtime_id: self.ctx.env().runtime_id,
             });
         }
         update_level
@@ -495,6 +499,7 @@ where
                 cmd.run(CommandRuntime {
                     scope: cur,
                     tx: self.command_tx.clone(),
+                    runtime_id: self.ctx.env().runtime_id,
                 });
             }
 

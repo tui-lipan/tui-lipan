@@ -15,6 +15,15 @@ impl TimerService {
     }
 
     pub(super) fn schedule(&self, delay: Duration, task: Task) {
+        self.schedule_owned(delay, task, None);
+    }
+
+    pub(super) fn schedule_owned(
+        &self,
+        delay: Duration,
+        task: Task,
+        _owner: Option<super::RuntimeId>,
+    ) {
         #[cfg(feature = "web")]
         {
             use wasm_bindgen::JsCast as _;
@@ -40,5 +49,18 @@ impl TimerService {
             let _ = delay;
             super::TaskExecutor::global().execute(task);
         }
+    }
+
+    /// No-op on the web target: pending work lives in the host's `setTimeout` queue, which cannot be
+    /// brought forward, and without the `web` feature nothing is ever deferred in the first place.
+    ///
+    /// The harnesses that drive virtual time (headless capture, `TestBackend`) are native-only, so
+    /// this exists to keep the two backends interchangeable rather than to be called.
+    pub(super) fn advance_owned(
+        &self,
+        _horizon: web_time::Instant,
+        _owner: super::RuntimeId,
+    ) -> usize {
+        0
     }
 }

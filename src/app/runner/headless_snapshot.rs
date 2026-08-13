@@ -33,6 +33,8 @@ const SCRIPT_ENV: &str = "TUI_LIPAN_SNAPSHOT_SCRIPT";
 const DIAGNOSTIC_ENV: &str = "TUI_LIPAN_SNAPSHOT_DIAGNOSTIC";
 /// Virtual-clock advance in milliseconds before capturing time-gated UI.
 const ADVANCE_ENV: &str = "TUI_LIPAN_SNAPSHOT_ADVANCE_MS";
+/// Real milliseconds to wait, pumping, so asynchronous work can land before capturing.
+const SETTLE_ENV: &str = "TUI_LIPAN_SNAPSHOT_SETTLE_MS";
 
 /// Viewport used when `TUI_LIPAN_SNAPSHOT_VIEWPORT` is unset.
 ///
@@ -69,6 +71,11 @@ pub(super) struct HeadlessSnapshotConfig {
     pub(super) diagnostic: bool,
     /// Virtual time to advance (and tick) before capturing.
     pub(super) advance: Duration,
+    /// Real time to wait, pumping messages, before and after the action script.
+    ///
+    /// Distinct from `advance`, which moves a virtual clock and cannot make a subprocess answer or a
+    /// socket deliver. Zero unless asked for, so no capture slows down by default.
+    pub(super) settle: Duration,
 }
 
 impl HeadlessSnapshotConfig {
@@ -109,6 +116,7 @@ impl HeadlessSnapshotConfig {
             actions,
             diagnostic: std::env::var(DIAGNOSTIC_ENV).as_deref() == Ok("1"),
             advance: env_duration_ms(ADVANCE_ENV).unwrap_or(Duration::ZERO),
+            settle: env_duration_ms(SETTLE_ENV).unwrap_or(Duration::ZERO),
         }))
     }
 
@@ -288,6 +296,7 @@ mod tests {
             actions: Vec::new(),
             diagnostic: true,
             advance: Duration::ZERO,
+            settle: Duration::ZERO,
         };
         assert_eq!(config.snapshot_options(), UiSnapshotOptions::diagnostic());
     }

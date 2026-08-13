@@ -6631,6 +6631,7 @@ fn headless_snapshot_config(
         actions: Vec::new(),
         diagnostic: false,
         advance: Duration::ZERO,
+        settle: Duration::ZERO,
     }
 }
 
@@ -6753,6 +6754,7 @@ fn key_script_config(
         actions,
         diagnostic: false,
         advance: Duration::ZERO,
+        settle: Duration::ZERO,
     }
 }
 
@@ -6854,6 +6856,7 @@ fn chord_reveal_snapshot_config(
         })],
         diagnostic: false,
         advance,
+        settle: Duration::ZERO,
     }
 }
 
@@ -6943,6 +6946,7 @@ fn headless_snapshot_viewports_write_suffixed_files() {
             actions: Vec::new(),
             diagnostic: false,
             advance: Duration::ZERO,
+            settle: Duration::ZERO,
         })
         .expect("multi-viewport snapshot succeeds");
 
@@ -7284,4 +7288,199 @@ fn cancel_only_swallows_an_unbound_key_after_the_prefix() {
     // The following key is ordinary again.
     runner.dispatch_layered_key(key(KeyCode::Char('x')));
     assert_eq!(keys.borrow().as_slice(), &[key(KeyCode::Char('x'))]);
+}
+
+/// Reveals itself only once a `Command::after` timer fires, the shape any app uses for a delayed
+/// affordance: a spawn animation's opacity gate, a which-key panel, a debounced result.
+struct DeferredRevealSmoke;
+
+impl Component for DeferredRevealSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = bool;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        false
+    }
+
+    fn init(&mut self, _ctx: &mut Context<Self>) -> Option<crate::Command> {
+        Some(crate::Command::after(Duration::from_millis(120), |link| {
+            link.send(());
+        }))
+    }
+
+    fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        ctx.state = true;
+        Update::full()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        Text::new(if ctx.state { "revealed" } else { "hidden" }).into()
+    }
+}
+
+/// Content arrives from a background task that has to actually wait - the shape of a subprocess
+/// answering, a socket delivering, or any thread the framework cannot fake with a clock.
+struct AsyncArrivalSmoke;
+
+impl Component for AsyncArrivalSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = bool;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        false
+    }
+
+    fn init(&mut self, _ctx: &mut Context<Self>) -> Option<crate::Command> {
+        Some(crate::Command::spawn(|link| {
+            std::thread::sleep(Duration::from_millis(80));
+            link.send(());
+        }))
+    }
+
+    fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        ctx.state = true;
+        Update::full()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        Text::new(if ctx.state { "arrived" } else { "waiting" }).into()
+    }
+}
+
+fn settle_snapshot_config(
+    path: std::path::PathBuf,
+    advance: Duration,
+    settle: Duration,
+) -> super::headless_snapshot::HeadlessSnapshotConfig {
+    super::headless_snapshot::HeadlessSnapshotConfig {
+        format: crate::ui_snapshot::UiSnapshotFileFormat::from_path(&path),
+        path,
+        viewports: vec![Rect {
+            x: 0,
+            y: 0,
+            w: 24,
+            h: 3,
+        }],
+        suffix_viewports: false,
+        frames: 2,
+        focus_steps: 0,
+        actions: Vec::new(),
+        diagnostic: false,
+        advance,
+        settle,
+    }
+}
+
+fn capture_to_string<C>(
+    component: C,
+    config: super::headless_snapshot::HeadlessSnapshotConfig,
+) -> String
+where
+    C: Component<Properties = ()> + 'static,
+{
+    let path = config.path.clone();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("temp dir");
+    }
+    AppRunner::new(App::new(), component, ())
+        .run_headless_snapshot(config)
+        .expect("headless snapshot succeeds");
+    std::fs::read_to_string(&path).expect("snapshot file exists")
+}
+
+fn snapshot_dir(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("tui-lipan-{name}-{}", std::process::id()))
+}
+
+#[test]
+fn a_virtual_advance_fires_a_deferred_command_so_its_state_is_captured() {
+    let dir = snapshot_dir("deferred-reveal");
+
+    // Without an advance the timer's deadline never arrives: the capture loop is synchronous and
+    // never sleeps, so the reveal is still pending.
+    let pending = capture_to_string(
+        DeferredRevealSmoke,
+        settle_snapshot_config(dir.join("pending.md"), Duration::ZERO, Duration::ZERO),
+    );
+    assert!(
+        pending.contains("hidden") && !pending.contains("revealed"),
+        "expected the reveal still pending:\n{pending}"
+    );
+
+    // Advancing past the delay runs it, which is the gap this closes - an application cannot settle
+    // a framework-owned timer itself, and the harness has no wall clock for it to wait on.
+    let revealed = capture_to_string(
+        DeferredRevealSmoke,
+        settle_snapshot_config(
+            dir.join("revealed.md"),
+            Duration::from_millis(200),
+            Duration::ZERO,
+        ),
+    );
+    assert!(
+        revealed.contains("revealed"),
+        "expected the advance to fire the deferred command:\n{revealed}"
+    );
+}
+
+#[test]
+fn a_real_settle_lets_asynchronous_work_land_before_capture() {
+    let dir = snapshot_dir("async-arrival");
+
+    // A virtual clock cannot make a background task finish, however far it is advanced.
+    let waiting = capture_to_string(
+        AsyncArrivalSmoke,
+        settle_snapshot_config(
+            dir.join("waiting.md"),
+            Duration::from_secs(5),
+            Duration::ZERO,
+        ),
+    );
+    assert!(
+        waiting.contains("waiting") && !waiting.contains("arrived"),
+        "advancing a virtual clock must not fake a background thread:\n{waiting}"
+    );
+
+    // Real time, pumped, does.
+    let arrived = capture_to_string(
+        AsyncArrivalSmoke,
+        settle_snapshot_config(
+            dir.join("arrived.md"),
+            Duration::ZERO,
+            Duration::from_millis(400),
+        ),
+    );
+    assert!(
+        arrived.contains("arrived"),
+        "expected the settle to let the background task land:\n{arrived}"
+    );
+}
+
+#[test]
+fn a_script_sleep_waits_in_real_time_where_the_author_put_it() {
+    let dir = snapshot_dir("script-sleep");
+
+    // `sleep:` exists so a wait can sit *between* scripted actions. The settle runs before the script
+    // only, so it cannot serve this: an author who needs to wait after a key has nowhere else to say
+    // so, and settling again afterwards would finish every animation the key started.
+    let mut config = settle_snapshot_config(dir.join("slept.md"), Duration::ZERO, Duration::ZERO);
+    config.actions = vec![crate::ui_snapshot::Action::Sleep(Duration::from_millis(
+        400,
+    ))];
+    let slept = capture_to_string(AsyncArrivalSmoke, config);
+    assert!(
+        slept.contains("arrived"),
+        "a scripted sleep should let the background task land:\n{slept}"
+    );
+
+    // Same script with a virtual wait instead: the clock moves, the thread does not.
+    let mut config = settle_snapshot_config(dir.join("waited.md"), Duration::ZERO, Duration::ZERO);
+    config.actions = vec![crate::ui_snapshot::Action::Wait(Duration::from_secs(5))];
+    let waited = capture_to_string(AsyncArrivalSmoke, config);
+    assert!(
+        waited.contains("waiting"),
+        "a virtual wait must not stand in for real time:\n{waited}"
+    );
 }
