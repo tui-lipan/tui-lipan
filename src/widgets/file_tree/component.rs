@@ -748,6 +748,14 @@ fn changed_only_empty_state(props: &FileTreeProps) -> Element {
     if let Some(text) = props.empty_text.clone() {
         list = list.empty_text(text);
     }
+    // Focus still lands here and still reports, so an application mirroring the tree's focus does
+    // not go stale for exactly the states where it has nothing to draw a cursor on.
+    if let Some(cb) = props.on_focus.clone() {
+        list = list.on_focus(cb);
+    }
+    if let Some(cb) = props.on_blur.clone() {
+        list = list.on_blur(cb);
+    }
     list.key(props.tree_focus_key.clone())
 }
 
