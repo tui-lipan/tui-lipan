@@ -7,9 +7,9 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::copy_feedback::CopyFeedbackRange;
 use crate::backend::ratatui_backend::common::{
-    DEFAULT_SCROLLBAR_THUMB, IntegratedScrollbarAppearance, ScrollbarAppearance,
+    CursorPlacement, DEFAULT_SCROLLBAR_THUMB, IntegratedScrollbarAppearance, ScrollbarAppearance,
     ScrollbarScrollState, calculate_visible_borders, integrated_vscrollbar_track_char,
-    is_cursor_visible, remember_cursor_position, render_integrated_scrollbar, render_vscrollbar,
+    is_cursor_visible, render_integrated_scrollbar, render_vscrollbar,
     resolve_scrollbar_thumb_style, style_paints_bg, to_ratatui_border_set, to_ratatui_border_type,
     to_ratatui_rect, to_ratatui_span, to_ratatui_style,
 };
@@ -209,7 +209,7 @@ pub(crate) struct TerminalRenderCtx<'a> {
     pub is_hovered: bool,
     pub blink_visible: bool,
     pub clip_rect: Option<Rect>,
-    pub cursor_sink: Option<&'a std::cell::Cell<Option<ratatui::layout::Position>>>,
+    pub caret: CursorPlacement<'a>,
     pub parent_integrated_v: Option<FrameIntegratedVTrack>,
     pub metrics_cache: Option<&'a RefCell<ScrollbarMetricsCache>>,
     pub node_theme: &'a Theme,
@@ -231,7 +231,7 @@ pub(crate) fn render_terminal(
         is_hovered,
         blink_visible,
         clip_rect,
-        cursor_sink,
+        caret,
         parent_integrated_v,
         metrics_cache,
         node_theme,
@@ -493,9 +493,10 @@ pub(crate) fn render_terminal(
         let cursor_x = content_rect.x.saturating_add(node.cursor_col as i16);
         let cursor_y = content_rect.y.saturating_add(node.cursor_row as i16);
         if is_cursor_visible(cursor_x, cursor_y, content_rect, clip_rect) {
-            let position = ratatui::layout::Position::new(cursor_x as u16, cursor_y as u16);
-            f.set_cursor_position(position);
-            remember_cursor_position(cursor_sink, position);
+            caret.place(
+                f,
+                ratatui::layout::Position::new(cursor_x as u16, cursor_y as u16),
+            );
         }
     }
 }
@@ -646,7 +647,7 @@ pub(crate) fn render_terminal_node(
             is_hovered,
             blink_visible: state.ctx.blink_visible,
             clip_rect: clip_bounds,
-            cursor_sink: Some(state.ctx.cursor_position),
+            caret: CursorPlacement::tracked(state.ctx.cursor_position, state.ctx.tree, node_id),
             parent_integrated_v,
             metrics_cache: Some(scrollbar_cache),
             node_theme: theme,

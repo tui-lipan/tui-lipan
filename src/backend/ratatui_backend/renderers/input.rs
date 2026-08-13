@@ -5,10 +5,10 @@ use ratatui::widgets::{Block, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::backend::ratatui_backend::common::{
-    calculate_visible_borders, clear_fg_preserve_bg_clipped, finalize_style,
-    remember_cursor_position, resolve_interactive_style_raw, style_backdrop, style_paints_bg,
-    style_uses_backdrop_bg, to_ratatui_border_set, to_ratatui_border_type, to_ratatui_rect,
-    to_ratatui_style, truncate_end_with_ellipsis,
+    CursorPlacement, calculate_visible_borders, clear_fg_preserve_bg_clipped, finalize_style,
+    resolve_interactive_style_raw, style_backdrop, style_paints_bg, style_uses_backdrop_bg,
+    to_ratatui_border_set, to_ratatui_border_type, to_ratatui_rect, to_ratatui_style,
+    truncate_end_with_ellipsis,
 };
 use crate::backend::ratatui_backend::render::{
     RenderState, apply_copy_feedback_to_selection_style,
@@ -44,7 +44,7 @@ pub(crate) struct InputRenderCtx<'a> {
     pub blink_visible: bool,
     pub disabled: bool,
     pub read_only: bool,
-    pub cursor_sink: Option<&'a std::cell::Cell<Option<ratatui::layout::Position>>>,
+    pub caret: CursorPlacement<'a>,
     pub rrect: ratatui::layout::Rect,
     pub clip_rect: Option<Rect>,
     pub error: Option<&'a str>,
@@ -84,7 +84,7 @@ pub(crate) fn render_input(
         blink_visible,
         disabled,
         read_only,
-        cursor_sink,
+        caret,
         rrect,
         clip_rect,
         error,
@@ -482,9 +482,10 @@ pub(crate) fn render_input(
             && cy >= effective_rrect.y as i16
             && cy < (effective_rrect.y as i32 + effective_rrect.height as i32) as i16
         {
-            let position = ratatui::layout::Position::new(cx.max(0) as u16, cy.max(0) as u16);
-            f.set_cursor_position(position);
-            remember_cursor_position(cursor_sink, position);
+            caret.place(
+                f,
+                ratatui::layout::Position::new(cx.max(0) as u16, cy.max(0) as u16),
+            );
         }
     }
 
@@ -613,7 +614,7 @@ pub(crate) fn render_input_node(
             blink_visible: state.ctx.blink_visible,
             disabled: node.disabled,
             read_only: node.read_only,
-            cursor_sink: Some(state.ctx.cursor_position),
+            caret: CursorPlacement::tracked(state.ctx.cursor_position, state.ctx.tree, node_id),
             rrect,
             clip_rect: clip_bounds,
             error: node.error.as_deref(),
@@ -633,7 +634,7 @@ mod tests {
     use ratatui::style::Modifier;
     use ratatui::{Terminal, TerminalOptions, Viewport};
 
-    use super::{InputRenderCtx, render_input};
+    use super::{CursorPlacement, InputRenderCtx, render_input};
     use crate::style::{BorderStyle, Padding, Rect, Style};
 
     fn test_input_ctx<'a>(
@@ -669,7 +670,7 @@ mod tests {
             blink_visible: true,
             disabled: false,
             read_only: false,
-            cursor_sink: None,
+            caret: CursorPlacement::untracked(),
             rrect: ratatui::layout::Rect::new(0, 0, rect.w, rect.h),
             clip_rect: None,
             error,

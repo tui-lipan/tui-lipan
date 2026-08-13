@@ -4,13 +4,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
 
 use crate::backend::ratatui_backend::common::{
-    DEFAULT_SCROLLBAR_THUMB, IntegratedScrollbarAppearance, ScrollbarAppearance,
+    CursorPlacement, DEFAULT_SCROLLBAR_THUMB, IntegratedScrollbarAppearance, ScrollbarAppearance,
     ScrollbarScrollState, calculate_visible_borders, clear_fg_preserve_bg_clipped, finalize_style,
-    integrated_hscrollbar_track_char, integrated_vscrollbar_track_char, remember_cursor_position,
-    render_hscrollbar, render_integrated_hscrollbar, render_integrated_scrollbar,
-    render_vscrollbar, resolve_interactive_style_raw, resolve_scrollbar_thumb_style,
-    style_backdrop, style_paints_bg, style_uses_backdrop_bg, to_ratatui_border_set,
-    to_ratatui_border_type, to_ratatui_rect, to_ratatui_style,
+    integrated_hscrollbar_track_char, integrated_vscrollbar_track_char, render_hscrollbar,
+    render_integrated_hscrollbar, render_integrated_scrollbar, render_vscrollbar,
+    resolve_interactive_style_raw, resolve_scrollbar_thumb_style, style_backdrop, style_paints_bg,
+    style_uses_backdrop_bg, to_ratatui_border_set, to_ratatui_border_type, to_ratatui_rect,
+    to_ratatui_style,
 };
 use crate::backend::ratatui_backend::render::{
     FrameIntegratedHTrack, FrameIntegratedVTrack, RenderState, ancestor_frame_integrated_tracks,
@@ -880,7 +880,7 @@ pub(crate) struct TextAreaInteractionRenderCtx<'a> {
     pub blink_visible: bool,
     pub disabled: bool,
     pub read_only: bool,
-    pub cursor_sink: Option<&'a std::cell::Cell<Option<ratatui::layout::Position>>>,
+    pub caret: CursorPlacement<'a>,
 }
 
 pub(crate) struct TextAreaLayoutRenderCtx {
@@ -1005,7 +1005,7 @@ pub(crate) fn render_text_area(
         blink_visible,
         disabled,
         read_only,
-        cursor_sink,
+        caret,
     } = interaction;
     let TextAreaLayoutRenderCtx {
         rect,
@@ -1156,9 +1156,7 @@ pub(crate) fn render_text_area(
                     && cy >= rrect.y as i16
                     && cy < (rrect.y as i32 + rrect.height as i32) as i16
                 {
-                    let position = ratatui::layout::Position::new(cx as u16, cy as u16);
-                    f.set_cursor_position(position);
-                    remember_cursor_position(cursor_sink, position);
+                    caret.place(f, ratatui::layout::Position::new(cx as u16, cy as u16));
                 }
             }
         }
@@ -1828,9 +1826,7 @@ pub(crate) fn render_text_area(
                     && cy >= rrect.y as i16
                     && cy < (rrect.y as i32 + rrect.height as i32) as i16
                 {
-                    let position = ratatui::layout::Position::new(cx as u16, cy as u16);
-                    f.set_cursor_position(position);
-                    remember_cursor_position(cursor_sink, position);
+                    caret.place(f, ratatui::layout::Position::new(cx as u16, cy as u16));
                 }
             }
         } else {
@@ -1911,9 +1907,7 @@ pub(crate) fn render_text_area(
                     && cy >= rrect.y as i16
                     && cy < (rrect.y as i32 + rrect.height as i32) as i16
                 {
-                    let position = ratatui::layout::Position::new(cx as u16, cy as u16);
-                    f.set_cursor_position(position);
-                    remember_cursor_position(cursor_sink, position);
+                    caret.place(f, ratatui::layout::Position::new(cx as u16, cy as u16));
                 }
             }
         }
@@ -2360,7 +2354,7 @@ pub(crate) fn render_text_area_node(
                 blink_visible: state.ctx.blink_visible,
                 disabled: ta.disabled,
                 read_only: ta.read_only,
-                cursor_sink: Some(state.ctx.cursor_position),
+                caret: CursorPlacement::tracked(state.ctx.cursor_position, state.ctx.tree, node.id),
             },
             layout: TextAreaLayoutRenderCtx {
                 rect,

@@ -1,7 +1,6 @@
 use std::cell::Cell as StdCell;
 use std::thread_local;
 
-use ratatui::layout::Position;
 use ratatui::style::Color as RColor;
 
 use crate::app::ContrastPolicy;
@@ -82,15 +81,6 @@ fn render_terminal_bg_color() -> Color {
     current_render_terminal_bg()
         .map(from_ratatui_color)
         .unwrap_or(Color::Reset)
-}
-
-pub(crate) fn remember_cursor_position(
-    sink: Option<&StdCell<Option<Position>>>,
-    position: Position,
-) {
-    if let Some(sink) = sink {
-        sink.set(Some(position));
-    }
 }
 
 pub(crate) struct InteractiveStyleState {
