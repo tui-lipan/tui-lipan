@@ -13,6 +13,28 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `TUI_LIPAN_SNAPSHOT_SETTLE_MS`, the script action `sleep:500`, and `TestBackend::settle(dt)` — real
+  time, pumped, for capturing an app whose content arrives from somewhere a clock cannot reach: a
+  spawned process, a socket, a background task. A virtual advance cannot make another thread finish,
+  so such an app previously captured as empty chrome with nothing in the widget tree to explain it.
+  The env var settles before the action script so it acts on an app that has finished starting;
+  `sleep:` waits between actions, which the settle deliberately leaves alone so a mid-animation
+  capture stays possible. All default to zero, so no existing capture slows down. Adds a variant to
+  the public `ui_snapshot::Action` enum, so an exhaustive `match` on it now needs another arm.
+  (breaking)
+
+### Fixed
+
+- Advancing the virtual clock now also fires `Command::after` timers, so a headless capture or a
+  `TestBackend` settles work the framework itself deferred. Previously the clock moved but its own
+  timers did not, leaving a gap no caller could close: the deferred command is framework-owned, so an
+  application could not settle it, and the harness had no wall clock for it to wait on. Anything
+  revealed on a timer — a spawn animation's opacity gate, a debounce, a delayed affordance — stayed in
+  its pre-timer state for the whole capture. Timers run inline on the advancing thread, so their
+  messages are queued before `advance` returns; chains resolve within one call, bounded so a
+  self-rearming timer cannot spin. The timer thread still ignores the virtual offset, so skipping
+  virtual time never makes later real timers fire early.
+
 - `FileTree::initial_expanded_paths`, seeding expansion the tree then owns, so an app can restore
   what the user had open after the tree unmounts or re-roots — a file panel following the focused
   document, a sidebar whose tab was switched away and back. Paths may be absolute under the root or

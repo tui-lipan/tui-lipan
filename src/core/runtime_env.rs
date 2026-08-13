@@ -279,6 +279,12 @@ pub(crate) struct RuntimeEnv {
     /// Offset added to [`Instant::now`] for headless capture and tests, so time-gated UI
     /// (chord reveal, animations, blink) can be settled without waiting on the wall clock.
     pub clock_offset: Rc<Cell<Duration>>,
+    /// Identity of the runtime this env belongs to.
+    ///
+    /// Carried here because the delayed-task queue is process-wide while runtimes are not, so a clock
+    /// advance has to name whose timers it may fire. Copied into every clone, which all describe the
+    /// same runtime.
+    pub runtime_id: crate::core::component::RuntimeId,
 }
 
 impl RuntimeEnv {
@@ -313,9 +319,16 @@ impl RuntimeEnv {
     }
 
     /// Shift the virtual clock forward by `dt`.
+    ///
+    /// This also brings [`Command::after`](crate::Command::after) timers forward by the same amount,
+    /// running whatever becomes due. A clock that moved without firing the timers hung off it left a
+    /// gap no caller could close: the deferred command is framework-owned, so an application could
+    /// not settle it itself, and the harness had no wall clock for it to wait on. Deferred tasks run
+    /// inline here, so the messages they send are queued before this returns.
     pub(crate) fn advance_clock(&self, dt: Duration) {
         self.clock_offset
             .set(self.clock_offset.get().saturating_add(dt));
+        crate::core::component::advance_deferred_commands(self.now(), self.runtime_id);
     }
 
     /// How long until a pending chord becomes revealed, or `None` when nothing is pending or it is

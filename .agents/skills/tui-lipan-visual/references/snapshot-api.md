@@ -21,7 +21,8 @@ TUI_LIPAN_SNAPSHOT=/tmp/app.png cargo snap todo
 | `TUI_LIPAN_SNAPSHOT_FOCUS` | `0` | Focus advances before capture |
 | `TUI_LIPAN_SNAPSHOT_KEYS` | unset | Keys-only shorthand, e.g. `tab,tab,enter` |
 | `TUI_LIPAN_SNAPSHOT_SCRIPT` | unset | Action script; wins over `_KEYS` |
-| `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` | `0` | Virtual-clock advance before capture, ticking animations |
+| `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` | `0` | Virtual-clock advance before capture: animations and `Command::after` timers |
+| `TUI_LIPAN_SNAPSHOT_SETTLE_MS` | `0` | Real time waited before the script, pumping messages, for async work a clock cannot fake |
 | `TUI_LIPAN_SNAPSHOT_DIAGNOSTIC` | unset | `1` uses `UiSnapshotOptions::diagnostic()` |
 
 `cargo snap <example>` = `cargo run --features ui-snapshot-png,ui-snapshot-json --example`.
@@ -112,7 +113,8 @@ let frame = backend.capture_frame();
 | `capture_ui_snapshot()` | `UiSnapshot` | Visual + semantic |
 | `capture_ui_snapshot_with_options(&opts)` | `UiSnapshot` | Truncation/chrome toggles |
 | `capture_ui_snapshot_with_margin(20, 8, &opts)` | `UiSnapshot` | Fit-to-content plus design-review margin |
-| `advance(dt)` | - | Advance virtual time for the full duration and tick animations |
+| `advance(dt)` | - | Advance virtual time for the full duration: ticks animations and fires `Command::after` |
+| `settle(dt)` | `Result` | Wait real time, pumping messages, for async work a clock cannot fake |
 | `advance_frame(dt)` | - | One clamped runner frame (50 ms) |
 | `baseline(dir)` | `SnapshotBaseline` | Compare capture against a stored PNG (`ui-snapshot-png`) |
 | `capture_frame()` | `CapturedFrame` | Pixel buffer only |
@@ -247,7 +249,8 @@ Steps separated by `;` or newlines. `#name` targets a key; `col,row` a cell.
 | `focus:#email` / `focus:next` / `focus:prev` | Focus |
 | `scroll:#list,down` / `scroll:down` | Scroll |
 | `drag:#a>#b` | Press, move, release |
-| `wait:500` | Advance the clock |
+| `wait:500` | Advance the virtual clock (animations, `Command::after`) |
+| `sleep:500` | Wait real time, pumping messages, for async work |
 
 Keys fail loudly when absent; coordinates do not. Prefer keys.
 

@@ -1481,6 +1481,41 @@ impl<C: Component> AppRunner<C> {
         Ok(())
     }
 
+    /// Wait `total` of *real* time, pumping messages, so asynchronous work can land.
+    ///
+    /// The counterpart to [`headless_advance_clock`](Self::headless_advance_clock), and needed because
+    /// a virtual clock cannot make a child process answer, a socket deliver, or a background thread
+    /// finish. An app whose content arrives that way - a terminal multiplexer's panes, anything behind
+    /// a spawned process or a network read - captures as empty chrome without this, and nothing in the
+    /// widget tree explains why.
+    ///
+    /// Real time passing is enough on its own for animation: `clock_now` already combines the wall
+    /// clock with the virtual offset, so the ticker sees the elapsed time and advances transitions
+    /// without a separate nudge.
+    fn headless_settle(
+        &mut self,
+        total: std::time::Duration,
+        bounds: crate::style::Rect,
+    ) -> Result<()> {
+        const STEP: std::time::Duration = std::time::Duration::from_millis(16);
+
+        let deadline = std::time::Instant::now() + total;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            std::thread::sleep(remaining.min(STEP));
+            let mut dirty = DirtyTracker::default();
+            self.update_animation_cycle(&mut dirty);
+            self.drain_messages_and_commands(&mut dirty)?;
+            if dirty.is_dirty() {
+                self.headless_render(bounds);
+            }
+        }
+        Ok(())
+    }
+
     /// Render one off-screen snapshot, write it, and return without opening a terminal.
     ///
     /// Mirrors the root-init sequence of [`Self::run`] - set viewport, `init()`,
@@ -1504,6 +1539,15 @@ impl<C: Component> AppRunner<C> {
             // Focus stepping and the key script need a laid-out tree, so they run
             // after the first render rather than before the loop.
             if frame == 0 {
+                // Before the script only, so it acts on an application that has finished starting: a
+                // key sent into a half-initialised app is dispatched against the wrong state, and no
+                // amount of settling afterwards recovers it. Waiting *within* the script is the
+                // script's own `sleep:` action, which keeps placement with the author - settling again
+                // here would run every animation the script triggered to completion, making a
+                // mid-animation capture impossible.
+                if !config.settle.is_zero() {
+                    self.headless_settle(config.settle, bounds)?;
+                }
                 for _ in 0..config.focus_steps {
                     self.framework_focus_step(focus::FocusDirection::Next);
                 }
@@ -2688,5 +2732,9 @@ impl<C: Component> crate::ui_snapshot::ActionHost for HeadlessActionHost<'_, C> 
 
     fn perform_wait(&mut self, dt: std::time::Duration) -> Result<()> {
         self.runner.headless_advance_clock(dt, self.bounds)
+    }
+
+    fn perform_sleep(&mut self, dt: std::time::Duration) -> Result<()> {
+        self.runner.headless_settle(dt, self.bounds)
     }
 }

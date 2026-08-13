@@ -34,6 +34,7 @@ fn new_registry() -> ComponentRegistry {
         dispatcher,
         command_tx,
         env: RuntimeEnv {
+            runtime_id: crate::core::component::RuntimeId::next(),
             command_registry: CommandRegistry::default(),
             quit,
             focus: Rc::new(FocusContext::default()),
@@ -555,6 +556,7 @@ fn keyed_command_latest_only_coalesces_pending_tasks() {
     cmd1.run(CommandRuntime {
         scope,
         tx: dummy_cmd_tx.clone(),
+        runtime_id: super::RuntimeId::next(),
     });
 
     started_rx
@@ -569,6 +571,7 @@ fn keyed_command_latest_only_coalesces_pending_tasks() {
     cmd2.run(CommandRuntime {
         scope,
         tx: dummy_cmd_tx.clone(),
+        runtime_id: super::RuntimeId::next(),
     });
 
     // Third update: task C replaces pending B.
@@ -579,6 +582,7 @@ fn keyed_command_latest_only_coalesces_pending_tasks() {
     cmd3.run(CommandRuntime {
         scope,
         tx: dummy_cmd_tx,
+        runtime_id: super::RuntimeId::next(),
     });
 
     // Release the active task.
@@ -631,6 +635,7 @@ fn after_does_not_occupy_executor_workers_while_waiting() {
     let runtime = || CommandRuntime {
         scope: ScopeId(1),
         tx: cmd_tx.clone(),
+        runtime_id: super::RuntimeId::next(),
     };
 
     // Far more long timers than the pool has workers (worker count is capped at 8).
@@ -662,6 +667,7 @@ fn after_runs_the_task_once_the_delay_elapses() {
     .run(CommandRuntime {
         scope: ScopeId(1),
         tx: cmd_tx,
+        runtime_id: super::RuntimeId::next(),
     });
 
     ran_rx
@@ -681,6 +687,7 @@ fn after_fires_in_due_order_regardless_of_submission_order() {
     let runtime = || CommandRuntime {
         scope: ScopeId(1),
         tx: cmd_tx.clone(),
+        runtime_id: super::RuntimeId::next(),
     };
     let (order_tx, order_rx) = mpsc::channel();
 

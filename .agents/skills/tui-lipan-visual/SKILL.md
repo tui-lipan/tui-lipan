@@ -6,10 +6,11 @@ description: >-
   polishing an existing UI after a change; when checking chrome, spacing,
   truncation, focus, contrast, colour, or viewport behavior; and when
   investigating how a running app behaves - clicking, typing, opening a modal,
-  reproducing a UI bug, or inspecting which widget is where. Covers headless
-  capture, PNG inspection, kept design sketches, recordings, and live
-  agent-driven sessions over the control channel. Use tui-lipan-app-builder for
-  state, messages, props, and async wiring.
+  reproducing a UI bug, or inspecting which widget is where. Also use when a
+  capture came back blank, empty, or missing content and you need to work out
+  why. Covers headless capture, PNG inspection, kept design sketches,
+  recordings, and live agent-driven sessions over the control channel. Use
+  tui-lipan-app-builder for state, messages, props, and async wiring.
 ---
 
 # TUI-lipan Visual Work
@@ -72,8 +73,15 @@ your normal `cargo check` / `cargo test` build artifacts.
 | `TUI_LIPAN_SNAPSHOT_FOCUS` | `0` | Focus advances before capture, for visible focus chrome |
 | `TUI_LIPAN_SNAPSHOT_KEYS` | unset | Keys-only shorthand, e.g. `tab,tab,enter` |
 | `TUI_LIPAN_SNAPSHOT_SCRIPT` | unset | Full action script (below); wins over `_KEYS` |
-| `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` | `0` | Virtual-clock advance before capture, ticking animations. Use for which-key, spinners, settled transitions |
+| `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` | `0` | Virtual-clock advance before capture: ticks animations and fires `Command::after` timers. Use for which-key, spinners, settled transitions |
+| `TUI_LIPAN_SNAPSHOT_SETTLE_MS` | `0` | **Real** time waited before the script, pumping messages. Use when content arrives from a subprocess, socket, or background thread |
 | `TUI_LIPAN_SNAPSHOT_DIAGNOSTIC` | unset | `1` captures with `UiSnapshotOptions::diagnostic()` |
+
+**If the app does anything asynchronous, you need `_SETTLE_MS`.** The capture loop
+is synchronous and never sleeps, so a spawned process, a socket read, or a
+background task has not finished by the time the artifact is written. No amount of
+`_ADVANCE_MS` helps: a virtual clock cannot make another thread finish. This is the
+single most common reason a capture comes back as empty chrome.
 
 ### Reaching states behind a click or a keystroke
 
@@ -100,7 +108,18 @@ Steps are separated by `;` or newlines:
 | `focus:next` / `focus:prev` | Move focus one step |
 | `scroll:#list,down` | Scroll over a widget (`up` / `down`) |
 | `drag:#card>#column` | Press, move, release |
-| `wait:500` | Advance the clock 500ms, ticking animations |
+| `wait:500` | Advance the *virtual* clock 500ms: animations and `Command::after` |
+| `sleep:500` | Wait 500ms of *real* time, pumping messages, for async work |
+
+**`wait:` does not wait.** It moves a virtual clock — instant, deterministic, and
+the right choice for animations and timers. `sleep:` really does spend the wall
+time, and is only for waiting on another thread. Reach for `wait:` first; if the
+thing you need is a process or a socket, only `sleep:` works.
+
+`_SETTLE_MS` runs *before* the script, so the script acts on an app that has
+finished starting. Waiting *between* steps is `sleep:`'s job — which is also how you
+capture mid-animation, since a settle after the script would run every animation the
+script just started to completion.
 
 **Target by key, not coordinate.** `click:#submit` resolves through the current
 tree and *fails loudly* when the key is absent; `click:42,7` silently clicks
@@ -484,10 +503,47 @@ Semantic fields worth checking: `selected_index`, `scroll_offset`,
 `item_labels`, `total_items`, `value_masked`, `placeholder` vs `label`,
 `checkbox_state`.
 
-**When content vanishes**, re-capture with diagnostic options
-(`TUI_LIPAN_SNAPSHOT_DIAGNOSTIC=1` or `UiSnapshotOptions::diagnostic()`) and look
-for `zero-area` flags *before* changing code. The usual cause is a fixed sibling
-or a default `Flex(1)` stack/frame eating the viewport.
+## When a capture comes back empty or wrong
+
+**Re-capture as diagnostic markdown before changing anything.** This is the highest
+value move in the whole skill and the easiest to skip:
+
+```bash
+TUI_LIPAN_SNAPSHOT=/tmp/tree.md TUI_LIPAN_SNAPSHOT_DIAGNOSTIC=1 <run the app>
+```
+
+Then read the tree and work down this list. The order matters — the cheap checks
+rule out the expensive theories.
+
+| The tree says | Cause | Fix |
+|---------------|-------|-----|
+| The widget is absent entirely | It is not being rendered; state, not layout | Check the condition that gates it |
+| Present with a `zero-area` flag | A fixed sibling or a default `Flex(1)` stack/frame ate the viewport | Re-check `Length` choices, padding, gaps |
+| Present at a sensible rect, nothing drawn | **The app has not finished starting** | `_SETTLE_MS` for async work, `_ADVANCE_MS` for a timer or animation gate |
+| Present and correct, but the PNG is markdown | Binary built without the snapshot features | Rebuild with them; see below |
+
+**"Present at a sensible rect but nothing drawn" is the trap.** The tree looks
+perfect — right kind, right key, right rect — because the node genuinely is there.
+What is missing is an effect the dump does not report: an `Animated` sitting at
+opacity 0 because the reveal timer has not fired, or a widget whose content arrives
+from a process that has not answered. Do not conclude "the framework is not
+rendering it" from a healthy-looking rect; conclude "it is there and invisible", and
+ask *what is it waiting for*.
+
+A quick way to separate the two: if the app has a config or a flag that disables the
+fade or the animation, capture with it off. If the content appears, the geometry was
+never the problem and you are waiting on time or a thread.
+
+**A capture with no diagnostic is not evidence.** An empty canvas plus rendered
+chrome looks exactly the same whether the app is mid-startup, the widget is
+zero-area, or the state is genuinely empty. Silence is not a result — get the tree.
+
+### Rebuild trap
+
+Any plain `cargo test`, `cargo build`, or `cargo clippy` run rebuilds the binary
+*without* the snapshot features, after which a `.png` path silently receives markdown
+(it warns on stderr, which is easy to miss when you are tailing output). If a `.png`
+suddenly will not open, rebuild with the features before suspecting anything else.
 
 ## Exercise real states before judging
 
@@ -543,6 +599,12 @@ wiring.
 - **Raising tolerance to make a baseline pass.** That is deleting the check while
   keeping the ceremony. Find the nondeterminism, or update the baseline
   deliberately.
+- **Explaining an empty capture without a diagnostic tree.** The failure modes are
+  indistinguishable from the image alone, so a confident cause guessed from a blank
+  canvas is usually the wrong one. Capture the tree, then explain.
+- **Reaching for `_ADVANCE_MS` when the wait is on a thread.** Advancing a virtual
+  clock a whole simulated minute still will not make a subprocess answer. Async work
+  needs `_SETTLE_MS` or `sleep:`.
 - **Suspecting the framework first.** Wrong rects are usually a sizing-usage bug:
   re-check `Length` choices, container-vs-leaf defaults, padding, and gaps.
   `VStack`, `HStack`, and `Frame` default to `Flex(1)`; fixed headers, footers,

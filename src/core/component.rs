@@ -63,6 +63,15 @@ use timer_native::TimerService;
 #[cfg(target_arch = "wasm32")]
 use timer_wasm::TimerService;
 
+/// Skip `dt` of virtual time in the [`Command::after`] scheduler, running whatever becomes due.
+///
+/// Called from [`RuntimeEnv::advance_clock`](crate::core::runtime_env::RuntimeEnv::advance_clock), so
+/// every harness that drives the virtual clock settles deferred commands without asking. Returns how
+/// many tasks ran, which the tests use to assert the plumbing rather than a wall-clock coincidence.
+pub(crate) fn advance_deferred_commands(horizon: Instant, runtime_id: RuntimeId) -> usize {
+    TimerService::global().advance_owned(horizon, runtime_id)
+}
+
 impl std::fmt::Debug for Command {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Command").finish_non_exhaustive()
@@ -151,6 +160,28 @@ impl Command {
 pub(crate) struct CommandRuntime {
     pub(crate) scope: ScopeId,
     pub(crate) tx: CommandTx,
+    /// Which runtime is running this command, so a deferred timer can be attributed to it.
+    pub(crate) runtime_id: RuntimeId,
+}
+
+/// Identity of one runtime within the process.
+///
+/// The delayed-task queue is process-wide while runtimes are not - a test binary runs several in
+/// parallel - so a timer records the runtime that armed it and a virtual advance claims only its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct RuntimeId(u64);
+
+impl RuntimeId {
+    #[cfg(test)]
+    pub(crate) fn from_raw_for_tests(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    /// Mint an id no live runtime shares.
+    pub(crate) fn next() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
 }
 
 trait CommandAction {
@@ -208,7 +239,11 @@ where
 
         let token = CancellationToken::default();
         let link = CommandLink::new(runtime.scope, runtime.tx, token.clone());
-        TimerService::global().schedule(self.delay, Task::with_token(move || f(link), token));
+        TimerService::global().schedule_owned(
+            self.delay,
+            Task::with_token(move || f(link), token),
+            Some(runtime.runtime_id),
+        );
     }
 }
 

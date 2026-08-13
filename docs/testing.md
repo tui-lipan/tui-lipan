@@ -243,7 +243,8 @@ TUI_LIPAN_SNAPSHOT=/tmp/app.png cargo run --example todo --features ui-snapshot-
 | `TUI_LIPAN_SNAPSHOT_FOCUS` | `0` | Focus advances before capture, for visible focus chrome |
 | `TUI_LIPAN_SNAPSHOT_KEYS` | unset | Comma-separated key script dispatched before capture, e.g. `tab,tab,enter` |
 | `TUI_LIPAN_SNAPSHOT_SCRIPT` | unset | Full action script (see below); takes precedence over `_KEYS` |
-| `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` | `0` | Virtual-clock advance before capture, ticking animations to quiescence. Use this for a which-key panel behind `command_chord_reveal_delay`, a settled transition, or a spinner mid-spin |
+| `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` | `0` | Virtual-clock advance before capture, ticking animations to quiescence and firing `Command::after` timers. Use this for a which-key panel behind `command_chord_reveal_delay`, a settled transition, or a spinner mid-spin |
+| `TUI_LIPAN_SNAPSHOT_SETTLE_MS` | `0` | **Real** time to wait before the action script, pumping messages, so asynchronous work can land. Use this when content arrives from a spawned process, a socket, or a background thread — a virtual clock cannot make another thread finish |
 | `TUI_LIPAN_SNAPSHOT_DIAGNOSTIC` | unset | `1` captures with `UiSnapshotOptions::diagnostic()` |
 
 `TUI_LIPAN_SNAPSHOT_KEYS` uses ordinary keybinding syntax (`ctrl+n`, `esc`,
@@ -471,7 +472,15 @@ Steps are separated by `;` or newlines.
 | `scroll:#list,down` | Scroll over a widget (`up` / `down`) |
 | `scroll:down` | Scroll at the current pointer position |
 | `drag:#card>#column` | Press, move, release |
-| `wait:500` | Advance the clock 500ms, ticking animations |
+| `wait:500` | Advance the clock 500ms, ticking animations and firing `Command::after` timers |
+| `sleep:500` | Wait 500ms of **real** time, pumping messages, so asynchronous work can land |
+
+`wait:` is instant and deterministic — reach for it first. `sleep:` really does spend the wall time,
+and is only the answer when what you are waiting on is another thread: a spawned process, a socket
+read, a background task. `TUI_LIPAN_SNAPSHOT_SETTLE_MS` covers the common case of "let the app finish
+starting" before the script runs; `sleep:` is for waiting *between* actions, which is also why the
+settle deliberately does not run again afterwards — that would finish every animation the script had
+just started and make a mid-animation capture impossible.
 
 **Target widgets by key, not by coordinate.** `#submit` resolves through the
 current tree to that widget's rect and clicks its centre, so it survives the
