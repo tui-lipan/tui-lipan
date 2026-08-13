@@ -392,6 +392,7 @@ impl FileTree {
                 scroll_indicator_style: Style::default(),
                 empty_text: Some("Directory is empty".into()),
                 empty_text_style: Style::default(),
+                empty_text_padding: Padding::default(),
                 explorer: false,
                 tree_focus_key: TREE_INPUT_KEY.into(),
                 explorer_focus_key: EXPLORER_INPUT_KEY.into(),
@@ -871,6 +872,16 @@ impl FileTree {
     /// Set empty-state style.
     pub fn empty_text_style(mut self, style: Style) -> Self {
         self.props.empty_text_style = style;
+        self
+    }
+
+    /// Set the inset around the empty-state text.
+    ///
+    /// The tree's own rows are flush with the surface because the root row starts the hierarchy
+    /// there, but a placeholder is prose rather than a row, and applications usually align it with
+    /// their other empty states instead. Defaults to none, which keeps it flush with the rows.
+    pub fn empty_text_padding(mut self, padding: impl Into<Padding>) -> Self {
+        self.props.empty_text_padding = padding.into();
         self
     }
 
@@ -1511,6 +1522,23 @@ mod tests {
                 Arc::<str>::from("/repo/tests")
             ]))
         );
+    }
+
+    /// The placeholder is prose rather than a row, so it insets independently of the tree, which
+    /// stays flush with the surface.
+    #[test]
+    fn empty_state_builders_update_props() {
+        let tree = FileTree::new("/repo");
+        assert_eq!(tree.props.empty_text_padding, Padding::default());
+
+        let tree = tree
+            .empty_text("No changes")
+            .empty_text_style(Style::new().dim())
+            .empty_text_padding((0, 0, 0, 1));
+
+        assert_eq!(tree.props.empty_text.as_deref(), Some("No changes"));
+        assert_eq!(tree.props.empty_text_style, Style::new().dim());
+        assert_eq!(tree.props.empty_text_padding, Padding::from((0, 0, 0, 1)));
     }
 
     #[test]

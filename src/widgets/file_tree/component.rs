@@ -744,6 +744,7 @@ fn changed_only_empty_state(props: &FileTreeProps) -> Element {
         .scrollbar_config(props.scrollbar_config.clone())
         .focusable(props.focusable)
         .tab_stop(props.tab_stop)
+        .padding(props.empty_text_padding)
         .empty_text_style(props.empty_text_style);
     if let Some(text) = props.empty_text.clone() {
         list = list.empty_text(text);

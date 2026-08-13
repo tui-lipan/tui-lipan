@@ -1056,6 +1056,7 @@ Source: `src/widgets/file_tree/mod.rs:346` (`FileTree`).
 | `scroll_indicator_style` | `Style::default()` |
 | `empty_text` | `Some("Directory is empty".into())` |
 | `empty_text_style` | `Style::default()` |
+| `empty_text_padding` | `Padding::default()` |
 | `explorer` | `false` |
 | `tree_focus_key` | `TREE_INPUT_KEY.into()` |
 | `explorer_focus_key` | `EXPLORER_INPUT_KEY.into()` |

@@ -35,6 +35,10 @@ While the crate is on `0.x.y`:
 
   Adds a variant to the public `Easing` enum, so an exhaustive `match` on it now needs another arm.
   (breaking)
+- `FileTree::empty_text_padding`, insetting the empty-state placeholder independently of the tree.
+  Rows are flush with the surface because the root row starts the hierarchy there, but a placeholder
+  is prose rather than a row, and applications usually align it with their other empty states.
+  Defaults to none, which is the previous rendering.
 - `TUI_LIPAN_SNAPSHOT_ADVANCE_MS`, `Sketch::advance(Duration)`, and
   `TestBackend::advance(Duration)`, so a headless capture can settle time-gated UI
   without sleeping: a which-key panel behind `App::command_chord_reveal_delay`, a finished
