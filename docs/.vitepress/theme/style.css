@@ -2,6 +2,9 @@
    tui-lipan docs theme - visual continuation of tui-lipan.dev landing.
    Source of truth for tokens: https://github.com/tui-lipan/website/blob/main/src/styles.css
    (mirror manually when landing palette changes)
+
+   Structure, sizing, and component overrides are shared with
+   rozi.tui-lipan.dev so the two sites read as one family. Palette stays here.
    ───────────────────────────────────────────────────────────────────── */
 
 :root {
@@ -54,6 +57,9 @@
     --vp-code-tab-active-bar-color: #22d3ee;
     --vp-code-tab-active-text-color: #22d3ee;
     --vp-code-tab-text-color: #618898;
+
+    /* Measure for body copy. ~80 characters at 14px JetBrains Mono. */
+    --lipan-prose: 680px;
 
     /* Layout sizing - exact landing values */
     --vp-nav-height: 48px;
@@ -646,68 +652,102 @@ body {
     padding-top: 32px !important;
 }
 .VPDoc .content-container {
-    max-width: 820px !important;
+    max-width: 860px !important;
 }
 
-/* Headings */
+/* Measure. Body copy is capped at --lipan-prose (~80 characters at 14px
+   JetBrains Mono, which advances 0.6em); headings, tables, code blocks, and
+   images keep the full column. Headings are short enough that a wide box costs
+   nothing, and it keeps the h2 rule flush with the tables underneath it -
+   constraining the heading too would stop that line short of the data. */
+.vp-doc > div > p,
+.vp-doc > div > ul,
+.vp-doc > div > ol,
+.vp-doc > div > blockquote,
+.vp-doc > div > .custom-block {
+    max-width: var(--lipan-prose);
+}
+
+/* Headings - a ~1.22 step per level. The previous scale ran 13/14/17, which
+   left h3 a bold recolour of body text and h4 identical to it. */
 .vp-doc h1 {
-    font-size: 24px !important;
+    font-size: 31px !important;
     font-weight: 800 !important;
     color: var(--vp-c-text-1) !important;
-    letter-spacing: -0.02em;
-    line-height: 1.1;
-    margin: 0 0 8px !important;
+    letter-spacing: -0.025em;
+    line-height: 1.15;
+    margin: 0 0 12px !important;
 }
 .vp-doc h2 {
-    font-size: 17px !important;
+    /* The anchor is absolutely positioned against the padding box, so it needs
+       to be pushed down by exactly the rule's padding to land beside the text
+       rather than up in the gap. VitePress hardcodes 24px to match its own
+       padding; this keeps the two tied together instead. */
+    --h2-pad: 36px;
+    font-size: 23px !important;
     font-weight: 700 !important;
     color: var(--vp-c-text-1) !important;
-    margin: 32px 0 12px !important;
-    padding-top: 32px !important;
+    margin: 40px 0 16px !important;
+    padding-top: var(--h2-pad) !important;
     border-top: 1px solid var(--vp-c-divider) !important;
-    letter-spacing: -0.01em;
+    letter-spacing: -0.015em;
+    line-height: 1.3;
 }
 .vp-doc h2 > .header-anchor {
+    top: var(--h2-pad);
     border-top: none;
 }
+/* More space above than below, so an h3 binds to the text it introduces
+   instead of floating between two blocks. */
 .vp-doc h3 {
-    font-size: 14px !important;
+    font-size: 19px !important;
     font-weight: 700 !important;
     color: var(--vp-c-brand-1) !important;
-    margin: 20px 0 8px !important;
+    margin: 34px 0 10px !important;
     padding-top: 0 !important;
     border-top: none !important;
+    line-height: 1.35;
 }
 .vp-doc h4 {
-    font-size: 13px !important;
+    font-size: 16px !important;
+    font-weight: 700 !important;
     color: var(--vp-c-text-1) !important;
+    margin: 26px 0 8px !important;
+    line-height: 1.4;
 }
 
-/* Paragraphs and lists - readable but compact */
+/* Paragraphs and lists. The gap between paragraphs must exceed the line
+   height or consecutive paragraphs read as one block. */
 .vp-doc p,
 .vp-doc summary {
-    font-size: 13px;
+    font-size: 14px;
     color: var(--vp-c-text-2);
-    line-height: 1.7;
-    margin-bottom: 14px;
+    line-height: 1.75;
+    margin-bottom: 24px;
 }
 .vp-doc ul,
 .vp-doc ol {
-    padding-left: 20px;
-    margin-bottom: 14px;
+    padding-left: 22px;
+    margin-bottom: 24px;
 }
 .vp-doc li {
-    font-size: 13px;
+    font-size: 14px;
     color: var(--vp-c-text-2);
-    line-height: 1.6;
-    margin-bottom: 4px;
+    line-height: 1.7;
+    margin-bottom: 8px;
+}
+.vp-doc li > ul,
+.vp-doc li > ol {
+    margin-top: 8px;
+    margin-bottom: 8px;
 }
 .vp-doc blockquote {
     border-left: 3px solid var(--vp-c-divider);
-    padding: 8px 14px;
+    padding: 10px 16px;
+    margin-bottom: 24px;
     color: var(--vp-c-text-2);
     background: transparent;
-    font-size: 13px;
+    font-size: 14px;
 }
 .vp-doc blockquote p {
     margin: 0;
@@ -726,16 +766,42 @@ body {
     color: var(--vp-c-text-3);
 }
 
-/* Inline code - 12px, accent on bg, border-bright box */
+/* Inline code - accent on bg, border-bright box.
+   These pages are dense with inline code, so it takes a cooler cyan than
+   --vp-c-brand-1; a whole page of brand pills reads as every identifier being
+   a link. Links and h3 keep brand-1 so the two stay distinguishable. */
 .vp-doc :not(pre) > code {
     background: var(--vp-c-bg);
     border: 1px solid var(--vp-c-border);
     border-radius: 2px;
     padding: 1px 5px;
-    font-size: 12px;
-    color: var(--vp-c-brand-1);
+    font-size: 13px;
+    color: #7ec8d6;
     font-family: var(--vp-font-family-mono);
     font-weight: inherit;
+}
+
+/* A link whose text is inline code - [`Component`](…) - is still a link.
+   Without this the rule above wins and the link renders identically to the
+   plain `Component` chip beside it, with nothing to say it is clickable. Keep
+   the box, take the link's colour, so hover and visited follow along too.
+   Must stay after the rule it overrides: the two have equal specificity. */
+.vp-doc a code {
+    color: inherit;
+}
+
+/* A heading written as `## \`keymap.conf\`` is still a heading. Without this
+   the rule above wins - the size lives on the <code> child, not the <h2> box -
+   and renders section headings at pill size, smaller than body text.
+   Must stay after the rule it overrides: the two have equal specificity. */
+.vp-doc :is(h1, h2, h3, h4, h5, h6) > code {
+    font-size: inherit;
+    font-weight: inherit;
+    color: inherit;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
 }
 
 /* Horizontal rules */
@@ -753,16 +819,16 @@ body {
     background: var(--vp-code-block-bg) !important;
     border: 1px solid var(--vp-c-border);
     border-radius: 3px;
-    margin: 16px 0;
+    margin: 24px 0;
 }
 .vp-doc div[class*="language-"] pre {
     padding: 16px !important;
-    font-size: 12.5px !important;
+    font-size: 13.5px !important;
     line-height: 1.6 !important;
 }
 .vp-doc div[class*="language-"] code {
     font-family: var(--vp-font-family-mono);
-    font-size: 12.5px !important;
+    font-size: 13.5px !important;
     background: transparent !important;
     border: none !important;
     padding: 0 !important;
@@ -812,12 +878,12 @@ body {
     background: var(--vp-c-tip-soft);
     border-radius: 0 3px 3px 0;
     padding: 12px 16px;
-    margin: 16px 0;
-    font-size: 12.5px;
+    margin: 24px 0;
+    font-size: 13.5px;
     color: var(--vp-c-text-2);
 }
 .vp-doc .custom-block p {
-    font-size: 12.5px;
+    font-size: 13.5px;
     margin: 0;
     color: var(--vp-c-text-2);
 }
@@ -870,8 +936,8 @@ body {
 .vp-doc table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 12.5px;
-    margin: 16px 0;
+    font-size: 13px;
+    margin: 24px 0;
     display: table;
 }
 .vp-doc th {
@@ -892,7 +958,7 @@ body {
     background: var(--vp-c-bg-soft);
 }
 .vp-doc table code {
-    font-size: 11.5px;
+    font-size: 12px;
 }
 
 /* ───────────────────────────────────────────────────────────────────────
@@ -911,6 +977,19 @@ body {
 }
 .outline-marker {
     background: var(--vp-c-brand-1) !important;
+}
+/* Let long entries wrap instead of truncating. VitePress pins outline links to
+   a single 28px line and ellipsises the overflow, which loses the end of most
+   h3 titles now that `outline: [2, 3]` indents them into a narrower column.
+   The active-item marker is positioned from measured rects, so variable
+   heights are fine. */
+.VPDocAsideOutline .outline-link {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    height: auto !important;
+    line-height: 1.5 !important;
+    padding: 3px 0 !important;
 }
 
 /* ───────────────────────────────────────────────────────────────────────
@@ -1089,10 +1168,19 @@ body.scanlines::after {
         padding: 24px 20px 60px !important;
     }
     .vp-doc h1 {
-        font-size: 22px !important;
+        font-size: 26px !important;
     }
     .vp-doc h2 {
-        font-size: 16px !important;
+        font-size: 20px !important;
+        margin-top: 32px !important;
+        padding-top: 28px !important;
+    }
+    .vp-doc h3 {
+        font-size: 17px !important;
+        margin-top: 28px !important;
+    }
+    .vp-doc h4 {
+        font-size: 15px !important;
     }
 
     /* Keep the mobile hamburger aligned with the navbar's right padding. */

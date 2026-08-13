@@ -9,6 +9,7 @@ examples/web/*/pkg/
 # Docs builds
 docs/.vitepress/cache/
 docs/.vitepress/dist/
+docs/.vitepress/.temp/
 docs/node_modules/
 
 # Visual baseline diffs are generated on failure, never committed

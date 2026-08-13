@@ -1,4 +1,27 @@
 import { defineConfig } from "vitepress";
+import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { repoLinksPlugin } from "./repoLinks";
+
+const srcDir = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
+
+/** What the index page calls itself, in a tab and when shared. */
+const LANDING_TITLE = "tui-lipan documentation";
+
+/**
+ * Read from the manifest rather than written down here. The version used to be
+ * typed into the navbar chip, which is a chance for the site to advertise a
+ * release that does not exist.
+ */
+const LIPAN_VERSION = (() => {
+  const manifest = readFileSync(
+    fileURLToPath(new URL("../../Cargo.toml", import.meta.url)),
+    "utf8",
+  );
+  const found = /^version\s*=\s*"([^"]+)"/m.exec(manifest);
+  if (!found) throw new Error("no version in Cargo.toml");
+  return found[1];
+})();
 
 export default defineConfig({
   title: "tui-lipan",
@@ -19,6 +42,19 @@ export default defineConfig({
       { rel: "apple-touch-icon", sizes: "180x180", href: "/apple-touch-icon.png" },
     ],
     ["link", { rel: "manifest", href: "/site.webmanifest" }],
+    ["meta", { name: "theme-color", content: "#04090d" }],
+    ["meta", { property: "og:type", content: "website" }],
+    ["meta", { property: "og:url", content: "https://docs.tui-lipan.dev" }],
+    ["meta", { name: "twitter:card", content: "summary" }],
+    ["meta", { property: "og:title", content: LANDING_TITLE }],
+    [
+      "meta",
+      {
+        property: "og:description",
+        content:
+          "Component-based TUI framework for Rust - declarative components, layout, focus, overlays, and a rich widget set.",
+      },
+    ],
     ["link", { rel: "preconnect", href: "https://fonts.googleapis.com" }],
     [
       "link",
@@ -35,7 +71,23 @@ export default defineConfig({
 
   markdown: { theme: { light: "night-owl", dark: "night-owl" } },
 
+  // The index page takes its title from the <h1>, which reads
+  // "tui-lipan Documentation | tui-lipan". Name it for what the page is instead.
+  // This lives here rather than in `index.md`'s frontmatter because GitHub
+  // renders YAML frontmatter as a table at the top of the file, and that file
+  // is also the repository's documentation index.
+  transformPageData(pageData) {
+    if (pageData.relativePath === "index.md") {
+      pageData.title = LANDING_TITLE;
+      pageData.titleTemplate = false;
+    }
+  },
+
+  vite: { plugins: [repoLinksPlugin(srcDir)] },
+
   themeConfig: {
+    lipanVersion: LIPAN_VERSION,
+    outline: [2, 3],
     nav: [
       { text: "Landing", link: "https://tui-lipan.dev" },
       { text: "Crates.io", link: "https://crates.io/crates/tui-lipan" },
@@ -81,6 +133,7 @@ export default defineConfig({
           { text: "Overlays & Navigation", link: "/widgets/overlays" },
           { text: "Tabs", link: "/widgets/tabs" },
           { text: "Terminal", link: "/widgets/terminal" },
+          { text: "Terminal Images", link: "/widgets/terminal-images" },
           { text: "Effects", link: "/widgets/effects" },
         ],
       },
@@ -92,6 +145,7 @@ export default defineConfig({
           { text: "Inline Mode", link: "/inline-mode" },
           { text: "External Programs", link: "/external-programs" },
           { text: "Patterns & Recipes", link: "/patterns" },
+          { text: "Large App Shells", link: "/large-app-shells" },
           { text: "Performance", link: "/perf" },
           { text: "Web Backend", link: "/web-backend" },
         ],

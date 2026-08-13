@@ -11,6 +11,12 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Changed
+
+- Docs site: navbar version reads `Cargo.toml`, headings/links/outline match the
+  structural fixes from the rozi site, and markdown links that leave `docs/`
+  rewrite to GitHub so they work both in the repo and on docs.tui-lipan.dev.
+
 ## [0.2.0] - 2026-08-13
 
 ### Added

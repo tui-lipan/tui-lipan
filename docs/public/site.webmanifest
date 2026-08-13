@@ -1,6 +1,7 @@
 {
   "name": "tui-lipan",
   "short_name": "tui-lipan",
+  "description": "Component-based TUI framework for Rust.",
   "icons": [
     {
       "src": "/web-app-manifest-192x192.png",
@@ -15,7 +16,7 @@
       "purpose": "maskable"
     }
   ],
-  "theme_color": "#cca1ef",
-  "background_color": "#cca1ef",
+  "theme_color": "#04090d",
+  "background_color": "#04090d",
   "display": "standalone"
 }
