@@ -2194,6 +2194,7 @@ mod tests {
                 command_chord_pending_since: Rc::new(Cell::new(None)),
                 command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),
                 clock_offset: Rc::new(Cell::new(std::time::Duration::ZERO)),
+                last_mouse: Rc::new(Cell::new(None)),
             },
         })
     }
@@ -2459,6 +2460,7 @@ mod tests {
                 command_chord_pending_since: Rc::new(Cell::new(None)),
                 command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),
                 clock_offset: Rc::new(Cell::new(std::time::Duration::ZERO)),
+                last_mouse: Rc::new(Cell::new(None)),
             },
         });
         let mut host = HostState::default();
@@ -2665,6 +2667,7 @@ mod tests {
                 command_chord_pending_since: Rc::new(Cell::new(None)),
                 command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),
                 clock_offset: Rc::new(Cell::new(std::time::Duration::ZERO)),
+                last_mouse: Rc::new(Cell::new(None)),
             },
         });
         let mut host = HostState::default();

@@ -61,7 +61,6 @@ impl<C: Component> AppRunner<C> {
             self.drag.clear();
             self.mouse.hovered = None;
             self.mouse.hovered_item_index = None;
-            self.mouse.last_mouse = None;
         }
 
         Ok(true)

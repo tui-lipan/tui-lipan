@@ -248,16 +248,21 @@ fn dispatch_mouse_shared<C: Component, T: MouseDispatchCtx<C>>(
     mouse: MouseEvent,
 ) -> bool {
     let command_chord_dirty = matches!(mouse.kind, MouseKind::Up(_)) && ctx.reset_command_chord();
-    dispatch_mouse_inner(ctx, mouse) || command_chord_dirty
+    let adjusted_mouse = ctx.adjust_mouse(mouse);
+    let handled = dispatch_mouse_inner(ctx, adjusted_mouse);
+    ctx.mouse_state()
+        .last_mouse
+        .set(Some((adjusted_mouse.x, adjusted_mouse.y)));
+    handled || command_chord_dirty
 }
 
 fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
     ctx: &mut T,
     mouse: MouseEvent,
 ) -> bool {
-    let adjusted_mouse = ctx.adjust_mouse(mouse);
-    let x = adjusted_mouse.x;
-    let y = adjusted_mouse.y;
+    let x = mouse.x;
+    let y = mouse.y;
+    let adjusted_mouse = mouse;
     if ctx.update_toast_hover(x, y) {
         return true;
     }
@@ -287,7 +292,7 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
         return drag_dirty;
     }
 
-    if matches!(mouse.kind, MouseKind::Up(_)) && ctx.forward_terminal_mouse(adjusted_mouse) {
+    if matches!(mouse.kind, MouseKind::Up(_)) && ctx.forward_terminal_mouse(mouse) {
         return true;
     }
 
@@ -295,7 +300,7 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
         return result;
     }
 
-    if let Some(result) = transition_mouse_move(ctx, adjusted_mouse, x, y) {
+    if let Some(result) = transition_mouse_move(ctx, mouse, x, y) {
         return result;
     }
 
@@ -320,11 +325,11 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
         hover_dirty = ctx.update_hover(x, y);
     }
 
-    if let Some(result) = transition_scroll_wheel(ctx, adjusted_mouse, x, y) {
+    if let Some(result) = transition_scroll_wheel(ctx, mouse, x, y) {
         return result;
     }
 
-    if let Some(result) = transition_right_click(ctx, adjusted_mouse, &mouse, x, y, hover_dirty) {
+    if let Some(result) = transition_right_click(ctx, mouse, &mouse, x, y, hover_dirty) {
         return result;
     }
 

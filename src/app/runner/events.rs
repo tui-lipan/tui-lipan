@@ -794,7 +794,7 @@ impl<C: Component> AppRunner<C> {
     }
 
     pub(crate) fn dispatch_mouse_move(&mut self, mouse: MouseEvent) -> bool {
-        if self.mouse.last_mouse == Some((mouse.x, mouse.y)) {
+        if self.mouse.last_mouse.get() == Some((mouse.x, mouse.y)) {
             return false;
         }
 
@@ -850,11 +850,11 @@ impl<C: Component> AppRunner<C> {
             return true;
         }
         if !self.core.tree.has_hoverables() {
-            self.mouse.last_mouse = Some((x, y));
+            self.mouse.last_mouse.set(Some((x, y)));
             return false;
         }
-        let prev_mouse = self.mouse.last_mouse;
-        self.mouse.last_mouse = Some((x, y));
+        let prev_mouse = self.mouse.last_mouse.get();
+        self.mouse.last_mouse.set(Some((x, y)));
         if prev_mouse != Some((x, y)) {
             self.mouse.suppress_pointer_item_hover_nodes.clear();
         }
@@ -1149,7 +1149,7 @@ impl<C: Component> AppRunner<C> {
     }
 
     pub(crate) fn refresh_hover_from_last_mouse(&mut self) -> bool {
-        let Some((x, y)) = self.mouse.last_mouse else {
+        let Some((x, y)) = self.mouse.last_mouse.get() else {
             return false;
         };
 
@@ -1170,6 +1170,7 @@ impl<C: Component> AppRunner<C> {
     pub(crate) fn dispatch_mouse_scroll(&mut self, mouse: MouseEvent, scroll_ticks: u16) -> bool {
         let (x, y) = self.to_content_coords(mouse.x, mouse.y);
         let adjusted_mouse = MouseEvent { x, y, ..mouse };
+        self.mouse.last_mouse.set(Some((x, y)));
         let hovered_toast = crate::overlay::hovered_toast(&self.core.tree, x, y);
         let toast_hover_dirty = self
             .core

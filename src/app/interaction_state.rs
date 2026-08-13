@@ -16,7 +16,9 @@ use crate::layout::tag::Tag;
 use crate::style::Rect;
 use crate::text::editor::TextEditor;
 use crate::text::input::TextInput;
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use web_time::Instant;
 
 /// Dirty level for the current frame.
@@ -286,7 +288,7 @@ pub(crate) struct MouseTrackingState {
     pub suppress_pointer_item_hover_nodes: std::collections::HashSet<NodeId>,
     /// Nodes whose row selection changed from a click this frame (not keyboard/programmatic).
     pub pointer_driven_item_hover_selection: std::collections::HashSet<NodeId>,
-    pub last_mouse: Option<(u16, u16)>,
+    pub last_mouse: Rc<Cell<Option<(u16, u16)>>>,
     /// For double/triple-click detection.
     pub last_click: Option<ClickState>,
     /// Track the node where the left mouse button was pressed to differentiate dragging from clicking.
@@ -303,6 +305,16 @@ pub(crate) struct MouseTrackingState {
     pub mouse_region_drag: Option<MouseRegionDragState>,
     /// Pending or active `PanView` drag-to-pan target.
     pub pan_view_drag: Option<PanViewDragState>,
+}
+
+impl MouseTrackingState {
+    /// Share the runtime's last-pointer cell so `Context::last_mouse` sees the same value.
+    pub(crate) fn with_pointer_cell(last_mouse: Rc<Cell<Option<(u16, u16)>>>) -> Self {
+        Self {
+            last_mouse,
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

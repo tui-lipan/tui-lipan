@@ -279,6 +279,11 @@ pub(crate) struct RuntimeEnv {
     /// Offset added to [`Instant::now`] for headless capture and tests, so time-gated UI
     /// (chord reveal, animations, blink) can be settled without waiting on the wall clock.
     pub clock_offset: Rc<Cell<Duration>>,
+    /// Last pointer in terminal content coordinates, shared with the runner's mouse state.
+    ///
+    /// Updated on motion even when the event is forwarded to a tracking terminal, so an app can
+    /// place something at the pointer from a key binding without having seen a move callback.
+    pub last_mouse: Rc<Cell<Option<(u16, u16)>>>,
     /// Identity of the runtime this env belongs to.
     ///
     /// Carried here because the delayed-task queue is process-wide while runtimes are not, so a clock

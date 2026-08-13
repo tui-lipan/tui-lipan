@@ -239,12 +239,14 @@ Emitted by: `Button::on_click`, `List::on_click`, `MouseRegion::on_click`
 
 ```rust
 pub struct MouseEvent {
-    pub x: u16,            // Terminal-space X
-    pub y: u16,            // Terminal-space Y
+    pub x: u16,            // Terminal content-space X
+    pub y: u16,            // Terminal content-space Y
     pub kind: MouseKind,   // Down, Up, Drag, ScrollUp, ScrollDown, ...
     pub mods: KeyMods,     // Modifier keys held
 }
 ```
+
+In inline mode, tui-lipan removes the viewport's terminal-row offset before delivering the event.
 
 ### `GraphNodeEvent`
 

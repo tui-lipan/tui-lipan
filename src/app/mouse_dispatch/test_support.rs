@@ -14,7 +14,7 @@ pub(crate) fn dispatch_mouse_move_test_backend<C: Component>(
     backend: &mut TestBackend<C>,
     mouse: MouseEvent,
 ) -> bool {
-    if backend.mouse.last_mouse == Some((mouse.x, mouse.y)) {
+    if backend.mouse.last_mouse.get() == Some((mouse.x, mouse.y)) {
         return false;
     }
     if !backend.core.tree.has_mouse_move_handlers() {
@@ -53,11 +53,11 @@ pub(crate) fn update_hover_test_backend<C: Component>(
         return true;
     }
     if !backend.core.tree.has_hoverables() {
-        backend.mouse.last_mouse = Some((x, y));
+        backend.mouse.last_mouse.set(Some((x, y)));
         return false;
     }
-    let prev = backend.mouse.last_mouse;
-    backend.mouse.last_mouse = Some((x, y));
+    let prev = backend.mouse.last_mouse.get();
+    backend.mouse.last_mouse.set(Some((x, y)));
     if !force_recompute && prev == Some((x, y)) {
         return false;
     }
@@ -1088,7 +1088,7 @@ pub(crate) fn dispatch_active_drag_test_backend<C: Component>(
     y: u16,
 ) -> Option<bool> {
     backend.drag.remember_pointer(x, y);
-    backend.mouse.last_mouse = Some((x, y));
+    backend.mouse.last_mouse.set(Some((x, y)));
     if drag::try_activate_drag_drop(
         &mut backend.core.tree,
         &mut backend.mouse,
