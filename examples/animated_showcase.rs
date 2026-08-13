@@ -4,13 +4,14 @@ use tui_lipan::prelude::*;
 
 struct AnimatedShowcase;
 
-const EASINGS: [Easing; 6] = [
+const EASINGS: [Easing; 7] = [
     Easing::Linear,
     Easing::EaseInQuad,
     Easing::EaseOutQuad,
     Easing::EaseInOutCubic,
     Easing::EaseInOutSine,
     Easing::EaseOutElastic,
+    Easing::EaseOutBack,
 ];
 
 const DURATIONS_MS: [u64; 4] = [120, 220, 360, 650];
@@ -506,6 +507,7 @@ fn easing_name(easing: Easing) -> &'static str {
         Easing::EaseInOutCubic => "EaseInOutCubic",
         Easing::EaseInOutSine => "EaseInOutSine",
         Easing::EaseOutElastic => "EaseOutElastic",
+        Easing::EaseOutBack => "EaseOutBack",
     }
 }
 

@@ -13,6 +13,14 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Easing::EaseOutBack` and `animation::ease_out_back`, the standard easings.net `easeOutBack`.
+  It crosses 1.0 once — peaking at ~1.102 near t = 0.58, then settling — which is what makes it
+  usable for springy *position* and rectangle animation, where the repeated crossings of
+  `EaseOutElastic` read as a 1-cell tremor on a character grid. The overshoot is a fraction of the
+  animated distance, so callers animating long distances may want to damp the part of the curve
+  above 1.0. Adds a variant to the public `Easing` enum, so an exhaustive `match` on it now needs
+  another arm. (breaking)
+
 - `TUI_LIPAN_SNAPSHOT_ADVANCE_MS`, `Sketch::advance(Duration)`, and
   `TestBackend::advance(Duration)`, so a headless capture can settle time-gated UI
   without sleeping: a which-key panel behind `App::command_chord_reveal_delay`, a finished
