@@ -13,6 +13,9 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Context::last_mouse()` — last pointer in terminal content coordinates, or `None` until a mouse
+  event has been seen. Updated on motion even when the event is forwarded to a tracking terminal, so
+  a key binding can place UI at the pointer without a move listener.
 - `TUI_LIPAN_SNAPSHOT_SETTLE_MS`, the script action `sleep:500`, and `TestBackend::settle(dt)` — real
   time, pumped, for capturing an app whose content arrives from somewhere a clock cannot reach: a
   spawned process, a socket, a background task. A virtual advance cannot make another thread finish,

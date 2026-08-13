@@ -1654,7 +1654,7 @@ impl<C: Component> AppRunner<C> {
     pub(crate) fn dispatch_active_drag(&mut self, x: u16, y: u16) -> Option<bool> {
         self.drag.autoscroll_layout_dirty = false;
         self.drag.remember_pointer(x, y);
-        self.mouse.last_mouse = Some((x, y));
+        self.mouse.last_mouse.set(Some((x, y)));
 
         if self.try_activate_drag_drop(x, y) {
             return Some(true);

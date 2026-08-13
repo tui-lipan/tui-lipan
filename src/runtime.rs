@@ -203,6 +203,7 @@ where
         let memo_dependency_recorder = Rc::new(RefCell::new(None));
         let command_chord_pending_since = Rc::new(Cell::new(None));
         let command_chord_reveal_delay = Rc::new(Cell::new(std::time::Duration::ZERO));
+        let last_mouse = Rc::new(Cell::new(None));
 
         let env = RuntimeEnv {
             runtime_id: crate::core::component::RuntimeId::next(),
@@ -240,6 +241,7 @@ where
             command_chord_pending_since,
             command_chord_reveal_delay,
             clock_offset: Rc::new(Cell::new(std::time::Duration::ZERO)),
+            last_mouse,
         };
 
         let components = crate::core::nested::ComponentRegistry::new(

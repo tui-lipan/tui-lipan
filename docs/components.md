@@ -120,6 +120,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `ctx.command_chord_pending_since()` | When the pending chord started, or `None` when none is pending |
 | `ctx.command_chord_revealed()` | Whether the pending chord has been held for at least [`App::command_chord_reveal_delay`](#deferring-chord-chrome); the signal for a which-key panel |
 | `ctx.set_command_chord_reveal_delay(d)` | Retime the reveal delay at runtime (config reload) |
+| `ctx.last_mouse()` | Last pointer in terminal content coordinates, or `None` until a mouse event has been seen. Updated even when motion is forwarded to a tracking terminal. |
 | `ctx.effect_phase()` | Current renderer animation phase; capture it when starting one-shot phase-based effects |
 | `ctx.mouse_capture_enabled()` | Current mouse capture state |
 | `ctx.set_mouse_capture(bool)` | Change mouse capture at runtime |

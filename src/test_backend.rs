@@ -197,6 +197,7 @@ where
             chord_mismatch_policy: app.chord_mismatch_policy,
         };
         let on_focus_changed = app.on_focus_changed.clone();
+        let last_mouse = core.ctx.env().last_mouse.clone();
 
         let mut backend = Self {
             core,
@@ -217,7 +218,7 @@ where
             focus_stack: Vec::new(),
             last_notified_focus: None,
             on_focus_changed,
-            mouse: MouseTrackingState::default(),
+            mouse: MouseTrackingState::with_pointer_cell(last_mouse),
             drag: DragState::default(),
             read_only_selection: HashMap::new(),
             copy_feedback: CopyFeedbackState::default(),
@@ -995,7 +996,7 @@ where
     }
 
     fn refresh_hover_from_last_mouse(&mut self) {
-        let Some((x, y)) = self.mouse.last_mouse else {
+        let Some((x, y)) = self.mouse.last_mouse.get() else {
             return;
         };
 
@@ -1053,7 +1054,7 @@ where
         crate::backend::ratatui_backend::capture_render::CaptureInteraction {
             focused: self.focused,
             hovered: self.mouse.hovered,
-            mouse_pos: self.mouse.last_mouse,
+            mouse_pos: self.mouse.last_mouse.get(),
         }
     }
 
@@ -1642,14 +1643,6 @@ impl<C: Component> crate::ui_snapshot::ActionHost for TestBackend<C> {
     }
 
     fn perform_mouse(&mut self, event: MouseEvent) -> Result<()> {
-        // A bare move must still update hover: send_mouse routes moves to
-        // `on_mouse_move` handlers, which most widgets do not have.
-        if matches!(event.kind, crate::core::event::MouseKind::Moved) {
-            use crate::app::mouse_dispatch::MouseDispatchCtx;
-            self.update_hover(event.x, event.y);
-            self.mouse.last_mouse = Some((event.x, event.y));
-            self.render();
-        }
         self.send_mouse(event)?;
         Ok(())
     }
@@ -2282,6 +2275,75 @@ mod tests {
             .focused()
             .expect("background focus should be restored after dismissal");
         assert_eq!(restored, focused);
+    }
+
+    #[test]
+    fn last_mouse_tracks_every_send_mouse_kind_on_context() {
+        struct Root;
+        impl Component for Root {
+            type Message = ();
+            type Properties = ();
+            type State = ();
+            fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+            fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+                Update::none()
+            }
+            fn view(&self, _ctx: &Context<Self>) -> Element {
+                Text::new("x").into()
+            }
+        }
+
+        let mut backend = TestBackend::new(Root);
+        assert_eq!(backend.core.ctx.last_mouse(), None);
+        let kinds = [
+            MouseKind::Moved,
+            MouseKind::Down(MouseButton::Left),
+            MouseKind::Drag(MouseButton::Left),
+            MouseKind::Up(MouseButton::Left),
+            MouseKind::ScrollDown,
+        ];
+        for (index, kind) in kinds.into_iter().enumerate() {
+            let position = (12 + index as u16, 7 + index as u16);
+            backend
+                .send_mouse(MouseEvent {
+                    x: position.0,
+                    y: position.1,
+                    kind,
+                    mods: KeyMods::default(),
+                })
+                .expect("mouse event");
+            assert_eq!(backend.core.ctx.last_mouse(), Some(position));
+        }
+    }
+
+    #[test]
+    fn scripted_hover_dispatches_mouse_move_callback() {
+        struct Root;
+        impl Component for Root {
+            type Message = ();
+            type Properties = ();
+            type State = usize;
+            fn create_state(&self, _props: &Self::Properties) -> Self::State {
+                0
+            }
+            fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+                ctx.state += 1;
+                Update::none()
+            }
+            fn view(&self, ctx: &Context<Self>) -> Element {
+                MouseRegion::new()
+                    .on_mouse_move(ctx.link().callback(|_| ()))
+                    .child(Text::new("x"))
+                    .into()
+            }
+        }
+
+        let mut backend = TestBackend::new(Root);
+        let action = crate::ui_snapshot::parse_script("hover:0,0")
+            .expect("parse hover")
+            .remove(0);
+        crate::ui_snapshot::execute(&mut backend, &action).expect("perform hover");
+        assert_eq!(*backend.state(), 1);
     }
 
     #[test]

@@ -619,6 +619,7 @@ impl<C: Component> AppRunner<C> {
             ..FocusState::default()
         };
         let on_focus_changed = app.on_focus_changed.clone();
+        let last_mouse = core.ctx.env().last_mouse.clone();
 
         AppRunner {
             title: app.title,
@@ -627,7 +628,7 @@ impl<C: Component> AppRunner<C> {
             focus,
             on_focus_changed,
             drag: DragState::default(),
-            mouse: MouseTrackingState::default(),
+            mouse: MouseTrackingState::with_pointer_cell(last_mouse),
             animation,
             copy_feedback: Default::default(),
             widgets: WidgetState::default(),
@@ -1006,7 +1007,7 @@ impl<C: Component> AppRunner<C> {
         let interaction = crate::backend::ratatui_backend::capture_render::CaptureInteraction {
             focused: self.focus.focused,
             hovered: self.mouse.hovered,
-            mouse_pos: self.mouse.last_mouse,
+            mouse_pos: self.mouse.last_mouse.get(),
         };
         let snapshot = crate::ui_snapshot::build_ui_snapshot(
             &self.core.tree,
@@ -1299,7 +1300,7 @@ impl<C: Component> AppRunner<C> {
         crate::backend::ratatui_backend::capture_render::CaptureInteraction {
             focused: self.focus.focused,
             hovered: self.mouse.hovered,
-            mouse_pos: self.mouse.last_mouse,
+            mouse_pos: self.mouse.last_mouse.get(),
         }
     }
 
@@ -1992,7 +1993,7 @@ impl<C: Component> AppRunner<C> {
                                 let needs_motion = self.needs_mouse_motion();
                                 if matches!(mouse.kind, MouseKind::Moved) && !needs_motion {
                                     let (x, y) = self.to_content_coords(mouse.x, mouse.y);
-                                    self.mouse.last_mouse = Some((x, y));
+                                    self.mouse.last_mouse.set(Some((x, y)));
                                     handled = true;
                                 }
 
@@ -2672,13 +2673,7 @@ impl<C: Component> crate::ui_snapshot::ActionHost for HeadlessActionHost<'_, C> 
     fn perform_mouse(&mut self, event: MouseEvent) -> Result<()> {
         match event.kind {
             crate::core::event::MouseKind::Moved => {
-                // Hover tracking and `on_mouse_move` handlers are separate
-                // paths: dispatch_mouse_move only serves explicit handlers and
-                // returns early when none exist, so hovering alone would never
-                // update hover state.
-                self.runner.update_hover(event.x, event.y);
-                self.runner.mouse.last_mouse = Some((event.x, event.y));
-                self.runner.dispatch_mouse_move(event);
+                self.runner.dispatch_mouse(event);
             }
             crate::core::event::MouseKind::ScrollUp | crate::core::event::MouseKind::ScrollDown => {
                 // A scripted wheel action is one raw tick; `dispatch_mouse_scroll` takes ticks and

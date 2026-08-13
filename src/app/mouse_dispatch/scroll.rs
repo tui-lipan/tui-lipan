@@ -12,8 +12,6 @@ pub(crate) fn transition_mouse_move<C: Component, T: MouseDispatchCtx<C>>(
 ) -> Option<bool> {
     if matches!(adjusted_mouse.kind, MouseKind::Moved) {
         if ctx.forward_terminal_mouse(adjusted_mouse) {
-            // Forwarded motion only writes bytes to the PTY; nothing in our
-            // own tree changed, so a repaint per motion event is pure waste.
             return Some(false);
         }
         let move_dirty = ctx.dispatch_mouse_move(adjusted_mouse);

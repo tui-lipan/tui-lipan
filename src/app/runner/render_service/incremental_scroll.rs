@@ -161,7 +161,7 @@ impl<C: Component> AppRunner<C> {
             return false;
         }
 
-        let Some((mx, my)) = self.mouse.last_mouse else {
+        let Some((mx, my)) = self.mouse.last_mouse.get() else {
             return false;
         };
 

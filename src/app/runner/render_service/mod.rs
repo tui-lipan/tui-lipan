@@ -935,7 +935,7 @@ impl<C: Component> AppRunner<C> {
         let hovered = self.mouse.hovered;
         let blink_visible = self.animation.blink_visible;
         let tree = &self.core.tree;
-        let mouse_pos = self.mouse.last_mouse;
+        let mouse_pos = self.mouse.last_mouse.get();
         let frame_area = {
             let frame = terminal.get_frame();
             frame.area()
@@ -1888,7 +1888,10 @@ mod tests {
         runner.last_frame_snapshot = Some(Buffer::empty(ratatui::layout::Rect::new(
             0, 0, viewport.w, viewport.h,
         )));
-        runner.mouse.last_mouse = Some((1, current.scroll_rows.start));
+        runner
+            .mouse
+            .last_mouse
+            .set(Some((1, current.scroll_rows.start)));
 
         assert!(
             runner

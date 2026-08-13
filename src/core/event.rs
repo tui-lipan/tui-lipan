@@ -26,7 +26,10 @@ pub enum MouseKind {
     ScrollDown,
 }
 
-/// A mouse event in terminal coordinates.
+/// A mouse event in terminal content coordinates.
+///
+/// In inline mode, the runtime removes the viewport's terminal-row offset before delivering the
+/// event to widgets and callbacks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct MouseEvent {
     /// X coordinate (column).
