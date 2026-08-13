@@ -480,24 +480,14 @@ impl Component for FileTreeComponent {
                     None
                 };
 
-                if ctx.props.change_view != FileTreeChangeView::ChangedOnly
-                    && expanded
-                    && !uses_provided_entries(&ctx.props)
-                    && let Some(path) = node_path.as_ref()
-                    && let Some(node) = node_by_path_mut(&mut ctx.state.root, path)
-                    && node.is_dir()
-                    && !node.loaded
-                {
-                    let result =
-                        read_directory(path, ctx.props.show_hidden, ctx.props.max_entries_per_dir);
-                    apply_directory_load(node, result);
-                }
-
                 if expanded
-                    && let Some(path) = node_path
-                    && uses_provided_entries(&ctx.props)
+                    && node_path.is_some()
+                    && (ctx.props.change_view != FileTreeChangeView::ChangedOnly
+                        || uses_provided_entries(&ctx.props))
                 {
-                    request_provided_directory(&mut ctx.state, &ctx.props, path);
+                    let expanded_paths =
+                        effective_expanded_paths(&ctx.props, &ctx.state).into_owned();
+                    load_expanded_directories(&mut ctx.state, &ctx.props, expanded_paths);
                 }
 
                 Update::full()
@@ -2846,6 +2836,99 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn opening_parent_loads_seeded_local_descendants() {
+        let dir = unique_component_test_dir("initial-expanded-open-parent");
+        std::fs::create_dir_all(dir.join("src/widgets")).expect("create dirs");
+        std::fs::write(dir.join("src/widgets/tree.rs"), "").expect("write file");
+        let root = dir.to_string_lossy().to_string();
+        let src = Arc::<str>::from(format!("{root}/src"));
+        let widgets = format!("{root}/src/widgets");
+        let props = crate::widgets::file_tree::FileTree::new(root)
+            .initial_expanded_paths([widgets.clone()])
+            .props;
+        let mut runtime = RuntimeCore::new_test(
+            FileTreeComponent::new(),
+            props,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 12,
+            },
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(std::cell::Cell::new(false)),
+        );
+
+        runtime.component.update(
+            FileTreeMsg::TreeToggled {
+                entry: Some(VisibleFileTreeEntry {
+                    path: src,
+                    kind: FileKind::Directory,
+                }),
+                expanded: true,
+            },
+            &mut runtime.ctx,
+        );
+
+        let node = node_by_path_mut(&mut runtime.ctx.state.root, &widgets).expect("widgets node");
+        assert!(node.loaded);
+        assert_eq!(node.children[0].name.as_ref(), "tree.rs");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn opening_parent_requests_seeded_provided_descendants() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let captured = requests.clone();
+        let props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::provided([
+                FileTreeDirectoryListing::new(".", [super::super::FileTreeEntry::directory("src")]),
+                FileTreeDirectoryListing::new(
+                    "src",
+                    [super::super::FileTreeEntry::directory("widgets")],
+                ),
+            ]))
+            .initial_expanded_paths(["src/widgets"])
+            .on_entry_request(crate::Callback::new(
+                move |request: FileTreeEntryRequest| {
+                    captured.borrow_mut().push(request.path);
+                },
+            ))
+            .props;
+        let mut runtime = RuntimeCore::new_test(
+            FileTreeComponent::new(),
+            props,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 12,
+            },
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(std::cell::Cell::new(false)),
+        );
+
+        runtime.component.update(
+            FileTreeMsg::TreeToggled {
+                entry: Some(VisibleFileTreeEntry {
+                    path: Arc::from("/remote/repo/src"),
+                    kind: FileKind::Directory,
+                }),
+                expanded: true,
+            },
+            &mut runtime.ctx,
+        );
+
+        assert_eq!(
+            requests.borrow().as_slice(),
+            &[Arc::from("/remote/repo/src/widgets")]
+        );
     }
 
     /// Re-rooting is the case the seed exists for: the tree drops everything it knew, so the same
