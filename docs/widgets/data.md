@@ -452,6 +452,13 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
 
 **Behavior:**
 - Local directories load on demand on first expand.
+- Every directory is expandable, including one that turns out to be empty; a lazy tree cannot know
+  a directory is empty until it has been opened, so its row keeps the same shape either way.
+- `empty_text` renders in place of the tree when a `ChangedOnly` view has nothing changed. Browsing
+  keeps its root row instead, since that row is the directory being browsed rather than a heading
+  over a projection. With `FileTreeChangeSource::Git` the placeholder waits for the first
+  `git status` to finish; with provided change data it appears as soon as the supplied list is
+  empty, so an application that fetches its own changes should vary `empty_text` while it loads.
 - With `FileTreeEntrySource::Provided`, an absent directory listing is pending: the widget renders
   `loading_label`, emits one `FileTreeEntryRequest` for the expanded path, and waits for the app to
   rebuild it with a matching `FileTreeDirectoryListing`. The callback must enqueue remote or other
