@@ -13,14 +13,20 @@ While the crate is on `0.x.y`:
 
 ### Added
 
-- `Easing::EaseOutBack` and `animation::ease_out_back`, the standard easings.net `easeOutBack`.
-  It crosses 1.0 once — peaking at ~1.102 near t = 0.58, then settling — which is what makes it
-  usable for springy *position* and rectangle animation, where the repeated crossings of
-  `EaseOutElastic` read as a 1-cell tremor on a character grid. The overshoot is a fraction of the
-  animated distance, so callers animating long distances may want to damp the part of the curve
-  above 1.0. Adds a variant to the public `Easing` enum, so an exhaustive `match` on it now needs
-  another arm. (breaking)
+- `Easing::EaseOutBack { overshoot_permille }` and `animation::ease_out_back`, a back ease-out with
+  a **tunable** single overshoot. It crosses 1.0 once and settles, which is what makes it usable for
+  springy *position* and rectangle animation, where the repeated crossings of `EaseOutElastic` read
+  as a 1-cell tremor on a character grid. `Easing::EASE_OUT_BACK` is the standard easings.net
+  `easeOutBack` (100‰, peaking at ~1.10 near t = 0.58).
 
+  Because the overshoot is a fraction of the animated *distance*, a fixed amplitude flings a
+  long-distance animation proportionally far; the amplitude lets a caller ask for a bounded nudge
+  instead (`permille = 1000 * wanted_units / distance_units`). The requested amplitude is what you
+  get: the curve Newton-solves the tension for it, since pinning both endpoints of the cubic family
+  leaves no closed-form inverse. `0` degenerates to a plain cubic ease-out.
+
+  Adds a variant to the public `Easing` enum, so an exhaustive `match` on it now needs another arm.
+  (breaking)
 - `TUI_LIPAN_SNAPSHOT_ADVANCE_MS`, `Sketch::advance(Duration)`, and
   `TestBackend::advance(Duration)`, so a headless capture can settle time-gated UI
   without sleeping: a which-key panel behind `App::command_chord_reveal_delay`, a finished
