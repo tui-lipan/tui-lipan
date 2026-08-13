@@ -19,12 +19,6 @@ While the crate is on `0.x.y`:
   `relay_osc52()` relays an already-approved request without requiring a native clipboard provider.
   OSC 52 clipboard loads remain disabled.
 
-### Changed
-
-- Docs site: navbar version reads `Cargo.toml`, headings/links/outline match the
-  structural fixes from the rozi site, and markdown links that leave `docs/`
-  rewrite to GitHub so they work both in the repo and on docs.tui-lipan.dev.
-
 ## [0.2.0] - 2026-08-13
 
 ### Added
@@ -41,197 +35,6 @@ While the crate is on `0.x.y`:
   capture stays possible. All default to zero, so no existing capture slows down. Adds a variant to
   the public `ui_snapshot::Action` enum, so an exhaustive `match` on it now needs another arm.
   (breaking)
-
-### Fixed
-
-- The caret no longer shows through whatever is drawn on top of the focused widget. The caret is the
-  host terminal's own cursor rather than a cell in the frame buffer, so a floating pane, a popover,
-  or any later sibling painted over a focused `Terminal`, `Input`, or `TextArea` still had it
-  blinking on top of them. Placement now asks the tree what sits topmost at the caret cell and
-  withholds the cursor when that is a layer outside the focused widget's own chain — including on
-  the incremental-scroll fast path, which places the caret without running the renderers.
-  Interactivity is the limit of what this can see: a purely decorative layer is not a hit-test
-  target, so it still lets the caret through, which keeps the failure safe in the direction of a
-  caret too many rather than one missing.
-
-- Advancing the virtual clock now also fires `Command::after` timers, so a headless capture or a
-  `TestBackend` settles work the framework itself deferred. Previously the clock moved but its own
-  timers did not, leaving a gap no caller could close: the deferred command is framework-owned, so an
-  application could not settle it, and the harness had no wall clock for it to wait on. Anything
-  revealed on a timer — a spawn animation's opacity gate, a debounce, a delayed affordance — stayed in
-  its pre-timer state for the whole capture. Timers run inline on the advancing thread, so their
-  messages are queued before `advance` returns; chains resolve within one call, bounded so a
-  self-rearming timer cannot spin. The timer thread still ignores the virtual offset, so skipping
-  virtual time never makes later real timers fire early.
-
-- `FileTree::initial_expanded_paths`, seeding expansion the tree then owns, so an app can restore
-  what the user had open after the tree unmounts or re-roots — a file panel following the focused
-  document, a sidebar whose tab was switched away and back. Paths may be absolute under the root or
-  relative to it, apply on mount and on every root change, and never disturb expansion the user has
-  since changed. Ancestors are deliberately not expanded along with a seeded path, so a directory
-  the user collapsed keeps its contents' expansion without being reopened by it. Pair with
-  `on_toggle` to record the set; ignored when controlled `expanded_paths` is set.
-- `Easing::EaseOutBack { overshoot_permille }` and `animation::ease_out_back`, a back ease-out with
-  a **tunable** single overshoot. It crosses 1.0 once and settles, which is what makes it usable for
-  springy *position* and rectangle animation, where the repeated crossings of `EaseOutElastic` read
-  as a 1-cell tremor on a character grid. `Easing::EASE_OUT_BACK` is the standard easings.net
-  `easeOutBack` (100‰, peaking at ~1.10 near t = 0.58).
-
-  Because the overshoot is a fraction of the animated *distance*, a fixed amplitude flings a
-  long-distance animation proportionally far; the amplitude lets a caller ask for a bounded nudge
-  instead (`permille = 1000 * wanted_units / distance_units`). The requested amplitude is what you
-  get up to the documented `MAX_BACK_OVERSHOOT_PERMILLE` ceiling of `500`: the curve Newton-solves
-  the tension for it, since pinning both endpoints of the cubic family leaves no closed-form
-  inverse. Larger requests saturate at the ceiling, and `0` degenerates to a plain cubic ease-out.
-
-  Adds a variant to the public `Easing` enum, so an exhaustive `match` on it now needs another arm.
-  (breaking)
-- `FileTree::empty_text_padding`, insetting the empty-state placeholder independently of the tree.
-  Rows are flush with the surface because the root row starts the hierarchy there, but a placeholder
-  is prose rather than a row, and applications usually align it with their other empty states.
-  Defaults to none, which is the previous rendering.
-- `TUI_LIPAN_SNAPSHOT_ADVANCE_MS`, `Sketch::advance(Duration)`, and
-  `TestBackend::advance(Duration)`, so a headless capture can settle time-gated UI
-  without sleeping: a which-key panel behind `App::command_chord_reveal_delay`, a finished
-  transition. The virtual clock is honoured by chord reveal and the animation ticker, which
-  runs in frame-sized steps for the requested duration. Action-script `wait:` uses the same
-  path. Default remains zero, so existing captures are unchanged. Virtual advancement
-  affects tui-lipan-managed time and animation state; application-owned wall-clock timers
-  and `Instant::now()` are not advanced. Headless capture runs the live runner ticker;
-  `TestBackend` / `Sketch` tick tree animations, transitions, overlays, and chord reveal,
-  not blink or spinner frames.
-- `TestBackend::baseline(dir)` and `UiSnapshot::baseline(dir)`, the Sketch baseline
-  affordance for apps that need real state. `.name()`, `.tolerance()`, `.check()`, and
-  `.assert_baseline()` match Sketch; `TUI_LIPAN_UPDATE_BASELINES=1` accepts the current
-  render. Baseline captures still force bitmap rendering.
-- `TUI_LIPAN_SNAPSHOT_VIEWPORTS=80x24,120x30,160x40`, capturing a breakpoint matrix in one
-  run and writing suffixed files (`app-80x24.png`, …). `TUI_LIPAN_SNAPSHOT_VIEWPORT` still
-  writes to the exact path when `_VIEWPORTS` is unset. A malformed entry fails the run
-  rather than being skipped.
-- `App::command_chord_reveal_delay(Duration)` and `Context::command_chord_revealed()`, for chord
-  affordances that should appear only when the user hesitates — a which-key panel, a hint bar. The
-  runtime schedules the frame at which the delay elapses, so a view reading `command_chord_revealed`
-  needs no timer of its own; a chord completed or cancelled before then never reveals.
-  `Context::command_chord_pending()` is unchanged and still flips the instant the chord starts,
-  which is what instant chrome (a mode badge, suppressing a caret) should keep using.
-  `Context::command_chord_pending_since()` exposes the underlying instant for apps that want their
-  own policy, and `Context::set_command_chord_reveal_delay()` retimes it at runtime for an app whose
-  delay comes from a config file it reloads while running. The default delay is zero, so behavior is
-  unchanged unless the delay is set.
-- Root components can implement `Component::on_window_focus_changed` to observe host
-  terminal/window focus transitions, with deterministic `TestBackend::set_window_focused` support.
-- `Tab::capped(bool)`, opting an inactive, unhovered tab into `Tabs::caps` end caps. A tab that
-  carries its own background for an app-specific reason — an unsaved marker, an error state — is
-  emphasized in a way the widget cannot infer, and previously read as a flat colored block beside
-  shaped peers. The remaining cap conditions are unchanged: untruncated, a background distinct from
-  the strip, and caps that fit the padding cells they replace.
-- `Style::elevate_by(f32)`, the `Style` form of `ColorTransform::Elevate`. Prefer it over
-  `Style::lighten_by` on hover/focus/active state styles: elevation is luminance-aware, so it lifts
-  a dark surface and dims a light one instead of washing both toward white, and being a transform it
-  composes with a color the element already carries rather than replacing it the way an explicit
-  `bg(..)` does. Previously reachable only as `transform_bg(ColorTransform::Elevate(..))`.
-- `Color::elevate()`, elevating by the default `0.08` step, completing the
-  `dim`/`dim_by`, `lighten`/`lighten_by` pairing. The default is deliberately much smaller than the
-  `0.35` those use: one surface step, not a wash.
-
-### Fixed
-
-- `FileTree` no longer strands an empty directory. Expandability came from the loaded children, so
-  a directory turned out to be empty, and closing it again left a row with no arrow and no way to
-  reopen it — a state only reachable by opening it once, since an unread directory was expandable.
-  A directory is now expandable because it is a directory. Collapsed directories also stop emitting
-  the placeholder child that used to stand in for this.
-- `FileTree::empty_text` now renders for a `ChangedOnly` view with nothing changed, instead of a
-  lone root row over an empty list. The root row is the one row a tree always has, so the
-  placeholder was unreachable there — but a changed-only root is a heading over a projection rather
-  than a directory being browsed, and a heading over nothing says less than "No changes". Browsing
-  keeps its root row. A `git status` still in flight holds the heading rather than claiming a clean
-  tree it is about to contradict; application-provided change data is taken as final, so an app that
-  fetches its own changes should vary `empty_text` while it loads.
-- `Esc` cancelling a pending command chord is no longer also delivered to the focused widget. One
-  press did two things, and for a terminal that was not a harmless extra byte: terminals read `ESC`
-  followed by a key as `Alt+<key>`, so cancelling a leader chord silently turned the next keystroke
-  into a meta chord. With no chord pending, `Esc` is untouched and still reaches whatever has focus.
-
-### Changed
-
-- `TestBackend::advance(Duration)` now consumes the full duration in 50 ms steps rather than
-  clamping to one frame. **(breaking)** The previous one-frame clamp is
-  `TestBackend::advance_frame(Duration)`. `backend.advance(400ms)` no longer silently means
-  50 ms. `Sketch::advance` is unchanged (it already consumed the full duration).
-- `RuntimeEnv::command_chord_pending: Rc<Cell<bool>>` becomes
-  `command_chord_pending_since: Rc<Cell<Option<Instant>>>`, so the pending chord carries its start
-  time rather than duplicating it in a second cell that could drift. **(breaking)** Migration: read
-  `Context::command_chord_pending()` as before; code touching the field directly replaces
-  `.get()` with `.get().is_some()`.
-- `Color::elevate(f32)` is renamed `Color::elevate_by(f32)`, so every amount-taking color modifier
-  ends in `_by` and the bare name is free for the default-amount form. **(breaking)** Migration:
-  rename `.elevate(x)` to `.elevate_by(x)`; `.elevate()` now means the default step.
-- `DatePicker` and `Radio` use roving focus (one tab stop) instead of making every
-  day cell / option a tab stop. Only the selected day / active option is
-  focusable; arrows move selection and focus follows via `focus_key` (derived by
-  default from `DatePicker` title / `Radio` option labels). `DatePicker::on_focus`
-  / `on_blur` are now `Callback<DateEvent>` and `Radio::on_focus` / `on_blur` are
-  `Callback<usize>`. Debug builds assert unique focusable keys after reconcile.
-  **(breaking)** Update handlers that expected `Callback<()>`.
-- `Hyperlink` `on_key` now runs **caller-first**: returning `true` consumes the key
-  before built-in Enter/Space activation. Previously activation ran first and the
-  custom handler was a fallback. **(breaking)** Migration: if your `on_key` should
-  not block activation, return `false` for Enter/Space (or omit those keys).
-- `ClipboardError` gained an `InvalidInput { operation, message }` variant for arguments the
-  clipboard cannot represent, distinct from `Provider` (the platform clipboard failed) and
-  `Unsupported` (the operation does not exist here). Retrying `InvalidInput` without changing the
-  input cannot succeed. **(breaking)** Only exhaustive `match` over `ClipboardError` needs
-  updating - add an `InvalidInput` arm, or match `{ .. }` as the existing call sites do.
-
-### Fixed
-
-- Handing the terminal to another program - a `ctrl+z` suspend, `$EDITOR`, a pager - now restores
-  the cursor. Ratatui hides it on every frame drawn without one and shows it again only when
-  `Terminal` drops, which a handoff never does, so the shell prompt came back with no visible
-  cursor until something else turned it on.
-- A `SIGTSTP` from outside the app (`kill -TSTP`, a parent shell) no longer stops the process with
-  the terminal still in raw mode, on the alternate screen and with mouse tracking on - which left
-  the shell prompt drawing over the frozen UI while mouse motion printed escape sequences into it.
-  The runner now takes the signal, releases the terminal at a frame boundary, and stops for real
-  with the default disposition back in place, so the shell still sees the job stop.
-- Mouse all-motion tracking (`1003`) is re-armed after the terminal comes back from an external
-  program or a suspend. Only basic capture is part of the resume sequence, so hover stayed dead
-  after returning from `$EDITOR` until something else toggled motion tracking.
-- Wheel events forwarded to a `Terminal` whose child has mouse tracking on no longer lose ticks.
-  The runner coalesces a burst of same-direction wheel events into one dispatch, but the terminal
-  forwarding path emitted a single mouse report and dropped the count, so the child saw one tick
-  where the host sent several. Hosts that emit several wheel events per physical notch made this
-  permanent rather than merely bursty: a TUI running inside a `Terminal` scrolled a fraction of
-  what the same TUI scrolled outside it. Forwarding stays a passthrough - the app-level
-  `scroll_wheel_multiplier` applies to local scrolling only, never to reports sent to a child.
-- Scripted `ui_snapshot` wheel actions apply `scroll_wheel_multiplier` once instead of squaring it.
-- `SearchPalette` can preserve the caller's matched-item order and can prioritize right-aligned
-  metadata over long labels through `preserve_item_order` and
-  `primary_truncate_description_first(false)`.
-- Terminal-native paste now cancels any pending app-command chord and repaints the cleared prefix
-  indicator, rather than leaving stale chord state visible.
-- Tabs hit-testing now follows actual rendered widths through Unicode truncation and ellipsis;
-  divider cells are inert for selection and per-tab hover, with symmetric repainting in either
-  direction.
-- `Splitter` hands each leftover column to the pane with the largest dropped fraction instead of to
-  the leftmost panes in index order. Sizes are floored from weights, so the spare columns were
-  landing on pane 0 regardless of which pane earned them - `[0.09, 0.45, 0.46]` across 10 columns
-  gave `[1, 5, 4]` rather than `[1, 4, 5]`. A drag round trips sizes through weights every frame,
-  so the misplacement could shift a pane the drag never touched. The weights-to-sizes round trip is
-  now exact.
-- `yazi` example no longer bumps `weights_nonce` on every splitter resize. The nonce means
-  "override whatever the splitter currently holds", so echoing it back each drag tick forced the
-  splitter to re-derive its exact columns from rounded weights instead of keeping its own.
-- Table headers no longer underline the selection-gutter spaces, so labels like `PID` do not pick
-  up a long underscore from `unselected_symbol` padding.
-- Measurement honors explicit `.width(Length::Px/Percent)` / `.height(...)` for every widget.
-  Auto/`Center` parents previously shrink-wrapped to content-only measure, so a child
-  `Input::…width(Length::Px(40))` (and the same pattern on `Button`, `Text`, `Checkbox`,
-  `Spacer`, …) was clamped away at reconcile. `Flex` still shrink-wraps so it does not
-  inflate Auto parents; `Percent` still falls back to content when the parent size is unknown.
-
-### Added
 
 - `Context::suspend_to_shell` stops the app to the shell the way `ctrl+z` does in an ordinary
   program. Raw mode clears the tty's `ISIG` flag, so the terminal driver never generates `SIGTSTP`
@@ -313,11 +116,6 @@ While the crate is on `0.x.y`:
   alone left. Large rects are outlined and thin ones filled; the outline reaches captures as well as
   the live paint, so a PNG shows what the operator sees. Cell targeting resolves to the smallest
   covering widget, keeping unkeyed widgets inspectable.
-- `hover:` actions now update hover state. Hover tracking and `on_mouse_move` handlers are separate
-  paths, and a bare move only reached the latter - which returns early when a widget has no move
-  handler, so hovering silently did nothing while a click (which moves, presses, releases) worked.
-- `AppRunner` records the bounds of its latest layout pass, so a capture taken between frames uses
-  the real viewport instead of a zero-sized one.
 
 - Action scripts drive a UI beyond typing: `click`, `rclick`, `mclick`, `hover`, `focus`, `scroll`,
   `drag`, `type`, `key`, and `wait`, separated by `;` or newlines. Available as
@@ -430,87 +228,9 @@ While the crate is on `0.x.y`:
 - Add configurable `FileTree::tree_focus_key` and `FileTree::explorer_focus_key` targets for
   composite focus routing and multiple simultaneously mounted trees.
 - Add `Tree::focus_key` for assigning a focus key directly to the tree's focusable list node.
-- `DraggableTabBar` now keeps successive close buttons under the pointer by temporarily giving a
-  deleted tab's width to its replacement until the mouse leaves the bar. Action tabs (for example a
-  trailing `+`) are excluded from that width lock.
 - `KeyBinding` parsing accepts the plus key as a bare `+` chord step or the name `plus`
   (including `alt-plus` / `alt-+`), while `+` inside a mixed step remains a modifier separator
   (`ctrl+c`). Canonical display maps crokey's `Hyphen`/`minus` labels to `-`.
-
-### Fixed
-
-- `TerminalPty` no longer loses the output of a command that writes and exits immediately.
-  `TerminalPtyEvent::Exited` came from a thread blocked on `child.wait()`, which returns the instant
-  the child dies — usually before the reader thread has been scheduled to pick up the bytes still
-  buffered on the master. Consumers reasonably treat `Exited` as "this PTY is finished" and drop the
-  handle, and dropping kills the reader, so those bytes were discarded rather than delivered late: a
-  fast command could show its exit status and none of its output. The exit event is now emitted by
-  whichever side can prove the stream is drained — the reader on end-of-stream or on an idle master
-  after the child is gone, with the wait thread stepping in only if the reader cannot get there — so
-  `Output` always precedes `Exited`. A killed PTY still reports its exit immediately.
-
-- `SearchPalette` no longer swallows its navigation keys when nothing matches. The internal input
-  interceptor claimed `Enter` (and the arrows, `PageUp`/`PageDown`, `Home`/`End`) unconditionally,
-  so an empty result list still sent an activation for a row that does not exist and reported the
-  key handled — `input_key_interceptor` never saw it. Those keys now fall through to the caller
-  where the palette has no row to act on, which is what lets `Enter` mean "create what was typed"
-  or "start something new" in an empty list. Navigation still outranks the caller everywhere the
-  palette can act on it.
-- Clearing or entering an app-command chord while a terminal has focus now claims a frame for chord
-  chrome (`command_chord_pending`), even when the key itself is forwarded with `DirtyLevel::None`.
-  A mismatch or Esc cancel no longer leaves a stale PREFIX indicator painted over a busy child TUI.
-- Clicking a `FileTree` explorer input now focuses it even when the tree is inside an excluded focus
-  scope.
-- Cross-bar `DraggableTabBar` drops now select the transferred tab on the destination bar by
-  emitting its `on_change` callback after `on_transfer`, restoring the expected active style.
-- Divider junctions now keep every same-axis segment that shares a cell (two titled horizontals
-  meeting a vertical) and pick the glyph from the union of arms, so a descending vertical tees as
-  `┬` instead of cornering as `┌`.
-- Fuzzy/Exact `BorderMergeMode` no longer wipes a neighbor's border-title on a shared seam that
-  already carries box-drawing: non-box glyphs stay put, and spaces that sit next to that text (the
-  `icon  title` gap) are preserved. Borders still replace ordinary underlay content (e.g. a modal
-  over text). Plain backdrop spaces still accept a border so parent fills with a foreground color do
-  not suppress frames. `Replace` still overwrites so occluding frames win.
-
-### Changed
-
-- MSRV raised to Rust 1.90 (breaking). The manifest declared `1.88` while the `image` feature family
-  resolves `ratatui-image → icy_sixel → quantette`, and `quantette 0.5.1` requires `1.90`;
-  `icy_sixel 0.5.0` pins that exact version, so no older resolution avoids it. `README.md` and
-  `CONTRIBUTING.md` had also drifted to a stale `1.85`, so all three now agree. The crate's own code
-  and its default features still build on 1.88 - update your toolchain (`rustup update stable`) if
-  you enable `image`, `terminal-images`, `image-full-formats`, or `ui-snapshot-png`.
-- The `todo` / `todo_ui` examples drop the outer "Todo App" bordered frame, give the New Task input
-  row `height: Length::Auto` (input stays `Flex` width), and nest Tips in a flex `VStack` so tip
-  text yields space instead of collapsing the bordered input in short terminals.
-- Floating `DragPreview::SourceSnapshot` previews are no longer forced to stay fully inside the
-  terminal. They stay anchored to the grab point under the cursor and cells that leave the
-  viewport are clipped, so large cards can slide partially off-screen (as in
-  `examples/drag_drop_kanban.rs`).
-- `DragSource` `preview_max_width` / `preview_max_height` of `None` no longer apply the old
-  60×20 defaults (breaking). Unset means paint the full source snapshot; pass
-  `Some(DEFAULT_PREVIEW_MAX_WIDTH)` / `Some(DEFAULT_PREVIEW_MAX_HEIGHT)` to keep the previous caps.
-
-- `CapturedFrame::to_png` and `UiSnapshot::to_png` / `to_png_default` now return
-  `Result<Vec<u8>>`, and `try_to_png` / `try_to_png_default` are removed (breaking). The infallible
-  forms returned an **empty buffer** when encoding failed, which wrote a zero-byte file that only
-  failed later, when something tried to read it. Migration: add `?` (or `.expect(...)`) at the call
-  site, and rename any `try_to_png*` call to `to_png*`.
-- The `tui-lipan-ui-sketch` and `tui-lipan-visual-design` agent skills are merged into a single
-  `tui-lipan-visual` skill (breaking, for anyone who copied them into their own skills directory).
-  They overlapped and gave contradictory advice: one told agents to delete their snapshot harness
-  when finished, the other told them to keep it. The merged skill ranks captures by cost - env-var
-  capture of a running app, then a kept `Sketch`, then a real test - and drops the throwaway
-  harness pattern entirely.
-- `Color::elevate` now applies its endpoint-blended lightness in OKLab with stable, gamut-mapped
-  relative chroma, preserving authored casts without weakening elevation or amplifying one-step
-  near-black tints.
-- Divider `label_padding` no longer clears blank cells around the label. Inset cells keep the
-  divider character (so a left inset of `1` reads as `─title`, matching Frame border titles), and
-  only the label's own cells interrupt the line. The value is now independent left/right insets
-  (`label_padding(n)` still sets both; `label_padding_axes(left, right)` sets them separately).
-
-### Added
 
 - Add `MouseRegion::drag_threshold(columns, rows)`, overriding how far the pointer must travel
   from the press before drag callbacks start. The default is unchanged and now named
@@ -520,10 +240,6 @@ While the crate is on `0.x.y`:
   ignored the first two columns and then arrived three cells out in a single jump. Such regions
   can now ask for `(1, 1)` and be tracked from the pointer's first step. Clearing a lowered
   threshold still marks the gesture as a drag, so the release is not also delivered as a click.
-- Anchor terminal selections to absolute retained scrollback lines, preserving selection and copy
-  behavior while scrolling, receiving output, and edge-autoscrolling a mouse drag. Replace the
-  viewport-based `TerminalSelection` alias with terminal-specific `TerminalPos`,
-  `TerminalSelection`, and `TerminalSelectionEvent` types (breaking).
 - Add the `terminal-images` feature: programs running inside a `Terminal` pane can draw pictures
   with the Kitty graphics protocol. `TerminalScreen` reads `APC _G` out of the PTY stream and
   decodes it rather than forwarding it, so the host terminal does not have to speak Kitty — the
@@ -539,17 +255,6 @@ While the crate is on `0.x.y`:
   `TerminalRenderSnapshot::images` (breaking: the struct gained a field). Unsupported requests —
   file/shared-memory transmission, the protocol's own animation frames — are answered with the
   protocol's own `ENOTSUPP` report. See [`docs/widgets/terminal-images.md`](docs/widgets/terminal-images.md).
-- Keep a pane's images across a width change unless the resize actually rewraps text. Treating
-  every column change as a rewrap cost a pane every image in it on each resize, which in a tiling
-  multiplexer is every time a neighbour opens.
-- Give `TerminalImagePlacement` the `image_id` its transmission used, and key the renderer's
-  encoding cache on it. Two placements holding identical pixels shared one encoding and so one
-  Kitty image id, which a host reads as a single placement — it drew one and dropped the other, so
-  repeated copies of a picture vanished as new ones arrived.
-- Accept a graphics transmission sent as one oversized escape rather than the chunks the protocol
-  asks for. Raw pixels in a single escape clear 64 KiB with a picture only a few hundred cells
-  wide, and the old per-escape bound dropped those silently — indistinguishable, from the sender's
-  side, from a terminal with no graphics support at all.
 - Add `TerminalCellSize`, `host_cell_size()`, `TerminalScreen::set_cell_size`, and
   `TerminalPtyConfig::cell_size` / `TerminalPty::resize_with_cell_size`. The PTY now reports pixel
   dimensions in `TIOCGWINSZ` instead of zeroes, and `CSI 14 t` (text-area size in pixels) is
@@ -653,7 +358,377 @@ While the crate is on `0.x.y`:
 - `PanView::wheel_to_pan(bool)` toggles mouse-wheel panning, mirroring the
   existing `drag_to_pan`. Defaults to `true`.
 
+- 20 new built-in `Theme` presets, all resolvable through `preset_by_name`.
+  Light: `solarized_light`, `gruvbox_light`, `tokyo_night_day`,
+  `catppuccin_latte`, `rose_pine_dawn`, `ayu_light` — the first light presets
+  the crate ships. Dark: `catppuccin_frappe`, `catppuccin_macchiato`,
+  `rose_pine`, `rose_pine_moon`, `kanagawa`, `everforest`, `ayu_dark`,
+  `ayu_mirage`, `nightfox`, `nordfox`, `night_owl`, `material_palenight`,
+  `oxocarbon`, `zenburn`. `preset_by_name` also accepts `"catppuccin_mocha"`
+  as an alias for the existing `catppuccin` preset.
+
+- `SearchPalette::input_key(key)` keys the query input directly, so
+  `ctx.request_focus(key)` targets it instead of relying on the palette
+  container's first-focusable-descendant fallback. Uncontrolled mode only; a
+  controlled palette renders no input of its own.
+
+- DevTools frame metrics now attribute dirty updates to components and input
+  sources (`input:key` / `input:mouse` / `input:drag` / `input:scroll`), coalesced
+  across deferred-full skipped iterations into the next recorded frame and shown
+  under the Dirty line in the stats panel.
+- Collection widgets now expose paired `Arc<[T]>` bulk setters alongside the
+  existing iterator setters: `Table::rows_arc`, `Tabs::tabs_arc`,
+  `Chart::series_arc`, `ChartSeries::data_arc`, `Sparkline::data_arc`,
+  `MultiSelect::items_arc`, and `SearchPalette::{items_arc, entries_arc}`.
+  Prefer these when component state already holds a shared slice so frames avoid
+  reallocating identical collections.
+- Internal component registry now stores trimmed display names and full type
+  names at mount for DevTools diagnostics and tracing identity.
+- DevTools reports memo miss reasons (key/dirty/deps/in-view Memo taxonomy) and
+  counts in-view `Memo` hits toward the panel hit rate. Reason collection is
+  gated on the stats panel being visible with metrics enabled, so hidden-panel
+  builds pay only the plain hit/miss counters.
+- DevTools records exclusive per-component `view()` timings (top slow views) and
+  emits `component.view` / `component.refresh` spans with component identity when
+  `profiling-tracing` is enabled.
+- DevTools shows a passive input-pressure line when recent Full frames are both
+  input-sourced and over the 16ms budget (overlay only; no log warnings).
+- Documented production performance patterns for update scope, widget-owned
+  scrolling, subtree memoization, stable shared props, bounded rendering, and
+  coalesced background work, distilled from opencode-tui.
+- Added plain-text export over absolute terminal line ranges: `TerminalScreen::total_text_lines`,
+  `text_lines`, `export_text`, `absolute_line_to_viewport`, and `absolute_line_to_offset`.
+  Absolute indices count from the oldest retained history line and never mutate the display
+  offset or run the render pipeline, so exporting does not disturb what the user is looking at.
+- Added OSC 133 semantic marks anchored to those absolute lines: public `SemanticMark` and
+  `SemanticMarkKind`, plus `TerminalScreen::semantic_marks`, `last_command_output_range`, and
+  `export_last_command_output`. Marks are bounded, dropped once their line falls out of
+  scrollback, and ignored while the alt screen is up.
+- Added `KeyBinding::key_events`, expanding a parsed binding into one `KeyEvent` per chord step
+  for send-keys style callers, with a dedicated `KeyEventExpansionError` for bindings that cannot
+  be expressed as discrete events.
+
+- Added `Theme::focus_decoration(bool)` and public `Theme::focus_decoration`, defaulting to `true`.
+  Disabling it suppresses theme-sourced focus chrome, focused-content palette defaults, and focused
+  scrollbar thumbs while preserving explicit widget focus styles and all selection styling.
+  (breaking)
+- Added widget `on_focus`/`on_blur` delivery and `App::on_focus_changed`, with public
+  `FocusEntry`/`FocusChanged` payloads, keyed-remount deduplication, post-reconcile delivery, and
+  focus diagnostics in the `devtools` panel. `Modal` and root `Popover` auto-focus by default;
+  `.auto_focus(false)` retains their existing focus trap while suspending focus.
+- `TestBackend` now drives the full generic `DragSource`/`DropTarget` pipeline: `send_mouse`
+  with `Down`/`Drag`/`Up` activates drags past the movement threshold and emits `on_drag_start`,
+  `on_drag_over`, `on_drag_leave`, `on_drop`, and `on_drag_cancel`, enabling headless integration
+  tests of composed drag-and-drop UIs (previously these drags were silently discarded). The
+  axis-neutral activation and target-compatibility logic is shared with the terminal runner.
+- Added `FocusScope::{None, Exclude, Contain}` and `.focus_scope(...)` to `VStack`, `HStack`,
+  and `Frame`. Excluded subtrees are skipped by traversal, fallback, descendant, and pointer
+  focus while explicit keyed requests can enter them; contained subtrees cycle focus internally.
+  A `Contain` pane is **opaque to the enclosing tab ring**: Tab from outside never enters it,
+  because a ring that could Tab *in* but not back *out* traps focus. Focus enters a pane by
+  click, `request_focus`, or an app-level pane-switch key. A focusable (`.focusable(true)`)
+  `Contain` pane is itself a tab stop in the enclosing ring, so the pane stays keyboard-reachable
+  even though its contents are opaque; the boundary node is never part of its own pane's ring.
+  As a safety valve, when every tab stop in the tree lives inside a pane, Tab from an unfocused
+  app descends into panes so traversal is never dead; the same valve applies inside capturing
+  overlays, whose ring descends through panes when it would otherwise be empty.
+
+- New `sidebar_tabs` example: rich vertical sidebar tabs composed from primitives — status
+  icon or live spinner, label plus description line per item, click/keyboard selection, and
+  drag-to-reorder with a flicker-free insertion indicator built on per-item `DropTarget`s.
+  The per-item top/bottom-half drop mapping is documented in `docs/widgets/input.md`.
+
+- `Flow::justify(Justify)` distributes each wrapped row's leftover width along the main axis.
+  All `Justify` variants are supported and applied per row (`SpaceBetween` pins every row's first
+  item to the left edge and last item to the right edge). Because Flow items are always measured
+  at their natural size, the space variants need no explicit child sizing, unlike stacks.
+
+- `ToastHandle::dismiss_immediately(id)` removes a toast synchronously without an exit transition,
+  allowing state notifications to be replaced without briefly stacking the fading old toast beside
+  its replacement. See `docs/widgets/overlays.md`.
+- `Update::layout_with_command(command)` combines a component-scoped layout
+  refresh with background work, avoiding a root-level full update for controlled
+  editors and other high-frequency widgets that launch async tasks.
+- `TerminalScreen::semantic_state()`, `drain_semantic_events()`, and
+  `restore_semantic_state()` expose working-directory and command-lifecycle
+  metadata parsed from `OSC 7` (`file://host/path`), `OSC 9;9` (Windows-style
+  CWD reports), and `OSC 133 A/B/C/D` (prompt/input/execution/completion
+  boundaries), plus a minimal `hyprmux_exe=` key/value extension and Fish/Kitty's
+  `cmdline_url=` for foreground-executable identity. Parsing runs through a
+  second, independent `vte::Perform` observer fed the same raw bytes as the
+  primary Alacritty grid parser, so it cannot affect rendering. New types:
+  `TerminalSemanticState`, `TerminalSemanticEvent`, `TerminalWorkingDirectory`,
+  `TerminalWorkingDirectorySource`, `TerminalCommandPhase`. This state is
+  deliberately kept out of `TerminalRenderSnapshot` - it is runtime metadata,
+  not something the renderer paints. See `docs/widgets/terminal.md`.
+- `TerminalPty::foreground_process_group_id()` (Unix-only) reports the PTY's
+  foreground process-group id (`tcgetpgrp(3)`) without exposing the underlying
+  master file descriptor, for host apps that need a native foreground-process
+  fallback when no shell integration is available.
+- `TerminalScreen::bell_count()` exposes a monotonic count of BEL events parsed
+  from child output, allowing hosts to trigger visual or audible notifications.
+- `SearchPalette::match_mode(SearchMatchMode)` adds a `Hybrid` matching
+  strategy alongside the existing (and still default) `Fuzzy` mode.
+  `Hybrid` evaluates exact, prefix, word-prefix, substring, and fuzzy
+  matching together and ranks results by that priority order first, so a
+  real substring or prefix match always outranks a fuzzy one. Fuzzy
+  candidates are additionally quality-gated on match density, span, start
+  position, and whether the matched characters stay mostly within one word,
+  rejecting weak scattered matches (e.g. `layo` against "Enable pane
+  synchronization") while keeping useful abbreviations (e.g. `prd` against
+  "production"). Fields (label/aliases, description, and the right-hand
+  hint) allow separate whitespace-delimited terms to match different fields,
+  while characters within one term never combine across fields. All terms
+  must match. Contiguous queries may omit separators within one field, so
+  `switchmodel` matches `Switch model`. Labels/aliases are weighted highest,
+  descriptions lower, and the right-hand hint is restricted to
+  exact/substring matching. See `docs/widgets/overlays.md` and `docs/enums.md`.
+- `rank_search_palette_indices_with_mode(items, query, match_mode, score_fn)`
+  ranks items with the standalone helper under an explicit `SearchMatchMode`
+  (e.g. `Hybrid`), for callers that own the query/selection but want the same
+  ordering as a `SearchPalette` configured with that mode.
+  `rank_search_palette_indices_with_score` remains and now delegates to it with
+  `SearchMatchMode::Fuzzy`. See `docs/widgets/overlays.md`.
+- `Modal::focus_style(Style)`, `extend_focus_style(Style)`, and
+  `inherit_focus_style()` configure the dialog frame while the modal or one of
+  its descendants holds focus, allowing focused root-portal dialogs to retain
+  intentional frame accents or compose with the theme focus style. See
+  `docs/widgets/overlays.md`.
+- `Tabs::caps(Option<(char, char)>)` draws `(left, right)` end-cap glyphs around
+  the active and hovered tabs. Each cap replaces one of the tab's two padding
+  cells, so the tab keeps its measured width and hit region, and is painted in
+  the tab's own background over the strip background so the tab reads as a
+  rounded or pointed pill (pass powerline separators for that look). A tab falls
+  back to flat padding when it is truncated by the overflow policy, when its
+  background matches the strip's, or when either cap is not single-width.
+  Defaults to `None` (flat padding). See `docs/widgets/tabs.md`.
+- `TerminalKeyModes` describes the input-affecting modes a child program has
+  enabled: `app_cursor` (DECCKM), `bracketed_paste` (mode 2004), and
+  `kitty_keyboard` (a `KittyKeyboardFlags` capturing the Kitty keyboard protocol
+  flags pushed with `CSI > <flags> u`). It rides on `TerminalRenderSnapshot`, is
+  applied automatically by `Terminal::snapshot`, and is exposed by
+  `TerminalScreen::key_modes()` and `Terminal::key_modes()` for hosts that wire a
+  `TerminalPty` by hand. This is the keyboard counterpart to the existing
+  `MouseModeState`. See `docs/widgets/terminal.md`.
+- `TerminalRenderSnapshot` now carries `cursor_shape` (`CaretShape`) and
+  `cursor_blinking` (`bool`) captured from the child program's `DECSCUSR`
+  (`CSI Ps SP q`) sequences, plus matching `Terminal::cursor_shape()` /
+  `Terminal::cursor_blinking()` builders. The `Terminal` widget now renders the
+  child's requested cursor shape and honors its steady/blinking preference
+  instead of forcing a blinking block. See `docs/widgets/terminal.md`.
+- `Context::command_chord_pending` method to query whether an app command chord is currently pending completion (e.g., after a leader prefix key has been matched).
+- Reference documentation for `BorderMergeMode` and `SplitterHandleMode` enums in `docs/enums.md` and `docs/styling.md`.
+- `Modal::max_height(Length)` caps a modal's height, and
+  `Modal::reserve_height(Length)` keeps a `RootPortal` modal's top edge fixed as
+  its content grows and shrinks: the overlay is centered as if it were
+  `reserve_height` tall, then the content is top-aligned within that reserved
+  band, pinning the top edge at `(viewport - reserve_height) / 2`. Together with
+  `height(Length::Auto)` this lets a content-hugging modal — e.g. a
+  `SearchPalette` filtered as the user types — shrink to its visible rows
+  without drifting toward the vertical center.
+
+  `reserve_height` positions and `max_height` bounds, independently: content
+  taller than the band keeps the same top edge and extends past the band's
+  bottom, so a modal can be anchored a quarter of the way down the viewport
+  (`reserve_height(Percent(50))`) while being free to grow to 75% of it. See
+  `docs/widgets/overlays.md`.
+
+- Layered keyboard dispatch: `FrameworkAction`, `FrameworkKeymap`, `UserKeymapPolicy`,
+  `KeyDispatchPolicy`, `TerminalKeyPolicy`, `CommandConflictPolicy`, and
+  `ChordMismatchPolicy` for explicit app-side input routing control.
+- `App::framework_keymap`, `App::global_quit`, `App::user_keymap_policy`,
+  `App::key_dispatch_policy`, `App::terminal_key_policy`,
+  `App::command_conflict_policy`, and `App::chord_mismatch_policy` builders.
+- Executable app command shortcuts via `CommandBuilder::shortcut` /
+  `CommandBuilder::shortcuts` with deterministic conflict resolution and chord
+  runtime support.
+- `SplitterHandleMode` (`Splitter::handle_mode`): `Gutter` (default) keeps the
+  classic reserved handle gutter; `Border` drops the gutter and rides the pane
+  border seam, deriving handle thickness from the borders actually present
+  (merged borders share a 1-cell wall, separate borders are grabbed together
+  as a 2-cell handle, borderless panes get a synthetic 1-cell handle).
+- Corner drag for splitters: when a vertical and a horizontal handle meet,
+  clicking on or next to the junction grabs both handles and dragging resizes
+  both splitters simultaneously; release emits `on_resize` for both.
+- Public `text_motion` module (also re-exported through the prelude) exposing
+  the byte-offset vim word/WORD/line motion algorithms
+  (`word_forward_start`/`word_backward_start`/`word_end`,
+  `big_word_forward_start`/`big_word_backward_start`/`big_word_end`,
+  `line_start_at`/`line_end_at`/`first_nonblank_in_line`) that back
+  `TextArea`'s vim mode, so host apps that render their own text grids (for
+  example a terminal emulator's scrollback copy mode) can reuse the same
+  `w`/`b`/`e`/`W`/`B`/`E`/`0`/`^`/`$` motions instead of reimplementing them.
+  See `docs/text-editing.md`.
+- `InlineHeight` height policy for inline viewports: `InlineHeight::Fixed(rows)`
+  keeps the classic fixed height, `InlineHeight::auto()` sizes the viewport to
+  the content's measured height every frame (growing and shrinking as the view
+  changes), and `InlineHeight::auto_capped(rows)` adds an upper bound. The
+  inline builders (`App::inline_ephemeral`, `App::inline_transcript`,
+  `App::inline_transcript_with_startup`) now take `impl Into<InlineHeight>`,
+  so existing calls with a plain row count keep compiling. When auto-sized
+  content is taller than the terminal (or the cap), the layout keeps its
+  natural height and the viewport shows its top rows, clipping the bottom.
+  See `docs/inline-mode.md` and `examples/inline_auto_height.rs`.
+- Unix-only `TerminalPty::handoff()` and `TerminalPtyHandoff` for advanced
+  terminal hosts that need to transfer a live PTY master to another process
+  without restarting the child. See `docs/widgets/terminal.md`.
+- `TerminalScreen::export_replay_bytes()` serializes the current screen state
+  (scrollback, primary/alternate contents, cursor, title, and common modes) as
+  a VT byte stream that a fresh same-sized `TerminalScreen` reproduces by
+  replaying it through the normal parser. Useful for seeding a newly attached
+  client from a server-owned terminal. See `docs/widgets/terminal.md`.
+- `FileTree::initial_expanded_paths`, seeding expansion the tree then owns, so an app can restore
+  what the user had open after the tree unmounts or re-roots — a file panel following the focused
+  document, a sidebar whose tab was switched away and back. Paths may be absolute under the root or
+  relative to it, apply on mount and on every root change, and never disturb expansion the user has
+  since changed. Ancestors are deliberately not expanded along with a seeded path, so a directory
+  the user collapsed keeps its contents' expansion without being reopened by it. Pair with
+  `on_toggle` to record the set; ignored when controlled `expanded_paths` is set.
+- `Easing::EaseOutBack { overshoot_permille }` and `animation::ease_out_back`, a back ease-out with
+  a **tunable** single overshoot. It crosses 1.0 once and settles, which is what makes it usable for
+  springy *position* and rectangle animation, where the repeated crossings of `EaseOutElastic` read
+  as a 1-cell tremor on a character grid. `Easing::EASE_OUT_BACK` is the standard easings.net
+  `easeOutBack` (100‰, peaking at ~1.10 near t = 0.58).
+
+  Because the overshoot is a fraction of the animated *distance*, a fixed amplitude flings a
+  long-distance animation proportionally far; the amplitude lets a caller ask for a bounded nudge
+  instead (`permille = 1000 * wanted_units / distance_units`). The requested amplitude is what you
+  get up to the documented `MAX_BACK_OVERSHOOT_PERMILLE` ceiling of `500`: the curve Newton-solves
+  the tension for it, since pinning both endpoints of the cubic family leaves no closed-form
+  inverse. Larger requests saturate at the ceiling, and `0` degenerates to a plain cubic ease-out.
+
+  Adds a variant to the public `Easing` enum, so an exhaustive `match` on it now needs another arm.
+  (breaking)
+- `FileTree::empty_text_padding`, insetting the empty-state placeholder independently of the tree.
+  Rows are flush with the surface because the root row starts the hierarchy there, but a placeholder
+  is prose rather than a row, and applications usually align it with their other empty states.
+  Defaults to none, which is the previous rendering.
+- `TUI_LIPAN_SNAPSHOT_ADVANCE_MS`, `Sketch::advance(Duration)`, and
+  `TestBackend::advance(Duration)`, so a headless capture can settle time-gated UI
+  without sleeping: a which-key panel behind `App::command_chord_reveal_delay`, a finished
+  transition. The virtual clock is honoured by chord reveal and the animation ticker, which
+  runs in frame-sized steps for the requested duration. Action-script `wait:` uses the same
+  path. Default remains zero, so existing captures are unchanged. Virtual advancement
+  affects tui-lipan-managed time and animation state; application-owned wall-clock timers
+  and `Instant::now()` are not advanced. Headless capture runs the live runner ticker;
+  `TestBackend` / `Sketch` tick tree animations, transitions, overlays, and chord reveal,
+  not blink or spinner frames.
+- `TestBackend::baseline(dir)` and `UiSnapshot::baseline(dir)`, the Sketch baseline
+  affordance for apps that need real state. `.name()`, `.tolerance()`, `.check()`, and
+  `.assert_baseline()` match Sketch; `TUI_LIPAN_UPDATE_BASELINES=1` accepts the current
+  render. Baseline captures still force bitmap rendering.
+- `TUI_LIPAN_SNAPSHOT_VIEWPORTS=80x24,120x30,160x40`, capturing a breakpoint matrix in one
+  run and writing suffixed files (`app-80x24.png`, …). `TUI_LIPAN_SNAPSHOT_VIEWPORT` still
+  writes to the exact path when `_VIEWPORTS` is unset. A malformed entry fails the run
+  rather than being skipped.
+- `App::command_chord_reveal_delay(Duration)` and `Context::command_chord_revealed()`, for chord
+  affordances that should appear only when the user hesitates — a which-key panel, a hint bar. The
+  runtime schedules the frame at which the delay elapses, so a view reading `command_chord_revealed`
+  needs no timer of its own; a chord completed or cancelled before then never reveals.
+  `Context::command_chord_pending()` is unchanged and still flips the instant the chord starts,
+  which is what instant chrome (a mode badge, suppressing a caret) should keep using.
+  `Context::command_chord_pending_since()` exposes the underlying instant for apps that want their
+  own policy, and `Context::set_command_chord_reveal_delay()` retimes it at runtime for an app whose
+  delay comes from a config file it reloads while running. The default delay is zero, so behavior is
+  unchanged unless the delay is set.
+- Root components can implement `Component::on_window_focus_changed` to observe host
+  terminal/window focus transitions, with deterministic `TestBackend::set_window_focused` support.
+- `Tab::capped(bool)`, opting an inactive, unhovered tab into `Tabs::caps` end caps. A tab that
+  carries its own background for an app-specific reason — an unsaved marker, an error state — is
+  emphasized in a way the widget cannot infer, and previously read as a flat colored block beside
+  shaped peers. The remaining cap conditions are unchanged: untruncated, a background distinct from
+  the strip, and caps that fit the padding cells they replace.
+- `Style::elevate_by(f32)`, the `Style` form of `ColorTransform::Elevate`. Prefer it over
+  `Style::lighten_by` on hover/focus/active state styles: elevation is luminance-aware, so it lifts
+  a dark surface and dims a light one instead of washing both toward white, and being a transform it
+  composes with a color the element already carries rather than replacing it the way an explicit
+  `bg(..)` does. Previously reachable only as `transform_bg(ColorTransform::Elevate(..))`.
+- `Color::elevate()`, elevating by the default `0.08` step, completing the
+  `dim`/`dim_by`, `lighten`/`lighten_by` pairing. The default is deliberately much smaller than the
+  `0.35` those use: one surface step, not a wash.
+- `Context::blur()`, `Context::focus_next()`, `Context::focus_prev()`, and
+  `TestBackend::blur()` for explicit focus control.
+- Theme-level `CaretPalette` defaults for `Input`, `TextArea`, and embedded
+  `SearchPalette` query inputs; explicit widget caret settings still override the
+  theme. (breaking)
+
 ### Changed
+
+- `TestBackend::advance(Duration)` now consumes the full duration in 50 ms steps rather than
+  clamping to one frame. **(breaking)** The previous one-frame clamp is
+  `TestBackend::advance_frame(Duration)`. `backend.advance(400ms)` no longer silently means
+  50 ms. `Sketch::advance` is unchanged (it already consumed the full duration).
+- `RuntimeEnv::command_chord_pending: Rc<Cell<bool>>` becomes
+  `command_chord_pending_since: Rc<Cell<Option<Instant>>>`, so the pending chord carries its start
+  time rather than duplicating it in a second cell that could drift. **(breaking)** Migration: read
+  `Context::command_chord_pending()` as before; code touching the field directly replaces
+  `.get()` with `.get().is_some()`.
+- `Color::elevate(f32)` is renamed `Color::elevate_by(f32)`, so every amount-taking color modifier
+  ends in `_by` and the bare name is free for the default-amount form. **(breaking)** Migration:
+  rename `.elevate(x)` to `.elevate_by(x)`; `.elevate()` now means the default step.
+- `DatePicker` and `Radio` use roving focus (one tab stop) instead of making every
+  day cell / option a tab stop. Only the selected day / active option is
+  focusable; arrows move selection and focus follows via `focus_key` (derived by
+  default from `DatePicker` title / `Radio` option labels). `DatePicker::on_focus`
+  / `on_blur` are now `Callback<DateEvent>` and `Radio::on_focus` / `on_blur` are
+  `Callback<usize>`. Debug builds assert unique focusable keys after reconcile.
+  **(breaking)** Update handlers that expected `Callback<()>`.
+- `Hyperlink` `on_key` now runs **caller-first**: returning `true` consumes the key
+  before built-in Enter/Space activation. Previously activation ran first and the
+  custom handler was a fallback. **(breaking)** Migration: if your `on_key` should
+  not block activation, return `false` for Enter/Space (or omit those keys).
+- `ClipboardError` gained an `InvalidInput { operation, message }` variant for arguments the
+  clipboard cannot represent, distinct from `Provider` (the platform clipboard failed) and
+  `Unsupported` (the operation does not exist here). Retrying `InvalidInput` without changing the
+  input cannot succeed. **(breaking)** Only exhaustive `match` over `ClipboardError` needs
+  updating - add an `InvalidInput` arm, or match `{ .. }` as the existing call sites do.
+- Anchor terminal selections to absolute retained scrollback lines, preserving selection and copy
+  behavior while scrolling, receiving output, and edge-autoscrolling a mouse drag. Replace the
+  viewport-based `TerminalSelection` alias with terminal-specific `TerminalPos`,
+  `TerminalSelection`, and `TerminalSelectionEvent` types (breaking).
+- `RowStylePolicy` controls how row-level selection/hover/active styling interacts with a rich-text
+  span: `Full` (row styling overrides the span, the default), `PreserveForeground` (row background
+  and modifiers apply but the span keeps its explicit foreground — useful for search matches that
+  must stay distinguishable inside a selected row), and `Disabled` (row styling never touches the
+  span). The new `Span::row_style_policy` field and setter replace the `allow_row_style` bool
+  field and setter: `allow_row_style(true)` becomes `RowStylePolicy::Full` and
+  `allow_row_style(false)` becomes `RowStylePolicy::Disabled`. (breaking)
+
+- MSRV raised to Rust 1.90 (breaking). The manifest declared `1.88` while the `image` feature family
+  resolves `ratatui-image → icy_sixel → quantette`, and `quantette 0.5.1` requires `1.90`;
+  `icy_sixel 0.5.0` pins that exact version, so no older resolution avoids it. `README.md` and
+  `CONTRIBUTING.md` had also drifted to a stale `1.85`, so all three now agree. The crate's own code
+  and its default features still build on 1.88 - update your toolchain (`rustup update stable`) if
+  you enable `image`, `terminal-images`, `image-full-formats`, or `ui-snapshot-png`.
+- The `todo` / `todo_ui` examples drop the outer "Todo App" bordered frame, give the New Task input
+  row `height: Length::Auto` (input stays `Flex` width), and nest Tips in a flex `VStack` so tip
+  text yields space instead of collapsing the bordered input in short terminals.
+- Floating `DragPreview::SourceSnapshot` previews are no longer forced to stay fully inside the
+  terminal. They stay anchored to the grab point under the cursor and cells that leave the
+  viewport are clipped, so large cards can slide partially off-screen (as in
+  `examples/drag_drop_kanban.rs`).
+- `DragSource` `preview_max_width` / `preview_max_height` of `None` no longer apply the old
+  60×20 defaults (breaking). Unset means paint the full source snapshot; pass
+  `Some(DEFAULT_PREVIEW_MAX_WIDTH)` / `Some(DEFAULT_PREVIEW_MAX_HEIGHT)` to keep the previous caps.
+
+- `CapturedFrame::to_png` and `UiSnapshot::to_png` / `to_png_default` now return
+  `Result<Vec<u8>>`, and `try_to_png` / `try_to_png_default` are removed (breaking). The infallible
+  forms returned an **empty buffer** when encoding failed, which wrote a zero-byte file that only
+  failed later, when something tried to read it. Migration: add `?` (or `.expect(...)`) at the call
+  site, and rename any `try_to_png*` call to `to_png*`.
+- The `tui-lipan-ui-sketch` and `tui-lipan-visual-design` agent skills are merged into a single
+  `tui-lipan-visual` skill (breaking, for anyone who copied them into their own skills directory).
+  They overlapped and gave contradictory advice: one told agents to delete their snapshot harness
+  when finished, the other told them to keep it. The merged skill ranks captures by cost - env-var
+  capture of a running app, then a kept `Sketch`, then a real test - and drops the throwaway
+  harness pattern entirely.
+- `Color::elevate` now applies its endpoint-blended lightness in OKLab with stable, gamut-mapped
+  relative chroma, preserving authored casts without weakening elevation or amplifying one-step
+  near-black tints.
+- Divider `label_padding` no longer clears blank cells around the label. Inset cells keep the
+  divider character (so a left inset of `1` reads as `─title`, matching Frame border titles), and
+  only the label's own cells interrupt the line. The value is now independent left/right insets
+  (`label_padding(n)` still sets both; `label_padding_axes(left, right)` sets them separately).
 
 - `SearchPalette` Hybrid matching prefers visible labels over hidden aliases:
   any label hit outranks a synonym-only alias hit on another row, while
@@ -662,20 +737,9 @@ While the crate is on `0.x.y`:
 - Compose perpendicular `Divider` intersections into directional box-drawing junctions.
 - Promote alpha-aware `Paint::rgba` backgrounds in the styling guide with practical translucent
   surface and toast examples.
-- Remove the unused public `Transition::is_exit` field (breaking).
 - `ManagedTerminal` now coalesces PTY resize bursts over a configurable 16 ms
   trailing window, preventing transient width changes from repeatedly clearing
   terminal semantic marks.
-- Display-column helpers and terminal selection rendering preserve joined
-  grapheme clusters instead of measuring or slicing their Unicode scalars
-  independently.
-- `TerminalCopyMode` returns `Ignored` for motions already at a boundary and
-  prompt jumps no longer wrap from one end of the prompt list to the other.
-- Text and virtual-text rendering now drops control characters consistently;
-  virtual text also strips terminal control sequences.
-- Add theme-level `CaretPalette` defaults for `Input`, `TextArea`, and embedded
-  `SearchPalette` query inputs; explicit widget caret settings still override the
-  theme (breaking)
 - Replace the breaking `Frame` border title/status API with positional `BorderLabels` header and
   footer groups. Labels now support left, center, and right placement, independent group styles,
   focused group styles, per-label overrides, and group padding. The old `title`, `status`, and
@@ -691,21 +755,10 @@ While the crate is on `0.x.y`:
   (breaking). Defaults and builder call sites that pass bare integers are
   unchanged; only code that reads the public node fields as `usize` needs an
   update.
-- `List` and `Table` keep reporting overflow scroll indicators when
-  `show_scroll_indicators` is on and no row is selected. The no-selection
-  scroll branch reported no indicators and a zero overflow count, so a
-  read-only list lost its "N more below" affordance until the user scrolled.
 - Theme reload files now accept TOML 1.1 syntax, including multiline inline
   tables and trailing commas. The dependency stacks behind optional image,
   diff, filesystem-watcher, and terminal-emulation features were also updated
   to their latest stable release lines, along with the procedural macro stack.
-- `PanView` now responds to the mouse wheel. It supported drag and keyboard
-  panning but was never routed to the wheel dispatcher at all, so spinning the
-  wheel over a pan surface did nothing. The wheel pans vertically and
-  shift+wheel horizontally, each tick moving one `key_step` in that axis so
-  wheel and keyboard panning share one step size. A clamped view at its edge
-  leaves the tick unhandled so it bubbles to an ancestor; an unclamped free
-  canvas has no edge and keeps consuming. Opt out with `wheel_to_pan(false)`.
 
 - `children(...)` doc comments on `ScrollView`, the stack containers, `Flow`,
   `Splitter`, `TreeNode`, and `GraphNode` now state that the call discards
@@ -713,14 +766,6 @@ While the crate is on `0.x.y`:
   setters replace, singular setters append. A new CI guard
   (`scripts/check-children-replace.py`) fails the build when a `children(...)`
   call would silently drop earlier `child(...)` entries.
-- A plain mouse wheel tick over a `ScrollView` with `ScrollAxis::Horizontal`
-  now pans that view horizontally instead of being discarded. Shift+wheel is
-  still the explicit horizontal override, and stays required when both axes are
-  enabled; with vertical scrolling off there was nothing to disambiguate, so the
-  modifier only made the wheel do nothing. When the view has no horizontal
-  travel left the tick is reported unhandled and bubbles to an ancestor, so a
-  horizontal strip nested inside a vertical `ScrollView` does not trap the
-  wheel.
 
 - Renamed `Theme::catppuccin` to `Theme::catppuccin_mocha` and `Theme::gruvbox`
   to `Theme::gruvbox_dark`, so every preset in a multi-variant family names its
@@ -746,7 +791,177 @@ While the crate is on `0.x.y`:
   with hover and focus styles, a Clear action with a destructive hover color,
   colored log-level tags in the list, and a dimmed line counter.
 
+- `Sparkline.data` is now `Arc<[u64]>` instead of `Vec<u64>` (breaking). Call
+  sites that assigned a `Vec` directly should use `Sparkline::new` / `.data(...)`
+  or `.data_arc(...)`.
+- `MultiSelect` and `SearchPalette` now store item/entry collections as
+  `Arc<[T]>` instead of `Vec<T>` (breaking for any code that depended on the
+  previous private storage shape via struct updates or reflection). Builder
+  iterator setters still accept `IntoIterator` and collect into `Arc`.
+
+- Added app-level `FocusPolicy::{Auto, OnDemand, Manual}` and `App::focus_policy(...)`;
+  `OnDemand` is now the default, so apps start unfocused until Tab, pointer interaction, or an
+  explicit focus request establishes focus. `Manual` disables framework Tab and pointer focus
+  movement while preserving explicit focus APIs and capturing-overlay focus traps. (breaking)
+- Added `tab_stop`, `on_focus`, and `on_blur` to focusable widgets. Renamed
+  `Input::tab_order` to `Input::tab_stop` and TextArea's literal-tab width setter from
+  `tab_stop` to `tab_display_width`. (breaking)
+- Accordion, DraggableTabBar, Hyperlink, PanView, and Tabs are no longer focusable by default;
+  opt in with `.focusable(true)`. (breaking)
+- Renamed stack containers' `FocusPolicy` accordion-sizing enum to `FocusSizing` and
+  `.focus_policy(...)` builder to `.focus_sizing(...)`. Tree's distinct
+  `.focus_policy(FocusAccordion)` API is unchanged. (breaking)
+- **(breaking)** Raised the declared MSRV from Rust 1.85 to 1.88 (matches the
+  locked Ratatui requirement), as part of laying groundwork for native
+  macOS/Windows support.
+- **(breaking)** `key_event_to_bytes` takes a second argument,
+  `modes: TerminalKeyModes`, carrying the DEC private modes the child has
+  enabled. Pass `TerminalKeyModes::default()` to keep the previous encoding, or
+  `TerminalScreen::key_modes()` to honor the child's requests. `TerminalPty::send_key`
+  gains the same argument.
+- **(breaking)** Renamed `wrap_bracketed_paste(text)` to
+  `encode_paste(text, modes)`. The old name always wrapped, which is wrong for a
+  child that has not enabled bracketed paste; the new one wraps only when
+  `modes.bracketed_paste` is set. `paste_sequences()` is unchanged.
+- **(breaking)** `TerminalRenderSnapshot` gains a `key_modes: TerminalKeyModes`
+  field, and `TerminalRenderSnapshot::from_parts` takes it as a final argument.
+  Callers constructing snapshots from an external transport must carry the
+  child's input modes across the wire, or pass `TerminalKeyModes::default()`.
+- **(breaking)** `TerminalRenderSnapshot::from_parts` takes two additional
+  arguments (`cursor_shape: CaretShape`, `cursor_blinking: bool`) after
+  `cursor_visible`. Callers constructing snapshots from an external transport
+  must supply the child's cursor shape and blink state.
+- **(breaking)** Renamed `CommandBuilder::keybinding(...)` to
+  `CommandBuilder::keybinding_hint(...)` for display-only palette hints;
+  executable bindings use `shortcut(...)` / `shortcuts(...)`.
+- **(breaking)** The `height` field of `SurfaceMode::InlineEphemeral` and
+  `SurfaceMode::InlineTranscript` is now `InlineHeight` instead of `u16`.
+  Code constructing these variants directly must wrap the row count
+  (`height: InlineHeight::Fixed(8)` or `height: 8.into()`); the `App` builder
+  methods are unaffected thanks to `From<u16> for InlineHeight`.
+
+### Removed
+
+- (breaking) Removed `Splitter::join_frame(bool)` method (use `Splitter::handle_mode(SplitterHandleMode::Border)` instead).
+- (breaking) Removed unused `TextAreaDecorationKind::VirtualText` enum variant.
+- Remove the unused public `Transition::is_exit` field (breaking).
+
 ### Fixed
+
+- The caret no longer shows through whatever is drawn on top of the focused widget. The caret is the
+  host terminal's own cursor rather than a cell in the frame buffer, so a floating pane, a popover,
+  or any later sibling painted over a focused `Terminal`, `Input`, or `TextArea` still had it
+  blinking on top of them. Placement now asks the tree what sits topmost at the caret cell and
+  withholds the cursor when that is a layer outside the focused widget's own chain — including on
+  the incremental-scroll fast path, which places the caret without running the renderers.
+  Interactivity is the limit of what this can see: a purely decorative layer is not a hit-test
+  target, so it still lets the caret through, which keeps the failure safe in the direction of a
+  caret too many rather than one missing.
+
+- Advancing the virtual clock now also fires `Command::after` timers, so a headless capture or a
+  `TestBackend` settles work the framework itself deferred. Previously the clock moved but its own
+  timers did not, leaving a gap no caller could close: the deferred command is framework-owned, so an
+  application could not settle it, and the harness had no wall clock for it to wait on. Anything
+  revealed on a timer — a spawn animation's opacity gate, a debounce, a delayed affordance — stayed in
+  its pre-timer state for the whole capture. Timers run inline on the advancing thread, so their
+  messages are queued before `advance` returns; chains resolve within one call, bounded so a
+  self-rearming timer cannot spin. The timer thread still ignores the virtual offset, so skipping
+  virtual time never makes later real timers fire early.
+
+- `FileTree` no longer strands an empty directory. Expandability came from the loaded children, so
+  a directory turned out to be empty, and closing it again left a row with no arrow and no way to
+  reopen it — a state only reachable by opening it once, since an unread directory was expandable.
+  A directory is now expandable because it is a directory. Collapsed directories also stop emitting
+  the placeholder child that used to stand in for this.
+- `FileTree::empty_text` now renders for a `ChangedOnly` view with nothing changed, instead of a
+  lone root row over an empty list. The root row is the one row a tree always has, so the
+  placeholder was unreachable there — but a changed-only root is a heading over a projection rather
+  than a directory being browsed, and a heading over nothing says less than "No changes". Browsing
+  keeps its root row. A `git status` still in flight holds the heading rather than claiming a clean
+  tree it is about to contradict; application-provided change data is taken as final, so an app that
+  fetches its own changes should vary `empty_text` while it loads.
+- `Esc` cancelling a pending command chord is no longer also delivered to the focused widget. One
+  press did two things, and for a terminal that was not a harmless extra byte: terminals read `ESC`
+  followed by a key as `Alt+<key>`, so cancelling a leader chord silently turned the next keystroke
+  into a meta chord. With no chord pending, `Esc` is untouched and still reaches whatever has focus.
+
+- Handing the terminal to another program - a `ctrl+z` suspend, `$EDITOR`, a pager - now restores
+  the cursor. Ratatui hides it on every frame drawn without one and shows it again only when
+  `Terminal` drops, which a handoff never does, so the shell prompt came back with no visible
+  cursor until something else turned it on.
+- A `SIGTSTP` from outside the app (`kill -TSTP`, a parent shell) no longer stops the process with
+  the terminal still in raw mode, on the alternate screen and with mouse tracking on - which left
+  the shell prompt drawing over the frozen UI while mouse motion printed escape sequences into it.
+  The runner now takes the signal, releases the terminal at a frame boundary, and stops for real
+  with the default disposition back in place, so the shell still sees the job stop.
+- Mouse all-motion tracking (`1003`) is re-armed after the terminal comes back from an external
+  program or a suspend. Only basic capture is part of the resume sequence, so hover stayed dead
+  after returning from `$EDITOR` until something else toggled motion tracking.
+- Wheel events forwarded to a `Terminal` whose child has mouse tracking on no longer lose ticks.
+  The runner coalesces a burst of same-direction wheel events into one dispatch, but the terminal
+  forwarding path emitted a single mouse report and dropped the count, so the child saw one tick
+  where the host sent several. Hosts that emit several wheel events per physical notch made this
+  permanent rather than merely bursty: a TUI running inside a `Terminal` scrolled a fraction of
+  what the same TUI scrolled outside it. Forwarding stays a passthrough - the app-level
+  `scroll_wheel_multiplier` applies to local scrolling only, never to reports sent to a child.
+- Scripted `ui_snapshot` wheel actions apply `scroll_wheel_multiplier` once instead of squaring it.
+- `SearchPalette` can preserve the caller's matched-item order and can prioritize right-aligned
+  metadata over long labels through `preserve_item_order` and
+  `primary_truncate_description_first(false)`.
+- Terminal-native paste now cancels any pending app-command chord and repaints the cleared prefix
+  indicator, rather than leaving stale chord state visible.
+- Tabs hit-testing now follows actual rendered widths through Unicode truncation and ellipsis;
+  divider cells are inert for selection and per-tab hover, with symmetric repainting in either
+  direction.
+- `Splitter` hands each leftover column to the pane with the largest dropped fraction instead of to
+  the leftmost panes in index order. Sizes are floored from weights, so the spare columns were
+  landing on pane 0 regardless of which pane earned them - `[0.09, 0.45, 0.46]` across 10 columns
+  gave `[1, 5, 4]` rather than `[1, 4, 5]`. A drag round trips sizes through weights every frame,
+  so the misplacement could shift a pane the drag never touched. The weights-to-sizes round trip is
+  now exact.
+- `yazi` example no longer bumps `weights_nonce` on every splitter resize. The nonce means
+  "override whatever the splitter currently holds", so echoing it back each drag tick forced the
+  splitter to re-derive its exact columns from rounded weights instead of keeping its own.
+- Table headers no longer underline the selection-gutter spaces, so labels like `PID` do not pick
+  up a long underscore from `unselected_symbol` padding.
+- Measurement honors explicit `.width(Length::Px/Percent)` / `.height(...)` for every widget.
+  Auto/`Center` parents previously shrink-wrapped to content-only measure, so a child
+  `Input::…width(Length::Px(40))` (and the same pattern on `Button`, `Text`, `Checkbox`,
+  `Spacer`, …) was clamped away at reconcile. `Flex` still shrink-wraps so it does not
+  inflate Auto parents; `Percent` still falls back to content when the parent size is unknown.
+
+- `TerminalPty` no longer loses the output of a command that writes and exits immediately.
+  `TerminalPtyEvent::Exited` came from a thread blocked on `child.wait()`, which returns the instant
+  the child dies — usually before the reader thread has been scheduled to pick up the bytes still
+  buffered on the master. Consumers reasonably treat `Exited` as "this PTY is finished" and drop the
+  handle, and dropping kills the reader, so those bytes were discarded rather than delivered late: a
+  fast command could show its exit status and none of its output. The exit event is now emitted by
+  whichever side can prove the stream is drained — the reader on end-of-stream or on an idle master
+  after the child is gone, with the wait thread stepping in only if the reader cannot get there — so
+  `Output` always precedes `Exited`. A killed PTY still reports its exit immediately.
+
+- `SearchPalette` no longer swallows its navigation keys when nothing matches. The internal input
+  interceptor claimed `Enter` (and the arrows, `PageUp`/`PageDown`, `Home`/`End`) unconditionally,
+  so an empty result list still sent an activation for a row that does not exist and reported the
+  key handled — `input_key_interceptor` never saw it. Those keys now fall through to the caller
+  where the palette has no row to act on, which is what lets `Enter` mean "create what was typed"
+  or "start something new" in an empty list. Navigation still outranks the caller everywhere the
+  palette can act on it.
+- Clearing or entering an app-command chord while a terminal has focus now claims a frame for chord
+  chrome (`command_chord_pending`), even when the key itself is forwarded with `DirtyLevel::None`.
+  A mismatch or Esc cancel no longer leaves a stale PREFIX indicator painted over a busy child TUI.
+- Clicking a `FileTree` explorer input now focuses it even when the tree is inside an excluded focus
+  scope.
+- Cross-bar `DraggableTabBar` drops now select the transferred tab on the destination bar by
+  emitting its `on_change` callback after `on_transfer`, restoring the expected active style.
+- Divider junctions now keep every same-axis segment that shares a cell (two titled horizontals
+  meeting a vertical) and pick the glyph from the union of arms, so a descending vertical tees as
+  `┬` instead of cornering as `┌`.
+- Fuzzy/Exact `BorderMergeMode` no longer wipes a neighbor's border-title on a shared seam that
+  already carries box-drawing: non-box glyphs stay put, and spaces that sit next to that text (the
+  `icon  title` gap) are preserved. Borders still replace ordinary underlay content (e.g. a modal
+  over text). Plain backdrop spaces still accept a border so parent fills with a foreground color do
+  not suppress frames. `Replace` still overwrites so occluding frames win.
 
 - Apply list selection/hover style overrides and contrast finalization to spinner gutters and
   status spinners (text markers already did). Narrow spinner gutters also lead-pad inside the
@@ -899,262 +1114,6 @@ While the crate is on `0.x.y`:
   components. A retained component whose child refresh falls back to a full
   re-render also no longer double-counts as both hit and miss.
 
-### Added
-
-- 20 new built-in `Theme` presets, all resolvable through `preset_by_name`.
-  Light: `solarized_light`, `gruvbox_light`, `tokyo_night_day`,
-  `catppuccin_latte`, `rose_pine_dawn`, `ayu_light` — the first light presets
-  the crate ships. Dark: `catppuccin_frappe`, `catppuccin_macchiato`,
-  `rose_pine`, `rose_pine_moon`, `kanagawa`, `everforest`, `ayu_dark`,
-  `ayu_mirage`, `nightfox`, `nordfox`, `night_owl`, `material_palenight`,
-  `oxocarbon`, `zenburn`. `preset_by_name` also accepts `"catppuccin_mocha"`
-  as an alias for the existing `catppuccin` preset.
-
-- `SearchPalette::input_key(key)` keys the query input directly, so
-  `ctx.request_focus(key)` targets it instead of relying on the palette
-  container's first-focusable-descendant fallback. Uncontrolled mode only; a
-  controlled palette renders no input of its own.
-
-- DevTools frame metrics now attribute dirty updates to components and input
-  sources (`input:key` / `input:mouse` / `input:drag` / `input:scroll`), coalesced
-  across deferred-full skipped iterations into the next recorded frame and shown
-  under the Dirty line in the stats panel.
-- Collection widgets now expose paired `Arc<[T]>` bulk setters alongside the
-  existing iterator setters: `Table::rows_arc`, `Tabs::tabs_arc`,
-  `Chart::series_arc`, `ChartSeries::data_arc`, `Sparkline::data_arc`,
-  `MultiSelect::items_arc`, and `SearchPalette::{items_arc, entries_arc}`.
-  Prefer these when component state already holds a shared slice so frames avoid
-  reallocating identical collections.
-- Internal component registry now stores trimmed display names and full type
-  names at mount for DevTools diagnostics and tracing identity.
-- DevTools reports memo miss reasons (key/dirty/deps/in-view Memo taxonomy) and
-  counts in-view `Memo` hits toward the panel hit rate. Reason collection is
-  gated on the stats panel being visible with metrics enabled, so hidden-panel
-  builds pay only the plain hit/miss counters.
-- DevTools records exclusive per-component `view()` timings (top slow views) and
-  emits `component.view` / `component.refresh` spans with component identity when
-  `profiling-tracing` is enabled.
-- DevTools shows a passive input-pressure line when recent Full frames are both
-  input-sourced and over the 16ms budget (overlay only; no log warnings).
-- Documented production performance patterns for update scope, widget-owned
-  scrolling, subtree memoization, stable shared props, bounded rendering, and
-  coalesced background work, distilled from opencode-tui.
-- Added plain-text export over absolute terminal line ranges: `TerminalScreen::total_text_lines`,
-  `text_lines`, `export_text`, `absolute_line_to_viewport`, and `absolute_line_to_offset`.
-  Absolute indices count from the oldest retained history line and never mutate the display
-  offset or run the render pipeline, so exporting does not disturb what the user is looking at.
-- Added OSC 133 semantic marks anchored to those absolute lines: public `SemanticMark` and
-  `SemanticMarkKind`, plus `TerminalScreen::semantic_marks`, `last_command_output_range`, and
-  `export_last_command_output`. Marks are bounded, dropped once their line falls out of
-  scrollback, and ignored while the alt screen is up.
-- Added `KeyBinding::key_events`, expanding a parsed binding into one `KeyEvent` per chord step
-  for send-keys style callers, with a dedicated `KeyEventExpansionError` for bindings that cannot
-  be expressed as discrete events.
-
-- Added `Theme::focus_decoration(bool)` and public `Theme::focus_decoration`, defaulting to `true`.
-  Disabling it suppresses theme-sourced focus chrome, focused-content palette defaults, and focused
-  scrollbar thumbs while preserving explicit widget focus styles and all selection styling.
-  (breaking)
-- Added widget `on_focus`/`on_blur` delivery and `App::on_focus_changed`, with public
-  `FocusEntry`/`FocusChanged` payloads, keyed-remount deduplication, post-reconcile delivery, and
-  focus diagnostics in the `devtools` panel. `Modal` and root `Popover` auto-focus by default;
-  `.auto_focus(false)` retains their existing focus trap while suspending focus.
-- `TestBackend` now drives the full generic `DragSource`/`DropTarget` pipeline: `send_mouse`
-  with `Down`/`Drag`/`Up` activates drags past the movement threshold and emits `on_drag_start`,
-  `on_drag_over`, `on_drag_leave`, `on_drop`, and `on_drag_cancel`, enabling headless integration
-  tests of composed drag-and-drop UIs (previously these drags were silently discarded). The
-  axis-neutral activation and target-compatibility logic is shared with the terminal runner.
-- Added `FocusScope::{None, Exclude, Contain}` and `.focus_scope(...)` to `VStack`, `HStack`,
-  and `Frame`. Excluded subtrees are skipped by traversal, fallback, descendant, and pointer
-  focus while explicit keyed requests can enter them; contained subtrees cycle focus internally.
-  A `Contain` pane is **opaque to the enclosing tab ring**: Tab from outside never enters it,
-  because a ring that could Tab *in* but not back *out* traps focus. Focus enters a pane by
-  click, `request_focus`, or an app-level pane-switch key. A focusable (`.focusable(true)`)
-  `Contain` pane is itself a tab stop in the enclosing ring, so the pane stays keyboard-reachable
-  even though its contents are opaque; the boundary node is never part of its own pane's ring.
-  As a safety valve, when every tab stop in the tree lives inside a pane, Tab from an unfocused
-  app descends into panes so traversal is never dead; the same valve applies inside capturing
-  overlays, whose ring descends through panes when it would otherwise be empty.
-
-- New `sidebar_tabs` example: rich vertical sidebar tabs composed from primitives — status
-  icon or live spinner, label plus description line per item, click/keyboard selection, and
-  drag-to-reorder with a flicker-free insertion indicator built on per-item `DropTarget`s.
-  The per-item top/bottom-half drop mapping is documented in `docs/widgets/input.md`.
-
-- `Flow::justify(Justify)` distributes each wrapped row's leftover width along the main axis.
-  All `Justify` variants are supported and applied per row (`SpaceBetween` pins every row's first
-  item to the left edge and last item to the right edge). Because Flow items are always measured
-  at their natural size, the space variants need no explicit child sizing, unlike stacks.
-
-- `RowStylePolicy` controls how row-level selection/hover/active styling interacts with a rich-text
-  span: `Full` (row styling overrides the span, the default), `PreserveForeground` (row background
-  and modifiers apply but the span keeps its explicit foreground — useful for search matches that
-  must stay distinguishable inside a selected row), and `Disabled` (row styling never touches the
-  span). The new `Span::row_style_policy` field and setter replace the `allow_row_style` bool
-  field and setter: `allow_row_style(true)` becomes `RowStylePolicy::Full` and
-  `allow_row_style(false)` becomes `RowStylePolicy::Disabled`. (breaking)
-- `ToastHandle::dismiss_immediately(id)` removes a toast synchronously without an exit transition,
-  allowing state notifications to be replaced without briefly stacking the fading old toast beside
-  its replacement. See `docs/widgets/overlays.md`.
-- `Update::layout_with_command(command)` combines a component-scoped layout
-  refresh with background work, avoiding a root-level full update for controlled
-  editors and other high-frequency widgets that launch async tasks.
-- `TerminalScreen::semantic_state()`, `drain_semantic_events()`, and
-  `restore_semantic_state()` expose working-directory and command-lifecycle
-  metadata parsed from `OSC 7` (`file://host/path`), `OSC 9;9` (Windows-style
-  CWD reports), and `OSC 133 A/B/C/D` (prompt/input/execution/completion
-  boundaries), plus a minimal `hyprmux_exe=` key/value extension and Fish/Kitty's
-  `cmdline_url=` for foreground-executable identity. Parsing runs through a
-  second, independent `vte::Perform` observer fed the same raw bytes as the
-  primary Alacritty grid parser, so it cannot affect rendering. New types:
-  `TerminalSemanticState`, `TerminalSemanticEvent`, `TerminalWorkingDirectory`,
-  `TerminalWorkingDirectorySource`, `TerminalCommandPhase`. This state is
-  deliberately kept out of `TerminalRenderSnapshot` - it is runtime metadata,
-  not something the renderer paints. See `docs/widgets/terminal.md`.
-- `TerminalPty::foreground_process_group_id()` (Unix-only) reports the PTY's
-  foreground process-group id (`tcgetpgrp(3)`) without exposing the underlying
-  master file descriptor, for host apps that need a native foreground-process
-  fallback when no shell integration is available.
-- `TerminalScreen::bell_count()` exposes a monotonic count of BEL events parsed
-  from child output, allowing hosts to trigger visual or audible notifications.
-- `SearchPalette::match_mode(SearchMatchMode)` adds a `Hybrid` matching
-  strategy alongside the existing (and still default) `Fuzzy` mode.
-  `Hybrid` evaluates exact, prefix, word-prefix, substring, and fuzzy
-  matching together and ranks results by that priority order first, so a
-  real substring or prefix match always outranks a fuzzy one. Fuzzy
-  candidates are additionally quality-gated on match density, span, start
-  position, and whether the matched characters stay mostly within one word,
-  rejecting weak scattered matches (e.g. `layo` against "Enable pane
-  synchronization") while keeping useful abbreviations (e.g. `prd` against
-  "production"). Fields (label/aliases, description, and the right-hand
-  hint) allow separate whitespace-delimited terms to match different fields,
-  while characters within one term never combine across fields. All terms
-  must match. Contiguous queries may omit separators within one field, so
-  `switchmodel` matches `Switch model`. Labels/aliases are weighted highest,
-  descriptions lower, and the right-hand hint is restricted to
-  exact/substring matching. See `docs/widgets/overlays.md` and `docs/enums.md`.
-- `rank_search_palette_indices_with_mode(items, query, match_mode, score_fn)`
-  ranks items with the standalone helper under an explicit `SearchMatchMode`
-  (e.g. `Hybrid`), for callers that own the query/selection but want the same
-  ordering as a `SearchPalette` configured with that mode.
-  `rank_search_palette_indices_with_score` remains and now delegates to it with
-  `SearchMatchMode::Fuzzy`. See `docs/widgets/overlays.md`.
-- `Modal::focus_style(Style)`, `extend_focus_style(Style)`, and
-  `inherit_focus_style()` configure the dialog frame while the modal or one of
-  its descendants holds focus, allowing focused root-portal dialogs to retain
-  intentional frame accents or compose with the theme focus style. See
-  `docs/widgets/overlays.md`.
-- `Tabs::caps(Option<(char, char)>)` draws `(left, right)` end-cap glyphs around
-  the active and hovered tabs. Each cap replaces one of the tab's two padding
-  cells, so the tab keeps its measured width and hit region, and is painted in
-  the tab's own background over the strip background so the tab reads as a
-  rounded or pointed pill (pass powerline separators for that look). A tab falls
-  back to flat padding when it is truncated by the overflow policy, when its
-  background matches the strip's, or when either cap is not single-width.
-  Defaults to `None` (flat padding). See `docs/widgets/tabs.md`.
-- `TerminalKeyModes` describes the input-affecting modes a child program has
-  enabled: `app_cursor` (DECCKM), `bracketed_paste` (mode 2004), and
-  `kitty_keyboard` (a `KittyKeyboardFlags` capturing the Kitty keyboard protocol
-  flags pushed with `CSI > <flags> u`). It rides on `TerminalRenderSnapshot`, is
-  applied automatically by `Terminal::snapshot`, and is exposed by
-  `TerminalScreen::key_modes()` and `Terminal::key_modes()` for hosts that wire a
-  `TerminalPty` by hand. This is the keyboard counterpart to the existing
-  `MouseModeState`. See `docs/widgets/terminal.md`.
-- `TerminalRenderSnapshot` now carries `cursor_shape` (`CaretShape`) and
-  `cursor_blinking` (`bool`) captured from the child program's `DECSCUSR`
-  (`CSI Ps SP q`) sequences, plus matching `Terminal::cursor_shape()` /
-  `Terminal::cursor_blinking()` builders. The `Terminal` widget now renders the
-  child's requested cursor shape and honors its steady/blinking preference
-  instead of forcing a blinking block. See `docs/widgets/terminal.md`.
-- `Context::command_chord_pending` method to query whether an app command chord is currently pending completion (e.g., after a leader prefix key has been matched).
-- Reference documentation for `BorderMergeMode` and `SplitterHandleMode` enums in `docs/enums.md` and `docs/styling.md`.
-- `Modal::max_height(Length)` caps a modal's height, and
-  `Modal::reserve_height(Length)` keeps a `RootPortal` modal's top edge fixed as
-  its content grows and shrinks: the overlay is centered as if it were
-  `reserve_height` tall, then the content is top-aligned within that reserved
-  band, pinning the top edge at `(viewport - reserve_height) / 2`. Together with
-  `height(Length::Auto)` this lets a content-hugging modal — e.g. a
-  `SearchPalette` filtered as the user types — shrink to its visible rows
-  without drifting toward the vertical center.
-
-  `reserve_height` positions and `max_height` bounds, independently: content
-  taller than the band keeps the same top edge and extends past the band's
-  bottom, so a modal can be anchored a quarter of the way down the viewport
-  (`reserve_height(Percent(50))`) while being free to grow to 75% of it. See
-  `docs/widgets/overlays.md`.
-
-- Layered keyboard dispatch: `FrameworkAction`, `FrameworkKeymap`, `UserKeymapPolicy`,
-  `KeyDispatchPolicy`, `TerminalKeyPolicy`, `CommandConflictPolicy`, and
-  `ChordMismatchPolicy` for explicit app-side input routing control.
-- `App::framework_keymap`, `App::global_quit`, `App::user_keymap_policy`,
-  `App::key_dispatch_policy`, `App::terminal_key_policy`,
-  `App::command_conflict_policy`, and `App::chord_mismatch_policy` builders.
-- Executable app command shortcuts via `CommandBuilder::shortcut` /
-  `CommandBuilder::shortcuts` with deterministic conflict resolution and chord
-  runtime support.
-- `SplitterHandleMode` (`Splitter::handle_mode`): `Gutter` (default) keeps the
-  classic reserved handle gutter; `Border` drops the gutter and rides the pane
-  border seam, deriving handle thickness from the borders actually present
-  (merged borders share a 1-cell wall, separate borders are grabbed together
-  as a 2-cell handle, borderless panes get a synthetic 1-cell handle).
-- Corner drag for splitters: when a vertical and a horizontal handle meet,
-  clicking on or next to the junction grabs both handles and dragging resizes
-  both splitters simultaneously; release emits `on_resize` for both.
-- Public `text_motion` module (also re-exported through the prelude) exposing
-  the byte-offset vim word/WORD/line motion algorithms
-  (`word_forward_start`/`word_backward_start`/`word_end`,
-  `big_word_forward_start`/`big_word_backward_start`/`big_word_end`,
-  `line_start_at`/`line_end_at`/`first_nonblank_in_line`) that back
-  `TextArea`'s vim mode, so host apps that render their own text grids (for
-  example a terminal emulator's scrollback copy mode) can reuse the same
-  `w`/`b`/`e`/`W`/`B`/`E`/`0`/`^`/`$` motions instead of reimplementing them.
-  See `docs/text-editing.md`.
-- `InlineHeight` height policy for inline viewports: `InlineHeight::Fixed(rows)`
-  keeps the classic fixed height, `InlineHeight::auto()` sizes the viewport to
-  the content's measured height every frame (growing and shrinking as the view
-  changes), and `InlineHeight::auto_capped(rows)` adds an upper bound. The
-  inline builders (`App::inline_ephemeral`, `App::inline_transcript`,
-  `App::inline_transcript_with_startup`) now take `impl Into<InlineHeight>`,
-  so existing calls with a plain row count keep compiling. When auto-sized
-  content is taller than the terminal (or the cap), the layout keeps its
-  natural height and the viewport shows its top rows, clipping the bottom.
-  See `docs/inline-mode.md` and `examples/inline_auto_height.rs`.
-- Unix-only `TerminalPty::handoff()` and `TerminalPtyHandoff` for advanced
-  terminal hosts that need to transfer a live PTY master to another process
-  without restarting the child. See `docs/widgets/terminal.md`.
-- `TerminalScreen::export_replay_bytes()` serializes the current screen state
-  (scrollback, primary/alternate contents, cursor, title, and common modes) as
-  a VT byte stream that a fresh same-sized `TerminalScreen` reproduces by
-  replaying it through the normal parser. Useful for seeding a newly attached
-  client from a server-owned terminal. See `docs/widgets/terminal.md`.
-
-### Changed
-
-- `Sparkline.data` is now `Arc<[u64]>` instead of `Vec<u64>` (breaking). Call
-  sites that assigned a `Vec` directly should use `Sparkline::new` / `.data(...)`
-  or `.data_arc(...)`.
-- `MultiSelect` and `SearchPalette` now store item/entry collections as
-  `Arc<[T]>` instead of `Vec<T>` (breaking for any code that depended on the
-  previous private storage shape via struct updates or reflection). Builder
-  iterator setters still accept `IntoIterator` and collect into `Arc`.
-
-- Added app-level `FocusPolicy::{Auto, OnDemand, Manual}` and `App::focus_policy(...)`;
-  `OnDemand` is now the default, so apps start unfocused until Tab, pointer interaction, or an
-  explicit focus request establishes focus. `Manual` disables framework Tab and pointer focus
-  movement while preserving explicit focus APIs and capturing-overlay focus traps. (breaking)
-- Added `Context::blur()`, `Context::focus_next()`, `Context::focus_prev()`, and
-  `TestBackend::blur()` for explicit focus control.
-- Added `tab_stop`, `on_focus`, and `on_blur` to focusable widgets. Renamed
-  `Input::tab_order` to `Input::tab_stop` and TextArea's literal-tab width setter from
-  `tab_stop` to `tab_display_width`. (breaking)
-- Accordion, DraggableTabBar, Hyperlink, PanView, and Tabs are no longer focusable by default;
-  opt in with `.focusable(true)`. (breaking)
-- Renamed stack containers' `FocusPolicy` accordion-sizing enum to `FocusSizing` and
-  `.focus_policy(...)` builder to `.focus_sizing(...)`. Tree's distinct
-  `.focus_policy(FocusAccordion)` API is unchanged. (breaking)
-
-### Fixed
-
 - Terminal semantic marks no longer drift onto unrelated lines once scrollback fills up.
   Eviction cannot be recovered from the grid after the fact: at the scrollback limit
   `history_size()` and `topmost_line()` are pinned while content keeps shifting, so a remap
@@ -1182,42 +1141,51 @@ While the crate is on `0.x.y`:
 - `on_blur` is no longer delivered to an unrelated widget when the blurred node's arena slot is
   recycled during reconcile. The callback is captured when the transition is recorded rather than
   re-resolved from a stale node id.
-- **(breaking)** Raised the declared MSRV from Rust 1.85 to 1.88 (matches the
-  locked Ratatui requirement), as part of laying groundwork for native
-  macOS/Windows support.
-- **(breaking)** `key_event_to_bytes` takes a second argument,
-  `modes: TerminalKeyModes`, carrying the DEC private modes the child has
-  enabled. Pass `TerminalKeyModes::default()` to keep the previous encoding, or
-  `TerminalScreen::key_modes()` to honor the child's requests. `TerminalPty::send_key`
-  gains the same argument.
-- **(breaking)** Renamed `wrap_bracketed_paste(text)` to
-  `encode_paste(text, modes)`. The old name always wrapped, which is wrong for a
-  child that has not enabled bracketed paste; the new one wraps only when
-  `modes.bracketed_paste` is set. `paste_sequences()` is unchanged.
-- **(breaking)** `TerminalRenderSnapshot` gains a `key_modes: TerminalKeyModes`
-  field, and `TerminalRenderSnapshot::from_parts` takes it as a final argument.
-  Callers constructing snapshots from an external transport must carry the
-  child's input modes across the wire, or pass `TerminalKeyModes::default()`.
-- **(breaking)** `TerminalRenderSnapshot::from_parts` takes two additional
-  arguments (`cursor_shape: CaretShape`, `cursor_blinking: bool`) after
-  `cursor_visible`. Callers constructing snapshots from an external transport
-  must supply the child's cursor shape and blink state.
-- **(breaking)** Renamed `CommandBuilder::keybinding(...)` to
-  `CommandBuilder::keybinding_hint(...)` for display-only palette hints;
-  executable bindings use `shortcut(...)` / `shortcuts(...)`.
-
-- **(breaking)** The `height` field of `SurfaceMode::InlineEphemeral` and
-  `SurfaceMode::InlineTranscript` is now `InlineHeight` instead of `u16`.
-  Code constructing these variants directly must wrap the row count
-  (`height: InlineHeight::Fixed(8)` or `height: 8.into()`); the `App` builder
-  methods are unaffected thanks to `From<u16> for InlineHeight`.
-### Removed
-
-- (breaking) Removed `Splitter::join_frame(bool)` method (use `Splitter::handle_mode(SplitterHandleMode::Border)` instead).
-- (breaking) Removed unused `TextAreaDecorationKind::VirtualText` enum variant.
-
-### Fixed
-
+- `hover:` actions now update hover state. Hover tracking and `on_mouse_move` handlers are separate
+  paths, and a bare move only reached the latter - which returns early when a widget has no move
+  handler, so hovering silently did nothing while a click (which moves, presses, releases) worked.
+- `AppRunner` records the bounds of its latest layout pass, so a capture taken between frames uses
+  the real viewport instead of a zero-sized one.
+- `DraggableTabBar` now keeps successive close buttons under the pointer by temporarily giving a
+  deleted tab's width to its replacement until the mouse leaves the bar. Action tabs (for example a
+  trailing `+`) are excluded from that width lock.
+- Keep a pane's images across a width change unless the resize actually rewraps text. Treating
+  every column change as a rewrap cost a pane every image in it on each resize, which in a tiling
+  multiplexer is every time a neighbour opens.
+- Give `TerminalImagePlacement` the `image_id` its transmission used, and key the renderer's
+  encoding cache on it. Two placements holding identical pixels shared one encoding and so one
+  Kitty image id, which a host reads as a single placement — it drew one and dropped the other, so
+  repeated copies of a picture vanished as new ones arrived.
+- Accept a graphics transmission sent as one oversized escape rather than the chunks the protocol
+  asks for. Raw pixels in a single escape clear 64 KiB with a picture only a few hundred cells
+  wide, and the old per-escape bound dropped those silently — indistinguishable, from the sender's
+  side, from a terminal with no graphics support at all.
+- Display-column helpers and terminal selection rendering preserve joined
+  grapheme clusters instead of measuring or slicing their Unicode scalars
+  independently.
+- `TerminalCopyMode` returns `Ignored` for motions already at a boundary and
+  prompt jumps no longer wrap from one end of the prompt list to the other.
+- Text and virtual-text rendering now drops control characters consistently;
+  virtual text also strips terminal control sequences.
+- `List` and `Table` keep reporting overflow scroll indicators when
+  `show_scroll_indicators` is on and no row is selected. The no-selection
+  scroll branch reported no indicators and a zero overflow count, so a
+  read-only list lost its "N more below" affordance until the user scrolled.
+- `PanView` now responds to the mouse wheel. It supported drag and keyboard
+  panning but was never routed to the wheel dispatcher at all, so spinning the
+  wheel over a pan surface did nothing. The wheel pans vertically and
+  shift+wheel horizontally, each tick moving one `key_step` in that axis so
+  wheel and keyboard panning share one step size. A clamped view at its edge
+  leaves the tick unhandled so it bubbles to an ancestor; an unclamped free
+  canvas has no edge and keeps consuming. Opt out with `wheel_to_pan(false)`.
+- A plain mouse wheel tick over a `ScrollView` with `ScrollAxis::Horizontal`
+  now pans that view horizontally instead of being discarded. Shift+wheel is
+  still the explicit horizontal override, and stays required when both axes are
+  enabled; with vertical scrolling off there was nothing to disambiguate, so the
+  modifier only made the wheel do nothing. When the view has no horizontal
+  travel left the tick is reported unhandled and bubbles to an ancestor, so a
+  horizontal strip nested inside a vertical `ScrollView` does not trap the
+  wheel.
 - Fixed initially-open root popovers resolving placement before the root node has a valid rect.
 - `TextArea` word wrapping reuses the previous word break when a separator overflows, including
   while that separator is still trailing, so typing the next character cannot jump ahead of it.

@@ -46,6 +46,11 @@ jobs:
       - name: Check children()/child() ordering
         run: python3 scripts/check-children-replace.py
 
+      - name: Check changelog structure
+        run: |
+          python3 scripts/test_check_changelog.py
+          python3 scripts/check-changelog.py
+
       - name: Check macro and rust formatting
         shell: bash
         run: |

@@ -122,18 +122,28 @@ in `CHANGELOG.md`. The format follows [Keep a Changelog](https://keepachangelog.
 - `Frame` now uses positional `BorderLabels` header/footer groups instead of its
   former title/status API (breaking).
 
-### Fixed
-- `ScrollView` no longer clips the last row when content height is odd.
-
 ### Removed
 - Deprecated `LegacyButton` widget.
+
+### Fixed
+- `ScrollView` no longer clips the last row when content height is odd.
 ```
 
 Use these section headings: **Added**, **Changed**, **Deprecated**, **Removed**,
 **Fixed**, **Security**.
 
-**Breaking changes** must say "(breaking)" at the end of the line so they are
-trivial to grep at release time.
+Each heading may appear at most once per release and must use that order. Run
+`python3 scripts/check-changelog.py --fix` to merge duplicate heading blocks and
+restore the canonical order without rewriting entries. CI runs the check-only
+form, `python3 scripts/check-changelog.py`.
+
+Classify entries by their primary effect: new APIs and capabilities are
+**Added**, changes to existing behavior or APIs are **Changed**, removals are
+**Removed**, and corrections to unintended behavior are **Fixed**.
+
+**Breaking changes** must end their entry with "(breaking)" so they are trivial
+to grep at release time. The changelog check enforces this for `[Unreleased]`;
+released entries retain their historical wording.
 
 **Skip the changelog only for:** internal refactors with no API/behavior change,
 docs-only changes, CI/tooling changes, test-only changes. When in doubt, add an

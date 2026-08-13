@@ -74,6 +74,7 @@ python3 scripts/check-widget-variant-parity.py
 python3 scripts/generate-node-kind-delegate-arms.py
 python3 scripts/check-widget-style-slots.py
 python3 scripts/check-children-replace.py
+python3 scripts/check-changelog.py
 find src tests benches examples tui-lipan-macro -name '*.rs' -print0 \
   | xargs -0 -r ./scripts/format-rust-with-macros --check
 python3 scripts/check-feature-tables.py

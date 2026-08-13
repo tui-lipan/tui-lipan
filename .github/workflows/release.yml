@@ -44,6 +44,11 @@ jobs:
           grep -Fq "## [$VERSION]" CHANGELOG.md \
             || { echo "CHANGELOG.md has no section for $VERSION"; exit 1; }
 
+      - name: Check changelog structure
+        run: |
+          python3 scripts/test_check_changelog.py
+          python3 scripts/check-changelog.py
+
       - name: Run cargo tests
         run: cargo test --workspace --all-features
 
