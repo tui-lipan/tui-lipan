@@ -27,18 +27,21 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          grep -q "^version = \"$VERSION\"" Cargo.toml \
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo "Tag is not a stable semantic version: $GITHUB_REF_NAME"; exit 1; }
+          grep -Fqx "version = \"$VERSION\"" <(grep '^version = ' Cargo.toml) \
             || { echo "Cargo.toml version does not match tag $GITHUB_REF_NAME"; exit 1; }
-          grep -q "^version = \"$VERSION\"" tui-lipan-macro/Cargo.toml \
+          grep -Fqx "version = \"$VERSION\"" \
+            <(grep '^version = ' tui-lipan-macro/Cargo.toml) \
             || { echo "tui-lipan-macro/Cargo.toml version does not match tag $GITHUB_REF_NAME"; exit 1; }
-          grep -q "version = \"$VERSION\"" <(grep 'tui-lipan-macro = ' Cargo.toml) \
+          grep -Fq "version = \"$VERSION\"" <(grep 'tui-lipan-macro = ' Cargo.toml) \
             || { echo "tui-lipan-macro dependency version in Cargo.toml does not match tag"; exit 1; }
 
       - name: Check changelog has this version
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          grep -q "^## \[$VERSION\]" CHANGELOG.md \
+          grep -Fq "## [$VERSION]" CHANGELOG.md \
             || { echo "CHANGELOG.md has no section for $VERSION"; exit 1; }
 
       - name: Run cargo tests
@@ -66,13 +69,50 @@ jobs:
         id: auth
 
       - name: Publish tui-lipan-macro
-        run: cargo publish -p tui-lipan-macro
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          STATUS=$(curl --silent --show-error --retry 3 --connect-timeout 10 --max-time 30 \
+            --user-agent "tui-lipan-release-workflow (https://github.com/tui-lipan/tui-lipan)" \
+            --output /dev/null --write-out '%{http_code}' \
+            "https://crates.io/api/v1/crates/tui-lipan-macro/$VERSION")
+          case "$STATUS" in
+            200) echo "tui-lipan-macro $VERSION is already published" ;;
+            404) cargo publish -p tui-lipan-macro ;;
+            *) echo "crates.io returned HTTP $STATUS for tui-lipan-macro $VERSION"; exit 1 ;;
+          esac
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
+      - name: Wait for tui-lipan-macro in the crates.io index
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error --retry 3 --connect-timeout 10 --max-time 30 \
+              --user-agent "tui-lipan-release-workflow (https://github.com/tui-lipan/tui-lipan)" \
+              "https://index.crates.io/tu/i-/tui-lipan-macro" \
+              | grep --fixed-strings "\"vers\":\"$VERSION\"" >/dev/null; then
+              exit 0
+            fi
+            echo "Waiting for tui-lipan-macro $VERSION (attempt $attempt/30)"
+            sleep 10
+          done
+          echo "tui-lipan-macro $VERSION did not appear in the crates.io index"
+          exit 1
+
       - name: Publish tui-lipan
-        # `cargo publish` blocks until the macro crate is visible in the
-        # index, so publishing sequentially in one job is safe.
-        run: cargo publish -p tui-lipan
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          STATUS=$(curl --silent --show-error --retry 3 --connect-timeout 10 --max-time 30 \
+            --user-agent "tui-lipan-release-workflow (https://github.com/tui-lipan/tui-lipan)" \
+            --output /dev/null --write-out '%{http_code}' \
+            "https://crates.io/api/v1/crates/tui-lipan/$VERSION")
+          case "$STATUS" in
+            200) echo "tui-lipan $VERSION is already published" ;;
+            404) cargo publish -p tui-lipan ;;
+            *) echo "crates.io returned HTTP $STATUS for tui-lipan $VERSION"; exit 1 ;;
+          esac
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

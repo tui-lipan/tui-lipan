@@ -11,6 +11,8 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-13
+
 ### Added
 
 - `Context::last_mouse()` — last pointer in terminal content coordinates, or `None` until a mouse
@@ -1372,5 +1374,6 @@ Highlights of what ships in 0.1.0:
 See the [README](README.md) for the full feature set and
 [docs.tui-lipan.dev](https://docs.tui-lipan.dev) for documentation.
 
-[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/tui-lipan/tui-lipan/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/tui-lipan/tui-lipan/releases/tag/v0.1.0
