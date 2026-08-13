@@ -89,6 +89,7 @@ pub(crate) struct FileTreeProps {
     pub(crate) scroll_indicator_style: Style,
     pub(crate) empty_text: Option<Arc<str>>,
     pub(crate) empty_text_style: Style,
+    pub(crate) empty_text_padding: Padding,
     pub(crate) explorer: bool,
     pub(crate) tree_focus_key: Arc<str>,
     pub(crate) explorer_focus_key: Arc<str>,

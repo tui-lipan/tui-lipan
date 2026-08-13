@@ -425,6 +425,7 @@ entries and git-backed or application-provided change projections.
 | `force_scroll_to_selected` | `bool` | Force the tree to reveal the selected row on next render |
 | `expanded_paths` | `impl IntoIterator<Item = impl Into<Arc<str>>>` | Controlled expanded directory paths; the root path is kept expanded automatically |
 | `initial_expanded_paths` | `impl IntoIterator<Item = impl Into<Arc<str>>>` | Expansion seeded on mount and on each root change, which the tree then owns |
+| `empty_text_padding` | `impl Into<Padding>` | Inset around the empty-state text; defaults to none, flush with the rows |
 | `indent_width` | `u16` | Indentation cells per hierarchy level (default: `2`); use `1` with short guides for compact `├item` rows |
 | `directory_icon` | `String` | Directory icon |
 | `file_icon` | `String` | File icon |
