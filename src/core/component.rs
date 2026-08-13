@@ -1177,10 +1177,11 @@ impl<C: Component> Context<C> {
 
     /// Last pointer position in terminal content coordinates.
     ///
-    /// `None` until a mouse event has been seen this run. Coordinates match [`MouseEvent`]: the
-    /// same space widgets and `MouseRegion` callbacks receive, including after inline-mode
-    /// content-offset adjustment. Motion that is forwarded to a tracking terminal still updates
-    /// this value, so a key binding can place UI at the pointer without a move listener.
+    /// `None` until a mouse event has been seen this run. Coordinates match
+    /// [`MouseEvent`](crate::core::event::MouseEvent): the same space widgets and `MouseRegion`
+    /// callbacks receive, including after inline-mode content-offset adjustment. Motion that is
+    /// forwarded to a tracking terminal still updates this value, so a key binding can place UI at
+    /// the pointer without a move listener.
     pub fn last_mouse(&self) -> Option<(u16, u16)> {
         self.env.last_mouse.get()
     }
