@@ -33,6 +33,10 @@ pub(crate) struct FileTreeState {
     pub(crate) root_virtual: bool,
     pub(crate) expanded: HashSet<Arc<str>>,
     pub(crate) git_snapshot: GitStatusSnapshot,
+    /// Whether the first `git status` for the current root is still running. Only the changed-only
+    /// empty state reads it: without it, every tree would answer "nothing changed" for the frames
+    /// between mounting and the snapshot landing, and then fill in.
+    pub(crate) git_snapshot_pending: bool,
     pub(crate) git_load_generation: u64,
     pub(crate) last_git_refresh_nonce: u64,
     pub(crate) changed_only_auto_expand_signature: u64,
@@ -124,6 +128,7 @@ impl Component for FileTreeComponent {
             root_virtual,
             expanded,
             git_snapshot,
+            git_snapshot_pending: false,
             git_load_generation: 0,
             last_git_refresh_nonce: props.git_refresh_nonce,
             changed_only_auto_expand_signature: 0,
@@ -152,6 +157,9 @@ impl Component for FileTreeComponent {
         let repo_root = discover_git_root(Path::new(ctx.props.root.as_ref()))
             .map(|path| Arc::<str>::from(path.to_string_lossy().as_ref()))?;
 
+        // A root outside any repository returns above: there is nothing to wait for, and the
+        // changed-only view can say so immediately.
+        ctx.state.git_snapshot_pending = true;
         Some(git_snapshot_command(
             ctx.link().clone(),
             repo_root,
@@ -189,6 +197,8 @@ impl Component for FileTreeComponent {
         };
 
         let projection = build_projection(&ctx.props, &ctx.state, active_filter);
+        let empty_changed_only =
+            changed_only_projection_is_empty(&ctx.props, &ctx.state, &projection);
         let selected_by_path = selected_visible_index_by_path(&ctx.props, &ctx.state, &projection);
         let select_lookup = projection.lookup.clone();
         let activate_lookup = projection.lookup.clone();
@@ -282,8 +292,16 @@ impl Component for FileTreeComponent {
                 .empty_text_style(ctx.props.empty_text_style);
         }
 
+        // The explorer stays even with nothing to show: a query that currently matches nothing must
+        // not tear its own input away mid-word.
+        let body: Element = if empty_changed_only {
+            changed_only_empty_state(&ctx.props)
+        } else {
+            tree.into()
+        };
+
         if !has_explorer {
-            return tree.into();
+            return body;
         }
 
         let query = ctx.state.explorer_input.text().to_owned();
@@ -338,7 +356,7 @@ impl Component for FileTreeComponent {
                 MouseRegion::new()
                     .on_mouse_down(ctx.link().callback(|_| FileTreeMsg::TreePointerDown))
                     .bubble_mouse_down(true)
-                    .child(tree),
+                    .child(body),
             )
             .into()
     }
@@ -523,6 +541,7 @@ impl Component for FileTreeComponent {
                 if generation != ctx.state.git_load_generation || !needs_git_snapshot(&ctx.props) {
                     return Update::none();
                 }
+                ctx.state.git_snapshot_pending = false;
                 ctx.state.git_snapshot = snapshot;
                 let snapshot = effective_change_snapshot(&ctx.state);
                 if should_auto_expand_changed_only(&ctx.props, &ctx.state, snapshot) {
@@ -680,6 +699,10 @@ impl Component for FileTreeComponent {
         } else {
             None
         };
+        if should_load_git {
+            // A root that moved out of every repository issues no command, and is settled at once.
+            ctx.state.git_snapshot_pending = command.is_some();
+        }
 
         if dirty {
             Update::with_command(command)
@@ -687,6 +710,53 @@ impl Component for FileTreeComponent {
             Update::none()
         }
     }
+}
+
+/// Whether the changed-only view has nothing to show.
+///
+/// The root row is the one row a tree always has, so in a browsing tree `empty_text` would be
+/// unreachable — but changed-only is not browsing. Its root is a heading over a projection rather
+/// than a directory you opened, and a heading over nothing is worse than saying nothing changed.
+///
+/// A `git status` still running is not the same as a clean tree, so a pending snapshot holds the
+/// heading rather than claiming an answer it does not have yet. Provided change data has no such
+/// moment: whatever the application passed is the answer, and its own loading state is its to show.
+fn changed_only_projection_is_empty(
+    props: &FileTreeProps,
+    state: &FileTreeState,
+    projection: &FileTreeProjection,
+) -> bool {
+    props.change_view == FileTreeChangeView::ChangedOnly
+        && props.empty_text.is_some()
+        && !state.git_snapshot_pending
+        && projection.root.children.is_empty()
+}
+
+/// The empty changed-only view: the same `List` the tree renders into, with no rows, so the
+/// placeholder inherits the tree's own sizing, styling, and focus target instead of collapsing the
+/// surface to a bare line of text.
+fn changed_only_empty_state(props: &FileTreeProps) -> Element {
+    let mut list = crate::widgets::List::new()
+        .width(props.width)
+        .height(props.height)
+        .style(props.style)
+        .scrollbar(props.scrollbar)
+        .scrollbar_config(props.scrollbar_config.clone())
+        .focusable(props.focusable)
+        .tab_stop(props.tab_stop)
+        .empty_text_style(props.empty_text_style);
+    if let Some(text) = props.empty_text.clone() {
+        list = list.empty_text(text);
+    }
+    // Focus still lands here and still reports, so an application mirroring the tree's focus does
+    // not go stale for exactly the states where it has nothing to draw a cursor on.
+    if let Some(cb) = props.on_focus.clone() {
+        list = list.on_focus(cb);
+    }
+    if let Some(cb) = props.on_blur.clone() {
+        list = list.on_blur(cb);
+    }
+    list.key(props.tree_focus_key.clone())
 }
 
 fn needs_git_snapshot(props: &FileTreeProps) -> bool {
@@ -1626,15 +1696,11 @@ fn build_projected_tree_node(
     }
 
     let mut tree = TreeNode::new(item)
+        // A directory is expandable because it is a directory, not because of what is inside it.
+        // Deriving this from the loaded children instead would strand an empty one: opening it
+        // loads nothing, so closing it again would leave a row with no arrow and no way back open.
         .expanded(is_expanded)
-        .expandable(
-            node.is_dir()
-                && (is_expanded
-                    || !node.loaded
-                    || node.loading
-                    || node.error.is_some()
-                    || !node.children.is_empty()),
-        )
+        .expandable(node.is_dir())
         .indent(ctx.props.indent_width);
     if file_tree_needs_nerd_arrow_placeholder(node, is_root, ctx.props) {
         tree = tree.leading_guide_fill_cells(2);
@@ -1652,18 +1718,14 @@ fn build_projected_tree_node(
                 TreeNode::new(format!("{} {error}", ctx.props.error_prefix))
                     .indent(ctx.props.indent_width),
             );
-        } else if !is_expanded && ctx.explorer_filter.is_none() && !node.children.is_empty() {
-            // A collapsed directory contributes no visible rows, so materializing its
-            // subtree is wasted work on every frame. Emit the same single placeholder
-            // used for a not-yet-loaded directory: `Tree` only checks that `children`
-            // is non-empty to keep the row expandable, and never flattens past a
-            // collapsed node. The real children are built on the next render, once
-            // `expanded` contains this path.
+        } else if !is_expanded && ctx.explorer_filter.is_none() {
+            // A collapsed directory contributes no visible rows — `Tree` never flattens past one —
+            // so materializing its subtree is wasted work on every frame. Its real children are
+            // built on the next render, once `expanded` contains this path.
             //
-            // Explorer search keeps the full walk: its filter decides visibility per
-            // child, so a collapsed directory's toggleability depends on how many of
-            // its children survive the filter.
-            tree = tree.child(TreeNode::new(" ").indent(ctx.props.indent_width));
+            // Explorer search keeps the full walk: its filter decides visibility per child, so a
+            // collapsed directory's toggleability depends on how many of its children survive the
+            // filter.
         } else {
             let mut display_index = 0usize;
             for child in &node.children {
@@ -2272,6 +2334,7 @@ mod tests {
             root_virtual: false,
             expanded,
             git_snapshot: GitStatusSnapshot::default(),
+            git_snapshot_pending: false,
             git_load_generation: 0,
             last_git_refresh_nonce: 0,
             changed_only_auto_expand_signature: 0,
@@ -2347,17 +2410,17 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_directories_project_one_placeholder_instead_of_their_subtree() {
+    fn collapsed_directories_project_no_subtree_and_stay_expandable() {
         let props = collapsed_projection_props();
         let state = FileTreeComponent::new().create_state(&props);
 
         let projection = build_projection(&props, &state, None);
         let src = projected_child(&projection.root, "src");
 
-        // A single placeholder keeps the row expandable without materializing
-        // `src/widgets` or `src/widgets/tree.rs`.
-        assert_eq!(src.children.len(), 1);
-        assert!(src.children[0].children.is_empty());
+        // Neither `src/widgets` nor `src/widgets/tree.rs` is materialized, and the row is still
+        // expandable on its own rather than through a stand-in child.
+        assert!(src.children.is_empty());
+        assert!(src.is_expandable());
         assert!(!src.expanded);
 
         // Nothing below a collapsed directory reaches the event lookup, because
@@ -2369,33 +2432,27 @@ mod tests {
         assert!(!deep, "collapsed subtree must not populate the lookup");
     }
 
+    /// An empty directory must be expandable whether or not it has been opened yet. A lazy tree
+    /// cannot know a directory is empty until it is loaded, so deriving expandability from the
+    /// loaded children would give the row an arrow, take it away the moment the user closed it
+    /// again, and leave no way to reopen it.
     #[test]
-    fn a_collapsed_loaded_empty_directory_stays_a_leaf() {
-        let props = collapsed_projection_props();
-        let state = FileTreeComponent::new().create_state(&props);
-
-        let projection = build_projection(&props, &state, None);
-        let empty = projected_child(&projection.root, "empty");
-
-        // `Tree` treats an empty `children` list as "not expandable". A loaded
-        // directory with no entries must keep that shape, or it would grow a
-        // toggle arrow that opens onto nothing.
-        assert!(empty.children.is_empty());
-        assert!(!empty.is_expandable());
-    }
-
-    #[test]
-    fn an_expanded_loaded_empty_directory_remains_collapsible() {
+    fn a_loaded_empty_directory_stays_expandable_in_both_states() {
         let props = collapsed_projection_props();
         let mut state = FileTreeComponent::new().create_state(&props);
-        state.expanded.insert(Arc::from("/remote/repo/empty"));
 
         let projection = build_projection(&props, &state, None);
         let empty = projected_child(&projection.root, "empty");
-
         assert!(empty.children.is_empty());
-        assert!(empty.expanded);
         assert!(empty.is_expandable());
+        assert!(!empty.expanded);
+
+        state.expanded.insert(Arc::from("/remote/repo/empty"));
+        let projection = build_projection(&props, &state, None);
+        let empty = projected_child(&projection.root, "empty");
+        assert!(empty.children.is_empty());
+        assert!(empty.is_expandable());
+        assert!(empty.expanded);
     }
 
     #[test]
@@ -2410,15 +2467,91 @@ mod tests {
 
         assert!(src.expanded);
         assert_eq!(src.children.len(), 1);
-        // `widgets` is itself still collapsed, so it stops at its placeholder.
-        assert_eq!(widgets.children.len(), 1);
-        assert!(widgets.children[0].children.is_empty());
+        // `widgets` is itself still collapsed, so its own subtree is not built.
+        assert!(widgets.children.is_empty());
+        assert!(widgets.is_expandable());
         assert!(
             projection
                 .lookup
                 .values()
                 .any(|entry| entry.path.as_ref() == "/remote/repo/src/widgets")
         );
+    }
+
+    /// The reported cycle, against the real filesystem: an empty directory opens, loads nothing,
+    /// closes, and must still open. Loading is what used to strand it — before the first expand the
+    /// directory is unread and therefore expandable, and afterwards it was judged by its (empty)
+    /// children.
+    #[test]
+    fn an_empty_directory_survives_an_expand_collapse_cycle() {
+        let dir = unique_component_test_dir("empty-cycle");
+        std::fs::create_dir_all(dir.join("empty")).expect("create dirs");
+        let root = dir.to_string_lossy().to_string();
+        let empty_path: Arc<str> = Arc::from(format!("{root}/empty").as_str());
+
+        let props = crate::widgets::file_tree::FileTree::new(root).props;
+        let mut state = FileTreeComponent::new().create_state(&props);
+
+        let expandable = |state: &FileTreeState| {
+            projected_child(&build_projection(&props, state, None).root, "empty").is_expandable()
+        };
+        assert!(expandable(&state), "unopened directory offers a toggle");
+
+        // Expand: the directory is read and turns out to have nothing in it.
+        state.expanded.insert(empty_path.clone());
+        let expanded = state.expanded.clone();
+        load_expanded_directories(&mut state, &props, expanded);
+        assert!(
+            node_by_path_mut(&mut state.root, empty_path.as_ref())
+                .expect("empty node")
+                .loaded
+        );
+        assert!(expandable(&state), "an open empty directory can be closed");
+
+        // Collapse: knowing it is empty must not turn the row into a leaf.
+        state.expanded.remove(&empty_path);
+        assert!(expandable(&state), "a closed empty directory reopens");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A changed-only view with nothing changed is empty, not a heading over nothing — but only
+    /// once it knows, and only in that view.
+    #[test]
+    fn changed_only_falls_back_to_empty_text_once_the_snapshot_settles() {
+        let clean = crate::widgets::file_tree::FileTree::new("/repo")
+            .change_view(FileTreeChangeView::ChangedOnly)
+            .empty_text("No changes")
+            .props;
+        let mut state = test_state_with_root(test_root());
+        let empty = |props: &FileTreeProps, state: &FileTreeState| {
+            let projection = build_projection(props, state, None);
+            changed_only_projection_is_empty(props, state, &projection)
+        };
+
+        assert!(empty(&clean, &state), "a clean tree says so");
+
+        // Mid-`git status` the tree has no answer yet, so the heading stays rather than flashing a
+        // claim it is about to contradict.
+        state.git_snapshot_pending = true;
+        assert!(!empty(&clean, &state));
+        state.git_snapshot_pending = false;
+
+        // With something changed there is a real projection to show.
+        state.git_snapshot.changed_paths = vec![Arc::from("/repo/src/main.rs")];
+        assert!(!empty(&clean, &state));
+        state.git_snapshot.changed_paths.clear();
+
+        // Browsing keeps its root row: that row is the directory you opened, not a heading.
+        let browsing = crate::widgets::file_tree::FileTree::new("/repo")
+            .empty_text("Directory is empty")
+            .props;
+        assert!(!empty(&browsing, &state));
+
+        // An application that removed the placeholder text gets the old shape back.
+        let mut silent = clean.clone();
+        silent.empty_text = None;
+        assert!(!empty(&silent, &state));
     }
 
     #[test]
@@ -3835,6 +3968,7 @@ mod tests {
                 kinds: HashMap::new(),
                 virtual_changes: false,
             },
+            git_snapshot_pending: false,
             git_load_generation: 0,
             last_git_refresh_nonce: 0,
             changed_only_auto_expand_signature: 0,

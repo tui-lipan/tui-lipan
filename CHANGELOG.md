@@ -81,6 +81,18 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `FileTree` no longer strands an empty directory. Expandability came from the loaded children, so
+  a directory turned out to be empty, and closing it again left a row with no arrow and no way to
+  reopen it — a state only reachable by opening it once, since an unread directory was expandable.
+  A directory is now expandable because it is a directory. Collapsed directories also stop emitting
+  the placeholder child that used to stand in for this.
+- `FileTree::empty_text` now renders for a `ChangedOnly` view with nothing changed, instead of a
+  lone root row over an empty list. The root row is the one row a tree always has, so the
+  placeholder was unreachable there — but a changed-only root is a heading over a projection rather
+  than a directory being browsed, and a heading over nothing says less than "No changes". Browsing
+  keeps its root row. A `git status` still in flight holds the heading rather than claiming a clean
+  tree it is about to contradict; application-provided change data is taken as final, so an app that
+  fetches its own changes should vary `empty_text` while it loads.
 - `Esc` cancelling a pending command chord is no longer also delivered to the focused widget. One
   press did two things, and for a terminal that was not a harmless extra byte: terminals read `ESC`
   followed by a key as `Alt+<key>`, so cancelling a leader chord silently turned the next keystroke
