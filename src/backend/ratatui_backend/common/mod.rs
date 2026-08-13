@@ -3,6 +3,7 @@
 mod cells;
 mod colors;
 mod convert;
+mod cursor;
 mod placeholder;
 mod scrollbars;
 mod style_resolve;
@@ -12,6 +13,7 @@ mod visual_effects;
 pub(crate) use cells::*;
 pub(crate) use colors::*;
 pub(crate) use convert::*;
+pub(crate) use cursor::*;
 pub(crate) use placeholder::*;
 pub(crate) use scrollbars::*;
 pub(crate) use style_resolve::*;

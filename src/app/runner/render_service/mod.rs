@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use tracing::trace_span;
 
 use crate::Result;
+use crate::backend::ratatui_backend::common::caret_occluded;
 #[cfg(feature = "terminal")]
 use crate::backend::ratatui_backend::renderers::terminal_cursor_position;
 use crate::backend::ratatui_backend::renderers::{
@@ -263,6 +264,14 @@ impl<C: Component> AppRunner<C> {
 
     pub(super) fn incremental_cursor_position(&self) -> Option<Position> {
         let id = self.focus.focused?;
+        let position = self.focused_cursor_position(id)?;
+        // This path places the caret without running the renderers, so the occlusion check they do
+        // has to happen here too - a layer drawn over the focused widget still owns the cell.
+        (!caret_occluded(&self.core.tree, id, position)).then_some(position)
+    }
+
+    /// Where the focused widget's caret sits, read from widget state rather than from a paint.
+    fn focused_cursor_position(&self, id: NodeId) -> Option<Position> {
         if !self.core.tree.is_valid(id) {
             return None;
         }

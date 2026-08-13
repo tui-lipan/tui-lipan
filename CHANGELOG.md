@@ -28,6 +28,16 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- The caret no longer shows through whatever is drawn on top of the focused widget. The caret is the
+  host terminal's own cursor rather than a cell in the frame buffer, so a floating pane, a popover,
+  or any later sibling painted over a focused `Terminal`, `Input`, or `TextArea` still had it
+  blinking on top of them. Placement now asks the tree what sits topmost at the caret cell and
+  withholds the cursor when that is a layer outside the focused widget's own chain — including on
+  the incremental-scroll fast path, which places the caret without running the renderers.
+  Interactivity is the limit of what this can see: a purely decorative layer is not a hit-test
+  target, so it still lets the caret through, which keeps the failure safe in the direction of a
+  caret too many rather than one missing.
+
 - Advancing the virtual clock now also fires `Command::after` timers, so a headless capture or a
   `TestBackend` settles work the framework itself deferred. Previously the clock moved but its own
   timers did not, leaving a gap no caller could close: the deferred command is framework-owned, so an
