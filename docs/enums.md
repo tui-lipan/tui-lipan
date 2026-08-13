@@ -438,6 +438,24 @@ child leaves the viewport.
 | `ScrollChildExitDirection::Below` | The child is now fully below the viewport |
 | `ScrollChildExitDirection::Removed` | The child identity is gone or no longer has measurable geometry |
 
+### `Easing`
+
+Built-in transition curves used by `TransitionConfig` and animated widgets.
+
+| Variant | Description |
+|---------|-------------|
+| `Easing::Linear` | Constant-rate interpolation |
+| `Easing::EaseInQuad` | Quadratic acceleration |
+| `Easing::EaseOutQuad` | Quadratic deceleration |
+| `Easing::EaseInOutCubic` | Cubic acceleration and deceleration |
+| `Easing::EaseInOutSine` | Sinusoidal acceleration and deceleration |
+| `Easing::EaseOutElastic` | Decaying repeated overshoot |
+| `Easing::EaseOutBack { overshoot_permille }` | One overshoot followed by a settle; amplitude is thousandths of the animated distance |
+
+`Easing::EASE_OUT_BACK` selects the standard easings.net curve with a `100` permille (10%)
+overshoot. `0` produces a plain cubic ease-out. Values above
+`animation::MAX_BACK_OVERSHOOT_PERMILLE` (`500`) saturate at that ceiling.
+
 ### `ScrollDistanceConfig`
 
 Distance-based timing for smooth target scrolling. Duration is computed as
