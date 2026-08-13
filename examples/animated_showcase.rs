@@ -4,13 +4,14 @@ use tui_lipan::prelude::*;
 
 struct AnimatedShowcase;
 
-const EASINGS: [Easing; 6] = [
+const EASINGS: [Easing; 7] = [
     Easing::Linear,
     Easing::EaseInQuad,
     Easing::EaseOutQuad,
     Easing::EaseInOutCubic,
     Easing::EaseInOutSine,
     Easing::EaseOutElastic,
+    Easing::EASE_OUT_BACK,
 ];
 
 const DURATIONS_MS: [u64; 4] = [120, 220, 360, 650];
@@ -498,14 +499,18 @@ fn current_transition(state: &State) -> TransitionConfig {
     }
 }
 
-fn easing_name(easing: Easing) -> &'static str {
+fn easing_name(easing: Easing) -> String {
     match easing {
-        Easing::Linear => "Linear",
-        Easing::EaseInQuad => "EaseInQuad",
-        Easing::EaseOutQuad => "EaseOutQuad",
-        Easing::EaseInOutCubic => "EaseInOutCubic",
-        Easing::EaseInOutSine => "EaseInOutSine",
-        Easing::EaseOutElastic => "EaseOutElastic",
+        Easing::Linear => "Linear".to_string(),
+        Easing::EaseInQuad => "EaseInQuad".to_string(),
+        Easing::EaseOutQuad => "EaseOutQuad".to_string(),
+        Easing::EaseInOutCubic => "EaseInOutCubic".to_string(),
+        Easing::EaseInOutSine => "EaseInOutSine".to_string(),
+        Easing::EaseOutElastic => "EaseOutElastic".to_string(),
+        // The amplitude is part of the identity of this one, so show it.
+        Easing::EaseOutBack { overshoot_permille } => {
+            format!("EaseOutBack {overshoot_permille}\u{2030}")
+        }
     }
 }
 
