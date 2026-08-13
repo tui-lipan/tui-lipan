@@ -362,6 +362,11 @@ for response in screen.drain_responses() {
     pty.write(&response)?;
 }
 
+// Apply decoded OSC 52 stores according to the host application's clipboard policy.
+for event in screen.drain_clipboard_events() {
+    clipboard.store(event.target, &event.text)?;
+}
+
 // Get a render snapshot for the Terminal widget
 let snapshot = screen.render_snapshot();
 
@@ -387,6 +392,12 @@ screen.resize(new_rows, new_cols) // Resize the terminal
 // Serialize the full state so a fresh same-sized screen can reproduce it
 let replay = screen.export_replay_bytes();
 ```
+
+`drain_clipboard_events()` returns `TerminalClipboardEvent` values for valid UTF-8 OSC 52 store
+requests. Each event identifies the requested `TerminalClipboardTarget` (`Clipboard` or
+`Selection`) and contains the decoded text. The parser deliberately leaves applying or relaying
+the request to the host application. OSC 52 clipboard loads are disabled, so clipboard queries are
+ignored and produce no PTY response.
 
 **`TerminalRenderSnapshot` fields:**
 

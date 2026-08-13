@@ -31,18 +31,43 @@ impl ClipboardHandle {
     /// Also emits OSC 52 when enabled (for clipboard over SSH) and writes to
     /// the primary selection on supported platforms.
     pub fn copy(&self, text: &str) -> Result<(), super::error::ClipboardError> {
-        self.service.write_clipboard_text(text)?;
-
         if self.config.enable_osc52 {
             write_osc52(text);
         }
+
+        let clipboard_result = self.service.write_clipboard_text(text);
 
         if self.config.enable_primary_selection && self.service.supports_primary_selection() {
             // Best-effort; don't fail the overall copy if primary selection fails.
             let _ = self.service.write_primary_selection_text(text);
         }
 
-        Ok(())
+        if self.config.enable_osc52 {
+            Ok(())
+        } else {
+            clipboard_result
+        }
+    }
+
+    /// Relay text to the outer terminal through OSC 52 without touching the native provider.
+    ///
+    /// Terminal hosts use this after applying their own trust/configuration policy to an OSC 52
+    /// request parsed from a child. Unlike [`copy`](Self::copy), this method is unconditional.
+    pub fn relay_osc52(&self, text: &str) {
+        write_osc52(text);
+    }
+
+    /// Apply a clipboard-store request received from a child through OSC 52.
+    ///
+    /// Returns `Ok(false)` without touching any clipboard when OSC 52 is disabled in the app
+    /// configuration. Enabled requests use the same native-plus-outer-terminal behavior as
+    /// [`copy`](Self::copy).
+    pub fn accept_osc52_store(&self, text: &str) -> Result<bool, super::error::ClipboardError> {
+        if !self.config.enable_osc52 {
+            return Ok(false);
+        }
+        self.copy(text)?;
+        Ok(true)
     }
 
     /// Read text from the system clipboard.
@@ -190,6 +215,73 @@ mod tests {
         fn write_clipboard_text(&mut self, _text: &str) -> Result<(), ClipboardError> {
             Ok(())
         }
+    }
+
+    struct FailingProvider;
+
+    impl ClipboardProvider for FailingProvider {
+        fn read_clipboard_text(&mut self) -> Result<String, ClipboardError> {
+            Ok(String::new())
+        }
+
+        fn write_clipboard_text(&mut self, _text: &str) -> Result<(), ClipboardError> {
+            Err(ClipboardError::provider(
+                ClipboardOperation::WriteClipboard,
+                "unavailable",
+            ))
+        }
+    }
+
+    #[test]
+    fn osc52_copy_succeeds_when_the_native_provider_is_unavailable() {
+        let service =
+            ClipboardService::new(Box::new(FailingProvider), default_clipboard_reporter());
+        let handle = ClipboardHandle::new(Rc::new(service), ClipboardConfig::default());
+
+        assert!(handle.copy("remote text").is_ok());
+    }
+
+    #[test]
+    fn native_copy_failure_is_reported_when_osc52_is_disabled() {
+        let service =
+            ClipboardService::new(Box::new(FailingProvider), default_clipboard_reporter());
+        let handle = ClipboardHandle::new(
+            Rc::new(service),
+            ClipboardConfig {
+                enable_osc52: false,
+                ..ClipboardConfig::default()
+            },
+        );
+
+        assert!(handle.copy("local text").is_err());
+    }
+
+    #[test]
+    fn disabled_osc52_store_does_not_touch_the_native_provider() {
+        let recorded = Rc::new(RefCell::new(Recorded::default()));
+        let service = ClipboardService::new(
+            Box::new(RecordingProvider(Rc::clone(&recorded))),
+            default_clipboard_reporter(),
+        );
+        let handle = ClipboardHandle::new(
+            Rc::new(service),
+            ClipboardConfig {
+                enable_osc52: false,
+                ..ClipboardConfig::default()
+            },
+        );
+
+        assert!(!handle.accept_osc52_store("blocked").unwrap());
+        assert!(recorded.borrow().texts_written.is_empty());
+    }
+
+    #[test]
+    fn enabled_osc52_store_updates_the_native_provider() {
+        let recorded = Rc::new(RefCell::new(Recorded::default()));
+        let handle = handle_with(Rc::clone(&recorded));
+
+        assert!(handle.accept_osc52_store("accepted").unwrap());
+        assert_eq!(recorded.borrow().texts_written, ["accepted"]);
     }
 
     #[test]

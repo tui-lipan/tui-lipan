@@ -37,8 +37,9 @@ pub use osc::{
 pub use pty::TerminalPtyHandoff;
 pub use pty::{TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent};
 pub use screen::{
-    SemanticMark, SemanticMarkKind, TerminalCellSize, TerminalColorPalette, TerminalDecoration,
-    TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle, TerminalViewport,
+    SemanticMark, SemanticMarkKind, TerminalCellSize, TerminalClipboardEvent,
+    TerminalClipboardTarget, TerminalColorPalette, TerminalDecoration, TerminalRenderSnapshot,
+    TerminalScreen, TerminalScreenHandle, TerminalViewport,
 };
 #[cfg(feature = "terminal")]
 pub use selection::{
