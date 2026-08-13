@@ -271,7 +271,7 @@ mod tests {
             },
         );
 
-        assert_eq!(handle.accept_osc52_store("blocked").unwrap(), false);
+        assert!(!handle.accept_osc52_store("blocked").unwrap());
         assert!(recorded.borrow().texts_written.is_empty());
     }
 
@@ -280,7 +280,7 @@ mod tests {
         let recorded = Rc::new(RefCell::new(Recorded::default()));
         let handle = handle_with(Rc::clone(&recorded));
 
-        assert_eq!(handle.accept_osc52_store("accepted").unwrap(), true);
+        assert!(handle.accept_osc52_store("accepted").unwrap());
         assert_eq!(recorded.borrow().texts_written, ["accepted"]);
     }
 
