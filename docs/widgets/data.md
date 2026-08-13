@@ -424,6 +424,7 @@ entries and git-backed or application-provided change projections.
 | `select_path` | `impl Into<Arc<str>>` | Reveal and select a path, forcing the tree to scroll to the row when visible |
 | `force_scroll_to_selected` | `bool` | Force the tree to reveal the selected row on next render |
 | `expanded_paths` | `impl IntoIterator<Item = impl Into<Arc<str>>>` | Controlled expanded directory paths; the root path is kept expanded automatically |
+| `initial_expanded_paths` | `impl IntoIterator<Item = impl Into<Arc<str>>>` | Expansion seeded on mount and on each root change, which the tree then owns |
 | `indent_width` | `u16` | Indentation cells per hierarchy level (default: `2`); use `1` with short guides for compact `├item` rows |
 | `directory_icon` | `String` | Directory icon |
 | `file_icon` | `String` | File icon |
@@ -482,6 +483,12 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
 - `on_explorer_focus` reports `FileTreeExplorerFocusOrigin::Tree` or `Pointer`, and
   `on_explorer_blur` reports when the input releases focus for app-level key routing.
 - `selected_path`, `reveal_path`, and `select_path` normalize absolute paths under the root or paths relative to the root. They are no-ops for paths outside the root, paths hidden by `show_hidden(false)`, absent/unreadable/capped entries, or rows filtered out by the current all-files/changed-only projection. `selected_path` only selects an already-visible row; `reveal_path` expands/loads ancestors when possible; `select_path` combines reveal + selection and scrolls to the selected row. With controlled `expanded_paths`, app-provided expansion remains authoritative, so reveal/select can only display rows made available by the controlled expansion set plus the reveal request during rendering.
+- `initial_expanded_paths` restores expansion across an unmount or a root change: it seeds the
+  tree's own expansion state on mount and on every root change, and is never applied again, so it
+  cannot fight expansion the user has changed since. Record the set with `on_toggle`. Paths outside
+  the root are ignored, and ancestors are *not* expanded alongside a seeded path — collapsing a
+  directory leaves what is inside it expanded, so a seeded descendant must not reopen the parent
+  that hides it. Ignored when controlled `expanded_paths` is set.
 - Restores pre-search expansion state when query clears.
 - Queries containing file extensions (e.g. `layout.rs`) prioritize filename matches.
 

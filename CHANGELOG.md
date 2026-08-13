@@ -13,6 +13,13 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `FileTree::initial_expanded_paths`, seeding expansion the tree then owns, so an app can restore
+  what the user had open after the tree unmounts or re-roots — a file panel following the focused
+  document, a sidebar whose tab was switched away and back. Paths may be absolute under the root or
+  relative to it, apply on mount and on every root change, and never disturb expansion the user has
+  since changed. Ancestors are deliberately not expanded along with a seeded path, so a directory
+  the user collapsed keeps its contents' expansion without being reopened by it. Pair with
+  `on_toggle` to record the set; ignored when controlled `expanded_paths` is set.
 - `Easing::EaseOutBack { overshoot_permille }` and `animation::ease_out_back`, a back ease-out with
   a **tunable** single overshoot. It crosses 1.0 once and settles, which is what makes it usable for
   springy *position* and rectangle animation, where the repeated crossings of `EaseOutElastic` read

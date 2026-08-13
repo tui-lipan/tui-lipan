@@ -137,6 +137,7 @@ impl Component for FileTreeComponent {
             requested_entry_paths: HashSet::new(),
         };
 
+        apply_initial_expanded_paths(&mut state, props);
         apply_reveal_paths_to_state(&mut state, props);
         state
     }
@@ -479,24 +480,14 @@ impl Component for FileTreeComponent {
                     None
                 };
 
-                if ctx.props.change_view != FileTreeChangeView::ChangedOnly
-                    && expanded
-                    && !uses_provided_entries(&ctx.props)
-                    && let Some(path) = node_path.as_ref()
-                    && let Some(node) = node_by_path_mut(&mut ctx.state.root, path)
-                    && node.is_dir()
-                    && !node.loaded
-                {
-                    let result =
-                        read_directory(path, ctx.props.show_hidden, ctx.props.max_entries_per_dir);
-                    apply_directory_load(node, result);
-                }
-
                 if expanded
-                    && let Some(path) = node_path
-                    && uses_provided_entries(&ctx.props)
+                    && node_path.is_some()
+                    && (ctx.props.change_view != FileTreeChangeView::ChangedOnly
+                        || uses_provided_entries(&ctx.props))
                 {
-                    request_provided_directory(&mut ctx.state, &ctx.props, path);
+                    let expanded_paths =
+                        effective_expanded_paths(&ctx.props, &ctx.state).into_owned();
+                    load_expanded_directories(&mut ctx.state, &ctx.props, expanded_paths);
                 }
 
                 Update::full()
@@ -760,6 +751,36 @@ fn rebuild_root_for_props(state: &mut FileTreeState, props: &FileTreeProps) {
     state.search_expanded_snapshot = None;
     state.search_found_dir = None;
     state.requested_entry_paths.clear();
+    apply_initial_expanded_paths(state, props);
+}
+
+/// Seed the tree's own expansion set from `initial_expanded_paths`, at the two moments it has none
+/// of its own: mounting, and re-rooting.
+///
+/// Only the given paths are expanded, never their ancestors — a collapsed directory keeps its
+/// contents' expansion, so seeding a descendant must not reopen the parent that hides it. Loading
+/// therefore still walks down from the root and stops at the first collapsed directory, leaving the
+/// deeper seeds to apply the moment their parent opens again.
+fn apply_initial_expanded_paths(state: &mut FileTreeState, props: &FileTreeProps) {
+    if props.expanded_paths.is_some() || props.initial_expanded_paths.is_empty() {
+        return;
+    }
+
+    let root = Path::new(state.root.path.as_ref());
+    for path in &props.initial_expanded_paths {
+        let resolved = if uses_provided_entries(props) {
+            resolve_provided_path(root, path.as_ref())
+                .map(|path| Arc::<str>::from(path.to_string_lossy().as_ref()))
+        } else {
+            resolve_path_under_root(&state.root.path, path.as_ref())
+        };
+        if let Some(resolved) = resolved {
+            state.expanded.insert(resolved);
+        }
+    }
+
+    let expanded = state.expanded.clone();
+    load_expanded_directories(state, props, expanded);
 }
 
 fn effective_initial_snapshot(props: &FileTreeProps) -> GitStatusSnapshot {
@@ -2767,6 +2788,194 @@ mod tests {
         let candidates = explorer_search_candidates(&hidden_props, &hidden_state).unwrap();
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].label.as_ref(), "one.rs");
+    }
+
+    /// The seed is expansion the tree adopts as its own, so it survives into the projection, loads
+    /// the directories it names, and stays out of the way of a path the user has since collapsed.
+    #[test]
+    fn initial_expanded_paths_seed_state_without_reopening_collapsed_parents() {
+        let dir = unique_component_test_dir("initial-expanded");
+        std::fs::create_dir_all(dir.join("src/widgets")).expect("create dirs");
+        std::fs::write(dir.join("src/widgets/tree.rs"), "").expect("write file");
+        let root = dir.to_string_lossy().to_string();
+
+        let props = crate::widgets::file_tree::FileTree::new(root.clone())
+            // Relative and absolute spellings both resolve; a path outside the root is dropped.
+            .initial_expanded_paths(["src", &format!("{root}/src/widgets"), "/elsewhere/src"])
+            .props;
+        let state = FileTreeComponent::new().create_state(&props);
+
+        assert!(state.expanded.contains(format!("{root}/src").as_str()));
+        assert!(
+            state
+                .expanded
+                .contains(format!("{root}/src/widgets").as_str())
+        );
+        assert!(!state.expanded.contains("/elsewhere/src"));
+        // Seeded directories are loaded, not left as lazy placeholders.
+        let mut loaded_state = state;
+        let widgets = node_by_path_mut(&mut loaded_state.root, &format!("{root}/src/widgets"))
+            .expect("widgets node");
+        assert!(widgets.loaded);
+        assert_eq!(widgets.children.len(), 1);
+
+        // A collapsed ancestor keeps its descendants' seeds without being reopened by them.
+        let collapsed = crate::widgets::file_tree::FileTree::new(root.clone())
+            .initial_expanded_paths([format!("{root}/src/widgets")])
+            .props;
+        let collapsed_state = FileTreeComponent::new().create_state(&collapsed);
+        assert!(
+            !collapsed_state
+                .expanded
+                .contains(format!("{root}/src").as_str())
+        );
+        assert!(
+            collapsed_state
+                .expanded
+                .contains(format!("{root}/src/widgets").as_str())
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn opening_parent_loads_seeded_local_descendants() {
+        let dir = unique_component_test_dir("initial-expanded-open-parent");
+        std::fs::create_dir_all(dir.join("src/widgets")).expect("create dirs");
+        std::fs::write(dir.join("src/widgets/tree.rs"), "").expect("write file");
+        let root = dir.to_string_lossy().to_string();
+        let src = Arc::<str>::from(format!("{root}/src"));
+        let widgets = format!("{root}/src/widgets");
+        let props = crate::widgets::file_tree::FileTree::new(root)
+            .initial_expanded_paths([widgets.clone()])
+            .props;
+        let mut runtime = RuntimeCore::new_test(
+            FileTreeComponent::new(),
+            props,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 12,
+            },
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(std::cell::Cell::new(false)),
+        );
+
+        runtime.component.update(
+            FileTreeMsg::TreeToggled {
+                entry: Some(VisibleFileTreeEntry {
+                    path: src,
+                    kind: FileKind::Directory,
+                }),
+                expanded: true,
+            },
+            &mut runtime.ctx,
+        );
+
+        let node = node_by_path_mut(&mut runtime.ctx.state.root, &widgets).expect("widgets node");
+        assert!(node.loaded);
+        assert_eq!(node.children[0].name.as_ref(), "tree.rs");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn opening_parent_requests_seeded_provided_descendants() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let captured = requests.clone();
+        let props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::provided([
+                FileTreeDirectoryListing::new(".", [super::super::FileTreeEntry::directory("src")]),
+                FileTreeDirectoryListing::new(
+                    "src",
+                    [super::super::FileTreeEntry::directory("widgets")],
+                ),
+            ]))
+            .initial_expanded_paths(["src/widgets"])
+            .on_entry_request(crate::Callback::new(
+                move |request: FileTreeEntryRequest| {
+                    captured.borrow_mut().push(request.path);
+                },
+            ))
+            .props;
+        let mut runtime = RuntimeCore::new_test(
+            FileTreeComponent::new(),
+            props,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 12,
+            },
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(std::cell::Cell::new(false)),
+        );
+
+        runtime.component.update(
+            FileTreeMsg::TreeToggled {
+                entry: Some(VisibleFileTreeEntry {
+                    path: Arc::from("/remote/repo/src"),
+                    kind: FileKind::Directory,
+                }),
+                expanded: true,
+            },
+            &mut runtime.ctx,
+        );
+
+        assert_eq!(
+            requests.borrow().as_slice(),
+            &[Arc::from("/remote/repo/src/widgets")]
+        );
+    }
+
+    /// Re-rooting is the case the seed exists for: the tree drops everything it knew, so the same
+    /// seed has to apply again against the new root.
+    #[test]
+    fn initial_expanded_paths_reapply_when_the_root_changes() {
+        let dir = unique_component_test_dir("initial-expanded-reroot");
+        std::fs::create_dir_all(dir.join("one/src")).expect("create one");
+        std::fs::create_dir_all(dir.join("two/src")).expect("create two");
+        let one = dir.join("one").to_string_lossy().to_string();
+        let two = dir.join("two").to_string_lossy().to_string();
+
+        let props = crate::widgets::file_tree::FileTree::new(one.clone())
+            .initial_expanded_paths([format!("{one}/src"), format!("{two}/src")])
+            .props;
+        let mut state = FileTreeComponent::new().create_state(&props);
+        assert!(state.expanded.contains(format!("{one}/src").as_str()));
+
+        let rerooted = crate::widgets::file_tree::FileTree::new(two.clone())
+            .initial_expanded_paths([format!("{one}/src"), format!("{two}/src")])
+            .props;
+        rebuild_root_for_props(&mut state, &rerooted);
+
+        assert!(state.expanded.contains(format!("{two}/src").as_str()));
+        // The previous root's entry is not carried into a tree that cannot show it.
+        assert!(!state.expanded.contains(format!("{one}/src").as_str()));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Controlled expansion is authoritative, so a seed alongside it would be a second answer to
+    /// the same question.
+    #[test]
+    fn controlled_expansion_ignores_the_seed() {
+        let dir = unique_component_test_dir("initial-expanded-controlled");
+        std::fs::create_dir_all(dir.join("src")).expect("create dirs");
+        let root = dir.to_string_lossy().to_string();
+
+        let props = crate::widgets::file_tree::FileTree::new(root.clone())
+            .initial_expanded_paths([format!("{root}/src")])
+            .expanded_paths(Vec::<String>::new())
+            .props;
+        let state = FileTreeComponent::new().create_state(&props);
+
+        assert!(!state.expanded.contains(format!("{root}/src").as_str()));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

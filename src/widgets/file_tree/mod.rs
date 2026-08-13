@@ -380,6 +380,7 @@ impl FileTree {
                 select_path: None,
                 force_scroll_to_selected: false,
                 expanded_paths: None,
+                initial_expanded_paths: HashSet::new(),
                 selection_symbol: None,
                 selection_symbol_style: None,
                 unfocused_selection_symbol_style: None,
@@ -783,6 +784,27 @@ impl FileTree {
     /// Control expanded directory paths.
     pub fn expanded_paths(mut self, paths: impl IntoIterator<Item = impl Into<Arc<str>>>) -> Self {
         self.props.expanded_paths = Some(paths.into_iter().map(Into::into).collect::<HashSet<_>>());
+        self
+    }
+
+    /// Seed expansion state the tree then owns, so an application can restore what was expanded
+    /// before the tree was unmounted or re-rooted.
+    ///
+    /// Paths may be absolute under the tree root or relative to it; paths outside the root are
+    /// ignored. They are applied when the tree mounts and whenever the root changes, and never
+    /// again — later edits to this set do not disturb expansion the user has since changed. Pair it
+    /// with [`Self::on_toggle`] to record what to seed next time.
+    ///
+    /// Ancestors are deliberately *not* expanded along with a seeded path: collapsing a directory
+    /// leaves what is inside it expanded, so seeding a descendant must not reopen the parent the
+    /// user closed. A seeded path becomes visible when its parent is expanded again.
+    ///
+    /// Ignored when [`Self::expanded_paths`] controls expansion, which is authoritative on its own.
+    pub fn initial_expanded_paths(
+        mut self,
+        paths: impl IntoIterator<Item = impl Into<Arc<str>>>,
+    ) -> Self {
+        self.props.initial_expanded_paths = paths.into_iter().map(Into::into).collect();
         self
     }
 

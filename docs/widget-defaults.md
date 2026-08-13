@@ -833,7 +833,7 @@ Source: `src/widgets/table/mod.rs:356` (`Table`).
 
 ## Tabs
 
-Source: `src/widgets/tabs/mod.rs:108` (`Tabs`).
+Source: `src/widgets/tabs/mod.rs:125` (`Tabs`).
 
 | Field | Default initializer |
 |---|---|
@@ -1044,6 +1044,7 @@ Source: `src/widgets/file_tree/mod.rs:346` (`FileTree`).
 | `select_path` | `None` |
 | `force_scroll_to_selected` | `false` |
 | `expanded_paths` | `None` |
+| `initial_expanded_paths` | `HashSet::new()` |
 | `selection_symbol` | `None` |
 | `selection_symbol_style` | `None` |
 | `unfocused_selection_symbol_style` | `None` |
