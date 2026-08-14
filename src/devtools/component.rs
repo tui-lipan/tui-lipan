@@ -688,13 +688,20 @@ fn app_body(ctx: &Context<DevToolsPanel>, state: &DevToolsState, label_width: u1
     // Deliberately not focusable: the App tab is a read-out, and DevTools is an
     // inspector layered over the app rather than something to tab into. Taking
     // focus on a click would pull it off whatever the app had focused, which is
-    // often the very thing being inspected. The wheel still scrolls, because
-    // wheel dispatch resolves by hit test rather than focus.
+    // often the very thing being inspected.
+    //
+    // Reaching the overflowed rows therefore goes through the two paths that
+    // need no focus: the wheel (dispatched by hit test) and ambient PageUp /
+    // PageDown. Ambient scroll is a last-resort fallback - it runs only after
+    // widget, bubble, command, and framework dispatch all decline the key, and
+    // only when this pane can actually move in that direction - so the host
+    // app keeps first claim on its own page keys.
     ScrollView::new()
         .height(Length::Flex(1))
         .scrollbar(true)
         .scrollbar_config(ScrollbarConfig::new())
         .focusable(false)
+        .ambient_page_scroll(true)
         .estimated_child_height(1)
         .children(rows)
         .key(DEVTOOLS_APP_METRICS_KEY)
@@ -1249,6 +1256,81 @@ mod tests {
         assert!(
             focus_after_body_click(DEVTOOLS_TAB_LOGS).is_some(),
             "the Logs tab does own focusable controls"
+        );
+    }
+
+    /// The App pane is unfocusable, so PageUp / PageDown reach it through the
+    /// ambient fallback. That fallback also has to stay polite: it declines the
+    /// key when the pane cannot move, leaving it for the host app.
+    #[test]
+    fn ambient_page_keys_scroll_the_unfocusable_app_pane() {
+        use crate::core::event::{KeyEvent, KeyMods};
+
+        let mut state = DevToolsState::default();
+        state.set_visible(true);
+        state.set_active_tab(DEVTOOLS_TAB_APP);
+        state.app_metrics.rows.borrow_mut().extend(
+            (0..40).map(|i| crate::DevToolsMetric::new(format!("Metric{i}"), i.to_string())),
+        );
+        let props = DevToolsProps {
+            state: Rc::new(RefCell::new(state)),
+        };
+        let mut backend = TestBackend::new_with_props(DevToolsPanel, props);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 60,
+            h: 12,
+        });
+        backend.render();
+
+        let offset = |backend: &TestBackend<DevToolsPanel>| -> usize {
+            backend
+                .core
+                .tree
+                .iter()
+                .find_map(|node| match &node.kind {
+                    crate::core::node::NodeKind::ScrollView(scroll)
+                        if node
+                            .key
+                            .as_ref()
+                            .is_some_and(|key| key.as_ref() == DEVTOOLS_APP_METRICS_KEY) =>
+                    {
+                        Some(scroll.offset)
+                    }
+                    _ => None,
+                })
+                .expect("app metrics ScrollView")
+        };
+        let page = |code| KeyEvent {
+            code,
+            mods: KeyMods::default(),
+        };
+
+        assert_eq!(offset(&backend), 0);
+        // Nothing is focused, so this can only land via the ambient fallback.
+        assert!(backend.focused().is_none());
+        assert!(
+            backend
+                .send_key(page(KeyCode::PageDown))
+                .expect("page down"),
+            "PageDown should reach the unfocused pane"
+        );
+        backend.render();
+        let scrolled = offset(&backend);
+        assert!(scrolled > 0, "PageDown should advance the pane");
+
+        assert!(backend.send_key(page(KeyCode::PageUp)).expect("page up"));
+        backend.render();
+        assert!(offset(&backend) < scrolled, "PageUp should walk it back");
+
+        // At the top the pane cannot move, so the key is left for the app.
+        assert_eq!(offset(&backend), 0);
+        assert!(
+            !backend
+                .send_key(page(KeyCode::PageUp))
+                .expect("page up at top"),
+            "a pane already at the top must not swallow PageUp"
         );
     }
 

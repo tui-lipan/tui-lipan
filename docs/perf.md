@@ -326,6 +326,20 @@ vertically instead of truncating rows. With no registered metrics it shows a
 hint naming `set_devtools_metrics`. Keep values preformatted and cheap to clone—DevTools never invokes host callbacks while
 rendering.
 
+The App tab is deliberately not focusable, so clicking it never pulls focus off
+whatever the app had focused - often the very thing being inspected. Its
+overflowed rows are reached the two ways that need no focus: the mouse wheel,
+and `PageUp` / `PageDown` via `ScrollView::ambient_page_scroll`. Ambient scroll
+is a last-resort fallback, running only after widget, bubble, command, and
+framework dispatch all decline the key, and only when the pane can actually move
+in that direction, so the host app keeps first claim on its own page keys.
+
+One caveat: ambient page scroll resolves to a *single* target, and declines when
+more than one `ScrollView` in the tree opts into it. An app that enables
+`ambient_page_scroll` on a scroll view of its own therefore loses page-key
+scrolling on it while the DevTools App tab is open. Nothing scrolls to the wrong
+place - the fallback simply stands down - and the wheel is unaffected on both.
+
 The overlay and sampling slightly perturb the workload, so use tracing or a
 benchmark for final comparisons.
 

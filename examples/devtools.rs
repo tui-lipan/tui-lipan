@@ -24,8 +24,9 @@ impl Component for DevtoolsDemo {
         State::default()
     }
 
-    fn init(&mut self, _ctx: &mut Context<Self>) -> Option<Command> {
+    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
         tui_lipan::debug_log!("[devtools] app init");
+        publish_metrics(ctx);
         Some(schedule_tick())
     }
 
@@ -47,6 +48,7 @@ impl Component for DevtoolsDemo {
         match msg {
             Msg::Tick => {
                 ctx.state.tick = ctx.state.tick.saturating_add(1);
+                publish_metrics(ctx);
 
                 if ctx.state.tick.is_multiple_of(2) {
                     tui_lipan::debug_log!(
@@ -83,6 +85,9 @@ impl Component for DevtoolsDemo {
                             .gap(1)
                             .child(Text::new("Press F12 to toggle DevTools overlay"))
                             .child(Text::new("Press L to emit a manual debug log"))
+                            .child(Text::new(
+                                "In the DevTools App tab: wheel or PageUp/PageDown to scroll",
+                            ))
                             .child(Text::new("Press Q or Esc to quit")),
                     ),
             )
@@ -101,6 +106,31 @@ impl Component for DevtoolsDemo {
             )
             .into()
     }
+}
+
+/// Publish the App-tab rows. More rows than the panel can show, so the tab
+/// demonstrates its overflow scrolling: it is not focusable, so the wheel and
+/// ambient PageUp/PageDown are the ways in.
+fn publish_metrics(ctx: &mut Context<DevtoolsDemo>) {
+    let tick = ctx.state.tick;
+    ctx.set_devtools_metrics(move || {
+        let mut rows = vec![
+            DevToolsMetric::new("Tick", tick.to_string()),
+            DevToolsMetric::new("Phase", phase_label(tick)),
+            DevToolsMetric::new("Uptime", format!("{:.1}s", tick as f64 * 0.35)),
+        ];
+        rows.extend((0..12).map(|i| {
+            DevToolsMetric::new(
+                format!("Worker{i}"),
+                format!(
+                    "queue {} \u{b7} last {}ms",
+                    (tick + i) % 7,
+                    4 + (tick + i) % 11
+                ),
+            )
+        }));
+        rows
+    });
 }
 
 fn phase_label(tick: u64) -> &'static str {

@@ -40,8 +40,11 @@ While the crate is on `0.x.y`:
   inspector layered over the app rather than something to tab into, so a click there was pulling
   focus off whatever the app had focused - often the very thing being inspected. Stats already
   passed clicks through; Logs still takes focus, since its filter, toggles, and log list are real
-  controls. The wheel still scrolls the App rows, because wheel dispatch resolves by hit test rather
-  than focus.
+  controls. Overflowed App rows stay reachable without focus: the wheel resolves by hit test, and
+  `PageUp` / `PageDown` arrive through `ScrollView::ambient_page_scroll`, which runs only after
+  every other dispatch path declines the key and only when the pane can actually move. Note that
+  ambient page scroll takes a single target, so an app that enables it on a scroll view of its own
+  loses page-key scrolling there while the App tab is open.
 - The DevTools App tab keeps a 6-row height floor, and its empty state is prose naming
   `Context::set_devtools_metrics` instead of a placeholder row that read as a metric called
   "Metrics".
