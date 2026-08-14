@@ -58,6 +58,14 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- `DraggableTabBar` is now clipped when it starts left of the visible area rather than re-anchored
+  at it. A bar can begin off-screen because it sits part-way outside its parent - a `Canvas` child at
+  a negative offset, which is how a side panel slides into view - or because a clip starts inside it.
+  The renderer already compensated for a clipped top edge but not a clipped left one, so the tabs
+  were pulled back into view and re-laid-out into the visible slice: a panel sliding in appeared to
+  grow its tabs out of nothing and re-wrap on every frame instead of arriving whole. Tab positions,
+  overflow controls, and the empty-bar placeholder now all come from the bar's own origin, with the
+  columns trimmed off its left edge spent as horizontal scroll.
 - Headless snapshots and recordings now mount the DevTools panel and apply framework-level key
   bindings, so `TUI_LIPAN_SNAPSHOT_KEYS="f12"` captures the panel instead of silently capturing the
   app without it.
