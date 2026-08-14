@@ -136,10 +136,14 @@ Examples requiring specific features:
 | `devtools` | `devtools` |
 | `theme_hot_reload` | `theme-reload` |
 
-With `devtools` enabled, the built-in panel uses compact defaults for Stats and
-Logs. The App tab sizes to host-provided metric content within the viewport and
-scrolls vertically when its rows are capped. Use `Context` (`show_devtools`, `hide_devtools`,
-`toggle_devtools`) for visibility.
+With `devtools` enabled, the built-in panel docks to the bottom of the viewport
+with its `Stats` / `Logs` / `App` tab strip pinned to the row above its bottom
+border, so tabs stay put while the body changes height. Stats and App both size
+to their content within the viewport, never below a shared 48-column floor;
+Logs always fills the width. The App tab scrolls vertically when its rows are
+capped. Use `Context` (`show_devtools`, `hide_devtools`, `toggle_devtools`) for
+visibility - the panel claims no keys of its own beyond `ctrl+c` on a selected
+Logs row.
 
 ### DevTools runtime configuration
 

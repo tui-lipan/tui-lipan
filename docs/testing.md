@@ -257,6 +257,13 @@ character. This is how states behind a keystroke are captured without a harness:
 TUI_LIPAN_SNAPSHOT=/tmp/modal.png TUI_LIPAN_SNAPSHOT_KEYS="tab,enter" cargo snap myapp
 ```
 
+Framework-level bindings work too, so with the `devtools` feature the panel can
+be captured over any app without touching its source:
+
+```sh
+TUI_LIPAN_SNAPSHOT=/tmp/devtools.png TUI_LIPAN_SNAPSHOT_KEYS="f12" cargo snap myapp
+```
+
 Time-gated chrome needs a clock, not more frames. `TUI_LIPAN_SNAPSHOT_FRAMES`
 renders back to back with no wall clock, so a which-key panel behind
 `App::command_chord_reveal_delay(300ms)` never appears. Advance virtual time

@@ -304,6 +304,34 @@ impl Component for TabsWithHeaderLabelComponent {
     }
 }
 
+struct FooterTabsComponent;
+
+impl Component for FooterTabsComponent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        Frame::new()
+            .width(Length::Px(40))
+            .height(Length::Px(4))
+            .header_left("Title")
+            .footer_right("hint")
+            .tab_titles(["Files", "Worktrees"])
+            .tab_edge(crate::widgets::TabEdge::Bottom)
+            .tab_variant(TabVariant::Minimal)
+            .active_tab(1)
+            .child(Text::new("body"))
+            .into()
+    }
+}
+
 impl Component for HeaderLabelPaddingStyleComponent {
     type Message = ();
     type Properties = ();
@@ -362,6 +390,47 @@ fn grouped_border_labels_render_in_all_positions() {
     assert!(row(4).contains("mode"));
     assert!(row(4).contains("workspace"));
     assert!(row(4).contains("time"));
+}
+
+#[test]
+fn footer_tab_edge_moves_the_strip_to_the_bottom_border() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 4,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        FooterTabsComponent,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    runtime.render_element(viewport, None, None, None);
+
+    let buffer = render_runtime_with_hover(&runtime, viewport, None, None);
+    let row = |y: u16| {
+        (0..viewport.w)
+            .map(|x| buffer[(x, y)].symbol().to_owned())
+            .collect::<String>()
+    };
+
+    let top = row(0);
+    let bottom = row(viewport.h - 1);
+    assert!(
+        bottom.contains("Files") && bottom.contains("Worktrees"),
+        "tabs belong on the bottom border, got {bottom:?}"
+    );
+    assert!(
+        !top.contains("Files"),
+        "the top border must not also draw them, got {top:?}"
+    );
+    // Each border keeps its own labels; tabs share the line they land on.
+    assert!(top.contains("Title"), "got {top:?}");
+    assert!(bottom.contains("hint"), "got {bottom:?}");
 }
 
 #[test]

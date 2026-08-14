@@ -9,9 +9,11 @@ use crate::style::{Align, BorderStyle, Justify, Length, Paint, ScrollbarConfig, 
 use crate::utils::gradient::ColorGradient;
 use crate::widgets::{
     BorderMergeMode, Button, ButtonVariant, Frame, FrameLabel, HStack, Input, InputEvent,
-    LogFilterMode, LogView, LogViewEvent, Overflow, ScrollKeymap, ScrollView, Spacer, Sparkline,
-    SparklineBarsPreset, SparklineVariant, SparklineZeroPolicy, TabsEvent, Text, VStack,
+    LogFilterMode, LogView, LogViewEvent, Overflow, ScrollView, Spacer, Sparkline,
+    SparklineBarsPreset, SparklineVariant, SparklineZeroPolicy, TabEdge, TabsEvent, Text, VStack,
 };
+
+use unicode_width::UnicodeWidthStr;
 
 use super::state::DevToolsState;
 
@@ -45,7 +47,6 @@ pub(crate) enum DevToolsMsg {
     CopySelected,
     /// Copy a specific log line (double-click / Enter on a row).
     CopyEntry(String),
-    Hide,
 }
 
 impl Component for DevToolsPanel {
@@ -56,10 +57,6 @@ impl Component for DevToolsPanel {
     fn create_state(&self, _props: &Self::Properties) -> Self::State {}
 
     fn on_key(&mut self, key: crate::core::event::KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
-        if matches!(key.code, KeyCode::Esc) {
-            ctx.link().send(DevToolsMsg::Hide);
-            return KeyUpdate::handled(Update::none());
-        }
         // Ctrl+C copies the selected log row while the Logs tab is active.
         if matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
             && key.mods.ctrl
@@ -111,9 +108,6 @@ impl Component for DevToolsPanel {
             DevToolsMsg::ClearLogs => {
                 state.clear_logs();
             }
-            DevToolsMsg::Hide => {
-                state.set_visible(false);
-            }
             DevToolsMsg::CopySelected | DevToolsMsg::CopyEntry(_) => unreachable!(),
         }
         Update::full()
@@ -133,12 +127,27 @@ impl Component for DevToolsPanel {
         let frame_style = fg_style(theme.primary.fg).bg(theme.surface.menu);
         let secondary_style = fg_style(theme.muted.fg.or(theme.primary.fg));
         let viewport = ctx.viewport();
-        let (panel_width, panel_height) = state.resolved_panel_size(viewport.w, viewport.h);
+        // Stats is measured here rather than in `resolved_panel_size` because
+        // only the view knows how its rows format. Every content-sized tab then
+        // goes through the same width policy, so Stats and App grow alike
+        // instead of Stats truncating at a hardcoded width.
+        let stats_rows = (state.active_tab != DEVTOOLS_TAB_LOGS
+            && state.active_tab != DEVTOOLS_TAB_APP)
+            .then(|| stats_rows(&state));
+        let stats_width = stats_rows.as_deref().map_or(0, stats_content_width);
+        let (panel_width, panel_height) =
+            state.resolved_panel_size(viewport.w, viewport.h, stats_width);
 
-        let body = match state.active_tab {
-            DEVTOOLS_TAB_LOGS => logs_body(ctx, &state),
-            DEVTOOLS_TAB_APP => app_body(ctx, &state, state.app_label_width(viewport.w)),
-            _ => stats_body(ctx, &state),
+        let body = match (state.active_tab, stats_rows) {
+            (DEVTOOLS_TAB_LOGS, _) => logs_body(ctx, &state),
+            (DEVTOOLS_TAB_APP, _) => app_body(ctx, &state, state.app_label_width(viewport.w)),
+            (_, Some(rows)) => stats_body(
+                ctx,
+                &state,
+                rows,
+                DevToolsState::sparkline_columns(panel_width, viewport.w),
+            ),
+            (_, None) => Spacer::new().height(Length::Px(0)).into(),
         };
 
         VStack::new()
@@ -152,12 +161,18 @@ impl Component for DevToolsPanel {
                     // DevTools is painted as a separate top layer; its border must not
                     // merge with app-layer borders that happen to occupy the same cells.
                     .border_merge_mode(BorderMergeMode::Replace)
+                    .style(frame_style)
+                    .header_left(FrameLabel::new("DevTools").style(secondary_style))
+                    .header_style(secondary_style)
+                    // The panel is bottom-anchored, so tabs on the bottom border
+                    // keep the same screen position no matter how tall the active
+                    // tab's body is. On the top border they moved with every
+                    // switch, which is what made them hard to hit.
                     .tab_titles(["Stats", "Logs", "App"])
+                    .tab_edge(TabEdge::Bottom)
                     .active_tab(state.active_tab.min(DEVTOOLS_TAB_APP))
                     .on_tab_change(ctx.link().callback(DevToolsMsg::TabChanged))
-                    .style(frame_style)
-                    .header_right(FrameLabel::new("DevTools").style(secondary_style))
-                    .header_style(secondary_style)
+                    .footer_style(secondary_style)
                     .width(panel_width)
                     .height(panel_height)
                     .child(body)
@@ -188,6 +203,16 @@ fn fg_style(color: Option<Paint>) -> Style {
     }
 }
 
+/// The quietest readable foreground: placeholders, captions, and key hints.
+fn dim_fg(theme: &crate::style::Theme) -> Style {
+    fg_style(
+        theme
+            .muted
+            .fg
+            .map(|paint| Paint::solid(paint.color().dim())),
+    )
+}
+
 /// Format a duration as compact milliseconds, e.g. `0.61ms`.
 fn fmt_ms(duration: std::time::Duration) -> String {
     format!("{:.2}ms", duration.as_secs_f64() * 1000.0)
@@ -202,170 +227,142 @@ fn dotted(parts: &[String], empty: &str) -> String {
     }
 }
 
-/// The stats body renders a FIXED set of 13 rows so nothing appears or
-/// disappears between frames: every section always occupies its line and shows
-/// a quiet placeholder when it has no data. All values aggregate over the
-/// recent frame window (`DevToolsState::stats_window`), not the latest frame,
-/// so the panel stays readable while the app animates at full frame rate.
+/// How loud one stats row should read. Resolved to a concrete `Style` at
+/// render time; kept separate so the rows can be measured without a theme.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StatsTone {
+    /// The headline counters.
+    Headline,
+    /// A row carrying real data.
+    Value,
+    /// A placeholder, a caption, or a quiet "nothing to report".
+    Muted,
+    /// An active warning.
+    Warn,
+}
+
+/// One rendered stats row, as text. The sparkline is not a row: it is drawn
+/// under `Chart` and stretches to whatever width the panel resolves to.
+struct StatsRow {
+    /// `None` for the full-width headline.
+    label: Option<&'static str>,
+    value: String,
+    tone: StatsTone,
+}
+
+/// Fixed-width gutter holding the label column, including its trailing space.
+const STATS_LABEL_WIDTH: u16 = 8;
+
+impl StatsRow {
+    fn labeled(label: &'static str, value: String, tone: StatsTone) -> Self {
+        Self {
+            label: Some(label),
+            value,
+            tone,
+        }
+    }
+
+    /// Columns this row wants, gutter included.
+    fn natural_width(&self) -> u16 {
+        let value = u16::try_from(UnicodeWidthStr::width(self.value.as_str())).unwrap_or(u16::MAX);
+        match self.label {
+            Some(_) => value.saturating_add(STATS_LABEL_WIDTH),
+            None => value,
+        }
+    }
+}
+
+/// The stats rows: a FIXED set of 11 text rows (plus the 2-row chart) so
+/// nothing appears or disappears between frames. Every section always occupies
+/// its line and shows a quiet placeholder when it has no data. All values
+/// aggregate over the recent frame window (`DevToolsState::stats_window`), not
+/// the latest frame, so the panel stays readable while the app animates at full
+/// frame rate.
+///
+/// Text only, no theme: the panel measures these to size itself before it has
+/// anything to render them into.
 ///
 /// `DEFAULT_STATS_PANEL_HEIGHT` must stay in sync with the row count here.
-fn stats_body(ctx: &Context<DevToolsPanel>, state: &DevToolsState) -> Element {
-    let theme = ctx.theme();
-    let primary_style = fg_style(theme.primary.fg);
-    let secondary_style = fg_style(theme.muted.fg.or(theme.primary.fg));
-    let dim_style = fg_style(
-        theme
-            .muted
-            .fg
-            .map(|paint| Paint::solid(paint.color().dim())),
-    );
-
+fn stats_rows(state: &DevToolsState) -> Vec<StatsRow> {
     let window = state.stats_window();
     let (node_count, overlay_count) = state
         .latest_frame()
         .map(|frame| (frame.node_count, frame.overlay_count))
         .unwrap_or((0, 0));
 
-    let mut rows: Vec<Element> = Vec::new();
-    // Bold bright labels in a fixed 7-column gutter, calm values to the
-    // right: the eye scans the label column, then reads across.
-    let label_style = primary_style.bold();
-    let labeled = |label: &'static str, value: String, value_style: Style| -> Element {
-        HStack::new()
-            .height(Length::Auto)
-            .child(Text::new(label).width(Length::Px(8)).style(label_style))
-            .child(
-                Text::new(value)
-                    .overflow(Overflow::Ellipsis)
-                    .width(Length::Flex(1))
-                    .style(value_style),
-            )
-            .into()
-    };
-
     // 1: headline
-    rows.push(
-        Text::new(format!(
+    let mut rows = vec![StatsRow {
+        label: None,
+        value: format!(
             "FPS {:.0} \u{b7} Nodes {} \u{b7} Overlays {}",
             state.fps(),
             node_count,
             overlay_count,
-        ))
-        .overflow(Overflow::Ellipsis)
-        .width(Length::Flex(1))
-        .style(primary_style.bold())
-        .into(),
-    );
+        ),
+        tone: StatsTone::Headline,
+    }];
 
     // 2-3: frame timing over the window
-    rows.push(labeled(
+    rows.push(StatsRow::labeled(
         "Frame",
         format!(
             "avg {} \u{b7} max {}",
             fmt_ms(window.avg_total),
             fmt_ms(window.max_total),
         ),
-        secondary_style,
+        StatsTone::Value,
     ));
-    rows.push(labeled(
+    rows.push(StatsRow::labeled(
         "Recon",
         format!(
             "avg {} \u{b7} Draw avg {}",
             fmt_ms(window.avg_reconcile),
             fmt_ms(window.avg_draw),
         ),
-        secondary_style,
+        StatsTone::Value,
     ));
 
-    // 4-6: frame-time history chart with an explicit scale caption.
-    // Microsecond samples; the scale floor is one 60fps frame budget so bar
-    // height reads as "fraction of budget" until a spike stretches the scale.
-    // Square-root height compression keeps typical sub-millisecond frames
-    // visible next to a 20ms spike; linear scaling flattens them to nothing.
-    let cols = state.sparkline_columns(ctx.viewport().w);
-    let history = state.duration_history_us(cols);
-    let scale_us = history
-        .iter()
-        .copied()
-        .max()
-        .unwrap_or(0)
-        .max(crate::devtools::state::FRAME_BUDGET_US);
-    rows.push(labeled(
+    // 4: caption for the chart drawn underneath it
+    rows.push(StatsRow::labeled(
         "Chart",
-        format!("scale {:.1}ms", scale_us as f64 / 1000.0),
-        dim_style,
+        format!("scale {:.1}ms", state.chart_scale_us() as f64 / 1000.0),
+        StatsTone::Muted,
     ));
-    let sqrt_max = (scale_us as f64).sqrt().ceil() as u64;
-    let sqrt_history: Vec<u64> = history
-        .iter()
-        .map(|&us| (us as f64).sqrt().round() as u64)
-        .collect();
-    rows.push(
-        Sparkline::new(sqrt_history)
-            .variant(SparklineVariant::Bars)
-            .min(0)
-            .max(sqrt_max)
-            .zero_policy(SparklineZeroPolicy::MinGlyph)
-            .chart_height(2)
-            .bars_preset(SparklineBarsPreset::Blocks)
-            // Row 0 of the gradient is the TOP chart row: accent up high so
-            // spikes pop, muted at the baseline so a quiet app stays quiet.
-            .height_gradient(ColorGradient::new(
-                theme
-                    .accent
-                    .fg
-                    .map(Paint::color)
-                    .unwrap_or(theme.border_active),
-                theme
-                    .muted
-                    .fg
-                    .or(theme.primary.fg)
-                    .map(Paint::color)
-                    .unwrap_or(theme.border_active),
-            ))
-            .overflow(Overflow::ClipStart)
-            .width(Length::Flex(1))
-            // Fixed 2-row area: an empty chart must not collapse and shift the
-            // rows below it when the first frame arrives.
-            .height(Length::Px(2))
-            .into(),
-    );
 
-    // 7: dirty-level distribution over the window
-    rows.push(labeled(
+    // 5: dirty-level distribution over the window
+    rows.push(StatsRow::labeled(
         "Updates",
         format!(
             "full {} \u{b7} layout {} \u{b7} paint {}",
             window.full, window.layout, window.paint,
         ),
-        secondary_style,
+        StatsTone::Value,
     ));
 
-    // 8: who requested the updates
+    // 6: who requested the updates
     let source_parts: Vec<String> = window
         .top_sources
         .iter()
         .map(|(label, count)| format!("{label} x{count}"))
         .collect();
-    let why_style = if source_parts.is_empty() {
-        dim_style
-    } else {
-        secondary_style
-    };
-    rows.push(labeled("Why", dotted(&source_parts, "idle"), why_style));
+    rows.push(StatsRow::labeled(
+        "Why",
+        dotted(&source_parts, "idle"),
+        tone_for(source_parts.is_empty()),
+    ));
 
-    // 9-10: memoization over the window
+    // 7-8: memoization over the window
     let memo_total = window.memo_hits + window.memo_misses;
-    let (memo_text, memo_style) = if memo_total == 0 {
-        ("no data".to_string(), dim_style)
+    let (memo_text, memo_tone) = if memo_total == 0 {
+        ("no data".to_string(), StatsTone::Muted)
     } else {
         let hit_rate = (window.memo_hits as f64 / memo_total as f64) * 100.0;
         (
             format!("{hit_rate:.0}% hit ({}/{memo_total})", window.memo_hits),
-            secondary_style,
+            StatsTone::Value,
         )
     };
-    rows.push(labeled("Memo", memo_text, memo_style));
+    rows.push(StatsRow::labeled("Memo", memo_text, memo_tone));
     let miss_parts: Vec<String> = window
         .top_miss_reasons
         .iter()
@@ -374,60 +371,164 @@ fn stats_body(ctx: &Context<DevToolsPanel>, state: &DevToolsState) -> Element {
             format!("{label} x{count}")
         })
         .collect();
-    let miss_style = if miss_parts.is_empty() {
-        dim_style
-    } else {
-        secondary_style
-    };
-    rows.push(labeled("Miss", dotted(&miss_parts, "none"), miss_style));
+    rows.push(StatsRow::labeled(
+        "Miss",
+        dotted(&miss_parts, "none"),
+        tone_for(miss_parts.is_empty()),
+    ));
 
-    // 11: worst view() times in the window
+    // 9: worst view() times in the window
     let slow_parts: Vec<String> = window
         .top_slow_views
         .iter()
         .map(|(name, duration)| format!("{name} {}", fmt_ms(*duration)))
         .collect();
-    let slow_style = if slow_parts.is_empty() {
-        dim_style
-    } else {
-        secondary_style
-    };
-    rows.push(labeled("Slow", dotted(&slow_parts, "none"), slow_style));
+    rows.push(StatsRow::labeled(
+        "Slow",
+        dotted(&slow_parts, "none"),
+        tone_for(slow_parts.is_empty()),
+    ));
 
-    // 12: focus, most-specific first so truncation drops the tail
+    // 10: focus, most-specific first so truncation drops the tail
     let focus_target = match (&state.focus.tag, &state.focus.key) {
         (Some(tag), Some(key)) => format!("{tag:?} \"{}\"", key.as_ref() as &str),
         (Some(tag), None) => format!("{tag:?}"),
         (None, Some(key)) => format!("\"{}\"", key.as_ref() as &str),
         (None, None) => "none".to_string(),
     };
-    rows.push(labeled(
+    rows.push(StatsRow::labeled(
         "Focus",
         format!(
             "{focus_target} \u{b7} {:?} \u{b7} r{}",
             state.focus.policy, state.focus.ring_len,
         ),
-        secondary_style,
+        StatsTone::Value,
     ));
 
-    // 13: input pressure, always present; only its style changes
+    // 11: input pressure, always present; only its tone changes
     let pressure = state.input_pressure();
     if pressure.should_warn() {
-        rows.push(labeled(
+        rows.push(StatsRow::labeled(
             "Input",
             format!(
                 "{}/{} full frames over budget",
                 pressure.offending, pressure.window,
             ),
-            Style::default().fg(crate::style::Color::Yellow),
+            StatsTone::Warn,
         ));
     } else {
-        rows.push(labeled("Input", "ok".to_string(), dim_style));
+        rows.push(StatsRow::labeled(
+            "Input",
+            "ok".to_string(),
+            StatsTone::Muted,
+        ));
     }
 
+    rows
+}
+
+/// A row with nothing to report reads as a placeholder, not as data.
+fn tone_for(is_placeholder: bool) -> StatsTone {
+    if is_placeholder {
+        StatsTone::Muted
+    } else {
+        StatsTone::Value
+    }
+}
+
+/// Widest stats row, in columns, gutter included.
+fn stats_content_width(rows: &[StatsRow]) -> u16 {
+    rows.iter().map(StatsRow::natural_width).max().unwrap_or(0)
+}
+
+/// Render the measured rows, with the frame-time chart under the `Chart`
+/// caption.
+///
+/// The chart takes microsecond samples; its scale floor is one 60fps frame
+/// budget so bar height reads as "fraction of budget" until a spike stretches
+/// the scale. Square-root height compression keeps typical sub-millisecond
+/// frames visible next to a 20ms spike; linear scaling flattens them to
+/// nothing.
+fn stats_body(
+    ctx: &Context<DevToolsPanel>,
+    state: &DevToolsState,
+    text_rows: Vec<StatsRow>,
+    sparkline_cols: usize,
+) -> Element {
+    let theme = ctx.theme();
+    let primary_style = fg_style(theme.primary.fg);
+    let secondary_style = fg_style(theme.muted.fg.or(theme.primary.fg));
+    let dim_style = dim_fg(&theme);
+    // Bold bright labels in a fixed gutter, calm values to the right: the eye
+    // scans the label column, then reads across.
+    let label_style = primary_style.bold();
+    let style_for = |tone: StatsTone| match tone {
+        StatsTone::Headline => primary_style.bold(),
+        StatsTone::Value => secondary_style,
+        StatsTone::Muted => dim_style,
+        StatsTone::Warn => Style::default().fg(crate::style::Color::Yellow),
+    };
+
+    let scale_us = state.chart_scale_us();
+    let sqrt_max = (scale_us as f64).sqrt().ceil() as u64;
+    let sqrt_history: Vec<u64> = state
+        .duration_history_us(sparkline_cols)
+        .iter()
+        .map(|&us| (us as f64).sqrt().round() as u64)
+        .collect();
+
     let mut stack = VStack::new().height(Length::Flex(1)).gap(0);
-    for row in rows {
-        stack = stack.child(row);
+    for row in text_rows {
+        let is_chart_caption = row.label == Some("Chart");
+        let value = Text::new(row.value)
+            .overflow(Overflow::Ellipsis)
+            .width(Length::Flex(1))
+            .style(style_for(row.tone));
+        stack = match row.label {
+            Some(label) => stack.child(
+                HStack::new()
+                    .height(Length::Auto)
+                    .child(
+                        Text::new(label)
+                            .width(Length::Px(STATS_LABEL_WIDTH))
+                            .style(label_style),
+                    )
+                    .child(value),
+            ),
+            None => stack.child(value),
+        };
+
+        if is_chart_caption {
+            stack = stack.child(
+                Sparkline::new(sqrt_history.clone())
+                    .variant(SparklineVariant::Bars)
+                    .min(0)
+                    .max(sqrt_max)
+                    .zero_policy(SparklineZeroPolicy::MinGlyph)
+                    .chart_height(2)
+                    .bars_preset(SparklineBarsPreset::Blocks)
+                    // Row 0 of the gradient is the TOP chart row: accent up high so
+                    // spikes pop, muted at the baseline so a quiet app stays quiet.
+                    .height_gradient(ColorGradient::new(
+                        theme
+                            .accent
+                            .fg
+                            .map(Paint::color)
+                            .unwrap_or(theme.border_active),
+                        theme
+                            .muted
+                            .fg
+                            .or(theme.primary.fg)
+                            .map(Paint::color)
+                            .unwrap_or(theme.border_active),
+                    ))
+                    .overflow(Overflow::ClipStart)
+                    .width(Length::Flex(1))
+                    // Fixed 2-row area: an empty chart must not collapse and shift the
+                    // rows below it when the first frame arrives.
+                    .height(Length::Px(2)),
+            );
+        }
     }
     stack.into()
 }
@@ -435,12 +536,7 @@ fn stats_body(ctx: &Context<DevToolsPanel>, state: &DevToolsState) -> Element {
 fn logs_body(ctx: &Context<DevToolsPanel>, state: &DevToolsState) -> Element {
     let theme = ctx.theme();
     let secondary_style = fg_style(theme.muted.fg.or(theme.primary.fg));
-    let dim_style = fg_style(
-        theme
-            .muted
-            .fg
-            .map(|paint| Paint::solid(paint.color().dim())),
-    );
+    let dim_style = dim_fg(&theme);
     let primary_style = fg_style(theme.primary.fg);
     let accent_style = fg_style(theme.accent.fg.or(theme.primary.fg));
 
@@ -547,37 +643,32 @@ fn app_body(ctx: &Context<DevToolsPanel>, state: &DevToolsState, label_width: u1
     let theme = ctx.theme();
     let label_style = fg_style(theme.primary.fg).bold();
     let value_style = fg_style(theme.muted.fg.or(theme.primary.fg));
-    let dim_style = fg_style(
-        theme
-            .muted
-            .fg
-            .map(|paint| Paint::solid(paint.color().dim())),
-    );
+    let dim_style = dim_fg(&theme);
     let metrics = state.app_metrics.rows.borrow();
-    let mut rows = Vec::with_capacity(metrics.len().max(1));
+    let mut rows = Vec::with_capacity(metrics.len().max(2));
 
     if metrics.is_empty() {
+        // A `Metrics | none` row read as a metric actually named "Metrics".
+        // The empty state is prose instead, and names the call that fills it.
         rows.push(
-            HStack::new()
-                .height(Length::Auto)
-                .child(
-                    Text::new("Metrics")
-                        .overflow(Overflow::Ellipsis)
-                        .width(Length::Px(label_width))
-                        .style(label_style),
-                )
-                .child(
-                    Text::new("none")
-                        .overflow(Overflow::Ellipsis)
-                        .width(Length::Flex(1))
-                        .style(dim_style),
-                )
+            Text::new("No app metrics registered.")
+                .overflow(Overflow::Ellipsis)
+                .width(Length::Flex(1))
+                .style(value_style)
+                .into(),
+        );
+        rows.push(
+            Text::new("Call ctx.set_devtools_metrics() to add rows.")
+                .overflow(Overflow::Ellipsis)
+                .width(Length::Flex(1))
+                .style(dim_style)
                 .into(),
         );
     } else {
         rows.extend(metrics.iter().map(|metric| {
             HStack::new()
                 .height(Length::Auto)
+                .gap(1)
                 .child(
                     Text::new(Arc::clone(&metric.label))
                         .overflow(Overflow::Ellipsis)
@@ -594,12 +685,16 @@ fn app_body(ctx: &Context<DevToolsPanel>, state: &DevToolsState, label_width: u1
         }));
     }
 
+    // Deliberately not focusable: the App tab is a read-out, and DevTools is an
+    // inspector layered over the app rather than something to tab into. Taking
+    // focus on a click would pull it off whatever the app had focused, which is
+    // often the very thing being inspected. The wheel still scrolls, because
+    // wheel dispatch resolves by hit test rather than focus.
     ScrollView::new()
         .height(Length::Flex(1))
         .scrollbar(true)
         .scrollbar_config(ScrollbarConfig::new())
-        .focusable(true)
-        .scroll_keys(ScrollKeymap::DEFAULT)
+        .focusable(false)
         .estimated_child_height(1)
         .children(rows)
         .key(DEVTOOLS_APP_METRICS_KEY)
@@ -734,6 +829,53 @@ mod tests {
         }
     }
 
+    /// Stats is content-sized by the same policy as the App tab: a row too wide
+    /// for the shared minimum grows the panel instead of truncating in place.
+    #[test]
+    fn stats_panel_grows_for_a_row_wider_than_the_minimum() {
+        let mut state = busy_state();
+        // A realistic long focus target, the row that overflowed at the old
+        // hardcoded 48 columns.
+        state.focus.key = Some("rozi-terminal-1-left-pane".into());
+        state.focus.policy = crate::app::FocusPolicy::OnDemand;
+
+        let props = DevToolsProps {
+            state: Rc::new(RefCell::new(state)),
+        };
+        let mut backend = TestBackend::new_with_props(DevToolsPanel, props);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 20,
+        });
+        backend.render();
+
+        let snapshot =
+            backend.capture_ui_snapshot_with_margin(4, 2, &crate::UiSnapshotOptions::default());
+        let markdown = snapshot.to_markdown();
+        if let Ok(dir) = std::env::var("DEVTOOLS_SNAPSHOT_DIR") {
+            let _ = std::fs::write(format!("{dir}/devtools-stats-wide.md"), &markdown);
+            #[cfg(feature = "ui-snapshot-png")]
+            let _ = std::fs::write(
+                format!("{dir}/devtools-stats-wide.png"),
+                snapshot.to_png_default().unwrap_or_default(),
+            );
+        }
+
+        let panel = panel_frame_rect(&backend);
+        assert!(
+            panel.w > 48,
+            "a row wider than the shared minimum should grow the panel, got {}",
+            panel.w
+        );
+        assert!(panel.w <= 100, "and never exceed the viewport");
+        assert!(
+            markdown.contains("rozi-terminal-1"),
+            "the focus target should render in full; got:\n{markdown}"
+        );
+    }
+
     /// Visual review harness for the Logs tab: seeded entries, one selected,
     /// exports PNG via `DEVTOOLS_SNAPSHOT_DIR`. Asserts the control chips.
     #[test]
@@ -861,6 +1003,270 @@ mod tests {
         );
     }
 
+    /// Visual review harness for the App tab: host metrics plus the shared
+    /// bottom tab strip, exported via `DEVTOOLS_SNAPSHOT_DIR`.
+    #[test]
+    fn app_panel_renders_host_metrics() {
+        let mut state = DevToolsState::default();
+        state.set_visible(true);
+        state.set_active_tab(DEVTOOLS_TAB_APP);
+        state.app_metrics.rows.borrow_mut().extend([
+            crate::DevToolsMetric::new("Panes", "4 (2 split, 2 stacked)"),
+            crate::DevToolsMetric::new("Clients", "2"),
+            crate::DevToolsMetric::new("Queue", "idle"),
+            crate::DevToolsMetric::new("Session", "restored 00:03:11 ago"),
+        ]);
+        let props = DevToolsProps {
+            state: Rc::new(RefCell::new(state)),
+        };
+        let mut backend = TestBackend::new_with_props(DevToolsPanel, props);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 60,
+            h: 12,
+        });
+        backend.render();
+
+        let snapshot =
+            backend.capture_ui_snapshot_with_margin(4, 2, &crate::UiSnapshotOptions::default());
+        let markdown = snapshot.to_markdown();
+        if let Ok(dir) = std::env::var("DEVTOOLS_SNAPSHOT_DIR") {
+            let _ = std::fs::write(format!("{dir}/devtools-app.md"), &markdown);
+            #[cfg(feature = "ui-snapshot-png")]
+            let _ = std::fs::write(
+                format!("{dir}/devtools-app.png"),
+                snapshot.to_png_default().unwrap_or_default(),
+            );
+        }
+
+        for label in [
+            "Panes", "Clients", "Queue", "Session", "Stats", "Logs", "App",
+        ] {
+            assert!(
+                markdown.contains(label),
+                "app panel should render `{label}`; got:\n{markdown}"
+            );
+        }
+    }
+
+    /// The App tab with no host metrics must still fill the shared minimum
+    /// panel width, so the bottom tab strip never truncates.
+    #[test]
+    fn app_panel_empty_state_keeps_the_shared_panel_width() {
+        let mut state = DevToolsState::default();
+        state.set_visible(true);
+        state.set_active_tab(DEVTOOLS_TAB_APP);
+        let props = DevToolsProps {
+            state: Rc::new(RefCell::new(state)),
+        };
+        let mut backend = TestBackend::new_with_props(DevToolsPanel, props);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 60,
+            h: 12,
+        });
+        backend.render();
+
+        let snapshot =
+            backend.capture_ui_snapshot_with_margin(4, 2, &crate::UiSnapshotOptions::default());
+        let markdown = snapshot.to_markdown();
+        if let Ok(dir) = std::env::var("DEVTOOLS_SNAPSHOT_DIR") {
+            let _ = std::fs::write(format!("{dir}/devtools-app-empty.md"), &markdown);
+            #[cfg(feature = "ui-snapshot-png")]
+            let _ = std::fs::write(
+                format!("{dir}/devtools-app-empty.png"),
+                snapshot.to_png_default().unwrap_or_default(),
+            );
+        }
+
+        let panel = panel_frame_rect(&backend);
+        assert_eq!(panel.w, 48, "empty App tab should use the shared minimum");
+        assert!(
+            markdown.contains("set_devtools_metrics"),
+            "empty state should name the call that fills it; got:\n{markdown}"
+        );
+        for label in ["Stats", "Logs", "App"] {
+            assert!(
+                markdown.contains(label),
+                "bottom tab strip should render `{label}` untruncated; got:\n{markdown}"
+            );
+        }
+    }
+
+    /// The tab strip is bottom-anchored, so it must land on the same row for
+    /// every tab regardless of how tall that tab's body is. This is the whole
+    /// point of moving it out of the top border.
+    #[test]
+    fn tab_strip_stays_on_the_same_row_across_tabs() {
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 30,
+        };
+
+        let tab_row = |tab: usize| -> i16 {
+            let mut state = busy_state();
+            state.set_active_tab(tab);
+            state.app_metrics.rows.borrow_mut().extend([
+                crate::DevToolsMetric::new("Panes", "4"),
+                crate::DevToolsMetric::new("Clients", "2"),
+            ]);
+            let props = DevToolsProps {
+                state: Rc::new(RefCell::new(state)),
+            };
+            let mut backend = TestBackend::new_with_props(DevToolsPanel, props);
+            backend.set_viewport(viewport);
+            backend.render();
+
+            let panel = panel_frame_rect(&backend);
+            // The strip rides the bottom border itself.
+            panel.y + i16::try_from(panel.h).unwrap_or(i16::MAX) - 1
+        };
+
+        let stats = tab_row(0);
+        assert_eq!(tab_row(DEVTOOLS_TAB_LOGS), stats);
+        assert_eq!(tab_row(DEVTOOLS_TAB_APP), stats);
+        assert_eq!(
+            stats,
+            i16::try_from(viewport.h).unwrap() - 1,
+            "the strip should sit on the panel's bottom border"
+        );
+    }
+
+    /// Clicking a bottom-border tab must switch tabs: the strip lives on the
+    /// frame's footer line now, so hit testing has to resolve there.
+    #[test]
+    fn clicking_a_footer_tab_switches_tabs() {
+        use crate::core::event::{MouseButton, MouseEvent, MouseKind};
+
+        let state = Rc::new(RefCell::new({
+            let mut state = DevToolsState::default();
+            state.set_visible(true);
+            state
+        }));
+        let props = DevToolsProps {
+            state: Rc::clone(&state),
+        };
+        let mut backend = TestBackend::new_with_props(DevToolsPanel, props);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 60,
+            h: 20,
+        });
+        backend.render();
+
+        let panel = panel_frame_rect(&backend);
+        let tab_row = panel.y + i16::try_from(panel.h).unwrap() - 1;
+        // "[ Stats ]| Logs | App" - land inside the "Logs" label.
+        let logs_col = panel.x + 12;
+
+        backend
+            .send_mouse(MouseEvent {
+                kind: MouseKind::Down(MouseButton::Left),
+                x: u16::try_from(logs_col).unwrap(),
+                y: u16::try_from(tab_row).unwrap(),
+                mods: Default::default(),
+            })
+            .expect("mouse down");
+        backend
+            .send_mouse(MouseEvent {
+                kind: MouseKind::Up(MouseButton::Left),
+                x: u16::try_from(logs_col).unwrap(),
+                y: u16::try_from(tab_row).unwrap(),
+                mods: Default::default(),
+            })
+            .expect("mouse up");
+        let _ = backend.pump();
+
+        assert_eq!(
+            state.borrow().active_tab,
+            DEVTOOLS_TAB_LOGS,
+            "clicking the footer `Logs` tab should activate it"
+        );
+    }
+
+    /// Only the Logs tab owns focusable controls. Clicking the Stats or App
+    /// body must leave the app's focus where it was: DevTools is an inspector
+    /// layered over the app, not something to tab into.
+    #[test]
+    fn only_the_logs_tab_takes_focus_from_a_body_click() {
+        use crate::core::event::{MouseButton, MouseEvent, MouseKind};
+
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 60,
+            h: 20,
+        };
+
+        let focus_after_body_click = |tab: usize| -> Option<crate::core::node::NodeId> {
+            let mut state = DevToolsState::default();
+            state.set_visible(true);
+            state.set_active_tab(tab);
+            state.app_metrics.rows.borrow_mut().extend([
+                crate::DevToolsMetric::new("Panes", "4"),
+                crate::DevToolsMetric::new("Clients", "2"),
+            ]);
+            let props = DevToolsProps {
+                state: Rc::new(RefCell::new(state)),
+            };
+            let mut backend = TestBackend::new_with_props(DevToolsPanel, props);
+            backend.set_viewport(viewport);
+            backend.render();
+
+            let panel = panel_frame_rect(&backend);
+            // First body row, one column inside the left border.
+            let (x, y) = (panel.x + 1, panel.y + 1);
+            for kind in [
+                MouseKind::Down(MouseButton::Left),
+                MouseKind::Up(MouseButton::Left),
+            ] {
+                backend
+                    .send_mouse(MouseEvent {
+                        kind,
+                        x: u16::try_from(x).unwrap(),
+                        y: u16::try_from(y).unwrap(),
+                        mods: Default::default(),
+                    })
+                    .expect("mouse event");
+            }
+            let _ = backend.pump();
+            backend.focused()
+        };
+
+        assert!(
+            focus_after_body_click(0).is_none(),
+            "the Stats body has nothing to focus"
+        );
+        assert!(
+            focus_after_body_click(DEVTOOLS_TAB_APP).is_none(),
+            "the App body is a read-out, so clicking it must not grab focus"
+        );
+        assert!(
+            focus_after_body_click(DEVTOOLS_TAB_LOGS).is_some(),
+            "the Logs tab does own focusable controls"
+        );
+    }
+
+    /// Rect of the DevTools panel frame in a rendered backend.
+    fn panel_frame_rect(backend: &TestBackend<DevToolsPanel>) -> Rect {
+        backend
+            .core
+            .tree
+            .iter()
+            .find(|node| {
+                node.key
+                    .as_ref()
+                    .is_some_and(|key| key.as_ref() == DEVTOOLS_KEY)
+            })
+            .expect("devtools panel frame")
+            .rect
+    }
+
     #[test]
     fn app_panel_renders_metrics_in_host_order() {
         let mut state = DevToolsState::default();
@@ -983,6 +1389,47 @@ mod tests {
         assert!(scroll.scrollbar);
         assert!(scroll.content_height > scroll.viewport_height);
         assert!(scroll.max_offset > 0);
+
+        // The pane is not focusable, so the wheel is the only way to reach the
+        // overflowed rows. Wheel dispatch resolves by hit test, not focus.
+        let body = Rect {
+            x: panel.rect.x + 1,
+            y: panel.rect.y + 1,
+            w: 1,
+            h: 1,
+        };
+        backend
+            .send_mouse(crate::core::event::MouseEvent {
+                kind: crate::core::event::MouseKind::ScrollDown,
+                x: u16::try_from(body.x).unwrap(),
+                y: u16::try_from(body.y).unwrap(),
+                mods: Default::default(),
+            })
+            .expect("wheel event");
+        let _ = backend.pump();
+        backend.render();
+
+        let offset = backend
+            .core
+            .tree
+            .iter()
+            .find_map(|node| match &node.kind {
+                crate::core::node::NodeKind::ScrollView(scroll)
+                    if node
+                        .key
+                        .as_ref()
+                        .is_some_and(|key| key.as_ref() == DEVTOOLS_APP_METRICS_KEY) =>
+                {
+                    Some(scroll.offset)
+                }
+                _ => None,
+            })
+            .expect("app metrics ScrollView");
+        assert!(offset > 0, "the wheel should scroll the unfocusable pane");
+        assert!(
+            backend.focused().is_none(),
+            "and must not focus it on the way"
+        );
     }
 
     #[test]

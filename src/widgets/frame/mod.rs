@@ -178,6 +178,27 @@ pub enum BorderMergeMode {
     Fuzzy,
 }
 
+/// Which border line a [`Frame`]'s tab strip is drawn on.
+///
+/// Tabs share their line with that border's labels, so `Bottom` puts them
+/// beside [`Frame::footer_left`] / [`Frame::footer_right`] rather than beside
+/// the header labels.
+///
+/// Bottom tabs are worth reaching for when the frame is anchored to the bottom
+/// of its container: that edge is the one that stays put, so the tab strip
+/// keeps its screen position even as the body above it changes height.
+///
+/// A `compact` frame has only one line and draws its tabs there whatever the
+/// edge says.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TabEdge {
+    /// Draw tabs on the top border, beside the header labels.
+    #[default]
+    Top,
+    /// Draw tabs on the bottom border, beside the footer labels.
+    Bottom,
+}
+
 /// Where an edge decoration is drawn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum DecorationPlacement {
@@ -442,6 +463,14 @@ impl Frame {
     /// Callback fired when the active tab changes via border tab clicks.
     pub fn on_tab_change(mut self, cb: Callback<TabsEvent>) -> Self {
         self.props.on_tab_change = Some(cb);
+        self
+    }
+
+    /// Set which border line the tab strip is drawn on.
+    ///
+    /// Default: `TabEdge::Top`.
+    pub fn tab_edge(mut self, edge: TabEdge) -> Self {
+        self.props.tab_edge = edge;
         self
     }
 
@@ -823,6 +852,7 @@ impl crate::layout::hash::LayoutHash for Frame {
         }
         self.props.active_tab.hash(hasher);
         self.props.tab_variant.hash(hasher);
+        self.props.tab_edge.hash(hasher);
         self.header.is_some().hash(hasher);
         if let Some(header) = self.header.as_deref() {
             recurse(header)?.hash(hasher);

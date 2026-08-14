@@ -145,7 +145,7 @@ impl<C: Component> AppRunner<C> {
     }
 
     #[cfg(feature = "devtools")]
-    pub(super) fn install_devtools_overlay(&mut self) {
+    pub(crate) fn install_devtools_overlay(&mut self) {
         if self.devtools_state.borrow().visible {
             self.core
                 .set_extra_root_element(Some(crate::devtools::panel_element(Rc::clone(

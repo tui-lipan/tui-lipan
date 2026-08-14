@@ -898,6 +898,27 @@ impl<C: Component> AppRunner<C> {
         true
     }
 
+    /// Apply queued framework side effects, reporting whether the UI changed.
+    fn drain_framework_effects(&mut self) -> bool {
+        #[cfg(feature = "devtools")]
+        {
+            let effects: Vec<_> = self.framework_effects.drain(..).collect();
+            let mut changed = false;
+            for effect in effects {
+                if matches!(effect, FrameworkSideEffect::ToggleDevtools) {
+                    let visible = self.devtools_state.borrow().visible;
+                    changed |= self.set_devtools_visible(!visible);
+                }
+            }
+            changed
+        }
+        #[cfg(not(feature = "devtools"))]
+        {
+            self.framework_effects.clear();
+            false
+        }
+    }
+
     #[cfg(feature = "devtools")]
     fn note_attribution(
         &mut self,
@@ -1256,6 +1277,10 @@ impl<C: Component> AppRunner<C> {
     /// Mirrors the root-init sequence of [`Self::run`] without touching a
     /// terminal, and is the unit both headless capture paths build on.
     fn headless_render(&mut self, bounds: crate::style::Rect) {
+        // Mount or unmount the panel exactly as the terminal render paths do,
+        // so a snapshot or recording that toggles DevTools actually captures it.
+        #[cfg(feature = "devtools")]
+        self.install_devtools_overlay();
         self.push_drag_layout_collapse_hint();
         self.core.render_element(
             bounds,
@@ -1286,6 +1311,10 @@ impl<C: Component> AppRunner<C> {
     ) -> Result<()> {
         self.dispatch_layered_key(key);
         self.notify_focus_change();
+        // Without this, framework-level bindings (F12 for DevTools) queue an
+        // effect that the headless path never applies, so a snapshot script
+        // asking for the panel silently captures the app without it.
+        self.drain_framework_effects();
 
         let mut dirty = DirtyTracker::default();
         self.drain_messages_and_commands(&mut dirty)?;
@@ -1925,21 +1954,9 @@ impl<C: Component> AppRunner<C> {
                                 let key_result = self.dispatch_layered_key(key);
                                 self.notify_focus_change();
 
-                                #[cfg(feature = "devtools")]
-                                {
-                                    let effects: Vec<_> =
-                                        self.framework_effects.drain(..).collect();
-                                    for effect in effects {
-                                        if matches!(effect, FrameworkSideEffect::ToggleDevtools) {
-                                            let visible = self.devtools_state.borrow().visible;
-                                            if self.set_devtools_visible(!visible) {
-                                                dirty.mark_full();
-                                            }
-                                        }
-                                    }
+                                if self.drain_framework_effects() {
+                                    dirty.mark_full();
                                 }
-                                #[cfg(not(feature = "devtools"))]
-                                self.framework_effects.clear();
 
                                 if key_result.quit {
                                     crate::debug::internal_log!(

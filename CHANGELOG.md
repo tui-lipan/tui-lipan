@@ -13,11 +13,51 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Frame::tab_edge(TabEdge)` draws the frame's border tab strip on the bottom border instead of the
+  top. Tabs share their line with that border's own labels, so `TabEdge::Bottom` puts them beside
+  `footer_left` / `footer_right` and leaves the header labels the top line. Worth reaching for on a
+  frame anchored to the bottom of its container: that edge is the one that stays put, so the strip
+  keeps its screen position while the body above it changes height. Rendering, hit testing, and
+  min-width all follow the edge; a `compact` frame still draws its tabs on its single line.
 - `TerminalScreen::drain_clipboard_events()` exposes decoded OSC 52 clipboard-store requests so
   terminal hosts can apply or relay child clipboard copies while retaining control of clipboard
   policy. `ClipboardHandle::accept_osc52_store()` applies that policy for managed hosts, and
   `relay_osc52()` relays an already-approved request without requiring a native clipboard provider.
   OSC 52 clipboard loads remain disabled.
+
+### Changed
+
+- DevTools panel redesign. The `Stats` / `Logs` / `App` tab strip moved from the frame's top border
+  to its bottom one (via the new `Frame::tab_edge`). The panel is bottom-anchored, so the strip now
+  keeps the same screen position for every tab; on the top border it shifted vertically on every
+  switch, because each tab sizes its body differently. The `DevTools` label moved to the top-left
+  border.
+- The DevTools Stats and App tabs now share one width policy: grow to fit the widest row, never
+  below a 48-column floor, never past the viewport. Stats was pinned at exactly 48 columns and
+  truncated rows that did not fit (a long focus key, a long `Slow` list) while App beside it resized
+  freely. Logs still always fills the width.
+- The DevTools App tab no longer takes focus when clicked. It is a read-out, and DevTools is an
+  inspector layered over the app rather than something to tab into, so a click there was pulling
+  focus off whatever the app had focused - often the very thing being inspected. Stats already
+  passed clicks through; Logs still takes focus, since its filter, toggles, and log list are real
+  controls. The wheel still scrolls the App rows, because wheel dispatch resolves by hit test rather
+  than focus.
+- The DevTools App tab keeps a 6-row height floor, and its empty state is prose naming
+  `Context::set_devtools_metrics` instead of a placeholder row that read as a metric called
+  "Metrics".
+- The DevTools panel no longer binds `Esc`. It never reached the panel unless focus happened to be
+  inside it, so it read as a broken shortcut; the panel now claims no keys of its own beyond
+  `ctrl+c` on a selected Logs row. Close it with the `toggle_devtools` binding (`F12` by default) or
+  `Context::hide_devtools()`.
+- The DevTools frame-time chart scale is measured over the retained frame buffer rather than the
+  visible bars. Scaling to the visible bars was circular once the panel became content-sized: the
+  scale caption's width feeds the panel width that decides how many bars fit.
+
+### Fixed
+
+- Headless snapshots and recordings now mount the DevTools panel and apply framework-level key
+  bindings, so `TUI_LIPAN_SNAPSHOT_KEYS="f12"` captures the panel instead of silently capturing the
+  app without it.
 
 ## [0.2.0] - 2026-08-13
 

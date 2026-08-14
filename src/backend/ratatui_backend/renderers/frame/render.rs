@@ -9,6 +9,7 @@ use crate::backend::ratatui_backend::common::{
 };
 use crate::backend::ratatui_backend::renderers::frame::utils::build_tabs_line;
 use crate::style::{Color, Edge, Paint, Rect, Style};
+use crate::widgets::TabEdge;
 use crate::widgets::internal::{FrameGeometry, FrameProps};
 use crate::widgets::{BorderLabels, FrameLabel};
 use crate::widgets::{BorderMergeMode, DecorationGlyph, DecorationPlacement, EdgeDecoration};
@@ -820,7 +821,10 @@ fn render_border_labels(buf: &mut Buffer, render: &BorderLabelsRender<'_>) {
     }
 }
 
-fn render_border_tabs_header(
+/// Draw the tab strip on `render`'s border line, sharing it with that line's
+/// left/right labels. Returns false when this frame draws no tabs there, so
+/// the caller can fall back to plain labels.
+fn render_border_tabs(
     buf: &mut Buffer,
     props: &FrameProps,
     render: &BorderLabelsRender<'_>,
@@ -838,6 +842,7 @@ fn render_border_tabs_header(
     } = render;
     let Some(tabs) = build_tabs_line(
         props,
+        labels,
         *block_style,
         *active,
         (*width).max(0).min(u16::MAX as i32) as u16,
@@ -1099,23 +1104,26 @@ fn render_border_frame(
         clip_rect: ctx.clip_rect,
         terminal_bg: ctx.terminal_bg,
     };
-    if !render_border_tabs_header(buf, props, &header_render) {
-        render_border_labels(buf, &header_render);
+    let footer_render = BorderLabelsRender {
+        x: left + 1,
+        y: bottom,
+        width: line_width,
+        labels: &props.footer,
+        block_style,
+        active: ctx.active,
+        fill_char: b_char,
+        clip_rect: ctx.clip_rect,
+        terminal_bg: ctx.terminal_bg,
+    };
+    // Tabs claim exactly one border line; the other one renders plain labels.
+    let (tabs_render, plain_render) = match props.tab_edge {
+        TabEdge::Top => (&header_render, &footer_render),
+        TabEdge::Bottom => (&footer_render, &header_render),
+    };
+    if !render_border_tabs(buf, props, tabs_render) {
+        render_border_labels(buf, tabs_render);
     }
-    render_border_labels(
-        buf,
-        &BorderLabelsRender {
-            x: left + 1,
-            y: bottom,
-            width: line_width,
-            labels: &props.footer,
-            block_style,
-            active: ctx.active,
-            fill_char: b_char,
-            clip_rect: ctx.clip_rect,
-            terminal_bg: ctx.terminal_bg,
-        },
-    );
+    render_border_labels(buf, plain_render);
 
     if let Some(inner_style) = props.inner_style() {
         fill_rect_clipped_style(
@@ -1222,7 +1230,8 @@ fn render_compact_frame(
         clip_rect: ctx.clip_rect,
         terminal_bg: ctx.terminal_bg,
     };
-    let rendered_tabs = render_border_tabs_header(buf, props, &header_render);
+    // A compact frame has one line, so tabs land there whatever `tab_edge` says.
+    let rendered_tabs = render_border_tabs(buf, props, &header_render);
     if !rendered_tabs && props.header.has_labels() {
         render_border_labels(buf, &header_render);
     } else if !rendered_tabs {

@@ -396,7 +396,7 @@ Note: Applies to the shared props backing stack container defaults.
 
 ## Frame/FrameNode
 
-Source: `src/widgets/frame/node.rs:272` (`FrameNode`).
+Source: `src/widgets/frame/node.rs:279` (`FrameNode`).
 
 Note: `Frame` is the public builder; these defaults come from its `FrameNode` backing type.
 
@@ -409,6 +409,7 @@ Note: `Frame` is the public builder; these defaults come from its `FrameNode` ba
 | `active_tab_style` | `Style::default()` |
 | `inactive_tab_style` | `Style::default()` |
 | `tab_variant` | `TabVariant::default()` |
+| `tab_edge` | `TabEdge::default()` |
 | `on_tab_change` | `None` |
 | `padding` | `Padding::default()` |
 | `decorations` | `Vec::new()` |
@@ -1248,7 +1249,7 @@ Source: `src/widgets/tree/mod.rs:27` (`Tree`).
 
 ## Terminal
 
-Source: `src/widgets/terminal/mod.rs:85` (`Terminal`).
+Source: `src/widgets/terminal/mod.rs:86` (`Terminal`).
 
 | Field | Default initializer |
 |---|---|
