@@ -312,6 +312,13 @@ pub(crate) fn render_draggable_tab_bar(
     }
 
     let dy = (inner_rrect.y as i32).saturating_sub(inner.y as i32).max(0) as u16;
+    // How many columns the bar has lost off its *left* edge, the horizontal twin of `dy`. A bar can
+    // start left of the visible area either because it sits part-way outside its parent - a Canvas
+    // child at a negative offset, which is how a panel slides in - or because a clip begins inside
+    // it. `to_ratatui_rect` folds a negative origin away to zero, so without this the bar would be
+    // re-anchored at the visible edge and re-laid-out into it rather than clipped, and a bar sliding
+    // in would appear to grow its tabs out of nothing instead of arriving.
+    let dx = (inner_rrect.x as i32).saturating_sub(inner.x as i32).max(0) as u16;
 
     let len = tabs.len();
     if len == 0 {
@@ -321,9 +328,12 @@ pub(crate) fn render_draggable_tab_bar(
                 style_backdrop(base_style),
                 contrast_policy,
             );
-            let content = truncate_end_with_ellipsis(text, inner_rrect.width);
+            // Truncated against the bar's own width rather than the visible slice, so a clipped
+            // bar shows the middle of its placeholder rather than a differently-ellipsised one.
+            let content = truncate_end_with_ellipsis(text, inner.w);
             let paragraph =
-                Paragraph::new(Span::styled(content.to_string(), to_ratatui_style(style)));
+                Paragraph::new(Span::styled(content.to_string(), to_ratatui_style(style)))
+                    .scroll((dy, dx));
             f.render_widget(paragraph, inner_rrect);
         }
         return;
@@ -393,22 +403,37 @@ pub(crate) fn render_draggable_tab_bar(
         _ => None,
     };
 
-    let segment_rect = |start: usize, width: usize| {
+    // A segment's rect on screen, and how much of it was trimmed off its left edge getting there.
+    // Positions come from the bar's own origin, which can be negative, so a segment that starts
+    // off-screen keeps its place instead of being pulled into view; the trim is handed back for the
+    // caller to spend as horizontal scroll, which is what clips the segment's content to match.
+    let segment_rect = |start: usize, width: usize| -> (ratatui::layout::Rect, u16) {
         let start = start.min(inner.w as usize);
         let width = width.min((inner.w as usize).saturating_sub(start));
         if width == 0 {
-            return ratatui::layout::Rect {
-                x: inner_rrect_unclipped.x,
-                y: inner_rrect_unclipped.y,
-                width: 0,
-                height: 0,
-            };
+            return (
+                ratatui::layout::Rect {
+                    x: inner_rrect_unclipped.x,
+                    y: inner_rrect_unclipped.y,
+                    width: 0,
+                    height: 0,
+                },
+                0,
+            );
         }
 
-        let mut rect = inner_rrect_unclipped;
-        rect.x = rect.x.saturating_add(start as u16);
-        rect.width = width as u16;
-        rect.intersection(inner_rrect)
+        let origin = i32::from(inner.x).saturating_add(start as i32);
+        let placed = crate::style::Rect {
+            x: origin.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
+            y: inner.y,
+            w: width as u16,
+            h: inner.h,
+        };
+        let clipped = to_ratatui_rect(placed).intersection(inner_rrect);
+        let trim = i32::from(clipped.x)
+            .saturating_sub(origin)
+            .clamp(0, i32::from(u16::MAX)) as u16;
+        (clipped, trim)
     };
 
     let mut tab_spans = Vec::new();
@@ -642,9 +667,10 @@ pub(crate) fn render_draggable_tab_bar(
             .min(u16::MAX as usize) as u16;
     }
 
-    let content_rect = segment_rect(layout.content_start, layout.content_width);
+    let (content_rect, content_trim) = segment_rect(layout.content_start, layout.content_width);
     if content_rect.width > 0 && content_rect.height > 0 {
-        let p = Paragraph::new(RText::from(Line::from(tab_spans))).scroll((dy, content_scroll));
+        let p = Paragraph::new(RText::from(Line::from(tab_spans)))
+            .scroll((dy, content_scroll.saturating_add(content_trim)));
         f.render_widget(p, content_rect);
     }
 
@@ -658,13 +684,13 @@ pub(crate) fn render_draggable_tab_bar(
             disabled,
         );
         let s = finalize_style(s, style_backdrop(base_style), contrast_policy);
-        let rect = segment_rect(left.start, left.end.saturating_sub(left.start));
+        let (rect, trim) = segment_rect(left.start, left.end.saturating_sub(left.start));
         if rect.width > 0 && rect.height > 0 {
             let p = Paragraph::new(RText::from(Line::from(vec![Span::styled(
                 left.label.as_ref().to_string(),
                 to_ratatui_style(s),
             )])))
-            .scroll((dy, 0));
+            .scroll((dy, trim));
             f.render_widget(p, rect);
         }
     }
@@ -679,13 +705,13 @@ pub(crate) fn render_draggable_tab_bar(
             disabled,
         );
         let s = finalize_style(s, style_backdrop(base_style), contrast_policy);
-        let rect = segment_rect(right.start, right.end.saturating_sub(right.start));
+        let (rect, trim) = segment_rect(right.start, right.end.saturating_sub(right.start));
         if rect.width > 0 && rect.height > 0 {
             let p = Paragraph::new(RText::from(Line::from(vec![Span::styled(
                 right.label.as_ref().to_string(),
                 to_ratatui_style(s),
             )])))
-            .scroll((dy, 0));
+            .scroll((dy, trim));
             f.render_widget(p, rect);
         }
     }
