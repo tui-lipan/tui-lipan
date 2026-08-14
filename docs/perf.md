@@ -278,6 +278,18 @@ App::new().devtools_config(DevToolsConfig {
 })
 ```
 
+The panel docks to the bottom of the viewport, with `DevTools` on its top border
+and the `Stats` / `Logs` / `App` tab strip on its last body row, directly above
+the bottom border. Because that edge is the anchored one, the tabs stay in the
+same cells no matter how tall the active tab's body is.
+
+Stats and App share one width policy: grow to fit the widest row, never below a
+48-column floor, never past the viewport. Logs always fills the width, because
+log lines are long and their wrapping should not resize the panel. The panel
+claims no keys of its own beyond `ctrl+c` on a selected Logs row; use the
+`toggle_devtools` binding (`F12` by default) or `Context::hide_devtools()` to
+close it.
+
 The stats panel renders a fixed set of rows so nothing appears or disappears
 between frames, and every value aggregates over the last 60 recorded frames
 rather than the latest one (per-frame data at full frame rate is unreadable).
@@ -286,9 +298,12 @@ Rows top to bottom:
 - `FPS / Nodes / Overlays`: headline counters (latest frame).
 - `Frame` / `Recon` / `Draw`: average and worst frame time over the window.
 - `Chart`: frame-time bar chart, one column per recorded frame. The scale
-  floor is one 60fps frame budget (16.7ms), stretched by the worst frame in
-  view; bar heights are square-root compressed so typical sub-millisecond
-  frames stay visible next to a spike. Spike tops render in the accent color.
+  floor is one 60fps frame budget (16.7ms), stretched by the worst frame in the
+  retained history; bar heights are square-root compressed so typical
+  sub-millisecond frames stay visible next to a spike. Spike tops render in the
+  accent color. The scale covers the whole buffer rather than just the visible
+  bars, because the caption's width feeds the panel width that decides how many
+  bars fit - so a spike keeps the scale stretched until it ages out.
 - `Updates`: how many window frames were full, layout-only, or paint-only.
 - `Why`: top update sources (components and input paths) merged across the
   window, e.g. `input:scroll x120 · Sidebar x10`, or `idle`. Animation ticks,
@@ -305,10 +320,25 @@ replaces the whole small snapshot; returning no rows clears it. The factory is
 not invoked without the `devtools` feature. Publication does not schedule a
 frame: calls from the host `view()` are consumed by the DevTools extra root
 later in that frame, and other calls remain stored until a host-requested frame
-rebuilds the panel. The tab fits its width and height to content within the
-viewport, then scrolls vertically instead of truncating rows. Keep values
-preformatted and cheap to clone—DevTools never invokes host callbacks while
+rebuilds the panel. The tab grows its width and height to fit content within the
+viewport, never shrinking below the panel's shared minimum, then scrolls
+vertically instead of truncating rows. With no registered metrics it shows a
+hint naming `set_devtools_metrics`. Keep values preformatted and cheap to clone—DevTools never invokes host callbacks while
 rendering.
+
+The App tab is deliberately not focusable, so clicking it never pulls focus off
+whatever the app had focused - often the very thing being inspected. Its
+overflowed rows are reached the two ways that need no focus: the mouse wheel,
+and `PageUp` / `PageDown` via `ScrollView::ambient_page_scroll`. Ambient scroll
+is a last-resort fallback, running only after widget, bubble, command, and
+framework dispatch all decline the key, and only when the pane can actually move
+in that direction, so the host app keeps first claim on its own page keys.
+
+One caveat: ambient page scroll resolves to a *single* target, and declines when
+more than one `ScrollView` in the tree opts into it. An app that enables
+`ambient_page_scroll` on a scroll view of its own therefore loses page-key
+scrolling on it while the DevTools App tab is open. Nothing scrolls to the wrong
+place - the fallback simply stands down - and the wheel is unaffected on both.
 
 The overlay and sampling slightly perturb the workload, so use tracing or a
 benchmark for final comparisons.

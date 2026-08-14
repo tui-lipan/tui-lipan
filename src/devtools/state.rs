@@ -31,8 +31,8 @@ const ATTRIBUTION_FRAME_CAP: usize = 6;
 const DEFAULT_CONFIG_PANEL_WIDTH: Length = Length::Flex(1);
 const DEFAULT_CONFIG_PANEL_HEIGHT: Length = Length::Percent(30);
 
-const DEFAULT_STATS_PANEL_WIDTH: Length = Length::Px(48);
-/// 2 border rows + the fixed 13-row stats body (see `stats_body`).
+/// 2 border rows + the fixed 13-row stats body (see `stats_rows`). The tab
+/// strip rides the bottom border, so it costs no body row.
 const DEFAULT_STATS_PANEL_HEIGHT: Length = Length::Px(15);
 /// Rolling window (in recorded frames) for stats aggregation and input pressure.
 const RECENT_WINDOW_FRAMES: usize = 60;
@@ -42,9 +42,20 @@ const INPUT_PRESSURE_THRESHOLD: u32 = 8;
 pub(crate) const FRAME_BUDGET_US: u64 = 16_667;
 const DEFAULT_LOGS_PANEL_WIDTH: Length = Length::Flex(1);
 const DEFAULT_LOGS_PANEL_HEIGHT: Length = Length::Px(26);
-const DEFAULT_APP_PANEL_MIN_WIDTH: u16 = 32;
-const APP_PANEL_CHROME_WIDTH: u16 = 3;
+/// Floor shared by every content-sized tab, so the panel never shrinks below
+/// the width its footer tab bar needs and switching tabs does not resize it
+/// for the sake of a few columns.
+const PANEL_MIN_WIDTH: u16 = 48;
+/// Left + right border. The panel has no horizontal padding.
+const PANEL_BORDER_WIDTH: u16 = 2;
+/// Borders plus the one-column gutter between an App row's label and value.
+const APP_PANEL_CHROME_WIDTH: u16 = PANEL_BORDER_WIDTH + 1;
 const APP_VALUE_MIN_WIDTH: u16 = 8;
+/// Border rows added to every tab's body height.
+pub(crate) const PANEL_CHROME_HEIGHT: u16 = 2;
+/// Floor for the content-sized App tab, so a host with one metric still gets a
+/// panel that reads as a panel rather than a sliver.
+const APP_PANEL_MIN_HEIGHT: u16 = 6;
 
 /// Origin of a dirty-level request recorded for DevTools frame metrics.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -276,7 +287,28 @@ impl DevToolsState {
         self.active_tab == LOGS_TAB_INDEX
     }
 
-    pub(crate) fn resolved_panel_size(&self, viewport_w: u16, viewport_h: u16) -> (Length, Length) {
+    /// Width policy shared by every content-sized tab: grow to fit the widest
+    /// row, never below [`PANEL_MIN_WIDTH`], never past the viewport.
+    ///
+    /// `content_w` is the tab's natural body width including any internal
+    /// gutters, but not the frame border.
+    pub(crate) fn panel_width_for(content_w: u16, viewport_w: u16) -> u16 {
+        content_w
+            .saturating_add(PANEL_BORDER_WIDTH)
+            .max(PANEL_MIN_WIDTH)
+            .min(viewport_w.max(1))
+    }
+
+    /// Resolve the panel box for the active tab.
+    ///
+    /// `stats_content_w` is the measured width of the Stats rows, ignored by
+    /// the other tabs (which measure their own content, or fill the viewport).
+    pub(crate) fn resolved_panel_size(
+        &self,
+        viewport_w: u16,
+        viewport_h: u16,
+        stats_content_w: u16,
+    ) -> (Length, Length) {
         let use_default_width = self.panel_width == DEFAULT_CONFIG_PANEL_WIDTH;
         let use_default_height = self.panel_height == DEFAULT_CONFIG_PANEL_HEIGHT;
         let showing_logs = self.active_tab == LOGS_TAB_INDEX;
@@ -288,7 +320,7 @@ impl DevToolsState {
             } else if showing_app {
                 Length::Px(self.app_panel_width(viewport_w))
             } else {
-                DEFAULT_STATS_PANEL_WIDTH
+                Length::Px(Self::panel_width_for(stats_content_w, viewport_w))
             }
         } else {
             self.panel_width
@@ -301,7 +333,8 @@ impl DevToolsState {
                 let body_rows = self.app_metrics.rows.borrow().len().max(1);
                 let desired = u16::try_from(body_rows)
                     .unwrap_or(u16::MAX)
-                    .saturating_add(2);
+                    .saturating_add(PANEL_CHROME_HEIGHT)
+                    .max(APP_PANEL_MIN_HEIGHT);
                 Length::Px(desired.min(viewport_h.max(1)))
             } else {
                 DEFAULT_STATS_PANEL_HEIGHT
@@ -328,17 +361,17 @@ impl DevToolsState {
 
     fn app_panel_width(&self, viewport_w: u16) -> u16 {
         let (label, value) = self.app_natural_widths();
-        label
-            .saturating_add(value)
-            .saturating_add(APP_PANEL_CHROME_WIDTH)
-            .max(DEFAULT_APP_PANEL_MIN_WIDTH)
-            .min(viewport_w.max(1))
+        // The label/value gutter is body content, so it counts toward the
+        // content width rather than being treated as extra chrome.
+        Self::panel_width_for(label.saturating_add(value).saturating_add(1), viewport_w)
     }
 
     fn app_natural_widths(&self) -> (u16, u16) {
         let metrics = self.app_metrics.rows.borrow();
         if metrics.is_empty() {
-            return (7, 4);
+            // The empty state is a prose hint, not a label/value pair; let the
+            // shared minimum width decide how wide the panel gets.
+            return (0, 0);
         }
 
         metrics.iter().fold((1, 1), |(label, value), metric| {
@@ -592,16 +625,35 @@ impl DevToolsState {
             .collect()
     }
 
-    /// Estimate the sparkline column count from the resolved panel width.
-    /// Subtracts the frame border (the panel has no horizontal padding); a
-    /// larger overhead leaves blank columns because `ClipStart` right-aligns
-    /// the bars in the wider content area.
-    pub(crate) fn sparkline_columns(&self, viewport_w: u16) -> usize {
-        const FRAME_OVERHEAD: u16 = 2; // left + right border
-        match self.resolved_panel_size(viewport_w, u16::MAX).0 {
-            Length::Px(w) => w.saturating_sub(FRAME_OVERHEAD) as usize,
-            _ => viewport_w.saturating_sub(FRAME_OVERHEAD) as usize,
-        }
+    /// Sparkline column count for an already-resolved panel width. Subtracts
+    /// the frame border (the panel has no horizontal padding); a larger
+    /// overhead leaves blank columns because `ClipStart` right-aligns the bars
+    /// in the wider content area.
+    pub(crate) fn sparkline_columns(panel_width: Length, viewport_w: u16) -> usize {
+        let width = match panel_width {
+            Length::Px(w) => w,
+            _ => viewport_w,
+        };
+        width.saturating_sub(PANEL_BORDER_WIDTH) as usize
+    }
+
+    /// Sparkline scale ceiling in microseconds: the worst frame in the retained
+    /// history, floored at one 60fps frame budget so a quiet app does not
+    /// amplify noise into a full-height chart.
+    ///
+    /// Deliberately measured over the whole buffer rather than the visible
+    /// bars. The caption's own width feeds the panel width, which decides how
+    /// many bars are visible - scaling to the visible bars would be circular.
+    /// Measuring the buffer breaks that and is an upper bound for any column
+    /// count, so no bar is ever clipped above the scale. The cost is that a
+    /// spike keeps the scale stretched until it ages out of the buffer.
+    pub(crate) fn chart_scale_us(&self) -> u64 {
+        self.frame_history
+            .iter()
+            .map(|frame| frame.total_duration.as_micros() as u64)
+            .max()
+            .unwrap_or(0)
+            .max(FRAME_BUDGET_US)
     }
 
     pub(crate) fn filtered_log_count(&self) -> usize {
@@ -885,13 +937,19 @@ mod tests {
     }
 
     #[test]
-    fn resolved_panel_size_uses_compact_stats_defaults() {
+    fn resolved_panel_size_grows_stats_to_fit_its_widest_row() {
         let state = DevToolsState::default();
 
+        // Narrow rows sit on the shared floor...
         assert_eq!(
-            state.resolved_panel_size(80, 40),
+            state.resolved_panel_size(80, 40, 20),
             (Length::Px(48), Length::Px(15))
         );
+        // ...wide ones grow, the same way the App tab does, instead of
+        // truncating at a hardcoded width.
+        assert_eq!(state.resolved_panel_size(80, 40, 60).0, Length::Px(62));
+        // ...and neither exceeds the viewport.
+        assert_eq!(state.resolved_panel_size(50, 40, 60).0, Length::Px(50));
     }
 
     #[test]
@@ -900,7 +958,7 @@ mod tests {
         state.set_active_tab(LOGS_TAB_INDEX);
 
         assert_eq!(
-            state.resolved_panel_size(80, 40),
+            state.resolved_panel_size(80, 40, 0),
             (Length::Flex(1), Length::Px(26))
         );
     }
@@ -914,17 +972,18 @@ mod tests {
             crate::app::DevToolsMetric::new("Panes", "4"),
             crate::app::DevToolsMetric::new("Clients", "2"),
         ]);
+        // Two short rows sit under the shared width/height floors.
         assert_eq!(
-            state.resolved_panel_size(80, 20),
-            (Length::Px(32), Length::Px(4))
+            state.resolved_panel_size(80, 20, 0),
+            (Length::Px(48), Length::Px(6))
         );
 
         state.app_metrics.rows.borrow_mut().extend(
             (0..20).map(|i| crate::app::DevToolsMetric::new(format!("M{i}"), i.to_string())),
         );
         assert_eq!(
-            state.resolved_panel_size(80, 10),
-            (Length::Px(32), Length::Px(10))
+            state.resolved_panel_size(80, 10, 0),
+            (Length::Px(48), Length::Px(10))
         );
     }
 
@@ -938,9 +997,9 @@ mod tests {
             .borrow_mut()
             .push(crate::app::DevToolsMetric::new("Heap", "x".repeat(60)));
 
-        assert_eq!(state.resolved_panel_size(100, 20).0, Length::Px(67));
+        assert_eq!(state.resolved_panel_size(100, 20, 0).0, Length::Px(67));
         assert_eq!(state.app_label_width(100), 4);
-        assert_eq!(state.resolved_panel_size(40, 20).0, Length::Px(40));
+        assert_eq!(state.resolved_panel_size(40, 20, 0).0, Length::Px(40));
         assert_eq!(state.app_label_width(40), 4);
     }
 
@@ -954,7 +1013,7 @@ mod tests {
         state.set_active_tab(LOGS_TAB_INDEX);
 
         assert_eq!(
-            state.resolved_panel_size(40, 40),
+            state.resolved_panel_size(40, 40, 0),
             (Length::Px(72), Length::Px(12))
         );
     }

@@ -23,38 +23,7 @@ pub(crate) fn measure_frame_chrome(frame: &Frame) -> (u16, u16) {
         min_h = min_h.saturating_add(border_padding.vertical());
 
         // Account for title/tabs width
-        if !frame.props.tab_titles.is_empty() {
-            let active_tab = frame
-                .props
-                .active_tab
-                .min(frame.props.tab_titles.len().saturating_sub(1));
-            let mut w = 0usize;
-            for (i, title) in frame.props.tab_titles.iter().enumerate() {
-                let title_w = title.width();
-                let (pad_l, pad_r) = if i == active_tab {
-                    frame.props.tab_variant.active_padding_width()
-                } else {
-                    frame.props.tab_variant.inactive_padding_width()
-                };
-                w = w
-                    .saturating_add(title_w)
-                    .saturating_add(pad_l)
-                    .saturating_add(pad_r);
-                if i + 1 < frame.props.tab_titles.len() {
-                    w = w.saturating_add(frame.props.tab_variant.separator_width());
-                }
-            }
-            let w = w.saturating_add(2).min(u16::MAX as usize) as u16;
-            min_w = min_w.max(w);
-        } else {
-            let w = frame
-                .props
-                .header
-                .min_width()
-                .max(frame.props.footer.min_width())
-                .min(u16::MAX as usize) as u16;
-            min_w = min_w.max(w);
-        }
+        min_w = min_w.max(border_line_min_width(&frame.props));
     } else {
         // Header takes space if no border
         if frame.header.is_some() {
@@ -161,38 +130,7 @@ pub(crate) fn measure_frame(
     let mut outer_h = inner_h;
 
     if frame.props.has_border() {
-        if !frame.props.tab_titles.is_empty() {
-            let active_tab = frame
-                .props
-                .active_tab
-                .min(frame.props.tab_titles.len().saturating_sub(1));
-            let mut w = 0usize;
-            for (i, title) in frame.props.tab_titles.iter().enumerate() {
-                let title_w = title.width();
-                let (pad_l, pad_r) = if i == active_tab {
-                    frame.props.tab_variant.active_padding_width()
-                } else {
-                    frame.props.tab_variant.inactive_padding_width()
-                };
-                w = w
-                    .saturating_add(title_w)
-                    .saturating_add(pad_l)
-                    .saturating_add(pad_r);
-                if i + 1 < frame.props.tab_titles.len() {
-                    w = w.saturating_add(frame.props.tab_variant.separator_width());
-                }
-            }
-            let w = w.saturating_add(2).min(u16::MAX as usize) as u16;
-            outer_w = outer_w.max(w);
-        } else {
-            let w = frame
-                .props
-                .header
-                .min_width()
-                .max(frame.props.footer.min_width())
-                .min(u16::MAX as usize) as u16;
-            outer_w = outer_w.max(w);
-        }
+        outer_w = outer_w.max(border_line_min_width(&frame.props));
 
         let border_padding = frame.props.border_padding();
         outer_w = outer_w.saturating_add(border_padding.horizontal());
@@ -229,6 +167,50 @@ pub(crate) fn measure_frame(
     };
 
     compute_frame_geometry(&frame.props, rect, FrameJoinOverlap::default(), true)
+}
+
+/// Widest border line this frame needs, in columns.
+///
+/// One line carries the tab strip (whichever `tab_edge` names) and the other
+/// carries plain labels, so the frame must be wide enough for the larger of the
+/// two. Tabs share their line with that edge's own labels, but those are
+/// truncated rather than driving the minimum, so only the strip itself counts.
+fn border_line_min_width(props: &crate::widgets::internal::FrameProps) -> u16 {
+    let labels_w = |labels: &crate::widgets::BorderLabels| labels.min_width();
+
+    if props.tab_titles.is_empty() {
+        return labels_w(&props.header)
+            .max(labels_w(&props.footer))
+            .min(u16::MAX as usize) as u16;
+    }
+
+    let active_tab = props
+        .active_tab
+        .min(props.tab_titles.len().saturating_sub(1));
+    let mut tabs_w = 0usize;
+    for (i, title) in props.tab_titles.iter().enumerate() {
+        let (pad_l, pad_r) = if i == active_tab {
+            props.tab_variant.active_padding_width()
+        } else {
+            props.tab_variant.inactive_padding_width()
+        };
+        tabs_w = tabs_w
+            .saturating_add(title.width())
+            .saturating_add(pad_l)
+            .saturating_add(pad_r);
+        if i + 1 < props.tab_titles.len() {
+            tabs_w = tabs_w.saturating_add(props.tab_variant.separator_width());
+        }
+    }
+    // The line the tabs do not occupy still has to fit its own labels.
+    let plain_labels_w = match props.tab_edge {
+        crate::widgets::TabEdge::Top => labels_w(&props.footer),
+        crate::widgets::TabEdge::Bottom => labels_w(&props.header),
+    };
+    tabs_w
+        .saturating_add(2)
+        .max(plain_labels_w)
+        .min(u16::MAX as usize) as u16
 }
 
 #[cfg(test)]

@@ -2839,7 +2839,7 @@ fn devtools_stats_panel_uses_compact_default_size() {
         .expect("devtools panel node should exist");
 
     assert_eq!(panel_node.rect.w, 48);
-    assert_eq!(panel_node.rect.h, 15);
+    assert_eq!(panel_node.rect.h, 15); // 13 stats rows + 2 borders
     assert_eq!(panel_node.rect.y, 65); // anchored to bottom
 }
 

@@ -4,7 +4,7 @@ use crate::style::{
     Align, BorderEdges, BorderStyle, Edge, Length, Padding, Rect, RichText, Style, StyleSlot,
     Theme, ThemeRole,
 };
-use crate::widgets::frame::{DecorationPlacement, EdgeDecoration};
+use crate::widgets::frame::{DecorationPlacement, EdgeDecoration, TabEdge};
 use crate::widgets::{BorderMergeMode, FocusScope, TabVariant, TabsEvent};
 
 /// Rarely-used focus/hover style overrides for [`FrameNode`].
@@ -34,7 +34,7 @@ pub struct FrameNode {
     pub header: Box<crate::widgets::frame::BorderLabels>,
     /// Labels rendered in the bottom border.
     pub footer: Box<crate::widgets::frame::BorderLabels>,
-    /// Tab titles rendered in the top border.
+    /// Tab titles rendered on the border line named by `tab_edge`.
     pub tab_titles: Vec<RichText>,
     /// Active tab index for border tabs.
     pub active_tab: usize,
@@ -44,6 +44,9 @@ pub struct FrameNode {
     pub inactive_tab_style: Style,
     /// Border tab variant.
     pub tab_variant: TabVariant,
+    /// Which border line the tab strip is drawn on.
+    /// Default: `TabEdge::Top`.
+    pub tab_edge: TabEdge,
     /// Callback fired when a border tab is clicked.
     pub on_tab_change: Option<Callback<TabsEvent>>,
     /// Padding inside the border.
@@ -253,8 +256,12 @@ impl WidgetNode for FrameNode {
             && (on_left || on_right || on_top || on_bottom);
 
         if !self.focusable && self.on_tab_change.is_some() {
-            // Tabs are always on the top row (y == rect.y)
-            if y != rect.y {
+            // Only the border line carrying the tab strip is clickable.
+            let tab_row = match self.tab_edge {
+                TabEdge::Top => rect.y,
+                TabEdge::Bottom => rect.y.saturating_add(rect.h as i16).saturating_sub(1),
+            };
+            if y != tab_row {
                 return Some(on_border && self.has_focus_chrome());
             }
         }
@@ -277,6 +284,7 @@ impl Default for FrameNode {
             active_tab_style: Style::default(),
             inactive_tab_style: Style::default(),
             tab_variant: TabVariant::default(),
+            tab_edge: TabEdge::default(),
             on_tab_change: None,
             padding: Padding::default(),
             decorations: Vec::new(),

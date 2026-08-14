@@ -866,7 +866,10 @@ pub(crate) fn gather_border_tabs_change(
             })
         }),
         NodeKind::Frame(props) => props.on_tab_change.clone().and_then(|cb| {
-            if !props.has_border() || props.has_header || props.tab_titles.is_empty() {
+            // Must mirror `build_tabs_line`: a custom header element owns the
+            // top border, but says nothing about the bottom one.
+            let bottom = matches!(props.tab_edge, crate::widgets::TabEdge::Bottom);
+            if !props.has_border() || (props.has_header && !bottom) || props.tab_titles.is_empty() {
                 return None;
             }
 
@@ -875,9 +878,17 @@ pub(crate) fn gather_border_tabs_change(
                 return None;
             }
 
+            // Tabs sit on whichever border line `tab_edge` names, sharing it
+            // with that line's own labels.
+            let (row, labels) = if bottom {
+                let bottom_y = node.rect.y + node.rect.h.saturating_sub(1) as i16;
+                (bottom_y, &props.footer)
+            } else {
+                (node.rect.y, &props.header)
+            };
             let title_rect = Rect {
                 x: node.rect.x.saturating_add(1),
-                y: node.rect.y,
+                y: row,
                 w: title_w,
                 h: 1,
             };
@@ -890,7 +901,7 @@ pub(crate) fn gather_border_tabs_change(
             let active = props.active_tab.min(len.saturating_sub(1));
 
             let col = (x as i32).saturating_sub(title_rect.x as i32) as usize;
-            let (tab_offset, tab_width) = frame_tab_hit_region(&props.header, title_w);
+            let (tab_offset, tab_width) = frame_tab_hit_region(labels, title_w);
             if col < tab_offset || col >= tab_offset.saturating_add(tab_width) {
                 return None;
             }
@@ -911,7 +922,9 @@ pub(crate) fn gather_border_tabs_change(
     }
 }
 
-fn frame_tab_hit_region(header: &crate::widgets::BorderLabels, width: u16) -> (usize, usize) {
+/// Columns the tab strip occupies on its border line, after that line's own
+/// left/right labels take their share.
+fn frame_tab_hit_region(labels: &crate::widgets::BorderLabels, width: u16) -> (usize, usize) {
     let label_width = |label: Option<&crate::widgets::FrameLabel>| {
         label
             .filter(|label| !label.content.is_empty())
@@ -919,23 +932,23 @@ fn frame_tab_hit_region(header: &crate::widgets::BorderLabels, width: u16) -> (u
                 label
                     .content
                     .width()
-                    .saturating_add(header.padding.left as usize)
-                    .saturating_add(header.padding.right as usize)
+                    .saturating_add(labels.padding.left as usize)
+                    .saturating_add(labels.padding.right as usize)
             })
             .unwrap_or(0)
     };
-    let left_width = label_width(header.left.as_ref());
-    let right_width = label_width(header.right.as_ref());
-    let has_left = header
+    let left_width = label_width(labels.left.as_ref());
+    let right_width = label_width(labels.right.as_ref());
+    let has_left = labels
         .left
         .as_ref()
         .is_some_and(|label| !label.content.is_empty());
-    let has_right = header
+    let has_right = labels
         .right
         .as_ref()
         .is_some_and(|label| !label.content.is_empty());
-    let left_separator = has_left && header.padding.right == 0;
-    let right_separator = has_right && header.padding.left == 0;
+    let left_separator = has_left && labels.padding.right == 0;
+    let right_separator = has_right && labels.padding.left == 0;
     let available = width as usize;
     let label_budget = available
         .saturating_sub(usize::from(left_separator))
@@ -996,6 +1009,39 @@ mod tests {
         let change = super::gather_border_tabs_change(&tree, tree.node(tree.root), 6, 0)
             .expect("clicking the first rendered tab should gather a tab change");
         assert_eq!(change.next, 0);
+    }
+
+    #[test]
+    fn frame_footer_tab_click_targets_the_bottom_border() {
+        let frame = Frame::new()
+            .width(crate::style::Length::Px(30))
+            .height(crate::style::Length::Px(5))
+            .tab_titles(["Files", "Worktrees"])
+            .tab_edge(crate::widgets::TabEdge::Bottom)
+            .tab_variant(TabVariant::Minimal)
+            .on_tab_change(Callback::new(|_| {}))
+            .child(Text::new("body"));
+        let root: crate::Element = frame.into();
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 30,
+                h: 5,
+            },
+            None,
+        );
+
+        let node = tree.node(tree.root);
+        // Bottom border of a 5-row frame.
+        let change = super::gather_border_tabs_change(&tree, node, 2, 4)
+            .expect("clicking the footer tab strip should gather a tab change");
+        assert_eq!(change.next, 0);
+        // The top border carries no tabs now, so a click there is inert.
+        assert!(super::gather_border_tabs_change(&tree, node, 2, 0).is_none());
     }
 
     #[test]

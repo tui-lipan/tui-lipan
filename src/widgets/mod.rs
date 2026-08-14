@@ -201,7 +201,7 @@ pub use flowchart::{
 };
 pub use frame::{
     BorderLabels, BorderMergeMode, DecorationGlyph, DecorationPlacement, EdgeDecoration, Frame,
-    FrameLabel,
+    FrameLabel, TabEdge,
 };
 pub use gantt_diagram::{
     GanttDate, GanttDate as DiagramGanttDate, GanttDiagram, GanttDiagramTheme, GanttDuration,

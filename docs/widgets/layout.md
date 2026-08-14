@@ -256,6 +256,7 @@ Frame::new().header(
 | `join_frame` | `bool` | Draw junction caps when adjacent to another bordered Frame |
 | `active_tab` | `usize` | Active border tab index |
 | `tab_titles` | `Vec<String>` | Border-embedded tab titles |
+| `tab_edge` | `TabEdge` | Which border draws the tabs: `Top` (default) or `Bottom` |
 | `active_tab_style` | `Style` | Active tab style |
 | `inactive_tab_style` | `Style` | Inactive tab style |
 | `focus_active_tab_style` | `Style` | Active tab when frame focused |
@@ -268,6 +269,25 @@ Frame::new().header(
 | `width` | `Length` | Width (default `Flex(1)`) |
 | `height` | `Length` | Height (default `Flex(1)`) |
 | `focus_scope` | `FocusScope` | Subtree traversal behavior (`None`, `Exclude`, or `Contain`) |
+
+**Border tabs**: `tab_titles` embeds a clickable tab strip in a border line, and `tab_edge` picks
+which one. Tabs share their line with that border's own labels, so `TabEdge::Bottom` puts them
+beside `footer_left` / `footer_right` while the header labels keep the top line to themselves.
+
+```rust
+Frame::new()
+    .header_left("DevTools")
+    .tab_titles(["Stats", "Logs", "App"])
+    .tab_edge(TabEdge::Bottom)
+    .active_tab(active)
+    .on_tab_change(ctx.link().callback(Msg::TabChanged))
+    .child(body)
+```
+
+Reach for bottom tabs when the frame is anchored to the bottom of its container: that edge is the
+one that stays put, so the strip keeps its screen position even as the body above it changes
+height. Top tabs on a bottom-anchored panel shift every time the content resizes. A `compact`
+frame has only one line and draws its tabs there whatever the edge says.
 
 **Clipping**: Children are automatically clipped to the Frame's inner content area (inside borders and padding).
 

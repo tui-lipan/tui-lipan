@@ -322,6 +322,20 @@ leave that neighbor's border-title text (and spaces next to it) alone. Ordinary 
 still replaced. Plain backdrop spaces still accept a border. `Replace` still overwrites so an
 occluding frame can wipe the seam.
 
+### `TabEdge`
+
+Which border line a `Frame` draws its tab strip on. Tabs share the line with that border's own
+labels.
+
+| Variant | Effect |
+|---------|--------|
+| `TabEdge::Top` | Draw tabs on the top border, beside the header labels **(default)** |
+| `TabEdge::Bottom` | Draw tabs on the bottom border, beside the footer labels |
+
+Bottom tabs suit a frame anchored to the bottom of its container: that edge stays put, so the strip
+keeps its screen position while the body above it changes height. A `compact` frame has one line and
+draws its tabs there whatever the edge says.
+
 ### `CapStyle` and `CapSides`
 
 `Badge` uses these enums for optional segment caps:
