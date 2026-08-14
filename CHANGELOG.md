@@ -13,6 +13,12 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `FileTree::entry_refresh_token(...)` refreshes local directory entries in place when its token
+  changes, rereading the root and currently expanded directories in a background command without
+  resetting expansion or explorer state. Stale token/root/source results are ignored, active
+  explorer queries rerun, and uncontrolled selection follows its path with a root fallback when
+  that path disappears. Collapsed descendants are loaded afresh when reopened; provided entry
+  sources ignore the token, and Git refresh remains separately controlled.
 - `FileTreeGitStatusCache` and `FileTree::git_status_cache(...)` let apps retain successful local
   Git decorations across keyed tree remounts. Cached indicators render immediately while the tree
   revalidates in the background; storage is app-owned, bounded, mode-aware, and protected from

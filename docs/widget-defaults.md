@@ -1011,6 +1011,7 @@ Source: `src/widgets/file_tree/mod.rs:346` (`FileTree`).
 |---|---|
 | `root` | `constructor/local value (not a default)` |
 | `entry_source` | `FileTreeEntrySource::default()` |
+| `entry_refresh_token` | `0` |
 | `show_hidden` | `false` |
 | `max_entries_per_dir` | `2_000` |
 | `show_icons` | `true` |

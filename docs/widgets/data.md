@@ -398,6 +398,7 @@ entries and git-backed or application-provided change projections.
 |------|------|-------------|
 | `root` | `impl Into<Arc<str>>` | **Constructor** - root directory path |
 | `entry_source` | `FileTreeEntrySource` | Directory entry source; defaults to local filesystem enumeration |
+| `entry_refresh_token` | `u64` | Re-read local root and currently expanded directories when the token changes; ignored for provided entries |
 | `show_hidden` | `bool` | Show hidden files (`.` prefix) |
 | `max_entries_per_dir` | `usize` | Cap entries per directory |
 | `directory_label_style` | `Style` | Style applied to directory names |
@@ -454,6 +455,14 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
 
 **Behavior:**
 - Local directories load on demand on first expand.
+- Change `entry_refresh_token(...)` to refresh local directory entries in place without remounting or
+  resetting expansion or explorer state. The root and currently expanded directories are reread;
+  collapsed descendants are unloaded and reread when reopened. Reads run in a background command;
+  results for an older token, root, or entry source are ignored. An active explorer query reruns
+  against the refreshed entries, and uncontrolled selection follows its path with the root as the
+  deterministic fallback when that path disappears. This does not refresh Git status; use
+  `git_refresh_token(...)` separately. Provided entry sources ignore the token because their
+  listings are owned by the application.
 - Every directory is expandable, including one that turns out to be empty; a lazy tree cannot know
   a directory is empty until it has been opened, so its row keeps the same shape either way.
 - `empty_text` renders in place of the tree when a `ChangedOnly` view has nothing changed. Browsing
