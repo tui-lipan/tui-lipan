@@ -57,6 +57,29 @@ When you edit Rust files that contain `ui!` or `rsx!` - especially examples in `
 - `cargo test <test_name>` - Run specific test by name
 - `cargo test --package tui-lipan --lib <module>::tests::<test_name> --exact` - Run single test
 
+#### Cost rules for new tests
+
+The suite is ~3000 tests that execute in about 2 seconds total. Anything that makes a test run
+noticeably slower is a bug in the test, not a fact of life. Before adding a test that shells out,
+builds, or sleeps:
+
+- **Never give a nested build a fresh `CARGO_TARGET_DIR`.** A throwaway target dir rebuilds
+  `tui-lipan` and its whole dependency graph from scratch on every run: over a minute of CPU and
+  several hundred MB of writes, every time. Reuse a stable cached dir under `target/` instead.
+  `target/` is gitignored and swept by `cargo clean`, so nothing needs its own cleanup.
+- **Cap nested builds with `CARGO_BUILD_JOBS`.** A spawned `cargo` does not inherit the parent's
+  jobserver, so it claims every core on top of the test harness. Two such tests in parallel can
+  swap-thrash the machine.
+- **Write generated fixture files only when their contents change.** Cargo judges freshness by
+  mtime, so rewriting an identical file defeats the cache above.
+- **Prefer no subprocess at all.** Compile-fail coverage is the one case that needs one. See
+  `assert_probe_crate_fails_to_compile` in `tests/inline_api_contract.rs` for the pattern to copy.
+- **Sanity-check a cached test with a negative control**: break the assertion on purpose once and
+  confirm it fails, so caching cannot silently turn the test vacuous.
+
+Rough budget: a new integration test should add well under a second of wall time. If yours adds
+more, time it with `cargo test --test <name>` and say why in the PR.
+
 ### Linting & Formatting
 - `cargo fmt` - Format code
 - `cargo fmt --all -- --check` - Check formatting
