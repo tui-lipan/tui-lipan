@@ -16,9 +16,9 @@ use super::events::{
 use super::explorer::{ExplorerCandidate, ExplorerFilter, search_candidates, search_filesystem};
 use super::fs::{FileIconStyle, FileKind, FsNode, read_directory, root_node};
 use super::git::{
-    GitFileDecorations, GitStatusSnapshot, discover_git_root,
-    insert_provided_decoration_path_and_parents, load_git_snapshot, provided_change_snapshot,
-    provided_root_path,
+    GitFileDecorations, GitStatusCacheKey, GitStatusCacheRequest, GitStatusSnapshot,
+    discover_git_root, insert_provided_decoration_path_and_parents, load_git_snapshot,
+    provided_change_snapshot, provided_root_path,
 };
 use super::mod_private::FileTreeProps;
 use super::{
@@ -70,7 +70,8 @@ pub(crate) enum FileTreeMsg {
     RequestGitRefresh(u64),
     GitSnapshotLoaded {
         generation: u64,
-        snapshot: GitStatusSnapshot,
+        snapshot: Option<GitStatusSnapshot>,
+        cache_request: Option<GitStatusCacheRequest>,
     },
     SyncRootMode,
     EnsureChangedOnlyExpanded,
@@ -157,14 +158,20 @@ impl Component for FileTreeComponent {
         let repo_root = discover_git_root(Path::new(ctx.props.root.as_ref()))
             .map(|path| Arc::<str>::from(path.to_string_lossy().as_ref()))?;
 
+        let (cached, cache_request) = prepare_git_cache(&ctx.props, Path::new(repo_root.as_ref()));
+        if let Some(snapshot) = cached.as_ref() {
+            ctx.state.git_snapshot = snapshot.clone();
+        }
+
         // A root outside any repository returns above: there is nothing to wait for, and the
         // changed-only view can say so immediately.
-        ctx.state.git_snapshot_pending = true;
+        ctx.state.git_snapshot_pending = cached.is_none();
         Some(git_snapshot_command(
             ctx.link().clone(),
             repo_root,
             ctx.props.git_diff_stats,
             ctx.state.git_load_generation,
+            cache_request,
         ))
     }
 
@@ -511,37 +518,46 @@ impl Component for FileTreeComponent {
                 Update::full()
             }
             FileTreeMsg::RequestGitRefresh(nonce) => {
-                if !needs_git_snapshot(&ctx.props) || nonce <= ctx.state.last_git_refresh_nonce {
+                if !needs_git_snapshot(&ctx.props) || nonce == ctx.state.last_git_refresh_nonce {
                     return Update::none();
                 }
 
                 ctx.state.last_git_refresh_nonce = nonce;
                 ctx.state.git_load_generation = ctx.state.git_load_generation.wrapping_add(1);
-                let root = ctx.props.root.clone();
+                let Some(repo_root) = discover_git_root(Path::new(ctx.props.root.as_ref())) else {
+                    ctx.state.git_snapshot_pending = false;
+                    return Update::none();
+                };
+                let repo_root = Arc::<str>::from(repo_root.to_string_lossy().as_ref());
                 let include_diff_stats = ctx.props.git_diff_stats;
                 let generation = ctx.state.git_load_generation;
-                Update {
-                    dirty: false,
-                    level: crate::core::component::UpdateLevel::None,
-                    command: Some(ctx.link().command(move |link| {
-                        let snapshot = discover_git_root(Path::new(root.as_ref()))
-                            .and_then(|repo_root| load_git_snapshot(&repo_root, include_diff_stats))
-                            .unwrap_or_default();
-                        link.send(FileTreeMsg::GitSnapshotLoaded {
-                            generation,
-                            snapshot,
-                        });
-                    })),
-                }
+                let (_, cache_request) =
+                    prepare_git_cache(&ctx.props, Path::new(repo_root.as_ref()));
+                Update::with_command(git_snapshot_command(
+                    ctx.link().clone(),
+                    repo_root,
+                    include_diff_stats,
+                    generation,
+                    cache_request,
+                ))
             }
             FileTreeMsg::GitSnapshotLoaded {
                 generation,
                 snapshot,
+                cache_request,
             } => {
                 if generation != ctx.state.git_load_generation || !needs_git_snapshot(&ctx.props) {
                     return Update::none();
                 }
                 ctx.state.git_snapshot_pending = false;
+                if let (Some(cache), Some(request)) =
+                    (ctx.props.git_status_cache.as_ref(), cache_request.as_ref())
+                {
+                    cache.finish_request(request, snapshot.as_ref());
+                }
+                let Some(snapshot) = snapshot else {
+                    return Update::none();
+                };
                 ctx.state.git_snapshot = snapshot;
                 let snapshot = effective_change_snapshot(&ctx.state);
                 if should_auto_expand_changed_only(&ctx.props, &ctx.state, snapshot) {
@@ -637,6 +653,7 @@ impl Component for FileTreeComponent {
     ) -> Update {
         let source_changed = old_props.entry_source != ctx.props.entry_source;
         let change_source_changed = old_props.change_source != ctx.props.change_source;
+        let git_cache_changed = old_props.git_status_cache != ctx.props.git_status_cache;
         let entry_mode_changed =
             uses_provided_entries(old_props) != uses_provided_entries(&ctx.props);
         let provided_options_changed = uses_provided_entries(&ctx.props)
@@ -645,11 +662,13 @@ impl Component for FileTreeComponent {
         let root_mode_changed = old_props.root != ctx.props.root
             || entry_mode_changed
             || uses_virtual_root(old_props) != uses_virtual_root(&ctx.props);
-        let should_load_git = should_load_git_after_props_change(old_props, &ctx.props);
+        let should_load_git = should_load_git_after_props_change(old_props, &ctx.props)
+            || (git_cache_changed && needs_git_snapshot(&ctx.props));
 
         if old_props.root != ctx.props.root
             || source_changed
             || change_source_changed
+            || git_cache_changed
             || old_props.git_diff_stats != ctx.props.git_diff_stats
             || needs_git_snapshot(old_props) != needs_git_snapshot(&ctx.props)
         {
@@ -689,19 +708,23 @@ impl Component for FileTreeComponent {
             || should_load_git;
         let command = if should_load_git {
             discover_git_root(Path::new(ctx.props.root.as_ref())).map(|repo_root| {
+                let (cached, cache_request) = prepare_git_cache(&ctx.props, &repo_root);
+                ctx.state.git_snapshot = cached.clone().unwrap_or_default();
+                ctx.state.git_snapshot_pending = cached.is_none();
                 git_snapshot_command(
                     ctx.link().clone(),
                     Arc::from(repo_root.to_string_lossy().as_ref()),
                     ctx.props.git_diff_stats,
                     ctx.state.git_load_generation,
+                    cache_request,
                 )
             })
         } else {
             None
         };
-        if should_load_git {
+        if should_load_git && command.is_none() {
             // A root that moved out of every repository issues no command, and is settled at once.
-            ctx.state.git_snapshot_pending = command.is_some();
+            ctx.state.git_snapshot_pending = false;
         }
 
         if dirty {
@@ -1218,15 +1241,29 @@ fn git_snapshot_command(
     repo_root: Arc<str>,
     include_diff_stats: bool,
     generation: u64,
+    cache_request: Option<GitStatusCacheRequest>,
 ) -> Command {
     link.command(move |link| {
-        let snapshot = load_git_snapshot(Path::new(repo_root.as_ref()), include_diff_stats)
-            .unwrap_or_default();
+        let snapshot = load_git_snapshot(Path::new(repo_root.as_ref()), include_diff_stats);
         link.send(FileTreeMsg::GitSnapshotLoaded {
             generation,
             snapshot,
+            cache_request,
         });
     })
+}
+
+fn prepare_git_cache(
+    props: &FileTreeProps,
+    repo_root: &Path,
+) -> (Option<GitStatusSnapshot>, Option<GitStatusCacheRequest>) {
+    let Some(cache) = props.git_status_cache.as_ref() else {
+        return (None, None);
+    };
+    let key = GitStatusCacheKey::new(repo_root, props.git_diff_stats);
+    let cached = cache.get(&key);
+    let request = cache.begin_request(key);
+    (cached, Some(request))
 }
 
 fn spawn_explorer_search(
@@ -2786,7 +2823,8 @@ mod tests {
         let update = runtime.component.update(
             FileTreeMsg::GitSnapshotLoaded {
                 generation: 0,
-                snapshot: GitStatusSnapshot::default(),
+                snapshot: Some(GitStatusSnapshot::default()),
+                cache_request: None,
             },
             &mut runtime.ctx,
         );
@@ -2800,6 +2838,62 @@ mod tests {
                 .entries
                 .contains_key("/remote/repo/README.md")
         );
+    }
+
+    #[test]
+    fn shared_git_cache_seeds_a_remounted_tree_before_revalidation_finishes() {
+        let dir = unique_component_test_dir("git-cache-remount");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(dir.join("changed.rs"), "changed").unwrap();
+
+        let cache = super::super::FileTreeGitStatusCache::new();
+        let key = GitStatusCacheKey::new(&dir, false);
+        let request = cache.begin_request(key);
+        let changed_path = super::super::fs::normalize_path(&dir.join("changed.rs"));
+        let modified =
+            super::super::GitFileStatus::new(None, Some(super::super::GitChangeState::Modified));
+        let mut snapshot = GitStatusSnapshot::default();
+        snapshot.entries.insert(
+            changed_path.clone(),
+            GitFileDecorations::from_status(modified, true),
+        );
+        snapshot.changed_paths.push(changed_path.clone());
+        assert!(cache.finish_request(&request, Some(&snapshot)));
+
+        let props = super::super::FileTree::new(dir.to_string_lossy().as_ref())
+            .git_status_cache(cache.clone())
+            .props;
+        let mut runtime = RuntimeCore::new_test(
+            FileTreeComponent::new(),
+            props,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 12,
+            },
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(std::cell::Cell::new(false)),
+        );
+
+        let command = runtime.component.init(&mut runtime.ctx);
+
+        assert!(
+            command.is_some(),
+            "the cached snapshot is still revalidated"
+        );
+        assert!(!runtime.ctx.state.git_snapshot_pending);
+        assert!(
+            runtime
+                .ctx
+                .state
+                .git_snapshot
+                .entries
+                .contains_key(&changed_path)
+        );
+        assert_eq!(cache.len(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

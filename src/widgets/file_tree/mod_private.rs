@@ -1,6 +1,6 @@
 use super::events::{FileTreeEvent, FileTreeToggleEvent};
 use super::fs::FileIconStyle;
-use super::git::GitIconStyle;
+use super::git::{FileTreeGitStatusCache, GitIconStyle};
 use super::{
     FileIconOverride, FileTreeChangeSource, FileTreeChangeView, FileTreeEntrySource,
     FileTreeItemStyle, FileTreeSuffixPriority,
@@ -123,6 +123,7 @@ pub(crate) struct FileTreeProps {
     pub(crate) change_view: FileTreeChangeView,
     pub(crate) git_diff_stats: bool,
     pub(crate) git_icon_style: GitIconStyle,
+    pub(crate) git_status_cache: Option<FileTreeGitStatusCache>,
     pub(crate) git_refresh_nonce: u64,
     pub(crate) git_marker_modified: Arc<str>,
     pub(crate) git_marker_added: Arc<str>,

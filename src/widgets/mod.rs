@@ -190,9 +190,9 @@ pub use er_diagram::{ErAttribute, ErCardinality, ErDiagram, ErDiagramTheme, ErEn
 pub use file_tree::{
     FileIconStyle, FileKind, FileTree, FileTreeChange, FileTreeChangeSource, FileTreeChangeStatus,
     FileTreeChangeView, FileTreeDirectoryListing, FileTreeEntry, FileTreeEntryRequest,
-    FileTreeEntrySource, FileTreeEvent, FileTreeExplorerFocusOrigin, FileTreeGitView,
-    FileTreeItemStyle, FileTreeSuffixPriority, FileTreeToggleEvent, GitChangeState, GitFileStatus,
-    GitIconStyle,
+    FileTreeEntrySource, FileTreeEvent, FileTreeExplorerFocusOrigin, FileTreeGitStatusCache,
+    FileTreeGitView, FileTreeItemStyle, FileTreeSuffixPriority, FileTreeToggleEvent,
+    GitChangeState, GitFileStatus, GitIconStyle,
 };
 pub use flow::Flow;
 pub use flowchart::{
