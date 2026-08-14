@@ -9,6 +9,7 @@ struct State {
     terminal_status: ManagedTerminalStatus,
     git_status_cache: FileTreeGitStatusCache,
     git_refresh_token: u64,
+    entry_refresh_token: u64,
     changed_only: bool,
 }
 
@@ -17,6 +18,7 @@ enum Msg {
     FileSelected(FileTreeEvent),
     TerminalStatus(ManagedTerminalStatus),
     RefreshGit,
+    RefreshEntries,
     ToggleChangedOnly,
     Quit,
 }
@@ -37,6 +39,7 @@ impl Component for DevToolsApp {
             terminal_status: ManagedTerminalStatus::Starting,
             git_status_cache: FileTreeGitStatusCache::new(),
             git_refresh_token: 0,
+            entry_refresh_token: 0,
             changed_only: false,
         }
     }
@@ -65,6 +68,15 @@ impl Component for DevToolsApp {
             return KeyUpdate::handled(Update::full());
         }
 
+        if !key.mods.ctrl
+            && !key.mods.alt
+            && !key.mods.super_key
+            && matches!(key.code, KeyCode::F(5))
+        {
+            ctx.link().send(Msg::RefreshEntries);
+            return KeyUpdate::handled(Update::full());
+        }
+
         KeyUpdate::unhandled(Update::none())
     }
 
@@ -80,6 +92,10 @@ impl Component for DevToolsApp {
             }
             Msg::RefreshGit => {
                 ctx.state.git_refresh_token = ctx.state.git_refresh_token.saturating_add(1);
+                Update::full()
+            }
+            Msg::RefreshEntries => {
+                ctx.state.entry_refresh_token = ctx.state.entry_refresh_token.saturating_add(1);
                 Update::full()
             }
             Msg::ToggleChangedOnly => {
@@ -103,6 +119,7 @@ impl Component for DevToolsApp {
             .indent_style(IndentStyle::None)
             .show_arrows(false)
             .git_refresh_token(ctx.state.git_refresh_token)
+            .entry_refresh_token(ctx.state.entry_refresh_token)
             .focusable(true)
             .explorer(true)
             .explorer_prefix(">")
@@ -166,7 +183,7 @@ impl Component for DevToolsApp {
                     .height(Length::Auto)
                     .padding((0, 1))
                     .child(Text::new(format!(
-                        "Selected: {} | G: toggle git changes | R: refresh git | Ctrl+Q: quit",
+                        "Selected: {} | G: toggle git changes | R: refresh git | F5: refresh entries | Ctrl+Q: quit",
                         ctx.state.selected_path
                     ))),
             )

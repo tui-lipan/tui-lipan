@@ -39,6 +39,11 @@ pub(crate) struct FileTreeState {
     pub(crate) git_snapshot_pending: bool,
     pub(crate) git_load_generation: u64,
     pub(crate) last_git_refresh_nonce: u64,
+    pub(crate) entry_refresh_requested_token: u64,
+    pub(crate) entry_refresh_completed_token: u64,
+    pub(crate) entry_refresh_requested_options: (bool, usize),
+    pub(crate) entry_refresh_pending: bool,
+    pub(crate) entry_refresh_generation: u64,
     pub(crate) changed_only_auto_expand_signature: u64,
     pub(crate) explorer_input: TextInput,
     pub(crate) explorer_query_id: u64,
@@ -48,6 +53,17 @@ pub(crate) struct FileTreeState {
     pub(crate) search_expanded_snapshot: Option<HashSet<Arc<str>>>,
     pub(crate) search_found_dir: Option<Arc<str>>,
     pub(crate) requested_entry_paths: HashSet<Arc<str>>,
+    pub(crate) uncontrolled_selected_path: Option<Arc<str>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct LocalEntryRefreshResult {
+    generation: u64,
+    token: u64,
+    root: Arc<str>,
+    snapshot: FsNode,
+    expanded: HashSet<Arc<str>>,
+    options: (bool, usize),
 }
 
 #[derive(Clone, Debug)]
@@ -67,6 +83,8 @@ pub(crate) enum FileTreeMsg {
         query_id: u64,
         filter: ExplorerFilter,
     },
+    RequestEntryRefresh(u64),
+    EntryRefreshLoaded(LocalEntryRefreshResult),
     RequestGitRefresh(u64),
     GitSnapshotLoaded {
         generation: u64,
@@ -124,6 +142,7 @@ impl Component for FileTreeComponent {
         let mut expanded = HashSet::new();
         expanded.insert(root.path.clone());
         let git_snapshot = effective_initial_snapshot(props);
+        let uncontrolled_selected_path = initial_uncontrolled_selected_path(props, &root);
         let mut state = Self::State {
             root,
             root_virtual,
@@ -132,6 +151,11 @@ impl Component for FileTreeComponent {
             git_snapshot_pending: false,
             git_load_generation: 0,
             last_git_refresh_nonce: props.git_refresh_nonce,
+            entry_refresh_requested_token: props.entry_refresh_token,
+            entry_refresh_completed_token: props.entry_refresh_token,
+            entry_refresh_requested_options: entry_refresh_options(props),
+            entry_refresh_pending: false,
+            entry_refresh_generation: 0,
             changed_only_auto_expand_signature: 0,
             explorer_input: TextInput::new(""),
             explorer_query_id: 0,
@@ -141,6 +165,7 @@ impl Component for FileTreeComponent {
             search_expanded_snapshot: None,
             search_found_dir: None,
             requested_entry_paths: HashSet::new(),
+            uncontrolled_selected_path,
         };
 
         apply_initial_expanded_paths(&mut state, props);
@@ -180,6 +205,18 @@ impl Component for FileTreeComponent {
             ctx.link().send(FileTreeMsg::SyncRootMode);
         }
 
+        let refresh_options = entry_refresh_options(&ctx.props);
+        if uses_local_entries(&ctx.props)
+            && (ctx.props.entry_refresh_token != ctx.state.entry_refresh_requested_token
+                || refresh_options != ctx.state.entry_refresh_requested_options
+                || (!ctx.state.entry_refresh_pending
+                    && ctx.props.entry_refresh_token != ctx.state.entry_refresh_completed_token))
+        {
+            ctx.link().send(FileTreeMsg::RequestEntryRefresh(
+                ctx.props.entry_refresh_token,
+            ));
+        }
+
         if needs_git_snapshot(&ctx.props)
             && ctx.props.git_refresh_nonce != ctx.state.last_git_refresh_nonce
         {
@@ -196,17 +233,14 @@ impl Component for FileTreeComponent {
             ctx.link().send(FileTreeMsg::EnsureRevealPaths);
         }
 
-        let query = ctx.state.explorer_input.text().to_owned();
-        let active_filter = if !ctx.props.explorer || query.trim().is_empty() {
-            None
-        } else {
-            Some(&ctx.state.explorer_filter)
-        };
+        let active_filter = active_explorer_filter(&ctx.props, &ctx.state);
 
         let projection = build_projection(&ctx.props, &ctx.state, active_filter);
         let empty_changed_only =
             changed_only_projection_is_empty(&ctx.props, &ctx.state, &projection);
         let selected_by_path = selected_visible_index_by_path(&ctx.props, &ctx.state, &projection);
+        let uncontrolled_selected_by_path =
+            uncontrolled_selected_visible_index(&ctx.props, &ctx.state, &projection);
         let select_lookup = projection.lookup.clone();
         let activate_lookup = projection.lookup.clone();
         let toggle_lookup = projection.lookup.clone();
@@ -258,7 +292,10 @@ impl Component for FileTreeComponent {
                     expanded: event.expanded,
                 }
             }));
-        if let Some(selected) = selected_by_path.or(ctx.props.selected) {
+        if let Some(selected) = selected_by_path
+            .or(uncontrolled_selected_by_path)
+            .or(ctx.props.selected)
+        {
             tree = tree.selected(selected);
         }
         if ctx.props.clear_selection {
@@ -450,10 +487,58 @@ impl Component for FileTreeComponent {
 
                 let expanded = ctx.state.expanded.clone();
                 load_expanded_directories(&mut ctx.state, &ctx.props, expanded);
+                normalize_uncontrolled_selection(&ctx.props, &mut ctx.state);
                 Update::full()
+            }
+            FileTreeMsg::RequestEntryRefresh(token) => {
+                let options = entry_refresh_options(&ctx.props);
+                if !uses_local_entries(&ctx.props) || token != ctx.props.entry_refresh_token {
+                    return Update::none();
+                }
+                if token == ctx.state.entry_refresh_requested_token
+                    && options == ctx.state.entry_refresh_requested_options
+                    && (ctx.state.entry_refresh_pending
+                        || token == ctx.state.entry_refresh_completed_token)
+                {
+                    return Update::none();
+                }
+
+                let expanded = effective_expanded_paths(&ctx.props, &ctx.state).into_owned();
+                begin_local_entry_refresh(ctx, token, expanded, options)
+            }
+            FileTreeMsg::EntryRefreshLoaded(result) => {
+                if !uses_local_entries(&ctx.props)
+                    || result.generation != ctx.state.entry_refresh_generation
+                    || result.token != ctx.state.entry_refresh_requested_token
+                    || result.token != ctx.props.entry_refresh_token
+                    || result.root != ctx.state.root.path
+                    || result.options != entry_refresh_options(&ctx.props)
+                    || !ctx.state.entry_refresh_pending
+                {
+                    return Update::none();
+                }
+
+                let expanded = effective_expanded_paths(&ctx.props, &ctx.state).into_owned();
+                if result.expanded != expanded {
+                    return begin_local_entry_refresh(ctx, result.token, expanded, result.options);
+                }
+
+                let link = ctx.link().clone();
+                ctx.state.root = result.snapshot;
+                ctx.state.entry_refresh_pending = false;
+                ctx.state.entry_refresh_completed_token = result.token;
+                if !ctx.props.explorer || ctx.state.explorer_input.text().trim().is_empty() {
+                    normalize_uncontrolled_selection(&ctx.props, &mut ctx.state);
+                }
+                let command =
+                    restart_explorer_search_after_entry_refresh(&ctx.props, &mut ctx.state, link);
+                Update::with_command(command)
             }
             FileTreeMsg::TreeSelected { entry } => {
                 if let Some(entry) = entry {
+                    if tracks_uncontrolled_selection(&ctx.props) {
+                        ctx.state.uncontrolled_selected_path = Some(entry.path.clone());
+                    }
                     if !ctx.state.explorer_input.text().trim().is_empty() {
                         ctx.state.search_found_dir = Some(selected_directory_for_restore(
                             &entry.path,
@@ -659,6 +744,11 @@ impl Component for FileTreeComponent {
         let provided_options_changed = uses_provided_entries(&ctx.props)
             && (old_props.show_hidden != ctx.props.show_hidden
                 || old_props.max_entries_per_dir != ctx.props.max_entries_per_dir);
+        let local_options_changed = uses_local_entries(&ctx.props)
+            && (old_props.show_hidden != ctx.props.show_hidden
+                || old_props.max_entries_per_dir != ctx.props.max_entries_per_dir);
+        let local_entry_token_changed = uses_local_entries(&ctx.props)
+            && old_props.entry_refresh_token != ctx.props.entry_refresh_token;
         let root_mode_changed = old_props.root != ctx.props.root
             || entry_mode_changed
             || uses_virtual_root(old_props) != uses_virtual_root(&ctx.props);
@@ -685,6 +775,10 @@ impl Component for FileTreeComponent {
             apply_changed_provided_listings(&mut ctx.state.root, old_props, &ctx.props);
         }
 
+        if local_entry_token_changed || (source_changed && !root_mode_changed) {
+            ctx.state.entry_refresh_generation = ctx.state.entry_refresh_generation.wrapping_add(1);
+        }
+
         if !root_mode_changed
             && (source_changed || change_source_changed || provided_options_changed)
         {
@@ -704,6 +798,8 @@ impl Component for FileTreeComponent {
             || source_changed
             || change_source_changed
             || provided_options_changed
+            || local_options_changed
+            || local_entry_token_changed
             || old_props.expanded_paths != ctx.props.expanded_paths
             || should_load_git;
         let command = if should_load_git {
@@ -807,6 +903,22 @@ fn uses_provided_entries(props: &FileTreeProps) -> bool {
     matches!(props.entry_source, FileTreeEntrySource::Provided(_))
 }
 
+fn uses_local_entries(props: &FileTreeProps) -> bool {
+    matches!(props.entry_source, FileTreeEntrySource::Local)
+}
+
+fn entry_refresh_options(props: &FileTreeProps) -> (bool, usize) {
+    (props.show_hidden, props.max_entries_per_dir)
+}
+
+fn tracks_uncontrolled_selection(props: &FileTreeProps) -> bool {
+    props.selected.is_none() && props.selected_path.is_none() && props.select_path.is_none()
+}
+
+fn initial_uncontrolled_selected_path(props: &FileTreeProps, root: &FsNode) -> Option<Arc<str>> {
+    tracks_uncontrolled_selection(props).then(|| root.path.clone())
+}
+
 fn uses_virtual_root(props: &FileTreeProps) -> bool {
     uses_provided_entries(props) || is_provided_changed_only(props)
 }
@@ -840,11 +952,18 @@ fn rebuild_root_for_props(state: &mut FileTreeState, props: &FileTreeProps) {
     state.git_snapshot = effective_initial_snapshot(props);
     state.git_load_generation = state.git_load_generation.wrapping_add(1);
     state.last_git_refresh_nonce = props.git_refresh_nonce;
+    state.entry_refresh_requested_token = props.entry_refresh_token;
+    state.entry_refresh_completed_token = props.entry_refresh_token;
+    state.entry_refresh_requested_options = entry_refresh_options(props);
+    state.entry_refresh_pending = false;
+    state.entry_refresh_generation = state.entry_refresh_generation.wrapping_add(1);
     state.changed_only_auto_expand_signature = 0;
+    state.explorer_query_id = state.explorer_query_id.saturating_add(1);
     state.explorer_filter = ExplorerFilter::default();
     state.search_expanded_snapshot = None;
     state.search_found_dir = None;
     state.requested_entry_paths.clear();
+    state.uncontrolled_selected_path = initial_uncontrolled_selected_path(props, &state.root);
     apply_initial_expanded_paths(state, props);
 }
 
@@ -1150,6 +1269,17 @@ fn has_reveal_path(props: &FileTreeProps) -> bool {
     props.reveal_path.is_some() || props.select_path.is_some()
 }
 
+fn active_explorer_filter<'a>(
+    props: &FileTreeProps,
+    state: &'a FileTreeState,
+) -> Option<&'a ExplorerFilter> {
+    if !props.explorer || state.explorer_input.text().trim().is_empty() {
+        None
+    } else {
+        Some(&state.explorer_filter)
+    }
+}
+
 fn normalized_reveal_paths(props: &FileTreeProps, root_path: &Arc<str>) -> Vec<Arc<str>> {
     if uses_provided_entries(props) {
         let root = Path::new(root_path.as_ref());
@@ -1186,6 +1316,45 @@ fn selected_visible_index_by_path(
             }
         })?;
     projection.path_to_visible_index.get(path.as_ref()).copied()
+}
+
+fn uncontrolled_selected_visible_index(
+    props: &FileTreeProps,
+    state: &FileTreeState,
+    projection: &FileTreeProjection,
+) -> Option<usize> {
+    if !tracks_uncontrolled_selection(props) {
+        return None;
+    }
+
+    state
+        .uncontrolled_selected_path
+        .as_ref()
+        .and_then(|path| projection.path_to_visible_index.get(path.as_ref()).copied())
+}
+
+fn normalize_uncontrolled_selection(props: &FileTreeProps, state: &mut FileTreeState) {
+    if !tracks_uncontrolled_selection(props) {
+        return;
+    }
+
+    let selected_path = {
+        let projection = build_projection(props, state, active_explorer_filter(props, state));
+        let selected = state
+            .uncontrolled_selected_path
+            .as_ref()
+            .filter(|path| projection.path_to_visible_index.contains_key(path.as_ref()))
+            .cloned();
+        selected.or_else(|| {
+            projection
+                .path_to_visible_index
+                .iter()
+                .min_by_key(|(_, index)| *index)
+                .map(|(path, _)| path.clone())
+        })
+    };
+
+    state.uncontrolled_selected_path = selected_path;
 }
 
 fn apply_reveal_paths_to_state(state: &mut FileTreeState, props: &FileTreeProps) -> bool {
@@ -1253,6 +1422,50 @@ fn git_snapshot_command(
     })
 }
 
+fn local_entry_refresh_command(
+    link: crate::callback::Link<FileTreeMsg>,
+    generation: u64,
+    token: u64,
+    root: Arc<str>,
+    expanded: HashSet<Arc<str>>,
+    options: (bool, usize),
+) -> Command {
+    link.command(move |link| {
+        let snapshot = load_local_snapshot(&root, &expanded, options);
+        link.send(FileTreeMsg::EntryRefreshLoaded(LocalEntryRefreshResult {
+            generation,
+            token,
+            root,
+            snapshot,
+            expanded,
+            options,
+        }));
+    })
+}
+
+fn begin_local_entry_refresh(
+    ctx: &mut Context<FileTreeComponent>,
+    token: u64,
+    expanded: HashSet<Arc<str>>,
+    options: (bool, usize),
+) -> Update {
+    ctx.state.entry_refresh_requested_token = token;
+    ctx.state.entry_refresh_requested_options = options;
+    ctx.state.entry_refresh_pending = true;
+    ctx.state.entry_refresh_generation = ctx.state.entry_refresh_generation.wrapping_add(1);
+    let generation = ctx.state.entry_refresh_generation;
+    let root = ctx.state.root.path.clone();
+    invalidate_explorer_query_for_entry_refresh(&ctx.props, &mut ctx.state);
+    Update::command_only(local_entry_refresh_command(
+        ctx.link().clone(),
+        generation,
+        token,
+        root,
+        expanded,
+        options,
+    ))
+}
+
 fn prepare_git_cache(
     props: &FileTreeProps,
     repo_root: &Path,
@@ -1288,6 +1501,41 @@ fn spawn_explorer_search(
         };
         link.send(FileTreeMsg::ExplorerResultsReady { query_id, filter });
     })
+}
+
+fn invalidate_explorer_query_for_entry_refresh(props: &FileTreeProps, state: &mut FileTreeState) {
+    if props.explorer && !state.explorer_input.text().trim().is_empty() {
+        state.explorer_query_id = state.explorer_query_id.saturating_add(1);
+        state.explorer_filter = ExplorerFilter::default();
+    }
+}
+
+fn restart_explorer_search_after_entry_refresh(
+    props: &FileTreeProps,
+    state: &mut FileTreeState,
+    link: crate::callback::Link<FileTreeMsg>,
+) -> Option<Command> {
+    if !props.explorer || state.explorer_input.text().trim().is_empty() {
+        return None;
+    }
+
+    let query_id = state.explorer_query_id.saturating_add(1);
+    state.explorer_query_id = query_id;
+    let query: Arc<str> = Arc::from(state.explorer_input.text().to_owned());
+    let search_root = if props.change_view == FileTreeChangeView::ChangedOnly {
+        state.root.path.clone()
+    } else {
+        props.root.clone()
+    };
+    Some(spawn_explorer_search(
+        link,
+        query_id,
+        query,
+        search_root,
+        props.show_hidden,
+        props.max_entries_per_dir,
+        explorer_search_candidates(props, state),
+    ))
 }
 
 fn apply_directory_load(node: &mut FsNode, result: super::fs::DirectoryLoadResult) {
@@ -1339,6 +1587,35 @@ fn load_expanded_directories(
             props.show_hidden,
             props.max_entries_per_dir,
         );
+    }
+}
+
+fn load_local_snapshot(
+    root_path: &str,
+    expanded: &HashSet<Arc<str>>,
+    (show_hidden, max_entries_per_dir): (bool, usize),
+) -> FsNode {
+    let mut root = root_node(&Arc::from(root_path));
+    load_local_snapshot_node(&mut root, expanded, show_hidden, max_entries_per_dir);
+    root
+}
+
+fn load_local_snapshot_node(
+    node: &mut FsNode,
+    expanded: &HashSet<Arc<str>>,
+    show_hidden: bool,
+    max_entries_per_dir: usize,
+) {
+    if !node.is_dir() || !expanded.contains(&node.path) {
+        return;
+    }
+
+    apply_directory_load(
+        node,
+        read_directory(node.path.as_ref(), show_hidden, max_entries_per_dir),
+    );
+    for child in &mut node.children {
+        load_local_snapshot_node(child, expanded, show_hidden, max_entries_per_dir);
     }
 }
 
@@ -2375,6 +2652,11 @@ mod tests {
             git_snapshot_pending: false,
             git_load_generation: 0,
             last_git_refresh_nonce: 0,
+            entry_refresh_requested_token: 0,
+            entry_refresh_completed_token: 0,
+            entry_refresh_requested_options: (false, 2_000),
+            entry_refresh_pending: false,
+            entry_refresh_generation: 0,
             changed_only_auto_expand_signature: 0,
             explorer_input: TextInput::new(""),
             explorer_query_id: 0,
@@ -2384,6 +2666,7 @@ mod tests {
             search_expanded_snapshot: None,
             search_found_dir: None,
             requested_entry_paths: HashSet::new(),
+            uncontrolled_selected_path: Some(Arc::from("/repo")),
         }
     }
 
@@ -2396,6 +2679,94 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ))
+    }
+
+    fn file_tree_runtime(props: FileTreeProps) -> RuntimeCore<FileTreeComponent> {
+        RuntimeCore::new_test(
+            FileTreeComponent::new(),
+            props,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 12,
+            },
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(std::cell::Cell::new(false)),
+        )
+    }
+
+    fn replace_file_tree_props(
+        runtime: &mut RuntimeCore<FileTreeComponent>,
+        props: FileTreeProps,
+    ) -> Update {
+        let old_props = std::mem::replace(&mut runtime.ctx.props, props);
+        runtime
+            .component
+            .on_props_changed(&old_props, &mut runtime.ctx)
+    }
+
+    fn local_refresh_result(
+        state: &FileTreeState,
+        props: &FileTreeProps,
+        generation: u64,
+        token: u64,
+    ) -> LocalEntryRefreshResult {
+        let options = entry_refresh_options(props);
+        let root = state.root.path.clone();
+        let expanded = effective_expanded_paths(props, state).into_owned();
+        LocalEntryRefreshResult {
+            generation,
+            token,
+            root: root.clone(),
+            snapshot: load_local_snapshot(root.as_ref(), &expanded, options),
+            expanded,
+            options,
+        }
+    }
+
+    fn run_local_refresh_command(
+        runtime: &mut RuntimeCore<FileTreeComponent>,
+        generation: u64,
+        token: u64,
+        expanded: HashSet<Arc<str>>,
+    ) -> LocalEntryRefreshResult {
+        let root = runtime.ctx.state.root.path.clone();
+        let options = entry_refresh_options(&runtime.ctx.props);
+        local_entry_refresh_command(
+            runtime.ctx.link().clone(),
+            generation,
+            token,
+            root,
+            expanded,
+            options,
+        )
+        .run(crate::core::component::CommandRuntime {
+            scope: crate::callback::ScopeId(1),
+            tx: runtime.command_tx.clone(),
+            runtime_id: runtime.ctx.env().runtime_id,
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            runtime.drain_commands();
+            if let Some(message) = runtime.queue.borrow_mut().pop_front().map(|(_, message)| {
+                *message
+                    .downcast::<FileTreeMsg>()
+                    .expect("expected a FileTree message")
+            }) {
+                let FileTreeMsg::EntryRefreshLoaded(result) = message else {
+                    panic!("expected an entry refresh result");
+                };
+                return result;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "entry refresh command did not send a result"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 
     #[test]
@@ -2697,6 +3068,547 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(old_root);
         let _ = std::fs::remove_dir_all(new_root);
+    }
+
+    #[test]
+    fn entry_refresh_command_builds_a_fresh_snapshot_for_any_token_change() {
+        let dir = unique_component_test_dir("entry-refresh-root");
+        std::fs::create_dir_all(dir.join("expanded")).unwrap();
+        std::fs::write(dir.join("before.rs"), "").unwrap();
+        std::fs::write(dir.join("expanded/before.rs"), "").unwrap();
+        let root = dir.to_string_lossy().into_owned();
+        let mut runtime = file_tree_runtime(
+            crate::widgets::file_tree::FileTree::new(root)
+                .initial_expanded_paths(["expanded"])
+                .props,
+        );
+        let expanded = runtime.ctx.state.expanded.clone();
+        std::fs::write(dir.join("after.rs"), "").unwrap();
+
+        let result = run_local_refresh_command(&mut runtime, 7, 2, expanded);
+
+        assert_eq!(result.generation, 7);
+        assert_eq!(result.token, 2);
+        assert_eq!(result.options, (false, 2_000));
+        assert!(result.snapshot.loaded);
+        assert!(
+            result
+                .snapshot
+                .children
+                .iter()
+                .any(|child| { child.name.as_ref() == "after.rs" })
+        );
+        assert!(
+            result
+                .snapshot
+                .children
+                .iter()
+                .all(|child| { child.name.as_ref() != "before.rs" || child.loaded })
+        );
+        assert!(result.snapshot.children.iter().any(|child| {
+            child.name.as_ref() == "expanded"
+                && child.loaded
+                && child
+                    .children
+                    .iter()
+                    .any(|entry| entry.name.as_ref() == "before.rs")
+        }));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn entry_refresh_rebuilds_a_deleted_and_recreated_expanded_directory() {
+        let dir = unique_component_test_dir("entry-refresh-recreated-dir");
+        let expanded_dir = dir.join("expanded");
+        std::fs::create_dir_all(&expanded_dir).unwrap();
+        std::fs::write(expanded_dir.join("before.rs"), "").unwrap();
+        let root = dir.to_string_lossy().into_owned();
+        let props = crate::widgets::file_tree::FileTree::new(root.clone())
+            .initial_expanded_paths(["expanded"])
+            .props;
+        let mut runtime = file_tree_runtime(props);
+        let expanded_before = runtime.ctx.state.expanded.clone();
+        let expanded_path = Arc::<str>::from(
+            Path::new(runtime.ctx.state.root.path.as_ref())
+                .join("expanded")
+                .to_string_lossy()
+                .as_ref(),
+        );
+
+        std::fs::remove_dir_all(&expanded_dir).unwrap();
+        std::fs::create_dir_all(&expanded_dir).unwrap();
+        std::fs::write(expanded_dir.join("after.rs"), "").unwrap();
+
+        replace_file_tree_props(
+            &mut runtime,
+            crate::widgets::file_tree::FileTree::new(root)
+                .entry_refresh_token(1)
+                .props,
+        );
+        let request = runtime
+            .component
+            .update(FileTreeMsg::RequestEntryRefresh(1), &mut runtime.ctx);
+        assert!(request.command.is_some());
+        let result = local_refresh_result(
+            &runtime.ctx.state,
+            &runtime.ctx.props,
+            runtime.ctx.state.entry_refresh_generation,
+            1,
+        );
+        runtime
+            .component
+            .update(FileTreeMsg::EntryRefreshLoaded(result), &mut runtime.ctx);
+
+        assert_eq!(runtime.ctx.state.expanded, expanded_before);
+        assert!(
+            node_by_path_mut(&mut runtime.ctx.state.root, &expanded_path).is_some_and(|node| {
+                node.loaded
+                    && node.children.len() == 1
+                    && node.children[0].name.as_ref() == "after.rs"
+            })
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn entry_refresh_restarts_when_options_change_in_flight() {
+        let dir = unique_component_test_dir("entry-refresh-options");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("visible.rs"), "").unwrap();
+        let root = dir.to_string_lossy().into_owned();
+        let mut runtime =
+            file_tree_runtime(crate::widgets::file_tree::FileTree::new(root.clone()).props);
+
+        replace_file_tree_props(
+            &mut runtime,
+            crate::widgets::file_tree::FileTree::new(root.clone())
+                .entry_refresh_token(1)
+                .props,
+        );
+        let first = runtime
+            .component
+            .update(FileTreeMsg::RequestEntryRefresh(1), &mut runtime.ctx);
+        assert!(first.command.is_some());
+        let stale_generation = runtime.ctx.state.entry_refresh_generation;
+        let stale =
+            local_refresh_result(&runtime.ctx.state, &runtime.ctx.props, stale_generation, 1);
+
+        std::fs::write(dir.join(".hidden.rs"), "").unwrap();
+        let options_update = replace_file_tree_props(
+            &mut runtime,
+            crate::widgets::file_tree::FileTree::new(root)
+                .show_hidden(true)
+                .max_entries_per_dir(3)
+                .entry_refresh_token(1)
+                .props,
+        );
+        assert!(options_update.dirty);
+        let _ = runtime.component.view(&runtime.ctx);
+        let (_, message) = runtime
+            .queue
+            .borrow_mut()
+            .pop_front()
+            .expect("options change should queue a refresh");
+        let request = *message
+            .downcast::<FileTreeMsg>()
+            .expect("expected a FileTree message");
+        assert!(matches!(request, FileTreeMsg::RequestEntryRefresh(1)));
+        let second = runtime.component.update(request, &mut runtime.ctx);
+        assert!(second.command.is_some());
+        assert_ne!(runtime.ctx.state.entry_refresh_generation, stale_generation);
+
+        let ignored = runtime
+            .component
+            .update(FileTreeMsg::EntryRefreshLoaded(stale), &mut runtime.ctx);
+        assert!(!ignored.dirty);
+        assert!(runtime.ctx.state.entry_refresh_pending);
+
+        let fresh = local_refresh_result(
+            &runtime.ctx.state,
+            &runtime.ctx.props,
+            runtime.ctx.state.entry_refresh_generation,
+            1,
+        );
+        runtime
+            .component
+            .update(FileTreeMsg::EntryRefreshLoaded(fresh), &mut runtime.ctx);
+        assert!(!runtime.ctx.state.entry_refresh_pending);
+        assert_eq!(runtime.ctx.state.entry_refresh_completed_token, 1);
+        assert!(
+            runtime
+                .ctx
+                .state
+                .root
+                .children
+                .iter()
+                .any(|child| { child.name.as_ref() == ".hidden.rs" })
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn entry_refresh_restarts_when_expansion_changes_in_flight() {
+        let dir = unique_component_test_dir("entry-refresh-expansion-race");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/new.rs"), "").unwrap();
+        let root = dir.to_string_lossy().into_owned();
+        let mut runtime =
+            file_tree_runtime(crate::widgets::file_tree::FileTree::new(root.clone()).props);
+
+        replace_file_tree_props(
+            &mut runtime,
+            crate::widgets::file_tree::FileTree::new(root)
+                .entry_refresh_token(1)
+                .props,
+        );
+        runtime
+            .component
+            .update(FileTreeMsg::RequestEntryRefresh(1), &mut runtime.ctx);
+        let stale_generation = runtime.ctx.state.entry_refresh_generation;
+        let stale =
+            local_refresh_result(&runtime.ctx.state, &runtime.ctx.props, stale_generation, 1);
+        let src = Arc::<str>::from(
+            Path::new(runtime.ctx.state.root.path.as_ref())
+                .join("src")
+                .to_string_lossy()
+                .as_ref(),
+        );
+        runtime.component.update(
+            FileTreeMsg::TreeToggled {
+                entry: Some(VisibleFileTreeEntry {
+                    path: src.clone(),
+                    kind: FileKind::Directory,
+                }),
+                expanded: true,
+            },
+            &mut runtime.ctx,
+        );
+
+        let restart = runtime
+            .component
+            .update(FileTreeMsg::EntryRefreshLoaded(stale), &mut runtime.ctx);
+        assert!(restart.command.is_some());
+        assert!(runtime.ctx.state.entry_refresh_pending);
+        assert_ne!(runtime.ctx.state.entry_refresh_generation, stale_generation);
+
+        let fresh = local_refresh_result(
+            &runtime.ctx.state,
+            &runtime.ctx.props,
+            runtime.ctx.state.entry_refresh_generation,
+            1,
+        );
+        runtime
+            .component
+            .update(FileTreeMsg::EntryRefreshLoaded(fresh), &mut runtime.ctx);
+        assert!(
+            node_by_path_mut(&mut runtime.ctx.state.root, &src).is_some_and(|node| {
+                node.loaded
+                    && node
+                        .children
+                        .iter()
+                        .any(|child| child.name.as_ref() == "new.rs")
+            })
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn stale_entry_refresh_completion_is_rejected_after_a_newer_token() {
+        let dir = unique_component_test_dir("entry-refresh-stale");
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_string_lossy().into_owned();
+        let props = crate::widgets::file_tree::FileTree::new(root.clone()).props;
+        let mut runtime = file_tree_runtime(props);
+
+        std::fs::write(dir.join("first.rs"), "").unwrap();
+        let first_props = crate::widgets::file_tree::FileTree::new(root.clone())
+            .entry_refresh_token(1)
+            .props;
+        let old_props = std::mem::replace(&mut runtime.ctx.props, first_props);
+        runtime
+            .component
+            .on_props_changed(&old_props, &mut runtime.ctx);
+        let first = runtime
+            .component
+            .update(FileTreeMsg::RequestEntryRefresh(1), &mut runtime.ctx);
+        assert!(first.command.is_some());
+        let stale = local_refresh_result(
+            &runtime.ctx.state,
+            &runtime.ctx.props,
+            runtime.ctx.state.entry_refresh_generation,
+            1,
+        );
+
+        std::fs::write(dir.join("second.rs"), "").unwrap();
+        let second_props = crate::widgets::file_tree::FileTree::new(root)
+            .entry_refresh_token(2)
+            .props;
+        let old_props = std::mem::replace(&mut runtime.ctx.props, second_props);
+        runtime
+            .component
+            .on_props_changed(&old_props, &mut runtime.ctx);
+        let second = runtime
+            .component
+            .update(FileTreeMsg::RequestEntryRefresh(2), &mut runtime.ctx);
+        assert!(second.command.is_some());
+
+        let ignored = runtime
+            .component
+            .update(FileTreeMsg::EntryRefreshLoaded(stale), &mut runtime.ctx);
+        assert!(!ignored.dirty);
+        assert!(runtime.ctx.state.root.children.iter().all(|child| {
+            child.name.as_ref() != "first.rs" && child.name.as_ref() != "second.rs"
+        }));
+
+        let fresh = local_refresh_result(
+            &runtime.ctx.state,
+            &runtime.ctx.props,
+            runtime.ctx.state.entry_refresh_generation,
+            2,
+        );
+        runtime
+            .component
+            .update(FileTreeMsg::EntryRefreshLoaded(fresh), &mut runtime.ctx);
+        assert!(
+            runtime
+                .ctx
+                .state
+                .root
+                .children
+                .iter()
+                .any(|child| { child.name.as_ref() == "second.rs" })
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn stale_entry_refresh_completion_is_rejected_after_a_root_change() {
+        let dir = unique_component_test_dir("entry-refresh-root-stale");
+        let first_root = dir.join("first");
+        let second_root = dir.join("second");
+        std::fs::create_dir_all(&first_root).unwrap();
+        std::fs::create_dir_all(&second_root).unwrap();
+        std::fs::write(first_root.join("first.rs"), "").unwrap();
+        std::fs::write(second_root.join("second.rs"), "").unwrap();
+        let first = first_root.to_string_lossy().into_owned();
+        let second = second_root.to_string_lossy().into_owned();
+        let props = crate::widgets::file_tree::FileTree::new(first.clone()).props;
+        let mut runtime = file_tree_runtime(props);
+
+        let next_props = crate::widgets::file_tree::FileTree::new(first.clone())
+            .entry_refresh_token(1)
+            .props;
+        let old_props = std::mem::replace(&mut runtime.ctx.props, next_props);
+        runtime
+            .component
+            .on_props_changed(&old_props, &mut runtime.ctx);
+        runtime
+            .component
+            .update(FileTreeMsg::RequestEntryRefresh(1), &mut runtime.ctx);
+        let stale = local_refresh_result(
+            &runtime.ctx.state,
+            &runtime.ctx.props,
+            runtime.ctx.state.entry_refresh_generation,
+            1,
+        );
+
+        let next_props = crate::widgets::file_tree::FileTree::new(second.clone())
+            .entry_refresh_token(1)
+            .props;
+        let old_props = std::mem::replace(&mut runtime.ctx.props, next_props);
+        runtime
+            .component
+            .on_props_changed(&old_props, &mut runtime.ctx);
+        let ignored = runtime
+            .component
+            .update(FileTreeMsg::EntryRefreshLoaded(stale), &mut runtime.ctx);
+
+        assert!(!ignored.dirty);
+        assert_eq!(runtime.ctx.state.root.path.as_ref(), second.as_str());
+        assert!(
+            runtime
+                .ctx
+                .state
+                .root
+                .children
+                .iter()
+                .any(|child| { child.name.as_ref() == "second.rs" })
+        );
+        assert!(
+            runtime
+                .ctx
+                .state
+                .root
+                .children
+                .iter()
+                .all(|child| { child.name.as_ref() != "first.rs" })
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn active_explorer_refresh_preserves_then_remaps_selection() {
+        let dir = unique_component_test_dir("entry-refresh-explorer-selection");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.rs"), "").unwrap();
+        std::fs::write(dir.join("b.rs"), "").unwrap();
+        let root = dir.to_string_lossy().into_owned();
+        let selected = Arc::<str>::from(format!("{root}/b.rs"));
+        let mut runtime = file_tree_runtime(
+            crate::widgets::file_tree::FileTree::new(root.clone())
+                .explorer(true)
+                .props,
+        );
+        runtime.component.update(
+            FileTreeMsg::TreeSelected {
+                entry: Some(VisibleFileTreeEntry {
+                    path: selected.clone(),
+                    kind: FileKind::File,
+                }),
+            },
+            &mut runtime.ctx,
+        );
+        runtime.ctx.state.explorer_input.set_text(".rs");
+        runtime.ctx.state.explorer_query_id = 10;
+        std::fs::write(dir.join("aa.rs"), "").unwrap();
+
+        replace_file_tree_props(
+            &mut runtime,
+            crate::widgets::file_tree::FileTree::new(root.clone())
+                .explorer(true)
+                .entry_refresh_token(1)
+                .props,
+        );
+        let request = runtime
+            .component
+            .update(FileTreeMsg::RequestEntryRefresh(1), &mut runtime.ctx);
+        assert!(request.command.is_some());
+        assert_eq!(runtime.ctx.state.explorer_query_id, 11);
+        let stale = runtime.component.update(
+            FileTreeMsg::ExplorerResultsReady {
+                query_id: 10,
+                filter: ExplorerFilter::default(),
+            },
+            &mut runtime.ctx,
+        );
+        assert!(!stale.dirty);
+
+        let result = local_refresh_result(
+            &runtime.ctx.state,
+            &runtime.ctx.props,
+            runtime.ctx.state.entry_refresh_generation,
+            1,
+        );
+        let restart = runtime
+            .component
+            .update(FileTreeMsg::EntryRefreshLoaded(result), &mut runtime.ctx);
+        assert!(restart.command.is_some());
+        assert_eq!(
+            runtime.ctx.state.uncontrolled_selected_path,
+            Some(selected.clone())
+        );
+        assert_eq!(runtime.ctx.state.explorer_query_id, 12);
+
+        let current = runtime.component.update(
+            FileTreeMsg::ExplorerResultsReady {
+                query_id: 12,
+                filter: ExplorerFilter {
+                    visible_paths: [
+                        runtime.ctx.state.root.path.clone(),
+                        Arc::from(format!("{root}/aa.rs")),
+                        selected.clone(),
+                    ]
+                    .into_iter()
+                    .collect(),
+                    ..ExplorerFilter::default()
+                },
+            },
+            &mut runtime.ctx,
+        );
+        assert!(current.dirty);
+        assert_eq!(
+            runtime.ctx.state.uncontrolled_selected_path,
+            Some(selected.clone())
+        );
+
+        std::fs::remove_file(dir.join("b.rs")).unwrap();
+        replace_file_tree_props(
+            &mut runtime,
+            crate::widgets::file_tree::FileTree::new(root)
+                .explorer(true)
+                .entry_refresh_token(2)
+                .props,
+        );
+        runtime
+            .component
+            .update(FileTreeMsg::RequestEntryRefresh(2), &mut runtime.ctx);
+        let result = local_refresh_result(
+            &runtime.ctx.state,
+            &runtime.ctx.props,
+            runtime.ctx.state.entry_refresh_generation,
+            2,
+        );
+        runtime
+            .component
+            .update(FileTreeMsg::EntryRefreshLoaded(result), &mut runtime.ctx);
+        assert_eq!(runtime.ctx.state.uncontrolled_selected_path, Some(selected));
+        assert_eq!(runtime.ctx.state.explorer_query_id, 14);
+
+        runtime.component.update(
+            FileTreeMsg::ExplorerResultsReady {
+                query_id: 14,
+                filter: ExplorerFilter {
+                    visible_paths: [runtime.ctx.state.root.path.clone()].into_iter().collect(),
+                    ..ExplorerFilter::default()
+                },
+            },
+            &mut runtime.ctx,
+        );
+        assert_eq!(
+            runtime.ctx.state.uncontrolled_selected_path,
+            Some(runtime.ctx.state.root.path.clone())
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn provided_entries_ignore_entry_refresh_token() {
+        let props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::provided([
+                FileTreeDirectoryListing::new(".", [super::super::FileTreeEntry::file("old.rs")]),
+            ]))
+            .entry_refresh_token(4)
+            .props;
+        let mut runtime = file_tree_runtime(props);
+
+        let update = runtime
+            .component
+            .update(FileTreeMsg::RequestEntryRefresh(5), &mut runtime.ctx);
+
+        assert!(!update.dirty);
+        assert_eq!(runtime.ctx.state.entry_refresh_completed_token, 4);
+        assert_eq!(runtime.ctx.state.root.children.len(), 1);
+        assert_eq!(runtime.ctx.state.root.children[0].name.as_ref(), "old.rs");
+
+        let stale = LocalEntryRefreshResult {
+            generation: runtime.ctx.state.entry_refresh_generation,
+            token: 4,
+            root: runtime.ctx.state.root.path.clone(),
+            snapshot: runtime.ctx.state.root.clone(),
+            expanded: HashSet::new(),
+            options: (false, 2_000),
+        };
+        let completion = runtime
+            .component
+            .update(FileTreeMsg::EntryRefreshLoaded(stale), &mut runtime.ctx);
+        assert!(!completion.dirty);
     }
 
     #[test]
@@ -4066,6 +4978,11 @@ mod tests {
             git_snapshot_pending: false,
             git_load_generation: 0,
             last_git_refresh_nonce: 0,
+            entry_refresh_requested_token: 0,
+            entry_refresh_completed_token: 0,
+            entry_refresh_requested_options: (false, 2_000),
+            entry_refresh_pending: false,
+            entry_refresh_generation: 0,
             changed_only_auto_expand_signature: 0,
             explorer_input: TextInput::new(""),
             explorer_query_id: 0,
@@ -4075,6 +4992,7 @@ mod tests {
             search_expanded_snapshot: None,
             search_found_dir: None,
             requested_entry_paths: HashSet::new(),
+            uncontrolled_selected_path: Some(Arc::from("/repo")),
         };
 
         let projection = build_projection(&props, &state, None);

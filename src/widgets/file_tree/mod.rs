@@ -346,6 +346,7 @@ impl FileTree {
             props: FileTreeProps {
                 root: root.into(),
                 entry_source: FileTreeEntrySource::default(),
+                entry_refresh_token: 0,
                 show_hidden: false,
                 max_entries_per_dir: 2_000,
                 show_icons: true,
@@ -465,6 +466,17 @@ impl FileTree {
     /// [`FileTree::on_entry_request`].
     pub fn entry_source(mut self, source: FileTreeEntrySource) -> Self {
         self.props.entry_source = source;
+        self
+    }
+
+    /// Refresh local directory entries when this token changes.
+    ///
+    /// Any token change is applied once, including changes to a lower value. The refresh rereads
+    /// the root and currently expanded directories in place, preserving expansion and explorer
+    /// state. Provided entry sources own their data and ignore this token; Git status refreshes
+    /// remain controlled separately by [`Self::git_refresh_token`].
+    pub fn entry_refresh_token(mut self, token: u64) -> Self {
+        self.props.entry_refresh_token = token;
         self
     }
 
@@ -1474,6 +1486,8 @@ mod tests {
     fn entry_source_defaults_to_local_and_builds_provided_listings() {
         let tree = FileTree::new("/repo");
         assert_eq!(tree.props.entry_source, FileTreeEntrySource::Local);
+        let tree = tree.entry_refresh_token(7);
+        assert_eq!(tree.props.entry_refresh_token, 7);
 
         let listing = FileTreeDirectoryListing::new(
             ".",
