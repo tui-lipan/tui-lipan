@@ -1163,6 +1163,13 @@ shared `Arc<[FileTreeEntry]>`, so cloning widget props does not clone every chil
 | `FileTreeChangeSource::Git` | Read change data from the local git repository **(default)** |
 | `FileTreeChangeSource::Provided(Vec<FileTreeChange>)` | Use application/backend-provided change rows; does not require local git and may include virtual, nonexistent, or deleted paths |
 
+### `FileTreeGitStatusCache`
+
+Clone an app-owned `FileTreeGitStatusCache` into `FileTree::git_status_cache(...)` for trees that
+replace one another. It keeps the last successful local Git snapshot visible across mounts while a
+fresh scan runs in the background. `new()` retains eight repository/mode snapshots;
+`with_capacity(...)` sets another bounded capacity, and `clear()` drops retained data.
+
 ### `FileTreeChangeStatus`
 
 | Variant | Description |

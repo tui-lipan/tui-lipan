@@ -12,7 +12,7 @@ pub use events::{
     FileTreeEntryRequest, FileTreeEvent, FileTreeExplorerFocusOrigin, FileTreeToggleEvent,
 };
 pub use fs::{FileIconStyle, FileKind};
-pub use git::{GitChangeState, GitFileStatus, GitIconStyle};
+pub use git::{FileTreeGitStatusCache, GitChangeState, GitFileStatus, GitIconStyle};
 pub(crate) use mod_private::FileTreeProps;
 
 pub(crate) const EXPLORER_INPUT_KEY: &str = "__ft_input";
@@ -431,6 +431,7 @@ impl FileTree {
                 change_view: FileTreeChangeView::default(),
                 git_diff_stats: false,
                 git_icon_style: GitIconStyle::NerdFont,
+                git_status_cache: None,
                 git_refresh_nonce: 0,
                 git_marker_modified: "M".into(),
                 git_marker_added: "A".into(),
@@ -1140,6 +1141,15 @@ impl FileTree {
         self
     }
 
+    /// Retain successful local Git snapshots across mounts of trees sharing this cache.
+    ///
+    /// Cached status is rendered immediately and revalidated in the background. The cache is used
+    /// only with local entries and [`FileTreeChangeSource::Git`].
+    pub fn git_status_cache(mut self, cache: FileTreeGitStatusCache) -> Self {
+        self.props.git_status_cache = Some(cache);
+        self
+    }
+
     /// Request an immediate Git status refresh.
     ///
     /// Call this when building the widget in response to a user action.
@@ -1586,6 +1596,7 @@ mod tests {
             crate::FileTreeDirectoryListing::new(".", [crate::FileTreeEntry::file("README.md")]);
         let _entry_source = crate::FileTreeEntrySource::provided([listing]);
         let _request: Option<crate::FileTreeEntryRequest> = None;
+        let _cache = crate::FileTreeGitStatusCache::new();
     }
 
     #[test]

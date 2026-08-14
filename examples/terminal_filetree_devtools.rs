@@ -7,6 +7,7 @@ struct State {
     root: Arc<str>,
     selected_path: Arc<str>,
     terminal_status: ManagedTerminalStatus,
+    git_status_cache: FileTreeGitStatusCache,
     git_refresh_token: u64,
     changed_only: bool,
 }
@@ -34,6 +35,7 @@ impl Component for DevToolsApp {
             selected_path: root.clone(),
             root,
             terminal_status: ManagedTerminalStatus::Starting,
+            git_status_cache: FileTreeGitStatusCache::new(),
             git_refresh_token: 0,
             changed_only: false,
         }
@@ -96,6 +98,7 @@ impl Component for DevToolsApp {
             .git_status(true)
             .git_changed_only(ctx.state.changed_only)
             .git_diff_stats(ctx.state.changed_only)
+            .git_status_cache(ctx.state.git_status_cache.clone())
             .icon_style(FileIconStyle::NerdFontColored)
             .indent_style(IndentStyle::None)
             .show_arrows(false)

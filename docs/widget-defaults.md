@@ -1091,6 +1091,7 @@ Source: `src/widgets/file_tree/mod.rs:346` (`FileTree`).
 | `change_view` | `FileTreeChangeView::default()` |
 | `git_diff_stats` | `false` |
 | `git_icon_style` | `GitIconStyle::NerdFont` |
+| `git_status_cache` | `None` |
 | `git_refresh_nonce` | `0` |
 | `git_marker_modified` | `"M".into()` |
 | `git_marker_added` | `"A".into()` |

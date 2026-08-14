@@ -13,6 +13,10 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `FileTreeGitStatusCache` and `FileTree::git_status_cache(...)` let apps retain successful local
+  Git decorations across keyed tree remounts. Cached indicators render immediately while the tree
+  revalidates in the background; storage is app-owned, bounded, mode-aware, and protected from
+  out-of-order shared refreshes.
 - `Frame::tab_edge(TabEdge)` draws the frame's border tab strip on the bottom border instead of the
   top. Tabs share their line with that border's own labels, so `TabEdge::Bottom` puts them beside
   `footer_left` / `footer_right` and leaves the header labels the top line. Worth reaching for on a

@@ -416,6 +416,7 @@ entries and git-backed or application-provided change projections.
 | `git_view` | `FileTreeGitView` | `AllFiles` (default) or `ChangedOnly` git-focused view |
 | `git_changed_only` | `bool` | Compatibility convenience setter for changed-only mode |
 | `git_diff_stats` | `bool` | Compatibility setter for `+N -M` diff stats next to change markers |
+| `git_status_cache` | `FileTreeGitStatusCache` | App-owned bounded cache that keeps the last successful local Git snapshot visible across mounts while it revalidates |
 | `git_refresh_token` | `u64` | Token to trigger deterministic git refresh |
 | `selected` | `usize` | Controlled selected visible row index |
 | `clear_selection` | `bool` | When `true`, suppress the selection highlight (authoritative over `selected` and internal state) |
@@ -473,6 +474,9 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
 - In changed-only mode, provided directories with pending descendants remain visible so they can
   be expanded and requested; a loaded clean directory disappears from that projection.
 - Git is the default change source; use `FileTreeChangeSource::Provided(...)` to display backend-provided change data without requiring a local git repository.
+- Clone one `FileTreeGitStatusCache` into trees that replace one another to avoid blank Git
+  indicators after a keyed remount. The cache retains successful local snapshots only, separates
+  status-only and diff-stat data, ignores provided sources, and revalidates every mount.
 - `directory_label_style(...)` and `file_label_style(...)` style names independently from icons and right-aligned change indicators.
 - `path_style(...)` / `path_styles(...)` match exact paths and can override row, icon, label, and suffix styling for reviewed, pinned, or otherwise annotated files.
 - `change_suffix_style(...)` and `git_suffix_style(...)` style only right-side metadata such as `M +30 -21`, leaving icons and labels unchanged.

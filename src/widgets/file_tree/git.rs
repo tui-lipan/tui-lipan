@@ -1,12 +1,187 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use super::fs::FileKind;
 use super::mod_private::FileTreeProps;
 use super::{FileTreeChange, FileTreeChangeStatus};
 use crate::style::Style;
+
+const DEFAULT_STATUS_CACHE_CAPACITY: usize = 8;
+
+/// App-owned cache for retaining local Git status across [`super::FileTree`] mounts.
+///
+/// Clone and pass the same cache to trees that may replace one another. A newly mounted tree can
+/// then render the last successful snapshot immediately while it revalidates in the background.
+/// Entries are least-recently-used and bounded by the configured repository capacity.
+#[derive(Clone)]
+pub struct FileTreeGitStatusCache {
+    inner: Rc<RefCell<GitStatusCacheState>>,
+}
+
+impl FileTreeGitStatusCache {
+    /// Create a cache retaining up to eight repository/mode snapshots.
+    pub fn new() -> Self {
+        Self::with_capacity(DEFAULT_STATUS_CACHE_CAPACITY)
+    }
+
+    /// Create a cache with a repository/mode snapshot capacity of at least one.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            inner: Rc::new(RefCell::new(GitStatusCacheState {
+                capacity: capacity.max(1),
+                ..GitStatusCacheState::default()
+            })),
+        }
+    }
+
+    /// Remove all retained snapshots and in-flight request ordering state.
+    pub fn clear(&self) {
+        let mut state = self.inner.borrow_mut();
+        state.entries.clear();
+        state.pending.clear();
+    }
+
+    /// Number of retained repository/mode snapshots.
+    pub fn len(&self) -> usize {
+        self.inner.borrow().entries.len()
+    }
+
+    /// Whether the cache currently retains no snapshots.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub(crate) fn get(&self, key: &GitStatusCacheKey) -> Option<GitStatusSnapshot> {
+        let mut state = self.inner.borrow_mut();
+        state.access_clock = state.access_clock.wrapping_add(1);
+        let access = state.access_clock;
+        let entry = state.entries.get_mut(key)?;
+        entry.last_access = access;
+        Some(entry.snapshot.clone())
+    }
+
+    pub(crate) fn begin_request(&self, key: GitStatusCacheKey) -> GitStatusCacheRequest {
+        let mut state = self.inner.borrow_mut();
+        state.request_clock = state.request_clock.wrapping_add(1);
+        let generation = state.request_clock;
+        state.pending.insert(key.clone(), generation);
+        while state.pending.len() > state.capacity {
+            let Some(oldest) = state
+                .pending
+                .iter()
+                .min_by_key(|(_, generation)| *generation)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            state.pending.remove(&oldest);
+        }
+        GitStatusCacheRequest { key, generation }
+    }
+
+    /// Commit only the newest shared request for this key. A failed refresh leaves the last good
+    /// snapshot intact, so a transient `git` failure cannot turn future mounts falsely clean.
+    pub(crate) fn finish_request(
+        &self,
+        request: &GitStatusCacheRequest,
+        snapshot: Option<&GitStatusSnapshot>,
+    ) -> bool {
+        let mut state = self.inner.borrow_mut();
+        if state.pending.get(&request.key) != Some(&request.generation) {
+            return false;
+        }
+        state.pending.remove(&request.key);
+        let Some(snapshot) = snapshot else {
+            return true;
+        };
+
+        state.access_clock = state.access_clock.wrapping_add(1);
+        let access = state.access_clock;
+        state.entries.insert(
+            request.key.clone(),
+            GitStatusCacheEntry {
+                snapshot: snapshot.clone(),
+                last_access: access,
+            },
+        );
+        while state.entries.len() > state.capacity {
+            let Some(oldest) = state
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_access)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            state.entries.remove(&oldest);
+        }
+        true
+    }
+}
+
+impl Default for FileTreeGitStatusCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for FileTreeGitStatusCache {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.inner.borrow();
+        formatter
+            .debug_struct("FileTreeGitStatusCache")
+            .field("len", &state.entries.len())
+            .field("capacity", &state.capacity)
+            .finish()
+    }
+}
+
+impl PartialEq for FileTreeGitStatusCache {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl Eq for FileTreeGitStatusCache {}
+
+#[derive(Default)]
+struct GitStatusCacheState {
+    capacity: usize,
+    access_clock: u64,
+    request_clock: u64,
+    entries: HashMap<GitStatusCacheKey, GitStatusCacheEntry>,
+    pending: HashMap<GitStatusCacheKey, u64>,
+}
+
+struct GitStatusCacheEntry {
+    snapshot: GitStatusSnapshot,
+    last_access: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct GitStatusCacheKey {
+    repo_root: Arc<str>,
+    include_diff_stats: bool,
+}
+
+impl GitStatusCacheKey {
+    pub(crate) fn new(repo_root: &Path, include_diff_stats: bool) -> Self {
+        Self {
+            repo_root: super::fs::normalize_path(repo_root),
+            include_diff_stats,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct GitStatusCacheRequest {
+    key: GitStatusCacheKey,
+    generation: u64,
+}
 
 /// Icon style for git status indicators.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -602,5 +777,74 @@ fn merge_diff_stat(
         (Some(existing), None) => Some(existing),
         (None, Some(diff_stat)) => Some(diff_stat),
         (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    fn snapshot(path: &'static str) -> GitStatusSnapshot {
+        GitStatusSnapshot {
+            changed_paths: vec![Arc::from(path)],
+            ..GitStatusSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn newest_shared_request_wins_and_failures_keep_last_good_snapshot() {
+        let cache = FileTreeGitStatusCache::new();
+        let key = GitStatusCacheKey::new(Path::new("/repo"), false);
+        let older = cache.begin_request(key.clone());
+        let newer = cache.begin_request(key.clone());
+
+        assert!(!cache.finish_request(&older, Some(&snapshot("/repo/old"))));
+        assert!(cache.is_empty());
+        assert!(cache.finish_request(&newer, Some(&snapshot("/repo/new"))));
+        assert_eq!(
+            cache.get(&key).unwrap().changed_paths,
+            [Arc::<str>::from("/repo/new")]
+        );
+
+        let failed = cache.begin_request(key.clone());
+        assert!(cache.finish_request(&failed, None));
+        assert_eq!(
+            cache.get(&key).unwrap().changed_paths,
+            [Arc::<str>::from("/repo/new")]
+        );
+    }
+
+    #[test]
+    fn capacity_is_lru_and_diff_stat_modes_do_not_alias() {
+        let cache = FileTreeGitStatusCache::with_capacity(2);
+        let first = GitStatusCacheKey::new(Path::new("/first"), false);
+        let first_with_stats = GitStatusCacheKey::new(Path::new("/first"), true);
+        let second = GitStatusCacheKey::new(Path::new("/second"), false);
+
+        for (key, path) in [
+            (first.clone(), "/first/plain"),
+            (first_with_stats.clone(), "/first/stats"),
+        ] {
+            let request = cache.begin_request(key);
+            assert!(cache.finish_request(&request, Some(&snapshot(path))));
+        }
+        assert!(cache.get(&first).is_some(), "touch the plain entry");
+        let request = cache.begin_request(second.clone());
+        assert!(cache.finish_request(&request, Some(&snapshot("/second/file"))));
+
+        assert!(cache.get(&first).is_some());
+        assert!(cache.get(&first_with_stats).is_none());
+        assert!(cache.get(&second).is_some());
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn abandoned_request_ordering_state_is_bounded() {
+        let cache = FileTreeGitStatusCache::with_capacity(2);
+        for root in ["/one", "/two", "/three"] {
+            cache.begin_request(GitStatusCacheKey::new(Path::new(root), false));
+        }
+
+        assert_eq!(cache.inner.borrow().pending.len(), 2);
     }
 }
