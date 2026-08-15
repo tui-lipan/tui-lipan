@@ -300,6 +300,12 @@ fn build_child_base_layouts<C: Borrow<Element>>(
         let (constraint_min_len, collapse_main, force_compact, focus_min_main) =
             axis_constraints(child, axis);
         let layout_constraints = child.layout_constraints();
+        let max_main = match axis {
+            Axis::Horizontal => layout_constraints.max_w,
+            Axis::Vertical => layout_constraints.max_h,
+        }
+        .and_then(|max| max.resolve_as_max(ctx.available));
+        let focus_min_main = max_main.map_or(focus_min_main, |max| focus_min_main.min(max));
         let constraint_min = if ctx.intrinsic_main_axis {
             constraint_min_len.resolve_as_min(0)
         } else {
