@@ -1009,9 +1009,14 @@ where
             if overlay.dismiss_policy.dismiss_on_escape() {
                 return self.dismiss_overlay(overlay);
             }
+            if overlay.dismiss_policy.escape_passthrough() {
+                return false;
+            }
+            if overlay.captures_focus {
+                return true;
+            }
         }
-
-        overlays.iter().any(|overlay| overlay.captures_focus)
+        false
     }
 
     fn dismiss_overlay(&mut self, overlay: &OverlayRoot) -> bool {
@@ -1243,8 +1248,14 @@ impl<C: Component> TestBackendDispatchOps<'_, C> {
             if overlay.dismiss_policy.dismiss_on_escape() {
                 return self.dismiss_overlay(overlay);
             }
+            if overlay.dismiss_policy.escape_passthrough() {
+                return false;
+            }
+            if overlay.captures_focus {
+                return true;
+            }
         }
-        overlays.iter().any(|overlay| overlay.captures_focus)
+        false
     }
 
     fn dismiss_overlay(&mut self, overlay: &OverlayRoot) -> bool {
@@ -1921,6 +1932,53 @@ mod tests {
         }
     }
 
+    enum ModalEscapeMsg {
+        ChildEscape,
+        Close,
+    }
+
+    #[derive(Default)]
+    struct ModalEscapeState {
+        child_escapes: usize,
+        closes: usize,
+    }
+
+    struct ModalEscapeHarness {
+        dismiss_on_escape: bool,
+    }
+
+    impl Component for ModalEscapeHarness {
+        type Message = ModalEscapeMsg;
+        type Properties = ();
+        type State = ModalEscapeState;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            ModalEscapeState::default()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                ModalEscapeMsg::ChildEscape => ctx.state.child_escapes += 1,
+                ModalEscapeMsg::Close => ctx.state.closes += 1,
+            }
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            Modal::new()
+                .dismiss_on_escape(self.dismiss_on_escape)
+                .on_close(ctx.link().callback(|_| ModalEscapeMsg::Close))
+                .child(
+                    Input::new("")
+                        .on_key(ctx.link().key_handler(|key| {
+                            key.is(KeyCode::Esc).then_some(ModalEscapeMsg::ChildEscape)
+                        }))
+                        .key("inside"),
+                )
+                .into()
+        }
+    }
+
     #[test]
     fn focus_callbacks_precede_app_hook_and_report_payloads() {
         let log = Rc::new(RefCell::new(Vec::new()));
@@ -2020,6 +2078,23 @@ mod tests {
         let backend = TestBackend::new_with_app(app, ManualModalHarness { auto_focus: true }, ());
 
         assert_eq!(backend.focused_key(), Some(&Key::from("inside")));
+    }
+
+    #[test]
+    fn modal_escape_dismissal_can_pass_through_to_focused_child() {
+        let mut passthrough = TestBackend::new(ModalEscapeHarness {
+            dismiss_on_escape: false,
+        });
+        assert!(passthrough.send_key(plain_code(KeyCode::Esc)).unwrap());
+        assert_eq!(passthrough.state().child_escapes, 1);
+        assert_eq!(passthrough.state().closes, 0);
+
+        let mut dismissing = TestBackend::new(ModalEscapeHarness {
+            dismiss_on_escape: true,
+        });
+        assert!(dismissing.send_key(plain_code(KeyCode::Esc)).unwrap());
+        assert_eq!(dismissing.state().child_escapes, 0);
+        assert_eq!(dismissing.state().closes, 1);
     }
 
     struct PaneWrappedModalHarness;

@@ -295,8 +295,14 @@ impl<C: Component> RunnerDispatchOps<'_, '_, C> {
             if overlay.dismiss_policy.dismiss_on_escape() {
                 return self.dismiss_overlay(overlay);
             }
+            if overlay.dismiss_policy.escape_passthrough() {
+                return false;
+            }
+            if overlay.captures_focus {
+                return true;
+            }
         }
-        overlays.iter().any(|overlay| overlay.captures_focus)
+        false
     }
 
     fn dismiss_overlay(&mut self, overlay: &OverlayRoot) -> bool {

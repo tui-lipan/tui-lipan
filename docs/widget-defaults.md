@@ -605,7 +605,7 @@ Source: `src/widgets/multi_select.rs:143` (`MultiSelect`).
 
 ## Modal
 
-Source: `src/widgets/modal.rs:37` (`Modal`).
+Source: `src/widgets/modal.rs:38` (`Modal`).
 
 | Field | Default initializer |
 |---|---|
@@ -626,6 +626,7 @@ Source: `src/widgets/modal.rs:37` (`Modal`).
 | `padding` | `1.into()` |
 | `title_style` | `Style::default()` |
 | `title_alignment` | `Align::Start` |
+| `dismiss_on_escape` | `true` |
 
 ## Popover
 

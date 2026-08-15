@@ -71,6 +71,7 @@ pub enum DismissPolicy {
     ClickOutside,
     ClickInside,
     ClickOutsideOrEscape,
+    ClickOutsidePassthroughEscape,
 }
 
 impl DismissPolicy {
@@ -79,11 +80,18 @@ impl DismissPolicy {
     }
 
     pub(crate) fn dismiss_on_click_outside(self) -> bool {
-        matches!(self, Self::ClickOutside | Self::ClickOutsideOrEscape)
+        matches!(
+            self,
+            Self::ClickOutside | Self::ClickOutsideOrEscape | Self::ClickOutsidePassthroughEscape
+        )
     }
 
     pub(crate) fn dismiss_on_escape(self) -> bool {
         matches!(self, Self::ClickOutsideOrEscape)
+    }
+
+    pub(crate) fn escape_passthrough(self) -> bool {
+        matches!(self, Self::ClickOutsidePassthroughEscape)
     }
 }
 
