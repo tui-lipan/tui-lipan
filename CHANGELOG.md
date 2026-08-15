@@ -71,6 +71,10 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Focus-protected stack children now honor their `max_width` / `max_height` while the stack computes
+  alignment and justification. A focused input whose intrinsic value exceeded its maximum could be
+  positioned using the uncapped width and then rendered at the capped width, leaving a gap beside
+  right- or center-justified content.
 - `DraggableTabBar` is now clipped when it starts left of the visible area rather than re-anchored
   at it. A bar can begin off-screen because it sits part-way outside its parent - a `Canvas` child at
   a negative offset, which is how a side panel slides into view - or because a clip starts inside it.

@@ -73,7 +73,7 @@ mod tests {
     use crate::core::node::{NodeId, NodeKind};
     use crate::style::{Color, Length, Style, Theme};
     use crate::widgets::{
-        Button, Center, ContextProvider, EffectScope, Frame, HStack, List, ListItem, Modal,
+        Button, Center, ContextProvider, EffectScope, Frame, HStack, Input, List, ListItem, Modal,
         ScrollView, Spacer, Text, ThemeProvider, VStack, ZStack,
     };
 
@@ -820,6 +820,48 @@ mod tests {
             min_x, expected_x,
             "expected HStack contents to be centered at x=7, got {min_x}"
         );
+    }
+
+    #[test]
+    fn hstack_end_justify_uses_max_constrained_focused_width() {
+        use crate::style::Justify;
+
+        fn row(value: &str) -> Element {
+            let input = Input::new(value)
+                .placeholder("Search… (/)")
+                .width(Length::Auto)
+                .height(Length::Px(1))
+                .border(false)
+                .padding(0)
+                .key("input");
+            HStack::new()
+                .justify(Justify::End)
+                .height(Length::Px(1))
+                .child(input.min_width(Length::Px(11)).max_width(Length::Px(22)))
+                .into()
+        }
+
+        let mut tree = NodeTree::new();
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 60,
+            h: 1,
+        };
+        LayoutEngine::reconcile_with_focus(&mut tree, &row(""), bounds, None);
+        let focus = crate::core::component::FocusContext::default();
+        let focused = find_by_key(&tree, "input");
+        focus.update_from_tree(&tree, Some(focused), None);
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &row("here i am quite long and it is moving left"),
+            bounds,
+            Some(&focus),
+        );
+
+        let input = tree.node(find_by_key(&tree, "input")).rect;
+        assert_eq!(input.w, 22);
+        assert_eq!(input.x, 38, "max-constrained input should stay end-aligned");
     }
 
     // ---------------------------------------------------------------
