@@ -13,6 +13,9 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Modal::dismiss_on_escape(false)` keeps backdrop-click dismissal while allowing Escape to reach
+  the focused child of a root-portal modal, so nested controls can handle Escape before the modal
+  closes.
 - `FileTree::entry_refresh_token(...)` refreshes local directory entries in place when its token
   changes, rereading the root and currently expanded directories in a background command without
   resetting expansion or explorer state. Stale token/root/source results are ignored, active
