@@ -27,6 +27,8 @@ pub use events::{
     terminal_selection_text,
 };
 #[cfg(feature = "terminal-images")]
+pub(crate) use graphics::{PLACEHOLDER as KITTY_PLACEHOLDER, diacritic as kitty_diacritic};
+#[cfg(feature = "terminal-images")]
 pub use graphics::{TerminalImage, TerminalImageCrop, TerminalImagePlacement};
 pub use mod_private::Terminal;
 pub use osc::{

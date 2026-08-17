@@ -474,6 +474,10 @@ Image::from_bytes(bytes)
 **Animation** (GIF, animated WebP, APNG): advance automatically.
 - Small GIFs are preloaded; large GIFs use a bounded worker channel.
 - Controls via `playback`, `repeat`, `speed_percent`.
+- Native Kitty animations keep the last displayed frame in place while the next frame is encoded
+  asynchronously. Once an encoded frame is available, its transmission precedes its placeholders
+  in the same paint, so first-loop playback starts immediately without flashing through empty
+  frames.
 
 **Environment knobs:**
 
@@ -481,7 +485,6 @@ Image::from_bytes(bytes)
 |----------|---------|-------------|
 | `TUI_LIPAN_IMAGE_MAX_FPS` | `30` | Frame rate cap |
 | `TUI_LIPAN_IMAGE_MAX_CATCHUP_MS` | `100` | Frame catch-up window |
-| `TUI_LIPAN_IMAGE_AUTO_ANIM_HALF_BLOCKS` | `false` | Allow halfblocks for animations |
 | `TUI_LIPAN_IMAGE_ENCODE_WORKERS` | `1` | Async encoding workers (1–2) |
 | `TUI_LIPAN_IMAGE_GIF_PRELOAD` | `true` | Eager GIF preloading |
 | `TUI_LIPAN_IMAGE_GIF_PRELOAD_MAX_BYTES` | `262144` | Preload size cap |

@@ -1048,6 +1048,18 @@ impl TerminalScreen {
         self.dirty = true;
     }
 
+    /// Choose whether this screen retains and decodes terminal image pixels.
+    ///
+    /// Disabling storage keeps graphics protocol replies and cursor movement correct while
+    /// retaining only image dimensions. It is intended for server-side semantic mirrors that
+    /// forward the original byte stream to a separate rendering client.
+    #[cfg(feature = "terminal-images")]
+    pub fn set_image_storage_enabled(&mut self, enabled: bool) {
+        self.graphics_scanner.set_decode_payload(enabled);
+        self.graphics.set_storage_enabled(enabled);
+        self.dirty = true;
+    }
+
     /// Return the current working-directory/command-lifecycle state accumulated from `OSC
     /// 7`/`OSC 9;9`/`OSC 133` sequences seen so far.
     ///

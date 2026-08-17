@@ -37,6 +37,9 @@ While the crate is on `0.x.y`:
   policy. `ClipboardHandle::accept_osc52_store()` applies that policy for managed hosts, and
   `relay_osc52()` relays an already-approved request without requiring a native clipboard provider.
   OSC 52 clipboard loads remain disabled.
+- `TerminalScreen::set_image_storage_enabled(false)` keeps graphics replies, dimensions, and cursor
+  movement without decoding or retaining raw image pixels. It is for server-side terminal mirrors
+  that forward the original stream to a separate rendering client.
 
 ### Changed
 
@@ -71,6 +74,19 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Rapid terminal-image updates now keep the last encoded frame visible while coalescing pending
+  encodes to the newest frame for that placement. Graphics-heavy terminal applications no longer
+  blink between frames or replay a backlog of obsolete renders after activity stops, and identical
+  child image ids remain isolated across terminal screens. Encoded-frame caching now accounts for
+  pixel payloads instead of terminal-cell counts, retains one payload-free displayed predecessor
+  while a replacement loads, and expires inactive streams instead of holding their image memory
+  after a pane closes. Kitty output is zlib-compressed with a terminal-compatible miniz stream,
+  preserves RGB sources without expanding them to RGBA, skips no-op terminal-frame resizes, and
+  drops its transmitted payload after the host receives it.
+- Native Kitty animations keep the last cached frame while the next encode runs, then transmit and
+  switch placeholders in one paint. The first completed frame also bootstraps playback immediately.
+  `ImageProtocol::Auto` no longer degrades large, fast animations to halfblocks to hide first-loop
+  flicker.
 - Focus-protected stack children now honor their `max_width` / `max_height` while the stack computes
   alignment and justification. A focused input whose intrinsic value exceeded its maximum could be
   positioned using the uncapped width and then rendered at the capped width, leaving a gap beside

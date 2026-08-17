@@ -100,6 +100,18 @@ should silently fail to appear.
 screen.set_image_budget(16 * 1024 * 1024);
 ```
 
+Server-side terminal mirrors that forward the original PTY stream to another rendering client can
+avoid decoding every image twice:
+
+```rust
+screen.set_image_storage_enabled(false);
+```
+
+That mode still validates command metadata, answers protocol queries, and applies image-implied
+cursor movement. It retains dimensions only; render snapshots contain no images. Raw RGB/RGBA
+payloads also skip base64 decoding, while PNG payloads are still decoded far enough to obtain their
+dimensions.
+
 Payloads are bounded before decoding as well: 32 MiB per transmission, 16384 pixels per axis.
 
 ## What is supported
@@ -139,8 +151,9 @@ Sixel input from the child is a separate protocol and is not read.
   text replay stream and does not re-emit image payloads.
 - **A partly visible image is cropped, not scaled.** That is what makes scrolling look right, but
   it also means an image wider than its pane shows its left part rather than shrinking to fit.
-- **Encoding is asynchronous.** The first frame after a new image has no pixels in it yet; the
-  encode lands a frame or two later and the pane repaints.
+- **Encoding is asynchronous.** The first image has no pixels until its encode lands. Later updates
+  keep the displayed frame in place while the replacement is encoded. Its transmission is emitted
+  before its native placeholders in one paint, so the host switches only after it has the pixels.
 
 ## Testing
 

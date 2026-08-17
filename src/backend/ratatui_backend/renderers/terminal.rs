@@ -143,7 +143,13 @@ fn render_terminal_images(
         draw_encoded_image(
             f,
             area,
-            placement_source_hash(placement.image_id, placement.image.source_hash(), crop),
+            placement_stream_hash(placement.image.stream_namespace(), placement.image_id, crop),
+            placement_source_hash(
+                placement.image.stream_namespace(),
+                placement.image_id,
+                placement.image.source_hash(),
+                crop,
+            ),
             || {
                 if whole {
                     Arc::clone(pixels)
@@ -186,18 +192,37 @@ fn crop_for_visible_cells(
     })
 }
 
-/// The identity an encoded placement caches under: which image, which part of it, whose placement.
+/// Stable identity of one terminal placement while its pixels change.
+#[cfg(feature = "terminal-images")]
+fn placement_stream_hash(stream_namespace: u64, image_id: u32, crop: TerminalImageCrop) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    stream_namespace.hash(&mut hasher);
+    image_id.hash(&mut hasher);
+    (crop.x, crop.y, crop.width, crop.height).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The identity an encoded placement caches under: which pixels, which part, and which screen.
 ///
 /// The crop is in there so two crops of one image cache separately. The *image id* is in there for
 /// a subtler reason: a host drawing through Kitty identifies a placement by the id of its encoding,
 /// so two placements sharing one encoding are one placement to it. Keying on the pixels alone would
 /// hand two copies of the same picture a single id, and the host would draw one of them and drop
-/// the other - which looks exactly like images vanishing as new ones arrive.
+/// the other - which looks exactly like images vanishing as new ones arrive. The namespace keeps
+/// child image ids separate across terminal screens.
 #[cfg(feature = "terminal-images")]
-fn placement_source_hash(image_id: u32, source_hash: u64, crop: TerminalImageCrop) -> u64 {
+fn placement_source_hash(
+    stream_namespace: u64,
+    image_id: u32,
+    source_hash: u64,
+    crop: TerminalImageCrop,
+) -> u64 {
     use std::hash::{Hash as _, Hasher as _};
 
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    stream_namespace.hash(&mut hasher);
     image_id.hash(&mut hasher);
     source_hash.hash(&mut hasher);
     (crop.x, crop.y, crop.width, crop.height).hash(&mut hasher);

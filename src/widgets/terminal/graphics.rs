@@ -41,6 +41,7 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::ops::Range;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -80,6 +81,17 @@ const MAX_IMAGE_DIMENSION: u32 = 16384;
 /// its own images from `1` would ever reach, so the two never collide.
 const FIRST_AUTO_ID: u32 = 1 << 24;
 
+/// Namespace terminal image streams across screens.
+///
+/// Child-assigned image ids restart at small integers in every pane. The renderer needs a stable
+/// owner id as well, both to keep the previous frame visible during an encode and to avoid sharing
+/// one host-protocol placement between unrelated panes that both chose image id `1`.
+static NEXT_STREAM_NAMESPACE: AtomicU64 = AtomicU64::new(1);
+
+fn next_stream_namespace() -> u64 {
+    NEXT_STREAM_NAMESPACE.fetch_add(1, Ordering::Relaxed)
+}
+
 // ─── Public types ────────────────────────────────────────────────────────────
 
 /// Decoded pixels the child transmitted.
@@ -90,6 +102,7 @@ const FIRST_AUTO_ID: u32 = 1 << 24;
 pub struct TerminalImage {
     pixels: Arc<DynamicImage>,
     source_hash: u64,
+    stream_namespace: u64,
 }
 
 impl TerminalImage {
@@ -105,14 +118,19 @@ impl TerminalImage {
 
     /// Stable hash of the transmitted payload.
     ///
-    /// Two images with the same hash decoded from the same bytes, which is what lets the renderer
-    /// cache one encoded protocol across frames and across panes showing the same picture.
+    /// Two images with the same hash decoded from the same bytes. The renderer combines this with
+    /// the screen and placement identity so unchanged frames hit the cache without letting two
+    /// panes accidentally share one host-protocol placement.
     pub fn source_hash(&self) -> u64 {
         self.source_hash
     }
 
     pub(crate) fn pixels(&self) -> &Arc<DynamicImage> {
         &self.pixels
+    }
+
+    pub(crate) fn stream_namespace(&self) -> u64 {
+        self.stream_namespace
     }
 }
 
@@ -210,16 +228,35 @@ enum ScanState {
 /// Every `APC` sequence is swallowed, not just the graphics ones: the VT parser discards `APC`
 /// bodies wholesale, so removing them from its input cannot change the grid, and it saves this
 /// scanner from having to reproduce `vte`'s string-state rules byte for byte.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct GraphicsScanner {
     state: ScanState,
     /// Body of the `APC` being accumulated, without the `ESC _` introducer.
     apc: Vec<u8>,
     /// Set once the body passed [`MAX_APC_BYTES`] and is being discarded.
     overflowed: bool,
+    decode_payload: bool,
+    decode_continuation_payload: bool,
+}
+
+impl Default for GraphicsScanner {
+    fn default() -> Self {
+        Self {
+            state: ScanState::default(),
+            apc: Vec::new(),
+            overflowed: false,
+            decode_payload: true,
+            decode_continuation_payload: false,
+        }
+    }
 }
 
 impl GraphicsScanner {
+    pub(super) fn set_decode_payload(&mut self, enabled: bool) {
+        self.decode_payload = enabled;
+        self.reset();
+    }
+
     /// Whether `bytes` can go to the VT parser whole, with no splitting and no allocation.
     ///
     /// The overwhelmingly common case for a terminal is a chunk with no graphics in it at all, so
@@ -341,7 +378,15 @@ impl GraphicsScanner {
         let Some(rest) = body.strip_prefix(b"G") else {
             return;
         };
-        if let Some(command) = GraphicsCommand::parse(rest) {
+        if let Some(command) = GraphicsCommand::parse(
+            rest,
+            self.decode_payload || self.decode_continuation_payload,
+        ) {
+            self.decode_continuation_payload = command.more
+                && (self.decode_payload
+                    || self.decode_continuation_payload
+                    || command.format == 100
+                    || matches!(command.action, GraphicsAction::Query));
             out.push(GraphicsSegment::Command(Box::new(command)));
         }
     }
@@ -351,6 +396,7 @@ impl GraphicsScanner {
         self.state = ScanState::Ground;
         self.apc.clear();
         self.overflowed = false;
+        self.decode_continuation_payload = false;
     }
 }
 
@@ -424,6 +470,7 @@ pub(super) struct GraphicsCommand {
     quiet: u32,
     /// Payload with the base64 already undone.
     payload: Vec<u8>,
+    payload_len: usize,
 }
 
 impl Default for GraphicsCommand {
@@ -451,12 +498,13 @@ impl Default for GraphicsCommand {
             delete: b'a',
             quiet: 0,
             payload: Vec::new(),
+            payload_len: 0,
         }
     }
 }
 
 impl GraphicsCommand {
-    fn parse(body: &[u8]) -> Option<Self> {
+    fn parse(body: &[u8], decode_payload: bool) -> Option<Self> {
         let (control, payload) = match body.iter().position(|byte| *byte == b';') {
             Some(at) => (&body[..at], &body[at + 1..]),
             None => (body, &body[body.len()..]),
@@ -471,9 +519,17 @@ impl GraphicsCommand {
             command.apply_key(*key, value);
         }
 
-        // A payload that does not decode makes the whole command malformed rather than empty:
-        // acting on half an image would draw garbage.
-        command.payload = BASE64.decode(payload).ok()?;
+        let must_decode = decode_payload
+            || matches!(command.action, GraphicsAction::Query)
+            || command.format == 100;
+        if must_decode {
+            // A payload that does not decode makes the whole command malformed rather than empty:
+            // acting on half an image would draw garbage.
+            command.payload = BASE64.decode(payload).ok()?;
+            command.payload_len = command.payload.len();
+        } else {
+            command.payload_len = base64_decoded_len(payload)?;
+        }
         Some(command)
     }
 
@@ -530,6 +586,32 @@ impl GraphicsCommand {
     }
 }
 
+fn base64_decoded_len(payload: &[u8]) -> Option<usize> {
+    if !payload.len().is_multiple_of(4) {
+        return None;
+    }
+    let padding = payload
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'=')
+        .count();
+    if padding > 2
+        || payload[..payload.len().saturating_sub(padding)]
+            .iter()
+            .any(|byte| !byte.is_ascii_alphanumeric() && !matches!(*byte, b'+' | b'/'))
+        || payload[payload.len().saturating_sub(padding)..]
+            .iter()
+            .any(|byte| *byte != b'=')
+    {
+        return None;
+    }
+    payload
+        .len()
+        .checked_div(4)?
+        .checked_mul(3)?
+        .checked_sub(padding)
+}
+
 // ─── Unicode placeholders ────────────────────────────────────────────────────
 
 /// The character a virtual placement is drawn with.
@@ -539,7 +621,7 @@ impl GraphicsCommand {
 /// should cover, tagging each with the image id (in the cell's foreground colour) and its position
 /// inside the image (in combining marks). Nothing is drawn where the *transmission* happened, so a
 /// virtual placement is stored and then found again by reading the grid.
-pub(super) const PLACEHOLDER: char = '\u{10EEEE}';
+pub(crate) const PLACEHOLDER: char = '\u{10EEEE}';
 
 /// The Kitty protocol's row/column diacritics, in the order the protocol assigns them.
 ///
@@ -851,8 +933,7 @@ static ROWCOLUMN_DIACRITICS: [char; 297] = [
 ///
 /// The decoder never needs this - it only reads marks - but building the sequences a real sender
 /// emits is how the placeholder path is tested, so it lives next to the table it indexes.
-#[cfg(test)]
-pub(super) fn diacritic(index: u16) -> char {
+pub(crate) fn diacritic(index: u16) -> char {
     ROWCOLUMN_DIACRITICS[usize::from(index).min(ROWCOLUMN_DIACRITICS.len() - 1)]
 }
 
@@ -1094,7 +1175,9 @@ struct PendingTransmit {
 
 /// Decoded images and their placements for one [`TerminalScreen`](super::TerminalScreen).
 pub(super) struct TerminalGraphics {
+    stream_namespace: u64,
     images: HashMap<u32, StoredImage>,
+    image_dimensions: HashMap<u32, (u32, u32)>,
     /// `I=` image numbers mapped to the ids they were transmitted under.
     numbers: HashMap<u32, u32>,
     placements: Vec<Placement>,
@@ -1103,12 +1186,15 @@ pub(super) struct TerminalGraphics {
     budget: usize,
     used_bytes: usize,
     clock: u64,
+    storage_enabled: bool,
 }
 
 impl Default for TerminalGraphics {
     fn default() -> Self {
         Self {
+            stream_namespace: next_stream_namespace(),
             images: HashMap::new(),
+            image_dimensions: HashMap::new(),
             numbers: HashMap::new(),
             placements: Vec::new(),
             pending: None,
@@ -1116,6 +1202,7 @@ impl Default for TerminalGraphics {
             budget: DEFAULT_IMAGE_BUDGET_BYTES,
             used_bytes: 0,
             clock: 0,
+            storage_enabled: true,
         }
     }
 }
@@ -1133,9 +1220,19 @@ impl TerminalGraphics {
         self.enforce_budget();
     }
 
+    pub(super) fn set_storage_enabled(&mut self, enabled: bool) {
+        if self.storage_enabled == enabled {
+            return;
+        }
+        self.storage_enabled = enabled;
+        self.reset();
+    }
+
     /// Drop everything, for `RIS` or a screen reset.
     pub(super) fn reset(&mut self) {
+        self.stream_namespace = next_stream_namespace();
         self.images.clear();
+        self.image_dimensions.clear();
         self.numbers.clear();
         self.placements.clear();
         self.pending = None;
@@ -1322,19 +1419,32 @@ impl TerminalGraphics {
     ) -> GraphicsOutcome {
         let mut pending = self.pending.take().unwrap_or_else(|| PendingTransmit {
             id: 0,
-            header: command.clone(),
+            header: GraphicsCommand {
+                payload: Vec::new(),
+                payload_len: 0,
+                ..command.clone()
+            },
             data: Vec::new(),
         });
         if pending.id == 0 {
             pending.id = self.resolve_id(pending.header.id, pending.header.number);
         }
 
-        if pending.data.len().saturating_add(command.payload.len()) > MAX_TRANSMIT_BYTES {
+        if pending
+            .header
+            .payload_len
+            .saturating_add(command.payload_len)
+            > MAX_TRANSMIT_BYTES
+        {
             return GraphicsOutcome {
                 response: report(&command, pending.id, Err("EFBIG:payload too large")),
                 advance: None,
             };
         }
+        pending.header.payload_len = pending
+            .header
+            .payload_len
+            .saturating_add(command.payload_len);
         pending.data.extend_from_slice(&command.payload);
 
         if command.more {
@@ -1351,6 +1461,28 @@ impl TerminalGraphics {
         payload: Vec<u8>,
         ctx: GraphicsContext,
     ) -> GraphicsOutcome {
+        if !self.storage_enabled {
+            let dimensions = match validate_transmit_dimensions(command, &payload) {
+                Ok(dimensions) => dimensions,
+                Err(error) => {
+                    return GraphicsOutcome {
+                        response: report(command, id, Err(error)),
+                        advance: None,
+                    };
+                }
+            };
+            self.image_dimensions.insert(id, dimensions);
+            if command.number != 0 {
+                self.numbers.insert(command.number, id);
+            }
+            return GraphicsOutcome {
+                response: report(command, id, Ok(())),
+                advance: (command.action == GraphicsAction::TransmitAndDisplay)
+                    .then(|| self.place(id, command, ctx))
+                    .flatten(),
+            };
+        }
+
         let decoded = match decode_payload(command, &payload) {
             Ok(image) => image,
             Err(error) => {
@@ -1365,6 +1497,7 @@ impl TerminalGraphics {
         let image = TerminalImage {
             pixels: Arc::new(decoded),
             source_hash: hash_payload(command.format, &payload),
+            stream_namespace: self.stream_namespace,
         };
         self.insert_image(id, image, bytes);
         if command.number != 0 {
@@ -1407,12 +1540,10 @@ impl TerminalGraphics {
         command: &GraphicsCommand,
         ctx: GraphicsContext,
     ) -> Option<(u16, u16)> {
-        let clock = self.clock;
-        let (image_w, image_h) = {
-            let stored = self.images.get_mut(&id)?;
-            stored.used = clock;
-            (stored.image.width(), stored.image.height())
-        };
+        let (image_w, image_h) = *self.image_dimensions.get(&id)?;
+        if let Some(stored) = self.images.get_mut(&id) {
+            stored.used = self.clock;
+        }
         // A virtual placement draws nothing here and moves nothing: the sender goes on to write
         // placeholder cells naming this image, and those are what put it on screen.
         if command.virtual_placement {
@@ -1439,23 +1570,25 @@ impl TerminalGraphics {
         let cols = cols.clamp(1, u32::from(ctx.cols.max(1))) as u16;
         let rows = rows.clamp(1, u32::from(u16::MAX)) as u16;
 
-        // A second placement with the same ids replaces the first, as the protocol specifies.
-        self.placements.retain(|placement| {
-            placement.image_id != id || placement.placement_id != command.placement
-        });
-        self.placements.push(Placement {
-            image_id: id,
-            placement_id: command.placement,
-            line: ctx.cursor_line,
-            col: ctx.cursor_col,
-            rows,
-            cols,
-            z: command.z,
-            crop,
-            alt_screen: ctx.alt_screen,
-        });
-        while self.placements.len() > MAX_PLACEMENTS {
-            self.placements.remove(0);
+        if self.storage_enabled {
+            // A second placement with the same ids replaces the first, as the protocol specifies.
+            self.placements.retain(|placement| {
+                placement.image_id != id || placement.placement_id != command.placement
+            });
+            self.placements.push(Placement {
+                image_id: id,
+                placement_id: command.placement,
+                line: ctx.cursor_line,
+                col: ctx.cursor_col,
+                rows,
+                cols,
+                z: command.z,
+                crop,
+                alt_screen: ctx.alt_screen,
+            });
+            while self.placements.len() > MAX_PLACEMENTS {
+                self.placements.remove(0);
+            }
         }
 
         (!command.no_cursor_move).then_some((rows, cols))
@@ -1512,7 +1645,7 @@ impl TerminalGraphics {
             match selector {
                 // "Delete all" frees every stored image, placed or not.
                 b'a' => {
-                    let ids: Vec<u32> = self.images.keys().copied().collect();
+                    let ids: Vec<u32> = self.image_dimensions.keys().copied().collect();
                     for id in ids {
                         self.remove_image(id);
                     }
@@ -1534,6 +1667,8 @@ impl TerminalGraphics {
 
     fn insert_image(&mut self, id: u32, image: TerminalImage, bytes: usize) {
         self.remove_image(id);
+        self.image_dimensions
+            .insert(id, (image.width(), image.height()));
         let clock = self.clock;
         self.images.insert(
             id,
@@ -1551,6 +1686,7 @@ impl TerminalGraphics {
         if let Some(stored) = self.images.remove(&id) {
             self.used_bytes = self.used_bytes.saturating_sub(stored.bytes);
         }
+        self.image_dimensions.remove(&id);
         self.numbers.retain(|_, mapped| *mapped != id);
         self.placements.retain(|placement| placement.image_id != id);
     }
@@ -1578,10 +1714,12 @@ impl TerminalGraphics {
     /// The id a command addresses, for commands that do not create one.
     fn lookup(&self, id: u32, number: u32) -> Option<u32> {
         if id != 0 {
-            return self.images.contains_key(&id).then_some(id);
+            return self.image_dimensions.contains_key(&id).then_some(id);
         }
         let mapped = *self.numbers.get(&number)?;
-        self.images.contains_key(&mapped).then_some(mapped)
+        self.image_dimensions
+            .contains_key(&mapped)
+            .then_some(mapped)
     }
 
     /// The id a transmission stores under, assigning one when the client did not.
@@ -1625,6 +1763,36 @@ fn source_crop(command: &GraphicsCommand, width: u32, height: u32) -> Option<Ter
 /// Decode a transmitted payload into pixels, or say why it could not be.
 ///
 /// Errors are the protocol's own codes, so they can be reported straight back to the child.
+fn validate_transmit_dimensions(
+    command: &GraphicsCommand,
+    payload: &[u8],
+) -> Result<(u32, u32), &'static str> {
+    match command.format {
+        format @ (24 | 32) => {
+            let (width, height) = (command.width, command.height);
+            if width == 0 || height == 0 {
+                return Err("EINVAL:missing s/v for raw pixels");
+            }
+            if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
+                return Err("EFBIG:image too large");
+            }
+            if !command.compressed {
+                let channels = if format == 24 { 3usize } else { 4usize };
+                let expected = (width as usize)
+                    .checked_mul(height as usize)
+                    .and_then(|pixels| pixels.checked_mul(channels))
+                    .ok_or("EFBIG:image too large")?;
+                if command.payload_len < expected {
+                    return Err("EINVAL:truncated pixel payload");
+                }
+            }
+            Ok((width, height))
+        }
+        100 => decode_payload(command, payload).map(|image| (image.width(), image.height())),
+        _ => Err("ENOTSUPP:unsupported format"),
+    }
+}
+
 fn decode_payload(command: &GraphicsCommand, payload: &[u8]) -> Result<DynamicImage, &'static str> {
     let mut data = if command.compressed {
         decompress(payload).ok_or("EINVAL:bad zlib payload")?
@@ -1749,6 +1917,18 @@ mod tests {
             }
         }
         (text, commands)
+    }
+
+    #[test]
+    fn image_stream_namespaces_are_unique_per_screen_and_reset() {
+        let mut first = TerminalGraphics::default();
+        let second = TerminalGraphics::default();
+        assert_ne!(first.stream_namespace, second.stream_namespace);
+
+        let before_reset = first.stream_namespace;
+        first.reset();
+        assert_ne!(first.stream_namespace, before_reset);
+        assert_ne!(first.stream_namespace, second.stream_namespace);
     }
 
     #[test]
@@ -1910,6 +2090,33 @@ mod tests {
     }
 
     #[test]
+    fn renderer_compressed_kitty_output_round_trips() {
+        use std::io::Write as _;
+
+        let pixels = vec![0x40u8; 30 * 40 * 4];
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(&pixels).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let wire = crate::backend::ratatui_backend::renderers::image::kitty_transmit_compressed_for(
+            &compressed,
+            30,
+            40,
+            33,
+            false,
+        );
+
+        let mut graphics = TerminalGraphics::default();
+        let mut scanner = GraphicsScanner::default();
+        let (_, commands) = scan_all(&mut scanner, wire.as_bytes());
+        for command in commands {
+            graphics.apply(command, context());
+        }
+
+        let decoded = graphics.images.get(&33).unwrap().image.pixels.to_rgba8();
+        assert_eq!(decoded.as_raw(), &pixels);
+    }
+
+    #[test]
     fn deleting_by_id_drops_the_placement() {
         let mut graphics = TerminalGraphics::default();
         let mut scanner = GraphicsScanner::default();
@@ -1977,6 +2184,28 @@ mod tests {
         let visible = graphics.visible(0, 0, 24, false);
         assert_eq!(visible.len(), 1, "the older image must have been evicted");
         assert_eq!(visible[0].image.width(), 31);
+    }
+
+    #[test]
+    fn metadata_only_storage_preserves_image_cursor_movement() {
+        let mut graphics = TerminalGraphics::default();
+        graphics.set_storage_enabled(false);
+        let mut scanner = GraphicsScanner::default();
+        scanner.set_decode_payload(false);
+        let (_, commands) = scan_all(&mut scanner, &rgb_command("a=T,i=7", 30, 40));
+        assert!(commands[0].payload.is_empty());
+        assert_eq!(commands[0].payload_len, 30 * 40 * 3);
+
+        let outcome = graphics.apply(commands[0].clone(), context());
+        assert_eq!(outcome.advance, Some((2, 3)));
+        assert!(!graphics.has_images());
+        assert_eq!(graphics.image_dimensions.get(&7), Some(&(30, 40)));
+
+        let (_, display) = scan_all(&mut scanner, b"\x1b_Ga=p,i=7;\x1b\\");
+        assert_eq!(
+            graphics.apply(display[0].clone(), context()).advance,
+            Some((2, 3))
+        );
     }
 
     #[test]
