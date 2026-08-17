@@ -109,7 +109,11 @@ fn render_terminal_images(
             continue;
         }
 
-        let pixels = placement.image.pixels();
+        // A payload whose decode was deferred is decoded here, on the first frame that draws it.
+        // `None` means it did not decode at all, which leaves nothing to paint.
+        let Some(pixels) = placement.image.pixels() else {
+            continue;
+        };
         let source = placement.source_crop.unwrap_or(TerminalImageCrop {
             x: 0,
             y: 0,

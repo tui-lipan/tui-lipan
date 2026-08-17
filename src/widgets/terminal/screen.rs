@@ -31,7 +31,9 @@ use super::graphics::{
 use super::osc::{
     SemanticObserver, TerminalCommandPhase, TerminalSemanticEvent, TerminalSemanticState,
 };
-use super::scrollback_ledger::{LedgerTerm, ledger_capacity, settle_history};
+use super::scrollback_ledger::{
+    HostModes, LedgerTerm, SGR_PIXELS_MOUSE, ledger_capacity, settle_history,
+};
 use super::selection::{ScrollbackLineage, TerminalSelection};
 use crate::style::{CaretShape, Color as UiColor, HostTerminalColors, Span, Style, Theme};
 use crate::utils::{GridPos, GridSelection, SelectionEnd};
@@ -286,6 +288,8 @@ pub struct TerminalScreen {
     /// Grid capacity backing `scrollback_len`, including ledger headroom.
     ledger_capacity: usize,
     mouse_mode: MouseModeState,
+    /// Whether the child asked for pixel mouse reporting (1016); see [`HostModes`].
+    pixel_mouse: bool,
     scrollback_offset: usize,
     cache: TerminalRenderSnapshot,
     palette: TerminalColorPalette,
@@ -338,6 +342,12 @@ impl TerminalScreenHandle {
     /// call (see [`TerminalScreen::render_snapshot`]).
     pub fn snapshot(&self) -> TerminalRenderSnapshot {
         self.0.borrow_mut().render_snapshot()
+    }
+
+    /// The cell size in pixels this screen reports to its child (see
+    /// [`TerminalScreen::set_cell_size`]).
+    pub fn cell_size(&self) -> TerminalCellSize {
+        self.0.borrow().cell_size()
     }
 
     /// Extract selected text across retained scrollback using display columns.
@@ -786,6 +796,7 @@ impl TerminalScreen {
             scrollback_len: scrollback,
             ledger_capacity: capacity,
             mouse_mode: MouseModeState::default(),
+            pixel_mouse: false,
             scrollback_offset: 0,
             cache: TerminalRenderSnapshot::default(),
             palette: TerminalColorPalette::default(),
@@ -833,7 +844,7 @@ impl TerminalScreen {
             self.record_semantic_marks_from_pending();
         }
         self.scrollback_offset = self.term.grid().display_offset();
-        self.mouse_mode = mouse_mode_from_term(*self.term.mode());
+        self.mouse_mode = mouse_mode_from_term(*self.term.mode(), self.pixel_mouse);
         self.dirty = true;
     }
 
@@ -870,7 +881,15 @@ impl TerminalScreen {
         if bytes.is_empty() {
             return 0;
         }
-        let mut ledger = LedgerTerm::new(&mut self.term, self.scrollback_len, self.ledger_capacity);
+        let mut ledger = LedgerTerm::new(
+            &mut self.term,
+            self.scrollback_len,
+            self.ledger_capacity,
+            HostModes {
+                pixel_mouse: &mut self.pixel_mouse,
+                responses: &self.listener.responses,
+            },
+        );
         self.processor.advance(&mut ledger, bytes);
         ledger.evicted()
     }
@@ -1058,6 +1077,19 @@ impl TerminalScreen {
         self.graphics_scanner.set_decode_payload(enabled);
         self.graphics.set_storage_enabled(enabled);
         self.dirty = true;
+    }
+
+    /// Choose which out-of-band transmission media (`t=f`, `t=t`, `t=s`) this screen accepts.
+    ///
+    /// These let a child leave a frame in a file or a shared-memory object and name it in a
+    /// hundred-byte escape, instead of compressing and base64-ing megabytes of pixels through the
+    /// PTY every frame. `t=t` and `t=s` are claimed by being read, so anything that fans one
+    /// terminal stream out to several readers wants
+    /// [`GraphicsMediaPolicy::SHARED`](crate::widgets::GraphicsMediaPolicy::SHARED), which keeps only
+    /// the re-readable `t=f`.
+    #[cfg(feature = "terminal-images")]
+    pub fn set_image_media_policy(&mut self, media: super::graphics_media::GraphicsMediaPolicy) {
+        self.graphics.set_media_policy(media);
     }
 
     /// Return the current working-directory/command-lifecycle state accumulated from `OSC
@@ -1262,7 +1294,7 @@ impl TerminalScreen {
             self.alt_screen = alt_screen;
         }
         self.scrollback_offset = self.term.grid().display_offset();
-        self.mouse_mode = mouse_mode_from_term(*self.term.mode());
+        self.mouse_mode = mouse_mode_from_term(*self.term.mode(), self.pixel_mouse);
         self.dirty = true;
     }
 
@@ -1281,7 +1313,7 @@ impl TerminalScreen {
             let cursor = content.cursor;
             let display_iter = content.display_iter;
             self.scrollback_offset = display_offset;
-            self.mouse_mode = mouse_mode_from_term(mode);
+            self.mouse_mode = mouse_mode_from_term(mode, self.pixel_mouse);
 
             let cursor_view = term::point_to_viewport(display_offset, cursor.point);
             let cursor_row = cursor_view.as_ref().map(|p| p.line as u16).unwrap_or(0);
@@ -1625,6 +1657,7 @@ impl TerminalScreen {
         // last-known working directory or command lifecycle became invalid.
         self.semantic_parser = SemanticVteParser::new();
         self.mouse_mode = MouseModeState::default();
+        self.pixel_mouse = false;
         self.scrollback_offset = 0;
         self.cache = TerminalRenderSnapshot::default();
         self.semantic_marks.clear();
@@ -1754,6 +1787,7 @@ impl TerminalScreen {
         push_dec_mode(bytes, 1004, mode.contains(TermMode::FOCUS_IN_OUT));
         push_dec_mode(bytes, 1005, mode.contains(TermMode::UTF8_MOUSE));
         push_dec_mode(bytes, 1006, mode.contains(TermMode::SGR_MOUSE));
+        push_dec_mode(bytes, SGR_PIXELS_MOUSE, self.pixel_mouse);
         push_dec_mode(bytes, 2004, mode.contains(TermMode::BRACKETED_PASTE));
         let kitty_flags = u8::from(mode.contains(TermMode::DISAMBIGUATE_ESC_CODES))
             | (u8::from(mode.contains(TermMode::REPORT_EVENT_TYPES)) << 1)
@@ -2272,8 +2306,12 @@ fn key_modes_from_term(mode: TermMode) -> TerminalKeyModes {
     }
 }
 
-fn mouse_mode_from_term(mode: TermMode) -> MouseModeState {
-    let encoding = if mode.contains(TermMode::SGR_MOUSE) {
+fn mouse_mode_from_term(mode: TermMode, pixel_mouse: bool) -> MouseModeState {
+    // 1016 carries SGR's shape, so it supersedes the encoding rather than combining with it, and a
+    // program that sets it without 1006 still gets SGR-shaped reports.
+    let encoding = if pixel_mouse {
+        MouseEncoding::SgrPixels
+    } else if mode.contains(TermMode::SGR_MOUSE) {
         MouseEncoding::Sgr
     } else if mode.contains(TermMode::UTF8_MOUSE) {
         MouseEncoding::Utf8
@@ -2840,6 +2878,30 @@ mod tests {
         // OSC 10/11 report the configured default fg/bg.
         assert!(joined.contains("]10;rgb:1111/2222/3333"), "{joined:?}");
         assert!(joined.contains("]11;rgb:4444/5555/6666"), "{joined:?}");
+    }
+
+    /// Mode 1016 belongs to the pointer, not the grid, so the emulator underneath never sees it.
+    /// A program that asks for it probes whether it took, and answering "not recognized" is what
+    /// makes it settle for whole cells - so the screen has to hold the mode and report it itself.
+    #[test]
+    fn tracks_and_reports_the_childs_request_for_pixel_mouse_reports() {
+        let mut screen = TerminalScreen::new(4, 20, 10);
+        screen.process_bytes(b"\x1b[?1003h\x1b[?1006h");
+        assert_eq!(screen.mouse_mode().encoding, MouseEncoding::Sgr);
+
+        screen.process_bytes(b"\x1b[?1016h\x1b[?1016$p");
+        assert_eq!(
+            screen.mouse_mode().encoding,
+            MouseEncoding::SgrPixels,
+            "reports go out in pixels once the child asks"
+        );
+        let answered = String::from_utf8(screen.drain_responses().concat()).unwrap();
+        assert!(answered.contains("\x1b[?1016;1$y"), "{answered:?}");
+
+        screen.process_bytes(b"\x1b[?1016l\x1b[?1016$p");
+        assert_eq!(screen.mouse_mode().encoding, MouseEncoding::Sgr);
+        let answered = String::from_utf8(screen.drain_responses().concat()).unwrap();
+        assert!(answered.contains("\x1b[?1016;2$y"), "{answered:?}");
     }
 
     #[test]

@@ -37,6 +37,8 @@ pub(crate) enum TerminalOp {
     PopKeyboardEnhancement,
     EnableThemeNotifications,
     DisableThemeNotifications,
+    EnablePixelMouse,
+    DisablePixelMouse,
     Flush,
 }
 
@@ -61,6 +63,8 @@ impl TerminalOp {
             Self::PopKeyboardEnhancement => Some(Self::PushKeyboardEnhancement),
             Self::EnableThemeNotifications => Some(Self::DisableThemeNotifications),
             Self::DisableThemeNotifications => Some(Self::EnableThemeNotifications),
+            Self::EnablePixelMouse => Some(Self::DisablePixelMouse),
+            Self::DisablePixelMouse => Some(Self::EnablePixelMouse),
             Self::ClearScreen | Self::Flush => None,
         }
     }
@@ -123,6 +127,7 @@ pub(crate) fn exit_plan(
         ops.push(TerminalOp::LeaveAlternateScreen);
     }
     ops.push(TerminalOp::DisableBracketedPaste);
+    ops.push(TerminalOp::DisablePixelMouse);
     ops.push(TerminalOp::DisableMouseCapture);
     ops.push(TerminalOp::DisableFocusChange);
     TerminalTransitionPlan::new(ops)
@@ -137,6 +142,7 @@ pub(crate) fn suspend_plan(policy: SurfaceTerminalPolicy) -> TerminalTransitionP
         ops.push(TerminalOp::LeaveAlternateScreen);
     }
     ops.push(TerminalOp::DisableBracketedPaste);
+    ops.push(TerminalOp::DisablePixelMouse);
     ops.push(TerminalOp::DisableMouseCapture);
     ops.push(TerminalOp::DisableFocusChange);
     // Ratatui hides the cursor on every frame that draws without one, and
@@ -167,6 +173,19 @@ pub(crate) fn resume_plan(
     ops.push(TerminalOp::EnableFocusChange);
     ops.push(TerminalOp::Flush);
     TerminalTransitionPlan::new(ops)
+}
+
+/// Turn SGR-pixels reporting on or off once the host has said whether it implements it.
+#[cfg(unix)]
+pub(crate) fn pixel_mouse_plan(enabled: bool) -> TerminalTransitionPlan {
+    TerminalTransitionPlan::new(vec![
+        if enabled {
+            TerminalOp::EnablePixelMouse
+        } else {
+            TerminalOp::DisablePixelMouse
+        },
+        TerminalOp::Flush,
+    ])
 }
 
 #[cfg(unix)]
@@ -264,6 +283,8 @@ impl<W: Write> TerminalTransitionExecutor for CrosstermTransitionExecutor<W> {
             TerminalOp::DisableThemeNotifications => {
                 execute!(self.writer, Print("\x1b[?2031l"))
             }
+            TerminalOp::EnablePixelMouse => execute!(self.writer, Print("\x1b[?1016h")),
+            TerminalOp::DisablePixelMouse => execute!(self.writer, Print("\x1b[?1016l")),
             TerminalOp::Flush => self.writer.flush(),
         }
     }
@@ -326,6 +347,7 @@ mod tests {
                 TerminalOp::DisableRawMode,
                 TerminalOp::LeaveAlternateScreen,
                 TerminalOp::DisableBracketedPaste,
+                TerminalOp::DisablePixelMouse,
                 TerminalOp::DisableMouseCapture,
                 TerminalOp::DisableFocusChange,
                 TerminalOp::ShowCursor,

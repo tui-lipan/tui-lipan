@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::app::context::SurfaceMode;
 use crate::style::{
     drain_pending_terminal_responses, flush_pending_terminal_responses_on_exit,
-    query_keyboard_enhancement_support,
+    query_host_capabilities,
 };
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
@@ -24,6 +24,10 @@ use super::image_support;
 
 type TerminalWriter = BufWriter<Stdout>;
 const TERMINAL_BUFFER_CAPACITY: usize = 64 * 1024;
+
+/// Image id for the startup graphics probe, high enough not to collide with a real placement's.
+#[cfg(feature = "terminal-images")]
+const GRAPHICS_PROBE_ID: u32 = u32::MAX;
 
 pub(crate) type Terminal = ratatui::Terminal<CrosstermBackend<TerminalWriter>>;
 
@@ -188,7 +192,39 @@ impl TerminalGuard {
     ) -> io::Result<(Terminal, Self)> {
         let policy = surface_terminal_policy(surface_mode);
         let mut stdout = io::stdout();
-        let keyboard_enhancement = query_keyboard_enhancement_support().unwrap_or(false);
+        // The object outlives the query so a terminal that declines it still finds it there, and is
+        // unlinked when this scope ends whether or not the terminal read it.
+        #[cfg(feature = "terminal-images")]
+        let graphics_probe = super::shared_frame::kitty_shared_memory_probe(GRAPHICS_PROBE_ID);
+        #[cfg(feature = "terminal-images")]
+        let probe_bytes = graphics_probe
+            .as_ref()
+            .map(|(_, query)| query.as_bytes())
+            .unwrap_or_default();
+        #[cfg(not(feature = "terminal-images"))]
+        let probe_bytes: &[u8] = &[];
+        let capabilities = query_host_capabilities(probe_bytes).unwrap_or_default();
+        let keyboard_enhancement = capabilities.keyboard_enhancement;
+        // Recorded rather than acted on: the mode is only worth asking for once the cell size is
+        // known too. Both halves have to be settled here, before the runner chooses an input
+        // decoder, because only one of them can read a pixel report - asking a decoder that cannot
+        // for one would put every click in the wrong cell.
+        #[cfg(unix)]
+        {
+            crate::app::input::pixel_mouse::note_host_support(capabilities.pixel_mouse);
+            if let Ok(size) = crossterm::terminal::window_size() {
+                crate::app::input::pixel_mouse::note_window_size(
+                    size.columns,
+                    size.rows,
+                    Some(size.width),
+                    Some(size.height),
+                );
+            }
+        }
+        #[cfg(feature = "terminal-images")]
+        super::shared_frame::note_host_support(
+            graphics_probe.is_some() && capabilities.graphics_query_ok,
+        );
         let plan = enter_plan(policy, mouse_enabled, keyboard_enhancement);
         let mut executor = CrosstermTransitionExecutor::new(stdout);
         execute_plan_with_rollback(&mut executor, &plan)?;

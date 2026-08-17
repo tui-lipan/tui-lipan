@@ -7,8 +7,9 @@ use std::time::Duration;
 use web_time::Instant;
 
 use super::{
-    AppRunner, DirtyLevel, DirtyTracker, DragState, FrameworkCommandAction,
+    AppRunner, DirtyLevel, DirtyTracker, DragState, FrameworkCommandAction, RunnerEvent,
     effective_active_drag_dirty_level, mouse_dispatch_dirty_level, spinner_frame_for_speed,
+    split_pointer_event,
 };
 use crate::TextEditor;
 use crate::animation::{Easing, TransitionConfig};
@@ -5491,6 +5492,56 @@ fn wheel_forward_runner(
     runner
 }
 
+/// Both spellings of a pointer report are pointer reports.
+///
+/// The runner's drag, motion, and wheel loops coalesce a burst of reports down to the newest one
+/// before dispatching, and they find those reports by matching this. A host reporting pixels reports
+/// every pixel of motion rather than every cell crossing, so it produces roughly an order of
+/// magnitude more of them during a drag - so a loop that recognised only the cell-precise spelling
+/// would stop coalescing exactly when there is most to coalesce, and nothing would say so. What the
+/// user sees then is a child running a backlog behind the pointer: a scrollbar grip that trails the
+/// mouse and catches up in jumps.
+#[test]
+fn a_pointer_report_is_recognised_in_either_precision() {
+    let mouse = crossterm::event::MouseEvent {
+        kind: crossterm::event::MouseEventKind::Moved,
+        column: 4,
+        row: 2,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    };
+
+    let (event, sub_cell) =
+        split_pointer_event(RunnerEvent::Terminal(CEvent::Mouse(mouse))).expect("a pointer");
+    assert_eq!(event, CEvent::Mouse(mouse));
+    assert_eq!(
+        sub_cell, None,
+        "a cell-precise report says nothing about where in the cell the pointer was"
+    );
+
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    {
+        let (event, sub_cell) = split_pointer_event(RunnerEvent::Pointer {
+            event: CEvent::Mouse(mouse),
+            sub_cell: (3, 7),
+        })
+        .expect("a pointer");
+        assert_eq!(event, CEvent::Mouse(mouse));
+        assert_eq!(
+            sub_cell,
+            Some((3, 7)),
+            "the sub-cell position has to survive coalescing to reach a child asking for pixels"
+        );
+    }
+
+    let handed_back =
+        split_pointer_event(RunnerEvent::Terminal(CEvent::FocusGained)).expect_err("not a pointer");
+    assert_eq!(
+        *handed_back,
+        RunnerEvent::Terminal(CEvent::FocusGained),
+        "anything else must come back intact to be replayed, not swallowed by the loop"
+    );
+}
+
 #[cfg(feature = "terminal")]
 #[test]
 fn coalesced_wheel_ticks_forward_one_sequence_per_tick() {
@@ -5960,6 +6011,41 @@ fn live_screen_output_reaches_the_node_without_a_view_pass() {
         !backend.refresh_live_terminals(),
         "a refresh that finds the screen unmoved does nothing"
     );
+}
+
+/// A pane nobody is looking at still has a child program writing to it, so the cadence the loop
+/// wakes on has to follow the live screen rather than the focus. The interval is the app's frame
+/// rate, which is at once the fastest such a pane can redraw and the only cost an idle one imposes.
+#[cfg(feature = "terminal")]
+#[test]
+fn an_unfocused_live_terminal_paces_the_loop_at_the_configured_frame_rate() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 4,
+    };
+    let screen = Rc::new(RefCell::new(crate::widgets::TerminalScreen::new(
+        4, 20, 100,
+    )));
+    let views = Rc::new(Cell::new(0));
+    let component = || LiveScreenSmoke {
+        screen: screen.clone(),
+        views: views.clone(),
+    };
+
+    for (fps, expected) in [(120u16, 8_333u64), (60, 16_666)] {
+        let mut runner = AppRunner::new(App::new().mouse(false).frame_rate(fps), component(), ());
+        init_runner(&mut runner, component(), viewport);
+        runner.focus.focused = None;
+
+        let mut dirty = DirtyTracker::default();
+        assert_eq!(
+            runner.update_animation_cycle(&mut dirty),
+            Duration::from_micros(expected),
+            "{fps} fps"
+        );
+    }
 }
 
 /// Chord mismatch under `AppCommandsThenTerminal` forwards the key (no frame for the key itself)

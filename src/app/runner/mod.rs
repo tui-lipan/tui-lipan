@@ -90,6 +90,14 @@ pub(crate) use terminal::TerminalManager;
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RunnerEvent {
     Terminal(CEvent),
+    /// A pointer event the host reported in pixels: the cell it landed in, plus where inside that
+    /// cell it was. Only the latter distinguishes it from [`Self::Terminal`], and only a terminal
+    /// widget forwarding to a child that asked for pixels has any use for it.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    Pointer {
+        event: CEvent,
+        sub_cell: (u16, u16),
+    },
     /// Wakeup for a queued live-control request.
     Control,
     HostTerminalColors(HostTerminalColors),
@@ -231,6 +239,29 @@ fn preserve_pending_event(pending_event: &mut Option<RunnerEvent>, event: Runner
     }
 }
 
+/// A pointer report, and where inside its cell it landed when the host reports pixels.
+type PointerReport = (CEvent, Option<(u16, u16)>);
+
+/// A pointer report in whichever spelling the running decoder produces; anything else is handed back
+/// untouched to be preserved.
+///
+/// The coalescing loops below have to accept both spellings. A host reporting pixels reports every
+/// pixel of motion rather than every cell crossing, so it produces roughly an order of magnitude
+/// more events during a drag - which is when coalescing matters most, and exactly when a loop
+/// matching only [`RunnerEvent::Terminal`] would stop doing it. Left uncoalesced, each report is
+/// dispatched, forwarded to a child, and rendered, so a fast drag runs the child a backlog behind
+/// the pointer: the grip trails the mouse and arrives in visible jumps.
+fn split_pointer_event(event: RunnerEvent) -> std::result::Result<PointerReport, Box<RunnerEvent>> {
+    match event {
+        RunnerEvent::Terminal(event @ CEvent::Mouse(_)) => Ok((event, None)),
+        #[cfg(all(unix, not(target_arch = "wasm32")))]
+        RunnerEvent::Pointer { event, sub_cell } if matches!(event, CEvent::Mouse(_)) => {
+            Ok((event, Some(sub_cell)))
+        }
+        other => Err(Box::new(other)),
+    }
+}
+
 fn deferred_host_color_refresh_deadline(now: Instant) -> Instant {
     now + HOST_COLOR_REFRESH_QUIET_WINDOW
 }
@@ -245,8 +276,22 @@ fn host_color_refresh_wait_remaining(
 }
 
 #[cfg(unix)]
+/// Whether Termina decodes this run's input rather than crossterm.
+///
+/// Live host colours need it, being a running conversation with the host rather than a startup
+/// question. Pixel-precise pointer reporting needs it for a harder reason: mode 1016 replaces the
+/// cell coordinates in a mouse report with pixel ones, and a decoder that does not know that reads
+/// one as the other and lands every click hundreds of columns away. So the mode is only ever asked
+/// for on this path, and asking for it is only possible on this path.
 fn uses_termina_live_input(surface: &SurfaceDriver, host_color_refresh_enabled: bool) -> bool {
-    !surface.is_inline() && host_color_refresh_enabled
+    if surface.is_inline() {
+        return false;
+    }
+    #[cfg(unix)]
+    if crate::app::input::pixel_mouse::is_active() {
+        return true;
+    }
+    host_color_refresh_enabled
 }
 
 struct PlatformInputCoordinator {
@@ -356,6 +401,9 @@ pub struct AppRunner<C: Component> {
     pub(crate) contrast_policy: ContrastPolicy,
     pub(crate) mouse_enabled: bool,
     pub(crate) scroll_wheel_multiplier: u16,
+    /// How often the loop wakes for content nothing asked it to draw - a terminal's child program
+    /// writing, an animation advancing. See [`crate::app::App::frame_rate`].
+    pub(crate) frame_interval: Duration,
     /// Genuine input events recovered from the stdin queue after a host-color OSC
     /// probe (e.g. wheel scrolls performed right after a `FocusGained`). Re-fed
     /// into the event loop ahead of the channel so the probe's blocking round-trip
@@ -645,6 +693,7 @@ impl<C: Component> AppRunner<C> {
             contrast_policy: app.contrast_policy,
             mouse_enabled,
             scroll_wheel_multiplier: app.scroll_wheel_multiplier.max(1),
+            frame_interval: crate::app::context::frame_interval(app.frame_rate),
             pending_reinjected_input: VecDeque::new(),
             mouse_capture_requested,
             mouse_capture_active: mouse_enabled,
@@ -1902,7 +1951,17 @@ impl<C: Component> AppRunner<C> {
                         }
                         None
                     }
-                    Some(RunnerEvent::Terminal(event)) => Some(event),
+                    #[cfg(all(unix, not(target_arch = "wasm32")))]
+                    Some(RunnerEvent::Pointer { event, sub_cell }) => {
+                        self.mouse.sub_cell.set(Some(sub_cell));
+                        Some(event)
+                    }
+                    Some(RunnerEvent::Terminal(event)) => {
+                        if matches!(event, CEvent::Mouse(_)) {
+                            self.mouse.sub_cell.set(None);
+                        }
+                        Some(event)
+                    }
                     None => None,
                 };
                 if let Some(event) = maybe_event {
@@ -2015,24 +2074,33 @@ impl<C: Component> AppRunner<C> {
                                 }
 
                                 if !handled && matches!(mouse.kind, MouseKind::Drag(_)) {
-                                    let mut pending_non_drag: Option<MouseEvent> = None;
+                                    let mut sub_cell = self.mouse.sub_cell.get();
+                                    let mut pending_non_drag: Option<(
+                                        MouseEvent,
+                                        Option<(u16, u16)>,
+                                    )> = None;
                                     while let Some(next_ev) = self.try_recv_event(event_rx)? {
-                                        match next_ev {
-                                            RunnerEvent::Terminal(CEvent::Mouse(next_m)) => {
-                                                if let Some(next_mouse) =
-                                                    self.convert_mouse_event(next_m)
+                                        match split_pointer_event(next_ev) {
+                                            Ok((next_ev, next_sub_cell)) => {
+                                                if let Some(next_mouse) = self
+                                                    .convert_coalesced_pointer(
+                                                        next_ev,
+                                                        next_sub_cell,
+                                                    )
                                                 {
                                                     if matches!(next_mouse.kind, MouseKind::Drag(_))
                                                     {
                                                         mouse = next_mouse;
+                                                        sub_cell = next_sub_cell;
                                                     } else {
-                                                        pending_non_drag = Some(next_mouse);
+                                                        pending_non_drag =
+                                                            Some((next_mouse, next_sub_cell));
                                                         break;
                                                     }
                                                 }
                                             }
-                                            _ => {
-                                                preserve_pending_event(&mut pending_event, next_ev);
+                                            Err(other) => {
+                                                preserve_pending_event(&mut pending_event, *other);
                                                 break;
                                             }
                                         }
@@ -2041,6 +2109,7 @@ impl<C: Component> AppRunner<C> {
                                     // Dispatch the (possibly coalesced) drag event.
                                     // This is important for forwarding drag events to
                                     // terminal PTY applications that have mouse mode enabled.
+                                    self.mouse.sub_cell.set(sub_cell);
                                     let drag_before = effective_active_drag_dirty_level(&self.drag);
                                     if self.dispatch_mouse(mouse) {
                                         let after = effective_active_drag_dirty_level(&self.drag);
@@ -2057,7 +2126,8 @@ impl<C: Component> AppRunner<C> {
                                         apply_dirty_level(&mut dirty, level);
                                     }
 
-                                    if let Some(non_drag) = pending_non_drag {
+                                    if let Some((non_drag, non_drag_sub_cell)) = pending_non_drag {
+                                        self.mouse.sub_cell.set(non_drag_sub_cell);
                                         let drag_before =
                                             effective_active_drag_dirty_level(&self.drag);
                                         if self.dispatch_mouse(non_drag) {
@@ -2081,75 +2151,95 @@ impl<C: Component> AppRunner<C> {
 
                                 if !handled {
                                     if matches!(mouse.kind, MouseKind::Moved) {
+                                        let mut sub_cell = self.mouse.sub_cell.get();
                                         let mut dispatched_coalesced_move = false;
                                         while let Some(next_ev) = self.try_recv_event(event_rx)? {
-                                            if let RunnerEvent::Terminal(CEvent::Mouse(next_m)) =
-                                                next_ev
-                                            {
-                                                if let Some(next_mouse) =
-                                                    self.convert_mouse_event(next_m)
-                                                {
-                                                    if matches!(next_mouse.kind, MouseKind::Moved) {
-                                                        mouse = next_mouse;
-                                                    } else {
-                                                        if self.dispatch_mouse(mouse) {
-                                                            let hover_level =
-                                                                self.motion_hover_dirty_level();
-                                                            apply_dirty_level(
-                                                                &mut dirty,
-                                                                mouse_dispatch_dirty_level(
-                                                                    mouse.kind,
-                                                                    None,
-                                                                    None,
-                                                                    hover_level,
-                                                                ),
-                                                            );
+                                            match split_pointer_event(next_ev) {
+                                                Ok((next_ev, next_sub_cell)) => {
+                                                    if let Some(next_mouse) = self
+                                                        .convert_coalesced_pointer(
+                                                            next_ev,
+                                                            next_sub_cell,
+                                                        )
+                                                    {
+                                                        if matches!(
+                                                            next_mouse.kind,
+                                                            MouseKind::Moved
+                                                        ) {
+                                                            mouse = next_mouse;
+                                                            sub_cell = next_sub_cell;
+                                                        } else {
+                                                            self.mouse.sub_cell.set(sub_cell);
+                                                            if self.dispatch_mouse(mouse) {
+                                                                let hover_level =
+                                                                    self.motion_hover_dirty_level();
+                                                                apply_dirty_level(
+                                                                    &mut dirty,
+                                                                    mouse_dispatch_dirty_level(
+                                                                        mouse.kind,
+                                                                        None,
+                                                                        None,
+                                                                        hover_level,
+                                                                    ),
+                                                                );
+                                                            }
+                                                            dispatched_coalesced_move = true;
+                                                            self.mouse.sub_cell.set(next_sub_cell);
+                                                            let drag_before =
+                                                                active_drag_dirty_level(
+                                                                    &self.drag.active,
+                                                                );
+                                                            if self.dispatch_mouse(next_mouse) {
+                                                                let after = active_drag_dirty_level(
+                                                                    &self.drag.active,
+                                                                );
+                                                                let hover_level =
+                                                                    self.motion_hover_dirty_level();
+                                                                let level =
+                                                                    mouse_dispatch_dirty_level(
+                                                                        next_mouse.kind,
+                                                                        drag_before,
+                                                                        after,
+                                                                        hover_level,
+                                                                    );
+                                                                #[cfg(feature = "devtools")]
+                                                                self.apply_input_dirty(
+                                                                    &mut dirty,
+                                                                    level,
+                                                                    "input:mouse",
+                                                                );
+                                                                #[cfg(not(feature = "devtools"))]
+                                                                apply_dirty_level(
+                                                                    &mut dirty, level,
+                                                                );
+                                                            }
+                                                            break;
                                                         }
-                                                        dispatched_coalesced_move = true;
-                                                        let drag_before = active_drag_dirty_level(
-                                                            &self.drag.active,
-                                                        );
-                                                        if self.dispatch_mouse(next_mouse) {
-                                                            let after = active_drag_dirty_level(
-                                                                &self.drag.active,
-                                                            );
-                                                            let hover_level =
-                                                                self.motion_hover_dirty_level();
-                                                            let level = mouse_dispatch_dirty_level(
-                                                                next_mouse.kind,
-                                                                drag_before,
-                                                                after,
-                                                                hover_level,
-                                                            );
-                                                            #[cfg(feature = "devtools")]
-                                                            self.apply_input_dirty(
-                                                                &mut dirty,
-                                                                level,
-                                                                "input:mouse",
-                                                            );
-                                                            #[cfg(not(feature = "devtools"))]
-                                                            apply_dirty_level(&mut dirty, level);
-                                                        }
-                                                        break;
                                                     }
                                                 }
-                                            } else {
-                                                preserve_pending_event(&mut pending_event, next_ev);
-                                                break;
+                                                Err(other) => {
+                                                    preserve_pending_event(
+                                                        &mut pending_event,
+                                                        *other,
+                                                    );
+                                                    break;
+                                                }
                                             }
                                         }
-                                        if !dispatched_coalesced_move && self.dispatch_mouse(mouse)
-                                        {
-                                            let hover_level = self.motion_hover_dirty_level();
-                                            apply_dirty_level(
-                                                &mut dirty,
-                                                mouse_dispatch_dirty_level(
-                                                    mouse.kind,
-                                                    None,
-                                                    None,
-                                                    hover_level,
-                                                ),
-                                            );
+                                        if !dispatched_coalesced_move {
+                                            self.mouse.sub_cell.set(sub_cell);
+                                            if self.dispatch_mouse(mouse) {
+                                                let hover_level = self.motion_hover_dirty_level();
+                                                apply_dirty_level(
+                                                    &mut dirty,
+                                                    mouse_dispatch_dirty_level(
+                                                        mouse.kind,
+                                                        None,
+                                                        None,
+                                                        hover_level,
+                                                    ),
+                                                );
+                                            }
                                         }
                                     } else if matches!(
                                         mouse.kind,
@@ -2163,55 +2253,63 @@ impl<C: Component> AppRunner<C> {
                                         let mut count: u16 = 1;
                                         let direction = mouse.kind;
                                         while let Some(next_ev) = self.try_recv_event(event_rx)? {
-                                            if let RunnerEvent::Terminal(CEvent::Mouse(next_m)) =
-                                                next_ev
-                                            {
-                                                if let Some(next_mouse) =
-                                                    self.convert_mouse_event(next_m)
-                                                {
-                                                    if next_mouse.kind == direction {
-                                                        count = count.saturating_add(1);
-                                                        // Keep the latest position
-                                                        mouse = MouseEvent {
-                                                            kind: direction,
-                                                            ..next_mouse
-                                                        };
-                                                    } else {
-                                                        // Different event - dispatch the
-                                                        // coalesced scroll first, then handle
-                                                        // the non-scroll event.
-                                                        if self.dispatch_mouse_scroll(mouse, count)
-                                                        {
-                                                            // Scroll offset changed - re-reconcile
-                                                            // with the cached element tree so newly
-                                                            // visible children are laid out, but skip
-                                                            // the expensive view() rebuild.
-                                                            dirty.mark_layout();
-                                                            #[cfg(feature = "devtools")]
+                                            match split_pointer_event(next_ev) {
+                                                Ok((next_ev, next_sub_cell)) => {
+                                                    if let Some(next_mouse) = self
+                                                        .convert_coalesced_pointer(
+                                                            next_ev,
+                                                            next_sub_cell,
+                                                        )
+                                                    {
+                                                        if next_mouse.kind == direction {
+                                                            count = count.saturating_add(1);
+                                                            // Keep the latest position
+                                                            mouse = MouseEvent {
+                                                                kind: direction,
+                                                                ..next_mouse
+                                                            };
+                                                        } else {
+                                                            // Different event - dispatch the
+                                                            // coalesced scroll first, then handle
+                                                            // the non-scroll event.
+                                                            if self
+                                                                .dispatch_mouse_scroll(mouse, count)
+                                                            {
+                                                                // Scroll offset changed - re-reconcile
+                                                                // with the cached element tree so newly
+                                                                // visible children are laid out, but skip
+                                                                // the expensive view() rebuild.
+                                                                dirty.mark_layout();
+                                                                #[cfg(feature = "devtools")]
                                                             self.note_attribution(
                                                                 crate::devtools::state::UpdateSource::Input(
                                                                     "input:scroll",
                                                                 ),
                                                                 DirtyLevel::LayoutOnly,
                                                             );
+                                                            }
+                                                            if self.dispatch_mouse(next_mouse) {
+                                                                #[cfg(feature = "devtools")]
+                                                                self.apply_input_dirty(
+                                                                    &mut dirty,
+                                                                    DirtyLevel::Full,
+                                                                    "input:mouse",
+                                                                );
+                                                                #[cfg(not(feature = "devtools"))]
+                                                                dirty.mark_full();
+                                                            }
+                                                            count = 0; // Already dispatched
+                                                            break;
                                                         }
-                                                        if self.dispatch_mouse(next_mouse) {
-                                                            #[cfg(feature = "devtools")]
-                                                            self.apply_input_dirty(
-                                                                &mut dirty,
-                                                                DirtyLevel::Full,
-                                                                "input:mouse",
-                                                            );
-                                                            #[cfg(not(feature = "devtools"))]
-                                                            dirty.mark_full();
-                                                        }
-                                                        count = 0; // Already dispatched
-                                                        break;
                                                     }
                                                 }
-                                            } else {
-                                                preserve_pending_event(&mut pending_event, next_ev);
-                                                break;
+                                                Err(other) => {
+                                                    preserve_pending_event(
+                                                        &mut pending_event,
+                                                        *other,
+                                                    );
+                                                    break;
+                                                }
                                             }
                                         }
                                         if count > 0 && self.dispatch_mouse_scroll(mouse, count) {
@@ -2518,6 +2616,24 @@ impl<C: Component> AppRunner<C> {
         let mouse = to_mouse_event(event)?;
         self.surface
             .convert_mouse_event(mouse, self.surface.inline.viewport_metrics)
+    }
+
+    /// A coalesced pointer report, with its sub-cell position recorded as the one a forwarded report
+    /// should carry.
+    ///
+    /// Coalescing keeps the newest report and drops the ones behind it, so the sub-cell position has
+    /// to follow the report that is kept: it travels beside the event rather than inside it, and
+    /// stale pixels within the right cell are a pointer that jitters where it should glide.
+    fn convert_coalesced_pointer(
+        &self,
+        event: CEvent,
+        sub_cell: Option<(u16, u16)>,
+    ) -> Option<MouseEvent> {
+        self.mouse.sub_cell.set(sub_cell);
+        match event {
+            CEvent::Mouse(event) => self.convert_mouse_event(event),
+            _ => None,
+        }
     }
 
     pub(crate) fn set_viewport_metrics(&mut self, area: ratatui::layout::Rect) {

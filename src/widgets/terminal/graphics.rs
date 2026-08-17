@@ -20,6 +20,11 @@
 //!
 //! - Direct transmission (`t=d`), chunked with `m=1`, in RGB (`f=24`), RGBA (`f=32`) and PNG
 //!   (`f=100`), with optional zlib compression (`o=z`).
+//! - Out-of-band transmission through a file (`t=f`), a temporary file (`t=t`) or a shared-memory
+//!   object (`t=s`), with the `O=`/`S=` window into it, subject to a
+//!   [`GraphicsMediaPolicy`]. This is the difference between a sender pasting every pixel into the
+//!   stream and naming where they already are, so it is also the difference between a frame that
+//!   must be compressed to be affordable and one that costs a hundred bytes.
 //! - Transmit (`a=t`), transmit-and-display (`a=T`), display a stored image (`a=p`), delete
 //!   (`a=d`), and query (`a=q`).
 //! - Source cropping (`x`/`y`/`w`/`h`), explicit cell sizing (`c`/`r`), z-index (`z`), suppressed
@@ -27,9 +32,6 @@
 //!
 //! ## Not implemented
 //!
-//! - Transmission through a file or shared memory (`t=f`, `t=t`, `t=s`). A multiplexer client can
-//!   be on a different machine from the program that wrote the file, so the path is meaningless
-//!   often enough that answering `ENOTSUPP` is more honest than reading it sometimes.
 //! - Unicode placeholders (`U=1`), animation (`a=a`, `a=f`, `a=c`), and relative placements.
 //!
 //! Unsupported requests are answered with the protocol's own error report, so a child that probes
@@ -47,6 +49,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use image::DynamicImage;
 
+use super::graphics_media::{self, GraphicsMediaPolicy, GraphicsMedium};
 use super::screen::TerminalCellSize;
 
 /// Largest payload accumulated across `m=1` chunks, before decoding.
@@ -100,20 +103,52 @@ fn next_stream_namespace() -> u64 {
 /// crate's types into the public API would make each of its releases a breaking change here.
 #[derive(Clone)]
 pub struct TerminalImage {
-    pixels: Arc<DynamicImage>,
+    source: ImageSource,
+    width: u32,
+    height: u32,
     source_hash: u64,
     stream_namespace: u64,
+}
+
+/// Everything [`decode_payload`] needs, kept so the decode can happen later.
+#[derive(Debug)]
+struct DeferredDecode {
+    payload: Vec<u8>,
+    compressed: bool,
+    format: u32,
+    width: u32,
+    height: u32,
+}
+
+/// Where an image's pixels are: already decoded, or still a payload waiting to be asked for.
+///
+/// A sender streaming frames replaces one id's image far faster than anything draws it - at 300
+/// frames a second against a client painting 120, roughly two thirds of the frames are superseded
+/// before they are ever looked at. Decoding those costs a full inflate and a full frame of memory
+/// traffic for pixels nothing will see. Deferring means the superseded ones are simply dropped.
+///
+/// Deferring is only safe when nothing is waiting to be told whether the payload was good, which is
+/// why [`GraphicsStore::finish_transmit`] applies it to `q=2` transmissions alone. See there.
+#[derive(Clone)]
+enum ImageSource {
+    Decoded(Arc<DynamicImage>),
+    Deferred {
+        input: Arc<DeferredDecode>,
+        /// `None` once decoding has been attempted and failed, so a broken payload is not retried
+        /// on every frame.
+        decoded: std::sync::OnceLock<Option<Arc<DynamicImage>>>,
+    },
 }
 
 impl TerminalImage {
     /// Width in pixels.
     pub fn width(&self) -> u32 {
-        self.pixels.width()
+        self.width
     }
 
     /// Height in pixels.
     pub fn height(&self) -> u32 {
-        self.pixels.height()
+        self.height
     }
 
     /// Stable hash of the transmitted payload.
@@ -125,8 +160,16 @@ impl TerminalImage {
         self.source_hash
     }
 
-    pub(crate) fn pixels(&self) -> &Arc<DynamicImage> {
-        &self.pixels
+    /// The pixels, decoding them now if that was put off. `None` for a payload that turns out not
+    /// to decode - which the renderer treats as nothing to draw, the same as it would an image the
+    /// budget evicted.
+    pub(crate) fn pixels(&self) -> Option<&Arc<DynamicImage>> {
+        match &self.source {
+            ImageSource::Decoded(pixels) => Some(pixels),
+            ImageSource::Deferred { input, decoded } => decoded
+                .get_or_init(|| decode_deferred(input).map(Arc::new))
+                .as_ref(),
+        }
     }
 
     pub(crate) fn stream_namespace(&self) -> u64 {
@@ -420,16 +463,6 @@ enum GraphicsAction {
     Animate,
 }
 
-/// Where the pixels come from (`t=`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum GraphicsMedium {
-    /// `t=d` - inline in the escape sequence.
-    #[default]
-    Direct,
-    /// `t=f`, `t=t`, `t=s` - a path or shared-memory object on the sender's machine.
-    OutOfBand,
-}
-
 /// A parsed `APC _G` command.
 #[derive(Clone, Debug)]
 pub(super) struct GraphicsCommand {
@@ -468,7 +501,13 @@ pub(super) struct GraphicsCommand {
     delete: u8,
     /// `q=` - 1 suppresses success reports, 2 suppresses failures too.
     quiet: u32,
-    /// Payload with the base64 already undone.
+    /// `O=` - where in an out-of-band source the pixels start.
+    source_offset: u64,
+    /// `S=` - how much of an out-of-band source to read; 0 means to the end.
+    source_size: usize,
+    /// Payload with the base64 already undone. For an out-of-band medium this names the source
+    /// rather than holding the pixels, until [`TerminalGraphics::resolve_medium`] swaps it for
+    /// what the source held.
     payload: Vec<u8>,
     payload_len: usize,
 }
@@ -497,6 +536,8 @@ impl Default for GraphicsCommand {
             virtual_placement: false,
             delete: b'a',
             quiet: 0,
+            source_offset: 0,
+            source_size: 0,
             payload: Vec::new(),
             payload_len: 0,
         }
@@ -519,8 +560,12 @@ impl GraphicsCommand {
             command.apply_key(*key, value);
         }
 
+        // An out-of-band payload is a name, not pixels, and it is short: decode it even on a
+        // screen that skips payloads, because the name is the only part that has to be understood
+        // before the pixels are fetched.
         let must_decode = decode_payload
             || matches!(command.action, GraphicsAction::Query)
+            || command.medium.is_out_of_band()
             || command.format == 100;
         if must_decode {
             // A payload that does not decode makes the whole command malformed rather than empty:
@@ -547,12 +592,9 @@ impl GraphicsCommand {
                     _ => GraphicsAction::Transmit,
                 }
             }
-            b't' => {
-                self.medium = match first {
-                    b'f' | b't' | b's' => GraphicsMedium::OutOfBand,
-                    _ => GraphicsMedium::Direct,
-                }
-            }
+            b't' => self.medium = GraphicsMedium::from_key(first),
+            b'O' => self.source_offset = text.parse().unwrap_or(0),
+            b'S' => self.source_size = text.parse().unwrap_or(0),
             b'f' => self.format = text.parse().unwrap_or(32),
             b's' => self.width = text.parse().unwrap_or(0),
             b'v' => self.height = text.parse().unwrap_or(0),
@@ -1133,6 +1175,13 @@ struct StoredImage {
     bytes: usize,
     /// Monotonic tick of the last transmit or placement, for LRU eviction.
     used: u64,
+    /// `c`/`r` from the image's virtual placement: the cell box the pixels are to be fitted to.
+    ///
+    /// The protocol has a sender declare this once and then write placeholder cells naming
+    /// positions *within it*, so without it a cell's position says nothing about which pixels it
+    /// covers. `None` for an image that never got a virtual placement, whose placeholders are read
+    /// against the cell grid its own pixels imply.
+    virtual_cells: Option<(u32, u32)>,
 }
 
 /// A live placement of a stored image.
@@ -1187,6 +1236,7 @@ pub(super) struct TerminalGraphics {
     used_bytes: usize,
     clock: u64,
     storage_enabled: bool,
+    media: GraphicsMediaPolicy,
 }
 
 impl Default for TerminalGraphics {
@@ -1203,6 +1253,7 @@ impl Default for TerminalGraphics {
             used_bytes: 0,
             clock: 0,
             storage_enabled: true,
+            media: GraphicsMediaPolicy::default(),
         }
     }
 }
@@ -1226,6 +1277,10 @@ impl TerminalGraphics {
         }
         self.storage_enabled = enabled;
         self.reset();
+    }
+
+    pub(super) fn set_media_policy(&mut self, media: GraphicsMediaPolicy) {
+        self.media = media;
     }
 
     /// Drop everything, for `RIS` or a screen reset.
@@ -1325,19 +1380,33 @@ impl TerminalGraphics {
             .filter_map(|rect| {
                 let stored = self.images.get(&rect.image_id)?;
                 let (width, height) = (stored.image.width(), stored.image.height());
-                // The source region a rect covers, in the cell grid the sender laid the image out
-                // on. Clamped rather than scaled: a rect that runs past the pixels it names is a
-                // sender that rounded up, not an image that should stretch.
-                let x = u32::from(rect.image_col) * u32::from(cell.width);
-                let y = u32::from(rect.image_row) * u32::from(cell.height);
+                // The source region a rect covers. A virtual placement said how many cells the
+                // whole image spans, so a cell's share of the pixels follows from that; without one
+                // the only thing left to read positions against is the grid the pixels themselves
+                // imply. Clamped either way: a rect running past the pixels it names is a sender
+                // that rounded up, not an image that should stretch.
+                let (x, y, crop_width, crop_height) = match stored.virtual_cells {
+                    Some((cols, rows)) if cols != 0 && rows != 0 => (
+                        width * u32::from(rect.image_col) / cols,
+                        height * u32::from(rect.image_row) / rows,
+                        width * u32::from(rect.width) / cols,
+                        height * u32::from(rect.height) / rows,
+                    ),
+                    _ => (
+                        u32::from(rect.image_col) * u32::from(cell.width),
+                        u32::from(rect.image_row) * u32::from(cell.height),
+                        u32::from(rect.width) * u32::from(cell.width),
+                        u32::from(rect.height) * u32::from(cell.height),
+                    ),
+                };
                 if x >= width || y >= height {
                     return None;
                 }
                 let crop = TerminalImageCrop {
                     x,
                     y,
-                    width: (u32::from(rect.width) * u32::from(cell.width)).min(width - x),
-                    height: (u32::from(rect.height) * u32::from(cell.height)).min(height - y),
+                    width: crop_width.min(width - x).max(1),
+                    height: crop_height.min(height - y).max(1),
                 };
                 Some(TerminalImagePlacement {
                     image_id: rect.image_id,
@@ -1382,24 +1451,38 @@ impl TerminalGraphics {
     /// A probe carries a real (tiny) payload, so it is validated exactly like a transmission: the
     /// client learns from the answer whether this terminal understands the format it wants to use.
     fn query(&mut self, command: &GraphicsCommand) -> GraphicsOutcome {
-        let result = match command.medium {
-            GraphicsMedium::OutOfBand => Err("ENOTSUPP:file transmission"),
-            GraphicsMedium::Direct => decode_payload(command, &command.payload).map(|_| ()),
-        };
+        let result = self
+            .resolve_medium(command, command.payload.clone())
+            .and_then(|payload| decode_payload(command, payload).map(|_| ()));
         GraphicsOutcome {
             response: report(command, command.id, result),
             advance: None,
         }
     }
 
-    fn transmit(&mut self, command: GraphicsCommand, ctx: GraphicsContext) -> GraphicsOutcome {
-        if command.medium == GraphicsMedium::OutOfBand {
-            self.pending = None;
-            return GraphicsOutcome {
-                response: report(&command, command.id, Err("ENOTSUPP:file transmission")),
-                advance: None,
-            };
+    /// Turn a command's payload into pixels, fetching them when the command only named where they
+    /// are. A direct payload is already the pixels and passes straight through.
+    fn resolve_medium(
+        &self,
+        command: &GraphicsCommand,
+        payload: Vec<u8>,
+    ) -> Result<Vec<u8>, &'static str> {
+        if !command.medium.is_out_of_band() {
+            return Ok(payload);
         }
+        if !self.media.allows(command.medium) {
+            return Err("ENOTSUPP:file transmission");
+        }
+        graphics_media::load(
+            command.medium,
+            &payload,
+            command.source_offset,
+            command.source_size,
+            MAX_TRANSMIT_BYTES,
+        )
+    }
+
+    fn transmit(&mut self, command: GraphicsCommand, ctx: GraphicsContext) -> GraphicsOutcome {
         if command.more || self.pending.is_some() {
             return self.transmit_chunked(command, ctx);
         }
@@ -1462,7 +1545,13 @@ impl TerminalGraphics {
         ctx: GraphicsContext,
     ) -> GraphicsOutcome {
         if !self.storage_enabled {
-            let dimensions = match validate_transmit_dimensions(command, &payload) {
+            let declared = if command.medium.is_out_of_band() && !self.media.allows(command.medium)
+            {
+                Err("ENOTSUPP:file transmission")
+            } else {
+                validate_transmit_dimensions(command, &payload)
+            };
+            let dimensions = match declared {
                 Ok(dimensions) => dimensions,
                 Err(error) => {
                     return GraphicsOutcome {
@@ -1483,8 +1572,8 @@ impl TerminalGraphics {
             };
         }
 
-        let decoded = match decode_payload(command, &payload) {
-            Ok(image) => image,
+        let payload = match self.resolve_medium(command, payload) {
+            Ok(payload) => payload,
             Err(error) => {
                 return GraphicsOutcome {
                     response: report(command, id, Err(error)),
@@ -1492,12 +1581,57 @@ impl TerminalGraphics {
                 };
             }
         };
-
-        let bytes = decoded_bytes(&decoded);
-        let image = TerminalImage {
-            pixels: Arc::new(decoded),
-            source_hash: hash_payload(command.format, &payload),
-            stream_namespace: self.stream_namespace,
+        // Hashed before decoding because decoding takes the buffer: for raw pixels the payload
+        // *becomes* the image rather than being copied into one, which is a full frame of memory
+        // traffic saved on every frame.
+        let source_hash = hash_payload(command.format, &payload);
+        let (image, bytes) = match deferrable(command) {
+            // Nothing is waiting to hear whether this decodes and the size is already known, so the
+            // work waits until something asks to draw it. A frame superseded before then - the
+            // common case for a sender streaming under one id - is dropped without ever being
+            // inflated. See [`ImageSource`].
+            Some((width, height, channels)) => {
+                let bytes = (width as usize)
+                    .saturating_mul(height as usize)
+                    .saturating_mul(channels);
+                let image = TerminalImage {
+                    source: ImageSource::Deferred {
+                        input: Arc::new(DeferredDecode {
+                            payload,
+                            compressed: command.compressed,
+                            format: command.format,
+                            width,
+                            height,
+                        }),
+                        decoded: std::sync::OnceLock::new(),
+                    },
+                    width,
+                    height,
+                    source_hash,
+                    stream_namespace: self.stream_namespace,
+                };
+                (image, bytes)
+            }
+            None => {
+                let decoded = match decode_payload(command, payload) {
+                    Ok(image) => image,
+                    Err(error) => {
+                        return GraphicsOutcome {
+                            response: report(command, id, Err(error)),
+                            advance: None,
+                        };
+                    }
+                };
+                let bytes = decoded_bytes(&decoded);
+                let image = TerminalImage {
+                    width: decoded.width(),
+                    height: decoded.height(),
+                    source: ImageSource::Decoded(Arc::new(decoded)),
+                    source_hash,
+                    stream_namespace: self.stream_namespace,
+                };
+                (image, bytes)
+            }
         };
         self.insert_image(id, image, bytes);
         if command.number != 0 {
@@ -1545,8 +1679,17 @@ impl TerminalGraphics {
             stored.used = self.clock;
         }
         // A virtual placement draws nothing here and moves nothing: the sender goes on to write
-        // placeholder cells naming this image, and those are what put it on screen.
+        // placeholder cells naming this image, and those are what put it on screen. What it does
+        // carry is the box those cells are positions in, which is the only statement of how big the
+        // image is meant to be - a frame drawn at twice the cell resolution is read as covering half
+        // as many cells without it.
         if command.virtual_placement {
+            if command.cols != 0
+                && command.rows != 0
+                && let Some(stored) = self.images.get_mut(&id)
+            {
+                stored.virtual_cells = Some((command.cols, command.rows));
+            }
             return None;
         }
         if image_w == 0 || image_h == 0 {
@@ -1666,6 +1809,9 @@ impl TerminalGraphics {
     }
 
     fn insert_image(&mut self, id: u32, image: TerminalImage, bytes: usize) {
+        // The cell box belongs to the id's virtual placement, not to one frame's pixels: the
+        // protocol has a sender declare it once and then send frame after frame under the same id.
+        let virtual_cells = self.images.get(&id).and_then(|stored| stored.virtual_cells);
         self.remove_image(id);
         self.image_dimensions
             .insert(id, (image.width(), image.height()));
@@ -1676,6 +1822,7 @@ impl TerminalGraphics {
                 image,
                 bytes,
                 used: clock,
+                virtual_cells,
             },
         );
         self.used_bytes = self.used_bytes.saturating_add(bytes);
@@ -1767,6 +1914,19 @@ fn validate_transmit_dimensions(
     command: &GraphicsCommand,
     payload: &[u8],
 ) -> Result<(u32, u32), &'static str> {
+    // An out-of-band command names its pixels instead of carrying them, and reading the source is
+    // how `t=t` and `t=s` are claimed. A screen that only tracks metadata must not claim one out
+    // from under the reader that actually needs it, so it goes on what the command declared.
+    if command.medium.is_out_of_band() {
+        if command.width > MAX_IMAGE_DIMENSION || command.height > MAX_IMAGE_DIMENSION {
+            return Err("EFBIG:image too large");
+        }
+        if command.format != 100 && (command.width == 0 || command.height == 0) {
+            return Err("EINVAL:missing s/v for raw pixels");
+        }
+        return Ok((command.width, command.height));
+    }
+
     match command.format {
         format @ (24 | 32) => {
             let (width, height) = (command.width, command.height);
@@ -1788,16 +1948,73 @@ fn validate_transmit_dimensions(
             }
             Ok((width, height))
         }
-        100 => decode_payload(command, payload).map(|image| (image.width(), image.height())),
+        // Only the compressed size is known up front for a PNG, so its dimensions cost a decode.
+        // This runs on a metadata-only screen, which never sees a raw frame's pixels at all.
+        100 => {
+            decode_payload(command, payload.to_vec()).map(|image| (image.width(), image.height()))
+        }
         _ => Err("ENOTSUPP:unsupported format"),
     }
 }
 
-fn decode_payload(command: &GraphicsCommand, payload: &[u8]) -> Result<DynamicImage, &'static str> {
+/// Turn a transmitted payload into pixels, consuming it.
+///
+/// By value rather than by reference because raw formats hand the buffer straight to the image: a
+/// full window of pixels arriving sixty times a second cannot afford a copy that exists only to
+/// satisfy a signature.
+/// Whether a transmission's decode can be put off, and the size it will decode to.
+///
+/// Two conditions, both strict:
+///
+/// - **`q=2`.** Deferring moves the moment a bad payload is discovered from the transmission to the
+///   first draw, and by then there is nobody to tell. Under `q=2` the child has asked for no
+///   reports at all - neither success nor failure - so nothing is lost. `q=0` and `q=1` both still
+///   hear about errors, and are decoded immediately so that they do.
+/// - **Raw pixels with a declared size.** The dimensions have to be known without decoding, because
+///   layout asks for them long before anything draws. `f=24`/`f=32` carry them in `s`/`v`; a PNG
+///   only reveals its size to the decoder.
+///
+/// Between them these describe a sender streaming frames, which is the only case where the saving
+/// exists in the first place.
+fn deferrable(command: &GraphicsCommand) -> Option<(u32, u32, usize)> {
+    if command.quiet < 2 {
+        return None;
+    }
+    let channels = match command.format {
+        24 => 3usize,
+        32 => 4usize,
+        _ => return None,
+    };
+    let (width, height) = (command.width, command.height);
+    if width == 0 || height == 0 || width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
+        return None;
+    }
+    Some((width, height, channels))
+}
+
+/// Run a decode that [`ImageSource::Deferred`] put off.
+fn decode_deferred(input: &DeferredDecode) -> Option<DynamicImage> {
+    decode_payload(
+        &GraphicsCommand {
+            compressed: input.compressed,
+            format: input.format,
+            width: input.width,
+            height: input.height,
+            ..GraphicsCommand::default()
+        },
+        input.payload.clone(),
+    )
+    .ok()
+}
+
+fn decode_payload(
+    command: &GraphicsCommand,
+    payload: Vec<u8>,
+) -> Result<DynamicImage, &'static str> {
     let mut data = if command.compressed {
-        decompress(payload).ok_or("EINVAL:bad zlib payload")?
+        decompress(&payload).ok_or("EINVAL:bad zlib payload")?
     } else {
-        payload.to_vec()
+        payload
     };
 
     match command.format {
@@ -1858,13 +2075,68 @@ fn decoded_bytes(image: &DynamicImage) -> usize {
         .saturating_mul(4)
 }
 
+/// Tell one frame's payload from the next, cheaply enough to do it on every frame.
+///
+/// Not a general-purpose hash: it exists so the renderer can see that pixels changed, and a full
+/// window of them arrives as often as the child can draw. The standard hasher manages roughly a
+/// gigabyte a second, which at that rate is a visible slice of a core spent deciding something the
+/// bytes already say; this reads a word at a time. A collision costs one stale frame on screen.
+/// Identity of a transmitted payload, for the render cache.
+///
+/// Every frame of an animation is hashed in full, so this is on the hot path in a way its size
+/// suggests it is not: a 1.5 MB frame at 60 fps is 90 MB/s through here, and one dependent
+/// multiply per eight bytes held that to about 5.6 GB/s - measurably more of a scrolling pane's
+/// cost than decoding the frame.
+///
+/// Four lanes fix that without changing the mixing: the multiplies within a 32-byte block do not
+/// depend on each other, so the processor overlaps them instead of waiting out each latency in
+/// turn, and the loop becomes limited by memory rather than by arithmetic. The values differ from
+/// the single-lane version, which costs nothing - the hash keys an in-process cache and is never
+/// persisted, sent to the server, or compared across builds.
 fn hash_payload(format: u32, payload: &[u8]) -> u64 {
-    use std::hash::{Hash as _, Hasher as _};
+    const PRIME: u64 = 0x9E37_79B9_7F4A_7C15;
+    const LANES: usize = 4;
+    const BLOCK: usize = LANES * 8;
 
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    format.hash(&mut hasher);
-    payload.hash(&mut hasher);
-    hasher.finish()
+    let seed = u64::from(format)
+        .wrapping_mul(PRIME)
+        .wrapping_add(payload.len() as u64);
+    // Distinct starting points, so a block of identical words does not leave the lanes equal.
+    let mut lanes = [
+        seed,
+        seed.wrapping_add(PRIME),
+        seed.wrapping_add(PRIME.wrapping_mul(2)),
+        seed.wrapping_add(PRIME.wrapping_mul(3)),
+    ];
+
+    let mut blocks = payload.chunks_exact(BLOCK);
+    for block in &mut blocks {
+        for (lane, word) in lanes.iter_mut().zip(block.chunks_exact(8)) {
+            let word = u64::from_le_bytes(word.try_into().expect("eight bytes"));
+            *lane = (*lane ^ word).wrapping_mul(PRIME).rotate_left(31);
+        }
+    }
+
+    // Whatever did not fill a block folds into one lane, position included so that the same bytes
+    // arriving at a different offset do not hash alike.
+    let mut state = lanes[0];
+    let mut words = blocks.remainder().chunks_exact(8);
+    for word in &mut words {
+        let word = u64::from_le_bytes(word.try_into().expect("eight bytes"));
+        state = (state ^ word).wrapping_mul(PRIME).rotate_left(31);
+    }
+    let mut tail = 0u64;
+    for (index, byte) in words.remainder().iter().enumerate() {
+        tail |= u64::from(*byte) << (index * 8);
+    }
+    state = (state ^ tail).wrapping_mul(PRIME);
+
+    for lane in &lanes[1..] {
+        state = (state ^ lane).wrapping_mul(PRIME).rotate_left(27);
+    }
+    state ^= state >> 29;
+    state = state.wrapping_mul(PRIME);
+    state ^ (state >> 32)
 }
 
 /// Build the protocol's report for a command, when it asked for one.
@@ -1893,6 +2165,117 @@ mod tests {
         let pixels = vec![0xa0u8; (width * height * 3) as usize];
         let payload = BASE64.encode(pixels);
         format!("\x1b_Gf=24,s={width},v={height},t=d,{keys};{payload}\x1b\\").into_bytes()
+    }
+
+    /// A cache key that missed a changed byte would leave a stale frame on screen, and one that
+    /// ignored position would do the same for a frame whose content merely moved.
+    #[test]
+    fn the_payload_hash_separates_frames_that_differ_anywhere() {
+        // Longer than one 32-byte block, and deliberately not a whole number of them, so the
+        // block loop, the word remainder and the byte tail are all exercised.
+        let base: Vec<u8> = (0..205u32).map(|byte| byte as u8).collect();
+        let hash = hash_payload(24, &base);
+
+        for index in [0usize, 7, 8, 31, 32, 100, 199, 200, 204] {
+            let mut changed = base.clone();
+            changed[index] ^= 0x01;
+            assert_ne!(
+                hash_payload(24, &changed),
+                hash,
+                "a byte at {index} changed without changing the hash"
+            );
+        }
+
+        assert_ne!(
+            hash_payload(32, &base),
+            hash,
+            "the format is part of the identity"
+        );
+        assert_ne!(
+            hash_payload(24, &base[..204]),
+            hash,
+            "the length is part of the identity"
+        );
+
+        let mut swapped = base.clone();
+        swapped.swap(0, 8);
+        assert_ne!(
+            hash_payload(24, &swapped),
+            hash,
+            "two words exchanged is a different frame, not the same one reordered"
+        );
+        assert_eq!(hash_payload(24, &base), hash, "and it is stable");
+    }
+
+    /// Deferring a decode moves the moment a bad payload is noticed to the first draw, so it is
+    /// allowed only where nobody is listening for the verdict and the size is already known.
+    #[test]
+    fn only_a_quiet_raw_transmission_may_have_its_decode_deferred() {
+        let raw_quiet = GraphicsCommand {
+            quiet: 2,
+            format: 24,
+            width: 4,
+            height: 4,
+            ..GraphicsCommand::default()
+        };
+        assert_eq!(deferrable(&raw_quiet), Some((4, 4, 3)));
+        assert_eq!(
+            deferrable(&GraphicsCommand {
+                format: 32,
+                ..raw_quiet.clone()
+            }),
+            Some((4, 4, 4)),
+            "an alpha channel is still raw"
+        );
+
+        for quiet in [0, 1] {
+            assert_eq!(
+                deferrable(&GraphicsCommand {
+                    quiet,
+                    ..raw_quiet.clone()
+                }),
+                None,
+                "q={quiet} still hears about a payload that does not decode"
+            );
+        }
+        assert_eq!(
+            deferrable(&GraphicsCommand {
+                format: 100,
+                ..raw_quiet.clone()
+            }),
+            None,
+            "a PNG only tells the decoder how big it is"
+        );
+        assert_eq!(
+            deferrable(&GraphicsCommand {
+                width: 0,
+                ..raw_quiet.clone()
+            }),
+            None,
+            "no declared size to lay out against"
+        );
+    }
+
+    /// The pixels a deferred decode produces are the pixels an immediate one would have.
+    #[test]
+    fn a_deferred_decode_yields_the_same_image() {
+        let mut graphics = TerminalGraphics::default();
+        let mut scanner = GraphicsScanner::default();
+        let (_, commands) = scan_all(&mut scanner, &rgb_command("q=2,i=7,a=T", 3, 2));
+        for command in commands {
+            graphics.apply(command, context());
+        }
+        let stored = &graphics.images.get(&7).expect("stored image").image;
+        assert!(
+            matches!(stored.source, ImageSource::Deferred { .. }),
+            "a quiet raw transmission is kept undecoded"
+        );
+        // Declared before anything is decoded, because layout asks long before the first draw.
+        assert_eq!((stored.width(), stored.height()), (3, 2));
+        let pixels = stored.pixels().expect("decodes on demand");
+        assert_eq!(pixels.width(), 3);
+        assert_eq!(pixels.height(), 2);
+        assert_eq!(pixels.to_rgb8().as_raw(), &vec![0xa0u8; 3 * 2 * 3]);
     }
 
     fn context() -> GraphicsContext {
@@ -2037,9 +2420,185 @@ mod tests {
         assert!(graphics.visible(0, 0, 24, false).is_empty());
     }
 
+    /// Write a frame where a child would leave one, and return the `t=f` command naming it.
+    fn out_of_band_frame(name: &str, width: u32, height: u32) -> (std::path::PathBuf, Vec<u8>) {
+        let path = std::env::temp_dir().join(format!("tui-lipan-oob-{name}"));
+        std::fs::write(&path, vec![0x7fu8; (width * height * 4) as usize]).expect("write frame");
+        let named = BASE64.encode(path.to_string_lossy().as_bytes());
+        let escape =
+            format!("\x1b_Ga=T,t=f,f=32,s={width},v={height},i=7;{named}\x1b\\").into_bytes();
+        (path, escape)
+    }
+
     #[test]
-    fn out_of_band_transmission_is_refused_in_the_protocol_s_own_terms() {
+    fn a_file_the_child_named_is_read_instead_of_the_escape_payload() {
+        let (path, escape) = out_of_band_frame("read", 4, 3);
         let mut graphics = TerminalGraphics::default();
+        let mut scanner = GraphicsScanner::default();
+        let (_, commands) = scan_all(&mut scanner, &escape);
+
+        let outcome = graphics.apply(commands[0].clone(), context());
+        let response = String::from_utf8(outcome.response.expect("a report")).unwrap();
+        assert!(response.contains("OK"), "unexpected report: {response}");
+
+        let placed = graphics.visible(0, 0, 24, false);
+        assert_eq!(placed.len(), 1);
+        assert_eq!((placed[0].image.width(), placed[0].image.height()), (4, 3));
+        assert!(path.exists(), "t=f leaves the frame for the next reader");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_screen_that_only_tracks_metadata_answers_without_claiming_the_source() {
+        let (path, escape) = out_of_band_frame("metadata", 4, 3);
+        let mut graphics = TerminalGraphics::default();
+        graphics.set_storage_enabled(false);
+        let mut scanner = GraphicsScanner::default();
+        scanner.set_decode_payload(false);
+        let (_, commands) = scan_all(&mut scanner, &escape);
+
+        let outcome = graphics.apply(commands[0].clone(), context());
+        let response = String::from_utf8(outcome.response.expect("a report")).unwrap();
+        assert!(response.contains("OK"), "unexpected report: {response}");
+        assert_eq!(graphics.image_dimensions.get(&7), Some(&(4, 3)));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_policy_without_consuming_media_keeps_the_re_readable_one() {
+        let (path, escape) = out_of_band_frame("policy", 2, 2);
+        let mut graphics = TerminalGraphics::default();
+        graphics.set_media_policy(GraphicsMediaPolicy::SHARED);
+        let mut scanner = GraphicsScanner::default();
+        let (_, commands) = scan_all(&mut scanner, &escape);
+        let outcome = graphics.apply(commands[0].clone(), context());
+        let response = String::from_utf8(outcome.response.expect("a report")).unwrap();
+        assert!(response.contains("OK"), "unexpected report: {response}");
+
+        let claiming = escape
+            .windows(4)
+            .position(|window| window == b"t=f,")
+            .map(|at| {
+                let mut bytes = escape.clone();
+                bytes[at + 2] = b't';
+                bytes
+            })
+            .expect("the escape names its medium");
+        let (_, commands) = scan_all(&mut scanner, &claiming);
+        let outcome = graphics.apply(commands[0].clone(), context());
+        let response = String::from_utf8(outcome.response.expect("a report")).unwrap();
+        assert!(
+            response.contains("ENOTSUPP"),
+            "unexpected report: {response}"
+        );
+        assert!(
+            path.exists(),
+            "a refused medium must not consume the source"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// The exchange a child uses to decide how it will send every later frame. It asks with one
+    /// pixel in each medium it can produce, and the cheapest medium that answers `OK` is the one it
+    /// commits to. Answering the file probe with an error is what makes a sender fall back to
+    /// pasting compressed pixels into the stream, so this answer is worth a frame rate.
+    #[test]
+    fn a_capability_probe_for_a_file_is_answered_from_the_file() {
+        let (path, _) = out_of_band_frame("probe", 1, 1);
+        let named = BASE64.encode(path.to_string_lossy().as_bytes());
+        let probe = format!("\x1b_Gi=300,a=q,t=f,f=32,s=1,v=1;{named}\x1b\\").into_bytes();
+        let mut graphics = TerminalGraphics::default();
+        graphics.set_media_policy(GraphicsMediaPolicy::SHARED);
+        let mut scanner = GraphicsScanner::default();
+        let (_, commands) = scan_all(&mut scanner, &probe);
+
+        let outcome = graphics.apply(commands[0].clone(), context());
+        assert_eq!(
+            outcome.response.as_deref(),
+            Some(b"\x1b_Gi=300;OK\x1b\\".as_ref())
+        );
+        assert!(path.exists(), "a probe must not consume what it asks about");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Both ends of the shared-memory medium, checked against each other: the sequences this
+    /// framework writes to a host are parsed by the same framework's terminal. A malformed query
+    /// would be answered `EINVAL` rather than `OK`, which reads as "the host does not support it" and
+    /// would silently keep every frame on the inline path forever.
+    #[cfg(all(unix, feature = "terminal-images", not(target_arch = "wasm32")))]
+    #[test]
+    fn the_shared_memory_sequences_this_writes_to_a_host_are_the_ones_it_reads() {
+        use crate::backend::ratatui_backend::renderers::image::kitty_transmit_shared_memory;
+        use crate::backend::ratatui_backend::shared_frame::{
+            SharedFrame, kitty_shared_memory_probe,
+        };
+
+        let (mut probe_frame, query) = kitty_shared_memory_probe(300).expect("probe frame");
+        probe_frame.handed_over();
+        let mut graphics = TerminalGraphics::default();
+        let mut scanner = GraphicsScanner::default();
+        let (_, commands) = scan_all(&mut scanner, query.as_bytes());
+        let outcome = graphics.apply(commands[0].clone(), context());
+        assert_eq!(
+            outcome.response.as_deref(),
+            Some(b"\x1b_Gi=300;OK\x1b\\".as_ref()),
+            "the probe a host is asked with has to be a transmission it can answer"
+        );
+
+        let mut frame = SharedFrame::write(&[0x40u8; 4 * 3 * 3]).expect("frame");
+        let transmit = kitty_transmit_shared_memory(
+            frame.name(),
+            4,
+            3,
+            24,
+            7,
+            ratatui::layout::Size::new(6, 2),
+        );
+        frame.handed_over();
+        let (_, commands) = scan_all(&mut scanner, transmit.as_bytes());
+        graphics.apply(commands[0].clone(), context());
+
+        // A `U=1` transmission draws nothing where it happens, so what proves it arrived is the
+        // stored image the placeholder cells will later name.
+        let stored = graphics.images.get(&7).expect("stored under its own id");
+        assert_eq!((stored.image.width(), stored.image.height()), (4, 3));
+
+        // And the cell box travels with it. The renderer transmits a frame at whatever resolution it
+        // arrived in and leaves the fitting to the terminal, so the box has to be what placeholder
+        // positions are read against: against the pixels' own cell grid instead, these six columns
+        // of a four-pixel-wide image would each claim a whole cell's worth and show the first
+        // fraction of it magnified.
+        let placement = whole_box_placement(&graphics, 7, 6, 2);
+        assert_eq!((placement.cols, placement.rows), (6, 2));
+        let crop = placement.source_crop.expect("a source region");
+        assert_eq!((crop.x, crop.y, crop.width, crop.height), (0, 0, 4, 3));
+    }
+
+    /// The placement a full box of placeholder cells resolves to, which is what a host showing the
+    /// image actually draws from.
+    #[cfg(feature = "terminal-images")]
+    fn whole_box_placement(
+        graphics: &TerminalGraphics,
+        image_id: u32,
+        cols: u16,
+        rows: u16,
+    ) -> TerminalImagePlacement {
+        let cells: Vec<PlaceholderCell> = (0..rows)
+            .flat_map(|row| {
+                (0..cols).map(move |col| {
+                    PlaceholderCell::new(row, col, image_id, &[diacritic(row), diacritic(col)])
+                })
+            })
+            .collect();
+        let mut placements = graphics.placeholder_placements(&cells, TerminalCellSize::new(10, 20));
+        assert_eq!(placements.len(), 1, "one image, one rectangle of cells");
+        placements.remove(0)
+    }
+
+    #[test]
+    fn out_of_band_transmission_is_refused_when_the_policy_allows_nothing() {
+        let mut graphics = TerminalGraphics::default();
+        graphics.set_media_policy(GraphicsMediaPolicy::NONE);
         let mut scanner = GraphicsScanner::default();
         let (_, commands) = scan_all(&mut scanner, b"\x1b_Ga=T,t=f,i=3;L3RtcC9pbWcucG5n\x1b\\");
 
@@ -2102,6 +2661,7 @@ mod tests {
             30,
             40,
             33,
+            ratatui::layout::Size::new(5, 4),
             false,
         );
 
@@ -2112,8 +2672,18 @@ mod tests {
             graphics.apply(command, context());
         }
 
-        let decoded = graphics.images.get(&33).unwrap().image.pixels.to_rgba8();
+        let decoded = graphics
+            .images
+            .get(&33)
+            .unwrap()
+            .image
+            .pixels()
+            .expect("pixels decode")
+            .to_rgba8();
         assert_eq!(decoded.as_raw(), &pixels);
+        let placement = whole_box_placement(&graphics, 33, 5, 4);
+        let crop = placement.source_crop.expect("a source region");
+        assert_eq!((crop.x, crop.y, crop.width, crop.height), (0, 0, 30, 40));
     }
 
     #[test]

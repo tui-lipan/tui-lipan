@@ -70,29 +70,48 @@ pub fn query_host_colors() -> Option<HostTerminalColors> {
     None
 }
 
-/// Detect Kitty keyboard-protocol support with a short, bounded timeout.
+/// What the host terminal said when asked, at startup, what it implements.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HostCapabilities {
+    /// The Kitty keyboard protocol, which distinguishes key presses a legacy encoding cannot.
+    pub keyboard_enhancement: bool,
+    /// SGR-pixels mouse reporting (DEC private mode 1016), which puts the pointer's position on the
+    /// wire in pixels rather than cells.
+    pub pixel_mouse: bool,
+    /// A graphics-protocol query answered `OK`. Only meaningful when one was asked.
+    pub graphics_query_ok: bool,
+}
+
+/// Ask the host what it implements, in one round trip with a short, bounded timeout.
 ///
-/// This mirrors `crossterm::terminal::supports_keyboard_enhancement` (write
-/// `CSI ? u` followed by `CSI c`, then wait for a Kitty flags reply `CSI ? … u`
-/// or the Primary Device Attributes terminator `CSI ? … c`) but caps the wait at
-/// ~250ms instead of crossterm's hard-coded 2s. Terminals answer this probe in
-/// well under a millisecond; the long crossterm timeout only ever bites when
-/// nothing is on the other end of the TTY (a non-interactive PTY, a harness, a
-/// pipe), where it stalls startup for two seconds before defaulting to `false`.
+/// The keyboard half mirrors `crossterm::terminal::supports_keyboard_enhancement` (write `CSI ? u`,
+/// wait for a Kitty flags reply `CSI ? … u`) but caps the wait at ~250ms instead of crossterm's
+/// hard-coded 2s. Terminals answer in well under a millisecond; the long timeout only ever bites
+/// when nothing is on the other end of the TTY (a non-interactive PTY, a harness, a pipe), where it
+/// stalls startup for two seconds before defaulting to `false`.
 ///
-/// Returns `None` when `/dev/tty` cannot be opened or raw mode cannot be set;
-/// callers should treat that as "unsupported" (`.unwrap_or(false)`), matching the
-/// previous crossterm behavior.
+/// Both questions ride one `CSI c` sentinel - Primary Device Attributes, which every terminal
+/// answers - so the wait ends as soon as that reply arrives and the sentinel is consumed rather than
+/// left queued to leak into the shell later. Asking them separately would cost a second timeout.
+///
+/// The mouse half cannot be asked through the event reader instead: `DECRPM` replies for modes the
+/// input parser does not model are a parse error there, not an event. Neither can a graphics query,
+/// whose reply is an `APC` sequence the parser does not surface at all - hence `graphics_probe`,
+/// written verbatim before the sentinel, whose `OK` reply is reported as `graphics_query_ok`.
+///
+/// Returns `None` when `/dev/tty` cannot be opened or raw mode cannot be set; callers should treat
+/// that as "nothing supported".
 #[cfg(unix)]
-pub fn query_keyboard_enhancement_support() -> Option<bool> {
+pub fn query_host_capabilities(graphics_probe: &[u8]) -> Option<HostCapabilities> {
     let fd = tty_open()?;
     let _fd_guard = FdGuard(fd);
     let _raw_guard = RawModeGuard::new(fd)?;
 
-    // CSI ? u  → request current Kitty keyboard flags.
-    // CSI c    → Primary Device Attributes, a universally-supported terminator
-    //            so we can stop waiting as soon as the DA reply arrives.
-    tty_write_all(fd, b"\x1b[?u\x1b[c")?;
+    let mut probe = Vec::with_capacity(graphics_probe.len() + 24);
+    probe.extend_from_slice(b"\x1b[?u\x1b[?1016$p");
+    probe.extend_from_slice(graphics_probe);
+    probe.extend_from_slice(b"\x1b[c");
+    tty_write_all(fd, &probe)?;
 
     let mut buffer = Vec::with_capacity(64);
     let deadline = Instant::now() + Duration::from_millis(250);
@@ -109,18 +128,17 @@ pub fn query_keyboard_enhancement_support() -> Option<bool> {
             break;
         }
         buffer.extend_from_slice(&chunk[..n]);
-        if let Some(supported) = scan_keyboard_enhancement(&buffer) {
-            return Some(supported);
+        if let Some(capabilities) = scan_host_capabilities(&buffer) {
+            return Some(capabilities);
         }
     }
     // No decisive reply within the budget: treat as unsupported.
-    Some(false)
+    Some(HostCapabilities::default())
 }
 
-/// Detection stub for non-Unix hosts (crossterm handles Windows natively, but the
-/// call sites default to `false`, so returning `None` preserves that).
+/// Query stub for non-Unix hosts (crossterm handles Windows keyboard enhancement natively).
 #[cfg(not(unix))]
-pub fn query_keyboard_enhancement_support() -> Option<bool> {
+pub fn query_host_capabilities(_graphics_probe: &[u8]) -> Option<HostCapabilities> {
     None
 }
 
@@ -211,7 +229,7 @@ pub(crate) fn flush_pending_terminal_responses_on_exit() {
             break;
         };
         pending.extend_from_slice(&chunk[..n]);
-        if scan_keyboard_enhancement(&pending).is_some() {
+        if scan_host_capabilities(&pending).is_some() {
             break;
         }
     }
@@ -228,30 +246,40 @@ pub(crate) fn flush_pending_terminal_responses_on_exit() {}
 
 /// Scan probe output through the terminating DA reply.
 ///
-/// `Some(true)`  — the DA terminator arrived after a Kitty flags reply.
-/// `Some(false)` — the DA terminator arrived without a Kitty flags reply.
-/// `None`        — the DA terminator has not arrived yet; keep reading. Waiting
-///                 for it consumes the sentinel instead of leaving it queued to
-///                 leak into the shell when raw mode is disabled.
+/// `Some(_)` — the DA terminator arrived; whatever replies preceded it are the answer.
+/// `None`    — it has not arrived yet; keep reading. Waiting for it consumes the sentinel instead of
+///             leaving it queued to leak into the shell when raw mode is disabled.
 #[cfg(unix)]
-fn scan_keyboard_enhancement(buf: &[u8]) -> Option<bool> {
+fn scan_host_capabilities(buf: &[u8]) -> Option<HostCapabilities> {
+    let mut capabilities = HostCapabilities::default();
     let mut i = 0usize;
-    let mut kitty_reply = false;
     while i + 2 < buf.len() {
+        // APC: the graphics protocol's own reply, `ESC _ G i=… ; OK ESC \`.
+        if buf[i] == 0x1b && buf[i + 1] == b'_' {
+            let end = find_string_terminator(&buf[i..])?;
+            capabilities.graphics_query_ok |= buf[i..i + end].ends_with(b";OK");
+            i += end;
+            continue;
+        }
         if buf[i] == 0x1b && buf[i + 1] == b'[' && buf[i + 2] == b'?' {
-            let mut j = i + 3;
+            let params = i + 3;
+            let mut j = params;
             while j < buf.len() {
-                let b = buf[j];
-                match b {
+                match buf[j] {
                     b'u' => {
-                        kitty_reply = true;
+                        capabilities.keyboard_enhancement = true;
                         i = j;
                         break;
                     }
-                    b'c' => return Some(kitty_reply),
+                    b'y' => {
+                        capabilities.pixel_mouse |= implements_mode(&buf[params..j], 1016);
+                        i = j;
+                        break;
+                    }
+                    b'c' => return Some(capabilities),
                     // CSI parameter (0x30..=0x3f) or intermediate (0x20..=0x2f) bytes
                     0x20..=0x3f => j += 1,
-                    // any other final byte: not the reply we sent, stop this scan
+                    // any other final byte: not a reply we sent, stop this scan
                     _ => break,
                 }
             }
@@ -263,6 +291,37 @@ fn scan_keyboard_enhancement(buf: &[u8]) -> Option<bool> {
         i += 1;
     }
     None
+}
+
+/// Where the `ESC \` that ends a string sequence begins, counted from its introducer.
+#[cfg(unix)]
+fn find_string_terminator(buf: &[u8]) -> Option<usize> {
+    buf.windows(2)
+        .position(|pair| pair == [0x1b, b'\\'])
+        .filter(|position| *position > 0)
+}
+
+/// Whether a `DECRPM` reply's parameters say `mode` is implemented.
+///
+/// The parameters run from the `?` to the `$` of a `CSI ? Pa ; Ps $ y` reply. Setting 0 is "not
+/// recognized"; every other value describes a mode the terminal has, set or reset, so the question
+/// of whether it is on right now is a different one from whether asking for it will work.
+#[cfg(unix)]
+fn implements_mode(params: &[u8], mode: u16) -> bool {
+    let Ok(text) = std::str::from_utf8(params) else {
+        return false;
+    };
+    let Some(text) = text.strip_suffix('$') else {
+        return false;
+    };
+    let mut fields = text.split(';');
+    if fields.next().and_then(|field| field.parse::<u16>().ok()) != Some(mode) {
+        return false;
+    }
+    matches!(
+        fields.next().and_then(|field| field.parse::<u8>().ok()),
+        Some(1..=4)
+    )
 }
 
 #[cfg(unix)]
@@ -522,40 +581,109 @@ impl Drop for RawModeGuard {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::scan_keyboard_enhancement;
+    use super::{HostCapabilities, scan_host_capabilities};
+
+    fn keyboard(enhancement: bool) -> Option<HostCapabilities> {
+        Some(HostCapabilities {
+            keyboard_enhancement: enhancement,
+            ..HostCapabilities::default()
+        })
+    }
 
     #[test]
     fn kitty_flags_reply_waits_for_da_terminator() {
         // The flags reply proves support, but the DA sentinel must still be consumed.
-        assert_eq!(scan_keyboard_enhancement(b"\x1b[?1u"), None);
+        assert_eq!(scan_host_capabilities(b"\x1b[?1u"), None);
     }
 
     #[test]
     fn kitty_reply_before_da_reports_supported() {
         // Kitty terminals answer the flags query first, then the DA terminator.
         assert_eq!(
-            scan_keyboard_enhancement(b"\x1b[?5u\x1b[?62;1;6c"),
-            Some(true)
+            scan_host_capabilities(b"\x1b[?5u\x1b[?62;1;6c"),
+            keyboard(true)
         );
     }
 
     #[test]
     fn primary_da_only_reports_unsupported() {
         // No Kitty support: only the Primary Device Attributes reply arrives.
-        assert_eq!(scan_keyboard_enhancement(b"\x1b[?62;1;6c"), Some(false));
+        assert_eq!(scan_host_capabilities(b"\x1b[?62;1;6c"), keyboard(false));
     }
 
     #[test]
     fn partial_sequence_is_inconclusive() {
         // A `CSI ? …` prefix with no terminator yet must not decide early.
-        assert_eq!(scan_keyboard_enhancement(b"\x1b[?62;1;6"), None);
-        assert_eq!(scan_keyboard_enhancement(b"\x1b[?"), None);
-        assert_eq!(scan_keyboard_enhancement(b""), None);
+        assert_eq!(scan_host_capabilities(b"\x1b[?62;1;6"), None);
+        assert_eq!(scan_host_capabilities(b"\x1b[?"), None);
+        assert_eq!(scan_host_capabilities(b""), None);
     }
 
     #[test]
     fn unrelated_bytes_are_ignored() {
         // Stray output that is not a `CSI ? …` reply is not misread as a decision.
-        assert_eq!(scan_keyboard_enhancement(b"hello\x1b[2J world"), None);
+        assert_eq!(scan_host_capabilities(b"hello\x1b[2J world"), None);
+    }
+
+    /// The graphics reply is an APC sequence rather than a CSI one, and its `OK` is what says a
+    /// terminal can read pixels out of shared memory.
+    #[test]
+    fn a_graphics_reply_decides_shared_memory_support() {
+        assert_eq!(
+            scan_host_capabilities(b"\x1b_Gi=4294967295;OK\x1b\\\x1b[?62;1;6c"),
+            Some(HostCapabilities {
+                graphics_query_ok: true,
+                ..HostCapabilities::default()
+            })
+        );
+        assert_eq!(
+            scan_host_capabilities(b"\x1b_Gi=4294967295;ENOTSUPP:shared memory\x1b\\\x1b[?62;1;6c"),
+            keyboard(false)
+        );
+        assert_eq!(
+            scan_host_capabilities(b"\x1b_Gi=4294967295;OK"),
+            None,
+            "an unterminated APC reply is not yet an answer"
+        );
+        assert_eq!(
+            scan_host_capabilities(b"\x1b_Gi=1;OK\x1b\\\x1b[?5u\x1b[?1016;2$y\x1b[?62;1;6c"),
+            Some(HostCapabilities {
+                keyboard_enhancement: true,
+                pixel_mouse: true,
+                graphics_query_ok: true,
+            }),
+            "three answers and a terminator in one round trip"
+        );
+    }
+
+    /// The mode report is why this probe exists at all: a terminal that implements SGR-pixels says
+    /// so here, and a terminal that does not answers 0 or does not answer.
+    #[test]
+    fn a_mode_report_decides_pixel_mouse_support() {
+        assert_eq!(
+            scan_host_capabilities(b"\x1b[?1016;2$y\x1b[?62;1;6c"),
+            Some(HostCapabilities {
+                pixel_mouse: true,
+                ..HostCapabilities::default()
+            })
+        );
+        assert_eq!(
+            scan_host_capabilities(b"\x1b[?5u\x1b[?1016;1$y\x1b[?62;1;6c"),
+            Some(HostCapabilities {
+                keyboard_enhancement: true,
+                pixel_mouse: true,
+                graphics_query_ok: false,
+            })
+        );
+        assert_eq!(
+            scan_host_capabilities(b"\x1b[?1016;0$y\x1b[?62;1;6c"),
+            keyboard(false),
+            "not recognized"
+        );
+        assert_eq!(
+            scan_host_capabilities(b"\x1b[?2026;2$y\x1b[?62;1;6c"),
+            keyboard(false),
+            "a report about some other mode decides nothing"
+        );
     }
 }

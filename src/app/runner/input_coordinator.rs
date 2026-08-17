@@ -23,9 +23,13 @@ use termina::event::{
 use termina::{EventReader, PlatformTerminal, Terminal as _};
 use web_time::Instant;
 
+use crate::app::input::pixel_mouse;
 use crate::backend::ratatui_backend::terminal_handoff::{
     InputHandoffControl, InputHandoffSlot, register_input_handoff_control,
     unregister_input_handoff_control,
+};
+use crate::backend::ratatui_backend::terminal_transition::{
+    CrosstermTransitionExecutor, execute_plan, pixel_mouse_plan,
 };
 use crate::style::{Color, HostTerminalColors};
 
@@ -230,7 +234,18 @@ fn contain_worker_panic(events: &mpsc::Sender<RunnerEvent>, worker: impl FnOnce(
 
 fn open_event_reader() -> io::Result<EventReader> {
     let terminal = PlatformTerminal::new()?;
-    Ok(terminal.event_reader())
+    if let Ok(size) = terminal.get_dimensions() {
+        pixel_mouse::note_window_size(size.cols, size.rows, size.pixel_width, size.pixel_height);
+    }
+    let reader = terminal.event_reader();
+    // Asked for here rather than in the enter plan: the host's own answer arrived before this, but
+    // the cell size a pixel report is divided by is only known now.
+    if pixel_mouse::is_active() {
+        let mut stdout = io::stdout();
+        let mut executor = CrosstermTransitionExecutor::new(&mut stdout);
+        let _ = execute_plan(&mut executor, &pixel_mouse_plan(true));
+    }
+    Ok(reader)
 }
 
 fn run_worker(
@@ -458,6 +473,8 @@ fn dynamic_color_response(
 #[derive(Debug, PartialEq, Eq)]
 enum TerminaEventAction {
     Input(CrosstermEvent),
+    /// A pointer position the host reported in pixels, split into cell and sub-cell parts.
+    Pointer(CrosstermEvent, (u16, u16)),
     ThemeRefresh,
     Ignore,
 }
@@ -469,6 +486,9 @@ fn dispatch_termina_event(
 ) -> bool {
     match map_termina_event(event) {
         TerminaEventAction::Input(event) => events.send(RunnerEvent::Terminal(event)).is_ok(),
+        TerminaEventAction::Pointer(event, sub_cell) => events
+            .send(RunnerEvent::Pointer { event, sub_cell })
+            .is_ok(),
         TerminaEventAction::ThemeRefresh => {
             refresh.request();
             true
@@ -482,10 +502,16 @@ fn map_termina_event(event: TerminaEvent) -> TerminaEventAction {
         TerminaEvent::Key(key) => {
             TerminaEventAction::Input(CrosstermEvent::Key(map_key_event(key)))
         }
-        TerminaEvent::Mouse(mouse) => {
-            TerminaEventAction::Input(CrosstermEvent::Mouse(map_mouse_event(mouse)))
-        }
+        TerminaEvent::Mouse(mouse) => map_pointer_event(mouse),
         TerminaEvent::WindowResized(size) => {
+            // The pixel dimensions ride along with every resize, which is what keeps the cell size
+            // current through a font zoom rather than only at startup.
+            pixel_mouse::note_window_size(
+                size.cols,
+                size.rows,
+                size.pixel_width,
+                size.pixel_height,
+            );
             TerminaEventAction::Input(CrosstermEvent::Resize(size.cols, size.rows))
         }
         TerminaEvent::FocusIn => TerminaEventAction::Input(CrosstermEvent::FocusGained),
@@ -496,6 +522,26 @@ fn map_termina_event(event: TerminaEvent) -> TerminaEventAction {
             TerminaEventAction::Ignore
         }
     }
+}
+
+/// A pointer report, in cells or in pixels depending on what the host was asked for.
+///
+/// Mode 1016 puts pixels on the wire in the same shape 1006 puts cells, and termina's input parser
+/// does not distinguish the two - it subtracts the protocol's one-based origin and hands back
+/// `column`/`row` either way. So when the mode is on, those fields hold zero-based *pixels*, and the
+/// split has to happen here, before anything downstream can mistake one for the other.
+/// (`MouseReport::Sgr1016` models the sequence for emitting, and never arrives as input.)
+fn map_pointer_event(mouse: TerminaMouseEvent) -> TerminaEventAction {
+    if !pixel_mouse::is_active() {
+        return TerminaEventAction::Input(CrosstermEvent::Mouse(map_mouse_event(mouse)));
+    }
+    let Some(position) = pixel_mouse::resolve(mouse.column, mouse.row) else {
+        return TerminaEventAction::Input(CrosstermEvent::Mouse(map_mouse_event(mouse)));
+    };
+    let mut event = map_mouse_event(mouse);
+    event.column = position.cell.0;
+    event.row = position.cell.1;
+    TerminaEventAction::Pointer(CrosstermEvent::Mouse(event), position.sub_cell)
 }
 
 fn map_key_event(key: TerminaKeyEvent) -> CrosstermKeyEvent {

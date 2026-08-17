@@ -12,6 +12,8 @@ pub(crate) mod key_dispatch;
 pub mod keyboard;
 pub mod keymap;
 pub mod mouse;
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub(crate) mod pixel_mouse;
 pub(crate) mod runtime_dispatch;
 pub mod scrollbar;
 pub mod text;

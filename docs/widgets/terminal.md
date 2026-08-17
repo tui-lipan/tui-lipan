@@ -668,6 +668,20 @@ the user asked for.
 Forwarding is a passthrough: the app-level `scroll_wheel_multiplier` scales local scrolling only and
 is never applied to reports sent to a child, which applies its own scroll step.
 
+### Pixel-precise reports
+
+A child that wants to know where the pointer is more finely than which cell it is over - one dragging
+a scrollbar or panning a canvas - enables SGR-pixels reporting (DEC private mode 1016) and probes
+whether it took. `TerminalScreen` holds that request and answers the probe, and `mouse_mode.encoding`
+becomes `MouseEncoding::SgrPixels`; the encoding is the only thing that changes, so a host writing
+`on_mouse_forward` payloads to the PTY needs no special handling.
+
+How much precision those reports actually carry depends on the host the app itself runs under. The
+runner asks it for the same mode on startup and, when the host both answers and reports a cell size
+that a pixel position can be divided by, passes the sub-cell offset through to the report. A host that
+only says which cell was clicked leaves reports on that cell's first pixel - correct, one cell
+granular, and exactly what the child would have got from cell coordinates.
+
 ---
 
 ## Plain-text export

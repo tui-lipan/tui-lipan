@@ -40,8 +40,49 @@ While the crate is on `0.x.y`:
 - `TerminalScreen::set_image_storage_enabled(false)` keeps graphics replies, dimensions, and cursor
   movement without decoding or retaining raw image pixels. It is for server-side terminal mirrors
   that forward the original stream to a separate rendering client.
+- Out-of-band Kitty graphics payloads: a child may leave its pixels in a file (`t=f`), a temporary
+  file the terminal then deletes (`t=t`), or a POSIX shared-memory object the terminal then unlinks
+  (`t=s`), and name them in the escape sequence instead of base64-encoding several megabytes through
+  the PTY per frame. `TerminalScreen::set_image_media_policy` chooses which media are accepted:
+  `GraphicsMediaPolicy::SHARED` declines the two that are consumed by reading, which is the setting
+  for anything fanning one terminal stream out to several readers, and `NONE` requires every picture
+  inline. `t=t` paths must be temporary or self-identifying, and every read is capped by the
+  transmission budget.
+- `App::frame_rate(fps)` sets how often the loop wakes for content that drives itself - animations,
+  transitions, and live terminal panes - between 15 and 480 fps. `DEFAULT_FRAME_RATE` is 120, up from
+  an implicit 62 fps that no app could raise.
+- Frames handed to the host through POSIX shared memory. A pane whose child redraws a full window
+  every frame had its pixels deflated, base64-encoded, chunked and written down stdout, and the host
+  paid to undo all three; now the pixels go into a shared-memory object and the escape sequence
+  carries its name. The host is asked at startup - with a `t=s` query it can only answer by reading a
+  real object - and only a terminal that answers `OK` is handed frames that way. A terminal behind
+  `tmux`, one on another machine, and Windows all keep the inline path. Objects are unlinked by the
+  host as it reads them, and by this process for any frame the host was never told about.
+- Pixel-precise pointer positions. A program that wants to know where the pointer is more finely than
+  which cell it is over - dragging a scrollbar, panning a canvas - asks for SGR-pixels reporting
+  (DEC private mode 1016) and probes whether it took. `TerminalScreen` now holds that request and
+  answers the probe itself instead of letting the emulator underneath report the mode as
+  unrecognized, and reports go out through the new `MouseEncoding::SgrPixels` carrying whatever
+  precision the host gave. The host is asked for the same mode on startup, and its answer only takes
+  effect while the cell size is known exactly enough to place a pixel report in a cell.
 
 ### Changed
+
+- **Breaking:** `query_keyboard_enhancement_support() -> Option<bool>` is replaced by
+  `query_host_capabilities(graphics_probe) -> Option<HostCapabilities>`, which asks about the Kitty
+  keyboard protocol, SGR-pixels mouse reporting, and a caller-supplied graphics query in the same
+  round trip. All three answers ride one `CSI c` sentinel, so the extra questions cost nothing;
+  asking separately would have cost a second 250 ms timeout apiece on a TTY with nothing on the other
+  end. It is also the only place they can be asked: replies for modes the input parser does not model
+  are a parse error there rather than an event, and an `APC` graphics reply is not surfaced at all.
+- **Breaking:** `mouse_event_to_bytes` takes a `MouseReportGeometry` where it took a viewport-offset
+  tuple. `MouseReportGeometry::at(offset)` is the old behavior; the struct's other two fields carry
+  the host's cell size and sub-cell pointer position, which is what `MouseEncoding::SgrPixels` needs
+  to report a position in pixels.
+- The loop wakes on the frame rate for *every* live terminal pane rather than only the focused one.
+  A child program writes whenever it likes and tells nobody, so an unfocused pane was left refreshing
+  on the 50 ms idle timeout - 20 fps for anything drawing in the background. The cost of the change
+  is one look per pane per frame at a screen that has not moved.
 
 - DevTools panel redesign. The `Stats` / `Logs` / `App` tab strip moved from the frame's top border
   to its bottom one (via the new `Frame::tab_edge`). The panel is bottom-anchored, so the strip now
@@ -82,7 +123,9 @@ While the crate is on `0.x.y`:
   while a replacement loads, and expires inactive streams instead of holding their image memory
   after a pane closes. Kitty output is zlib-compressed with a terminal-compatible miniz stream,
   preserves RGB sources without expanding them to RGBA, skips no-op terminal-frame resizes, and
-  drops its transmitted payload after the host receives it.
+  drops its transmitted payload after the host receives it. Live terminal placements reuse one
+  stable host image id, so each producer frame replaces the same native resource and keeps its
+  Unicode placeholder identity instead of churning terminal images.
 - Native Kitty animations keep the last cached frame while the next encode runs, then transmit and
   switch placeholders in one paint. The first completed frame also bootstraps playback immediately.
   `ImageProtocol::Auto` no longer degrades large, fast animations to halfblocks to hide first-loop
@@ -102,6 +145,30 @@ While the crate is on `0.x.y`:
 - Headless snapshots and recordings now mount the DevTools panel and apply framework-level key
   bindings, so `TUI_LIPAN_SNAPSHOT_KEYS="f12"` captures the panel instead of silently capturing the
   app without it.
+- A terminal pane is sized in the host's own pixels. The pixel dimensions handed to a PTY came from
+  the image encoder, which guesses 10x20 whenever the host ignores its size query - so a program that
+  asks how big its window is drew every frame at a resolution the host would never display, and the
+  frames had to be resampled to fit. The window size the host reports is preferred now: it divides
+  into the grid exactly or not at all, and it follows a font zoom, where a size queried once at
+  startup does not.
+- A frame already sized for its box is handed to a Kitty host as it arrived. Frames were resampled to
+  the target rectangle every time, which for a program redrawing a full window every frame cost more
+  per frame than drawing it did; the host is told the cell box instead (`c=` / `r=`) and scales on the
+  way to the screen. Only for the aspect-preserving fits, and only up to twice the target size, so a
+  photograph shown small is still shrunk once here rather than shipped whole every frame. A crop still
+  happens here, since a box size cannot express which pixels to keep.
+- Kitty virtual placements honor the cell box the sender declared. A frame drawn at some multiple of
+  the cell resolution - what any program that asks the terminal how big a cell is will produce - was
+  read as though its pixels were one-to-one with placeholder cells, so a HiDPI frame appeared cropped
+  to its top-left corner instead of scaled into its box.
+- Pointer reports are coalesced whatever precision they arrive in. The drag, motion, and wheel loops
+  collapse a burst to the newest report before dispatching, but they recognised only the cell-precise
+  spelling - so turning on pixel reporting turned coalescing off, exactly where there was most to
+  coalesce, since a host reporting pixels reports every pixel of motion rather than every cell
+  crossing. Uncoalesced, each report was dispatched, forwarded to a child, and rendered, leaving the
+  child a backlog behind the pointer: a scrollbar grip trailing the mouse and catching up in jumps.
+  The sub-cell position now follows the report that survives coalescing rather than the one it
+  replaced.
 
 ## [0.2.0] - 2026-08-13
 

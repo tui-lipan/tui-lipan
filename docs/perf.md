@@ -262,6 +262,48 @@ Prefer built-in spinners, transitions, and effects over an app-owned 16 ms
 command loop. Remove completed effects and lower custom effect cadence where
 possible so an idle app returns to event-driven rendering.
 
+## Frame rate
+
+Most frames come from something happening: a key, a message, a mouse event. The
+frame rate governs the rest — the content that drives itself, where the app has
+to *look* rather than be told:
+
+- animations, property transitions, and animated scrolls
+- live terminal panes, since a child program writes whenever it likes and
+  announces nothing
+
+`App::frame_rate(fps)` sets that cadence, between 15 and 480; the default is
+`DEFAULT_FRAME_RATE` (120). An idle app is unaffected: with nothing animating
+and no live terminal the loop waits on events and wakes on a 50 ms idle timeout.
+
+The cost of a higher rate is one look per frame at each self-driven thing, and
+for a terminal pane that look is a cheap comparison against a screen that has
+usually not moved. The reason to lower it is a machine where painting is the
+expensive part — a slow remote link, a very large viewport — not a busy app.
+
+```rust
+App::new().frame_rate(60).mount(Root).run()
+```
+
+Every live terminal pane is looked at on this cadence, not only the focused one,
+so a pane rendering in the background reaches the same rate as one in front.
+
+A pane showing pixels rather than text has a second cost, on the way out to the
+host: a full window of them, every frame, deflated and base64-encoded and written
+down stdout. Where the host can read a POSIX shared-memory object — asked at
+startup, answered by the terminal itself — the pixels go there instead and the
+escape sequence carries only a name. Nothing configures this; see
+[terminal images](widgets/terminal-images.md#out-the-other-side-to-the-host).
+
+The frame itself is passed on at the size it arrived, with the host told which
+cell box to scale it into. Resampling a full window of pixels costs more per frame
+than the child spent drawing it, so it is worth knowing what makes it necessary:
+a frame more than twice its box (a photograph shown small — shrunk once, then
+cached), or a crop, which chooses which pixels to keep and so cannot be expressed
+as a box size. What makes it *unnecessary* is the child drawing at a resolution
+the host will actually display, which is what the pane's pixel dimensions tell it,
+and those now come from the size the host reports rather than a guess.
+
 ## Diagnose before optimizing
 
 Enable the built-in panel while investigating update scope and subtree reuse:

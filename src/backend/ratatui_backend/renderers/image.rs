@@ -30,6 +30,8 @@ use ratatui_image::protocol::Protocol;
 
 use crate::backend::ratatui_backend::common::{to_ratatui_rect, to_ratatui_style};
 use crate::backend::ratatui_backend::image_support;
+#[cfg(feature = "terminal-images")]
+use crate::backend::ratatui_backend::shared_frame::{self, SharedFrame};
 use crate::style::resolve::resolve_base_style;
 use crate::style::{Rect, Theme};
 use crate::widgets::internal::ImageNode;
@@ -95,6 +97,9 @@ impl EncodedProtocol {
 #[cfg(feature = "terminal-images")]
 struct CompressedKitty {
     transmit: Mutex<Option<String>>,
+    /// Held for as long as the transmission that names it might still be written, and unlinked on
+    /// drop if it never was. `None` for an inline transmission, which carries its own pixels.
+    shared: Mutex<Option<SharedFrame>>,
     id_color: String,
     id_extra: u16,
     size: ratatui::layout::Size,
@@ -114,14 +119,28 @@ impl CompressedKitty {
                 (converted.as_raw().as_slice(), 32)
             }
         };
-        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
-        encoder.write_all(pixels).ok()?;
-        let compressed = encoder.finish().ok()?;
-        let transmit = kitty_transmit_compressed_format(&compressed, width, height, format, id);
+        let (transmit, shared) = match shared_frame(pixels) {
+            // Naming the pixels: no deflate, no base64 of megabytes, no chunked write, and the
+            // terminal reads them straight out of memory.
+            Some(frame) => (
+                kitty_transmit_shared_memory(frame.name(), width, height, format, id, size),
+                Some(frame),
+            ),
+            None => {
+                let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+                encoder.write_all(pixels).ok()?;
+                let compressed = encoder.finish().ok()?;
+                (
+                    kitty_transmit_compressed_format(&compressed, width, height, format, id, size),
+                    None,
+                )
+            }
+        };
         let [id_extra, id_r, id_g, id_b] = id.to_be_bytes();
 
         Some(Self {
             transmit: Mutex::new(Some(transmit)),
+            shared: Mutex::new(shared),
             id_color: format!("\x1b[38;2;{id_r};{id_g};{id_b}m"),
             id_extra: u16::from(id_extra),
             size,
@@ -181,11 +200,53 @@ impl CompressedKitty {
     }
 
     fn take_transmission(&self) -> Option<String> {
-        self.transmit
+        let sequence = self
+            .transmit
             .lock()
             .ok()
-            .and_then(|mut sequence| sequence.take())
+            .and_then(|mut sequence| sequence.take())?;
+        // Written into this frame's buffer, so the host is about to be told the name and reading is
+        // what unlinks the object. Until this point it was this process's to clean up.
+        if let Ok(mut shared) = self.shared.lock()
+            && let Some(frame) = shared.as_mut()
+        {
+            frame.handed_over();
+        }
+        Some(sequence)
     }
+}
+
+/// Pixels in shared memory, when that is a medium the host said it can read.
+#[cfg(feature = "terminal-images")]
+fn shared_frame(pixels: &[u8]) -> Option<SharedFrame> {
+    if !shared_frame::host_reads_shared_memory() {
+        return None;
+    }
+    // A name only means something to a terminal reading this machine's own shared memory. Under
+    // tmux the reader is tmux, which passes the sequence through to a terminal that may be anywhere.
+    if std::env::var_os("TMUX").is_some() {
+        return None;
+    }
+    SharedFrame::write(pixels)
+}
+
+/// A `t=s` transmission: the pixels are in `name`, and this only says where.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn kitty_transmit_shared_memory(
+    name: &str,
+    width: u32,
+    height: u32,
+    format: u8,
+    id: u32,
+    cells: ratatui::layout::Size,
+) -> String {
+    let (columns, rows) = (cells.width, cells.height);
+    let mut data = format!(
+        "\x1b_Gq=2,i={id},a=T,U=1,f={format},t=s,s={width},v={height},c={columns},r={rows};"
+    );
+    BASE64.encode_string(name, &mut data);
+    data.push_str("\x1b\\");
+    data
 }
 
 #[cfg(feature = "terminal-images")]
@@ -195,6 +256,7 @@ fn kitty_transmit_compressed_format(
     height: u32,
     format: u8,
     id: u32,
+    cells: ratatui::layout::Size,
 ) -> String {
     kitty_transmit_compressed_format_for(
         payload,
@@ -202,6 +264,7 @@ fn kitty_transmit_compressed_format(
         height,
         format,
         id,
+        cells,
         std::env::var_os("TMUX").is_some(),
     )
 }
@@ -212,9 +275,10 @@ pub(crate) fn kitty_transmit_compressed_for(
     width: u32,
     height: u32,
     id: u32,
+    cells: ratatui::layout::Size,
     is_tmux: bool,
 ) -> String {
-    kitty_transmit_compressed_format_for(payload, width, height, 32, id, is_tmux)
+    kitty_transmit_compressed_format_for(payload, width, height, 32, id, cells, is_tmux)
 }
 
 #[cfg(feature = "terminal-images")]
@@ -224,6 +288,7 @@ fn kitty_transmit_compressed_format_for(
     height: u32,
     format: u8,
     id: u32,
+    cells: ratatui::layout::Size,
     is_tmux: bool,
 ) -> String {
     const CHUNK_BYTES: usize = 3072;
@@ -240,9 +305,10 @@ fn kitty_transmit_compressed_format_for(
         data.push_str(start);
         write!(data, "{escape}_Gq=2,").expect("writing to a String cannot fail");
         if index == 0 {
+            let (columns, rows) = (cells.width, cells.height);
             write!(
                 data,
-                "i={id},a=T,U=1,f={format},o=z,t=d,s={width},v={height},"
+                "i={id},a=T,U=1,f={format},o=z,t=d,s={width},v={height},c={columns},r={rows},"
             )
             .expect("writing to a String cannot fail");
         }
@@ -499,6 +565,22 @@ impl AsyncEncoder {
         inner.cache.get(key)
     }
 
+    #[cfg(feature = "terminal-images")]
+    fn encode_synchronously(&self, request: EncodeRequest) -> Option<Arc<EncodedProtocol>> {
+        let protocol = Arc::new(encode_request(&request)?);
+        let Ok(mut inner) = self.inner.lock() else {
+            return Some(protocol);
+        };
+        inner.cache.insert(
+            request.stream_key,
+            request.key,
+            Arc::clone(&protocol),
+            request.estimated_bytes,
+            request.retention,
+        );
+        Some(protocol)
+    }
+
     fn cache_get_latest_compatible(
         &self,
         stream_key: u64,
@@ -643,6 +725,38 @@ fn async_encoder() -> &'static Arc<AsyncEncoder> {
 
         encoder
     })
+}
+
+/// How much bigger than its box a picture may be before scaling it here beats leaving it to the host.
+///
+/// A Kitty transmission names the cell box it is to fill, and the terminal scales into it on the
+/// GPU for nothing. Doing the same work here means resampling every pixel of every frame, which for
+/// a child redrawing its whole window is the entire frame budget - nine milliseconds against two
+/// tenths. What the trade turns on is how much bigger the source is: a window drawn at twice the
+/// cell resolution is worth passing on whole, while a twelve-megapixel photograph shown in a corner
+/// would mean transmitting all of it for the host to discard almost all of it.
+#[cfg(feature = "terminal-images")]
+const HOST_SCALE_MAX_OVERSAMPLE: u32 = 2;
+
+/// Whether the host can be left to scale this image into its cell box.
+///
+/// Only for the fits that mean "the whole picture, shrunk to taste": a crop has to choose which
+/// pixels to keep, and choosing is not something the box dimensions can express.
+#[cfg(feature = "terminal-images")]
+fn host_scales_into_cells(
+    fit: ImageFit,
+    image: &image::DynamicImage,
+    pixel_width: u32,
+    pixel_height: u32,
+) -> bool {
+    if !matches!(fit, ImageFit::Contain | ImageFit::Scale) {
+        return false;
+    }
+    if pixel_width == 0 || pixel_height == 0 {
+        return false;
+    }
+    image.width() <= pixel_width.saturating_mul(HOST_SCALE_MAX_OVERSAMPLE)
+        && image.height() <= pixel_height.saturating_mul(HOST_SCALE_MAX_OVERSAMPLE)
 }
 
 fn fit_to_resize(fit: ImageFit) -> Resize {
@@ -926,6 +1040,28 @@ fn build_encode_request(
     ))
 }
 
+#[cfg(feature = "terminal-images")]
+fn kitty_image_id(request: &EncodeRequest) -> u32 {
+    use std::hash::{Hash as _, Hasher as _};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    match request.retention {
+        CacheRetention::LatestOnly => {
+            // Terminal placements replace their pixels continuously. Keep their host image id
+            // stable so native terminals replace one image instead of allocating a new image and
+            // repainting differently-colored Unicode placeholders for every producer frame.
+            b"tui-lipan-terminal-image-stream".hash(&mut hasher);
+            request.stream_key.hash(&mut hasher);
+        }
+        CacheRetention::Variants => {
+            // Image widgets may render the same source independently at the same size. Preserve
+            // the frame-specific identity until those widgets have their own stream namespace.
+            request.key.hash(&mut hasher);
+        }
+    }
+    (hasher.finish() as u32).max(1)
+}
+
 fn encode_request(request: &EncodeRequest) -> Option<EncodedProtocol> {
     let mut picker = image_support::picker_snapshot();
     if let Some(protocol_type) = resolved_protocol_type(request.key.resolved_protocol) {
@@ -939,8 +1075,6 @@ fn encode_request(request: &EncodeRequest) -> Option<EncodedProtocol> {
     let resize = fit_to_resize(request.key.fit);
     #[cfg(feature = "terminal-images")]
     if matches!(request.key.resolved_protocol, ImageProtocol::Kitty) {
-        use std::hash::{Hash as _, Hasher as _};
-
         let encoded_size = resize.size_for(request.image.as_ref(), picker.font_size(), size);
         let pixel_width = u32::from(encoded_size.width) * u32::from(picker.font_size().width);
         let pixel_height = u32::from(encoded_size.height) * u32::from(picker.font_size().height);
@@ -948,8 +1082,13 @@ fn encode_request(request: &EncodeRequest) -> Option<EncodedProtocol> {
             .key
             .background_rgb
             .map(|(r, g, b)| image::Rgba([r, g, b, 255]));
-        let resized = (request.image.width() != pixel_width
-            || request.image.height() != pixel_height)
+        let resized = (!host_scales_into_cells(
+            request.key.fit,
+            request.image.as_ref(),
+            pixel_width,
+            pixel_height,
+        ) && (request.image.width() != pixel_width
+            || request.image.height() != pixel_height))
             .then(|| {
                 resize.resize(
                     request.image.as_ref(),
@@ -959,9 +1098,7 @@ fn encode_request(request: &EncodeRequest) -> Option<EncodedProtocol> {
                 )
             });
         let image = resized.as_ref().unwrap_or(request.image.as_ref());
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        request.key.hash(&mut hasher);
-        let id = (hasher.finish() as u32).max(1);
+        let id = kitty_image_id(request);
         return CompressedKitty::new(image, encoded_size, id).map(EncodedProtocol::CompressedKitty);
     }
 
@@ -1066,18 +1203,28 @@ pub(crate) fn draw_encoded_image(
         return true;
     }
 
-    let protocol = {
-        let stale = encoder.cache_get_latest_compatible(stream_key, &key);
-        encoder.enqueue(EncodeRequest::new(
-            stream_key,
-            key,
-            pixels(),
-            CacheRetention::LatestOnly,
-        ));
-        stale
-    };
+    let stale = encoder.cache_get_latest_compatible(stream_key, &key);
+    let request = EncodeRequest::new(stream_key, key, pixels(), CacheRetention::LatestOnly);
 
-    let Some(protocol) = protocol else {
+    // A terminal application has already paced and decoded this frame. Native Kitty encoding is
+    // fast enough to finish inside that paint, which avoids coupling visible frame cadence to the
+    // worker-completion poll. Other protocols stay asynchronous because their encoders can be much
+    // more expensive and do not have Kitty's one-transmission-per-frame replacement semantics.
+    if matches!(key.resolved_protocol, ImageProtocol::Kitty) {
+        if let Some(protocol) = encoder.encode_synchronously(request) {
+            protocol.render(f, area);
+            return true;
+        }
+        if let Some(protocol) = stale {
+            protocol.render(f, area);
+            return true;
+        }
+        return false;
+    }
+
+    encoder.enqueue(request);
+
+    let Some(protocol) = stale else {
         return false;
     };
     protocol.render(f, area);
@@ -1217,6 +1364,43 @@ pub(crate) fn render_image_inline_fallback(
 mod tests {
     use super::*;
 
+    /// A picture the size of its box, or a little over, is the host's to scale; a picture many times
+    /// the size of its box is not.
+    ///
+    /// This is what a program redrawing its whole window costs or does not cost. Scaling here means
+    /// resampling every pixel of every frame - nine milliseconds against two tenths for handing the
+    /// frame over as it arrived - so the case that has to stay on the cheap side is a window drawn
+    /// at some multiple of the cell resolution, which is what any program asking the terminal how
+    /// big a cell is will produce.
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn a_frame_near_its_box_is_scaled_by_the_host_and_a_far_larger_one_here() {
+        fn image(width: u32, height: u32) -> image::DynamicImage {
+            image::DynamicImage::ImageRgb8(image::RgbImage::new(width, height))
+        }
+
+        assert!(
+            host_scales_into_cells(ImageFit::Scale, &image(880, 440), 880, 440),
+            "a frame already the size of its box needs nothing done to it"
+        );
+        assert!(
+            host_scales_into_cells(ImageFit::Contain, &image(1760, 880), 880, 440),
+            "twice the cell resolution is the case worth passing on whole"
+        );
+        assert!(
+            !host_scales_into_cells(ImageFit::Scale, &image(4000, 3000), 880, 440),
+            "a photograph shown small is worth shrinking once here"
+        );
+        assert!(
+            !host_scales_into_cells(ImageFit::Crop, &image(900, 450), 880, 440),
+            "a crop chooses which pixels to keep, which a box size cannot express"
+        );
+        assert!(
+            !host_scales_into_cells(ImageFit::Scale, &image(880, 440), 0, 0),
+            "a box with no pixels in it is not a box to scale into"
+        );
+    }
+
     fn key(source_hash: u64) -> RenderCacheKey {
         RenderCacheKey {
             source_hash,
@@ -1272,6 +1456,51 @@ mod tests {
 
         assert!(stream_encoding_compatible(7, &previous, 7, &next));
         assert!(!stream_encoding_compatible(7, &previous, 8, &next));
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn terminal_kitty_image_id_stays_stable_across_frames() {
+        assert_eq!(
+            kitty_image_id(&request(7, 10)),
+            kitty_image_id(&request(7, 11))
+        );
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn terminal_kitty_image_id_is_isolated_per_stream() {
+        assert_ne!(
+            kitty_image_id(&request(7, 10)),
+            kitty_image_id(&request(8, 10))
+        );
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn terminal_kitty_frame_can_encode_without_worker_round_trip() {
+        let encoder = AsyncEncoder::default();
+        let mut request = request(7, 10);
+        request.key.width = 1;
+        request.key.height = 1;
+        request.key.resolved_protocol = ImageProtocol::Kitty;
+        let key = request.key;
+
+        let encoded = encoder.encode_synchronously(request).unwrap();
+
+        assert!(encoded.transmission_pending());
+        assert!(encoder.cache_get(&key).is_some());
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn widget_kitty_image_id_remains_frame_specific() {
+        let mut first = request(7, 10);
+        let mut second = request(7, 11);
+        first.retention = CacheRetention::Variants;
+        second.retention = CacheRetention::Variants;
+
+        assert_ne!(kitty_image_id(&first), kitty_image_id(&second));
     }
 
     #[test]
