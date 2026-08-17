@@ -65,14 +65,21 @@ mod imp {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
-    /// How many objects to keep alive for reuse. Four is a frame's worth of slack at 60 fps against
-    /// a host reading them one at a time, and four frames of resident memory.
-    const SLOTS: usize = 4;
+    /// How many objects to keep alive for reuse.
+    ///
+    /// Read together with [`GRACE`], which the two of them are only meaningful as a pair: a slot
+    /// cannot come round again until its grace has passed, so the pool sustains
+    /// `SLOTS / GRACE` frames a second and *every* frame above that allocates instead. Eight slots
+    /// against a 50 ms grace is 160 fps, comfortably past the 120 fps loop; four would have put the
+    /// cliff at 80, close enough to a fast producer to fall off it silently.
+    const SLOTS: usize = 8;
 
     /// A slot is not reused within this long of being handed over, however quickly the name
     /// disappears. The protocol has the host read the object and then unlink it, so the name going
     /// away means it is finished - but a host that unlinked first and read second would be within
     /// its rights to be slow about the read, and nothing here can see that happen.
+    ///
+    /// Raising this lowers the frame rate the pool can sustain. See [`SLOTS`].
     const GRACE: Duration = Duration::from_millis(50);
 
     /// Total resident bytes the pool may hold. A pane large enough to blow through this keeps the
@@ -82,7 +89,7 @@ mod imp {
     static POOL: Mutex<Pool> = Mutex::new(Pool {
         slots: Vec::new(),
         claimed: 0,
-        swept: false,
+        claimed_bytes: 0,
     });
 
     struct Pool {
@@ -90,7 +97,25 @@ mod imp {
         /// Slots currently out with a frame. Counted so the pool cannot grow past [`SLOTS`] by
         /// creating a new slot for every frame while the others are away.
         claimed: usize,
-        swept: bool,
+        /// What those slots hold, so [`POOL_BUDGET`] counts the memory that is pinned rather than
+        /// only the part of it sitting idle here.
+        claimed_bytes: usize,
+    }
+
+    impl Pool {
+        /// Every byte this pool is keeping resident, out with a frame or not.
+        fn resident(&self) -> usize {
+            self.claimed_bytes + self.slots.iter().map(|slot| slot.len).sum::<usize>()
+        }
+    }
+
+    /// The pool, through a poisoned lock as readily as a healthy one.
+    ///
+    /// A panic anywhere under this lock would otherwise turn pooling off for the rest of the
+    /// process, and the state it guards is a list of mappings - there is no invariant a panic could
+    /// leave half-built that reusing a slot would then act on.
+    fn pool() -> std::sync::MutexGuard<'static, Pool> {
+        POOL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// One reusable object: created and sized once, written again every frame.
@@ -236,20 +261,23 @@ mod imp {
 
     /// Take a slot able to hold `len` bytes, or `None` to say the caller should allocate.
     fn claim(len: usize) -> Option<Slot> {
-        let mut pool = POOL.lock().ok()?;
-        if !pool.swept {
-            pool.swept = true;
-            sweep_dead_runs();
-        }
+        // Swept outside the lock: a machine with a lot of shared memory (a browser leaves hundreds
+        // of objects there) makes this a directory walk plus a signal per entry, and no frame
+        // should wait behind it.
+        static SWEEP: std::sync::Once = std::sync::Once::new();
+        SWEEP.call_once(sweep_dead_runs);
+
+        let mut pool = pool();
         if let Some(index) = pool
             .slots
             .iter()
             .position(|slot| slot.len == len && slot.reusable())
         {
             pool.claimed += 1;
+            pool.claimed_bytes += len;
             return Some(pool.slots.swap_remove(index));
         }
-        let resident: usize = pool.slots.iter().map(|slot| slot.len).sum();
+        let resident = pool.resident();
         if pool.slots.len() + pool.claimed >= SLOTS || resident + len > POOL_BUDGET {
             // A pane that changed size leaves slots no frame of this size can use. One of those is
             // what makes room; if there is none, every slot is either the wrong size and still out
@@ -259,23 +287,30 @@ mod imp {
                 .iter()
                 .position(|slot| slot.len != len && slot.reusable())?;
             pool.slots.swap_remove(index).destroy();
-            let resident: usize = pool.slots.iter().map(|slot| slot.len).sum();
-            if resident + len > POOL_BUDGET {
+            if pool.resident() + len > POOL_BUDGET {
                 return None;
             }
         }
         let slot = create_slot(len)?;
         pool.claimed += 1;
+        pool.claimed_bytes += len;
         Some(slot)
     }
 
     fn release(slot: Slot) {
-        if let Ok(mut pool) = POOL.lock() {
-            pool.claimed = pool.claimed.saturating_sub(1);
-            pool.slots.push(slot);
-        } else {
-            slot.destroy();
-        }
+        let mut pool = pool();
+        pool.claimed = pool.claimed.saturating_sub(1);
+        pool.claimed_bytes = pool.claimed_bytes.saturating_sub(slot.len);
+        pool.slots.push(slot);
+    }
+
+    /// Give up a claimed slot without returning it to the pool.
+    fn discard(slot: Slot) {
+        let mut pool = pool();
+        pool.claimed = pool.claimed.saturating_sub(1);
+        pool.claimed_bytes = pool.claimed_bytes.saturating_sub(slot.len);
+        drop(pool);
+        slot.destroy();
     }
 
     /// Pixels in a shared-memory object, waiting for the host to read them.
@@ -324,14 +359,12 @@ mod imp {
                 // Hard links inside the namespace are what the whole scheme rests on, so a failure
                 // here means this platform cannot pool at all rather than that this frame is
                 // unlucky. Drop the slot and let the caller allocate.
-                slot.destroy();
-                if let Ok(mut pool) = POOL.lock() {
-                    pool.claimed = pool.claimed.saturating_sub(1);
-                }
+                discard(slot);
                 return None;
             }
             Some(Self {
                 name,
+                // The clock starts when the host is told, not now. See `handed_over`.
                 slot: Some(Slot {
                     handed: Some((link, Instant::now())),
                     ..slot
@@ -385,7 +418,14 @@ mod imp {
         /// overwriting them before it has.
         pub(crate) fn handed_over(&mut self) {
             self.owned = false;
-            if let Some(slot) = self.slot.take() {
+            if let Some(mut slot) = self.slot.take() {
+                // The grace runs from here rather than from the write. An encode can finish long
+                // before the frame it produced is painted - the widget path encodes on a worker -
+                // and a grace that had already elapsed by the time the host first heard the name
+                // would be no grace at all.
+                if let Some((_, at)) = slot.handed.as_mut() {
+                    *at = Instant::now();
+                }
                 release(slot);
             }
         }
@@ -482,6 +522,32 @@ mod imp {
                 "the link the host was given must survive until the host removes it"
             );
             std::fs::remove_file(&handed).ok();
+        }
+
+        /// An encode can finish long before its frame is painted, so a grace measured from the
+        /// write can be spent before the host has heard the name at all - which is the one moment
+        /// it exists to cover.
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn the_grace_runs_from_the_handover_not_from_the_write() {
+            let _lock = TEST_POOL.lock().unwrap_or_else(|e| e.into_inner());
+            let pixels = vec![5u8; 20 * 1024];
+            let mut frame = SharedFrame::write(&pixels).expect("frame");
+            let Some(source) = frame.slot.as_ref().map(|slot| slot.source.clone()) else {
+                return;
+            };
+            // Encoded, and not painted for longer than the grace.
+            std::thread::sleep(GRACE + Duration::from_millis(5));
+            let handed = format!("/dev/shm{}", frame.name());
+            frame.handed_over();
+            std::fs::remove_file(&handed).expect("host unlinks");
+
+            let next = SharedFrame::write(&pixels).expect("next frame");
+            assert_ne!(
+                next.slot.as_ref().map(|slot| slot.source.clone()),
+                Some(source),
+                "the grace has to start when the host was told the name"
+            );
         }
 
         /// The matching claim: once the host has unlinked and the grace has passed, the next frame

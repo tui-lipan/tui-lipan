@@ -66,7 +66,11 @@ While the crate is on `0.x.y`:
   row from its first cell, covering command palettes and turning DevTools rows black until a hover
   dirtied those cells. Each visible span is now its own walk, so the image resumes after the
   overlay instead of leaving a black band, and overlay cells are forced through the diff so they
-  win even if a walk still races them.
+  win even if a walk still races them. A placement with no visible span left is dropped before it
+  is decoded rather than after it is encoded, so a pane entirely behind DevTools or a full-screen
+  overlay costs nothing per frame instead of a full read, decode, encode and copy. Only a backdrop
+  that actually fills - a background color at full opacity - counts as covering; a dim or a fade
+  leaves the picture showing through it, as it draws.
 - Out-of-band transmissions (`t=f`, `t=t`, `t=s`) identify themselves by name and serial rather than
   hashing the pixel payload. A child rewriting a file in place still misses the render cache, and a
   scrolling pane no longer spends a full-frame hash on pixels it is about to decode anyway.
@@ -80,22 +84,22 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
-- **Breaking:** `query_keyboard_enhancement_support() -> Option<bool>` is replaced by
+- `query_keyboard_enhancement_support() -> Option<bool>` is replaced by
   `query_host_capabilities(graphics_probe) -> Option<HostCapabilities>`, which asks about the Kitty
   keyboard protocol, SGR-pixels mouse reporting, and a caller-supplied graphics query in the same
   round trip. All three answers ride one `CSI c` sentinel, so the extra questions cost nothing;
   asking separately would have cost a second 250 ms timeout apiece on a TTY with nothing on the other
   end. It is also the only place they can be asked: replies for modes the input parser does not model
   are a parse error there rather than an event, and an `APC` graphics reply is not surfaced at all.
-- **Breaking:** `mouse_event_to_bytes` takes a `MouseReportGeometry` where it took a viewport-offset
+  (breaking)
+- `mouse_event_to_bytes` takes a `MouseReportGeometry` where it took a viewport-offset
   tuple. `MouseReportGeometry::at(offset)` is the old behavior; the struct's other two fields carry
   the host's cell size and sub-cell pointer position, which is what `MouseEncoding::SgrPixels` needs
-  to report a position in pixels.
+  to report a position in pixels. (breaking)
 - The loop wakes on the frame rate for *every* live terminal pane rather than only the focused one.
   A child program writes whenever it likes and tells nobody, so an unfocused pane was left refreshing
   on the 50 ms idle timeout - 20 fps for anything drawing in the background. The cost of the change
   is one look per pane per frame at a screen that has not moved.
-
 - DevTools panel redesign. The `Stats` / `Logs` / `App` tab strip moved from the frame's top border
   to its bottom one (via the new `Frame::tab_edge`). The panel is bottom-anchored, so the strip now
   keeps the same screen position for every tab; on the top border it shifted vertically on every

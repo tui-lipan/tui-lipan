@@ -1523,10 +1523,16 @@ fn image_occlusion_rects(
         {
             continue;
         }
+        // Only a backdrop that paints a solid background over the whole screen hides what is under
+        // it, and only at full opacity - which is exactly the condition `render_overlay_backdrop`
+        // fills a block on. A dim or a fade leaves the pane readable through it, so punching the
+        // image out there would replace a dimmed picture with no picture at all, and forcing every
+        // cell through the diff would repaint the whole grid on every frame to do it.
         if overlay
             .backdrop
             .as_ref()
-            .is_some_and(|style| !style.is_empty())
+            .is_some_and(|style| style.bg.is_some())
+            && overlay.opacity >= 1.0
         {
             let full = to_ratatui_rect(content_rect);
             if full.width > 0 && full.height > 0 {

@@ -109,6 +109,18 @@ fn render_terminal_images(
             continue;
         }
 
+        let area = ratatui::layout::Rect {
+            x: vis_left as u16,
+            y: vis_top as u16,
+            width: (vis_right - vis_left) as u16,
+            height: (vis_bottom - vis_top) as u16,
+        };
+        // Asked before the decode, because everything below it - decode, encode, the copy into
+        // shared memory - is work for a picture an overlay is going to cover completely.
+        if crate::backend::ratatui_backend::renderers::image::image_area_fully_occluded(area) {
+            continue;
+        }
+
         // A payload whose decode was deferred is decoded here, on the first frame that draws it.
         // `None` means it did not decode at all, which leaves nothing to paint.
         let Some(pixels) = placement.image.pixels() else {
@@ -137,12 +149,6 @@ fn render_terminal_images(
             && crop.y == 0
             && crop.width == pixels.width()
             && crop.height == pixels.height();
-        let area = ratatui::layout::Rect {
-            x: vis_left as u16,
-            y: vis_top as u16,
-            width: (vis_right - vis_left) as u16,
-            height: (vis_bottom - vis_top) as u16,
-        };
 
         draw_encoded_image(
             f,

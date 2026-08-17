@@ -163,6 +163,15 @@ one on another machine, which cannot resolve a name in this machine's memory and
 unlinked by the host as it reads them, and by this process for any frame the host was never told
 about.
 
+On Linux the objects are pooled, which is why `/dev/shm` holds a handful of `tui-lipan-pool-<pid>-*`
+names for as long as a pane is drawing. A fresh object per frame is a fresh *allocation* per frame -
+every byte written lands on a page that does not exist yet - so each slot is created once and written
+again every frame, and what the host is handed is a fresh hard link to it. That link is the part the
+host unlinks, and its disappearance is the only signal that the host is finished: a slot whose link is
+still there is never reused, and a frame that finds every slot busy allocates its own object exactly
+as it used to. Pool objects left behind by a run that was killed are removed by the next run, which
+can tell because the name carries the process that made it.
+
 Windows has no POSIX shared-memory namespace, so frames there are always inline.
 
 ## What is supported

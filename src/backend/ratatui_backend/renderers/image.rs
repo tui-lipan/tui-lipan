@@ -71,6 +71,28 @@ pub(crate) fn image_placeholders_painted() -> bool {
     IMAGE_PLACEHOLDERS_PAINTED.get()
 }
 
+/// Whether every cell of `area` is covered by this frame's occlusions.
+///
+/// Worth asking before a placement is decoded rather than after: the walk that discovers it has no
+/// visible span to write is the *last* step, by which point the frame has already been read out of
+/// the child's file, decoded, encoded and copied into shared memory - a full pipeline for a picture
+/// that goes nowhere. A pane entirely under DevTools or a full-screen overlay costs nothing now.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn image_area_fully_occluded(area: ratatui::layout::Rect) -> bool {
+    if area.width == 0 || area.height == 0 {
+        return false;
+    }
+    IMAGE_OCCLUSIONS.with(|slot| {
+        let holes = slot.borrow();
+        if holes.is_empty() {
+            return false;
+        }
+        let right = area.x.saturating_add(area.width);
+        (area.y..area.y.saturating_add(area.height))
+            .all(|y| uncovered_x_spans(area.x, right, y, &holes).is_empty())
+    })
+}
+
 /// Columns of `y` in `[x0, x1)` that no occlusion covers, as half-open spans.
 #[cfg(feature = "terminal-images")]
 fn uncovered_x_spans(x0: u16, x1: u16, y: u16, holes: &[ratatui::layout::Rect]) -> Vec<(u16, u16)> {
@@ -1487,6 +1509,67 @@ mod tests {
             uncovered_x_spans(0, 10, 1, &[full]).is_empty(),
             "a row the overlay owns entirely has no placeholders"
         );
+    }
+
+    /// A placement with nowhere to draw must be found out before it is decoded, not after: the
+    /// discovery is worth a whole frame of pipeline.
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn a_placement_entirely_under_an_overlay_is_known_to_be_invisible() {
+        let area = ratatui::layout::Rect {
+            x: 2,
+            y: 2,
+            width: 6,
+            height: 3,
+        };
+        clear_image_occlusions();
+        assert!(
+            !image_area_fully_occluded(area),
+            "nothing is covered when nothing occludes"
+        );
+
+        set_image_occlusions(vec![ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 4,
+        }]);
+        assert!(
+            !image_area_fully_occluded(area),
+            "a placement whose last row shows is still worth drawing"
+        );
+
+        set_image_occlusions(vec![ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 20,
+        }]);
+        assert!(
+            image_area_fully_occluded(area),
+            "every row covered means the frame is decoded for nobody"
+        );
+
+        // Two overlays that only cover it between them still cover it.
+        set_image_occlusions(vec![
+            ratatui::layout::Rect {
+                x: 0,
+                y: 0,
+                width: 5,
+                height: 20,
+            },
+            ratatui::layout::Rect {
+                x: 5,
+                y: 0,
+                width: 15,
+                height: 20,
+            },
+        ]);
+        assert!(
+            image_area_fully_occluded(area),
+            "adjacent overlays leave no gap to draw into"
+        );
+        clear_image_occlusions();
     }
 
     /// Overlay columns stay writable so later paint can put text there; uncovered cells stay Skip

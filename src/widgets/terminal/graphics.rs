@@ -1664,9 +1664,15 @@ impl TerminalGraphics {
     /// most of a scrolling pane's remaining CPU on a walk whose answer we already know: this is a
     /// new transmission. The serial is mixed in because a child that rewrites a file in place
     /// (a ring of paths) would otherwise hash as the same frame forever.
+    ///
+    /// The serial is spread across the word before it is combined: XORed in raw it only ever
+    /// touches the low bits, so two paths would collide whenever their name hashes differed by the
+    /// small number that separates two serials, rather than by a full word.
     fn named_source_identity(&mut self, format: u32, name: &[u8]) -> u64 {
+        const PRIME: u64 = 0x9E37_79B9_7F4A_7C15;
+
         self.source_serial = self.source_serial.wrapping_add(1);
-        hash_payload(format, name) ^ self.source_serial
+        hash_payload(format, name) ^ self.source_serial.wrapping_mul(PRIME).rotate_left(31)
     }
 
     fn display_stored(

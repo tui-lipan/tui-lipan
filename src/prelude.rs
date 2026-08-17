@@ -228,8 +228,6 @@ pub use crate::widgets::{
 
 #[cfg(all(feature = "terminal-images", not(target_arch = "wasm32")))]
 pub use crate::host_cell_size;
-#[cfg(not(target_arch = "wasm32"))]
-pub use crate::{PixelPointerStatus, pixel_pointer_status};
 #[cfg(all(feature = "terminal-images", not(target_arch = "wasm32")))]
 pub use crate::host_reads_shared_frames;
 #[cfg(all(feature = "terminal", unix))]
@@ -252,6 +250,8 @@ pub use crate::widgets::{
 pub use crate::widgets::{
     GraphicsMediaPolicy, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use crate::{PixelPointerStatus, pixel_pointer_status};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Feature-gated utilities
