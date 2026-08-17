@@ -337,6 +337,12 @@ impl NodeTree {
         changed
     }
 
+    /// Whether any terminal is reading a live screen a child program can write to at any moment.
+    #[cfg(feature = "terminal")]
+    pub(crate) fn has_live_terminals(&self) -> bool {
+        !self.live_terminal_ids.is_empty()
+    }
+
     /// Returns true if any animated wrapper nodes are currently transitioning.
     pub fn has_animated_widgets(&self) -> bool {
         self.has_animated_widgets

@@ -795,9 +795,11 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
     fn forward_terminal_mouse(&mut self, mouse: MouseEvent) -> bool {
         #[cfg(feature = "terminal")]
         {
-            let Some(plan) =
-                crate::app::runner::events::terminal_mouse_forward_plan(&self.core.tree, mouse)
-            else {
+            let Some(plan) = crate::app::runner::events::terminal_mouse_forward_plan(
+                &self.core.tree,
+                mouse,
+                self.mouse.sub_cell.get(),
+            ) else {
                 return false;
             };
             if plan.focus {

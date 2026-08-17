@@ -5,13 +5,15 @@ pub(crate) mod glyph_paint_cache;
 pub(crate) mod image_support;
 pub(crate) mod render;
 pub(crate) mod renderers;
+#[cfg(feature = "terminal-images")]
+pub(crate) mod shared_frame;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native_terminal;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod terminal_handoff;
 #[cfg(not(target_arch = "wasm32"))]
-mod terminal_transition;
+pub(crate) mod terminal_transition;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use native_terminal::{

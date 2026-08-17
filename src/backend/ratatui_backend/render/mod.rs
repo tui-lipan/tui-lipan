@@ -3,6 +3,8 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use ratatui::buffer::Cell as BufferCell;
+#[cfg(feature = "terminal-images")]
+use ratatui::buffer::CellDiffOption;
 use ratatui::layout::Position;
 use ratatui::style::Color as RColor;
 use ratatui::widgets::{Block, Clear};
@@ -199,6 +201,14 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
     let extra_root = extra_root_wrapper_children(tree);
     let initial_root = extra_root.map_or(tree.root, |(base, _extra)| base);
 
+    #[cfg(feature = "terminal-images")]
+    let _image_occlusion_guard = {
+        crate::backend::ratatui_backend::renderers::image::set_image_occlusions(
+            image_occlusion_rects(tree, content_rect, extra_root),
+        );
+        ImageOcclusionGuard
+    };
+
     if tree.is_valid(initial_root) && !overlay_nodes.contains(&initial_root) {
         render_subtree(
             &mut state,
@@ -369,6 +379,9 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
     {
         render_subtree(&mut state, extra, Some(content_rect), RenderOffset::ZERO);
     }
+
+    #[cfg(feature = "terminal-images")]
+    flush_occluded_image_cells(state.f, tree, content_rect, extra_root);
 
     // Last, so the inspector outline sits above overlays and chrome alike. It is
     // a debugging marker, not part of any widget's appearance.
@@ -1479,6 +1492,125 @@ fn render_hstack_node(
     let mut props = node.props.clone();
     props.style = resolve_base_style(theme, props.style);
     render_hstack(f, &props, rect, rrect, clip_bounds, terminal_bg);
+}
+
+/// Drops the frame's Kitty occlusion list even if paint panics, so a later frame cannot
+/// inherit holes that no longer exist.
+#[cfg(feature = "terminal-images")]
+struct ImageOcclusionGuard;
+
+#[cfg(feature = "terminal-images")]
+impl Drop for ImageOcclusionGuard {
+    fn drop(&mut self) {
+        crate::backend::ratatui_backend::renderers::image::clear_image_occlusions();
+    }
+}
+
+/// Opaque overlay and DevTools rects a Kitty placeholder row must walk around.
+#[cfg(feature = "terminal-images")]
+fn image_occlusion_rects(
+    tree: &NodeTree,
+    content_rect: Rect,
+    extra_root: Option<(NodeId, NodeId)>,
+) -> Vec<ratatui::layout::Rect> {
+    let mut rects = Vec::new();
+    for overlay in tree.overlay_roots() {
+        if !tree.is_valid(overlay.id) {
+            continue;
+        }
+        if overlay_clear_restore_mode(tree.node(overlay.id))
+            == OverlayClearRestoreMode::PreserveForeground
+        {
+            continue;
+        }
+        // Only a backdrop that paints a solid background over the whole screen hides what is under
+        // it, and only at full opacity - which is exactly the condition `render_overlay_backdrop`
+        // fills a block on. A dim or a fade leaves the pane readable through it, so punching the
+        // image out there would replace a dimmed picture with no picture at all, and forcing every
+        // cell through the diff would repaint the whole grid on every frame to do it.
+        if overlay
+            .backdrop
+            .as_ref()
+            .is_some_and(|style| style.bg.is_some())
+            && overlay.opacity >= 1.0
+        {
+            let full = to_ratatui_rect(content_rect);
+            if full.width > 0 && full.height > 0 {
+                rects.push(full);
+            }
+        }
+        let overlay_node = tree.node(overlay.id);
+        let overlay_offset = if let NodeKind::Animated(animated) = &overlay_node.kind {
+            RenderOffset::ZERO.add_cells(animated.visual_position_offset_cells())
+        } else {
+            RenderOffset::ZERO
+        };
+        let clear_rect = clip_overlay_clear_rect(
+            content_rect,
+            overlay_offset.apply_to_rect(overlay_node.rect),
+        );
+        if clear_rect.width > 0 && clear_rect.height > 0 {
+            rects.push(clear_rect);
+        }
+    }
+    if let Some((_base, extra)) = extra_root {
+        #[cfg(feature = "devtools")]
+        if let Some(rect) = keyed_descendant_rect(tree, extra, crate::devtools::DEVTOOLS_KEY) {
+            let panel = clip_overlay_clear_rect(content_rect, rect);
+            if panel.width > 0 && panel.height > 0 {
+                rects.push(panel);
+            }
+        }
+        #[cfg(not(feature = "devtools"))]
+        let _ = extra;
+    }
+    rects
+}
+
+#[cfg(all(feature = "terminal-images", feature = "devtools"))]
+fn keyed_descendant_rect(tree: &NodeTree, root: NodeId, key: &str) -> Option<Rect> {
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        if !tree.is_valid(id) {
+            continue;
+        }
+        let node = tree.node(id);
+        if node
+            .key
+            .as_ref()
+            .is_some_and(|node_key| node_key.as_ref() == key)
+        {
+            return Some(node.rect);
+        }
+        stack.extend(node.children.iter().copied());
+    }
+    None
+}
+
+/// Overlay cells that did not change still have to be re-emitted: a new image frame rewrites its
+/// row from the first cell, and without this they stay as placeholders on the host.
+#[cfg(feature = "terminal-images")]
+fn flush_occluded_image_cells(
+    f: &mut ratatui::Frame<'_>,
+    tree: &NodeTree,
+    content_rect: Rect,
+    extra_root: Option<(NodeId, NodeId)>,
+) {
+    if !crate::backend::ratatui_backend::renderers::image::image_placeholders_painted() {
+        return;
+    }
+    let buf = f.buffer_mut();
+    for rect in image_occlusion_rects(tree, content_rect, extra_root) {
+        for y in rect.y..rect.y.saturating_add(rect.height) {
+            for x in rect.x..rect.x.saturating_add(rect.width) {
+                if let Some(cell) = buf.cell_mut((x, y))
+                    && cell.diff_option != CellDiffOption::Skip
+                {
+                    cell.set_diff_option(CellDiffOption::AlwaysUpdate);
+                }
+            }
+        }
+    }
 }
 
 mod drag_preview;

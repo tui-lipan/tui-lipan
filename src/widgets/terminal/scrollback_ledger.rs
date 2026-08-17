@@ -43,9 +43,27 @@ pub(super) fn ledger_capacity(scrollback_len: usize, rows: u16) -> usize {
     scrollback_len.saturating_add(usize::from(rows))
 }
 
+/// DEC private mode for SGR-pixel mouse reporting, which the grid emulator does not implement.
+pub(super) const SGR_PIXELS_MOUSE: u16 = 1016;
+
+/// A mode the emulator underneath does not know about, kept beside it.
+///
+/// Left to itself the emulator logs mode 1016 as unknown and answers its `DECRQM` probe with
+/// "not recognized", which is what makes a program asking for pixel-precise pointer positions fall
+/// back to whole cells. The mode costs the grid nothing - it changes how the *host's* pointer is
+/// encoded on the way in, not anything about the screen - so it is tracked here and reported as
+/// set, and each report then carries whatever precision the client that sent it actually had.
+pub(super) struct HostModes<'a> {
+    /// Whether the child program has asked for pixel mouse reporting.
+    pub(super) pixel_mouse: &'a mut bool,
+    /// Where replies to the child go, so a `DECRQM` answer keeps its place in the stream.
+    pub(super) responses: &'a std::cell::RefCell<Vec<Vec<u8>>>,
+}
+
 /// A [`Term`] that counts the scrollback lines evicted while it is driven.
 pub(super) struct LedgerTerm<'a, T: EventListener> {
     inner: &'a mut Term<T>,
+    modes: HostModes<'a>,
     /// Scrollback depth actually exposed to callers.
     limit: usize,
     /// Grid capacity, always `limit + rows`.
@@ -54,9 +72,15 @@ pub(super) struct LedgerTerm<'a, T: EventListener> {
 }
 
 impl<'a, T: EventListener> LedgerTerm<'a, T> {
-    pub(super) fn new(inner: &'a mut Term<T>, limit: usize, capacity: usize) -> Self {
+    pub(super) fn new(
+        inner: &'a mut Term<T>,
+        limit: usize,
+        capacity: usize,
+        modes: HostModes<'a>,
+    ) -> Self {
         Self {
             inner,
+            modes,
             limit,
             capacity,
             evicted: 0,
@@ -269,14 +293,33 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
         self.settle();
     }
     fn set_private_mode(&mut self, mode: PrivateMode) {
+        if mode.raw() == SGR_PIXELS_MOUSE {
+            *self.modes.pixel_mouse = true;
+            return;
+        }
         self.inner.set_private_mode(mode);
         self.settle();
     }
     fn unset_private_mode(&mut self, mode: PrivateMode) {
+        if mode.raw() == SGR_PIXELS_MOUSE {
+            *self.modes.pixel_mouse = false;
+            return;
+        }
         self.inner.unset_private_mode(mode);
         self.settle();
     }
     fn report_private_mode(&mut self, mode: PrivateMode) {
+        if mode.raw() == SGR_PIXELS_MOUSE {
+            // DECRPM: 1 is set, 2 is reset. Answering 0 (not recognized) is what the emulator
+            // underneath would do, and what makes a program give up on pixel precision.
+            let setting = if *self.modes.pixel_mouse { 1 } else { 2 };
+            self.modes.responses.borrow_mut().push(
+                format!("\x1b[?{SGR_PIXELS_MOUSE};{setting}$y")
+                    .as_bytes()
+                    .to_vec(),
+            );
+            return;
+        }
         self.inner.report_private_mode(mode);
         self.settle();
     }
@@ -363,6 +406,20 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
 }
 
 #[cfg(test)]
+impl<'a> HostModes<'a> {
+    /// Modes for a test that only drives the grid, with nothing watching either field.
+    fn detached(
+        pixel_mouse: &'a mut bool,
+        responses: &'a std::cell::RefCell<Vec<Vec<u8>>>,
+    ) -> Self {
+        Self {
+            pixel_mouse,
+            responses,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use alacritty_terminal::event::VoidListener;
     use alacritty_terminal::index::{Column, Line};
@@ -429,7 +486,14 @@ mod tests {
             direct_parser.advance(&mut direct, chunk);
             // A capacity equal to the limit disables trimming, so any difference is
             // delegation, not the ledger's own eviction.
-            let mut ledger = LedgerTerm::new(&mut wrapped, 10_000, 10_000);
+            let mut pixel_mouse = false;
+            let responses = std::cell::RefCell::new(Vec::new());
+            let mut ledger = LedgerTerm::new(
+                &mut wrapped,
+                10_000,
+                10_000,
+                HostModes::detached(&mut pixel_mouse, &responses),
+            );
             wrapped_parser.advance(&mut ledger, chunk);
             assert_eq!(ledger.evicted(), 0);
 
@@ -463,7 +527,14 @@ mod tests {
         let mut parser = Processor::<StdSyncHandler>::new();
         let mut total = 0usize;
         for i in 0..20 {
-            let mut ledger = LedgerTerm::new(&mut term, 3, ledger_capacity(3, 2));
+            let mut pixel_mouse = false;
+            let responses = std::cell::RefCell::new(Vec::new());
+            let mut ledger = LedgerTerm::new(
+                &mut term,
+                3,
+                ledger_capacity(3, 2),
+                HostModes::detached(&mut pixel_mouse, &responses),
+            );
             parser.advance(&mut ledger, format!("l{i}\r\n").as_bytes());
             total += ledger.evicted();
         }
@@ -488,7 +559,14 @@ mod tests {
             VoidListener,
         );
         let mut parser = Processor::<StdSyncHandler>::new();
-        let mut ledger = LedgerTerm::new(&mut term, 2, capacity);
+        let mut pixel_mouse = false;
+        let responses = std::cell::RefCell::new(Vec::new());
+        let mut ledger = LedgerTerm::new(
+            &mut term,
+            2,
+            capacity,
+            HostModes::detached(&mut pixel_mouse, &responses),
+        );
         parser.advance(&mut ledger, b"a\r\nb\r\nc\r\nd");
         parser.advance(&mut ledger, b"\x1b[999S");
         let evicted = ledger.evicted();

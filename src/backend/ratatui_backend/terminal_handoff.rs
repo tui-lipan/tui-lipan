@@ -17,7 +17,7 @@ use super::terminal_transition::{
     CrosstermTransitionExecutor, execute_plan_with_rollback, resume_plan, suspend_plan,
 };
 #[cfg(unix)]
-use super::terminal_transition::{execute_plan, theme_notification_plan};
+use super::terminal_transition::{execute_plan, pixel_mouse_plan, theme_notification_plan};
 
 static STDIN_READER_PAUSED: AtomicBool = AtomicBool::new(false);
 
@@ -369,6 +369,12 @@ pub fn resume_after_external_process(
     }
     STDIN_READER_PAUSED.store(false, Ordering::SeqCst);
     FULL_REPAINT_AFTER_HANDOFF.store(true, Ordering::SeqCst);
+    // The suspend turned pixel reporting off; the host is the same one that answered at startup, so
+    // it goes straight back on rather than being asked again.
+    #[cfg(unix)]
+    if crate::app::input::pixel_mouse::is_active() {
+        let _ = execute_plan(&mut executor, &pixel_mouse_plan(true));
+    }
     Ok(())
 }
 

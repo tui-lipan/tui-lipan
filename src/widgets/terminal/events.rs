@@ -422,6 +422,13 @@ pub enum MouseEncoding {
     Sgr,
     /// UTF-8 extended encoding (1005) - no coordinate limits.
     Utf8,
+    /// SGR-pixels encoding (1016) - SGR's shape, reporting pixels instead of cells.
+    ///
+    /// A program that asks for this is drawing something a cell is too coarse for: dragging a
+    /// scrollbar, a canvas, a map. It only means anything when the host reports the pointer in
+    /// pixels too, so [`TerminalScreen`](crate::widgets::TerminalScreen) answers the mode's
+    /// `DECRQM` probe with what is actually available rather than with what was asked for.
+    SgrPixels,
 }
 
 /// Combined mouse mode state.
@@ -439,12 +446,38 @@ pub struct MouseModeState {
     pub focus_events_enabled: bool,
 }
 
+/// Where a pane sits, and how finely the host can say where the pointer is inside it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MouseReportGeometry {
+    /// Cell position of the pane's content area on screen, subtracted to make the report relative.
+    pub content_origin: (u16, u16),
+    /// Where in its cell the pointer is, in pixels, when the host reports that finely.
+    ///
+    /// `None` leaves [`MouseEncoding::SgrPixels`] reporting cell corners, which is the honest
+    /// answer when all the host said was which cell.
+    pub sub_cell: Option<(u16, u16)>,
+    /// Host cell size in pixels, used to turn a cell position into a pixel one.
+    pub cell: super::TerminalCellSize,
+}
+
+impl MouseReportGeometry {
+    /// Geometry for a pane at `content_origin` with no sub-cell information.
+    pub fn at(content_origin: (u16, u16)) -> Self {
+        Self {
+            content_origin,
+            sub_cell: None,
+            cell: super::TerminalCellSize::default(),
+        }
+    }
+}
+
 /// Encode a MouseEvent to bytes for PTY (SGR 1006 format).
 pub fn mouse_event_to_bytes(
     event: MouseEvent,
     encoding: MouseEncoding,
-    viewport_offset: (u16, u16),
+    geometry: MouseReportGeometry,
 ) -> Option<Vec<u8>> {
+    let viewport_offset = geometry.content_origin;
     let (button_code, is_release) = match event.kind {
         MouseKind::Down(btn) => (button_to_code(btn), false),
         MouseKind::Up(btn) => (button_to_code(btn), true),
@@ -474,6 +507,30 @@ pub fn mouse_event_to_bytes(
         MouseEncoding::Sgr => {
             let suffix = if is_release { 'm' } else { 'M' };
             Some(format!("\x1b[<{};{};{}{}", cb, cx, cy, suffix).into_bytes())
+        }
+        MouseEncoding::SgrPixels => {
+            // Clamped into the cell: the host measures its own font, the child was told this
+            // screen's, and a report has to land in the cell the pane actually hit-tested.
+            let (sub_x, sub_y) = geometry.sub_cell.map_or((0, 0), |(x, y)| {
+                (
+                    x.min(geometry.cell.width.saturating_sub(1)),
+                    y.min(geometry.cell.height.saturating_sub(1)),
+                )
+            });
+            // Both coordinate systems are one-based, so the cell's own pixel origin is
+            // `(cx - 1) * cell`, and the report is one past the pixel the pointer is on.
+            let px = cx
+                .saturating_sub(1)
+                .saturating_mul(geometry.cell.width)
+                .saturating_add(sub_x)
+                .saturating_add(1);
+            let py = cy
+                .saturating_sub(1)
+                .saturating_mul(geometry.cell.height)
+                .saturating_add(sub_y)
+                .saturating_add(1);
+            let suffix = if is_release { 'm' } else { 'M' };
+            Some(format!("\x1b[<{};{};{}{}", cb, px, py, suffix).into_bytes())
         }
         MouseEncoding::X10 => {
             if cx > 223 || cy > 223 {

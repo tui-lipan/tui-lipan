@@ -24,8 +24,8 @@ pub use crate::core::memo::Memo;
 
 pub use crate::Tag;
 pub use crate::app::{
-    App, ContrastPolicy, DevToolsMetric, FocusChanged, FocusEntry, FocusPolicy, InlineHeight,
-    InlineStartupPolicy, ScreenBackground, SurfaceMode, TextAreaNewlineBinding,
+    App, ContrastPolicy, DEFAULT_FRAME_RATE, DevToolsMetric, FocusChanged, FocusEntry, FocusPolicy,
+    InlineHeight, InlineStartupPolicy, ScreenBackground, SurfaceMode, TextAreaNewlineBinding,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -228,6 +228,8 @@ pub use crate::widgets::{
 
 #[cfg(all(feature = "terminal-images", not(target_arch = "wasm32")))]
 pub use crate::host_cell_size;
+#[cfg(all(feature = "terminal-images", not(target_arch = "wasm32")))]
+pub use crate::host_reads_shared_frames;
 #[cfg(all(feature = "terminal", unix))]
 pub use crate::widgets::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
@@ -245,7 +247,11 @@ pub use crate::widgets::{
     paste_sequences, terminal_selection_text, to_viewport, viewport_row,
 };
 #[cfg(feature = "terminal-images")]
-pub use crate::widgets::{TerminalImage, TerminalImageCrop, TerminalImagePlacement};
+pub use crate::widgets::{
+    GraphicsMediaPolicy, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
+};
+#[cfg(not(target_arch = "wasm32"))]
+pub use crate::{PixelPointerStatus, pixel_pointer_status};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Feature-gated utilities

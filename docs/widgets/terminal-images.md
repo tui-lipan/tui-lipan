@@ -89,6 +89,13 @@ of one picture would collapse, the second silently not drawn.
 by Kitty z-index. Rows and columns are viewport-relative, and a cursor placement's may be negative
 when the image starts above or to the left of the pane.
 
+A transmission may name the cell box it is meant to fill (`c=` columns, `r=` rows), and a virtual
+placement is then mapped through that box rather than through the cell grid: each placeholder cell
+takes the slice of the image its position in the box calls for. This is what lets a child draw at
+whatever resolution it likes — twice the cell size on a HiDPI screen, say — and still have the
+picture scaled into the cells it asked for instead of cropped to its top-left corner. The box belongs
+to the image id, so a sender animating by re-transmitting under the same id declares it once.
+
 ## Memory
 
 Decoded pixels are capped per screen, 96 MiB by default, and evicted least-recently-used once the
@@ -100,7 +107,72 @@ should silently fail to appear.
 screen.set_image_budget(16 * 1024 * 1024);
 ```
 
+Server-side terminal mirrors that forward the original PTY stream to another rendering client can
+avoid decoding every image twice:
+
+```rust
+screen.set_image_storage_enabled(false);
+```
+
+That mode still validates command metadata, answers protocol queries, and applies image-implied
+cursor movement. It retains dimensions only; render snapshots contain no images. Raw RGB/RGBA
+payloads also skip base64 decoding, while PNG payloads are still decoded far enough to obtain their
+dimensions.
+
 Payloads are bounded before decoding as well: 32 MiB per transmission, 16384 pixels per axis.
+
+## Out-of-band payloads
+
+A child redrawing a full window every frame can leave its pixels somewhere and *name* them in the
+escape sequence instead of base64-encoding several megabytes through the PTY: `t=f` a file it leaves
+in place, `t=t` a temporary file, `t=s` a POSIX shared-memory object. This is the difference between
+a hundred bytes on the wire and a compress/encode/decode/inflate round trip per frame, and it is what
+lets a program in a pane animate at the host's own frame rate.
+
+The last two are consumed by reading - the file is deleted, the object unlinked - so exactly one
+reader may ever claim them. Anything that fans one PTY stream out to several readers (a multiplexer
+with several attached clients, a server-side mirror) must therefore decline them and keep only `t=f`,
+which stays readable:
+
+```rust
+screen.set_image_media_policy(GraphicsMediaPolicy::SHARED);
+```
+
+`GraphicsMediaPolicy::NONE` declines all three, so every picture arrives inline. Refusals are the
+protocol's own `EBADF`/`ENOTSUPP` reports, which is what makes a child fall back to `t=d` rather than
+lose the image. A `t=t` path must be temporary or say in its own name what it is for, `t=s` names are
+resolved as shared-memory objects rather than paths, and both reads are capped by the same
+transmission budget as an inline payload.
+
+A path only means something on the machine that wrote it, so a pane attached from elsewhere should
+decline: a remote client reading `/tmp/...` from its own filesystem is the one failure mode here that
+is not a clean error.
+
+### Out the other side, to the host
+
+The same reasoning applies to what this framework writes *to* the terminal it is running in, and the
+cost is the same one twice over: a pane whose child sends a full window of pixels every frame would
+otherwise have them deflated, base64-encoded, chunked and written down stdout, and the host would
+undo all of it.
+
+So a frame goes into a POSIX shared-memory object and the escape sequence carries its name. Nothing
+configures this. At startup the host is asked - with a `t=s` query it can only answer by reading a
+real object - and only a terminal that answers `OK` is handed frames that way; everything else keeps
+the inline path, including a terminal reached through `tmux`, whose reader is not the terminal, and
+one on another machine, which cannot resolve a name in this machine's memory and says so. Objects are
+unlinked by the host as it reads them, and by this process for any frame the host was never told
+about.
+
+On Linux the objects are pooled, which is why `/dev/shm` holds a handful of `tui-lipan-pool-<pid>-*`
+names for as long as a pane is drawing. A fresh object per frame is a fresh *allocation* per frame -
+every byte written lands on a page that does not exist yet - so each slot is created once and written
+again every frame, and what the host is handed is a fresh hard link to it. That link is the part the
+host unlinks, and its disappearance is the only signal that the host is finished: a slot whose link is
+still there is never reused, and a frame that finds every slot busy allocates its own object exactly
+as it used to. Pool objects left behind by a run that was killed are removed by the next run, which
+can tell because the name carries the process that made it.
+
+Windows has no POSIX shared-memory namespace, so frames there are always inline.
 
 ## What is supported
 
@@ -108,6 +180,7 @@ Payloads are bounded before decoding as well: 32 MiB per transmission, 16384 pix
 | --- | --- |
 | `a=t`, `a=T`, `a=p`, `a=d`, `a=q` | Transmit, transmit-and-display, display, delete, query |
 | `t=d` | Direct transmission, chunked with `m=1` |
+| `t=f`, `t=t`, `t=s` | Out-of-band transmission: a file left in place, a temporary file, a POSIX shared-memory object |
 | `f=24`, `f=32`, `f=100` | RGB, RGBA, PNG |
 | `o=z` | zlib-compressed payloads |
 | `s`, `v` | Pixel dimensions for the raw formats |
@@ -123,9 +196,6 @@ Payloads are bounded before decoding as well: 32 MiB per transmission, 16384 pix
 Not supported, and answered with the protocol's own `ENOTSUPP` report so a child that probes first
 gets a clean answer rather than silence:
 
-- **File and shared-memory transmission** (`t=f`, `t=t`, `t=s`). A pane can be attached from a
-  different machine than the one that wrote the file, so a path is meaningless often enough that
-  refusing is more honest than reading it sometimes. Tools that fall back to `t=d` still work.
 - **The protocol's animation frames** (`a=a`, `a=f`, `a=c`). A sender that animates by
   re-transmitting under the same image id — which is what `ratatui-image` does for GIFs — works
   regardless: the new pixels replace the old and the placeholders keep pointing at them.
@@ -139,8 +209,9 @@ Sixel input from the child is a separate protocol and is not read.
   text replay stream and does not re-emit image payloads.
 - **A partly visible image is cropped, not scaled.** That is what makes scrolling look right, but
   it also means an image wider than its pane shows its left part rather than shrinking to fit.
-- **Encoding is asynchronous.** The first frame after a new image has no pixels in it yet; the
-  encode lands a frame or two later and the pane repaints.
+- **Encoding is asynchronous.** The first image has no pixels until its encode lands. Later updates
+  keep the displayed frame in place while the replacement is encoded. Its transmission is emitted
+  before its native placeholders in one paint, so the host switches only after it has the pixels.
 
 ## Testing
 

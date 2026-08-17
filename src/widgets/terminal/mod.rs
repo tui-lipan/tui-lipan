@@ -6,6 +6,8 @@ mod copy_mode;
 mod events;
 #[cfg(feature = "terminal-images")]
 mod graphics;
+#[cfg(feature = "terminal-images")]
+mod graphics_media;
 mod layout;
 mod mod_private;
 mod node;
@@ -21,13 +23,17 @@ pub use buffer::TerminalBuffer;
 #[cfg(feature = "terminal")]
 pub use copy_mode::{CopyModeAction, CopyModeGrid, TerminalCopyMode};
 pub use events::{
-    KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, TerminalInputEvent,
-    TerminalInputKind, TerminalKeyModes, TerminalPasteShortcutBehavior, encode_paste,
-    focus_sequences, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
+    KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, MouseReportGeometry,
+    TerminalInputEvent, TerminalInputKind, TerminalKeyModes, TerminalPasteShortcutBehavior,
+    encode_paste, focus_sequences, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
     terminal_selection_text,
 };
 #[cfg(feature = "terminal-images")]
+pub(crate) use graphics::{PLACEHOLDER as KITTY_PLACEHOLDER, diacritic as kitty_diacritic};
+#[cfg(feature = "terminal-images")]
 pub use graphics::{TerminalImage, TerminalImageCrop, TerminalImagePlacement};
+#[cfg(feature = "terminal-images")]
+pub use graphics_media::GraphicsMediaPolicy;
 pub use mod_private::Terminal;
 pub use osc::{
     TerminalCommandPhase, TerminalSemanticEvent, TerminalSemanticState, TerminalWorkingDirectory,
@@ -983,7 +989,9 @@ mod tests {
         };
         use super::events::MouseEncoding;
 
-        let bytes = mouse_event_to_bytes(event, MouseEncoding::Sgr, (0, 0)).expect("mouse bytes");
+        let bytes =
+            mouse_event_to_bytes(event, MouseEncoding::Sgr, MouseReportGeometry::at((0, 0)))
+                .expect("mouse bytes");
         assert_eq!(String::from_utf8(bytes).unwrap(), "\u{1b}[<0;3;4M");
     }
 
@@ -1000,8 +1008,49 @@ mod tests {
         };
         use super::events::MouseEncoding;
 
-        let bytes = mouse_event_to_bytes(event, MouseEncoding::Sgr, (0, 0)).expect("mouse bytes");
+        let bytes =
+            mouse_event_to_bytes(event, MouseEncoding::Sgr, MouseReportGeometry::at((0, 0)))
+                .expect("mouse bytes");
         assert_eq!(String::from_utf8(bytes).unwrap(), "\u{1b}[<35;27;6M");
+    }
+
+    /// A child that asked for mode 1016 gets pixels, and gets the host's sub-cell precision when
+    /// the host had any to give. Without the offset the report snaps to a cell corner, which is a
+    /// scrollbar drag that moves in steps.
+    #[test]
+    fn mouse_event_to_bytes_sgr_pixels_places_the_pointer_inside_its_cell() {
+        use super::events::MouseEncoding;
+        let event = MouseEvent {
+            x: 12,
+            y: 7,
+            kind: MouseKind::Drag(MouseButton::Left),
+            mods: KeyMods::default(),
+        };
+        let geometry = MouseReportGeometry {
+            content_origin: (10, 5),
+            sub_cell: Some((4, 11)),
+            cell: TerminalCellSize::new(9, 17),
+        };
+
+        let bytes =
+            mouse_event_to_bytes(event, MouseEncoding::SgrPixels, geometry).expect("mouse bytes");
+        // Two cells into the pane, plus where in that cell the pointer was: 2*9+4+1, 2*17+11+1.
+        assert_eq!(String::from_utf8(bytes).unwrap(), "\u{1b}[<32;23;46M");
+
+        let bytes = mouse_event_to_bytes(
+            event,
+            MouseEncoding::SgrPixels,
+            MouseReportGeometry {
+                sub_cell: None,
+                ..geometry
+            },
+        )
+        .expect("mouse bytes");
+        assert_eq!(
+            String::from_utf8(bytes).unwrap(),
+            "\u{1b}[<32;19;35M",
+            "a host that only said which cell reports that cell's own first pixel"
+        );
     }
 
     #[test]

@@ -49,24 +49,17 @@ impl<C: Component> AppRunner<C> {
             if currently_suspended {
                 // Ensure the poll timeout is short enough to wake up when the
                 // suspension expires so we can trigger the repaint promptly.
-                poll_timeout = poll_timeout.min(Duration::from_millis(16));
+                poll_timeout = poll_timeout.min(self.frame_interval);
             }
         }
 
-        if let Some(id) = self.focus.focused
-            && self.core.tree.is_valid(id)
-            && {
-                #[cfg(feature = "terminal")]
-                {
-                    matches!(self.core.tree.node(id).kind, NodeKind::Terminal(_))
-                }
-                #[cfg(not(feature = "terminal"))]
-                {
-                    false
-                }
-            }
-        {
-            poll_timeout = poll_timeout.min(Duration::from_millis(16));
+        // A child program writes whenever it likes and tells nobody, so every live terminal - not
+        // only the focused one - has to be looked at on a cadence. This is the whole frame rate a
+        // program drawing at video rates can reach through a pane, and the only cost a pane with
+        // nothing to say imposes.
+        #[cfg(feature = "terminal")]
+        if self.core.tree.has_live_terminals() {
+            poll_timeout = poll_timeout.min(self.frame_interval);
         }
 
         if self.stationary_drag_autoscroll_pending() {
@@ -129,7 +122,7 @@ impl<C: Component> AppRunner<C> {
             || self.core.ctx.env().animations.has_active()
         {
             poll_timeout = poll_timeout.min(
-                Duration::from_millis(16)
+                self.frame_interval
                     .saturating_sub(self.clock_elapsed(self.animation.last_animated_tick)),
             );
         }
@@ -272,7 +265,7 @@ impl<C: Component> AppRunner<C> {
         if (self.core.tree.has_animated_widgets()
             || self.core.tree.has_animated_scrolls()
             || self.core.ctx.env().animations.has_active())
-            && self.clock_elapsed(self.animation.last_animated_tick) >= Duration::from_millis(16)
+            && self.clock_elapsed(self.animation.last_animated_tick) >= self.frame_interval
         {
             let dt = self.clock_elapsed(self.animation.last_animated_tick);
             self.animation.last_animated_tick = self.clock_now();

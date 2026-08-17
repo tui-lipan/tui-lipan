@@ -65,6 +65,71 @@ pub fn host_cell_size() -> crate::widgets::TerminalCellSize {
     crate::backend::ratatui_backend::image_support::host_cell_size()
 }
 
+/// Why pointer reports are, or are not, pixel-precise on this host.
+///
+/// Mode 1016 needs two independent things to be true, and when it is off it is not obvious which
+/// one is missing: the host has to answer the startup probe saying it implements the mode, and the
+/// cell size has to be known exactly - from the size the host reports when asked, or from a window
+/// size the grid divides evenly. A terminal that pads its window fails the second while passing the
+/// first, and the mode then stays off silently, leaving reports cell-precise.
+///
+/// Reported rather than reasoned about, because both halves are answers from the host that no
+/// amount of reading the code will produce.
+/// Platforms without the mode report it inactive rather than making every caller spell out a
+/// `cfg`: "pointer reports are cell-precise here" is the true answer, not a missing one.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn pixel_pointer_status() -> PixelPointerStatus {
+    #[cfg(unix)]
+    {
+        PixelPointerStatus {
+            host_supports: crate::app::input::pixel_mouse::host_supports(),
+            cell: crate::app::input::pixel_mouse::cell_size(),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        PixelPointerStatus {
+            host_supports: false,
+            cell: None,
+        }
+    }
+}
+
+/// What [`pixel_pointer_status`] found. `active` is the conjunction, and is what actually decides
+/// whether the mode is asked for and reports are read as pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(not(target_arch = "wasm32"))]
+pub struct PixelPointerStatus {
+    /// The host answered the `DECRQM` probe for mode 1016 saying it implements it.
+    pub host_supports: bool,
+    /// Cell size in pixels, when it is known exactly. `None` leaves the mode off whatever the host
+    /// said, because a pixel report that cannot be divided into a cell is worse than a cell report.
+    pub cell: Option<(u16, u16)>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PixelPointerStatus {
+    /// Whether pointer reports on this host carry pixels.
+    pub fn active(&self) -> bool {
+        self.host_supports && self.cell.is_some()
+    }
+}
+
+/// Whether frames reach the host terminal through shared memory rather than through the PTY.
+///
+/// The difference is not a detail. A `t=s` transmission is a few hundred bytes naming an object the
+/// host maps; the fallback deflates and base64s every pixel of every frame and writes the result
+/// down the PTY, which for a full-window animation is tens of megabytes a second and shows up as
+/// both CPU and visible stutter. Which one is in use is decided once, by whether the host answered
+/// the startup probe, and is otherwise invisible - hence this.
+///
+/// Always false under `TMUX`, where the reader is tmux rather than a terminal on this machine.
+#[cfg(all(feature = "terminal-images", not(target_arch = "wasm32")))]
+pub fn host_reads_shared_frames() -> bool {
+    crate::backend::ratatui_backend::shared_frame::host_reads_shared_memory()
+        && std::env::var_os("TMUX").is_none()
+}
+
 /// Temporarily release the interactive terminal for an external program (e.g. `$EDITOR`).
 ///
 /// Run suspend/resume on the **UI thread** (see [`Command::new`](crate::core::component::Command::new));
@@ -204,7 +269,9 @@ pub use crate::widgets::{
     TerminalPasteShortcutBehavior, TerminalRenderSnapshot, terminal_selection_text,
 };
 #[cfg(feature = "terminal-images")]
-pub use crate::widgets::{TerminalImage, TerminalImageCrop, TerminalImagePlacement};
+pub use crate::widgets::{
+    GraphicsMediaPolicy, TerminalImage, TerminalImageCrop, TerminalImagePlacement,
+};
 
 #[cfg(feature = "diff-view")]
 pub use crate::widgets::{

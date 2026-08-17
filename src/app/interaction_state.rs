@@ -289,6 +289,12 @@ pub(crate) struct MouseTrackingState {
     /// Nodes whose row selection changed from a click this frame (not keyboard/programmatic).
     pub pointer_driven_item_hover_selection: std::collections::HashSet<NodeId>,
     pub last_mouse: Rc<Cell<Option<(u16, u16)>>>,
+    /// Where inside its cell the last pointer position was, when the host reported pixels.
+    ///
+    /// Nothing in the widget tree is laid out finely enough to care; it exists so a terminal
+    /// forwarding to a child that asked for pixel reports can pass on the precision it was given
+    /// rather than the cell corner.
+    pub sub_cell: Cell<Option<(u16, u16)>>,
     /// For double/triple-click detection.
     pub last_click: Option<ClickState>,
     /// Track the node where the left mouse button was pressed to differentiate dragging from clicking.

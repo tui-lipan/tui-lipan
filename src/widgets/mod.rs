@@ -109,6 +109,8 @@ pub(crate) use scroll_view::utils::{
     calc_scroll_view_window, normalize_input_offset, scroll_view_scrollbar_metrics,
 };
 pub(crate) use status_bar_layout::StatusBarLayout;
+#[cfg(feature = "terminal-images")]
+pub(crate) use terminal::{KITTY_PLACEHOLDER, kitty_diacritic};
 pub(crate) use text_area::TextAreaGeometry;
 pub(crate) use text_area::text_area_cursor_reserve;
 pub(crate) use text_area::text_area_visual_line_for_cursor;
@@ -289,18 +291,19 @@ pub use terminal::TerminalPtyHandoff;
 #[cfg(feature = "terminal")]
 pub use terminal::{
     CopyModeAction, CopyModeGrid, KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState,
-    ScrollbackLineage, SemanticMark, SemanticMarkKind, Terminal, TerminalBuffer, TerminalCellSize,
-    TerminalClipboardEvent, TerminalClipboardTarget, TerminalColorPalette, TerminalCommandPhase,
-    TerminalCopyMode, TerminalDecoration, TerminalInputEvent, TerminalInputKind, TerminalKeyModes,
-    TerminalPasteShortcutBehavior, TerminalPos, TerminalPty, TerminalPtyConfig, TerminalPtyError,
-    TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle,
-    TerminalSelection, TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState,
-    TerminalViewport, TerminalWorkingDirectory, TerminalWorkingDirectorySource, absolute_line,
-    encode_paste, focus_sequences, from_viewport, key_event_to_bytes, mouse_event_to_bytes,
-    paste_sequences, terminal_selection_text, to_viewport, viewport_row,
+    MouseReportGeometry, ScrollbackLineage, SemanticMark, SemanticMarkKind, Terminal,
+    TerminalBuffer, TerminalCellSize, TerminalClipboardEvent, TerminalClipboardTarget,
+    TerminalColorPalette, TerminalCommandPhase, TerminalCopyMode, TerminalDecoration,
+    TerminalInputEvent, TerminalInputKind, TerminalKeyModes, TerminalPasteShortcutBehavior,
+    TerminalPos, TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent,
+    TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle, TerminalSelection,
+    TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState, TerminalViewport,
+    TerminalWorkingDirectory, TerminalWorkingDirectorySource, absolute_line, encode_paste,
+    focus_sequences, from_viewport, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
+    terminal_selection_text, to_viewport, viewport_row,
 };
 #[cfg(feature = "terminal-images")]
-pub use terminal::{TerminalImage, TerminalImageCrop, TerminalImagePlacement};
+pub use terminal::{GraphicsMediaPolicy, TerminalImage, TerminalImageCrop, TerminalImagePlacement};
 pub use text::{Overflow, Text};
 pub use text_area::{
     IMAGE_SENTINEL_BASE, SENTINEL_BASE, SentinelEvent, SentinelId, TextArea,

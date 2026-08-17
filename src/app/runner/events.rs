@@ -777,7 +777,9 @@ impl<C: Component> AppRunner<C> {
     /// passthrough of what the host sent, and the child program applies its own scroll step.
     #[cfg(feature = "terminal")]
     pub(crate) fn forward_terminal_mouse_ticks(&mut self, mouse: MouseEvent, ticks: u16) -> bool {
-        let Some(plan) = terminal_mouse_forward_plan(&self.core.tree, mouse) else {
+        let Some(plan) =
+            terminal_mouse_forward_plan(&self.core.tree, mouse, self.mouse.sub_cell.get())
+        else {
             return false;
         };
         if plan.focus {
@@ -1205,6 +1207,19 @@ impl<C: Component> AppRunner<C> {
     }
 }
 
+/// The host's cell size, for turning a cell position back into the pixels a child asked for.
+///
+/// Only [`MouseEncoding::SgrPixels`] reads this, and that encoding is only reachable once
+/// `pixel_mouse` has a measured size, so the fallback never reaches a child.
+#[cfg(feature = "terminal")]
+fn host_cell_size() -> crate::widgets::TerminalCellSize {
+    #[cfg(unix)]
+    if let Some((width, height)) = crate::app::input::pixel_mouse::cell_size() {
+        return crate::widgets::TerminalCellSize::new(width, height);
+    }
+    crate::widgets::TerminalCellSize::default()
+}
+
 /// What forwarding a mouse event to a terminal requires, resolved from the node tree alone.
 ///
 /// Split out from [`AppRunner::forward_terminal_mouse`] so `TestBackend` can share it. Without
@@ -1228,6 +1243,7 @@ pub(crate) struct TerminalMouseForward {
 pub(crate) fn terminal_mouse_forward_plan(
     tree: &crate::core::node::NodeTree,
     mouse: MouseEvent,
+    sub_cell: Option<(u16, u16)>,
 ) -> Option<TerminalMouseForward> {
     // Shift is the escape hatch for local selection over a tracking terminal.
     if mouse.mods.shift {
@@ -1280,8 +1296,17 @@ pub(crate) fn terminal_mouse_forward_plan(
 
     let callback = term.on_mouse_forward.clone()?;
     let encoding = term.mouse_mode.encoding;
-    let offset = (content_rect.x.max(0) as u16, content_rect.y.max(0) as u16);
-    let bytes = mouse_event_to_bytes(mouse, encoding, offset)?;
+    let geometry = crate::widgets::MouseReportGeometry {
+        content_origin: (content_rect.x.max(0) as u16, content_rect.y.max(0) as u16),
+        sub_cell,
+        // The size the child was told through `TIOCGWINSZ`, so the pixels it is handed divide back
+        // into the cell it thinks they are in. Only a screen the app never installed falls back.
+        cell: term
+            .screen
+            .as_ref()
+            .map_or_else(host_cell_size, |screen| screen.cell_size()),
+    };
+    let bytes = mouse_event_to_bytes(mouse, encoding, geometry)?;
     Some(TerminalMouseForward {
         hit,
         bytes,
