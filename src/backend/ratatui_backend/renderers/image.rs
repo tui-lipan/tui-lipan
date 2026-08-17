@@ -233,58 +233,44 @@ impl CompressedKitty {
         for y in 0..height {
             let row_y = area.y.saturating_add(y);
             let spans = uncovered_x_spans(area.x, row_end, row_y, &holes);
-            let Some(&(origin, _)) = spans.first() else {
-                continue;
-            };
-
-            symbol.clear();
-            if let Some(sequence) = transmit.take() {
-                symbol.push_str(&sequence);
-            }
-            symbol.push_str("\x1b[s");
-            symbol.push_str(&self.id_color);
             for &(start, end) in &spans {
-                if start != origin {
-                    symbol.push_str("\x1b[u");
-                    let dx = start.saturating_sub(origin);
-                    if dx > 0 {
-                        let _ = write!(symbol, "\x1b[{dx}C");
-                    }
+                let span_width = end.saturating_sub(start);
+                if span_width == 0 {
+                    continue;
+                }
+                // One walk per span, from that span's first cell. A gap in the *same* cell's
+                // sequence is invisible to the host: placeholders are a consecutive run, and
+                // jumping the cursor mid-walk never starts a second one, which left everything
+                // to the right of a modal black.
+                symbol.clear();
+                if let Some(sequence) = transmit.take() {
+                    symbol.push_str(&sequence);
                 }
                 let col = start.saturating_sub(area.x);
+                let right = span_width.saturating_sub(1);
                 let _ = write!(
                     symbol,
-                    "\u{10EEEE}{}{}{}",
+                    "\x1b[s{}\u{10EEEE}{}{}{}",
+                    self.id_color,
                     crate::widgets::kitty_diacritic(y),
                     crate::widgets::kitty_diacritic(col),
                     crate::widgets::kitty_diacritic(self.id_extra),
                 );
-                let rest = (end.saturating_sub(start)).saturating_sub(1);
-                for _ in 0..rest {
+                for _ in 1..span_width {
                     symbol.push(crate::widgets::KITTY_PLACEHOLDER);
                 }
-            }
-            // Back to this row's origin, then to the bottom-right of the placement, so the
-            // cursor-walk does not leave the host's cursor sitting in a placeholder cell.
-            let right =
-                (area.x.saturating_add(area.width).saturating_sub(1)).saturating_sub(origin);
-            let down = (area.y.saturating_add(area.height).saturating_sub(1)).saturating_sub(row_y);
-            let _ = write!(symbol, "\x1b[u\x1b[{right}C\x1b[{down}B");
+                let _ = write!(symbol, "\x1b[u\x1b[{right}C");
 
-            for &(start, end) in &spans {
-                for x in start..end {
-                    if x == origin {
-                        continue;
-                    }
+                for x in start.saturating_add(1)..end {
                     if let Some(cell) = f.buffer_mut().cell_mut((x, row_y)) {
                         cell.set_diff_option(CellDiffOption::Skip);
                     }
                 }
+                if let Some(cell) = f.buffer_mut().cell_mut((start, row_y)) {
+                    cell.set_symbol(&symbol).set_diff_option(UNIT_WIDTH);
+                }
+                IMAGE_PLACEHOLDERS_PAINTED.set(true);
             }
-            if let Some(cell) = f.buffer_mut().cell_mut((origin, row_y)) {
-                cell.set_symbol(&symbol).set_diff_option(UNIT_WIDTH);
-            }
-            IMAGE_PLACEHOLDERS_PAINTED.set(true);
         }
     }
 
@@ -1545,7 +1531,7 @@ mod tests {
                     ),
                     "the first uncovered cell carries the row walk"
                 );
-                for x in [1, 2, 3, 7, 8, 9] {
+                for x in [1, 2, 3] {
                     assert_eq!(
                         buffer.cell((x, 0)).map(|cell| cell.diff_option),
                         Some(CellDiffOption::Skip),
@@ -1557,6 +1543,20 @@ mod tests {
                         buffer.cell((x, 0)).map(|cell| cell.diff_option),
                         Some(CellDiffOption::Skip),
                         "overlay cell {x} must remain writable for the modal"
+                    );
+                }
+                assert!(
+                    matches!(
+                        buffer.cell((7, 0)).map(|cell| cell.diff_option),
+                        Some(CellDiffOption::ForcedWidth(_))
+                    ),
+                    "the run to the right of the overlay is a new walk, not a gap in the first one"
+                );
+                for x in [8, 9] {
+                    assert_eq!(
+                        buffer.cell((x, 0)).map(|cell| cell.diff_option),
+                        Some(CellDiffOption::Skip),
+                        "uncovered cell {x} should be drawn by the walk, not the diff"
                     );
                 }
             })

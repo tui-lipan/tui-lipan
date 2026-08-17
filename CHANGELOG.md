@@ -64,8 +64,9 @@ While the crate is on `0.x.y`:
   never told about.
 - Kitty placeholder rows skip opaque overlays and DevTools. A new frame used to rewrite the whole
   row from its first cell, covering command palettes and turning DevTools rows black until a hover
-  dirtied those cells. The walk now punches those rects out, and the overlay cells are forced
-  through the diff so they win even if a walk still races them.
+  dirtied those cells. Each visible span is now its own walk, so the image resumes after the
+  overlay instead of leaving a black band, and overlay cells are forced through the diff so they
+  win even if a walk still races them.
 - Out-of-band transmissions (`t=f`, `t=t`, `t=s`) identify themselves by name and serial rather than
   hashing the pixel payload. A child rewriting a file in place still misses the render cache, and a
   scrolling pane no longer spends a full-frame hash on pixels it is about to decode anyway.
