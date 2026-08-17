@@ -1,3 +1,5 @@
+#[cfg(feature = "terminal-images")]
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 #[cfg(feature = "terminal-images")]
 use std::fmt::Write as _;
@@ -36,6 +38,73 @@ use crate::style::resolve::resolve_base_style;
 use crate::style::{Rect, Theme};
 use crate::widgets::internal::ImageNode;
 use crate::widgets::{ImageFit, ImageProtocol};
+
+#[cfg(feature = "terminal-images")]
+thread_local! {
+    static IMAGE_OCCLUSIONS: RefCell<Vec<ratatui::layout::Rect>> = const { RefCell::new(Vec::new()) };
+    static IMAGE_PLACEHOLDERS_PAINTED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Remember which cells a Kitty placeholder row must not cover this frame.
+///
+/// A placeholder row is written from its first cell as one escape sequence that walks the cursor
+/// across the whole width. Overlay text is painted into the buffer afterwards, but those cells are
+/// not re-emitted unless they changed, so a new frame restomps the modal on the host. Subtracting
+/// the rects from the walk is what stops that; [`CellDiffOption::AlwaysUpdate`] on the same cells is
+/// the belt in case a walk still races them.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn set_image_occlusions(rects: Vec<ratatui::layout::Rect>) {
+    IMAGE_OCCLUSIONS.with(|slot| *slot.borrow_mut() = rects);
+    IMAGE_PLACEHOLDERS_PAINTED.set(false);
+}
+
+/// Drop the frame's occlusion list. [`set_image_occlusions`] installs the next one.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn clear_image_occlusions() {
+    IMAGE_OCCLUSIONS.with(|slot| slot.borrow_mut().clear());
+    IMAGE_PLACEHOLDERS_PAINTED.set(false);
+}
+
+/// Whether this frame wrote Kitty placeholders, so overlay cells must be forced through the diff.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn image_placeholders_painted() -> bool {
+    IMAGE_PLACEHOLDERS_PAINTED.get()
+}
+
+/// Columns of `y` in `[x0, x1)` that no occlusion covers, as half-open spans.
+#[cfg(feature = "terminal-images")]
+fn uncovered_x_spans(x0: u16, x1: u16, y: u16, holes: &[ratatui::layout::Rect]) -> Vec<(u16, u16)> {
+    if x0 >= x1 {
+        return Vec::new();
+    }
+    let mut cuts: Vec<(u16, u16)> = holes
+        .iter()
+        .filter_map(|hole| {
+            if y < hole.y || y >= hole.y.saturating_add(hole.height) {
+                return None;
+            }
+            let left = hole.x.max(x0);
+            let right = hole.x.saturating_add(hole.width).min(x1);
+            (left < right).then_some((left, right))
+        })
+        .collect();
+    if cuts.is_empty() {
+        return vec![(x0, x1)];
+    }
+    cuts.sort_unstable();
+    let mut spans = Vec::new();
+    let mut cursor = x0;
+    for (left, right) in cuts {
+        if cursor < left {
+            spans.push((cursor, left));
+        }
+        cursor = cursor.max(right);
+    }
+    if cursor < x1 {
+        spans.push((cursor, x1));
+    }
+    spans
+}
 
 enum EncodedProtocol {
     Ratatui {
@@ -155,41 +224,67 @@ impl CompressedKitty {
         if full_width == 0 {
             return;
         }
-        let width = usize::from(full_width);
-        let mut transmit = self.take_transmission();
-        let placeholder_row: String =
-            std::iter::repeat_n(crate::widgets::KITTY_PLACEHOLDER, width - 1).collect();
-        let right = area.width.saturating_sub(1);
-        let down = area.height.saturating_sub(1);
-        let restore_cursor = format!("\x1b[u\x1b[{right}C\x1b[{down}B");
+        let row_end = area.x.saturating_add(full_width);
         let height = area.height.min(self.size.height).min(297);
+        let mut transmit = self.take_transmission();
         let mut symbol = String::new();
+        let holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
 
         for y in 0..height {
+            let row_y = area.y.saturating_add(y);
+            let spans = uncovered_x_spans(area.x, row_end, row_y, &holes);
+            let Some(&(origin, _)) = spans.first() else {
+                continue;
+            };
+
             symbol.clear();
             if let Some(sequence) = transmit.take() {
                 symbol.push_str(&sequence);
             }
-            write!(
-                symbol,
-                "\x1b[s{}\u{10EEEE}{}{}{}",
-                self.id_color,
-                crate::widgets::kitty_diacritic(y),
-                crate::widgets::kitty_diacritic(0),
-                crate::widgets::kitty_diacritic(self.id_extra),
-            )
-            .expect("writing to a String cannot fail");
-            symbol.push_str(&placeholder_row);
-            symbol.push_str(&restore_cursor);
-
-            for x in 1..full_width {
-                if let Some(cell) = f.buffer_mut().cell_mut((area.x + x, area.y + y)) {
-                    cell.set_diff_option(CellDiffOption::Skip);
+            symbol.push_str("\x1b[s");
+            symbol.push_str(&self.id_color);
+            for &(start, end) in &spans {
+                if start != origin {
+                    symbol.push_str("\x1b[u");
+                    let dx = start.saturating_sub(origin);
+                    if dx > 0 {
+                        let _ = write!(symbol, "\x1b[{dx}C");
+                    }
+                }
+                let col = start.saturating_sub(area.x);
+                let _ = write!(
+                    symbol,
+                    "\u{10EEEE}{}{}{}",
+                    crate::widgets::kitty_diacritic(y),
+                    crate::widgets::kitty_diacritic(col),
+                    crate::widgets::kitty_diacritic(self.id_extra),
+                );
+                let rest = (end.saturating_sub(start)).saturating_sub(1);
+                for _ in 0..rest {
+                    symbol.push(crate::widgets::KITTY_PLACEHOLDER);
                 }
             }
-            if let Some(cell) = f.buffer_mut().cell_mut((area.x, area.y + y)) {
+            // Back to this row's origin, then to the bottom-right of the placement, so the
+            // cursor-walk does not leave the host's cursor sitting in a placeholder cell.
+            let right =
+                (area.x.saturating_add(area.width).saturating_sub(1)).saturating_sub(origin);
+            let down = (area.y.saturating_add(area.height).saturating_sub(1)).saturating_sub(row_y);
+            let _ = write!(symbol, "\x1b[u\x1b[{right}C\x1b[{down}B");
+
+            for &(start, end) in &spans {
+                for x in start..end {
+                    if x == origin {
+                        continue;
+                    }
+                    if let Some(cell) = f.buffer_mut().cell_mut((x, row_y)) {
+                        cell.set_diff_option(CellDiffOption::Skip);
+                    }
+                }
+            }
+            if let Some(cell) = f.buffer_mut().cell_mut((origin, row_y)) {
                 cell.set_symbol(&symbol).set_diff_option(UNIT_WIDTH);
             }
+            IMAGE_PLACEHOLDERS_PAINTED.set(true);
         }
     }
 
@@ -1363,6 +1458,111 @@ pub(crate) fn render_image_inline_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A hole in the middle of a row must split it, and stacked holes must merge, so a placeholder
+    /// walk never writes into a cell an overlay is about to own.
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn overlay_rects_punch_holes_in_a_placeholder_row() {
+        let hole = ratatui::layout::Rect {
+            x: 4,
+            y: 1,
+            width: 3,
+            height: 1,
+        };
+        assert_eq!(
+            uncovered_x_spans(0, 10, 1, &[hole]),
+            vec![(0, 4), (7, 10)],
+            "the walk has to resume after the overlay, not cover it"
+        );
+        assert_eq!(
+            uncovered_x_spans(0, 10, 0, &[hole]),
+            vec![(0, 10)],
+            "a hole on another row must not punch this one"
+        );
+        let overlap = ratatui::layout::Rect {
+            x: 5,
+            y: 1,
+            width: 4,
+            height: 1,
+        };
+        assert_eq!(
+            uncovered_x_spans(0, 10, 1, &[hole, overlap]),
+            vec![(0, 4), (9, 10)],
+            "overlapping overlays are one cut, not a gap between them"
+        );
+        let full = ratatui::layout::Rect {
+            x: 0,
+            y: 1,
+            width: 10,
+            height: 1,
+        };
+        assert!(
+            uncovered_x_spans(0, 10, 1, &[full]).is_empty(),
+            "a row the overlay owns entirely has no placeholders"
+        );
+    }
+
+    /// Overlay columns stay writable so later paint can put text there; uncovered cells stay Skip
+    /// so the first-cell walk is the only thing that draws them.
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn a_kitty_row_does_not_skip_cells_under_an_opaque_overlay() {
+        let kitty = CompressedKitty {
+            transmit: Mutex::new(None),
+            shared: Mutex::new(None),
+            id_color: "\x1b[38;2;1;2;3m".into(),
+            id_extra: 0,
+            size: ratatui::layout::Size {
+                width: 10,
+                height: 2,
+            },
+        };
+        set_image_occlusions(vec![ratatui::layout::Rect {
+            x: 4,
+            y: 0,
+            width: 3,
+            height: 1,
+        }]);
+        let backend = ratatui::backend::TestBackend::new(10, 2);
+        let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+        terminal
+            .draw(|f| {
+                kitty.render(
+                    f,
+                    ratatui::layout::Rect {
+                        x: 0,
+                        y: 0,
+                        width: 10,
+                        height: 2,
+                    },
+                );
+                let buffer = f.buffer_mut();
+                assert!(
+                    matches!(
+                        buffer.cell((0, 0)).map(|cell| cell.diff_option),
+                        Some(CellDiffOption::ForcedWidth(_))
+                    ),
+                    "the first uncovered cell carries the row walk"
+                );
+                for x in [1, 2, 3, 7, 8, 9] {
+                    assert_eq!(
+                        buffer.cell((x, 0)).map(|cell| cell.diff_option),
+                        Some(CellDiffOption::Skip),
+                        "uncovered cell {x} should be drawn by the walk, not the diff"
+                    );
+                }
+                for x in 4..7 {
+                    assert_ne!(
+                        buffer.cell((x, 0)).map(|cell| cell.diff_option),
+                        Some(CellDiffOption::Skip),
+                        "overlay cell {x} must remain writable for the modal"
+                    );
+                }
+            })
+            .expect("draw");
+        clear_image_occlusions();
+    }
 
     /// A picture the size of its box, or a little over, is the host's to scale; a picture many times
     /// the size of its box is not.
