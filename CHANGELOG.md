@@ -56,8 +56,15 @@ While the crate is on `0.x.y`:
   paid to undo all three; now the pixels go into a shared-memory object and the escape sequence
   carries its name. The host is asked at startup - with a `t=s` query it can only answer by reading a
   real object - and only a terminal that answers `OK` is handed frames that way. A terminal behind
-  `tmux`, one on another machine, and Windows all keep the inline path. Objects are unlinked by the
-  host as it reads them, and by this process for any frame the host was never told about.
+  `tmux`, one on another machine, and Windows all keep the inline path. On Linux the objects are
+  pooled: each frame copies into a resident mapping and hands the host a fresh hard link, so the
+  per-frame cost is a memcpy rather than a page-faulting allocation. A slot is reused only after the
+  host has unlinked the name it was given; a frame that finds every slot busy allocates as before.
+  Objects are unlinked by the host as it reads them, and by this process for any frame the host was
+  never told about.
+- Out-of-band transmissions (`t=f`, `t=t`, `t=s`) identify themselves by name and serial rather than
+  hashing the pixel payload. A child rewriting a file in place still misses the render cache, and a
+  scrolling pane no longer spends a full-frame hash on pixels it is about to decode anyway.
 - Pixel-precise pointer positions. A program that wants to know where the pointer is more finely than
   which cell it is over - dragging a scrollbar, panning a canvas - asks for SGR-pixels reporting
   (DEC private mode 1016) and probes whether it took. `TerminalScreen` now holds that request and

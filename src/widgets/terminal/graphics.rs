@@ -1237,6 +1237,9 @@ pub(super) struct TerminalGraphics {
     clock: u64,
     storage_enabled: bool,
     media: GraphicsMediaPolicy,
+    /// Counts transmissions that named their pixels rather than carrying them. See
+    /// [`TerminalGraphics::named_source_identity`].
+    source_serial: u64,
 }
 
 impl Default for TerminalGraphics {
@@ -1254,6 +1257,7 @@ impl Default for TerminalGraphics {
             clock: 0,
             storage_enabled: true,
             media: GraphicsMediaPolicy::default(),
+            source_serial: 0,
         }
     }
 }
@@ -1292,6 +1296,7 @@ impl TerminalGraphics {
         self.placements.clear();
         self.pending = None;
         self.used_bytes = 0;
+        self.source_serial = 0;
     }
 
     /// Drop every placement while keeping the images themselves.
@@ -1572,6 +1577,17 @@ impl TerminalGraphics {
             };
         }
 
+        // Identity is taken from what the child *named*, before the pixels are loaded. An out-of-band
+        // transmission's payload is a path, tens of bytes; hashing the 2 MB it points at would be
+        // most of a scrolling pane's remaining CPU, and a child that reuses a path (a ring of files
+        // rewritten in place) would then hash as identical frames. The serial is what keeps those
+        // distinct. Inline pixels are still hashed in full: they are the identity, and there is no
+        // cheaper one.
+        let source_hash = if command.medium.is_out_of_band() {
+            self.named_source_identity(command.format, &payload)
+        } else {
+            hash_payload(command.format, &payload)
+        };
         let payload = match self.resolve_medium(command, payload) {
             Ok(payload) => payload,
             Err(error) => {
@@ -1581,10 +1597,6 @@ impl TerminalGraphics {
                 };
             }
         };
-        // Hashed before decoding because decoding takes the buffer: for raw pixels the payload
-        // *becomes* the image rather than being copied into one, which is a full frame of memory
-        // traffic saved on every frame.
-        let source_hash = hash_payload(command.format, &payload);
         let (image, bytes) = match deferrable(command) {
             // Nothing is waiting to hear whether this decodes and the size is already known, so the
             // work waits until something asks to draw it. A frame superseded before then - the
@@ -1644,6 +1656,17 @@ impl TerminalGraphics {
                 .then(|| self.place(id, command, ctx))
                 .flatten(),
         }
+    }
+
+    /// Identity of a transmission that named its pixels rather than carrying them.
+    ///
+    /// The payload here is the path or shm name, not the pixels. Hashing those pixels would spend
+    /// most of a scrolling pane's remaining CPU on a walk whose answer we already know: this is a
+    /// new transmission. The serial is mixed in because a child that rewrites a file in place
+    /// (a ring of paths) would otherwise hash as the same frame forever.
+    fn named_source_identity(&mut self, format: u32, name: &[u8]) -> u64 {
+        self.source_serial = self.source_serial.wrapping_add(1);
+        hash_payload(format, name) ^ self.source_serial
     }
 
     fn display_stored(
@@ -2075,18 +2098,13 @@ fn decoded_bytes(image: &DynamicImage) -> usize {
         .saturating_mul(4)
 }
 
-/// Tell one frame's payload from the next, cheaply enough to do it on every frame.
-///
-/// Not a general-purpose hash: it exists so the renderer can see that pixels changed, and a full
-/// window of them arrives as often as the child can draw. The standard hasher manages roughly a
-/// gigabyte a second, which at that rate is a visible slice of a core spent deciding something the
-/// bytes already say; this reads a word at a time. A collision costs one stale frame on screen.
 /// Identity of a transmitted payload, for the render cache.
 ///
-/// Every frame of an animation is hashed in full, so this is on the hot path in a way its size
-/// suggests it is not: a 1.5 MB frame at 60 fps is 90 MB/s through here, and one dependent
-/// multiply per eight bytes held that to about 5.6 GB/s - measurably more of a scrolling pane's
-/// cost than decoding the frame.
+/// Not a general-purpose hash: it exists so the renderer can see that pixels changed. A collision
+/// costs one stale frame on screen. Inline transmissions still hash every pixel, so this is on the
+/// hot path in a way its size suggests it is not: a 1.5 MB frame at 60 fps is 90 MB/s through here,
+/// and one dependent multiply per eight bytes held that to about 5.6 GB/s. Out-of-band
+/// transmissions skip this walk: they take identity from the name and a serial.
 ///
 /// Four lanes fix that without changing the mixing: the multiplies within a 32-byte block do not
 /// depend on each other, so the processor overlaps them instead of waiting out each latency in
@@ -2445,6 +2463,36 @@ mod tests {
         assert_eq!(placed.len(), 1);
         assert_eq!((placed[0].image.width(), placed[0].image.height()), (4, 3));
         assert!(path.exists(), "t=f leaves the frame for the next reader");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A child that rewrites a file in place (a ring of paths) would hash as the same frame if
+    /// identity were the path, and hashing the pixels would spend a scrolling pane's remaining
+    /// budget on a walk whose answer we already know: this is a new transmission.
+    #[test]
+    fn a_named_file_rewritten_in_place_is_a_new_frame() {
+        let (path, escape) = out_of_band_frame("rewrite", 4, 3);
+        let mut graphics = TerminalGraphics::default();
+        let mut scanner = GraphicsScanner::default();
+
+        let (_, first) = scan_all(&mut scanner, &escape);
+        graphics.apply(first[0].clone(), context());
+        let first_hash = graphics.images.get(&7).expect("stored").image.source_hash();
+
+        std::fs::write(&path, vec![0x11u8; 4 * 3 * 4]).expect("rewrite");
+        let (_, second) = scan_all(&mut scanner, &escape);
+        graphics.apply(second[0].clone(), context());
+        let second_hash = graphics
+            .images
+            .get(&7)
+            .expect("replaced")
+            .image
+            .source_hash();
+
+        assert_ne!(
+            first_hash, second_hash,
+            "the same path with new pixels must miss the render cache"
+        );
         std::fs::remove_file(&path).ok();
     }
 
