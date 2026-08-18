@@ -143,17 +143,20 @@ pub fn reconcile_list(tree: &mut NodeTree, id: NodeId, list: &List, rect: Rect) 
                         );
                     (start, top, bot, len.saturating_sub(end))
                 } else {
-                    (
-                        crate::widgets::scroll::smart_list_offset(
-                            old_offset,
-                            selected,
-                            len,
-                            visible_capacity.min(u16::MAX as usize) as u16,
-                        ),
-                        false,
-                        false,
-                        0,
-                    )
+                    let smart_offset = crate::widgets::scroll::smart_list_offset(
+                        old_offset,
+                        selected,
+                        len,
+                        visible_capacity.min(u16::MAX as usize) as u16,
+                    );
+                    let bottom_clamped =
+                        crate::widgets::list::utils::clamp_bottom_glued_offset_for_items(
+                            smart_offset,
+                            &wrapped_items,
+                            max_display,
+                            false,
+                        );
+                    (bottom_clamped, false, false, 0)
                 }
             } else if list.show_scroll_indicators {
                 // No selection: keep the previous offset, but still derive the
@@ -771,5 +774,46 @@ mod tests {
 
         // Matches what an equivalent selected list reports from the same offset.
         assert_eq!(overflow_indicators(Some(0)), (top, bottom, bottom_count));
+    }
+
+    #[test]
+    fn growing_viewport_backfills_rows_above_bottom_selection() {
+        let mut tree = NodeTree::new();
+        let id = tree.alloc();
+        let list = List::new()
+            .items((0..8).map(|i| ListItem::new(format!("row {i}"))))
+            .selected(7);
+
+        reconcile_list(
+            &mut tree,
+            id,
+            &list,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 20,
+                h: 4,
+            },
+        );
+        let NodeKind::List(node) = &tree.node(id).kind else {
+            panic!("expected list node");
+        };
+        assert_eq!(node.offset, 4);
+
+        reconcile_list(
+            &mut tree,
+            id,
+            &list,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 20,
+                h: 7,
+            },
+        );
+        let NodeKind::List(node) = &tree.node(id).kind else {
+            panic!("expected list node");
+        };
+        assert_eq!(node.offset, 1);
     }
 }

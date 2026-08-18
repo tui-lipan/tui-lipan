@@ -91,6 +91,9 @@ ListItem::new("description")
 
 Keyboard/mouse selection and activation skip non-selectable rows (`Header`/`Spacer`).
 
+When a list viewport grows while showing its final rows, the retained scroll position moves upward
+as needed to fill the enlarged viewport instead of leaving blank rows below the content.
+
 `ListItem::line(...)` adds extra visual lines under the primary line. Selection,
 activation, and callbacks still use the item index (not visual line index).
 
