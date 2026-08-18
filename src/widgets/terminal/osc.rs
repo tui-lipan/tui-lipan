@@ -220,7 +220,7 @@ impl SemanticObserver {
                     continue;
                 }
                 match key {
-                    b"hyprmux_exe" => {
+                    b"rozi_exe" | b"hyprmux_exe" => {
                         if let Some(decoded) = percent_decode(value)
                             && let Some(name) = normalize_executable(&decoded)
                         {
@@ -386,7 +386,7 @@ fn parse_ascii_i32(bytes: &[u8]) -> Option<i32> {
     std::str::from_utf8(bytes).ok()?.trim().parse().ok()
 }
 
-/// Reduce a decoded `hyprmux_exe` value to a normalized basename.
+/// Reduce a decoded executable marker value to a normalized basename.
 ///
 /// Only the executable identity is ever kept - never a full command line - and control/NUL bytes
 /// invalidate the whole value rather than being silently stripped.
@@ -400,8 +400,8 @@ fn normalize_executable(decoded: &[u8]) -> Option<Arc<str>> {
 
 /// Extract the first whitespace-delimited token of a decoded command line and return its
 /// basename, for integrations (Fish/Kitty `cmdline_url`) that report a full command line rather
-/// than an isolated executable identity. Only the basename is kept: hyprmux never persists or
-/// forwards full command lines through normalized protocol messages.
+/// than an isolated executable identity. Only the basename is kept: the framework never persists
+/// or forwards full command lines through normalized semantic events.
 fn first_token_basename(decoded: &[u8]) -> Option<Arc<str>> {
     if decoded.len() > MAX_SEMANTIC_VALUE_LEN {
         return None;
@@ -554,7 +554,16 @@ mod tests {
     }
 
     #[test]
-    fn osc133_hyprmux_extension_reports_executable_basename() {
+    fn osc133_rozi_extension_reports_executable_basename() {
+        let (state, _) = drive(b"\x1b]133;C;rozi_exe=%2Ftmp%2Fzz-very-long-program-name\x07");
+        assert_eq!(
+            state.executable,
+            Some(Arc::from("zz-very-long-program-name"))
+        );
+    }
+
+    #[test]
+    fn osc133_legacy_hyprmux_extension_remains_accepted() {
         let (state, _) = drive(b"\x1b]133;C;hyprmux_exe=%2Fusr%2Fbin%2Fhtop\x07");
         assert_eq!(state.executable, Some(Arc::from("htop")));
     }
@@ -571,7 +580,7 @@ mod tests {
     fn osc133_new_prompt_clears_previous_executable() {
         let mut parser = VteParser::new();
         let mut observer = SemanticObserver::default();
-        parser.advance(&mut observer, b"\x1b]133;C;hyprmux_exe=vim\x07");
+        parser.advance(&mut observer, b"\x1b]133;C;rozi_exe=vim\x07");
         assert_eq!(observer.state().executable, Some(Arc::from("vim")));
 
         parser.advance(&mut observer, b"\x1b]133;A\x07");

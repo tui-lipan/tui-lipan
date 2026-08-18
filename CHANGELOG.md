@@ -142,6 +142,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- OSC 133 semantic tracking accepts Rozi's `rozi_exe` executable marker. The parser still accepts
+  the legacy `hyprmux_exe` spelling, while both forms retain only a normalized executable basename.
 - Rapid terminal-image updates now keep the last encoded frame visible while coalescing pending
   encodes to the newest frame for that placement. Graphics-heavy terminal applications no longer
   blink between frames or replay a backlog of obsolete renders after activity stops, and identical
