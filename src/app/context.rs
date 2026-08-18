@@ -19,6 +19,13 @@ use std::time::Duration;
 /// Frames per second the loop wakes at for self-driven content. See [`App::frame_rate`].
 pub const DEFAULT_FRAME_RATE: u16 = 120;
 
+/// Frames per second used for late-bound style-only color transitions.
+///
+/// Repainting a terminal-sized tree is substantially more expensive than interpolating one color,
+/// and a short terminal-cell fade does not benefit from running at the geometry/video ceiling. See
+/// [`App::color_animation_frame_rate`].
+pub const DEFAULT_COLOR_ANIMATION_FRAME_RATE: u16 = 30;
+
 /// The interval between wakes at `fps`, never shorter than a millisecond.
 pub(crate) fn frame_interval(fps: u16) -> Duration {
     Duration::from_micros(1_000_000 / u64::from(fps.max(1))).max(Duration::from_millis(1))
@@ -380,6 +387,7 @@ pub struct App {
     pub(crate) terminal_bg: Option<Color>,
     pub(crate) live_host_terminal_colors: bool,
     pub(crate) frame_rate: u16,
+    pub(crate) color_animation_frame_rate: u16,
     pub(crate) system_theme: bool,
     pub(crate) screen_background: ScreenBackground,
     #[cfg(feature = "devtools")]
@@ -416,6 +424,7 @@ impl Default for App {
             terminal_bg: None,
             live_host_terminal_colors: false,
             frame_rate: DEFAULT_FRAME_RATE,
+            color_animation_frame_rate: DEFAULT_COLOR_ANIMATION_FRAME_RATE,
             system_theme: false,
             screen_background: ScreenBackground::default(),
             #[cfg(feature = "devtools")]
@@ -719,14 +728,36 @@ impl App {
     ///
     /// A key press or a mouse event draws immediately; this is the ceiling for everything the app
     /// did not ask for, which in practice means a focused terminal's child program writing output
-    /// and animations advancing. It is a ceiling and a floor at once: the loop wakes this often
-    /// while such content is live, and no oftener, so the number is both the smoothness a video
-    /// rate producer can reach and the CPU it is allowed to cost.
+    /// and geometry/layout animations advancing. It is a ceiling and a floor at once: the loop
+    /// wakes this often while such content is live, and no oftener, so the number is both the
+    /// smoothness a video rate producer can reach and the CPU it is allowed to cost.
+    ///
+    /// Style-only colors produced by [`Context::animated_color`](crate::Context::animated_color)
+    /// use [`color_animation_frame_rate`](Self::color_animation_frame_rate) when no geometry or
+    /// concrete-value transition is active. That avoids repainting a terminal-sized tree at video
+    /// rate for a border or text-color fade.
     ///
     /// [`DEFAULT_FRAME_RATE`] keeps up with a 120 Hz display. Halve it to spend less on a 60 Hz one;
     /// raising it past what the host can present buys nothing.
     pub fn frame_rate(mut self, fps: u16) -> Self {
         self.frame_rate = fps.clamp(15, 480);
+        self
+    }
+
+    /// Set the cadence for style-only colors from
+    /// [`Context::animated_color`](crate::Context::animated_color).
+    ///
+    /// These transitions need a repaint but no `view()` or layout pass. They are paced separately
+    /// because repainting a large tree at the video/geometry rate is wasteful for a short color
+    /// fade. The effective rate never exceeds [`frame_rate`](Self::frame_rate); if a geometry or
+    /// concrete-value transition is active at the same time, all transitions advance on that
+    /// higher-rate frame.
+    ///
+    /// The default is [`DEFAULT_COLOR_ANIMATION_FRAME_RATE`] (30 fps), which gives a 160 ms focus
+    /// fade five intermediate paints while cutting its repaint load to one quarter of the default
+    /// 120 fps frame rate.
+    pub fn color_animation_frame_rate(mut self, fps: u16) -> Self {
+        self.color_animation_frame_rate = fps.clamp(15, 480);
         self
     }
 

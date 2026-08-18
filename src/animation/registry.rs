@@ -316,8 +316,25 @@ impl AnimationRegistry {
     }
 
     /// Whether any transition currently has a non-zero remaining duration.
+    #[cfg(test)]
     pub(crate) fn has_active(&self) -> bool {
         self.entries.borrow().values().any(|e| e.is_animating())
+    }
+
+    /// Whether an active transition has a concrete value baked into view output.
+    pub(crate) fn has_active_view_transition(&self) -> bool {
+        self.entries
+            .borrow()
+            .values()
+            .any(|entry| entry.is_animating() && !entry.paint_resolved())
+    }
+
+    /// Whether an active transition is resolved by the renderer from a late-bound paint.
+    pub(crate) fn has_active_paint_transition(&self) -> bool {
+        self.entries
+            .borrow()
+            .values()
+            .any(|entry| entry.is_animating() && entry.paint_resolved())
     }
 
     /// Generation counter for memo invalidation. Bumped whenever an active
@@ -428,6 +445,20 @@ mod tests {
         let _ = reg.tick(Duration::from_millis(50));
         let v = reg.transition::<f32>("scalar".into(), 1.0, cfg(100));
         assert!((0.4..=0.6).contains(&v));
+    }
+
+    #[test]
+    fn active_transitions_report_whether_they_need_view_or_paint() {
+        let reg = AnimationRegistry::default();
+        let _ = reg.transition::<f32>("layout".into(), 0.0, cfg(100));
+        let _ = reg.animated_paint("chrome".into(), Color::Red, cfg(100));
+        assert!(!reg.has_active_view_transition());
+        assert!(!reg.has_active_paint_transition());
+
+        let _ = reg.transition::<f32>("layout".into(), 1.0, cfg(100));
+        let _ = reg.animated_paint("chrome".into(), Color::Blue, cfg(100));
+        assert!(reg.has_active_view_transition());
+        assert!(reg.has_active_paint_transition());
     }
 
     #[test]
