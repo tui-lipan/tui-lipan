@@ -24,6 +24,35 @@ impl<C: Component> AppRunner<C> {
         self.core.ctx.env().elapsed(since)
     }
 
+    /// How far to advance transitions on a tick that arrived `elapsed` after the previous one.
+    ///
+    /// Wall-clock gaps (idle, the first tick after startup, a blocked loop) must not advance a full
+    /// transition in one step - `Transition::tick` clamps elapsed to duration. The cap is never
+    /// tighter than one frame of the cadence actually in flight, though: capping below the interval
+    /// would advance a transition slower than wall clock and stretch its configured duration.
+    pub(super) fn animation_step(elapsed: Duration, interval: Duration) -> Duration {
+        elapsed.min(interval.max(Duration::from_millis(50)))
+    }
+
+    /// Cadence required by the animations currently in flight.
+    ///
+    /// A concrete property or tree animation feeds view/layout and keeps the app-wide frame rate.
+    /// A late-bound color only changes cells while painting, so by itself it uses the cheaper color
+    /// cadence. When both are active they share the higher-rate frame instead of running two clocks.
+    pub(super) fn active_animation_interval(&self) -> Option<Duration> {
+        let animations = &self.core.ctx.env().animations;
+        if self.core.tree.has_animated_widgets()
+            || self.core.tree.has_animated_scrolls()
+            || animations.has_active_view_transition()
+        {
+            Some(self.frame_interval)
+        } else if animations.has_active_paint_transition() {
+            Some(self.color_animation_interval)
+        } else {
+            None
+        }
+    }
+
     pub(super) fn update_animation_cycle(&mut self, dirty: &mut DirtyTracker) -> Duration {
         // Suppress framework-internal debug_log! entries (cursor blink, spinner
         // tick, etc.) from appearing in the devtools panel — they are not useful
@@ -117,13 +146,10 @@ impl<C: Component> AppRunner<C> {
             );
         }
 
-        if self.core.tree.has_animated_widgets()
-            || self.core.tree.has_animated_scrolls()
-            || self.core.ctx.env().animations.has_active()
-        {
+        let animation_interval = self.active_animation_interval();
+        if let Some(interval) = animation_interval {
             poll_timeout = poll_timeout.min(
-                self.frame_interval
-                    .saturating_sub(self.clock_elapsed(self.animation.last_animated_tick)),
+                interval.saturating_sub(self.clock_elapsed(self.animation.last_animated_tick)),
             );
         }
 
@@ -262,16 +288,12 @@ impl<C: Component> AppRunner<C> {
             dirty.mark_paint();
         }
 
-        if (self.core.tree.has_animated_widgets()
-            || self.core.tree.has_animated_scrolls()
-            || self.core.ctx.env().animations.has_active())
-            && self.clock_elapsed(self.animation.last_animated_tick) >= self.frame_interval
+        if let Some(interval) = animation_interval
+            && self.clock_elapsed(self.animation.last_animated_tick) >= interval
         {
             let dt = self.clock_elapsed(self.animation.last_animated_tick);
             self.animation.last_animated_tick = self.clock_now();
-            // Wall-clock gaps (idle, first tick after startup) must not advance a full
-            // transition in one step - Transition::tick clamps elapsed to duration.
-            let dt = dt.min(Duration::from_millis(50));
+            let dt = Self::animation_step(dt, interval);
             let (changed, needs_paint, needs_layout) =
                 crate::app::animation::tick_tree_animations(&mut self.core.tree, dt);
             // Property-scoped transitions: advance and mark full re-render when

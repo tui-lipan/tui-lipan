@@ -268,7 +268,8 @@ Most frames come from something happening: a key, a message, a mouse event. The
 frame rate governs the rest — the content that drives itself, where the app has
 to *look* rather than be told:
 
-- animations, property transitions, and animated scrolls
+- geometry/layout animations, concrete-value property transitions, and animated
+  scrolls
 - live terminal panes, since a child program writes whenever it likes and
   announces nothing
 
@@ -276,13 +277,26 @@ to *look* rather than be told:
 `DEFAULT_FRAME_RATE` (120). An idle app is unaffected: with nothing animating
 and no live terminal the loop waits on events and wakes on a 50 ms idle timeout.
 
+Late-bound colors from `Context::animated_color` are different: advancing one
+needs a repaint, but no `view()` or layout pass. By themselves they use
+`App::color_animation_frame_rate(fps)`, clamped to the same 15..480 range and
+defaulting to `DEFAULT_COLOR_ANIMATION_FRAME_RATE` (30). This gives a 160 ms
+focus-border fade five intermediate paints instead of repainting a
+terminal-sized tree roughly nineteen times. The effective color rate never exceeds `frame_rate`; while a
+geometry or concrete-value transition overlaps it, both advance on the
+higher-rate frame.
+
 The cost of a higher rate is one look per frame at each self-driven thing, and
 for a terminal pane that look is a cheap comparison against a screen that has
 usually not moved. The reason to lower it is a machine where painting is the
 expensive part — a slow remote link, a very large viewport — not a busy app.
 
 ```rust
-App::new().frame_rate(60).mount(Root).run()
+App::new()
+    .frame_rate(60)
+    .color_animation_frame_rate(30)
+    .mount(Root)
+    .run()
 ```
 
 Every live terminal pane is looked at on this cadence, not only the focused one,

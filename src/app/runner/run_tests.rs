@@ -2157,6 +2157,141 @@ fn an_animated_colour_fades_without_a_view_pass() {
 }
 
 #[test]
+fn style_only_color_transitions_use_their_lower_repaint_rate() {
+    let focused = Rc::new(Cell::new(false));
+    let views = Rc::new(Cell::new(0));
+    let component = || AnimatedChromeSmoke {
+        focused: focused.clone(),
+        views: views.clone(),
+    };
+    let mut runner = AppRunner::new(
+        App::new()
+            .mouse(false)
+            .frame_rate(120)
+            .color_animation_frame_rate(30),
+        component(),
+        (),
+    );
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 10,
+        h: 1,
+    };
+    init_runner(&mut runner, component(), viewport);
+
+    focused.set(true);
+    runner.core.render_element(viewport, None, None, None);
+    assert_eq!(
+        runner.active_animation_interval(),
+        Some(Duration::from_micros(33_333)),
+        "a late-bound color alone should not repaint at the 120 Hz geometry rate"
+    );
+
+    // A concrete transition has to feed a fresh value through view/layout. When one overlaps the
+    // color fade they share its higher-rate frame; the runtime must not run two animation clocks.
+    let config = TransitionConfig {
+        duration: Duration::from_millis(100),
+        easing: Easing::Linear,
+    };
+    let _ = runner.core.ctx.transition("layout", 0.0_f32, config);
+    let _ = runner.core.ctx.transition("layout", 1.0_f32, config);
+    assert_eq!(
+        runner.active_animation_interval(),
+        Some(Duration::from_micros(8_333))
+    );
+}
+
+/// The cheaper cadence buys fewer paints, not a longer fade: a 100 ms transition still finishes
+/// after 100 ms of clock, it just lands on three frames instead of twelve.
+#[test]
+fn the_color_cadence_shortens_the_paint_count_not_the_fade() {
+    let focused = Rc::new(Cell::new(false));
+    let views = Rc::new(Cell::new(0));
+    let component = || AnimatedChromeSmoke {
+        focused: focused.clone(),
+        views: views.clone(),
+    };
+    let mut runner = AppRunner::new(
+        App::new()
+            .mouse(false)
+            .frame_rate(120)
+            .color_animation_frame_rate(30),
+        component(),
+        (),
+    );
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 10,
+        h: 1,
+    };
+    init_runner(&mut runner, component(), viewport);
+
+    focused.set(true);
+    runner.core.render_element(viewport, None, None, None);
+    runner.animation.last_animated_tick = runner.core.ctx.env().now();
+    let views_at_start = views.get();
+
+    let step = Duration::from_millis(5);
+    let mut elapsed = Duration::ZERO;
+    let mut paints = 0;
+    while runner
+        .core
+        .ctx
+        .env()
+        .animations
+        .has_active_paint_transition()
+    {
+        runner.core.ctx.env().advance_clock(step);
+        elapsed += step;
+        assert!(elapsed < Duration::from_millis(500), "the fade never ended");
+        let mut dirty = DirtyTracker::default();
+        runner.update_animation_cycle(&mut dirty);
+        if dirty.level() == DirtyLevel::PaintOnly {
+            paints += 1;
+        }
+    }
+
+    assert!(
+        elapsed <= Duration::from_millis(120),
+        "a 100 ms fade must not be stretched by its cadence, took {elapsed:?}"
+    );
+    assert!(
+        (3..=4).contains(&paints),
+        "30 Hz should cost about three paints, not the dozen 120 Hz would: {paints}"
+    );
+    assert_eq!(
+        views.get(),
+        views_at_start,
+        "and none of them re-ran view()"
+    );
+}
+
+/// A cadence slower than the ticker's idle-gap cap must not slow the fade down. Advancing by less
+/// than the frame that actually elapsed would stretch a 160 ms transition past 160 ms.
+#[test]
+fn a_slow_color_cadence_advances_by_its_whole_frame() {
+    type Runner = AppRunner<AnimatedChromeSmoke>;
+    let slow = Duration::from_micros(66_666);
+
+    assert_eq!(Runner::animation_step(slow, slow), slow);
+    assert_eq!(
+        Runner::animation_step(Duration::from_millis(500), slow),
+        slow,
+        "an idle gap is still capped, just no tighter than one frame"
+    );
+    assert_eq!(
+        Runner::animation_step(
+            Duration::from_millis(500),
+            crate::app::context::frame_interval(120)
+        ),
+        Duration::from_millis(50),
+        "a fast cadence keeps the original catch-up cap"
+    );
+}
+
+#[test]
 fn moved_mouse_events_only_need_paint() {
     assert_eq!(
         mouse_dispatch_dirty_level(MouseKind::Moved, None, None, DirtyLevel::PaintOnly),

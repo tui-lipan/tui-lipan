@@ -13,6 +13,10 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `App::color_animation_frame_rate(fps)` separately paces late-bound colors from
+  `Context::animated_color`, defaulting to 30 fps through
+  `DEFAULT_COLOR_ANIMATION_FRAME_RATE`. The effective cadence never exceeds `App::frame_rate`, and
+  an overlapping geometry or concrete-value transition carries the color on its higher-rate frame.
 - `Modal::dismiss_on_escape(false)` keeps backdrop-click dismissal while allowing Escape to reach
   the focused child of a root-portal modal, so nested controls can handle Escape before the modal
   closes.
@@ -84,6 +88,9 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- Style-only color transitions no longer repaint a terminal-sized tree at the default 120 fps
+  geometry/video cadence. They use the separately configurable color-animation rate when they are
+  the only animation in flight, reducing CPU for focus-border, text-color, and background fades.
 - `query_keyboard_enhancement_support() -> Option<bool>` is replaced by
   `query_host_capabilities(graphics_probe) -> Option<HostCapabilities>`, which asks about the Kitty
   keyboard protocol, SGR-pixels mouse reporting, and a caller-supplied graphics query in the same

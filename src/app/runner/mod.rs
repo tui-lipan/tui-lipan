@@ -402,8 +402,11 @@ pub struct AppRunner<C: Component> {
     pub(crate) mouse_enabled: bool,
     pub(crate) scroll_wheel_multiplier: u16,
     /// How often the loop wakes for content nothing asked it to draw - a terminal's child program
-    /// writing, an animation advancing. See [`crate::app::App::frame_rate`].
+    /// writing, or geometry/layout animation advancing. See [`crate::app::App::frame_rate`].
     pub(crate) frame_interval: Duration,
+    /// Slower repaint cadence for late-bound style colors when no view/layout animation is active.
+    /// See [`crate::app::App::color_animation_frame_rate`].
+    pub(crate) color_animation_interval: Duration,
     /// Genuine input events recovered from the stdin queue after a host-color OSC
     /// probe (e.g. wheel scrolls performed right after a `FocusGained`). Re-fed
     /// into the event loop ahead of the channel so the probe's blocking round-trip
@@ -668,6 +671,12 @@ impl<C: Component> AppRunner<C> {
         };
         let on_focus_changed = app.on_focus_changed.clone();
         let last_mouse = core.ctx.env().last_mouse.clone();
+        let frame_interval = crate::app::context::frame_interval(app.frame_rate);
+        // A style-only fade is a subset of self-driven frames and must never outrun the app-wide
+        // ceiling, even when the two setters are called in the opposite order.
+        let color_animation_interval = frame_interval.max(crate::app::context::frame_interval(
+            app.color_animation_frame_rate,
+        ));
 
         AppRunner {
             title: app.title,
@@ -693,7 +702,8 @@ impl<C: Component> AppRunner<C> {
             contrast_policy: app.contrast_policy,
             mouse_enabled,
             scroll_wheel_multiplier: app.scroll_wheel_multiplier.max(1),
-            frame_interval: crate::app::context::frame_interval(app.frame_rate),
+            frame_interval,
+            color_animation_interval,
             pending_reinjected_input: VecDeque::new(),
             mouse_capture_requested,
             mouse_capture_active: mouse_enabled,
