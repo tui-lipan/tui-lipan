@@ -5731,11 +5731,11 @@ fn forwarded_wheel_ticks_ignore_app_scroll_wheel_multiplier() {
     assert_eq!(emitted[0], b"\x1b[<64;3;2M".to_vec());
 }
 
-/// End-to-end check of the tmux-style leader model a terminal mux (hyprmux)
-/// relies on: `AppCommandsFirst` + `AppCommandsThenTerminal` + the default
-/// `SwallowPrefixReplayCurrent`. The leader prefix is swallowed, a completing
-/// key runs the command, a mismatching key is replayed to the PTY while the
-/// prefix is dropped, and plain typing reaches the PTY untouched.
+/// End-to-end check of a tmux-style leader model:
+/// `AppCommandsFirst` + `AppCommandsThenTerminal` + the default
+/// `SwallowPrefixReplayCurrent`. The leader prefix is swallowed, a completing key runs the
+/// command, a mismatching key is replayed to the PTY while the prefix is dropped, and plain typing
+/// reaches the PTY untouched.
 #[cfg(feature = "terminal")]
 #[test]
 fn mux_leader_chord_model_matches_prefix_semantics() {

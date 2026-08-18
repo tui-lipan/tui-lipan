@@ -142,6 +142,9 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- OSC 133 semantic tracking accepts namespaced private `<vendor>_exe` executable markers without
+  coupling the terminal parser to any one application. Values retain only a normalized executable
+  basename and reject control characters.
 - Rapid terminal-image updates now keep the last encoded frame visible while coalescing pending
   encodes to the newest frame for that placement. Graphics-heavy terminal applications no longer
   blink between frames or replay a backlog of obsolete renders after activity stops, and identical
@@ -631,7 +634,7 @@ While the crate is on `0.x.y`:
   `restore_semantic_state()` expose working-directory and command-lifecycle
   metadata parsed from `OSC 7` (`file://host/path`), `OSC 9;9` (Windows-style
   CWD reports), and `OSC 133 A/B/C/D` (prompt/input/execution/completion
-  boundaries), plus a minimal `hyprmux_exe=` key/value extension and Fish/Kitty's
+  boundaries), plus a minimal namespaced `<vendor>_exe=` key/value extension and Fish/Kitty's
   `cmdline_url=` for foreground-executable identity. Parsing runs through a
   second, independent `vte::Perform` observer fed the same raw bytes as the
   primary Alacritty grid parser, so it cannot affect rendering. New types:

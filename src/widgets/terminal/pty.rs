@@ -779,11 +779,10 @@ mod tests {
         drop(pty);
     }
 
-    /// A consumer that treats `Exited` as "this PTY is done" and drops the handle - the natural
-    /// way to use this API, and what `hyprmux` does - must still have been given everything the
-    /// child wrote. Dropping kills the reader, so an exit event emitted ahead of the reader used
-    /// to discard whatever was still sitting in the master's buffer: a command that wrote and
-    /// exited immediately could lose its output entirely.
+    /// A consumer that treats `Exited` as "this PTY is done" and drops the handle must still have
+    /// been given everything the child wrote. Dropping kills the reader, so an exit event emitted
+    /// ahead of the reader used to discard whatever was still sitting in the master's buffer: a
+    /// command that wrote and exited immediately could lose its output entirely.
     #[test]
     fn a_fast_command_s_output_arrives_before_its_exit() {
         // The race needs the child to write and exit in one breath, so retry: a single run that

@@ -385,7 +385,7 @@ inline mode, and more - full catalog in [`docs/examples.md`](docs/examples.md).
   markdown + syntax + diffs, rich prompt editing, modal workflows, themes, and
   clipboard images - built end-to-end on tui-lipan. Live preview on
   [tui-lipan.dev](https://tui-lipan.dev).
-- **[hyprmux](https://github.com/tui-lipan/hyprmux)** - a Hyprland-style tiling
+- **[Rozi](https://github.com/tui-lipan/rozi)** - a Hyprland-style tiling
   terminal multiplexer: dwindle/master layouts, floating and fullscreen panes,
   workspaces, animated geometry, themes with hot reload, and real PTY panes via
   tui-lipan's terminal primitives.
