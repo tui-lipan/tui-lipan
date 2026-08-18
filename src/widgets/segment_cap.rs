@@ -24,8 +24,8 @@ impl CapStyle {
     pub const fn glyphs(self) -> Option<(&'static str, &'static str)> {
         match self {
             Self::Padded => None,
-            // The left cap points right and the right cap points left, matching the workbar
-            // composition used by hyprmux.
+            // The left cap points right and the right cap points left, so each cap faces inward
+            // toward the segment it terminates.
             Self::Half => Some(("\u{2590}", "\u{258c}")),
             Self::Round => Some(("\u{e0b6}", "\u{e0b4}")),
             Self::Arrow => Some(("\u{e0b2}", "\u{e0b0}")),
@@ -184,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn same_color_separators_match_hyprmux_workbar_behavior() {
+    fn same_color_separators_keep_adjacent_segments_distinct() {
         assert_eq!(same_color_separator(CapStyle::Arrow), "\u{e0b3}");
         assert_eq!(same_color_separator(CapStyle::Round), "▏");
         assert_eq!(same_color_separator(CapStyle::Half), "▏");

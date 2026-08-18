@@ -362,7 +362,7 @@ fn hint_can_open(kind: HintKind) -> bool {
     kind.can_open() || matches!(kind, HintKind::Custom(tag) if custom_hint_opens(tag))
 }
 
-/// Example-local custom-hint policy, equivalent to hyprmux's per-pattern `open` setting.
+/// Example-local policy for whether a custom hint should open when activated.
 fn custom_hint_opens(tag: u16) -> bool {
     const CUSTOM_HINTS: &[(u16, bool)] = &[(IPV4_HINT_ID, false)];
     CUSTOM_HINTS

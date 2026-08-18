@@ -516,9 +516,10 @@ Recognized sequences:
 - **`OSC 133 ; A/B/C/D`** reports command lifecycle boundaries: `A` = prompt start, `B` = prompt
   end / input start, `C` = execution start, `D[;exit_code]` = command finished, surfaced as
   `TerminalCommandPhase::{Prompt, Input, Executing, Completed { exit_status }}`.
-- Two `OSC 133` key/value extensions report foreground-executable identity - never a full command
-  line - as a normalized basename: hyprmux's own `hyprmux_exe=<percent-encoded name>`, and Fish/
-  Kitty's `cmdline_url=<percent-encoded command line>` (only the first token's basename is kept).
+- Two `OSC 133` key/value forms report foreground-executable identity - never a full command line -
+  as a normalized basename: a namespaced private `<vendor>_exe=<percent-encoded name>` parameter,
+  and Fish/Kitty's `cmdline_url=<percent-encoded command line>` (only the first token's basename is
+  kept). The private form requires a non-empty namespace and rejects control characters.
 
 `TerminalScreen::reset()` clears in-flight parser state but preserves accumulated semantic state -
 a child hard reset (RIS) does not imply its last-known working directory or command lifecycle

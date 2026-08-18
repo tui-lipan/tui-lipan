@@ -4017,8 +4017,8 @@ impl Component for BorderOnStyledBackdropComponent {
     }
 
     fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
-        // Parent fill with an explicit fg (like hyprmux's theme.primary + backdrop) must not
-        // suppress Fuzzy border drawing on those styled blank cells.
+        // A parent fill with an explicit foreground and backdrop must not suppress Fuzzy border
+        // drawing on those styled blank cells.
         ZStack::new()
             .style(Style::new().fg(Color::Yellow).bg(Color::Black))
             .child(
