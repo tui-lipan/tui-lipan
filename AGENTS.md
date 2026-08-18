@@ -56,6 +56,14 @@ When you edit Rust files that contain `ui!` or `rsx!` - especially examples in `
 - `cargo test --no-run` - Compile tests without running
 - `cargo test <test_name>` - Run specific test by name
 - `cargo test --package tui-lipan --lib <module>::tests::<test_name> --exact` - Run single test
+- `cargo test --test widget_behavior_suite <module>::<test_name>` - Run one widget integration test
+- `cargo test --test snapshot_suite <module>::<test_name>` - Run one snapshot integration test
+- `cargo test --test contracts_suite <module>::<test_name>` - Run one contract integration test
+
+Integration cases live under `tests/suites/{widget_behavior,snapshot,contracts}/` and are declared
+by the matching top-level `*_suite.rs`. Add a case to an existing suite unless it requires
+process-global environment, real-terminal state, nested Cargo locking, or asynchronous global
+state; those constraints justify a standalone test binary.
 
 #### Cost rules for new tests
 
@@ -78,7 +86,7 @@ builds, or sleeps:
   confirm it fails, so caching cannot silently turn the test vacuous.
 
 Rough budget: a new integration test should add well under a second of wall time. If yours adds
-more, time it with `cargo test --test <name>` and say why in the PR.
+more, time its suite and module filter and say why in the PR.
 
 ### Linting & Formatting
 - `cargo fmt` - Format code

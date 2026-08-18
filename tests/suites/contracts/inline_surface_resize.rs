@@ -1,9 +1,4 @@
-#[allow(dead_code)]
-mod support {
-    pub(crate) mod inline_surface_fixture;
-}
-
-use support::inline_surface_fixture::{
+use crate::inline_surface_fixture::{
     ResizeStep, expected_content_bounds, expected_inline_resize_clear_from,
     expected_logical_anchor_after_height_change, replay_resize_fixture,
 };
