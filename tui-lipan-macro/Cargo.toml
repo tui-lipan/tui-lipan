@@ -15,6 +15,18 @@ authors = ["Adam Mikołajczyk <adam@tui-lipan.dev>"]
 [lib]
 proc-macro = true
 
+[[bin]]
+name = "rsx-fmt"
+path = "src/bin/rsx-fmt.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "ui-fmt"
+path = "src/bin/ui-fmt.rs"
+test = false
+bench = false
+
 [dependencies]
 proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
 quote = "1.0.47"
