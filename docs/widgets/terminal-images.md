@@ -119,6 +119,12 @@ cursor movement. It retains dimensions only; render snapshots contain no images.
 payloads also skip base64 decoding, while PNG payloads are still decoded far enough to obtain their
 dimensions.
 
+`screen.has_images()` is whether any of those pixels are still retained: true after a child has
+transmitted an image that has not been deleted or evicted, including when it has scrolled out of
+view. Visible placements this frame are `snapshot.images`. A host that needs the class of pane
+whose image layer does not follow a widget shrink or fade should look at the flag, not at the
+process in front of the PTY.
+
 Payloads are bounded before decoding as well: 32 MiB per transmission, 16384 pixels per axis.
 
 ## Out-of-band payloads

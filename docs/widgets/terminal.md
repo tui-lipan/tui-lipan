@@ -783,4 +783,5 @@ Behaviour worth knowing:
 Programs in a pane can draw pictures with the Kitty graphics protocol; enable the
 `terminal-images` feature. The host terminal does not have to speak Kitty - the pane decodes the
 child's escapes and re-encodes for whatever the host supports, down to half-blocks. See
-[terminal-images.md](terminal-images.md).
+[terminal-images.md](terminal-images.md). `TerminalScreen::has_images()` is whether any of those
+pixels are still retained; `snapshot.images` is the visible set this frame.

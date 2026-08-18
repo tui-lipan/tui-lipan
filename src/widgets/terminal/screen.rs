@@ -350,6 +350,13 @@ impl TerminalScreenHandle {
         self.0.borrow().cell_size()
     }
 
+    /// Whether the screen currently retains any Kitty graphics (see
+    /// [`TerminalScreen::has_images`]).
+    #[cfg(feature = "terminal-images")]
+    pub fn has_images(&self) -> bool {
+        self.0.borrow().has_images()
+    }
+
     /// Extract selected text across retained scrollback using display columns.
     pub fn selection_display_text(
         &self,
@@ -1090,6 +1097,18 @@ impl TerminalScreen {
     #[cfg(feature = "terminal-images")]
     pub fn set_image_media_policy(&mut self, media: super::graphics_media::GraphicsMediaPolicy) {
         self.graphics.set_media_policy(media);
+    }
+
+    /// Whether this screen currently retains any Kitty graphics.
+    ///
+    /// True after a child has transmitted at least one image that has not been deleted or
+    /// evicted. Visible placements this frame are [`TerminalRenderSnapshot::images`]; this
+    /// flag stays set while those pixels are still in the store, including when they have
+    /// scrolled out of the viewport. That is the class of panes whose host-side image layer
+    /// does not follow a widget shrink or fade.
+    #[cfg(feature = "terminal-images")]
+    pub fn has_images(&self) -> bool {
+        self.graphics.has_images()
     }
 
     /// Return the current working-directory/command-lifecycle state accumulated from `OSC
@@ -3385,6 +3404,26 @@ mod tests {
 
             // Kitty leaves the cursor on the image's last row, just past its right edge.
             assert_eq!((snapshot.cursor_row, snapshot.cursor_col), (2, 4));
+        }
+
+        #[test]
+        fn has_images_tracks_the_graphics_store_not_the_viewport() {
+            let mut screen = screen(4, 20, 50);
+            assert!(!screen.has_images());
+
+            screen.process_bytes(&place(20, 40, "i=1,C=1"));
+            assert!(screen.has_images());
+            assert!(!screen.render_snapshot().images.is_empty());
+
+            screen.process_bytes(b"\r\n".repeat(10).as_slice());
+            assert!(
+                screen.render_snapshot().images.is_empty(),
+                "scrolled out of the viewport"
+            );
+            assert!(screen.has_images(), "the store still holds the image");
+
+            screen.process_bytes(b"\x1b_Ga=d,d=A\x1b\\");
+            assert!(!screen.has_images());
         }
 
         #[test]

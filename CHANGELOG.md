@@ -13,6 +13,10 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `TerminalScreen::has_images()` and `TerminalScreenHandle::has_images()` report whether the
+  screen still retains any Kitty graphics (`terminal-images`). True after a child has transmitted
+  an image that has not been deleted or evicted, including when those pixels have scrolled out of
+  the viewport. Visible placements this frame remain `TerminalRenderSnapshot::images`.
 - `App::color_animation_frame_rate(fps)` separately paces late-bound colors from
   `Context::animated_color`, defaulting to 30 fps through
   `DEFAULT_COLOR_ANIMATION_FRAME_RATE`. The effective cadence never exceeds `App::frame_rate`, and
