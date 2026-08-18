@@ -142,6 +142,8 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Lists scrolled to their final rows now move the retained offset upward when their viewport grows,
+  filling the newly available height instead of leaving a blank gap until the next wheel scroll.
 - OSC 133 semantic tracking accepts namespaced private `<vendor>_exe` executable markers without
   coupling the terminal parser to any one application. Values retain only a normalized executable
   basename and reject control characters.
