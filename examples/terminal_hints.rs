@@ -53,7 +53,7 @@ impl Component for TerminalHints {
         let snapshot = screen.render_snapshot();
         let matches = HintScan::new()
             .custom(IPV4_HINT_ID, ipv4_ranges)
-            .scan(&snapshot.text);
+            .scan_wrapped(&snapshot.text, &snapshot.wrapped_rows);
         let labels = assign_labels(matches.len(), HOME_ROW_HINT_KEYS);
 
         Self::State {
@@ -193,24 +193,31 @@ fn hint_decorations(
                 HintKind::GitSha => Color::Magenta,
                 HintKind::Custom(_) => Color::Yellow,
             };
-            Some([
-                TerminalDecoration::highlight(
-                    hint.row,
-                    hint.start_col..hint.end_col,
-                    Style::new().fg(highlight).bold().underline(),
+            let mut decorations = hint
+                .spans
+                .iter()
+                .map(|span| {
+                    TerminalDecoration::highlight(
+                        span.row,
+                        span.start_col..span.end_col,
+                        Style::new().fg(highlight).bold().underline(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            // Painted over the start of the match rather than inserted after its end: a hint
+            // running to the right-hand edge has no room to push a label into.
+            decorations.push(TerminalDecoration::overlay(
+                hint.row(),
+                hint.start_col(),
+                Span::new(label.clone()).style(
+                    Style::new()
+                        .fg(Color::Black)
+                        .bg(Color::Yellow)
+                        .bold()
+                        .contrast_policy(ContrastPolicy::BlackOrWhite),
                 ),
-                TerminalDecoration::label(
-                    hint.row,
-                    hint.end_col,
-                    Span::new(label.clone()).style(
-                        Style::new()
-                            .fg(Color::Black)
-                            .bg(Color::Yellow)
-                            .bold()
-                            .contrast_policy(ContrastPolicy::BlackOrWhite),
-                    ),
-                ),
-            ])
+            ));
+            Some(decorations)
         })
         .flatten()
         .collect()
@@ -299,12 +306,12 @@ fn activate_hint(index: usize, open: bool, ctx: &mut Context<TerminalHints>) -> 
             hint.kind,
             TerminalSelection {
                 anchor: TerminalPos {
-                    line: top_line.saturating_add(hint.row),
-                    col: hint.start_col,
+                    line: top_line.saturating_add(hint.row()),
+                    col: hint.start_col(),
                 },
                 cursor: TerminalPos {
-                    line: top_line.saturating_add(hint.row),
-                    col: hint.end_col,
+                    line: top_line.saturating_add(hint.end_row()),
+                    col: hint.end_col(),
                 },
             },
         )

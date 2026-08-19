@@ -13,6 +13,13 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `TerminalRenderSnapshot::wrapped_rows` reports which visible rows the terminal soft-wrapped into
+  the row below, and `HintScan::scan_wrapped(text, wrapped_rows)` rejoins those rows before
+  scanning. A URL or path longer than the terminal is wide is one `HintMatch` covering one
+  `HintSpan` per row rather than fragments that no scanner recognizes.
+- `TerminalDecoration::overlay(row, col, span)` paints a span over the columns it covers instead of
+  inserting it between them, so a label anchored inside a fixed-width row keeps every later column
+  in place. `utils::spans::overwrite_at_column` is the same operation on a styled line.
 - `TerminalScreen::has_images()` and `TerminalScreenHandle::has_images()` report whether the
   screen still retains any Kitty graphics (`terminal-images`). True after a child has transmitted
   an image that has not been deleted or evicted, including when those pixels have scrolled out of
@@ -92,6 +99,9 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- `HintMatch` carries `spans: Vec<HintSpan>` instead of a single `row`/`start_col`/`end_col`, since
+  a hint may now cross a soft wrap. `HintMatch::row()`, `start_col()`, `end_row()`, and `end_col()`
+  read the first and last of them.
 - Style-only color transitions no longer repaint a terminal-sized tree at the default 120 fps
   geometry/video cadence. They use the separately configurable color-animation rate when they are
   the only animation in flight, reducing CPU for focus-border, text-color, and background fades.
