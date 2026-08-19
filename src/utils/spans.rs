@@ -269,6 +269,47 @@ pub fn restyle_columns(spans: &[Span], ranges: &[(Range<usize>, Style)]) -> Vec<
     out
 }
 
+/// Return a copy of `spans` with `overlay` painted over the display columns starting at `column`.
+///
+/// Unlike [`insert_at_column`], nothing shifts: the overlay covers exactly as many columns as it
+/// is wide, so every column after it keeps the position it had. That is what a label anchored to
+/// content underneath needs - an insert at the right-hand edge of a fixed-width line, such as a
+/// terminal row, is pushed straight off it. A wide character the overlay half-covers is dropped
+/// and its remaining cell padded with a space, since half a glyph cannot be drawn. The line is
+/// extended only when the overlay itself reaches past its end.
+pub fn overwrite_at_column(spans: &[Span], column: usize, overlay: Span) -> Vec<Span> {
+    let overlay_width = display_width(overlay.content.as_ref());
+    if overlay_width == 0 {
+        return spans.to_vec();
+    }
+    let total = spans_width(spans);
+
+    let (mut out, _) = take_prefix_spans(spans, column);
+    let prefix_width = spans_width(&out);
+    if prefix_width < column {
+        out.push(Span::new(" ".repeat(column - prefix_width)));
+    }
+    push_span_slice_styled(&mut out, &overlay, 0..overlay.content.len(), overlay.style);
+
+    let written = column.saturating_add(overlay_width);
+    let tail_width = total.saturating_sub(written);
+    if tail_width == 0 {
+        return out;
+    }
+    let mut suffix = slice_columns(spans, written, total);
+    if spans_width(&suffix) > tail_width {
+        suffix = truncate_spans_start(&suffix, tail_width);
+    }
+    let suffix_width = spans_width(&suffix);
+    if suffix_width < tail_width {
+        out.push(Span::new(" ".repeat(tail_width - suffix_width)));
+    }
+    for span in &suffix {
+        push_span_slice_styled(&mut out, span, 0..span.content.len(), span.style);
+    }
+    out
+}
+
 /// Return a copy of `spans` with `insert` placed at display column `column`.
 pub fn insert_at_column(spans: &[Span], column: usize, insert: Span) -> Vec<Span> {
     let cursor = crate::utils::text::cursor_at_column(spans, column);
@@ -441,6 +482,25 @@ mod tests {
             &[(0..5, Style::new().fg(Color::Blue))],
         );
         assert!(Arc::ptr_eq(&source.content, &styled[0].content));
+    }
+
+    #[test]
+    fn overwrite_keeps_line_width_and_pads_half_covered_wide_chars() {
+        let spans = [Span::new("abcdef")];
+        let painted = overwrite_at_column(&spans, 2, Span::new("XY").style(Style::new().bold()));
+        assert_eq!(line_text(&painted), "abXYef");
+        assert_eq!(line_width(&painted), 6);
+
+        // Half of a wide character cannot be drawn: the overlay takes the cell it covers and the
+        // other one becomes a space, so every later column stays where it was.
+        let wide = [Span::new("a界界b")];
+        let over_wide = overwrite_at_column(&wide, 2, Span::new("X"));
+        assert_eq!(line_text(&over_wide), "a X界b");
+        assert_eq!(line_width(&wide), line_width(&over_wide));
+
+        // Past the end the line grows, since there is nothing left to cover.
+        let past = overwrite_at_column(&spans, 8, Span::new("Z"));
+        assert_eq!(line_text(&past), "abcdef  Z");
     }
 
     #[test]

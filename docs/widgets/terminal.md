@@ -414,10 +414,28 @@ ignored and produce no PTY response.
 | `total_scrollback_rows` | `usize` | Total history rows |
 | `mouse_mode` | `MouseModeState` | PTY mouse/focus reporting mode |
 | `key_modes` | `TerminalKeyModes` | PTY input modes (DECCKM, bracketed paste) |
+| `wrapped_rows` | `Arc<[bool]>` | Whether each visible row soft-wraps into the next |
 
 `TerminalRenderSnapshot::from_parts(...)` rebuilds a snapshot from owned parts. It is intended for
 applications that define their own versioned external snapshot transport. `TerminalRenderSnapshot`
-itself is not a stable wire protocol.
+itself is not a stable wire protocol. Such a transport attaches wrap flags with
+`with_wrapped_rows(...)`; a transport that cannot carry them omits it, and callers see a viewport
+where nothing wraps.
+
+`wrapped_rows` is what turns visible rows back into logical lines. A row is one grid row, not one
+line of output: a program that printed something longer than the terminal is wide occupies several
+of them, and only this flag says which breaks were the terminal's rather than the program's.
+Anything scanning `text` for something that can outrun the width - a URL, a path - has to rejoin
+those rows first, which is what `HintScan::scan_wrapped` does:
+
+```rust
+let snapshot = screen.render_snapshot();
+let hints = HintScan::new().scan_wrapped(&snapshot.text, &snapshot.wrapped_rows);
+```
+
+A hint crossing a wrap is one `HintMatch` carrying one `HintSpan` per row it covers, in row order;
+`row()` / `start_col()` and `end_row()` / `end_col()` read the first and last of them. `HintScan::scan`
+still treats every row as a line of its own and always returns single-span matches.
 
 ### Selection, decoration, and copy mode
 
@@ -429,13 +447,21 @@ across scrollback, including rows containing CJK or emoji. Snapshot-only hosts c
 `TerminalScreen::export_selection_text` is intentionally different: it reads
 pre-trimmed scrollback text and therefore takes character-indexed positions.
 
-`snapshot.decorated(&decorations)` applies batched `TerminalDecoration::highlight`
-and `TerminalDecoration::label` values to `color_lines`. It deliberately leaves
-the snapshot's plain `text` untouched, so search/hint scanning and selection
-extraction continue to see undecorated terminal output. Decorations are applied
-before the renderer's selection style, so selection remains the final overlay.
-`TerminalDecoration::label(row, col, span)` accepts any display column; pass a
-detected hint's `end_col` to append a label immediately after the match.
+`snapshot.decorated(&decorations)` applies batched `TerminalDecoration::highlight`,
+`TerminalDecoration::label`, and `TerminalDecoration::overlay` values to
+`color_lines`. It deliberately leaves the snapshot's plain `text` untouched, so
+search/hint scanning and selection extraction continue to see undecorated
+terminal output. Decorations are applied before the renderer's selection style,
+so selection remains the final overlay.
+
+`label(row, col, span)` *inserts* the span, moving every later column right;
+`overlay(row, col, span)` paints it over the columns it covers and moves nothing.
+Prefer `overlay` for anything anchored to content: a terminal row is exactly as
+wide as the terminal, so a label inserted at or near the end of a row - which is
+where a wrapped URL's `end_col` lands - is pushed off the edge and clipped away.
+Overlays are applied before inserts, so their columns are the plain ones the
+caller passed. `utils::spans::overwrite_at_column` is the same operation on a
+styled line.
 
 `TerminalCopyMode` is navigation state, not a widget. An app owns clipboard and
 screen integration:

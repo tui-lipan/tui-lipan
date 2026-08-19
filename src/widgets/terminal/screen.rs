@@ -429,21 +429,38 @@ pub struct TerminalRenderSnapshot {
     /// image reports the rect it would occupy in full and the renderer crops the pixels.
     #[cfg(feature = "terminal-images")]
     pub images: Arc<[TerminalImagePlacement]>,
+    /// Whether each visible row soft-wraps into the row below it.
+    ///
+    /// A row is one grid row, not one logical line: a program that printed a line longer than the
+    /// terminal is wide occupies several of them. Anything scanning [`Self::text`] for something
+    /// that can outrun the width - a URL, a path - has to rejoin those rows first, and this is
+    /// the only record of where a break was the terminal's rather than the program's. Indexed by
+    /// visible row; may be shorter than the viewport, in which case the missing rows do not wrap.
+    pub wrapped_rows: Arc<[bool]>,
 }
 
 /// A display-column decoration applied to a terminal render snapshot.
 ///
 /// Decorations affect only [`TerminalRenderSnapshot::color_lines`]. The snapshot's plain `text`
 /// remains unchanged so callers that scan plain snapshot text continue to see the terminal's
-/// original contents. Use [`Self::highlight`] for a restyled range and [`Self::label`] for an
-/// inserted span.
+/// original contents. Use [`Self::highlight`] for a restyled range, [`Self::label`] for a span
+/// inserted between existing columns, and [`Self::overlay`] for one painted over them.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TerminalDecoration {
     row: usize,
     start_col: usize,
     end_col: usize,
     style: Style,
-    insert: Option<Span>,
+    text: Option<DecorationText>,
+}
+
+/// A span a decoration draws, and how it makes room for it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum DecorationText {
+    /// Pushed in, moving every later column right.
+    Insert(Span),
+    /// Painted over the columns it covers, moving nothing.
+    Overlay(Span),
 }
 
 impl TerminalDecoration {
@@ -454,18 +471,36 @@ impl TerminalDecoration {
             start_col: cols.start,
             end_col: cols.end,
             style,
-            insert: None,
+            text: None,
         }
     }
 
-    /// Insert a styled label at a display column on `row`.
+    /// Insert a styled label at a display column on `row`, shifting the rest of the row right.
+    ///
+    /// A row that already fills the terminal's width has nowhere to shift to, so a label inserted
+    /// at or near its end is pushed off the edge. Use [`Self::overlay`] to anchor a label to a
+    /// column instead.
     pub fn label(row: usize, col: usize, span: Span) -> Self {
         Self {
             row,
             start_col: col,
             end_col: col,
             style: Style::default(),
-            insert: Some(span),
+            text: Some(DecorationText::Insert(span)),
+        }
+    }
+
+    /// Paint a styled span over the columns starting at `col` on `row`, covering what is there.
+    ///
+    /// Column positions are preserved, so the label stays on the content it marks and a fixed-width
+    /// row keeps its width.
+    pub fn overlay(row: usize, col: usize, span: Span) -> Self {
+        Self {
+            row,
+            start_col: col,
+            end_col: col,
+            style: Style::default(),
+            text: Some(DecorationText::Overlay(span)),
         }
     }
 }
@@ -489,6 +524,7 @@ impl Default for TerminalRenderSnapshot {
             key_modes: TerminalKeyModes::default(),
             #[cfg(feature = "terminal-images")]
             images: Arc::from([]),
+            wrapped_rows: Arc::from([]),
         }
     }
 }
@@ -532,6 +568,15 @@ impl TerminalRenderSnapshot {
         )
     }
 
+    /// Attach per-row soft-wrap flags to an externally built snapshot.
+    ///
+    /// `wrapped_rows[row]` says row `row` continues into `row + 1`. A transport that cannot carry
+    /// the flags simply omits this, and callers see a viewport where nothing wraps.
+    pub fn with_wrapped_rows(mut self, wrapped_rows: impl Into<Arc<[bool]>>) -> Self {
+        self.wrapped_rows = wrapped_rows.into();
+        self
+    }
+
     /// Attach scrollback lineage counters to an externally built snapshot.
     pub fn with_scrollback_lineage(mut self, evicted_lines: u64, history_epoch: u64) -> Self {
         self.evicted_lines = evicted_lines;
@@ -573,6 +618,7 @@ impl TerminalRenderSnapshot {
             key_modes,
             #[cfg(feature = "terminal-images")]
             images: Arc::from([]),
+            wrapped_rows: Arc::from([]),
         }
     }
 
@@ -624,19 +670,27 @@ impl TerminalRenderSnapshot {
 
             let ranges: Vec<_> = sorted
                 .iter()
-                .filter(|(decoration, _)| decoration.insert.is_none())
+                .filter(|(decoration, _)| decoration.text.is_none())
                 .map(|(decoration, _)| (decoration.start_col..decoration.end_col, decoration.style))
                 .collect();
             if !ranges.is_empty() {
                 *line = crate::utils::spans::restyle_columns(line, &ranges);
             }
 
-            for (decoration, _) in sorted
-                .iter()
-                .filter(|(decoration, _)| decoration.insert.is_some())
-                .rev()
-            {
-                if let Some(insert) = decoration.insert.clone() {
+            // Overlays first, and left to right: they neither move nor read the columns an insert
+            // would shift, so doing them before the inserts keeps their anchors the plain ones the
+            // caller passed. Inserts then run right to left as before.
+            for (decoration, _) in &sorted {
+                if let Some(DecorationText::Overlay(overlay)) = decoration.text.clone() {
+                    *line = crate::utils::spans::overwrite_at_column(
+                        line,
+                        decoration.start_col,
+                        overlay,
+                    );
+                }
+            }
+            for (decoration, _) in sorted.iter().rev() {
+                if let Some(DecorationText::Insert(insert)) = decoration.text.clone() {
                     *line =
                         crate::utils::spans::insert_at_column(line, decoration.start_col, insert);
                 }
@@ -1357,6 +1411,8 @@ impl TerminalScreen {
             #[cfg(feature = "terminal-images")]
             let images = self.visible_images(display_offset, mode.contains(TermMode::ALT_SCREEN));
 
+            let wrapped_rows = visible_wrapped_rows(self.term.grid(), display_offset, self.rows);
+
             let mut text = String::new();
             for (idx, line) in visible.iter().enumerate() {
                 if idx > 0 {
@@ -1384,6 +1440,7 @@ impl TerminalScreen {
                 key_modes: key_modes_from_term(mode),
                 #[cfg(feature = "terminal-images")]
                 images: images.into(),
+                wrapped_rows: wrapped_rows.into(),
             };
             self.dirty = false;
         }
@@ -2211,6 +2268,32 @@ fn push_cell_text_str(out: &mut String, cell: &TermCell) {
     }
 }
 
+/// Soft-wrap flags for the `rows` visible viewport rows at `display_offset`, one per row.
+///
+/// The terminal records a wrap on the last cell of the row that overflowed, so the flag reads
+/// forward: row `i` is `true` when its text continues on row `i + 1`.
+fn visible_wrapped_rows(
+    grid: &alacritty_terminal::grid::Grid<TermCell>,
+    display_offset: usize,
+    rows: u16,
+) -> Vec<bool> {
+    let last_column = grid.last_column();
+    (0..usize::from(rows))
+        .map(|row| {
+            let Ok(offset) = i32::try_from(display_offset) else {
+                return false;
+            };
+            let Ok(row) = i32::try_from(row) else {
+                return false;
+            };
+            let line = Line(row - offset);
+            line >= grid.topmost_line()
+                && line <= grid.bottommost_line()
+                && grid[line][last_column].flags.contains(CellFlags::WRAPLINE)
+        })
+        .collect()
+}
+
 fn display_line_width(grid: &alacritty_terminal::grid::Grid<TermCell>, line: Line) -> usize {
     let wrapline = grid[line][grid.last_column()]
         .flags
@@ -2648,6 +2731,49 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect();
         assert_eq!(text, "aXbcYd");
+    }
+
+    #[test]
+    fn overlay_decorations_paint_over_columns_without_moving_the_row() {
+        let snapshot = TerminalRenderSnapshot::from_parts(
+            "abcd",
+            vec![vec![Span::new("abcd")]],
+            0,
+            0,
+            true,
+            CaretShape::Block,
+            true,
+            7,
+            0,
+            0,
+            MouseModeState::default(),
+            TerminalKeyModes::default(),
+        );
+        // An insert at the last column would land past a full-width row's right edge; an overlay
+        // marks the same column and leaves the row exactly as wide as it was.
+        let decorated = snapshot.decorated(&[
+            TerminalDecoration::overlay(0, 0, Span::new("XY")),
+            TerminalDecoration::overlay(0, 3, Span::new("Z")),
+        ]);
+        let text: String = decorated.color_lines[0]
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        assert_eq!(text, "XYcZ");
+    }
+
+    #[test]
+    fn render_snapshot_reports_soft_wrapped_rows() {
+        let mut screen = TerminalScreen::new(4, 6, 10);
+        screen.process_bytes(b"abcdefgh\r\nshort");
+        let snapshot = screen.render_snapshot();
+
+        // Row 0 overflowed into row 1; row 2 is a line the program broke itself.
+        assert_eq!(snapshot.text.as_ref(), "abcdef\ngh    \nshort \n      ");
+        assert_eq!(
+            snapshot.wrapped_rows.as_ref(),
+            &[true, false, false, false][..]
+        );
     }
 
     #[test]

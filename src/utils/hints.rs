@@ -3,6 +3,7 @@
 //! Built-in scanners are dependency-free. Regex-backed scanners are available
 //! with the optional `hints-regex` feature.
 
+use std::borrow::Cow;
 use std::ops::Range;
 
 use super::open_url::{is_allowed_scheme, parse_scheme};
@@ -37,19 +38,52 @@ impl HintKind {
     }
 }
 
-/// A hint found in a newline-delimited terminal snapshot.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HintMatch {
+/// The part of a hint lying on one row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HintSpan {
     /// Zero-based line number.
     pub row: usize,
     /// Start display column, inclusive.
     pub start_col: usize,
     /// End display column, exclusive.
     pub end_col: usize,
+}
+
+/// A hint found in a newline-delimited terminal snapshot.
+///
+/// A hint occupies more than one span only when the rows it covers were soft-wrapped by the
+/// terminal, which [`HintScan::scan_wrapped`] rejoins before scanning; [`HintScan::scan`] treats
+/// every row as a line of its own and always produces single-span matches.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HintMatch {
+    /// The rows this hint covers, in order, each with its own display columns. Never empty.
+    pub spans: Vec<HintSpan>,
     /// Matched text after trailing display punctuation is removed.
     pub text: String,
     /// The scanner that produced this match.
     pub kind: HintKind,
+}
+
+impl HintMatch {
+    /// The row the hint starts on.
+    pub fn row(&self) -> usize {
+        self.spans.first().map_or(0, |span| span.row)
+    }
+
+    /// The display column the hint starts at, on [`Self::row`].
+    pub fn start_col(&self) -> usize {
+        self.spans.first().map_or(0, |span| span.start_col)
+    }
+
+    /// The row the hint ends on.
+    pub fn end_row(&self) -> usize {
+        self.spans.last().map_or(0, |span| span.row)
+    }
+
+    /// The display column, exclusive, the hint ends at on [`Self::end_row`].
+    pub fn end_col(&self) -> usize {
+        self.spans.last().map_or(0, |span| span.end_col)
+    }
 }
 
 /// A line scanner returning UTF-8 byte ranges for matches.
@@ -113,18 +147,53 @@ impl HintScan {
     }
 
     /// Scan all enabled scanners and return sorted, non-overlapping matches.
+    ///
+    /// Each row is scanned as a line of its own, so a hint the terminal soft-wrapped is seen as
+    /// the unrelated fragments it was broken into. Use [`Self::scan_wrapped`] wherever the wrap
+    /// flags are known.
     pub fn scan(&self, text: &str) -> Vec<HintMatch> {
+        self.scan_wrapped(text, &[])
+    }
+
+    /// Scan `text`, rejoining rows the terminal soft-wrapped before matching.
+    ///
+    /// `wrapped_rows[row]` says row `row` continues into `row + 1`; missing entries do not wrap.
+    /// A hint spanning a wrap is one match covering one span per row, so a URL longer than the
+    /// terminal is wide is copied whole rather than found as several broken pieces - or, since
+    /// neither piece is a URL on its own, not found at all.
+    pub fn scan_wrapped(&self, text: &str, wrapped_rows: &[bool]) -> Vec<HintMatch> {
+        let rows: Vec<&str> = text.split('\n').collect();
         let mut output = Vec::new();
-        for (row, line) in text.split('\n').enumerate() {
+        let mut first = 0usize;
+        while first < rows.len() {
+            let mut last = first;
+            while last + 1 < rows.len() && wrapped_rows.get(last).copied().unwrap_or(false) {
+                last += 1;
+            }
+            let group = &rows[first..=last];
+            let line = if group.len() == 1 {
+                Cow::Borrowed(group[0])
+            } else {
+                Cow::Owned(group.concat())
+            };
+
+            let mut ranges: Vec<(Range<usize>, HintKind)> = Vec::new();
             for (kind, scanner) in &self.scanners {
-                let mut ranges = Vec::new();
-                scanner.scan_line(line, &mut ranges);
-                for range in ranges {
-                    push_range(&mut output, row, line, range, *kind);
+                let mut found = Vec::new();
+                scanner.scan_line(&line, &mut found);
+                for range in found {
+                    push_range(&mut ranges, &line, range, *kind);
                 }
             }
+            ranges.sort_by_key(|(range, _)| (range.start, range.end));
+            output.extend(
+                ranges
+                    .into_iter()
+                    .filter_map(|(range, kind)| hint_match(group, first, &line, range, kind)),
+            );
+            first = last + 1;
         }
-        output.sort_by_key(|matched| (matched.row, matched.start_col, matched.end_col));
+        output.sort_by_key(|matched| (matched.row(), matched.start_col(), matched.end_col()));
         output
     }
 
@@ -207,9 +276,13 @@ pub fn filter_labels(labels: &[String], input: &str) -> HintFilter {
     selected.map_or(HintFilter::NoMatch, HintFilter::Selected)
 }
 
+/// Accept one scanner range on a logical line, trimmed and free of already-accepted overlap.
+///
+/// Ranges are byte offsets into the logical line, which is what makes the earlier scanner win an
+/// overlap: built-ins are registered before custom ones and are already in `output` by the time a
+/// custom range is offered.
 fn push_range(
-    output: &mut Vec<HintMatch>,
-    row: usize,
+    output: &mut Vec<(Range<usize>, HintKind)>,
     line: &str,
     range: Range<usize>,
     kind: HintKind,
@@ -225,22 +298,53 @@ fn push_range(
         return;
     }
     let end = start + trimmed.len();
-    let start_col = display_column(line, start);
-    let end_col = display_column(line, end);
-    if start_col >= end_col
-        || output.iter().any(|existing| {
-            existing.row == row && start_col < existing.end_col && end_col > existing.start_col
-        })
+    if output
+        .iter()
+        .any(|(existing, _)| start < existing.end && end > existing.start)
     {
         return;
     }
-    output.push(HintMatch {
-        row,
-        start_col,
-        end_col,
-        text: trimmed.to_string(),
+    output.push((start..end, kind));
+}
+
+/// Cut a logical-line byte range into one span per row it covers.
+///
+/// `group` holds the rows the line was joined from, in order, and `first` is the row number of
+/// `group[0]`. Rows the range misses contribute nothing, so a match never carries an empty span.
+fn hint_match(
+    group: &[&str],
+    first: usize,
+    line: &str,
+    range: Range<usize>,
+    kind: HintKind,
+) -> Option<HintMatch> {
+    let mut spans = Vec::new();
+    let mut base = 0usize;
+    for (offset, row) in group.iter().enumerate() {
+        let row_end = base + row.len();
+        let start = range.start.max(base);
+        let end = range.end.min(row_end);
+        if start < end {
+            let start_col = display_column(row, start - base);
+            let end_col = display_column(row, end - base);
+            if start_col < end_col {
+                spans.push(HintSpan {
+                    row: first + offset,
+                    start_col,
+                    end_col,
+                });
+            }
+        }
+        base = row_end;
+    }
+    if spans.is_empty() {
+        return None;
+    }
+    Some(HintMatch {
+        spans,
+        text: line[range].to_string(),
         kind,
-    });
+    })
 }
 
 /// Return whether `byte` may appear inside a URL scheme name.
@@ -455,7 +559,7 @@ mod tests {
             ]
         );
         assert_eq!(found[0].kind, HintKind::Url);
-        assert_eq!(found[0].start_col, 3);
+        assert_eq!(found[0].start_col(), 3);
     }
 
     #[test]
@@ -466,7 +570,42 @@ mod tests {
             })
             .scan("你 issue-123");
         assert_eq!(found[0].kind, HintKind::Custom(7));
-        assert_eq!(found[0].start_col, 3);
+        assert_eq!(found[0].start_col(), 3);
+    }
+
+    #[test]
+    fn wrapped_rows_are_rejoined_into_one_hint_with_a_span_per_row() {
+        let text = "see https://example.com/a\nvery/long/path?q=1 rest\nnope";
+        let wrapped = [true, false, false];
+        let found = HintScan::new().urls(true).paths(false).git_shas(false);
+
+        // Neither row carries a whole URL, so scanning them apart finds one truncated match.
+        let split = found.scan(text);
+        assert_eq!(split.len(), 1);
+        assert_eq!(split[0].text, "https://example.com/a");
+
+        let joined = found.scan_wrapped(text, &wrapped);
+        assert_eq!(joined.len(), 1);
+        assert_eq!(joined[0].text, "https://example.com/avery/long/path?q=1");
+        assert_eq!(
+            joined[0].spans,
+            vec![
+                HintSpan {
+                    row: 0,
+                    start_col: 4,
+                    end_col: 25
+                },
+                HintSpan {
+                    row: 1,
+                    start_col: 0,
+                    end_col: 18
+                },
+            ]
+        );
+        assert_eq!(joined[0].row(), 0);
+        assert_eq!(joined[0].start_col(), 4);
+        assert_eq!(joined[0].end_row(), 1);
+        assert_eq!(joined[0].end_col(), 18);
     }
 
     #[test]
@@ -494,7 +633,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["https://a.test", "https://b.test"]
         );
-        assert_eq!(found[0].start_col, 9);
+        assert_eq!(found[0].start_col(), 9);
     }
 
     #[test]
