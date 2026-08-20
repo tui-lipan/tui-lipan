@@ -2078,6 +2078,7 @@ fn animated_position_zero_duration_snaps_and_emits_callback() {
 struct AnimatedChromeSmoke {
     focused: Rc<Cell<bool>>,
     views: Rc<Cell<usize>>,
+    frame_rate: Option<u16>,
 }
 
 impl Component for AnimatedChromeSmoke {
@@ -2098,14 +2099,16 @@ impl Component for AnimatedChromeSmoke {
         } else {
             Color::Rgb(0, 0, 0)
         };
-        let paint = ctx.animated_color(
-            "chrome",
-            target,
-            crate::animation::TransitionConfig {
-                duration: Duration::from_millis(100),
-                easing: crate::animation::Easing::Linear,
-            },
-        );
+        let config = crate::animation::TransitionConfig {
+            duration: Duration::from_millis(100),
+            easing: crate::animation::Easing::Linear,
+        };
+        let paint = match self.frame_rate {
+            Some(frame_rate) => {
+                ctx.animated_color_with_frame_rate("chrome", target, config, frame_rate)
+            }
+            None => ctx.animated_color("chrome", target, config),
+        };
         Text::new("chrome").style(Style::new().fg(paint)).into()
     }
 }
@@ -2120,6 +2123,7 @@ fn an_animated_colour_fades_without_a_view_pass() {
     let mut backend = crate::TestBackend::new(AnimatedChromeSmoke {
         focused: focused.clone(),
         views: views.clone(),
+        frame_rate: None,
     });
     backend.set_viewport(Rect {
         x: 0,
@@ -2163,6 +2167,7 @@ fn style_only_color_transitions_use_their_lower_repaint_rate() {
     let component = || AnimatedChromeSmoke {
         focused: focused.clone(),
         views: views.clone(),
+        frame_rate: None,
     };
     let mut runner = AppRunner::new(
         App::new()
@@ -2202,6 +2207,58 @@ fn style_only_color_transitions_use_their_lower_repaint_rate() {
     );
 }
 
+#[test]
+fn a_color_transition_can_select_a_slower_repaint_rate() {
+    let focused = Rc::new(Cell::new(false));
+    let views = Rc::new(Cell::new(0));
+    let component = || AnimatedChromeSmoke {
+        focused: focused.clone(),
+        views: views.clone(),
+        frame_rate: Some(10),
+    };
+    let mut runner = AppRunner::new(
+        App::new()
+            .mouse(false)
+            .frame_rate(120)
+            .color_animation_frame_rate(30),
+        component(),
+        (),
+    );
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 10,
+        h: 1,
+    };
+    init_runner(&mut runner, component(), viewport);
+
+    focused.set(true);
+    runner.core.render_element(viewport, None, None, None);
+    assert_eq!(
+        runner.active_animation_interval(),
+        Some(Duration::from_millis(100)),
+        "a long-running subtle fade should not inherit the app's 30 Hz color default"
+    );
+
+    let config = TransitionConfig {
+        duration: Duration::from_millis(100),
+        easing: Easing::Linear,
+    };
+    let _ = runner
+        .core
+        .ctx
+        .animated_color("ordinary", Color::Black, config);
+    let _ = runner
+        .core
+        .ctx
+        .animated_color("ordinary", Color::White, config);
+    assert_eq!(
+        runner.active_animation_interval(),
+        Some(Duration::from_micros(33_333)),
+        "overlapping colors share the fastest active cadence"
+    );
+}
+
 /// The cheaper cadence buys fewer paints, not a longer fade: a 100 ms transition still finishes
 /// after 100 ms of clock, it just lands on three frames instead of twelve.
 #[test]
@@ -2211,6 +2268,7 @@ fn the_color_cadence_shortens_the_paint_count_not_the_fade() {
     let component = || AnimatedChromeSmoke {
         focused: focused.clone(),
         views: views.clone(),
+        frame_rate: None,
     };
     let mut runner = AppRunner::new(
         App::new()

@@ -44,6 +44,9 @@ While the crate is on `0.x.y`:
   `Context::animated_color`, defaulting to 30 fps through
   `DEFAULT_COLOR_ANIMATION_FRAME_RATE`. The effective cadence never exceeds `App::frame_rate`, and
   an overlapping geometry or concrete-value transition carries the color on its higher-rate frame.
+- `Context::animated_color_with_frame_rate` lets a long-running style-only effect such as a
+  breathing marker choose a lower repaint cadence without slowing short colour feedback elsewhere.
+  Overlapping transitions still share the fastest active cadence and one animation clock.
 - `Modal::dismiss_on_escape(false)` keeps backdrop-click dismissal while allowing Escape to reach
   the focused child of a root-portal modal, so nested controls can handle Escape before the modal
   closes.
