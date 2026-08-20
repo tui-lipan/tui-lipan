@@ -240,6 +240,10 @@ name = "diff_hunk_navigation"
 required-features = ["diff-view"]
 
 [[example]]
+name = "diff_inline_comments"
+required-features = ["diff-view"]
+
+[[example]]
 name = "image"
 required-features = ["image"]
 

@@ -713,7 +713,7 @@ fn mouse_region_wrapping_frame_receives_border_clicks() {
     );
     assert_eq!(backend.mouse.left_down_node, Some(target));
     assert!(
-        mouse::gather_hit_actions(&backend.core.tree, target, x, y)
+        mouse::gather_hit_actions(&backend.core.tree, target, x, y, KeyMods::NONE)
             .on_click
             .is_some()
     );

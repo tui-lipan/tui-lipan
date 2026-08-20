@@ -324,6 +324,8 @@ pub(crate) struct DocumentViewNode {
     #[cfg(feature = "diff-view")]
     pub diff_context_separator_click:
         Option<crate::widgets::diff_view::DiffContextSeparatorClickConfig>,
+    #[cfg(feature = "diff-view")]
+    pub diff_line_click: Option<crate::widgets::diff_view::DiffLineClickConfig>,
     /// Style used for synthetic wrap-padding gutter rows inserted for peer sync.
     pub split_wrap_padding_gutter_style: Option<Style>,
     /// Style used for synthetic wrap-padding content rows inserted for peer sync.
@@ -371,6 +373,7 @@ impl WidgetNode for DocumentViewNode {
     fn has_on_click(&self) -> bool {
         self.on_click.is_some()
             || self.has_diff_context_separator_click()
+            || self.has_diff_line_click()
             || self.on_scroll.is_some()
             || self.scrollbar
             || self.h_scrollbar
@@ -457,6 +460,17 @@ impl DocumentViewNode {
                 .as_ref()
                 .and_then(|config| config.hover_style)
                 .is_some_and(|style| !style.is_empty())
+        }
+        #[cfg(not(feature = "diff-view"))]
+        {
+            false
+        }
+    }
+
+    fn has_diff_line_click(&self) -> bool {
+        #[cfg(feature = "diff-view")]
+        {
+            self.diff_line_click.is_some()
         }
         #[cfg(not(feature = "diff-view"))]
         {
@@ -618,6 +632,8 @@ impl From<DocumentView> for DocumentViewNode {
             diff_split_pane: dv.diff_split_pane,
             #[cfg(feature = "diff-view")]
             diff_context_separator_click: dv.diff_context_separator_click,
+            #[cfg(feature = "diff-view")]
+            diff_line_click: dv.diff_line_click,
             split_wrap_padding_gutter_style: dv.split_wrap_padding_gutter_style,
             split_wrap_padding_style: dv.split_wrap_padding_style,
             multi_click_select: dv.multi_click_select,

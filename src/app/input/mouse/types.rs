@@ -3,14 +3,14 @@ use crate::core::event::{MouseDragEvent, MouseEvent};
 use crate::core::node::NodeId;
 use crate::style::{Padding, Rect, ScrollbarVariant};
 use crate::utils::text::SentinelInfo;
-#[cfg(feature = "diff-view")]
-use crate::widgets::DiffContextSeparatorEvent;
 use crate::widgets::{
     CheckboxEvent, CheckboxState, DocumentClickEvent, DragReorderMode, DraggableTabActionEvent,
     DraggableTabCloseEvent, DraggableTabTransferEvent, FlowchartEdgeEvent, FlowchartNodeEvent,
     FlowchartSubgraphEvent, InputEvent, ListEvent, ProgressEvent, TableRow, TabsEvent,
     TextAreaSentinelClickEvent,
 };
+#[cfg(feature = "diff-view")]
+use crate::widgets::{DiffContextSeparatorEvent, DiffLineClickEvent, DiffLineRangeEvent};
 use crate::widgets::{TextAreaImageMode, TextAreaSentinel, TextAreaVisualLine};
 use std::sync::Arc;
 
@@ -36,6 +36,10 @@ pub(crate) struct HitActions {
     pub flowchart_item_click: Option<FlowchartItemClick>,
     #[cfg(feature = "diff-view")]
     pub diff_context_separator_click: Option<DiffContextSeparatorClick>,
+    #[cfg(feature = "diff-view")]
+    pub diff_line_click: Option<DiffLineClick>,
+    #[cfg(feature = "diff-view")]
+    pub diff_line_range_start: Option<DiffLineRangeStart>,
     pub slider_change: Option<SliderChange>,
     pub splitter_grab: Option<SplitterGrab>,
     pub drag_source_grab: Option<DragSourceGrab>,
@@ -52,6 +56,19 @@ pub(crate) struct DocumentClick {
 pub(crate) struct DiffContextSeparatorClick {
     pub cb: Callback<DiffContextSeparatorEvent>,
     pub event: DiffContextSeparatorEvent,
+}
+
+#[cfg(feature = "diff-view")]
+pub(crate) struct DiffLineClick {
+    pub cb: Callback<DiffLineClickEvent>,
+    pub event: DiffLineClickEvent,
+}
+
+#[cfg(feature = "diff-view")]
+pub(crate) struct DiffLineRangeStart {
+    pub node_id: NodeId,
+    pub cb: Callback<DiffLineRangeEvent>,
+    pub event: DiffLineClickEvent,
 }
 
 pub(crate) struct InputChange {
@@ -216,6 +233,8 @@ pub(crate) struct TextAreaChange {
     pub on_sentinel_click: Option<Callback<TextAreaSentinelClickEvent>>,
     #[cfg(feature = "diff-view")]
     pub diff_context_separator_click: Option<crate::widgets::DiffContextSeparatorClickConfig>,
+    #[cfg(feature = "diff-view")]
+    pub diff_line_click: Option<crate::widgets::DiffLineClickConfig>,
     pub images: Vec<crate::clipboard::ImageContent>,
     pub image_mode: TextAreaImageMode,
     pub sentinels: Vec<TextAreaSentinel>,

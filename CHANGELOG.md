@@ -13,6 +13,14 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `DiffView::on_line_click` emits pane-aware, source-mapped `DiffLineClickEvent`s, and
+  `DiffView::inline_block(s)` inserts arbitrary full-width elements after stable old/new line
+  anchors or inclusive `DiffLineRange`s. `DiffView::on_line_range_select` maps plain line-number
+  gutter drags to `DiffLineRangeEvent`s while preserving content-area text selection and previews
+  the in-progress gutter/content rows with `line_range_style`; selected rows stay highlighted and
+  visible through context collapsing. Segmented split diffs retain wrapped-row alignment, enabling
+  focusable inline review editors; the new `diff_inline_comments` example demonstrates adding,
+  saving, editing, and deleting single- or multiline comments.
 - `Terminal::on_link_activate` and `ManagedTerminal::on_link_activate` intercept modified
   left-clicks on explicit OSC 8 links or detected `http` / `https` / `mailto` text before selection
   and PTY mouse forwarding. Ctrl is the default through `link_activation_mods`; non-link clicks

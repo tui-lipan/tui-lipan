@@ -9,6 +9,8 @@ use crate::utils::arena::Arena;
 use crate::widgets::MouseMode;
 use crate::widgets::internal::{FrameJoinOverlap, RememberedScrollAnchor, compute_frame_geometry};
 use crate::widgets::{DecorationPlacement, SingleDocSelection};
+#[cfg(feature = "diff-view")]
+use crate::widgets::{DiffLineClickConfig, DiffPane};
 
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
@@ -198,6 +200,15 @@ impl Node {
 }
 
 /// A realized tree of nodes.
+#[cfg(feature = "diff-view")]
+#[derive(Clone)]
+struct DiffLineRangePreview {
+    node_rects: Vec<Rect>,
+    pane: DiffPane,
+    start_logical_line: usize,
+    end_logical_line: usize,
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct NodeTree {
     /// Root id.
@@ -247,6 +258,8 @@ pub(crate) struct NodeTree {
     /// `ScrollView` child is reconciled back into the viewport.
     offscreen_doc_restore_stack: Vec<Vec<SingleDocSelection>>,
     active_theme_stack: Vec<Rc<Theme>>,
+    #[cfg(feature = "diff-view")]
+    diff_line_range_preview: Option<DiffLineRangePreview>,
 }
 
 impl NodeTree {
@@ -285,7 +298,63 @@ impl NodeTree {
             pan_input_offset_by_key: FxHashMap::default(),
             offscreen_doc_restore_stack: Vec::new(),
             active_theme_stack: vec![default_active_theme()],
+            #[cfg(feature = "diff-view")]
+            diff_line_range_preview: None,
         }
+    }
+
+    #[cfg(feature = "diff-view")]
+    pub(crate) fn set_diff_line_range_preview(
+        &mut self,
+        node_id: NodeId,
+        pane: DiffPane,
+        start_logical_line: usize,
+        end_logical_line: usize,
+    ) {
+        self.diff_line_range_preview = Some(DiffLineRangePreview {
+            node_rects: vec![self.node(node_id).rect],
+            pane,
+            start_logical_line,
+            end_logical_line,
+        });
+    }
+
+    #[cfg(feature = "diff-view")]
+    pub(crate) fn update_diff_line_range_preview(
+        &mut self,
+        node_id: NodeId,
+        end_logical_line: usize,
+    ) {
+        let rect = self.node(node_id).rect;
+        if let Some(preview) = self.diff_line_range_preview.as_mut() {
+            if !preview.node_rects.contains(&rect) {
+                preview.node_rects.push(rect);
+            }
+            preview.end_logical_line = end_logical_line;
+        }
+    }
+
+    #[cfg(feature = "diff-view")]
+    pub(crate) fn clear_diff_line_range_preview(&mut self) {
+        self.diff_line_range_preview = None;
+    }
+
+    #[cfg(feature = "diff-view")]
+    pub(crate) fn diff_line_range_preview_style(
+        &self,
+        node_id: NodeId,
+        config: &DiffLineClickConfig,
+        source_line: usize,
+    ) -> Option<crate::style::Style> {
+        let preview = self.diff_line_range_preview.as_ref()?;
+        if !preview.node_rects.contains(&self.node(node_id).rect) {
+            return None;
+        }
+        let event = config.events_by_source_line.get(source_line).copied()??;
+        let start = preview.start_logical_line.min(preview.end_logical_line);
+        let end = preview.start_logical_line.max(preview.end_logical_line);
+        (event.pane == preview.pane && (start..=end).contains(&event.logical_line))
+            .then_some(config.range_style)
     }
 
     pub fn is_valid(&self, id: NodeId) -> bool {

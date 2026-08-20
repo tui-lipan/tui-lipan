@@ -84,6 +84,68 @@ pub(crate) fn transition_terminal_link_gesture<C: Component, T: MouseDispatchCtx
     }
 }
 
+#[cfg(feature = "diff-view")]
+pub(crate) fn transition_diff_line_range_gesture<C: Component, T: MouseDispatchCtx<C>>(
+    ctx: &mut T,
+    mouse: MouseEvent,
+) -> Option<bool> {
+    ctx.mouse_state().diff_line_range_drag.as_ref()?;
+    match mouse.kind {
+        MouseKind::Drag(MouseButton::Left) => {
+            let (node_id, start) = {
+                let drag = ctx.mouse_state().diff_line_range_drag.as_ref()?;
+                (drag.node_id, drag.start)
+            };
+            let target = ctx
+                .tree()
+                .hit_test(mouse.x as i16, mouse.y as i16)
+                .unwrap_or(node_id);
+            if let Some(end) =
+                mouse::diff_line_event_at_node(ctx.tree(), target, mouse.y, mouse.mods)
+                && end.pane == start.pane
+            {
+                let range = crate::widgets::DiffLineRange::new(start.anchor, end.anchor);
+                if range.is_valid() {
+                    ctx.tree_mut()
+                        .update_diff_line_range_preview(target, end.logical_line);
+                }
+            }
+            Some(true)
+        }
+        MouseKind::Up(MouseButton::Left) => {
+            let drag = ctx.mouse_state().diff_line_range_drag.take()?;
+            ctx.tree_mut().clear_diff_line_range_preview();
+            if !ctx.mouse_state().drag_threshold_exceeded {
+                return None;
+            }
+            let target = ctx
+                .tree()
+                .hit_test(mouse.x as i16, mouse.y as i16)
+                .unwrap_or(drag.node_id);
+            let end = mouse::diff_line_event_at_node(ctx.tree(), target, mouse.y, mouse.mods);
+            if let Some(end) = end
+                && end.pane == drag.start.pane
+            {
+                let range = crate::widgets::DiffLineRange::new(drag.start.anchor, end.anchor);
+                if range.is_valid() {
+                    drag.callback.emit(crate::widgets::DiffLineRangeEvent {
+                        pane: drag.start.pane,
+                        range,
+                        start_logical_line: drag.start.logical_line,
+                        end_logical_line: end.logical_line,
+                    });
+                }
+            }
+            let state = ctx.mouse_state();
+            state.left_down_node = None;
+            state.left_down_pos = None;
+            state.pending_drag_source = None;
+            Some(true)
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn transition_right_click<C: Component, T: MouseDispatchCtx<C>>(
     ctx: &mut T,
     adjusted_mouse: MouseEvent,
@@ -234,6 +296,23 @@ pub(crate) fn transition_widget_down<C: Component, T: MouseDispatchCtx<C>>(
         return Some(true);
     }
 
+    #[cfg(feature = "diff-view")]
+    if let Some(start) = actions.diff_line_range_start {
+        ctx.tree_mut().set_diff_line_range_preview(
+            start.node_id,
+            start.event.pane,
+            start.event.logical_line,
+            start.event.logical_line,
+        );
+        ctx.mouse_state().diff_line_range_drag =
+            Some(crate::app::interaction_state::DiffLineRangeDragState {
+                node_id: start.node_id,
+                callback: start.cb,
+                start: start.event,
+            });
+        return Some(true);
+    }
+
     if let Some(change) = actions.textarea_change
         && ctx.handle_textarea_click(change, x, y)
     {
@@ -321,6 +400,15 @@ pub(crate) fn transition_widget_up<C: Component, T: MouseDispatchCtx<C>>(
             return Some(true);
         }
 
+        #[cfg(feature = "diff-view")]
+        let diff_line_handled = actions.diff_line_click.is_some();
+        #[cfg(feature = "diff-view")]
+        if let Some(click) = actions.diff_line_click {
+            click.cb.emit(click.event);
+        }
+        #[cfg(not(feature = "diff-view"))]
+        let diff_line_handled = false;
+
         if let Some(click) = actions.document_click {
             if click.link.is_none()
                 && matches!(&ctx.tree().node(hit).kind, NodeKind::DocumentView(doc) if doc.passthrough_clicks)
@@ -357,6 +445,9 @@ pub(crate) fn transition_widget_up<C: Component, T: MouseDispatchCtx<C>>(
 
         if let Some(cb) = actions.on_click {
             return Some(ctx.handle_fallback_click(cb, mouse));
+        }
+        if diff_line_handled {
+            return Some(true);
         }
     }
     None

@@ -144,15 +144,17 @@ pub use context_provider::ContextProvider;
 pub use date_picker::{DateEvent, DatePicker};
 #[cfg(feature = "diff-view")]
 pub(crate) use diff_view::{
-    DiffColorStrategy, DiffContextSeparatorClickConfig, DiffDocumentFormatter, SplitWrapDualPass,
-    element_subtree_has_split_wrap_sync, rebuild_diff_gutter_spans, split_wrap_layout_pass,
-    split_wrap_pane_widths, split_wrap_scrollbar_cols_pair,
+    DiffColorStrategy, DiffContextSeparatorClickConfig, DiffDocumentFormatter, DiffLineClickConfig,
+    SplitWrapDualPass, apply_diff_gutter_selection, element_subtree_has_split_wrap_sync,
+    rebuild_diff_gutter_spans, split_wrap_layout_pass, split_wrap_pane_widths,
+    split_wrap_scrollbar_cols_pair,
 };
 #[cfg(feature = "diff-view")]
 pub use diff_view::{
     DiffContextExpansion, DiffContextRange, DiffContextSeparatorDirection,
-    DiffContextSeparatorEvent, DiffData, DiffDataConfig, DiffHunkAnchor, DiffPane, DiffPrefixes,
-    DiffScrollEvent, DiffView, DiffViewBackend, DiffViewMode,
+    DiffContextSeparatorEvent, DiffData, DiffDataConfig, DiffHunkAnchor, DiffInlineBlock,
+    DiffLineAnchor, DiffLineClickEvent, DiffLineRange, DiffLineRangeEvent, DiffLineSide, DiffPane,
+    DiffPrefixes, DiffScrollEvent, DiffView, DiffViewBackend, DiffViewMode,
 };
 pub use divider::{Divider, Orientation};
 #[cfg(feature = "markdown")]

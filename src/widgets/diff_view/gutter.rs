@@ -12,6 +12,32 @@ use std::sync::Arc;
 pub(crate) type DiffGutterSpans = Arc<Vec<Vec<crate::style::Span>>>;
 type DiffGutterSpansCache = HashMap<(u64, u64), DiffGutterSpans>;
 
+pub(crate) fn apply_diff_gutter_selection(
+    gutter: &DiffGutterSpans,
+    selected_lines: &[bool],
+    selection_style: crate::style::Style,
+) -> DiffGutterSpans {
+    if selection_style == crate::style::Style::default()
+        || !selected_lines.iter().copied().any(|selected| selected)
+    {
+        return Arc::clone(gutter);
+    }
+    gutter
+        .iter()
+        .enumerate()
+        .map(|(index, spans)| {
+            let mut spans = spans.clone();
+            if selected_lines.get(index).copied().unwrap_or(false) {
+                for span in &mut spans {
+                    span.style = span.style.patch(selection_style);
+                }
+            }
+            spans
+        })
+        .collect::<Vec<_>>()
+        .into()
+}
+
 thread_local! {
     static DIFF_GUTTER_SPANS_CACHE: RefCell<DiffGutterSpansCache> =
         RefCell::new(HashMap::new());

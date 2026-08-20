@@ -127,8 +127,8 @@ fn apply_diff_text_area_theme(text_area: &mut crate::widgets::TextArea, theme: &
         return;
     };
 
-    let old_style = diff.style;
     apply_diff_palette_theme(&mut diff.style, theme);
+    diff.selection_style = theme.selection.patch(diff.selection_style);
     #[cfg(feature = "syntax-syntect")]
     if let Some(base) = diff.base.as_mut() {
         crate::widgets::apply_syntect_strategy_app_theme(base, theme);
@@ -141,11 +141,16 @@ fn apply_diff_text_area_theme(text_area: &mut crate::widgets::TextArea, theme: &
     if text_area.split_wrap_padding_style.is_some() {
         text_area.split_wrap_padding_style = Some(diff.style.empty);
     }
-    if diff.style != old_style && text_area.gutter_lines.is_some() {
-        text_area.gutter_lines = Some(crate::widgets::rebuild_diff_gutter_spans(
-            diff.lines.as_ref(),
-            diff.style,
+    if text_area.gutter_lines.is_some() {
+        let gutter = crate::widgets::rebuild_diff_gutter_spans(diff.lines.as_ref(), diff.style);
+        text_area.gutter_lines = Some(crate::widgets::apply_diff_gutter_selection(
+            &gutter,
+            diff.selected_lines.as_ref(),
+            diff.selection_style,
         ));
+    }
+    if let Some(config) = text_area.diff_line_click.as_mut() {
+        config.range_style = diff.selection_style;
     }
 }
 
@@ -180,8 +185,9 @@ fn apply_diff_document_theme(dv: &mut crate::widgets::DocumentView, theme: &Them
         return;
     };
 
-    let old_style = diff.strategy().style;
     apply_diff_palette_theme(&mut diff.strategy_mut().style, theme);
+    let explicit_selection_style = diff.strategy().selection_style;
+    diff.strategy_mut().selection_style = theme.selection.patch(explicit_selection_style);
     #[cfg(feature = "syntax-syntect")]
     if let Some(base) = diff.strategy_mut().base.as_mut() {
         crate::widgets::apply_syntect_strategy_app_theme(base, theme);
@@ -199,10 +205,18 @@ fn apply_diff_document_theme(dv: &mut crate::widgets::DocumentView, theme: &Them
     if dv.split_wrap_padding_style.is_some() {
         dv.split_wrap_padding_style = Some(diff.strategy().style.empty);
     }
-    if diff.strategy().style != old_style && dv.gutter_lines.is_some() {
-        dv.gutter_lines = Some(crate::widgets::rebuild_diff_gutter_spans(
+    if dv.gutter_lines.is_some() {
+        let gutter = crate::widgets::rebuild_diff_gutter_spans(
             diff.strategy().lines.as_ref(),
             diff.strategy().style,
+        );
+        dv.gutter_lines = Some(crate::widgets::apply_diff_gutter_selection(
+            &gutter,
+            diff.strategy().selected_lines.as_ref(),
+            diff.strategy().selection_style,
         ));
+    }
+    if let Some(config) = dv.diff_line_click.as_mut() {
+        config.range_style = diff.strategy().selection_style;
     }
 }

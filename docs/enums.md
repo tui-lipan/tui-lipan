@@ -1231,6 +1231,32 @@ right-aligned change metadata.
 | `DiffPane::Right` | Right pane in split mode |
 | `DiffPane::Unified` | Unified pane |
 
+### `DiffLineSide`
+
+| Variant | Description |
+|---------|-------------|
+| `DiffLineSide::Old` | Resolve an inline anchor through its original/source line |
+| `DiffLineSide::New` | Resolve an inline anchor through its modified/source line **(default)** |
+
+The preferred side keeps a comment attached to the clicked half of a split
+replacement when switching to unified mode, where removed and added rows are
+rendered separately.
+
+### `DiffLineRange`
+
+Inclusive source range used by multiline review comments:
+
+```rust
+pub struct DiffLineRange {
+    pub start: DiffLineAnchor,
+    pub end: DiffLineAnchor,
+}
+```
+
+`DiffLineRange::new(start, end)` orders endpoints that use the same source side.
+`DiffLineRange::single(anchor)` creates a one-row range. Patch ranges are valid
+only when both endpoints have the same `hunk_index`.
+
 ### `DiffContextSeparatorDirection`
 
 | Variant | Description |

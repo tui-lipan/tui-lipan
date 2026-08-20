@@ -198,6 +198,59 @@ pub enum DiffPane {
 }
 ```
 
+### `DiffLineClickEvent` *(feature `diff-view`)*
+
+Emitted by: `DiffView::on_line_click`
+
+```rust
+pub struct DiffLineClickEvent {
+    pub pane: DiffPane,
+    pub anchor: DiffLineAnchor,
+    pub logical_line: usize, // zero-based rendered row before soft wrapping
+    pub mods: KeyMods,       // modifiers held for the click
+}
+
+pub struct DiffLineAnchor {
+    pub old_line: Option<usize>, // git-style 1-based source line
+    pub new_line: Option<usize>, // git-style 1-based source line
+    pub hunk_index: Option<usize>, // zero-based parsed patch hunk, when present
+    pub preferred_side: DiffLineSide,
+}
+
+pub struct DiffLineRange {
+    pub start: DiffLineAnchor, // inclusive
+    pub end: DiffLineAnchor,   // inclusive
+}
+```
+
+The anchor identifies the complete aligned row, so split-pane events from the
+left and right carry the same anchor and differ only in `pane`. Pass
+`DiffLineRange::single(event.anchor)` to `DiffInlineBlock::after_range(...)` to
+insert a full-width editor or review control immediately after that row.
+`hunk_index` disambiguates repeated old/new line numbers in multi-file patch
+input, while `preferred_side` keeps split replacements attached to the clicked
+old/new half in unified mode.
+
+### `DiffLineRangeEvent` *(feature `diff-view`)*
+
+Emitted by: `DiffView::on_line_range_select`
+
+```rust
+pub struct DiffLineRangeEvent {
+    pub pane: DiffPane,
+    pub range: DiffLineRange,       // inclusive, source ordered
+    pub start_logical_line: usize,  // zero-based
+    pub end_logical_line: usize,    // zero-based
+}
+```
+
+Plain left-button dragging in a diff line-number gutter emits one event on
+release. During the drag, the active pane previews the inclusive range across
+both gutter and content cells with `DiffView::line_range_style`. The drag must
+remain in one split pane and one patch hunk. Content-area dragging remains text
+selection, and a gutter click without dragging continues to emit
+`DiffLineClickEvent`.
+
 ### `DiffContextSeparatorEvent` *(feature `diff-view`)*
 
 Emitted by: `DiffView::on_context_separator_click`
@@ -827,6 +880,8 @@ Quick lookup - which callbacks does each widget support?
 | Callback | Payload | When |
 |----------|---------|------|
 | `on_scroll` | `DiffScrollEvent` | A rendered diff pane scrolls |
+| `on_line_click` | `DiffLineClickEvent` | A mapped source row is clicked |
+| `on_line_range_select` | `DiffLineRangeEvent` | A plain gutter drag selects an inclusive source range |
 | `on_context_separator_click` | `DiffContextSeparatorEvent` | A visible collapsed-context separator line is clicked |
 
 ### Graph

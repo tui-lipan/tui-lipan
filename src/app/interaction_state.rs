@@ -9,6 +9,8 @@ use crate::app::input::drag::{
 use crate::app::input::hex_history::HexHistory;
 use crate::app::input::scrollbar::ScrollbarDrag;
 use crate::app::input::text_area_vim::TextAreaVimState;
+#[cfg(feature = "diff-view")]
+use crate::callback::Callback;
 use crate::core::element::Key;
 use crate::core::event::MouseButton;
 use crate::core::node::NodeId;
@@ -316,6 +318,9 @@ pub(crate) struct MouseTrackingState {
     pub mouse_region_drag: Option<MouseRegionDragState>,
     /// Pending or active `PanView` drag-to-pan target.
     pub pan_view_drag: Option<PanViewDragState>,
+    /// Diff gutter drag that will emit one inclusive source range on release.
+    #[cfg(feature = "diff-view")]
+    pub diff_line_range_drag: Option<DiffLineRangeDragState>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -349,6 +354,13 @@ pub(crate) struct PanViewDragState {
     pub node_id: NodeId,
     pub last_pos: (u16, u16),
     pub started: bool,
+}
+
+#[cfg(feature = "diff-view")]
+pub(crate) struct DiffLineRangeDragState {
+    pub node_id: NodeId,
+    pub callback: Callback<crate::widgets::DiffLineRangeEvent>,
+    pub start: crate::widgets::DiffLineClickEvent,
 }
 
 pub(crate) struct FocusState {

@@ -139,6 +139,8 @@ pub struct TextAreaNode {
     #[cfg(feature = "diff-view")]
     pub diff_context_separator_click:
         Option<crate::widgets::diff_view::DiffContextSeparatorClickConfig>,
+    #[cfg(feature = "diff-view")]
+    pub diff_line_click: Option<crate::widgets::diff_view::DiffLineClickConfig>,
     /// Style used for synthetic wrap-padding gutter rows inserted for peer sync.
     pub split_wrap_padding_gutter_style: Option<Style>,
     /// Style used for synthetic wrap-padding content rows inserted for peer sync.
@@ -186,6 +188,17 @@ impl TextAreaNode {
                 .as_ref()
                 .and_then(|config| config.hover_style)
                 .is_some_and(|style| !style.is_empty())
+        }
+        #[cfg(not(feature = "diff-view"))]
+        {
+            false
+        }
+    }
+
+    fn has_diff_line_click(&self) -> bool {
+        #[cfg(feature = "diff-view")]
+        {
+            self.diff_line_click.is_some()
         }
         #[cfg(not(feature = "diff-view"))]
         {
@@ -378,6 +391,7 @@ impl WidgetNode for TextAreaNode {
         !self.disabled
             && (self.on_click.is_some()
                 || self.has_diff_context_separator_click()
+                || self.has_diff_line_click()
                 || self.on_sentinel_click.is_some()
                 || self.on_change.is_some()
                 || self.on_scroll.is_some()
@@ -546,6 +560,8 @@ impl From<super::TextArea> for TextAreaNode {
             split_wrap_side: value.split_wrap_side,
             #[cfg(feature = "diff-view")]
             diff_context_separator_click: value.diff_context_separator_click,
+            #[cfg(feature = "diff-view")]
+            diff_line_click: value.diff_line_click,
             split_wrap_padding_gutter_style: value.split_wrap_padding_gutter_style,
             split_wrap_padding_style: value.split_wrap_padding_style,
             copy_excluded_bytes: value.copy_excluded_bytes,

@@ -803,6 +803,7 @@ pub(crate) struct ContextCollapseOptions<'a> {
     pub context_separator_text: &'a str,
     pub min_separator_lines: usize,
     pub expanded_contexts: &'a [DiffContextExpansion],
+    pub pinned_ranges: &'a [DiffLineRange],
 }
 
 pub(crate) fn context_collapse_options<'a>(
@@ -816,6 +817,14 @@ pub(crate) fn context_collapse_options<'a>(
         context_separator_text,
         min_separator_lines,
         expanded_contexts,
+        pinned_ranges: &[],
+    }
+}
+
+impl<'a> ContextCollapseOptions<'a> {
+    pub(crate) fn pinned_ranges(mut self, ranges: &'a [DiffLineRange]) -> Self {
+        self.pinned_ranges = ranges;
+        self
     }
 }
 
@@ -975,6 +984,7 @@ fn apply_keep_mask(
         context_separator_text,
         min_separator_lines,
         expanded_contexts,
+        pinned_ranges: _,
     } = options;
     let n = lines.len();
     let mut result = Vec::new();
@@ -1026,6 +1036,27 @@ fn apply_keep_mask(
     result
 }
 
+fn pin_range_rows(
+    keep: &mut [bool],
+    rows: &[(Option<usize>, Option<usize>, Option<usize>)],
+    ranges: &[DiffLineRange],
+) {
+    for range in ranges {
+        if !range.is_valid() {
+            continue;
+        }
+        let find = |anchor: DiffLineAnchor| {
+            rows.iter().position(|&(old_line, new_line, hunk_index)| {
+                anchor.matches_source_row(old_line, new_line, hunk_index)
+            })
+        };
+        let (Some(start), Some(end)) = (find(range.start), find(range.end)) else {
+            continue;
+        };
+        keep[start.min(end)..=start.max(end)].fill(true);
+    }
+}
+
 /// Collapse context lines in split (left/right) and unified views.
 ///
 /// For split mode the keep-mask is computed from both sides in lockstep (a row
@@ -1075,6 +1106,24 @@ fn collapse_context(
             *keep = true;
         }
     }
+    let split_rows = (0..split_n)
+        .map(|i| {
+            (
+                left.get(i)
+                    .and_then(|line| line.old_line)
+                    .or_else(|| right.get(i).and_then(|line| line.old_line)),
+                right
+                    .get(i)
+                    .and_then(|line| line.new_line)
+                    .or_else(|| left.get(i).and_then(|line| line.new_line)),
+                left.get(i)
+                    .and_then(|line| line.hunk)
+                    .or_else(|| right.get(i).and_then(|line| line.hunk))
+                    .map(|hunk| hunk.index),
+            )
+        })
+        .collect::<Vec<_>>();
+    pin_range_rows(&mut split_keep, &split_rows, options.pinned_ranges);
     let new_left = apply_keep_mask(left, &split_keep, options);
     let new_right = apply_keep_mask(right, &split_keep, options);
 
@@ -1094,6 +1143,17 @@ fn collapse_context(
             *keep = true;
         }
     }
+    let unified_rows = unified
+        .iter()
+        .map(|line| {
+            (
+                line.old_line,
+                line.new_line,
+                line.hunk.map(|hunk| hunk.index),
+            )
+        })
+        .collect::<Vec<_>>();
+    pin_range_rows(&mut uni_keep, &unified_rows, options.pinned_ranges);
     let new_unified = apply_keep_mask(unified, &uni_keep, options);
 
     (new_left, new_right, new_unified)
