@@ -5627,6 +5627,56 @@ fn wheel_forward_runner(
     runner
 }
 
+#[cfg(feature = "terminal")]
+#[test]
+fn first_left_gesture_focuses_a_tracking_terminal_without_reaching_the_child() {
+    let forwarded = Rc::new(RefCell::new(Vec::new()));
+    let mut runner = wheel_forward_runner(&forwarded, App::new().mouse(false));
+    assert!(
+        runner.focus.focused.is_none(),
+        "on-demand focus starts empty"
+    );
+
+    for (x, kind) in [
+        (2, MouseKind::Down(MouseButton::Left)),
+        (3, MouseKind::Drag(MouseButton::Left)),
+        (3, MouseKind::Up(MouseButton::Left)),
+    ] {
+        assert!(runner.dispatch_mouse(MouseEvent {
+            x,
+            y: 1,
+            kind,
+            mods: KeyMods::default(),
+        }));
+    }
+
+    assert!(
+        runner.focus.focused.is_some(),
+        "the first press must still focus the terminal"
+    );
+    assert!(
+        forwarded.borrow().is_empty(),
+        "the child must not receive any part of the gesture whose press only focused it"
+    );
+
+    for kind in [
+        MouseKind::Down(MouseButton::Left),
+        MouseKind::Up(MouseButton::Left),
+    ] {
+        assert!(runner.dispatch_mouse(MouseEvent {
+            x: 3,
+            y: 1,
+            kind,
+            mods: KeyMods::default(),
+        }));
+    }
+    assert_eq!(
+        forwarded.borrow().len(),
+        2,
+        "a later click on the focused terminal must reach the child normally"
+    );
+}
+
 /// Both spellings of a pointer report are pointer reports.
 ///
 /// The runner's drag, motion, and wheel loops coalesce a burst of reports down to the newest one
@@ -5988,7 +6038,7 @@ fn terminal_link_activation_prefers_explicit_osc8_destinations() {
 
 #[cfg(feature = "terminal")]
 #[test]
-fn non_link_and_unmodified_terminal_clicks_keep_existing_forwarding() {
+fn ordinary_terminal_clicks_forward_after_the_focus_gesture() {
     let activated = Rc::new(RefCell::new(Vec::new()));
     let forwarded = Rc::new(RefCell::new(Vec::new()));
     let mut backend = terminal_link_backend(
@@ -6005,8 +6055,8 @@ fn non_link_and_unmodified_terminal_clicks_keep_existing_forwarding() {
     assert!(activated.borrow().is_empty());
     assert_eq!(
         forwarded.borrow().len(),
-        4,
-        "both halves of both ordinary clicks reach the child"
+        2,
+        "the first click only focuses; both halves of the later ordinary click reach the child"
     );
 }
 
