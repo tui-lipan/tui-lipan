@@ -8,15 +8,19 @@ use crate::style::{
     BorderStyle, CaretShape, Color, Padding, Rect, ScrollbarVariant, Span, Style, StyleSlot, Theme,
     ThemeRole,
 };
+use crate::utils::hints::HintSpan;
 use crate::widgets::ScrollEvent;
 
 use super::events::{
-    MouseModeState, TerminalInputEvent, TerminalKeyModes, TerminalPasteShortcutBehavior,
+    MouseModeState, TerminalInputEvent, TerminalKeyModes, TerminalLinkEvent,
+    TerminalPasteShortcutBehavior,
 };
 #[cfg(feature = "terminal-images")]
 use super::graphics::TerminalImagePlacement;
 use super::layout::terminal_content_layout;
-use super::screen::{TerminalDecoration, TerminalRenderSnapshot, TerminalScreenHandle};
+use super::screen::{
+    TerminalDecoration, TerminalHyperlink, TerminalRenderSnapshot, TerminalScreenHandle,
+};
 use super::selection::{
     ScrollbackLineage, TerminalSelection, TerminalSelectionEvent, rebase_selection,
 };
@@ -24,7 +28,11 @@ use super::selection::{
 /// Runtime node for terminal rendering.
 #[derive(Clone)]
 pub(crate) struct TerminalNode {
+    pub text: Arc<str>,
     pub lines: Arc<[Vec<Span>]>,
+    pub wrapped_rows: Arc<[bool]>,
+    pub hyperlinks: Arc<[TerminalHyperlink]>,
+    pub link_hover: Option<TerminalLinkHover>,
     pub cursor_row: u16,
     pub cursor_col: u16,
     pub cursor_visible: bool,
@@ -54,6 +62,9 @@ pub(crate) struct TerminalNode {
     pub paste_shortcut_behavior: TerminalPasteShortcutBehavior,
     pub on_selection: Option<Callback<TerminalSelectionEvent>>,
     pub on_mouse_forward: Option<Callback<Vec<u8>>>,
+    pub link_activation_mods: crate::core::event::KeyMods,
+    pub link_hover_style: StyleSlot,
+    pub on_link_activate: Option<Callback<TerminalLinkEvent>>,
     pub style: Style,
     pub hover_style: StyleSlot,
     pub focus_style: StyleSlot,
@@ -83,6 +94,12 @@ pub(crate) struct TerminalNode {
     pub on_blur: Option<Callback<()>>,
     pub on_key: Option<KeyHandler>,
     pub on_input: Option<Callback<TerminalInputEvent>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TerminalLinkHover {
+    pub uri: Arc<str>,
+    pub spans: Arc<[HintSpan]>,
 }
 
 impl TerminalNode {
@@ -119,7 +136,16 @@ impl TerminalNode {
         };
         self.selection = rebase_selection(self.selection, self.lineage, to);
         self.lineage = to;
+        if self.text != snapshot.text
+            || self.wrapped_rows != snapshot.wrapped_rows
+            || self.hyperlinks != snapshot.hyperlinks
+        {
+            self.link_hover = None;
+        }
+        self.text = snapshot.text.clone();
         self.lines = snapshot.color_lines.clone();
+        self.wrapped_rows = snapshot.wrapped_rows.clone();
+        self.hyperlinks = snapshot.hyperlinks.clone();
         self.cursor_row = snapshot.cursor_row;
         self.cursor_col = snapshot.cursor_col;
         self.cursor_visible = snapshot.cursor_visible && self.show_cursor_requested;

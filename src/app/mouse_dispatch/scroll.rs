@@ -11,12 +11,26 @@ pub(crate) fn transition_mouse_move<C: Component, T: MouseDispatchCtx<C>>(
     y: u16,
 ) -> Option<bool> {
     if matches!(adjusted_mouse.kind, MouseKind::Moved) {
+        #[cfg(feature = "terminal")]
+        let link_hover_dirty = {
+            let previous = ctx.mouse_state().terminal_link_hover_node;
+            let (next, dirty) = crate::app::input::handlers::terminal::update_link_hover(
+                ctx.tree_mut(),
+                previous,
+                adjusted_mouse,
+            );
+            ctx.mouse_state().terminal_link_hover_node = next;
+            dirty
+        };
+        #[cfg(not(feature = "terminal"))]
+        let link_hover_dirty = false;
+
         if ctx.forward_terminal_mouse(adjusted_mouse) {
-            return Some(false);
+            return Some(link_hover_dirty);
         }
         let move_dirty = ctx.dispatch_mouse_move(adjusted_mouse);
         let hover_dirty = ctx.update_hover(x, y);
-        return Some(move_dirty || hover_dirty);
+        return Some(link_hover_dirty || move_dirty || hover_dirty);
     }
     None
 }

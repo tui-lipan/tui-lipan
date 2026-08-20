@@ -210,6 +210,7 @@ pub(crate) struct NodeTree {
     has_hoverables: bool,
     has_mouse_move_handlers: bool,
     has_terminal_any_event: bool,
+    has_terminal_link_hover: bool,
     /// Terminals reading a live screen, so the pre-draw refresh visits only those.
     #[cfg(feature = "terminal")]
     live_terminal_ids: Vec<NodeId>,
@@ -261,6 +262,7 @@ impl NodeTree {
             has_hoverables: false,
             has_mouse_move_handlers: false,
             has_terminal_any_event: false,
+            has_terminal_link_hover: false,
             #[cfg(feature = "terminal")]
             live_terminal_ids: Vec::new(),
             has_spinners: false,
@@ -306,6 +308,11 @@ impl NodeTree {
     /// Returns true if any terminal node requests any-event mouse forwarding.
     pub fn has_terminal_any_event(&self) -> bool {
         self.has_terminal_any_event
+    }
+
+    /// Returns true if any terminal node can paint modifier-hovered links.
+    pub fn has_terminal_link_hover(&self) -> bool {
+        self.has_terminal_link_hover
     }
 
     /// Returns true if any spinner glyphs exist in the tree.
@@ -924,7 +931,7 @@ impl NodeTree {
     /// Notify the tree that a node's kind was just set during reconciliation.
     ///
     /// This incrementally tracks `has_hoverables`, pointer-move listeners,
-    /// any-event terminals, spinner glyph hosts, and
+    /// any-event/link-hover terminals, spinner glyph hosts, and
     /// `has_animated_images` so that
     /// the expensive post-reconciliation `refresh_hoverables()` DFS can be
     /// skipped entirely.
@@ -943,6 +950,13 @@ impl NodeTree {
                 if terminal.mouse_mode.mode == MouseMode::AnyEvent && terminal.on_mouse_forward.is_some())
         {
             self.has_terminal_any_event = true;
+        }
+        #[cfg(feature = "terminal")]
+        if !self.has_terminal_link_hover
+            && matches!(&node.kind, NodeKind::Terminal(terminal)
+                if terminal.on_link_activate.is_some())
+        {
+            self.has_terminal_link_hover = true;
         }
         #[cfg(feature = "terminal")]
         if matches!(&node.kind, NodeKind::Terminal(terminal) if terminal.screen.is_some()) {
@@ -1000,6 +1014,7 @@ impl NodeTree {
         self.has_hoverables = false;
         self.has_mouse_move_handlers = false;
         self.has_terminal_any_event = false;
+        self.has_terminal_link_hover = false;
         #[cfg(feature = "terminal")]
         self.live_terminal_ids.clear();
         self.has_spinners = false;
@@ -1284,6 +1299,8 @@ impl NodeTree {
         #[cfg(feature = "terminal")]
         let mut full_terminal_any_event = false;
         #[cfg(feature = "terminal")]
+        let mut full_terminal_link_hover = false;
+        #[cfg(feature = "terminal")]
         let mut full_live_terminal_ids = Vec::new();
         let mut full_spinners = false;
         let mut full_spinner_ids = Vec::new();
@@ -1308,6 +1325,8 @@ impl NodeTree {
             {
                 full_terminal_any_event |= matches!(&node.kind, NodeKind::Terminal(terminal)
                     if terminal.mouse_mode.mode == MouseMode::AnyEvent && terminal.on_mouse_forward.is_some());
+                full_terminal_link_hover |= matches!(&node.kind, NodeKind::Terminal(terminal)
+                    if terminal.on_link_activate.is_some());
                 if matches!(&node.kind, NodeKind::Terminal(terminal) if terminal.screen.is_some()) {
                     full_live_terminal_ids.push(node.id);
                 }
@@ -1349,6 +1368,11 @@ impl NodeTree {
         assert_eq!(
             self.has_terminal_any_event, full_terminal_any_event,
             "incremental has_terminal_any_event must match full scan"
+        );
+        #[cfg(feature = "terminal")]
+        assert_eq!(
+            self.has_terminal_link_hover, full_terminal_link_hover,
+            "incremental has_terminal_link_hover must match full scan"
         );
         #[cfg(feature = "terminal")]
         assert_eq!(

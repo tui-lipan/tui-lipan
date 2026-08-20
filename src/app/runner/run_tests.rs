@@ -5731,6 +5731,319 @@ fn forwarded_wheel_ticks_ignore_app_scroll_wheel_multiplier() {
     assert_eq!(emitted[0], b"\x1b[<64;3;2M".to_vec());
 }
 
+#[cfg(feature = "terminal")]
+#[derive(Clone)]
+struct TerminalLinkClickSmoke {
+    snapshot: crate::widgets::TerminalRenderSnapshot,
+    activated: Rc<RefCell<Vec<crate::widgets::TerminalLinkEvent>>>,
+    forwarded: Rc<RefCell<Vec<Vec<u8>>>>,
+}
+
+#[cfg(feature = "terminal")]
+impl Component for TerminalLinkClickSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let activated = self.activated.clone();
+        let forwarded = self.forwarded.clone();
+        Terminal::new()
+            .snapshot(self.snapshot.clone())
+            .width(Length::Flex(1))
+            .height(Length::Flex(1))
+            .on_link_activate(Callback::new(
+                move |event: crate::widgets::TerminalLinkEvent| {
+                    activated.borrow_mut().push(event);
+                },
+            ))
+            .on_mouse_forward(Callback::new(move |bytes| {
+                forwarded.borrow_mut().push(bytes);
+            }))
+            .into()
+    }
+}
+
+#[cfg(feature = "terminal")]
+fn terminal_link_snapshot(text: &str) -> crate::widgets::TerminalRenderSnapshot {
+    crate::widgets::TerminalRenderSnapshot::from_parts(
+        text,
+        vec![vec![Span::new(text)]],
+        0,
+        0,
+        true,
+        crate::CaretShape::Block,
+        true,
+        1,
+        0,
+        0,
+        crate::widgets::MouseModeState {
+            mode: crate::widgets::MouseMode::Normal,
+            encoding: crate::widgets::MouseEncoding::Sgr,
+            focus_events_enabled: false,
+        },
+        crate::widgets::TerminalKeyModes::default(),
+    )
+}
+
+#[cfg(feature = "terminal")]
+fn terminal_link_backend(
+    snapshot: crate::widgets::TerminalRenderSnapshot,
+    activated: &Rc<RefCell<Vec<crate::widgets::TerminalLinkEvent>>>,
+    forwarded: &Rc<RefCell<Vec<Vec<u8>>>>,
+) -> crate::TestBackend<TerminalLinkClickSmoke> {
+    let mut backend = crate::TestBackend::new(TerminalLinkClickSmoke {
+        snapshot,
+        activated: activated.clone(),
+        forwarded: forwarded.clone(),
+    });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 3,
+    });
+    backend.render();
+    backend
+}
+
+#[cfg(feature = "terminal")]
+fn send_left_mouse(
+    backend: &mut crate::TestBackend<TerminalLinkClickSmoke>,
+    x: u16,
+    kind: MouseKind,
+    mods: KeyMods,
+) {
+    backend
+        .send_mouse(MouseEvent {
+            x,
+            y: 0,
+            kind,
+            mods,
+        })
+        .expect("mouse dispatch");
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn ctrl_click_activates_plain_terminal_urls_before_mouse_forwarding() {
+    let activated = Rc::new(RefCell::new(Vec::new()));
+    let forwarded = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = terminal_link_backend(
+        terminal_link_snapshot("open https://example.com/docs"),
+        &activated,
+        &forwarded,
+    );
+
+    send_left_mouse(
+        &mut backend,
+        10,
+        MouseKind::Down(MouseButton::Left),
+        KeyMods::CTRL,
+    );
+    send_left_mouse(
+        &mut backend,
+        10,
+        MouseKind::Up(MouseButton::Left),
+        KeyMods::NONE,
+    );
+
+    assert_eq!(
+        activated.borrow().as_slice(),
+        &[crate::widgets::TerminalLinkEvent {
+            uri: Arc::from("https://example.com/docs"),
+            row: 0,
+            col: 10,
+        }]
+    );
+    assert!(
+        forwarded.borrow().is_empty(),
+        "a tracking child must receive neither half of an activated host link click"
+    );
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn activation_modifiers_hover_only_the_terminal_link_under_the_pointer() {
+    let activated = Rc::new(RefCell::new(Vec::new()));
+    let forwarded = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = terminal_link_backend(
+        terminal_link_snapshot("open https://example.com"),
+        &activated,
+        &forwarded,
+    );
+
+    send_left_mouse(&mut backend, 10, MouseKind::Moved, KeyMods::CTRL);
+    let hovered = backend.capture_frame();
+    assert!(
+        (5..24).all(|col| hovered.cell(col, 0).modifiers.underline),
+        "the complete detected URL is underlined"
+    );
+    assert!(
+        !hovered.cell(4, 0).modifiers.underline,
+        "text outside the link keeps its original style"
+    );
+
+    send_left_mouse(&mut backend, 10, MouseKind::Moved, KeyMods::NONE);
+    let cleared = backend.capture_frame();
+    assert!(
+        (5..24).all(|col| !cleared.cell(col, 0).modifiers.underline),
+        "moving without the activation modifiers clears the link hover"
+    );
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_link_hover_requests_native_pointer_motion_reports() {
+    let component = TerminalLinkClickSmoke {
+        snapshot: terminal_link_snapshot("https://example.com"),
+        activated: Rc::new(RefCell::new(Vec::new())),
+        forwarded: Rc::new(RefCell::new(Vec::new())),
+    };
+    let mut runner = AppRunner::new(App::new(), component.clone(), ());
+    init_runner(
+        &mut runner,
+        component,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 3,
+        },
+    );
+
+    assert!(
+        runner.needs_mouse_motion(),
+        "an activatable terminal link must enable host all-motion reporting"
+    );
+
+    runner.mouse.last_mouse.set(Some((10, 0)));
+    assert!(runner.refresh_terminal_link_hover_at_pointer(KeyMods::CTRL));
+    let terminal = runner
+        .core
+        .tree
+        .iter()
+        .find_map(|node| match &node.kind {
+            NodeKind::Terminal(terminal) => Some(terminal),
+            _ => None,
+        })
+        .expect("terminal widget");
+    assert_eq!(
+        terminal.link_hover.as_ref().map(|hover| hover.uri.as_ref()),
+        Some("https://example.com"),
+        "pressing the modifier reuses the remembered pointer cell"
+    );
+
+    assert!(runner.refresh_terminal_link_hover_at_pointer(KeyMods::NONE));
+    let terminal = runner
+        .core
+        .tree
+        .iter()
+        .find_map(|node| match &node.kind {
+            NodeKind::Terminal(terminal) => Some(terminal),
+            _ => None,
+        })
+        .expect("terminal widget");
+    assert!(
+        terminal.link_hover.is_none(),
+        "releasing the modifier clears the remembered hover"
+    );
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_link_activation_prefers_explicit_osc8_destinations() {
+    let activated = Rc::new(RefCell::new(Vec::new()));
+    let forwarded = Rc::new(RefCell::new(Vec::new()));
+    let snapshot = terminal_link_snapshot("read docs").with_hyperlinks(vec![
+        crate::widgets::TerminalHyperlink::new("https://example.com/hidden", 0, 5..9),
+    ]);
+    let mut backend = terminal_link_backend(snapshot, &activated, &forwarded);
+
+    send_left_mouse(
+        &mut backend,
+        6,
+        MouseKind::Down(MouseButton::Left),
+        KeyMods::CTRL,
+    );
+    send_left_mouse(
+        &mut backend,
+        6,
+        MouseKind::Up(MouseButton::Left),
+        KeyMods::CTRL,
+    );
+
+    assert_eq!(
+        activated.borrow()[0].uri.as_ref(),
+        "https://example.com/hidden"
+    );
+    assert!(forwarded.borrow().is_empty());
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn non_link_and_unmodified_terminal_clicks_keep_existing_forwarding() {
+    let activated = Rc::new(RefCell::new(Vec::new()));
+    let forwarded = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = terminal_link_backend(
+        terminal_link_snapshot("https://example.com"),
+        &activated,
+        &forwarded,
+    );
+
+    for (x, mods) in [(2, KeyMods::NONE), (30, KeyMods::CTRL)] {
+        send_left_mouse(&mut backend, x, MouseKind::Down(MouseButton::Left), mods);
+        send_left_mouse(&mut backend, x, MouseKind::Up(MouseButton::Left), mods);
+    }
+
+    assert!(activated.borrow().is_empty());
+    assert_eq!(
+        forwarded.borrow().len(),
+        4,
+        "both halves of both ordinary clicks reach the child"
+    );
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn dragging_cancels_terminal_link_activation_without_leaking_to_the_child() {
+    let activated = Rc::new(RefCell::new(Vec::new()));
+    let forwarded = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = terminal_link_backend(
+        terminal_link_snapshot("https://example.com"),
+        &activated,
+        &forwarded,
+    );
+
+    send_left_mouse(
+        &mut backend,
+        2,
+        MouseKind::Down(MouseButton::Left),
+        KeyMods::CTRL,
+    );
+    send_left_mouse(
+        &mut backend,
+        8,
+        MouseKind::Drag(MouseButton::Left),
+        KeyMods::CTRL,
+    );
+    send_left_mouse(
+        &mut backend,
+        2,
+        MouseKind::Up(MouseButton::Left),
+        KeyMods::CTRL,
+    );
+
+    assert!(activated.borrow().is_empty());
+    assert!(forwarded.borrow().is_empty());
+}
+
 /// End-to-end check of a tmux-style leader model:
 /// `AppCommandsFirst` + `AppCommandsThenTerminal` + the default
 /// `SwallowPrefixReplayCurrent`. The leader prefix is swallowed, a completing key runs the

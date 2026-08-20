@@ -24,6 +24,7 @@ use crate::style::resolve::{
 use crate::style::{Rect, ScrollbarVariant, Span, Style, Theme, ThemeRole, resolve_slot};
 use crate::utils::GridSelection;
 use crate::utils::scrollbar::ScrollbarMetricsCache;
+use crate::utils::spans::restyle_columns;
 #[cfg(feature = "terminal-images")]
 use crate::widgets::TerminalImageCrop;
 use crate::widgets::internal::terminal_content_layout;
@@ -276,6 +277,7 @@ pub(crate) fn render_terminal(
     let theme = node_theme;
     let style = resolve_base_style(theme, node.style);
     let hover_style = resolve_slot(theme, ThemeRole::Hover, &node.hover_style);
+    let link_hover_style = resolve_slot(theme, ThemeRole::Hover, &node.link_hover_style);
     let focus_style = resolve_slot(theme, ThemeRole::Focus, &node.focus_style);
     let focus_content_style =
         resolve_focus_style_defaults(theme, node.focus_content_style, theme.terminal.focus);
@@ -384,17 +386,42 @@ pub(crate) fn render_terminal(
                     }
                     _ => node.lines.get(row).map(Vec::as_slice),
                 };
-                let mut spans: Vec<ratatui::text::Span<'_>> = source
-                    .map(|line| {
-                        apply_selection_to_row(
-                            line,
-                            row,
-                            paint_selection,
-                            selection_style,
-                            content_style,
-                        )
-                    })
-                    .unwrap_or_default();
+                let hovered_source = node.link_hover.as_ref().and_then(|hover| {
+                    let mut row_spans = hover.spans.iter().filter(|span| span.row == row);
+                    let first = row_spans.next()?;
+                    let line = source?;
+                    let mut ranges = vec![(first.start_col..first.end_col, link_hover_style)];
+                    ranges.extend(
+                        row_spans.map(|span| (span.start_col..span.end_col, link_hover_style)),
+                    );
+                    Some(restyle_columns(line, &ranges))
+                });
+                let mut spans: Vec<ratatui::text::Span<'_>> = if let Some(line) =
+                    hovered_source.as_deref()
+                {
+                    apply_selection_to_row(
+                        line,
+                        row,
+                        paint_selection,
+                        selection_style,
+                        content_style,
+                    )
+                    .into_iter()
+                    .map(|span| ratatui::text::Span::styled(span.content.into_owned(), span.style))
+                    .collect()
+                } else {
+                    source
+                        .map(|line| {
+                            apply_selection_to_row(
+                                line,
+                                row,
+                                paint_selection,
+                                selection_style,
+                                content_style,
+                            )
+                        })
+                        .unwrap_or_default()
+                };
 
                 if spans.is_empty() {
                     spans.push(ratatui::text::Span::styled(

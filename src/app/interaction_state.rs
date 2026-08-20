@@ -305,12 +305,23 @@ pub(crate) struct MouseTrackingState {
     pub drag_threshold_exceeded: bool,
     /// Whether the logical click (MouseUp) should be suppressed because a widget handled it during Down.
     pub click_consumed: bool,
+    /// A modified terminal-link press waiting for release on the same destination.
+    pub terminal_link_press: Option<TerminalLinkPress>,
+    /// Terminal currently painting one modifier-hovered link.
+    #[cfg(feature = "terminal")]
+    pub terminal_link_hover_node: Option<NodeId>,
     /// Pending drag source candidate captured on left button down.
     pub pending_drag_source: Option<NodeId>,
     /// Pending or active `MouseRegion` drag callback target.
     pub mouse_region_drag: Option<MouseRegionDragState>,
     /// Pending or active `PanView` drag-to-pan target.
     pub pan_view_drag: Option<PanViewDragState>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TerminalLinkPress {
+    pub node_id: NodeId,
+    pub uri: std::sync::Arc<str>,
 }
 
 impl MouseTrackingState {

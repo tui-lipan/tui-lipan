@@ -1,13 +1,178 @@
 //! Terminal keyboard and scroll-wheel handlers.
 
+use std::sync::Arc;
+
 use crate::callback::KeyHandler;
 use crate::clipboard::{ClipboardConfig, ClipboardPasteContent, ClipboardService, write_osc52};
-use crate::core::event::{KeyCode, KeyEvent};
+use crate::core::event::{KeyCode, KeyEvent, KeyMods, MouseEvent};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::utils::SelectionEnd;
-use crate::widgets::internal::{apply_scroll_action, terminal_node_selection_text};
-use crate::widgets::{ScrollEvent, ScrollMetrics};
+use crate::utils::hints::{HintScan, HintSpan};
+use crate::widgets::internal::{
+    TerminalLinkHover, apply_scroll_action, terminal_mouse_content_rect,
+    terminal_node_selection_text,
+};
+use crate::widgets::{ScrollEvent, ScrollMetrics, TerminalLinkEvent};
 use crate::widgets::{TerminalInputKind, TerminalPasteShortcutBehavior, encode_paste};
+
+/// A link activation resolved from one terminal cell.
+pub(crate) struct TerminalLinkHit {
+    pub node_id: NodeId,
+    pub event: TerminalLinkEvent,
+    pub spans: Arc<[HintSpan]>,
+    pub callback: crate::callback::Callback<TerminalLinkEvent>,
+}
+
+/// Resolve a link press, including modifier and ancestor-capture policy.
+pub(crate) fn modified_link_hit(tree: &NodeTree, mouse: MouseEvent) -> Option<TerminalLinkHit> {
+    let hit = tree.hit_test(mouse.x as i16, mouse.y as i16)?;
+    let NodeKind::Terminal(term) = &tree.node(hit).kind else {
+        return None;
+    };
+    term.on_link_activate.as_ref()?;
+    if !mods_contain(term.link_activation_mods, mouse.mods)
+        || crate::app::input::mouse::ancestor_mouse_region_captures_mods(tree, hit, mouse.mods)
+    {
+        return None;
+    }
+    link_hit_at_node(tree, hit, mouse)
+}
+
+/// Resolve a release against the same terminal that owned the press.
+pub(crate) fn link_hit_at_node(
+    tree: &NodeTree,
+    node_id: NodeId,
+    mouse: MouseEvent,
+) -> Option<TerminalLinkHit> {
+    if tree.hit_test(mouse.x as i16, mouse.y as i16)? != node_id {
+        return None;
+    }
+    let NodeKind::Terminal(term) = &tree.node(node_id).kind else {
+        return None;
+    };
+    let callback = term.on_link_activate.clone()?;
+    let content = terminal_mouse_content_rect(tree, node_id)?;
+    if !content.contains(mouse.x as i16, mouse.y as i16) {
+        return None;
+    }
+    let row = usize::from(mouse.y.saturating_sub(content.y.max(0) as u16));
+    let col = usize::from(mouse.x.saturating_sub(content.x.max(0) as u16));
+    let (uri, spans) = terminal_link_at(term, row, col)?;
+    Some(TerminalLinkHit {
+        node_id,
+        event: TerminalLinkEvent {
+            uri: uri.clone(),
+            row,
+            col,
+        },
+        spans,
+        callback,
+    })
+}
+
+fn terminal_link_at(
+    term: &crate::widgets::internal::TerminalNode,
+    row: usize,
+    col: usize,
+) -> Option<(Arc<str>, Arc<[HintSpan]>)> {
+    if let Some(clicked) = term.hyperlinks.iter().find(|link| link.contains(row, col)) {
+        let mut related = term
+            .hyperlinks
+            .iter()
+            .filter(|link| link.uri == clicked.uri)
+            .collect::<Vec<_>>();
+        related.sort_by_key(|link| (link.row, link.start_col));
+        let clicked_index = related
+            .iter()
+            .position(|link| std::ptr::eq(*link, clicked))?;
+        let mut first = clicked_index;
+        while first > 0 && hyperlink_spans_connect(term, related[first - 1], related[first]) {
+            first -= 1;
+        }
+        let mut last = clicked_index + 1;
+        while last < related.len()
+            && hyperlink_spans_connect(term, related[last - 1], related[last])
+        {
+            last += 1;
+        }
+        let spans = related[first..last]
+            .iter()
+            .map(|link| HintSpan {
+                row: link.row,
+                start_col: link.start_col,
+                end_col: link.end_col,
+            })
+            .collect::<Vec<_>>();
+        return Some((clicked.uri.clone(), spans.into()));
+    }
+
+    HintScan::new()
+        .paths(false)
+        .git_shas(false)
+        .scan_wrapped(&term.text, &term.wrapped_rows)
+        .into_iter()
+        .find(|matched| {
+            matched
+                .spans
+                .iter()
+                .any(|span| span.row == row && (span.start_col..span.end_col).contains(&col))
+        })
+        .map(|matched| (matched.text.into(), matched.spans.into()))
+}
+
+fn hyperlink_spans_connect(
+    term: &crate::widgets::internal::TerminalNode,
+    left: &crate::widgets::TerminalHyperlink,
+    right: &crate::widgets::TerminalHyperlink,
+) -> bool {
+    if left.row == right.row {
+        return left.end_col == right.start_col;
+    }
+    right.row == left.row + 1
+        && left.end_col == term.viewport_cols
+        && right.start_col == 0
+        && term.wrapped_rows.get(left.row).copied().unwrap_or(false)
+}
+
+fn mods_contain(required: KeyMods, actual: KeyMods) -> bool {
+    (!required.ctrl || actual.ctrl)
+        && (!required.alt || actual.alt)
+        && (!required.shift || actual.shift)
+        && (!required.super_key || actual.super_key)
+}
+
+/// Update the one terminal link painted as modifier-hovered.
+pub(crate) fn update_link_hover(
+    tree: &mut NodeTree,
+    previous: Option<NodeId>,
+    mouse: MouseEvent,
+) -> (Option<NodeId>, bool) {
+    let next = modified_link_hit(tree, mouse);
+    let next_id = next.as_ref().map(|hit| hit.node_id);
+    let mut dirty = false;
+
+    if let Some(previous) = previous.filter(|previous| Some(*previous) != next_id)
+        && tree.is_valid(previous)
+        && let NodeKind::Terminal(term) = &mut tree.node_mut(previous).kind
+    {
+        dirty |= term.link_hover.take().is_some();
+    }
+
+    if let Some(hit) = next {
+        let hover = TerminalLinkHover {
+            uri: hit.event.uri,
+            spans: hit.spans,
+        };
+        if let NodeKind::Terminal(term) = &mut tree.node_mut(hit.node_id).kind
+            && term.link_hover.as_ref() != Some(&hover)
+        {
+            term.link_hover = Some(hover);
+            dirty = true;
+        }
+    }
+
+    (next_id, dirty)
+}
 
 /// Handle keyboard input for a focused Terminal node.
 pub(crate) fn handle_key(

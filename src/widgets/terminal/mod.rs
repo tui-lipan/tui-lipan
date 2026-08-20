@@ -24,9 +24,9 @@ pub use buffer::TerminalBuffer;
 pub use copy_mode::{CopyModeAction, CopyModeGrid, TerminalCopyMode};
 pub use events::{
     KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, MouseReportGeometry,
-    TerminalInputEvent, TerminalInputKind, TerminalKeyModes, TerminalPasteShortcutBehavior,
-    encode_paste, focus_sequences, key_event_to_bytes, mouse_event_to_bytes, paste_sequences,
-    terminal_selection_text,
+    TerminalInputEvent, TerminalInputKind, TerminalKeyModes, TerminalLinkEvent,
+    TerminalPasteShortcutBehavior, encode_paste, focus_sequences, key_event_to_bytes,
+    mouse_event_to_bytes, paste_sequences, terminal_selection_text,
 };
 #[cfg(feature = "terminal-images")]
 pub(crate) use graphics::{PLACEHOLDER as KITTY_PLACEHOLDER, diacritic as kitty_diacritic};
@@ -44,8 +44,8 @@ pub use pty::TerminalPtyHandoff;
 pub use pty::{TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent};
 pub use screen::{
     SemanticMark, SemanticMarkKind, TerminalCellSize, TerminalClipboardEvent,
-    TerminalClipboardTarget, TerminalColorPalette, TerminalDecoration, TerminalRenderSnapshot,
-    TerminalScreen, TerminalScreenHandle, TerminalViewport,
+    TerminalClipboardTarget, TerminalColorPalette, TerminalDecoration, TerminalHyperlink,
+    TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle, TerminalViewport,
 };
 #[cfg(feature = "terminal")]
 pub use selection::{
@@ -54,7 +54,7 @@ pub use selection::{
 };
 
 pub(crate) use layout::{measure_terminal, terminal_content_layout, terminal_mouse_content_rect};
-pub(crate) use node::{TerminalNode, apply_terminal_selection_input};
+pub(crate) use node::{TerminalLinkHover, TerminalNode, apply_terminal_selection_input};
 pub(crate) use reconcile::reconcile_terminal;
 
 #[cfg(feature = "terminal")]
@@ -80,6 +80,7 @@ pub(crate) fn terminal_node_selection_text(
 
 use crate::callback::{Callback, KeyHandler};
 use crate::core::element::{Element, ElementKind};
+use crate::core::event::KeyMods;
 use crate::style::{
     BorderStyle, CaretShape, Color, Length, Padding, ScrollbarConfig, ScrollbarVariant, Span,
     Style, StyleSlot,
@@ -99,6 +100,8 @@ impl Default for Terminal {
             caret_color: None,
             color_lines: None,
             color_cache_key: 0,
+            wrapped_rows: Arc::from([]),
+            hyperlinks: Arc::from([]),
             screen: None,
             decorations: Arc::from([] as [TerminalDecoration; 0]),
             scrollback_offset: 0,
@@ -114,6 +117,9 @@ impl Default for Terminal {
             on_selection: None,
             on_resize: None,
             on_mouse_forward: None,
+            link_activation_mods: KeyMods::CTRL,
+            link_hover_style: StyleSlot::Replace(Style::new().underline()),
+            on_link_activate: None,
             scroll_wheel: true,
             on_scroll: None,
             on_scroll_to: None,
@@ -243,6 +249,8 @@ impl Terminal {
         self.cursor_blinking = snapshot.cursor_blinking;
         self.color_lines = Some(snapshot.color_lines);
         self.color_cache_key = snapshot.sequence;
+        self.wrapped_rows = snapshot.wrapped_rows;
+        self.hyperlinks = snapshot.hyperlinks;
         self.scrollback_offset = snapshot.scrollback_offset;
         self.total_scrollback_rows = snapshot.total_scrollback_rows;
         self.mouse_mode = snapshot.mouse_mode;
@@ -447,6 +455,47 @@ impl Terminal {
     /// Set callback to forward mouse bytes to PTY.
     pub fn on_mouse_forward(mut self, cb: Callback<Vec<u8>>) -> Self {
         self.on_mouse_forward = Some(cb);
+        self
+    }
+
+    /// Require these modifiers to activate a link with the left mouse button.
+    ///
+    /// The default is [`KeyMods::CTRL`]. Extra held modifiers are allowed.
+    pub fn link_activation_mods(mut self, mods: KeyMods) -> Self {
+        self.link_activation_mods = mods;
+        self
+    }
+
+    /// Set the style applied to a link under a pointer carrying the activation modifiers.
+    pub fn link_hover_style(mut self, style: Style) -> Self {
+        self.link_hover_style = StyleSlot::Replace(style);
+        self
+    }
+
+    /// Extend the active theme's hover style for an activatable link.
+    pub fn extend_link_hover_style(mut self, style: Style) -> Self {
+        self.link_hover_style = StyleSlot::Extend(style);
+        self
+    }
+
+    /// Inherit an activatable link's hover style from the active theme.
+    pub fn inherit_link_hover_style(mut self) -> Self {
+        self.link_hover_style = StyleSlot::Inherit;
+        self
+    }
+
+    /// Set the link-hover style slot directly for composite forwarding.
+    pub fn link_hover_style_slot(mut self, slot: StyleSlot) -> Self {
+        self.link_hover_style = slot;
+        self
+    }
+
+    /// Set the callback for modified clicks on explicit OSC 8 links or plain-text URLs.
+    ///
+    /// A successful activation consumes the complete press/release gesture before terminal text
+    /// selection or PTY mouse forwarding. Clicking a cell without a link keeps ordinary behavior.
+    pub fn on_link_activate(mut self, cb: Callback<TerminalLinkEvent>) -> Self {
+        self.on_link_activate = Some(cb);
         self
     }
 

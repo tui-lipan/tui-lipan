@@ -8,7 +8,9 @@ use std::sync::Arc;
 use alacritty_terminal::event::{Event as TermEvent, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, GridCell, Scroll};
 use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::cell::{Cell as TermCell, Flags as CellFlags};
+use alacritty_terminal::term::cell::{
+    Cell as TermCell, Flags as CellFlags, Hyperlink as TermHyperlink,
+};
 use alacritty_terminal::term::{
     self, ClipboardType as TermClipboardType, Config as TermConfig, Term, TermMode,
 };
@@ -563,6 +565,41 @@ pub struct TerminalRenderSnapshot {
     /// the only record of where a break was the terminal's rather than the program's. Indexed by
     /// visible row; may be shorter than the viewport, in which case the missing rows do not wrap.
     pub wrapped_rows: Arc<[bool]>,
+    /// Explicit OSC 8 hyperlink spans in the visible viewport.
+    ///
+    /// Each entry covers one contiguous run on one row. A link crossing a soft wrap therefore has
+    /// one entry per row, all carrying the same URI.
+    pub hyperlinks: Arc<[TerminalHyperlink]>,
+}
+
+/// One visible row span carrying an explicit OSC 8 hyperlink.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TerminalHyperlink {
+    /// Link destination supplied by the child.
+    pub uri: Arc<str>,
+    /// Zero-based visible viewport row.
+    pub row: usize,
+    /// First linked display column, inclusive.
+    pub start_col: usize,
+    /// Last linked display column, exclusive.
+    pub end_col: usize,
+}
+
+impl TerminalHyperlink {
+    /// Create one explicit hyperlink span.
+    pub fn new(uri: impl Into<Arc<str>>, row: usize, cols: std::ops::Range<usize>) -> Self {
+        Self {
+            uri: uri.into(),
+            row,
+            start_col: cols.start,
+            end_col: cols.end,
+        }
+    }
+
+    /// Return whether this span contains a visible viewport cell.
+    pub fn contains(&self, row: usize, col: usize) -> bool {
+        self.row == row && (self.start_col..self.end_col).contains(&col)
+    }
 }
 
 /// A display-column decoration applied to a terminal render snapshot.
@@ -651,6 +688,7 @@ impl Default for TerminalRenderSnapshot {
             #[cfg(feature = "terminal-images")]
             images: Arc::from([]),
             wrapped_rows: Arc::from([]),
+            hyperlinks: Arc::from([]),
         }
     }
 }
@@ -703,6 +741,15 @@ impl TerminalRenderSnapshot {
         self
     }
 
+    /// Attach explicit OSC 8 hyperlinks to an externally built snapshot.
+    ///
+    /// External snapshot transports opt into this metadata just as they do wrap flags. Entries
+    /// outside the visible viewport are harmless but can never be activated by the widget.
+    pub fn with_hyperlinks(mut self, hyperlinks: impl Into<Arc<[TerminalHyperlink]>>) -> Self {
+        self.hyperlinks = hyperlinks.into();
+        self
+    }
+
     /// Attach scrollback lineage counters to an externally built snapshot.
     pub fn with_scrollback_lineage(mut self, evicted_lines: u64, history_epoch: u64) -> Self {
         self.evicted_lines = evicted_lines;
@@ -745,6 +792,7 @@ impl TerminalRenderSnapshot {
             #[cfg(feature = "terminal-images")]
             images: Arc::from([]),
             wrapped_rows: Arc::from([]),
+            hyperlinks: Arc::from([]),
         }
     }
 
@@ -1437,9 +1485,9 @@ impl TerminalScreen {
     /// it goes through the normal VTE parser and future parser fixes naturally
     /// apply to exported state.
     ///
-    /// Non-goals: tab stops, custom scrolling regions, cursor style, kitty
-    /// keyboard stack depth (the effective flags are preserved), hyperlinks,
-    /// and the current display offset. The receiver lands on the live view.
+    /// Non-goals: tab stops, custom scrolling regions, cursor style, exact Kitty
+    /// keyboard stack depth (the effective flags are preserved), and the current
+    /// display offset. The receiver lands on the live view.
     pub fn export_replay_bytes(&mut self) -> Vec<u8> {
         let dirty = self.dirty;
         let cache = self.cache.clone();
@@ -1594,7 +1642,7 @@ impl TerminalScreen {
             let cursor_shape = caret_shape_from_term(cursor_style.shape);
             let cursor_blinking = cursor_style.blinking;
 
-            let mut visible = renderable_content_lines(
+            let (mut visible, hyperlinks) = renderable_content_lines(
                 display_iter,
                 display_offset,
                 self.rows,
@@ -1638,6 +1686,7 @@ impl TerminalScreen {
                 #[cfg(feature = "terminal-images")]
                 images: images.into(),
                 wrapped_rows: wrapped_rows.into(),
+                hyperlinks: hyperlinks.into(),
             };
             self.dirty = false;
         }
@@ -2003,6 +2052,7 @@ impl TerminalScreen {
         // RIS (primary) or DECSET 1049 (alt) already blanks the target grid.
         bytes.extend_from_slice(b"\x1b[0m\x1b[H");
         let mut style = ReplayStyle::default();
+        let mut hyperlink = None;
 
         for line in top.0..=bottom.0 {
             let line = Line(line);
@@ -2013,7 +2063,10 @@ impl TerminalScreen {
                 grid.columns()
             } else {
                 (0..grid.columns())
-                    .rfind(|col| !grid[line][Column(*col)].is_empty())
+                    .rfind(|col| {
+                        let cell = &grid[line][Column(*col)];
+                        !cell.is_empty() || cell.hyperlink().is_some()
+                    })
                     .map_or(0, |col| col + 1)
             };
             for col in 0..end_col {
@@ -2023,6 +2076,11 @@ impl TerminalScreen {
                     .intersects(CellFlags::WIDE_CHAR_SPACER | CellFlags::LEADING_WIDE_CHAR_SPACER)
                 {
                     continue;
+                }
+                let next_hyperlink = cell.hyperlink();
+                if next_hyperlink != hyperlink {
+                    push_replay_hyperlink(&mut bytes, next_hyperlink.as_ref());
+                    hyperlink = next_hyperlink;
                 }
                 let next_style = ReplayStyle::from(cell);
                 if next_style != style {
@@ -2039,6 +2097,9 @@ impl TerminalScreen {
                 bytes.extend_from_slice(b"\r\n");
             }
         }
+        if hyperlink.is_some() {
+            push_replay_hyperlink(&mut bytes, None);
+        }
         bytes.extend_from_slice(b"\x1b[0m");
         bytes
     }
@@ -2049,6 +2110,7 @@ impl TerminalScreen {
         let col = (cursor.point.column.0 + 1).min(self.cols as usize);
         bytes.extend_from_slice(format!("\x1b[{row};{col}H").as_bytes());
         ReplayStyle::from(&cursor.template).push_sgr(bytes);
+        push_replay_hyperlink(bytes, cursor.template.hyperlink().as_ref());
     }
 
     fn push_title(&self, bytes: &mut Vec<u8>) {
@@ -2180,6 +2242,14 @@ fn push_cell_text(bytes: &mut Vec<u8>, cell: &TermCell) {
             bytes.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
         }
     }
+}
+
+fn push_replay_hyperlink(bytes: &mut Vec<u8>, hyperlink: Option<&TermHyperlink>) {
+    bytes.extend_from_slice(b"\x1b]8;;");
+    if let Some(hyperlink) = hyperlink {
+        bytes.extend_from_slice(hyperlink.uri().as_bytes());
+    }
+    bytes.extend_from_slice(b"\x1b\\");
 }
 
 fn push_color_sgr(params: &mut Vec<String>, color: TermColor, foreground: bool) {
@@ -2385,8 +2455,9 @@ fn renderable_content_lines(
     rows: u16,
     cols: u16,
     palette: TerminalColorPalette,
-) -> Vec<Vec<Span>> {
+) -> (Vec<Vec<Span>>, Vec<TerminalHyperlink>) {
     let mut lines: Vec<Vec<Span>> = vec![Vec::new(); rows as usize];
+    let mut hyperlinks: Vec<TerminalHyperlink> = Vec::new();
     let mut current_row: Option<usize> = None;
     let mut run_style: Option<Style> = None;
     let mut run_text = String::new();
@@ -2423,6 +2494,18 @@ fn renderable_content_lines(
         }
 
         let cell = indexed.cell;
+        if let Some(link) = cell.hyperlink() {
+            let col = point.column.0;
+            if let Some(previous) = hyperlinks.last_mut()
+                && previous.row == row
+                && previous.end_col == col
+                && previous.uri.as_ref() == link.uri()
+            {
+                previous.end_col = col + 1;
+            } else {
+                hyperlinks.push(TerminalHyperlink::new(link.uri(), row, col..col + 1));
+            }
+        }
         if cell
             .flags
             .intersects(CellFlags::WIDE_CHAR_SPACER | CellFlags::LEADING_WIDE_CHAR_SPACER)
@@ -2450,7 +2533,7 @@ fn renderable_content_lines(
         }
     }
 
-    lines
+    (lines, hyperlinks)
 }
 
 fn push_cell_text_str(out: &mut String, cell: &TermCell) {
@@ -2757,6 +2840,7 @@ mod tests {
         );
         assert_eq!(target_snapshot.mouse_mode, source_snapshot.mouse_mode);
         assert_eq!(target_snapshot.key_modes, source_snapshot.key_modes);
+        assert_eq!(target_snapshot.hyperlinks, source_snapshot.hyperlinks);
         assert_eq!(target.title(), source.title());
         target
     }
@@ -2779,6 +2863,10 @@ mod tests {
             );
             assert_eq!(
                 target_snapshot.color_lines, source_snapshot.color_lines,
+                "offset {offset}"
+            );
+            assert_eq!(
+                target_snapshot.hyperlinks, source_snapshot.hyperlinks,
                 "offset {offset}"
             );
         }
@@ -2981,6 +3069,25 @@ mod tests {
             snapshot.wrapped_rows.as_ref(),
             &[true, false, false, false][..]
         );
+    }
+
+    #[test]
+    fn render_snapshot_reports_explicit_hyperlinks_per_visible_row() {
+        let mut screen = TerminalScreen::new(3, 6, 10);
+        screen.process_bytes(
+            b"\x1b]8;id=docs;https://example.com/docs\x1b\\abcdefgh\x1b]8;;\x1b\\ plain",
+        );
+        let snapshot = screen.render_snapshot();
+
+        assert_eq!(
+            snapshot.hyperlinks.as_ref(),
+            &[
+                TerminalHyperlink::new("https://example.com/docs", 0, 0..6),
+                TerminalHyperlink::new("https://example.com/docs", 1, 0..2),
+            ]
+        );
+        assert!(snapshot.hyperlinks[0].contains(0, 5));
+        assert!(!snapshot.hyperlinks[0].contains(1, 0));
     }
 
     #[test]
@@ -3325,6 +3432,27 @@ mod tests {
 
         let mut target = assert_replay_round_trips(&mut screen);
         assert_scrollback_views_round_trip(&mut screen, &mut target);
+    }
+
+    #[test]
+    fn replay_round_trips_hyperlink_cells_and_active_template() {
+        let mut source = TerminalScreen::new(2, 24, 10);
+        source.process_bytes(b"\x1b]8;;https://example.com/docs\x1b\\docs");
+
+        let mut target = assert_replay_round_trips(&mut source);
+        assert_eq!(
+            target.render_snapshot().hyperlinks.as_ref(),
+            &[TerminalHyperlink::new("https://example.com/docs", 0, 0..4)]
+        );
+
+        // The source left OSC 8 open. Replay restores the cursor template too, so later bytes sent
+        // to source and target remain linked without another opening sequence.
+        source.process_bytes(b" next");
+        target.process_bytes(b" next");
+        assert_eq!(
+            target.render_snapshot().hyperlinks,
+            source.render_snapshot().hyperlinks
+        );
     }
 
     #[test]

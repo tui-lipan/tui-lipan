@@ -30,10 +30,11 @@ use crate::Command;
 use crate::callback::{Callback, CommandLink};
 use crate::core::component::{Component, Context, Update};
 use crate::core::element::Element;
-use crate::style::Length;
+use crate::core::event::KeyMods;
+use crate::style::{Length, Style, StyleSlot};
 use crate::widgets::terminal::{
-    Terminal, TerminalClipboardTarget, TerminalInputEvent, TerminalPty, TerminalPtyConfig,
-    TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen, TerminalViewport,
+    Terminal, TerminalClipboardTarget, TerminalInputEvent, TerminalLinkEvent, TerminalPty,
+    TerminalPtyConfig, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen, TerminalViewport,
 };
 use crate::widgets::{Text, VStack};
 
@@ -73,6 +74,14 @@ pub struct ManagedTerminalProps {
     /// Enable scroll wheel for scrollback.
     /// Default: `true`.
     pub scroll_wheel: bool,
+    /// Modifiers required to activate explicit OSC 8 links and detected plain-text URLs.
+    /// Default: [`KeyMods::CTRL`]. Extra held modifiers are allowed.
+    pub link_activation_mods: KeyMods,
+    /// Style applied to a link under a pointer carrying the activation modifiers.
+    /// Default: underline.
+    pub link_hover_style: StyleSlot,
+    /// Callback fired when a modified left click activates a link.
+    pub on_link_activate: Option<Callback<TerminalLinkEvent>>,
     /// Delay before applying a burst of terminal viewport resizes.
     /// Default: `16ms`. Use [`std::time::Duration::ZERO`] to apply every resize immediately.
     /// Interval used to coalesce bursts of PTY resize requests; zero applies each request.
@@ -107,6 +116,9 @@ impl Default for ManagedTerminalProps {
             placeholder: Some(Arc::from("Starting terminal...")),
             forward_mouse: true,
             scroll_wheel: true,
+            link_activation_mods: KeyMods::CTRL,
+            link_hover_style: StyleSlot::Replace(Style::new().underline()),
+            on_link_activate: None,
             resize_debounce: Duration::from_millis(16),
             style: crate::style::Style::default(),
             focusable: true,
@@ -187,6 +199,44 @@ impl ManagedTerminal {
     /// Set whether scroll wheel controls scrollback.
     pub fn scroll_wheel(mut self, enabled: bool) -> Self {
         self.props.scroll_wheel = enabled;
+        self
+    }
+
+    /// Require these modifiers to activate a link with the left mouse button.
+    ///
+    /// The default is [`KeyMods::CTRL`]. Extra held modifiers are allowed.
+    pub fn link_activation_mods(mut self, mods: KeyMods) -> Self {
+        self.props.link_activation_mods = mods;
+        self
+    }
+
+    /// Set the style applied to a link under a pointer carrying the activation modifiers.
+    pub fn link_hover_style(mut self, style: Style) -> Self {
+        self.props.link_hover_style = StyleSlot::Replace(style);
+        self
+    }
+
+    /// Extend the active theme's hover style for an activatable link.
+    pub fn extend_link_hover_style(mut self, style: Style) -> Self {
+        self.props.link_hover_style = StyleSlot::Extend(style);
+        self
+    }
+
+    /// Inherit an activatable link's hover style from the active theme.
+    pub fn inherit_link_hover_style(mut self) -> Self {
+        self.props.link_hover_style = StyleSlot::Inherit;
+        self
+    }
+
+    /// Set the link-hover style slot directly for composite forwarding.
+    pub fn link_hover_style_slot(mut self, slot: StyleSlot) -> Self {
+        self.props.link_hover_style = slot;
+        self
+    }
+
+    /// Set the callback for modified clicks on explicit OSC 8 links or plain-text URLs.
+    pub fn on_link_activate(mut self, callback: Callback<TerminalLinkEvent>) -> Self {
+        self.props.on_link_activate = Some(callback);
         self
     }
 
@@ -497,6 +547,8 @@ impl Component for ManagedTerminal {
             .width(ctx.props.width)
             .height(ctx.props.height)
             .scroll_wheel(ctx.props.scroll_wheel)
+            .link_activation_mods(ctx.props.link_activation_mods)
+            .link_hover_style_slot(ctx.props.link_hover_style)
             .on_input(ctx.link().callback(ManagedTerminalMsg::TerminalInput))
             .on_resize(ctx.link().callback(|viewport: TerminalViewport| {
                 ManagedTerminalMsg::Resize {
@@ -511,6 +563,9 @@ impl Component for ManagedTerminal {
         }
         if let Some(on_blur) = ctx.props.on_blur.clone() {
             terminal = terminal.on_blur(on_blur);
+        }
+        if let Some(on_link_activate) = ctx.props.on_link_activate.clone() {
+            terminal = terminal.on_link_activate(on_link_activate);
         }
 
         if ctx.props.forward_mouse {
@@ -585,6 +640,12 @@ mod tests {
         assert!(props.auto_start);
         assert!(props.forward_mouse);
         assert!(props.scroll_wheel);
+        assert_eq!(props.link_activation_mods, KeyMods::CTRL);
+        assert_eq!(
+            props.link_hover_style,
+            StyleSlot::Replace(Style::new().underline())
+        );
+        assert!(props.on_link_activate.is_none());
         assert_eq!(props.resize_debounce, Duration::from_millis(16));
         assert!(props.focusable);
     }
@@ -596,6 +657,7 @@ mod tests {
             .initial_size(80, 30)
             .auto_start(false)
             .forward_mouse(false)
+            .link_activation_mods(KeyMods::ALT)
             .resize_debounce(Duration::ZERO);
 
         assert_eq!(terminal.props.scrollback, 5000);
@@ -603,6 +665,7 @@ mod tests {
         assert_eq!(terminal.props.initial_rows, 30);
         assert!(!terminal.props.auto_start);
         assert!(!terminal.props.forward_mouse);
+        assert_eq!(terminal.props.link_activation_mods, KeyMods::ALT);
         assert_eq!(terminal.props.resize_debounce, Duration::ZERO);
     }
 

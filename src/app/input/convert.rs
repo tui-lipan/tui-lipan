@@ -8,14 +8,7 @@ pub(crate) fn to_key_event(k: crossterm::event::KeyEvent) -> Option<KeyEvent> {
         return None;
     }
 
-    let mods = KeyMods {
-        ctrl: k
-            .modifiers
-            .contains(crossterm::event::KeyModifiers::CONTROL),
-        alt: k.modifiers.contains(crossterm::event::KeyModifiers::ALT),
-        shift: k.modifiers.contains(crossterm::event::KeyModifiers::SHIFT),
-        super_key: k.modifiers.contains(crossterm::event::KeyModifiers::SUPER),
-    };
+    let mods = to_key_mods(k.modifiers);
 
     let code = match k.code {
         crossterm::event::KeyCode::Char(c) => KeyCode::Char(c),
@@ -41,15 +34,41 @@ pub(crate) fn to_key_event(k: crossterm::event::KeyEvent) -> Option<KeyEvent> {
     Some(KeyEvent { code, mods })
 }
 
+#[cfg(feature = "terminal")]
+pub(crate) fn modifier_key_state(k: crossterm::event::KeyEvent) -> Option<KeyMods> {
+    use crossterm::event::{KeyCode as CKeyCode, KeyEventKind, ModifierKeyCode};
+
+    let mut mods = to_key_mods(k.modifiers);
+    let active = !matches!(k.kind, KeyEventKind::Release);
+    match k.code {
+        CKeyCode::Modifier(ModifierKeyCode::LeftControl | ModifierKeyCode::RightControl) => {
+            mods.ctrl = active;
+        }
+        CKeyCode::Modifier(ModifierKeyCode::LeftAlt | ModifierKeyCode::RightAlt) => {
+            mods.alt = active;
+        }
+        CKeyCode::Modifier(ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift) => {
+            mods.shift = active;
+        }
+        CKeyCode::Modifier(ModifierKeyCode::LeftSuper | ModifierKeyCode::RightSuper) => {
+            mods.super_key = active;
+        }
+        _ => return None,
+    }
+    Some(mods)
+}
+
+fn to_key_mods(modifiers: crossterm::event::KeyModifiers) -> KeyMods {
+    KeyMods {
+        ctrl: modifiers.contains(crossterm::event::KeyModifiers::CONTROL),
+        alt: modifiers.contains(crossterm::event::KeyModifiers::ALT),
+        shift: modifiers.contains(crossterm::event::KeyModifiers::SHIFT),
+        super_key: modifiers.contains(crossterm::event::KeyModifiers::SUPER),
+    }
+}
+
 pub(crate) fn to_mouse_event(m: crossterm::event::MouseEvent) -> Option<MouseEvent> {
-    let mods = KeyMods {
-        ctrl: m
-            .modifiers
-            .contains(crossterm::event::KeyModifiers::CONTROL),
-        alt: m.modifiers.contains(crossterm::event::KeyModifiers::ALT),
-        shift: m.modifiers.contains(crossterm::event::KeyModifiers::SHIFT),
-        super_key: m.modifiers.contains(crossterm::event::KeyModifiers::SUPER),
-    };
+    let mods = to_key_mods(m.modifiers);
 
     let kind = match m.kind {
         crossterm::event::MouseEventKind::Down(btn) => MouseKind::Down(to_mouse_button(btn)?),
@@ -135,6 +154,36 @@ mod tests {
         assert!(translated.mods.shift);
         assert!(!translated.mods.alt);
         assert!(!translated.mods.super_key);
+    }
+
+    #[cfg(feature = "terminal")]
+    #[test]
+    fn modifier_key_events_report_the_effective_held_state() {
+        use crossterm::event::{KeyEventKind, KeyEventState, ModifierKeyCode};
+
+        let press = CrosstermKeyEvent::new_with_kind_and_state(
+            CrosstermKeyCode::Modifier(ModifierKeyCode::LeftControl),
+            KeyModifiers::SHIFT,
+            KeyEventKind::Press,
+            KeyEventState::NONE,
+        );
+        assert_eq!(
+            modifier_key_state(press),
+            Some(KeyMods {
+                ctrl: true,
+                shift: true,
+                ..KeyMods::NONE
+            })
+        );
+
+        let release = CrosstermKeyEvent::new_with_kind_and_state(
+            CrosstermKeyCode::Modifier(ModifierKeyCode::LeftControl),
+            // Crossterm includes the modifier represented by `KeyCode::Modifier` even on release.
+            KeyModifiers::CONTROL,
+            KeyEventKind::Release,
+            KeyEventState::NONE,
+        );
+        assert_eq!(modifier_key_state(release), Some(KeyMods::NONE));
     }
 
     #[test]

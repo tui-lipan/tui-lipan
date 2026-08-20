@@ -7,6 +7,8 @@ use crate::backend::ratatui_backend::terminal_handoff::{
 };
 use crate::core::component::Component;
 #[cfg(feature = "terminal")]
+use crate::core::event::{KeyMods, MouseEvent, MouseKind};
+#[cfg(feature = "terminal")]
 use crate::core::node::{NodeId, NodeKind};
 #[cfg(feature = "terminal")]
 use crate::widgets::{TerminalInputEvent, TerminalInputKind, focus_sequences};
@@ -95,6 +97,27 @@ impl<C: Component> AppRunner<C> {
         self.core.tree.has_hoverables()
             || self.core.tree.has_mouse_move_handlers()
             || self.core.tree.has_terminal_any_event()
+            || self.core.tree.has_terminal_link_hover()
+    }
+
+    #[cfg(feature = "terminal")]
+    pub(super) fn refresh_terminal_link_hover_at_pointer(&mut self, mods: KeyMods) -> bool {
+        let Some((x, y)) = self.mouse.last_mouse.get() else {
+            return false;
+        };
+        let previous = self.mouse.terminal_link_hover_node;
+        let (next, dirty) = crate::app::input::handlers::terminal::update_link_hover(
+            &mut self.core.tree,
+            previous,
+            MouseEvent {
+                x,
+                y,
+                kind: MouseKind::Moved,
+                mods,
+            },
+        );
+        self.mouse.terminal_link_hover_node = next;
+        dirty
     }
 
     pub(super) fn sync_mouse_motion_capture(

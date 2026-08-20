@@ -29,6 +29,17 @@ pub struct TerminalInputEvent {
     pub bytes: Arc<[u8]>,
 }
 
+/// Event emitted when the terminal activates a link under a modified click.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalLinkEvent {
+    /// Explicit OSC 8 destination or detected plain-text URL.
+    pub uri: Arc<str>,
+    /// Zero-based visible viewport row that was activated.
+    pub row: usize,
+    /// Zero-based display column that was activated.
+    pub col: usize,
+}
+
 /// Extract a terminal selection from styled rendered lines.
 ///
 /// Terminal selection columns are **display columns**, not character indices. Wide characters and

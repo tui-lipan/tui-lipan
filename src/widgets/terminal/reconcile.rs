@@ -31,6 +31,18 @@ pub(crate) fn reconcile_terminal(
             .clone()
             .unwrap_or_else(|| terminal_lines(terminal.content.as_ref())),
     };
+    let text = live.as_ref().map_or_else(
+        || terminal.content.clone(),
+        |snapshot| snapshot.text.clone(),
+    );
+    let wrapped_rows = live.as_ref().map_or_else(
+        || terminal.wrapped_rows.clone(),
+        |snapshot| snapshot.wrapped_rows.clone(),
+    );
+    let hyperlinks = live.as_ref().map_or_else(
+        || terminal.hyperlinks.clone(),
+        |snapshot| snapshot.hyperlinks.clone(),
+    );
     let total_scrollback_rows = live
         .as_ref()
         .map_or(terminal.total_scrollback_rows, |snapshot| {
@@ -83,6 +95,7 @@ pub(crate) fn reconcile_terminal(
         old_lineage,
         old_viewport_rows,
         old_viewport_cols,
+        old_link_hover,
     ) = if let NodeKind::Terminal(old) = &tree.node(id).kind {
         (
             old.scroll_override,
@@ -91,6 +104,16 @@ pub(crate) fn reconcile_terminal(
             old.lineage,
             old.viewport_rows,
             old.viewport_cols,
+            if terminal.on_link_activate.is_some()
+                && old.link_activation_mods == terminal.link_activation_mods
+                && old.text == text
+                && old.wrapped_rows == wrapped_rows
+                && old.hyperlinks == hyperlinks
+            {
+                old.link_hover.clone()
+            } else {
+                None
+            },
         )
     } else {
         (
@@ -100,6 +123,7 @@ pub(crate) fn reconcile_terminal(
             ScrollbackLineage::default(),
             0,
             0,
+            None,
         )
     };
 
@@ -140,7 +164,11 @@ pub(crate) fn reconcile_terminal(
     node.rect = rect;
     node.children.clear();
     node.kind = NodeKind::Terminal(TerminalNode {
+        text,
         lines,
+        wrapped_rows,
+        hyperlinks,
+        link_hover: old_link_hover,
         cursor_row: live.as_ref().map_or(terminal.cursor_row, |s| s.cursor_row),
         cursor_col: live.as_ref().map_or(terminal.cursor_col, |s| s.cursor_col),
         // A live screen reports what the child program wants; `show_cursor` is what the app allows.
@@ -171,6 +199,9 @@ pub(crate) fn reconcile_terminal(
         paste_shortcut_behavior: terminal.paste_shortcut_behavior,
         on_selection: terminal.on_selection.clone(),
         on_mouse_forward: terminal.on_mouse_forward.clone(),
+        link_activation_mods: terminal.link_activation_mods,
+        link_hover_style: terminal.link_hover_style,
+        on_link_activate: terminal.on_link_activate.clone(),
         style: terminal.style,
         hover_style: terminal.hover_style,
         focus_style: terminal.focus_style,
