@@ -13,6 +13,12 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Terminal::on_link_activate` and `ManagedTerminal::on_link_activate` intercept modified
+  left-clicks on explicit OSC 8 links or detected `http` / `https` / `mailto` text before selection
+  and PTY mouse forwarding. Ctrl is the default through `link_activation_mods`; non-link clicks
+  retain their previous behavior. `TerminalRenderSnapshot::hyperlinks` preserves visible OSC 8
+  spans for snapshot-backed widgets and external transports, and replay exports now retain the
+  links and active hyperlink template for newly attached clients.
 - `TerminalRenderSnapshot::wrapped_rows` reports which visible rows the terminal soft-wrapped into
   the row below, and `HintScan::scan_wrapped(text, wrapped_rows)` rejoins those rows before
   scanning. A URL or path longer than the terminal is wide is one `HintMatch` covering one

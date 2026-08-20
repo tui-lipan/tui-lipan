@@ -1,4 +1,5 @@
 use crate::callback::{Callback, KeyHandler};
+use crate::core::event::KeyMods;
 use crate::style::{
     BorderStyle, CaretShape, Color, Length, Padding, ScrollbarVariant, Span, Style, StyleSlot,
 };
@@ -6,11 +7,14 @@ use crate::widgets::ScrollEvent;
 use std::sync::Arc;
 
 use super::events::{
-    MouseModeState, TerminalInputEvent, TerminalKeyModes, TerminalPasteShortcutBehavior,
+    MouseModeState, TerminalInputEvent, TerminalKeyModes, TerminalLinkEvent,
+    TerminalPasteShortcutBehavior,
 };
 #[cfg(feature = "terminal-images")]
 use super::graphics::TerminalImagePlacement;
-use super::screen::{TerminalDecoration, TerminalScreenHandle, TerminalViewport};
+use super::screen::{
+    TerminalDecoration, TerminalHyperlink, TerminalScreenHandle, TerminalViewport,
+};
 use super::selection::{TerminalSelection, TerminalSelectionEvent};
 
 /// Terminal-like widget backed by a read-only `TextArea`.
@@ -25,6 +29,8 @@ pub struct Terminal {
     pub(crate) caret_color: Option<Color>,
     pub(crate) color_lines: Option<Arc<[Vec<Span>]>>,
     pub(crate) color_cache_key: u64,
+    pub(crate) wrapped_rows: Arc<[bool]>,
+    pub(crate) hyperlinks: Arc<[TerminalHyperlink]>,
     /// Set by [`Terminal::screen`](super::Terminal::screen): the widget reads this screen itself
     /// instead of being handed a snapshot, so output can repaint without a rebuild.
     pub(crate) screen: Option<TerminalScreenHandle>,
@@ -46,6 +52,8 @@ pub struct Terminal {
     pub(crate) on_selection: Option<Callback<TerminalSelectionEvent>>,
     pub(crate) on_resize: Option<Callback<TerminalViewport>>,
     pub(crate) on_mouse_forward: Option<Callback<Vec<u8>>>,
+    pub(crate) link_activation_mods: KeyMods,
+    pub(crate) on_link_activate: Option<Callback<TerminalLinkEvent>>,
     pub(crate) scroll_wheel: bool,
     pub(crate) on_scroll: Option<Callback<ScrollEvent>>,
     pub(crate) on_scroll_to: Option<Callback<usize>>,

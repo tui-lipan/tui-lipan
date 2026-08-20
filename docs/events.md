@@ -356,6 +356,21 @@ pub struct HyperlinkEvent {
 }
 ```
 
+### `TerminalLinkEvent`
+
+Emitted by: `Terminal::on_link_activate`, `ManagedTerminal::on_link_activate`
+
+```rust
+pub struct TerminalLinkEvent {
+    pub uri: Arc<str>, // Explicit OSC 8 destination or detected plain-text URL
+    pub row: usize,    // Visible viewport row
+    pub col: usize,    // Display column
+}
+```
+
+The callback is opt-in and defaults to Ctrl+left-click through
+`link_activation_mods(KeyMods::CTRL)`. The application owns URI policy and opening.
+
 ### `MouseMoveEvent`
 
 Emitted by: `MouseRegion::on_mouse_move`

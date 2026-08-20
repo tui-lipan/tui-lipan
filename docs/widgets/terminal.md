@@ -20,6 +20,8 @@ The recommended starting point: a complete PTY terminal with automatic lifecycle
 | `placeholder` | `Option<Arc<str>>` | Text shown before PTY is ready |
 | `forward_mouse` | `bool` | Forward mouse events to PTY (default: true) |
 | `scroll_wheel` | `bool` | Mouse wheel for scrollback (default: true) |
+| `link_activation_mods` | `KeyMods` | Modifiers required for link activation (default: `KeyMods::CTRL`; extras allowed) |
+| `on_link_activate` | `Callback<TerminalLinkEvent>` | Modified click on an OSC 8 link or detected URL |
 | `resize_debounce` | `Duration` | Trailing-edge PTY/screen resize delay (default: 16ms; zero is immediate) |
 | `style` | `Style` | Terminal content style |
 | `focusable` | `bool` | Accept focus (default: true) |
@@ -108,6 +110,8 @@ The low-level terminal viewport widget. Use when you need custom PTY handling, m
 | `on_resize` | `Callback<TerminalViewport>` | Viewport size changed; emitted synchronously during reconciliation |
 | `on_scroll_to` | `Callback<usize>` | Scrollback offset changed |
 | `on_mouse_forward` | `Callback<Vec<u8>>` | Mouse event bytes for PTY |
+| `link_activation_mods` | `KeyMods` | Modifiers required for link activation (default: `KeyMods::CTRL`; extras allowed) |
+| `on_link_activate` | `Callback<TerminalLinkEvent>` | Modified click on an OSC 8 link or detected URL |
 | `on_selection` | `Callback<TerminalSelectionEvent>` | Selection and extracted text changed |
 | `on_key` | `KeyHandler` | Low-level key handler |
 
@@ -164,6 +168,32 @@ over a doctored snapshot can; use `decorations` to overlay a live screen instead
 Cursor visibility is the intersection of both sides: the child program's request from the screen,
 ANDed with `show_cursor`. A pane that has exited, or is wearing hint labels, sets `show_cursor(false)`
 and shows no caret regardless of what the child asked for.
+
+### Link activation
+
+Install `on_link_activate` to opt into terminal-style Ctrl-click links:
+
+```rust
+Terminal::new()
+    .screen(TerminalScreenHandle::new(screen))
+    .on_link_activate(ctx.link().callback(Msg::OpenLink))
+```
+
+The default activation chord is Ctrl+left-click. `link_activation_mods(...)` changes the required
+modifiers; extra held modifiers are allowed. The callback receives a `TerminalLinkEvent` with the
+destination URI and visible viewport row/column.
+
+Explicit OSC 8 destinations win, including labels whose visible text is not a URL. Otherwise the
+widget uses the built-in URL hint scanner, which recognizes allowed-scheme `http`, `https`, and
+`mailto` text and rejoins soft-wrapped rows before matching. The framework reports the destination;
+the application decides whether and how to open it. `tui_lipan::utils::open_url` is the
+scheme-restricted system-opener helper.
+
+A link press is resolved before terminal selection and PTY mouse forwarding. When its release lands
+on the same destination without crossing the drag threshold, the callback fires and neither half of
+the gesture reaches a mouse-tracking child. A drag cancels activation and remains consumed. A click
+without the required modifiers, or with no link under it, keeps the existing selection/forwarding
+behavior. An ancestor `MouseRegion::capture_requires_mods(...)` still takes precedence.
 
 ---
 
@@ -415,12 +445,14 @@ ignored and produce no PTY response.
 | `mouse_mode` | `MouseModeState` | PTY mouse/focus reporting mode |
 | `key_modes` | `TerminalKeyModes` | PTY input modes (DECCKM, bracketed paste) |
 | `wrapped_rows` | `Arc<[bool]>` | Whether each visible row soft-wraps into the next |
+| `hyperlinks` | `Arc<[TerminalHyperlink]>` | Visible row-local OSC 8 destination spans |
 
 `TerminalRenderSnapshot::from_parts(...)` rebuilds a snapshot from owned parts. It is intended for
 applications that define their own versioned external snapshot transport. `TerminalRenderSnapshot`
 itself is not a stable wire protocol. Such a transport attaches wrap flags with
-`with_wrapped_rows(...)`; a transport that cannot carry them omits it, and callers see a viewport
-where nothing wraps.
+`with_wrapped_rows(...)` and explicit links with `with_hyperlinks(...)`; a transport that cannot
+carry them omits them, and callers see a viewport where nothing wraps and no OSC 8 metadata exists.
+Plain-text URL activation still works from `text`.
 
 `wrapped_rows` is what turns visible rows back into logical lines. A row is one grid row, not one
 line of output: a program that printed something longer than the terminal is wide occupies several
@@ -573,12 +605,12 @@ screen.process_bytes(&replay);
 let _ = screen.drain_responses(); // the source already answered device queries
 ```
 
-The stream captures scrollback, primary/alternate screen contents, the cursor position and pen
-template, the title, and common terminal modes, including the effective Kitty keyboard flags. It is
-a replay stream, not a stable data format: tab stops, custom scrolling regions, cursor style, exact
-Kitty keyboard stack depth, hyperlinks, and the display offset are intentional non-goals — the
-receiver lands on the live view. This is the seeding mechanism a terminal host uses to bring a newly
-attached client up to date with a live terminal it does not own directly.
+The stream captures scrollback, primary/alternate screen contents, OSC 8 hyperlinks, the cursor
+position and pen template, the title, and common terminal modes, including the effective Kitty
+keyboard flags. It is a replay stream, not a stable data format: tab stops, custom scrolling
+regions, cursor style, exact Kitty keyboard stack depth, and the display offset are intentional
+non-goals — the receiver lands on the live view. This is the seeding mechanism a terminal host uses
+to bring a newly attached client up to date with a live terminal it does not own directly.
 
 ### Serializable terminal snapshot leaf types
 

@@ -31,6 +31,7 @@ pub(crate) fn transition_drag_threshold<C: Component, T: MouseDispatchCtx<C>>(
         state.left_down_pos = Some((x, y));
         state.drag_threshold_exceeded = false;
         state.click_consumed = false;
+        state.terminal_link_press = None;
         state.pending_drag_source = None;
         state.mouse_region_drag = None;
         state.pan_view_drag = None;

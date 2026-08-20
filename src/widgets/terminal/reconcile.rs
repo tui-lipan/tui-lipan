@@ -140,7 +140,19 @@ pub(crate) fn reconcile_terminal(
     node.rect = rect;
     node.children.clear();
     node.kind = NodeKind::Terminal(TerminalNode {
+        text: live.as_ref().map_or_else(
+            || terminal.content.clone(),
+            |snapshot| snapshot.text.clone(),
+        ),
         lines,
+        wrapped_rows: live.as_ref().map_or_else(
+            || terminal.wrapped_rows.clone(),
+            |snapshot| snapshot.wrapped_rows.clone(),
+        ),
+        hyperlinks: live.as_ref().map_or_else(
+            || terminal.hyperlinks.clone(),
+            |snapshot| snapshot.hyperlinks.clone(),
+        ),
         cursor_row: live.as_ref().map_or(terminal.cursor_row, |s| s.cursor_row),
         cursor_col: live.as_ref().map_or(terminal.cursor_col, |s| s.cursor_col),
         // A live screen reports what the child program wants; `show_cursor` is what the app allows.
@@ -171,6 +183,8 @@ pub(crate) fn reconcile_terminal(
         paste_shortcut_behavior: terminal.paste_shortcut_behavior,
         on_selection: terminal.on_selection.clone(),
         on_mouse_forward: terminal.on_mouse_forward.clone(),
+        link_activation_mods: terminal.link_activation_mods,
+        on_link_activate: terminal.on_link_activate.clone(),
         style: terminal.style,
         hover_style: terminal.hover_style,
         focus_style: terminal.focus_style,

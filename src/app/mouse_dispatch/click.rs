@@ -21,6 +21,69 @@ pub(crate) fn transition_overlay_click<C: Component, T: MouseDispatchCtx<C>>(
     None
 }
 
+pub(crate) fn transition_terminal_link_down<C: Component, T: MouseDispatchCtx<C>>(
+    ctx: &mut T,
+    mouse: MouseEvent,
+) -> bool {
+    if !matches!(mouse.kind, MouseKind::Down(MouseButton::Left)) {
+        return false;
+    }
+    #[cfg(feature = "terminal")]
+    {
+        let Some(hit) = crate::app::input::handlers::terminal::modified_link_hit(ctx.tree(), mouse)
+        else {
+            return false;
+        };
+        ctx.mouse_state().terminal_link_press =
+            Some(crate::app::interaction_state::TerminalLinkPress {
+                node_id: hit.node_id,
+                uri: hit.event.uri,
+            });
+        true
+    }
+    #[cfg(not(feature = "terminal"))]
+    {
+        let _ = (ctx, mouse);
+        false
+    }
+}
+
+/// Consume the rest of a terminal-link gesture and activate it on a matching release.
+pub(crate) fn transition_terminal_link_gesture<C: Component, T: MouseDispatchCtx<C>>(
+    ctx: &mut T,
+    mouse: MouseEvent,
+) -> Option<bool> {
+    ctx.mouse_state().terminal_link_press.as_ref()?;
+    match mouse.kind {
+        MouseKind::Drag(MouseButton::Left) => Some(true),
+        MouseKind::Up(MouseButton::Left) => {
+            let press = ctx.mouse_state().terminal_link_press.take()?;
+            let dragged = ctx.mouse_state().drag_threshold_exceeded;
+            let state = ctx.mouse_state();
+            state.left_down_node = None;
+            state.left_down_pos = None;
+            state.pending_drag_source = None;
+
+            #[cfg(feature = "terminal")]
+            if !dragged
+                && let Some(hit) = crate::app::input::handlers::terminal::link_hit_at_node(
+                    ctx.tree(),
+                    press.node_id,
+                    mouse,
+                )
+                && hit.event.uri == press.uri
+            {
+                hit.callback.emit(hit.event);
+            }
+            #[cfg(not(feature = "terminal"))]
+            let _ = (press, dragged);
+
+            Some(true)
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn transition_right_click<C: Component, T: MouseDispatchCtx<C>>(
     ctx: &mut T,
     adjusted_mouse: MouseEvent,

@@ -271,6 +271,10 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
 
     transition_drag_threshold(ctx, &mouse, x, y);
 
+    if let Some(result) = transition_terminal_link_gesture(ctx, mouse) {
+        return result;
+    }
+
     if let Some(result) = transition_mouse_region_drag(ctx, &mouse, x, y) {
         return result;
     }
@@ -380,7 +384,8 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
         }
     }
 
-    if is_down && ctx.forward_terminal_mouse(adjusted_mouse) {
+    let terminal_link_down = is_down && transition_terminal_link_down(ctx, adjusted_mouse);
+    if is_down && !terminal_link_down && ctx.forward_terminal_mouse(adjusted_mouse) {
         return true;
     }
 
@@ -428,6 +433,9 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
     if is_down {
         let actions = mouse::gather_hit_actions(ctx.tree(), hit, x, y);
         emit_bubbling_mouse_down(ctx.tree(), hit, adjusted_mouse);
+        if terminal_link_down {
+            return true;
+        }
         // Second pass (common path): refine the drag target from the resolved hit. If
         // nothing is found here the first-pass result is intentionally left in place.
         let drag_target = if mouse_region_has_drag_callbacks(&actions)

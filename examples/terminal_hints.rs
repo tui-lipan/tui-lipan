@@ -1,4 +1,4 @@
-//! Keyboard-driven terminal hints backed by the public hint and decoration APIs.
+//! Keyboard-driven terminal hints plus Ctrl-click link activation.
 //!
 //! Run with:
 //!   cargo run --example terminal_hints --features terminal
@@ -31,6 +31,7 @@ enum Msg {
     Exit,
     Append(char),
     Activate { index: usize, open: bool },
+    OpenLink(TerminalLinkEvent),
     ClearCopyFlash,
     Quit,
 }
@@ -45,6 +46,7 @@ impl Component for TerminalHints {
         screen.process_bytes(
             b"\x1b[1;36m$ tui-lipan demo --hints\x1b[0m\r\n\
               URL: https://github.com/tui-lipan/tui-lipan\r\n\
+              OSC 8: \x1b]8;;https://tui-lipan.dev\x1b\\framework docs\x1b]8;;\x1b\\\r\n\
               Path: ./examples/terminal_hints.rs:42\r\n\
               Commit: 9fceb02d4a1e8f0c7b12abcdeffed1234567890a\r\n\
               Address: 192.168.1.42 (custom regex hint)\r\n\
@@ -102,6 +104,13 @@ impl Component for TerminalHints {
             }
             Msg::Append(ch) => ctx.state.filter.push(ch),
             Msg::Activate { index, open } => return activate_hint(index, open, ctx),
+            Msg::OpenLink(event) => {
+                let uri = event.uri;
+                ctx.state.status = match tui_lipan::utils::open_url(&uri) {
+                    Ok(()) => format!("Opened link: {uri}"),
+                    Err(error) => format!("Open failed ({error}): {uri}"),
+                };
+            }
             Msg::ClearCopyFlash => ctx.state.copy_flash = None,
             Msg::Quit => {
                 ctx.quit();
@@ -130,7 +139,7 @@ impl Component for TerminalHints {
             Span::new("label: ").fg(Color::DarkGray),
             Span::new(filter).fg(Color::Yellow).bold(),
             Span::new(format!(
-                "  {}/{} visible  |  lowercase copy  |  uppercase open  |  Esc/q exit  |  h enter",
+                "  {}/{} visible  |  Ctrl-click link  |  lowercase copy  |  uppercase open  |  Esc/q exit  |  h enter",
                 visible.len(),
                 ctx.state.matches.len()
             ))
@@ -142,6 +151,7 @@ impl Component for TerminalHints {
             .selection(ctx.state.copy_flash)
             .selection_style(Style::new().fg(Color::Black).bg(Color::LightCyan))
             .on_key(ctx.link().key_handler(|key| Some(Msg::Key(key))))
+            .on_link_activate(ctx.link().callback(Msg::OpenLink))
             .into();
 
         VStack::new()
