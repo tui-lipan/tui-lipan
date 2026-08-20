@@ -152,6 +152,9 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Resizing a terminal no longer leaves an OSC 133-marked active prompt in the reflow buffer for the
+  shell's `SIGWINCH` redraw to duplicate. The stale prompt region is cleared before the grid changes
+  size, while command output and terminals without semantic prompt integration keep normal reflow.
 - `host_cell_size()` compiles on Windows with `terminal-images`. The window-size path that prefers
   pixel-mouse measurements is Unix-only, and the image encoder's font-size guess remains the
   fallback everywhere else.
