@@ -5900,6 +5900,32 @@ fn activation_modifiers_hover_only_the_terminal_link_under_the_pointer() {
 
 #[cfg(feature = "terminal")]
 #[test]
+fn terminal_link_hover_requests_native_pointer_motion_reports() {
+    let component = TerminalLinkClickSmoke {
+        snapshot: terminal_link_snapshot("https://example.com"),
+        activated: Rc::new(RefCell::new(Vec::new())),
+        forwarded: Rc::new(RefCell::new(Vec::new())),
+    };
+    let mut runner = AppRunner::new(App::new(), component.clone(), ());
+    init_runner(
+        &mut runner,
+        component,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 3,
+        },
+    );
+
+    assert!(
+        runner.needs_mouse_motion(),
+        "an activatable terminal link must enable host all-motion reporting"
+    );
+}
+
+#[cfg(feature = "terminal")]
+#[test]
 fn terminal_link_activation_prefers_explicit_osc8_destinations() {
     let activated = Rc::new(RefCell::new(Vec::new()));
     let forwarded = Rc::new(RefCell::new(Vec::new()));

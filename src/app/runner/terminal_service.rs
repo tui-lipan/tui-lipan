@@ -95,6 +95,7 @@ impl<C: Component> AppRunner<C> {
         self.core.tree.has_hoverables()
             || self.core.tree.has_mouse_move_handlers()
             || self.core.tree.has_terminal_any_event()
+            || self.core.tree.has_terminal_link_hover()
     }
 
     pub(super) fn sync_mouse_motion_capture(
