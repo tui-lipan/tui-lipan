@@ -17,7 +17,8 @@ While the crate is on `0.x.y`:
   left-clicks on explicit OSC 8 links or detected `http` / `https` / `mailto` text before selection
   and PTY mouse forwarding. Ctrl is the default through `link_activation_mods`; non-link clicks
   retain their previous behavior. A link under a pointer carrying those modifiers is underlined by
-  default and can be customized through `link_hover_style`. `TerminalRenderSnapshot::hyperlinks`
+  default and can be customized through `link_hover_style`; Kitty keyboard enhancement hosts also
+  refresh that hover immediately on modifier press and release. `TerminalRenderSnapshot::hyperlinks`
   preserves visible OSC 8 spans for snapshot-backed widgets and external transports, and replay
   exports now retain the links and active hyperlink template for newly attached clients.
 - `TerminalRenderSnapshot::wrapped_rows` reports which visible rows the terminal soft-wrapped into

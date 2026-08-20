@@ -249,10 +249,15 @@ impl<W> CrosstermTransitionExecutor<W> {
     }
 }
 
+fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
+    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+}
+
 impl<W: Write> TerminalTransitionExecutor for CrosstermTransitionExecutor<W> {
     fn execute_op(&mut self, op: TerminalOp) -> io::Result<()> {
-        let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-            | KeyboardEnhancementFlags::REPORT_EVENT_TYPES;
+        let flags = keyboard_enhancement_flags();
         match op {
             TerminalOp::EnableRawMode => enable_raw_mode(),
             TerminalOp::DisableRawMode => disable_raw_mode(),
@@ -316,6 +321,14 @@ mod tests {
             disable_auto_wrap: false,
             clear_on_start: true,
         }
+    }
+
+    #[test]
+    fn keyboard_enhancement_requests_standalone_modifier_events() {
+        assert!(
+            keyboard_enhancement_flags()
+                .contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
+        );
     }
 
     #[test]

@@ -187,9 +187,10 @@ destination URI and visible viewport row/column.
 
 Moving the pointer over an activatable link with those modifiers held applies `link_hover_style`
 to the complete link; the default underlines it. The `link_hover_style`,
-`extend_link_hover_style`, and `inherit_link_hover_style` builders customize that feedback. Host
-terminals report modifier state with pointer events, so a stationary modifier press or release does
-not repaint until the next pointer event.
+`extend_link_hover_style`, and `inherit_link_hover_style` builders customize that feedback. A host
+supporting Kitty keyboard enhancements reports standalone modifier presses and releases, so pressing
+Ctrl over an already stationary link refreshes it immediately. On older hosts, modifier state is
+available only on pointer events and the hover updates on the next movement.
 
 Explicit OSC 8 destinations win, including labels whose visible text is not a URL. Otherwise the
 widget uses the built-in URL hint scanner, which recognizes allowed-scheme `http`, `https`, and

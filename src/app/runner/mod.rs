@@ -38,6 +38,8 @@ use crate::clipboard::{
 };
 use crate::core::component::{Component, Context};
 use crate::core::element::Element;
+#[cfg(feature = "terminal")]
+use crate::core::event::KeyMods;
 use crate::core::event::{KeyCode, MouseEvent, MouseKind};
 use crate::core::node::NodeId;
 use crate::runtime::{RuntimeCore, RuntimeCoreConfig};
@@ -51,6 +53,8 @@ use ratatui::Terminal as RatatuiTerminal;
 use crate::app::context::DevToolsConfig;
 use crate::app::context::{App, ContrastPolicy, SurfaceMode, TextAreaNewlineBinding};
 use crate::app::input::command_registry::CommandEntry;
+#[cfg(feature = "terminal")]
+use crate::app::input::convert::modifier_key_state;
 use crate::app::input::convert::{to_key_event, to_mouse_event};
 use crate::app::input::focus;
 use crate::app::input::keyboard;
@@ -1986,10 +1990,20 @@ impl<C: Component> AppRunner<C> {
                         }
                         CEvent::FocusLost => {
                             self.set_window_focused(false, &mut dirty);
+                            #[cfg(feature = "terminal")]
+                            if self.refresh_terminal_link_hover_at_pointer(KeyMods::NONE) {
+                                dirty.mark_paint();
+                            }
                             self.animation.reset_blink();
                             dirty.mark_paint();
                         }
                         CEvent::Key(k) => {
+                            #[cfg(feature = "terminal")]
+                            if let Some(mods) = modifier_key_state(k)
+                                && self.refresh_terminal_link_hover_at_pointer(mods)
+                            {
+                                dirty.mark_paint();
+                            }
                             if let Some(key) = to_key_event(k) {
                                 if matches!(key.code, KeyCode::Esc)
                                     && matches!(self.drag.active, ActiveDrag::DragDrop(_))

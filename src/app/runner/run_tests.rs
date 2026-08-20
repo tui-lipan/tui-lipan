@@ -5922,6 +5922,38 @@ fn terminal_link_hover_requests_native_pointer_motion_reports() {
         runner.needs_mouse_motion(),
         "an activatable terminal link must enable host all-motion reporting"
     );
+
+    runner.mouse.last_mouse.set(Some((10, 0)));
+    assert!(runner.refresh_terminal_link_hover_at_pointer(KeyMods::CTRL));
+    let terminal = runner
+        .core
+        .tree
+        .iter()
+        .find_map(|node| match &node.kind {
+            NodeKind::Terminal(terminal) => Some(terminal),
+            _ => None,
+        })
+        .expect("terminal widget");
+    assert_eq!(
+        terminal.link_hover.as_ref().map(|hover| hover.uri.as_ref()),
+        Some("https://example.com"),
+        "pressing the modifier reuses the remembered pointer cell"
+    );
+
+    assert!(runner.refresh_terminal_link_hover_at_pointer(KeyMods::NONE));
+    let terminal = runner
+        .core
+        .tree
+        .iter()
+        .find_map(|node| match &node.kind {
+            NodeKind::Terminal(terminal) => Some(terminal),
+            _ => None,
+        })
+        .expect("terminal widget");
+    assert!(
+        terminal.link_hover.is_none(),
+        "releasing the modifier clears the remembered hover"
+    );
 }
 
 #[cfg(feature = "terminal")]
