@@ -82,6 +82,7 @@ pub(crate) fn queried_host_cell_size() -> Option<(u16, u16)> {
 /// drawing it did.
 #[cfg(feature = "terminal-images")]
 pub(crate) fn host_cell_size() -> crate::widgets::TerminalCellSize {
+    #[cfg(unix)]
     if let Some((width, height)) = crate::app::input::pixel_mouse::cell_size() {
         return crate::widgets::TerminalCellSize::new(width, height);
     }
