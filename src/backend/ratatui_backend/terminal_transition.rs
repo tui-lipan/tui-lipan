@@ -249,10 +249,19 @@ impl<W> CrosstermTransitionExecutor<W> {
     }
 }
 
+/// What the host is asked to report, and deliberately what it is not.
+///
+/// `REPORT_ALL_KEYS_AS_ESCAPE_CODES` would add standalone modifier press and release events, which
+/// is the only way to refresh a link hover under a stationary pointer. It cannot be asked for: it
+/// also replaces ordinary text keys with `CSI <key>;<mods> u`, reporting the *unshifted layout key*
+/// and leaving the character the layout would have produced to a companion flag. Termina decodes
+/// the shifted alternate of `REPORT_ALTERNATE_KEYS` but has nowhere to put the associated text of
+/// `REPORT_ASSOCIATED_TEXT`, so anything the layout composes - `Shift`+letter, an AltGr character,
+/// a dead-key sequence, an IME commit - would arrive as the bare key it was typed on and be
+/// entered, or forwarded to a PTY, as the wrong character. Text input outranks hover latency.
 fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
     KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
 }
 
 impl<W: Write> TerminalTransitionExecutor for CrosstermTransitionExecutor<W> {
@@ -323,11 +332,18 @@ mod tests {
         }
     }
 
+    /// Asking for every key as an escape code costs the host's decoded text, which is what a layout
+    /// composes `Shift`+letter, AltGr, dead keys, and IME commits into. No hover refresh is worth
+    /// typing the wrong character.
     #[test]
-    fn keyboard_enhancement_requests_standalone_modifier_events() {
+    fn keyboard_enhancement_leaves_text_keys_to_the_host() {
+        assert!(
+            !keyboard_enhancement_flags()
+                .contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
+        );
         assert!(
             keyboard_enhancement_flags()
-                .contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
+                .contains(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         );
     }
 
