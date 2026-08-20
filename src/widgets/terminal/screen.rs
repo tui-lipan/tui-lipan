@@ -81,6 +81,128 @@ pub struct SemanticMark {
 
 const MAX_SEMANTIC_MARKS: usize = 256;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PromptBoundary {
+    Start,
+    CommandStart,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum PromptScanState {
+    #[default]
+    Ground,
+    Escape,
+    Osc,
+    OscEscape,
+}
+
+/// Finds prompt lifecycle boundaries without delaying the grid parser.
+///
+/// The semantic parser records state after processing a complete PTY chunk, which is too late for
+/// a prompt mark: one chunk commonly contains `OSC 133;A` followed by the prompt and part of the
+/// input. This scanner reports the byte offset of `A`/`C` terminators so the grid can be advanced
+/// only that far before the cursor position is captured.
+#[derive(Debug, Default)]
+struct PromptBoundaryScanner {
+    state: PromptScanState,
+    prefix_len: u8,
+    boundary: Option<PromptBoundary>,
+}
+
+impl PromptBoundaryScanner {
+    fn scan(&mut self, bytes: &[u8]) -> Vec<(usize, PromptBoundary)> {
+        if self.state == PromptScanState::Ground && !bytes.contains(&0x1b) && !bytes.contains(&0x9d)
+        {
+            return Vec::new();
+        }
+
+        let mut boundaries = Vec::new();
+        for (index, &byte) in bytes.iter().enumerate() {
+            match self.state {
+                PromptScanState::Ground => match byte {
+                    0x1b => self.state = PromptScanState::Escape,
+                    0x9d => self.start_osc(),
+                    _ => {}
+                },
+                PromptScanState::Escape => {
+                    if byte == b']' {
+                        self.start_osc();
+                    } else if byte != 0x1b {
+                        self.state = PromptScanState::Ground;
+                    }
+                }
+                PromptScanState::Osc => match byte {
+                    0x07 | 0x9c => {
+                        if let Some(boundary) = self.finish_osc() {
+                            boundaries.push((index + 1, boundary));
+                        }
+                    }
+                    0x18 | 0x1a => self.cancel_osc(),
+                    0x1b => self.state = PromptScanState::OscEscape,
+                    _ => self.consume_osc_byte(byte),
+                },
+                PromptScanState::OscEscape => match byte {
+                    b'\\' => {
+                        if let Some(boundary) = self.finish_osc() {
+                            boundaries.push((index + 1, boundary));
+                        }
+                    }
+                    0x18 | 0x1a => self.cancel_osc(),
+                    0x1b => self.boundary = None,
+                    _ => {
+                        self.boundary = None;
+                        self.state = PromptScanState::Osc;
+                    }
+                },
+            }
+        }
+        boundaries
+    }
+
+    fn start_osc(&mut self) {
+        self.state = PromptScanState::Osc;
+        self.prefix_len = 0;
+        self.boundary = None;
+    }
+
+    fn consume_osc_byte(&mut self, byte: u8) {
+        let expected = b"133;";
+        if usize::from(self.prefix_len) < expected.len() {
+            if byte == expected[usize::from(self.prefix_len)] {
+                self.prefix_len += 1;
+            } else {
+                self.prefix_len = u8::MAX;
+            }
+        } else if self.prefix_len == expected.len() as u8 {
+            self.boundary = match byte {
+                b'A' => Some(PromptBoundary::Start),
+                b'C' => Some(PromptBoundary::CommandStart),
+                _ => None,
+            };
+            self.prefix_len += 1;
+        }
+    }
+
+    fn finish_osc(&mut self) -> Option<PromptBoundary> {
+        let boundary = self.boundary.take();
+        self.state = PromptScanState::Ground;
+        self.prefix_len = 0;
+        boundary
+    }
+
+    fn cancel_osc(&mut self) {
+        self.state = PromptScanState::Ground;
+        self.prefix_len = 0;
+        self.boundary = None;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ActivePromptMark {
+    absolute_line: usize,
+    column: usize,
+}
+
 /// Cursor style applied when the child program never issues `DECSCUSR`.
 ///
 /// A blinking block matches the historical default and the common terminal
@@ -299,6 +421,10 @@ pub struct TerminalScreen {
     semantic_marks: VecDeque<SemanticMark>,
     /// How many semantic events have already been turned into marks (reset on drain).
     semantic_events_seen: usize,
+    /// Lightweight OSC scanner used to capture prompt marks at their exact grid position.
+    prompt_boundary_scanner: PromptBoundaryScanner,
+    /// Start of the prompt currently being edited, cleared when command execution begins.
+    active_prompt_mark: Option<ActivePromptMark>,
     /// Splits `APC _G` graphics commands out of the byte stream before the grid parser sees it.
     #[cfg(feature = "terminal-images")]
     graphics_scanner: GraphicsScanner,
@@ -865,6 +991,8 @@ impl TerminalScreen {
             sequence: 0,
             semantic_marks: VecDeque::new(),
             semantic_events_seen: 0,
+            prompt_boundary_scanner: PromptBoundaryScanner::default(),
+            active_prompt_mark: None,
             #[cfg(feature = "terminal-images")]
             graphics_scanner: GraphicsScanner::default(),
             #[cfg(feature = "terminal-images")]
@@ -883,12 +1011,11 @@ impl TerminalScreen {
     /// Feed terminal bytes.
     ///
     pub fn process_bytes(&mut self, bytes: &[u8]) {
-        let evicted = self.feed_grid(bytes);
+        let evicted = self.feed_grid_with_prompt_boundaries(bytes);
         if evicted > 0 {
             self.evicted_lines = self.evicted_lines.saturating_add(evicted as u64);
         }
         self.semantic_parser.advance(&mut self.semantic, bytes);
-        self.drop_evicted_semantic_marks(evicted);
         self.settle_graphics(evicted);
         let alt_screen = self.term.mode().contains(TermMode::ALT_SCREEN);
         if self.alt_screen != alt_screen {
@@ -901,12 +1028,44 @@ impl TerminalScreen {
             // rather than leaving them pending, or they get replayed against
             // main-screen coordinates the moment the alt screen is torn down.
             self.discard_pending_semantic_marks();
+            self.active_prompt_mark = None;
         } else {
             self.record_semantic_marks_from_pending();
         }
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode(), self.pixel_mouse);
         self.dirty = true;
+    }
+
+    fn feed_grid_with_prompt_boundaries(&mut self, bytes: &[u8]) -> usize {
+        let boundaries = self.prompt_boundary_scanner.scan(bytes);
+        let mut evicted_total = 0;
+        let mut start = 0;
+        for (end, boundary) in boundaries {
+            let evicted = self.feed_grid(&bytes[start..end]);
+            self.drop_evicted_semantic_marks(evicted);
+            evicted_total += evicted;
+            self.apply_prompt_boundary(boundary);
+            start = end;
+        }
+
+        let evicted = self.feed_grid(&bytes[start..]);
+        self.drop_evicted_semantic_marks(evicted);
+        evicted_total + evicted
+    }
+
+    fn apply_prompt_boundary(&mut self, boundary: PromptBoundary) {
+        match boundary {
+            PromptBoundary::Start if !self.term.mode().contains(TermMode::ALT_SCREEN) => {
+                self.active_prompt_mark = Some(ActivePromptMark {
+                    absolute_line: self.cursor_absolute_line(),
+                    column: self.term.grid().cursor.point.column.0,
+                });
+            }
+            PromptBoundary::Start | PromptBoundary::CommandStart => {
+                self.active_prompt_mark = None;
+            }
+        }
     }
 
     /// Drive the grid parser, returning how many scrollback lines the chunk evicted.
@@ -1326,9 +1485,15 @@ impl TerminalScreen {
     /// Resize screen dimensions.
     ///
     pub fn resize(&mut self, rows: u16, cols: u16) {
-        let reflowed = cols.max(1) != self.cols;
-        self.rows = rows.max(1);
-        self.cols = cols.max(1);
+        let rows = rows.max(1);
+        let cols = cols.max(1);
+        let dimensions_changed = rows != self.rows || cols != self.cols;
+        let reflowed = cols != self.cols;
+        if dimensions_changed {
+            self.clear_active_prompt();
+        }
+        self.rows = rows;
+        self.cols = cols;
         let dimensions = TermDimensions {
             rows: self.rows as usize,
             cols: self.cols as usize,
@@ -1369,6 +1534,38 @@ impl TerminalScreen {
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode(), self.pixel_mouse);
         self.dirty = true;
+    }
+
+    /// Erase an active semantic prompt before grid reflow.
+    ///
+    /// Shells receive `SIGWINCH` after a PTY resize and redraw their current prompt. Leaving the
+    /// old prompt in the reflow buffer makes that redraw additive, duplicating wrapped input.
+    fn clear_active_prompt(&mut self) {
+        let Some(mark) = self.active_prompt_mark.take() else {
+            return;
+        };
+        if self.term.mode().contains(TermMode::ALT_SCREEN) {
+            return;
+        }
+
+        let grid = self.term.grid_mut();
+        let line = grid.topmost_line().0 + mark.absolute_line as i32;
+        let screen_lines = grid.screen_lines() as i32;
+        if !(0..screen_lines).contains(&line) {
+            return;
+        }
+
+        let columns = grid.columns();
+        let start_column = mark.column.min(columns);
+        let background = grid.cursor.template.bg;
+        for cell in &mut grid[Line(line)][Column(start_column)..Column(columns)] {
+            *cell = background.into();
+        }
+        for row in line + 1..screen_lines {
+            for cell in &mut grid[Line(row)][Column(0)..Column(columns)] {
+                *cell = background.into();
+            }
+        }
     }
 
     /// Return current visible screen contents.
@@ -1670,6 +1867,14 @@ impl TerminalScreen {
         for mark in &mut self.semantic_marks {
             mark.absolute_line -= evicted;
         }
+        self.active_prompt_mark = self.active_prompt_mark.and_then(|mut mark| {
+            if mark.absolute_line < evicted {
+                None
+            } else {
+                mark.absolute_line -= evicted;
+                Some(mark)
+            }
+        });
     }
 
     /// Consume pending semantic events without recording marks for them.
@@ -1738,6 +1943,8 @@ impl TerminalScreen {
         self.cache = TerminalRenderSnapshot::default();
         self.semantic_marks.clear();
         self.semantic_events_seen = 0;
+        self.prompt_boundary_scanner = PromptBoundaryScanner::default();
+        self.active_prompt_mark = None;
         self.evicted_lines = 0;
         self.history_epoch = self.history_epoch.saturating_add(1);
         self.alt_screen = false;
@@ -2773,6 +2980,64 @@ mod tests {
         assert_eq!(
             snapshot.wrapped_rows.as_ref(),
             &[true, false, false, false][..]
+        );
+    }
+
+    #[test]
+    fn narrowing_a_wrapped_live_line_does_not_duplicate_its_prefix() {
+        let line = concat!(
+            "tui-lipan main ❯ ops::profile::tests::capturing_an_ephemeral_session_",
+            "does_not_rename_it fails in the full-suite run and passes in isolation. ",
+            "It is not mine — I stashed my changes and reproduced the identical failure ",
+            "on the baseline tree. Its rx.try_recv().is_err() assertion is racy under parallel load."
+        );
+        let mut screen = TerminalScreen::new(4, 176, 20);
+        screen.process_bytes(b"\x1b]13");
+        screen.process_bytes(format!("3;A\x1b\\{line}").as_bytes());
+
+        screen.resize(4, 147);
+        assert!(
+            screen
+                .render_snapshot()
+                .text
+                .lines()
+                .all(|row| row.trim().is_empty()),
+            "the stale active prompt must be removed before reflow"
+        );
+
+        // Readline redraws the active input after receiving SIGWINCH.
+        screen.process_bytes(b"\r\x1b[K\r\x1b[A\x1b[K\r");
+        screen.process_bytes(line.as_bytes());
+        let snapshot = screen.render_snapshot();
+        let actual = snapshot
+            .text
+            .lines()
+            .map(|row| row.trim_end().to_owned())
+            .collect::<Vec<_>>();
+        let mut expected = line
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(147)
+            .map(|chunk| chunk.iter().collect::<String>().trim_end().to_owned())
+            .collect::<Vec<_>>();
+        expected.resize(4, String::new());
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn resizing_after_command_start_preserves_output() {
+        let mut screen = TerminalScreen::new(4, 24, 20);
+        screen.process_bytes(
+            b"\x1b]133;A\x1b\\prompt \x1b]133;B\x1b\\command\r\n\
+              \x1b]133;C\x1b\\command output",
+        );
+
+        screen.resize(4, 18);
+
+        assert!(
+            screen.render_snapshot().text.contains("command output"),
+            "OSC 133;C must retire the prompt mark before command output starts"
         );
     }
 

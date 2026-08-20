@@ -547,6 +547,10 @@ Recognized sequences:
   and Fish/Kitty's `cmdline_url=<percent-encoded command line>` (only the first token's basename is
   kept). The private form requires a non-empty namespace and rejects control characters.
 
+While a prompt marked by `A` is active (through `B`, until `C`), resizing clears that prompt region
+before reflow. This gives the shell's `SIGWINCH` redraw a clean grid instead of duplicating wrapped
+input. Shells without OSC 133 integration retain ordinary terminal reflow.
+
 `TerminalScreen::reset()` clears in-flight parser state but preserves accumulated semantic state -
 a child hard reset (RIS) does not imply its last-known working directory or command lifecycle
 became invalid.
