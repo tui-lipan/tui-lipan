@@ -11,10 +11,12 @@ use ratatui::widgets::{Block, Clear};
 
 use crate::app::ContrastPolicy;
 use crate::app::copy_feedback::CopyFeedbackState;
+#[cfg(feature = "diff-view")]
+use crate::backend::ratatui_backend::common::finalize_style;
 use crate::backend::ratatui_backend::common::{
     apply_effect_style_clipped, apply_visual_effects_clipped, current_render_screen_background,
-    finalize_style, from_ratatui_color, push_render_terminal_bg, render_placeholder_frame,
-    to_ratatui_rect, to_ratatui_style,
+    from_ratatui_color, push_render_terminal_bg, render_placeholder_frame, to_ratatui_rect,
+    to_ratatui_style,
 };
 use crate::backend::ratatui_backend::glyph_paint_cache::{ActiveMemoGuard, PaintGlyphCaches};
 #[cfg(feature = "big-text")]

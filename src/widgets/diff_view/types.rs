@@ -411,7 +411,7 @@ pub(crate) struct DiffLineClickConfig {
     pub events_by_source_line: Arc<[Option<DiffLineClickEvent>]>,
     pub on_click: Option<Callback<DiffLineClickEvent>>,
     pub on_range_select: Option<Callback<DiffLineRangeEvent>>,
-    pub range_style: Style,
+    pub range_overlay: Style,
 }
 
 /// Prefixes used for diff lines.

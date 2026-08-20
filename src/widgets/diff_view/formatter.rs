@@ -51,11 +51,11 @@ impl DiffDocumentFormatter {
     pub(crate) fn with_line_selection(
         mut self,
         selected_lines: Arc<[bool]>,
-        selection_style: crate::style::Style,
+        selection_slot: crate::style::StyleSlot,
     ) -> Self {
         self.strategy = self
             .strategy
-            .with_line_selection(selected_lines, selection_style);
+            .with_line_selection(selected_lines, selection_slot);
         self.refresh_formatter_cache_key();
         self
     }

@@ -18,7 +18,7 @@ use std::hash::{Hash, Hasher};
 
 use crate::callback::Callback;
 use crate::core::element::Element;
-use crate::style::{Color, DiffPalette, Length, Style};
+use crate::style::{Color, DiffPalette, Length, Style, StyleSlot};
 use crate::widgets::{Divider, DocumentView, Frame, HStack, ScrollEvent, TextArea, VStack};
 use rustc_hash::FxHasher;
 use std::rc::Rc;
@@ -203,7 +203,7 @@ pub struct DiffView {
     on_scroll: Option<Callback<DiffScrollEvent>>,
     on_line_click: Option<Callback<DiffLineClickEvent>>,
     on_line_range_select: Option<Callback<DiffLineRangeEvent>>,
-    line_range_style: Style,
+    line_range_style: StyleSlot,
     on_context_separator_click: Option<Callback<DiffContextSeparatorEvent>>,
     context_separator_hover_style: Option<Style>,
     text_area: TextArea,
@@ -316,7 +316,7 @@ impl DiffView {
             on_scroll: None,
             on_line_click: None,
             on_line_range_select: None,
-            line_range_style: Style::default(),
+            line_range_style: StyleSlot::Inherit,
             on_context_separator_click: None,
             context_separator_hover_style: None,
             text_area,
@@ -401,9 +401,27 @@ impl DiffView {
 
     /// Set the style for inline-block source ranges and live gutter-drag previews.
     ///
-    /// The active theme's selection style supplies defaults for unset fields.
+    /// This replaces the active theme's selection role.
     pub fn line_range_style(mut self, style: Style) -> Self {
-        self.line_range_style = style;
+        self.line_range_style = StyleSlot::Replace(style);
+        self
+    }
+
+    /// Extend the active theme's selection role for source ranges.
+    pub fn extend_line_range_style(mut self, style: Style) -> Self {
+        self.line_range_style = StyleSlot::Extend(style);
+        self
+    }
+
+    /// Inherit the active theme's selection role for source ranges.
+    pub fn inherit_line_range_style(mut self) -> Self {
+        self.line_range_style = StyleSlot::Inherit;
+        self
+    }
+
+    /// Set the source-range style slot directly.
+    pub fn line_range_style_slot(mut self, slot: StyleSlot) -> Self {
+        self.line_range_style = slot;
         self
     }
 
@@ -978,7 +996,7 @@ fn line_click_config(
     logical_offset: usize,
     on_click: Option<Callback<DiffLineClickEvent>>,
     on_range_select: Option<Callback<DiffLineRangeEvent>>,
-    range_style: Style,
+    range_slot: StyleSlot,
 ) -> Option<DiffLineClickConfig> {
     if on_click.is_none() && on_range_select.is_none() {
         return None;
@@ -1012,7 +1030,7 @@ fn line_click_config(
             events_by_source_line: events.into(),
             on_click,
             on_range_select,
-            range_style,
+            range_overlay: range_slot.explicit_style().unwrap_or_default(),
         })
 }
 
@@ -1249,7 +1267,7 @@ impl From<DiffView> for Element {
             let gutter_spans = apply_diff_gutter_selection(
                 &pane_data.gutter_spans,
                 selected_rows.as_ref(),
-                view.line_range_style,
+                view.line_range_style.explicit_style().unwrap_or_default(),
             );
             let gutter_col_width = pane_data.gutter_col_width;
             let excluded_source_lines = pane_data.excluded_source_lines;
@@ -1384,7 +1402,7 @@ impl From<DiffView> for Element {
             let gutter_spans = apply_diff_gutter_selection(
                 &pane_data.gutter_spans,
                 selected_rows.as_ref(),
-                view.line_range_style,
+                view.line_range_style.explicit_style().unwrap_or_default(),
             );
             let gutter_col_width = pane_data.gutter_col_width;
             let excluded_source_lines = pane_data.excluded_source_lines;

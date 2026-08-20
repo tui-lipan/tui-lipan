@@ -354,7 +354,7 @@ impl NodeTree {
         let start = preview.start_logical_line.min(preview.end_logical_line);
         let end = preview.start_logical_line.max(preview.end_logical_line);
         (event.pane == preview.pane && (start..=end).contains(&event.logical_line))
-            .then_some(config.range_style)
+            .then_some(config.range_overlay)
     }
 
     pub fn is_valid(&self, id: NodeId) -> bool {

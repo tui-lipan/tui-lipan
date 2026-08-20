@@ -2,7 +2,7 @@
 
 use super::render::*;
 use crate::style::DiffPalette;
-use crate::style::{Span, Style};
+use crate::style::{Span, Style, StyleSlot};
 use crate::widgets::{TextAreaColorInput, TextAreaColorLines, TextAreaColorStrategy};
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
@@ -21,7 +21,8 @@ pub(crate) struct DiffColorStrategy {
     pub(crate) highlight_full_width: bool,
     pub(crate) pad_full_width: bool,
     pub(crate) selected_lines: Arc<[bool]>,
-    pub(crate) selection_style: Style,
+    pub(crate) selection_slot: StyleSlot,
+    pub(crate) selection_overlay: Style,
     /// Cached [`TextAreaColorStrategy::cache_key`] (palette + base); recomputed after theme patch.
     strategy_cache_key: u64,
     /// Cached hash of [`Self::style`]; recomputed alongside `strategy_cache_key`.
@@ -45,7 +46,8 @@ impl DiffColorStrategy {
             highlight_full_width,
             pad_full_width,
             selected_lines: Arc::from([]),
-            selection_style: Style::default(),
+            selection_slot: StyleSlot::Inherit,
+            selection_overlay: Style::default(),
             strategy_cache_key: 0,
             style_hash: 0,
         };
@@ -56,10 +58,11 @@ impl DiffColorStrategy {
     pub(crate) fn with_line_selection(
         mut self,
         selected_lines: Arc<[bool]>,
-        selection_style: Style,
+        selection_slot: StyleSlot,
     ) -> Self {
         self.selected_lines = selected_lines;
-        self.selection_style = selection_style;
+        self.selection_slot = selection_slot;
+        self.selection_overlay = selection_slot.explicit_style().unwrap_or_default();
         self.recompute_strategy_cache_key();
         self
     }
@@ -73,7 +76,7 @@ impl DiffColorStrategy {
             self.pad_full_width,
             self.base.as_ref().map(|b| b.cache_key()),
             self.selected_lines.as_ref(),
-            self.selection_style,
+            self.selection_overlay,
         );
     }
 
@@ -147,9 +150,9 @@ impl TextAreaColorStrategy for DiffColorStrategy {
             }
 
             if self.selected_lines.get(idx).copied().unwrap_or(false) {
-                spans = apply_line_style(spans, self.selection_style);
-                if self.selection_style.bg.is_some() {
-                    spans.insert(0, Span::new("").style(self.selection_style));
+                spans = apply_line_style(spans, self.selection_overlay);
+                if self.selection_overlay.bg.is_some() {
+                    spans.insert(0, Span::new("").style(self.selection_overlay));
                 }
             }
 

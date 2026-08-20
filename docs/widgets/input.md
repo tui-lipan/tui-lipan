@@ -781,7 +781,7 @@ Line numbers in `DiffView` are source-mapped (git-style), not visual-row counter
 | `on_context_separator_click` | `Callback<DiffContextSeparatorEvent>` | Fires when a visible context separator line is clicked |
 | `on_line_click` | `Callback<DiffLineClickEvent>` | Fires when a mapped source row is clicked, with pane, modifiers, old/new line anchor, and pre-wrap logical row |
 | `on_line_range_select` | `Callback<DiffLineRangeEvent>` | Fires after a plain left-button drag through a line-number gutter selects an inclusive source range |
-| `line_range_style` | `Style` | Override the theme selection style used to highlight source ranges associated with inline blocks |
+| `line_range_style` / `extend_line_range_style` / `line_range_style_slot` | `Style` / `StyleSlot` | Replace, extend, or directly configure the theme selection role used for saved source ranges and live drag previews |
 | `inline_block` | `DiffInlineBlock` | Insert one arbitrary full-width element after an anchored source row or inclusive range |
 | `inline_blocks` | `IntoIterator<Item = DiffInlineBlock>` | Set all full-width anchored elements, such as ranged comment editors and saved review comments |
 | `shared_selection_id` | `Arc<str>` | Cross-widget selection group id (unified: as-is; split: auto-suffixed `:left`/`:right`, while plain `DocumentView`s using the unsuffixed base id can still drag into split panes) |

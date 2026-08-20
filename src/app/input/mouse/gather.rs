@@ -381,6 +381,8 @@ pub(crate) fn gather_hit_actions(
     let node = tree.node(hit);
     let x_i16 = x as i16;
     let y_i16 = y as i16;
+    #[cfg(not(feature = "diff-view"))]
+    let _ = mods;
 
     let on_click = match &node.kind {
         NodeKind::Button(btn) => btn.on_click.clone(),

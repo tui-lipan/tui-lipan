@@ -965,7 +965,7 @@ impl<C: Component> AppRunner<C> {
     fn drain_framework_effects(&mut self) -> bool {
         #[cfg(feature = "devtools")]
         {
-            let effects: Vec<_> = self.framework_effects.drain(..).collect();
+            let effects = std::mem::take(&mut self.framework_effects);
             let mut changed = false;
             for effect in effects {
                 if matches!(effect, FrameworkSideEffect::ToggleDevtools) {
