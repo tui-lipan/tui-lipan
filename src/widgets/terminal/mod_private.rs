@@ -53,6 +53,7 @@ pub struct Terminal {
     pub(crate) on_resize: Option<Callback<TerminalViewport>>,
     pub(crate) on_mouse_forward: Option<Callback<Vec<u8>>>,
     pub(crate) link_activation_mods: KeyMods,
+    pub(crate) link_hover_style: StyleSlot,
     pub(crate) on_link_activate: Option<Callback<TerminalLinkEvent>>,
     pub(crate) scroll_wheel: bool,
     pub(crate) on_scroll: Option<Callback<ScrollEvent>>,

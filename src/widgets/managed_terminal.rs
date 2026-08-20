@@ -31,7 +31,7 @@ use crate::callback::{Callback, CommandLink};
 use crate::core::component::{Component, Context, Update};
 use crate::core::element::Element;
 use crate::core::event::KeyMods;
-use crate::style::Length;
+use crate::style::{Length, Style, StyleSlot};
 use crate::widgets::terminal::{
     Terminal, TerminalClipboardTarget, TerminalInputEvent, TerminalLinkEvent, TerminalPty,
     TerminalPtyConfig, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen, TerminalViewport,
@@ -77,6 +77,9 @@ pub struct ManagedTerminalProps {
     /// Modifiers required to activate explicit OSC 8 links and detected plain-text URLs.
     /// Default: [`KeyMods::CTRL`]. Extra held modifiers are allowed.
     pub link_activation_mods: KeyMods,
+    /// Style applied to a link under a pointer carrying the activation modifiers.
+    /// Default: underline.
+    pub link_hover_style: StyleSlot,
     /// Callback fired when a modified left click activates a link.
     pub on_link_activate: Option<Callback<TerminalLinkEvent>>,
     /// Delay before applying a burst of terminal viewport resizes.
@@ -114,6 +117,7 @@ impl Default for ManagedTerminalProps {
             forward_mouse: true,
             scroll_wheel: true,
             link_activation_mods: KeyMods::CTRL,
+            link_hover_style: StyleSlot::Replace(Style::new().underline()),
             on_link_activate: None,
             resize_debounce: Duration::from_millis(16),
             style: crate::style::Style::default(),
@@ -203,6 +207,30 @@ impl ManagedTerminal {
     /// The default is [`KeyMods::CTRL`]. Extra held modifiers are allowed.
     pub fn link_activation_mods(mut self, mods: KeyMods) -> Self {
         self.props.link_activation_mods = mods;
+        self
+    }
+
+    /// Set the style applied to a link under a pointer carrying the activation modifiers.
+    pub fn link_hover_style(mut self, style: Style) -> Self {
+        self.props.link_hover_style = StyleSlot::Replace(style);
+        self
+    }
+
+    /// Extend the active theme's hover style for an activatable link.
+    pub fn extend_link_hover_style(mut self, style: Style) -> Self {
+        self.props.link_hover_style = StyleSlot::Extend(style);
+        self
+    }
+
+    /// Inherit an activatable link's hover style from the active theme.
+    pub fn inherit_link_hover_style(mut self) -> Self {
+        self.props.link_hover_style = StyleSlot::Inherit;
+        self
+    }
+
+    /// Set the link-hover style slot directly for composite forwarding.
+    pub fn link_hover_style_slot(mut self, slot: StyleSlot) -> Self {
+        self.props.link_hover_style = slot;
         self
     }
 
@@ -520,6 +548,7 @@ impl Component for ManagedTerminal {
             .height(ctx.props.height)
             .scroll_wheel(ctx.props.scroll_wheel)
             .link_activation_mods(ctx.props.link_activation_mods)
+            .link_hover_style_slot(ctx.props.link_hover_style)
             .on_input(ctx.link().callback(ManagedTerminalMsg::TerminalInput))
             .on_resize(ctx.link().callback(|viewport: TerminalViewport| {
                 ManagedTerminalMsg::Resize {
@@ -612,6 +641,10 @@ mod tests {
         assert!(props.forward_mouse);
         assert!(props.scroll_wheel);
         assert_eq!(props.link_activation_mods, KeyMods::CTRL);
+        assert_eq!(
+            props.link_hover_style,
+            StyleSlot::Replace(Style::new().underline())
+        );
         assert!(props.on_link_activate.is_none());
         assert_eq!(props.resize_debounce, Duration::from_millis(16));
         assert!(props.focusable);

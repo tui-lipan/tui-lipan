@@ -103,8 +103,9 @@ pub(crate) use super::table::{TableNode, measure_table, reconcile_table};
 pub(crate) use super::tabs::{TabsNode, measure_tabs, reconcile_tabs};
 #[cfg(feature = "terminal")]
 pub(crate) use super::terminal::{
-    TerminalNode, apply_terminal_selection_input, measure_terminal, reconcile_terminal,
-    terminal_content_layout, terminal_mouse_content_rect, terminal_node_selection_text,
+    TerminalLinkHover, TerminalNode, apply_terminal_selection_input, measure_terminal,
+    reconcile_terminal, terminal_content_layout, terminal_mouse_content_rect,
+    terminal_node_selection_text,
 };
 pub(crate) use super::text::{
     TextNode, measure_text_constrained, reconcile_text, split_spans_on_newlines,

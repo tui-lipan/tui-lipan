@@ -151,6 +151,7 @@ impl Component for TerminalHints {
             .selection(ctx.state.copy_flash)
             .selection_style(Style::new().fg(Color::Black).bg(Color::LightCyan))
             .on_key(ctx.link().key_handler(|key| Some(Msg::Key(key))))
+            .link_hover_style(Style::new().fg(Color::LightCyan).underline())
             .on_link_activate(ctx.link().callback(Msg::OpenLink))
             .into();
 

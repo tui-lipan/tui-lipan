@@ -21,6 +21,7 @@ The recommended starting point: a complete PTY terminal with automatic lifecycle
 | `forward_mouse` | `bool` | Forward mouse events to PTY (default: true) |
 | `scroll_wheel` | `bool` | Mouse wheel for scrollback (default: true) |
 | `link_activation_mods` | `KeyMods` | Modifiers required for link activation (default: `KeyMods::CTRL`; extras allowed) |
+| `link_hover_style` | `StyleSlot` | Style for the link under a modified pointer (default: underline) |
 | `on_link_activate` | `Callback<TerminalLinkEvent>` | Modified click on an OSC 8 link or detected URL |
 | `resize_debounce` | `Duration` | Trailing-edge PTY/screen resize delay (default: 16ms; zero is immediate) |
 | `style` | `Style` | Terminal content style |
@@ -111,6 +112,7 @@ The low-level terminal viewport widget. Use when you need custom PTY handling, m
 | `on_scroll_to` | `Callback<usize>` | Scrollback offset changed |
 | `on_mouse_forward` | `Callback<Vec<u8>>` | Mouse event bytes for PTY |
 | `link_activation_mods` | `KeyMods` | Modifiers required for link activation (default: `KeyMods::CTRL`; extras allowed) |
+| `link_hover_style` | `StyleSlot` | Style for the link under a modified pointer (default: underline) |
 | `on_link_activate` | `Callback<TerminalLinkEvent>` | Modified click on an OSC 8 link or detected URL |
 | `on_selection` | `Callback<TerminalSelectionEvent>` | Selection and extracted text changed |
 | `on_key` | `KeyHandler` | Low-level key handler |
@@ -182,6 +184,12 @@ Terminal::new()
 The default activation chord is Ctrl+left-click. `link_activation_mods(...)` changes the required
 modifiers; extra held modifiers are allowed. The callback receives a `TerminalLinkEvent` with the
 destination URI and visible viewport row/column.
+
+Moving the pointer over an activatable link with those modifiers held applies `link_hover_style`
+to the complete link; the default underlines it. The `link_hover_style`,
+`extend_link_hover_style`, and `inherit_link_hover_style` builders customize that feedback. Host
+terminals report modifier state with pointer events, so a stationary modifier press or release does
+not repaint until the next pointer event.
 
 Explicit OSC 8 destinations win, including labels whose visible text is not a URL. Otherwise the
 widget uses the built-in URL hint scanner, which recognizes allowed-scheme `http`, `https`, and

@@ -307,6 +307,9 @@ pub(crate) struct MouseTrackingState {
     pub click_consumed: bool,
     /// A modified terminal-link press waiting for release on the same destination.
     pub terminal_link_press: Option<TerminalLinkPress>,
+    /// Terminal currently painting one modifier-hovered link.
+    #[cfg(feature = "terminal")]
+    pub terminal_link_hover_node: Option<NodeId>,
     /// Pending drag source candidate captured on left button down.
     pub pending_drag_source: Option<NodeId>,
     /// Pending or active `MouseRegion` drag callback target.

@@ -54,7 +54,7 @@ pub use selection::{
 };
 
 pub(crate) use layout::{measure_terminal, terminal_content_layout, terminal_mouse_content_rect};
-pub(crate) use node::{TerminalNode, apply_terminal_selection_input};
+pub(crate) use node::{TerminalLinkHover, TerminalNode, apply_terminal_selection_input};
 pub(crate) use reconcile::reconcile_terminal;
 
 #[cfg(feature = "terminal")]
@@ -118,6 +118,7 @@ impl Default for Terminal {
             on_resize: None,
             on_mouse_forward: None,
             link_activation_mods: KeyMods::CTRL,
+            link_hover_style: StyleSlot::Replace(Style::new().underline()),
             on_link_activate: None,
             scroll_wheel: true,
             on_scroll: None,
@@ -462,6 +463,30 @@ impl Terminal {
     /// The default is [`KeyMods::CTRL`]. Extra held modifiers are allowed.
     pub fn link_activation_mods(mut self, mods: KeyMods) -> Self {
         self.link_activation_mods = mods;
+        self
+    }
+
+    /// Set the style applied to a link under a pointer carrying the activation modifiers.
+    pub fn link_hover_style(mut self, style: Style) -> Self {
+        self.link_hover_style = StyleSlot::Replace(style);
+        self
+    }
+
+    /// Extend the active theme's hover style for an activatable link.
+    pub fn extend_link_hover_style(mut self, style: Style) -> Self {
+        self.link_hover_style = StyleSlot::Extend(style);
+        self
+    }
+
+    /// Inherit an activatable link's hover style from the active theme.
+    pub fn inherit_link_hover_style(mut self) -> Self {
+        self.link_hover_style = StyleSlot::Inherit;
+        self
+    }
+
+    /// Set the link-hover style slot directly for composite forwarding.
+    pub fn link_hover_style_slot(mut self, slot: StyleSlot) -> Self {
+        self.link_hover_style = slot;
         self
     }
 

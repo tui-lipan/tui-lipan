@@ -5870,6 +5870,36 @@ fn ctrl_click_activates_plain_terminal_urls_before_mouse_forwarding() {
 
 #[cfg(feature = "terminal")]
 #[test]
+fn activation_modifiers_hover_only_the_terminal_link_under_the_pointer() {
+    let activated = Rc::new(RefCell::new(Vec::new()));
+    let forwarded = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = terminal_link_backend(
+        terminal_link_snapshot("open https://example.com"),
+        &activated,
+        &forwarded,
+    );
+
+    send_left_mouse(&mut backend, 10, MouseKind::Moved, KeyMods::CTRL);
+    let hovered = backend.capture_frame();
+    assert!(
+        (5..24).all(|col| hovered.cell(col, 0).modifiers.underline),
+        "the complete detected URL is underlined"
+    );
+    assert!(
+        !hovered.cell(4, 0).modifiers.underline,
+        "text outside the link keeps its original style"
+    );
+
+    send_left_mouse(&mut backend, 10, MouseKind::Moved, KeyMods::NONE);
+    let cleared = backend.capture_frame();
+    assert!(
+        (5..24).all(|col| !cleared.cell(col, 0).modifiers.underline),
+        "moving without the activation modifiers clears the link hover"
+    );
+}
+
+#[cfg(feature = "terminal")]
+#[test]
 fn terminal_link_activation_prefers_explicit_osc8_destinations() {
     let activated = Rc::new(RefCell::new(Vec::new()));
     let forwarded = Rc::new(RefCell::new(Vec::new()));
