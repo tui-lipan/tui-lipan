@@ -779,6 +779,11 @@ Line numbers in `DiffView` are source-mapped (git-style), not visual-row counter
 | `expanded_context` | `DiffContextRange` | Convenience setter to fully expand one collapsed context range |
 | `expanded_context_lines` | `(DiffContextRange, usize)` | Expand one collapsed range by a specific number of lines |
 | `on_context_separator_click` | `Callback<DiffContextSeparatorEvent>` | Fires when a visible context separator line is clicked |
+| `on_line_click` | `Callback<DiffLineClickEvent>` | Fires when a mapped source row is clicked, with pane, modifiers, old/new line anchor, and pre-wrap logical row |
+| `on_line_range_select` | `Callback<DiffLineRangeEvent>` | Fires after a plain left-button drag through a line-number gutter selects an inclusive source range |
+| `line_range_style` / `extend_line_range_style` / `line_range_style_slot` | `Style` / `StyleSlot` | Replace, extend, or directly configure the theme selection role used for saved source ranges and live drag previews |
+| `inline_block` | `DiffInlineBlock` | Insert one arbitrary full-width element after an anchored source row or inclusive range |
+| `inline_blocks` | `IntoIterator<Item = DiffInlineBlock>` | Set all full-width anchored elements, such as ranged comment editors and saved review comments |
 | `shared_selection_id` | `Arc<str>` | Cross-widget selection group id (unified: as-is; split: auto-suffixed `:left`/`:right`, while plain `DocumentView`s using the unsuffixed base id can still drag into split panes) |
 | `on_scroll` | `Callback<DiffScrollEvent>` | Pane-aware scroll callback (`pane` + `ScrollEvent`) |
 
@@ -800,6 +805,7 @@ let diff = DiffView::new(before, after)
     .neutral_bg(Color::rgb(24, 24, 24))
     .word_diff(true)
     .show_prefixes(true);
+```
 
 By default, `DiffView` derives its added/removed/marker styling from `Theme::diff`.
 Use `.diff_style(...)` only when you want per-widget overrides.
@@ -811,6 +817,56 @@ divider selects both panes row-by-row. Copy shortcuts copy that cross-pane
 selection as tab-separated logical diff rows (`left\tright`), collapsing any
 soft-wrapped visual rows back into their original diff line.
 
+Inline review controls use stable source anchors returned by `on_line_click`:
+
+```rust
+DiffView::with_content(before, after)
+    .mode(DiffViewMode::Split)
+    .height(Length::Auto)
+    .scrollbar(false)
+    .inline_blocks(comments.iter().map(|comment| {
+        DiffInlineBlock::after_range(comment.range, comment_editor(comment))
+    }))
+    .on_line_click(ctx.link().callback(Msg::OpenComment))
+    .on_line_range_select(ctx.link().callback(Msg::OpenCommentRange))
+```
+
+`DiffLineAnchor` carries git-style 1-based `old_line` / `new_line` values, a
+zero-based `hunk_index` for parsed patch input, and a `preferred_side`. The hunk
+index disambiguates repeated line numbers across files; it is `None` for
+before/after content diffs. The preferred side preserves whether the old or new
+half was clicked when a paired split replacement becomes separate removed/added
+rows in unified mode. In split mode `pane` still identifies where the click
+landed. Added and removed rows can have only one source line. Patch headers and
+context-collapse separators do not emit line clicks.
+
+`on_line_range_select` reserves plain left-button dragging only inside the
+line-number gutter. Content-area dragging remains ordinary text selection.
+While the button is held, the active pane paints the in-progress gutter and
+content rows with `line_range_style` (the theme selection style by default).
+The callback receives a normalized `DiffLineRangeEvent` on release; pass its
+`range` to `DiffInlineBlock::after_range(...)`. Both endpoints are inclusive,
+the block is inserted after the final selected row, and every selected row
+receives the same style. A click without dragging still emits `on_line_click`.
+Patch ranges remain within one `hunk_index`, and split ranges remain within one
+`pane`.
+
+When at least one inline block matches a visible row, `DiffView` divides the
+render into synchronized auto-height segments and places each block between
+them across the complete width. Each segment performs split-wrap synchronization
+independently, so soft-wrapped rows remain aligned and line-number gutter widths
+stay constant between segments. Inline blocks force the outer height to `Auto`;
+segment-local vertical/horizontal scrollbars and wheel handling are suppressed.
+Put the `DiffView` inside one `ScrollView` for a bounded review viewport, and
+drive scrolling on that parent rather than using `DiffView::scroll_offset` /
+`scroll_to_hunk`. Every row in an anchored range is pinned so context collapsing
+cannot hide part of an existing editor or saved comment.
+
+See `cargo run --example diff_inline_comments --features diff-view` for a
+complete click, gutter-drag range selection, focus, multiline edit, save, and
+delete flow using a real `TextArea`.
+
+```rust
 // Efficient: build DiffData once, reuse across renders
 let data = DiffData::with_config(before, after, config);
 let diff = DiffView::new(before, after).with_diff(data);

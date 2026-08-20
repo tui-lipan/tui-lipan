@@ -207,10 +207,12 @@ cargo run --example burst_effects --features big-text
 |---------|-------------|
 | `diff_hub` | `DiffView` hub: before/after compare and patch-based unified/split modes |
 | `diff_hunk_navigation` | Global hunk navigation across one auto-height patch-backed `DiffView` per file inside a keyed `ScrollView` |
+| `diff_inline_comments` | Click a source row or drag through its line-number gutter to create highlighted single- or multiline review ranges with editable full-width comments |
 
 ```bash
 cargo run --example diff_hub --features diff-view
 cargo run --example diff_hunk_navigation --features diff-view
+cargo run --example diff_inline_comments --features diff-view
 ```
 
 ### `qr-code`

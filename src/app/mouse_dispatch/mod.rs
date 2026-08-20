@@ -275,6 +275,11 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
         return result;
     }
 
+    #[cfg(feature = "diff-view")]
+    if let Some(result) = transition_diff_line_range_gesture(ctx, mouse) {
+        return result;
+    }
+
     if let Some(result) = transition_mouse_region_drag(ctx, &mouse, x, y) {
         return result;
     }
@@ -431,7 +436,7 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
     }
 
     if is_down {
-        let actions = mouse::gather_hit_actions(ctx.tree(), hit, x, y);
+        let actions = mouse::gather_hit_actions(ctx.tree(), hit, x, y, mouse.mods);
         emit_bubbling_mouse_down(ctx.tree(), hit, adjusted_mouse);
         if terminal_link_down {
             return true;
@@ -492,7 +497,7 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
     }
 
     if is_up {
-        let actions = mouse::gather_hit_actions(ctx.tree(), hit, x, y);
+        let actions = mouse::gather_hit_actions(ctx.tree(), hit, x, y, mouse.mods);
         if let Some(result) = transition_widget_up(ctx, hit, mouse, actions, x, y) {
             return result;
         }

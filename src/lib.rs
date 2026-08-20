@@ -276,7 +276,8 @@ pub use crate::widgets::{
 #[cfg(feature = "diff-view")]
 pub use crate::widgets::{
     DiffContextExpansion, DiffContextRange, DiffContextSeparatorDirection,
-    DiffContextSeparatorEvent, DiffData, DiffDataConfig, DiffHunkAnchor,
+    DiffContextSeparatorEvent, DiffData, DiffDataConfig, DiffHunkAnchor, DiffInlineBlock,
+    DiffLineAnchor, DiffLineClickEvent, DiffLineRange, DiffLineRangeEvent, DiffLineSide,
 };
 
 #[cfg(feature = "syntax-syntect")]

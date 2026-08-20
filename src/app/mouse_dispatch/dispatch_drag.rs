@@ -27,14 +27,26 @@ pub(crate) fn transition_drag_threshold<C: Component, T: MouseDispatchCtx<C>>(
     );
 
     if is_down {
-        let state = ctx.mouse_state();
-        state.left_down_pos = Some((x, y));
-        state.drag_threshold_exceeded = false;
-        state.click_consumed = false;
-        state.terminal_link_press = None;
-        state.pending_drag_source = None;
-        state.mouse_region_drag = None;
-        state.pan_view_drag = None;
+        #[cfg(feature = "diff-view")]
+        let clear_diff_preview;
+        {
+            let state = ctx.mouse_state();
+            state.left_down_pos = Some((x, y));
+            state.drag_threshold_exceeded = false;
+            state.click_consumed = false;
+            state.terminal_link_press = None;
+            state.pending_drag_source = None;
+            state.mouse_region_drag = None;
+            state.pan_view_drag = None;
+            #[cfg(feature = "diff-view")]
+            {
+                clear_diff_preview = state.diff_line_range_drag.take().is_some();
+            }
+        }
+        #[cfg(feature = "diff-view")]
+        if clear_diff_preview {
+            ctx.tree_mut().clear_diff_line_range_preview();
+        }
     } else if is_drag && drag_travel_exceeds(ctx, DEFAULT_DRAG_THRESHOLD, x, y) {
         ctx.mouse_state().drag_threshold_exceeded = true;
     }

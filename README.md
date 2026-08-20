@@ -368,6 +368,7 @@ cargo run --example <name>
 cargo run --example big_text   --features big-text
 cargo run --example image      --features image
 cargo run --example diff_hub  --features diff-view
+cargo run --example diff_inline_comments --features diff-view
 cargo run --example qr_code   --features qr-code
 cargo run --example terminal_filetree_devtools --features terminal
 cargo run --example devtools --features devtools

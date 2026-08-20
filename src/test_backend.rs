@@ -7971,4 +7971,355 @@ mod tests {
         );
         assert_eq!(backend.state().text_area, "alpha\nbeta");
     }
+
+    #[cfg(feature = "diff-view")]
+    struct DiffLineClickRoot {
+        backend: crate::widgets::DiffViewBackend,
+    }
+
+    #[cfg(feature = "diff-view")]
+    #[derive(Clone)]
+    enum DiffLineClickMsg {
+        Line(crate::widgets::DiffLineClickEvent),
+        Range(crate::widgets::DiffLineRangeEvent),
+        Ordinary,
+    }
+
+    #[cfg(feature = "diff-view")]
+    #[derive(Default)]
+    struct DiffLineClickState {
+        line: Option<crate::widgets::DiffLineClickEvent>,
+        range: Option<crate::widgets::DiffLineRangeEvent>,
+        ordinary_clicks: usize,
+    }
+
+    #[cfg(feature = "diff-view")]
+    impl Component for DiffLineClickRoot {
+        type Message = DiffLineClickMsg;
+        type Properties = ();
+        type State = DiffLineClickState;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            DiffLineClickState::default()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                DiffLineClickMsg::Line(event) => ctx.state.line = Some(event),
+                DiffLineClickMsg::Range(event) => ctx.state.range = Some(event),
+                DiffLineClickMsg::Ordinary => ctx.state.ordinary_clicks += 1,
+            }
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let view = crate::widgets::DiffView::with_content(
+                "same\nold\nend\ntail",
+                "same\nnew\nend\ntail",
+            )
+            .mode(crate::widgets::DiffViewMode::Split)
+            .backend(self.backend)
+            .wrap(false)
+            .panels_border(false)
+            .scrollbar(false)
+            .focusable(false)
+            .line_range_style(Style::new().bg(Color::Blue))
+            .on_line_click(ctx.link().callback(DiffLineClickMsg::Line))
+            .on_line_range_select(ctx.link().callback(DiffLineClickMsg::Range));
+            let view = match self.backend {
+                crate::widgets::DiffViewBackend::TextArea => view.text_area(
+                    TextArea::new("").on_click(
+                        ctx.link()
+                            .callback(|_: MouseEvent| DiffLineClickMsg::Ordinary),
+                    ),
+                ),
+                crate::widgets::DiffViewBackend::DocumentView => {
+                    view.document_view(DocumentView::new("").on_click(ctx.link().callback(
+                        |_: crate::widgets::DocumentClickEvent| DiffLineClickMsg::Ordinary,
+                    )))
+                }
+            };
+            view.into()
+        }
+    }
+
+    #[cfg(feature = "diff-view")]
+    #[test]
+    fn diff_line_click_routes_pane_and_source_anchor() {
+        for diff_backend in [
+            crate::widgets::DiffViewBackend::TextArea,
+            crate::widgets::DiffViewBackend::DocumentView,
+        ] {
+            let mut backend = TestBackend::new(DiffLineClickRoot {
+                backend: diff_backend,
+            });
+            backend.set_viewport(Rect {
+                x: 0,
+                y: 0,
+                w: 60,
+                h: 8,
+            });
+            backend.render();
+
+            let (content_x, gutter_x, y, drag_start_y, drag_end_y) = backend
+                .core
+                .tree
+                .iter()
+                .find_map(|node| match &node.kind {
+                    NodeKind::DocumentView(doc) => {
+                        let config = doc.diff_line_click.as_ref()?;
+                        let source_line = changed_right_source_line(config)?;
+                        let visual_row = doc
+                            .visual_cache
+                            .source_line_map
+                            .iter()
+                            .position(|line| *line == source_line)?;
+                        let inner = node.rect.inner(doc.border, doc.padding);
+                        let content = doc.content_layout(inner);
+                        let drag_start_source = config
+                            .events_by_source_line
+                            .iter()
+                            .position(|event| event.is_some_and(|event| event.logical_line == 0))?;
+                        let drag_end_source = config
+                            .events_by_source_line
+                            .iter()
+                            .position(|event| event.is_some_and(|event| event.logical_line == 2))?;
+                        let drag_start_row = doc
+                            .visual_cache
+                            .source_line_map
+                            .iter()
+                            .position(|line| *line == drag_start_source)?;
+                        let drag_end_row = doc
+                            .visual_cache
+                            .source_line_map
+                            .iter()
+                            .position(|line| *line == drag_end_source)?;
+                        Some((
+                            content.content_x.max(0) as u16,
+                            inner.x.max(0) as u16,
+                            inner.y.max(0) as u16 + visual_row as u16,
+                            inner.y.max(0) as u16 + drag_start_row as u16,
+                            inner.y.max(0) as u16 + drag_end_row as u16,
+                        ))
+                    }
+                    NodeKind::TextArea(area) => {
+                        let config = area.diff_line_click.as_ref()?;
+                        let source_line = changed_right_source_line(config)?;
+                        let visual_row = area
+                            .visual_cache
+                            .latest_lines()?
+                            .iter()
+                            .position(|line| line.line_num.saturating_sub(1) == source_line)?;
+                        let metrics = area.metrics(node.rect);
+                        let drag_start_source = config
+                            .events_by_source_line
+                            .iter()
+                            .position(|event| event.is_some_and(|event| event.logical_line == 0))?;
+                        let drag_end_source = config
+                            .events_by_source_line
+                            .iter()
+                            .position(|event| event.is_some_and(|event| event.logical_line == 2))?;
+                        let lines = area.visual_cache.latest_lines()?;
+                        let drag_start_row = lines.iter().position(|line| {
+                            line.line_num.saturating_sub(1) == drag_start_source
+                        })?;
+                        let drag_end_row = lines
+                            .iter()
+                            .position(|line| line.line_num.saturating_sub(1) == drag_end_source)?;
+                        Some((
+                            metrics.content_rect.x.max(0) as u16,
+                            metrics.inner_rect.x.max(0) as u16,
+                            metrics.inner_rect.y.max(0) as u16 + visual_row as u16,
+                            metrics.inner_rect.y.max(0) as u16 + drag_start_row as u16,
+                            metrics.inner_rect.y.max(0) as u16 + drag_end_row as u16,
+                        ))
+                    }
+                    _ => None,
+                })
+                .expect("right changed diff row");
+            for kind in [
+                MouseKind::Down(MouseButton::Left),
+                MouseKind::Up(MouseButton::Left),
+            ] {
+                backend
+                    .send_mouse(MouseEvent {
+                        x: content_x,
+                        y,
+                        kind,
+                        mods: KeyMods::NONE,
+                    })
+                    .expect("diff row click");
+            }
+
+            assert_eq!(
+                backend.state().line,
+                Some(crate::widgets::DiffLineClickEvent {
+                    pane: crate::widgets::DiffPane::Right,
+                    anchor: crate::widgets::DiffLineAnchor::new(Some(2), Some(2)),
+                    logical_line: 1,
+                    mods: KeyMods::NONE,
+                }),
+                "{diff_backend:?}"
+            );
+            let expected_ordinary_clicks =
+                usize::from(diff_backend == crate::widgets::DiffViewBackend::DocumentView);
+            assert_eq!(
+                backend.state().ordinary_clicks,
+                expected_ordinary_clicks,
+                "{diff_backend:?}"
+            );
+
+            backend.state_mut().line = None;
+            for kind in [
+                MouseKind::Down(MouseButton::Left),
+                MouseKind::Up(MouseButton::Left),
+            ] {
+                backend
+                    .send_mouse(MouseEvent {
+                        x: gutter_x,
+                        y,
+                        kind,
+                        mods: KeyMods::NONE,
+                    })
+                    .expect("diff gutter click");
+            }
+            assert!(
+                backend.state().line.is_some_and(|event| {
+                    event.anchor == crate::widgets::DiffLineAnchor::new(Some(2), Some(2))
+                        && event.mods == KeyMods::NONE
+                }),
+                "{diff_backend:?}"
+            );
+            assert_eq!(
+                backend.state().ordinary_clicks,
+                expected_ordinary_clicks,
+                "{diff_backend:?}"
+            );
+
+            backend.state_mut().line = None;
+            let before_drag = backend.capture_frame();
+            backend
+                .send_mouse(MouseEvent {
+                    x: gutter_x,
+                    y: drag_start_y,
+                    kind: MouseKind::Down(MouseButton::Left),
+                    mods: KeyMods::NONE,
+                })
+                .expect("start diff gutter range drag");
+            backend
+                .send_mouse(MouseEvent {
+                    x: gutter_x,
+                    y: drag_end_y,
+                    kind: MouseKind::Drag(MouseButton::Left),
+                    mods: KeyMods::NONE,
+                })
+                .expect("extend diff gutter range drag");
+
+            let during_drag = backend.capture_frame();
+            let content_probe_x = content_x.saturating_add(2);
+            for (x, y) in [
+                (gutter_x, drag_start_y),
+                (content_probe_x, drag_start_y),
+                (gutter_x, drag_end_y),
+                (content_probe_x, drag_end_y),
+            ] {
+                assert_ne!(
+                    captured_bg(&before_drag, x, y),
+                    captured_bg(&during_drag, x, y),
+                    "live range preview at ({x}, {y}) for {diff_backend:?}"
+                );
+            }
+            assert_eq!(
+                captured_bg(&before_drag, content_probe_x, drag_end_y + 1),
+                captured_bg(&during_drag, content_probe_x, drag_end_y + 1),
+                "row outside live range for {diff_backend:?}"
+            );
+
+            backend
+                .send_mouse(MouseEvent {
+                    x: gutter_x,
+                    y: drag_end_y,
+                    kind: MouseKind::Up(MouseButton::Left),
+                    mods: KeyMods::NONE,
+                })
+                .expect("release diff gutter range drag");
+            let after_drag = backend.capture_frame();
+            assert_eq!(
+                captured_bg(&before_drag, content_probe_x, drag_start_y),
+                captured_bg(&after_drag, content_probe_x, drag_start_y),
+                "transient preview clears on release for {diff_backend:?}"
+            );
+            assert_eq!(
+                backend.state().range,
+                Some(crate::widgets::DiffLineRangeEvent {
+                    pane: crate::widgets::DiffPane::Right,
+                    range: crate::widgets::DiffLineRange::new(
+                        crate::widgets::DiffLineAnchor::new(Some(1), Some(1)),
+                        crate::widgets::DiffLineAnchor::new(Some(3), Some(3)),
+                    ),
+                    start_logical_line: 0,
+                    end_logical_line: 2,
+                }),
+                "{diff_backend:?}"
+            );
+            assert!(backend.state().line.is_none(), "{diff_backend:?}");
+            assert_eq!(
+                backend.state().ordinary_clicks,
+                expected_ordinary_clicks,
+                "{diff_backend:?}"
+            );
+
+            for event in [
+                MouseEvent {
+                    x: gutter_x,
+                    y: drag_end_y,
+                    kind: MouseKind::Down(MouseButton::Left),
+                    mods: KeyMods::NONE,
+                },
+                MouseEvent {
+                    x: gutter_x,
+                    y: drag_start_y,
+                    kind: MouseKind::Drag(MouseButton::Left),
+                    mods: KeyMods::NONE,
+                },
+                MouseEvent {
+                    x: gutter_x,
+                    y: drag_start_y,
+                    kind: MouseKind::Up(MouseButton::Left),
+                    mods: KeyMods::NONE,
+                },
+            ] {
+                backend
+                    .send_mouse(event)
+                    .expect("reverse diff gutter range drag");
+            }
+            assert!(
+                backend.state().range.is_some_and(|event| {
+                    event.range
+                        == crate::widgets::DiffLineRange::new(
+                            crate::widgets::DiffLineAnchor::new(Some(1), Some(1)),
+                            crate::widgets::DiffLineAnchor::new(Some(3), Some(3)),
+                        )
+                        && event.start_logical_line == 2
+                        && event.end_logical_line == 0
+                }),
+                "{diff_backend:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "diff-view")]
+    fn changed_right_source_line(config: &crate::widgets::DiffLineClickConfig) -> Option<usize> {
+        config.events_by_source_line.iter().position(|event| {
+            event.as_ref().is_some_and(|event| {
+                event.pane == crate::widgets::DiffPane::Right
+                    && event.anchor == crate::widgets::DiffLineAnchor::new(Some(2), Some(2))
+            })
+        })
+    }
+
+    #[cfg(feature = "diff-view")]
+    fn captured_bg(frame: &crate::CapturedFrame, x: u16, y: u16) -> Color {
+        frame.cells[usize::from(y) * usize::from(frame.width) + usize::from(x)].bg
+    }
 }

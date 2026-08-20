@@ -2,6 +2,8 @@
 
 use super::render::{DiffRender, build_diff_data};
 use crate::callback::Callback;
+use crate::core::element::Element;
+use crate::core::event::KeyMods;
 use crate::style::Style;
 use crate::widgets::ScrollEvent;
 use std::sync::Arc;
@@ -38,6 +40,201 @@ pub enum DiffPane {
     Right,
     /// Unified pane in unified mode.
     Unified,
+}
+
+/// Source side preferred when resolving an anchored row across diff modes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DiffLineSide {
+    /// Resolve through the original/source line.
+    Old,
+    /// Resolve through the modified/source line.
+    #[default]
+    New,
+}
+
+/// Stable source-line identity for one rendered diff row.
+///
+/// Line numbers are git-style and 1-based. Added rows have only [`Self::new_line`],
+/// removed rows have only [`Self::old_line`], and unchanged rows normally have both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DiffLineAnchor {
+    /// Original/source line represented by the row.
+    pub old_line: Option<usize>,
+    /// Modified/source line represented by the row.
+    pub new_line: Option<usize>,
+    /// Zero-based patch hunk index when the diff came from a unified patch.
+    ///
+    /// This disambiguates repeated line numbers across files. Before/after
+    /// content diffs do not have parsed patch hunks and report `None`.
+    pub hunk_index: Option<usize>,
+    /// Side used when a split replacement becomes separate removed/added rows
+    /// in unified mode.
+    pub preferred_side: DiffLineSide,
+}
+
+impl DiffLineAnchor {
+    /// Create a source-line anchor.
+    pub const fn new(old_line: Option<usize>, new_line: Option<usize>) -> Self {
+        Self {
+            old_line,
+            new_line,
+            hunk_index: None,
+            preferred_side: if new_line.is_some() {
+                DiffLineSide::New
+            } else {
+                DiffLineSide::Old
+            },
+        }
+    }
+
+    /// Associate this anchor with a zero-based parsed patch hunk.
+    pub const fn with_hunk_index(mut self, hunk_index: usize) -> Self {
+        self.hunk_index = Some(hunk_index);
+        self
+    }
+
+    /// Prefer one source side when resolving this anchor across view modes.
+    pub const fn with_preferred_side(mut self, side: DiffLineSide) -> Self {
+        self.preferred_side = side;
+        self
+    }
+
+    /// Source line on the preferred side, falling back to the other side.
+    pub const fn preferred_line(self) -> Option<usize> {
+        match self.preferred_side {
+            DiffLineSide::Old => match self.old_line {
+                Some(line) => Some(line),
+                None => self.new_line,
+            },
+            DiffLineSide::New => match self.new_line {
+                Some(line) => Some(line),
+                None => self.old_line,
+            },
+        }
+    }
+
+    pub(crate) fn matches_source_row(
+        self,
+        old_line: Option<usize>,
+        new_line: Option<usize>,
+        hunk_index: Option<usize>,
+    ) -> bool {
+        if self.hunk_index != hunk_index {
+            return false;
+        }
+        if self.old_line == old_line && self.new_line == new_line {
+            return true;
+        }
+        match self.preferred_side {
+            DiffLineSide::Old => self.old_line.is_some() && self.old_line == old_line,
+            DiffLineSide::New => self.new_line.is_some() && self.new_line == new_line,
+        }
+    }
+}
+
+/// Stable inclusive source-row range for a multiline diff comment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DiffLineRange {
+    /// First selected source row.
+    pub start: DiffLineAnchor,
+    /// Last selected source row.
+    pub end: DiffLineAnchor,
+}
+
+impl DiffLineRange {
+    /// Create an inclusive range, ordered by source line when both endpoints
+    /// use the same preferred side.
+    pub fn new(mut start: DiffLineAnchor, mut end: DiffLineAnchor) -> Self {
+        if start.hunk_index == end.hunk_index
+            && start.preferred_side == end.preferred_side
+            && start.preferred_line() > end.preferred_line()
+        {
+            std::mem::swap(&mut start, &mut end);
+        }
+        Self { start, end }
+    }
+
+    /// Create a one-row range.
+    pub const fn single(anchor: DiffLineAnchor) -> Self {
+        Self {
+            start: anchor,
+            end: anchor,
+        }
+    }
+
+    /// Whether both endpoints identify the same source row.
+    pub fn is_single_line(self) -> bool {
+        self.start.old_line == self.end.old_line
+            && self.start.new_line == self.end.new_line
+            && self.start.hunk_index == self.end.hunk_index
+            && self.start.preferred_side == self.end.preferred_side
+    }
+
+    /// Whether both endpoints belong to the same before/after diff or patch hunk.
+    pub fn is_valid(self) -> bool {
+        self.start.hunk_index == self.end.hunk_index
+    }
+}
+
+/// Event emitted when a source row in a [`DiffView`](super::DiffView) is clicked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DiffLineClickEvent {
+    /// Pane that received the click.
+    pub pane: DiffPane,
+    /// Stable source-line identity shared by the aligned split row.
+    pub anchor: DiffLineAnchor,
+    /// Zero-based rendered logical row before soft wrapping.
+    pub logical_line: usize,
+    /// Keyboard modifiers held for application-specific click actions.
+    pub mods: KeyMods,
+}
+
+/// Event emitted after dragging through a diff pane's line-number gutter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DiffLineRangeEvent {
+    /// Pane where the drag started and ended.
+    pub pane: DiffPane,
+    /// Inclusive source range selected by the drag.
+    pub range: DiffLineRange,
+    /// Zero-based logical row where the drag started.
+    pub start_logical_line: usize,
+    /// Zero-based logical row where the drag ended.
+    pub end_logical_line: usize,
+}
+
+/// An arbitrary element inserted after a source row in a [`DiffView`](super::DiffView).
+///
+/// Inline blocks span the complete diff width in both unified and split modes,
+/// making them suitable for comment editors and review controls.
+#[derive(Clone)]
+pub struct DiffInlineBlock {
+    pub(crate) range: DiffLineRange,
+    pub(crate) content: Element,
+}
+
+impl DiffInlineBlock {
+    /// Insert `content` after the row identified by `anchor`.
+    pub fn after(anchor: DiffLineAnchor, content: impl Into<Element>) -> Self {
+        Self::after_range(DiffLineRange::single(anchor), content)
+    }
+
+    /// Insert `content` after the final row in an inclusive source range.
+    pub fn after_range(range: DiffLineRange, content: impl Into<Element>) -> Self {
+        Self {
+            range,
+            content: content.into(),
+        }
+    }
+
+    /// Source row after which this block is inserted.
+    pub const fn anchor(&self) -> DiffLineAnchor {
+        self.range.end
+    }
+
+    /// Inclusive source range associated with this block.
+    pub const fn range(&self) -> DiffLineRange {
+        self.range
+    }
 }
 
 /// Scroll event emitted by [`DiffView`](super::DiffView) with pane metadata.
@@ -207,6 +404,14 @@ pub(crate) struct DiffContextSeparatorClickConfig {
     pub events_by_source_line: Arc<[Option<DiffContextSeparatorEvent>]>,
     pub on_click: Option<Callback<DiffContextSeparatorEvent>>,
     pub hover_style: Option<Style>,
+}
+
+#[derive(Clone)]
+pub(crate) struct DiffLineClickConfig {
+    pub events_by_source_line: Arc<[Option<DiffLineClickEvent>]>,
+    pub on_click: Option<Callback<DiffLineClickEvent>>,
+    pub on_range_select: Option<Callback<DiffLineRangeEvent>>,
+    pub range_overlay: Style,
 }
 
 /// Prefixes used for diff lines.

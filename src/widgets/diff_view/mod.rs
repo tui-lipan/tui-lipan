@@ -13,13 +13,13 @@ pub use types::*;
 pub(crate) use wrap_sync::*;
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 
 use crate::callback::Callback;
 use crate::core::element::Element;
-use crate::style::{Color, DiffPalette, Length, Style};
-use crate::widgets::{Divider, DocumentView, Frame, HStack, ScrollEvent, TextArea};
+use crate::style::{Color, DiffPalette, Length, Style, StyleSlot};
+use crate::widgets::{Divider, DocumentView, Frame, HStack, ScrollEvent, TextArea, VStack};
 use rustc_hash::FxHasher;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -201,6 +201,9 @@ pub struct DiffView {
     scroll_offset: Option<usize>,
     scroll_to_hunk: Option<usize>,
     on_scroll: Option<Callback<DiffScrollEvent>>,
+    on_line_click: Option<Callback<DiffLineClickEvent>>,
+    on_line_range_select: Option<Callback<DiffLineRangeEvent>>,
+    line_range_style: StyleSlot,
     on_context_separator_click: Option<Callback<DiffContextSeparatorEvent>>,
     context_separator_hover_style: Option<Style>,
     text_area: TextArea,
@@ -221,6 +224,7 @@ pub struct DiffView {
     context_separator_min_lines: usize,
     context_expand_lines: usize,
     expanded_contexts: Vec<DiffContextExpansion>,
+    inline_blocks: Vec<DiffInlineBlock>,
     /// Per-pane data cache (avoids recomputing numbered render, gutter, excluded
     /// lines every frame). Keyed by (diff_hash, mode, pane, line_numbers, min_digits, style).
     pane_cache: RefCell<Vec<PaneCacheEntry>>,
@@ -310,6 +314,9 @@ impl DiffView {
             scroll_offset: None,
             scroll_to_hunk: None,
             on_scroll: None,
+            on_line_click: None,
+            on_line_range_select: None,
+            line_range_style: StyleSlot::Inherit,
             on_context_separator_click: None,
             context_separator_hover_style: None,
             text_area,
@@ -330,6 +337,7 @@ impl DiffView {
             context_separator_min_lines: default_context_separator_min_lines(),
             context_expand_lines: default_context_expand_lines(),
             expanded_contexts: Vec::new(),
+            inline_blocks: Vec::new(),
             pane_cache: RefCell::new(Vec::new()),
         }
     }
@@ -372,6 +380,60 @@ impl DiffView {
     /// Receive pane-aware scroll events from rendered pane(s).
     pub fn on_scroll(mut self, cb: Callback<DiffScrollEvent>) -> Self {
         self.on_scroll = Some(cb);
+        self
+    }
+
+    /// Set the callback fired when a rendered source row is clicked.
+    ///
+    /// Patch metadata and collapsed-context separator rows do not emit this callback.
+    /// In split mode the event reports the clicked pane and an anchor shared by the
+    /// aligned left/right row.
+    pub fn on_line_click(mut self, cb: Callback<DiffLineClickEvent>) -> Self {
+        self.on_line_click = Some(cb);
+        self
+    }
+
+    /// Set the callback fired after dragging across source rows in a pane gutter.
+    pub fn on_line_range_select(mut self, cb: Callback<DiffLineRangeEvent>) -> Self {
+        self.on_line_range_select = Some(cb);
+        self
+    }
+
+    /// Set the style for inline-block source ranges and live gutter-drag previews.
+    ///
+    /// This replaces the active theme's selection role.
+    pub fn line_range_style(mut self, style: Style) -> Self {
+        self.line_range_style = StyleSlot::Replace(style);
+        self
+    }
+
+    /// Extend the active theme's selection role for source ranges.
+    pub fn extend_line_range_style(mut self, style: Style) -> Self {
+        self.line_range_style = StyleSlot::Extend(style);
+        self
+    }
+
+    /// Inherit the active theme's selection role for source ranges.
+    pub fn inherit_line_range_style(mut self) -> Self {
+        self.line_range_style = StyleSlot::Inherit;
+        self
+    }
+
+    /// Set the source-range style slot directly.
+    pub fn line_range_style_slot(mut self, slot: StyleSlot) -> Self {
+        self.line_range_style = slot;
+        self
+    }
+
+    /// Insert an arbitrary full-width element after a source row or range.
+    pub fn inline_block(mut self, block: DiffInlineBlock) -> Self {
+        self.inline_blocks.push(block);
+        self
+    }
+
+    /// Set full-width elements inserted after anchored source rows.
+    pub fn inline_blocks(mut self, blocks: impl IntoIterator<Item = DiffInlineBlock>) -> Self {
+        self.inline_blocks = blocks.into_iter().collect();
         self
     }
 
@@ -829,13 +891,17 @@ impl DiffView {
     }
 
     fn resolved_height(&self) -> Length {
-        self.height_override.unwrap_or_else(|| {
-            if self.should_use_implicit_auto_height() {
-                Length::Auto
-            } else {
-                self.backend_height()
-            }
-        })
+        if !self.inline_blocks.is_empty() {
+            Length::Auto
+        } else {
+            self.height_override.unwrap_or_else(|| {
+                if self.should_use_implicit_auto_height() {
+                    Length::Auto
+                } else {
+                    self.backend_height()
+                }
+            })
+        }
     }
 }
 
@@ -873,6 +939,177 @@ fn separator_click_config(
             on_click,
             hover_style,
         })
+}
+
+fn diff_line_anchor(line: &DiffRenderLine) -> Option<DiffLineAnchor> {
+    (!matches!(
+        line.kind,
+        DiffLineKind::PatchHeader | DiffLineKind::Separator | DiffLineKind::Empty
+    ) && (line.old_line.is_some() || line.new_line.is_some()))
+    .then(|| {
+        let anchor = DiffLineAnchor::new(line.old_line, line.new_line);
+        line.hunk
+            .map(|hunk| anchor.with_hunk_index(hunk.index))
+            .unwrap_or(anchor)
+    })
+}
+
+fn unified_line_anchors(render: &DiffRender) -> Vec<Option<DiffLineAnchor>> {
+    render.lines.iter().map(diff_line_anchor).collect()
+}
+
+fn source_line_digits(render: &DiffRender, pane: DiffPane) -> usize {
+    render
+        .lines
+        .iter()
+        .flat_map(|line| match pane {
+            DiffPane::Left => [line.old_line, None],
+            DiffPane::Right => [line.new_line, None],
+            DiffPane::Unified => [line.old_line, line.new_line],
+        })
+        .flatten()
+        .max()
+        .map_or(1, |line| line.to_string().len())
+}
+
+fn split_line_anchors(left: &DiffRender, right: &DiffRender) -> Vec<Option<DiffLineAnchor>> {
+    left.lines
+        .iter()
+        .zip(right.lines.iter())
+        .map(|(left, right)| {
+            let old_line = left.old_line.or(right.old_line);
+            let new_line = right.new_line.or(left.new_line);
+            (old_line.is_some() || new_line.is_some()).then(|| {
+                let anchor = DiffLineAnchor::new(old_line, new_line);
+                left.hunk
+                    .or(right.hunk)
+                    .map(|hunk| anchor.with_hunk_index(hunk.index))
+                    .unwrap_or(anchor)
+            })
+        })
+        .collect()
+}
+
+fn line_click_config(
+    anchors: &[Option<DiffLineAnchor>],
+    pane: DiffPane,
+    logical_offset: usize,
+    on_click: Option<Callback<DiffLineClickEvent>>,
+    on_range_select: Option<Callback<DiffLineRangeEvent>>,
+    range_slot: StyleSlot,
+) -> Option<DiffLineClickConfig> {
+    if on_click.is_none() && on_range_select.is_none() {
+        return None;
+    }
+    let events = anchors
+        .iter()
+        .enumerate()
+        .map(|(index, anchor)| {
+            anchor.map(|anchor| {
+                let preferred_side = match pane {
+                    DiffPane::Left if anchor.old_line.is_some() => DiffLineSide::Old,
+                    DiffPane::Right if anchor.new_line.is_some() => DiffLineSide::New,
+                    DiffPane::Left | DiffPane::Right if anchor.old_line.is_some() => {
+                        DiffLineSide::Old
+                    }
+                    _ => DiffLineSide::New,
+                };
+                DiffLineClickEvent {
+                    pane,
+                    anchor: anchor.with_preferred_side(preferred_side),
+                    logical_line: logical_offset.saturating_add(index),
+                    mods: crate::core::event::KeyMods::NONE,
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    events
+        .iter()
+        .any(Option::is_some)
+        .then(|| DiffLineClickConfig {
+            events_by_source_line: events.into(),
+            on_click,
+            on_range_select,
+            range_overlay: range_slot.explicit_style().unwrap_or_default(),
+        })
+}
+
+fn line_range_bounds(
+    anchors: &[Option<DiffLineAnchor>],
+    range: DiffLineRange,
+) -> Option<(usize, usize)> {
+    if !range.is_valid() {
+        return None;
+    }
+    let find = |target: DiffLineAnchor| {
+        anchors.iter().position(|anchor| {
+            anchor.is_some_and(|candidate| {
+                target.matches_source_row(
+                    candidate.old_line,
+                    candidate.new_line,
+                    candidate.hunk_index,
+                )
+            })
+        })
+    };
+    let start = find(range.start)?;
+    let end = find(range.end)?;
+    Some((start.min(end), start.max(end)))
+}
+
+fn selected_line_rows(
+    anchors: &[Option<DiffLineAnchor>],
+    blocks: &[DiffInlineBlock],
+) -> Arc<[bool]> {
+    let mut selected = vec![false; anchors.len()];
+    for block in blocks {
+        if let Some((start, end)) = line_range_bounds(anchors, block.range) {
+            selected[start..=end].fill(true);
+        }
+    }
+    selected.into()
+}
+
+fn build_inline_content(
+    anchors: &[Option<DiffLineAnchor>],
+    blocks: &[DiffInlineBlock],
+    mut build_segment: impl FnMut(usize, usize) -> Element,
+) -> Option<Element> {
+    let mut blocks_by_row: BTreeMap<usize, Vec<Element>> = BTreeMap::new();
+    for block in blocks {
+        let Some((_, row)) = line_range_bounds(anchors, block.range) else {
+            continue;
+        };
+        blocks_by_row
+            .entry(row)
+            .or_default()
+            .push(block.content.clone());
+    }
+    if blocks_by_row.is_empty() {
+        return None;
+    }
+
+    let mut children = Vec::new();
+    let mut segment_start = 0usize;
+    for (row, row_blocks) in blocks_by_row {
+        let segment_end = row.saturating_add(1).min(anchors.len());
+        if segment_start < segment_end {
+            children.push(build_segment(segment_start, segment_end));
+        }
+        children.extend(row_blocks);
+        segment_start = segment_end;
+    }
+    if segment_start < anchors.len() {
+        children.push(build_segment(segment_start, anchors.len()));
+    }
+
+    Some(
+        VStack::new()
+            .height(Length::Auto)
+            .align(crate::style::Align::Stretch)
+            .children(children)
+            .into(),
+    )
 }
 
 impl From<DiffView> for Element {
@@ -930,6 +1167,11 @@ impl From<DiffView> for Element {
             )
         };
 
+        let pinned_ranges = view
+            .inline_blocks
+            .iter()
+            .map(|block| block.range)
+            .collect::<Vec<_>>();
         let (left_render, right_render, unified_render) =
             apply_runtime_context_collapse_to_diff_renders(
                 left_render,
@@ -941,8 +1183,13 @@ impl From<DiffView> for Element {
                     view.context_separator_text.as_ref(),
                     view.context_separator_min_lines,
                     &view.expanded_contexts,
-                ),
+                )
+                .pinned_ranges(&pinned_ranges),
             );
+        let split_anchors = split_line_anchors(&left_render, &right_render);
+        let unified_anchors = unified_line_anchors(&unified_render);
+        let split_selected_rows = selected_line_rows(&split_anchors, &view.inline_blocks);
+        let unified_selected_rows = selected_line_rows(&unified_anchors, &view.inline_blocks);
 
         let base_strategy = view
             .base_color_strategy
@@ -960,46 +1207,23 @@ impl From<DiffView> for Element {
                 DiffViewBackend::TextArea => view.text_area.min_line_number_width as usize,
                 DiffViewBackend::DocumentView => view.document_view.min_line_number_width as usize,
             });
+        let pane_min_digits = |pane| {
+            min_line_digits.max(match pane {
+                DiffPane::Left => source_line_digits(&left_render, pane),
+                DiffPane::Right => source_line_digits(&right_render, pane),
+                DiffPane::Unified => source_line_digits(&unified_render, pane),
+            })
+        };
 
         let language = view.language.clone();
         let theme = view.theme.clone();
         let split_wrap_sync = matches!(view.mode, DiffViewMode::Split) && view.effective_wrap();
-        let split_wrap_state = split_wrap_sync.then(new_split_wrap_sync_state);
-        if let Some(ref sync) = split_wrap_state {
-            wrap_sync::set_split_wrap_scrollbar_cols(
-                sync,
-                split_pane_standalone_scrollbar_cols(&view, DiffPane::Left),
-                split_pane_standalone_scrollbar_cols(&view, DiffPane::Right),
-            );
-        }
         let split_wrap_padding_gutter_style = split_wrap_sync.then_some(
             view.diff_style
                 .empty
                 .patch(view.diff_style.context_line_number),
         );
         let split_wrap_padding_style = split_wrap_sync.then_some(view.diff_style.empty);
-        let left_peer_source_lines = if split_wrap_sync {
-            Some(Arc::new(
-                right_render
-                    .lines
-                    .iter()
-                    .map(|line| Arc::clone(&line.text))
-                    .collect::<Vec<_>>(),
-            ))
-        } else {
-            None
-        };
-        let right_peer_source_lines = if split_wrap_sync {
-            Some(Arc::new(
-                left_render
-                    .lines
-                    .iter()
-                    .map(|line| Arc::clone(&line.text))
-                    .collect::<Vec<_>>(),
-            ))
-        } else {
-            None
-        };
 
         // Pre-compute per-pane shared selection ids.  Unified uses the id
         // as-is; split suffixes `:left` / `:right` so only same-side panels
@@ -1022,10 +1246,29 @@ impl From<DiffView> for Element {
             gutter_style_hash,
         };
 
-        let build_text_area = |render: &DiffRender, pane: DiffPane| {
-            let pane_data = get_pane_data(&view.pane_cache, render, pane, pane_options);
+        let build_text_area = |render: &DiffRender,
+                               pane: DiffPane,
+                               line_anchors: &[Option<DiffLineAnchor>],
+                               selected_rows: Arc<[bool]>,
+                               logical_offset: usize,
+                               peer_source_lines: Option<Arc<Vec<Arc<str>>>>,
+                               split_wrap_state: Option<SharedSplitWrapSync>,
+                               segmented: bool| {
+            let pane_data = get_pane_data(
+                &view.pane_cache,
+                render,
+                pane,
+                PaneRenderOptions {
+                    min_digits: pane_min_digits(pane),
+                    ..pane_options
+                },
+            );
             let render = pane_data.numbered_render;
-            let gutter_spans = pane_data.gutter_spans;
+            let gutter_spans = apply_diff_gutter_selection(
+                &pane_data.gutter_spans,
+                selected_rows.as_ref(),
+                view.line_range_style.explicit_style().unwrap_or_default(),
+            );
             let gutter_col_width = pane_data.gutter_col_width;
             let excluded_source_lines = pane_data.excluded_source_lines;
             let excluded_bytes = pane_data.excluded_bytes;
@@ -1035,7 +1278,8 @@ impl From<DiffView> for Element {
                 view.diff_style,
                 view.highlight_full_width,
                 false,
-            );
+            )
+            .with_line_selection(Arc::clone(&selected_rows), view.line_range_style);
             let separator_click = separator_click_config(
                 &render,
                 pane,
@@ -1058,12 +1302,8 @@ impl From<DiffView> for Element {
 
             area = area.line_numbers(false);
 
-            area.peer_source_lines = match pane {
-                DiffPane::Left => left_peer_source_lines.clone(),
-                DiffPane::Right => right_peer_source_lines.clone(),
-                DiffPane::Unified => None,
-            };
-            area.split_wrap_sync = split_wrap_state.clone();
+            area.peer_source_lines = peer_source_lines;
+            area.split_wrap_sync = split_wrap_state;
             area.split_wrap_side = match pane {
                 DiffPane::Left => Some(SplitPaneSide::Left),
                 DiffPane::Right => Some(SplitPaneSide::Right),
@@ -1072,6 +1312,14 @@ impl From<DiffView> for Element {
             area.split_wrap_padding_gutter_style = split_wrap_padding_gutter_style;
             area.split_wrap_padding_style = split_wrap_padding_style;
             area.diff_context_separator_click = separator_click;
+            area.diff_line_click = line_click_config(
+                line_anchors,
+                pane,
+                logical_offset,
+                view.on_line_click.clone(),
+                view.on_line_range_select.clone(),
+                view.line_range_style,
+            );
 
             if let Some(v) = view.wrap_override {
                 area = area.wrap(v);
@@ -1091,19 +1339,27 @@ impl From<DiffView> for Element {
                 area = area.scrollbar(is_right);
                 area.pin_scrollbar_focus_style = is_right;
             }
+            if segmented {
+                area = area.scrollbar(false);
+                area = area.h_scrollbar(false);
+                area = area.scroll_wheel(false);
+                area.pin_scrollbar_focus_style = false;
+            }
 
             // Border is handled by pane wrapper frames.
             area = area.border(false);
 
-            if use_auto_pane_height {
+            if use_auto_pane_height || segmented {
                 area = area.height(Length::Auto);
             }
 
-            if let Some(offset) = view.scroll_offset {
-                area = area.scroll_offset(offset);
-            }
-            if let Some(line) = scroll_to_hunk_line {
-                area = area.scroll_to_line(line);
+            if !segmented {
+                if let Some(offset) = view.scroll_offset {
+                    area = area.scroll_offset(offset);
+                }
+                if let Some(line) = scroll_to_hunk_line {
+                    area = area.scroll_to_line(line);
+                }
             }
 
             let existing_on_scroll = area.on_scroll.clone();
@@ -1125,10 +1381,29 @@ impl From<DiffView> for Element {
             area.into()
         };
 
-        let build_document_view = |render: &DiffRender, pane: DiffPane| {
-            let pane_data = get_pane_data(&view.pane_cache, render, pane, pane_options);
+        let build_document_view = |render: &DiffRender,
+                                   pane: DiffPane,
+                                   line_anchors: &[Option<DiffLineAnchor>],
+                                   selected_rows: Arc<[bool]>,
+                                   logical_offset: usize,
+                                   peer_source_lines: Option<Arc<Vec<Arc<str>>>>,
+                                   split_wrap_state: Option<SharedSplitWrapSync>,
+                                   segmented: bool| {
+            let pane_data = get_pane_data(
+                &view.pane_cache,
+                render,
+                pane,
+                PaneRenderOptions {
+                    min_digits: pane_min_digits(pane),
+                    ..pane_options
+                },
+            );
             let render = pane_data.numbered_render;
-            let gutter_spans = pane_data.gutter_spans;
+            let gutter_spans = apply_diff_gutter_selection(
+                &pane_data.gutter_spans,
+                selected_rows.as_ref(),
+                view.line_range_style.explicit_style().unwrap_or_default(),
+            );
             let gutter_col_width = pane_data.gutter_col_width;
             let excluded_source_lines = pane_data.excluded_source_lines;
             let formatter = DiffDocumentFormatter::new(
@@ -1139,7 +1414,8 @@ impl From<DiffView> for Element {
                 false,
                 language.clone(),
                 theme.clone(),
-            );
+            )
+            .with_line_selection(Arc::clone(&selected_rows), view.line_range_style);
             let separator_click = separator_click_config(
                 &render,
                 pane,
@@ -1154,17 +1430,14 @@ impl From<DiffView> for Element {
             doc.value = render.raw_text.clone();
             doc.content_type = Some("diff".into());
             doc.formatter = Some(Rc::new(formatter));
-            doc.highlight_full_width = view.highlight_full_width;
+            doc.highlight_full_width =
+                view.highlight_full_width || selected_rows.iter().copied().any(|selected| selected);
             doc.gutter_lines = Some(gutter_spans);
             doc.gutter_col_width = gutter_col_width;
             doc.copy_excluded_source_lines = Some(excluded_source_lines);
             doc.shared_selection_id = pane_shared_selection_id(pane);
-            doc.peer_source_lines = match pane {
-                DiffPane::Left => left_peer_source_lines.clone(),
-                DiffPane::Right => right_peer_source_lines.clone(),
-                DiffPane::Unified => None,
-            };
-            doc.split_wrap_sync = split_wrap_state.clone();
+            doc.peer_source_lines = peer_source_lines;
+            doc.split_wrap_sync = split_wrap_state;
             doc.split_wrap_side = match pane {
                 DiffPane::Left => Some(SplitPaneSide::Left),
                 DiffPane::Right => Some(SplitPaneSide::Right),
@@ -1178,6 +1451,14 @@ impl From<DiffView> for Element {
             doc.split_wrap_padding_gutter_style = split_wrap_padding_gutter_style;
             doc.split_wrap_padding_style = split_wrap_padding_style;
             doc.diff_context_separator_click = separator_click;
+            doc.diff_line_click = line_click_config(
+                line_anchors,
+                pane,
+                logical_offset,
+                view.on_line_click.clone(),
+                view.on_line_range_select.clone(),
+                view.line_range_style,
+            );
 
             doc = doc.line_numbers(false);
 
@@ -1199,19 +1480,27 @@ impl From<DiffView> for Element {
                 doc = doc.scrollbar(is_right);
                 doc.pin_scrollbar_focus_style = is_right;
             }
+            if segmented {
+                doc = doc.scrollbar(false);
+                doc = doc.h_scrollbar(false);
+                doc = doc.scroll_wheel(false);
+                doc.pin_scrollbar_focus_style = false;
+            }
 
             // Border is handled by pane wrapper frames.
             doc = doc.border(false);
 
-            if use_auto_pane_height {
+            if use_auto_pane_height || segmented {
                 doc.height = Length::Auto;
             }
 
-            if let Some(offset) = view.scroll_offset {
-                doc.scroll_offset = Some(offset);
-            }
-            if let Some(line) = scroll_to_hunk_line {
-                doc = doc.scroll_to_source_line(line);
+            if !segmented {
+                if let Some(offset) = view.scroll_offset {
+                    doc.scroll_offset = Some(offset);
+                }
+                if let Some(line) = scroll_to_hunk_line {
+                    doc = doc.scroll_to_source_line(line);
+                }
             }
 
             let existing_on_scroll = doc.on_scroll.clone();
@@ -1233,10 +1522,37 @@ impl From<DiffView> for Element {
             doc.into()
         };
 
-        let build_pane = |render: &DiffRender, pane: DiffPane, is_left: bool| -> Element {
+        let build_pane = |render: &DiffRender,
+                          pane: DiffPane,
+                          is_left: bool,
+                          line_anchors: &[Option<DiffLineAnchor>],
+                          selected_rows: Arc<[bool]>,
+                          logical_offset: usize,
+                          peer_source_lines: Option<Arc<Vec<Arc<str>>>>,
+                          split_wrap_state: Option<SharedSplitWrapSync>,
+                          segmented: bool|
+         -> Element {
             let inner: Element = match view.backend {
-                DiffViewBackend::TextArea => build_text_area(render, pane),
-                DiffViewBackend::DocumentView => build_document_view(render, pane),
+                DiffViewBackend::TextArea => build_text_area(
+                    render,
+                    pane,
+                    line_anchors,
+                    Arc::clone(&selected_rows),
+                    logical_offset,
+                    peer_source_lines,
+                    split_wrap_state,
+                    segmented,
+                ),
+                DiffViewBackend::DocumentView => build_document_view(
+                    render,
+                    pane,
+                    line_anchors,
+                    selected_rows,
+                    logical_offset,
+                    peer_source_lines,
+                    split_wrap_state,
+                    segmented,
+                ),
             };
 
             let right_pad = if is_left && view.single_scrollbar && view.effective_scrollbar() {
@@ -1251,38 +1567,162 @@ impl From<DiffView> for Element {
                 .padding((0, right_pad, 0, 0))
                 .child(inner);
 
-            if use_auto_pane_height {
+            if use_auto_pane_height || segmented {
                 pane = pane.height(Length::Auto);
             }
 
             pane.into()
         };
 
+        let build_split_content = |left_render: &DiffRender,
+                                   right_render: &DiffRender,
+                                   anchors: &[Option<DiffLineAnchor>],
+                                   selected_rows: Arc<[bool]>,
+                                   logical_offset: usize,
+                                   segmented: bool| {
+            let split_wrap_state = split_wrap_sync.then(new_split_wrap_sync_state);
+            if let Some(ref sync) = split_wrap_state {
+                let (left_cols, right_cols) = if segmented {
+                    (0, 0)
+                } else {
+                    (
+                        split_pane_standalone_scrollbar_cols(&view, DiffPane::Left),
+                        split_pane_standalone_scrollbar_cols(&view, DiffPane::Right),
+                    )
+                };
+                wrap_sync::set_split_wrap_scrollbar_cols(sync, left_cols, right_cols);
+            }
+            let left_peer_source_lines = split_wrap_sync.then(|| {
+                Arc::new(
+                    right_render
+                        .lines
+                        .iter()
+                        .map(|line| Arc::clone(&line.text))
+                        .collect::<Vec<_>>(),
+                )
+            });
+            let right_peer_source_lines = split_wrap_sync.then(|| {
+                Arc::new(
+                    left_render
+                        .lines
+                        .iter()
+                        .map(|line| Arc::clone(&line.text))
+                        .collect::<Vec<_>>(),
+                )
+            });
+            let left = build_pane(
+                left_render,
+                DiffPane::Left,
+                true,
+                anchors,
+                Arc::clone(&selected_rows),
+                logical_offset,
+                left_peer_source_lines,
+                split_wrap_state.clone(),
+                segmented,
+            );
+            let right = build_pane(
+                right_render,
+                DiffPane::Right,
+                false,
+                anchors,
+                selected_rows,
+                logical_offset,
+                right_peer_source_lines,
+                split_wrap_state,
+                segmented,
+            );
+
+            let mut stack = HStack::new().even_flex(true).child(left);
+            if view.vertical_separator {
+                stack = stack.child(
+                    Divider::vertical()
+                        .ch(view.vertical_separator_char)
+                        .style(view.vertical_separator_style)
+                        .join_frame(view.join_frame),
+                );
+            }
+            stack = stack.child(right);
+            if segmented {
+                stack = stack.height(Length::Auto);
+            }
+            let element: Element = stack.into();
+            if segmented {
+                element.key(format!("diff-inline-split-band-{logical_offset}"))
+            } else {
+                element
+            }
+        };
+
+        let build_unified_content = |render: &DiffRender,
+                                     anchors: &[Option<DiffLineAnchor>],
+                                     selected_rows: Arc<[bool]>,
+                                     logical_offset: usize,
+                                     segmented: bool| {
+            let element = build_pane(
+                render,
+                DiffPane::Unified,
+                false,
+                anchors,
+                selected_rows,
+                logical_offset,
+                None,
+                None,
+                segmented,
+            );
+            if segmented {
+                element.key(format!("diff-inline-unified-band-{logical_offset}"))
+            } else {
+                element
+            }
+        };
+
         let content = match view.mode {
             DiffViewMode::Split => {
-                let left = build_pane(&left_render, DiffPane::Left, true);
-                let right = build_pane(&right_render, DiffPane::Right, false);
-                if view.vertical_separator {
-                    HStack::new()
-                        .even_flex(true)
-                        .child(left)
-                        .child(
-                            Divider::vertical()
-                                .ch(view.vertical_separator_char)
-                                .style(view.vertical_separator_style)
-                                .join_frame(view.join_frame),
-                        )
-                        .child(right)
-                        .into()
-                } else {
-                    HStack::new()
-                        .even_flex(true)
-                        .child(left)
-                        .child(right)
-                        .into()
-                }
+                build_inline_content(&split_anchors, &view.inline_blocks, |start, end| {
+                    let left = DiffRender::new(left_render.lines[start..end].to_vec());
+                    let right = DiffRender::new(right_render.lines[start..end].to_vec());
+                    build_split_content(
+                        &left,
+                        &right,
+                        &split_anchors[start..end],
+                        Arc::from(&split_selected_rows[start..end]),
+                        start,
+                        true,
+                    )
+                })
+                .unwrap_or_else(|| {
+                    build_split_content(
+                        &left_render,
+                        &right_render,
+                        &split_anchors,
+                        Arc::clone(&split_selected_rows),
+                        0,
+                        false,
+                    )
+                })
             }
-            DiffViewMode::Unified => build_pane(&unified_render, DiffPane::Unified, false),
+            DiffViewMode::Unified => {
+                build_inline_content(&unified_anchors, &view.inline_blocks, |start, end| {
+                    let render = DiffRender::new(unified_render.lines[start..end].to_vec());
+                    build_unified_content(
+                        &render,
+                        &unified_anchors[start..end],
+                        Arc::from(&unified_selected_rows[start..end]),
+                        start,
+                        true,
+                    )
+                })
+                .unwrap_or_else(|| {
+                    build_unified_content(
+                        &unified_render,
+                        &unified_anchors,
+                        Arc::clone(&unified_selected_rows),
+                        0,
+                        false,
+                    )
+                })
+            }
         };
 
         Frame::new()

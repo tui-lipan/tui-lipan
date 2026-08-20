@@ -11,6 +11,8 @@ use ratatui::widgets::{Block, Clear};
 
 use crate::app::ContrastPolicy;
 use crate::app::copy_feedback::CopyFeedbackState;
+#[cfg(feature = "diff-view")]
+use crate::backend::ratatui_backend::common::finalize_style;
 use crate::backend::ratatui_backend::common::{
     apply_effect_style_clipped, apply_visual_effects_clipped, current_render_screen_background,
     from_ratatui_color, push_render_terminal_bg, render_placeholder_frame, to_ratatui_rect,
@@ -789,6 +791,113 @@ fn render_subtree(
     }
 }
 
+#[cfg(feature = "diff-view")]
+fn patch_diff_line_range_preview_row(
+    f: &mut ratatui::Frame<'_>,
+    row: Rect,
+    clip_rect: Option<Rect>,
+    style: Style,
+) {
+    let row = clip_rect.map_or(row, |clip| row.intersection(&clip));
+    if row.w == 0 || row.h == 0 {
+        return;
+    }
+    let area = to_ratatui_rect(row);
+    let buffer = f.buffer_mut();
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            let Some(cell) = buffer.cell_mut((x, y)) else {
+                continue;
+            };
+            let backdrop = (cell.bg != RColor::Reset).then(|| from_ratatui_color(cell.bg));
+            let overlay = finalize_style(style, backdrop, ContrastPolicy::Off);
+            cell.set_style(to_ratatui_style(overlay));
+        }
+    }
+}
+
+#[cfg(feature = "diff-view")]
+fn render_diff_line_range_preview(
+    f: &mut ratatui::Frame<'_>,
+    tree: &NodeTree,
+    node: &crate::core::node::Node,
+    rect: Rect,
+    clip_rect: Option<Rect>,
+) {
+    match &node.kind {
+        NodeKind::DocumentView(doc) => {
+            let Some(config) = doc.diff_line_click.as_ref() else {
+                return;
+            };
+            let inner = rect.inner(doc.border, doc.padding);
+            let content = doc.content_layout(inner);
+            let row_width = u16::try_from(content.content_x.saturating_sub(inner.x))
+                .unwrap_or(0)
+                .saturating_add(content.content_width);
+            for visible_row in 0..usize::from(content.content_height) {
+                let visual_idx = doc.scroll_offset.saturating_add(visible_row);
+                let Some(source_line) = doc.visual_cache.source_line_map.get(visual_idx).copied()
+                else {
+                    continue;
+                };
+                let Some(style) = tree.diff_line_range_preview_style(node.id, config, source_line)
+                else {
+                    continue;
+                };
+                patch_diff_line_range_preview_row(
+                    f,
+                    Rect {
+                        x: inner.x,
+                        y: inner.y.saturating_add(visible_row as i16),
+                        w: row_width,
+                        h: 1,
+                    },
+                    clip_rect,
+                    style,
+                );
+            }
+        }
+        NodeKind::TextArea(area) => {
+            let Some(config) = area.diff_line_click.as_ref() else {
+                return;
+            };
+            let metrics = area.metrics(rect);
+            let row_width =
+                u16::try_from(metrics.content_rect.x.saturating_sub(metrics.inner_rect.x))
+                    .unwrap_or(0)
+                    .saturating_add(metrics.content_rect.w);
+            let Some(lines) = area.visual_cache.latest_lines() else {
+                return;
+            };
+            for visible_row in 0..usize::from(metrics.content_rect.h) {
+                let visual_idx = area.scroll_offset.saturating_add(visible_row);
+                let Some(source_line) = lines
+                    .get(visual_idx)
+                    .map(|line| line.line_num.saturating_sub(1))
+                else {
+                    continue;
+                };
+                let Some(style) = tree.diff_line_range_preview_style(node.id, config, source_line)
+                else {
+                    continue;
+                };
+                patch_diff_line_range_preview_row(
+                    f,
+                    Rect {
+                        x: metrics.inner_rect.x,
+                        y: metrics.inner_rect.y.saturating_add(visible_row as i16),
+                        w: row_width,
+                        h: 1,
+                    },
+                    clip_rect,
+                    style,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
 fn render_node(
     state: &mut RenderState<'_, '_, '_>,
     node: &crate::core::node::Node,
@@ -1044,6 +1153,8 @@ fn render_node(
         }
         NodeKind::TextArea(ta) => {
             render_text_area_node(state, node, ta, rect, rrect, clip_bounds);
+            #[cfg(feature = "diff-view")]
+            render_diff_line_range_preview(state.f, state.ctx.tree, node, rect, clip_bounds);
         }
         #[cfg(feature = "terminal")]
         NodeKind::Terminal(terminal) => {
@@ -1339,6 +1450,8 @@ fn render_node(
                     hover_mouse_pos: is_hovered.then_some(()).and(state.ctx.mouse_pos),
                 },
             );
+            #[cfg(feature = "diff-view")]
+            render_diff_line_range_preview(state.f, state.ctx.tree, node, rect, clip_bounds);
         }
     }
 

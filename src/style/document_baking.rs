@@ -5,6 +5,10 @@ use std::rc::Rc;
 
 use crate::core::element::{Element, ElementKind};
 use crate::style::Theme;
+#[cfg(feature = "diff-view")]
+use crate::style::ThemeRole;
+#[cfg(feature = "diff-view")]
+use crate::style::resolve::resolve_slot;
 use crate::widgets::DocumentStyles;
 
 /// Apply the remaining render-time theme carve-out to document-oriented content.
@@ -127,8 +131,8 @@ fn apply_diff_text_area_theme(text_area: &mut crate::widgets::TextArea, theme: &
         return;
     };
 
-    let old_style = diff.style;
     apply_diff_palette_theme(&mut diff.style, theme);
+    diff.selection_overlay = resolve_slot(theme, ThemeRole::Selection, &diff.selection_slot);
     #[cfg(feature = "syntax-syntect")]
     if let Some(base) = diff.base.as_mut() {
         crate::widgets::apply_syntect_strategy_app_theme(base, theme);
@@ -141,11 +145,16 @@ fn apply_diff_text_area_theme(text_area: &mut crate::widgets::TextArea, theme: &
     if text_area.split_wrap_padding_style.is_some() {
         text_area.split_wrap_padding_style = Some(diff.style.empty);
     }
-    if diff.style != old_style && text_area.gutter_lines.is_some() {
-        text_area.gutter_lines = Some(crate::widgets::rebuild_diff_gutter_spans(
-            diff.lines.as_ref(),
-            diff.style,
+    if text_area.gutter_lines.is_some() {
+        let gutter = crate::widgets::rebuild_diff_gutter_spans(diff.lines.as_ref(), diff.style);
+        text_area.gutter_lines = Some(crate::widgets::apply_diff_gutter_selection(
+            &gutter,
+            diff.selected_lines.as_ref(),
+            diff.selection_overlay,
         ));
+    }
+    if let Some(config) = text_area.diff_line_click.as_mut() {
+        config.range_overlay = diff.selection_overlay;
     }
 }
 
@@ -180,8 +189,10 @@ fn apply_diff_document_theme(dv: &mut crate::widgets::DocumentView, theme: &Them
         return;
     };
 
-    let old_style = diff.strategy().style;
     apply_diff_palette_theme(&mut diff.strategy_mut().style, theme);
+    let selection_slot = diff.strategy().selection_slot;
+    diff.strategy_mut().selection_overlay =
+        resolve_slot(theme, ThemeRole::Selection, &selection_slot);
     #[cfg(feature = "syntax-syntect")]
     if let Some(base) = diff.strategy_mut().base.as_mut() {
         crate::widgets::apply_syntect_strategy_app_theme(base, theme);
@@ -199,10 +210,18 @@ fn apply_diff_document_theme(dv: &mut crate::widgets::DocumentView, theme: &Them
     if dv.split_wrap_padding_style.is_some() {
         dv.split_wrap_padding_style = Some(diff.strategy().style.empty);
     }
-    if diff.strategy().style != old_style && dv.gutter_lines.is_some() {
-        dv.gutter_lines = Some(crate::widgets::rebuild_diff_gutter_spans(
+    if dv.gutter_lines.is_some() {
+        let gutter = crate::widgets::rebuild_diff_gutter_spans(
             diff.strategy().lines.as_ref(),
             diff.strategy().style,
+        );
+        dv.gutter_lines = Some(crate::widgets::apply_diff_gutter_selection(
+            &gutter,
+            diff.strategy().selected_lines.as_ref(),
+            diff.strategy().selection_overlay,
         ));
+    }
+    if let Some(config) = dv.diff_line_click.as_mut() {
+        config.range_overlay = diff.strategy().selection_overlay;
     }
 }

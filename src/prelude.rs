@@ -212,8 +212,9 @@ pub use crate::widgets::{QrCode, QrEcc, QrRender};
 #[cfg(feature = "diff-view")]
 pub use crate::widgets::{
     DiffContextExpansion, DiffContextRange, DiffContextSeparatorDirection,
-    DiffContextSeparatorEvent, DiffData, DiffDataConfig, DiffHunkAnchor, DiffPane, DiffPrefixes,
-    DiffScrollEvent, DiffView, DiffViewBackend, DiffViewMode,
+    DiffContextSeparatorEvent, DiffData, DiffDataConfig, DiffHunkAnchor, DiffInlineBlock,
+    DiffLineAnchor, DiffLineClickEvent, DiffLineRange, DiffLineRangeEvent, DiffLineSide, DiffPane,
+    DiffPrefixes, DiffScrollEvent, DiffView, DiffViewBackend, DiffViewMode,
 };
 
 #[cfg(feature = "image")]

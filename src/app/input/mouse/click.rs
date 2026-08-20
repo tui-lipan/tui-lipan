@@ -387,6 +387,8 @@ mod tests {
             on_sentinel_click: Some(on_sentinel_click),
             #[cfg(feature = "diff-view")]
             diff_context_separator_click: None,
+            #[cfg(feature = "diff-view")]
+            diff_line_click: None,
             images,
             image_mode,
             sentinels,

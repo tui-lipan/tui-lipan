@@ -382,7 +382,7 @@ impl Component for LazygitDemo {
                         },
                         Spacer { height: Length::Px(1) },
                         Text {
-                            content: format!("Required: 30x8"),
+                            content: "Required: 30x8",
                             style: Style::new().fg(Color::Gray),
                         },
                         Text {

@@ -48,6 +48,18 @@ impl DiffDocumentFormatter {
         }
     }
 
+    pub(crate) fn with_line_selection(
+        mut self,
+        selected_lines: Arc<[bool]>,
+        selection_slot: crate::style::StyleSlot,
+    ) -> Self {
+        self.strategy = self
+            .strategy
+            .with_line_selection(selected_lines, selection_slot);
+        self.refresh_formatter_cache_key();
+        self
+    }
+
     pub(crate) fn refresh_formatter_cache_key(&mut self) {
         self.formatter_cache_key =
             diff_document_formatter_cache_key(&self.strategy, &self.language, &self.theme);

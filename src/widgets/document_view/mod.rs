@@ -290,6 +290,8 @@ pub struct DocumentView {
     #[cfg(feature = "diff-view")]
     pub(crate) diff_context_separator_click:
         Option<crate::widgets::diff_view::DiffContextSeparatorClickConfig>,
+    #[cfg(feature = "diff-view")]
+    pub(crate) diff_line_click: Option<crate::widgets::diff_view::DiffLineClickConfig>,
     /// Style used for synthetic wrap-padding gutter rows inserted for peer sync.
     pub(crate) split_wrap_padding_gutter_style: Option<Style>,
     /// Style used for synthetic wrap-padding content rows inserted for peer sync.
@@ -396,6 +398,8 @@ impl Default for DocumentView {
             diff_split_pane: None,
             #[cfg(feature = "diff-view")]
             diff_context_separator_click: None,
+            #[cfg(feature = "diff-view")]
+            diff_line_click: None,
             split_wrap_padding_gutter_style: None,
             split_wrap_padding_style: None,
             multi_click_select: true,

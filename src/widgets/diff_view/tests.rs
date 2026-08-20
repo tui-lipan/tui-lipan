@@ -407,6 +407,393 @@ fn editable_enables_text_area_editing() {
 }
 
 #[test]
+fn line_click_events_expose_stable_source_anchors_for_both_backends() {
+    for backend in [DiffViewBackend::TextArea, DiffViewBackend::DocumentView] {
+        let element: Element = DiffView::with_content("same\nold\nend", "same\nnew\nend")
+            .mode(DiffViewMode::Split)
+            .backend(backend)
+            .on_line_click(crate::callback::Callback::new(|_| {}))
+            .into();
+        let ElementKind::HStack(stack) = outer_content(element).kind else {
+            panic!("expected split diff");
+        };
+
+        let configs = stack.children.into_iter().map(|pane| {
+            let kind = pane_child_kind(pane);
+            match kind {
+                ElementKind::TextArea(area) => area.diff_line_click.expect("line click config"),
+                ElementKind::DocumentView(doc) => doc.diff_line_click.expect("line click config"),
+                _ => panic!("expected diff backend"),
+            }
+        });
+
+        for (pane, config) in [DiffPane::Left, DiffPane::Right].into_iter().zip(configs) {
+            let events = config
+                .events_by_source_line
+                .iter()
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>();
+            assert!(events.iter().all(|event| event.pane == pane));
+            assert!(events.iter().any(|event| {
+                event.anchor.old_line == Some(2)
+                    && event.anchor.new_line == Some(2)
+                    && event.anchor.preferred_side
+                        == if pane == DiffPane::Left {
+                            DiffLineSide::Old
+                        } else {
+                            DiffLineSide::New
+                        }
+                    && event.logical_line == 1
+            }));
+        }
+    }
+}
+
+#[test]
+fn line_range_selection_can_be_enabled_without_line_click_callback() {
+    for backend in [DiffViewBackend::TextArea, DiffViewBackend::DocumentView] {
+        let element: Element = DiffView::with_content("one\ntwo", "one\ntwo")
+            .mode(DiffViewMode::Unified)
+            .backend(backend)
+            .on_line_range_select(crate::callback::Callback::new(|_| {}))
+            .into();
+        let config = match pane_child_kind(outer_content(element)) {
+            ElementKind::TextArea(area) => area.diff_line_click.expect("range config"),
+            ElementKind::DocumentView(doc) => doc.diff_line_click.expect("range config"),
+            _ => panic!("diff backend"),
+        };
+
+        assert!(config.on_click.is_none());
+        assert!(config.on_range_select.is_some());
+    }
+}
+
+#[test]
+fn inline_block_splits_diff_after_anchored_row_and_spans_outer_width() {
+    let comment: Element = Text::new("inline comment")
+        .height(Length::Px(2))
+        .width(Length::Flex(1))
+        .into();
+    let root: Element = DiffView::with_content("same\nold\nend", "same\nnew\nend")
+        .mode(DiffViewMode::Split)
+        .backend(DiffViewBackend::DocumentView)
+        .panels_border(false)
+        .scrollbar(false)
+        .height(Length::Auto)
+        .inline_block(DiffInlineBlock::after(
+            DiffLineAnchor::new(Some(2), Some(2)),
+            comment.key("inline-comment"),
+        ))
+        .into();
+
+    let ElementKind::VStack(stack) = outer_content(root.clone()).kind else {
+        panic!("inline blocks should segment the diff in a vertical stack");
+    };
+    assert_eq!(stack.children.len(), 3);
+    assert_eq!(stack.props.align, crate::style::Align::Stretch);
+    assert!(matches!(stack.children[0].kind, ElementKind::HStack(_)));
+    assert_eq!(
+        stack.children[1].key.as_ref().map(AsRef::as_ref),
+        Some("inline-comment")
+    );
+    assert!(matches!(stack.children[2].kind, ElementKind::HStack(_)));
+
+    let mut tree = NodeTree::new();
+    LayoutEngine::reconcile_with_focus(
+        &mut tree,
+        &root,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 80,
+            h: 20,
+        },
+        None,
+    );
+    let comment_id = find_by_key(&tree, "inline-comment").expect("inline comment node");
+    let outer_rect = tree.node(tree.root).rect;
+    let comment_rect = tree.node(comment_id).rect;
+    assert_eq!(comment_rect.x, outer_rect.x);
+    assert_eq!(comment_rect.w, outer_rect.w);
+}
+
+#[test]
+fn diff_line_range_orders_same_side_source_endpoints() {
+    let range = DiffLineRange::new(
+        DiffLineAnchor::new(Some(11), Some(11)),
+        DiffLineAnchor::new(Some(7), Some(7)),
+    );
+
+    assert_eq!(range.start.preferred_line(), Some(7));
+    assert_eq!(range.end.preferred_line(), Some(11));
+    assert!(!range.is_single_line());
+    assert!(range.is_valid());
+}
+
+#[test]
+fn ranged_inline_block_highlights_every_selected_source_row() {
+    let content = "line 1\nline 2\nline 3\nline 4\nline 5";
+    let range = DiffLineRange::new(
+        DiffLineAnchor::new(Some(2), Some(2)),
+        DiffLineAnchor::new(Some(4), Some(4)),
+    );
+
+    for backend in [DiffViewBackend::TextArea, DiffViewBackend::DocumentView] {
+        let element: Element = DiffView::with_content(content, content)
+            .mode(DiffViewMode::Unified)
+            .backend(backend)
+            .inline_block(DiffInlineBlock::after_range(range, Text::new("comment")))
+            .into();
+        let ElementKind::VStack(stack) = outer_content(element).kind else {
+            panic!("segmented unified diff");
+        };
+        let selected_lines = match pane_child_kind(stack.children[0].clone()) {
+            ElementKind::TextArea(area) => area
+                .color_strategy
+                .as_ref()
+                .and_then(|strategy| strategy.as_any().downcast_ref::<DiffColorStrategy>())
+                .expect("diff strategy")
+                .selected_lines
+                .to_vec(),
+            ElementKind::DocumentView(doc) => doc
+                .formatter
+                .as_ref()
+                .and_then(|formatter| formatter.as_any().downcast_ref::<DiffDocumentFormatter>())
+                .expect("diff formatter")
+                .strategy()
+                .selected_lines
+                .to_vec(),
+            _ => panic!("diff backend"),
+        };
+
+        assert_eq!(selected_lines, vec![false, true, true, true], "{backend:?}");
+    }
+}
+
+#[test]
+fn ranged_inline_block_pins_all_selected_context_rows() {
+    let before = (1..=30)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut after_lines = (1..=30)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>();
+    after_lines[19] = "changed line 20".to_string();
+    let after = after_lines.join("\n");
+    let range = DiffLineRange::new(
+        DiffLineAnchor::new(Some(2), Some(2)),
+        DiffLineAnchor::new(Some(6), Some(6)),
+    );
+
+    let element: Element = DiffView::with_content(before, after)
+        .mode(DiffViewMode::Unified)
+        .context_lines(0)
+        .inline_block(DiffInlineBlock::after_range(range, Text::new("comment")))
+        .into();
+    let ElementKind::VStack(stack) = outer_content(element).kind else {
+        panic!("segmented unified diff");
+    };
+    let ElementKind::TextArea(first_band) = pane_child_kind(stack.children[0].clone()) else {
+        panic!("TextArea band");
+    };
+
+    for line in 2..=6 {
+        assert!(
+            first_band
+                .value
+                .lines()
+                .any(|value| value == format!("line {line}")),
+            "missing pinned line {line}"
+        );
+    }
+}
+
+#[test]
+fn preferred_side_keeps_split_replacement_anchor_stable_in_unified_mode() {
+    for (side, first_band_contains_new) in [(DiffLineSide::Old, false), (DiffLineSide::New, true)] {
+        let element: Element =
+            DiffView::with_content("start\nold-value\nend", "start\nnew-value\nend")
+                .mode(DiffViewMode::Unified)
+                .inline_block(DiffInlineBlock::after(
+                    DiffLineAnchor::new(Some(2), Some(2)).with_preferred_side(side),
+                    Text::new("comment"),
+                ))
+                .into();
+        let ElementKind::VStack(stack) = outer_content(element).kind else {
+            panic!("segmented unified diff");
+        };
+        let ElementKind::TextArea(first_band) = pane_child_kind(stack.children[0].clone()) else {
+            panic!("unified TextArea band");
+        };
+
+        assert!(first_band.value.contains("old-value"));
+        assert_eq!(
+            first_band.value.contains("new-value"),
+            first_band_contains_new,
+            "{side:?}"
+        );
+    }
+}
+
+#[test]
+fn inline_block_pins_context_row_that_would_otherwise_collapse() {
+    let before = (1..=30)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut after_lines = (1..=30)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>();
+    after_lines[19] = "changed line 20".to_string();
+    let after = after_lines.join("\n");
+    let pinned: Element = Text::new("pinned").into();
+
+    let element: Element = DiffView::with_content(before, after)
+        .mode(DiffViewMode::Split)
+        .context_lines(1)
+        .inline_block(DiffInlineBlock::after(
+            DiffLineAnchor::new(Some(2), Some(2)),
+            pinned.key("pinned-comment"),
+        ))
+        .into();
+    let ElementKind::VStack(stack) = outer_content(element).kind else {
+        panic!("pinned row should produce segmented content");
+    };
+
+    assert!(
+        stack
+            .children
+            .iter()
+            .any(|child| { child.key.as_ref().map(AsRef::as_ref) == Some("pinned-comment") })
+    );
+}
+
+#[test]
+fn inline_segments_keep_full_diff_gutter_width() {
+    let content = (1..=120)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let element: Element = DiffView::with_content(content.clone(), content)
+        .mode(DiffViewMode::Unified)
+        .line_numbers(true)
+        .inline_block(DiffInlineBlock::after(
+            DiffLineAnchor::new(Some(9), Some(9)),
+            Text::new("comment"),
+        ))
+        .into();
+    let ElementKind::VStack(stack) = outer_content(element).kind else {
+        panic!("segmented unified diff");
+    };
+    let widths = [0usize, 2usize].map(|index| {
+        let ElementKind::TextArea(area) = pane_child_kind(stack.children[index].clone()) else {
+            panic!("TextArea segment");
+        };
+        area.gutter_col_width
+    });
+
+    assert_eq!(widths[0], widths[1]);
+    assert!(widths[0] >= 3);
+}
+
+#[test]
+fn inline_blocks_force_auto_height_and_delegate_all_scrolling() {
+    let element: Element = DiffView::with_content("old", "new")
+        .mode(DiffViewMode::Unified)
+        .height(Length::Px(5))
+        .scrollbar(true)
+        .h_scrollbar(true)
+        .inline_block(DiffInlineBlock::after(
+            DiffLineAnchor::new(Some(1), None),
+            Text::new("comment"),
+        ))
+        .into();
+    let ElementKind::Frame(frame) = element.kind else {
+        panic!("outer frame");
+    };
+    assert_eq!(frame.props.height, Length::Auto);
+    let ElementKind::VStack(stack) = frame.child.expect("content").kind else {
+        panic!("segmented content");
+    };
+    let ElementKind::TextArea(area) = pane_child_kind(stack.children[0].clone()) else {
+        panic!("TextArea segment");
+    };
+    assert!(!area.scrollbar);
+    assert!(!area.h_scrollbar);
+    assert!(!area.scroll_wheel);
+}
+
+#[test]
+fn inline_blocks_keep_each_wrapped_split_segment_aligned() {
+    let before = "context\nthis removed line is intentionally very long for wrapping\nlast";
+    let after = "context\nshort replacement\nlast";
+
+    for backend in [DiffViewBackend::TextArea, DiffViewBackend::DocumentView] {
+        let root: Element = DiffView::with_content(before, after)
+            .mode(DiffViewMode::Split)
+            .backend(backend)
+            .wrap(true)
+            .scrollbar(false)
+            .line_numbers(false)
+            .panels_border(false)
+            .height(Length::Auto)
+            .inline_block(DiffInlineBlock::after(
+                DiffLineAnchor::new(Some(2), Some(2)),
+                Text::new("comment").height(Length::Px(1)),
+            ))
+            .into();
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 34,
+                h: 30,
+            },
+            None,
+        );
+
+        let split_segments = tree
+            .iter()
+            .filter(|node| matches!(node.kind, NodeKind::HStack(_)))
+            .map(|node| {
+                let left_pane = node.children[0];
+                let right_pane = node.children[1];
+                let left_leaf = tree.node(left_pane).children[0];
+                let right_leaf = tree.node(right_pane).children[0];
+                let left_count = match &tree.node(left_leaf).kind {
+                    NodeKind::TextArea(area) => area.visual_lines_count,
+                    NodeKind::DocumentView(doc) => doc.total_visual_lines,
+                    _ => panic!("left diff leaf"),
+                };
+                let right_count = match &tree.node(right_leaf).kind {
+                    NodeKind::TextArea(area) => area.visual_lines_count,
+                    NodeKind::DocumentView(doc) => doc.total_visual_lines,
+                    _ => panic!("right diff leaf"),
+                };
+                (
+                    tree.node(left_leaf).rect,
+                    left_count,
+                    tree.node(right_leaf).rect,
+                    right_count,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(split_segments.len(), 2);
+        for (left_rect, left_count, right_rect, right_count) in split_segments {
+            assert_eq!(left_count, right_count, "{backend:?} visual rows");
+            assert_eq!(left_rect.h, right_rect.h, "{backend:?} pane rects");
+            assert_eq!(left_rect.h as usize, left_count, "{backend:?} clipping");
+        }
+    }
+}
+
+#[test]
 fn unified_document_backend_renders_document_view() {
     let element: Element = DiffView::with_content("left", "right")
         .mode(DiffViewMode::Unified)
@@ -462,6 +849,70 @@ fn controlled_scroll_offset_applies_to_rendered_backend() {
         panic!("expected DocumentView backend");
     };
     assert_eq!(doc.scroll_offset, Some(7));
+}
+
+#[test]
+fn patch_line_click_anchors_include_hunk_identity() {
+    let patch = concat!(
+        "diff --git a/one.rs b/one.rs\n",
+        "--- a/one.rs\n",
+        "+++ b/one.rs\n",
+        "@@ -1 +1 @@\n",
+        "-old\n",
+        "+new\n",
+    );
+    let element: Element = DiffView::from_patch(patch)
+        .mode(DiffViewMode::Unified)
+        .on_line_click(crate::callback::Callback::new(|_| {}))
+        .into();
+    let ElementKind::TextArea(area) = pane_child_kind(outer_content(element)) else {
+        panic!("unified TextArea backend");
+    };
+    let events = area
+        .diff_line_click
+        .expect("line click config")
+        .events_by_source_line;
+
+    assert!(
+        events
+            .iter()
+            .flatten()
+            .all(|event| event.anchor.hunk_index == Some(0))
+    );
+}
+
+#[test]
+fn hunk_identity_disambiguates_repeated_patch_line_numbers() {
+    let patch = concat!(
+        "diff --git a/one.rs b/one.rs\n",
+        "--- a/one.rs\n",
+        "+++ b/one.rs\n",
+        "@@ -1 +1 @@\n",
+        "-old-one\n",
+        "+new-one\n",
+        "diff --git a/two.rs b/two.rs\n",
+        "--- a/two.rs\n",
+        "+++ b/two.rs\n",
+        "@@ -1 +1 @@\n",
+        "-old-two\n",
+        "+new-two\n",
+    );
+    let element: Element = DiffView::from_patch(patch)
+        .mode(DiffViewMode::Unified)
+        .inline_block(DiffInlineBlock::after(
+            DiffLineAnchor::new(None, Some(1)).with_hunk_index(1),
+            Text::new("second-file-comment"),
+        ))
+        .into();
+    let ElementKind::VStack(stack) = outer_content(element).kind else {
+        panic!("segmented patch");
+    };
+    let ElementKind::TextArea(first_band) = pane_child_kind(stack.children[0].clone()) else {
+        panic!("patch TextArea");
+    };
+
+    assert!(first_band.value.contains("new-one"));
+    assert!(first_band.value.contains("new-two"));
 }
 
 #[test]

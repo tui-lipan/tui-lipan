@@ -1,9 +1,11 @@
-#[cfg(feature = "diff-view")]
-use crate::app::input::mouse::types::DiffContextSeparatorClick;
 use crate::app::input::mouse::types::{
     CheckboxToggle, DocumentClick, DragSourceGrab, DraggableTabBarAction, FlowchartItemClick,
     GraphNodeClick, HitActions, InputChange, ListSelect, ProgressChange, SliderChange,
     SplitterGrab, TableSelect, TabsChange, TextAreaChange,
+};
+#[cfg(feature = "diff-view")]
+use crate::app::input::mouse::types::{
+    DiffContextSeparatorClick, DiffLineClick, DiffLineRangeStart,
 };
 use crate::core::event::KeyMods;
 use crate::core::node::{Node, NodeId, NodeKind, NodeTree};
@@ -34,13 +36,15 @@ fn document_view_diff_context_separator_click(
     };
     let inner = node.rect.inner(doc.border, doc.padding);
     let cl = doc.content_layout(inner);
-    let content_rect = Rect {
-        x: cl.content_x,
+    let row_rect = Rect {
+        x: inner.x,
         y: cl.content_y,
-        w: cl.content_width,
+        w: u16::try_from(cl.content_x.saturating_sub(inner.x))
+            .unwrap_or(0)
+            .saturating_add(cl.content_width),
         h: cl.content_height,
     };
-    if !content_rect.contains(x, y) {
+    if !row_rect.contains(x, y) {
         return None;
     }
 
@@ -89,6 +93,183 @@ fn text_area_diff_context_separator_click(
         change.diff_context_separator_click.as_ref(),
         source_line,
     )
+}
+
+#[cfg(feature = "diff-view")]
+fn diff_line_event_from_source_line(
+    config: Option<&crate::widgets::DiffLineClickConfig>,
+    source_line: usize,
+    mods: KeyMods,
+) -> Option<crate::widgets::DiffLineClickEvent> {
+    let config = config?;
+    let mut event = config.events_by_source_line.get(source_line).copied()??;
+    event.mods = mods;
+    Some(event)
+}
+
+#[cfg(feature = "diff-view")]
+fn diff_line_click_from_source_line(
+    config: Option<&crate::widgets::DiffLineClickConfig>,
+    source_line: usize,
+    mods: KeyMods,
+) -> Option<DiffLineClick> {
+    let config = config?;
+    let event = diff_line_event_from_source_line(Some(config), source_line, mods)?;
+    Some(DiffLineClick {
+        cb: config.on_click.clone()?,
+        event,
+    })
+}
+
+#[cfg(feature = "diff-view")]
+fn document_view_diff_line_click(
+    node: &Node,
+    x: i16,
+    y: i16,
+    mods: KeyMods,
+) -> Option<DiffLineClick> {
+    let NodeKind::DocumentView(doc) = &node.kind else {
+        return None;
+    };
+    let inner = node.rect.inner(doc.border, doc.padding);
+    let cl = doc.content_layout(inner);
+    let content_rect = Rect {
+        x: inner.x,
+        y: cl.content_y,
+        w: u16::try_from(cl.content_x.saturating_sub(inner.x))
+            .unwrap_or(0)
+            .saturating_add(cl.content_width),
+        h: cl.content_height,
+    };
+    if !content_rect.contains(x, y) {
+        return None;
+    }
+
+    let rel_y = y.saturating_sub(inner.y) as usize;
+    let visual_idx = doc.scroll_offset.saturating_add(rel_y);
+    let source_line = doc.visual_cache.source_line_map.get(visual_idx).copied()?;
+    diff_line_click_from_source_line(doc.diff_line_click.as_ref(), source_line, mods)
+}
+
+#[cfg(feature = "diff-view")]
+fn text_area_diff_line_click(
+    change: &TextAreaChange,
+    x: i16,
+    y: i16,
+    mods: KeyMods,
+) -> Option<DiffLineClick> {
+    let inner = change.rect.inner(change.border, change.padding);
+    let scrollbar_cols = if change.scrollbar && !change.scrollbar_over_border {
+        1u16.saturating_add(change.scrollbar_gap)
+    } else {
+        0
+    };
+    let content_rect = Rect {
+        x: inner.x,
+        y: inner.y,
+        w: inner.w.saturating_sub(scrollbar_cols),
+        h: inner.h.saturating_sub(u16::from(
+            change.h_scrollbar && !change.h_scrollbar_over_border,
+        )),
+    };
+    if !content_rect.contains(x, y) {
+        return None;
+    }
+
+    let rel_y = y.saturating_sub(inner.y) as usize;
+    let visual_idx = change.scroll_offset.saturating_add(rel_y);
+    let source_line = change
+        .visual_lines
+        .as_ref()?
+        .get(visual_idx)?
+        .line_num
+        .saturating_sub(1);
+    diff_line_click_from_source_line(change.diff_line_click.as_ref(), source_line, mods)
+}
+
+#[cfg(feature = "diff-view")]
+pub(crate) fn diff_line_event_at_node(
+    tree: &NodeTree,
+    node_id: NodeId,
+    y: u16,
+    mods: KeyMods,
+) -> Option<crate::widgets::DiffLineClickEvent> {
+    let node = tree.node(node_id);
+    let y = y as i16;
+    match &node.kind {
+        NodeKind::DocumentView(doc) => {
+            let inner = node.rect.inner(doc.border, doc.padding);
+            let cl = doc.content_layout(inner);
+            if y < cl.content_y || y >= cl.content_y.saturating_add(cl.content_height as i16) {
+                return None;
+            }
+            let visual_idx = doc
+                .scroll_offset
+                .saturating_add(y.saturating_sub(inner.y) as usize);
+            let source_line = doc.visual_cache.source_line_map.get(visual_idx).copied()?;
+            diff_line_event_from_source_line(doc.diff_line_click.as_ref(), source_line, mods)
+        }
+        NodeKind::TextArea(area) => {
+            let metrics = area.metrics(node.rect);
+            if y < metrics.content_rect.y
+                || y >= metrics
+                    .content_rect
+                    .y
+                    .saturating_add(metrics.content_rect.h as i16)
+            {
+                return None;
+            }
+            let visual_idx = area
+                .scroll_offset
+                .saturating_add(y.saturating_sub(metrics.inner_rect.y) as usize);
+            let source_line = area
+                .visual_cache
+                .latest_lines()?
+                .get(visual_idx)?
+                .line_num
+                .saturating_sub(1);
+            diff_line_event_from_source_line(area.diff_line_click.as_ref(), source_line, mods)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "diff-view")]
+fn diff_line_range_start(
+    tree: &NodeTree,
+    node_id: NodeId,
+    x: i16,
+    y: i16,
+    mods: KeyMods,
+) -> Option<DiffLineRangeStart> {
+    let node = tree.node(node_id);
+    let (in_gutter, callback) = match &node.kind {
+        NodeKind::DocumentView(doc) => {
+            let inner = node.rect.inner(doc.border, doc.padding);
+            let cl = doc.content_layout(inner);
+            (
+                x >= inner.x && x < cl.content_x,
+                doc.diff_line_click.as_ref()?.on_range_select.clone()?,
+            )
+        }
+        NodeKind::TextArea(area) => {
+            let metrics = area.metrics(node.rect);
+            (
+                metrics.gutter_width > 0 && x >= metrics.inner_rect.x && x < metrics.content_rect.x,
+                area.diff_line_click.as_ref()?.on_range_select.clone()?,
+            )
+        }
+        _ => return None,
+    };
+    if !in_gutter {
+        return None;
+    }
+    let event = diff_line_event_at_node(tree, node_id, y as u16, mods)?;
+    Some(DiffLineRangeStart {
+        node_id,
+        cb: callback,
+        event,
+    })
 }
 
 /// Resolve final left-click target from a deepest hit node.
@@ -190,10 +371,18 @@ pub(crate) fn find_ancestor_on_click(
 }
 
 /// Gather actions for a hit node.
-pub(crate) fn gather_hit_actions(tree: &NodeTree, hit: NodeId, x: u16, y: u16) -> HitActions {
+pub(crate) fn gather_hit_actions(
+    tree: &NodeTree,
+    hit: NodeId,
+    x: u16,
+    y: u16,
+    mods: KeyMods,
+) -> HitActions {
     let node = tree.node(hit);
     let x_i16 = x as i16;
     let y_i16 = y as i16;
+    #[cfg(not(feature = "diff-view"))]
+    let _ = mods;
 
     let on_click = match &node.kind {
         NodeKind::Button(btn) => btn.on_click.clone(),
@@ -760,6 +949,8 @@ pub(crate) fn gather_hit_actions(tree: &NodeTree, hit: NodeId, x: u16, y: u16) -
                     on_sentinel_click: ta.on_sentinel_click.clone(),
                     #[cfg(feature = "diff-view")]
                     diff_context_separator_click: ta.diff_context_separator_click.clone(),
+                    #[cfg(feature = "diff-view")]
+                    diff_line_click: ta.diff_line_click.clone(),
                     images: if ta.on_sentinel_click.is_some() {
                         ta.images.clone()
                     } else {
@@ -786,6 +977,14 @@ pub(crate) fn gather_hit_actions(tree: &NodeTree, hit: NodeId, x: u16, y: u16) -
                 .as_ref()
                 .and_then(|change| text_area_diff_context_separator_click(change, x_i16, y_i16))
         });
+    #[cfg(feature = "diff-view")]
+    let diff_line_click = document_view_diff_line_click(node, x_i16, y_i16, mods).or_else(|| {
+        textarea_change
+            .as_ref()
+            .and_then(|change| text_area_diff_line_click(change, x_i16, y_i16, mods))
+    });
+    #[cfg(feature = "diff-view")]
+    let diff_line_range_start = diff_line_range_start(tree, node.id, x_i16, y_i16, mods);
 
     HitActions {
         on_click,
@@ -808,6 +1007,10 @@ pub(crate) fn gather_hit_actions(tree: &NodeTree, hit: NodeId, x: u16, y: u16) -
         flowchart_item_click,
         #[cfg(feature = "diff-view")]
         diff_context_separator_click,
+        #[cfg(feature = "diff-view")]
+        diff_line_click,
+        #[cfg(feature = "diff-view")]
+        diff_line_range_start,
         slider_change,
         splitter_grab,
         drag_source_grab,
@@ -1065,13 +1268,13 @@ mod tests {
         );
 
         assert!(
-            gather_hit_actions(&tree, tree.root, 5, 0)
+            gather_hit_actions(&tree, tree.root, 5, 0, KeyMods::NONE)
                 .tabs_change
                 .is_none(),
             "the divider between `one` and `two` is not a tab"
         );
         assert_eq!(
-            gather_hit_actions(&tree, tree.root, 6, 0)
+            gather_hit_actions(&tree, tree.root, 6, 0, KeyMods::NONE)
                 .tabs_change
                 .expect("the second tab should remain clickable")
                 .next,
@@ -1104,7 +1307,7 @@ mod tests {
     fn focusable_graph_gathers_node_click_without_callbacks() {
         let tree = reconcile_graph(Graph::new().root(GraphNode::new("root")).focusable(true));
 
-        let actions = gather_hit_actions(&tree, tree.root, 0, 0);
+        let actions = gather_hit_actions(&tree, tree.root, 0, 0, KeyMods::NONE);
 
         let click = actions
             .graph_node_click
@@ -1123,7 +1326,7 @@ mod tests {
                 .on_node_activate(Callback::new(|_| {})),
         );
 
-        let actions = gather_hit_actions(&tree, tree.root, 0, 0);
+        let actions = gather_hit_actions(&tree, tree.root, 0, 0, KeyMods::NONE);
 
         assert!(actions.graph_node_click.is_some());
     }

@@ -2133,10 +2133,10 @@ fn hash_payload(format: u32, payload: &[u8]) -> u64 {
         seed.wrapping_add(PRIME.wrapping_mul(3)),
     ];
 
-    let mut blocks = payload.chunks_exact(BLOCK);
-    for block in &mut blocks {
-        for (lane, word) in lanes.iter_mut().zip(block.chunks_exact(8)) {
-            let word = u64::from_le_bytes(word.try_into().expect("eight bytes"));
+    let (blocks, remainder) = payload.as_chunks::<BLOCK>();
+    for block in blocks {
+        for (lane, word) in lanes.iter_mut().zip(block.as_chunks::<8>().0) {
+            let word = u64::from_le_bytes(*word);
             *lane = (*lane ^ word).wrapping_mul(PRIME).rotate_left(31);
         }
     }
@@ -2144,13 +2144,13 @@ fn hash_payload(format: u32, payload: &[u8]) -> u64 {
     // Whatever did not fill a block folds into one lane, position included so that the same bytes
     // arriving at a different offset do not hash alike.
     let mut state = lanes[0];
-    let mut words = blocks.remainder().chunks_exact(8);
-    for word in &mut words {
-        let word = u64::from_le_bytes(word.try_into().expect("eight bytes"));
+    let (words, tail_bytes) = remainder.as_chunks::<8>();
+    for word in words {
+        let word = u64::from_le_bytes(*word);
         state = (state ^ word).wrapping_mul(PRIME).rotate_left(31);
     }
     let mut tail = 0u64;
-    for (index, byte) in words.remainder().iter().enumerate() {
+    for (index, byte) in tail_bytes.iter().enumerate() {
         tail |= u64::from(*byte) << (index * 8);
     }
     state = (state ^ tail).wrapping_mul(PRIME);
