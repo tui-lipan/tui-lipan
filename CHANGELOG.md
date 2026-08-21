@@ -171,6 +171,11 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Wrapped `TextArea` rows no longer split a token at an interior separator (`/`, `|`, `-`, `_`,
+  `.`, `:`) when the whole token would fit on a fresh row. A token that overruns the space left on
+  the current row now moves down intact, and separators only break a token that is wider than the
+  row itself. A row also never ends inside a run of separators, so trailing `":"`, `"::"` or `": "`
+  keeps its word instead of stranding the rest of the run alone on the next row.
 - A left-button gesture that first focuses a mouse-tracking `Terminal` no longer also reaches the
   child. The focus press and its matching drag/release are consumed; later clicks on the focused
   terminal still forward normally.

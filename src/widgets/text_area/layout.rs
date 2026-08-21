@@ -1544,6 +1544,30 @@ mod tests {
     }
 
     #[test]
+    fn separator_at_row_end_keeps_its_word_together() {
+        // A ':' (or '.') that lands on the last cell of a full row used to end
+        // the row there, pushing whatever followed onto a row of its own.
+        let base = "aaa bbb ccc ddd eee fff";
+        for (suffix, expected_second_row) in [("::", "fff::"), (": g", "fff: g"), ("..", "fff..")] {
+            let value = format!("{base}{suffix}");
+            let text_area = make_textarea(&value, true, false).cursor(value.len());
+            let mut cache = TextAreaVisualCache::default();
+            calculate_text_area_visual_metrics(
+                &text_area,
+                24,
+                false,
+                hash_text(&value),
+                Some(&mut cache),
+            );
+            let lines = cache.latest_lines().expect("layout is cached");
+
+            assert_eq!(lines.len(), 2, "unexpected row count for {value:?}");
+            assert_eq!(&value[lines[0].start..lines[0].end], "aaa bbb ccc ddd eee ");
+            assert_eq!(&value[lines[1].start..lines[1].end], expected_second_row);
+        }
+    }
+
+    #[test]
     fn trailing_space_and_next_input_stay_on_caret_row() {
         for (value, expected_col) in [("really long tex ", 4), ("really long tex d", 5)] {
             let text_area = make_textarea(value, true, false).cursor(value.len());

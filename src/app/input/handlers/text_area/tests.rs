@@ -4332,13 +4332,15 @@ fn arrow_down_from_visible_wrap_break_enters_continuation() {
     let value = "Please implement this plan: ~/.claude/plans/so-by-order-1-quizzical-teapot.md\n\nCommit each crucial checkpoint.";
     let root = TextArea::new(value).border(false).scrollbar(false).into();
     let mut tree = NodeTree::new();
+    // The path is wider than the row, so it splits at a separator instead of
+    // moving down whole and the continuation starts after a visible break.
     LayoutEngine::reconcile_with_focus(
         &mut tree,
         &root,
         Rect {
             x: 0,
             y: 0,
-            w: 69,
+            w: 40,
             h: 6,
         },
         None,
@@ -4354,18 +4356,18 @@ fn arrow_down_from_visible_wrap_break_enters_continuation() {
 
     let continuation = lines
         .iter()
-        .position(|line| &value[line.start..line.end] == "teapot.md")
-        .expect("path should wrap before teapot.md");
+        .position(|line| &value[line.start..line.end] == "plans/so-by-order-1-quizzical-teapot.md")
+        .expect("path should wrap inside the path token");
     let wrap_boundary = lines[continuation].start;
     assert_eq!(
         &value[..wrap_boundary],
-        "Please implement this plan: ~/.claude/plans/so-by-order-1-quizzical-"
+        "Please implement this plan: ~/.claude/"
     );
 
     assert_eq!(
         text_area_visual_line_for_cursor(&lines, wrap_boundary),
         continuation,
-        "the boundary after the dash belongs to the continuation start",
+        "the boundary after the separator belongs to the continuation start",
     );
 
     let initial_cursor = crate::utils::text::prev_char_boundary(value, wrap_boundary);

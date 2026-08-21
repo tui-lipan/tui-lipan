@@ -88,6 +88,54 @@ pub(crate) fn prepare_text(
     PreparedText { segments, widths }
 }
 
+/// Segment kinds a wrapped row is allowed to end on.
+fn is_break_kind(kind: SegmentKind) -> bool {
+    matches!(
+        kind,
+        SegmentKind::Space
+            | SegmentKind::PreservedSpace
+            | SegmentKind::Tab
+            | SegmentKind::SoftBreak
+    )
+}
+
+/// Whether the break opportunity in front of the segment at `next_idx` is usable.
+///
+/// A run of separators (`": "`, `"::"`, `"  "`) offers a break after each one,
+/// and a greedy scan would take the last that fits. Breaking inside the run
+/// strands the rest of it on the next row: `"... dfd:"` keeps the full row and
+/// the following `":"` or `" fdfd"` drops down alone. Only the separator that
+/// ends the run is a usable break, so the whole word moves down at the previous
+/// word break instead.
+fn break_is_usable(pt: &PreparedText, next_idx: usize) -> bool {
+    pt.segments
+        .get(next_idx)
+        .is_none_or(|next| !is_break_kind(next.kind))
+}
+
+/// Whether the token starting at `start` fits on a row of its own.
+///
+/// A token is a run of non-whitespace segments, separators included, so
+/// `https://host/path` and `some.dotted.name` are single tokens. Splitting one
+/// at an interior separator is a fallback for tokens too wide for any row: a
+/// token that would fit on a fresh row moves there whole instead.
+///
+/// Scanning stops as soon as the budget is exceeded, so the extra work per row
+/// is bounded by `wrap_width` rather than by the length of the token.
+fn token_fits_on_a_row(pt: &PreparedText, start: usize, wrap_width: usize) -> bool {
+    let mut width = 0usize;
+    for (segment, segment_width) in pt.segments.iter().zip(pt.widths.iter()).skip(start) {
+        if !matches!(segment.kind, SegmentKind::Text | SegmentKind::SoftBreak) {
+            return true;
+        }
+        width = width.saturating_add(*segment_width);
+        if width > wrap_width {
+            return false;
+        }
+    }
+    true
+}
+
 /// Counts the wrapped lines for `pt` at `width` without allocating.
 ///
 /// Mirrors the control flow of [`layout_lines`] exactly but only tracks the
@@ -119,7 +167,9 @@ pub(crate) fn count_lines(pt: &PreparedText, width: usize) -> usize {
 
         let mut used = 0usize;
         let mut cursor = idx;
-        let mut last_break: Option<usize> = None;
+        let mut token_start = idx;
+        let mut last_word_break: Option<usize> = None;
+        let mut last_token_break: Option<usize> = None;
 
         while cursor < pt.segments.len() {
             let cur = pt.segments[cursor];
@@ -134,14 +184,18 @@ pub(crate) fn count_lines(pt: &PreparedText, width: usize) -> usize {
             used = used.saturating_add(cw);
             cursor += 1;
 
-            if matches!(
-                cur.kind,
-                SegmentKind::Space
-                    | SegmentKind::PreservedSpace
-                    | SegmentKind::Tab
-                    | SegmentKind::SoftBreak
-            ) {
-                last_break = Some(cursor);
+            match cur.kind {
+                SegmentKind::Space | SegmentKind::PreservedSpace | SegmentKind::Tab => {
+                    token_start = cursor;
+                    last_token_break = None;
+                    if break_is_usable(pt, cursor) {
+                        last_word_break = Some(cursor);
+                    }
+                }
+                SegmentKind::SoftBreak if break_is_usable(pt, cursor) => {
+                    last_token_break = Some(cursor);
+                }
+                _ => {}
             }
         }
 
@@ -156,7 +210,16 @@ pub(crate) fn count_lines(pt: &PreparedText, width: usize) -> usize {
             continue;
         }
 
-        if let Some(next_idx) = last_break {
+        let split_token = last_token_break
+            .filter(|_| !token_fits_on_a_row(pt, token_start, wrap_width))
+            .is_some();
+        let chosen = if split_token {
+            last_token_break
+        } else {
+            last_word_break
+        };
+
+        if let Some(next_idx) = chosen {
             count += 1;
             idx = next_idx;
             continue;
@@ -203,7 +266,9 @@ pub(crate) fn layout_lines(pt: &PreparedText, width: usize) -> Vec<LineRange> {
 
         let mut used = 0usize;
         let mut cursor = idx;
-        let mut last_break: Option<(usize, usize)> = None;
+        let mut token_start = idx;
+        let mut last_word_break: Option<(usize, usize)> = None;
+        let mut last_token_break: Option<(usize, usize)> = None;
 
         while cursor < pt.segments.len() {
             let cur = pt.segments[cursor];
@@ -218,14 +283,18 @@ pub(crate) fn layout_lines(pt: &PreparedText, width: usize) -> Vec<LineRange> {
             used = used.saturating_add(cw);
             cursor += 1;
 
-            if matches!(
-                cur.kind,
-                SegmentKind::Space
-                    | SegmentKind::PreservedSpace
-                    | SegmentKind::Tab
-                    | SegmentKind::SoftBreak
-            ) {
-                last_break = Some((cursor, cur.end));
+            match cur.kind {
+                SegmentKind::Space | SegmentKind::PreservedSpace | SegmentKind::Tab => {
+                    token_start = cursor;
+                    last_token_break = None;
+                    if break_is_usable(pt, cursor) {
+                        last_word_break = Some((cursor, cur.end));
+                    }
+                }
+                SegmentKind::SoftBreak if break_is_usable(pt, cursor) => {
+                    last_token_break = Some((cursor, cur.end));
+                }
+                _ => {}
             }
         }
 
@@ -248,7 +317,19 @@ pub(crate) fn layout_lines(pt: &PreparedText, width: usize) -> Vec<LineRange> {
             continue;
         }
 
-        if let Some((next_idx, end)) = last_break {
+        // Split the token at an interior separator only when it cannot fit a row
+        // of its own; otherwise fall back to the last word break so the whole
+        // token moves down intact.
+        let split_token = last_token_break
+            .filter(|_| !token_fits_on_a_row(pt, token_start, wrap_width))
+            .is_some();
+        let chosen = if split_token {
+            last_token_break
+        } else {
+            last_word_break
+        };
+
+        if let Some((next_idx, end)) = chosen {
             out.push(LineRange {
                 start: line_start,
                 end,
@@ -461,6 +542,76 @@ mod tests {
     }
 
     #[test]
+    fn token_that_fits_a_fresh_row_moves_down_whole() {
+        // The URL does not fit in what is left of row 1, but does fit a row of
+        // its own, so it moves down intact instead of splitting at a separator.
+        let s = "testing https://chatgpt.com/c/6a8828df-6d0a9f7dfe5b";
+        let pt = prepare_text(s, None, 4);
+        let lines = layout_lines(&pt, 45)
+            .into_iter()
+            .map(|line| &s[line.start..line.end])
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            lines,
+            vec!["testing ", "https://chatgpt.com/c/6a8828df-6d0a9f7dfe5b"]
+        );
+        assert_eq!(count_lines(&pt, 45), lines.len());
+    }
+
+    #[test]
+    fn token_wider_than_a_row_still_splits_at_separators() {
+        let s = "testing https://chatgpt.com/c/6a8828df-6d0a9f7dfe5b";
+        let pt = prepare_text(s, None, 40);
+        let lines = layout_lines(&pt, 40)
+            .into_iter()
+            .map(|line| &s[line.start..line.end])
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            lines,
+            vec!["testing https://chatgpt.com/c/6a8828df-", "6d0a9f7dfe5b"]
+        );
+        assert_eq!(count_lines(&pt, 40), lines.len());
+    }
+
+    #[test]
+    fn separator_run_at_row_end_moves_the_whole_word_down() {
+        // "hello word:" fills the row exactly, so the greedy scan used to break
+        // after the ':' and strand the rest of the run on its own row.
+        for (s, expected) in [
+            ("hello word::", vec![(0usize, 6usize), (6, 12)]),
+            ("hello word: x", vec![(0, 6), (6, 13)]),
+            ("hello word.. ", vec![(0, 6), (6, 13)]),
+        ] {
+            let pt = prepare_text(s, None, 4);
+            let lines = layout_lines(&pt, 11)
+                .into_iter()
+                .map(|line| (line.start, line.end))
+                .collect::<Vec<_>>();
+            assert_eq!(lines, expected, "unexpected layout for {s:?}");
+            assert_eq!(count_lines(&pt, 11), lines.len(), "count for {s:?}");
+        }
+    }
+
+    #[test]
+    fn separator_still_breaks_unbreakable_runs() {
+        for (s, width, expected) in [
+            ("aaa/bbb/ccc", 8usize, vec![(0usize, 8usize), (8, 11)]),
+            ("a.b.c.d.e.f", 6, vec![(0, 6), (6, 11)]),
+            ("hello aaa/bbb/ccc", 10, vec![(0, 10), (10, 17)]),
+        ] {
+            let pt = prepare_text(s, None, 4);
+            let lines = layout_lines(&pt, width)
+                .into_iter()
+                .map(|line| (line.start, line.end))
+                .collect::<Vec<_>>();
+            assert_eq!(lines, expected, "unexpected layout for {s:?}");
+            assert_eq!(count_lines(&pt, width), lines.len(), "count for {s:?}");
+        }
+    }
+
+    #[test]
     fn count_lines_matches_layout_lines_across_widths() {
         let samples = [
             "",
@@ -474,6 +625,11 @@ mod tests {
             "\u{4F60}\u{597D}a b\u{4F60}",
             "trailing  spaces   ",
             "word-with-hyphens-that-are-long break here",
+            "hello word:: more",
+            "path/to/some/file.rs and more text",
+            "colon: dot. slash/ pipe| dash- under_ run",
+            "testing https://chatgpt.com/c/6a8828df-6d0a9f7dfe5b",
+            "a b/c d well-known some.dotted.name end",
         ];
         for s in samples {
             let pt = prepare_text(s, None, 4);
