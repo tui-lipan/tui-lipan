@@ -383,7 +383,7 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
     }
 
     #[cfg(feature = "terminal-images")]
-    flush_occluded_image_cells(state.f, tree, content_rect, extra_root);
+    flush_occluded_image_cells(state.f);
 
     // Last, so the inspector outline sits above overlays and chrome alike. It is
     // a debugging marker, not part of any widget's appearance.
@@ -468,12 +468,29 @@ pub(crate) fn render_regions(
         return;
     }
 
+    #[cfg(feature = "terminal-images")]
+    let _image_occlusion_guard = {
+        let content_rect = Rect {
+            x: content.x as i16,
+            y: content.y as i16,
+            w: content.width,
+            h: content.height,
+        };
+        crate::backend::ratatui_backend::renderers::image::set_image_occlusions(
+            image_occlusion_rects(tree, content_rect, extra_root_wrapper_children(tree)),
+        );
+        ImageOcclusionGuard
+    };
+
     for &region in regions {
         if region.is_empty() {
             continue;
         }
         render_subtree(&mut state, tree.root, Some(region), RenderOffset::ZERO);
     }
+
+    #[cfg(feature = "terminal-images")]
+    flush_occluded_image_cells(state.f);
 }
 
 fn collect_overlay_nodes(tree: &NodeTree) -> HashSet<NodeId> {
@@ -1607,6 +1624,123 @@ fn render_hstack_node(
     render_hstack(f, &props, rect, rrect, clip_bounds, terminal_bg);
 }
 
+/// Rectangles of later Canvas terminal layers that paint above `owner`.
+///
+/// A Canvas child is the framework's absolute-positioned layer boundary. Terminal hosts use it for
+/// floating panes, popup terminals, and similar windows. Native Kitty pictures are not ordinary
+/// buffer cells, so a lower terminal's placeholder walk has to leave holes for those later layers
+/// instead of relying on their normal paint to cover it.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn terminal_image_layer_occlusions(
+    tree: &NodeTree,
+    owner: NodeId,
+    content: ratatui::layout::Rect,
+) -> Vec<ratatui::layout::Rect> {
+    let Some(owner_rank) = tree.iter().position(|node| node.id == owner) else {
+        return Vec::new();
+    };
+    let owner_ancestors: HashSet<NodeId> = std::iter::successors(Some(owner), |id| {
+        tree.is_valid(*id).then(|| tree.node(*id).parent).flatten()
+    })
+    .collect();
+    let content_rect = Rect {
+        x: content.x as i16,
+        y: content.y as i16,
+        w: content.width,
+        h: content.height,
+    };
+
+    tree.iter()
+        .enumerate()
+        .filter_map(|(rank, node)| {
+            if rank <= owner_rank {
+                return None;
+            }
+            let parent_id = node.parent?;
+            let parent = tree.is_valid(parent_id).then(|| tree.node(parent_id))?;
+            if !matches!(parent.kind, NodeKind::Canvas(_))
+                || !terminal_layer_branch_is_opaque(tree, node.id, &owner_ancestors)
+                || !subtree_has_opaque_terminal(tree, node.id)
+            {
+                return None;
+            }
+
+            let rect = visually_offset_node_rect(tree, node.id)
+                .intersection(&visually_offset_node_rect(tree, parent_id))
+                .intersection(&content_rect);
+            (!rect.is_empty()).then(|| to_ratatui_rect(rect))
+        })
+        .collect()
+}
+
+/// Whether wrappers unique to this later layer leave it fully opaque.
+#[cfg(feature = "terminal-images")]
+fn terminal_layer_branch_is_opaque(
+    tree: &NodeTree,
+    root: NodeId,
+    owner_ancestors: &HashSet<NodeId>,
+) -> bool {
+    let mut current = Some(root);
+    while let Some(id) = current {
+        if owner_ancestors.contains(&id) {
+            break;
+        }
+        if !tree.is_valid(id) {
+            return false;
+        }
+        let node = tree.node(id);
+        if matches!(&node.kind, NodeKind::Animated(animated) if animated_exposes_underlay(animated))
+        {
+            return false;
+        }
+        current = node.parent;
+    }
+    true
+}
+
+/// A terminal under a partial-opacity wrapper shows the layer below it, so it cannot punch a hole.
+#[cfg(feature = "terminal-images")]
+fn subtree_has_opaque_terminal(tree: &NodeTree, root: NodeId) -> bool {
+    let mut stack = vec![root];
+    while let Some(id) = stack.pop() {
+        if !tree.is_valid(id) {
+            continue;
+        }
+        let node = tree.node(id);
+        if matches!(&node.kind, NodeKind::Animated(animated) if animated_exposes_underlay(animated))
+        {
+            continue;
+        }
+        if matches!(node.kind, NodeKind::Terminal(_)) {
+            return true;
+        }
+        stack.extend(node.children.iter().rev().copied());
+    }
+    false
+}
+
+#[cfg(feature = "terminal-images")]
+fn animated_exposes_underlay(animated: &crate::widgets::internal::AnimatedNode) -> bool {
+    animated.opacity < 1.0 && animated.opacity_target.is_none() && !animated.opacity_fg_only
+}
+
+/// Apply every render-only Animated offset on a node's ancestor chain.
+#[cfg(feature = "terminal-images")]
+fn visually_offset_node_rect(tree: &NodeTree, id: NodeId) -> Rect {
+    let mut rect = tree.node(id).rect;
+    let mut current = Some(id);
+    while let Some(current_id) = current {
+        let node = tree.node(current_id);
+        if let NodeKind::Animated(animated) = &node.kind {
+            let (dx, dy) = animated.visual_position_offset_cells();
+            rect.x = rect.x.saturating_add(dx);
+            rect.y = rect.y.saturating_add(dy);
+        }
+        current = node.parent;
+    }
+    rect
+}
+
 /// Drops the frame's Kitty occlusion list even if paint panics, so a later frame cannot
 /// inherit holes that no longer exist.
 #[cfg(feature = "terminal-images")]
@@ -1700,24 +1834,22 @@ fn keyed_descendant_rect(tree: &NodeTree, root: NodeId, key: &str) -> Option<Rec
     None
 }
 
-/// Overlay cells that did not change still have to be re-emitted: a new image frame rewrites its
-/// row from the first cell, and without this they stay as placeholders on the host.
+/// Covered cells that did not change still have to be re-emitted: a new image frame updates the
+/// native resource behind old placeholders, and without this the covered cells reveal that frame.
 #[cfg(feature = "terminal-images")]
-fn flush_occluded_image_cells(
-    f: &mut ratatui::Frame<'_>,
-    tree: &NodeTree,
-    content_rect: Rect,
-    extra_root: Option<(NodeId, NodeId)>,
-) {
+fn flush_occluded_image_cells(f: &mut ratatui::Frame<'_>) {
     if !crate::backend::ratatui_backend::renderers::image::image_placeholders_painted() {
         return;
     }
     let buf = f.buffer_mut();
-    for rect in image_occlusion_rects(tree, content_rect, extra_root) {
+    for rect in crate::backend::ratatui_backend::renderers::image::painted_image_occlusions() {
         for y in rect.y..rect.y.saturating_add(rect.height) {
             for x in rect.x..rect.x.saturating_add(rect.width) {
                 if let Some(cell) = buf.cell_mut((x, y))
-                    && cell.diff_option != CellDiffOption::Skip
+                    && !matches!(
+                        cell.diff_option,
+                        CellDiffOption::Skip | CellDiffOption::ForcedWidth(_)
+                    )
                 {
                     cell.set_diff_option(CellDiffOption::AlwaysUpdate);
                 }
@@ -1738,3 +1870,152 @@ pub(crate) use overlay::*;
 
 #[cfg(test)]
 mod render_tests;
+
+#[cfg(all(test, feature = "terminal-images"))]
+mod terminal_image_layer_tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use super::terminal_image_layer_occlusions;
+    use crate::app::context::SurfaceMode;
+    use crate::core::component::{Component, Context, Update};
+    use crate::core::element::{Element, IntoElement};
+    use crate::runtime::RuntimeCore;
+    use crate::style::{Color, Rect, Theme};
+    use crate::widgets::{Animated, Canvas, Terminal};
+
+    struct LayeredTerminals {
+        top_opacity: f32,
+        top_opacity_target: Option<Color>,
+    }
+
+    impl Component for LayeredTerminals {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let bottom: Element = Terminal::new().scrollbar(false).into();
+            let top: Element = Terminal::new().scrollbar(false).into();
+            let mut top_layer = Animated::new(top.key("top-terminal")).opacity(self.top_opacity);
+            if let Some(target) = self.top_opacity_target {
+                top_layer = top_layer.opacity_target(target);
+            }
+            Canvas::new()
+                .child_at(
+                    Rect {
+                        x: 0,
+                        y: 0,
+                        w: 10,
+                        h: 5,
+                    },
+                    bottom.key("bottom-terminal"),
+                )
+                .child_at(
+                    Rect {
+                        x: 2,
+                        y: 1,
+                        w: 4,
+                        h: 3,
+                    },
+                    top_layer.key("top-layer"),
+                )
+                .into()
+        }
+    }
+
+    fn runtime(
+        top_opacity: f32,
+        top_opacity_target: Option<Color>,
+    ) -> RuntimeCore<LayeredTerminals> {
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 5,
+        };
+        let mut runtime = RuntimeCore::new_test(
+            LayeredTerminals {
+                top_opacity,
+                top_opacity_target,
+            },
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        );
+        runtime.init();
+        runtime.render_element(viewport, None, None, None);
+        runtime
+    }
+
+    fn node_with_key(
+        runtime: &RuntimeCore<LayeredTerminals>,
+        key: &str,
+    ) -> crate::core::node::NodeId {
+        runtime
+            .tree
+            .iter()
+            .find(|node| {
+                node.key
+                    .as_ref()
+                    .is_some_and(|node_key| node_key.as_ref() == key)
+            })
+            .map(|node| node.id)
+            .expect("keyed terminal node")
+    }
+
+    #[test]
+    fn lower_terminal_walks_around_later_canvas_terminal_layer() {
+        let runtime = runtime(1.0, None);
+        let bottom = node_with_key(&runtime, "bottom-terminal");
+        let top = node_with_key(&runtime, "top-terminal");
+        let content = ratatui::layout::Rect::new(0, 0, 10, 5);
+
+        assert_eq!(
+            terminal_image_layer_occlusions(&runtime.tree, bottom, content),
+            vec![ratatui::layout::Rect::new(2, 1, 4, 3)]
+        );
+        assert!(
+            terminal_image_layer_occlusions(&runtime.tree, top, content).is_empty(),
+            "the upper terminal must still paint inside its own layer"
+        );
+    }
+
+    #[test]
+    fn translucent_canvas_terminal_layer_does_not_hide_lower_image() {
+        let runtime = runtime(0.5, None);
+        let bottom = node_with_key(&runtime, "bottom-terminal");
+
+        assert!(
+            terminal_image_layer_occlusions(
+                &runtime.tree,
+                bottom,
+                ratatui::layout::Rect::new(0, 0, 10, 5),
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn fixed_target_dim_keeps_canvas_terminal_layer_opaque() {
+        let runtime = runtime(0.5, Some(Color::Black));
+        let bottom = node_with_key(&runtime, "bottom-terminal");
+
+        assert_eq!(
+            terminal_image_layer_occlusions(
+                &runtime.tree,
+                bottom,
+                ratatui::layout::Rect::new(0, 0, 10, 5),
+            ),
+            vec![ratatui::layout::Rect::new(2, 1, 4, 3)]
+        );
+    }
+}

@@ -117,7 +117,7 @@ fn render_terminal_images(
             height: (vis_bottom - vis_top) as u16,
         };
         // Asked before the decode, because everything below it - decode, encode, the copy into
-        // shared memory - is work for a picture an overlay is going to cover completely.
+        // shared memory - is work for a picture a later layer is going to cover completely.
         if crate::backend::ratatui_backend::renderers::image::image_area_fully_occluded(area) {
             continue;
         }
@@ -698,6 +698,16 @@ pub(crate) fn render_terminal_node(
         .ctx
         .copy_feedback
         .and_then(|feedback| feedback.active_range(node_id));
+    #[cfg(feature = "terminal-images")]
+    let _image_occlusion_scope = (!term.images.is_empty()).then(|| {
+        crate::backend::ratatui_backend::renderers::image::push_image_occlusions(
+            crate::backend::ratatui_backend::render::terminal_image_layer_occlusions(
+                state.ctx.tree,
+                node_id,
+                state.content,
+            ),
+        )
+    });
     let f = &mut *state.f;
     render_terminal(
         f,

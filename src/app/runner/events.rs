@@ -3,9 +3,9 @@ use crate::app::input::mouse;
 use crate::app::interaction_state::HoverPaintTarget;
 use crate::app::mouse_dispatch;
 use crate::core::component::Component;
-#[cfg(feature = "terminal")]
-use crate::core::event::MouseKind;
 use crate::core::event::{KeyEvent, MouseEvent};
+#[cfg(feature = "terminal")]
+use crate::core::event::{MouseButton, MouseKind};
 use crate::core::node::{NodeId, NodeKind};
 use crate::runtime::BubbleKeyResult;
 use crate::style::ThemeRole;
@@ -777,13 +777,22 @@ impl<C: Component> AppRunner<C> {
     /// passthrough of what the host sent, and the child program applies its own scroll step.
     #[cfg(feature = "terminal")]
     pub(crate) fn forward_terminal_mouse_ticks(&mut self, mouse: MouseEvent, ticks: u16) -> bool {
+        if consume_terminal_focus_gesture(&mut self.mouse, mouse.kind) {
+            return true;
+        }
         let Some(plan) =
             terminal_mouse_forward_plan(&self.core.tree, mouse, self.mouse.sub_cell.get())
         else {
             return false;
         };
-        if plan.focus {
-            let _ = self.focus_for_node(plan.hit);
+        let focus_changed = plan.focus && self.focus_for_node(plan.hit);
+        if focus_changed && matches!(mouse.kind, MouseKind::Down(MouseButton::Left)) {
+            self.mouse.terminal_focus_press_consumed = true;
+            // Terminal forwarding normally preempts ordinary mouse dispatch. Give bubbling
+            // containers the focus press even though the tracking child deliberately does not get
+            // it; window-manager shells use this to reconcile their logical pane focus.
+            mouse_dispatch::emit_bubbling_mouse_down(&self.core.tree, plan.hit, mouse);
+            return true;
         }
         // One callback carrying the repeated sequence rather than one callback per tick: the bytes
         // reaching the child are identical either way, and the consumer sees a single write.
@@ -1237,6 +1246,29 @@ pub(crate) struct TerminalMouseForward {
     /// Clicks, drags, and scrolls focus the terminal they act on; plain motion must not, or
     /// hovering an any-event pane would steal focus.
     pub(crate) focus: bool,
+}
+
+/// Consume the rest of a left-button gesture whose press only focused a tracking terminal.
+///
+/// This runs before hit-testing so the release is still consumed if the pointer leaves the
+/// terminal. A fresh press abandons stale state from a release the host never delivered.
+#[cfg(feature = "terminal")]
+pub(crate) fn consume_terminal_focus_gesture(
+    mouse: &mut crate::app::interaction_state::MouseTrackingState,
+    kind: MouseKind,
+) -> bool {
+    match kind {
+        MouseKind::Down(_) => {
+            mouse.terminal_focus_press_consumed = false;
+            false
+        }
+        MouseKind::Drag(MouseButton::Left) if mouse.terminal_focus_press_consumed => true,
+        MouseKind::Up(MouseButton::Left) if mouse.terminal_focus_press_consumed => {
+            mouse.terminal_focus_press_consumed = false;
+            true
+        }
+        _ => false,
+    }
 }
 
 #[cfg(feature = "terminal")]

@@ -309,6 +309,13 @@ pub(crate) struct MouseTrackingState {
     pub click_consumed: bool,
     /// A modified terminal-link press waiting for release on the same destination.
     pub terminal_link_press: Option<TerminalLinkPress>,
+    /// A left press consumed because it only focused a mouse-tracking terminal.
+    ///
+    /// Drag and release belong to the same gesture, so they must be consumed too; otherwise the
+    /// child receives a release without the press that began it. A fresh press clears stale state
+    /// left by a release the host never delivered.
+    #[cfg(feature = "terminal")]
+    pub terminal_focus_press_consumed: bool,
     /// Terminal currently painting one modifier-hovered link.
     #[cfg(feature = "terminal")]
     pub terminal_link_hover_node: Option<NodeId>,

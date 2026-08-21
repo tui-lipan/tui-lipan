@@ -171,6 +171,12 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- A left-button gesture that first focuses a mouse-tracking `Terminal` no longer also reaches the
+  child. The focus press and its matching drag/release are consumed; later clicks on the focused
+  terminal still forward normally.
+- Native Kitty pictures in overlapping Canvas terminal layers no longer bleed through floating
+  panes above them. Each lower terminal's placeholder walk now skips later opaque terminal layers
+  while the upper terminal keeps drawing inside its own rectangle.
 - Resizing a terminal no longer leaves an OSC 133-marked active prompt in the reflow buffer for the
   shell's `SIGWINCH` redraw to duplicate. The stale prompt region is cleared before the grid changes
   size, while command output and terminals without semantic prompt integration keep normal reflow.

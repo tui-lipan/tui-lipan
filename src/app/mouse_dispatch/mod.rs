@@ -808,6 +808,12 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
     fn forward_terminal_mouse(&mut self, mouse: MouseEvent) -> bool {
         #[cfg(feature = "terminal")]
         {
+            if crate::app::runner::events::consume_terminal_focus_gesture(
+                &mut self.mouse,
+                mouse.kind,
+            ) {
+                return true;
+            }
             let Some(plan) = crate::app::runner::events::terminal_mouse_forward_plan(
                 &self.core.tree,
                 mouse,
@@ -815,8 +821,11 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
             ) else {
                 return false;
             };
-            if plan.focus {
-                let _ = self.focus_for_node(plan.hit);
+            let focus_changed = plan.focus && self.focus_for_node(plan.hit);
+            if focus_changed && matches!(mouse.kind, MouseKind::Down(MouseButton::Left)) {
+                self.mouse.terminal_focus_press_consumed = true;
+                emit_bubbling_mouse_down(&self.core.tree, plan.hit, mouse);
+                return true;
             }
             plan.callback.emit(plan.bytes);
             true

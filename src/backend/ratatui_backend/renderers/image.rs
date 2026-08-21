@@ -42,26 +42,58 @@ use crate::widgets::{ImageFit, ImageProtocol};
 #[cfg(feature = "terminal-images")]
 thread_local! {
     static IMAGE_OCCLUSIONS: RefCell<Vec<ratatui::layout::Rect>> = const { RefCell::new(Vec::new()) };
+    static PAINTED_IMAGE_OCCLUSIONS: RefCell<Vec<ratatui::layout::Rect>> = const { RefCell::new(Vec::new()) };
     static IMAGE_PLACEHOLDERS_PAINTED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Remember which cells a Kitty placeholder row must not cover this frame.
 ///
 /// A placeholder row is written from its first cell as one escape sequence that walks the cursor
-/// across the whole width. Overlay text is painted into the buffer afterwards, but those cells are
-/// not re-emitted unless they changed, so a new frame restomps the modal on the host. Subtracting
-/// the rects from the walk is what stops that; [`CellDiffOption::AlwaysUpdate`] on the same cells is
-/// the belt in case a walk still races them.
+/// across the whole width. A later overlay or Canvas layer is painted into the buffer afterwards,
+/// but unchanged cells are not re-emitted, so a new native frame can show through it on the host.
+/// Subtracting the rects from the walk is what stops that; [`CellDiffOption::AlwaysUpdate`] on the
+/// same cells is the belt in case a walk still races them.
 #[cfg(feature = "terminal-images")]
 pub(crate) fn set_image_occlusions(rects: Vec<ratatui::layout::Rect>) {
     IMAGE_OCCLUSIONS.with(|slot| *slot.borrow_mut() = rects);
+    PAINTED_IMAGE_OCCLUSIONS.with(|slot| slot.borrow_mut().clear());
     IMAGE_PLACEHOLDERS_PAINTED.set(false);
+}
+
+/// Add holes for one image-owning subtree, restoring the frame-wide list on drop.
+///
+/// Floating terminal panes are ordinary Canvas layers rather than root-portal overlays. A lower
+/// pane must walk around the panes above it, while the upper pane must still draw inside its own
+/// rectangle, so those holes only apply while the lower terminal node is rendered.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn push_image_occlusions(
+    rects: impl IntoIterator<Item = ratatui::layout::Rect>,
+) -> ImageOcclusionScope {
+    let original_len = IMAGE_OCCLUSIONS.with(|slot| {
+        let mut active = slot.borrow_mut();
+        let original_len = active.len();
+        active.extend(rects);
+        original_len
+    });
+    ImageOcclusionScope(original_len)
+}
+
+/// Restores the active occlusion list even if a widget renderer panics.
+#[cfg(feature = "terminal-images")]
+pub(crate) struct ImageOcclusionScope(usize);
+
+#[cfg(feature = "terminal-images")]
+impl Drop for ImageOcclusionScope {
+    fn drop(&mut self) {
+        IMAGE_OCCLUSIONS.with(|slot| slot.borrow_mut().truncate(self.0));
+    }
 }
 
 /// Drop the frame's occlusion list. [`set_image_occlusions`] installs the next one.
 #[cfg(feature = "terminal-images")]
 pub(crate) fn clear_image_occlusions() {
     IMAGE_OCCLUSIONS.with(|slot| slot.borrow_mut().clear());
+    PAINTED_IMAGE_OCCLUSIONS.with(|slot| slot.borrow_mut().clear());
     IMAGE_PLACEHOLDERS_PAINTED.set(false);
 }
 
@@ -71,12 +103,19 @@ pub(crate) fn image_placeholders_painted() -> bool {
     IMAGE_PLACEHOLDERS_PAINTED.get()
 }
 
+/// Holes used by a placeholder walk that actually painted this frame.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn painted_image_occlusions() -> Vec<ratatui::layout::Rect> {
+    PAINTED_IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone())
+}
+
 /// Whether every cell of `area` is covered by this frame's occlusions.
 ///
 /// Worth asking before a placement is decoded rather than after: the walk that discovers it has no
 /// visible span to write is the *last* step, by which point the frame has already been read out of
 /// the child's file, decoded, encoded and copied into shared memory - a full pipeline for a picture
-/// that goes nowhere. A pane entirely under DevTools or a full-screen overlay costs nothing now.
+/// that goes nowhere. A pane entirely under DevTools, an overlay, or a later terminal layer costs
+/// nothing now.
 #[cfg(feature = "terminal-images")]
 pub(crate) fn image_area_fully_occluded(area: ratatui::layout::Rect) -> bool {
     if area.width == 0 || area.height == 0 {
@@ -251,6 +290,7 @@ impl CompressedKitty {
         let mut transmit = self.take_transmission();
         let mut symbol = String::new();
         let holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
+        let mut painted_placeholders = false;
 
         for y in 0..height {
             let row_y = area.y.saturating_add(y);
@@ -292,7 +332,22 @@ impl CompressedKitty {
                     cell.set_symbol(&symbol).set_diff_option(UNIT_WIDTH);
                 }
                 IMAGE_PLACEHOLDERS_PAINTED.set(true);
+                painted_placeholders = true;
             }
+        }
+        if painted_placeholders {
+            PAINTED_IMAGE_OCCLUSIONS.with(|slot| {
+                let mut painted = slot.borrow_mut();
+                for hole in holes {
+                    let intersection = area.intersection(hole);
+                    if intersection.width > 0
+                        && intersection.height > 0
+                        && !painted.contains(&intersection)
+                    {
+                        painted.push(intersection);
+                    }
+                }
+            });
         }
     }
 
@@ -1572,6 +1627,28 @@ mod tests {
         clear_image_occlusions();
     }
 
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn scoped_terminal_layer_holes_restore_the_frame_wide_occlusions() {
+        let area = ratatui::layout::Rect::new(0, 0, 2, 1);
+        set_image_occlusions(vec![ratatui::layout::Rect::new(0, 0, 1, 1)]);
+        assert!(!image_area_fully_occluded(area));
+
+        {
+            let _scope = push_image_occlusions([ratatui::layout::Rect::new(1, 0, 1, 1)]);
+            assert!(
+                image_area_fully_occluded(area),
+                "the lower terminal sees both the overlay and floating-pane holes"
+            );
+        }
+
+        assert!(
+            !image_area_fully_occluded(area),
+            "the upper terminal must not inherit the lower terminal's pane hole"
+        );
+        clear_image_occlusions();
+    }
+
     /// Overlay columns stay writable so later paint can put text there; uncovered cells stay Skip
     /// so the first-cell walk is the only thing that draws them.
     #[cfg(feature = "terminal-images")]
@@ -1644,6 +1721,11 @@ mod tests {
                 }
             })
             .expect("draw");
+        assert_eq!(
+            painted_image_occlusions(),
+            vec![ratatui::layout::Rect::new(4, 0, 3, 1)],
+            "only holes touched by a real placeholder walk need forced repaint"
+        );
         clear_image_occlusions();
     }
 
