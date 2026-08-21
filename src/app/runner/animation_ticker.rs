@@ -46,10 +46,10 @@ impl<C: Component> AppRunner<C> {
             || animations.has_active_view_transition()
         {
             Some(self.frame_interval)
-        } else if animations.has_active_paint_transition() {
-            Some(self.color_animation_interval)
         } else {
-            None
+            animations
+                .active_paint_transition_interval(self.color_animation_interval)
+                .map(|interval| self.frame_interval.max(interval))
         }
     }
 

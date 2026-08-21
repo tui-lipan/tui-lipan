@@ -23,6 +23,8 @@ trait DynEntry: Any {
     fn reset_touched(&self);
     /// Whether this entry is only ever read while painting, so advancing it needs no `view()` pass.
     fn paint_resolved(&self) -> bool;
+    /// Optional caller-selected cadence for a paint-resolved transition.
+    fn paint_interval(&self) -> Option<Duration>;
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn as_any(&self) -> &dyn Any;
 }
@@ -36,6 +38,7 @@ struct TypedEntry<T: Lerp + PartialEq + 'static> {
     /// concrete value. The view then cannot have baked the value into anything but a style, which is
     /// what makes advancing it a repaint instead of a rebuild.
     paint_resolved: Cell<bool>,
+    paint_interval: Cell<Option<Duration>>,
 }
 
 impl<T: Lerp + PartialEq + 'static> DynEntry for TypedEntry<T> {
@@ -72,6 +75,10 @@ impl<T: Lerp + PartialEq + 'static> DynEntry for TypedEntry<T> {
 
     fn paint_resolved(&self) -> bool {
         self.paint_resolved.get()
+    }
+
+    fn paint_interval(&self) -> Option<Duration> {
+        self.paint_interval.get()
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
@@ -163,7 +170,7 @@ impl AnimationRegistry {
         target: T,
         config: TransitionConfig,
     ) -> T {
-        self.advance(key, target, config, false)
+        self.advance(key, target, config, false, None)
     }
 
     /// Like [`transition`](Self::transition), but hands back a [`Paint`] that names the entry instead
@@ -178,8 +185,9 @@ impl AnimationRegistry {
         key: Key,
         target: Color,
         config: TransitionConfig,
+        frame_interval: Option<Duration>,
     ) -> Paint {
-        let current = self.advance(key.clone(), target, config, true);
+        let current = self.advance(key.clone(), target, config, true, frame_interval);
         match self.slot_for(key) {
             Some(slot) => Paint::Animated {
                 slot,
@@ -220,6 +228,7 @@ impl AnimationRegistry {
         target: T,
         config: TransitionConfig,
         paint_resolved: bool,
+        paint_interval: Option<Duration>,
     ) -> T {
         let mut entries = self.entries.borrow_mut();
         let entry = entries.entry(key).or_insert_with(|| {
@@ -229,6 +238,7 @@ impl AnimationRegistry {
                 transition: None,
                 touched: Cell::new(true),
                 paint_resolved: Cell::new(paint_resolved),
+                paint_interval: Cell::new(paint_interval),
             })
         });
 
@@ -249,6 +259,7 @@ impl AnimationRegistry {
         if !paint_resolved {
             typed.paint_resolved.set(false);
         }
+        typed.paint_interval.set(paint_interval);
 
         if typed.target != target {
             let from = typed.current.clone();
@@ -330,11 +341,22 @@ impl AnimationRegistry {
     }
 
     /// Whether an active transition is resolved by the renderer from a late-bound paint.
+    #[cfg(test)]
     pub(crate) fn has_active_paint_transition(&self) -> bool {
         self.entries
             .borrow()
             .values()
             .any(|entry| entry.is_animating() && entry.paint_resolved())
+    }
+
+    /// Fastest cadence requested by an active paint transition, falling back to the app default.
+    pub(crate) fn active_paint_transition_interval(&self, default: Duration) -> Option<Duration> {
+        self.entries
+            .borrow()
+            .values()
+            .filter(|entry| entry.is_animating() && entry.paint_resolved())
+            .map(|entry| entry.paint_interval().unwrap_or(default))
+            .min()
     }
 
     /// Generation counter for memo invalidation. Bumped whenever an active
@@ -451,12 +473,12 @@ mod tests {
     fn active_transitions_report_whether_they_need_view_or_paint() {
         let reg = AnimationRegistry::default();
         let _ = reg.transition::<f32>("layout".into(), 0.0, cfg(100));
-        let _ = reg.animated_paint("chrome".into(), Color::Red, cfg(100));
+        let _ = reg.animated_paint("chrome".into(), Color::Red, cfg(100), None);
         assert!(!reg.has_active_view_transition());
         assert!(!reg.has_active_paint_transition());
 
         let _ = reg.transition::<f32>("layout".into(), 1.0, cfg(100));
-        let _ = reg.animated_paint("chrome".into(), Color::Blue, cfg(100));
+        let _ = reg.animated_paint("chrome".into(), Color::Blue, cfg(100), None);
         assert!(reg.has_active_view_transition());
         assert!(reg.has_active_paint_transition());
     }

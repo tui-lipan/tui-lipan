@@ -1442,7 +1442,31 @@ impl<C: Component> Context<C> {
         // fade currently is, so a memoized subtree must not be invalidated as it advances.
         self.env
             .animations
-            .animated_paint(key.into(), target, config)
+            .animated_paint(key.into(), target, config, None)
+    }
+
+    /// Transition a style-only colour at a caller-selected repaint cadence.
+    ///
+    /// This has the same paint-only behavior as [`animated_color`](Self::animated_color), but is
+    /// intended for long-running, subtle animation such as a breathing status marker. Such an
+    /// effect can use fewer frames than short focus feedback without lowering
+    /// [`App::color_animation_frame_rate`](crate::App::color_animation_frame_rate) for every colour
+    /// transition in the application.
+    ///
+    /// The rate is clamped to 1-480 fps and never exceeds the app-wide
+    /// [`App::frame_rate`](crate::App::frame_rate). Overlapping transitions share the fastest active
+    /// cadence, so the runtime still uses one animation clock.
+    pub fn animated_color_with_frame_rate(
+        &self,
+        key: impl Into<Key>,
+        target: crate::style::Color,
+        config: crate::animation::TransitionConfig,
+        frame_rate: u16,
+    ) -> crate::style::Paint {
+        let interval = crate::app::context::frame_interval(frame_rate.clamp(1, 480));
+        self.env
+            .animations
+            .animated_paint(key.into(), target, config, Some(interval))
     }
 
     /// Convenience helper for responsive layouts based on viewport width.

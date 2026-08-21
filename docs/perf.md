@@ -65,6 +65,17 @@ that the caller never sees the interpolated colour, so it cannot feed layout,
 text, or a decision; that restriction is exactly what makes skipping `view()`
 sound. A value read concretely even once keeps asking for view passes.
 
+Long-running subtle effects need not use the same cadence as short feedback. Use
+`Context::animated_color_with_frame_rate` for a breathing marker or ambient tint
+that remains smooth with fewer repaints:
+
+```rust
+let marker = ctx.animated_color_with_frame_rate("status", target, config, 10);
+```
+
+The app-wide colour rate remains the default for ordinary fades. Overlapping
+transitions share the fastest active cadence and never exceed `App::frame_rate`.
+
 Verify the level you actually get with `TestBackend::update_level`, which reports
 what a message's `update()` asked for:
 
