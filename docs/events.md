@@ -35,6 +35,26 @@ ctx.link().key_handler(|key: KeyEvent| {
 })
 ```
 
+`Some` **consumes** the key: it never reaches the widget's own behavior, focus traversal, app
+commands, or framework bindings. A catch-all handler therefore locks the keyboard out of the
+rest of the app:
+
+```rust
+// Wrong: swallows Tab, Ctrl-Q, and every other binding.
+ctx.link().key_handler(|key| Some(Msg::Key(key)))
+```
+
+To watch keys without consuming them, use `key_observer`. It delivers the same message but
+always reports the key unhandled:
+
+```rust
+// Right: sees every key, steals none.
+ctx.link().key_observer(|key| Some(Msg::Key(key)))
+```
+
+Reach for a consuming catch-all only where the widget genuinely owns every key, such as
+terminal passthrough (`examples/terminal_copy_mode.rs`).
+
 ---
 
 ## Event Structs

@@ -215,9 +215,23 @@ impl<Msg: 'static> Link<Msg> {
         })
     }
 
-    /// Convert a key event into an optional message.
+    /// Convert a key event into an optional message, **consuming** every key it maps.
     ///
-    /// Returns `true` when a message is produced.
+    /// Returning `Some` marks the key handled: it stops there and never reaches focus
+    /// traversal, app commands, or framework bindings. Map only the keys the widget really
+    /// owns, and return `None` for the rest:
+    ///
+    /// ```ignore
+    /// // Consumes Enter; Tab, Ctrl-Q and everything else keep working.
+    /// .on_key(ctx.link().key_handler(|key| {
+    ///     matches!(key.code, KeyCode::Enter).then(|| Msg::Submit)
+    /// }))
+    /// ```
+    ///
+    /// A catch-all such as `|key| Some(Msg::Key(key))` swallows *all* keys, which locks the
+    /// keyboard out of the rest of the app. Use [`Self::key_observer`] when the intent is to
+    /// watch keys rather than consume them; reach for a catch-all here only for widgets that
+    /// genuinely own every key, such as terminal passthrough.
     pub fn key_handler(&self, f: impl Fn(KeyEvent) -> Option<Msg> + 'static) -> KeyHandler {
         let link = (*self).clone();
         KeyHandler::new(move |e| {
@@ -227,6 +241,29 @@ impl<Msg: 'static> Link<Msg> {
             } else {
                 false
             }
+        })
+    }
+
+    /// Observe key events **without consuming** them.
+    ///
+    /// The message is delivered exactly like [`Self::key_handler`], but the key is always
+    /// reported unhandled, so it continues to the widget's own behavior, focus traversal, app
+    /// commands, and framework bindings:
+    ///
+    /// ```ignore
+    /// // Sees every key, steals none.
+    /// .on_key(ctx.link().key_observer(|key| Some(Msg::Key(key))))
+    /// ```
+    ///
+    /// This is the right choice for logging, status lines, activity tracking, and any other
+    /// passive read of the key stream.
+    pub fn key_observer(&self, f: impl Fn(KeyEvent) -> Option<Msg> + 'static) -> KeyHandler {
+        let link = (*self).clone();
+        KeyHandler::new(move |e| {
+            if let Some(msg) = f(e) {
+                link.send(msg);
+            }
+            false
         })
     }
 }
@@ -273,6 +310,40 @@ mod tests {
         let handled = handler.handle(key(KeyCode::Enter));
 
         assert!(!handled);
+        assert_eq!(queue.borrow().len(), 1);
+    }
+
+    #[test]
+    fn key_observer_sends_without_consuming_the_key() {
+        let queue: TestQueue = Rc::new(RefCell::new(Vec::new()));
+        let dispatcher = {
+            let queue = queue.clone();
+            Dispatcher::new(move |scope, msg| queue.borrow_mut().push((scope, msg)))
+        };
+        let link: Link<Msg> = Link::new(ScopeId(1), dispatcher);
+        let handler = link.key_observer(|_key| Some(Msg::Ping));
+
+        // A catch-all observer must never report the key as handled, or it would swallow
+        // Tab traversal and every framework binding.
+        assert!(!handler.handle(key(KeyCode::Enter)));
+        assert!(!handler.handle(key(KeyCode::Tab)));
+        assert_eq!(queue.borrow().len(), 2);
+    }
+
+    #[test]
+    fn key_observer_skips_the_message_when_the_closure_returns_none() {
+        let queue: TestQueue = Rc::new(RefCell::new(Vec::new()));
+        let dispatcher = {
+            let queue = queue.clone();
+            Dispatcher::new(move |scope, msg| queue.borrow_mut().push((scope, msg)))
+        };
+        let link: Link<Msg> = Link::new(ScopeId(1), dispatcher);
+        let handler =
+            link.key_observer(|key| matches!(key.code, KeyCode::Enter).then_some(Msg::Ping));
+
+        assert!(!handler.handle(key(KeyCode::Tab)));
+        assert!(queue.borrow().is_empty());
+        assert!(!handler.handle(key(KeyCode::Enter)));
         assert_eq!(queue.borrow().len(), 1);
     }
 

@@ -75,6 +75,9 @@ impl Component for TerminalCopyModeDemo {
                 ctx.state.snapshot.total_scrollback_rows,
             ))
             .selection_style(Style::new().fg(Color::Black).bg(Color::LightCyan))
+            // A consuming catch-all is correct here and nowhere else: the terminal owns
+            // every key while focused. Elsewhere use `key_observer`, which watches keys
+            // without swallowing focus traversal and framework bindings.
             .on_key(ctx.link().key_handler(|key| Some(Msg::Key(key))))
             .into();
 
