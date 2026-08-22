@@ -118,6 +118,23 @@ def render(prefix: list[str], releases: list[Release], references: list[str]) ->
     return "\n".join(output) + "\n"
 
 
+def release_notes(releases: list[Release], version: str) -> str:
+    """Render one release's body the way GitHub Release notes want it."""
+    for release in releases:
+        if release.name != version:
+            continue
+        output: list[str] = normalize_blank_lines(release.preamble.copy())
+        for category, body in release.sections:
+            body = normalize_blank_lines(body.copy())
+            if not body:
+                continue
+            if output:
+                output.append("")
+            output.extend([f"### {category}", "", *body])
+        return "\n".join(output) + "\n"
+    raise ValueError(f"no release section for {version}")
+
+
 def validate(releases: list[Release], references: list[str]) -> list[str]:
     problems: list[str] = []
     names = [release.name for release in releases]
@@ -210,6 +227,11 @@ def main() -> int:
         action="store_true",
         help="merge duplicate category blocks and put categories in canonical order",
     )
+    parser.add_argument(
+        "--release-notes",
+        metavar="VERSION",
+        help="print that version's sections to stdout instead of validating",
+    )
     args = parser.parse_args()
 
     lines = CHANGELOG.read_text(encoding="utf-8").splitlines()
@@ -218,6 +240,14 @@ def main() -> int:
     except ValueError as error:
         print(f"CHANGELOG.md: {error}", file=sys.stderr)
         return 1
+
+    if args.release_notes:
+        try:
+            sys.stdout.write(release_notes(releases, args.release_notes))
+        except ValueError as error:
+            print(f"CHANGELOG.md: {error}", file=sys.stderr)
+            return 1
+        return 0
 
     if args.fix:
         unknown = sorted(

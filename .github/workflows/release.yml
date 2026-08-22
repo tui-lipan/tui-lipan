@@ -121,3 +121,31 @@ jobs:
           esac
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: publish
+    permissions:
+      # Required to create the release.
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Create GitHub Release
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "$GITHUB_REF_NAME already has a GitHub Release"
+            exit 0
+          fi
+          python3 scripts/check-changelog.py --release-notes "$VERSION" > notes.md
+          gh release create "$GITHUB_REF_NAME" \
+            --title "tui-lipan $GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            --latest
+        env:
+          GH_TOKEN: ${{ github.token }}
