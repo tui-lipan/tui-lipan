@@ -150,6 +150,9 @@ impl Component for TerminalHints {
             .show_cursor(!ctx.state.active)
             .selection(ctx.state.copy_flash)
             .selection_style(Style::new().fg(Color::Black).bg(Color::LightCyan))
+            // A consuming catch-all is correct here and nowhere else: the terminal owns
+            // every key while focused. Elsewhere use `key_observer`, which watches keys
+            // without swallowing focus traversal and framework bindings.
             .on_key(ctx.link().key_handler(|key| Some(Msg::Key(key))))
             .link_hover_style(Style::new().fg(Color::LightCyan).underline())
             .on_link_activate(ctx.link().callback(Msg::OpenLink))

@@ -43,6 +43,9 @@ pub struct HexAreaNode {
 }
 
 impl WidgetNode for HexAreaNode {
+    fn is_disabled(&self) -> bool {
+        self.disabled
+    }
     fn is_focusable(&self) -> bool {
         self.focusable
     }

@@ -2,6 +2,8 @@
 mod chart_axis_tick_labels;
 #[path = "suites/widget_behavior/cursor_occlusion.rs"]
 mod cursor_occlusion;
+#[path = "suites/widget_behavior/disabled_focus.rs"]
+mod disabled_focus;
 #[path = "suites/widget_behavior/drag_drop_test_backend.rs"]
 mod drag_drop_test_backend;
 #[path = "suites/widget_behavior/draggable_tab_bar_clipped_render.rs"]

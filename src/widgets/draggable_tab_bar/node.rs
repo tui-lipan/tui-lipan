@@ -131,6 +131,9 @@ impl DraggableTabBarNode {
 }
 
 impl WidgetNode for DraggableTabBarNode {
+    fn is_disabled(&self) -> bool {
+        self.disabled
+    }
     fn is_focusable(&self) -> bool {
         self.focusable
     }

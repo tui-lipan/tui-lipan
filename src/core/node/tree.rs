@@ -111,12 +111,19 @@ impl Node {
     }
 
     /// Returns true if this node can receive focus.
+    ///
+    /// A disabled widget is never focusable: it cannot act on a key, so parking focus on it
+    /// would strand keyboard users on a dead stop. The rule lives here rather than in each
+    /// widget's [`WidgetNode::is_focusable`] so a new widget cannot forget it.
     pub fn is_focusable(&self) -> bool {
-        self.kind.is_focusable()
+        !self.kind.is_disabled() && self.kind.is_focusable()
     }
 
+    /// Returns true if this node participates in Tab traversal.
+    ///
+    /// Disabled widgets are excluded for the same reason as [`Self::is_focusable`].
     pub fn is_tab_stop(&self) -> bool {
-        self.kind.is_tab_stop()
+        !self.kind.is_disabled() && self.kind.is_tab_stop()
     }
 
     pub(crate) fn on_focus_callback(&self) -> Option<&crate::callback::Callback<()>> {

@@ -304,6 +304,51 @@ Key dynamic focus targets. Under `OnDemand`, a temporarily unmounted focused key
 focus returns when that key remounts. Call `ctx.blur()` to forget it. Stable keys also suppress
 spurious widget `on_blur`/`on_focus` pairs across remounts.
 
+#### Arrow Navigation Across a Group of Widgets
+
+Framework traversal is linear: Tab and Shift-Tab walk one ring. Arrow keys belong to the focused
+widget — `Tabs` moves its active tab, `List` moves its selection — and only reach the component
+when the focused widget ignores them, which is exactly the case for a row of `Button`s. That
+bubbling `on_key` is where grid-style navigation lives:
+
+```rust
+const ROWS: [&[&str]; 2] = [&["cut", "copy", "paste"], &["undo", "redo"]];
+
+fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
+    let Some((row, col)) = ROWS.iter().enumerate().find_map(|(row, keys)| {
+        keys.iter()
+            .position(|key| ctx.has_focus_within_key(*key))
+            .map(|col| (row, col))
+    }) else {
+        return KeyUpdate::unhandled(Update::none());
+    };
+
+    // Rows differ in length, so a vertical move clamps onto the shorter row.
+    let in_row = |row: usize, col: usize| ROWS[row][col.min(ROWS[row].len() - 1)];
+    let target = match key.code {
+        KeyCode::Left => col.checked_sub(1).map(|col| in_row(row, col)),
+        KeyCode::Right => (col + 1 < ROWS[row].len()).then(|| in_row(row, col + 1)),
+        KeyCode::Up => row.checked_sub(1).map(|row| in_row(row, col)),
+        KeyCode::Down => (row + 1 < ROWS.len()).then(|| in_row(row + 1, col)),
+        _ => None,
+    };
+
+    match target {
+        Some(target) => {
+            ctx.request_focus(target);
+            KeyUpdate::handled(Update::full())
+        }
+        // Unhandled at the edges, so the key still reaches app and framework bindings.
+        None => KeyUpdate::unhandled(Update::none()),
+    }
+}
+```
+
+`examples/widgets.rs` runs this over two button rows. Composite widgets that own a group — `Radio`,
+`DatePicker` — already implement the same idea internally as one tab stop plus arrows; follow that
+shape when a group is really one control, and keep the group's members out of the Tab ring with
+`.tab_stop(false)`.
+
 ---
 
 ### 8. Conditional Overlay Pattern

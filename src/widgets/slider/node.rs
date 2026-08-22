@@ -40,11 +40,14 @@ pub struct SliderNode {
 }
 
 impl WidgetNode for SliderNode {
+    fn is_disabled(&self) -> bool {
+        self.disabled
+    }
     fn is_focusable(&self) -> bool {
-        !self.disabled && self.focusable
+        self.focusable
     }
     fn is_tab_stop(&self) -> bool {
-        !self.disabled && self.focusable && self.tab_stop
+        self.focusable && self.tab_stop
     }
     fn on_focus_callback(&self) -> Option<&Callback<()>> {
         self.on_focus.as_ref()

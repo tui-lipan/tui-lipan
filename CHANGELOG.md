@@ -11,6 +11,22 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- `Link::key_observer` builds a `KeyHandler` that delivers its message without consuming the key,
+  so focus traversal, app commands, and framework bindings keep working. Use it wherever a widget
+  wants to watch the key stream; `Link::key_handler` still consumes every key it maps, which a
+  catch-all such as `|key| Some(Msg::Key(key))` turns into an app-wide keyboard lock.
+
+### Fixed
+
+- Disabled widgets are no longer focusable. `Button`, `Checkbox`, `Input`, `List`, `Table`, `Tabs`,
+  `TextArea`, `HexArea`, and `DraggableTabBar` kept their tab stop while disabled, so Tab parked
+  focus on a widget that refuses every key; only `Slider` excluded itself. The rule now lives in
+  `Node::is_focusable`/`Node::is_tab_stop` via the new `WidgetNode::is_disabled`, and applies to
+  traversal, click-to-focus, and `ctx.request_focus`. Disabling the focused widget releases focus
+  on the next render. `.tab_stop(false)` next to `.disabled(true)` is now redundant.
+
 ## [0.3.0] - 2026-08-21
 
 ### Added

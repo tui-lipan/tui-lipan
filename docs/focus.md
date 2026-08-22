@@ -47,6 +47,16 @@ focus target. Incidental controls such as `Accordion`, `DraggableTabBar`, `Hyper
 and `Tabs` are not focusable by default; opt in when their keyboard behavior belongs in the app's
 focus ring. Input, editor, and primary data surfaces remain focusable by default.
 
+### Disabled Widgets
+
+`.disabled(true)` removes a widget from focus entirely: it is not a tab stop, click-to-focus
+skips it, and `ctx.request_focus(key)` will not land on it. A disabled widget refuses every key,
+so holding focus would strand keyboard users on a dead stop. Disabling the currently focused
+widget releases focus on the next render, and `FocusPolicy::Auto` moves on to the next stop.
+
+Do not add `.tab_stop(false)` alongside `.disabled(true)` — the rule is applied centrally in
+`Node::is_focusable`, for every widget that has a `disabled` flag.
+
 ```rust
 Input::new(value)
     .key("search")

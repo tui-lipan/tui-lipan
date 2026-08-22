@@ -33,6 +33,9 @@ pub struct CheckboxNode {
 }
 
 impl WidgetNode for CheckboxNode {
+    fn is_disabled(&self) -> bool {
+        self.disabled
+    }
     fn is_focusable(&self) -> bool {
         self.focusable
     }

@@ -43,10 +43,33 @@ impl Component for WidgetDemo {
 
     fn create_state(&self, _props: &Self::Properties) -> Self::State {
         State {
-            status: "Tab to move focus, Enter/Space activates buttons, arrows navigate, Esc quits."
+            status: "Tab/Shift-Tab move focus, arrows move between buttons, Enter/Space activates, Esc or Ctrl-Q quits."
                 .to_string(),
             border_style: BorderStyle::Rounded,
             ..State::default()
+        }
+    }
+
+    fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
+        // Buttons ignore arrow keys, so an arrow only reaches this bubbling handler
+        // when a button holds focus. That is the hook for grid-style navigation the
+        // framework itself does not provide - it only knows the linear Tab order.
+        match key.code {
+            KeyCode::Esc => {
+                ctx.quit();
+                KeyUpdate::handled(Update::full())
+            }
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
+                match focused_button(ctx).and_then(|cell| button_neighbor(cell, key.code)) {
+                    Some(target) => {
+                        ctx.request_focus(target);
+                        ctx.state.status = format!("Arrow focus: {target}");
+                        KeyUpdate::handled(Update::full())
+                    }
+                    None => KeyUpdate::unhandled(Update::none()),
+                }
+            }
+            _ => KeyUpdate::unhandled(Update::none()),
         }
     }
 
@@ -102,7 +125,7 @@ impl Component for WidgetDemo {
                                         Msg::Action(Action::SetBorderStyle(BorderStyle::Plain))
                                     }))
                                     .on_key(ctx.link().key_handler(|key| {
-                                        Some(Msg::ActionKey(
+                                        activation_key(key).then_some(Msg::ActionKey(
                                             Action::SetBorderStyle(BorderStyle::Plain),
                                             key,
                                         ))
@@ -119,7 +142,7 @@ impl Component for WidgetDemo {
                                         Msg::Action(Action::SetBorderStyle(BorderStyle::Rounded))
                                     }))
                                     .on_key(ctx.link().key_handler(|key| {
-                                        Some(Msg::ActionKey(
+                                        activation_key(key).then_some(Msg::ActionKey(
                                             Action::SetBorderStyle(BorderStyle::Rounded),
                                             key,
                                         ))
@@ -136,7 +159,7 @@ impl Component for WidgetDemo {
                                         Msg::Action(Action::SetBorderStyle(BorderStyle::Double))
                                     }))
                                     .on_key(ctx.link().key_handler(|key| {
-                                        Some(Msg::ActionKey(
+                                        activation_key(key).then_some(Msg::ActionKey(
                                             Action::SetBorderStyle(BorderStyle::Double),
                                             key,
                                         ))
@@ -153,7 +176,7 @@ impl Component for WidgetDemo {
                                         Msg::Action(Action::SetBorderStyle(BorderStyle::Thick))
                                     }))
                                     .on_key(ctx.link().key_handler(|key| {
-                                        Some(Msg::ActionKey(
+                                        activation_key(key).then_some(Msg::ActionKey(
                                             Action::SetBorderStyle(BorderStyle::Thick),
                                             key,
                                         ))
@@ -172,7 +195,8 @@ impl Component for WidgetDemo {
                                     ctx.link().callback(|_| Msg::Action(Action::ToggleDisabled)),
                                 )
                                 .on_key(ctx.link().key_handler(|key| {
-                                    Some(Msg::ActionKey(Action::ToggleDisabled, key))
+                                    activation_key(key)
+                                        .then_some(Msg::ActionKey(Action::ToggleDisabled, key))
                                 }))
                                 .key("btn_toggle_disabled"),
                             )
@@ -261,6 +285,7 @@ impl Component for WidgetDemo {
                             })
                             .disabled(disabled)
                             .disabled_style(disabled_style)
+                            .focusable(true)
                             .on_change(ctx.link().callback(Msg::TabChanged))
                             .key("tabs"),
                     )
@@ -272,7 +297,9 @@ impl Component for WidgetDemo {
                             .disabled(disabled)
                             .disabled_style(disabled_style)
                             .on_change(ctx.link().callback(Msg::FilterChanged))
-                            .on_key(ctx.link().key_handler(|key| Some(Msg::FilterKey(key))))
+                            .on_key(ctx.link().key_handler(|key| {
+                                matches!(key.code, KeyCode::Enter).then(|| Msg::FilterKey(key))
+                            }))
                             .key("filter"),
                     )
                     .child(
@@ -377,12 +404,8 @@ impl Component for WidgetDemo {
                 Update::full()
             }
             Msg::FilterKey(key) => {
-                if matches!(key.code, KeyCode::Enter) {
-                    ctx.state.status = "Enter pressed in filter".to_string();
-                    Update::full()
-                } else {
-                    Update::none()
-                }
+                ctx.state.status = format!("{:?} pressed in filter", key.code);
+                Update::full()
             }
             Msg::TabChanged(ev) => {
                 ctx.state.tab = ev.index;
@@ -421,15 +444,64 @@ impl Component for WidgetDemo {
                 Update::full()
             }
             Msg::ActionKey(action, key) => {
-                if matches!(key.code, KeyCode::Enter | KeyCode::Char(' ')) {
-                    apply_action(action, ctx);
-                    Update::full()
-                } else {
-                    Update::none()
-                }
+                apply_action(action, ctx);
+                ctx.state.status = format!("{} (via {:?})", ctx.state.status, key.code);
+                Update::full()
             }
         }
     }
+}
+
+/// The two button rows, in layout order. `btn_disabled_preview` is disabled, so it
+/// is not focusable and stays out of the grid.
+const BUTTON_GRID: [&[&str]; 2] = [
+    &[
+        "btn_plain",
+        "btn_rounded",
+        "btn_double",
+        "btn_thick",
+        "btn_toggle_disabled",
+    ],
+    &[
+        "demo_bracket",
+        "demo_filled",
+        "demo_bold_rounded",
+        "demo_rounded_thick",
+    ],
+];
+
+/// Locate the focused button in [`BUTTON_GRID`] as `(row, column)`.
+fn focused_button(ctx: &Context<WidgetDemo>) -> Option<(usize, usize)> {
+    BUTTON_GRID.iter().enumerate().find_map(|(row, keys)| {
+        keys.iter()
+            .position(|key| ctx.has_focus_within_key(*key))
+            .map(|column| (row, column))
+    })
+}
+
+/// The button an arrow key moves to, or `None` at the edge of the grid so the key
+/// stays unhandled and can still reach app commands and framework bindings.
+fn button_neighbor((row, column): (usize, usize), code: KeyCode) -> Option<&'static str> {
+    let (row, column) = match code {
+        KeyCode::Left => (row, column.checked_sub(1)?),
+        KeyCode::Right => (row, next_index(column, BUTTON_GRID[row].len())?),
+        KeyCode::Up => (row.checked_sub(1)?, column),
+        KeyCode::Down => (next_index(row, BUTTON_GRID.len())?, column),
+        _ => return None,
+    };
+    // Rows differ in length; clamp so a vertical move always lands on a button.
+    let keys = BUTTON_GRID[row];
+    Some(keys[column.min(keys.len() - 1)])
+}
+
+fn next_index(index: usize, len: usize) -> Option<usize> {
+    (index + 1 < len).then_some(index + 1)
+}
+
+/// Keys that activate a button. Every other key must stay unhandled so focus
+/// traversal (Tab) and the quit shortcuts keep working.
+fn activation_key(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Enter | KeyCode::Char(' '))
 }
 
 fn apply_action(action: Action, ctx: &mut Context<WidgetDemo>) {
@@ -491,4 +563,155 @@ fn main() -> Result<()> {
         .title("tui-lipan - Widgets")
         .mount(WidgetDemo)
         .run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tui_lipan::TestBackend;
+
+    fn backend() -> TestBackend<WidgetDemo> {
+        let mut backend = TestBackend::new(WidgetDemo);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 100,
+            h: 34,
+        });
+        backend.render();
+        backend
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            mods: KeyMods::default(),
+        }
+    }
+
+    #[test]
+    fn tab_traversal_skips_the_disabled_preview_button() {
+        let mut backend = backend();
+        backend.focus_key(&Key::from("btn_toggle_disabled"));
+        backend.render();
+        backend.send_key(key(KeyCode::Tab)).unwrap();
+        backend.render();
+
+        assert_eq!(
+            backend.focused_key().map(|key| key.to_string()),
+            Some("demo_bracket".to_string()),
+        );
+    }
+
+    #[test]
+    fn tab_moves_focus_off_a_button_with_an_on_key_handler() {
+        let mut backend = backend();
+        backend.focus_key(&Key::from("btn_plain"));
+        backend.send_key(key(KeyCode::Tab)).unwrap();
+        backend.render();
+
+        assert_eq!(
+            backend.focused_key().map(|key| key.to_string()),
+            Some("btn_rounded".to_string()),
+        );
+    }
+
+    #[test]
+    fn tab_moves_focus_off_the_filter_input() {
+        let mut backend = backend();
+        backend.focus_key(&Key::from("filter"));
+        backend.send_key(key(KeyCode::Tab)).unwrap();
+        backend.render();
+
+        assert_ne!(
+            backend.focused_key().map(|key| key.to_string()),
+            Some("filter".to_string()),
+        );
+    }
+
+    fn focus_after_key(from: &'static str, code: KeyCode) -> Option<String> {
+        let mut backend = backend();
+        backend.focus_key(&Key::from(from));
+        backend.render();
+        backend.send_key(key(code)).unwrap();
+        backend.render();
+        backend.focused_key().map(|key| key.to_string())
+    }
+
+    #[test]
+    fn arrows_move_focus_within_a_button_row() {
+        assert_eq!(
+            focus_after_key("btn_plain", KeyCode::Right),
+            Some("btn_rounded".to_string())
+        );
+        assert_eq!(
+            focus_after_key("btn_rounded", KeyCode::Left),
+            Some("btn_plain".to_string())
+        );
+    }
+
+    #[test]
+    fn arrows_move_focus_between_the_two_button_rows() {
+        assert_eq!(
+            focus_after_key("btn_double", KeyCode::Down),
+            Some("demo_bold_rounded".to_string())
+        );
+        assert_eq!(
+            focus_after_key("demo_bracket", KeyCode::Up),
+            Some("btn_plain".to_string())
+        );
+    }
+
+    #[test]
+    fn a_vertical_move_clamps_onto_the_shorter_row() {
+        assert_eq!(
+            focus_after_key("btn_toggle_disabled", KeyCode::Down),
+            Some("demo_rounded_thick".to_string())
+        );
+    }
+
+    #[test]
+    fn an_arrow_at_the_grid_edge_leaves_focus_alone() {
+        assert_eq!(
+            focus_after_key("btn_plain", KeyCode::Left),
+            Some("btn_plain".to_string())
+        );
+        assert_eq!(
+            focus_after_key("btn_plain", KeyCode::Up),
+            Some("btn_plain".to_string())
+        );
+    }
+
+    #[test]
+    fn arrows_still_belong_to_the_focused_widget() {
+        let mut backend = backend();
+        backend.focus_key(&Key::from("tabs"));
+        backend.render();
+        backend.send_key(key(KeyCode::Right)).unwrap();
+        backend.render();
+
+        assert_eq!(backend.state().tab, 1, "Tabs must keep consuming Right");
+        assert_eq!(
+            backend.focused_key().map(|key| key.to_string()),
+            Some("tabs".to_string())
+        );
+        assert_eq!(
+            backend.focused_key().map(|key| key.to_string()),
+            Some("tabs".to_string())
+        );
+    }
+
+    #[test]
+    fn a_focused_button_leaves_esc_for_the_app_quit_handler() {
+        let mut backend = backend();
+        backend.focus_key(&Key::from("btn_plain"));
+        let before = backend.state().status.clone();
+        backend.send_key(key(KeyCode::Esc)).unwrap();
+
+        assert_eq!(
+            backend.state().status,
+            before,
+            "Esc must not be consumed as a button activation"
+        );
+    }
 }
