@@ -18,6 +18,13 @@ While the crate is on `0.x.y`:
   wants to watch the key stream; `Link::key_handler` still consumes every key it maps, which a
   catch-all such as `|key| Some(Msg::Key(key))` turns into an app-wide keyboard lock.
 
+### Changed
+
+- `ui-snapshot-png` now requires `fontdb` 0.24, which vendors the face-metadata parsing it used to
+  take from `ttf-parser`. The unmaintained `ttf-parser` (RUSTSEC-2026-0192) is no longer reachable
+  through font discovery, leaving `fontdue`'s rasterizer as its only remaining path into the tree.
+  System font lookup and PNG capture output are unchanged.
+
 ### Fixed
 
 - Disabled widgets are no longer focusable. `Button`, `Checkbox`, `Input`, `List`, `Table`, `Tabs`,
