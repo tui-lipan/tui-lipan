@@ -37,6 +37,15 @@ pub(crate) trait WidgetNode {
     fn is_tab_stop(&self) -> bool {
         self.is_focusable()
     }
+    /// Whether the widget is currently disabled.
+    ///
+    /// A disabled widget is excluded from focus centrally by
+    /// [`Node::is_focusable`](crate::core::node::Node::is_focusable), so implementations of
+    /// [`Self::is_focusable`] must not repeat the check. Every node type carrying a `disabled`
+    /// field has to implement this; `scripts/check-disabled-focus.py` enforces that.
+    fn is_disabled(&self) -> bool {
+        false
+    }
     fn on_focus_callback(&self) -> Option<&Callback<()>> {
         None
     }
@@ -323,6 +332,10 @@ impl WidgetNode for NodeKind {
 
     fn is_tab_stop(&self) -> bool {
         node_kind_delegate_match!(self, is_tab_stop())
+    }
+
+    fn is_disabled(&self) -> bool {
+        node_kind_delegate_match!(self, is_disabled())
     }
 
     fn on_focus_callback(&self) -> Option<&Callback<()>> {

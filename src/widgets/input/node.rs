@@ -56,6 +56,9 @@ pub struct InputNode {
 }
 
 impl WidgetNode for InputNode {
+    fn is_disabled(&self) -> bool {
+        self.disabled
+    }
     fn is_focusable(&self) -> bool {
         self.focusable
     }

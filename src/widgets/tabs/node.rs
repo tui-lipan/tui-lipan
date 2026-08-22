@@ -34,6 +34,9 @@ pub struct TabsNode {
 }
 
 impl WidgetNode for TabsNode {
+    fn is_disabled(&self) -> bool {
+        self.disabled
+    }
     fn is_focusable(&self) -> bool {
         self.focusable
     }

@@ -73,6 +73,9 @@ pub struct ListNode {
 }
 
 impl WidgetNode for ListNode {
+    fn is_disabled(&self) -> bool {
+        self.disabled
+    }
     fn is_focusable(&self) -> bool {
         self.focusable
     }

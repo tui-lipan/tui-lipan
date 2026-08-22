@@ -70,6 +70,9 @@ pub struct TableNode {
 }
 
 impl WidgetNode for TableNode {
+    fn is_disabled(&self) -> bool {
+        self.disabled
+    }
     fn is_focusable(&self) -> bool {
         self.focusable
     }

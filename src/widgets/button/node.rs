@@ -36,6 +36,9 @@ pub struct ButtonNode {
 }
 
 impl WidgetNode for ButtonNode {
+    fn is_disabled(&self) -> bool {
+        self.disabled
+    }
     fn is_focusable(&self) -> bool {
         self.focusable
     }
