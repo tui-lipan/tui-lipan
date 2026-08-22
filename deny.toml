@@ -35,16 +35,6 @@ ignore = [
     { id = "RUSTSEC-2024-0320", reason = "yaml-rust - pulled by syntect for theme parsing; will be removed when syntect bumps to yaml-rust2." },
     { id = "RUSTSEC-2024-0436", reason = "paste - pulled deep through image → ravif → rav1e (proc-macro only)." },
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained - pulled by fontdue/fontdb for PNG snapshot font rendering; parses bundled and system fonts, not untrusted input. Revisit when fontdue/fontdb migrate." },
-
-    # quick-xml DoS vectors (quadratic attribute checking, unbounded
-    # namespace declarations). Patched in quick-xml 0.41.0, but both
-    # dependents pin older lines: plist (via syntect, parses app-provided
-    # .tmTheme files, not untrusted network XML) and wayland-scanner (a
-    # proc-macro that parses Wayland protocol XML at build time only).
-    # Neither path exposes attacker-controlled XML at runtime through
-    # tui-lipan's API. Revisit when plist and wayland-scanner bump.
-    { id = "RUSTSEC-2026-0194", reason = "quick-xml attr DoS - only build-time / app-provided XML, not reachable with untrusted input." },
-    { id = "RUSTSEC-2026-0195", reason = "quick-xml NsReader DoS - only build-time / app-provided XML, not reachable with untrusted input." },
 ]
 
 [sources]
