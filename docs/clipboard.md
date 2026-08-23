@@ -110,6 +110,28 @@ terminal still received the copy request. Terminal hosts that already applied th
 parsed child request can call `relay_osc52()` to emit only the outer-terminal sequence.
 `accept_osc52_store()` applies a parsed child request only when `enable_osc52` is enabled, returning
 `Ok(false)` without touching the native clipboard otherwise. `ManagedTerminal` uses this policy.
+
+### OSC 52 under a multiplexer
+
+A multiplexer sits between the app and the real terminal emulator, so the escape needs one extra
+hop and the framing is chosen from the environment:
+
+| Environment | Framing written |
+| --- | --- |
+| `$TMUX` set | the bare escape **and** the tmux DCS passthrough copy |
+| `$STY` set (GNU screen) | the DCS passthrough copy only |
+| neither | the bare escape |
+
+tmux gets both because its two forwarding mechanisms consume different bytes: `set-clipboard`
+(default `external`) forwards a bare OSC 52 outward, while `allow-passthrough` (added in tmux 3.3,
+default **off**) forwards the wrapped copy verbatim. Writing both means whichever one the user has
+enabled performs the copy; if both are on, the clipboard is set twice to the same text. GNU screen
+has no `set-clipboard` equivalent, so the passthrough is the only framing it forwards.
+
+A multiplexer that hosts panes with tui-lipan's own terminal widget does not need any of this: it
+parses a child's bare OSC 52 into a `TerminalClipboardEvent` directly. Such a host should avoid
+leaking an outer `$TMUX` into its panes' environment, since that would make children emit the tmux
+framing for a multiplexer that is not tmux.
 Call `ctx.flash_copy_feedback(node_id)` after a successful programmatic copy to reuse the
 configured selection flash on that exact widget. For the focused widget, obtain `node_id` with
 `ctx.focused_node_id()` before requesting the flash.

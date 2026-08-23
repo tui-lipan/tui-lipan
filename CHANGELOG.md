@@ -11,6 +11,16 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- OSC 52 copies now reach the outer terminal under a default tmux. Inside tmux the escape was
+  written *only* as a DCS passthrough, which tmux forwards solely when `allow-passthrough` is on -
+  and that option ships off (tmux 3.3+). The bare escape that `set-clipboard` (default `external`)
+  does forward was never sent, so `ClipboardHandle::copy` silently dropped the outer-terminal copy
+  on a stock tmux while still reporting success. Under `$TMUX` both framings are now written, so
+  whichever mechanism is enabled performs the copy. GNU screen (`$STY`) keeps passthrough-only
+  framing, which is the only form it forwards.
+
 ## [0.3.1] - 2026-08-22
 
 ### Added
