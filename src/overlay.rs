@@ -666,13 +666,29 @@ mod tests {
 
     #[test]
     fn renew_keeps_a_toast_alive_past_its_original_timeout() {
+        let timeout = Duration::from_millis(10);
         let mut manager = OverlayManager::new();
-        let id = manager.push_toast(Toast::new("held").duration(0.01));
+        let id = manager.push_toast(Toast::new("held").duration(timeout.as_secs_f64()));
+        let created_at = manager.entries[0].created_at;
 
+        // `sleep` guarantees only a lower bound, so the renewal lands at least
+        // 5ms after creation and may overshoot by any amount.
         thread::sleep(Duration::from_millis(5));
         assert!(manager.renew(id));
-        thread::sleep(Duration::from_millis(7));
-        manager.tick_at(Instant::now());
+        let renewed_at = manager.entries[0].created_at;
+
+        // Drive the clock from the observed renewal instant instead of sleeping
+        // toward the deadline: this tick is inside the renewed window by
+        // construction, and clears the original deadline because renewing moved
+        // `created_at` forward by at least the sleep above. Sleeping 7ms against
+        // a 10ms timeout instead left a 3ms margin that a loaded runner could
+        // overshoot, which failed in CI.
+        let tick = renewed_at + timeout - Duration::from_millis(1);
+        assert!(
+            tick > created_at + timeout,
+            "the tick must clear the original deadline"
+        );
+        manager.tick_at(tick);
 
         assert!(
             !manager.entries[0].pending_dismiss,
