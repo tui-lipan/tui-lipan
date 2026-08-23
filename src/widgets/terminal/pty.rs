@@ -75,6 +75,33 @@ fn prime_conpty_cursor(_writer: &mut dyn Write) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Environment markers that advertise an enclosing terminal multiplexer.
+///
+/// A child spawned into a tui-lipan terminal pane is hosted by *this* process,
+/// not by whatever multiplexer launched it, so these are removed by default.
+/// See [`TerminalPtyConfig::inherit_multiplexer_env`].
+pub(crate) const MULTIPLEXER_ENV: [&str; 4] = ["TMUX", "TMUX_PANE", "STY", "WINDOW"];
+
+/// Apply the configured environment to a spawn builder.
+///
+/// `CommandBuilder::new` seeds the child from this process's environment, so
+/// anything the host inherited leaks into the pane unless removed here.
+/// Removals run first so an explicitly configured value still wins.
+fn configure_env(
+    builder: &mut CommandBuilder,
+    term: &str,
+    env_remove: &[Arc<str>],
+    env: &[(Arc<str>, Arc<str>)],
+) {
+    for key in env_remove {
+        builder.env_remove(key.as_ref());
+    }
+    builder.env("TERM", term);
+    for (key, value) in env {
+        builder.env(key.as_ref(), value.as_ref());
+    }
+}
+
 /// PTY spawn options.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalPtyConfig {
@@ -85,6 +112,7 @@ pub struct TerminalPtyConfig {
     pub(crate) cwd: Option<Arc<str>>,
     pub(crate) term: Arc<str>,
     pub(crate) env: Vec<(Arc<str>, Arc<str>)>,
+    pub(crate) env_remove: Vec<Arc<str>>,
     pub(crate) cell: TerminalCellSize,
 }
 
@@ -100,6 +128,7 @@ impl Default for TerminalPtyConfig {
             cwd: None,
             term: Arc::from("xterm-256color"),
             env: vec![(Arc::from("COLORTERM"), Arc::from("truecolor"))],
+            env_remove: MULTIPLEXER_ENV.iter().copied().map(Arc::from).collect(),
             cell: TerminalCellSize::default(),
         }
     }
@@ -161,6 +190,41 @@ impl TerminalPtyConfig {
     /// Add one environment variable.
     pub fn env(mut self, key: impl Into<Arc<str>>, value: impl Into<Arc<str>>) -> Self {
         self.env.push((key.into(), value.into()));
+        self
+    }
+
+    /// Remove one variable from the environment the child inherits.
+    ///
+    /// The child otherwise inherits this process's environment. Removals are
+    /// applied before [`env`](Self::env), so setting a variable you also remove
+    /// still wins.
+    pub fn env_remove(mut self, key: impl Into<Arc<str>>) -> Self {
+        self.env_remove.push(key.into());
+        self
+    }
+
+    /// Keep the host's multiplexer markers in the child environment.
+    ///
+    /// By default `TMUX`, `TMUX_PANE`, `STY`, and `WINDOW` are removed: a child
+    /// in this pane is hosted by this process, and a child that believes it is
+    /// inside tmux behaves accordingly - wrapping its `OSC 52` clipboard writes
+    /// in tmux's DCS passthrough (which this widget's parser does not unwrap)
+    /// and suppressing inline-image protocols. Pass `true` only if the host
+    /// genuinely wants the enclosing multiplexer to handle those.
+    pub fn inherit_multiplexer_env(mut self, inherit: bool) -> Self {
+        if inherit {
+            self.env_remove
+                .retain(|key| !MULTIPLEXER_ENV.contains(&key.as_ref()));
+        } else if !MULTIPLEXER_ENV
+            .iter()
+            .all(|marker| self.env_remove.iter().any(|key| key.as_ref() == *marker))
+        {
+            for marker in MULTIPLEXER_ENV {
+                if !self.env_remove.iter().any(|key| key.as_ref() == marker) {
+                    self.env_remove.push(Arc::from(marker));
+                }
+            }
+        }
         self
     }
 }
@@ -386,12 +450,14 @@ impl TerminalPty {
         for arg in config.args {
             builder.arg(arg.as_ref());
         }
-        builder.env("TERM", config.term.as_ref());
+        configure_env(
+            &mut builder,
+            config.term.as_ref(),
+            &config.env_remove,
+            &config.env,
+        );
         if let Some(cwd) = config.cwd {
             builder.cwd(cwd.as_ref());
-        }
-        for (key, value) in config.env {
-            builder.env(key.as_ref(), value.as_ref());
         }
 
         let mut child = pair
@@ -755,6 +821,96 @@ impl Drop for TerminalPty {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    fn removes(config: &TerminalPtyConfig, key: &str) -> bool {
+        config.env_remove.iter().any(|k| k.as_ref() == key)
+    }
+
+    #[test]
+    fn multiplexer_markers_are_scrubbed_by_default() {
+        // `CommandBuilder::new` seeds the child from this process's environment,
+        // so a host launched under tmux would otherwise tell every pane child it
+        // is inside tmux.
+        let config = TerminalPtyConfig::new("/bin/sh");
+        for marker in MULTIPLEXER_ENV {
+            assert!(removes(&config, marker), "{marker} should be removed");
+        }
+    }
+
+    #[test]
+    fn inherit_multiplexer_env_keeps_the_markers() {
+        let config = TerminalPtyConfig::new("/bin/sh").inherit_multiplexer_env(true);
+        for marker in MULTIPLEXER_ENV {
+            assert!(!removes(&config, marker), "{marker} should be kept");
+        }
+    }
+
+    #[test]
+    fn inherit_multiplexer_env_round_trips() {
+        let config = TerminalPtyConfig::new("/bin/sh")
+            .inherit_multiplexer_env(true)
+            .inherit_multiplexer_env(false);
+        for marker in MULTIPLEXER_ENV {
+            assert!(removes(&config, marker), "{marker} should be removed again");
+        }
+        // Re-enabling must not duplicate entries.
+        assert_eq!(config.env_remove.len(), MULTIPLEXER_ENV.len());
+    }
+
+    #[test]
+    fn inherit_multiplexer_env_preserves_custom_removals() {
+        let config = TerminalPtyConfig::new("/bin/sh")
+            .env_remove("SECRET_TOKEN")
+            .inherit_multiplexer_env(true);
+        assert!(removes(&config, "SECRET_TOKEN"));
+        assert!(!removes(&config, "TMUX"));
+    }
+
+    #[test]
+    fn env_remove_is_additive() {
+        let config = TerminalPtyConfig::new("/bin/sh").env_remove("SECRET_TOKEN");
+        assert!(removes(&config, "SECRET_TOKEN"));
+        assert!(removes(&config, "TMUX"), "defaults are kept");
+    }
+
+    #[test]
+    fn configure_env_strips_inherited_markers_from_the_builder() {
+        // Seed the marker on the builder rather than on this process: mutating
+        // the real environment would race the other tests in this binary.
+        let mut builder = CommandBuilder::new("/bin/sh");
+        builder.env("TMUX", "/tmp/fake,1,0");
+        builder.env("STY", "1234.pts-0.host");
+
+        let config = TerminalPtyConfig::new("/bin/sh");
+        configure_env(
+            &mut builder,
+            "xterm-256color",
+            &config.env_remove,
+            &config.env,
+        );
+
+        assert_eq!(builder.get_env("TMUX"), None);
+        assert_eq!(builder.get_env("STY"), None);
+        assert_eq!(
+            builder.get_env("TERM"),
+            Some(std::ffi::OsStr::new("xterm-256color"))
+        );
+    }
+
+    #[test]
+    fn configure_env_lets_an_explicit_value_win_over_a_removal() {
+        let mut builder = CommandBuilder::new("/bin/sh");
+        let config = TerminalPtyConfig::new("/bin/sh").env("TMUX", "kept");
+
+        configure_env(
+            &mut builder,
+            "xterm-256color",
+            &config.env_remove,
+            &config.env,
+        );
+
+        assert_eq!(builder.get_env("TMUX"), Some(std::ffi::OsStr::new("kept")));
+    }
 
     #[test]
     fn dropping_a_clone_does_not_kill_the_shared_pty() {
