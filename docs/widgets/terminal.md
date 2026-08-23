@@ -331,6 +331,33 @@ use tui_lipan::prelude::*;
 let config = TerminalPtyConfig::new("/bin/zsh")
     .cwd("/home/user")
     .term("xterm-256color");
+```
+
+### The child environment
+
+The child inherits this process's environment, then `TerminalPtyConfig` adjusts
+it: removals first, then explicit values, so a variable you both remove and set
+keeps the value you set.
+
+`TERM` and `COLORTERM` are set for you, because this widget - not whatever
+launched the host - is the terminal the child talks to. For the same reason the
+multiplexer markers `TMUX`, `TMUX_PANE`, `STY`, and `WINDOW` are **removed by
+default**. A host started inside tmux would otherwise hand every pane child a
+`$TMUX` that describes a multiplexer the child is no longer talking to, and the
+child would act on it: wrapping its `OSC 52` clipboard writes in tmux's DCS
+passthrough, which this widget's parser does not unwrap, and suppressing
+inline-image protocols that it assumes tmux will eat.
+
+```rust
+let config = TerminalPtyConfig::new("/bin/zsh")
+    .env_remove("SECRET_TOKEN")        // drop one more inherited variable
+    .inherit_multiplexer_env(true);    // opt out: let the outer multiplexer handle it
+```
+
+Pass `inherit_multiplexer_env(true)` only when the host genuinely wants the
+enclosing multiplexer to own clipboard and image passthrough for its children.
+
+```rust
 
 // Spawn the PTY with an event callback
 let pty = TerminalPty::spawn(config, move |event| {

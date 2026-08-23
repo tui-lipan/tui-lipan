@@ -26,6 +26,13 @@ While the crate is on `0.x.y`:
 
 ### Changed
 
+- `Terminal` panes no longer hand their child the host's multiplexer markers. `TMUX`, `TMUX_PANE`,
+  `STY`, and `WINDOW` are removed from the inherited environment before spawn, because the pane -
+  not whatever launched the host - is the terminal the child talks to. A host started inside tmux
+  previously told every child it was inside tmux, so children wrapped their `OSC 52` writes in a DCS
+  passthrough the widget's parser does not unwrap (clipboard copies were silently lost) and
+  suppressed inline-image protocols. `TerminalPtyConfig::inherit_multiplexer_env(true)` restores the
+  old behavior, and `TerminalPtyConfig::env_remove` drops additional inherited variables.
 - `CaretShape` gained a `TerminalDefault` variant, so exhaustive matches on it need a new arm
   (breaking)
 - `CaretPalette` gained a public `blinking` field, so struct-literal construction needs the new
