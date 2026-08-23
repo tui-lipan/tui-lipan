@@ -46,13 +46,14 @@ impl TerminalManager {
                         None
                     } else {
                         let caret_shape = node.caret_shape.unwrap_or(theme.caret.shape);
+                        let blinking = node.caret_blinking.unwrap_or(theme.caret.blinking);
                         if self.osc12_supported {
                             desired_cursor_color = node
                                 .caret_color
                                 .or(theme.caret.color)
                                 .and_then(Color::to_rgb);
                         }
-                        Some(if node.vim_motions && caret_shape == CaretShape::Block {
+                        let caret_shape = if node.vim_motions && caret_shape == CaretShape::Block {
                             match text_area_vim_state
                                 .get(&id)
                                 .map(|state| state.mode)
@@ -65,7 +66,8 @@ impl TerminalManager {
                             }
                         } else {
                             caret_shape
-                        })
+                        };
+                        Some((caret_shape, blinking))
                     }
                 }
                 NodeKind::Input(node) => {
@@ -78,7 +80,10 @@ impl TerminalManager {
                                 .or(theme.caret.color)
                                 .and_then(Color::to_rgb);
                         }
-                        Some(node.caret_shape.unwrap_or(theme.caret.shape))
+                        Some((
+                            node.caret_shape.unwrap_or(theme.caret.shape),
+                            node.caret_blinking.unwrap_or(theme.caret.blinking),
+                        ))
                     }
                 }
                 #[cfg(feature = "terminal")]
@@ -90,19 +95,17 @@ impl TerminalManager {
                     // by the framework blink timer in the terminal renderer, so the
                     // hardware cursor stays a steady shape here to avoid double blink.
                     if node.cursor_visible {
-                        Some(node.cursor_shape)
+                        Some((node.cursor_shape, false))
                     } else {
                         None
                     }
                 }
                 _ => None,
             };
-            if let Some(caret_shape) = caret {
-                match caret_shape {
-                    CaretShape::Bar => target_style = SetCursorStyle::SteadyBar,
-                    CaretShape::Block => target_style = SetCursorStyle::SteadyBlock,
-                    CaretShape::Underline => target_style = SetCursorStyle::SteadyUnderScore,
-                }
+            if let Some((caret_shape, blinking)) = caret
+                && let Some(style) = cursor_style_for(caret_shape, blinking)
+            {
+                target_style = style;
             }
         }
 
@@ -129,6 +132,24 @@ impl TerminalManager {
         }
         Ok(())
     }
+}
+
+/// Resolve a caret shape and blink preference to a `DECSCUSR` style.
+///
+/// Returns `None` for [`CaretShape::TerminalDefault`], which deliberately
+/// declines to pick a style so the caller keeps `DefaultUserShape` and the
+/// terminal's own cursor configuration stands. Blink is part of that
+/// configuration, so `blinking` is ignored in that case.
+fn cursor_style_for(shape: CaretShape, blinking: bool) -> Option<SetCursorStyle> {
+    Some(match (shape, blinking) {
+        (CaretShape::TerminalDefault, _) => return None,
+        (CaretShape::Bar, false) => SetCursorStyle::SteadyBar,
+        (CaretShape::Bar, true) => SetCursorStyle::BlinkingBar,
+        (CaretShape::Block, false) => SetCursorStyle::SteadyBlock,
+        (CaretShape::Block, true) => SetCursorStyle::BlinkingBlock,
+        (CaretShape::Underline, false) => SetCursorStyle::SteadyUnderScore,
+        (CaretShape::Underline, true) => SetCursorStyle::BlinkingUnderScore,
+    })
 }
 
 fn supports_osc12_cursor_color() -> bool {
@@ -240,6 +261,127 @@ mod tests {
             .unwrap();
 
         assert!(String::from_utf8_lossy(&out).contains("\u{1b}[4 q"));
+    }
+
+    fn emitted(tree: &NodeTree) -> String {
+        let mut manager = TerminalManager {
+            osc12_supported: false,
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        manager
+            .update_cursor(&mut out, tree, Some(tree.root), &HashMap::new())
+            .unwrap();
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    #[test]
+    fn caret_blinking_selects_the_blinking_decscusr_variant() {
+        // CSI 1/3/5 q are the blinking block/underline/bar forms; their steady
+        // counterparts are CSI 2/4/6 q.
+        for (shape, expected) in [
+            (CaretShape::Block, "\u{1b}[1 q"),
+            (CaretShape::Underline, "\u{1b}[3 q"),
+            (CaretShape::Bar, "\u{1b}[5 q"),
+        ] {
+            let tree = tree_with_theme(
+                Input::new("abc").caret_shape(shape).caret_blinking(true),
+                Theme::default(),
+            );
+            assert!(
+                emitted(&tree).contains(expected),
+                "{shape:?} blinking should emit {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn caret_blinking_defaults_to_steady() {
+        let tree = tree_with_theme(
+            Input::new("abc").caret_shape(CaretShape::Bar),
+            Theme::default(),
+        );
+        assert!(emitted(&tree).contains("\u{1b}[6 q"));
+    }
+
+    #[test]
+    fn theme_caret_blinking_applies_when_the_widget_does_not_override_it() {
+        let tree = tree_with_theme(
+            Input::new("abc"),
+            Theme::default()
+                .caret_shape(CaretShape::Bar)
+                .caret_blinking(true),
+        );
+        assert!(emitted(&tree).contains("\u{1b}[5 q"));
+    }
+
+    #[test]
+    fn widget_caret_blinking_overrides_the_theme() {
+        let tree = tree_with_theme(
+            Input::new("abc").caret_blinking(false),
+            Theme::default()
+                .caret_shape(CaretShape::Bar)
+                .caret_blinking(true),
+        );
+        assert!(emitted(&tree).contains("\u{1b}[6 q"));
+    }
+
+    #[test]
+    fn terminal_default_shape_emits_the_user_shape_reset() {
+        // CSI 0 q restores whatever the user configured in their terminal, and
+        // blink is part of that configuration, so it must not be overridden.
+        let tree = tree_with_theme(
+            Input::new("abc")
+                .caret_shape(CaretShape::TerminalDefault)
+                .caret_blinking(true),
+            Theme::default(),
+        );
+        let out = emitted(&tree);
+        assert!(out.contains("\u{1b}[0 q"), "expected CSI 0 q, got {out:?}");
+        for overridden in ["\u{1b}[1 q", "\u{1b}[5 q", "\u{1b}[6 q"] {
+            assert!(
+                !out.contains(overridden),
+                "{overridden:?} should not be sent"
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_default_shape_from_the_theme_also_defers_to_the_terminal() {
+        let tree = tree_with_theme(
+            TextArea::new("abc"),
+            Theme::default().caret_shape(CaretShape::TerminalDefault),
+        );
+        assert!(emitted(&tree).contains("\u{1b}[0 q"));
+    }
+
+    #[test]
+    fn vim_block_swap_is_skipped_for_terminal_default() {
+        // The insert-mode Block -> Bar swap keys off an explicit Block shape, so
+        // deferring to the terminal must survive vim motions untouched.
+        let tree = text_area_tree_with(
+            TextArea::new("abc")
+                .vim_motions(true)
+                .caret_shape(CaretShape::TerminalDefault),
+        );
+        let mut manager = TerminalManager {
+            osc12_supported: false,
+            ..Default::default()
+        };
+        let mut state = HashMap::new();
+        state.insert(
+            tree.root,
+            TextAreaVimState {
+                mode: TextAreaVimMode::Insert,
+                ..Default::default()
+            },
+        );
+        let mut out = Vec::new();
+        manager
+            .update_cursor(&mut out, &tree, Some(tree.root), &state)
+            .unwrap();
+
+        assert!(String::from_utf8_lossy(&out).contains("\u{1b}[0 q"));
     }
 
     #[test]

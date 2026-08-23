@@ -1339,6 +1339,21 @@ pub enum CaretShape {
     Bar,
     /// Underline cursor (_), rendered as an underline.
     Underline,
+    /// Leave the terminal's own cursor configuration alone.
+    ///
+    /// The runtime emits `CSI 0 q` (crossterm's `DefaultUserShape`) instead of
+    /// picking a shape, so the caret keeps whatever the user configured in
+    /// their terminal emulator. Blink is part of that configuration, so
+    /// [`CaretPalette::blinking`] and `caret_blinking` have no effect while
+    /// this shape is active.
+    TerminalDefault,
+}
+
+impl CaretShape {
+    /// Whether this shape leaves the terminal's own cursor configuration alone.
+    pub fn is_terminal_default(self) -> bool {
+        matches!(self, Self::TerminalDefault)
+    }
 }
 
 /// Global caret defaults for editable text-entry widgets.
@@ -1351,17 +1366,34 @@ pub struct CaretPalette {
     pub shape: CaretShape,
     /// Default hardware caret color sent through OSC 12 when supported.
     pub color: Option<Color>,
+    /// Whether the caret blinks. Ignored when `shape` is
+    /// [`CaretShape::TerminalDefault`], which defers to the terminal.
+    pub blinking: bool,
 }
 
 impl CaretPalette {
     /// Create caret defaults with an optional hardware color.
+    ///
+    /// The caret is steady; use [`blinking`](Self::blinking) to opt in.
     pub fn new(shape: CaretShape, color: Option<Color>) -> Self {
-        Self { shape, color }
+        Self {
+            shape,
+            color,
+            blinking: false,
+        }
     }
 
     /// Set the default hardware caret color.
     pub fn color(mut self, color: impl Into<Option<Color>>) -> Self {
         self.color = color.into();
+        self
+    }
+
+    /// Set whether the caret blinks by default.
+    ///
+    /// Has no effect while the shape is [`CaretShape::TerminalDefault`].
+    pub fn blinking(mut self, blinking: bool) -> Self {
+        self.blinking = blinking;
         self
     }
 }
@@ -2219,6 +2251,14 @@ impl Theme {
         self
     }
 
+    /// Set whether the global caret blinks.
+    ///
+    /// Has no effect while the caret shape is [`CaretShape::TerminalDefault`].
+    pub fn caret_blinking(mut self, blinking: bool) -> Self {
+        self.caret.blinking = blinking;
+        self
+    }
+
     /// Set the global hardware caret color for editable text-entry widgets.
     ///
     /// Pass `None` to leave the terminal's existing caret color unchanged.
@@ -2553,6 +2593,14 @@ impl ThemePalette {
     /// Override the global caret shape for editable text-entry widgets.
     pub fn caret_shape(mut self, shape: CaretShape) -> Self {
         self.caret.shape = shape;
+        self
+    }
+
+    /// Override whether the global caret blinks.
+    ///
+    /// Has no effect while the caret shape is [`CaretShape::TerminalDefault`].
+    pub fn caret_blinking(mut self, blinking: bool) -> Self {
+        self.caret.blinking = blinking;
         self
     }
 

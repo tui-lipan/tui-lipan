@@ -29,6 +29,7 @@ pub struct InputNode {
     pub placeholder_style: Style,
     pub focus_placeholder_style: Style,
     pub caret_shape: Option<CaretShape>,
+    pub caret_blinking: Option<bool>,
     pub caret_color: Option<Color>,
     pub selection_style: StyleSlot,
     pub border: bool,

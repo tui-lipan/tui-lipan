@@ -27,6 +27,7 @@ pub(crate) fn reconcile_input(widget: &Input) -> InputNode {
         placeholder_style: widget.placeholder_style,
         focus_placeholder_style: widget.focus_placeholder_style,
         caret_shape: widget.caret_shape,
+        caret_blinking: widget.caret_blinking,
         caret_color: widget.caret_color,
         selection_style: widget.selection_style,
         border: widget.border,
