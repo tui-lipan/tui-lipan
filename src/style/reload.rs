@@ -697,6 +697,7 @@ enum TomlCaretShape {
     Block,
     Bar,
     Underline,
+    TerminalDefault,
 }
 
 impl From<TomlCaretShape> for CaretShape {
@@ -705,6 +706,7 @@ impl From<TomlCaretShape> for CaretShape {
             TomlCaretShape::Block => Self::Block,
             TomlCaretShape::Bar => Self::Bar,
             TomlCaretShape::Underline => Self::Underline,
+            TomlCaretShape::TerminalDefault => Self::TerminalDefault,
         }
     }
 }
@@ -713,6 +715,7 @@ impl From<TomlCaretShape> for CaretShape {
 struct TomlCaretPalette {
     shape: Option<TomlCaretShape>,
     color: Option<ColorSpec>,
+    blinking: Option<bool>,
 }
 
 impl TomlCaretPalette {
@@ -722,6 +725,9 @@ impl TomlCaretPalette {
         }
         if let Some(color) = self.color {
             base.color = Some(color.into());
+        }
+        if let Some(blinking) = self.blinking {
+            base.blinking = blinking;
         }
         base
     }
@@ -1277,6 +1283,60 @@ color = "#112233"
 
         assert_eq!(theme.caret.shape, crate::style::CaretShape::Underline);
         assert_eq!(theme.caret.color, Some(Color::Rgb(0x11, 0x22, 0x33)));
+        assert!(!theme.caret.blinking, "blink defaults to steady");
+    }
+
+    #[test]
+    fn toml_theme_caret_overrides_blinking() {
+        let overlay = toml::from_str::<TomlTheme>(
+            r##"
+[caret]
+shape = "bar"
+blinking = true
+"##,
+        )
+        .expect("theme TOML should parse");
+
+        let theme = overlay
+            .into_theme(Theme::default())
+            .expect("overlay should succeed");
+
+        assert_eq!(theme.caret.shape, crate::style::CaretShape::Bar);
+        assert!(theme.caret.blinking);
+    }
+
+    #[test]
+    fn toml_theme_caret_accepts_terminal_default_shape() {
+        let overlay = toml::from_str::<TomlTheme>(
+            r##"
+[caret]
+shape = "terminal_default"
+"##,
+        )
+        .expect("theme TOML should parse");
+
+        let theme = overlay
+            .into_theme(Theme::default())
+            .expect("overlay should succeed");
+
+        assert_eq!(theme.caret.shape, crate::style::CaretShape::TerminalDefault);
+    }
+
+    #[test]
+    fn toml_theme_caret_omitting_blinking_keeps_the_base_value() {
+        let overlay = toml::from_str::<TomlTheme>(
+            r##"
+[caret]
+shape = "bar"
+"##,
+        )
+        .expect("theme TOML should parse");
+
+        let theme = overlay
+            .into_theme(Theme::default().caret_blinking(true))
+            .expect("overlay should succeed");
+
+        assert!(theme.caret.blinking);
     }
 
     #[test]

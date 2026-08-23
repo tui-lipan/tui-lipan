@@ -719,6 +719,7 @@ fg = "#FF8000"
 [caret]
 shape = "bar"
 color = "#FFC066"
+blinking = true
 ```
 
 Theme files support TOML 1.1 syntax, including multiline inline tables with
@@ -797,7 +798,7 @@ This keeps app-specific tokens inside the same `ThemeProvider` tree as the frame
 |-------|------|---------|
 | `primary` | `Style` | Base text and background |
 | `accent` | `Style` | Interactive emphasis for hover/cursors/controls |
-| `caret` | `CaretPalette` | Global shape and hardware color for editable text-entry carets |
+| `caret` | `CaretPalette` | Global shape, blink, and hardware color for editable text-entry carets |
 | `selection` | `Style` | Selected/current state |
 | `focus` | `Style` | Focused widget chrome and focus affordances |
 | `focus_decoration` | `bool` | Enable theme-sourced focus roles, focused-content palettes, automatic frame focus chrome, and focused scrollbar thumbs (default: `true`) |
@@ -823,8 +824,44 @@ Notes:
 - Generic `hover` is disabled by default. Opt in with `Theme::hover(...)` when you want row/surface hover feedback.
 - `Theme::focus_decoration(false)` is the complete theme-level focus-decoration kill switch. It suppresses inherited and extended `theme.focus`, per-widget focus palettes, automatic frame focus chrome, and `scrollbar.thumb_focus`. Explicit widget focus styles still render.
 - `Theme::focus(Style::default())` only empties the generic focus role; use it when per-widget focus palettes should remain active.
-- `Input`, `TextArea`, and embedded `SearchPalette` query inputs inherit `theme.caret`; their explicit caret setters override the inherited shape or color. `ThemePalette` defaults to a block caret colored with its accent.
+- `Input`, `TextArea`, and embedded `SearchPalette` query inputs inherit `theme.caret`; their explicit caret setters override the inherited shape, blink, or color. `ThemePalette` defaults to a steady block caret colored with its accent.
 - `Terminal` keeps the cursor shape requested by its child process; terminal output is not rewritten by the global text-entry caret palette.
+
+### Caret shape and blink
+
+`CaretShape` picks the hardware caret the terminal draws for the focused editable
+widget, and `blinking` picks between the steady and blinking form of that shape:
+
+| Shape | Steady | Blinking |
+| --- | --- | --- |
+| `CaretShape::Block` | `CSI 2 q` | `CSI 1 q` |
+| `CaretShape::Underline` | `CSI 4 q` | `CSI 3 q` |
+| `CaretShape::Bar` | `CSI 6 q` | `CSI 5 q` |
+| `CaretShape::TerminalDefault` | `CSI 0 q` | `CSI 0 q` |
+
+`CaretShape::TerminalDefault` deliberately declines to choose: it emits `CSI 0 q`
+so the caret keeps whatever the user configured in their terminal emulator. Blink
+is part of that configuration, so `blinking` is ignored while it is active - both
+at the theme level and per widget.
+
+```rust
+// Blinking bar for one widget, overriding the theme.
+TextArea::new(text)
+    .caret_shape(CaretShape::Bar)
+    .caret_blinking(true)
+
+// Leave the user's terminal cursor alone everywhere.
+Theme::default().caret_shape(CaretShape::TerminalDefault)
+```
+
+Blink is unset by default on both `Input` and `TextArea`, so a widget inherits
+`theme.caret.blinking` until it calls `.caret_blinking(..)`. `SearchPalette`
+forwards its own override through `.input_caret_blinking(..)`.
+
+`TextArea::vim_motions` swaps a **`Block`** caret to `Bar` in insert mode. That
+swap keys off an explicit `Block`, so `Bar`, `Underline`, and `TerminalDefault`
+pass through modes unchanged, and the blink preference is preserved across the
+swap.
 - Buttons and other control-emphasis states use `accent`, not `selection`, so selection styling stays independent from interactive styling.
 - Text-oriented widgets keep their normal text color on focus by default. Theme `focus` applies to focus chrome (borders, focus affordances), while `input.focus`, `text_area.focus`, `document_view.focus`, `hex_area.focus`, and `terminal.focus` opt into focused content styling.
 - Widget APIs follow the same split: use `.focus_style(...)` for focus chrome and `.focus_content_style(...)` when you want focused text/content to change.

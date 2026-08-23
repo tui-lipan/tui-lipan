@@ -487,6 +487,9 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
             if let Some(shape) = ctx.props.input_caret_shape {
                 input = input.caret_shape(shape);
             }
+            if let Some(blinking) = ctx.props.input_caret_blinking {
+                input = input.caret_blinking(blinking);
+            }
 
             if let Some(cb) = ctx.props.on_focus.clone() {
                 input = input.on_focus(cb);

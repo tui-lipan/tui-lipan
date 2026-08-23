@@ -44,6 +44,7 @@ pub struct Input {
     pub(crate) suffix_style: Style,
     pub(crate) focus_suffix_style: Style,
     pub(crate) caret_shape: Option<CaretShape>,
+    pub(crate) caret_blinking: Option<bool>,
     pub(crate) caret_color: Option<Color>,
     pub(crate) selection_style: StyleSlot,
     pub(crate) border: bool,
@@ -102,6 +103,7 @@ impl Input {
             suffix_style: Style::default(),
             focus_suffix_style: Style::default(),
             caret_shape: None,
+            caret_blinking: None,
             caret_color: None,
             selection_style: StyleSlot::Inherit,
             border: true,
@@ -288,6 +290,18 @@ impl Input {
     /// Override the active theme's caret shape (bar, block, or underline).
     pub fn caret_shape(mut self, shape: CaretShape) -> Self {
         self.caret_shape = Some(shape);
+        self
+    }
+
+    /// Override whether the caret blinks.
+    ///
+    /// Falls back to the active theme's [`CaretPalette::blinking`] when unset,
+    /// and has no effect while the resolved shape is
+    /// [`CaretShape::TerminalDefault`].
+    ///
+    /// [`CaretPalette::blinking`]: crate::style::CaretPalette::blinking
+    pub fn caret_blinking(mut self, blinking: bool) -> Self {
+        self.caret_blinking = Some(blinking);
         self
     }
 

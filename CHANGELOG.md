@@ -11,6 +11,26 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- Caret blink control. `CaretPalette::blinking` (with `Theme::caret_blinking` and
+  `ThemePalette::caret_blinking`), the `blinking` key in a theme TOML `[caret]` table, and
+  `caret_blinking(..)` on `Input`, `TextArea`, and `SearchPalette::input_caret_blinking` select
+  between the steady and blinking form of the caret shape. The runtime previously emitted only the
+  steady `DECSCUSR` variants, so a blinking caret could not be requested at all. Blink is unset per
+  widget and defaults to steady on the theme, so existing carets are unchanged.
+- `CaretShape::TerminalDefault` leaves the terminal's own cursor configuration alone: the runtime
+  emits `CSI 0 q` instead of choosing a shape, so the caret keeps whatever the user configured in
+  their emulator. Blink is part of that configuration and is ignored while this shape is active.
+  Selectable from a theme TOML `[caret]` table as `shape = "terminal_default"`.
+
+### Changed
+
+- `CaretShape` gained a `TerminalDefault` variant, so exhaustive matches on it need a new arm
+  (breaking)
+- `CaretPalette` gained a public `blinking` field, so struct-literal construction needs the new
+  field; `CaretPalette::new` keeps its signature and defaults it to steady (breaking)
+
 ### Fixed
 
 - OSC 52 copies now reach the outer terminal under a default tmux. Inside tmux the escape was

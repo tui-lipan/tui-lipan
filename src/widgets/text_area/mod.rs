@@ -223,6 +223,7 @@ pub struct TextArea {
     pub(crate) focus_content_style: Style,
     pub(crate) hover_border_style: Option<BorderStyle>,
     pub(crate) caret_shape: Option<CaretShape>,
+    pub(crate) caret_blinking: Option<bool>,
     pub(crate) caret_color: Option<Color>,
     pub(crate) selection_style: StyleSlot,
     pub(crate) unfocused_selection_style: StyleSlot,
@@ -355,6 +356,7 @@ impl Default for TextArea {
             focus_content_style: Style::default(),
             hover_border_style: None,
             caret_shape: None,
+            caret_blinking: None,
             caret_color: None,
             selection_style: StyleSlot::Inherit,
             unfocused_selection_style: StyleSlot::Inherit,
@@ -697,6 +699,18 @@ impl TextArea {
     /// Override the active theme's caret shape.
     pub fn caret_shape(mut self, shape: CaretShape) -> Self {
         self.caret_shape = Some(shape);
+        self
+    }
+
+    /// Override whether the caret blinks.
+    ///
+    /// Falls back to the active theme's [`CaretPalette::blinking`] when unset,
+    /// and has no effect while the resolved shape is
+    /// [`CaretShape::TerminalDefault`].
+    ///
+    /// [`CaretPalette::blinking`]: crate::style::CaretPalette::blinking
+    pub fn caret_blinking(mut self, blinking: bool) -> Self {
+        self.caret_blinking = Some(blinking);
         self
     }
 

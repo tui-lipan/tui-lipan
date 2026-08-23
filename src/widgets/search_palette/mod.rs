@@ -537,6 +537,7 @@ pub(crate) struct SearchPaletteProps<T> {
     input_divider_style: Style,
     input_divider_join_frame: bool,
     input_caret_shape: Option<CaretShape>,
+    input_caret_blinking: Option<bool>,
     input_caret_color: Option<Color>,
     input_border_style: BorderStyle,
     input_padding: Padding,
@@ -627,6 +628,7 @@ impl<T: PartialEq> PartialEq for SearchPaletteProps<T> {
             && self.input_divider_style == other.input_divider_style
             && self.input_divider_join_frame == other.input_divider_join_frame
             && self.input_caret_shape == other.input_caret_shape
+            && self.input_caret_blinking == other.input_caret_blinking
             && self.input_caret_color == other.input_caret_color
             && self.input_border_style == other.input_border_style
             && self.input_padding == other.input_padding
@@ -790,6 +792,7 @@ impl<T: Clone + PartialEq> Default for SearchPalette<T> {
                 input_divider_style: Style::default(),
                 input_divider_join_frame: true,
                 input_caret_shape: None,
+                input_caret_blinking: None,
                 input_caret_color: None,
                 input_border_style: BorderStyle::Plain,
                 input_padding: Padding {
@@ -1117,6 +1120,15 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// Override the active theme's input caret shape (block, bar, or underline).
     pub fn input_caret_shape(mut self, shape: CaretShape) -> Self {
         self.props.input_caret_shape = Some(shape);
+        self
+    }
+
+    /// Override whether the input caret blinks.
+    ///
+    /// Falls back to the active theme when unset, and has no effect while the
+    /// resolved shape is [`CaretShape::TerminalDefault`].
+    pub fn input_caret_blinking(mut self, blinking: bool) -> Self {
+        self.props.input_caret_blinking = Some(blinking);
         self
     }
 
