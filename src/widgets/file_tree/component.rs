@@ -2120,7 +2120,7 @@ fn resolve_item_style_path(root: &Path, path: &str) -> Option<PathBuf> {
 }
 
 fn canonical_or_lexical_path(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| lexical_normalize_path(path))
+    super::fs::canonicalize_plain(path).unwrap_or_else(|_| lexical_normalize_path(path))
 }
 
 fn lexical_normalize_path(path: &Path) -> PathBuf {

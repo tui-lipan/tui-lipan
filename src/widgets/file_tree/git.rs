@@ -418,7 +418,7 @@ fn provided_status(status: FileTreeChangeStatus, staged: bool) -> GitFileStatus 
 
 pub(crate) fn provided_root_path(root: &str) -> PathBuf {
     let root = Path::new(root);
-    if let Ok(canonical) = std::fs::canonicalize(root) {
+    if let Ok(canonical) = super::fs::canonicalize_plain(root) {
         return canonical;
     }
 
