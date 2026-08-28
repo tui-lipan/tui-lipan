@@ -1,6 +1,8 @@
 #![allow(unsafe_code)]
 
 #[cfg(unix)]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(unix)]
 use std::time::Duration;
 #[cfg(unix)]
 use web_time::Instant;
@@ -82,6 +84,66 @@ pub struct HostCapabilities {
     pub graphics_query_ok: bool,
 }
 
+/// What the startup probe learned about the way the host answers, kept for the teardown flush.
+///
+/// The distinction that matters at exit is not how capable the terminal is but whether it answers
+/// `CSI c` at all, and how long it takes: waiting on a reply that is never coming stalls every
+/// quit, and asking for one whose answer outlives the wait is precisely what leaks it to the shell.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProbeOutcome {
+    /// The sentinel came back, in this long. The terminal answers, and this is the round trip any
+    /// later request has to be budgeted against.
+    Answered(Duration),
+    /// An escape sequence arrived but the sentinel did not, so something is answering more slowly
+    /// than the probe was willing to wait. Its reply is still in flight.
+    Slow,
+    /// Nothing that looks like a reply arrived, so nothing is owed later either.
+    Silent,
+}
+
+/// The startup [`ProbeOutcome`], encoded for lock-free reads from the teardown path - which runs
+/// in `Drop` and on the panic path, where taking a lock is not worth the risk.
+#[cfg(unix)]
+static PROBE_OUTCOME: AtomicU64 = AtomicU64::new(SILENT_BITS);
+
+/// Any other value is a measured round trip in microseconds, so the two markers take the top of
+/// the range, where a real measurement cannot reach.
+#[cfg(unix)]
+const SILENT_BITS: u64 = u64::MAX;
+#[cfg(unix)]
+const SLOW_BITS: u64 = u64::MAX - 1;
+
+#[cfg(unix)]
+fn encode_outcome(outcome: ProbeOutcome) -> u64 {
+    match outcome {
+        ProbeOutcome::Answered(round_trip) => u64::try_from(round_trip.as_micros())
+            .unwrap_or(u64::MAX)
+            .min(SLOW_BITS - 1),
+        ProbeOutcome::Slow => SLOW_BITS,
+        ProbeOutcome::Silent => SILENT_BITS,
+    }
+}
+
+#[cfg(unix)]
+fn decode_outcome(bits: u64) -> ProbeOutcome {
+    match bits {
+        SILENT_BITS => ProbeOutcome::Silent,
+        SLOW_BITS => ProbeOutcome::Slow,
+        micros => ProbeOutcome::Answered(Duration::from_micros(micros)),
+    }
+}
+
+#[cfg(unix)]
+fn record_probe_outcome(outcome: ProbeOutcome) {
+    PROBE_OUTCOME.store(encode_outcome(outcome), Ordering::Relaxed);
+}
+
+#[cfg(unix)]
+fn probe_outcome() -> ProbeOutcome {
+    decode_outcome(PROBE_OUTCOME.load(Ordering::Relaxed))
+}
+
 /// Ask the host what it implements, in one round trip with a short, bounded timeout.
 ///
 /// The keyboard half mirrors `crossterm::terminal::supports_keyboard_enhancement` (write `CSI ? u`,
@@ -111,6 +173,9 @@ pub fn query_host_capabilities(graphics_probe: &[u8]) -> Option<HostCapabilities
     probe.extend_from_slice(b"\x1b[?u\x1b[?1016$p");
     probe.extend_from_slice(graphics_probe);
     probe.extend_from_slice(b"\x1b[c");
+    // Timed from before the write: what teardown needs to budget for is the whole trip, including
+    // however long the host sat on the request before answering it.
+    let asked = Instant::now();
     tty_write_all(fd, &probe)?;
 
     let mut buffer = Vec::with_capacity(64);
@@ -129,10 +194,19 @@ pub fn query_host_capabilities(graphics_probe: &[u8]) -> Option<HostCapabilities
         }
         buffer.extend_from_slice(&chunk[..n]);
         if let Some(capabilities) = scan_host_capabilities(&buffer) {
+            record_probe_outcome(ProbeOutcome::Answered(asked.elapsed()));
             return Some(capabilities);
         }
     }
-    // No decisive reply within the budget: treat as unsupported.
+    // No decisive reply within the budget: treat as unsupported. Whether a reply was nevertheless
+    // on its way is what teardown reads to tell an unanswered question from an unanswerable one.
+    // An `ESC` is the evidence: every reply starts with one, and a key pressed during startup -
+    // the other thing that can put bytes here - usually does not.
+    record_probe_outcome(if buffer.contains(&0x1b) {
+        ProbeOutcome::Slow
+    } else {
+        ProbeOutcome::Silent
+    });
     Some(HostCapabilities::default())
 }
 
@@ -191,6 +265,88 @@ pub(crate) fn drain_pending_terminal_responses() {
 #[cfg(not(unix))]
 pub(crate) fn drain_pending_terminal_responses() {}
 
+/// What the teardown flush does about the reply it may be owed.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ExitFlush {
+    /// Write a fresh `CSI c` as an ordering sentinel before draining.
+    sentinel: bool,
+    /// Upper bound on the wait. It is reached only when no reply comes; a reply ends the wait
+    /// immediately, so the usual cost is one round trip rather than the whole budget.
+    budget: Duration,
+}
+
+/// Enough for any terminal on the same machine, and the floor a measured round trip is raised to.
+#[cfg(unix)]
+const EXIT_FLUSH_FLOOR: Duration = Duration::from_millis(50);
+/// Ceiling on the wait, so a host that stops answering cannot hold a quit open indefinitely.
+#[cfg(unix)]
+const EXIT_FLUSH_CEILING: Duration = Duration::from_millis(500);
+/// Headroom over the measured round trip, covering the jitter a single sample cannot.
+#[cfg(unix)]
+const EXIT_FLUSH_HEADROOM: u32 = 4;
+
+/// Decide the teardown flush from what the startup probe observed.
+///
+/// The rule behind all three arms is that a sentinel is a promise to wait for its reply. Writing
+/// one and then giving up early does not merely fail to help - it queues a reply that lands after
+/// cooked mode returns, which is the leak this whole path exists to prevent.
+#[cfg(unix)]
+fn exit_flush_plan(outcome: ProbeOutcome) -> ExitFlush {
+    match outcome {
+        // The host answers and its round trip is known, so a sentinel can be both asked for and
+        // waited out.
+        ProbeOutcome::Answered(round_trip) => ExitFlush {
+            sentinel: true,
+            budget: round_trip
+                .saturating_mul(EXIT_FLUSH_HEADROOM)
+                .clamp(EXIT_FLUSH_FLOOR, EXIT_FLUSH_CEILING),
+        },
+        // A reply is already owed from startup. Asking again would only queue a second one behind
+        // it, so this waits out the first instead of adding to the problem.
+        ProbeOutcome::Slow => ExitFlush {
+            sentinel: false,
+            budget: EXIT_FLUSH_CEILING,
+        },
+        // Nothing answered the startup probe, so nothing will answer this one either. Waiting would
+        // spend the ceiling on every quit to learn what is already known.
+        ProbeOutcome::Silent => ExitFlush {
+            sentinel: false,
+            budget: Duration::ZERO,
+        },
+    }
+}
+
+/// Read until the `CSI c` reply arrives or `budget` runs out.
+#[cfg(unix)]
+fn drain_through_da_reply(fd: i32, budget: Duration) {
+    if budget.is_zero() {
+        return;
+    }
+    let deadline = Instant::now() + budget;
+    let mut pending = Vec::with_capacity(256);
+    let mut chunk = [0u8; 256];
+    while Instant::now() < deadline {
+        let remaining = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis() as i32;
+        match poll_readable(fd, remaining.min(10)) {
+            // Sliced so the deadline is still checked while the host is quiet.
+            Some(false) => continue,
+            // A poll error will not fix itself, and retrying it inside the deadline is a spin.
+            None => return,
+            Some(true) => {}
+        }
+        match tty_read(fd, &mut chunk) {
+            Some(0) | None => return,
+            Some(n) => pending.extend_from_slice(&chunk[..n]),
+        }
+        if scan_host_capabilities(&pending).is_some() {
+            return;
+        }
+    }
+}
+
 /// Discard terminal protocol-response bytes still queued on the controlling TTY.
 ///
 /// A capability probe's DA1 reply (`CSI ? … c`) can arrive after the startup
@@ -205,34 +361,27 @@ pub(crate) fn drain_pending_terminal_responses() {}
 ///
 /// At those boundaries there is no application input to preserve, so a blanket
 /// flush is correct.
+///
+/// A DA1 request is an ordering sentinel: its reply can only arrive after the terminal has
+/// processed the preceding mode changes and their reports, so draining through it drains those
+/// too. But the wait for it has to be a wait the round trip actually fits inside. Over SSH, or
+/// through a multiplexer on a remote host, the trip runs from the application to `sshd`, across
+/// the network to the user's real terminal, and all the way back; a budget picked for a terminal
+/// on the same machine expires first, and the reply then lands at the shell prompt as a stray
+/// `61;4;…c`. That is the leak, arriving by way of the sentinel written to prevent it. So the
+/// budget comes from [`exit_flush_plan`], which sizes it against the round trip the startup probe
+/// measured on this very link, and declines to write a sentinel it cannot promise to wait for.
 #[cfg(unix)]
 pub(crate) fn flush_pending_terminal_responses_on_exit() {
+    let plan = exit_flush_plan(probe_outcome());
     let Some(fd) = tty_open() else {
         return;
     };
     let _fd_guard = FdGuard(fd);
-    // A DA1 request is an ordering sentinel: its reply can only arrive after the
-    // terminal has processed preceding mode changes and their reports. Drain
-    // through that reply, then flush any partial tail before cooked mode returns.
-    let _ = tty_write_all(fd, b"\x1b[c");
-    let deadline = Instant::now() + Duration::from_millis(50);
-    let mut pending = Vec::with_capacity(256);
-    let mut chunk = [0u8; 256];
-    while Instant::now() < deadline {
-        let remaining = deadline
-            .saturating_duration_since(Instant::now())
-            .as_millis() as i32;
-        if !matches!(poll_readable(fd, remaining.min(10)), Some(true)) {
-            continue;
-        }
-        let Some(n) = tty_read(fd, &mut chunk) else {
-            break;
-        };
-        pending.extend_from_slice(&chunk[..n]);
-        if scan_host_capabilities(&pending).is_some() {
-            break;
-        }
+    if plan.sentinel {
+        let _ = tty_write_all(fd, b"\x1b[c");
     }
+    drain_through_da_reply(fd, plan.budget);
     // SAFETY: `tcflush(TCIFLUSH)` on the controlling TTY drops unread response
     // fragments after the ordering sentinel; callers have paused the input worker.
     unsafe {
@@ -581,7 +730,12 @@ impl Drop for RawModeGuard {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{HostCapabilities, scan_host_capabilities};
+    use std::time::Duration;
+
+    use super::{
+        EXIT_FLUSH_CEILING, EXIT_FLUSH_FLOOR, ExitFlush, HostCapabilities, ProbeOutcome,
+        decode_outcome, encode_outcome, exit_flush_plan, scan_host_capabilities,
+    };
 
     fn keyboard(enhancement: bool) -> Option<HostCapabilities> {
         Some(HostCapabilities {
@@ -684,6 +838,91 @@ mod tests {
             scan_host_capabilities(b"\x1b[?2026;2$y\x1b[?62;1;6c"),
             keyboard(false),
             "a report about some other mode decides nothing"
+        );
+    }
+
+    #[test]
+    fn a_terminal_on_this_machine_keeps_the_floor() {
+        // Four times nothing is still nothing, and the floor is what a local terminal ran on
+        // before any of this was measured.
+        assert_eq!(
+            exit_flush_plan(ProbeOutcome::Answered(Duration::from_micros(300))),
+            ExitFlush {
+                sentinel: true,
+                budget: EXIT_FLUSH_FLOOR,
+            }
+        );
+    }
+
+    #[test]
+    fn a_round_trip_over_ssh_widens_the_budget_past_the_floor() {
+        // The reported case: a 60ms link answers long after a 50ms budget has given up, and the
+        // reply lands at the shell prompt.
+        assert_eq!(
+            exit_flush_plan(ProbeOutcome::Answered(Duration::from_millis(60))),
+            ExitFlush {
+                sentinel: true,
+                budget: Duration::from_millis(240),
+            }
+        );
+    }
+
+    #[test]
+    fn a_slow_link_stops_widening_at_the_ceiling() {
+        assert_eq!(
+            exit_flush_plan(ProbeOutcome::Answered(Duration::from_millis(200))),
+            ExitFlush {
+                sentinel: true,
+                budget: EXIT_FLUSH_CEILING,
+            },
+            "four times 200ms would be 800ms; a quit does not wait that long"
+        );
+    }
+
+    #[test]
+    fn a_reply_already_owed_is_waited_out_rather_than_asked_for_again() {
+        assert_eq!(
+            exit_flush_plan(ProbeOutcome::Slow),
+            ExitFlush {
+                sentinel: false,
+                budget: EXIT_FLUSH_CEILING,
+            },
+            "a second sentinel would only queue a second reply to leak"
+        );
+    }
+
+    #[test]
+    fn a_host_that_never_answered_is_not_waited_for() {
+        assert_eq!(
+            exit_flush_plan(ProbeOutcome::Silent),
+            ExitFlush {
+                sentinel: false,
+                budget: Duration::ZERO,
+            },
+            "nothing answered the startup probe, so nothing will answer this one"
+        );
+    }
+
+    #[test]
+    fn outcomes_survive_the_atomic_encoding() {
+        for outcome in [
+            ProbeOutcome::Answered(Duration::from_micros(1)),
+            ProbeOutcome::Answered(Duration::from_millis(60)),
+            ProbeOutcome::Slow,
+            ProbeOutcome::Silent,
+        ] {
+            assert_eq!(decode_outcome(encode_outcome(outcome)), outcome);
+        }
+    }
+
+    #[test]
+    fn an_unrepresentable_round_trip_stays_a_measurement() {
+        // The markers live at the top of the range, so a saturating measurement must land below
+        // them - decoding one as `Slow` or `Silent` would change what the flush does.
+        let saturated = decode_outcome(encode_outcome(ProbeOutcome::Answered(Duration::MAX)));
+        assert!(
+            matches!(saturated, ProbeOutcome::Answered(_)),
+            "got {saturated:?}"
         );
     }
 }
