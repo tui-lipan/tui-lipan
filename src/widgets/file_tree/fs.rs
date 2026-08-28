@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -190,12 +191,61 @@ impl FileKind {
     }
 }
 
+/// Where the home directory is kept, in the order they are tried.
+///
+/// `HOME` is the POSIX one, and a deliberate override wherever it is set. `USERPROFILE` is where
+/// Windows keeps it, and its absence here is why the abbreviation never fired there: Windows does
+/// not set `HOME`, and the shells that do (Git Bash) set it to a POSIX path that cannot
+/// prefix-match a Windows one. Whichever the path is actually under wins, so a `HOME` that does not
+/// fit does not mask a `USERPROFILE` that does.
+const HOME_VARS: [&str; 2] = ["HOME", "USERPROFILE"];
+
+/// A path as a person should read it: no Win32 verbatim prefix, home directory as `~`.
 pub(crate) fn path_to_display(path: &str) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    if !home.is_empty() && path.starts_with(&home) {
-        return path.replacen(&home, "~", 1);
+    let homes = HOME_VARS.map(|name| std::env::var(name).unwrap_or_default());
+    abbreviate_home(&strip_verbatim_prefix(path), &homes)
+}
+
+/// Replace whichever of `homes` the path lies under with `~`.
+fn abbreviate_home(path: &str, homes: &[String]) -> String {
+    for home in homes {
+        if !home.is_empty() && path.starts_with(home.as_str()) {
+            return path.replacen(home.as_str(), "~", 1);
+        }
     }
     path.to_string()
+}
+
+/// Drop Windows' extended-length path prefix.
+///
+/// `fs::canonicalize` always returns one, so the tree's root arrived here spelled `\\?\C:\Users`
+/// rather than `C:\Users`. The prefix is a Win32 API detail - it opts a path out of the
+/// normalization every other path goes through, and out of the `MAX_PATH` limit with it - and means
+/// nothing to a person reading a file tree.
+///
+/// Only the displayed copy loses it. The path itself keeps the prefix, because past `MAX_PATH` it
+/// is the only spelling the filesystem APIs will open.
+fn strip_verbatim_prefix(path: &str) -> Cow<'_, str> {
+    // `\\?\UNC\server\share` is the verbatim spelling of `\\server\share`, so this one is replaced
+    // rather than removed: cutting it off would leave a path rooted at the server name.
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return Cow::Owned(format!(r"\\{rest}"));
+    }
+    match path.strip_prefix(r"\\?\") {
+        Some(rest) if is_drive_path(rest) => Cow::Borrowed(rest),
+        // Anything else behind the prefix - a volume GUID, say - has no plain spelling, so it keeps
+        // the one it has rather than being shortened into a path that names nothing.
+        _ => Cow::Borrowed(path),
+    }
+}
+
+/// Whether this is `C:` or `C:\…`, the only forms that stay valid once the prefix is dropped.
+fn is_drive_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes.get(2), None | Some(b'\\'))
 }
 
 #[derive(Clone, Debug)]
@@ -349,4 +399,60 @@ fn display_name(path: &Path) -> Arc<str> {
         .filter(|name| !name.is_empty())
         .map(Arc::from)
         .unwrap_or_else(|| Arc::<str>::from(path.to_string_lossy().as_ref()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{abbreviate_home, strip_verbatim_prefix};
+
+    /// Windows-shaped strings, run everywhere. The functions under test are pure string handling,
+    /// and CI is Linux-only - gating these behind `cfg(windows)` would mean nothing ran them.
+    #[test]
+    fn a_verbatim_drive_prefix_is_not_shown() {
+        assert_eq!(strip_verbatim_prefix(r"\\?\C:\Users"), r"C:\Users");
+        assert_eq!(strip_verbatim_prefix(r"\\?\C:\"), r"C:\");
+        assert_eq!(strip_verbatim_prefix(r"\\?\C:"), "C:");
+    }
+
+    #[test]
+    fn a_verbatim_unc_prefix_becomes_its_plain_spelling() {
+        assert_eq!(
+            strip_verbatim_prefix(r"\\?\UNC\server\share\dir"),
+            r"\\server\share\dir",
+            "cutting the prefix off would root the path at the server name"
+        );
+    }
+
+    #[test]
+    fn a_verbatim_path_with_no_plain_spelling_is_left_alone() {
+        let volume = r"\\?\Volume{b75e2c83-0000-0000-0000-602f00000000}\dir";
+        assert_eq!(strip_verbatim_prefix(volume), volume);
+    }
+
+    #[test]
+    fn ordinary_paths_are_untouched() {
+        assert_eq!(strip_verbatim_prefix(r"C:\Users"), r"C:\Users");
+        assert_eq!(strip_verbatim_prefix(r"\\server\share"), r"\\server\share");
+        assert_eq!(strip_verbatim_prefix("/home/adam/src"), "/home/adam/src");
+    }
+
+    #[test]
+    fn a_home_that_does_not_fit_does_not_mask_one_that_does() {
+        // Git Bash sets `HOME` to a POSIX path while the tree holds Windows ones, which is the
+        // shape that has to fall through to `USERPROFILE`.
+        let homes = ["/c/Users/adam".to_string(), r"C:\Users\adam".to_string()];
+        assert_eq!(abbreviate_home(r"C:\Users\adam\src", &homes), r"~\src");
+    }
+
+    #[test]
+    fn a_posix_home_is_abbreviated() {
+        let homes = ["/home/adam".to_string(), String::new()];
+        assert_eq!(abbreviate_home("/home/adam/src", &homes), "~/src");
+    }
+
+    #[test]
+    fn an_unset_home_leaves_the_path_alone() {
+        let homes = [String::new(), String::new()];
+        assert_eq!(abbreviate_home(r"C:\Users\adam", &homes), r"C:\Users\adam");
+    }
 }
