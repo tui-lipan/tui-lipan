@@ -1,7 +1,7 @@
 #![allow(unsafe_code)]
 
 #[cfg(unix)]
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(unix)]
 use std::time::Duration;
 #[cfg(unix)]
@@ -84,64 +84,60 @@ pub struct HostCapabilities {
     pub graphics_query_ok: bool,
 }
 
-/// What the startup probe learned about the way the host answers, kept for the teardown flush.
+/// What the startup probe learned about the host, in two pieces with different lifetimes.
 ///
-/// The distinction that matters at exit is not how capable the terminal is but whether it answers
-/// `CSI c` at all, and how long it takes: waiting on a reply that is never coming stalls every
-/// quit, and asking for one whose answer outlives the wait is precisely what leaks it to the shell.
+/// **How long the host takes to answer `CSI c`** is durable: it describes the terminal, and stays
+/// true until a different probe replaces it. **Whether the probe's own reply is still in flight**
+/// is not - it holds only until something drains the input queue, and the first flush is that
+/// something. Keeping the two apart is what stops a transient condition from being read as a
+/// standing fact for the rest of the process.
+///
+/// Both are atomics rather than a lock: the readers run in `Drop` and on the panic path, where
+/// taking a lock is not worth the risk. `Relaxed` is enough because each value stands alone and
+/// publishes no accompanying memory.
+///
+/// The round trip in microseconds, or [`ROUND_TRIP_UNKNOWN`] when nothing answered.
 #[cfg(unix)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ProbeOutcome {
-    /// The sentinel came back, in this long. The terminal answers, and this is the round trip any
-    /// later request has to be budgeted against.
-    Answered(Duration),
-    /// An escape sequence arrived but the sentinel did not, so something is answering more slowly
-    /// than the probe was willing to wait. Its reply is still in flight.
-    Slow,
-    /// Nothing that looks like a reply arrived, so nothing is owed later either.
-    Silent,
-}
+static PROBE_ROUND_TRIP: AtomicU64 = AtomicU64::new(ROUND_TRIP_UNKNOWN);
 
-/// The startup [`ProbeOutcome`], encoded for lock-free reads from the teardown path - which runs
-/// in `Drop` and on the panic path, where taking a lock is not worth the risk.
+/// Whether the startup probe's `CSI c` reply may still be on its way. Cleared by whoever acts on
+/// it - see [`take_startup_reply_outstanding`].
 #[cfg(unix)]
-static PROBE_OUTCOME: AtomicU64 = AtomicU64::new(SILENT_BITS);
+static STARTUP_REPLY_OUTSTANDING: AtomicBool = AtomicBool::new(false);
 
-/// Any other value is a measured round trip in microseconds, so the two markers take the top of
-/// the range, where a real measurement cannot reach.
+/// Every other value is a real measurement, so the marker takes the top of the range where one
+/// cannot reach.
 #[cfg(unix)]
-const SILENT_BITS: u64 = u64::MAX;
-#[cfg(unix)]
-const SLOW_BITS: u64 = u64::MAX - 1;
+const ROUND_TRIP_UNKNOWN: u64 = u64::MAX;
 
 #[cfg(unix)]
-fn encode_outcome(outcome: ProbeOutcome) -> u64 {
-    match outcome {
-        ProbeOutcome::Answered(round_trip) => u64::try_from(round_trip.as_micros())
+fn record_round_trip(round_trip: Option<Duration>) {
+    let bits = round_trip.map_or(ROUND_TRIP_UNKNOWN, |round_trip| {
+        u64::try_from(round_trip.as_micros())
             .unwrap_or(u64::MAX)
-            .min(SLOW_BITS - 1),
-        ProbeOutcome::Slow => SLOW_BITS,
-        ProbeOutcome::Silent => SILENT_BITS,
+            .min(ROUND_TRIP_UNKNOWN - 1)
+    });
+    PROBE_ROUND_TRIP.store(bits, Ordering::Relaxed);
+}
+
+#[cfg(unix)]
+fn probe_round_trip() -> Option<Duration> {
+    match PROBE_ROUND_TRIP.load(Ordering::Relaxed) {
+        ROUND_TRIP_UNKNOWN => None,
+        micros => Some(Duration::from_micros(micros)),
     }
 }
 
+/// Read the "startup reply may still be coming" flag and clear it in one step.
+///
+/// Taken rather than read, because the caller is about to drain and flush the queue the reply would
+/// arrive in. Leaving it set would make every later call wait the reply out again - and there are
+/// many later calls: this runs on terminal drop, on panic restore, and on both sides of every
+/// external-program handoff, so a flag that never cleared would put a wait on each of them for a
+/// reply the first one already dealt with.
 #[cfg(unix)]
-fn decode_outcome(bits: u64) -> ProbeOutcome {
-    match bits {
-        SILENT_BITS => ProbeOutcome::Silent,
-        SLOW_BITS => ProbeOutcome::Slow,
-        micros => ProbeOutcome::Answered(Duration::from_micros(micros)),
-    }
-}
-
-#[cfg(unix)]
-fn record_probe_outcome(outcome: ProbeOutcome) {
-    PROBE_OUTCOME.store(encode_outcome(outcome), Ordering::Relaxed);
-}
-
-#[cfg(unix)]
-fn probe_outcome() -> ProbeOutcome {
-    decode_outcome(PROBE_OUTCOME.load(Ordering::Relaxed))
+fn take_startup_reply_outstanding() -> bool {
+    STARTUP_REPLY_OUTSTANDING.swap(false, Ordering::Relaxed)
 }
 
 /// Ask the host what it implements, in one round trip with a short, bounded timeout.
@@ -165,6 +161,14 @@ fn probe_outcome() -> ProbeOutcome {
 /// that as "nothing supported".
 #[cfg(unix)]
 pub fn query_host_capabilities(graphics_probe: &[u8]) -> Option<HostCapabilities> {
+    // Cleared before the first thing that can fail. Every step below - opening the TTY, raw mode,
+    // the write, the poll, the read - can return early, and a guard may be entering a different
+    // terminal than the one an earlier probe measured. Without this, a probe that never establishes
+    // that the current host answers at all would leave the previous host's round trip standing, and
+    // teardown would write a sentinel on the strength of it.
+    record_round_trip(None);
+    STARTUP_REPLY_OUTSTANDING.store(false, Ordering::Relaxed);
+
     let fd = tty_open()?;
     let _fd_guard = FdGuard(fd);
     let _raw_guard = RawModeGuard::new(fd)?;
@@ -194,19 +198,15 @@ pub fn query_host_capabilities(graphics_probe: &[u8]) -> Option<HostCapabilities
         }
         buffer.extend_from_slice(&chunk[..n]);
         if let Some(capabilities) = scan_host_capabilities(&buffer) {
-            record_probe_outcome(ProbeOutcome::Answered(asked.elapsed()));
+            record_round_trip(Some(asked.elapsed()));
             return Some(capabilities);
         }
     }
-    // No decisive reply within the budget: treat as unsupported. Whether a reply was nevertheless
-    // on its way is what teardown reads to tell an unanswered question from an unanswerable one.
-    // An `ESC` is the evidence: every reply starts with one, and a key pressed during startup -
-    // the other thing that can put bytes here - usually does not.
-    record_probe_outcome(if buffer.contains(&0x1b) {
-        ProbeOutcome::Slow
-    } else {
-        ProbeOutcome::Silent
-    });
+    // No decisive reply within the budget: treat as unsupported, and leave the round trip unknown -
+    // nothing here measured one. Whether a reply is nevertheless still on its way is the separate
+    // question teardown asks, and an `ESC` is the evidence for it: every reply starts with one, and
+    // a key pressed during startup - the other thing that can put bytes here - usually does not.
+    STARTUP_REPLY_OUTSTANDING.store(buffer.contains(&0x1b), Ordering::Relaxed);
     Some(HostCapabilities::default())
 }
 
@@ -286,31 +286,39 @@ const EXIT_FLUSH_CEILING: Duration = Duration::from_millis(500);
 #[cfg(unix)]
 const EXIT_FLUSH_HEADROOM: u32 = 4;
 
-/// Decide the teardown flush from what the startup probe observed.
+/// Decide the flush from what is known about the host and what may still be owed by it.
 ///
-/// The rule behind all three arms is that a sentinel is a promise to wait for its reply. Writing
-/// one and then giving up early does not merely fail to help - it queues a reply that lands after
-/// cooked mode returns, which is the leak this whole path exists to prevent.
+/// The rule behind every arm is that a sentinel is a promise to wait for its reply. Writing one and
+/// then giving up early does not merely fail to help - it queues a reply that lands after cooked
+/// mode returns, which is the leak this whole path exists to prevent.
 #[cfg(unix)]
-fn exit_flush_plan(outcome: ProbeOutcome) -> ExitFlush {
-    match outcome {
-        // The host answers and its round trip is known, so a sentinel can be both asked for and
-        // waited out.
-        ProbeOutcome::Answered(round_trip) => ExitFlush {
+fn exit_flush_plan(round_trip: Option<Duration>, startup_reply_outstanding: bool) -> ExitFlush {
+    // A reply is already owed from startup, so asking again would queue a second one behind it.
+    // This waits out the first instead of adding to the problem, and the wait is the ceiling
+    // because the round trip that would have sized it is exactly what did not come back.
+    //
+    // Only the first flush sees this: the flag is taken, not read. The wait can run the full
+    // ceiling, because the fragment already read at startup was consumed there - the tail arriving
+    // here cannot be recognised as the end of a `CSI c` reply on its own. Erring long is the safe
+    // direction: too long costs a one-time pause, too short is the leak.
+    if startup_reply_outstanding {
+        return ExitFlush {
+            sentinel: false,
+            budget: EXIT_FLUSH_CEILING,
+        };
+    }
+    match round_trip {
+        // The host answers and how fast is known, so a sentinel can be both asked for and waited
+        // out.
+        Some(round_trip) => ExitFlush {
             sentinel: true,
             budget: round_trip
                 .saturating_mul(EXIT_FLUSH_HEADROOM)
                 .clamp(EXIT_FLUSH_FLOOR, EXIT_FLUSH_CEILING),
         },
-        // A reply is already owed from startup. Asking again would only queue a second one behind
-        // it, so this waits out the first instead of adding to the problem.
-        ProbeOutcome::Slow => ExitFlush {
-            sentinel: false,
-            budget: EXIT_FLUSH_CEILING,
-        },
-        // Nothing answered the startup probe, so nothing will answer this one either. Waiting would
-        // spend the ceiling on every quit to learn what is already known.
-        ProbeOutcome::Silent => ExitFlush {
+        // Nothing is known to answer, and nothing is owed. Waiting would spend the ceiling to learn
+        // what is already known, on every call.
+        None => ExitFlush {
             sentinel: false,
             budget: Duration::ZERO,
         },
@@ -371,9 +379,14 @@ fn drain_through_da_reply(fd: i32, budget: Duration) {
 /// `61;4;…c`. That is the leak, arriving by way of the sentinel written to prevent it. So the
 /// budget comes from [`exit_flush_plan`], which sizes it against the round trip the startup probe
 /// measured on this very link, and declines to write a sentinel it cannot promise to wait for.
+///
+/// Despite the name this is not a once-per-process call. It runs on terminal drop, on panic
+/// restore, and on both sides of every external-program handoff, so anything it costs is paid again
+/// on each trip out to an editor or a shell - which is why the one condition here that is genuinely
+/// transient, the startup reply still being in flight, is taken and cleared rather than read.
 #[cfg(unix)]
 pub(crate) fn flush_pending_terminal_responses_on_exit() {
-    let plan = exit_flush_plan(probe_outcome());
+    let plan = exit_flush_plan(probe_round_trip(), take_startup_reply_outstanding());
     let Some(fd) = tty_open() else {
         return;
     };
@@ -730,11 +743,13 @@ impl Drop for RawModeGuard {
 
 #[cfg(all(test, unix))]
 mod tests {
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     use super::{
-        EXIT_FLUSH_CEILING, EXIT_FLUSH_FLOOR, ExitFlush, HostCapabilities, ProbeOutcome,
-        decode_outcome, encode_outcome, exit_flush_plan, scan_host_capabilities,
+        EXIT_FLUSH_CEILING, EXIT_FLUSH_FLOOR, ExitFlush, HostCapabilities,
+        STARTUP_REPLY_OUTSTANDING, exit_flush_plan, probe_round_trip, record_round_trip,
+        scan_host_capabilities, take_startup_reply_outstanding,
     };
 
     fn keyboard(enhancement: bool) -> Option<HostCapabilities> {
@@ -840,13 +855,12 @@ mod tests {
             "a report about some other mode decides nothing"
         );
     }
-
     #[test]
     fn a_terminal_on_this_machine_keeps_the_floor() {
         // Four times nothing is still nothing, and the floor is what a local terminal ran on
         // before any of this was measured.
         assert_eq!(
-            exit_flush_plan(ProbeOutcome::Answered(Duration::from_micros(300))),
+            exit_flush_plan(Some(Duration::from_micros(300)), false),
             ExitFlush {
                 sentinel: true,
                 budget: EXIT_FLUSH_FLOOR,
@@ -859,7 +873,7 @@ mod tests {
         // The reported case: a 60ms link answers long after a 50ms budget has given up, and the
         // reply lands at the shell prompt.
         assert_eq!(
-            exit_flush_plan(ProbeOutcome::Answered(Duration::from_millis(60))),
+            exit_flush_plan(Some(Duration::from_millis(60)), false),
             ExitFlush {
                 sentinel: true,
                 budget: Duration::from_millis(240),
@@ -870,7 +884,7 @@ mod tests {
     #[test]
     fn a_slow_link_stops_widening_at_the_ceiling() {
         assert_eq!(
-            exit_flush_plan(ProbeOutcome::Answered(Duration::from_millis(200))),
+            exit_flush_plan(Some(Duration::from_millis(200)), false),
             ExitFlush {
                 sentinel: true,
                 budget: EXIT_FLUSH_CEILING,
@@ -882,7 +896,7 @@ mod tests {
     #[test]
     fn a_reply_already_owed_is_waited_out_rather_than_asked_for_again() {
         assert_eq!(
-            exit_flush_plan(ProbeOutcome::Slow),
+            exit_flush_plan(None, true),
             ExitFlush {
                 sentinel: false,
                 budget: EXIT_FLUSH_CEILING,
@@ -892,37 +906,65 @@ mod tests {
     }
 
     #[test]
-    fn a_host_that_never_answered_is_not_waited_for() {
+    fn an_owed_reply_outranks_a_known_round_trip() {
+        // Both can be true at once - a probe answers, a later one times out with a fragment - and
+        // the owed reply has to win: a sentinel sized by the old round trip would be queued behind
+        // a reply that has not arrived.
         assert_eq!(
-            exit_flush_plan(ProbeOutcome::Silent),
+            exit_flush_plan(Some(Duration::from_millis(1)), true),
             ExitFlush {
                 sentinel: false,
-                budget: Duration::ZERO,
-            },
-            "nothing answered the startup probe, so nothing will answer this one"
+                budget: EXIT_FLUSH_CEILING,
+            }
         );
     }
 
     #[test]
-    fn outcomes_survive_the_atomic_encoding() {
-        for outcome in [
-            ProbeOutcome::Answered(Duration::from_micros(1)),
-            ProbeOutcome::Answered(Duration::from_millis(60)),
-            ProbeOutcome::Slow,
-            ProbeOutcome::Silent,
-        ] {
-            assert_eq!(decode_outcome(encode_outcome(outcome)), outcome);
-        }
+    fn a_host_that_never_answered_is_not_waited_for() {
+        assert_eq!(
+            exit_flush_plan(None, false),
+            ExitFlush {
+                sentinel: false,
+                budget: Duration::ZERO,
+            },
+            "nothing is known to answer, and nothing is owed"
+        );
     }
 
+    /// Owns `STARTUP_REPLY_OUTSTANDING` for the whole suite. Nothing else writes it: the only
+    /// other writer is the startup probe, which no test may run - CI has no tty, and library code
+    /// must never query the host terminal from a test.
     #[test]
-    fn an_unrepresentable_round_trip_stays_a_measurement() {
-        // The markers live at the top of the range, so a saturating measurement must land below
-        // them - decoding one as `Slow` or `Silent` would change what the flush does.
-        let saturated = decode_outcome(encode_outcome(ProbeOutcome::Answered(Duration::MAX)));
+    fn the_owed_reply_is_taken_once_and_not_again() {
+        STARTUP_REPLY_OUTSTANDING.store(true, Ordering::Relaxed);
+
+        assert!(take_startup_reply_outstanding(), "the first flush sees it");
         assert!(
-            matches!(saturated, ProbeOutcome::Answered(_)),
-            "got {saturated:?}"
+            !take_startup_reply_outstanding(),
+            "and no later one does - the first drained the queue it would have arrived in. A flag \
+             that stayed set would put the ceiling on terminal drop, on panic restore, and on both \
+             sides of every external-program handoff, forever."
+        );
+    }
+
+    /// Owns `PROBE_ROUND_TRIP` for the whole suite, for the same reason as the test above.
+    #[test]
+    fn the_round_trip_survives_the_atomic_encoding() {
+        for round_trip in [Duration::from_micros(1), Duration::from_millis(60)] {
+            record_round_trip(Some(round_trip));
+            assert_eq!(probe_round_trip(), Some(round_trip));
+        }
+
+        // The marker lives at the top of the range, so a saturating measurement has to land below
+        // it: read back as `None` it would say the host never answered, which is the opposite.
+        record_round_trip(Some(Duration::MAX));
+        assert!(probe_round_trip().is_some(), "saturated, not unknown");
+
+        record_round_trip(None);
+        assert_eq!(
+            probe_round_trip(),
+            None,
+            "and unknown round-trips as unknown"
         );
     }
 }

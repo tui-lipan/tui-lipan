@@ -66,6 +66,12 @@ While the crate is on `0.x.y`:
   500ms), and no sentinel is written when the probe never got one back: a request that cannot be
   waited out is what produces the leak. A terminal that answered nothing at startup is no longer
   waited for at all, which also removes a fixed 50ms from teardown on a TTY that never replies.
+  Where the probe's own reply was still in flight when it timed out, the next flush waits that
+  reply out instead of asking for another - once, since draining and flushing the queue is what
+  settles it. This flush is not exit-only: it also runs on panic restore and on both sides of every
+  external-program handoff, so a condition treated as permanent would have put a wait on each trip
+  out to an editor or shell.
+
 - OSC 52 copies now reach the outer terminal under a default tmux. Inside tmux the escape was
   written *only* as a DCS passthrough, which tmux forwards solely when `allow-passthrough` is on -
   and that option ships off (tmux 3.3+). The bare escape that `set-clipboard` (default `external`)
