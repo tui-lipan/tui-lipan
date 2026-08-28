@@ -114,6 +114,30 @@ jobs:
       - name: Run cargo tests
         run: cargo test --workspace --all-features
 
+  # Windows-only behavior - path spelling, and anything else written behind `cfg(windows)` - is
+  # invisible to every job above, so a claim about it was previously verified by nothing at all.
+  # Scoped to the widgets the Windows-specific code lives in rather than the whole suite: the point
+  # is coverage that did not exist, not a second full matrix.
+  test-windows:
+    name: Test (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Fetch dependencies
+        run: cargo fetch
+
+      - name: Run widget tests
+        run: cargo test --all-features --lib widgets::file_tree
+
   web-examples:
     name: Web examples
     runs-on: ubuntu-latest

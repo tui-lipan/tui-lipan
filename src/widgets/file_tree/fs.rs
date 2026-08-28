@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -194,36 +193,55 @@ impl FileKind {
 
 /// Where the home directory is kept, in the order they are tried.
 ///
-/// `HOME` is the POSIX one, and a deliberate override wherever it is set. `USERPROFILE` is where
-/// Windows keeps it, and its absence here is why the abbreviation never fired there: Windows does
-/// not set `HOME`, and the shells that do (Git Bash) set it to a POSIX path that cannot
-/// prefix-match a Windows one. Whichever the path is actually under wins, so a `HOME` that does not
-/// fit does not mask a `USERPROFILE` that does.
-const HOME_VARS: [&str; 2] = ["HOME", "USERPROFILE"];
+/// `USERPROFILE` is Windows' own, and its absence here is why the abbreviation never fired there:
+/// Windows does not set `HOME`, and the shells that do (Git Bash) set it to a POSIX path that
+/// cannot prefix-match a Windows one. `HOME` stays a candidate on both, as the deliberate override.
+/// Whichever the path actually lies under wins, so one that does not fit cannot mask one that does.
+#[cfg(windows)]
+const HOME_VARS: &[&str] = &["USERPROFILE", "HOME"];
+#[cfg(not(windows))]
+const HOME_VARS: &[&str] = &["HOME"];
 
-/// A path as a person should read it: no Win32 verbatim prefix, home directory as `~`.
+/// What separates one path component from the next. Windows accepts either; on POSIX a backslash
+/// is an ordinary character in a filename and must not split anything.
+#[cfg(windows)]
+const SEPARATORS: &[char] = &['\\', '/'];
+#[cfg(not(windows))]
+const SEPARATORS: &[char] = &['/'];
+
+/// A path as a person should read it: plainly spelled, home directory as `~`.
 ///
-/// [`canonicalize_plain`] means stored paths have no prefix to drop by the time they arrive here.
-/// The strip stays as the backstop for the paths that never went through it - a root the app passed
-/// already spelled verbatim, which is kept as given when it cannot be canonicalized.
+/// [`canonicalize_plain`] means a stored path is already spelled as plainly as it safely can be by
+/// the time it arrives here. Simplifying again is the backstop for the paths that never went
+/// through it - a root the app passed already spelled verbatim, kept as given because it could not
+/// be canonicalized.
 pub(crate) fn path_to_display(path: &str) -> String {
-    let homes = HOME_VARS.map(|name| std::env::var(name).unwrap_or_default());
-    abbreviate_home(&strip_verbatim_prefix(path), &homes)
+    let homes: Vec<String> = HOME_VARS
+        .iter()
+        .map(|name| std::env::var(name).unwrap_or_default())
+        .collect();
+    let simplified = dunce::simplified(Path::new(path));
+    abbreviate_home(&simplified.to_string_lossy(), &homes, SEPARATORS)
 }
 
 /// Replace whichever of `homes` the path lies under with `~`.
 ///
-/// The match has to land on a path component: a plain prefix test abbreviates `/home/adamant/src`
-/// to `~ant/src` when `HOME` is `/home/adam`, naming a directory the user does not have. A trailing
-/// separator on the variable itself (`HOME=/home/adam/`) is not part of the name either.
-fn abbreviate_home(path: &str, homes: &[String]) -> String {
+/// The match has to land on a component boundary: a plain prefix test abbreviates
+/// `/home/adamant/src` to `~ant/src` when `HOME` is `/home/adam`, naming a directory the user does
+/// not have. A trailing separator on the variable itself (`HOME=/home/adam/`) is not part of the
+/// name either.
+///
+/// `separators` is a parameter rather than the constant so the Windows rule can be exercised on any
+/// platform: the production values are [`SEPARATORS`], which differ per platform, and the tests
+/// below pass both shapes explicitly.
+fn abbreviate_home(path: &str, homes: &[String], separators: &[char]) -> String {
     for home in homes {
-        let home = home.trim_end_matches(SEPARATORS);
+        let home = home.trim_end_matches(separators);
         if home.is_empty() {
             continue;
         }
         if let Some(rest) = path.strip_prefix(home)
-            && (rest.is_empty() || rest.starts_with(SEPARATORS))
+            && (rest.is_empty() || rest.starts_with(separators))
         {
             return format!("~{rest}");
         }
@@ -231,66 +249,22 @@ fn abbreviate_home(path: &str, homes: &[String]) -> String {
     path.to_string()
 }
 
-/// Both separators everywhere rather than the platform's own: the paths themselves come in either
-/// shape, and a `cfg(windows)` rule would sit where CI - Linux-only - cannot run it. The cost is
-/// that a POSIX file named with a literal backslash right after the home directory reads as though
-/// it were a subdirectory, which is a cosmetic label on a pathological name.
-const SEPARATORS: &[char] = &['/', '\\'];
-
-/// Windows' extended-length path prefix, and the spelling of a UNC share behind it.
-const VERBATIM_PREFIX: &str = r"\\?\";
-const VERBATIM_UNC_PREFIX: &str = r"\\?\UNC\";
-
 /// `fs::canonicalize`, spelled the way the rest of the widget spells paths.
 ///
-/// On Windows canonicalize always returns the extended-length form, so this is the one door the
-/// prefix can come through. Dropping it here rather than at the point of display keeps every path
-/// the widget stores, keys git decorations by, matches item styles against, and hands to app code
-/// in an event in the same spelling an app would build for itself.
+/// On Windows canonicalize always returns the extended-length `\?\` form, so this is the one door
+/// that spelling can come through. Simplifying it here rather than at the point of display keeps
+/// every path the widget stores, keys git decorations by, matches item styles against, and hands to
+/// app code in an event in the same spelling an app would build for itself.
 ///
-/// Losing the prefix does not lose access to long paths: `std::fs` re-adds it, converting a path
-/// past the legacy limit to the verbatim form before it reaches Win32.
+/// The contract is *plain wherever plain means the same thing*, not *never verbatim*. `\\?\` does
+/// more than lift the `MAX_PATH` limit: it also turns off the Win32 parsing that would rewrite the
+/// path on the way to the filesystem. A name ending in a dot or space, a component that collides
+/// with a reserved DOS device (`NUL`, `COM1`), or a path over 260 characters therefore has no plain
+/// spelling that still refers to the same file, and keeps the verbatim one. `dunce` draws exactly
+/// that line, and draws it against real Win32 rules rather than a prefix test; it is also why a
+/// long path handed to `git -C` stays in the form that works, since it is never shortened.
 pub(crate) fn canonicalize_plain(path: &Path) -> io::Result<PathBuf> {
-    fs::canonicalize(path).map(|canonical| plain_path(&canonical))
-}
-
-/// The plain spelling of a path, where it has one.
-fn plain_path(path: &Path) -> PathBuf {
-    let text = path.to_string_lossy();
-    if !text.starts_with(VERBATIM_PREFIX) {
-        // Returned as it came, so a path that is not valid UTF-8 keeps every byte it had rather
-        // than being round-tripped through a lossy conversion for nothing.
-        return path.to_path_buf();
-    }
-    PathBuf::from(strip_verbatim_prefix(&text).as_ref())
-}
-
-/// Drop Windows' extended-length path prefix.
-///
-/// The prefix is a Win32 API detail - it opts a path out of the normalization every other path goes
-/// through, and out of the `MAX_PATH` limit with it - and means nothing to a person reading a file
-/// tree, or to an app comparing paths.
-fn strip_verbatim_prefix(path: &str) -> Cow<'_, str> {
-    // `\\?\UNC\server\share` is the verbatim spelling of `\\server\share`, so this one is replaced
-    // rather than removed: cutting it off would leave a path rooted at the server name.
-    if let Some(rest) = path.strip_prefix(VERBATIM_UNC_PREFIX) {
-        return Cow::Owned(format!(r"\\{rest}"));
-    }
-    match path.strip_prefix(VERBATIM_PREFIX) {
-        Some(rest) if is_drive_path(rest) => Cow::Borrowed(rest),
-        // Anything else behind the prefix - a volume GUID, say - has no plain spelling, so it keeps
-        // the one it has rather than being shortened into a path that names nothing.
-        _ => Cow::Borrowed(path),
-    }
-}
-
-/// Whether this is `C:` or `C:\…`, the only forms that stay valid once the prefix is dropped.
-fn is_drive_path(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    bytes.len() >= 2
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && matches!(bytes.get(2), None | Some(b'\\'))
+    dunce::canonicalize(path)
 }
 
 #[derive(Clone, Debug)]
@@ -448,104 +422,99 @@ fn display_name(path: &Path) -> Arc<str> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use super::abbreviate_home;
 
-    use super::{abbreviate_home, plain_path, strip_verbatim_prefix};
-
-    /// Windows-shaped strings, run everywhere. The functions under test are pure string handling,
-    /// and CI is Linux-only - gating these behind `cfg(windows)` would mean nothing ran them.
-    #[test]
-    fn a_verbatim_drive_prefix_is_not_shown() {
-        assert_eq!(strip_verbatim_prefix(r"\\?\C:\Users"), r"C:\Users");
-        assert_eq!(strip_verbatim_prefix(r"\\?\C:\"), r"C:\");
-        assert_eq!(strip_verbatim_prefix(r"\\?\C:"), "C:");
-    }
-
-    #[test]
-    fn a_verbatim_unc_prefix_becomes_its_plain_spelling() {
-        assert_eq!(
-            strip_verbatim_prefix(r"\\?\UNC\server\share\dir"),
-            r"\\server\share\dir",
-            "cutting the prefix off would root the path at the server name"
-        );
-    }
-
-    #[test]
-    fn a_verbatim_path_with_no_plain_spelling_is_left_alone() {
-        let volume = r"\\?\Volume{b75e2c83-0000-0000-0000-602f00000000}\dir";
-        assert_eq!(strip_verbatim_prefix(volume), volume);
-    }
-
-    #[test]
-    fn ordinary_paths_are_untouched() {
-        assert_eq!(strip_verbatim_prefix(r"C:\Users"), r"C:\Users");
-        assert_eq!(strip_verbatim_prefix(r"\\server\share"), r"\\server\share");
-        assert_eq!(strip_verbatim_prefix("/home/adam/src"), "/home/adam/src");
-    }
+    /// The Windows separator set, passed explicitly so the Windows rule is exercised on the Linux
+    /// CI that runs these. `SEPARATORS` itself is per-platform; this is the shape it takes there.
+    const WINDOWS: &[char] = &['\\', '/'];
+    const POSIX: &[char] = &['/'];
 
     #[test]
     fn a_home_that_does_not_fit_does_not_mask_one_that_does() {
         // Git Bash sets `HOME` to a POSIX path while the tree holds Windows ones, which is the
-        // shape that has to fall through to `USERPROFILE`.
-        let homes = ["/c/Users/adam".to_string(), r"C:\Users\adam".to_string()];
-        assert_eq!(abbreviate_home(r"C:\Users\adam\src", &homes), r"~\src");
+        // shape that has to fall through to the next candidate.
+        let homes = [r"C:\Users\adam".to_string(), "/c/Users/adam".to_string()];
+        assert_eq!(
+            abbreviate_home(r"C:\Users\adam\src", &homes, WINDOWS),
+            r"~\src"
+        );
+
+        let reversed = ["/c/Users/adam".to_string(), r"C:\Users\adam".to_string()];
+        assert_eq!(
+            abbreviate_home(r"C:\Users\adam\src", &reversed, WINDOWS),
+            r"~\src",
+            "order decides nothing when only one candidate can match"
+        );
     }
 
     #[test]
     fn a_posix_home_is_abbreviated() {
-        let homes = ["/home/adam".to_string(), String::new()];
-        assert_eq!(abbreviate_home("/home/adam/src", &homes), "~/src");
+        let homes = ["/home/adam".to_string()];
+        assert_eq!(abbreviate_home("/home/adam/src", &homes, POSIX), "~/src");
     }
 
     #[test]
     fn an_unset_home_leaves_the_path_alone() {
         let homes = [String::new(), String::new()];
-        assert_eq!(abbreviate_home(r"C:\Users\adam", &homes), r"C:\Users\adam");
+        assert_eq!(
+            abbreviate_home(r"C:\Users\adam", &homes, WINDOWS),
+            r"C:\Users\adam"
+        );
     }
 
     #[test]
     fn the_home_match_lands_on_a_component_boundary() {
-        let homes = ["/home/adam".to_string(), String::new()];
+        let homes = ["/home/adam".to_string()];
         assert_eq!(
-            abbreviate_home("/home/adamant/src", &homes),
+            abbreviate_home("/home/adamant/src", &homes, POSIX),
             "/home/adamant/src",
             "a plain prefix test would call this `~ant/src`, naming a directory nobody has"
         );
         assert_eq!(
-            abbreviate_home("/home/adam", &homes),
+            abbreviate_home("/home/adam", &homes, POSIX),
             "~",
             "the home itself"
         );
-        assert_eq!(abbreviate_home("/home/adam/src", &homes), "~/src");
+        assert_eq!(abbreviate_home("/home/adam/src", &homes, POSIX), "~/src");
     }
 
     #[test]
     fn a_trailing_separator_is_not_part_of_the_home_name() {
-        let homes = ["/home/adam/".to_string(), String::new()];
-        assert_eq!(abbreviate_home("/home/adam/src", &homes), "~/src");
+        let posix = ["/home/adam/".to_string()];
+        assert_eq!(abbreviate_home("/home/adam/src", &posix, POSIX), "~/src");
 
-        let windows = [r"C:\Users\adam\".to_string(), String::new()];
-        assert_eq!(abbreviate_home(r"C:\Users\adam\src", &windows), r"~\src");
-    }
-
-    #[test]
-    fn a_canonicalized_path_is_stored_without_the_prefix() {
-        // What `fs::canonicalize` hands back on Windows, and what the widget stores instead - the
-        // spelling an app comparing against its own paths would build.
+        let windows = [r"C:\Users\adam\".to_string()];
         assert_eq!(
-            plain_path(Path::new(r"\\?\C:\Users\adam\src")),
-            PathBuf::from(r"C:\Users\adam\src")
-        );
-        assert_eq!(
-            plain_path(Path::new(r"\\?\UNC\server\share\dir")),
-            PathBuf::from(r"\\server\share\dir")
+            abbreviate_home(r"C:\Users\adam\src", &windows, WINDOWS),
+            r"~\src"
         );
     }
 
     #[test]
-    fn a_path_with_no_prefix_is_stored_as_it_came() {
-        for path in ["/home/adam/src", r"C:\Users\adam"] {
-            assert_eq!(plain_path(Path::new(path)), PathBuf::from(path));
-        }
+    fn a_backslash_is_an_ordinary_character_in_a_posix_name() {
+        // The same input the Windows set would split. On POSIX `adam\x` is one directory name, and
+        // a file inside a differently named directory must not be abbreviated as though it were in
+        // the home.
+        let homes = ["/home/adam".to_string()];
+        assert_eq!(
+            abbreviate_home(r"/home/adam\x", &homes, POSIX),
+            r"/home/adam\x"
+        );
+        assert_eq!(abbreviate_home(r"/home/adam\x", &homes, WINDOWS), r"~\x");
+    }
+
+    /// The plain-spelling contract itself belongs to `dunce`, which decides it against real Win32
+    /// rules and can only do so on Windows - `dunce::simplified` is a no-op everywhere else. So
+    /// this runs only where it means something, and needs a Windows CI job to run at all.
+    #[cfg(windows)]
+    #[test]
+    fn an_ordinary_canonical_path_is_stored_plainly() {
+        let temporary = std::env::temp_dir();
+        let canonical = super::canonicalize_plain(&temporary).expect("temp dir canonicalizes");
+        assert!(
+            !canonical.to_string_lossy().starts_with(r"\\?\"),
+            "an ordinary short path has a plain spelling: {canonical:?}"
+        );
+        assert!(canonical.is_dir(), "and still names the same directory");
     }
 }
