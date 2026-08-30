@@ -56,6 +56,23 @@ While the crate is on `0.x.y`:
   `Picker::from_query_stdio` answers `Ok` carrying an arbitrary built-in font size when the query
   goes unanswered, and that was taken for the host's own measurement; the picker's reported
   capabilities now decide, so an unanswering host keeps cell-precise reports.
+- Quitting a fullscreen app over SSH no longer leaves a stray `61;4;…c` at the shell prompt. The
+  teardown flush writes a `CSI c` sentinel and drains through its reply so nothing is left queued
+  when cooked mode returns, but it waited a fixed 50ms for that reply - a budget sized for a
+  terminal on the same machine. Across a network the round trip runs to the user's real terminal
+  and back, routinely outlasting it, so the flush gave up, restored cooked mode, and the reply it
+  had just asked for landed on the shell. The budget is now taken from the round trip the startup
+  capability probe measured on the same link (four times it, floored at the old 50ms and capped at
+  500ms), and no sentinel is written when the probe never got one back: a request that cannot be
+  waited out is what produces the leak. A terminal that answered nothing at startup is no longer
+  waited for at all, which also removes a fixed 50ms from teardown on a TTY that never replies.
+  Where the probe wrote its `CSI c` but never saw the answer - it timed out, or the poll or read
+  failed under it - the reply is treated as still owed, and the next flush waits it out instead of
+  asking for another. Once: the flag is cleared by the caller that drains and flushes the queue for
+  it, and only by one that got that far. This flush is not exit-only - it also runs on panic restore
+  and on both sides of every external-program handoff - so a condition treated as permanent would
+  have put that wait on every trip out to an editor or shell.
+
 - OSC 52 copies now reach the outer terminal under a default tmux. Inside tmux the escape was
   written *only* as a DCS passthrough, which tmux forwards solely when `allow-passthrough` is on -
   and that option ships off (tmux 3.3+). The bare escape that `set-clipboard` (default `external`)

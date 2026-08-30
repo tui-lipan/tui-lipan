@@ -1,6 +1,8 @@
 #![allow(unsafe_code)]
 
 #[cfg(unix)]
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(unix)]
 use std::time::Duration;
 #[cfg(unix)]
 use web_time::Instant;
@@ -82,6 +84,77 @@ pub struct HostCapabilities {
     pub graphics_query_ok: bool,
 }
 
+/// What the startup probe learned about the host, in two pieces with different lifetimes.
+///
+/// **How long the host takes to answer `CSI c`** is durable: it describes the terminal, and stays
+/// true until a different probe replaces it. **Whether the probe's own reply is still in flight**
+/// is not - it holds only until something drains the input queue, and the first flush is that
+/// something. Keeping the two apart is what stops a transient condition from being read as a
+/// standing fact for the rest of the process.
+///
+/// Both are atomics rather than a lock: the readers run in `Drop` and on the panic path, where
+/// taking a lock is not worth the risk. `Relaxed` is enough because each value stands alone and
+/// publishes no accompanying memory.
+///
+/// The round trip in microseconds, or [`ROUND_TRIP_UNKNOWN`] when nothing answered.
+#[cfg(unix)]
+static PROBE_ROUND_TRIP: AtomicU64 = AtomicU64::new(ROUND_TRIP_UNKNOWN);
+
+/// Whether the startup probe's `CSI c` reply may still be on its way. Set the moment the sentinel
+/// is written and cleared by whoever drains the queue for it - see [`settle_startup_reply`].
+#[cfg(unix)]
+static STARTUP_REPLY_OUTSTANDING: AtomicBool = AtomicBool::new(false);
+
+/// Every other value is a real measurement, so the marker takes the top of the range where one
+/// cannot reach.
+#[cfg(unix)]
+const ROUND_TRIP_UNKNOWN: u64 = u64::MAX;
+
+#[cfg(unix)]
+fn record_round_trip(round_trip: Option<Duration>) {
+    let bits = round_trip.map_or(ROUND_TRIP_UNKNOWN, |round_trip| {
+        u64::try_from(round_trip.as_micros())
+            .unwrap_or(u64::MAX)
+            .min(ROUND_TRIP_UNKNOWN - 1)
+    });
+    PROBE_ROUND_TRIP.store(bits, Ordering::Relaxed);
+}
+
+#[cfg(unix)]
+fn probe_round_trip() -> Option<Duration> {
+    match PROBE_ROUND_TRIP.load(Ordering::Relaxed) {
+        ROUND_TRIP_UNKNOWN => None,
+        micros => Some(Duration::from_micros(micros)),
+    }
+}
+
+#[cfg(unix)]
+fn set_startup_reply_outstanding(outstanding: bool) {
+    STARTUP_REPLY_OUTSTANDING.store(outstanding, Ordering::Relaxed);
+}
+
+#[cfg(unix)]
+fn startup_reply_outstanding() -> bool {
+    STARTUP_REPLY_OUTSTANDING.load(Ordering::Relaxed)
+}
+
+/// Clear the flag, but only for a caller that actually observed it set and has since drained and
+/// flushed the queue the reply would have arrived in.
+///
+/// Read-then-settle rather than a single `swap`, because taking the flag up front would let a
+/// caller that never got that far - one whose `/dev/tty` open failed, say - count as having dealt
+/// with the reply, leaving every later flush to skip a wait nothing had performed.
+///
+/// Clearing it at all is what keeps this from becoming a standing cost: the flush runs on terminal
+/// drop, on panic restore, and on both sides of every external-program handoff, so a flag that
+/// never cleared would put the ceiling on each trip out to an editor or a shell.
+#[cfg(unix)]
+fn settle_startup_reply(was_outstanding: bool) {
+    if was_outstanding {
+        STARTUP_REPLY_OUTSTANDING.store(false, Ordering::Relaxed);
+    }
+}
+
 /// Ask the host what it implements, in one round trip with a short, bounded timeout.
 ///
 /// The keyboard half mirrors `crossterm::terminal::supports_keyboard_enhancement` (write `CSI ? u`,
@@ -103,6 +176,14 @@ pub struct HostCapabilities {
 /// that as "nothing supported".
 #[cfg(unix)]
 pub fn query_host_capabilities(graphics_probe: &[u8]) -> Option<HostCapabilities> {
+    // Cleared before the first thing that can fail. Opening the TTY and raw mode can both return
+    // early, and a guard may be entering a different terminal than the one an earlier probe
+    // measured. Without this, a probe that never establishes that the current host answers at all
+    // would leave the previous host's round trip standing, and teardown would write a sentinel on
+    // the strength of it. Nothing is owed yet either: nothing has been asked.
+    record_round_trip(None);
+    set_startup_reply_outstanding(false);
+
     let fd = tty_open()?;
     let _fd_guard = FdGuard(fd);
     let _raw_guard = RawModeGuard::new(fd)?;
@@ -111,7 +192,15 @@ pub fn query_host_capabilities(graphics_probe: &[u8]) -> Option<HostCapabilities
     probe.extend_from_slice(b"\x1b[?u\x1b[?1016$p");
     probe.extend_from_slice(graphics_probe);
     probe.extend_from_slice(b"\x1b[c");
+    // Timed from before the write: what teardown needs to budget for is the whole trip, including
+    // however long the host sat on the request before answering it.
+    let asked = Instant::now();
     tty_write_all(fd, &probe)?;
+    // The sentinel is on the wire, so a reply is owed from here until one is seen. Recorded now
+    // rather than after the read loop because everything between is fallible: a poll or read error
+    // returns without ever looking at the queue, and the reply nobody waited for still arrives.
+    // "The probe failed" is not "the host owes nothing" once the question has been asked.
+    set_startup_reply_outstanding(true);
 
     let mut buffer = Vec::with_capacity(64);
     let deadline = Instant::now() + Duration::from_millis(250);
@@ -129,10 +218,17 @@ pub fn query_host_capabilities(graphics_probe: &[u8]) -> Option<HostCapabilities
         }
         buffer.extend_from_slice(&chunk[..n]);
         if let Some(capabilities) = scan_host_capabilities(&buffer) {
+            record_round_trip(Some(asked.elapsed()));
+            // The sentinel came back and was consumed here, so nothing is owed downstream.
+            set_startup_reply_outstanding(false);
             return Some(capabilities);
         }
     }
-    // No decisive reply within the budget: treat as unsupported.
+    // No decisive reply within the budget: treat as unsupported, and leave the round trip unknown -
+    // nothing here measured one. The owed-reply flag stays set. An empty buffer does not prove the
+    // host is silent, only that nothing arrived inside 250ms, which is also what a link slower than
+    // that looks like with a reply still in flight. Erring towards "owed" costs one bounded wait at
+    // the next flush; erring the other way is the leak.
     Some(HostCapabilities::default())
 }
 
@@ -191,6 +287,96 @@ pub(crate) fn drain_pending_terminal_responses() {
 #[cfg(not(unix))]
 pub(crate) fn drain_pending_terminal_responses() {}
 
+/// What the teardown flush does about the reply it may be owed.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ExitFlush {
+    /// Write a fresh `CSI c` as an ordering sentinel before draining.
+    sentinel: bool,
+    /// Upper bound on the wait. It is reached only when no reply comes; a reply ends the wait
+    /// immediately, so the usual cost is one round trip rather than the whole budget.
+    budget: Duration,
+}
+
+/// Enough for any terminal on the same machine, and the floor a measured round trip is raised to.
+#[cfg(unix)]
+const EXIT_FLUSH_FLOOR: Duration = Duration::from_millis(50);
+/// Ceiling on the wait, so a host that stops answering cannot hold a quit open indefinitely.
+#[cfg(unix)]
+const EXIT_FLUSH_CEILING: Duration = Duration::from_millis(500);
+/// Headroom over the measured round trip, covering the jitter a single sample cannot.
+#[cfg(unix)]
+const EXIT_FLUSH_HEADROOM: u32 = 4;
+
+/// Decide the flush from what is known about the host and what may still be owed by it.
+///
+/// The rule behind every arm is that a sentinel is a promise to wait for its reply. Writing one and
+/// then giving up early does not merely fail to help - it queues a reply that lands after cooked
+/// mode returns, which is the leak this whole path exists to prevent.
+#[cfg(unix)]
+fn exit_flush_plan(round_trip: Option<Duration>, startup_reply_outstanding: bool) -> ExitFlush {
+    // A reply is already owed from startup, so asking again would queue a second one behind it.
+    // This waits out the first instead of adding to the problem, and the wait is the ceiling
+    // because the round trip that would have sized it is exactly what did not come back.
+    //
+    // Only the first flush sees this: the flag is taken, not read. The wait can run the full
+    // ceiling, because the fragment already read at startup was consumed there - the tail arriving
+    // here cannot be recognised as the end of a `CSI c` reply on its own. Erring long is the safe
+    // direction: too long costs a one-time pause, too short is the leak.
+    if startup_reply_outstanding {
+        return ExitFlush {
+            sentinel: false,
+            budget: EXIT_FLUSH_CEILING,
+        };
+    }
+    match round_trip {
+        // The host answers and how fast is known, so a sentinel can be both asked for and waited
+        // out.
+        Some(round_trip) => ExitFlush {
+            sentinel: true,
+            budget: round_trip
+                .saturating_mul(EXIT_FLUSH_HEADROOM)
+                .clamp(EXIT_FLUSH_FLOOR, EXIT_FLUSH_CEILING),
+        },
+        // Nothing is known to answer, and nothing is owed. Waiting would spend the ceiling to learn
+        // what is already known, on every call.
+        None => ExitFlush {
+            sentinel: false,
+            budget: Duration::ZERO,
+        },
+    }
+}
+
+/// Read until the `CSI c` reply arrives or `budget` runs out.
+#[cfg(unix)]
+fn drain_through_da_reply(fd: i32, budget: Duration) {
+    if budget.is_zero() {
+        return;
+    }
+    let deadline = Instant::now() + budget;
+    let mut pending = Vec::with_capacity(256);
+    let mut chunk = [0u8; 256];
+    while Instant::now() < deadline {
+        let remaining = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis() as i32;
+        match poll_readable(fd, remaining.min(10)) {
+            // Sliced so the deadline is still checked while the host is quiet.
+            Some(false) => continue,
+            // A poll error will not fix itself, and retrying it inside the deadline is a spin.
+            None => return,
+            Some(true) => {}
+        }
+        match tty_read(fd, &mut chunk) {
+            Some(0) | None => return,
+            Some(n) => pending.extend_from_slice(&chunk[..n]),
+        }
+        if scan_host_capabilities(&pending).is_some() {
+            return;
+        }
+    }
+}
+
 /// Discard terminal protocol-response bytes still queued on the controlling TTY.
 ///
 /// A capability probe's DA1 reply (`CSI ? … c`) can arrive after the startup
@@ -205,39 +391,50 @@ pub(crate) fn drain_pending_terminal_responses() {}
 ///
 /// At those boundaries there is no application input to preserve, so a blanket
 /// flush is correct.
+///
+/// A DA1 request is an ordering sentinel: its reply can only arrive after the terminal has
+/// processed the preceding mode changes and their reports, so draining through it drains those
+/// too. But the wait for it has to be a wait the round trip actually fits inside. Over SSH, or
+/// through a multiplexer on a remote host, the trip runs from the application to `sshd`, across
+/// the network to the user's real terminal, and all the way back; a budget picked for a terminal
+/// on the same machine expires first, and the reply then lands at the shell prompt as a stray
+/// `61;4;…c`. That is the leak, arriving by way of the sentinel written to prevent it. So the
+/// budget comes from [`exit_flush_plan`], which sizes it against the round trip the startup probe
+/// measured on this very link, and declines to write a sentinel it cannot promise to wait for.
+///
+/// Despite the name this is not a once-per-process call. It runs on terminal drop, on panic
+/// restore, and on both sides of every external-program handoff, so anything it costs is paid again
+/// on each trip out to an editor or a shell - which is why the one condition here that is genuinely
+/// transient, the startup reply still being in flight, is cleared once it has been dealt with.
+///
+/// **Restores are assumed not to overlap.** Nothing serializes them - the panic hook can run this
+/// on a panicking thread while `Drop` runs it on another - and this function does not make that
+/// safe: a second caller can still finish and restore cooked mode while the first is mid-drain.
+/// That is unchanged from before the round-trip budget existed. What the read-then-settle pattern
+/// avoids is making it worse: a caller that arrives while a reply is still owed sees the flag set
+/// and waits for it too, rather than being handed a zero-budget plan because someone else claimed
+/// the flag first. Genuine overlap wants a restore lock, which belongs above this function.
 #[cfg(unix)]
 pub(crate) fn flush_pending_terminal_responses_on_exit() {
     let Some(fd) = tty_open() else {
+        // Nothing was drained, so nothing is settled: whatever was owed is still owed, and the next
+        // caller inherits it.
         return;
     };
     let _fd_guard = FdGuard(fd);
-    // A DA1 request is an ordering sentinel: its reply can only arrive after the
-    // terminal has processed preceding mode changes and their reports. Drain
-    // through that reply, then flush any partial tail before cooked mode returns.
-    let _ = tty_write_all(fd, b"\x1b[c");
-    let deadline = Instant::now() + Duration::from_millis(50);
-    let mut pending = Vec::with_capacity(256);
-    let mut chunk = [0u8; 256];
-    while Instant::now() < deadline {
-        let remaining = deadline
-            .saturating_duration_since(Instant::now())
-            .as_millis() as i32;
-        if !matches!(poll_readable(fd, remaining.min(10)), Some(true)) {
-            continue;
-        }
-        let Some(n) = tty_read(fd, &mut chunk) else {
-            break;
-        };
-        pending.extend_from_slice(&chunk[..n]);
-        if scan_host_capabilities(&pending).is_some() {
-            break;
-        }
+
+    let outstanding = startup_reply_outstanding();
+    let plan = exit_flush_plan(probe_round_trip(), outstanding);
+    if plan.sentinel {
+        let _ = tty_write_all(fd, b"\x1b[c");
     }
+    drain_through_da_reply(fd, plan.budget);
     // SAFETY: `tcflush(TCIFLUSH)` on the controlling TTY drops unread response
     // fragments after the ordering sentinel; callers have paused the input worker.
     unsafe {
         libc::tcflush(fd, libc::TCIFLUSH);
     }
+    settle_startup_reply(outstanding);
 }
 
 /// Flush stub for non-Unix hosts. See [`drain_pending_terminal_responses`].
@@ -581,7 +778,13 @@ impl Drop for RawModeGuard {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::{HostCapabilities, scan_host_capabilities};
+    use std::time::Duration;
+
+    use super::{
+        EXIT_FLUSH_CEILING, EXIT_FLUSH_FLOOR, ExitFlush, HostCapabilities, exit_flush_plan,
+        probe_round_trip, record_round_trip, scan_host_capabilities, set_startup_reply_outstanding,
+        settle_startup_reply, startup_reply_outstanding,
+    };
 
     fn keyboard(enhancement: bool) -> Option<HostCapabilities> {
         Some(HostCapabilities {
@@ -684,6 +887,130 @@ mod tests {
             scan_host_capabilities(b"\x1b[?2026;2$y\x1b[?62;1;6c"),
             keyboard(false),
             "a report about some other mode decides nothing"
+        );
+    }
+    #[test]
+    fn a_terminal_on_this_machine_keeps_the_floor() {
+        // Four times nothing is still nothing, and the floor is what a local terminal ran on
+        // before any of this was measured.
+        assert_eq!(
+            exit_flush_plan(Some(Duration::from_micros(300)), false),
+            ExitFlush {
+                sentinel: true,
+                budget: EXIT_FLUSH_FLOOR,
+            }
+        );
+    }
+
+    #[test]
+    fn a_round_trip_over_ssh_widens_the_budget_past_the_floor() {
+        // The reported case: a 60ms link answers long after a 50ms budget has given up, and the
+        // reply lands at the shell prompt.
+        assert_eq!(
+            exit_flush_plan(Some(Duration::from_millis(60)), false),
+            ExitFlush {
+                sentinel: true,
+                budget: Duration::from_millis(240),
+            }
+        );
+    }
+
+    #[test]
+    fn a_slow_link_stops_widening_at_the_ceiling() {
+        assert_eq!(
+            exit_flush_plan(Some(Duration::from_millis(200)), false),
+            ExitFlush {
+                sentinel: true,
+                budget: EXIT_FLUSH_CEILING,
+            },
+            "four times 200ms would be 800ms; a quit does not wait that long"
+        );
+    }
+
+    #[test]
+    fn a_reply_already_owed_is_waited_out_rather_than_asked_for_again() {
+        assert_eq!(
+            exit_flush_plan(None, true),
+            ExitFlush {
+                sentinel: false,
+                budget: EXIT_FLUSH_CEILING,
+            },
+            "a second sentinel would only queue a second reply to leak"
+        );
+    }
+
+    #[test]
+    fn an_owed_reply_outranks_a_known_round_trip() {
+        // Both can be true at once - a probe answers, a later one times out with a fragment - and
+        // the owed reply has to win: a sentinel sized by the old round trip would be queued behind
+        // a reply that has not arrived.
+        assert_eq!(
+            exit_flush_plan(Some(Duration::from_millis(1)), true),
+            ExitFlush {
+                sentinel: false,
+                budget: EXIT_FLUSH_CEILING,
+            }
+        );
+    }
+
+    #[test]
+    fn a_host_that_never_answered_is_not_waited_for() {
+        assert_eq!(
+            exit_flush_plan(None, false),
+            ExitFlush {
+                sentinel: false,
+                budget: Duration::ZERO,
+            },
+            "nothing is known to answer, and nothing is owed"
+        );
+    }
+
+    /// Owns `STARTUP_REPLY_OUTSTANDING` for the whole suite. Nothing else writes it: the only
+    /// other writer is the startup probe, which no test may run - CI has no tty, and library code
+    /// must never query the host terminal from a test.
+    #[test]
+    fn an_owed_reply_is_settled_only_by_a_caller_that_drained_for_it() {
+        set_startup_reply_outstanding(true);
+
+        let observed = startup_reply_outstanding();
+        assert!(observed, "the first flush sees it");
+
+        // What a caller that never opened the TTY passes: it drained nothing, so the reply is
+        // still owed and the next flush has to inherit it. Taking the flag up front would have
+        // spent it here.
+        settle_startup_reply(false);
+        assert!(
+            startup_reply_outstanding(),
+            "a caller that did no work must not settle it"
+        );
+
+        settle_startup_reply(observed);
+        assert!(
+            !startup_reply_outstanding(),
+            "settled once the queue was drained and flushed - a flag that stayed set would put the \
+             ceiling on terminal drop, on panic restore, and on both sides of every \
+             external-program handoff, forever"
+        );
+    }
+
+    /// Owns `PROBE_ROUND_TRIP` for the whole suite, for the same reason as the test above.
+    #[test]
+    fn the_round_trip_survives_the_atomic_encoding() {
+        for round_trip in [Duration::from_micros(1), Duration::from_millis(60)] {
+            record_round_trip(Some(round_trip));
+            assert_eq!(probe_round_trip(), Some(round_trip));
+        }
+
+        // The marker lives at the top of the range, so a saturating measurement has to land below
+        // it: read back as `None` it would say the host never answered, which is the opposite.
+        record_round_trip(Some(Duration::MAX));
+        assert!(probe_round_trip().is_some(), "saturated, not unknown");
+
+        record_round_trip(None);
+        assert_eq!(
+            probe_round_trip(),
+            None,
+            "and unknown round-trips as unknown"
         );
     }
 }
