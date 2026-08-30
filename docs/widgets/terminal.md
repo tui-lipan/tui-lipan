@@ -775,10 +775,13 @@ becomes `MouseEncoding::SgrPixels`; the encoding is the only thing that changes,
 `on_mouse_forward` payloads to the PTY needs no special handling.
 
 How much precision those reports actually carry depends on the host the app itself runs under. The
-runner asks it for the same mode on startup and, when the host both answers and reports a cell size
-that a pixel position can be divided by, passes the sub-cell offset through to the report. A host that
-only says which cell was clicked leaves reports on that cell's first pixel - correct, one cell
-granular, and exactly what the child would have got from cell coordinates.
+runner asks it for the same mode as soon as the host both answers the probe and reports a cell size
+that a pixel position can be divided by, and then passes the sub-cell offset through to the report.
+Those two facts can settle at different times - a host that pads its window only reveals its cell
+size on a resize that happens to divide evenly - so the request may come mid-run rather than at
+startup, and reports are read as pixels only once it has. A host that only says which cell was
+clicked leaves reports on that cell's first pixel - correct, one cell granular, and exactly what the
+child would have got from cell coordinates.
 
 ---
 

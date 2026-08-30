@@ -40,6 +40,22 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Pointer reports are no longer read as pixels on a host that was never asked for them. SGR-pixels
+  reporting (DEC private mode 1016) needs both a host that implements it and an exactly known cell
+  size, and the cell size is re-derived from every resize - so a window whose pixel size only starts
+  dividing evenly part way through a run flipped the decoder to pixels while the host was still
+  sending cells. Every coordinate was then divided by the cell size, collapsing the whole screen
+  into its top-left corner: hovers stuck to the first row, and a selection drag scrolled the view up
+  because the pointer read as being above it. The mode is now asked for at the moment the cell size
+  becomes known, and a report is read as pixels only after that request reaches the host.
+- Pixel reporting is no longer restored after an external program when Termina is not the input
+  decoder. `terminal_handoff` re-enabled the mode from the host's capabilities alone, so an app on
+  the crossterm path could come back from an editor with the host sending pixels to a decoder that
+  reads them as cells.
+- A host that ignores the cell-size query no longer enables pixel-precise reporting off a guess.
+  `Picker::from_query_stdio` answers `Ok` carrying an arbitrary built-in font size when the query
+  goes unanswered, and that was taken for the host's own measurement; the picker's reported
+  capabilities now decide, so an unanswering host keeps cell-precise reports.
 - OSC 52 copies now reach the outer terminal under a default tmux. Inside tmux the escape was
   written *only* as a DCS passthrough, which tmux forwards solely when `allow-passthrough` is on -
   and that option ships off (tmux 3.3+). The bare escape that `set-clipboard` (default `external`)
