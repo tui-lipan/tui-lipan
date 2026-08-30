@@ -23,7 +23,7 @@ use termina::event::{
 use termina::{EventReader, PlatformTerminal, Terminal as _};
 use web_time::Instant;
 
-use crate::app::input::pixel_mouse;
+use crate::app::input::pixel_mouse::{self, PointerReport};
 use crate::backend::ratatui_backend::terminal_handoff::{
     InputHandoffControl, InputHandoffSlot, register_input_handoff_control,
     unregister_input_handoff_control,
@@ -240,11 +240,7 @@ fn open_event_reader() -> io::Result<EventReader> {
     let reader = terminal.event_reader();
     // Asked for here rather than in the enter plan: the host's own answer arrived before this, but
     // the cell size a pixel report is divided by is only known now.
-    if pixel_mouse::is_active() {
-        let mut stdout = io::stdout();
-        let mut executor = CrosstermTransitionExecutor::new(&mut stdout);
-        let _ = execute_plan(&mut executor, &pixel_mouse_plan(true));
-    }
+    sync_pixel_mouse_mode();
     Ok(reader)
 }
 
@@ -484,7 +480,17 @@ fn dispatch_termina_event(
     events: &mpsc::Sender<RunnerEvent>,
     refresh: &RefreshRequests,
 ) -> bool {
-    match map_termina_event(event) {
+    let action = map_termina_event(event);
+    // A resize is where a padded window can first divide evenly, and so where the mode can first be
+    // worth asking for. The ask lives here rather than in the mapping because it writes to the host,
+    // and this is the worker that owns input.
+    if matches!(
+        action,
+        TerminaEventAction::Input(CrosstermEvent::Resize(..))
+    ) {
+        sync_pixel_mouse_mode();
+    }
+    match action {
         TerminaEventAction::Input(event) => events.send(RunnerEvent::Terminal(event)).is_ok(),
         TerminaEventAction::Pointer(event, sub_cell) => events
             .send(RunnerEvent::Pointer { event, sub_cell })
@@ -524,6 +530,29 @@ fn map_termina_event(event: TerminaEvent) -> TerminaEventAction {
     }
 }
 
+/// Bring the host's SGR-pixels mode in line with what this run can make sense of.
+///
+/// Both halves of `pixel_mouse::is_active` can turn true after startup, because the cell size is
+/// re-derived from every resize. The mode has to be asked for at that moment rather than only at
+/// startup: `map_pointer_event` reads reports as pixels only once the host has actually been asked,
+/// so a cell size learned late would otherwise leave the precision on the table forever.
+///
+/// Only ever called from the Termina worker, which is the one decoder that can read a pixel report -
+/// which is also why it stays out of `map_termina_event`, whose job is a pure mapping. The write is
+/// noted only if it lands, so a host that never heard the escape keeps sending cells and keeps being
+/// read that way.
+fn sync_pixel_mouse_mode() {
+    let wanted = pixel_mouse::is_active();
+    if wanted == pixel_mouse::reports_pixels() {
+        return;
+    }
+    let mut stdout = io::stdout();
+    let mut executor = CrosstermTransitionExecutor::new(&mut stdout);
+    if execute_plan(&mut executor, &pixel_mouse_plan(wanted)).is_ok() {
+        pixel_mouse::note_mode_enabled(wanted);
+    }
+}
+
 /// A pointer report, in cells or in pixels depending on what the host was asked for.
 ///
 /// Mode 1016 puts pixels on the wire in the same shape 1006 puts cells, and termina's input parser
@@ -532,16 +561,15 @@ fn map_termina_event(event: TerminaEvent) -> TerminaEventAction {
 /// split has to happen here, before anything downstream can mistake one for the other.
 /// (`MouseReport::Sgr1016` models the sequence for emitting, and never arrives as input.)
 fn map_pointer_event(mouse: TerminaMouseEvent) -> TerminaEventAction {
-    if !pixel_mouse::is_active() {
-        return TerminaEventAction::Input(CrosstermEvent::Mouse(map_mouse_event(mouse)));
-    }
-    let Some(position) = pixel_mouse::resolve(mouse.column, mouse.row) else {
-        return TerminaEventAction::Input(CrosstermEvent::Mouse(map_mouse_event(mouse)));
-    };
     let mut event = map_mouse_event(mouse);
-    event.column = position.cell.0;
-    event.row = position.cell.1;
-    TerminaEventAction::Pointer(CrosstermEvent::Mouse(event), position.sub_cell)
+    match pixel_mouse::read_report(mouse.column, mouse.row) {
+        PointerReport::Cells => TerminaEventAction::Input(CrosstermEvent::Mouse(event)),
+        PointerReport::Pixels(position) => {
+            event.column = position.cell.0;
+            event.row = position.cell.1;
+            TerminaEventAction::Pointer(CrosstermEvent::Mouse(event), position.sub_cell)
+        }
+    }
 }
 
 fn map_key_event(key: TerminaKeyEvent) -> CrosstermKeyEvent {

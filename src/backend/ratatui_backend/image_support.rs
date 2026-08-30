@@ -2,8 +2,8 @@ use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 use web_time::Instant;
 
-use ratatui_image::picker::Picker;
 use ratatui_image::picker::cap_parser::QueryStdioOptions;
+use ratatui_image::picker::{Capability, Picker};
 
 fn picker_state() -> &'static RwLock<Picker> {
     static PICKER: OnceLock<RwLock<Picker>> = OnceLock::new();
@@ -17,6 +17,19 @@ fn render_suspend_until() -> &'static RwLock<Option<Instant>> {
 
 /// Whether [`init_image_picker`] got its font size from the host rather than guessing.
 static CELL_SIZE_QUERIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the picker's font size is the host's answer to the cell-size query.
+///
+/// A query that goes unanswered is not an error: the picker reports `Ok` carrying either an
+/// arbitrary built-in size or the truncated result of dividing a padded window, both of which are
+/// plausible numbers rather than true ones. Only the query's own answer says the size is real,
+/// which is what a pixel coordinate has to be divided by.
+fn cell_size_was_queried(picker: &Picker) -> bool {
+    picker
+        .capabilities()
+        .iter()
+        .any(|capability| matches!(capability, Capability::CellSize(Some(_))))
+}
 
 /// Environment override for the image protocol, for a host whose answer cannot be trusted.
 ///
@@ -46,7 +59,10 @@ pub(crate) fn init_image_picker() {
     };
 
     let queried = Picker::from_query_stdio_with_options(options);
-    CELL_SIZE_QUERIED.store(queried.is_ok(), std::sync::atomic::Ordering::Release);
+    CELL_SIZE_QUERIED.store(
+        queried.as_ref().is_ok_and(cell_size_was_queried),
+        std::sync::atomic::Ordering::Release,
+    );
     let mut picker = queried.unwrap_or_else(|_| Picker::halfblocks());
     if let Some(protocol) = forced_protocol() {
         picker.set_protocol_type(protocol);

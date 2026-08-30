@@ -95,8 +95,9 @@ pub fn pixel_pointer_status() -> PixelPointerStatus {
     }
 }
 
-/// What [`pixel_pointer_status`] found. `active` is the conjunction, and is what actually decides
-/// whether the mode is asked for and reports are read as pixels.
+/// What [`pixel_pointer_status`] found. `active` is the conjunction, and is what decides whether the
+/// mode is asked for; reports carry pixels from the moment that request reaches the host, which for
+/// a host that only reveals its cell size on a resize is later than startup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg(not(target_arch = "wasm32"))]
 pub struct PixelPointerStatus {
