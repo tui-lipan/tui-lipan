@@ -48,6 +48,13 @@ While the crate is on `0.x.y`:
   into its top-left corner: hovers stuck to the first row, and a selection drag scrolled the view up
   because the pointer read as being above it. The mode is now asked for at the moment the cell size
   becomes known, and a report is read as pixels only after that request reaches the host.
+- A mouse report whose column or row is `0` no longer panics the input worker in this repo's own
+  builds. termina 0.3.3 subtracts the protocol's one-based origin in its SGR and rxvt paths without
+  the guard its X10 path already has; `[patch.crates-io]` pins the upstream fix (38047a2,
+  unreleased - helix-editor/termina#28). Cargo strips `[patch]` on publish, so an app depending on
+  tui-lipan from crates.io needs the same stanza in its own manifest until a termina release carries
+  the fix. That matters more from this version on: pixel reporting now actually reaches hosts it
+  used to skip, and mode 1016 makes `0` an ordinary coordinate rather than an edge case.
 - Pixel reporting is no longer restored after an external program when Termina is not the input
   decoder. `terminal_handoff` re-enabled the mode from the host's capabilities alone, so an app on
   the crossterm path could come back from an editor with the host sending pixels to a decoder that
