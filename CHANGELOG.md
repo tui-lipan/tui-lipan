@@ -72,7 +72,25 @@ While the crate is on `0.x.y`:
   it, and only by one that got that far. This flush is not exit-only - it also runs on panic restore
   and on both sides of every external-program handoff - so a condition treated as permanent would
   have put that wait on every trip out to an editor or shell.
-
+- `FileTree` paths are now spelled plainly on Windows wherever the plain spelling means the same
+  thing. The widget resolves paths through `fs::canonicalize`, which on Windows always returns the
+  extended-length `\\?\` form, so the root displayed as `\\?\C:\Users` and every path the widget
+  stored, keyed git decorations by, matched item styles against, or handed to app code in an event
+  was spelled `\\?\C:\…` - which an app comparing against a path it built itself would not match.
+  Canonicalization now goes through `dunce`, which drops the prefix against real Win32 rules: a
+  component that collides with a reserved DOS device (`NUL`, `COM1`), a name ending in a dot or
+  space, or a path past the legacy length limit keeps the verbatim spelling, because for those the
+  plain form names a different file or none at all. UNC shares (`\\?\UNC\server\share`) likewise
+  keep it. Adds a dependency on `dunce` (CC0-1.0 OR MIT-0 OR Apache-2.0, no dependencies of its
+  own), which is a no-op off Windows.
+- `FileTree` now abbreviates the home directory to `~` on Windows. It only ever consulted `HOME`,
+  which Windows does not set; the shells that do set one (Git Bash) set it to a POSIX path that
+  cannot prefix-match a Windows path, so the abbreviation never fired. `USERPROFILE` is now tried as
+  well, and whichever of the two the path actually lies under is the one that is replaced.
+- `FileTree`'s `~` abbreviation now requires a path-component boundary. A plain prefix test rendered
+  `/home/adamant/src` as `~ant/src` when `HOME` was `/home/adam`, naming a directory that does not
+  exist. A trailing separator on the variable itself (`HOME=/home/adam/`) is no longer treated as
+  part of the directory name.
 - OSC 52 copies now reach the outer terminal under a default tmux. Inside tmux the escape was
   written *only* as a DCS passthrough, which tmux forwards solely when `allow-passthrough` is on -
   and that option ships off (tmux 3.3+). The bare escape that `set-clipboard` (default `external`)
