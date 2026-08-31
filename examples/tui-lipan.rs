@@ -1176,7 +1176,12 @@ impl Component for TuiLipanShowcase {
                 .on_click(ctx.link().callback(|_: MouseEvent| Msg::MouseUp))
                 .child(gradient_wrapped);
 
-        let stage = Center::new().child(EffectScope::new().effects(effects).child(interactive_art));
+        let foreground_effects = effects.into_iter().map(VisualEffect::foreground_only);
+        let stage = Center::new().child(
+            EffectScope::new()
+                .effects(foreground_effects)
+                .child(interactive_art),
+        );
 
         Frame::new()
             .header_left(title)
@@ -1200,6 +1205,8 @@ impl Component for TuiLipanShowcase {
 fn main() -> Result<()> {
     App::new()
         .title("tui-lipan AsciiCanvas showcase")
+        .theme(Theme::lipan())
+        .fill_background()
         .mount(TuiLipanShowcase)
         .run()
 }
@@ -1243,6 +1250,20 @@ mod tests {
 
         for mask in [off, above, below, left, right] {
             assert!(mask_has_any_scope_local_cell(&mask));
+        }
+    }
+
+    #[test]
+    fn every_tab_brand_gradient_is_foreground_only() {
+        for tab in 0..TAB_LABELS.len() {
+            let effects = brand_gradient_scope_effects(tab);
+            assert!(matches!(
+                effects.as_slice(),
+                [VisualEffect::Channels {
+                    channels: EffectChannels::Foreground,
+                    ..
+                }]
+            ));
         }
     }
 }

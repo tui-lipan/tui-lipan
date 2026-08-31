@@ -73,22 +73,28 @@ impl BannerPlacement {
 /// Brand gradient on Hero (horizontal sweep) vs other tabs (vertical), scope-local via [`VisualEffect::Gradient`].
 pub fn brand_gradient_scope_effects(tab: usize) -> Vec<VisualEffect> {
     if tab == TAB_HERO {
-        vec![VisualEffect::Gradient {
-            gradient: ColorGradient::new(Color::Rgb(126, 58, 199), Color::Rgb(244, 114, 182))
-                .with_center(Color::Rgb(185, 86, 205)),
-            blend: 0.9,
-            frequency: 1.15,
-            speed: 0.35,
-            axis: EffectAxis::Diagonal,
-        }]
+        vec![
+            VisualEffect::Gradient {
+                gradient: ColorGradient::new(Color::Rgb(126, 58, 199), Color::Rgb(244, 114, 182))
+                    .with_center(Color::Rgb(185, 86, 205)),
+                blend: 0.9,
+                frequency: 1.15,
+                speed: 0.35,
+                axis: EffectAxis::Diagonal,
+            }
+            .foreground_only(),
+        ]
     } else {
-        vec![VisualEffect::Gradient {
-            gradient: ColorGradient::new(Color::Rgb(70, 40, 160), Color::Rgb(20, 160, 190))
-                .with_center(Color::Rgb(50, 100, 220)),
-            blend: 0.78,
-            frequency: 0.8,
-            speed: 0.1,
-            axis: EffectAxis::Vertical,
-        }]
+        vec![
+            VisualEffect::Gradient {
+                gradient: ColorGradient::new(Color::Rgb(70, 40, 160), Color::Rgb(20, 160, 190))
+                    .with_center(Color::Rgb(50, 100, 220)),
+                blend: 0.78,
+                frequency: 0.8,
+                speed: 0.1,
+                axis: EffectAxis::Vertical,
+            }
+            .foreground_only(),
+        ]
     }
 }

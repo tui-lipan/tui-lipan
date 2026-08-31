@@ -6,6 +6,19 @@ Declarative post-processing for `EffectScope` and hover passes on `MouseRegion` 
 
 Uses `ColorGradient` stops (`min` -> optional `center` -> `max`) sampled along `EffectAxis` in **scope-local** normalized coordinates (nested scopes remap independently), then blended onto rendered fg/bg like `RainbowWave`. `frequency` repeats a sine-eased mirrored ramp (`min -> max -> min`) across the scope, avoiding hard wrap seams and sharp endpoint troughs; `speed` shifts the pattern using the renderer phase (`0.0` = static).
 
+Effects modify both color channels by default. Use `.foreground_only()`, `.background_only()`, or `.channels(EffectChannels::...)` to restrict any effect without changing its variant fields. A foreground-only gradient is useful for art rendered over an app-level fill because it leaves concrete cell backgrounds unchanged:
+
+```rust
+VisualEffect::Gradient {
+    gradient,
+    blend: 0.9,
+    frequency: 1.0,
+    speed: 0.0,
+    axis: EffectAxis::Horizontal,
+}
+.foreground_only()
+```
+
 ## `VisualEffect::Ripple`
 
 `Ripple` uses `origin: EffectOrigin`, so the ring can be pinned to explicit scope-local cells or resolved from the current `EffectScope` bounds at render time. Its `radius: RippleRadius` is the animation knob: `Fixed` is static, `Loop` repeats from zero to `max_radius`, and `Once` plays a single burst from a captured renderer `start_tick`.

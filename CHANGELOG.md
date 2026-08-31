@@ -13,6 +13,10 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `VisualEffect::channels`, `foreground_only`, and `background_only` restrict any visual effect to
+  selected cell color channels. Effects still modify both channels by default. This lets gradients
+  and rainbow waves color glyphs without washing out concrete backgrounds from
+  `App::fill_background` or `App::screen_background`.
 - Caret blink control. `CaretPalette::blinking` (with `Theme::caret_blinking` and
   `ThemePalette::caret_blinking`), the `blinking` key in a theme TOML `[caret]` table, and
   `caret_blinking(..)` on `Input`, `TextArea`, and `SearchPalette::input_caret_blinking` select

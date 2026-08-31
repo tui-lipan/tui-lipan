@@ -97,6 +97,18 @@ pub enum EffectAxis {
     Diagonal,
 }
 
+/// Color channels a [`VisualEffect`] may modify.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub enum EffectChannels {
+    /// Allow the effect to modify foreground and background colors.
+    #[default]
+    Both,
+    /// Allow the effect to modify only foreground colors.
+    Foreground,
+    /// Allow the effect to modify only background colors.
+    Background,
+}
+
 /// Quantization palette presets for post-processing.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum EffectPalette {
@@ -420,6 +432,13 @@ pub enum VisualEffect {
         /// Effect evaluated only where the clip allows.
         inner: Box<VisualEffect>,
     },
+    /// Restrict an inner effect to selected cell color channels.
+    Channels {
+        /// Color channels the inner effect may modify.
+        channels: EffectChannels,
+        /// Effect evaluated with the channel restriction.
+        inner: Box<VisualEffect>,
+    },
     /// Apply a relative `ColorTransform` to fg and/or bg of each cell in the scope.
     ///
     /// Independent channels: `fg = None` leaves text colors untouched, same for `bg`.
@@ -483,6 +502,28 @@ impl VisualEffect {
             fg: None,
             bg: Some(t),
         }
+    }
+
+    /// Restrict this effect to selected cell color channels.
+    pub fn channels(self, channels: EffectChannels) -> Self {
+        if channels == EffectChannels::Both {
+            self
+        } else {
+            Self::Channels {
+                channels,
+                inner: Box::new(self),
+            }
+        }
+    }
+
+    /// Restrict this effect to foreground colors, leaving cell backgrounds unchanged.
+    pub fn foreground_only(self) -> Self {
+        self.channels(EffectChannels::Foreground)
+    }
+
+    /// Restrict this effect to background colors, leaving cell foregrounds unchanged.
+    pub fn background_only(self) -> Self {
+        self.channels(EffectChannels::Background)
     }
 
     /// Create a [`VisualEffect::Ripple`] from an explicit scope-local cell origin.
@@ -557,6 +598,7 @@ impl VisualEffect {
             Self::RetroCrt { flicker, .. } => *flicker > 0.0,
             Self::Ripple { radius, .. } => !matches!(radius, RippleRadius::Fixed(_)),
             Self::Clipped { inner, .. } => inner.is_animated(),
+            Self::Channels { inner, .. } => inner.is_animated(),
             Self::Custom(effect) => effect.is_animated(),
             _ => false,
         }
@@ -572,7 +614,7 @@ impl VisualEffect {
         }
 
         let interval = match self {
-            Self::Clipped { inner, .. } => inner
+            Self::Clipped { inner, .. } | Self::Channels { inner, .. } => inner
                 .animation_interval()
                 .unwrap_or_else(|| Duration::from_millis(16)),
             Self::Custom(effect) => effect.animation_interval(),
@@ -691,6 +733,16 @@ impl PartialEq for VisualEffect {
                 },
             ) => b_a == b_b && m_a == m_b && i_a == i_b,
             (
+                Self::Channels {
+                    channels: c_a,
+                    inner: i_a,
+                },
+                Self::Channels {
+                    channels: c_b,
+                    inner: i_b,
+                },
+            ) => c_a == c_b && i_a == i_b,
+            (
                 Self::ColorTransform { fg: fg_a, bg: bg_a },
                 Self::ColorTransform { fg: fg_b, bg: bg_b },
             ) => fg_a == fg_b && bg_a == bg_b,
@@ -779,6 +831,11 @@ impl Hash for VisualEffect {
                 10u8.hash(state);
                 bounds.hash(state);
                 mask.hash(state);
+                inner.hash(state);
+            }
+            Self::Channels { channels, inner } => {
+                14u8.hash(state);
+                channels.hash(state);
                 inner.hash(state);
             }
             Self::ColorTransform { fg, bg } => {
@@ -871,6 +928,25 @@ mod tests {
     fn custom_effect_animation_flag_is_delegated() {
         assert!(VisualEffect::Custom(Arc::new(AnimatedEffect)).is_animated());
         assert!(!VisualEffect::Custom(Arc::new(NoopEffect)).is_animated());
+    }
+
+    #[test]
+    fn channel_restriction_controls_eq_hash_and_animation() {
+        let foreground = VisualEffect::Custom(Arc::new(AnimatedEffect)).foreground_only();
+        let same = foreground.clone();
+        let background = match &foreground {
+            VisualEffect::Channels { inner, .. } => VisualEffect::Channels {
+                channels: EffectChannels::Background,
+                inner: inner.clone(),
+            },
+            _ => unreachable!("foreground_only should wrap the effect"),
+        };
+
+        assert_eq!(foreground, same);
+        assert_eq!(hash_effect(&foreground), hash_effect(&same));
+        assert_ne!(foreground, background);
+        assert_ne!(hash_effect(&foreground), hash_effect(&background));
+        assert!(foreground.is_animated());
     }
 
     #[test]
