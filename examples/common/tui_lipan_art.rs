@@ -71,12 +71,17 @@ impl BannerPlacement {
 }
 
 /// Brand gradient on Hero (horizontal sweep) vs other tabs (vertical), scope-local via [`VisualEffect::Gradient`].
+///
+/// The Hero ramp is the brand's: `Theme::lipan()`'s `splitter.active` light
+/// violet through its accent into its selection purple. It used to end on
+/// pink, which is rozi's half of the family and not tui-lipan's. The other
+/// tabs are effect showcases and keep their own palettes.
 pub fn brand_gradient_scope_effects(tab: usize) -> Vec<VisualEffect> {
     if tab == TAB_HERO {
         vec![
             VisualEffect::Gradient {
-                gradient: ColorGradient::new(Color::Rgb(126, 58, 199), Color::Rgb(244, 114, 182))
-                    .with_center(Color::Rgb(185, 86, 205)),
+                gradient: ColorGradient::new(Color::Rgb(216, 180, 254), Color::Rgb(147, 51, 234))
+                    .with_center(Color::Rgb(192, 132, 252)),
                 blend: 0.9,
                 frequency: 1.15,
                 speed: 0.35,

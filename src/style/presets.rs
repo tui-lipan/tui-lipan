@@ -352,6 +352,18 @@ impl Theme {
     /// violet accent (`#C084FC`), accented by a richer purple (`#9333EA`) for
     /// selection. Surfaces carry a faint teal-navy tint so panels and popovers
     /// layer cleanly. This is the project's "business card" look.
+    ///
+    /// It is also the palette of record for tui-lipan.dev and
+    /// docs.tui-lipan.dev: both sites mirror the colours below rather than
+    /// inventing their own, so a page of documentation and an application
+    /// built with the crate are painted from one list.
+    ///
+    /// The brand ramp is `#D8B4FE` into `#9333EA` - the `splitter.active`
+    /// light violet into the selection purple, both of them colours declared
+    /// below. It lives only in the mark, the wordmark, and page decoration;
+    /// there is no field for it here, because a gradient means nothing in a
+    /// cell grid. Rose belongs to rozi, and nothing in this preset goes near
+    /// it.
     pub fn lipan() -> Self {
         let background = Color::hex_u24(0x04090D);
         let accent = Color::hex_u24(0xC084FC);
