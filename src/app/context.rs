@@ -194,6 +194,47 @@ pub struct FocusEntry {
     pub key: Option<crate::core::element::Key>,
     /// Widget kind.
     pub tag: Tag,
+    /// Keyed path from the focused leaf toward the root.
+    keys: Arc<[crate::core::element::Key]>,
+}
+
+impl FocusEntry {
+    /// Construct a standalone focus entry.
+    ///
+    /// Runtime-produced entries additionally include keyed ancestors in [`Self::keys`].
+    pub fn new(key: Option<crate::core::element::Key>, tag: Tag) -> Self {
+        let keys = key.iter().cloned().collect::<Vec<_>>().into();
+        Self { key, tag, keys }
+    }
+
+    pub(crate) fn with_keys(
+        key: Option<crate::core::element::Key>,
+        tag: Tag,
+        keys: Arc<[crate::core::element::Key]>,
+    ) -> Self {
+        Self { key, tag, keys }
+    }
+
+    /// Return whether this widget is inside the element identified by `key`.
+    pub fn is_within_key(&self, key: impl AsRef<str>) -> bool {
+        let key = key.as_ref();
+        self.keys.iter().any(|candidate| candidate.as_ref() == key)
+    }
+
+    /// Iterate keyed ancestry from the focused leaf toward the root.
+    ///
+    /// The focused widget's own key is first when it has one.
+    pub fn keys(&self) -> impl ExactSizeIterator<Item = &crate::core::element::Key> {
+        self.keys.iter()
+    }
+
+    pub(crate) fn key_path(&self) -> &[crate::core::element::Key] {
+        &self.keys
+    }
+
+    pub(crate) fn key_path_arc(&self) -> Arc<[crate::core::element::Key]> {
+        Arc::clone(&self.keys)
+    }
 }
 
 /// App-level focus transition payload.

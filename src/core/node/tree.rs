@@ -64,6 +64,8 @@ pub(crate) struct Node {
     pub id: NodeId,
     /// Optional user-provided key.
     pub key: Option<Key>,
+    /// Whether pointer presses may acquire focus in this subtree.
+    pub pointer_focus: bool,
     /// Layout rectangle.
     pub rect: Rect,
     /// Parent node.
@@ -174,6 +176,7 @@ impl Node {
         Self {
             id,
             key: None,
+            pointer_focus: true,
             rect: Rect::default(),
             parent: None,
             children: Vec::new(),
@@ -187,6 +190,7 @@ impl Node {
     pub(crate) fn reset_for_reuse(&mut self, id: NodeId) {
         self.id = id;
         self.key = None;
+        self.pointer_focus = true;
         self.parent = None;
         self.rect = Rect::default();
         self.children.clear();
@@ -198,6 +202,7 @@ impl Node {
 
     pub(crate) fn reset_for_free(&mut self) {
         self.key = None;
+        self.pointer_focus = true;
         self.parent = None;
         self.children.clear();
         self.epoch = 0;
@@ -894,6 +899,22 @@ impl NodeTree {
             current = self.node(node_id).parent;
         }
         false
+    }
+
+    /// Whether pointer focus acquisition is enabled on `id` and all of its ancestors.
+    pub(crate) fn allows_pointer_focus(&self, id: NodeId) -> bool {
+        if !self.is_valid(id) {
+            return false;
+        }
+        let mut current = Some(id);
+        while let Some(node_id) = current {
+            let node = self.node(node_id);
+            if !node.pointer_focus {
+                return false;
+            }
+            current = node.parent;
+        }
+        true
     }
 
     /// Collect the tab ring for the pane rooted at `root`.

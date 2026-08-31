@@ -376,6 +376,8 @@ pub(crate) struct FocusState {
     pub focused_key: Option<Key>,
     pub focused_tag: Option<Tag>,
     pub focus_stack: Vec<FocusStackEntry>,
+    pub unclassified_focus_request: Option<Key>,
+    pub deferred_outside_focus: Option<Key>,
     pub last_notified: Option<NotifiedFocus>,
     pub window_focused: bool,
     #[cfg(feature = "terminal")]
@@ -396,6 +398,8 @@ impl FocusState {
             focused_key: &mut self.focused_key,
             focused_tag: &mut self.focused_tag,
             focus_stack: &mut self.focus_stack,
+            unclassified_focus_request: &mut self.unclassified_focus_request,
+            deferred_outside_focus: &mut self.deferred_outside_focus,
         }
     }
 }
@@ -408,6 +412,8 @@ impl Default for FocusState {
             focused_key: None,
             focused_tag: None,
             focus_stack: Vec::new(),
+            unclassified_focus_request: None,
+            deferred_outside_focus: None,
             last_notified: None,
             window_focused: true,
             #[cfg(feature = "terminal")]

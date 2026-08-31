@@ -26,6 +26,7 @@ use crate::layout::measure::min_size_constrained;
 use crate::style::{Rect, ThemeRole};
 use crate::widgets::DragPreview;
 
+use crate::app::focus_service;
 use crate::app::input::{focus, scrollbar};
 
 use super::{
@@ -798,7 +799,13 @@ impl<C: Component> AppRunner<C> {
             &mut self.focus.focused_tag,
             self.focus.policy,
         );
+        focus_service::classify_focus_request(&self.core.tree, &mut self.focus.refs());
         self.ensure_overlay_focus();
+        self.core.focus.update_from_tree(
+            &self.core.tree,
+            self.focus.focused,
+            self.focus.focused_key.as_ref(),
+        );
         self.notify_focus_change();
         #[cfg(feature = "devtools")]
         self.update_devtools_focus_metrics();

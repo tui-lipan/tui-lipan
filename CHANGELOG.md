@@ -13,6 +13,19 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Element::pointer_focus` and the matching last-in-chain `IntoElement::pointer_focus` control
+  pointer focus acquisition independently of focusability and Tab traversal. A disabled subtree
+  still receives hit testing and pointer callbacks, and remains reachable through Tab or
+  `Context::request_focus`. `ScrollView::tab_stop` adds the corresponding traversal control for
+  focusable scroll views.
+- Root components can turn widget focus transitions into ordinary application messages with
+  `Component::on_focus_changed`. `FocusEntry` now includes keyed ancestry through
+  `is_within_key` and `keys`, allowing applications to identify the focused region even when the
+  focused leaf is a nested widget. (breaking)
+- Capturing overlays retain the latest `Context::request_focus` destination proven to be outside
+  the active trap and apply it after dismissal. Unmounted targets remain unclassified until a
+  later reconciliation, nested captures reclassify retained targets against their parent, and
+  `Context::blur` explicitly cancels retained requests.
 - `VisualEffect::channels`, `foreground_only`, and `background_only` restrict any visual effect to
   selected cell color channels. Effects still modify both channels by default. This lets gradients
   and rainbow waves color glyphs without washing out concrete backgrounds from

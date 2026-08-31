@@ -207,6 +207,8 @@ impl<C: Component> AppRunner<C> {
             focused_key: &mut focus_state.focused_key,
             focused_tag: &mut focus_state.focused_tag,
             focus_stack: &mut focus_state.focus_stack,
+            unclassified_focus_request: &mut focus_state.unclassified_focus_request,
+            deferred_outside_focus: &mut focus_state.deferred_outside_focus,
             focus_policy: focus_state.policy,
             keymap,
             keymap_runtime,
@@ -270,6 +272,8 @@ struct RunnerDispatchOps<'a, 'b, C: Component> {
     focused_key: &'a mut Option<Key>,
     focused_tag: &'a mut Option<Tag>,
     focus_stack: &'a mut Vec<FocusStackEntry>,
+    unclassified_focus_request: &'a mut Option<Key>,
+    deferred_outside_focus: &'a mut Option<Key>,
     focus_policy: FocusPolicy,
     keymap: &'a Keymap,
     keymap_runtime: &'a mut KeymapRuntime,
@@ -322,8 +326,10 @@ impl<C: Component> RunnerDispatchOps<'_, '_, C> {
                 focused_key: &mut *self.focused_key,
                 focused_tag: &mut *self.focused_tag,
                 focus_stack: &mut *self.focus_stack,
+                unclassified_focus_request: &mut *self.unclassified_focus_request,
+                deferred_outside_focus: &mut *self.deferred_outside_focus,
             };
-            focus_service::restore_focus_from_stack(
+            focus_service::dismiss_capturing_overlay(
                 &self.core.tree,
                 &mut refs,
                 OverlayKey::of(overlay),
@@ -339,6 +345,8 @@ impl<C: Component> RunnerDispatchOps<'_, '_, C> {
             focused_key: &mut *self.focused_key,
             focused_tag: &mut *self.focused_tag,
             focus_stack: &mut *self.focus_stack,
+            unclassified_focus_request: &mut *self.unclassified_focus_request,
+            deferred_outside_focus: &mut *self.deferred_outside_focus,
         };
         focus_service::overlay_step(&self.core.tree, &mut refs, FocusDirection::Next)
     }
@@ -350,6 +358,8 @@ impl<C: Component> RunnerDispatchOps<'_, '_, C> {
             focused_key: &mut *self.focused_key,
             focused_tag: &mut *self.focused_tag,
             focus_stack: &mut *self.focus_stack,
+            unclassified_focus_request: &mut *self.unclassified_focus_request,
+            deferred_outside_focus: &mut *self.deferred_outside_focus,
         };
         focus_service::overlay_step(&self.core.tree, &mut refs, FocusDirection::Prev)
     }

@@ -50,7 +50,9 @@ Use `ctx.request_focus(...)` and stable element keys for focus handoff. A retain
 restores focus when its widget remounts; `ctx.blur()` clears that identity. Use `tab_stop(false)`
 for command-only targets, `FocusScope::Contain` for pane-local rings, and
 `FocusScope::Exclude` for non-navigable subtrees. Return `KeyUpdate::handled(...)` only when the app
-consumed the key.
+consumed the key. Shell commands do not need to suppress pane-focus requests while a capturing
+overlay is open: the framework defers the latest destination outside the capture until it closes,
+while overlay-local requests continue to work immediately.
 
 Route widget `on_focus`/`on_blur` callbacks into messages when focus changes affect state. Use
 `App::on_focus_changed` for diagnostics or cross-cutting observation, and key dynamic focusables so

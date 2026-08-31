@@ -68,6 +68,8 @@ impl std::fmt::Display for Key {
 pub struct Element {
     /// Optional key for stable identity.
     pub(crate) key: Option<Key>,
+    /// Whether pointer presses may acquire focus in this subtree.
+    pub(crate) pointer_focus: bool,
     /// Concrete element kind.
     pub(crate) kind: ElementKind,
     /// Layout constraints for stack sizing.
@@ -85,6 +87,7 @@ impl Element {
     pub(crate) fn new(kind: ElementKind) -> Self {
         Self {
             key: None,
+            pointer_focus: true,
             kind,
             layout: LayoutConstraints::default(),
             layout_hash_cache: Cell::new(None),
@@ -106,6 +109,16 @@ impl Element {
     /// compatible.
     pub fn key(mut self, key: impl Into<Key>) -> Self {
         self.key = Some(key.into());
+        self
+    }
+
+    /// Set whether pointer presses may acquire focus from this element or its descendants.
+    ///
+    /// Hit testing and pointer callbacks are unchanged. Programmatic focus and Tab traversal are
+    /// controlled separately by `request_focus` and widget-specific `tab_stop` settings.
+    pub fn pointer_focus(mut self, pointer_focus: bool) -> Self {
+        self.pointer_focus = pointer_focus;
+        self.clear_caches();
         self
     }
 
@@ -678,6 +691,11 @@ pub trait IntoElement: Into<Element> + Sized {
     /// multi-child container reconciliation.
     fn key(self, key: impl Into<Key>) -> Element {
         self.into().key(key)
+    }
+
+    /// Convert into an element and control pointer focus acquisition for its subtree.
+    fn pointer_focus(self, pointer_focus: bool) -> Element {
+        self.into().pointer_focus(pointer_focus)
     }
 
     /// Convert into an element and assign a path-independent component state

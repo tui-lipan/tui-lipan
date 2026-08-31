@@ -362,6 +362,7 @@ Scrollable container with optional scrollbar.
 | `scroll_acceleration` | `f32` | Convenience setter that enables smooth wheel scrolling and changes the wheel impulse |
 | `ambient_page_scroll` | `bool` | Opt this ScrollView into PageUp/PageDown fallback routing when no focused handler or `on_key` scope handles the key |
 | `focusable` | `bool` | Whether ScrollView is focusable |
+| `tab_stop` | `bool` | Whether a focusable ScrollView participates in next/previous traversal (default `true`) |
 | `scrollbar` | `bool` | Show vertical scrollbar |
 | `scrollbar_config` | `ScrollbarConfig` | Full vertical scrollbar configuration (variant, gap, thumb, thumb styles) |
 | `axis` | `ScrollAxis` | Scroll axes: `Vertical` (default), `Horizontal`, or `Both` |

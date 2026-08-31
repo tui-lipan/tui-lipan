@@ -123,6 +123,7 @@ pub(crate) fn element_layout_hash(el: &Element) -> Option<u64> {
     let mut hasher = layout_hasher();
     tag_of_element(el).hash(&mut hasher);
     el.layout_constraints().hash(&mut hasher);
+    el.pointer_focus.hash(&mut hasher);
 
     el.kind.layout_hash(&mut hasher, &element_layout_hash)?;
 
@@ -172,6 +173,17 @@ mod tests {
         let changed = base.clone().max_width(Length::Px(20));
         let hash_c = element_layout_hash(&changed).expect("changed text should be hashable");
         assert_ne!(hash_a, hash_c);
+    }
+
+    #[test]
+    fn layout_hash_tracks_pointer_focus() {
+        let enabled: Element = Text::new("hello").into();
+        let disabled = enabled.clone().pointer_focus(false);
+
+        assert_ne!(
+            element_layout_hash(&enabled),
+            element_layout_hash(&disabled)
+        );
     }
 
     #[test]

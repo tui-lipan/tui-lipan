@@ -274,7 +274,10 @@ pub(crate) fn find_first_focusable_descendant(tree: &NodeTree, root: NodeId) -> 
     find_first_focusable_descendant_impl(tree, root, true)
 }
 
-fn find_first_focusable_descendant_unscoped(tree: &NodeTree, root: NodeId) -> Option<NodeId> {
+pub(crate) fn find_first_focusable_descendant_unscoped(
+    tree: &NodeTree,
+    root: NodeId,
+) -> Option<NodeId> {
     find_first_focusable_descendant_impl(tree, root, false)
 }
 

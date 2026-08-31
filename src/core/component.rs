@@ -485,6 +485,17 @@ pub trait Component: Sized + 'static {
         Update::none()
     }
 
+    /// Produce a root message after framework widget focus changes.
+    ///
+    /// Nested components do not receive this callback. The returned message is appended to the
+    /// normal root queue after widget focus callbacks and is never updated synchronously.
+    fn on_focus_changed(
+        &self,
+        _change: &crate::app::context::FocusChanged,
+    ) -> Option<Self::Message> {
+        None
+    }
+
     /// Update state in response to a message.
     ///
     /// Returns `(dirty, command)`.

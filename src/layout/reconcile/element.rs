@@ -82,6 +82,7 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
         let node = ctx.tree.node_mut(id);
         node.epoch = epoch;
         node.key = el.key.clone();
+        node.pointer_focus = el.pointer_focus;
         node.parent = parent;
         node.rect = rect;
         node.set_active_theme(active_theme);
@@ -103,6 +104,7 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
         let node = ctx.tree.node_mut(id);
         node.epoch = epoch;
         node.key = el.key.clone();
+        node.pointer_focus = el.pointer_focus;
         node.parent = parent;
         node.set_active_theme(active_theme);
     }

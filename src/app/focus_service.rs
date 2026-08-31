@@ -8,6 +8,10 @@
 //!
 //! [`TestBackend`]: crate::TestBackend
 
+use std::sync::Arc;
+
+use smallvec::SmallVec;
+
 use crate::app::context::{FocusChanged, FocusChangedHook, FocusEntry, FocusPolicy};
 use crate::app::input::focus::{self, FocusDirection};
 use crate::callback::Callback;
@@ -82,6 +86,8 @@ pub(crate) struct FocusRefs<'a> {
     pub focused_key: &'a mut Option<Key>,
     pub focused_tag: &'a mut Option<Tag>,
     pub focus_stack: &'a mut Vec<FocusStackEntry>,
+    pub unclassified_focus_request: &'a mut Option<Key>,
+    pub deferred_outside_focus: &'a mut Option<Key>,
 }
 
 impl FocusRefs<'_> {
@@ -94,6 +100,12 @@ impl FocusRefs<'_> {
     fn clear_focus(&mut self) {
         *self.focused = None;
         *self.focused_tag = None;
+    }
+
+    fn set_focus_for_request(&mut self, tree: &NodeTree, id: NodeId, key: Key) {
+        *self.focused = Some(id);
+        *self.focused_key = Some(key);
+        *self.focused_tag = Some(tag_of_node(tree.node(id)));
     }
 }
 
@@ -293,14 +305,14 @@ pub(crate) fn apply_focus_request(
 ) {
     match request {
         FocusRequest::Key(key) => {
-            *refs.focused = None;
-            *refs.focused_key = Some(key);
-            *refs.focused_tag = None;
+            *refs.unclassified_focus_request = Some(key);
         }
         FocusRequest::Clear => {
             *refs.focused = None;
             *refs.focused_key = None;
             *refs.focused_tag = None;
+            *refs.unclassified_focus_request = None;
+            *refs.deferred_outside_focus = None;
         }
         FocusRequest::Next => {
             if !overlay_step(tree, refs, FocusDirection::Next) {
@@ -315,6 +327,188 @@ pub(crate) fn apply_focus_request(
     }
 }
 
+fn keyed_node(tree: &NodeTree, key: &Key, capture: Option<NodeId>) -> Option<NodeId> {
+    capture
+        .and_then(|capture| {
+            tree.iter_with_overlays()
+                .find(|node| node.key.as_ref() == Some(key) && tree.is_descendant(capture, node.id))
+                .map(|node| node.id)
+        })
+        .or_else(|| {
+            tree.iter_with_overlays()
+                .find(|node| node.key.as_ref() == Some(key))
+                .map(|node| node.id)
+        })
+}
+
+fn focus_target_for_keyed_node(tree: &NodeTree, id: NodeId) -> Option<NodeId> {
+    if tree.node(id).is_focusable() {
+        return Some(id);
+    }
+    if focus::in_excluded_scope(tree, id) {
+        focus::find_first_focusable_descendant_unscoped(tree, id)
+    } else {
+        focus::find_first_focusable_descendant(tree, id)
+    }
+}
+
+fn classify_unclassified_request(
+    tree: &NodeTree,
+    refs: &mut FocusRefs<'_>,
+    capture: Option<NodeId>,
+) -> bool {
+    let Some(key) = refs.unclassified_focus_request.take() else {
+        return false;
+    };
+    let Some(keyed) = keyed_node(tree, &key, capture) else {
+        *refs.unclassified_focus_request = Some(key);
+        return false;
+    };
+    let target = focus_target_for_keyed_node(tree, keyed);
+
+    if let Some(overlay_id) = capture {
+        let overlay_key = tree
+            .overlay_roots()
+            .iter()
+            .find(|overlay| overlay.id == overlay_id)
+            .map(OverlayKey::of);
+        if let Some(overlay_key) = overlay_key {
+            push_focus_stack(tree, refs, overlay_key);
+        }
+        if !tree.is_descendant(overlay_id, target.unwrap_or(keyed)) {
+            *refs.deferred_outside_focus = Some(key);
+            return false;
+        }
+    }
+
+    let Some(target) = target else {
+        *refs.unclassified_focus_request = Some(key);
+        return false;
+    };
+    refs.set_focus_for_request(tree, target, key);
+    true
+}
+
+/// Classify the latest unresolved keyed request against the current capturing overlay.
+///
+/// Run after ordinary focus restoration and before [`ensure_overlay_focus`].
+pub(crate) fn classify_focus_request(tree: &NodeTree, refs: &mut FocusRefs<'_>) -> bool {
+    let capture = tree.top_capturing_overlay().map(|overlay| overlay.id);
+    classify_unclassified_request(tree, refs, capture)
+}
+
+fn reclassify_deferred_request(tree: &NodeTree, refs: &mut FocusRefs<'_>, capture: NodeId) -> bool {
+    let Some(key) = refs.deferred_outside_focus.take() else {
+        return false;
+    };
+    let Some(keyed) = keyed_node(tree, &key, Some(capture)) else {
+        *refs.deferred_outside_focus = Some(key);
+        return false;
+    };
+    let Some(target) = focus_target_for_keyed_node(tree, keyed) else {
+        *refs.deferred_outside_focus = Some(key);
+        return false;
+    };
+    if !tree.is_descendant(capture, target) {
+        *refs.deferred_outside_focus = Some(key);
+        return false;
+    }
+
+    refs.set_focus_for_request(tree, target, key);
+    true
+}
+
+fn remaining_capture_after_dismissal(tree: &NodeTree, dismissed: OverlayKey) -> Option<NodeId> {
+    tree.overlay_roots()
+        .iter()
+        .rev()
+        .find(|overlay| overlay.captures_focus && OverlayKey::of(overlay) != dismissed)
+        .map(|overlay| overlay.id)
+}
+
+/// Restore and reclassify retained requests after one capturing overlay is dismissed.
+pub(crate) fn dismiss_capturing_overlay(
+    tree: &NodeTree,
+    refs: &mut FocusRefs<'_>,
+    dismissed: OverlayKey,
+) -> bool {
+    let before = *refs.focused;
+    let restored = restore_focus_from_stack(tree, refs, dismissed);
+    let remaining = remaining_capture_after_dismissal(tree, dismissed);
+
+    if let Some(capture) = remaining {
+        reclassify_deferred_request(tree, refs, capture);
+        classify_unclassified_request(tree, refs, Some(capture));
+        return restored || before != *refs.focused;
+    }
+
+    if let Some(key) = refs.unclassified_focus_request.take() {
+        *refs.deferred_outside_focus = None;
+        *refs.focused = None;
+        *refs.focused_key = Some(key);
+        *refs.focused_tag = None;
+        focus::restore_focus(
+            tree,
+            refs.focused,
+            refs.focused_key,
+            refs.focused_tag,
+            refs.policy,
+        );
+    } else if let Some(key) = refs.deferred_outside_focus.take()
+        && let Some(keyed) = keyed_node(tree, &key, None)
+        && let Some(target) = focus_target_for_keyed_node(tree, keyed)
+    {
+        refs.set_focus_for_request(tree, target, key);
+    }
+
+    restored || before != *refs.focused
+}
+
+fn keyed_path(tree: &NodeTree, id: NodeId) -> SmallVec<[Key; 8]> {
+    let mut keys = SmallVec::new();
+    let mut current = Some(id);
+    while let Some(node_id) = current {
+        if !tree.is_valid(node_id) {
+            break;
+        }
+        let node = tree.node(node_id);
+        if let Some(key) = &node.key {
+            keys.push(key.clone());
+        }
+        current = node.parent;
+    }
+    keys
+}
+
+fn notified_focus(tree: &NodeTree, id: NodeId, previous: Option<&NotifiedFocus>) -> NotifiedFocus {
+    let node = tree.node(id);
+    let key = node.key.clone();
+    let keys = keyed_path(tree, id);
+    let keys: Arc<[Key]> = previous
+        .filter(|old| same_leaf_identity(old, id, key.as_ref()))
+        .filter(|old| old.entry.key_path() == keys.as_slice())
+        .map_or_else(
+            || Arc::from(keys.into_vec()),
+            |old| old.entry.key_path_arc(),
+        );
+
+    NotifiedFocus {
+        id,
+        entry: FocusEntry::with_keys(key, tag_of_node(node), keys),
+        on_blur: node.on_blur_callback().cloned(),
+    }
+}
+
+fn same_leaf_identity(old: &NotifiedFocus, new_id: NodeId, new_key: Option<&Key>) -> bool {
+    old.id == new_id
+        || old
+            .entry
+            .key
+            .as_ref()
+            .zip(new_key)
+            .is_some_and(|(old, new)| old == new)
+}
+
 /// Deliver `on_blur` / `on_focus` / the app hook for a completed transition.
 ///
 /// Callbacks are emitted onto the normal queue, so handlers run on the next pump
@@ -324,55 +518,49 @@ pub(crate) fn notify_focus_change(
     focused: Option<NodeId>,
     last_notified: &mut Option<NotifiedFocus>,
     hook: Option<&FocusChangedHook>,
-) {
-    let current = focused.filter(|id| tree.is_valid(*id)).map(|id| {
-        let node = tree.node(id);
-        NotifiedFocus {
-            id,
-            entry: FocusEntry {
-                key: node.key.clone(),
-                tag: tag_of_node(node),
-            },
-            on_blur: node.on_blur_callback().cloned(),
-        }
-    });
+) -> Option<FocusChanged> {
+    let current = focused
+        .filter(|id| tree.is_valid(*id))
+        .map(|id| notified_focus(tree, id, last_notified.as_ref()));
 
+    let same_identity = match (&*last_notified, &current) {
+        (Some(old), Some(new)) => same_leaf_identity(old, new.id, new.entry.key.as_ref()),
+        (None, None) => true,
+        _ => false,
+    };
     let unchanged = match (&*last_notified, &current) {
         (None, None) => true,
-        (Some(old), Some(new)) => {
-            old.id == new.id
-                || old
-                    .entry
-                    .key
-                    .as_ref()
-                    .zip(new.entry.key.as_ref())
-                    .is_some_and(|(old, new)| old == new)
-        }
+        (Some(old), Some(new)) => same_identity && old.entry.key_path() == new.entry.key_path(),
         _ => false,
     };
     if unchanged {
         // Keep the live node id and blur callback after a keyed remount so a
         // later blur still reaches the remounted widget.
         *last_notified = current;
-        return;
+        return None;
     }
 
     let previous = last_notified.take();
     *last_notified = current.clone();
 
-    if let Some(callback) = previous.as_ref().and_then(|old| old.on_blur.clone()) {
-        callback.emit(());
+    if !same_identity {
+        if let Some(callback) = previous.as_ref().and_then(|old| old.on_blur.clone()) {
+            callback.emit(());
+        }
+        if let Some(callback) = current
+            .as_ref()
+            .and_then(|new| tree.node(new.id).on_focus_callback().cloned())
+        {
+            callback.emit(());
+        }
     }
-    if let Some(callback) = current
-        .as_ref()
-        .and_then(|new| tree.node(new.id).on_focus_callback().cloned())
-    {
-        callback.emit(());
-    }
+
+    let change = FocusChanged {
+        old: previous.map(|old| old.entry),
+        new: current.map(|new| new.entry),
+    };
     if let Some(hook) = hook {
-        hook(&FocusChanged {
-            old: previous.map(|old| old.entry),
-            new: current.map(|new| new.entry),
-        });
+        hook(&change);
     }
+    Some(change)
 }

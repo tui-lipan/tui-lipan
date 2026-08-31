@@ -436,6 +436,7 @@ pub(crate) struct ComponentRegistryConfig {
 struct ExpandElementParams {
     parent: Option<ComponentId>,
     key: Option<Key>,
+    pointer_focus: bool,
     layout: LayoutConstraints,
     kind: ElementKind,
     index_in_parent: usize,
@@ -1146,7 +1147,11 @@ impl ComponentRegistry {
 
         for (idx, child) in children.into_iter().enumerate() {
             let Element {
-                key, kind, layout, ..
+                key,
+                pointer_focus,
+                kind,
+                layout,
+                ..
             } = child;
             match kind {
                 ElementKind::Component(component) => {
@@ -1216,6 +1221,7 @@ impl ComponentRegistry {
 
                     out.push(Element {
                         key,
+                        pointer_focus,
                         kind: ElementKind::Group(Group {
                             scope,
                             child: Box::new(expanded),
@@ -1233,6 +1239,7 @@ impl ComponentRegistry {
                         ExpandElementParams {
                             parent,
                             key,
+                            pointer_focus,
                             layout,
                             kind: other,
                             index_in_parent: idx,
@@ -1257,6 +1264,7 @@ impl ComponentRegistry {
         let ExpandElementParams {
             parent,
             key,
+            pointer_focus,
             layout,
             kind,
             index_in_parent,
@@ -1280,6 +1288,7 @@ impl ComponentRegistry {
                 );
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::VStack(vs),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1303,6 +1312,7 @@ impl ComponentRegistry {
                 );
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::HStack(hs),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1326,6 +1336,7 @@ impl ComponentRegistry {
                 );
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::Flow(flow),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1349,6 +1360,7 @@ impl ComponentRegistry {
                 );
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::ScrollView(sv),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1372,6 +1384,7 @@ impl ComponentRegistry {
                 );
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::Splitter(splitter),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1409,6 +1422,7 @@ impl ComponentRegistry {
                     .collect();
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::Grid(grid),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1442,6 +1456,7 @@ impl ComponentRegistry {
                     .collect();
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::Canvas(canvas),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1484,6 +1499,7 @@ impl ComponentRegistry {
                 path.pop();
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::Frame(frame),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1507,6 +1523,7 @@ impl ComponentRegistry {
                 );
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::ZStack(zs),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1529,6 +1546,7 @@ impl ComponentRegistry {
                 path.pop();
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::Center(center),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1573,6 +1591,7 @@ impl ComponentRegistry {
                 path.pop();
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::CenterPin(cp),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1612,6 +1631,7 @@ impl ComponentRegistry {
                 path.pop();
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::StatusBarLayout(status_layout),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1647,6 +1667,7 @@ impl ComponentRegistry {
                 path.pop();
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::Popover(popover),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1671,6 +1692,7 @@ impl ComponentRegistry {
                 path.pop();
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::Portal(portal),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1697,6 +1719,7 @@ impl ComponentRegistry {
                 path.pop();
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::Group(group),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1716,9 +1739,10 @@ impl ComponentRegistry {
                     self.expand_children(host, parent, path, vec![tp.child], epoch, viewport);
                 self.theme_stack.pop();
                 path.pop();
-                let child = expanded
+                let mut child = expanded
                     .pop()
                     .unwrap_or_else(|| crate::widgets::Text::new("").into());
+                child.pointer_focus &= pointer_focus;
                 #[cfg(feature = "profiling-tracing")]
                 let theme_start = web_time::Instant::now();
                 let child = crate::style::apply_document_theme_carve_out(&tp.theme, child);
@@ -1729,6 +1753,7 @@ impl ComponentRegistry {
                 );
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::ThemeProvider(Box::new(
                         crate::core::element::ThemeProviderElement {
                             theme: tp.theme,
@@ -1781,9 +1806,11 @@ impl ComponentRegistry {
                 self.context_stack.pop();
                 path.pop();
 
-                expanded
+                let mut child = expanded
                     .pop()
-                    .unwrap_or_else(|| crate::widgets::Text::new("").into())
+                    .unwrap_or_else(|| crate::widgets::Text::new("").into());
+                child.pointer_focus &= pointer_focus;
+                child
             }
             ElementKind::Memo(memo) => {
                 let seg = PathSegment {
@@ -1797,7 +1824,7 @@ impl ComponentRegistry {
                 let hit = host
                     .prev_memo(path, memo.call_site)
                     .is_some_and(|cached| cached.deps_hash == memo.deps_hash);
-                let child = if hit {
+                let mut child = if hit {
                     let (mut expanded_child, descendant_ids) = host
                         .prev_memo(path, memo.call_site)
                         .map(|cached| {
@@ -1834,7 +1861,7 @@ impl ComponentRegistry {
                                     epoch,
                                     viewport,
                                 );
-                                let child = expanded
+                                let mut child = expanded
                                     .pop()
                                     .unwrap_or_else(|| crate::widgets::Text::new("").into());
                                 let descendant_ids =
@@ -1849,6 +1876,7 @@ impl ComponentRegistry {
                                     },
                                 );
                                 path.pop();
+                                child.pointer_focus &= pointer_focus;
                                 return child;
                             }
                         }
@@ -1887,6 +1915,7 @@ impl ComponentRegistry {
                     },
                 );
                 path.pop();
+                child.pointer_focus &= pointer_focus;
                 child
             }
             ElementKind::EffectScope(mut scope) => {
@@ -1903,6 +1932,7 @@ impl ComponentRegistry {
                 path.pop();
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::EffectScope(scope),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1924,6 +1954,7 @@ impl ComponentRegistry {
                 path.pop();
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::MouseRegion(region),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1945,6 +1976,7 @@ impl ComponentRegistry {
                 path.pop();
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::DragSource(source),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1966,6 +1998,7 @@ impl ComponentRegistry {
                 path.pop();
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::DropTarget(target),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -1990,6 +2023,7 @@ impl ComponentRegistry {
                 path.pop();
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::Animated(animated),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -2004,6 +2038,7 @@ impl ComponentRegistry {
                 );
                 Element {
                     key,
+                    pointer_focus,
                     kind: ElementKind::Component(component),
                     layout,
                     layout_hash_cache: Cell::new(None),
@@ -2013,6 +2048,7 @@ impl ComponentRegistry {
             }
             other => Element {
                 key,
+                pointer_focus,
                 kind: other,
                 layout,
                 layout_hash_cache: Cell::new(None),

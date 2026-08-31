@@ -304,6 +304,11 @@ Key dynamic focus targets. Under `OnDemand`, a temporarily unmounted focused key
 focus returns when that key remounts. Call `ctx.blur()` to forget it. Stable keys also suppress
 spurious widget `on_blur`/`on_focus` pairs across remounts.
 
+Capturing overlays also make app-level focus handoff safe: `ctx.request_focus` may target content
+mounted behind a modal without first checking whether a modal is open. The framework keeps the
+latest outside target and applies it after the capture closes. Requests for fields inside the modal
+still resolve immediately, and `ctx.blur()` explicitly cancels both retained destinations.
+
 #### Arrow Navigation Across a Group of Widgets
 
 Framework traversal is linear: Tab and Shift-Tab walk one ring. Arrow keys belong to the focused

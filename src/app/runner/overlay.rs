@@ -103,7 +103,7 @@ impl<C: Component> AppRunner<C> {
     }
 
     pub(crate) fn restore_focus_from_stack(&mut self, overlay: OverlayKey) {
-        let restored = focus_service::restore_focus_from_stack(
+        let restored = focus_service::dismiss_capturing_overlay(
             &self.core.tree,
             &mut self.focus.refs(),
             overlay,

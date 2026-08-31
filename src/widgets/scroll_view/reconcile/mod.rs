@@ -892,6 +892,7 @@ pub(crate) fn reconcile_scroll_view(
             scroll_wheel_behavior: sv.scroll_wheel_behavior,
             ambient_page_scroll: sv.ambient_page_scroll,
             focusable: sv.focusable,
+            tab_stop: sv.tab_stop,
             scrollbar: actual_standalone || (sv.scrollbar && !use_standalone),
             scrollbar_variant: sv.scrollbar_config.variant,
             scrollbar_gap: sv.scrollbar_config.gap,

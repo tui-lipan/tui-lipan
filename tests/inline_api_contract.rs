@@ -10,10 +10,9 @@ use tui_lipan::{
 
 #[test]
 fn root_and_prelude_export_focus_event_types() {
-    let entry = FocusEntry {
-        key: Some(Key::from("field")),
-        tag: Tag::Input,
-    };
+    let entry = FocusEntry::new(Some(Key::from("field")), Tag::Input);
+    assert!(entry.is_within_key("field"));
+    assert_eq!(entry.keys().count(), 1);
     let changed = FocusChanged {
         old: None,
         new: Some(entry),

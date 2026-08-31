@@ -86,6 +86,7 @@ pub struct ScrollViewNode {
     pub scroll_wheel_behavior: ScrollWheelBehavior,
     pub ambient_page_scroll: bool,
     pub focusable: bool,
+    pub tab_stop: bool,
     pub scrollbar: bool,
     pub scrollbar_variant: ScrollbarVariant,
     pub scrollbar_gap: u16,
@@ -394,6 +395,10 @@ impl VirtualHeightCache {
 impl WidgetNode for ScrollViewNode {
     fn is_focusable(&self) -> bool {
         self.focusable
+    }
+
+    fn is_tab_stop(&self) -> bool {
+        self.focusable && self.tab_stop
     }
 
     fn has_on_click(&self) -> bool {

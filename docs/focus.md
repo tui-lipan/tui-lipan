@@ -32,20 +32,23 @@ App::new()
 `ctx.request_focus`, `ctx.focus_next`, and `ctx.focus_prev` still work. Capturing overlays are
 the other deliberate exception: they auto-focus and trap by default even under `Manual`.
 
-## Focusable Versus Tab Stop
+## Focus Acquisition Controls
 
-These properties answer different questions:
+These properties answer independent questions:
 
 | Property | Meaning |
 |----------|---------|
 | `focusable` | The widget may own focus and receive focused keyboard input. |
 | `tab_stop` | The widget participates in next/previous traversal. Default: `true`. |
+| `pointer_focus` | Pointer presses may acquire focus from the element or its descendants. Default: `true`. |
 
 A widget with `.focusable(true).tab_stop(false)` is omitted from Tab traversal but remains
 reachable by pointer focus and `ctx.request_focus(key)`. A non-focusable widget cannot become a
-focus target. Incidental controls such as `Accordion`, `DraggableTabBar`, `Hyperlink`, `PanView`,
-and `Tabs` are not focusable by default; opt in when their keyboard behavior belongs in the app's
-focus ring. Input, editor, and primary data surfaces remain focusable by default.
+focus target. An element subtree with `.pointer_focus(false)` keeps hit testing and pointer
+callbacks, Tab traversal, and explicit `request_focus` behavior; only pointer acquisition is
+disabled. Incidental controls such as `Accordion`, `DraggableTabBar`, `Hyperlink`, `PanView`, and
+`Tabs` are not focusable by default; opt in when their keyboard behavior belongs in the app's focus
+ring. Input, editor, and primary data surfaces remain focusable by default.
 
 ### Disabled Widgets
 
@@ -113,7 +116,11 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 ```
 
 `request_focus(key)` may be issued before the keyed widget mounts; the pending key resolves after
-reconciliation. It is also the explicit escape hatch into `FocusScope::Exclude`.
+reconciliation. It is also the explicit escape hatch into `FocusScope::Exclude`. While a capturing
+overlay is active, a request that resolves outside it is retained instead of moving focus through
+the trap. The latest outside request is applied after the last capturing overlay closes. A request
+that resolves inside the overlay takes effect immediately without erasing that post-overlay target.
+Unresolved keys remain unclassified until a later reconciliation locates them.
 
 Keying a **composite** widget keys its container, which is usually not focusable. `request_focus`
 on such a key falls back to the container's first focusable descendant — which works until the
@@ -127,9 +134,10 @@ SearchPalette::<T>::new().input_key("command-query")
 ctx.request_focus("command-query");
 ```
 
-`blur()` clears both the current focus and retained focus identity. Under `OnDemand` and `Manual`,
-the app remains unfocused until focus is established again. Under `Auto`, the next reconciliation
-restores the default eligible target, so blur acts as a reset to automatic focus.
+`blur()` clears the current focus, retained focus identity, and any unclassified or deferred focus
+request. Under `OnDemand` and `Manual`, the app remains unfocused until focus is established again.
+Under `Auto`, the next reconciliation restores the default eligible target, so blur acts as a reset
+to automatic focus.
 
 `TestBackend::focus_next()`, `focus_prev()`, `blur()`, and `focused_key()` expose the same behavior
 for headless tests.
@@ -215,6 +223,9 @@ pane, the overlay ring descends through panes so the overlay is never a keyboard
 Root `Modal` and `Popover` overlays capture and trap focus. Their default `.auto_focus(true)`
 focuses the first eligible descendant under every policy, including `Manual`. Dismissal restores
 the prior focus entry; opening over an unfocused `OnDemand` app and dismissing returns to no focus.
+Programmatic focus requests cannot escape the trap: one latest outside destination is deferred
+until dismissal. Nested overlays reclassify it against the remaining parent capture, so a target in
+that parent can receive focus as soon as the child closes.
 
 Set `.auto_focus(false)` to retain keyboard capture and trapping while suspending focus inside the
 overlay. Empty capturing overlays use the same suspension behavior. Local overlays do not provide
@@ -222,13 +233,16 @@ root capture semantics.
 
 Set `Popover::capture_focus(false)` for a passive root-portal overlay that must remain above the
 normal tree without taking focus from its trigger, such as autocomplete suggestions. In this mode,
-`auto_focus` has no effect and keyboard input continues to route to the existing focused widget.
+`auto_focus` has no effect, keyboard input continues to route to the existing focused widget, and
+explicit focus requests are applied normally rather than deferred.
 
 ## Widget Focus Controls
 
 `Accordion`, `Button`, `Checkbox`, `DocumentView`, `DraggableTabBar`, `FileTree`, `HexArea`,
 `Hyperlink`, `Input`, `List`, `ManagedTerminal`, `PanView`, `SearchPalette`, `Slider`, `Table`,
 `Tabs`, `Terminal`, `TextArea`, and `Tree` expose `tab_stop`, `on_focus`, and `on_blur`.
+`ScrollView` exposes `tab_stop` for focusable scrolling surfaces. Every element supports the
+last-in-chain `.pointer_focus(...)` control.
 `DatePicker` and `Radio` also expose them, but use roving focus: only the selected day /
 active option is a tab stop (see [`widgets/input.md`](widgets/input.md)).
 
