@@ -355,30 +355,28 @@ fn focus_target_for_keyed_node(tree: &NodeTree, id: NodeId) -> Option<NodeId> {
 fn classify_unclassified_request(
     tree: &NodeTree,
     refs: &mut FocusRefs<'_>,
-    capture: Option<NodeId>,
+    capture: NodeId,
 ) -> bool {
     let Some(key) = refs.unclassified_focus_request.take() else {
         return false;
     };
-    let Some(keyed) = keyed_node(tree, &key, capture) else {
+    let Some(keyed) = keyed_node(tree, &key, Some(capture)) else {
         *refs.unclassified_focus_request = Some(key);
         return false;
     };
     let target = focus_target_for_keyed_node(tree, keyed);
 
-    if let Some(overlay_id) = capture {
-        let overlay_key = tree
-            .overlay_roots()
-            .iter()
-            .find(|overlay| overlay.id == overlay_id)
-            .map(OverlayKey::of);
-        if let Some(overlay_key) = overlay_key {
-            push_focus_stack(tree, refs, overlay_key);
-        }
-        if !tree.is_descendant(overlay_id, target.unwrap_or(keyed)) {
-            *refs.deferred_outside_focus = Some(key);
-            return false;
-        }
+    let overlay_key = tree
+        .overlay_roots()
+        .iter()
+        .find(|overlay| overlay.id == capture)
+        .map(OverlayKey::of);
+    if let Some(overlay_key) = overlay_key {
+        push_focus_stack(tree, refs, overlay_key);
+    }
+    if !tree.is_descendant(capture, target.unwrap_or(keyed)) {
+        *refs.deferred_outside_focus = Some(key);
+        return false;
     }
 
     let Some(target) = target else {
@@ -389,12 +387,34 @@ fn classify_unclassified_request(
     true
 }
 
-/// Classify the latest unresolved keyed request against the current capturing overlay.
+fn restore_unclassified_request(tree: &NodeTree, refs: &mut FocusRefs<'_>) -> bool {
+    let Some(key) = refs.unclassified_focus_request.take() else {
+        return false;
+    };
+    let before = *refs.focused;
+    *refs.focused = None;
+    *refs.focused_key = Some(key);
+    *refs.focused_tag = None;
+    focus::restore_focus(
+        tree,
+        refs.focused,
+        refs.focused_key,
+        refs.focused_tag,
+        refs.policy,
+    );
+    before != *refs.focused
+}
+
+/// Resolve a staged keyed request or classify it against the current capturing overlay.
 ///
-/// Run after ordinary focus restoration and before [`ensure_overlay_focus`].
+/// Without a capture this restores the legacy `focused_key` pending path, so ordinary focus
+/// movement can replace an unresolved request. Run after ordinary focus restoration and before
+/// [`ensure_overlay_focus`].
 pub(crate) fn classify_focus_request(tree: &NodeTree, refs: &mut FocusRefs<'_>) -> bool {
-    let capture = tree.top_capturing_overlay().map(|overlay| overlay.id);
-    classify_unclassified_request(tree, refs, capture)
+    match tree.top_capturing_overlay() {
+        Some(overlay) => classify_unclassified_request(tree, refs, overlay.id),
+        None => restore_unclassified_request(tree, refs),
+    }
 }
 
 fn reclassify_deferred_request(tree: &NodeTree, refs: &mut FocusRefs<'_>, capture: NodeId) -> bool {
@@ -438,22 +458,13 @@ pub(crate) fn dismiss_capturing_overlay(
 
     if let Some(capture) = remaining {
         reclassify_deferred_request(tree, refs, capture);
-        classify_unclassified_request(tree, refs, Some(capture));
+        classify_unclassified_request(tree, refs, capture);
         return restored || before != *refs.focused;
     }
 
-    if let Some(key) = refs.unclassified_focus_request.take() {
+    if refs.unclassified_focus_request.is_some() {
         *refs.deferred_outside_focus = None;
-        *refs.focused = None;
-        *refs.focused_key = Some(key);
-        *refs.focused_tag = None;
-        focus::restore_focus(
-            tree,
-            refs.focused,
-            refs.focused_key,
-            refs.focused_tag,
-            refs.policy,
-        );
+        restore_unclassified_request(tree, refs);
     } else if let Some(key) = refs.deferred_outside_focus.take()
         && let Some(keyed) = keyed_node(tree, &key, None)
         && let Some(target) = focus_target_for_keyed_node(tree, keyed)

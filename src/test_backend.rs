@@ -2296,6 +2296,116 @@ mod tests {
         }
     }
 
+    enum PendingFocusMsg {
+        RequestFuture,
+        MountFuture,
+    }
+
+    struct PendingFocusHarness;
+
+    impl Component for PendingFocusHarness {
+        type Message = PendingFocusMsg;
+        type Properties = ();
+        type State = bool;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            false
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                PendingFocusMsg::RequestFuture => ctx.request_focus("future"),
+                PendingFocusMsg::MountFuture => ctx.state = true,
+            }
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let mut root = VStack::new()
+                .child(Button::new("A").key("a"))
+                .child(Button::new("C").key("c"));
+            if ctx.state {
+                root = root.child(Button::new("Future").key("future"));
+            }
+            root.into()
+        }
+    }
+
+    fn pending_focus_backend() -> TestBackend<PendingFocusHarness> {
+        let mut backend = TestBackend::new(PendingFocusHarness);
+        backend.focus_next();
+        assert_eq!(backend.focused_key(), Some(&Key::from("a")));
+        backend
+    }
+
+    #[test]
+    fn unresolved_request_without_overlay_keeps_on_demand_pending_semantics() {
+        let mut backend = pending_focus_backend();
+        backend
+            .dispatch(PendingFocusMsg::RequestFuture)
+            .expect("future focus request");
+
+        assert_eq!(backend.focused(), None);
+        assert_eq!(backend.focused_key(), Some(&Key::from("future")));
+        assert_eq!(backend.unclassified_focus_request, None);
+
+        backend
+            .dispatch(PendingFocusMsg::MountFuture)
+            .expect("future target should mount");
+        assert_eq!(backend.focused_key(), Some(&Key::from("future")));
+    }
+
+    #[test]
+    fn traversal_cancels_unresolved_request_without_overlay() {
+        let mut backend = pending_focus_backend();
+        backend
+            .dispatch(PendingFocusMsg::RequestFuture)
+            .expect("future focus request");
+
+        backend.focus_next();
+        let traversed = backend.focused_key().cloned();
+        assert_eq!(traversed, Some(Key::from("a")));
+
+        backend
+            .dispatch(PendingFocusMsg::MountFuture)
+            .expect("future target should mount");
+        assert_eq!(backend.focused_key(), traversed.as_ref());
+    }
+
+    #[test]
+    fn pointer_focus_cancels_unresolved_request_without_overlay() {
+        let mut backend = pending_focus_backend();
+        backend
+            .dispatch(PendingFocusMsg::RequestFuture)
+            .expect("future focus request");
+        let target = backend
+            .core
+            .tree
+            .iter()
+            .find(|node| node.key.as_ref() == Some(&Key::from("c")))
+            .map(|node| node.rect)
+            .expect("pointer target should be mounted");
+        for kind in [
+            MouseKind::Down(MouseButton::Left),
+            MouseKind::Up(MouseButton::Left),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x: target.x.max(0) as u16,
+                    y: target.y.max(0) as u16,
+                    kind,
+                    mods: KeyMods::NONE,
+                })
+                .expect("pointer focus should dispatch");
+        }
+        assert_eq!(backend.focused_key(), Some(&Key::from("c")));
+
+        backend
+            .dispatch(PendingFocusMsg::MountFuture)
+            .expect("future target should mount");
+        assert_eq!(backend.focused_key(), Some(&Key::from("c")));
+    }
+
     enum DeferredFocusMsg {
         Open,
         Close,

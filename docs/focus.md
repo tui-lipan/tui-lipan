@@ -120,7 +120,8 @@ reconciliation. It is also the explicit escape hatch into `FocusScope::Exclude`.
 overlay is active, a request that resolves outside it is retained instead of moving focus through
 the trap. The latest outside request is applied after the last capturing overlay closes. A request
 that resolves inside the overlay takes effect immediately without erasing that post-overlay target.
-Unresolved keys remain unclassified until a later reconciliation locates them.
+While the capture is active, unresolved keys remain unclassified until a later reconciliation
+locates them. Without a capture, normal focus movement replaces an unresolved pending key.
 
 Keying a **composite** widget keys its container, which is usually not focusable. `request_focus`
 on such a key falls back to the container's first focusable descendant — which works until the
@@ -249,8 +250,25 @@ active option is a tab stop (see [`widgets/input.md`](widgets/input.md)).
 ## Focus Events
 
 The focusable widgets listed in [Widget Focus Controls](#widget-focus-controls) expose
-`.on_focus(Callback<()>)` and `.on_blur(Callback<()>)`. Observe all changes with
-`App::on_focus_changed`:
+`.on_focus(Callback<()>)` and `.on_blur(Callback<()>)` for behavior local to one widget.
+
+The root component can turn every application-level transition into a normal message:
+
+```rust
+fn on_focus_changed(&self, change: &FocusChanged) -> Option<Self::Message> {
+    let in_editor = change
+        .new
+        .as_ref()
+        .is_some_and(|entry| entry.is_within_key("editor"));
+    Some(Msg::EditorFocusChanged(in_editor))
+}
+```
+
+Only the root component receives this lifecycle call. The returned message goes through
+`update()` later; nested components do not receive the hook and focus delivery never re-enters
+reconciliation.
+
+Use `App::on_focus_changed` for synchronous diagnostics and observation:
 
 ```rust
 App::new().on_focus_changed(|change: &FocusChanged| {
@@ -259,18 +277,28 @@ App::new().on_focus_changed(|change: &FocusChanged| {
 ```
 
 `FocusChanged` contains optional `old` and `new` `FocusEntry` values. Each entry carries the
-widget's optional `Key` and public `Tag`.
+focused widget's optional `Key`, public `Tag`, and keyed ancestry. `entry.keys()` iterates keys from
+the focused leaf toward the root, including the leaf key when present.
+`entry.is_within_key(key)` checks the whole path without depending on its storage. The old entry
+keeps its captured path even when its node has already unmounted.
 
-The runtime emits `on_blur(old)` before `on_focus(new)`, then invokes the app hook. Link-backed
-widget callbacks enter the normal callback queue in that order and run on the next pump, so the
-synchronous app hook runs before those queued component handlers. Delivery is never re-entrant
-into reconciliation.
-If the old node has already unmounted, its widget callback cannot run, but the app hook still
-receives the retained old entry.
+The runtime treats the same node ID, or the same non-empty leaf key after a remount, as one leaf
+identity:
 
-Notifications are deduplicated when the runtime node is unchanged or both old and new nodes have
-the same non-empty key. An unkeyed focusable widget that is replaced during reconciliation may
-emit a blur/focus pair. Key dynamic focusable widgets when stable callback identity matters.
+- Same leaf identity and the same keyed ancestry emits nothing.
+- Same leaf identity under different keyed ancestry emits the app-level `FocusChanged`, but no
+  widget blur/focus pair.
+- A different leaf identity emits `on_blur(old)`, then `on_focus(new)`, and the app-level change.
+
+This lets a keyed input move between keyed regions without manufacturing a widget blur/focus pair,
+while the root still learns that focus entered a different region. An unkeyed focusable widget
+replaced during reconciliation may emit a blur/focus pair, so key dynamic focusables when stable
+widget callback identity matters.
+
+Delivery order is widget callback emission, the synchronous `App::on_focus_changed` diagnostic
+hook, then root `Component::on_focus_changed`. A message returned by the component hook is appended
+to the normal queue after link-backed widget callback messages. Their handlers call `update()`
+later in queue order.
 
 ## Focus Decoration
 
