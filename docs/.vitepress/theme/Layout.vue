@@ -36,5 +36,6 @@ const MARKS = [
   <DefaultLayout>
     <template #nav-bar-title-after><NavTitleMeta /></template>
     <template #nav-bar-content-after><NavGitHubLink /></template>
+    <template #nav-screen-content-after><NavGitHubLink /></template>
   </DefaultLayout>
 </template>
