@@ -38,9 +38,9 @@ and developer tools - anything that runs in a terminal.
 
 ```toml
 [dependencies]
-tui-lipan = "0.3"
+tui-lipan = "0.4"
 # Optional feature-gated widgets:
-# tui-lipan = { version = "0.3", features = ["image", "big-text", "terminal"] }
+# tui-lipan = { version = "0.4", features = ["image", "big-text", "terminal"] }
 ```
 
 ```rust
@@ -208,7 +208,7 @@ writing any `update()` logic.
 To disable the system clipboard (no-system-dep builds):
 
 ```toml
-tui-lipan = { version = "0.3", default-features = false }
+tui-lipan = { version = "0.4", default-features = false }
 ```
 
 For smaller shipping binaries, build with the size-optimized profile:
