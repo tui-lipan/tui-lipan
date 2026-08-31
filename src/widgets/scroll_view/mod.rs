@@ -53,6 +53,8 @@ pub struct ScrollView {
     pub(crate) ambient_page_scroll: bool,
     /// Whether the scroll view can receive focus.
     pub(crate) focusable: bool,
+    /// Whether the scroll view participates in Tab traversal.
+    pub(crate) tab_stop: bool,
     /// Callback fired when the scroll offset changes.
     pub(crate) on_scroll: Option<Callback<ScrollEvent>>,
     /// Callback fired when the scrollbar is dragged/clicked.
@@ -103,6 +105,7 @@ impl Default for ScrollView {
             scroll_wheel_behavior: ScrollWheelBehavior::default(),
             ambient_page_scroll: false,
             focusable: false,
+            tab_stop: true,
             on_scroll: None,
             on_scroll_to: None,
             on_viewport_change: None,
@@ -353,6 +356,15 @@ impl ScrollView {
     /// Allow the scroll view to receive focus.
     pub fn focusable(mut self, focusable: bool) -> Self {
         self.focusable = focusable;
+        self
+    }
+
+    /// Set whether this scroll view participates in Tab traversal.
+    ///
+    /// A focusable scroll view with `tab_stop(false)` remains reachable by pointer focus and
+    /// `Context::request_focus`.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
         self
     }
 

@@ -371,6 +371,14 @@ where
         }
     }
 
+    pub(crate) fn queue_focus_changed_message(&self, change: &crate::app::context::FocusChanged) {
+        if let Some(message) = self.component.on_focus_changed(change) {
+            self.queue
+                .borrow_mut()
+                .push_back((ScopeId(1), Box::new(message)));
+        }
+    }
+
     pub(crate) fn drain_commands(&mut self) {
         let mut queue = self.queue.borrow_mut();
         while let Ok((scope, msg)) = self.command_rx.try_recv() {

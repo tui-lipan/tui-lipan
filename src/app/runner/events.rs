@@ -718,6 +718,9 @@ impl<C: Component> AppRunner<C> {
         if !self.core.tree.is_valid(id) {
             return false;
         }
+        if !self.core.tree.allows_pointer_focus(id) {
+            return false;
+        }
         if focus::in_excluded_scope(&self.core.tree, id) {
             return false;
         }

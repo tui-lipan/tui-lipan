@@ -32,20 +32,23 @@ App::new()
 `ctx.request_focus`, `ctx.focus_next`, and `ctx.focus_prev` still work. Capturing overlays are
 the other deliberate exception: they auto-focus and trap by default even under `Manual`.
 
-## Focusable Versus Tab Stop
+## Focus Acquisition Controls
 
-These properties answer different questions:
+These properties answer independent questions:
 
 | Property | Meaning |
 |----------|---------|
 | `focusable` | The widget may own focus and receive focused keyboard input. |
 | `tab_stop` | The widget participates in next/previous traversal. Default: `true`. |
+| `pointer_focus` | Pointer presses may acquire focus from the element or its descendants. Default: `true`. |
 
 A widget with `.focusable(true).tab_stop(false)` is omitted from Tab traversal but remains
 reachable by pointer focus and `ctx.request_focus(key)`. A non-focusable widget cannot become a
-focus target. Incidental controls such as `Accordion`, `DraggableTabBar`, `Hyperlink`, `PanView`,
-and `Tabs` are not focusable by default; opt in when their keyboard behavior belongs in the app's
-focus ring. Input, editor, and primary data surfaces remain focusable by default.
+focus target. An element subtree with `.pointer_focus(false)` keeps hit testing and pointer
+callbacks, Tab traversal, and explicit `request_focus` behavior; only pointer acquisition is
+disabled. Incidental controls such as `Accordion`, `DraggableTabBar`, `Hyperlink`, `PanView`, and
+`Tabs` are not focusable by default; opt in when their keyboard behavior belongs in the app's focus
+ring. Input, editor, and primary data surfaces remain focusable by default.
 
 ### Disabled Widgets
 
@@ -113,7 +116,12 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 ```
 
 `request_focus(key)` may be issued before the keyed widget mounts; the pending key resolves after
-reconciliation. It is also the explicit escape hatch into `FocusScope::Exclude`.
+reconciliation. It is also the explicit escape hatch into `FocusScope::Exclude`. While a capturing
+overlay is active, a request that resolves outside it is retained instead of moving focus through
+the trap. The latest outside request is applied after the last capturing overlay closes. A request
+that resolves inside the overlay takes effect immediately without erasing that post-overlay target.
+While the capture is active, unresolved keys remain unclassified until a later reconciliation
+locates them. Without a capture, normal focus movement replaces an unresolved pending key.
 
 Keying a **composite** widget keys its container, which is usually not focusable. `request_focus`
 on such a key falls back to the container's first focusable descendant — which works until the
@@ -127,9 +135,10 @@ SearchPalette::<T>::new().input_key("command-query")
 ctx.request_focus("command-query");
 ```
 
-`blur()` clears both the current focus and retained focus identity. Under `OnDemand` and `Manual`,
-the app remains unfocused until focus is established again. Under `Auto`, the next reconciliation
-restores the default eligible target, so blur acts as a reset to automatic focus.
+`blur()` clears the current focus, retained focus identity, and any unclassified or deferred focus
+request. Under `OnDemand` and `Manual`, the app remains unfocused until focus is established again.
+Under `Auto`, the next reconciliation restores the default eligible target, so blur acts as a reset
+to automatic focus.
 
 `TestBackend::focus_next()`, `focus_prev()`, `blur()`, and `focused_key()` expose the same behavior
 for headless tests.
@@ -215,6 +224,9 @@ pane, the overlay ring descends through panes so the overlay is never a keyboard
 Root `Modal` and `Popover` overlays capture and trap focus. Their default `.auto_focus(true)`
 focuses the first eligible descendant under every policy, including `Manual`. Dismissal restores
 the prior focus entry; opening over an unfocused `OnDemand` app and dismissing returns to no focus.
+Programmatic focus requests cannot escape the trap: one latest outside destination is deferred
+until dismissal. Nested overlays reclassify it against the remaining parent capture, so a target in
+that parent can receive focus as soon as the child closes.
 
 Set `.auto_focus(false)` to retain keyboard capture and trapping while suspending focus inside the
 overlay. Empty capturing overlays use the same suspension behavior. Local overlays do not provide
@@ -222,21 +234,41 @@ root capture semantics.
 
 Set `Popover::capture_focus(false)` for a passive root-portal overlay that must remain above the
 normal tree without taking focus from its trigger, such as autocomplete suggestions. In this mode,
-`auto_focus` has no effect and keyboard input continues to route to the existing focused widget.
+`auto_focus` has no effect, keyboard input continues to route to the existing focused widget, and
+explicit focus requests are applied normally rather than deferred.
 
 ## Widget Focus Controls
 
 `Accordion`, `Button`, `Checkbox`, `DocumentView`, `DraggableTabBar`, `FileTree`, `HexArea`,
 `Hyperlink`, `Input`, `List`, `ManagedTerminal`, `PanView`, `SearchPalette`, `Slider`, `Table`,
 `Tabs`, `Terminal`, `TextArea`, and `Tree` expose `tab_stop`, `on_focus`, and `on_blur`.
+`ScrollView` exposes `tab_stop` for focusable scrolling surfaces. Every element supports the
+last-in-chain `.pointer_focus(...)` control.
 `DatePicker` and `Radio` also expose them, but use roving focus: only the selected day /
 active option is a tab stop (see [`widgets/input.md`](widgets/input.md)).
 
 ## Focus Events
 
 The focusable widgets listed in [Widget Focus Controls](#widget-focus-controls) expose
-`.on_focus(Callback<()>)` and `.on_blur(Callback<()>)`. Observe all changes with
-`App::on_focus_changed`:
+`.on_focus(Callback<()>)` and `.on_blur(Callback<()>)` for behavior local to one widget.
+
+The root component can turn every application-level transition into a normal message:
+
+```rust
+fn on_focus_changed(&self, change: &FocusChanged) -> Option<Self::Message> {
+    let in_editor = change
+        .new
+        .as_ref()
+        .is_some_and(|entry| entry.is_within_key("editor"));
+    Some(Msg::EditorFocusChanged(in_editor))
+}
+```
+
+Only the root component receives this lifecycle call. The returned message goes through
+`update()` later; nested components do not receive the hook and focus delivery never re-enters
+reconciliation.
+
+Use `App::on_focus_changed` for synchronous diagnostics and observation:
 
 ```rust
 App::new().on_focus_changed(|change: &FocusChanged| {
@@ -245,18 +277,28 @@ App::new().on_focus_changed(|change: &FocusChanged| {
 ```
 
 `FocusChanged` contains optional `old` and `new` `FocusEntry` values. Each entry carries the
-widget's optional `Key` and public `Tag`.
+focused widget's optional `Key`, public `Tag`, and keyed ancestry. `entry.keys()` iterates keys from
+the focused leaf toward the root, including the leaf key when present.
+`entry.is_within_key(key)` checks the whole path without depending on its storage. The old entry
+keeps its captured path even when its node has already unmounted.
 
-The runtime emits `on_blur(old)` before `on_focus(new)`, then invokes the app hook. Link-backed
-widget callbacks enter the normal callback queue in that order and run on the next pump, so the
-synchronous app hook runs before those queued component handlers. Delivery is never re-entrant
-into reconciliation.
-If the old node has already unmounted, its widget callback cannot run, but the app hook still
-receives the retained old entry.
+The runtime treats the same node ID, or the same non-empty leaf key after a remount, as one leaf
+identity:
 
-Notifications are deduplicated when the runtime node is unchanged or both old and new nodes have
-the same non-empty key. An unkeyed focusable widget that is replaced during reconciliation may
-emit a blur/focus pair. Key dynamic focusable widgets when stable callback identity matters.
+- Same leaf identity and the same keyed ancestry emits nothing.
+- Same leaf identity under different keyed ancestry emits the app-level `FocusChanged`, but no
+  widget blur/focus pair.
+- A different leaf identity emits `on_blur(old)`, then `on_focus(new)`, and the app-level change.
+
+This lets a keyed input move between keyed regions without manufacturing a widget blur/focus pair,
+while the root still learns that focus entered a different region. An unkeyed focusable widget
+replaced during reconciliation may emit a blur/focus pair, so key dynamic focusables when stable
+widget callback identity matters.
+
+Delivery order is widget callback emission, the synchronous `App::on_focus_changed` diagnostic
+hook, then root `Component::on_focus_changed`. A message returned by the component hook is appended
+to the normal queue after link-backed widget callback messages. Their handlers call `update()`
+later in queue order.
 
 ## Focus Decoration
 

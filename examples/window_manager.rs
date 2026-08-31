@@ -341,6 +341,7 @@ struct State {
 
 #[derive(Clone, Debug)]
 enum Msg {
+    FrameworkFocusEnteredWindow(WindowId),
     FocusWindow(WindowId, FrameworkFocus),
     HoverWindow(WindowId),
     BeginMove(WindowId, FloatRect, u16, u16, u16, u16, bool),
@@ -502,6 +503,10 @@ impl Component for WindowManagerDemo {
 
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
         match msg {
+            Msg::FrameworkFocusEnteredWindow(id) => {
+                focus_window(&mut ctx.state, id);
+                Update::full()
+            }
             Msg::FocusWindow(id, framework_focus) => {
                 focus_window(&mut ctx.state, id);
                 if framework_focus == FrameworkFocus::Request {
@@ -699,6 +704,15 @@ impl Component for WindowManagerDemo {
         }
     }
 
+    fn on_focus_changed(&self, change: &FocusChanged) -> Option<Self::Message> {
+        change
+            .new
+            .as_ref()?
+            .keys()
+            .find_map(|key| window_id_from_key(key.as_ref()))
+            .map(Msg::FrameworkFocusEnteredWindow)
+    }
+
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
         if key.is(KeyCode::Esc) || key.is(KeyCode::Char('q')) {
             ctx.quit();
@@ -708,8 +722,6 @@ impl Component for WindowManagerDemo {
         if !is_mod_key(key) {
             return KeyUpdate::unhandled(Update::none());
         }
-
-        sync_focus_from_framework(ctx);
 
         if let Some((index, symbol_implies_shift)) = workspace_key(key) {
             if key.mods.shift || symbol_implies_shift {
@@ -1267,6 +1279,10 @@ fn window_key(id: WindowId) -> String {
     format!("wm-window-{id}")
 }
 
+fn window_id_from_key(key: &str) -> Option<WindowId> {
+    key.strip_prefix("wm-window-")?.parse().ok()
+}
+
 fn window_body_focus_key(id: WindowId) -> String {
     format!("wm-window-focus-{id}")
 }
@@ -1303,33 +1319,11 @@ fn request_current_window_focus(ctx: &mut Context<WindowManagerDemo>) {
     }
 }
 
-fn framework_focused_window(
-    ctx: &Context<WindowManagerDemo>,
-    workspace: &Workspace,
-) -> Option<WindowId> {
-    workspace
-        .windows
-        .iter()
-        .filter(|window| !window.closing)
-        .find(|window| ctx.has_focus_within_key(window_key(window.id)))
-        .map(|window| window.id)
-}
-
 fn effective_focused_window(
     ctx: &Context<WindowManagerDemo>,
-    workspace: &Workspace,
+    _workspace: &Workspace,
 ) -> Option<WindowId> {
-    framework_focused_window(ctx, workspace).or(ctx.state.focused_window)
-}
-
-fn sync_focus_from_framework(ctx: &mut Context<WindowManagerDemo>) {
-    let framework_focus = {
-        let workspace = &ctx.state.workspaces[ctx.state.active_workspace];
-        framework_focused_window(ctx, workspace)
-    };
-    if let Some(id) = framework_focus {
-        focus_window(&mut ctx.state, id);
-    }
+    ctx.state.focused_window
 }
 
 fn top_bar(

@@ -48,6 +48,8 @@ macro_rules! focus_refs {
             focused_key: &mut $this.focused_key,
             focused_tag: &mut $this.focused_tag,
             focus_stack: &mut $this.focus_stack,
+            unclassified_focus_request: &mut $this.unclassified_focus_request,
+            deferred_outside_focus: &mut $this.deferred_outside_focus,
         }
     };
 }
@@ -90,6 +92,8 @@ pub struct TestBackend<C: Component> {
     pub(crate) hex_history: HashMap<NodeId, HexHistory>,
     pub(crate) hex_pending_edit: HashMap<NodeId, HexPendingEdit>,
     focus_stack: Vec<FocusStackEntry>,
+    unclassified_focus_request: Option<Key>,
+    deferred_outside_focus: Option<Key>,
     last_notified_focus: Option<crate::app::focus_service::NotifiedFocus>,
     on_focus_changed: Option<crate::app::context::FocusChangedHook>,
     pub(crate) mouse: MouseTrackingState,
@@ -216,6 +220,8 @@ where
             hex_history: HashMap::new(),
             hex_pending_edit: HashMap::new(),
             focus_stack: Vec::new(),
+            unclassified_focus_request: None,
+            deferred_outside_focus: None,
             last_notified_focus: None,
             on_focus_changed,
             mouse: MouseTrackingState::with_pointer_cell(last_mouse),
@@ -344,6 +350,8 @@ where
         self.focused = None;
         self.focused_key = None;
         self.focused_tag = None;
+        self.unclassified_focus_request = None;
+        self.deferred_outside_focus = None;
         self.notify_focus_change();
     }
 
@@ -521,6 +529,8 @@ where
             focused_key,
             focused_tag,
             focus_stack,
+            unclassified_focus_request,
+            deferred_outside_focus,
             keymap,
             keymap_runtime,
             text_area_newline_binding,
@@ -557,6 +567,8 @@ where
             focused_key,
             focused_tag,
             focus_stack,
+            unclassified_focus_request,
+            deferred_outside_focus,
             keymap,
             keymap_runtime,
             key_dispatch_state,
@@ -692,6 +704,9 @@ where
             return false;
         }
         if !self.core.tree.is_valid(id) {
+            return false;
+        }
+        if !self.core.tree.allows_pointer_focus(id) {
             return false;
         }
         if focus::in_excluded_scope(&self.core.tree, id) {
@@ -923,7 +938,11 @@ where
             &mut self.focused_tag,
             self.focus_policy,
         );
+        focus_service::classify_focus_request(&self.core.tree, &mut focus_refs!(self));
         self.ensure_overlay_focus();
+        self.core
+            .focus
+            .update_from_tree(&self.core.tree, self.focused, self.focused_key.as_ref());
         self.notify_focus_change();
         self.refresh_hover_from_last_mouse();
     }
@@ -963,12 +982,14 @@ where
     }
 
     fn notify_focus_change(&mut self) {
-        focus_service::notify_focus_change(
+        if let Some(change) = focus_service::notify_focus_change(
             &self.core.tree,
             self.focused,
             &mut self.last_notified_focus,
             self.on_focus_changed.as_ref(),
-        )
+        ) {
+            self.core.queue_focus_changed_message(&change);
+        }
     }
 
     fn ensure_overlay_focus(&mut self) {
@@ -1030,7 +1051,7 @@ where
         };
 
         if dismissed && overlay.captures_focus {
-            focus_service::restore_focus_from_stack(
+            focus_service::dismiss_capturing_overlay(
                 &self.core.tree,
                 &mut focus_refs!(self),
                 OverlayKey::of(overlay),
@@ -1224,6 +1245,8 @@ struct TestBackendDispatchOps<'a, C: Component> {
     focused_key: &'a mut Option<Key>,
     focused_tag: &'a mut Option<Tag>,
     focus_stack: &'a mut Vec<FocusStackEntry>,
+    unclassified_focus_request: &'a mut Option<Key>,
+    deferred_outside_focus: &'a mut Option<Key>,
     keymap: &'a Keymap,
     keymap_runtime: &'a mut KeymapRuntime,
     key_dispatch_state: &'a mut RuntimeKeyDispatchState,
@@ -1275,8 +1298,10 @@ impl<C: Component> TestBackendDispatchOps<'_, C> {
                 focused_key: &mut *self.focused_key,
                 focused_tag: &mut *self.focused_tag,
                 focus_stack: &mut *self.focus_stack,
+                unclassified_focus_request: &mut *self.unclassified_focus_request,
+                deferred_outside_focus: &mut *self.deferred_outside_focus,
             };
-            focus_service::restore_focus_from_stack(
+            focus_service::dismiss_capturing_overlay(
                 &self.core.tree,
                 &mut refs,
                 OverlayKey::of(overlay),
@@ -1292,6 +1317,8 @@ impl<C: Component> TestBackendDispatchOps<'_, C> {
             focused_key: &mut *self.focused_key,
             focused_tag: &mut *self.focused_tag,
             focus_stack: &mut *self.focus_stack,
+            unclassified_focus_request: &mut *self.unclassified_focus_request,
+            deferred_outside_focus: &mut *self.deferred_outside_focus,
         };
         focus_service::overlay_step(&self.core.tree, &mut refs, FocusDirection::Next)
     }
@@ -1303,6 +1330,8 @@ impl<C: Component> TestBackendDispatchOps<'_, C> {
             focused_key: &mut *self.focused_key,
             focused_tag: &mut *self.focused_tag,
             focus_stack: &mut *self.focus_stack,
+            unclassified_focus_request: &mut *self.unclassified_focus_request,
+            deferred_outside_focus: &mut *self.deferred_outside_focus,
         };
         focus_service::overlay_step(&self.core.tree, &mut refs, FocusDirection::Prev)
     }
@@ -1837,6 +1866,46 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    enum RootFocusMessage {
+        Widget,
+        Root,
+    }
+
+    struct RootFocusMessageHarness;
+
+    impl Component for RootFocusMessageHarness {
+        type Message = RootFocusMessage;
+        type Properties = ();
+        type State = Vec<&'static str>;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            Vec::new()
+        }
+
+        fn on_focus_changed(&self, _change: &crate::FocusChanged) -> Option<Self::Message> {
+            Some(RootFocusMessage::Root)
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state.push(match msg {
+                RootFocusMessage::Widget => "widget",
+                RootFocusMessage::Root => "root",
+            });
+            Update::none()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            Frame::new()
+                .child(
+                    Button::new("Focused")
+                        .on_focus(ctx.link().callback(|_| RootFocusMessage::Widget))
+                        .key("leaf"),
+                )
+                .key("region")
+        }
+    }
+
     struct UnmountFocusedHarness;
 
     impl Component for UnmountFocusedHarness {
@@ -1854,10 +1923,49 @@ mod tests {
 
         fn view(&self, ctx: &Context<Self>) -> Element {
             if ctx.state {
-                Button::new("Transient").key("transient")
+                Frame::new()
+                    .child(Button::new("Transient").key("transient"))
+                    .key("transient-region")
             } else {
                 Text::new("gone").into()
             }
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum MoveFocusedMsg {
+        Move,
+    }
+
+    struct MoveFocusedHarness {
+        log: Rc<RefCell<Vec<&'static str>>>,
+    }
+
+    impl Component for MoveFocusedHarness {
+        type Message = MoveFocusedMsg;
+        type Properties = ();
+        type State = bool;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            false
+        }
+
+        fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state = true;
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let focus_log = self.log.clone();
+            let blur_log = self.log.clone();
+            Frame::new()
+                .child(
+                    Button::new("Leaf")
+                        .on_focus(Callback::new(move |_| focus_log.borrow_mut().push("focus")))
+                        .on_blur(Callback::new(move |_| blur_log.borrow_mut().push("blur")))
+                        .key("leaf"),
+                )
+                .key(if ctx.state { "right" } else { "left" })
         }
     }
 
@@ -2053,6 +2161,43 @@ mod tests {
     }
 
     #[test]
+    fn same_key_moving_between_keyed_parents_emits_only_app_transition() {
+        let widget_log = Rc::new(RefCell::new(Vec::new()));
+        let changes = Rc::new(RefCell::new(Vec::new()));
+        let hook_changes = changes.clone();
+        let app = crate::App::new()
+            .focus_policy(FocusPolicy::Auto)
+            .on_focus_changed(move |change| hook_changes.borrow_mut().push(change.clone()));
+        let mut backend = TestBackend::new_with_app(
+            app,
+            MoveFocusedHarness {
+                log: widget_log.clone(),
+            },
+            (),
+        );
+        widget_log.borrow_mut().clear();
+        changes.borrow_mut().clear();
+
+        backend
+            .dispatch(MoveFocusedMsg::Move)
+            .expect("move should dispatch");
+
+        assert!(widget_log.borrow().is_empty());
+        let changes = changes.borrow();
+        assert_eq!(changes.len(), 1);
+        let old = changes[0].old.as_ref().expect("old focus entry");
+        let new = changes[0].new.as_ref().expect("new focus entry");
+        assert_eq!(
+            old.keys().map(AsRef::<str>::as_ref).collect::<Vec<_>>(),
+            ["leaf", "left"]
+        );
+        assert_eq!(
+            new.keys().map(AsRef::<str>::as_ref).collect::<Vec<_>>(),
+            ["leaf", "right"]
+        );
+    }
+
+    #[test]
     fn manual_modal_auto_focus_can_be_disabled_without_losing_capture() {
         let app = crate::App::new().focus_policy(FocusPolicy::Manual);
         let mut backend =
@@ -2149,6 +2294,463 @@ mod tests {
             }
             stack.into()
         }
+    }
+
+    enum PendingFocusMsg {
+        RequestFuture,
+        MountFuture,
+    }
+
+    struct PendingFocusHarness;
+
+    impl Component for PendingFocusHarness {
+        type Message = PendingFocusMsg;
+        type Properties = ();
+        type State = bool;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            false
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                PendingFocusMsg::RequestFuture => ctx.request_focus("future"),
+                PendingFocusMsg::MountFuture => ctx.state = true,
+            }
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let mut root = VStack::new()
+                .child(Button::new("A").key("a"))
+                .child(Button::new("C").key("c"));
+            if ctx.state {
+                root = root.child(Button::new("Future").key("future"));
+            }
+            root.into()
+        }
+    }
+
+    fn pending_focus_backend() -> TestBackend<PendingFocusHarness> {
+        let mut backend = TestBackend::new(PendingFocusHarness);
+        backend.focus_next();
+        assert_eq!(backend.focused_key(), Some(&Key::from("a")));
+        backend
+    }
+
+    #[test]
+    fn unresolved_request_without_overlay_keeps_on_demand_pending_semantics() {
+        let mut backend = pending_focus_backend();
+        backend
+            .dispatch(PendingFocusMsg::RequestFuture)
+            .expect("future focus request");
+
+        assert_eq!(backend.focused(), None);
+        assert_eq!(backend.focused_key(), Some(&Key::from("future")));
+        assert_eq!(backend.unclassified_focus_request, None);
+
+        backend
+            .dispatch(PendingFocusMsg::MountFuture)
+            .expect("future target should mount");
+        assert_eq!(backend.focused_key(), Some(&Key::from("future")));
+    }
+
+    #[test]
+    fn traversal_cancels_unresolved_request_without_overlay() {
+        let mut backend = pending_focus_backend();
+        backend
+            .dispatch(PendingFocusMsg::RequestFuture)
+            .expect("future focus request");
+
+        backend.focus_next();
+        let traversed = backend.focused_key().cloned();
+        assert_eq!(traversed, Some(Key::from("a")));
+
+        backend
+            .dispatch(PendingFocusMsg::MountFuture)
+            .expect("future target should mount");
+        assert_eq!(backend.focused_key(), traversed.as_ref());
+    }
+
+    #[test]
+    fn pointer_focus_cancels_unresolved_request_without_overlay() {
+        let mut backend = pending_focus_backend();
+        backend
+            .dispatch(PendingFocusMsg::RequestFuture)
+            .expect("future focus request");
+        let target = backend
+            .core
+            .tree
+            .iter()
+            .find(|node| node.key.as_ref() == Some(&Key::from("c")))
+            .map(|node| node.rect)
+            .expect("pointer target should be mounted");
+        for kind in [
+            MouseKind::Down(MouseButton::Left),
+            MouseKind::Up(MouseButton::Left),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x: target.x.max(0) as u16,
+                    y: target.y.max(0) as u16,
+                    kind,
+                    mods: KeyMods::NONE,
+                })
+                .expect("pointer focus should dispatch");
+        }
+        assert_eq!(backend.focused_key(), Some(&Key::from("c")));
+
+        backend
+            .dispatch(PendingFocusMsg::MountFuture)
+            .expect("future target should mount");
+        assert_eq!(backend.focused_key(), Some(&Key::from("c")));
+    }
+
+    enum DeferredFocusMsg {
+        Open,
+        Close,
+        Request(&'static str),
+        MountOutside,
+        RequestLateInside,
+        MountLateInside,
+        RemoveOutsideA,
+        DisableOutsideA,
+        Blur,
+    }
+
+    #[derive(Default)]
+    struct DeferredFocusState {
+        open: bool,
+        show_outside_a: bool,
+        disable_outside_a: bool,
+        show_spawned: bool,
+        show_late_inside: bool,
+    }
+
+    struct DeferredFocusHarness {
+        auto_focus: bool,
+    }
+
+    impl Component for DeferredFocusHarness {
+        type Message = DeferredFocusMsg;
+        type Properties = ();
+        type State = DeferredFocusState;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            DeferredFocusState {
+                show_outside_a: true,
+                ..Default::default()
+            }
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                DeferredFocusMsg::Open => ctx.state.open = true,
+                DeferredFocusMsg::Close => ctx.state.open = false,
+                DeferredFocusMsg::Request(key) => ctx.request_focus(key),
+                DeferredFocusMsg::MountOutside => {
+                    ctx.state.show_spawned = true;
+                    ctx.request_focus("spawned");
+                }
+                DeferredFocusMsg::RequestLateInside => ctx.request_focus("late-inside"),
+                DeferredFocusMsg::MountLateInside => ctx.state.show_late_inside = true,
+                DeferredFocusMsg::RemoveOutsideA => ctx.state.show_outside_a = false,
+                DeferredFocusMsg::DisableOutsideA => ctx.state.disable_outside_a = true,
+                DeferredFocusMsg::Blur => ctx.blur(),
+            }
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let mut root = VStack::new();
+            if ctx.state.show_outside_a {
+                root = root.child(
+                    Button::new("Outside A")
+                        .disabled(ctx.state.disable_outside_a)
+                        .key("outside-a"),
+                );
+            }
+            root = root.child(Button::new("Outside B").key("outside-b"));
+            if ctx.state.show_spawned {
+                root = root.child(Button::new("Spawned").key("spawned"));
+            }
+            if ctx.state.open {
+                let mut contents = VStack::new().child(Button::new("Inside").key("inside"));
+                if ctx.state.show_late_inside {
+                    contents = contents.child(Button::new("Late inside").key("late-inside"));
+                }
+                root = root.child(
+                    Modal::new()
+                        .auto_focus(self.auto_focus)
+                        .on_close(ctx.link().callback(|_| DeferredFocusMsg::Close))
+                        .child(contents)
+                        .key("modal-host"),
+                );
+            }
+            root.into()
+        }
+    }
+
+    fn open_deferred_focus_harness() -> TestBackend<DeferredFocusHarness> {
+        let mut backend = TestBackend::new(DeferredFocusHarness { auto_focus: true });
+        backend.focus_next();
+        assert_eq!(backend.focused_key(), Some(&Key::from("outside-a")));
+        backend
+            .dispatch(DeferredFocusMsg::Open)
+            .expect("modal should open");
+        assert_eq!(backend.focused_key(), Some(&Key::from("inside")));
+        backend
+    }
+
+    fn dismiss_deferred_focus_harness(backend: &mut TestBackend<DeferredFocusHarness>) {
+        assert!(
+            backend
+                .send_key(plain_code(KeyCode::Esc))
+                .expect("Escape should dismiss modal")
+        );
+    }
+
+    #[test]
+    fn outside_focus_request_is_deferred_until_modal_dismissal() {
+        let mut backend = open_deferred_focus_harness();
+
+        backend
+            .dispatch(DeferredFocusMsg::MountOutside)
+            .expect("outside target should mount");
+        assert_eq!(backend.focused_key(), Some(&Key::from("inside")));
+
+        dismiss_deferred_focus_harness(&mut backend);
+        assert_eq!(backend.focused_key(), Some(&Key::from("spawned")));
+    }
+
+    #[test]
+    fn latest_outside_focus_request_wins() {
+        let mut backend = open_deferred_focus_harness();
+
+        backend
+            .dispatch(DeferredFocusMsg::Request("outside-a"))
+            .expect("first outside request");
+        backend
+            .dispatch(DeferredFocusMsg::Request("outside-b"))
+            .expect("second outside request");
+
+        dismiss_deferred_focus_harness(&mut backend);
+        assert_eq!(backend.focused_key(), Some(&Key::from("outside-b")));
+    }
+
+    #[test]
+    fn inside_focus_request_does_not_erase_deferred_destination() {
+        let mut backend = open_deferred_focus_harness();
+
+        backend
+            .dispatch(DeferredFocusMsg::Request("outside-b"))
+            .expect("outside request");
+        backend
+            .dispatch(DeferredFocusMsg::Request("inside"))
+            .expect("inside request");
+        assert_eq!(backend.focused_key(), Some(&Key::from("inside")));
+
+        dismiss_deferred_focus_harness(&mut backend);
+        assert_eq!(backend.focused_key(), Some(&Key::from("outside-b")));
+    }
+
+    #[test]
+    fn keyed_modal_host_request_is_classified_inside_capture() {
+        let mut backend = open_deferred_focus_harness();
+        backend
+            .dispatch(DeferredFocusMsg::Request("modal-host"))
+            .expect("modal host request");
+
+        assert_eq!(backend.focused_key(), Some(&Key::from("modal-host")));
+        assert_eq!(backend.deferred_outside_focus, None);
+    }
+
+    #[test]
+    fn unresolved_request_is_retried_and_classified_inside_modal() {
+        let mut backend = open_deferred_focus_harness();
+
+        backend
+            .dispatch(DeferredFocusMsg::RequestLateInside)
+            .expect("unresolved request");
+        assert_eq!(backend.focused_key(), Some(&Key::from("inside")));
+        assert_eq!(
+            backend.unclassified_focus_request,
+            Some(Key::from("late-inside"))
+        );
+
+        backend
+            .dispatch(DeferredFocusMsg::MountLateInside)
+            .expect("late modal child should mount");
+        assert_eq!(backend.focused_key(), Some(&Key::from("late-inside")));
+
+        dismiss_deferred_focus_harness(&mut backend);
+        assert_eq!(backend.focused_key(), Some(&Key::from("outside-a")));
+    }
+
+    #[test]
+    fn overlay_navigation_preserves_deferred_destination() {
+        let mut backend = open_deferred_focus_harness();
+        backend
+            .dispatch(DeferredFocusMsg::MountLateInside)
+            .expect("second modal field should mount");
+        backend
+            .dispatch(DeferredFocusMsg::Request("outside-b"))
+            .expect("outside request");
+
+        backend.focus_next();
+        assert_eq!(backend.focused_key(), Some(&Key::from("late-inside")));
+
+        dismiss_deferred_focus_harness(&mut backend);
+        assert_eq!(backend.focused_key(), Some(&Key::from("outside-b")));
+    }
+
+    #[test]
+    fn blur_cancels_retained_focus_requests() {
+        let mut backend = open_deferred_focus_harness();
+        backend
+            .dispatch(DeferredFocusMsg::Request("outside-b"))
+            .expect("outside request");
+        backend
+            .dispatch(DeferredFocusMsg::Blur)
+            .expect("blur should dispatch");
+
+        dismiss_deferred_focus_harness(&mut backend);
+        assert_eq!(backend.focused_key(), Some(&Key::from("outside-a")));
+    }
+
+    #[test]
+    fn auto_focus_false_modal_still_defers_outside_request() {
+        let mut backend = TestBackend::new(DeferredFocusHarness { auto_focus: false });
+        backend.focus_next();
+        backend
+            .dispatch(DeferredFocusMsg::Open)
+            .expect("modal should open");
+        assert_eq!(backend.focused(), None);
+
+        backend
+            .dispatch(DeferredFocusMsg::Request("outside-b"))
+            .expect("outside request");
+        assert_eq!(backend.focused(), None);
+
+        dismiss_deferred_focus_harness(&mut backend);
+        assert_eq!(backend.focused_key(), Some(&Key::from("outside-b")));
+    }
+
+    #[test]
+    fn stale_deferred_target_falls_back_to_pre_overlay_focus() {
+        let mut backend = open_deferred_focus_harness();
+        backend
+            .dispatch(DeferredFocusMsg::Request("outside-a"))
+            .expect("outside request");
+        backend
+            .dispatch(DeferredFocusMsg::RemoveOutsideA)
+            .expect("outside target should unmount");
+
+        dismiss_deferred_focus_harness(&mut backend);
+        assert_eq!(backend.focused_key(), Some(&Key::from("outside-b")));
+    }
+
+    #[test]
+    fn disabled_deferred_target_falls_back_to_pre_overlay_focus() {
+        let mut backend = open_deferred_focus_harness();
+        backend
+            .dispatch(DeferredFocusMsg::Request("outside-a"))
+            .expect("outside request");
+        backend
+            .dispatch(DeferredFocusMsg::DisableOutsideA)
+            .expect("outside target should be disabled");
+
+        dismiss_deferred_focus_harness(&mut backend);
+        assert_eq!(backend.focused_key(), Some(&Key::from("outside-b")));
+    }
+
+    enum NestedDeferredFocusMsg {
+        OpenParent,
+        OpenChild,
+        CloseParent,
+        CloseChild,
+        Request(&'static str),
+    }
+
+    struct NestedDeferredFocusHarness;
+
+    impl Component for NestedDeferredFocusHarness {
+        type Message = NestedDeferredFocusMsg;
+        type Properties = ();
+        type State = u8;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            0
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                NestedDeferredFocusMsg::OpenParent => ctx.state = 1,
+                NestedDeferredFocusMsg::OpenChild => ctx.state = 2,
+                NestedDeferredFocusMsg::CloseParent => ctx.state = 0,
+                NestedDeferredFocusMsg::CloseChild => ctx.state = 1,
+                NestedDeferredFocusMsg::Request(key) => ctx.request_focus(key),
+            }
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let mut root = VStack::new().child(Button::new("Outside").key("outside"));
+            if ctx.state >= 1 {
+                root = root.child(
+                    Modal::new()
+                        .on_close(ctx.link().callback(|_| NestedDeferredFocusMsg::CloseParent))
+                        .child(Button::new("Parent").key("parent-inside")),
+                );
+            }
+            if ctx.state >= 2 {
+                root = root.child(
+                    Modal::new()
+                        .on_close(ctx.link().callback(|_| NestedDeferredFocusMsg::CloseChild))
+                        .child(Button::new("Child").key("child-inside")),
+                );
+            }
+            root.into()
+        }
+    }
+
+    fn open_nested_focus_harness() -> TestBackend<NestedDeferredFocusHarness> {
+        let mut backend = TestBackend::new(NestedDeferredFocusHarness);
+        backend.focus_next();
+        backend
+            .dispatch(NestedDeferredFocusMsg::OpenParent)
+            .expect("parent modal should open");
+        backend
+            .dispatch(NestedDeferredFocusMsg::OpenChild)
+            .expect("child modal should open");
+        assert_eq!(backend.focused_key(), Some(&Key::from("child-inside")));
+        backend
+    }
+
+    #[test]
+    fn nested_dismissal_applies_target_that_enters_remaining_capture() {
+        let mut backend = open_nested_focus_harness();
+        backend
+            .dispatch(NestedDeferredFocusMsg::Request("parent-inside"))
+            .expect("parent request");
+        assert_eq!(backend.focused_key(), Some(&Key::from("child-inside")));
+
+        assert!(backend.send_key(plain_code(KeyCode::Esc)).unwrap());
+        assert_eq!(backend.focused_key(), Some(&Key::from("parent-inside")));
+    }
+
+    #[test]
+    fn nested_dismissal_keeps_outside_target_deferred_until_last_capture() {
+        let mut backend = open_nested_focus_harness();
+        backend
+            .dispatch(NestedDeferredFocusMsg::Request("outside"))
+            .expect("outside request");
+
+        assert!(backend.send_key(plain_code(KeyCode::Esc)).unwrap());
+        assert_eq!(backend.focused_key(), Some(&Key::from("parent-inside")));
+
+        assert!(backend.send_key(plain_code(KeyCode::Esc)).unwrap());
+        assert_eq!(backend.focused_key(), Some(&Key::from("outside")));
     }
 
     #[test]
@@ -2255,6 +2857,16 @@ mod tests {
     }
 
     #[test]
+    fn root_focus_message_is_queued_after_widget_callback_message() {
+        let app = crate::App::new().focus_policy(FocusPolicy::Auto);
+        let mut backend = TestBackend::new_with_app(app, RootFocusMessageHarness, ());
+
+        assert!(backend.state().is_empty());
+        backend.pump().expect("focus messages should pump");
+        assert_eq!(backend.state(), &["widget", "root"]);
+    }
+
+    #[test]
     fn app_hook_keeps_old_payload_when_focused_node_disappears() {
         let changes = Rc::new(RefCell::new(Vec::new()));
         let hook_changes = changes.clone();
@@ -2276,6 +2888,12 @@ mod tests {
                 .and_then(|entry| entry.key.as_ref())
                 .map(AsRef::<str>::as_ref),
             Some("transient")
+        );
+        let old = changes[0].old.as_ref().expect("old focus entry");
+        assert!(old.is_within_key("transient-region"));
+        assert_eq!(
+            old.keys().map(AsRef::<str>::as_ref).collect::<Vec<_>>(),
+            ["transient", "transient-region"]
         );
         assert_eq!(changes[0].new, None);
     }
@@ -2325,6 +2943,24 @@ mod tests {
         assert!(backend.send_key(plain_key('x')).expect("type into trigger"));
         assert_eq!(backend.focused_key(), Some(&Key::from("trigger")));
         assert_eq!(backend.state(), "x");
+    }
+
+    #[test]
+    fn non_capturing_popover_does_not_defer_focus_requests() {
+        let app = crate::App::new().focus_policy(FocusPolicy::Auto);
+        let mut backend = TestBackend::new_with_app(
+            app,
+            PopoverAutoFocusHarness {
+                capture_focus: false,
+            },
+            (),
+        );
+
+        backend.apply_focus_request(crate::runtime::FocusRequest::Key(Key::from("content")));
+        backend.render();
+
+        assert_eq!(backend.focused_key(), Some(&Key::from("content")));
+        assert_eq!(backend.deferred_outside_focus, None);
     }
 
     #[test]
@@ -3287,6 +3923,129 @@ mod tests {
             })
             .expect("input click should dispatch");
         assert_eq!(backend.focused_key(), Some(&Key::from("input")));
+    }
+
+    #[derive(Clone, Copy)]
+    enum PointerFocusMsg {
+        Clicked,
+        Request,
+    }
+
+    struct PointerFocusRoot;
+
+    impl Component for PointerFocusRoot {
+        type Message = PointerFocusMsg;
+        type Properties = ();
+        type State = usize;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            0
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            VStack::new()
+                .child(
+                    Frame::new()
+                        .child(
+                            Button::new("child")
+                                .on_click(ctx.link().callback(|_| PointerFocusMsg::Clicked))
+                                .key("child"),
+                        )
+                        .key("region")
+                        .pointer_focus(false),
+                )
+                .child(Button::new("outside").key("outside"))
+                .into()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                PointerFocusMsg::Clicked => {
+                    ctx.state += 1;
+                    Update::none()
+                }
+                PointerFocusMsg::Request => {
+                    ctx.request_focus("child");
+                    Update::full()
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pointer_focus_false_blocks_acquisition_but_not_click_tab_or_request() {
+        let mut backend = TestBackend::new(PointerFocusRoot);
+        let child_rect = backend
+            .core
+            .tree
+            .iter()
+            .find(|node| node.key.as_ref() == Some(&Key::from("child")))
+            .map(|node| node.rect)
+            .expect("child button should be mounted");
+
+        for kind in [
+            MouseKind::Down(MouseButton::Left),
+            MouseKind::Up(MouseButton::Left),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x: child_rect.x.max(0) as u16,
+                    y: child_rect.y.max(0) as u16,
+                    kind,
+                    mods: KeyMods::NONE,
+                })
+                .expect("child click should dispatch");
+        }
+        assert_eq!(backend.focused(), None);
+        assert_eq!(*backend.state(), 1);
+
+        backend.focus_next();
+        assert_eq!(backend.focused_key(), Some(&Key::from("child")));
+        backend.blur();
+
+        backend
+            .dispatch(PointerFocusMsg::Request)
+            .expect("focus request should dispatch");
+        assert_eq!(backend.focused_key(), Some(&Key::from("child")));
+        assert!(backend.core.ctx.has_focus_within_key("region"));
+    }
+
+    struct ScrollViewTabStopRoot;
+
+    impl Component for ScrollViewTabStopRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            VStack::new()
+                .child(
+                    ScrollView::new()
+                        .focusable(true)
+                        .tab_stop(false)
+                        .child(Text::new("body"))
+                        .key("scroll"),
+                )
+                .child(Button::new("button").key("button"))
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.request_focus("scroll");
+            Update::full()
+        }
+    }
+
+    #[test]
+    fn scroll_view_tab_stop_false_skips_traversal_but_allows_request() {
+        let mut backend = TestBackend::new(ScrollViewTabStopRoot);
+        backend.focus_next();
+        assert_eq!(backend.focused_key(), Some(&Key::from("button")));
+
+        backend.dispatch(()).expect("focus request should dispatch");
+        assert_eq!(backend.focused_key(), Some(&Key::from("scroll")));
     }
 
     struct ExcludedScopeRoot;

@@ -1360,6 +1360,13 @@ impl<C: Component> AppRunner<C> {
             &mut self.focus.focused_tag,
             self.focus.policy,
         );
+        crate::app::focus_service::classify_focus_request(&self.core.tree, &mut self.focus.refs());
+        self.ensure_overlay_focus();
+        self.core.focus.update_from_tree(
+            &self.core.tree,
+            self.focus.focused,
+            self.focus.focused_key.as_ref(),
+        );
     }
 
     /// Dispatch one scripted key and settle the frame it produced.
@@ -1801,6 +1808,16 @@ impl<C: Component> AppRunner<C> {
                     &mut self.focus.focused_key,
                     &mut self.focus.focused_tag,
                     self.focus.policy,
+                );
+                crate::app::focus_service::classify_focus_request(
+                    &self.core.tree,
+                    &mut self.focus.refs(),
+                );
+                self.ensure_overlay_focus();
+                self.core.focus.update_from_tree(
+                    &self.core.tree,
+                    self.focus.focused,
+                    self.focus.focused_key.as_ref(),
                 );
             }
 
