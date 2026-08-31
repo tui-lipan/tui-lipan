@@ -199,13 +199,13 @@ pub use crate::process::{
 pub use crate::style::Theme;
 pub use crate::style::{
     Align, BorderEdges, BorderStyle, CaretPalette, CaretShape, CellEffect, Color, ColorTransform,
-    DiffPalette, DocumentPalette, DocumentViewPalette, Edge, EffectAxis, EffectCell, EffectContext,
-    EffectPalette, EffectPrepareContext, FileIconPalette, FloatRect, GitStatusPalette,
-    HexAreaPalette, HostTerminalColors, InputPalette, Justify, LayoutConstraints, Length, Padding,
-    Paint, PreparedCellEffect, Rect, RetroPreset, RichText, RippleRadius, ScrollbarConfig,
-    ScrollbarPalette, ScrollbarVariant, ShrinkPriority, Size, Span, StatusPalette, Style,
-    SurfacePalette, SyntaxPalette, TerminalColor, TerminalPalette, TextAreaPalette, ThemeExtension,
-    ThemePalette, VisualEffect, query_host_colors,
+    DiffPalette, DocumentPalette, DocumentViewPalette, Edge, EffectAxis, EffectCell,
+    EffectChannels, EffectContext, EffectPalette, EffectPrepareContext, FileIconPalette, FloatRect,
+    GitStatusPalette, HexAreaPalette, HostTerminalColors, InputPalette, Justify, LayoutConstraints,
+    Length, Padding, Paint, PreparedCellEffect, Rect, RetroPreset, RichText, RippleRadius,
+    ScrollbarConfig, ScrollbarPalette, ScrollbarVariant, ShrinkPriority, Size, Span, StatusPalette,
+    Style, SurfacePalette, SyntaxPalette, TerminalColor, TerminalPalette, TextAreaPalette,
+    ThemeExtension, ThemePalette, VisualEffect, query_host_colors,
 };
 #[cfg(feature = "theme-reload")]
 pub use crate::style::{ThemeWatcher, load_theme_from_toml};

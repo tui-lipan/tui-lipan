@@ -652,6 +652,98 @@ fn gradient_sample_uses_full_smooth_mirrored_cycle_per_frequency() {
 }
 
 #[test]
+fn foreground_only_gradient_leaves_concrete_background_unchanged() {
+    let backend = TestBackend::new(1, 1);
+    let mut terminal = Terminal::new(backend).expect("terminal");
+    let scope = Rect {
+        x: 0,
+        y: 0,
+        w: 1,
+        h: 1,
+    };
+    let original_fg = RColor::Rgb(240, 240, 240);
+    let original_bg = RColor::Rgb(4, 9, 13);
+    let effect = VisualEffect::Gradient {
+        gradient: crate::utils::gradient::ColorGradient::new(Color::Red, Color::Blue),
+        blend: 0.9,
+        frequency: 1.0,
+        speed: 0.0,
+        axis: crate::style::EffectAxis::Horizontal,
+    }
+    .foreground_only();
+
+    terminal
+        .draw(|f| {
+            let cell = f.buffer_mut().cell_mut((0, 0)).expect("cell");
+            cell.fg = original_fg;
+            cell.bg = original_bg;
+            apply_visual_effects_clipped(f, scope, &[effect], 0, None, Some(original_bg));
+        })
+        .expect("draw");
+
+    let cell = &terminal.backend().buffer()[(0, 0)];
+    assert_ne!(cell.fg, original_fg);
+    assert_eq!(cell.bg, original_bg);
+}
+
+#[test]
+fn channel_restriction_wraps_prepared_custom_effects() {
+    #[derive(Debug)]
+    struct PrepareOnly;
+
+    #[derive(Debug)]
+    struct Prepared;
+
+    impl crate::style::CellEffect for PrepareOnly {
+        fn apply(&self, _cell: &mut crate::style::EffectCell, _ctx: &crate::style::EffectContext) {
+            panic!("prepared effect should use its prepared path");
+        }
+
+        fn prepare(
+            &self,
+            _ctx: &crate::style::EffectPrepareContext,
+        ) -> Option<Box<dyn crate::style::PreparedCellEffect>> {
+            Some(Box::new(Prepared))
+        }
+    }
+
+    impl crate::style::PreparedCellEffect for Prepared {
+        fn apply(&self, cell: &mut crate::style::EffectCell, _ctx: &crate::style::EffectContext) {
+            cell.set_symbol("X");
+            cell.fg = RColor::Red;
+            cell.bg = RColor::Blue;
+        }
+    }
+
+    let original_bg = RColor::Rgb(4, 9, 13);
+    let effect = VisualEffect::Custom(Arc::new(PrepareOnly)).foreground_only();
+    let mut terminal = Terminal::new(TestBackend::new(1, 1)).expect("terminal");
+    terminal
+        .draw(|f| {
+            f.buffer_mut().cell_mut((0, 0)).expect("cell").bg = original_bg;
+            apply_visual_effects_clipped(
+                f,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 1,
+                    h: 1,
+                },
+                &[effect],
+                0,
+                None,
+                Some(original_bg),
+            );
+        })
+        .expect("draw");
+
+    let cell = &terminal.backend().buffer()[(0, 0)];
+    assert_eq!(cell.symbol(), "X");
+    assert_eq!(cell.fg, RColor::Red);
+    assert_eq!(cell.bg, original_bg);
+}
+
+#[test]
 fn clipped_mask_tints_only_lit_cells() {
     let backend = TestBackend::new(3, 1);
     let mut terminal = Terminal::new(backend).expect("terminal");

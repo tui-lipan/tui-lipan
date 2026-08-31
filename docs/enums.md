@@ -570,11 +570,12 @@ Used with `EffectScope::effect(...)`, `EffectScope::effects(...)`, and `MouseReg
 | `VisualEffect::Monochrome { strength }` | Desaturate fg/bg colors toward grayscale |
 | `VisualEffect::PaletteQuantize { palette }` | Quantize fg/bg colors to an effect palette |
 | `VisualEffect::Scanlines { strength, spacing }` | Dim every `spacing` rows |
-| `VisualEffect::RainbowWave { blend, frequency, speed, axis }` | Animated color wave sampled in scope-local coordinates |
-| `VisualEffect::Gradient { gradient, blend, frequency, speed, axis }` | Mirrored `ColorGradient` wash sampled in scope-local coordinates |
+| `VisualEffect::RainbowWave { blend, frequency, speed, axis }` | Animated color wave sampled in scope-local coordinates; supports foreground-only or background-only output through the channel restriction methods |
+| `VisualEffect::Gradient { gradient, blend, frequency, speed, axis }` | Mirrored `ColorGradient` wash sampled in scope-local coordinates; supports foreground-only or background-only output through the channel restriction methods |
 | `VisualEffect::RetroCrt { preset, flicker, scanline_strength }` | Retro CRT preset with palette, scanlines, and optional flicker |
 | `VisualEffect::Ripple { origin, radius, ring_width, tint, strength }` | Aspect-correct radial tint ring from an explicit or aligned `EffectOrigin`; `radius` is a `RippleRadius` |
 | `VisualEffect::Clipped { bounds, mask, inner }` | Restrict another effect to a scope-local rect and/or mask |
+| `VisualEffect::Channels { channels, inner }` | Restrict another effect to `EffectChannels::Both`, `Foreground`, or `Background` |
 | `VisualEffect::ColorTransform { fg, bg }` | Apply relative `ColorTransform`s to fg and/or bg |
 | `VisualEffect::ContrastPolicy(policy)` | Apply readable-foreground contrast adjustment |
 | `VisualEffect::Custom(Arc<dyn CellEffect>)` | User-defined per-cell effect; can optionally prepare frame-constant state with `CellEffect::prepare` |

@@ -4,8 +4,8 @@ use ratatui::style::{Color as RColor, Modifier as RMod};
 
 use crate::app::ContrastPolicy;
 use crate::style::{
-    Color, ColorTransform, EffectAxis, EffectContext, EffectPalette, EffectPrepareContext, Rect,
-    RetroPreset, RippleRadius, Style, VisualEffect,
+    Color, ColorTransform, EffectAxis, EffectChannels, EffectContext, EffectPalette,
+    EffectPrepareContext, Rect, RetroPreset, RippleRadius, Style, VisualEffect,
 };
 use crate::utils::color_contrast::{
     readable_text_color, readable_text_color_apca, readable_text_color_black_or_white,
@@ -787,36 +787,59 @@ fn retro_crt_vignette_dim(x: i16, y: i16, bounds: RRect, strength: f32) -> f32 {
     radial.powf(2.2) * strength
 }
 
-fn strip_clipped(mut e: &VisualEffect) -> &VisualEffect {
-    while let VisualEffect::Clipped { inner, .. } = e {
-        e = inner;
+fn strip_effect_wrappers(mut effect: &VisualEffect) -> &VisualEffect {
+    loop {
+        effect = match effect {
+            VisualEffect::Clipped { inner, .. } | VisualEffect::Channels { inner, .. } => inner,
+            _ => return effect,
+        };
     }
-    e
 }
 
 fn cell_passes_visual_clip(effect: &VisualEffect, scope_rect: Rect, x: i16, y: i16) -> bool {
     let mut e = effect;
-    while let VisualEffect::Clipped {
-        bounds,
-        mask,
-        inner,
-    } = e
-    {
-        let lx = x - scope_rect.x;
-        let ly = y - scope_rect.y;
-        if let Some(b) = bounds
-            && !b.contains(lx, ly)
-        {
-            return false;
+    loop {
+        match e {
+            VisualEffect::Clipped {
+                bounds,
+                mask,
+                inner,
+            } => {
+                let lx = x - scope_rect.x;
+                let ly = y - scope_rect.y;
+                if let Some(b) = bounds
+                    && !b.contains(lx, ly)
+                {
+                    return false;
+                }
+                if let Some(m) = mask
+                    && !m.test_scope_local(lx, ly)
+                {
+                    return false;
+                }
+                e = inner;
+            }
+            VisualEffect::Channels { inner, .. } => e = inner,
+            _ => return true,
         }
-        if let Some(m) = mask
-            && !m.test_scope_local(lx, ly)
-        {
-            return false;
-        }
-        e = inner;
     }
-    true
+}
+
+fn visual_effect_channels(effect: &VisualEffect) -> (bool, bool) {
+    let mut foreground = true;
+    let mut background = true;
+    let mut effect = effect;
+    loop {
+        match effect {
+            VisualEffect::Channels { channels, inner } => {
+                foreground &= matches!(channels, EffectChannels::Both | EffectChannels::Foreground);
+                background &= matches!(channels, EffectChannels::Both | EffectChannels::Background);
+                effect = inner;
+            }
+            VisualEffect::Clipped { inner, .. } => effect = inner,
+            _ => return (foreground, background),
+        }
+    }
 }
 
 fn apply_retro_crt_refresh_wave(
@@ -908,7 +931,7 @@ fn apply_visual_effect_to_cell(
     effect: &VisualEffect,
     params: &VisualEffectCellParams<'_>,
 ) {
-    let effect = strip_clipped(effect);
+    let effect = strip_effect_wrappers(effect);
     let quantize_palette = params.quantize_palette;
     let retro_crt = params.retro_crt;
     let retro_refresh_waves = params.retro_refresh_waves;
@@ -1058,7 +1081,7 @@ fn apply_visual_effect_to_cell(
             };
             effect.apply(cell, &ctx);
         }
-        VisualEffect::Clipped { .. } => {}
+        VisualEffect::Clipped { .. } | VisualEffect::Channels { .. } => {}
     }
 }
 
@@ -1157,7 +1180,20 @@ pub(crate) fn apply_visual_effects_clipped(
     for effect in effects {
         let gate = |x: u16, y: u16| cell_passes_visual_clip(effect, draw_rect, x as i16, y as i16);
 
-        let peeled = strip_clipped(effect);
+        let peeled = strip_effect_wrappers(effect);
+        let (apply_foreground, apply_background) = visual_effect_channels(effect);
+        let original_foregrounds = (!apply_foreground).then(|| {
+            intersection
+                .positions()
+                .map(|position| buf[position].fg)
+                .collect::<Vec<_>>()
+        });
+        let original_backgrounds = (!apply_background).then(|| {
+            intersection
+                .positions()
+                .map(|position| buf[position].bg)
+                .collect::<Vec<_>>()
+        });
         let retro_crt = match peeled {
             VisualEffect::RetroCrt { preset, .. } => Some(retro_crt_params(*preset)),
             _ => None,
@@ -1242,6 +1278,16 @@ pub(crate) fn apply_visual_effects_clipped(
                             &cell_params,
                         ),
                     }
+                }
+            }
+        }
+        for (index, position) in intersection.positions().enumerate() {
+            if let Some(cell) = buf.cell_mut(position) {
+                if let Some(foregrounds) = &original_foregrounds {
+                    cell.fg = foregrounds[index];
+                }
+                if let Some(backgrounds) = &original_backgrounds {
+                    cell.bg = backgrounds[index];
                 }
             }
         }

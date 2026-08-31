@@ -89,6 +89,14 @@ fn apply_effect(
         }
         return apply_effect(fg, bg, x, y, phase, inner, buf_w, buf_h);
     }
+    if let VisualEffect::Channels { channels, inner } = effect {
+        let (effect_fg, effect_bg) = apply_effect(fg, bg, x, y, phase, inner, buf_w, buf_h);
+        return match channels {
+            EffectChannels::Both => (effect_fg, effect_bg),
+            EffectChannels::Foreground => (effect_fg, bg),
+            EffectChannels::Background => (fg, effect_bg),
+        };
+    }
 
     match effect {
         VisualEffect::Gradient { .. } => {
@@ -166,8 +174,9 @@ fn apply_effect(
         | VisualEffect::RetroCrt { .. }
         | VisualEffect::PaletteQuantize { .. }
         | VisualEffect::Custom(_)
-        | VisualEffect::Clipped { .. } => {
-            // Not materialised in this example (Clipped handled above).
+        | VisualEffect::Clipped { .. }
+        | VisualEffect::Channels { .. } => {
+            // Not materialised in this example (wrappers handled above).
             (fg, bg)
         }
     }
@@ -575,15 +584,18 @@ fn schedule_preview_tick(ctx: &Context<ExporterApp>) -> Update {
 fn mode_effects(tab: usize, _phase: u64) -> Vec<VisualEffect> {
     match tab {
         TAB_NEON => vec![
-            VisualEffect::Monochrome { strength: 0.35 },
+            VisualEffect::Monochrome { strength: 0.35 }.foreground_only(),
             VisualEffect::RainbowWave {
                 blend: 0.82,
                 frequency: 1.2,
                 speed: 1.05,
                 axis: EffectAxis::Diagonal,
-            },
+            }
+            .foreground_only(),
         ],
-        TAB_CRT_AMBER => vec![VisualEffect::tint(Color::Rgb(255, 176, 0), 0.35)],
+        TAB_CRT_AMBER => {
+            vec![VisualEffect::tint(Color::Rgb(255, 176, 0), 0.35).foreground_only()]
+        }
         _ => Vec::new(),
     }
 }
@@ -982,15 +994,7 @@ mod tests {
     fn neon_mode_exports_with_colors() {
         let buffer = build_composed_buffer(BannerPlacement::Off);
         let mut effects = brand_gradient_scope_effects(TAB_NEON);
-        effects.extend_from_slice(&[
-            VisualEffect::Monochrome { strength: 0.35 },
-            VisualEffect::RainbowWave {
-                blend: 0.82,
-                frequency: 1.2,
-                speed: 1.05,
-                axis: EffectAxis::Diagonal,
-            },
-        ]);
+        effects.extend(mode_effects(TAB_NEON, 0));
         let materialized = materialize_effects(&buffer, &effects, 0);
         let json = export_buffer_to_json(&materialized, "Neon", 12);
         let seq = FrameSequence::from_json(&json).expect("parse should succeed");
@@ -1000,6 +1004,14 @@ mod tests {
         assert!(
             has_fg,
             "expected some foreground colours after materialisation"
+        );
+        assert!(
+            buffer
+                .cells()
+                .iter()
+                .zip(materialized.cells())
+                .all(|(before, after)| before.style.bg == after.style.bg),
+            "foreground-only mode effects must preserve exported backgrounds"
         );
     }
 
