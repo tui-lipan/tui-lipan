@@ -86,6 +86,9 @@ export default defineConfig({
   vite: { plugins: [repoLinksPlugin(srcDir)] },
 
   themeConfig: {
+    // The app mark, same file the browser tab uses - it is the rounded variant,
+    // so it needs no styling beyond a size.
+    logo: "/favicon.svg",
     lipanVersion: LIPAN_VERSION,
     outline: [2, 3],
     nav: [

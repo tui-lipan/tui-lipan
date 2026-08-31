@@ -368,8 +368,15 @@ body {
     letter-spacing: -0.02em;
     border-bottom: none !important;
 }
-/* Site name color + small bordered version chip after it (landing .version) */
-.VPNavBarTitle .title .VPImage,
+/* Site name color + small bordered version chip after it (landing .version).
+   The mark is shown, sized to the 48px bar rather than VitePress's default
+   24px; its rounded plate is in the SVG, so it needs no radius here. Mirrors
+   rozi.tui-lipan.dev. */
+.VPNavBarTitle .title .VPImage {
+    width: 22px !important;
+    height: 22px !important;
+    margin-right: -2px;
+}
 .VPNavBarTitle .title svg {
     display: none !important;
 }
