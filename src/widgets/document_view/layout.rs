@@ -83,15 +83,19 @@ pub(crate) fn resolved_gutter_base_width(
     }
 }
 
+/// Columns a *standalone* vertical scrollbar takes out of the content area.
+///
+/// `integrated_track` is true when an `Integrated` scrollbar has chrome to draw
+/// on: the DocumentView's own border, or the first ancestor `Frame` that
+/// exposes an edge for it. Drawing over existing chrome costs no column.
 pub(crate) fn standalone_scrollbar_cols(
     enabled: bool,
     variant: ScrollbarVariant,
     gap: u16,
-    border: bool,
+    integrated_track: bool,
 ) -> u16 {
-    let integrated_over_border =
-        enabled && matches!(variant, ScrollbarVariant::Integrated) && border;
-    if enabled && !integrated_over_border {
+    let integrated = enabled && matches!(variant, ScrollbarVariant::Integrated) && integrated_track;
+    if enabled && !integrated {
         1u16.saturating_add(gap)
     } else {
         0
@@ -108,12 +112,14 @@ pub(crate) fn content_width_from_inner(
         .saturating_sub(scrollbar_cols)
 }
 
+/// Whether the horizontal scrollbar is drawn *on* chrome instead of taking a
+/// content row. See [`standalone_scrollbar_cols`] for `integrated_track`.
 pub(crate) fn h_scrollbar_over_border(
     h_scrollbar: bool,
     h_scrollbar_variant: ScrollbarVariant,
-    border: bool,
+    integrated_track: bool,
 ) -> bool {
-    h_scrollbar && matches!(h_scrollbar_variant, ScrollbarVariant::Integrated) && border
+    h_scrollbar && matches!(h_scrollbar_variant, ScrollbarVariant::Integrated) && integrated_track
 }
 
 pub(crate) fn h_scrollbar_visible(
@@ -161,6 +167,10 @@ pub fn measure_document_view(dv: &DocumentView) -> (u16, u16) {
         dv.gutter_col_width,
     );
     let border_w: u16 = if dv.border { 2 } else { 0 };
+    // Measure runs without the node tree, so an ancestor `Frame` that could host
+    // an integrated scrollbar is not visible here. Assume the standalone column
+    // is needed: over-measuring by a column only makes an `Auto` DocumentView
+    // slightly roomier, while under-measuring would clip content.
     let scrollbar_cols = standalone_scrollbar_cols(
         dv.scrollbar,
         dv.scrollbar_config.variant,
@@ -227,6 +237,10 @@ pub fn measure_document_view_constrained(dv: &DocumentView, max_w: Option<u16>) 
 
     // Determine the effective outer width (mirrors reconcile logic).
     let border_w: u16 = if dv.border { 2 } else { 0 };
+    // Measure runs without the node tree, so an ancestor `Frame` that could host
+    // an integrated scrollbar is not visible here. Assume the standalone column
+    // is needed: over-measuring by a column only makes an `Auto` DocumentView
+    // slightly roomier, while under-measuring would clip content.
     let scrollbar_cols = standalone_scrollbar_cols(
         dv.scrollbar,
         dv.scrollbar_config.variant,

@@ -50,25 +50,23 @@ pub(crate) fn scroll_view_clip_rect(
                 }
             }
 
-            let parent_integrated_v = node.parent.is_some_and(|pid| {
-                matches!(
-                    &tree.node(pid).kind,
-                    NodeKind::Frame(props)
-                        if (props.has_border()
-                            && (props.border_edges.has_left() || props.border_edges.has_right()))
-                            || props.decorations.iter().any(|d| {
-                                d.placement == DecorationPlacement::Border
-                                    && matches!(d.edge, Edge::Left | Edge::Right)
-                            })
-                )
-            });
+            // Mirror `render_scroll_view`: an integrated scrollbar draws on the
+            // ScrollView's own border, or - when it is borderless - on the first
+            // *ancestor* `Frame` that exposes an edge. Checking only the direct
+            // parent clipped a column off nested ScrollViews that render their
+            // scrollbar on a grandparent frame.
             let use_integrated = scroll_view.scrollbar
                 && matches!(scroll_view.scrollbar_variant, ScrollbarVariant::Integrated)
-                && (scroll_view.props.border || parent_integrated_v);
+                && (scroll_view.props.border
+                    || tree
+                        .ancestor_frame_integrated_vscrollbar_x(node.parent)
+                        .is_some());
             let use_standalone = scroll_view.scrollbar && !use_integrated;
 
             if use_standalone && inner.w > 0 {
-                inner.w = inner.w.saturating_sub(1);
+                inner.w = inner
+                    .w
+                    .saturating_sub(1u16.saturating_add(scroll_view.scrollbar_gap));
             }
 
             clip = Some(match clip {

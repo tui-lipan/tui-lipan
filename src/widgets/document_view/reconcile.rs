@@ -308,6 +308,17 @@ pub fn reconcile_document_view(
 
     // Build the new node.
     let mut dv_node = DocumentViewNode::from(dv.clone());
+    // A borderless DocumentView can still draw an integrated scrollbar on the
+    // first ancestor `Frame` that exposes an edge (same rule the renderer uses
+    // via `ancestor_frame_integrated_tracks`). Resolve it here so the content
+    // width/height below stop reserving a standalone track that is never drawn.
+    let parent_id = tree.node(id).parent;
+    dv_node.parent_integrated_v = tree
+        .ancestor_frame_integrated_vscrollbar_x(parent_id)
+        .is_some();
+    dv_node.parent_integrated_h = tree
+        .ancestor_frame_integrated_hscrollbar_y(parent_id)
+        .is_some();
     dv_node.content_hash = value_hash;
     dv_node.format_cache = old_format_cache;
     dv_node.visual_cache = old_visual_cache;
@@ -335,7 +346,7 @@ pub fn reconcile_document_view(
         dv_node.scrollbar,
         dv_node.scrollbar_variant,
         dv_node.scrollbar_gap,
-        dv_node.border,
+        dv_node.border || dv_node.parent_integrated_v,
     );
 
     // ── Visual cache lookup ─────────────────────────────────────────────

@@ -278,6 +278,12 @@ pub(crate) struct DocumentViewNode {
     pub h_scrollbar: bool,
     pub h_scrollbar_variant: ScrollbarVariant,
     pub h_scrollbar_thumb: Option<char>,
+    /// First ancestor `Frame` exposes a left/right edge an integrated vertical
+    /// scrollbar can be drawn on. Resolved during reconcile (the node tree is
+    /// not reachable from `From<DocumentView>` or the measure pass).
+    pub parent_integrated_v: bool,
+    /// As [`Self::parent_integrated_v`], for a top/bottom edge.
+    pub parent_integrated_h: bool,
     #[cfg(feature = "diff-view")]
     pub pin_scrollbar_focus: bool,
     pub h_scroll_offset: usize,
@@ -517,7 +523,7 @@ impl DocumentViewNode {
 
         let v_scrollbar_over_border = self.scrollbar
             && matches!(self.scrollbar_variant, ScrollbarVariant::Integrated)
-            && self.border;
+            && (self.border || self.parent_integrated_v);
         let scrollbar_cols: u16 = if self.scrollbar && !v_scrollbar_over_border {
             1u16.saturating_add(self.scrollbar_gap)
         } else {
@@ -531,7 +537,7 @@ impl DocumentViewNode {
 
         let h_scrollbar_over_border = self.h_scrollbar
             && matches!(self.h_scrollbar_variant, ScrollbarVariant::Integrated)
-            && self.border;
+            && (self.border || self.parent_integrated_h);
         let h_scrollbar_visible = self.h_scrollbar
             && !self.wrap
             && (self.max_line_width as usize) > content_width as usize;
@@ -601,6 +607,9 @@ impl From<DocumentView> for DocumentViewNode {
             h_scrollbar: dv.h_scrollbar,
             h_scrollbar_variant: dv.h_scrollbar_variant,
             h_scrollbar_thumb: dv.h_scrollbar_thumb,
+            // Needs the node tree; filled in by `reconcile_document_view`.
+            parent_integrated_v: false,
+            parent_integrated_h: false,
             #[cfg(feature = "diff-view")]
             pin_scrollbar_focus: dv.pin_scrollbar_focus_style,
             h_scroll_offset: 0,

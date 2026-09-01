@@ -15,6 +15,15 @@ While the crate is on `0.x.y`:
 
 - Built-in terminal path hints recognize Windows drive-relative, rooted, UNC, verbatim, and quoted
   paths, including paths written with backslash separators.
+- A borderless `DocumentView` with `ScrollbarVariant::Integrated` now draws its vertical and
+  horizontal scrollbars on the first ancestor `Frame` that exposes an edge, matching `List`,
+  `Table`, `Terminal`, `TextArea`, and `ScrollView`. It previously fell back to a standalone
+  scrollbar carved out of its own content area.
+- A borderless `ScrollView` with `ScrollbarVariant::Integrated` no longer reserves a standalone
+  scrollbar column when it renders on an ancestor `Frame` edge. Layout, clipping, and rendering
+  now agree, so the dead gutter column between the content and the frame border is gone. Clipping
+  also follows the whole ancestor chain instead of the direct parent only, which fixes nested
+  scroll views losing their rightmost content column.
 
 ## [0.4.0] - 2026-08-31
 

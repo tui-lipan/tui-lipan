@@ -22,8 +22,9 @@ use crate::style::{
 use crate::utils::color_contrast::contrast_ratio;
 use crate::widgets::{
     Animated, BorderLabels, BorderMergeMode, Button, Canvas, DecorationGlyph, DecorationPlacement,
-    Divider, EdgeDecoration, EffectScope, Frame, FrameLabel, HStack, List, ListItem, Modal, Spacer,
-    Splitter, SplitterHandleMode, TabVariant, Text, Toast, VStack, ZStack,
+    Divider, DocumentView, EdgeDecoration, EffectScope, Frame, FrameLabel, HStack, List, ListItem,
+    Modal, ScrollView, Spacer, Splitter, SplitterHandleMode, TabVariant, Text, Toast, VStack,
+    ZStack,
 };
 
 struct HeaderFrameComponent;
@@ -5242,4 +5243,120 @@ fn translucent_toast_surface_is_uniform_behind_its_text() {
         sampled.iter().all(|(_, _, bg)| *bg == first),
         "the surface must be one colour across the toast, got {sampled:?}",
     );
+}
+
+struct FrameIntegratedScrollViewComponent;
+
+impl Component for FrameIntegratedScrollViewComponent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        Frame::new()
+            .child(
+                ScrollView::new()
+                    .scrollbar(true)
+                    .scrollbar_config(ScrollbarConfig::new().variant(ScrollbarVariant::Integrated))
+                    .children((0..10).map(|_| Text::new(FRAME_INTEGRATED_LINE).into())),
+            )
+            .into()
+    }
+}
+
+struct FrameIntegratedDocumentViewComponent;
+
+impl Component for FrameIntegratedDocumentViewComponent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        let text = [FRAME_INTEGRATED_LINE; 10].join("\n");
+        Frame::new()
+            .child(
+                DocumentView::new(text)
+                    .border(false)
+                    .wrap(false)
+                    .scrollbar(true)
+                    .scrollbar_config(ScrollbarConfig::new().variant(ScrollbarVariant::Integrated)),
+            )
+            .into()
+    }
+}
+
+/// Exactly as wide as the frame's inner area in [`FRAME_INTEGRATED_VIEWPORT`], so
+/// the last character only survives when no standalone scrollbar column is
+/// carved out of the content.
+const FRAME_INTEGRATED_LINE: &str = "abcdefghijklmnopqr";
+
+const FRAME_INTEGRATED_VIEWPORT: Rect = Rect {
+    x: 0,
+    y: 0,
+    w: 20,
+    h: 6,
+};
+
+fn frame_integrated_rows<C>(component: C) -> Vec<String>
+where
+    C: Component,
+    C::Properties: Default,
+{
+    let mut backend = crate::test_backend::TestBackend::new(component);
+    backend.set_viewport(FRAME_INTEGRATED_VIEWPORT);
+    backend.render();
+    backend.capture_frame().to_fixed_grid_lines()
+}
+
+/// The frame's right border column carries the integrated thumb for at least one
+/// of the rows between the corners.
+fn assert_thumb_on_frame_border(rows: &[String], widget: &str) {
+    let border_col: String = rows[1..rows.len() - 1]
+        .iter()
+        .filter_map(|row| row.chars().nth(19))
+        .collect();
+    assert!(
+        border_col.contains('█'),
+        "{widget} should draw its integrated thumb on the ancestor frame border, got {border_col:?}"
+    );
+}
+
+#[test]
+fn scroll_view_integrated_on_ancestor_frame_keeps_full_content_width() {
+    let rows = frame_integrated_rows(FrameIntegratedScrollViewComponent);
+
+    assert_eq!(
+        rows[1].chars().nth(18),
+        Some('r'),
+        "ScrollView rendering its scrollbar on the frame border must not also \
+         reserve a standalone column, got {:?}",
+        rows[1]
+    );
+    assert_thumb_on_frame_border(&rows, "ScrollView");
+}
+
+#[test]
+fn document_view_integrated_scrollbar_uses_ancestor_frame_border() {
+    let rows = frame_integrated_rows(FrameIntegratedDocumentViewComponent);
+
+    assert_eq!(
+        rows[1].chars().nth(18),
+        Some('r'),
+        "DocumentView drawing on the frame border must not reserve a standalone \
+         column, got {:?}",
+        rows[1]
+    );
+    assert_thumb_on_frame_border(&rows, "DocumentView");
 }
