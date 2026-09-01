@@ -17,7 +17,7 @@ pub const HOME_ROW_HINT_KEYS: &str = "asdfghjkl;";
 pub enum HintKind {
     /// A URL whose scheme is allowed by [`crate::utils::open_url()`].
     Url,
-    /// A relative, home-relative, or absolute path.
+    /// A relative, home-relative, or absolute path using Unix or Windows separators.
     Path,
     /// A hexadecimal Git object abbreviation or full SHA.
     GitSha,
@@ -395,54 +395,124 @@ fn append_url_ranges(line: &str, out: &mut Vec<Range<usize>>) {
     out.extend(url_ranges(line));
 }
 
+fn is_path_separator(byte: u8) -> bool {
+    matches!(byte, b'/' | b'\\')
+}
+
+fn is_path_boundary(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, '(' | '[' | '{' | '"' | '\'')
+}
+
+fn path_token_start(line: &str, separator: usize) -> usize {
+    line[..separator]
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| is_path_boundary(*ch))
+        .map_or(0, |(index, ch)| index + ch.len_utf8())
+}
+
+fn has_drive_prefix(bytes: &[u8], start: usize) -> bool {
+    bytes.get(start).is_some_and(u8::is_ascii_alphabetic) && bytes.get(start + 1) == Some(&b':')
+}
+
+fn path_start(line: &str, separator: usize) -> Option<usize> {
+    let bytes = line.as_bytes();
+    if separator > 0 && bytes[separator - 1] == bytes[separator] {
+        return None;
+    }
+    if separator >= 2 && bytes[separator - 2..separator] == *b".." {
+        return Some(separator - 2);
+    }
+    if separator >= 1 && matches!(bytes[separator - 1], b'.' | b'~') {
+        return Some(separator - 1);
+    }
+    let token_start = path_token_start(line, separator);
+    if has_drive_prefix(bytes, token_start) {
+        return Some(token_start);
+    }
+    Some(separator)
+}
+
+fn path_quote(line: &str, start: usize) -> Option<char> {
+    line[..start]
+        .chars()
+        .next_back()
+        .filter(|ch| matches!(ch, '"' | '\''))
+}
+
+fn is_drive_colon(bytes: &[u8], index: usize) -> bool {
+    index > 0
+        && bytes[index - 1].is_ascii_alphabetic()
+        && bytes.get(index + 1).copied().is_some_and(is_path_separator)
+}
+
+fn unquoted_path_end(line: &str, separator: usize) -> usize {
+    line[separator..]
+        .char_indices()
+        .find(|(offset, ch)| {
+            ch.is_whitespace()
+                || (*ch == ':' && !is_drive_colon(line.as_bytes(), separator + offset))
+        })
+        .map_or(line.len(), |(offset, _)| separator + offset)
+}
+
+fn path_end(line: &str, separator: usize, quote: Option<char>) -> usize {
+    quote
+        .and_then(|quote| line[separator..].find(quote))
+        .map_or_else(
+            || unquoted_path_end(line, separator),
+            |offset| separator + offset,
+        )
+}
+
+fn extend_line_number(line: &str, end: usize) -> usize {
+    if line.as_bytes().get(end) != Some(&b':') {
+        return end;
+    }
+    let number_start = end + 1;
+    let number_end = line[number_start..]
+        .char_indices()
+        .find(|(_, ch)| !ch.is_ascii_digit())
+        .map_or(line.len(), |(offset, _)| number_start + offset);
+    if number_end > number_start {
+        number_end
+    } else {
+        end
+    }
+}
+
+fn has_path_body(bytes: &[u8], start: usize, separator: usize, end: usize) -> bool {
+    end > separator + 1
+        || (has_drive_prefix(bytes, start) && separator == start + 2 && end == separator + 1)
+}
+
 fn path_ranges(line: &str) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
     let mut cursor = 0usize;
-    while let Some(relative) = line[cursor..].find('/') {
-        let slash = cursor + relative;
-        let start = if slash > 0 && line.as_bytes()[slash - 1] == b'/' {
-            cursor = slash + 1;
+    while let Some(relative) = line[cursor..].bytes().position(is_path_separator) {
+        let separator = cursor + relative;
+        let Some(start) = path_start(line, separator) else {
+            cursor = separator + 1;
             continue;
-        } else if slash >= 2
-            && line.as_bytes()[slash - 2] == b'.'
-            && line.as_bytes()[slash - 1] == b'.'
-        {
-            slash - 2
-        } else if slash >= 1 && matches!(line.as_bytes()[slash - 1], b'.' | b'~') {
-            slash - 1
-        } else {
-            slash
         };
         if start > 0
             && !line[..start]
                 .chars()
                 .next_back()
-                .is_some_and(|ch| ch.is_whitespace() || matches!(ch, '(' | '[' | '{' | '"'))
+                .is_some_and(is_path_boundary)
         {
-            cursor = slash + 1;
+            cursor = separator + 1;
             continue;
         }
-        let end = line[slash..]
-            .char_indices()
-            .find(|(_, ch)| ch.is_whitespace() || *ch == ':')
-            .map(|(offset, _)| slash + offset)
-            .unwrap_or(line.len());
-        let mut end = end;
-        if end < line.len() && line.as_bytes()[end] == b':' {
-            let port_start = end + 1;
-            let port_end = line[port_start..]
-                .char_indices()
-                .find(|(_, ch)| !ch.is_ascii_digit())
-                .map(|(offset, _)| port_start + offset)
-                .unwrap_or(line.len());
-            if port_end > port_start {
-                end = port_end;
-            }
+        let quote = path_quote(line, start);
+        let mut end = path_end(line, separator, quote);
+        if quote.is_none() {
+            end = extend_line_number(line, end);
         }
-        if end > slash + 1 && end > start {
+        if has_path_body(line.as_bytes(), start, separator, end) {
             ranges.push(start..end);
         }
-        cursor = end.max(slash + 1);
+        cursor = end.max(separator + 1);
     }
     ranges
 }
@@ -686,6 +756,38 @@ mod tests {
     fn path_scanning_never_slices_inside_multibyte_prefixes() {
         let found = HintScan::new().scan("你/relative ./safe/path");
         assert!(found.iter().any(|hint| hint.text == "./safe/path"));
+    }
+
+    #[test]
+    fn paths_accept_windows_forms() {
+        let found = HintScan::new().scan(
+            r#"C:\Users\me\src\main.rs:12 D:src\lib.rs E:/src/main.rs C:\ ..\tests\hints.rs \\server\share\logs\run.log \\?\C:\ProgramData\Rozi\config.toml "C:\Program Files\Rozi\rozi.exe""#,
+        );
+        assert_eq!(
+            found
+                .iter()
+                .map(|matched| (matched.text.as_str(), matched.kind))
+                .collect::<Vec<_>>(),
+            vec![
+                (r"C:\Users\me\src\main.rs:12", HintKind::Path),
+                (r"D:src\lib.rs", HintKind::Path),
+                ("E:/src/main.rs", HintKind::Path),
+                (r"C:\", HintKind::Path),
+                (r"..\tests\hints.rs", HintKind::Path),
+                (r"\\server\share\logs\run.log", HintKind::Path),
+                (r"\\?\C:\ProgramData\Rozi\config.toml", HintKind::Path),
+                (r"C:\Program Files\Rozi\rozi.exe", HintKind::Path),
+            ]
+        );
+    }
+
+    #[test]
+    fn windows_path_scanning_does_not_promote_embedded_separators() {
+        assert!(
+            HintScan::new()
+                .scan(r"word\wrap escaped\n xC:\embedded")
+                .is_empty()
+        );
     }
 
     #[cfg(feature = "hints-regex")]

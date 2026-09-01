@@ -500,6 +500,9 @@ let snapshot = screen.render_snapshot();
 let hints = HintScan::new().scan_wrapped(&snapshot.text, &snapshot.wrapped_rows);
 ```
 
+The built-in path scanner accepts slash and backslash separators. Windows drive-relative, rooted,
+UNC, and verbatim paths are recognized, and quoting allows a path to contain spaces.
+
 A hint crossing a wrap is one `HintMatch` carrying one `HintSpan` per row it covers, in row order;
 `row()` / `start_col()` and `end_row()` / `end_col()` read the first and last of them. `HintScan::scan`
 still treats every row as a line of its own and always returns single-span matches.

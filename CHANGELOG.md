@@ -11,6 +11,11 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- Built-in terminal path hints recognize Windows drive-relative, rooted, UNC, verbatim, and quoted
+  paths, including paths written with backslash separators.
+
 ## [0.4.0] - 2026-08-31
 
 ### Added
