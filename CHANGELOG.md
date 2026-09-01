@@ -24,6 +24,10 @@ While the crate is on `0.x.y`:
   now agree, so the dead gutter column between the content and the frame border is gone. Clipping
   also follows the whole ancestor chain instead of the direct parent only, which fixes nested
   scroll views losing their rightmost content column.
+- `ScrollView` scrollbar hit zones and drag geometry apply the same integrated-vs-standalone rule
+  as the renderer. A standalone vertical scrollbar had its column deducted twice from the
+  horizontal hit zone, and `Integrated` with no border and no ancestor frame edge - which renders
+  as standalone - had it deducted from neither the hit zone nor the drag track.
 
 ## [0.4.0] - 2026-08-31
 

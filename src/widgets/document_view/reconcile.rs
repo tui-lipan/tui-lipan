@@ -122,8 +122,8 @@ use crate::widgets::scroll::SmoothScrollState;
 use super::DocumentView;
 use super::format::PlainFormatter;
 use super::layout::{
-    h_scrollbar_visible, measure_document_view, measure_document_view_constrained,
-    standalone_scrollbar_cols,
+    ParentIntegrated, h_scrollbar_visible, measure_document_view_constrained_with,
+    measure_document_view_with, standalone_scrollbar_cols,
 };
 use super::node::DocumentViewNode;
 #[cfg(feature = "diff-view")]
@@ -179,7 +179,7 @@ fn record_split_wrap_pass1_cache_hit(dv_node: &DocumentViewNode) {
 pub fn reconcile_document_view(
     tree: &mut NodeTree,
     id: NodeId,
-    _parent: Option<NodeId>,
+    parent: Option<NodeId>,
     dv: &DocumentView,
     rect: crate::style::Rect,
     constraints: &LayoutConstraints,
@@ -187,10 +187,23 @@ pub fn reconcile_document_view(
     #[cfg(feature = "profiling-tracing")]
     let _span = trace_span!("document_view.reconcile").entered();
 
+    // A borderless DocumentView can draw an integrated scrollbar on the first
+    // ancestor `Frame` that exposes an edge - the same rule the renderer applies
+    // via `ancestor_frame_integrated_tracks`. Unlike the element measure pass we
+    // have the tree here, so measurement and layout can both account for it.
+    let parent_integrated = ParentIntegrated {
+        v: tree
+            .ancestor_frame_integrated_vscrollbar_x(parent)
+            .is_some(),
+        h: tree
+            .ancestor_frame_integrated_hscrollbar_y(parent)
+            .is_some(),
+    };
+
     let (nat_w, nat_h) = if matches!(dv.resolved_height(), crate::style::Length::Auto) {
-        measure_document_view_constrained(dv, Some(rect.w))
+        measure_document_view_constrained_with(dv, Some(rect.w), parent_integrated)
     } else {
-        measure_document_view(dv)
+        measure_document_view_with(dv, parent_integrated)
     };
     let available_h = rect.h;
     let mut rect = resolve_rect_with_auto(
@@ -308,17 +321,8 @@ pub fn reconcile_document_view(
 
     // Build the new node.
     let mut dv_node = DocumentViewNode::from(dv.clone());
-    // A borderless DocumentView can still draw an integrated scrollbar on the
-    // first ancestor `Frame` that exposes an edge (same rule the renderer uses
-    // via `ancestor_frame_integrated_tracks`). Resolve it here so the content
-    // width/height below stop reserving a standalone track that is never drawn.
-    let parent_id = tree.node(id).parent;
-    dv_node.parent_integrated_v = tree
-        .ancestor_frame_integrated_vscrollbar_x(parent_id)
-        .is_some();
-    dv_node.parent_integrated_h = tree
-        .ancestor_frame_integrated_hscrollbar_y(parent_id)
-        .is_some();
+    dv_node.parent_integrated_v = parent_integrated.v;
+    dv_node.parent_integrated_h = parent_integrated.h;
     dv_node.content_hash = value_hash;
     dv_node.format_cache = old_format_cache;
     dv_node.visual_cache = old_visual_cache;

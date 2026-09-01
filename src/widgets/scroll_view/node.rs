@@ -90,6 +90,10 @@ pub struct ScrollViewNode {
     pub scrollbar: bool,
     pub scrollbar_variant: ScrollbarVariant,
     pub scrollbar_gap: u16,
+    /// First ancestor `Frame` exposes a left/right edge an integrated vertical
+    /// scrollbar can be drawn on. Resolved during reconcile so consumers without
+    /// the node tree (scrollbar drag metrics) apply the renderer's rule.
+    pub parent_integrated_v: bool,
     pub scrollbar_thumb: Option<char>,
     pub scrollbar_thumb_style: Option<Style>,
     pub scrollbar_thumb_focus_style: Option<Style>,
@@ -424,16 +428,11 @@ impl WidgetNode for ScrollViewNode {
             return Vec::new();
         }
 
-        let use_standalone_v =
-            self.scrollbar && matches!(self.scrollbar_variant, ScrollbarVariant::Standalone);
-        let content_w = if use_standalone_v {
-            inner
-                .w
-                .saturating_sub(1u16.saturating_add(self.scrollbar_gap))
-        } else {
-            inner.w
-        };
-
+        // `compute_scrollbar_zones` wants the content width *before* the
+        // scrollbar-column deduction and subtracts it itself, using the same
+        // `Integrated && (border || ancestor frame edge)` rule as the renderer.
+        // Pre-deducting here both double-counted the column for a standalone
+        // scrollbar and missed the ancestor-frame case entirely.
         compute_scrollbar_zones(ScrollbarZonesParams {
             id,
             rect,
@@ -445,7 +444,7 @@ impl WidgetNode for ScrollViewNode {
             h_scrollbar: self.h_scrollbar && self.axis.horizontal_enabled(),
             h_scrollbar_variant: self.h_scrollbar_variant,
             content_x: inner.x,
-            content_width: content_w,
+            content_width: inner.w,
             max_content_width: self.content_width as usize,
             wrap: false,
             parent_border_x,
