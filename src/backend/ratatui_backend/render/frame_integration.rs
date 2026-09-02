@@ -307,19 +307,32 @@ pub(crate) fn ancestor_frame_integrated_vtrack(
     None
 }
 
-/// Integrated tracks for [`TextArea`](crate::widgets::TextArea): first ancestor `Frame` that has any
-/// integrated edge (border or border-like decoration).
+/// Integrated tracks for widgets with both scroll axes.
+///
+/// Resolve each axis independently. A nearer frame may expose only a horizontal
+/// edge while a farther frame provides the vertical edge, or vice versa.
 pub(crate) fn ancestor_frame_integrated_tracks(
     state: &RenderState<'_, '_, '_>,
     mut cur: Option<NodeId>,
 ) -> Option<ParentFrameIntegratedTracks> {
+    let mut tracks = ParentFrameIntegratedTracks { v: None, h: None };
+
     while let Some(id) = cur {
         if let Some(t) = frame_integrated_tracks_at(state, id) {
-            return Some(t);
+            tracks.v = tracks.v.or(t.v);
+            tracks.h = tracks.h.or(t.h);
+            if tracks.v.is_some() && tracks.h.is_some() {
+                break;
+            }
         }
         cur = state.ctx.tree.node(id).parent;
     }
-    None
+
+    if tracks.v.is_none() && tracks.h.is_none() {
+        None
+    } else {
+        Some(tracks)
+    }
 }
 
 fn rect_right(rect: Rect) -> i16 {

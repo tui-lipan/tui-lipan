@@ -5297,6 +5297,43 @@ impl Component for FrameIntegratedDocumentViewComponent {
     }
 }
 
+struct SplitAncestorTracksDocumentViewComponent;
+
+impl Component for SplitAncestorTracksDocumentViewComponent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        let text = ["abcdefghijklmnopqrstuvwxyz0123456789"; 10].join("\n");
+        Frame::new()
+            .border(false)
+            .decoration(EdgeDecoration::new(Edge::Right).glyph(DecorationGlyph::Custom('│')))
+            .child(
+                Frame::new()
+                    .border_edges(BorderEdges::HorizontalCaps)
+                    .child(
+                        DocumentView::new(text)
+                            .border(false)
+                            .wrap(false)
+                            .scrollbar(true)
+                            .scrollbar_config(
+                                ScrollbarConfig::new().variant(ScrollbarVariant::Integrated),
+                            )
+                            .h_scrollbar(true)
+                            .h_scrollbar_variant(ScrollbarVariant::Integrated),
+                    ),
+            )
+            .into()
+    }
+}
+
 /// Exactly as wide as the frame's inner area in [`FRAME_INTEGRATED_VIEWPORT`], so
 /// the last character only survives when no standalone scrollbar column is
 /// carved out of the content.
@@ -5359,4 +5396,26 @@ fn document_view_integrated_scrollbar_uses_ancestor_frame_border() {
         rows[1]
     );
     assert_thumb_on_frame_border(&rows, "DocumentView");
+}
+
+#[test]
+fn document_view_resolves_split_ancestor_tracks_per_axis() {
+    let rows = frame_integrated_rows(SplitAncestorTracksDocumentViewComponent);
+
+    assert_eq!(
+        rows[1].chars().nth(18),
+        Some('s'),
+        "the outer vertical track must keep all 19 content columns, got {:?}",
+        rows[1]
+    );
+    assert!(
+        rows[1..rows.len() - 1]
+            .iter()
+            .any(|row| row.chars().nth(19) == Some('█')),
+        "the vertical thumb must use the outer frame's right-edge decoration"
+    );
+    assert!(
+        rows[rows.len() - 1].contains('█'),
+        "the horizontal thumb must use the nearer frame's bottom edge"
+    );
 }

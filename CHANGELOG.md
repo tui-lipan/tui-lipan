@@ -19,6 +19,9 @@ While the crate is on `0.x.y`:
   horizontal scrollbars on the first ancestor `Frame` that exposes an edge, matching `List`,
   `Table`, `Terminal`, `TextArea`, and `ScrollView`. It previously fell back to a standalone
   scrollbar carved out of its own content area.
+- Integrated vertical and horizontal scrollbars now resolve their ancestor `Frame` tracks
+  independently. A nearer frame that exposes only one axis no longer prevents `DocumentView` or
+  `TextArea` from using a farther frame edge for the other axis.
 - A borderless `ScrollView` with `ScrollbarVariant::Integrated` no longer reserves a standalone
   scrollbar column when it renders on an ancestor `Frame` edge. Layout, clipping, and rendering
   now agree, so the dead gutter column between the content and the frame border is gone. Clipping
