@@ -528,6 +528,32 @@ to extend or inherit the scoped theme roles.
 
 > `ItemDescription::right(...)` is trailing metadata: it is bounded and truncated before the primary label, so long right-side hints do not displace item labels in narrow palettes.
 
+`ItemDescription::spinner(...)` animates a spinner next to a row's description,
+for rows whose work is still running:
+
+```rust
+SearchItem::new("Deploy", value).description(
+    ItemDescription::new()
+        .left("building")
+        .spinner(Spinner::new())
+        .spinner_position(ListSymbolPosition::Right), // default: Left
+)
+```
+
+The spinner takes its own reserved cells out of the description's width budget, so
+it never shifts the fuzzy-match highlights inside the description text and never
+re-truncates it as the glyph cycles. Where it lands depends on
+`description_placement`:
+
+| Placement | Spinner position |
+|-----------|------------------|
+| `Above` / `Below` | Beside the description text, on the description's own line |
+| `Right` | Beside the right-aligned description column |
+| `Inline` | At the start or end of the whole row, since label and description share one line |
+
+Leaving `Spinner::frame` unset lets the app's spinner ticker animate it; setting a
+frame explicitly keeps it static.
+
 Use `item_status(...)` for symbol-column status indicators without replacing the
 default renderer:
 

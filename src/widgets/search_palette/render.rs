@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use crate::style::{RowStylePolicy, Span, Style};
 use crate::utils::gradient::{ColorGradient, GradientRange};
-use crate::widgets::{ListItem, ListItemGutter, ListItemLine, ListItemStatus};
+use crate::widgets::list::ListItemSpinnerSlot;
+use crate::widgets::{
+    ListItem, ListItemGutter, ListItemLine, ListItemStatus, ListSymbolPosition, Spinner,
+};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::matching::SearchResult;
@@ -324,6 +327,19 @@ fn default_render<T>(
             }
         });
     let description_right = item.description.as_ref().and_then(|d| d.right.clone());
+    let description_spinner = item
+        .description
+        .as_ref()
+        .and_then(|d| d.spinner.as_deref().cloned());
+    let description_spinner_position = item
+        .description
+        .as_ref()
+        .map_or(ListSymbolPosition::Left, |d| d.spinner_position);
+    // Cells the spinner takes out of the description's width budgets. It never shares a
+    // cell with the text, so truncation stays put while the glyph animates.
+    let description_spinner_width = description_spinner
+        .as_ref()
+        .map_or(0, |spinner| spinner_anchored_width(spinner, true));
 
     let mut score_right_spans = Vec::new();
     if score.show {
@@ -356,7 +372,9 @@ fn default_render<T>(
             DescriptionPlacement::Inline => {
                 let sep = styles.description_separator.as_deref().unwrap_or(" - ");
                 if let Some(width) = styles.line_width {
-                    let left_budget = width.saturating_sub(score_width);
+                    let left_budget = width
+                        .saturating_sub(score_width)
+                        .saturating_sub(description_spinner_width);
                     label_spans = inline_truncate(
                         label_spans,
                         desc_spans,
@@ -379,21 +397,30 @@ fn default_render<T>(
                 if let Some(width) = styles.line_width {
                     if primary_truncate_description_first {
                         let label_width = spans_width(&label_spans) as u16;
-                        let mut desc_budget = width.saturating_sub(label_width);
+                        let mut desc_budget = width
+                            .saturating_sub(label_width)
+                            .saturating_sub(description_spinner_width);
                         if score_width > 0 {
                             desc_budget = desc_budget.saturating_sub(score_width.saturating_add(2));
                         }
                         desc_right = truncate_spans_with_ellipsis(&desc_right, desc_budget);
                     } else {
-                        desc_right = truncate_spans_with_ellipsis(&desc_right, width);
+                        desc_right = truncate_spans_with_ellipsis(
+                            &desc_right,
+                            width.saturating_sub(description_spinner_width),
+                        );
                     }
                 }
                 if !desc_right.is_empty() {
-                    primary_right_spans.push(
-                        Span::new(" ")
-                            .style(description_style)
-                            .row_style_policy(description_row_policy),
-                    );
+                    let separated_by_spinner = description_spinner.is_some()
+                        && matches!(description_spinner_position, ListSymbolPosition::Left);
+                    if !separated_by_spinner {
+                        primary_right_spans.push(
+                            Span::new(" ")
+                                .style(description_style)
+                                .row_style_policy(description_row_policy),
+                        );
+                    }
                     primary_right_spans.extend(desc_right);
                     primary_right_highlight = explicit_description_override.is_none();
                     primary_right_hover = explicit_description_override.is_none();
@@ -406,8 +433,14 @@ fn default_render<T>(
                 } else {
                     &mut bottom_lines
                 };
+                let mut desc_line = ListItemLine::from_spans(desc_spans);
+                if let Some(spinner) = description_spinner.clone() {
+                    desc_line = desc_line
+                        .label_spinner(spinner)
+                        .label_spinner_position(description_spinner_position);
+                }
                 target.push(
-                    ListItemLine::from_spans(desc_spans)
+                    desc_line
                         .style(description_style)
                         .selection_label(
                             styles.description_selection && explicit_description_override.is_none(),
@@ -489,6 +522,7 @@ fn default_render<T>(
         let mut list_item = ListItem::from_spans(first.spans)
             .style(styles.item)
             .active(item.active)
+            .label_spinner_position(first.label_spinner_position)
             .primary_selection_label(first.selection_label)
             .primary_selection_description(first.selection_description)
             .primary_hover_label(first.hover_label)
@@ -498,6 +532,7 @@ fn default_render<T>(
         if !first.description_spans.is_empty() {
             list_item = list_item.description_spans(first.description_spans);
         }
+        list_item.label_spinner = first.label_spinner;
 
         for line in top_iter {
             list_item = list_item.line(line);
@@ -529,6 +564,21 @@ fn default_render<T>(
     if !primary_right_spans.is_empty() {
         list_item = list_item.description_spans(primary_right_spans);
     }
+    if let Some(spinner) = description_spinner {
+        list_item = match styles.description_placement {
+            // The description has its own right-aligned column here.
+            DescriptionPlacement::Right => list_item
+                .description_spinner(spinner)
+                .description_spinner_position(description_spinner_position),
+            // Label and description share the primary line, so the slot anchors to the
+            // whole row instead of to the description text alone.
+            DescriptionPlacement::Inline => list_item
+                .label_spinner(spinner)
+                .label_spinner_position(description_spinner_position),
+            // Already attached to the description's own line.
+            DescriptionPlacement::Above | DescriptionPlacement::Below => list_item,
+        };
+    }
     for line in bottom_lines {
         list_item = list_item.line(line);
     }
@@ -544,6 +594,11 @@ fn effective_description_overflow(
         DescriptionPlacement::Above | DescriptionPlacement::Below => overflow,
         DescriptionPlacement::Inline | DescriptionPlacement::Right => DescriptionOverflow::Truncate,
     }
+}
+
+/// Cells a description spinner reserves next to its text, gap included.
+fn spinner_anchored_width(spinner: &Spinner, has_text: bool) -> u16 {
+    ListItemSpinnerSlot::from_spinner(spinner.clone()).anchored_width(has_text)
 }
 
 fn spans_width(spans: &[Span]) -> usize {

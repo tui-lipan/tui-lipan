@@ -155,7 +155,7 @@ mod tests {
 }
 
 /// An animated spinner widget.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Spinner {
     /// Animation style.
     pub spinner_style: SpinnerStyle,

@@ -41,6 +41,12 @@ fn node_kind_has_spinners(kind: &NodeKind) -> bool {
                     .gutter
                     .as_ref()
                     .is_some_and(|gutter| gutter.has_spinner())
+                || item.description_spinner.is_some()
+                || item.label_spinner.is_some()
+                || item
+                    .extra_lines
+                    .iter()
+                    .any(|line| line.description_spinner.is_some() || line.label_spinner.is_some())
         }),
         _ => false,
     }

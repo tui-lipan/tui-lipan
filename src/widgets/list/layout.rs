@@ -6,6 +6,16 @@ use crate::widgets::list::leading_metrics;
 use crate::widgets::list::reconcile::wrap_right_lines_for_runtime;
 use unicode_width::UnicodeWidthStr;
 
+/// Columns a spinner slot adds next to the text run it is anchored to.
+fn slot_width(
+    spinner: Option<&crate::widgets::list::ListItemSpinnerSlot>,
+    text_spans: &[crate::style::Span],
+) -> usize {
+    spinner.map_or(0, |spinner| {
+        spinner.anchored_width(!text_spans.is_empty()) as usize
+    })
+}
+
 fn spans_width(spans: &[crate::style::Span]) -> usize {
     spans
         .iter()
@@ -61,6 +71,11 @@ pub fn measure_list(list: &List) -> (u16, u16) {
 
         let primary_w = spans_width(&item.spans)
             .saturating_add(spans_width(&item.description_spans))
+            .saturating_add(slot_width(item.label_spinner.as_ref(), &item.spans))
+            .saturating_add(slot_width(
+                item.description_spinner.as_ref(),
+                &item.description_spans,
+            ))
             .saturating_add(if item.symbol_line == 0 {
                 trailing_symbol_w
             } else {
@@ -74,6 +89,11 @@ pub fn measure_list(list: &List) -> (u16, u16) {
             .map(|(line_idx, line)| {
                 spans_width(&line.spans)
                     .saturating_add(spans_width(&line.description_spans))
+                    .saturating_add(slot_width(line.label_spinner.as_ref(), &line.spans))
+                    .saturating_add(slot_width(
+                        line.description_spinner.as_ref(),
+                        &line.description_spans,
+                    ))
                     .saturating_add(if item.symbol_line == line_idx + 1 {
                         trailing_symbol_w
                     } else {

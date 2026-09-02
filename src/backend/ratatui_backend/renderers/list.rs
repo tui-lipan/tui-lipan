@@ -28,7 +28,7 @@ use crate::style::{
     resolve_selection_slot, resolve_slot,
 };
 use crate::widgets::list::{
-    ListItemGutterKind, ListItemStatusKind, ListSymbolWidthCtx,
+    ListItemGutterKind, ListItemSpinnerSlot, ListItemStatusKind, ListSymbolWidthCtx,
     effective_extra_line_indent_for_width, effective_prefix_for_width,
     item_symbol_width_for_reserved, item_uses_gutter, max_numbered_prefix_width_for_items,
     reserved_gutter_width_for_items, reserved_symbol_width_for_items,
@@ -119,7 +119,7 @@ fn concrete_list_state_style(style: Style) -> Style {
     }
 }
 
-struct SpinnerGutterDraw {
+struct SpinnerSlotDraw {
     spinner_style: SpinnerStyle,
     frame: usize,
     label: Option<std::sync::Arc<str>>,
@@ -135,7 +135,7 @@ struct GutterSpanPushCtx<'v, 's> {
     rs_base: ratatui::style::Style,
     item_spans: &'v mut Vec<Span<'s>>,
     item_spans_width: &'v mut usize,
-    spinner_draws: &'v mut Vec<SpinnerGutterDraw>,
+    spinner_draws: &'v mut Vec<SpinnerSlotDraw>,
     content_inner: Rect,
     dx: u16,
     dy: u16,
@@ -296,7 +296,7 @@ fn push_gutter_spans<'v, 's>(
                 style_backdrop(left_base_style),
                 contrast_policy,
             );
-            spinner_draws.push(SpinnerGutterDraw {
+            spinner_draws.push(SpinnerSlotDraw {
                 spinner_style: spinner.spinner_style,
                 frame: spinner.frame,
                 label: spinner.label.clone(),
@@ -321,6 +321,71 @@ fn push_gutter_spans<'v, 's>(
         item_spans.push(Span::styled(spaces(gap), rs_base));
     }
     *item_spans_width += reserved_gutter_width;
+}
+
+struct LineSpinnerDrawCtx {
+    base_style: Style,
+    style_override: Style,
+    content_inner: Rect,
+    dx: u16,
+    dy: u16,
+    virtual_line_idx: usize,
+    /// Column of the spinner slot, relative to the content origin.
+    slot_x: usize,
+    contrast_policy: ContrastPolicy,
+}
+
+/// Queue the overlay draw for a label or description spinner. The row itself only paints
+/// blank cells there; the spinner is painted afterwards so gradient styles (OpenCode,
+/// Lightsaber) keep their per-cell colors.
+fn push_line_spinner_draw(
+    spinner: &ListItemSpinnerSlot,
+    spinner_draws: &mut Vec<SpinnerSlotDraw>,
+    ctx: LineSpinnerDrawCtx,
+) {
+    let LineSpinnerDrawCtx {
+        base_style,
+        style_override,
+        content_inner,
+        dx,
+        dy,
+        virtual_line_idx,
+        slot_x,
+        contrast_policy,
+    } = ctx;
+    let inset = usize::from(spinner.leading);
+    let body_width = (spinner.slot_width() as usize).saturating_sub(inset);
+    if body_width == 0 {
+        return;
+    }
+    let virtual_x = content_inner
+        .x
+        .saturating_add(slot_x.saturating_add(inset) as i16);
+    let virtual_y = content_inner.y.saturating_add(virtual_line_idx as i16);
+    let style = finalize_style(
+        base_style.patch(spinner.style).patch(style_override),
+        style_backdrop(base_style),
+        contrast_policy,
+    );
+    let label_style = finalize_style(
+        base_style.patch(spinner.label_style).patch(style_override),
+        style_backdrop(base_style),
+        contrast_policy,
+    );
+    spinner_draws.push(SpinnerSlotDraw {
+        spinner_style: spinner.spinner_style,
+        frame: spinner.frame,
+        label: spinner.label.clone(),
+        gap: spinner.gap,
+        style,
+        label_style,
+        rect: Rect {
+            x: virtual_x.saturating_sub(dx as i16),
+            y: virtual_y.saturating_sub(dy as i16),
+            w: body_width.min(u16::MAX as usize) as u16,
+            h: 1,
+        },
+    });
 }
 
 fn push_status_symbol_spans<'v, 's>(
@@ -383,7 +448,7 @@ fn push_status_symbol_spans<'v, 's>(
                 style_backdrop(left_base_style),
                 contrast_policy,
             );
-            spinner_draws.push(SpinnerGutterDraw {
+            spinner_draws.push(SpinnerSlotDraw {
                 spinner_style: spinner.spinner_style,
                 frame: spinner.frame,
                 label: None,
@@ -791,6 +856,8 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                 truncate_description_first,
                 max_label_width,
                 max_description_width,
+                description_spinner,
+                label_spinner,
             ) = if sub_line == 0 {
                 (
                     &item.spans,
@@ -803,6 +870,12 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                     item.primary_truncate_description_first,
                     item.primary_max_label_width,
                     item.primary_max_description_width,
+                    item.description_spinner
+                        .as_ref()
+                        .map(|spinner| (spinner, item.description_spinner_position)),
+                    item.label_spinner
+                        .as_ref()
+                        .map(|spinner| (spinner, item.label_spinner_position)),
                 )
             } else {
                 let line = &item.extra_lines[sub_line - 1];
@@ -817,6 +890,12 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                     line.truncate_description_first,
                     line.max_label_width,
                     line.max_description_width,
+                    line.description_spinner
+                        .as_ref()
+                        .map(|spinner| (spinner, line.description_spinner_position)),
+                    line.label_spinner
+                        .as_ref()
+                        .map(|spinner| (spinner, line.label_spinner_position)),
                 )
             };
 
@@ -1055,18 +1134,29 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                 ));
             }
 
+            // Each spinner keeps its own reserved cells beside the text it is anchored
+            // to, so truncation stays stable while the glyph animates.
+            let spinner_reserved = description_spinner.map_or(0usize, |(spinner, _)| {
+                spinner.anchored_width(!line_right_spans_src.is_empty()) as usize
+            });
+            let label_spinner_reserved = label_spinner.map_or(0usize, |(spinner, _)| {
+                spinner.anchored_width(!line_spans_src.is_empty()) as usize
+            });
+
             if truncate_description_first {
                 let left_budget = max_text_w
                     .saturating_sub(item_symbol_width as u16)
                     .saturating_sub(item_gutter_width as u16)
                     .saturating_sub(prefix_or_indent_w)
                     .saturating_sub(trailing_symbol_width as u16)
+                    .saturating_sub(label_spinner_reserved as u16)
                     .saturating_sub(row_padding.horizontal());
                 let max_right_width = if (left_content_width as u16) >= left_budget {
                     0
                 } else {
                     left_budget.saturating_sub(left_content_width as u16)
                 };
+                let max_right_width = max_right_width.saturating_sub(spinner_reserved as u16);
                 right_spans = truncate_spans(right_spans, max_right_width);
                 right_width = right_spans
                     .iter()
@@ -1076,11 +1166,12 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
 
             // Apply max_description_width cap: limit how much space description can take
             if let Some(max_desc_w) = max_description_width {
+                let text_budget = (max_desc_w as usize).saturating_sub(spinner_reserved);
                 let capped = right_spans
                     .iter()
                     .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
                     .sum::<usize>()
-                    .min(max_desc_w as usize);
+                    .min(text_budget);
                 right_spans = truncate_spans(right_spans, capped as u16);
                 right_width = right_spans
                     .iter()
@@ -1088,12 +1179,15 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                     .sum();
             }
 
+            right_width = right_width.saturating_add(spinner_reserved);
+
             // Truncate content to fit available width.
             let reserved_width = (item_symbol_width as u16)
                 .saturating_add(item_gutter_width as u16)
                 .saturating_add(prefix_or_indent_w)
                 .saturating_add(trailing_symbol_width as u16)
                 .saturating_add(right_width as u16)
+                .saturating_add(label_spinner_reserved as u16)
                 .saturating_add(row_padding.horizontal());
             let available_left_width = max_text_w.saturating_sub(reserved_width);
             // Apply max_label_width cap
@@ -1107,8 +1201,45 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                 .iter()
                 .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
                 .sum();
-            item_spans.extend(truncated_left);
-            item_spans_width += truncated_left_width;
+
+            if let Some((spinner, position)) = label_spinner {
+                let slot_width = spinner.slot_width() as usize;
+                let text_gap = label_spinner_reserved.saturating_sub(slot_width);
+                let slot_x = match position {
+                    ListSymbolPosition::Left => item_spans_width,
+                    ListSymbolPosition::Right => item_spans_width
+                        .saturating_add(truncated_left_width)
+                        .saturating_add(text_gap),
+                };
+                push_line_spinner_draw(
+                    spinner,
+                    &mut spinner_draws,
+                    LineSpinnerDrawCtx {
+                        base_style: left_base_style,
+                        style_override: left_style_override,
+                        content_inner,
+                        dx,
+                        dy,
+                        virtual_line_idx: line_idx,
+                        slot_x,
+                        contrast_policy,
+                    },
+                );
+                let blanks = Span::styled(spaces(label_spinner_reserved), rs_base);
+                match position {
+                    ListSymbolPosition::Left => {
+                        item_spans.push(blanks);
+                        item_spans.extend(truncated_left);
+                    }
+                    ListSymbolPosition::Right => {
+                        item_spans.extend(truncated_left);
+                        item_spans.push(blanks);
+                    }
+                }
+            } else {
+                item_spans.extend(truncated_left);
+            }
+            item_spans_width += truncated_left_width + label_spinner_reserved;
 
             // Right-positioned active symbol renders immediately after the label.
             if active_right_symbol_width > 0
@@ -1137,6 +1268,7 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
             };
 
             // Pad to push right_spans to the row edge / paint a full-width highlight.
+            let mut description_x = item_spans_width;
             if right_width > 0 || selection_full_width {
                 let total_available = max_text_w as usize;
                 let padding = total_available
@@ -1146,10 +1278,51 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                     .saturating_sub(edge_cap_width);
                 if padding > 0 {
                     item_spans.push(Span::styled(spaces(padding), rs_base));
+                    description_x = description_x.saturating_add(padding);
                 }
             }
 
-            item_spans.extend(right_spans);
+            if let Some((spinner, position)) = description_spinner {
+                let text_width: usize = right_spans
+                    .iter()
+                    .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                    .sum();
+                let slot_width = spinner.slot_width() as usize;
+                let text_gap = spinner_reserved.saturating_sub(slot_width);
+                let slot_x = match position {
+                    ListSymbolPosition::Left => description_x,
+                    ListSymbolPosition::Right => description_x
+                        .saturating_add(text_width)
+                        .saturating_add(text_gap),
+                };
+                push_line_spinner_draw(
+                    spinner,
+                    &mut spinner_draws,
+                    LineSpinnerDrawCtx {
+                        base_style: right_base_style,
+                        style_override: right_style_override,
+                        content_inner,
+                        dx,
+                        dy,
+                        virtual_line_idx: line_idx,
+                        slot_x,
+                        contrast_policy,
+                    },
+                );
+                let blanks = Span::styled(spaces(spinner_reserved), rs_base);
+                match position {
+                    ListSymbolPosition::Left => {
+                        item_spans.push(blanks);
+                        item_spans.extend(right_spans);
+                    }
+                    ListSymbolPosition::Right => {
+                        item_spans.extend(right_spans);
+                        item_spans.push(blanks);
+                    }
+                }
+            } else {
+                item_spans.extend(right_spans);
+            }
 
             if row_padding.right > 0 {
                 item_spans.push(Span::styled(

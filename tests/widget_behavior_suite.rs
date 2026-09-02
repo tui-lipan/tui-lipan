@@ -20,6 +20,8 @@ mod file_tree_explorer_focus;
 mod flow_in_hstack_wraps;
 #[path = "suites/widget_behavior/gantt_diagram_render.rs"]
 mod gantt_diagram_render;
+#[path = "suites/widget_behavior/list_description_spinner_render.rs"]
+mod list_description_spinner_render;
 #[path = "suites/widget_behavior/modal_reserve_height.rs"]
 mod modal_reserve_height;
 #[path = "suites/widget_behavior/mouse_region_drag_threshold.rs"]

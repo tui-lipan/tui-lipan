@@ -302,7 +302,7 @@ pub struct ListItemGutter {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ListItemGutterKind {
     Text(Vec<Span>),
-    Spinner(ListItemSpinnerGutter),
+    Spinner(ListItemSpinnerSlot),
 }
 
 /// Per-row status content rendered in the list symbol column.
@@ -314,11 +314,11 @@ pub struct ListItemStatus {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ListItemStatusKind {
     Text(Vec<Span>),
-    Spinner(ListItemSpinnerGutter),
+    Spinner(ListItemSpinnerSlot),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ListItemSpinnerGutter {
+pub(crate) struct ListItemSpinnerSlot {
     pub spinner_style: SpinnerStyle,
     pub speed: SpinnerSpeed,
     pub frame: usize,
@@ -329,6 +329,44 @@ pub(crate) struct ListItemSpinnerGutter {
     pub leading: u16,
     pub style: Style,
     pub label_style: Style,
+}
+
+impl ListItemSpinnerSlot {
+    /// Build a spinner slot from a public [`Spinner`].
+    pub(crate) fn from_spinner(spinner: Spinner) -> Self {
+        Self {
+            spinner_style: spinner.spinner_style,
+            speed: spinner.speed,
+            frame: spinner.frame.unwrap_or(0),
+            auto_frame: spinner.frame.is_none(),
+            label: spinner.label,
+            gap: spinner.gap,
+            leading: 0,
+            style: spinner.style,
+            label_style: spinner.label_style,
+        }
+    }
+
+    /// Columns the spinner itself occupies, including its own label and leading inset.
+    pub(crate) fn slot_width(&self) -> u16 {
+        let label_width = self
+            .label
+            .as_ref()
+            .map(|label| UnicodeWidthStr::width(label.as_ref()).min(u16::MAX as usize) as u16)
+            .unwrap_or(0);
+        let label_gap = if label_width > 0 { self.gap } else { 0 };
+        self.leading
+            .saturating_add(self.spinner_style.width())
+            .saturating_add(label_gap)
+            .saturating_add(label_width)
+    }
+
+    /// Columns the slot occupies next to the text run it is anchored to, including the
+    /// gap that separates the two.
+    pub(crate) fn anchored_width(&self, has_text: bool) -> u16 {
+        let text_gap = if has_text { self.gap } else { 0 };
+        self.slot_width().saturating_add(text_gap)
+    }
 }
 
 impl ListItemGutter {
@@ -366,19 +404,7 @@ impl ListItemGutter {
                 .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
                 .sum::<usize>()
                 .min(u16::MAX as usize) as u16,
-            ListItemGutterKind::Spinner(spinner) => {
-                let label_width = spinner
-                    .label
-                    .as_ref()
-                    .map(|label| UnicodeWidthStr::width(label.as_ref()) as u16)
-                    .unwrap_or(0);
-                let gap = if label_width > 0 { spinner.gap } else { 0 };
-                spinner
-                    .leading
-                    .saturating_add(spinner.spinner_style.width())
-                    .saturating_add(gap)
-                    .saturating_add(label_width)
-            }
+            ListItemGutterKind::Spinner(spinner) => spinner.slot_width(),
         }
     }
 
@@ -386,7 +412,7 @@ impl ListItemGutter {
         matches!(self.kind, ListItemGutterKind::Spinner(_))
     }
 
-    pub(crate) fn spinner_mut(&mut self) -> Option<&mut ListItemSpinnerGutter> {
+    pub(crate) fn spinner_mut(&mut self) -> Option<&mut ListItemSpinnerSlot> {
         match &mut self.kind {
             ListItemGutterKind::Spinner(spinner) => Some(spinner),
             ListItemGutterKind::Text(_) => None,
@@ -397,7 +423,7 @@ impl ListItemGutter {
 impl From<Spinner> for ListItemGutter {
     fn from(spinner: Spinner) -> Self {
         Self {
-            kind: ListItemGutterKind::Spinner(ListItemSpinnerGutter {
+            kind: ListItemGutterKind::Spinner(ListItemSpinnerSlot {
                 spinner_style: spinner.spinner_style,
                 speed: spinner.speed,
                 frame: spinner.frame.unwrap_or(0),
@@ -445,7 +471,7 @@ impl ListItemStatus {
         matches!(self.kind, ListItemStatusKind::Spinner(_))
     }
 
-    pub(crate) fn spinner_mut(&mut self) -> Option<&mut ListItemSpinnerGutter> {
+    pub(crate) fn spinner_mut(&mut self) -> Option<&mut ListItemSpinnerSlot> {
         match &mut self.kind {
             ListItemStatusKind::Spinner(spinner) => Some(spinner),
             ListItemStatusKind::Text(_) => None,
@@ -456,7 +482,7 @@ impl ListItemStatus {
 impl From<Spinner> for ListItemStatus {
     fn from(spinner: Spinner) -> Self {
         Self {
-            kind: ListItemStatusKind::Spinner(ListItemSpinnerGutter {
+            kind: ListItemStatusKind::Spinner(ListItemSpinnerSlot {
                 spinner_style: spinner.spinner_style,
                 speed: spinner.speed,
                 frame: spinner.frame.unwrap_or(0),
@@ -476,6 +502,10 @@ impl From<Spinner> for ListItemStatus {
 pub struct ListItem {
     pub(crate) spans: Vec<Span>,
     pub(crate) description_spans: Vec<Span>,
+    pub(crate) label_spinner: Option<ListItemSpinnerSlot>,
+    pub(crate) label_spinner_position: ListSymbolPosition,
+    pub(crate) description_spinner: Option<ListItemSpinnerSlot>,
+    pub(crate) description_spinner_position: ListSymbolPosition,
     pub(crate) extra_lines: Vec<ListItemLine>,
     pub(crate) status: Option<ListItemStatus>,
     pub(crate) gutter: Option<ListItemGutter>,
@@ -504,6 +534,10 @@ pub struct ListItem {
 pub struct ListItemLine {
     pub(crate) spans: Vec<Span>,
     pub(crate) description_spans: Vec<Span>,
+    pub(crate) label_spinner: Option<ListItemSpinnerSlot>,
+    pub(crate) label_spinner_position: ListSymbolPosition,
+    pub(crate) description_spinner: Option<ListItemSpinnerSlot>,
+    pub(crate) description_spinner_position: ListSymbolPosition,
     pub(crate) style: Style,
     pub(crate) selection_label: bool,
     pub(crate) selection_description: bool,
@@ -522,6 +556,10 @@ impl ListItemLine {
         Self {
             spans: vec![Span::new(content)],
             description_spans: Vec::new(),
+            label_spinner: None,
+            label_spinner_position: ListSymbolPosition::Left,
+            description_spinner: None,
+            description_spinner_position: ListSymbolPosition::Left,
             style: Style::default(),
             selection_label: true,
             selection_description: true,
@@ -540,6 +578,10 @@ impl ListItemLine {
         Self {
             spans: spans.into_iter().collect(),
             description_spans: Vec::new(),
+            label_spinner: None,
+            label_spinner_position: ListSymbolPosition::Left,
+            description_spinner: None,
+            description_spinner_position: ListSymbolPosition::Left,
             style: Style::default(),
             selection_label: true,
             selection_description: true,
@@ -570,6 +612,40 @@ impl ListItemLine {
         for span in &mut self.description_spans {
             span.style = style;
         }
+        self
+    }
+
+    /// Show an animated spinner alongside this line's description.
+    ///
+    /// The spinner occupies its own reserved cells next to the description text (see
+    /// [`ListItemLine::description_spinner_position`]); it never mixes into the
+    /// description spans, so description truncation and wrapping stay stable while it
+    /// animates. Leaving [`Spinner::frame`] unset lets the runtime animate it.
+    pub fn description_spinner(mut self, spinner: Spinner) -> Self {
+        self.description_spinner = Some(ListItemSpinnerSlot::from_spinner(spinner));
+        self
+    }
+
+    /// Place the description spinner before ([`ListSymbolPosition::Left`], the default)
+    /// or after ([`ListSymbolPosition::Right`]) the description text.
+    pub fn description_spinner_position(mut self, position: ListSymbolPosition) -> Self {
+        self.description_spinner_position = position;
+        self
+    }
+
+    /// Show an animated spinner alongside this line's label text.
+    ///
+    /// Like [`ListItemLine::description_spinner`], the spinner keeps its own reserved
+    /// cells, so label truncation stays stable while it animates.
+    pub fn label_spinner(mut self, spinner: Spinner) -> Self {
+        self.label_spinner = Some(ListItemSpinnerSlot::from_spinner(spinner));
+        self
+    }
+
+    /// Place the label spinner before ([`ListSymbolPosition::Left`], the default) or
+    /// after ([`ListSymbolPosition::Right`]) the label text.
+    pub fn label_spinner_position(mut self, position: ListSymbolPosition) -> Self {
+        self.label_spinner_position = position;
         self
     }
 
@@ -640,6 +716,10 @@ impl ListItem {
         Self {
             spans: vec![Span::new(content)],
             description_spans: Vec::new(),
+            label_spinner: None,
+            label_spinner_position: ListSymbolPosition::Left,
+            description_spinner: None,
+            description_spinner_position: ListSymbolPosition::Left,
             extra_lines: Vec::new(),
             status: None,
             gutter: None,
@@ -676,6 +756,10 @@ impl ListItem {
         Self {
             spans: vec![Span::new("")],
             description_spans: Vec::new(),
+            label_spinner: None,
+            label_spinner_position: ListSymbolPosition::Left,
+            description_spinner: None,
+            description_spinner_position: ListSymbolPosition::Left,
             extra_lines: Vec::new(),
             status: None,
             gutter: None,
@@ -705,6 +789,10 @@ impl ListItem {
         Self {
             spans: spans.into_iter().collect(),
             description_spans: Vec::new(),
+            label_spinner: None,
+            label_spinner_position: ListSymbolPosition::Left,
+            description_spinner: None,
+            description_spinner_position: ListSymbolPosition::Left,
             extra_lines: Vec::new(),
             status: None,
             gutter: None,
@@ -746,6 +834,60 @@ impl ListItem {
         for span in &mut self.description_spans {
             span.style = style;
         }
+        self
+    }
+
+    /// Show an animated spinner alongside the primary description.
+    ///
+    /// The spinner occupies its own reserved cells next to the description text (see
+    /// [`ListItem::description_spinner_position`]); it never mixes into the description
+    /// spans, so description truncation and wrapping stay stable while it animates.
+    /// Leaving [`Spinner::frame`] unset lets the runtime animate it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tui_lipan::prelude::{ListItem, Spinner};
+    /// let item = ListItem::new("Deploy")
+    ///     .description("building")
+    ///     .description_spinner(Spinner::new());
+    /// ```
+    pub fn description_spinner(mut self, spinner: Spinner) -> Self {
+        self.description_spinner = Some(ListItemSpinnerSlot::from_spinner(spinner));
+        self
+    }
+
+    /// Place the description spinner before ([`ListSymbolPosition::Left`], the default)
+    /// or after ([`ListSymbolPosition::Right`]) the description text.
+    pub fn description_spinner_position(mut self, position: ListSymbolPosition) -> Self {
+        self.description_spinner_position = position;
+        self
+    }
+
+    /// Show an animated spinner alongside the primary label text.
+    ///
+    /// Like [`ListItem::description_spinner`], the spinner keeps its own reserved cells,
+    /// so label truncation stays stable while it animates. Unlike
+    /// [`ListItem::gutter`], the slot belongs to this row alone and does not reserve a
+    /// column across every row of the list.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tui_lipan::prelude::{ListItem, ListSymbolPosition, Spinner};
+    /// let item = ListItem::new("Indexing repository")
+    ///     .label_spinner(Spinner::new())
+    ///     .label_spinner_position(ListSymbolPosition::Right);
+    /// ```
+    pub fn label_spinner(mut self, spinner: Spinner) -> Self {
+        self.label_spinner = Some(ListItemSpinnerSlot::from_spinner(spinner));
+        self
+    }
+
+    /// Place the label spinner before ([`ListSymbolPosition::Left`], the default) or
+    /// after ([`ListSymbolPosition::Right`]) the label text.
+    pub fn label_spinner_position(mut self, position: ListSymbolPosition) -> Self {
+        self.label_spinner_position = position;
         self
     }
 
@@ -2004,6 +2146,31 @@ fn hash_list_item_layout(item: &ListItem, hasher: &mut impl std::hash::Hasher) {
     item.primary_max_label_width.hash(hasher);
     item.primary_max_description_width.hash(hasher);
     item.symbol_line.hash(hasher);
+    // Slot widths only: they are constant per spinner style, so an animating frame
+    // never invalidates the layout hash.
+    hash_spinner_slot(
+        item.label_spinner.as_ref(),
+        item.label_spinner_position,
+        hasher,
+    );
+    hash_spinner_slot(
+        item.description_spinner.as_ref(),
+        item.description_spinner_position,
+        hasher,
+    );
+}
+
+fn hash_spinner_slot(
+    spinner: Option<&ListItemSpinnerSlot>,
+    position: ListSymbolPosition,
+    hasher: &mut impl std::hash::Hasher,
+) {
+    use std::hash::Hash;
+
+    spinner.map(ListItemSpinnerSlot::slot_width).hash(hasher);
+    if spinner.is_some() {
+        position.hash(hasher);
+    }
 }
 
 fn hash_list_item_line_layout(line: &ListItemLine, hasher: &mut impl std::hash::Hasher) {
@@ -2014,6 +2181,16 @@ fn hash_list_item_line_layout(line: &ListItemLine, hasher: &mut impl std::hash::
     line.wrap_description.hash(hasher);
     line.max_label_width.hash(hasher);
     line.max_description_width.hash(hasher);
+    hash_spinner_slot(
+        line.label_spinner.as_ref(),
+        line.label_spinner_position,
+        hasher,
+    );
+    hash_spinner_slot(
+        line.description_spinner.as_ref(),
+        line.description_spinner_position,
+        hasher,
+    );
 }
 
 impl crate::layout::hash::LayoutHash for List {

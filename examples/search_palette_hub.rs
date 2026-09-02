@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use tui_lipan::prelude::*;
 
+/// Rows the demo pretends are still being indexed, to show `ItemDescription::spinner`.
+const INDEXING_PATHS: &[&str] = &["src/widgets/list/mod.rs", "src/utils/nucleo.rs"];
+
 const CONTROLLED_ITEMS: &[(&str, &str)] = &[
     ("src/lib.rs", "Crate root & re-exports"),
     ("src/app.rs", "Application entrypoint"),
@@ -320,9 +323,21 @@ impl SearchPaletteHub {
     }
 
     fn view_controlled_palette(&self, ctx: &Context<Self>) -> Element {
+        // Rows whose work is still running get an animated description spinner. It sits
+        // in its own reserved cells, so the description text below never shifts or
+        // re-truncates as the glyph cycles.
         let items: Vec<SearchItem<Arc<str>>> = CONTROLLED_ITEMS
             .iter()
-            .map(|(path, desc)| SearchItem::new(*path, Arc::from(*path)).description(*desc))
+            .map(|(path, desc)| {
+                let description = if INDEXING_PATHS.contains(path) {
+                    ItemDescription::new()
+                        .left("indexing")
+                        .spinner(Spinner::new())
+                } else {
+                    ItemDescription::from(*desc)
+                };
+                SearchItem::new(*path, Arc::from(*path)).description(description)
+            })
             .collect();
 
         let palette = SearchPalette::new()

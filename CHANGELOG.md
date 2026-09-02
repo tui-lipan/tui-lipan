@@ -11,6 +11,32 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- `ListItem` and `ListItemLine` gained `description_spinner(...)` and `label_spinner(...)`,
+  with `description_spinner_position(...)` / `label_spinner_position(...)` choosing the side
+  (`ListSymbolPosition::Left`, the default, or `Right`). Unlike `ListItem::gutter(...)`, these
+  slots belong to a single row's text rather than reserving a column across every row. The
+  spinner takes its own reserved cells out of the row's width budget, so truncation, wrapping,
+  and any highlight offsets inside the text stay put while the glyph cycles; on a wrapped row
+  the slot stays on the first visual line. Leaving `Spinner::frame` unset lets the app's
+  spinner ticker animate it.
+- `ItemDescription::spinner(...)` and `.spinner_position(...)` put an animated spinner next to a
+  `SearchPalette` row's description. Placement follows `description_placement`: beside the
+  description text on its own line for `Above`/`Below`, beside the right-aligned column for
+  `Right`, and at the start or end of the row for `Inline`, where label and description share
+  one line.
+- New example `list_description_spinners`: row-anchored spinners in `List` and `SearchPalette`,
+  with a key to cycle every `DescriptionPlacement`.
+
+### Changed
+
+- `ItemDescription` gained `spinner` and `spinner_position` fields. Struct-literal construction
+  now needs them; the builders (`ItemDescription::new().left(...)`) and the `From<&str>` /
+  `From<String>` / `From<Arc<str>>` conversions are unaffected. (breaking)
+- `Spinner` now derives `PartialEq`, `Eq`, and `Hash`, so it can live inside comparable and
+  hashable props such as `ItemDescription`. (breaking)
+
 ## [0.4.1] - 2026-09-02
 
 ### Changed

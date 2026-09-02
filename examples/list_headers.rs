@@ -38,7 +38,12 @@ fn demo_items() -> Vec<ListItem> {
         ListItem::spacer(),
         ListItem::header("Backend"),
         ListItem::new("src/api/routes.rs").gutter(ListItemGutter::text("●")),
-        ListItem::new("src/api/service.rs"),
+        // A row-local spinner beside the description: unlike a gutter it reserves no
+        // column across the other rows, and its cells are its own, so "running tests"
+        // never shifts as the glyph cycles.
+        ListItem::new("src/api/service.rs")
+            .description("running tests")
+            .description_spinner(Spinner::new()),
         ListItem::new("src/db/migrations.rs").gutter(ListItemGutter::text("●")),
     ]
 }
