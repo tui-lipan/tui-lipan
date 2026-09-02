@@ -33,6 +33,7 @@ pub fn query_host_colors() -> Option<HostTerminalColors> {
     tty_write_all(fd, &build_query_batch())?;
 
     let mut buffer = Vec::with_capacity(4096);
+    let mut ordered_response = Vec::with_capacity(4096);
     let mut parsed = Parsed::default();
 
     let deadline = Instant::now() + Duration::from_millis(200);
@@ -50,8 +51,9 @@ pub fn query_host_colors() -> Option<HostTerminalColors> {
             break;
         }
         buffer.extend_from_slice(&chunk[..n]);
+        ordered_response.extend_from_slice(&chunk[..n]);
         parse_frames(&mut buffer, &mut parsed);
-        if parsed.complete() {
+        if host_color_query_settled(&ordered_response) {
             break;
         }
     }
@@ -64,6 +66,17 @@ pub fn query_host_colors() -> Option<HostTerminalColors> {
     }
 
     Some(HostTerminalColors { ansi, fg, bg })
+}
+
+/// Whether the DA1 ordering sentinel at the end of a host-color query has come back.
+///
+/// Foreground and background replies are not enough. A terminal may schedule its OSC 4 palette
+/// reports separately and return OSC 10/11 first. Restoring cooked mode at that point lets the
+/// pending palette reports echo onto the primary screen before the application enters its
+/// alternate screen, where they stay hidden until exit.
+#[cfg(unix)]
+fn host_color_query_settled(response: &[u8]) -> bool {
+    scan_host_capabilities(response).is_some()
 }
 
 /// Query stub for non-Unix hosts.
@@ -530,19 +543,15 @@ struct Parsed {
 }
 
 #[cfg(unix)]
-impl Parsed {
-    fn complete(&self) -> bool {
-        self.fg.is_some() && self.bg.is_some()
-    }
-}
-
-#[cfg(unix)]
 fn build_query_batch() -> Vec<u8> {
     let mut out = Vec::with_capacity(256);
     for i in 0..16 {
         out.extend_from_slice(format!("\x1b]4;{i};?\x1b\\").as_bytes());
     }
-    out.extend_from_slice(b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\");
+    // Primary DA is an ordering sentinel. Its reply can only arrive after the terminal has
+    // processed the preceding palette queries, so the temporary raw-mode guard stays active until
+    // no palette report can be echoed by cooked mode.
+    out.extend_from_slice(b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[c");
     out
 }
 
@@ -781,9 +790,10 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        EXIT_FLUSH_CEILING, EXIT_FLUSH_FLOOR, ExitFlush, HostCapabilities, exit_flush_plan,
-        probe_round_trip, record_round_trip, scan_host_capabilities, set_startup_reply_outstanding,
-        settle_startup_reply, startup_reply_outstanding,
+        EXIT_FLUSH_CEILING, EXIT_FLUSH_FLOOR, ExitFlush, HostCapabilities, build_query_batch,
+        exit_flush_plan, host_color_query_settled, probe_round_trip, record_round_trip,
+        scan_host_capabilities, set_startup_reply_outstanding, settle_startup_reply,
+        startup_reply_outstanding,
     };
 
     fn keyboard(enhancement: bool) -> Option<HostCapabilities> {
@@ -791,6 +801,24 @@ mod tests {
             keyboard_enhancement: enhancement,
             ..HostCapabilities::default()
         })
+    }
+
+    #[test]
+    fn host_color_query_waits_for_its_ordering_sentinel() {
+        let colors = b"\x1b]10;rgb:eeee/eeee/eeee\x1b\\\
+                       \x1b]11;rgb:1111/1111/1111\x1b\\";
+        assert!(
+            !host_color_query_settled(colors),
+            "dynamic colors may arrive before the separately scheduled palette reports"
+        );
+
+        let mut ordered = colors.to_vec();
+        ordered.extend_from_slice(b"\x1b]4;0;rgb:0000/0000/0000\x1b\\\x1b[?62;1;6c");
+        assert!(host_color_query_settled(&ordered));
+        assert!(
+            build_query_batch().ends_with(b"\x1b[c"),
+            "the query must put DA after every OSC color request"
+        );
     }
 
     #[test]
