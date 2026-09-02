@@ -41,8 +41,3 @@ ignore = [
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# The `[patch.crates-io]` pin on termina's upstream fix for the SGR mouse-coordinate underflow
-# (38047a2, unreleased - helix-editor/termina#28). Same repository as the published crate, and the
-# patch is stripped on publish, so nothing reaches a consumer from here. Remove both together once
-# a release carries the fix.
-allow-git = ["https://github.com/helix-editor/termina"]

@@ -146,7 +146,7 @@ open = "5.4.0"
 ignore = "0.4.31"
 
 [target.'cfg(all(unix, not(target_arch = "wasm32")))'.dependencies]
-termina = "=0.3.3"
+termina = "0.4"
 
 [target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
 wl-clipboard-rs = { version = "0.9.3", optional = true }
@@ -155,21 +155,6 @@ wl-clipboard-rs = { version = "0.9.3", optional = true }
 ratatui = { version = "0.30", default-features = false, features = ["layout-cache", "underline-color"] }
 syntect = { version = "5.2", optional = true, default-features = false, features = ["default-fancy"] }
 two-face = { version = "0.5.1", optional = true, default-features = false, features = ["syntect-fancy"] }
-
-# ─── Patches ─────────────────────────────────────────────────────────────────
-
-[patch.crates-io]
-# termina 0.3.3 subtracts the protocol's one-based origin from SGR and rxvt mouse coordinates
-# without a guard, so a report of column or row 0 - which SGR-pixels (mode 1016) makes ordinary,
-# and which terminals also send for a drag that leaves the window - panics the input worker and
-# takes the app down with it. Fixed upstream in 38047a2 and unreleased
-# (https://github.com/helix-editor/termina/issues/28); drop this, and move the `=0.3.3` pin above,
-# once a release carrying it exists.
-#
-# Cargo strips `[patch]` when publishing, so this covers this repo's own examples, tests, and
-# benches only. An app depending on tui-lipan from crates.io needs the same stanza in its own
-# manifest until that release lands.
-termina = { git = "https://github.com/helix-editor/termina", rev = "38047a2491f4cf65eb4b2a3ed69cca87a98a10fc" }
 
 # ─── Features ────────────────────────────────────────────────────────────────
 
