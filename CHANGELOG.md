@@ -11,6 +11,8 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-02
+
 ### Added
 
 - `ListItem` and `ListItemLine` gained `description_spinner(...)` and `label_spinner(...)`,
@@ -1805,7 +1807,8 @@ Highlights of what ships in 0.1.0:
 See the [README](README.md) for the full feature set and
 [docs.tui-lipan.dev](https://docs.tui-lipan.dev) for documentation.
 
-[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/tui-lipan/tui-lipan/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/tui-lipan/tui-lipan/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/tui-lipan/tui-lipan/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/tui-lipan/tui-lipan/compare/v0.3.0...v0.3.1
