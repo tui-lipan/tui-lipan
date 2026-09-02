@@ -129,6 +129,12 @@ Key implementation areas:
 - min/max/focus/collapse constraints via `LayoutConstraints`
 - overlay roots laid out relative to viewport bounds
 
+Measurement carries a scoped ancestor-chrome context while descending through
+`Frame` children. This lets element-tree measurement account for integrated
+scrollbar tracks before runtime nodes exist. The per-element and shared measure
+caches include that context in their keys, and the scope guard restores it after
+each frame child is measured.
+
 For app-author layout usage, see [Styling](styling.md) and
 [Layout widgets](widgets/layout.md). For contributor guidance, see
 [Widget authoring](widget-authoring.md).

@@ -1,4 +1,4 @@
-use crate::layout::measure::min_size_constrained;
+use crate::layout::measure::{min_size_constrained, with_frame_measure_context};
 use crate::style::{Length, Rect};
 use crate::widgets::Frame;
 
@@ -80,7 +80,9 @@ pub(crate) fn measure_frame(
     let (content_w, content_h) = frame
         .child
         .as_deref()
-        .map(|c| min_size_constrained(c, inner_max_w, inner_max_h))
+        .map(|c| {
+            with_frame_measure_context(frame, || min_size_constrained(c, inner_max_w, inner_max_h))
+        })
         .unwrap_or((0, 0));
 
     // Measure header if exists (for dynamic height calculation)
@@ -223,7 +225,7 @@ mod tests {
     use crate::core::component::{Component, Context, Update};
     use crate::core::node::NodeKind;
     use crate::runtime::RuntimeCore;
-    use crate::style::{BorderEdges, Length};
+    use crate::style::{BorderEdges, Length, ScrollbarVariant};
     use crate::style::{Rect, Theme};
     use crate::widgets::text::Overflow;
     use crate::widgets::{DocumentView, Frame, Text, TextArea, VStack};
@@ -391,6 +393,99 @@ mod tests {
         let geometry = measure_frame(&frame, Some(28), None);
 
         assert_eq!(geometry.outer_size().1, child.1.saturating_add(2));
+    }
+
+    #[test]
+    fn frame_measure_hosts_nested_document_integrated_scrollbar() {
+        let document = DocumentView::new("abcdefghijklmnopqrstuvwxyz")
+            .height(Length::Auto)
+            .border(false)
+            .wrap(false)
+            .scrollbar(false)
+            .h_scrollbar(true)
+            .h_scrollbar_variant(ScrollbarVariant::Integrated);
+        let child: crate::Element = VStack::new().height(Length::Auto).child(document).into();
+
+        assert_eq!(
+            crate::layout::measure::min_size_constrained(&child, Some(18), None).1,
+            2,
+            "without ancestor chrome the horizontal scrollbar needs its own row"
+        );
+
+        let frame = Frame::new()
+            .width(Length::Px(20))
+            .height(Length::Auto)
+            .child(child);
+        assert_eq!(
+            measure_frame(&frame, Some(20), None).outer_size().1,
+            3,
+            "one content row plus two frame edges must not reserve a standalone scrollbar row"
+        );
+        assert_eq!(
+            crate::layout::measure::min_size_constrained(
+                frame.child.as_deref().expect("frame child"),
+                Some(18),
+                None,
+            )
+            .1,
+            2,
+            "frame measurement must restore the tree-blind context afterward"
+        );
+    }
+
+    #[test]
+    fn frame_measure_uses_integrated_vertical_track_for_wrapping() {
+        let document = DocumentView::new("abcdefghijklmnopqr")
+            .height(Length::Auto)
+            .border(false)
+            .wrap(true)
+            .scrollbar(true)
+            .scrollbar_config(
+                crate::style::ScrollbarConfig::new().variant(ScrollbarVariant::Integrated),
+            );
+        let child: crate::Element = VStack::new().height(Length::Auto).child(document).into();
+
+        assert_eq!(
+            crate::layout::measure::min_size_constrained(&child, Some(18), None).1,
+            2,
+            "without ancestor chrome the standalone column wraps the last character"
+        );
+
+        let frame = Frame::new()
+            .width(Length::Px(20))
+            .height(Length::Auto)
+            .child(child);
+        assert_eq!(
+            measure_frame(&frame, Some(20), None).outer_size().1,
+            3,
+            "the integrated frame track must leave all 18 content columns available"
+        );
+    }
+
+    #[test]
+    fn frame_measure_does_not_offer_a_missing_integrated_axis() {
+        use crate::style::Edge;
+        use crate::widgets::frame::{DecorationGlyph, EdgeDecoration};
+
+        let document = DocumentView::new("abcdefghijklmnopqrstuvwxyz")
+            .height(Length::Auto)
+            .border(false)
+            .wrap(false)
+            .scrollbar(false)
+            .h_scrollbar(true)
+            .h_scrollbar_variant(ScrollbarVariant::Integrated);
+        let frame = Frame::new()
+            .border(false)
+            .width(Length::Px(20))
+            .height(Length::Auto)
+            .decoration(EdgeDecoration::new(Edge::Right).glyph(DecorationGlyph::Custom('│')))
+            .child(VStack::new().height(Length::Auto).child(document));
+
+        assert_eq!(
+            measure_frame(&frame, Some(20), None).outer_size().1,
+            2,
+            "a vertical frame decoration cannot host the horizontal scrollbar"
+        );
     }
 
     #[test]

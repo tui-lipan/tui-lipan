@@ -1,6 +1,6 @@
 use crate::core::component::FocusContext;
 use crate::core::node::{NodeId, NodeKind, NodeTree};
-use crate::layout::measure::min_size_constrained;
+use crate::layout::measure::{min_size_constrained, with_frame_measure_context};
 use crate::layout::reconcile::{ElementReconcile, OverlayState, ReconcileCtx, reconcile_element};
 use crate::layout::tag::can_reuse;
 use crate::style::{Align, Rect};
@@ -162,8 +162,9 @@ pub(crate) fn reconcile_frame(
         let child_rect = match frame.props.child_align {
             Align::Start | Align::Stretch => content,
             Align::Center => {
-                let (child_w, child_h) =
-                    min_size_constrained(child, Some(content.w), Some(content.h));
+                let (child_w, child_h) = with_frame_measure_context(frame, || {
+                    min_size_constrained(child, Some(content.w), Some(content.h))
+                });
                 let w = child_w.min(content.w);
                 let h = child_h.min(content.h);
                 let x = content
@@ -175,8 +176,9 @@ pub(crate) fn reconcile_frame(
                 Rect { x, y, w, h }
             }
             Align::End => {
-                let (child_w, child_h) =
-                    min_size_constrained(child, Some(content.w), Some(content.h));
+                let (child_w, child_h) = with_frame_measure_context(frame, || {
+                    min_size_constrained(child, Some(content.w), Some(content.h))
+                });
                 let w = child_w.min(content.w);
                 let h = child_h.min(content.h);
                 let x = content.x.saturating_add(content.w.saturating_sub(w) as i16);

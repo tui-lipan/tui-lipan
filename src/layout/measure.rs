@@ -1,8 +1,8 @@
 //! Widget measurement functions.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
-use crate::core::element::{Element, ElementKind, MeasureCacheEntry};
+use crate::core::element::{Element, ElementKind, MeasureCacheEntry, MeasureContext};
 #[cfg(feature = "big-text")]
 use crate::widgets::internal::measure_big_text;
 #[cfg(feature = "image")]
@@ -22,7 +22,11 @@ use crate::widgets::internal::{
     measure_text_area, measure_text_area_constrained,
 };
 
-use crate::style::Length;
+use crate::style::{Edge, Length};
+use crate::widgets::document_view::layout::{
+    ParentIntegrated, measure_document_view_constrained_with, measure_document_view_with,
+};
+use crate::widgets::{DecorationPlacement, Frame};
 
 use super::axis::{Axis, requested_main_axis};
 use super::hash::element_layout_hash;
@@ -51,7 +55,7 @@ fn requested_measure_bound(len: Length, available: u16) -> Option<u16> {
     }
 }
 
-type GlobalMeasureCacheKey = (u64, Option<u16>, Option<u16>);
+type GlobalMeasureCacheKey = (u64, Option<u16>, Option<u16>, MeasureContext);
 type GlobalMeasureCache = crate::utils::gen_cache::GenerationalCache<
     GlobalMeasureCacheKey,
     (u16, u16),
@@ -61,12 +65,53 @@ type GlobalMeasureCache = crate::utils::gen_cache::GenerationalCache<
 thread_local! {
     static GLOBAL_MEASURE_CACHE: RefCell<GlobalMeasureCache> =
         RefCell::new(GlobalMeasureCache::new(GLOBAL_MEASURE_CACHE_MAX_ENTRIES));
+    static CURRENT_MEASURE_CONTEXT: Cell<MeasureContext> = const {
+        Cell::new(MeasureContext::NONE)
+    };
 }
 
 /// Per-generation cap. Large scroll lists × width probes would otherwise thrash a
 /// tiny cache that cleared entirely on overflow; the generational cache keeps a
 /// second generation so resize sweeps keep hitting (see [`crate::utils::gen_cache`]).
 const GLOBAL_MEASURE_CACHE_MAX_ENTRIES: usize = 16_384;
+
+struct MeasureContextGuard(MeasureContext);
+
+impl Drop for MeasureContextGuard {
+    fn drop(&mut self) {
+        CURRENT_MEASURE_CONTEXT.with(|context| context.set(self.0));
+    }
+}
+
+fn with_measure_context<T>(context: MeasureContext, f: impl FnOnce() -> T) -> T {
+    let previous = CURRENT_MEASURE_CONTEXT.with(|current| current.replace(context));
+    let _guard = MeasureContextGuard(previous);
+    f()
+}
+
+fn current_measure_context() -> MeasureContext {
+    CURRENT_MEASURE_CONTEXT.with(Cell::get)
+}
+
+pub(crate) fn with_frame_measure_context<T>(frame: &Frame, f: impl FnOnce() -> T) -> T {
+    let parent = current_measure_context();
+    let border_v = frame.props.has_border() && frame.props.border_edges.has_right();
+    let border_h = frame.props.has_border() && frame.props.border_edges.has_bottom();
+    let decoration_v = frame.props.decorations.iter().any(|decoration| {
+        decoration.placement == DecorationPlacement::Border
+            && matches!(decoration.edge, Edge::Left | Edge::Right)
+    });
+    let decoration_h = frame.props.decorations.iter().any(|decoration| {
+        decoration.placement == DecorationPlacement::Border
+            && matches!(decoration.edge, Edge::Top | Edge::Bottom)
+    });
+    let context = MeasureContext {
+        ancestor_integrated_v: parent.ancestor_integrated_v || border_v || decoration_v,
+        ancestor_integrated_h: parent.ancestor_integrated_h || border_h || decoration_h,
+    };
+
+    with_measure_context(context, f)
+}
 
 #[cfg(feature = "diff-view")]
 fn element_has_split_wrap_measure_state(el: &Element) -> bool {
@@ -149,20 +194,21 @@ pub(crate) fn min_size_constrained(
     max_w: Option<u16>,
     max_h: Option<u16>,
 ) -> (u16, u16) {
+    let measure_context = current_measure_context();
     let split_wrap_measure_state = element_has_split_wrap_measure_state(el);
     let skip_local_cache = split_wrap_measure_state || drag_source_should_skip_measure_cache(el);
     let skip_global_cache = drag_source_should_skip_measure_cache(el);
 
     if !skip_local_cache {
         for entry in el.measure_cache.get().into_iter().flatten() {
-            if entry.max_w == max_w && entry.max_h == max_h {
+            if entry.max_w == max_w && entry.max_h == max_h && entry.context == measure_context {
                 return entry.size;
             }
         }
     }
 
     let global_cache_key = if !skip_global_cache {
-        element_layout_hash(el).map(|hash| (hash, max_w, max_h))
+        element_layout_hash(el).map(|hash| (hash, max_w, max_h, measure_context))
     } else {
         None
     };
@@ -170,7 +216,12 @@ pub(crate) fn min_size_constrained(
         && let Some(size) = GLOBAL_MEASURE_CACHE.with(|cache| cache.borrow().get(&key).copied())
     {
         if !skip_local_cache {
-            let new_entry = Some(MeasureCacheEntry { max_w, max_h, size });
+            let new_entry = Some(MeasureCacheEntry {
+                max_w,
+                max_h,
+                context: measure_context,
+                size,
+            });
             let mut slots = el.measure_cache.get();
             slots[1] = slots[0];
             slots[0] = new_entry;
@@ -209,7 +260,18 @@ pub(crate) fn min_size_constrained(
     let (w, h) = if let ElementKind::TextArea(t) = &el.kind {
         measure_text_area_constrained(t, effective_max_w)
     } else if let ElementKind::DocumentView(dv) = &el.kind {
-        measure_document_view_constrained(dv, effective_max_w)
+        if measure_context == MeasureContext::NONE {
+            measure_document_view_constrained(dv, effective_max_w)
+        } else {
+            measure_document_view_constrained_with(
+                dv,
+                effective_max_w,
+                ParentIntegrated {
+                    v: measure_context.ancestor_integrated_v,
+                    h: measure_context.ancestor_integrated_h,
+                },
+            )
+        }
     } else {
         // Pass the effective (tighter) bounds so children are measured within
         // both the parent's available space and this element's own max constraints.
@@ -225,7 +287,12 @@ pub(crate) fn min_size_constrained(
     );
 
     if !skip_local_cache {
-        let new_entry = Some(MeasureCacheEntry { max_w, max_h, size });
+        let new_entry = Some(MeasureCacheEntry {
+            max_w,
+            max_h,
+            context: measure_context,
+            size,
+        });
         let mut slots = el.measure_cache.get();
         if slots[0] == new_entry {
             return size;
@@ -308,7 +375,19 @@ fn min_size_unconstrained_constrained(
         ElementKind::Slider(s) => measure_slider(s),
         ElementKind::Spinner(sp) => measure_spinner(sp),
         ElementKind::Splitter(splitter) => measure_splitter(splitter, max_w, max_h),
-        ElementKind::DocumentView(dv) => measure_document_view(dv),
+        ElementKind::DocumentView(dv) if current_measure_context() == MeasureContext::NONE => {
+            measure_document_view(dv)
+        }
+        ElementKind::DocumentView(dv) => {
+            let context = current_measure_context();
+            measure_document_view_with(
+                dv,
+                ParentIntegrated {
+                    v: context.ancestor_integrated_v,
+                    h: context.ancestor_integrated_h,
+                },
+            )
+        }
         ElementKind::ThemeProvider(tp) => min_size_constrained(&tp.child, max_w, max_h),
         ElementKind::ContextProvider(cp) => min_size_constrained(&cp.child, max_w, max_h),
         ElementKind::Memo(_) => (0, 0),

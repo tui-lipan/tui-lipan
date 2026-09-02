@@ -22,6 +22,9 @@ While the crate is on `0.x.y`:
 - Integrated vertical and horizontal scrollbars now resolve their ancestor `Frame` tracks
   independently. A nearer frame that exposes only one axis no longer prevents `DocumentView` or
   `TextArea` from using a farther frame edge for the other axis.
+- Frame measurement now passes ancestor integrated scrollbar tracks to nested `DocumentView`
+  elements. Auto-height containers no longer reserve a standalone horizontal scrollbar row when
+  the frame's border hosts that track.
 - A borderless `ScrollView` with `ScrollbarVariant::Integrated` no longer reserves a standalone
   scrollbar column when it renders on an ancestor `Frame` edge. Layout, clipping, and rendering
   now agree, so the dead gutter column between the content and the frame border is gone. Clipping
