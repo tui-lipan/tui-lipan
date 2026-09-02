@@ -50,6 +50,27 @@ fn document_geometry_shared_store(key: u64, mw: u16, size: (u16, u16)) {
     DOCUMENT_GEOMETRY_SHARED_CACHE.with(|c| c.borrow_mut().insert((key, mw), size));
 }
 
+/// Integrated-scrollbar chrome contributed by the first ancestor `Frame`.
+///
+/// A borderless `DocumentView` draws its integrated scrollbars on that frame's
+/// edges, which costs no content column or row. Reconcile resolves this from the
+/// node tree; the element measure pass has no tree and passes
+/// [`ParentIntegrated::NONE`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) struct ParentIntegrated {
+    pub v: bool,
+    pub h: bool,
+}
+
+impl ParentIntegrated {
+    /// No ancestor frame edge is available (or none has been resolved yet).
+    pub(crate) const NONE: Self = Self { v: false, h: false };
+
+    fn is_none(self) -> bool {
+        !self.v && !self.h
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DocumentMeasureCacheEntry {
     pub key: u64,
@@ -83,15 +104,19 @@ pub(crate) fn resolved_gutter_base_width(
     }
 }
 
+/// Columns a *standalone* vertical scrollbar takes out of the content area.
+///
+/// `integrated_track` is true when an `Integrated` scrollbar has chrome to draw
+/// on: the DocumentView's own border, or the first ancestor `Frame` that
+/// exposes an edge for it. Drawing over existing chrome costs no column.
 pub(crate) fn standalone_scrollbar_cols(
     enabled: bool,
     variant: ScrollbarVariant,
     gap: u16,
-    border: bool,
+    integrated_track: bool,
 ) -> u16 {
-    let integrated_over_border =
-        enabled && matches!(variant, ScrollbarVariant::Integrated) && border;
-    if enabled && !integrated_over_border {
+    let integrated = enabled && matches!(variant, ScrollbarVariant::Integrated) && integrated_track;
+    if enabled && !integrated {
         1u16.saturating_add(gap)
     } else {
         0
@@ -108,12 +133,14 @@ pub(crate) fn content_width_from_inner(
         .saturating_sub(scrollbar_cols)
 }
 
+/// Whether the horizontal scrollbar is drawn *on* chrome instead of taking a
+/// content row. See [`standalone_scrollbar_cols`] for `integrated_track`.
 pub(crate) fn h_scrollbar_over_border(
     h_scrollbar: bool,
     h_scrollbar_variant: ScrollbarVariant,
-    border: bool,
+    integrated_track: bool,
 ) -> bool {
-    h_scrollbar && matches!(h_scrollbar_variant, ScrollbarVariant::Integrated) && border
+    h_scrollbar && matches!(h_scrollbar_variant, ScrollbarVariant::Integrated) && integrated_track
 }
 
 pub(crate) fn h_scrollbar_visible(
@@ -144,7 +171,20 @@ pub(crate) fn visual_height_with_chrome(
 }
 
 /// Measure the natural (unconstrained) size of a `DocumentView`.
+///
+/// The element measure pass has no node tree, so it cannot see an ancestor
+/// `Frame` that would host an integrated scrollbar. Reconcile does, and calls
+/// [`measure_document_view_with`] with the resolved edges.
 pub fn measure_document_view(dv: &DocumentView) -> (u16, u16) {
+    measure_document_view_with(dv, ParentIntegrated::NONE)
+}
+
+/// [`measure_document_view`], told which ancestor-frame edges host integrated
+/// scrollbars for this widget.
+pub(crate) fn measure_document_view_with(
+    dv: &DocumentView,
+    parent: ParentIntegrated,
+) -> (u16, u16) {
     let line_count = dv.value.split('\n').count().max(1);
     let max_line_w = dv
         .value
@@ -165,7 +205,7 @@ pub fn measure_document_view(dv: &DocumentView) -> (u16, u16) {
         dv.scrollbar,
         dv.scrollbar_config.variant,
         dv.scrollbar_config.gap,
-        dv.border,
+        dv.border || parent.v,
     );
     let w = max_line_w
         .saturating_add(gutter_total_width(gutter, dv.gutter_gap))
@@ -183,7 +223,18 @@ pub fn measure_document_view(dv: &DocumentView) -> (u16, u16) {
 /// rows instead of the raw source-line count. This also accounts for a visible
 /// standalone horizontal scrollbar when wrapping is disabled.
 pub fn measure_document_view_constrained(dv: &DocumentView, max_w: Option<u16>) -> (u16, u16) {
-    let cache_key = document_measure_cache_key(dv);
+    measure_document_view_constrained_with(dv, max_w, ParentIntegrated::NONE)
+}
+
+/// [`measure_document_view_constrained`], told which ancestor-frame edges host
+/// integrated scrollbars for this widget. `parent` participates in the measure
+/// cache key, so the tree-aware and tree-blind results never alias.
+pub(crate) fn measure_document_view_constrained_with(
+    dv: &DocumentView,
+    max_w: Option<u16>,
+    parent: ParentIntegrated,
+) -> (u16, u16) {
+    let cache_key = document_measure_cache_key(dv, parent);
     for entry in dv.measure_cache.borrow().iter().flatten() {
         if entry.key == cache_key && entry.max_w == max_w {
             return entry.size;
@@ -203,7 +254,7 @@ pub fn measure_document_view_constrained(dv: &DocumentView, max_w: Option<u16>) 
         }
     }
 
-    let (nat_w, nat_h) = measure_document_view(dv);
+    let (nat_w, nat_h) = measure_document_view_with(dv, parent);
 
     if !is_auto_height {
         let size = (nat_w, nat_h);
@@ -231,7 +282,7 @@ pub fn measure_document_view_constrained(dv: &DocumentView, max_w: Option<u16>) 
         dv.scrollbar,
         dv.scrollbar_config.variant,
         dv.scrollbar_config.gap,
-        dv.border,
+        dv.border || parent.v,
     );
     let layout_w = dv.width.resolve(mw, nat_w).min(mw);
 
@@ -240,6 +291,10 @@ pub fn measure_document_view_constrained(dv: &DocumentView, max_w: Option<u16>) 
         .saturating_sub(dv.padding.horizontal());
 
     let mut dv_node = super::node::DocumentViewNode::from(dv.clone());
+    // `auto_height_for_visual_plan` reserves a row for a standalone horizontal
+    // scrollbar; tell the node which edges the ancestor frame already provides.
+    dv_node.parent_integrated_v = parent.v;
+    dv_node.parent_integrated_h = parent.h;
 
     // Keep measure path fully deterministic: no visual cache shortcuts while
     // we are converging reconcile/measure geometry behavior.
@@ -396,7 +451,18 @@ fn document_measure_base_key(dv: &DocumentView) -> u64 {
     key
 }
 
-fn document_measure_cache_key(dv: &DocumentView) -> u64 {
+fn document_measure_cache_key(dv: &DocumentView, parent: ParentIntegrated) -> u64 {
+    let key = document_measure_content_key(dv);
+    if parent.is_none() {
+        return key;
+    }
+    let mut h = FxHasher::default();
+    key.hash(&mut h);
+    parent.hash(&mut h);
+    h.finish()
+}
+
+fn document_measure_content_key(dv: &DocumentView) -> u64 {
     let base = document_measure_base_key(dv);
 
     #[cfg(feature = "diff-view")]
@@ -457,6 +523,63 @@ mod tests {
     #[cfg(feature = "markdown")]
     use crate::widgets::document_view::node::{DocumentFlattenCtx, flatten_blocks};
     use crate::widgets::{DocumentView, FormattedBlock, FormattedDocument, FormattedLine};
+
+    fn integrated_doc(value: &str) -> DocumentView {
+        DocumentView::new(value.to_string())
+            .border(false)
+            .scrollbar(true)
+            .scrollbar_config(
+                ScrollbarConfig::new().variant(crate::style::ScrollbarVariant::Integrated),
+            )
+    }
+
+    const PARENT_V_EDGE: ParentIntegrated = ParentIntegrated { v: true, h: false };
+
+    #[test]
+    fn ancestor_frame_edge_drops_the_standalone_column_from_the_natural_width() {
+        let dv = integrated_doc("a short line");
+
+        let (blind_w, _) = measure_document_view_with(&dv, ParentIntegrated::NONE);
+        let (framed_w, _) = measure_document_view_with(&dv, PARENT_V_EDGE);
+
+        assert_eq!(
+            blind_w,
+            framed_w + 1,
+            "an integrated bar hosted by an ancestor frame costs no content column"
+        );
+    }
+
+    #[test]
+    fn parent_frame_edge_participates_in_the_measure_cache_key() {
+        // The same DocumentView is measured by the tree-blind element pass and
+        // again by reconcile, which knows about the frame. The two results must
+        // not alias through the measure cache, in either order.
+        // `Auto` width so the measured size reflects the content, not the
+        // 40-column bound: `Flex` would clamp both results to `max_w` and hide
+        // any aliasing.
+        let dv = integrated_doc("a short line")
+            .width(Length::Auto)
+            .height(Length::Auto);
+
+        let blind = measure_document_view_constrained_with(&dv, Some(40), ParentIntegrated::NONE);
+        let framed = measure_document_view_constrained_with(&dv, Some(40), PARENT_V_EDGE);
+        // The second call must not be served the first one's cache entry: the
+        // frame-aware measure is exactly one column narrower.
+        assert_eq!(
+            blind.0,
+            framed.0 + 1,
+            "frame-aware measure aliased the tree-blind cache entry"
+        );
+        // And the reverse order is served correctly too.
+        assert_eq!(
+            measure_document_view_constrained_with(&dv, Some(40), PARENT_V_EDGE),
+            framed
+        );
+        assert_eq!(
+            measure_document_view_constrained_with(&dv, Some(40), ParentIntegrated::NONE),
+            blind
+        );
+    }
 
     #[test]
     fn constrained_measure_resolves_percent_width_from_max_width() {

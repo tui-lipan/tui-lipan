@@ -50,25 +50,23 @@ pub(crate) fn scroll_view_clip_rect(
                 }
             }
 
-            let parent_integrated_v = node.parent.is_some_and(|pid| {
-                matches!(
-                    &tree.node(pid).kind,
-                    NodeKind::Frame(props)
-                        if (props.has_border()
-                            && (props.border_edges.has_left() || props.border_edges.has_right()))
-                            || props.decorations.iter().any(|d| {
-                                d.placement == DecorationPlacement::Border
-                                    && matches!(d.edge, Edge::Left | Edge::Right)
-                            })
-                )
-            });
+            // Mirror `render_scroll_view`: an integrated scrollbar draws on the
+            // ScrollView's own border, or - when it is borderless - on the first
+            // *ancestor* `Frame` that exposes an edge. Checking only the direct
+            // parent clipped a column off nested ScrollViews that render their
+            // scrollbar on a grandparent frame.
             let use_integrated = scroll_view.scrollbar
                 && matches!(scroll_view.scrollbar_variant, ScrollbarVariant::Integrated)
-                && (scroll_view.props.border || parent_integrated_v);
+                && (scroll_view.props.border
+                    || tree
+                        .ancestor_frame_integrated_vscrollbar_x(node.parent)
+                        .is_some());
             let use_standalone = scroll_view.scrollbar && !use_integrated;
 
             if use_standalone && inner.w > 0 {
-                inner.w = inner.w.saturating_sub(1);
+                inner.w = inner
+                    .w
+                    .saturating_sub(1u16.saturating_add(scroll_view.scrollbar_gap));
             }
 
             clip = Some(match clip {
@@ -309,19 +307,32 @@ pub(crate) fn ancestor_frame_integrated_vtrack(
     None
 }
 
-/// Integrated tracks for [`TextArea`](crate::widgets::TextArea): first ancestor `Frame` that has any
-/// integrated edge (border or border-like decoration).
+/// Integrated tracks for widgets with both scroll axes.
+///
+/// Resolve each axis independently. A nearer frame may expose only a horizontal
+/// edge while a farther frame provides the vertical edge, or vice versa.
 pub(crate) fn ancestor_frame_integrated_tracks(
     state: &RenderState<'_, '_, '_>,
     mut cur: Option<NodeId>,
 ) -> Option<ParentFrameIntegratedTracks> {
+    let mut tracks = ParentFrameIntegratedTracks { v: None, h: None };
+
     while let Some(id) = cur {
         if let Some(t) = frame_integrated_tracks_at(state, id) {
-            return Some(t);
+            tracks.v = tracks.v.or(t.v);
+            tracks.h = tracks.h.or(t.h);
+            if tracks.v.is_some() && tracks.h.is_some() {
+                break;
+            }
         }
         cur = state.ctx.tree.node(id).parent;
     }
-    None
+
+    if tracks.v.is_none() && tracks.h.is_none() {
+        None
+    } else {
+        Some(tracks)
+    }
 }
 
 fn rect_right(rect: Rect) -> i16 {

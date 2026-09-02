@@ -50,6 +50,18 @@ pub(crate) fn reconcile_scroll_view(
     } = ctx;
     let epoch = *epoch;
     let focus = *focus;
+
+    // An `Integrated` scrollbar is painted *over* existing chrome, so it costs
+    // no content column. The chrome is either the ScrollView's own border or -
+    // when it is borderless - the first ancestor `Frame` that exposes an edge
+    // for it. `render_scroll_view` already resolves it that way; reserving a
+    // standalone column here left a dead gutter under the frame-drawn bar.
+    let parent_frame_v_edge = tree
+        .ancestor_frame_integrated_vscrollbar_x(tree.node(id).parent)
+        .is_some();
+    let integrated_v = matches!(sv.scrollbar_config.variant, ScrollbarVariant::Integrated)
+        && (sv.props.border || parent_frame_v_edge);
+
     let (
         mut layout_cache,
         mut virtual_cache,
@@ -124,9 +136,7 @@ pub(crate) fn reconcile_scroll_view(
             .and_then(|key| tree.remembered_scroll_anchor_by_key.get(key).cloned())
     };
 
-    let use_standalone = sv.scrollbar
-        && (!sv.props.border
-            || matches!(sv.scrollbar_config.variant, ScrollbarVariant::Standalone));
+    let use_standalone = sv.scrollbar && !integrated_v;
     let inner = rect.inner(sv.props.border, sv.props.padding);
     let horizontal_overflow = sv.axis.horizontal_enabled();
 
@@ -896,6 +906,7 @@ pub(crate) fn reconcile_scroll_view(
             scrollbar: actual_standalone || (sv.scrollbar && !use_standalone),
             scrollbar_variant: sv.scrollbar_config.variant,
             scrollbar_gap: sv.scrollbar_config.gap,
+            parent_integrated_v: parent_frame_v_edge,
             scrollbar_thumb: sv.scrollbar_config.thumb,
             scrollbar_thumb_style: sv.scrollbar_config.thumb_style,
             scrollbar_thumb_focus_style: sv.scrollbar_config.thumb_focus_style,

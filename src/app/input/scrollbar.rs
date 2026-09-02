@@ -521,8 +521,14 @@ pub(crate) fn compute_metrics(node: &Node, axis: ScrollbarAxis) -> Option<Scroll
                     return None;
                 }
 
-                let use_standalone_v = scroll_view.scrollbar
-                    && matches!(scroll_view.scrollbar_variant, ScrollbarVariant::Standalone);
+                // Mirror the renderer: an integrated vertical scrollbar draws
+                // on the ScrollView's own border or on the ancestor frame edge
+                // resolved during reconcile, and only a standalone one narrows
+                // the horizontal track.
+                let integrated_v =
+                    matches!(scroll_view.scrollbar_variant, ScrollbarVariant::Integrated)
+                        && (scroll_view.props.border || scroll_view.parent_integrated_v);
+                let use_standalone_v = scroll_view.scrollbar && !integrated_v;
                 let mut content_inner = inner;
                 if use_standalone_v && content_inner.w > 0 {
                     content_inner.w = content_inner
@@ -1000,6 +1006,101 @@ mod tests {
         // bottom row, so the vertical track spans 9 rows (leaving a clean corner)
         // and the drag geometry matches the render.
         assert_eq!(metrics.inner.h, 9);
+    }
+
+    fn integrated_scroll_view(children: usize, line_w: usize) -> ScrollView {
+        ScrollView::new()
+            .axis(crate::widgets::ScrollAxis::Both)
+            .scrollbar(true)
+            .scrollbar_config(
+                crate::style::ScrollbarConfig::new()
+                    .variant(crate::style::ScrollbarVariant::Integrated),
+            )
+            .h_scrollbar(true)
+            .children((0..children).map(|_| {
+                Text::new("x".repeat(line_w))
+                    .width(Length::Auto)
+                    .height(Length::Px(1))
+                    .into()
+            }))
+    }
+
+    fn scroll_view_node(tree: &NodeTree) -> &crate::core::node::Node {
+        tree.iter()
+            .find(|node| matches!(node.kind, NodeKind::ScrollView(_)))
+            .expect("expected a scroll view node")
+    }
+
+    #[test]
+    fn horizontal_track_narrows_when_integrated_falls_back_to_standalone() {
+        // `Integrated` with neither an own border nor an ancestor frame edge has
+        // no chrome to draw on, so the renderer falls back to a standalone bar
+        // that costs a content column. The drag geometry must agree, or the
+        // horizontal track maps cursor positions against a track one column too
+        // wide.
+        let root: crate::Element = integrated_scroll_view(30, 60).into();
+        let tree = reconcile(root, 20, 10);
+        let node = scroll_view_node(&tree);
+
+        let metrics = compute_metrics(node, ScrollbarAxis::Horizontal).expect("horizontal metrics");
+        assert_eq!(
+            metrics.inner.w, 19,
+            "standalone fallback must reserve its column in the horizontal track"
+        );
+    }
+
+    #[test]
+    fn horizontal_track_keeps_full_width_on_ancestor_frame_edge() {
+        // Same ScrollView, now under a bordered Frame: the vertical bar is drawn
+        // on the frame border and costs no content column.
+        let root: crate::Element = crate::widgets::Frame::new()
+            .child(integrated_scroll_view(30, 60))
+            .into();
+        let tree = reconcile(root, 20, 10);
+        let node = scroll_view_node(&tree);
+
+        let inner_w = node.rect.inner(false, crate::style::Padding::default()).w;
+        let metrics = compute_metrics(node, ScrollbarAxis::Horizontal).expect("horizontal metrics");
+        assert_eq!(
+            metrics.inner.w, inner_w,
+            "an integrated bar on the frame border must not narrow the horizontal track"
+        );
+    }
+
+    #[test]
+    fn horizontal_hit_zone_matches_the_rendered_content_width() {
+        // `compute_scrollbar_zones` subtracts the standalone scrollbar column
+        // itself. Deducting it again before handing over `content_width` made
+        // the horizontal hit zone a column too narrow.
+        let root: crate::Element = ScrollView::new()
+            .axis(crate::widgets::ScrollAxis::Both)
+            .scrollbar(true)
+            .h_scrollbar(true)
+            .children((0..30).map(|_| {
+                Text::new("x".repeat(60))
+                    .width(Length::Auto)
+                    .height(Length::Px(1))
+                    .into()
+            }))
+            .into();
+        let tree = reconcile(root, 20, 10);
+        let node = scroll_view_node(&tree);
+
+        let zones = crate::core::node::scrollbar_zones(&tree, node);
+        let horizontal = zones
+            .iter()
+            .find(|zone| zone.axis == ScrollbarAxis::Horizontal)
+            .expect("expected a horizontal scrollbar zone");
+        let metrics = compute_metrics(node, ScrollbarAxis::Horizontal).expect("horizontal metrics");
+
+        assert_eq!(
+            horizontal.rect.w, 19,
+            "the standalone vertical column must be deducted exactly once"
+        );
+        assert_eq!(
+            horizontal.rect.w, metrics.inner.w,
+            "hit zone and drag geometry must describe the same track"
+        );
     }
 
     #[test]

@@ -243,7 +243,7 @@ pub(crate) fn auto_height_for_visual_plan(
     let h_scrollbar_over_border = super::layout::h_scrollbar_over_border(
         dv_node.h_scrollbar,
         dv_node.h_scrollbar_variant,
-        dv_node.border,
+        dv_node.border || dv_node.parent_integrated_h,
     );
     let h_scrollbar_visible = super::layout::h_scrollbar_visible(
         dv_node.h_scrollbar,
@@ -270,7 +270,7 @@ pub(crate) fn viewport_height_for_visual_plan(
     let h_scrollbar_over_border = super::layout::h_scrollbar_over_border(
         dv_node.h_scrollbar,
         dv_node.h_scrollbar_variant,
-        dv_node.border,
+        dv_node.border || dv_node.parent_integrated_h,
     );
     let h_scrollbar_visible = super::layout::h_scrollbar_visible(
         dv_node.h_scrollbar,

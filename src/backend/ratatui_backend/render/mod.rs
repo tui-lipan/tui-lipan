@@ -66,7 +66,7 @@ use crate::backend::ratatui_backend::renderers::{
 };
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::style::resolve::{resolve_base_style, resolve_force_accent_style};
-use crate::style::{Rect, Style, StyleSlot, ThemeRole, resolve_slot};
+use crate::style::{Rect, ScrollbarVariant, Style, StyleSlot, ThemeRole, resolve_slot};
 use crate::utils::scrollbar::ScrollbarMetricsCache;
 use crate::widgets::internal::{FrameGeometry, StackProps, compute_frame_geometry};
 use crate::widgets::{DragSlot, DropHighlight};
@@ -1452,6 +1452,18 @@ fn render_node(
                 .copy_feedback
                 .filter(|feedback| feedback.is_active(node_id))
                 .map(|_| state.ctx.copy_feedback_style);
+            // A borderless DocumentView hangs its integrated scrollbars on the
+            // first ancestor `Frame` that exposes an edge, same as List/Table/
+            // TextArea.
+            let parent_tracks = if !dv.border
+                && ((dv.scrollbar && matches!(dv.scrollbar_variant, ScrollbarVariant::Integrated))
+                    || (dv.h_scrollbar
+                        && matches!(dv.h_scrollbar_variant, ScrollbarVariant::Integrated)))
+            {
+                ancestor_frame_integrated_tracks(state, node.parent)
+            } else {
+                None
+            };
             render_document_view(
                 state.f,
                 dv,
@@ -1461,6 +1473,8 @@ fn render_node(
                     is_focused,
                     is_hovered,
                     scrollbar_focus_override,
+                    parent_integrated_v: parent_tracks.and_then(|t| t.v),
+                    parent_integrated_h: parent_tracks.and_then(|t| t.h),
                     theme: active_theme,
                     copy_feedback_style,
                     #[cfg(feature = "diff-view")]

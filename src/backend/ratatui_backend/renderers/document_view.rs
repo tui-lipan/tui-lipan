@@ -10,12 +10,13 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::ContrastPolicy;
 use crate::backend::ratatui_backend::common::{
     DEFAULT_SCROLLBAR_THUMB, IntegratedScrollbarAppearance, InteractiveStyleState,
-    ScrollbarAppearance, ScrollbarScrollState, border_horizontal_char, border_vertical_char,
-    calculate_visible_borders, fill_rect_clipped_style, render_hscrollbar,
+    ScrollbarAppearance, ScrollbarScrollState, calculate_visible_borders, fill_rect_clipped_style,
+    integrated_hscrollbar_track_char, integrated_vscrollbar_track_char, render_hscrollbar,
     render_integrated_hscrollbar, render_integrated_scrollbar, render_vscrollbar,
     resolve_interactive_style, resolve_scrollbar_thumb_style, style_paints_bg,
     to_ratatui_border_set, to_ratatui_border_type, to_ratatui_rect, to_ratatui_style,
 };
+use crate::backend::ratatui_backend::render::{FrameIntegratedHTrack, FrameIntegratedVTrack};
 use crate::style::resolve::{
     resolve_base_style, resolve_focus_style_defaults, resolve_scrollbar_theme,
 };
@@ -42,6 +43,11 @@ pub(crate) struct DocumentViewRenderCtx<'a> {
     pub is_focused: bool,
     pub is_hovered: bool,
     pub scrollbar_focus_override: bool,
+    /// Integrated scrollbar tracks on the first ancestor `Frame` that exposes an
+    /// edge, for a borderless DocumentView. `None` when the widget draws its own
+    /// border or no such ancestor exists.
+    pub parent_integrated_v: Option<FrameIntegratedVTrack>,
+    pub parent_integrated_h: Option<FrameIntegratedHTrack>,
     pub theme: &'a Theme,
     pub copy_feedback_style: Option<Style>,
     #[cfg(feature = "diff-view")]
@@ -60,6 +66,8 @@ pub(crate) fn render_document_view(
         is_focused,
         is_hovered,
         scrollbar_focus_override,
+        parent_integrated_v,
+        parent_integrated_h,
         theme,
         copy_feedback_style,
         #[cfg(feature = "diff-view")]
@@ -160,9 +168,12 @@ pub(crate) fn render_document_view(
     let gutter = node.gutter_width();
 
     // ── Scrollbar space calculation ─────────────────────────────────────
-    let is_v_integrated = matches!(node.scrollbar_variant, ScrollbarVariant::Integrated) && border;
+    // An integrated scrollbar draws on chrome that already exists: this widget's
+    // own border, or the first ancestor `Frame` that exposes an edge for it.
+    let is_v_integrated = matches!(node.scrollbar_variant, ScrollbarVariant::Integrated)
+        && (border || parent_integrated_v.is_some());
     let scrollbar_cols: u16 = if node.scrollbar && !is_v_integrated {
-        1
+        1u16.saturating_add(node.scrollbar_gap)
     } else {
         0
     };
@@ -173,8 +184,8 @@ pub(crate) fn render_document_view(
         .saturating_sub(scrollbar_cols);
     let h_scrollbar_visible =
         node.h_scrollbar && !node.wrap && (node.max_line_width as usize) > (content_w as usize);
-    let is_h_integrated =
-        matches!(node.h_scrollbar_variant, ScrollbarVariant::Integrated) && border;
+    let is_h_integrated = matches!(node.h_scrollbar_variant, ScrollbarVariant::Integrated)
+        && (border || parent_integrated_h.is_some());
 
     let mut viewport_h = inner.h as usize;
     if h_scrollbar_visible && !is_h_integrated {
@@ -434,14 +445,38 @@ pub(crate) fn render_document_view(
         let track_style = scrollbar_track_style;
 
         if is_v_integrated {
-            // Integrated: render on the right border column
+            // Integrated: render on the right border column, or on the ancestor
+            // frame edge hosting it when this DocumentView is borderless.
             let sb_rect = Rect {
-                x: rect.x.saturating_add(rect.w.saturating_sub(1) as i16),
+                x: parent_integrated_v
+                    .map(|p| p.track_x)
+                    .unwrap_or_else(|| rect.x.saturating_add(rect.w.saturating_sub(1) as i16)),
                 y: inner.y,
                 w: 1,
                 h: viewport_h as u16,
             };
-            let border_char = border_vertical_char(border_style);
+            let track_fallback = parent_integrated_v
+                .map(|p| p.border_style_fallback)
+                .unwrap_or(border_style);
+            let mut v_scratch = [0u8; 4];
+            let border_char = integrated_vscrollbar_track_char(
+                parent_integrated_v.and_then(|p| p.track_glyph),
+                track_fallback,
+                &mut v_scratch,
+            );
+            // An ancestor frame's border column sits outside this widget's clip.
+            // Keep the vertical clipping, but move the band onto the track.
+            let sb_clip = match parent_integrated_v {
+                Some(_) => {
+                    let track = to_ratatui_rect(sb_rect);
+                    ratatui::layout::Rect {
+                        x: track.x,
+                        width: track.width,
+                        ..clip_rrect
+                    }
+                }
+                None => clip_rrect,
+            };
             render_integrated_scrollbar(
                 f,
                 sb_rect,
@@ -453,10 +488,12 @@ pub(crate) fn render_document_view(
                 IntegratedScrollbarAppearance {
                     thumb_char: thumb,
                     border_char,
-                    base_style: chrome_style,
+                    base_style: parent_integrated_v
+                        .map(|p| p.track_style)
+                        .unwrap_or(chrome_style),
                     thumb_style,
                     track_style,
-                    clip_rect: Some(clip_rrect),
+                    clip_rect: Some(sb_clip),
                     metrics_cache: None,
                 },
             );
@@ -500,14 +537,36 @@ pub(crate) fn render_document_view(
         let h_track_style = scrollbar_track_style;
 
         if is_h_integrated {
-            // Integrated: render on the bottom border row
+            // Integrated: render on the bottom border row, or on the ancestor
+            // frame edge hosting it when this DocumentView is borderless.
             let sb_rect = Rect {
                 x: content_x,
-                y: rect.y.saturating_add(rect.h.saturating_sub(1) as i16),
+                y: parent_integrated_h
+                    .map(|p| p.track_y)
+                    .unwrap_or_else(|| rect.y.saturating_add(rect.h.saturating_sub(1) as i16)),
                 w: content_w,
                 h: 1,
             };
-            let border_char = border_horizontal_char(border_style);
+            let track_fallback = parent_integrated_h
+                .map(|p| p.border_style_fallback)
+                .unwrap_or(border_style);
+            let mut h_scratch = [0u8; 4];
+            let border_char = integrated_hscrollbar_track_char(
+                parent_integrated_h.and_then(|p| p.track_glyph),
+                track_fallback,
+                &mut h_scratch,
+            );
+            let sb_clip = match parent_integrated_h {
+                Some(_) => {
+                    let track = to_ratatui_rect(sb_rect);
+                    ratatui::layout::Rect {
+                        y: track.y,
+                        height: track.height,
+                        ..clip_rrect
+                    }
+                }
+                None => clip_rrect,
+            };
             render_integrated_hscrollbar(
                 f,
                 sb_rect,
@@ -519,10 +578,12 @@ pub(crate) fn render_document_view(
                 IntegratedScrollbarAppearance {
                     thumb_char: h_thumb,
                     border_char,
-                    base_style: chrome_style,
+                    base_style: parent_integrated_h
+                        .map(|p| p.track_style)
+                        .unwrap_or(chrome_style),
                     thumb_style: h_thumb_style,
                     track_style: h_track_style,
-                    clip_rect: Some(clip_rrect),
+                    clip_rect: Some(sb_clip),
                     metrics_cache: None,
                 },
             );
