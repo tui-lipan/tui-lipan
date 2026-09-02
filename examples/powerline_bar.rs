@@ -277,76 +277,96 @@ mod tests {
     use super::*;
     use tui_lipan::TestBackend;
 
+    /// Render this example on a thread with room to spare.
+    ///
+    /// The default 2 MiB test-thread stack is not enough for a debug build of this
+    /// particular tree: eight stacked demos, each a chain of badges, recursed through
+    /// layout and render frames that carry every branch's locals when unoptimized. A real
+    /// app renders on the 8 MiB main thread and a release build needs a fraction of this,
+    /// so the size belongs here rather than in the engine.
+    fn with_render_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(body)
+            .expect("spawn render thread")
+            .join()
+            .expect("render thread panicked")
+    }
+
     #[test]
     fn powerline_segments_render_as_compact_zero_gap_chains() {
-        let mut backend = TestBackend::new(PowerlineBar);
-        backend.set_viewport(Rect {
-            x: 0,
-            y: 0,
-            w: 80,
-            h: 20,
+        with_render_stack(|| {
+            let mut backend = TestBackend::new(PowerlineBar);
+            backend.set_viewport(Rect {
+                x: 0,
+                y: 0,
+                w: 80,
+                h: 20,
+            });
+            backend.render();
+            let frame = backend.capture_frame();
+            let grid = frame.to_fixed_grid();
+
+            assert!(grid.contains("Padded  MAIN  +3  RUST  READY"));
+            assert!(grid.contains("Half ▐MAIN ▐+3 ▐RUST ▐READY"));
+            assert!(grid.contains("Round MAIN +3 RUST READY"));
+            assert!(grid.contains("Arrow MAIN +3 RUST READY"));
+            assert!(grid.contains("Same ONE TWO THREE"));
+
+            let arrow_y = frame
+                .to_fixed_grid_lines()
+                .iter()
+                .position(|line| line.contains("Arrow MAIN"))
+                .unwrap() as u16;
+            let arrows: Vec<_> = (0..frame.width)
+                .filter(|&x| frame.cell(x, arrow_y).symbol == "")
+                .collect();
+            assert_eq!(arrows.len(), 4);
+            assert_eq!(frame.cell(arrows[0], arrow_y).fg, COLORS[0]);
+            assert_eq!(frame.cell(arrows[0], arrow_y).bg, BAR_BG);
+            assert_eq!(frame.cell(arrows[1], arrow_y).fg, COLORS[1]);
+            assert_eq!(frame.cell(arrows[1], arrow_y).bg, COLORS[0]);
+
+            let same_y = frame
+                .to_fixed_grid_lines()
+                .iter()
+                .position(|line| line.contains("Same ONE"))
+                .unwrap() as u16;
+            let separators: Vec<_> = (0..frame.width)
+                .filter(|&x| frame.cell(x, same_y).symbol == "")
+                .collect();
+            assert_eq!(separators.len(), 2);
+            assert_eq!(frame.cell(separators[0], same_y).bg, COLORS[0]);
+            assert_ne!(frame.cell(separators[0], same_y).fg, COLORS[0]);
         });
-        backend.render();
-        let frame = backend.capture_frame();
-        let grid = frame.to_fixed_grid();
-
-        assert!(grid.contains("Padded  MAIN  +3  RUST  READY"));
-        assert!(grid.contains("Half ▐MAIN ▐+3 ▐RUST ▐READY"));
-        assert!(grid.contains("Round MAIN +3 RUST READY"));
-        assert!(grid.contains("Arrow MAIN +3 RUST READY"));
-        assert!(grid.contains("Same ONE TWO THREE"));
-
-        let arrow_y = frame
-            .to_fixed_grid_lines()
-            .iter()
-            .position(|line| line.contains("Arrow MAIN"))
-            .unwrap() as u16;
-        let arrows: Vec<_> = (0..frame.width)
-            .filter(|&x| frame.cell(x, arrow_y).symbol == "")
-            .collect();
-        assert_eq!(arrows.len(), 4);
-        assert_eq!(frame.cell(arrows[0], arrow_y).fg, COLORS[0]);
-        assert_eq!(frame.cell(arrows[0], arrow_y).bg, BAR_BG);
-        assert_eq!(frame.cell(arrows[1], arrow_y).fg, COLORS[1]);
-        assert_eq!(frame.cell(arrows[1], arrow_y).bg, COLORS[0]);
-
-        let same_y = frame
-            .to_fixed_grid_lines()
-            .iter()
-            .position(|line| line.contains("Same ONE"))
-            .unwrap() as u16;
-        let separators: Vec<_> = (0..frame.width)
-            .filter(|&x| frame.cell(x, same_y).symbol == "")
-            .collect();
-        assert_eq!(separators.len(), 2);
-        assert_eq!(frame.cell(separators[0], same_y).bg, COLORS[0]);
-        assert_ne!(frame.cell(separators[0], same_y).fg, COLORS[0]);
     }
 
     #[test]
     fn nerd_font_fallback_uses_plain_padded_badges() {
-        let mut backend = TestBackend::new(PowerlineBar);
-        backend.set_viewport(Rect {
-            x: 0,
-            y: 0,
-            w: 80,
-            h: 20,
-        });
-        backend
-            .send_key(KeyEvent {
-                code: KeyCode::Char('n'),
-                mods: KeyMods::NONE,
-            })
-            .unwrap();
-        backend.render();
-        let grid = backend.capture_frame().to_fixed_grid();
+        with_render_stack(|| {
+            let mut backend = TestBackend::new(PowerlineBar);
+            backend.set_viewport(Rect {
+                x: 0,
+                y: 0,
+                w: 80,
+                h: 20,
+            });
+            backend
+                .send_key(KeyEvent {
+                    code: KeyCode::Char('n'),
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+            backend.render();
+            let grid = backend.capture_frame().to_fixed_grid();
 
-        assert!(grid.contains("Round  MAIN  +3  RUST  READY"));
-        assert!(grid.contains("Arrow  MAIN  +3  RUST  READY"));
-        assert!(grid.contains("Same  ONE ▏TWO ▏THREE"));
-        assert!(!grid.contains(''));
-        assert!(!grid.contains(''));
-        assert!(!grid.contains(''));
-        assert_eq!(grid.matches('▏').count(), 2);
+            assert!(grid.contains("Round  MAIN  +3  RUST  READY"));
+            assert!(grid.contains("Arrow  MAIN  +3  RUST  READY"));
+            assert!(grid.contains("Same  ONE ▏TWO ▏THREE"));
+            assert!(!grid.contains(''));
+            assert!(!grid.contains(''));
+            assert!(!grid.contains(''));
+            assert_eq!(grid.matches('▏').count(), 2);
+        });
     }
 }

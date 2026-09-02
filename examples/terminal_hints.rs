@@ -6,9 +6,7 @@
 use std::time::Duration;
 
 use tui_lipan::prelude::*;
-use tui_lipan::utils::hints::{
-    HOME_ROW_HINT_KEYS, HintKind, HintMatch, HintScan, HintSpan, assign_labels,
-};
+use tui_lipan::utils::hints::{HOME_ROW_HINT_KEYS, HintKind, HintMatch, HintScan, assign_labels};
 
 const TERMINAL_KEY: &str = "hint-terminal";
 const IPV4_HINT_ID: u16 = 1;
@@ -405,6 +403,7 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     use tui_lipan::TestBackend;
+    use tui_lipan::utils::hints::HintSpan;
 
     fn hint(kind: HintKind) -> HintMatch {
         HintMatch {

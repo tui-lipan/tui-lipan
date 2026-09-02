@@ -129,7 +129,13 @@ fn copy_mode_highlight(
         .selection(total_scrollback_rows)
         .unwrap_or_else(|| TerminalSelection::new(cursor));
     let (_, end) = selection.normalized();
-    if selection.anchor == end {
+    if selection.anchor == selection.cursor {
+        // No anchor set yet, so both ends sit on the same cell. Widen forward from the
+        // cursor: advancing the anchor instead would leave it past the cursor, a
+        // backwards selection that highlights the same cell but reads inside out.
+        selection.cursor.col = selection.cursor.col.saturating_add(1);
+    } else if selection.anchor == end {
+        // Selection runs backwards, so the anchor is the later endpoint to widen.
         selection.anchor.col = selection.anchor.col.saturating_add(1);
     } else {
         selection.cursor.col = selection.cursor.col.saturating_add(1);
