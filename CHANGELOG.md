@@ -11,6 +11,24 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Changed
+
+- termina moves to `0.4`, and the `[patch.crates-io]` stanza that carried the unreleased
+  mouse-coordinate fix is gone. termina 0.4.0 ships that fix (38047a2, helix-editor/termina#28),
+  so an app depending on tui-lipan from crates.io no longer needs to copy the stanza into its own
+  manifest to keep a report of column or row `0` from panicking the input worker. `ratatui-termina`
+  still requires termina `0.3`, so the graph resolves both versions until ratatui bumps; nothing in
+  tui-lipan bridges the two, and `[bans] multiple-versions` already allows it.
+
+### Fixed
+
+- The input worker no longer dies when its own waker interrupts a read. termina 0.4 returns
+  `io::ErrorKind::Interrupted` from `EventReader::read` when a waker unblocks it, and the worker
+  treated every read error as fatal - so the wake that exists to deliver a command would instead
+  report an input error and stop the reader thread, leaving the application without input. An
+  interrupt is now the command signal it was always meant to be. A wake arriving during a host
+  color query likewise abandons the query and re-arms the refresh instead of failing the worker.
+
 ## [0.4.1] - 2026-09-02
 
 ### Fixed

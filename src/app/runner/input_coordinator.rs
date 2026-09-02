@@ -297,6 +297,10 @@ fn run_worker(
                         break;
                     }
                 }
+                // The waker unblocks this read to hand the worker a command, so an interrupt is
+                // the signal working as intended rather than a failed read. Loop around and let
+                // `process_worker_commands` collect what the wake was for.
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
                 Err(err) => {
                     let _ = events.send(RunnerEvent::InputError(err.to_string()));
                     break;
@@ -411,7 +415,16 @@ fn query_host_colors(
         if !reader.poll(Some(remaining), |_| true)? {
             break;
         }
-        let event = reader.read(|_| true)?;
+        let event = match reader.read(|_| true) {
+            Ok(event) => event,
+            // A command is waiting. Abandon the query rather than making the worker unreachable
+            // until the deadline, and re-arm the refresh so the colors still resolve afterwards.
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                refresh.request();
+                return Ok(None);
+            }
+            Err(err) => return Err(err),
+        };
         if let Some((slot, color)) = dynamic_color_response(&event) {
             match slot {
                 DynamicColorNumber::TextForegroundColor => foreground = Some(color),
