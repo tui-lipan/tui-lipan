@@ -11,6 +11,32 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- `FileTree` shows where a symlink points, as `link → target`, the way `ls -l` reports it. On by
+  default; `symlink_targets(false)` turns it off, `symlink_target_arrow(...)` replaces the arrow
+  for a font that has none, and `symlink_target_style(...)` restyles the suffix (dim by default).
+  The target shares the row's suffix budget with any change metadata and sits ahead of it. Local
+  trees read the target when a directory is listed; a tree served through `entry_source` shows
+  what its entries carry in the new `FileTreeEntry::symlink_target(...)`, since the widget cannot
+  follow a link on another host.
+- `FileTreeEntry` carries a `symlink_target` field to hold that target. Its constructors and
+  builders are unchanged, but the struct has public fields: code that builds one as a struct
+  literal has to name the new field. (breaking)
+
+### Fixed
+
+- `FileTree` in `FileTreeChangeView::ChangedOnly` no longer replaces the whole tree with its
+  `empty_text` when the root row is collapsed. Emptiness now comes from the change projection
+  itself rather than the rows it happens to be drawing, so folding the heading shut hides the
+  changed files without claiming there are none, and leaves a heading to click back open. An
+  explorer query that matches nothing still shows the placeholder.
+- `FileTree` rows for symlinks now carry the link's own path rather than the target's. Resolving
+  the link gave two rows one identity — a repository where `CLAUDE.md` links to `AGENTS.md` had
+  both rows spelled `AGENTS.md` — so moving the cursor onto one landed on the other, and the git
+  decorations of one were shown on both. Paths in `FileTreeEvent` for a symlink now name the link,
+  which is also what `git status` reports.
+
 ## [0.5.0] - 2026-09-02
 
 ### Added

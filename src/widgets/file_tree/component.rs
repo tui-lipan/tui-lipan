@@ -54,6 +54,11 @@ pub(crate) struct FileTreeState {
     pub(crate) search_found_dir: Option<Arc<str>>,
     pub(crate) requested_entry_paths: HashSet<Arc<str>>,
     pub(crate) uncontrolled_selected_path: Option<Arc<str>>,
+    /// Where each symlink in the tree points, keyed by the link's own path.
+    ///
+    /// Kept beside the tree rather than on `FsNode` for the same reason the git decorations are:
+    /// it is one string for a rare kind of node, and every other node would carry an empty slot.
+    pub(crate) symlink_targets: HashMap<Arc<str>, Arc<str>>,
 }
 
 #[derive(Clone, Debug)]
@@ -113,6 +118,9 @@ pub(crate) struct VisibleFileTreeEntry {
 
 struct FileTreeProjection {
     root: TreeNode,
+    /// Whether the tree this projection was built from had nothing to show, independent of what the
+    /// projection actually rendered. Collapsing a directory removes its rows without emptying it.
+    source_is_empty: bool,
     lookup: Arc<HashMap<crate::widgets::TreePath, VisibleFileTreeEntry>>,
     path_to_visible_index: HashMap<Arc<str>, usize>,
 }
@@ -122,6 +130,7 @@ struct ProjectionBuildContext<'a> {
     expanded: &'a HashSet<Arc<str>>,
     explorer_filter: Option<&'a ExplorerFilter>,
     git_decorations: &'a HashMap<Arc<str>, GitFileDecorations>,
+    symlink_targets: &'a HashMap<Arc<str>, Arc<str>>,
     path_styles: &'a HashMap<Arc<str>, FileTreeItemStyle>,
     lookup: &'a mut HashMap<crate::widgets::TreePath, VisibleFileTreeEntry>,
 }
@@ -166,10 +175,12 @@ impl Component for FileTreeComponent {
             search_found_dir: None,
             requested_entry_paths: HashSet::new(),
             uncontrolled_selected_path,
+            symlink_targets: HashMap::new(),
         };
 
         apply_initial_expanded_paths(&mut state, props);
         apply_reveal_paths_to_state(&mut state, props);
+        sync_symlink_targets(&mut state, props);
         state
     }
 
@@ -527,6 +538,7 @@ impl Component for FileTreeComponent {
                 ctx.state.root = result.snapshot;
                 ctx.state.entry_refresh_pending = false;
                 ctx.state.entry_refresh_completed_token = result.token;
+                sync_symlink_targets(&mut ctx.state, &ctx.props);
                 if !ctx.props.explorer || ctx.state.explorer_input.text().trim().is_empty() {
                     normalize_uncontrolled_selection(&ctx.props, &mut ctx.state);
                 }
@@ -771,8 +783,10 @@ impl Component for FileTreeComponent {
             let (root, root_virtual) = initial_root(&ctx.props);
             ctx.state.root = root;
             ctx.state.root_virtual = root_virtual;
+            sync_symlink_targets(&mut ctx.state, &ctx.props);
         } else if source_changed && uses_provided_entries(&ctx.props) {
             apply_changed_provided_listings(&mut ctx.state.root, old_props, &ctx.props);
+            sync_symlink_targets(&mut ctx.state, &ctx.props);
         }
 
         if local_entry_token_changed || (source_changed && !root_mode_changed) {
@@ -840,6 +854,10 @@ impl Component for FileTreeComponent {
 /// A `git status` still running is not the same as a clean tree, so a pending snapshot holds the
 /// heading rather than claiming an answer it does not have yet. Provided change data has no such
 /// moment: whatever the application passed is the answer, and its own loading state is its to show.
+///
+/// Emptiness comes from the projection's source, not its rows: a collapsed root draws no children
+/// while still having them, and treating that as clean would swap the whole tree for the
+/// placeholder as soon as the user folded the heading shut.
 fn changed_only_projection_is_empty(
     props: &FileTreeProps,
     state: &FileTreeState,
@@ -848,7 +866,7 @@ fn changed_only_projection_is_empty(
     props.change_view == FileTreeChangeView::ChangedOnly
         && props.empty_text.is_some()
         && !state.git_snapshot_pending
-        && projection.root.children.is_empty()
+        && projection.source_is_empty
 }
 
 /// The empty changed-only view: the same `List` the tree renders into, with no rows, so the
@@ -965,6 +983,7 @@ fn rebuild_root_for_props(state: &mut FileTreeState, props: &FileTreeProps) {
     state.requested_entry_paths.clear();
     state.uncontrolled_selected_path = initial_uncontrolled_selected_path(props, &state.root);
     apply_initial_expanded_paths(state, props);
+    sync_symlink_targets(state, props);
 }
 
 /// Seed the tree's own expansion set from `initial_expanded_paths`, at the two moments it has none
@@ -1538,6 +1557,71 @@ fn restart_explorer_search_after_entry_refresh(
     ))
 }
 
+/// Learn where the tree's symlinks point, for the `link → target` suffix.
+///
+/// Rebuilt from the tree rather than accumulated, so a link that was repointed between listings
+/// reports where it points now, and a directory that has since collapsed out of the tree stops
+/// being remembered. That costs one `read_link` per link on the tree, which is why this runs where
+/// the tree changes shape rather than per frame — and why a tree with no links costs a walk.
+///
+/// Under a provided entry source the targets come from the listings: the widget cannot follow a
+/// link that lives on another host.
+fn sync_symlink_targets(state: &mut FileTreeState, props: &FileTreeProps) {
+    if !props.symlink_targets {
+        return;
+    }
+    state.symlink_targets.clear();
+    if uses_provided_entries(props) {
+        collect_provided_symlink_targets(&state.root, props, &mut state.symlink_targets);
+    } else {
+        collect_local_symlink_targets(&state.root, &mut state.symlink_targets);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn collect_local_symlink_targets(node: &FsNode, targets: &mut HashMap<Arc<str>, Arc<str>>) {
+    if matches!(node.kind, FileKind::Symlink)
+        && let Ok(target) = std::fs::read_link(node.path.as_ref())
+    {
+        targets.insert(
+            node.path.clone(),
+            Arc::from(target.to_string_lossy().as_ref()),
+        );
+    }
+    for child in &node.children {
+        collect_local_symlink_targets(child, targets);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn collect_local_symlink_targets(_node: &FsNode, _targets: &mut HashMap<Arc<str>, Arc<str>>) {}
+
+fn collect_provided_symlink_targets(
+    root: &FsNode,
+    props: &FileTreeProps,
+    targets: &mut HashMap<Arc<str>, Arc<str>>,
+) {
+    let FileTreeEntrySource::Provided(listings) = &props.entry_source else {
+        return;
+    };
+    for (directory, listing) in provided_listing_map(root.path.as_ref(), listings) {
+        let Ok(entries) = &listing.entries else {
+            continue;
+        };
+        for entry in entries.iter() {
+            let Some(target) = entry.symlink_target.as_ref() else {
+                continue;
+            };
+            if !is_valid_provided_name(entry.name.as_ref()) {
+                continue;
+            }
+            let path =
+                lexical_normalize_path(&Path::new(directory.as_ref()).join(entry.name.as_ref()));
+            targets.insert(Arc::from(path.to_string_lossy().as_ref()), target.clone());
+        }
+    }
+}
+
 fn apply_directory_load(node: &mut FsNode, result: super::fs::DirectoryLoadResult) {
     node.loading = false;
     node.loaded = true;
@@ -1588,6 +1672,7 @@ fn load_expanded_directories(
             props.max_entries_per_dir,
         );
     }
+    sync_symlink_targets(state, props);
 }
 
 fn load_local_snapshot(
@@ -1789,6 +1874,18 @@ fn build_projection(
         state.root.clone()
     };
     let expanded = effective_expanded_paths(props, state);
+    // Whether there is anything to project, read off the source tree rather than the rows that come
+    // out of it. A collapsed root contributes no rows at all, and answering "nothing changed"
+    // because the heading is closed would replace the whole tab with its empty state the moment the
+    // user folds it shut. A filter is different: it is the user narrowing the same set, so a query
+    // that matches nothing really does leave nothing to show.
+    let source_is_empty = root.children.is_empty()
+        || explorer_filter.is_some_and(|filter| {
+            !root
+                .children
+                .iter()
+                .any(|child| filter.visible_paths.contains(&child.path))
+        });
 
     let mut lookup = HashMap::new();
     let path_styles = resolved_path_styles(
@@ -1801,6 +1898,7 @@ fn build_projection(
         expanded: expanded.as_ref(),
         explorer_filter,
         git_decorations: &snapshot.entries,
+        symlink_targets: &state.symlink_targets,
         path_styles: &path_styles,
         lookup: &mut lookup,
     };
@@ -1809,6 +1907,7 @@ fn build_projection(
 
     FileTreeProjection {
         root,
+        source_is_empty,
         lookup: Arc::new(lookup),
         path_to_visible_index,
     }
@@ -1998,6 +2097,12 @@ fn build_projected_tree_node(
         ctx.props.change_suffix_style,
         path_style.and_then(|style| style.suffix),
     );
+    // Ahead of the change metadata, and styled on its own: where a link points is a property of the
+    // name, while `M +3 -1` describes the file's state, and `change_suffix_style` speaks for the
+    // latter alone.
+    if let Some(target) = symlink_target_span(node, ctx) {
+        description_spans.insert(0, target);
+    }
 
     let mut item = ListItem::from_spans(spans).primary_truncate_description_first(matches!(
         ctx.props.change_suffix_priority,
@@ -2061,6 +2166,24 @@ fn build_projected_tree_node(
     }
 
     tree
+}
+
+/// The ` → target` that follows a symlink's name, when the tree knows where it points.
+///
+/// One span rather than an arrow plus a target: they are never styled apart, and keeping them
+/// together means truncation drops the whole suffix instead of leaving a dangling arrow.
+fn symlink_target_span(
+    node: &FsNode,
+    ctx: &ProjectionBuildContext<'_>,
+) -> Option<crate::style::Span> {
+    if !ctx.props.symlink_targets || !matches!(node.kind, FileKind::Symlink) {
+        return None;
+    }
+    let target = ctx.symlink_targets.get(node.path.as_ref())?;
+    Some(
+        crate::style::Span::new(format!(" {} {target}", ctx.props.symlink_target_arrow))
+            .style(ctx.props.symlink_target_style),
+    )
 }
 
 fn apply_suffix_style(
@@ -2611,6 +2734,11 @@ mod tests {
     use crate::style::{Color, Rect, Theme};
     use std::cell::RefCell;
     use std::rc::Rc;
+    use std::sync::LazyLock;
+
+    /// For the projection tests that build their own context: a tree with no symlinks in it needs
+    /// no targets, and a borrow of an empty map has to outlive the context that holds it.
+    static NO_SYMLINK_TARGETS: LazyLock<HashMap<Arc<str>, Arc<str>>> = LazyLock::new(HashMap::new);
 
     fn test_root() -> FsNode {
         FsNode {
@@ -2667,6 +2795,7 @@ mod tests {
             search_found_dir: None,
             requested_entry_paths: HashSet::new(),
             uncontrolled_selected_path: Some(Arc::from("/repo")),
+            symlink_targets: HashMap::new(),
         }
     }
 
@@ -2818,6 +2947,86 @@ mod tests {
             .unwrap_or_else(|| panic!("no projected child named {name:?}"))
     }
 
+    /// A symlink says where it points, the way `ls -l` does, and says it in the row's suffix so a
+    /// change marker can still follow.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_row_shows_where_it_points() {
+        let dir = unique_component_test_dir("symlink-target");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        std::fs::write(dir.join("AGENTS.md"), "guide").expect("target file");
+        std::os::unix::fs::symlink("AGENTS.md", dir.join("CLAUDE.md")).expect("symlink");
+        let root = super::super::fs::canonicalize_plain(&dir).expect("canonical temp dir");
+        let root = root.to_string_lossy().to_string();
+
+        let suffix_of = |props: &FileTreeProps| {
+            let state = FileTreeComponent::new().create_state(props);
+            let projection = build_projection(props, &state, None);
+            projected_child(&projection.root, "CLAUDE.md")
+                .item
+                .description_spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        };
+
+        let props = crate::widgets::file_tree::FileTree::new(root.clone()).props;
+        assert_eq!(suffix_of(&props), " → AGENTS.md");
+
+        let arrow = crate::widgets::file_tree::FileTree::new(root.clone())
+            .symlink_target_arrow("->")
+            .props;
+        assert_eq!(suffix_of(&arrow), " -> AGENTS.md");
+
+        let off = crate::widgets::file_tree::FileTree::new(root.clone())
+            .symlink_targets(false)
+            .props;
+        assert_eq!(
+            suffix_of(&off),
+            "",
+            "an application can turn the suffix off"
+        );
+
+        // The file the link points at is an ordinary row and says nothing extra.
+        let state = FileTreeComponent::new().create_state(&props);
+        let projection = build_projection(&props, &state, None);
+        assert!(
+            projected_child(&projection.root, "AGENTS.md")
+                .item
+                .description_spans
+                .is_empty()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A tree served by the application cannot have its links followed here, so the target rides
+    /// along on the entry.
+    #[test]
+    fn a_provided_symlink_shows_the_target_the_application_supplied() {
+        let props = crate::widgets::file_tree::FileTree::new("/remote/repo")
+            .entry_source(FileTreeEntrySource::provided([
+                FileTreeDirectoryListing::new(
+                    "/remote/repo",
+                    [
+                        super::super::FileTreeEntry::file("AGENTS.md"),
+                        super::super::FileTreeEntry::file("CLAUDE.md").symlink_target("AGENTS.md"),
+                    ],
+                ),
+            ]))
+            .props;
+        let state = FileTreeComponent::new().create_state(&props);
+        let projection = build_projection(&props, &state, None);
+
+        let suffix = projected_child(&projection.root, "CLAUDE.md")
+            .item
+            .description_spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert_eq!(suffix, " → AGENTS.md");
+    }
+
     #[test]
     fn collapsed_directories_project_no_subtree_and_stay_expandable() {
         let props = collapsed_projection_props();
@@ -2961,6 +3170,35 @@ mod tests {
         let mut silent = clean.clone();
         silent.empty_text = None;
         assert!(!empty(&silent, &state));
+    }
+
+    /// Folding the root shut hides the changed files; it does not make the tree clean. Reading
+    /// emptiness off the rendered rows used to swap the whole view for "No changes" here, leaving
+    /// no heading to click back open.
+    #[test]
+    fn changed_only_keeps_its_tree_when_the_root_is_collapsed() {
+        let props = crate::widgets::file_tree::FileTree::new("/repo")
+            .change_view(FileTreeChangeView::ChangedOnly)
+            .empty_text("No changes")
+            .props;
+        let mut state = test_state_with_root(test_root());
+        state.git_snapshot.changed_paths = vec![Arc::from("/repo/src/main.rs")];
+
+        state.expanded.remove::<str>("/repo");
+        let projection = build_projection(&props, &state, None);
+        assert!(
+            projection.root.children.is_empty(),
+            "a collapsed root draws no rows"
+        );
+        assert!(
+            !changed_only_projection_is_empty(&props, &state, &projection),
+            "a collapsed root is not a clean tree"
+        );
+
+        // A filter that matches nothing is the user narrowing the same set, and still empty.
+        let filter = ExplorerFilter::default();
+        let filtered = build_projection(&props, &state, Some(&filter));
+        assert!(changed_only_projection_is_empty(&props, &state, &filtered));
     }
 
     #[test]
@@ -4375,6 +4613,7 @@ mod tests {
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
+            symlink_targets: &NO_SYMLINK_TARGETS,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -4414,6 +4653,7 @@ mod tests {
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
+            symlink_targets: &NO_SYMLINK_TARGETS,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -4441,6 +4681,7 @@ mod tests {
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
+            symlink_targets: &NO_SYMLINK_TARGETS,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -4497,6 +4738,7 @@ mod tests {
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
+            symlink_targets: &NO_SYMLINK_TARGETS,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -4543,6 +4785,7 @@ mod tests {
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
+            symlink_targets: &NO_SYMLINK_TARGETS,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -4571,6 +4814,7 @@ mod tests {
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
+            symlink_targets: &NO_SYMLINK_TARGETS,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -4638,6 +4882,7 @@ mod tests {
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
+            symlink_targets: &NO_SYMLINK_TARGETS,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -4685,6 +4930,7 @@ mod tests {
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
+            symlink_targets: &NO_SYMLINK_TARGETS,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -4738,6 +4984,7 @@ mod tests {
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
+            symlink_targets: &NO_SYMLINK_TARGETS,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -4822,6 +5069,7 @@ mod tests {
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
+            symlink_targets: &NO_SYMLINK_TARGETS,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -4855,6 +5103,7 @@ mod tests {
             expanded: &expanded,
             explorer_filter: None,
             git_decorations: &decorations,
+            symlink_targets: &NO_SYMLINK_TARGETS,
             path_styles: &path_styles,
             lookup: &mut lookup,
         };
@@ -4993,6 +5242,7 @@ mod tests {
             search_found_dir: None,
             requested_entry_paths: HashSet::new(),
             uncontrolled_selected_path: Some(Arc::from("/repo")),
+            symlink_targets: HashMap::new(),
         };
 
         let projection = build_projection(&props, &state, None);

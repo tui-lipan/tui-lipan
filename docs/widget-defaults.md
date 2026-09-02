@@ -106,7 +106,7 @@ Source: `src/widgets/checkbox/mod.rs:187` (`Checkbox`).
 
 ## Input
 
-Source: `src/widgets/input/mod.rs:85` (`Input`).
+Source: `src/widgets/input/mod.rs:86` (`Input`).
 
 | Field | Default initializer |
 |---|---|
@@ -129,6 +129,7 @@ Source: `src/widgets/input/mod.rs:85` (`Input`).
 | `suffix_style` | `Style::default()` |
 | `focus_suffix_style` | `Style::default()` |
 | `caret_shape` | `None` |
+| `caret_blinking` | `None` |
 | `caret_color` | `None` |
 | `selection_style` | `StyleSlot::Inherit` |
 | `border` | `true` |
@@ -155,7 +156,7 @@ Source: `src/widgets/input/mod.rs:85` (`Input`).
 
 ## TextArea
 
-Source: `src/widgets/text_area/mod.rs:451` (`TextArea`).
+Source: `src/widgets/text_area/mod.rs:457` (`TextArea`).
 
 | Field | Default initializer |
 |---|---|
@@ -169,6 +170,7 @@ Source: `src/widgets/text_area/mod.rs:451` (`TextArea`).
 | `focus_content_style` | `Style::default()` |
 | `hover_border_style` | `None` |
 | `caret_shape` | `None` |
+| `caret_blinking` | `None` |
 | `caret_color` | `None` |
 | `selection_style` | `StyleSlot::Inherit` |
 | `unfocused_selection_style` | `StyleSlot::Inherit` |
@@ -240,6 +242,7 @@ Source: `src/widgets/text_area/mod.rs:451` (`TextArea`).
 | `split_wrap_sync` | `None` |
 | `split_wrap_side` | `None` |
 | `diff_context_separator_click` | `None` |
+| `diff_line_click` | `None` |
 | `split_wrap_padding_gutter_style` | `None` |
 | `split_wrap_padding_style` | `None` |
 | `copy_excluded_bytes` | `None` |
@@ -256,7 +259,7 @@ Source: `src/widgets/text_area/mod.rs:451` (`TextArea`).
 
 ## List
 
-Source: `src/widgets/list/mod.rs:1302` (`List`).
+Source: `src/widgets/list/mod.rs:1444` (`List`).
 
 | Field | Default initializer |
 |---|---|
@@ -341,7 +344,7 @@ Source: `src/widgets/list/mod.rs:78` (`ListConfig`).
 
 ## ScrollView
 
-Source: `src/widgets/scroll_view/mod.rs:92` (`ScrollView`).
+Source: `src/widgets/scroll_view/mod.rs:94` (`ScrollView`).
 
 | Field | Default initializer |
 |---|---|
@@ -358,6 +361,7 @@ Source: `src/widgets/scroll_view/mod.rs:92` (`ScrollView`).
 | `scroll_wheel_behavior` | `ScrollWheelBehavior::default()` |
 | `ambient_page_scroll` | `false` |
 | `focusable` | `false` |
+| `tab_stop` | `true` |
 | `on_scroll` | `None` |
 | `on_scroll_to` | `None` |
 | `on_viewport_change` | `None` |
@@ -929,7 +933,7 @@ Source: `src/widgets/draggable_tab_bar/mod.rs:502` (`DraggableTabBar`).
 
 ## DocumentView
 
-Source: `src/widgets/document_view/mod.rs:329` (`DocumentView`).
+Source: `src/widgets/document_view/mod.rs:331` (`DocumentView`).
 
 | Field | Default initializer |
 |---|---|
@@ -996,6 +1000,7 @@ Source: `src/widgets/document_view/mod.rs:329` (`DocumentView`).
 | `split_wrap_side` | `None` |
 | `diff_split_pane` | `None` |
 | `diff_context_separator_click` | `None` |
+| `diff_line_click` | `None` |
 | `split_wrap_padding_gutter_style` | `None` |
 | `split_wrap_padding_style` | `None` |
 | `multi_click_select` | `true` |
@@ -1006,7 +1011,7 @@ Source: `src/widgets/document_view/mod.rs:329` (`DocumentView`).
 
 ## FileTree
 
-Source: `src/widgets/file_tree/mod.rs:346` (`FileTree`).
+Source: `src/widgets/file_tree/mod.rs:360` (`FileTree`).
 
 | Field | Default initializer |
 |---|---|
@@ -1109,6 +1114,9 @@ Source: `src/widgets/file_tree/mod.rs:346` (`FileTree`).
 | `git_style_conflicted` | `default_git_style_conflicted()` |
 | `change_suffix_style` | `Style::default()` |
 | `change_suffix_priority` | `FileTreeSuffixPriority::default()` |
+| `symlink_targets` | `true` |
+| `symlink_target_arrow` | `"→".into()` |
+| `symlink_target_style` | `Style::default().dim()` |
 | `path_styles` | `HashMap::new()` |
 | `on_select` | `None` |
 | `on_activate` | `None` |
@@ -1117,7 +1125,7 @@ Source: `src/widgets/file_tree/mod.rs:346` (`FileTree`).
 
 ## SearchPalette
 
-Source: `src/widgets/search_palette/mod.rs:773` (`SearchPalette`).
+Source: `src/widgets/search_palette/mod.rs:801` (`SearchPalette`).
 
 | Field | Default initializer |
 |---|---|
@@ -1140,6 +1148,7 @@ Source: `src/widgets/search_palette/mod.rs:773` (`SearchPalette`).
 | `input_divider_style` | `Style::default()` |
 | `input_divider_join_frame` | `true` |
 | `input_caret_shape` | `None` |
+| `input_caret_blinking` | `None` |
 | `input_caret_color` | `None` |
 | `input_border_style` | `BorderStyle::Plain` |
 | `input_padding` | `Padding { left: 1, right: 1, top: 0, bottom: 0, }` |
@@ -1252,7 +1261,7 @@ Source: `src/widgets/tree/mod.rs:27` (`Tree`).
 
 ## Terminal
 
-Source: `src/widgets/terminal/mod.rs:86` (`Terminal`).
+Source: `src/widgets/terminal/mod.rs:93` (`Terminal`).
 
 | Field | Default initializer |
 |---|---|
@@ -1265,6 +1274,8 @@ Source: `src/widgets/terminal/mod.rs:86` (`Terminal`).
 | `caret_color` | `None` |
 | `color_lines` | `None` |
 | `color_cache_key` | `0` |
+| `wrapped_rows` | `Arc::from([])` |
+| `hyperlinks` | `Arc::from([])` |
 | `screen` | `None` |
 | `decorations` | `Arc::from([] as [TerminalDecoration; 0])` |
 | `scrollback_offset` | `0` |
@@ -1279,6 +1290,9 @@ Source: `src/widgets/terminal/mod.rs:86` (`Terminal`).
 | `on_selection` | `None` |
 | `on_resize` | `None` |
 | `on_mouse_forward` | `None` |
+| `link_activation_mods` | `KeyMods::CTRL` |
+| `link_hover_style` | `StyleSlot::Replace(Style::new().underline())` |
+| `on_link_activate` | `None` |
 | `scroll_wheel` | `true` |
 | `on_scroll` | `None` |
 | `on_scroll_to` | `None` |
@@ -1309,7 +1323,7 @@ Source: `src/widgets/terminal/mod.rs:86` (`Terminal`).
 
 ## DiffView
 
-Source: `src/widgets/diff_view/mod.rs:285` (`DiffView`).
+Source: `src/widgets/diff_view/mod.rs:289` (`DiffView`).
 
 Note: `DiffView::new()` delegates to `new_internal("", "", None)`; argument-backed content fields are shown as constructor/local values.
 
@@ -1342,6 +1356,9 @@ Note: `DiffView::new()` delegates to `new_internal("", "", None)`; argument-back
 | `scroll_offset` | `None` |
 | `scroll_to_hunk` | `None` |
 | `on_scroll` | `None` |
+| `on_line_click` | `None` |
+| `on_line_range_select` | `None` |
+| `line_range_style` | `StyleSlot::Inherit` |
 | `on_context_separator_click` | `None` |
 | `context_separator_hover_style` | `None` |
 | `text_area` | `constructor/local value (not a default)` |
@@ -1362,11 +1379,12 @@ Note: `DiffView::new()` delegates to `new_internal("", "", None)`; argument-back
 | `context_separator_min_lines` | `default_context_separator_min_lines()` |
 | `context_expand_lines` | `default_context_expand_lines()` |
 | `expanded_contexts` | `Vec::new()` |
+| `inline_blocks` | `Vec::new()` |
 | `pane_cache` | `RefCell::new(Vec::new())` |
 
 ## ManagedTerminal
 
-Source: `src/widgets/managed_terminal.rs:100` (`ManagedTerminalProps`).
+Source: `src/widgets/managed_terminal.rs:109` (`ManagedTerminalProps`).
 
 Note: `ManagedTerminal` is a component; defaults come from `ManagedTerminalProps`.
 
@@ -1381,6 +1399,9 @@ Note: `ManagedTerminal` is a component; defaults come from `ManagedTerminalProps
 | `placeholder` | `Some(Arc::from("Starting terminal..."))` |
 | `forward_mouse` | `true` |
 | `scroll_wheel` | `true` |
+| `link_activation_mods` | `KeyMods::CTRL` |
+| `link_hover_style` | `StyleSlot::Replace(Style::new().underline())` |
+| `on_link_activate` | `None` |
 | `resize_debounce` | `Duration::from_millis(16)` |
 | `style` | `crate::style::Style::default()` |
 | `focusable` | `true` |
