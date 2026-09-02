@@ -63,6 +63,9 @@ jobs:
       - name: Check documented feature tables
         run: python3 scripts/check-feature-tables.py
 
+      - name: Check documented install snippets
+        run: python3 scripts/check-install-snippets.py
+
       - name: Check workspace formatting
         run: cargo fmt --all -- --check
 

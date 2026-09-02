@@ -109,6 +109,7 @@ python3 scripts/check-changelog.py
 find src tests benches examples tui-lipan-macro -name '*.rs' -print0 \
   | xargs -0 -r ./scripts/format-rust-with-macros --check
 python3 scripts/check-feature-tables.py
+python3 scripts/check-install-snippets.py
 cargo fmt --all -- --check
 cargo check --workspace --all-targets --all-features
 cargo clippy --workspace --all-targets --all-features -- -D warnings
