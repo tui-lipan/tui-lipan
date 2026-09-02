@@ -6,7 +6,9 @@
 use std::time::Duration;
 
 use tui_lipan::prelude::*;
-use tui_lipan::utils::hints::{HOME_ROW_HINT_KEYS, HintKind, HintMatch, HintScan, assign_labels};
+use tui_lipan::utils::hints::{
+    HOME_ROW_HINT_KEYS, HintKind, HintMatch, HintScan, HintSpan, assign_labels,
+};
 
 const TERMINAL_KEY: &str = "hint-terminal";
 const IPV4_HINT_ID: u16 = 1;
@@ -406,9 +408,11 @@ mod tests {
 
     fn hint(kind: HintKind) -> HintMatch {
         HintMatch {
-            row: 0,
-            start_col: 0,
-            end_col: 4,
+            spans: vec![HintSpan {
+                row: 0,
+                start_col: 0,
+                end_col: 4,
+            }],
             text: "hint".to_string(),
             kind,
         }
@@ -447,7 +451,7 @@ mod tests {
     }
 
     #[test]
-    fn labels_render_at_the_end_of_each_detected_hint() {
+    fn labels_paint_over_the_start_of_each_detected_hint() {
         let mut backend = TestBackend::new(TerminalHints);
         backend.set_viewport(Rect {
             x: 0,
@@ -458,8 +462,19 @@ mod tests {
         backend.render();
         let frame = backend.capture_frame();
         let active = frame.to_fixed_grid();
-        assert!(active.contains("https://github.com/tui-lipan/tui-lipana"));
-        assert!(!active.contains("[a]"));
+
+        // `hint_decorations` overwrites the hint's first cell instead of appending after
+        // its last, so a hint that runs to the right edge still gets a label. Here the
+        // "a" of the first hint replaces the "h" of "https", and every later cell of the
+        // match survives untouched.
+        assert!(
+            active.contains("attps://github.com/tui-lipan/tui-lipan"),
+            "label should cover the first cell of the URL hint"
+        );
+        // The second and third hints get the next home-row keys, over "." and "9".
+        assert!(active.contains("s/examples/terminal_hints.rs:42"));
+        assert!(active.contains("dfceb02d4a1e8f0c7b12abcdeffed1234567890a"));
+        assert!(!active.contains("[a]"), "labels are painted, not bracketed");
 
         assert!(
             frame
