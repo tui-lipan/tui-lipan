@@ -434,6 +434,35 @@ mod tests {
     }
 
     #[test]
+    fn frame_measure_uses_integrated_vertical_track_for_wrapping() {
+        let document = DocumentView::new("abcdefghijklmnopqr")
+            .height(Length::Auto)
+            .border(false)
+            .wrap(true)
+            .scrollbar(true)
+            .scrollbar_config(
+                crate::style::ScrollbarConfig::new().variant(ScrollbarVariant::Integrated),
+            );
+        let child: crate::Element = VStack::new().height(Length::Auto).child(document).into();
+
+        assert_eq!(
+            crate::layout::measure::min_size_constrained(&child, Some(18), None).1,
+            2,
+            "without ancestor chrome the standalone column wraps the last character"
+        );
+
+        let frame = Frame::new()
+            .width(Length::Px(20))
+            .height(Length::Auto)
+            .child(child);
+        assert_eq!(
+            measure_frame(&frame, Some(20), None).outer_size().1,
+            3,
+            "the integrated frame track must leave all 18 content columns available"
+        );
+    }
+
+    #[test]
     fn frame_measure_does_not_offer_a_missing_integrated_axis() {
         use crate::style::Edge;
         use crate::widgets::frame::{DecorationGlyph, EdgeDecoration};
