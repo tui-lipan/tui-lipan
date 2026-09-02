@@ -22,6 +22,8 @@ mod flow_in_hstack_wraps;
 mod gantt_diagram_render;
 #[path = "suites/widget_behavior/list_description_spinner_render.rs"]
 mod list_description_spinner_render;
+#[path = "suites/widget_behavior/list_selection_highlight_lines.rs"]
+mod list_selection_highlight_lines;
 #[path = "suites/widget_behavior/modal_reserve_height.rs"]
 mod modal_reserve_height;
 #[path = "suites/widget_behavior/mouse_region_drag_threshold.rs"]

@@ -37,6 +37,15 @@ While the crate is on `0.x.y`:
 - `Spinner` now derives `PartialEq`, `Eq`, and `Hash`, so it can live inside comparable and
   hashable props such as `ItemDescription`. (breaking)
 
+### Fixed
+
+- A selected multi-line `List` row no longer draws two differently sized highlight bars. Only a
+  line carrying a right-aligned description was padded out to the row edge, and that pad takes the
+  row background, so a row whose description sat on an extra line showed a full-width bar on that
+  line and a label-width one on the others. Reaching the edge is now decided per item rather than
+  per visual line. Rows with no right-aligned content anywhere keep the default label-hugging
+  pill.
+
 ## [0.4.1] - 2026-09-02
 
 ### Changed
