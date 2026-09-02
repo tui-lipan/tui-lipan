@@ -11,6 +11,8 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-02
+
 ### Changed
 
 - termina moves to `0.4`, and the `[patch.crates-io]` stanza that carried the unreleased
@@ -28,11 +30,6 @@ While the crate is on `0.x.y`:
   report an input error and stop the reader thread, leaving the application without input. An
   interrupt is now the command signal it was always meant to be. A wake arriving during a host
   color query likewise abandons the query and re-arms the refresh instead of failing the worker.
-
-## [0.4.1] - 2026-09-02
-
-### Fixed
-
 - Host terminal palette queries now wait for an ordering reply before restoring cooked input.
   Terminals that return OSC 10/11 before their separately scheduled OSC 4 reports no longer echo
   those palette reports onto the primary screen behind a fullscreen application.
