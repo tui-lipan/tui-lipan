@@ -117,6 +117,13 @@ jobs:
       - name: Run cargo tests
         run: cargo test --workspace --all-features
 
+      # `cargo test --workspace` builds no example test target, and `check`/`clippy
+      # --all-targets` builds each example as a binary without its `#[cfg(test)]` code, so
+      # a test inside an example compiled nowhere in this pipeline. One rotted silently
+      # through an API change that way.
+      - name: Run example tests
+        run: cargo test --examples --all-features
+
   # Windows-only behavior - path spelling, and anything else written behind `cfg(windows)` - is
   # invisible to every job above, so a claim about it was previously verified by nothing at all.
   #
