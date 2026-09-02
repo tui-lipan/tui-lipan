@@ -129,6 +129,9 @@ pub struct FileTreeEntry {
     pub is_dir: bool,
     /// Whether the entry is a symbolic link.
     pub is_symlink: bool,
+    /// Where the link points, as the link itself spells it. The widget cannot read a link on
+    /// another host, so a provided tree that wants targets shown has to carry them.
+    pub symlink_target: Option<Arc<str>>,
     /// Git status supplied by the application, when any.
     pub git_status: Option<GitFileStatus>,
     /// Whether ignore rules mark this entry as ignored.
@@ -145,6 +148,7 @@ impl FileTreeEntry {
             name: name.into(),
             is_dir,
             is_symlink: false,
+            symlink_target: None,
             git_status: None,
             ignored: false,
         }
@@ -163,6 +167,16 @@ impl FileTreeEntry {
     /// Mark whether this entry is a symbolic link.
     pub fn symlink(mut self, is_symlink: bool) -> Self {
         self.is_symlink = is_symlink;
+        self
+    }
+
+    /// Set where this symlink points, spelled the way the link itself spells it.
+    ///
+    /// Shown as `link → target` when [`FileTree::symlink_targets`] is on. Setting it also marks the
+    /// entry as a symlink, since a target is only meaningful for one.
+    pub fn symlink_target(mut self, target: impl Into<Arc<str>>) -> Self {
+        self.symlink_target = Some(target.into());
+        self.is_symlink = true;
         self
     }
 
@@ -450,6 +464,9 @@ impl FileTree {
                 git_style_conflicted: default_git_style_conflicted(),
                 change_suffix_style: Style::default(),
                 change_suffix_priority: FileTreeSuffixPriority::default(),
+                symlink_targets: true,
+                symlink_target_arrow: "→".into(),
+                symlink_target_style: Style::default().dim(),
                 path_styles: HashMap::new(),
                 on_select: None,
                 on_activate: None,
@@ -1261,6 +1278,33 @@ impl FileTree {
     /// Set a Git-compatible style patch for right-aligned change metadata.
     pub fn git_suffix_style(self, style: Style) -> Self {
         self.change_suffix_style(style)
+    }
+
+    /// Show where each symlink points, as `link → target` (default `true`).
+    ///
+    /// The target is the link's own text, the way `ls -l` reports it, so a relative link stays
+    /// relative. It shares the row's suffix budget with any change metadata and sits ahead of it.
+    ///
+    /// Local trees read the target when a directory is listed. A tree served through
+    /// [`FileTree::entry_source`] shows only what its entries carry in
+    /// [`FileTreeEntry::symlink_target`], since the widget cannot follow a link on another host.
+    pub fn symlink_targets(mut self, show: bool) -> Self {
+        self.props.symlink_targets = show;
+        self
+    }
+
+    /// Set what separates a symlink from its target (default `"→"`).
+    ///
+    /// A terminal whose font has no arrow can ask for `"->"` instead.
+    pub fn symlink_target_arrow(mut self, arrow: impl Into<Arc<str>>) -> Self {
+        self.props.symlink_target_arrow = arrow.into();
+        self
+    }
+
+    /// Set the style of the arrow and target after a symlink's name (default dim).
+    pub fn symlink_target_style(mut self, style: Style) -> Self {
+        self.props.symlink_target_style = style;
+        self
     }
 
     /// Set whether labels or right-aligned change metadata win when rows are narrow.

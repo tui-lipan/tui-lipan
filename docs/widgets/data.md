@@ -429,6 +429,9 @@ entries and git-backed or application-provided change projections.
 | `file_label_style` | `Style` | Style applied to regular file names |
 | `path_style` | `(path, FileTreeItemStyle)` | Apply row/icon/label/suffix styles to one exact path |
 | `path_styles` | `impl IntoIterator<Item = (path, FileTreeItemStyle)>` | Apply exact path-specific item styles in bulk |
+| `symlink_targets` | `bool` | Show where each symlink points, as `link → target` (default: true) |
+| `symlink_target_arrow` | `impl Into<Arc<str>>` | What separates a symlink from its target (default: `"→"`) |
+| `symlink_target_style` | `Style` | Style of the arrow and target after a symlink's name (default: dim) |
 | `git_status` | `bool` | Show change status badges for git/provided changes (default: true) |
 | `highlight_changed_labels` | `bool` | Also apply change status colors to file/directory labels (default: false) |
 | `change_suffix_style` | `Style` | Style only the right-side change metadata suffix, such as status markers and diff stats |

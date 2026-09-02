@@ -340,14 +340,16 @@ pub(crate) fn read_directory(
         }
 
         let kind = FileKind::from_file_type(&file_type);
-        // The parent path is already canonical. Construct child path directly
-        // to avoid an `fs::canonicalize` syscall per entry. Only resolve
-        // symlinks where the canonical target matters for consistency.
-        let child_path = if matches!(kind, FileKind::Symlink) {
-            normalize_path(&child.path())
-        } else {
-            Arc::from(root.join(name_str).to_string_lossy().as_ref())
-        };
+        // The parent path is already canonical, so a child is built from it directly rather than
+        // paying an `fs::canonicalize` syscall per entry.
+        //
+        // A symlink is spelled the same way, by its own name rather than its target's. The path is
+        // what identifies a row - selection, expansion, git decorations, and the path an activation
+        // hands the application are all keyed by it - and resolving the link collapses two rows onto
+        // one identity: a repository where `CLAUDE.md` links to `AGENTS.md` gets two rows claiming
+        // to be `AGENTS.md`, so selecting one lands on the other. Git says the same thing: it
+        // reports the link's own path, never the target's.
+        let child_path = Arc::<str>::from(root.join(name_str).to_string_lossy().as_ref());
 
         entries.push(LoadedEntry {
             name: Arc::from(name_str),
@@ -423,11 +425,56 @@ fn display_name(path: &Path) -> Arc<str> {
 #[cfg(test)]
 mod tests {
     use super::abbreviate_home;
+    #[cfg(unix)]
+    use super::{canonicalize_plain, fs, read_directory};
 
     /// The Windows separator set, passed explicitly so the Windows rule is exercised on the Linux
     /// CI that runs these. `SEPARATORS` itself is per-platform; this is the shape it takes there.
     const WINDOWS: &[char] = &['\\', '/'];
     const POSIX: &[char] = &['/'];
+
+    /// A symlink is a row of its own. Storing its target's path instead gave a repository where
+    /// `CLAUDE.md` links to `AGENTS.md` two rows with one identity, and everything keyed by path -
+    /// selection above all - could then only pick one of them.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_keeps_its_own_path_rather_than_its_targets() {
+        let dir = std::env::temp_dir().join(format!(
+            "tui-lipan-file-tree-symlink-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).expect("temp dir");
+        fs::write(dir.join("AGENTS.md"), "guide").expect("target file");
+        std::os::unix::fs::symlink("AGENTS.md", dir.join("CLAUDE.md")).expect("symlink");
+
+        let root = canonicalize_plain(&dir).expect("temp dir canonicalizes");
+        let loaded = read_directory(&root.to_string_lossy(), false, 2_000);
+
+        let path_of = |name: &str| {
+            loaded
+                .entries
+                .iter()
+                .find(|entry| entry.name.as_ref() == name)
+                .map(|entry| entry.path.to_string())
+                .unwrap_or_else(|| panic!("{name} listed"))
+        };
+        assert_eq!(
+            path_of("CLAUDE.md"),
+            root.join("CLAUDE.md").to_string_lossy(),
+            "the link is spelled by its own name"
+        );
+        assert_ne!(
+            path_of("CLAUDE.md"),
+            path_of("AGENTS.md"),
+            "two rows, two identities"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_home_that_does_not_fit_does_not_mask_one_that_does() {
