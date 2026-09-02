@@ -2089,6 +2089,12 @@ fn build_projected_tree_node(
         label_base_style,
         ctx.props.explorer_match_style,
     ));
+    // Part of the name, not of the row's metadata: `link → target` reads as one thing and belongs
+    // against the label. The description slot is right-aligned, which would park the target at the
+    // far edge of the row with a field of blanks between it and the link it belongs to.
+    if let Some(target) = symlink_target_span(node, ctx) {
+        spans.push(target);
+    }
 
     let mut description_spans =
         git_description_spans(git_decoration, ctx.props, node.is_dir(), is_expanded);
@@ -2097,12 +2103,6 @@ fn build_projected_tree_node(
         ctx.props.change_suffix_style,
         path_style.and_then(|style| style.suffix),
     );
-    // Ahead of the change metadata, and styled on its own: where a link points is a property of the
-    // name, while `M +3 -1` describes the file's state, and `change_suffix_style` speaks for the
-    // latter alone.
-    if let Some(target) = symlink_target_span(node, ctx) {
-        description_spans.insert(0, target);
-    }
 
     let mut item = ListItem::from_spans(spans).primary_truncate_description_first(matches!(
         ctx.props.change_suffix_priority,
@@ -2171,7 +2171,7 @@ fn build_projected_tree_node(
 /// The ` → target` that follows a symlink's name, when the tree knows where it points.
 ///
 /// One span rather than an arrow plus a target: they are never styled apart, and keeping them
-/// together means truncation drops the whole suffix instead of leaving a dangling arrow.
+/// together means truncation drops the whole tail instead of leaving a dangling arrow.
 fn symlink_target_span(
     node: &FsNode,
     ctx: &ProjectionBuildContext<'_>,
@@ -2959,42 +2959,53 @@ mod tests {
         let root = super::super::fs::canonicalize_plain(&dir).expect("canonical temp dir");
         let root = root.to_string_lossy().to_string();
 
-        let suffix_of = |props: &FileTreeProps| {
+        // The target belongs to the label, beside the name. The description slot is right-aligned,
+        // so a target there would sit at the far edge of the row instead.
+        let label_of = |props: &FileTreeProps| {
             let state = FileTreeComponent::new().create_state(props);
             let projection = build_projection(props, &state, None);
-            projected_child(&projection.root, "CLAUDE.md")
-                .item
-                .description_spans
+            let row = projected_child(&projection.root, "CLAUDE.md");
+            assert!(
+                row.item.description_spans.is_empty(),
+                "the target is not right-aligned metadata"
+            );
+            row.item
+                .spans
                 .iter()
                 .map(|span| span.content.as_ref())
                 .collect::<String>()
         };
 
         let props = crate::widgets::file_tree::FileTree::new(root.clone()).props;
-        assert_eq!(suffix_of(&props), " → AGENTS.md");
+        assert!(
+            label_of(&props).ends_with("CLAUDE.md → AGENTS.md"),
+            "got {:?}",
+            label_of(&props)
+        );
 
         let arrow = crate::widgets::file_tree::FileTree::new(root.clone())
             .symlink_target_arrow("->")
             .props;
-        assert_eq!(suffix_of(&arrow), " -> AGENTS.md");
+        assert!(label_of(&arrow).ends_with("CLAUDE.md -> AGENTS.md"));
 
         let off = crate::widgets::file_tree::FileTree::new(root.clone())
             .symlink_targets(false)
             .props;
-        assert_eq!(
-            suffix_of(&off),
-            "",
-            "an application can turn the suffix off"
+        assert!(
+            label_of(&off).ends_with("CLAUDE.md"),
+            "an application can turn the target off"
         );
 
         // The file the link points at is an ordinary row and says nothing extra.
         let state = FileTreeComponent::new().create_state(&props);
         let projection = build_projection(&props, &state, None);
+        let target_row = projected_child(&projection.root, "AGENTS.md");
         assert!(
-            projected_child(&projection.root, "AGENTS.md")
+            target_row
                 .item
-                .description_spans
-                .is_empty()
+                .spans
+                .iter()
+                .all(|span| !span.content.contains('→'))
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -3018,13 +3029,13 @@ mod tests {
         let state = FileTreeComponent::new().create_state(&props);
         let projection = build_projection(&props, &state, None);
 
-        let suffix = projected_child(&projection.root, "CLAUDE.md")
+        let label = projected_child(&projection.root, "CLAUDE.md")
             .item
-            .description_spans
+            .spans
             .iter()
             .map(|span| span.content.as_ref())
             .collect::<String>();
-        assert_eq!(suffix, " → AGENTS.md");
+        assert!(label.ends_with("CLAUDE.md → AGENTS.md"), "got {label:?}");
     }
 
     #[test]

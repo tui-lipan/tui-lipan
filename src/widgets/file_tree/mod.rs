@@ -1283,7 +1283,9 @@ impl FileTree {
     /// Show where each symlink points, as `link → target` (default `true`).
     ///
     /// The target is the link's own text, the way `ls -l` reports it, so a relative link stays
-    /// relative. It shares the row's suffix budget with any change metadata and sits ahead of it.
+    /// relative. It sits against the name as part of the row's label, so any change metadata still
+    /// right-aligns past it, and a narrow row trims the target with the label rather than the
+    /// markers.
     ///
     /// Local trees read the target when a directory is listed. A tree served through
     /// [`FileTree::entry_source`] shows only what its entries carry in
