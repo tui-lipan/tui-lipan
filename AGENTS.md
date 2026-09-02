@@ -115,6 +115,7 @@ cargo check --workspace --all-targets --all-features
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 cargo test --workspace --all-features
+cargo test --examples --all-features
 cargo deny --all-features check licenses sources advisories bans
 ```
 
