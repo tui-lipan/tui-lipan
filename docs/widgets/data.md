@@ -82,6 +82,16 @@ ListItem::new("Changed").gutter(ListItemGutter::text("~ "))
 ListItem::new("Working").status_spinner(Spinner::new())
 ListItem::new("Dirty").status_symbol(" ~ ")
 
+// Spinners anchored to a row's own text, no reserved column across rows.
+ListItem::new("Deploy")
+    .description("building")
+    .description_spinner(Spinner::new())
+ListItem::new("Index")
+    .description("scanning")
+    .description_spinner(Spinner::new())
+    .description_spinner_position(ListSymbolPosition::Right)
+ListItem::new("Sync").label_spinner(Spinner::new())
+
 // Symbol/gutter can be rendered on a non-primary line (useful for "description above")
 ListItem::new("description")
     .line(ListItemLine::new("label"))
@@ -118,6 +128,17 @@ inside the existing list symbol column. Status is symbol-column content, not a
 separate row gutter. Active symbols keep priority, then row status, then selected
 symbols, then the unselected symbol/spaces. Use this for one-column row state
 such as a busy spinner.
+
+`ListItem::description_spinner(...)` and `.label_spinner(...)` animate next to a
+row's own text instead of in a column shared by every row. Both are available on
+`ListItemLine` too, and `.description_spinner_position(...)` /
+`.label_spinner_position(...)` choose the side (`ListSymbolPosition::Left`, the
+default, or `Right`). The spinner gets its own reserved cells: it is measured into
+the row's width budget and never shares a cell with the text, so truncation,
+wrapping, and any highlight offsets inside the text stay put while the glyph
+cycles. On a wrapped row the slot stays on the first visual line, where its width
+was reserved. Prefer `ListItem::gutter(...)` when markers should line up in a
+column across rows, and these when the spinner belongs to one row's text.
 
 `List::symbol_column(true)` enables the built-in status/selection symbol column;
 the reserved width still comes from configured selection/unselected/active

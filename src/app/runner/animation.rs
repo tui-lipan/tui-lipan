@@ -16,6 +16,16 @@ use crate::style::Rect;
 
 use super::{AppRunner, spinner_frame_for_speed};
 
+/// Advance one auto-animating list spinner slot to the shared animation tick.
+fn advance_list_spinner(
+    spinner: Option<&mut crate::widgets::list::ListItemSpinnerSlot>,
+    tick: usize,
+) {
+    if let Some(spinner) = spinner.filter(|spinner| spinner.auto_frame) {
+        spinner.frame = spinner_frame_for_speed(tick, spinner.speed);
+    }
+}
+
 impl<C: Component> AppRunner<C> {
     pub(crate) fn update_spinner_frames(&mut self) {
         let spinner_ids = self.core.tree.spinner_ids().to_vec();
@@ -41,22 +51,21 @@ impl<C: Component> AppRunner<C> {
                     }
                 }
                 NodeKind::List(node) => {
+                    let tick = self.animation.spinner_frame;
                     for item in std::sync::Arc::make_mut(&mut node.items) {
-                        if let Some(spinner) = item.status.as_mut().and_then(|s| s.spinner_mut())
-                            && spinner.auto_frame
-                        {
-                            spinner.frame = spinner_frame_for_speed(
-                                self.animation.spinner_frame,
-                                spinner.speed,
-                            );
-                        }
-                        if let Some(spinner) = item.gutter.as_mut().and_then(|g| g.spinner_mut())
-                            && spinner.auto_frame
-                        {
-                            spinner.frame = spinner_frame_for_speed(
-                                self.animation.spinner_frame,
-                                spinner.speed,
-                            );
+                        advance_list_spinner(
+                            item.status.as_mut().and_then(|s| s.spinner_mut()),
+                            tick,
+                        );
+                        advance_list_spinner(
+                            item.gutter.as_mut().and_then(|g| g.spinner_mut()),
+                            tick,
+                        );
+                        advance_list_spinner(item.description_spinner.as_mut(), tick);
+                        advance_list_spinner(item.label_spinner.as_mut(), tick);
+                        for line in &mut item.extra_lines {
+                            advance_list_spinner(line.description_spinner.as_mut(), tick);
+                            advance_list_spinner(line.label_spinner.as_mut(), tick);
                         }
                     }
                 }

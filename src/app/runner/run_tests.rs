@@ -33,7 +33,7 @@ use crate::widgets::Terminal;
 use crate::widgets::internal::AnimatedNode;
 use crate::widgets::{
     Animated, DocumentView, DragPayload, DragSource, DropTarget, Frame, HStack, Input, List,
-    ListItem, MouseRegion, ScrollView, Spacer, Spinner, SpinnerSpeed, Text, TextArea,
+    ListItem, ListItemLine, MouseRegion, ScrollView, Spacer, Spinner, SpinnerSpeed, Text, TextArea,
     TextAreaEvent, VStack,
 };
 use crossterm::event::{
@@ -604,6 +604,8 @@ struct AutoSpinnerSmoke;
 
 struct ManualSpinnerSmoke;
 
+struct ListDescriptionSpinnerSmoke;
+
 struct PaintOnlyMessageProbe;
 
 #[derive(Clone)]
@@ -735,6 +737,33 @@ impl Component for AutoSpinnerSmoke {
 
     fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
         Spinner::new().into()
+    }
+}
+
+impl Component for ListDescriptionSpinnerSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        List::new()
+            .items([
+                ListItem::new("Deploy")
+                    .description("building")
+                    .description_spinner(Spinner::new()),
+                ListItem::new("Index").line(
+                    ListItemLine::new("shard 2")
+                        .description("scanning")
+                        .description_spinner(Spinner::new().frame(3)),
+                ),
+            ])
+            .into()
     }
 }
 
@@ -1483,6 +1512,27 @@ fn first_spinner_node<C: Component>(runner: &AppRunner<C>) -> (usize, bool, Spin
         .expect("spinner node should exist")
 }
 
+/// Frames of the primary item's description spinner and the extra line's spinner.
+fn first_list_description_spinners<C: Component>(runner: &AppRunner<C>) -> (usize, usize) {
+    runner
+        .core
+        .tree
+        .iter()
+        .find_map(|node| match &node.kind {
+            NodeKind::List(list) => {
+                let item = list.items.first()?;
+                let primary = item.description_spinner.as_ref()?.frame;
+                let line = list.items[1].extra_lines[0]
+                    .description_spinner
+                    .as_ref()?
+                    .frame;
+                Some((primary, line))
+            }
+            _ => None,
+        })
+        .expect("list node with description spinners should exist")
+}
+
 fn drag_source_dragging<C: Component>(runner: &AppRunner<C>) -> bool {
     let id = node_id_by_key(&runner.core.tree, "source");
     match &runner.core.tree.node(id).kind {
@@ -1518,6 +1568,30 @@ fn auto_spinner_syncs_to_current_runtime_frame() {
     let (frame, auto_frame, speed) = first_spinner_node(&runner);
     assert!(auto_frame);
     assert_eq!(frame, spinner_frame_for_speed(9, speed));
+}
+
+#[test]
+fn list_description_spinners_sync_to_current_runtime_frame() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 4,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), ListDescriptionSpinnerSmoke, ());
+    init_runner(&mut runner, ListDescriptionSpinnerSmoke, viewport);
+
+    assert!(
+        runner.core.tree.has_spinners(),
+        "a description spinner must register the list as animated"
+    );
+
+    runner.animation.spinner_frame = 9;
+    runner.update_spinner_frames();
+
+    let (item, line) = first_list_description_spinners(&runner);
+    assert_eq!(item, spinner_frame_for_speed(9, SpinnerSpeed::Normal));
+    assert_eq!(line, 3, "an explicit frame stays put on an extra line");
 }
 
 #[test]

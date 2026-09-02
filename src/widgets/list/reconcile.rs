@@ -411,8 +411,15 @@ fn wrap_item_right_lines(
     let primary_first_budget = budget_for_original_line(0, prefix_width);
 
     if item.primary_wrap_label && primary_description_spans.is_empty() {
-        let (first, rest) =
-            split_for_wrap(&primary_spans, primary_first_budget, primary_cont_budget);
+        let label_spinner_w = item
+            .label_spinner
+            .as_ref()
+            .map_or(0, |spinner| spinner.anchored_width(true));
+        let (first, rest) = split_for_wrap(
+            &primary_spans,
+            primary_first_budget.saturating_sub(label_spinner_w),
+            primary_cont_budget,
+        );
         let rest_count = rest.len();
         primary_spans = first;
         if original_symbol_line > 0 {
@@ -438,7 +445,16 @@ fn wrap_item_right_lines(
 
     if item.primary_wrap_description {
         let left_w = spans_width(&primary_spans) as u16;
-        let first_budget = primary_first_budget.saturating_sub(left_w);
+        let spinner_w = item
+            .description_spinner
+            .as_ref()
+            .map_or(0, |spinner| spinner.anchored_width(true))
+            .saturating_add(item.label_spinner.as_ref().map_or(0, |spinner| {
+                spinner.anchored_width(!primary_spans.is_empty())
+            }));
+        let first_budget = primary_first_budget
+            .saturating_sub(left_w)
+            .saturating_sub(spinner_w);
         let cont_budget = primary_cont_budget;
         let (first, rest) = split_for_wrap(&primary_description_spans, first_budget, cont_budget);
         let rest_count = rest.len();
@@ -485,13 +501,25 @@ fn wrap_item_right_lines(
     out.extra_line_indent = extra_line_indent;
     out.gutter = item.gutter.clone();
     out.gutter_line = gutter_line;
+    out.description_spinner = item.description_spinner.clone();
+    out.description_spinner_position = item.description_spinner_position;
+    out.label_spinner = item.label_spinner.clone();
+    out.label_spinner_position = item.label_spinner_position;
 
     for (extra_idx, line) in item.extra_lines.iter().enumerate() {
         let original_line_no = extra_idx + 1;
         let extra_first_budget = budget_for_original_line(original_line_no, extra_line_indent);
         let extra_cont_budget = common_budget.saturating_sub(extra_line_indent);
         if line.wrap_label && line.description_spans.is_empty() {
-            let (first, rest) = split_for_wrap(&line.spans, extra_first_budget, extra_cont_budget);
+            let label_spinner_w = line
+                .label_spinner
+                .as_ref()
+                .map_or(0, |spinner| spinner.anchored_width(true));
+            let (first, rest) = split_for_wrap(
+                &line.spans,
+                extra_first_budget.saturating_sub(label_spinner_w),
+                extra_cont_budget,
+            );
             let rest_count = rest.len();
             if original_line_no < original_symbol_line {
                 symbol_line = symbol_line.saturating_add(rest_count);
@@ -499,15 +527,18 @@ fn wrap_item_right_lines(
             if original_line_no < original_gutter_line {
                 gutter_line = gutter_line.saturating_add(rest_count);
             }
-            let primary = ListItemLine::from_spans(first)
-                .style(line.style)
-                .selection_label(line.selection_label)
-                .selection_description(false)
-                .hover_label(line.hover_label)
-                .hover_description(false)
-                .truncate_description_first(line.truncate_description_first)
-                .wrap_label(false)
-                .wrap_description(false);
+            let primary = carry_line_spinners(
+                ListItemLine::from_spans(first)
+                    .style(line.style)
+                    .selection_label(line.selection_label)
+                    .selection_description(false)
+                    .hover_label(line.hover_label)
+                    .hover_description(false)
+                    .truncate_description_first(line.truncate_description_first)
+                    .wrap_label(false)
+                    .wrap_description(false),
+                line,
+            );
             wrapped_lines.push(primary);
             for extra in rest {
                 wrapped_lines.push(
@@ -524,7 +555,18 @@ fn wrap_item_right_lines(
             }
         } else if line.wrap_description {
             let left_w = spans_width(&line.spans) as u16;
-            let first_budget = extra_first_budget.saturating_sub(left_w);
+            let spinner_w = line
+                .description_spinner
+                .as_ref()
+                .map_or(0, |spinner| spinner.anchored_width(true))
+                .saturating_add(
+                    line.label_spinner
+                        .as_ref()
+                        .map_or(0, |spinner| spinner.anchored_width(!line.spans.is_empty())),
+                );
+            let first_budget = extra_first_budget
+                .saturating_sub(left_w)
+                .saturating_sub(spinner_w);
             let cont_budget = extra_cont_budget;
             let (first, rest) = split_for_wrap(&line.description_spans, first_budget, cont_budget);
             let rest_count = rest.len();
@@ -534,16 +576,19 @@ fn wrap_item_right_lines(
             if original_line_no < original_gutter_line {
                 gutter_line = gutter_line.saturating_add(rest_count);
             }
-            let primary = ListItemLine::from_spans(line.spans.clone())
-                .description_spans(first)
-                .style(line.style)
-                .selection_label(line.selection_label)
-                .selection_description(line.selection_description)
-                .hover_label(line.hover_label)
-                .hover_description(line.hover_description)
-                .truncate_description_first(line.truncate_description_first)
-                .wrap_label(false)
-                .wrap_description(false);
+            let primary = carry_line_spinners(
+                ListItemLine::from_spans(line.spans.clone())
+                    .description_spans(first)
+                    .style(line.style)
+                    .selection_label(line.selection_label)
+                    .selection_description(line.selection_description)
+                    .hover_label(line.hover_label)
+                    .hover_description(line.hover_description)
+                    .truncate_description_first(line.truncate_description_first)
+                    .wrap_label(false)
+                    .wrap_description(false),
+                line,
+            );
             wrapped_lines.push(primary);
             for extra in rest {
                 wrapped_lines.push(
@@ -567,6 +612,16 @@ fn wrap_item_right_lines(
     out.symbol_line(symbol_line)
         .gutter_line(gutter_line)
         .lines(wrapped_lines)
+}
+
+/// Continuation lines drop the spinners: they belong to the first visual line of a
+/// wrapped row, where their width was reserved.
+fn carry_line_spinners(mut wrapped: ListItemLine, source: &ListItemLine) -> ListItemLine {
+    wrapped.description_spinner = source.description_spinner.clone();
+    wrapped.description_spinner_position = source.description_spinner_position;
+    wrapped.label_spinner = source.label_spinner.clone();
+    wrapped.label_spinner_position = source.label_spinner_position;
+    wrapped
 }
 
 fn split_for_wrap(

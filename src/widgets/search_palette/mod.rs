@@ -12,7 +12,9 @@ use crate::style::{
     BorderStyle, CaretShape, Color, Length, Padding, ScrollbarConfig, Style, StyleSlot,
 };
 use crate::utils::gradient::{ColorGradient, GradientRange};
-use crate::widgets::{ListConfig, ListItem, ListItemGutter, ListItemStatus};
+use crate::widgets::{
+    ListConfig, ListItem, ListItemGutter, ListItemStatus, ListSymbolPosition, Spinner,
+};
 
 pub(crate) const DEFAULT_SYNC_MATCH_LIMIT: usize = 100;
 
@@ -27,7 +29,7 @@ pub(crate) const DEFAULT_SYNC_MATCH_LIMIT: usize = 100;
 /// # Examples
 ///
 /// ```
-/// # use tui_lipan::prelude::ItemDescription;
+/// # use tui_lipan::prelude::{ItemDescription, Spinner};
 /// // Left only (equivalent to a plain string):
 /// let d = ItemDescription::new().left("Code editor");
 ///
@@ -36,6 +38,9 @@ pub(crate) const DEFAULT_SYNC_MATCH_LIMIT: usize = 100;
 ///
 /// // Both:
 /// let d = ItemDescription::new().left("Code editor").right("Free");
+///
+/// // Animated, for a row whose work is still running:
+/// let d = ItemDescription::new().left("indexing").spinner(Spinner::new());
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ItemDescription {
@@ -43,6 +48,12 @@ pub struct ItemDescription {
     pub left: Option<Arc<str>>,
     /// Right-aligned text (not searchable, always shown on the right).
     pub right: Option<Arc<str>>,
+    /// Animated spinner rendered next to the description (see
+    /// [`ItemDescription::spinner`]). Boxed to keep `SearchItem` small: a palette
+    /// holds one per row, and almost none of them carry a spinner.
+    pub spinner: Option<Box<Spinner>>,
+    /// Which side of the description text the spinner sits on.
+    pub spinner_position: ListSymbolPosition,
 }
 
 impl ItemDescription {
@@ -62,32 +73,47 @@ impl ItemDescription {
         self.right = Some(text.into());
         self
     }
+
+    /// Render an animated spinner next to the description.
+    ///
+    /// The spinner gets its own reserved cells, so it never shifts the fuzzy-match
+    /// highlights inside the description text and never re-truncates it as it animates.
+    /// Leaving [`Spinner::frame`] unset lets the runtime animate it.
+    ///
+    /// Where it lands depends on [`SearchPalette::description_placement`]:
+    ///
+    /// - [`DescriptionPlacement::Above`] / [`DescriptionPlacement::Below`]: directly
+    ///   beside the description text on its own line.
+    /// - [`DescriptionPlacement::Right`]: beside the right-aligned description column.
+    /// - [`DescriptionPlacement::Inline`]: at the start or end of the whole row, since
+    ///   label and description share one line there.
+    pub fn spinner(mut self, spinner: Spinner) -> Self {
+        self.spinner = Some(Box::new(spinner));
+        self
+    }
+
+    /// Put the spinner after the description text instead of before it.
+    pub fn spinner_position(mut self, position: ListSymbolPosition) -> Self {
+        self.spinner_position = position;
+        self
+    }
 }
 
 impl From<&str> for ItemDescription {
     fn from(s: &str) -> Self {
-        Self {
-            left: Some(s.into()),
-            right: None,
-        }
+        Self::new().left(s)
     }
 }
 
 impl From<String> for ItemDescription {
     fn from(s: String) -> Self {
-        Self {
-            left: Some(s.into()),
-            right: None,
-        }
+        Self::new().left(s)
     }
 }
 
 impl From<Arc<str>> for ItemDescription {
     fn from(s: Arc<str>) -> Self {
-        Self {
-            left: Some(s),
-            right: None,
-        }
+        Self::new().left(s)
     }
 }
 
