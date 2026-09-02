@@ -3,7 +3,7 @@ use crate::layout::axis::Axis;
 use crate::style::Rect;
 use crate::widgets::containers::layout::{frame_join_enabled, measure_stack};
 
-use super::{Splitter, SplitterHandleMode, sizes_from_weights};
+use super::{Splitter, SplitterHandleMode, apply_pane_limits, sizes_from_weights};
 
 fn rides_border(splitter: &Splitter) -> bool {
     matches!(splitter.handle_mode, SplitterHandleMode::Border)
@@ -122,7 +122,13 @@ pub(crate) fn layout_splitter(
     };
     let available_main = available_main.saturating_sub(handle_total);
 
-    let pane_sizes = sizes_from_weights(weights, available_main, splitter.min_size);
+    let mut pane_sizes = sizes_from_weights(weights, available_main, splitter.min_size);
+    apply_pane_limits(
+        &mut pane_sizes,
+        &splitter.pane_limits,
+        splitter.min_size,
+        available_main,
+    );
 
     let mut pane_rects = Vec::with_capacity(splitter.children.len());
     let mut handle_rects = Vec::with_capacity(splitter.children.len().saturating_sub(1));

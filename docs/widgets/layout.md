@@ -788,8 +788,9 @@ Resizable container with draggable handles between panes.
 | Prop | Type | Description |
 |------|------|-------------|
 | `orientation` | - | Use `Splitter::horizontal()` (top/bottom) or `Splitter::vertical()` (left/right) |
-| `weights` | `Vec<u16>` | Initial weight for each pane |
-| `min_size` | `Vec<u16>` | Minimum size for each pane in cells |
+| `weights` | `Vec<f32>` | Initial weight for each pane |
+| `min_size` | `u16` | Minimum size in cells, shared by every pane |
+| `pane_limits` | `Vec<SplitterPaneLimits>` | Per-pane size bounds, indexed like the children |
 | `handle_size` | `u16` | Handle gutter width/height |
 | `handle_symbol` | `char` | Handle character |
 | `handle_style` | `Style` | Handle idle style |
@@ -801,11 +802,32 @@ Resizable container with draggable handles between panes.
 
 ```rust
 Splitter::vertical()   // Left/Right split
-    .weights(vec![30, 70])
-    .min_size(vec![10, 20])
+    .weights(vec![30.0, 70.0])
+    .min_size(10)
     .child(sidebar)
     .child(main_content)
 ```
+
+**Pane limits**: `min_size` is one floor shared by every pane. A pane with bounds of its own -
+a sidebar that stops widening at 80 columns, a preview that must never swallow the window -
+declares them with `pane_limits`:
+
+```rust
+Splitter::vertical()
+    .pane_limits(vec![
+        SplitterPaneLimits::range(16, 80),   // the sidebar
+        SplitterPaneLimits::UNBOUNDED,       // the content pane takes the rest
+    ])
+    .child(sidebar)
+    .child(main_content)
+```
+
+Also available as `SplitterPaneLimits::min_size(n)` and `::max_size(n)`. Bounds hold for a drag
+and for a programmatic weight change alike: the handle stops where the two panes it separates run
+out of room, and a pane held at its ceiling hands the cells it cannot use to the panes that can
+still take them, so the split always covers the splitter. Without them a drag past the size the
+app will draw leaves the pane in an oversized allocation with a gap beside it. Panes past the last
+entry, and a splitter given no entries, are bounded only by `min_size`.
 
 **Handle mode**: `handle_mode(SplitterHandleMode::Border)` drops the gutter and rides the pane
 border seam instead of drawing its own handle glyph. Thickness follows the borders actually

@@ -175,8 +175,31 @@ pub(crate) fn apply_splitter_drag_target(
     let min = splitter.min_size.min(total);
     let max_left = total.saturating_sub(min);
     let min_left = min.min(max_left);
-    let new_left =
-        (sizes[handle] as i32 + delta as i32).clamp(min_left as i32, max_left as i32) as u16;
+    // Per-pane bounds narrow that window further, from both sides of the handle:
+    // the pane on the left cannot pass its own ceiling, and it cannot grow so far
+    // that the pane on the right drops under its floor. A drag that ignored this
+    // would leave the pane drawn at the size its app allows inside a larger
+    // allocation - a hole beside the pane, and a neighbour laid out at a width it
+    // never gets. A pair whose bounds cannot both be honoured at this total keeps
+    // the shared `min_size` window rather than pinning the handle at one end.
+    let (left_min, left_max) = crate::widgets::internal::splitter_pane_bounds(
+        &splitter.pane_limits,
+        handle,
+        splitter.min_size,
+    );
+    let (right_min, right_max) = crate::widgets::internal::splitter_pane_bounds(
+        &splitter.pane_limits,
+        handle + 1,
+        splitter.min_size,
+    );
+    let lower = min_left.max(left_min).max(total.saturating_sub(right_max));
+    let upper = max_left.min(left_max).min(total.saturating_sub(right_min));
+    let (lower, upper) = if lower <= upper {
+        (lower, upper)
+    } else {
+        (min_left, max_left)
+    };
+    let new_left = (sizes[handle] as i32 + delta as i32).clamp(lower as i32, upper as i32) as u16;
     let new_right = total.saturating_sub(new_left);
     if new_left == sizes[handle] && new_right == sizes[handle + 1] {
         return false;

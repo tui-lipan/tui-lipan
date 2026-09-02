@@ -35,6 +35,55 @@ pub enum SplitterHandleMode {
     Border,
 }
 
+/// Size bounds for one [`Splitter`] pane, in cells along the split axis.
+///
+/// [`Splitter::min_size`] is a single floor shared by every pane. A pane with a
+/// ceiling of its own - a sidebar that stops widening at 80 columns, a preview
+/// that must never swallow the window - needs bounds the splitter can enforce,
+/// or the handle travels past the size the app will actually draw and leaves the
+/// pane sitting in an oversized allocation with a hole beside it.
+///
+/// Bounds hold for a drag and for a programmatic weight change alike.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct SplitterPaneLimits {
+    /// Smallest size for this pane. Raises [`Splitter::min_size`] when larger.
+    pub min: Option<u16>,
+    /// Largest size for this pane. A `max` below the effective minimum yields to it.
+    pub max: Option<u16>,
+}
+
+impl SplitterPaneLimits {
+    /// No bounds beyond the splitter's own [`min_size`](Splitter::min_size).
+    pub const UNBOUNDED: Self = Self {
+        min: None,
+        max: None,
+    };
+
+    /// Keep the pane at or above `min` cells.
+    pub fn min_size(min: u16) -> Self {
+        Self {
+            min: Some(min),
+            max: None,
+        }
+    }
+
+    /// Keep the pane at or below `max` cells.
+    pub fn max_size(max: u16) -> Self {
+        Self {
+            min: None,
+            max: Some(max),
+        }
+    }
+
+    /// Keep the pane within `min..=max` cells.
+    pub fn range(min: u16, max: u16) -> Self {
+        Self {
+            min: Some(min),
+            max: Some(max.max(min)),
+        }
+    }
+}
+
 /// Emitted by splitter resize callbacks with normalized pane weights.
 #[derive(Clone, Debug)]
 pub struct SplitterResizeEvent {
@@ -55,6 +104,7 @@ pub struct Splitter {
     pub(crate) on_resize_live: Option<Callback<SplitterResizeEvent>>,
     pub(crate) on_resize: Option<Callback<SplitterResizeEvent>>,
     pub(crate) min_size: u16,
+    pub(crate) pane_limits: Vec<SplitterPaneLimits>,
     pub(crate) handle_size: u16,
     pub(crate) handle_mode: SplitterHandleMode,
     pub(crate) handle_symbol: char,
@@ -85,6 +135,7 @@ impl Splitter {
             on_resize_live: None,
             on_resize: None,
             min_size: 3,
+            pane_limits: Vec::new(),
             handle_size: 1,
             handle_mode: SplitterHandleMode::Gutter,
             handle_symbol: '─',
@@ -107,6 +158,7 @@ impl Splitter {
             on_resize_live: None,
             on_resize: None,
             min_size: 3,
+            pane_limits: Vec::new(),
             handle_size: 1,
             handle_mode: SplitterHandleMode::Gutter,
             handle_symbol: '│',
@@ -179,6 +231,31 @@ impl Splitter {
     /// Set minimum size per pane (in cells).
     pub fn min_size(mut self, min_size: u16) -> Self {
         self.min_size = min_size;
+        self
+    }
+
+    /// Set per-pane size bounds, indexed like the children.
+    ///
+    /// Entries past the last pane are ignored, and panes past the last entry keep
+    /// [`min_size`](Self::min_size) as their only bound. A handle stops where the
+    /// bounds of the two panes it separates run out, and a pane clamped by them
+    /// hands its cells to the panes that can still take them - the split always
+    /// covers the splitter.
+    ///
+    /// ```
+    /// # use tui_lipan::prelude::*;
+    /// // The sidebar never goes below 16 columns or past 80, however far the
+    /// // handle is dragged; the content pane takes whatever is left.
+    /// Splitter::vertical()
+    ///     .pane_limits(vec![
+    ///         SplitterPaneLimits::range(16, 80),
+    ///         SplitterPaneLimits::UNBOUNDED,
+    ///     ])
+    ///     .child(Spacer::new())
+    ///     .child(Spacer::new());
+    /// ```
+    pub fn pane_limits(mut self, limits: impl Into<Vec<SplitterPaneLimits>>) -> Self {
+        self.pane_limits = limits.into();
         self
     }
 
@@ -255,6 +332,7 @@ impl crate::layout::hash::LayoutHash for Splitter {
         self.height.hash(hasher);
         self.orientation.hash(hasher);
         self.min_size.hash(hasher);
+        self.pane_limits.hash(hasher);
         self.handle_size.hash(hasher);
         self.handle_mode.hash(hasher);
         self.handle_symbol.hash(hasher);
@@ -396,6 +474,106 @@ pub(crate) fn sizes_from_weights(weights: &[f32], available: u16, min_size: u16)
     sizes
 }
 
+/// The size window for pane `index`: the shared `min_size` raised by the pane's
+/// own floor, and its ceiling.
+///
+/// A ceiling below the floor is not a size any pane can take, so the floor wins
+/// and the pane is pinned there rather than collapsing to an impossible width.
+pub(crate) fn pane_bounds(
+    limits: &[SplitterPaneLimits],
+    index: usize,
+    min_size: u16,
+) -> (u16, u16) {
+    let limit = limits.get(index).copied().unwrap_or_default();
+    let min = limit.min.unwrap_or(0).max(min_size);
+    let max = limit.max.unwrap_or(u16::MAX).max(min);
+    (min, max)
+}
+
+/// Clamp `sizes` into their per-pane bounds and move the difference to the panes
+/// that can still absorb it.
+///
+/// [`sizes_from_weights`] has already spent every available cell, so a pane held
+/// back by its ceiling leaves a surplus that something else must take - left
+/// alone it is a hole in the layout, which is exactly the gap this bound exists
+/// to prevent. Cells go to (and come from) the pane with the most room first, so
+/// an unbounded neighbour absorbs the whole difference and no pane is pushed
+/// through a bound to satisfy another.
+///
+/// Floors that cannot all be met at this size are dropped rather than
+/// overflowing the splitter: the ceilings still hold.
+pub(crate) fn apply_pane_limits(
+    sizes: &mut [u16],
+    limits: &[SplitterPaneLimits],
+    min_size: u16,
+    available: u16,
+) {
+    if sizes.is_empty() || limits.is_empty() {
+        return;
+    }
+
+    let bounds: Vec<(u16, u16)> = (0..sizes.len())
+        .map(|index| pane_bounds(limits, index, min_size))
+        .collect();
+    let floors: u32 = bounds.iter().map(|(min, _)| u32::from(*min)).sum();
+    let honour_floors = floors <= u32::from(available);
+
+    for (size, (min, max)) in sizes.iter_mut().zip(&bounds) {
+        if honour_floors {
+            *size = (*size).max(*min);
+        }
+        *size = (*size).min(*max);
+    }
+
+    let total: u32 = sizes.iter().map(|size| u32::from(*size)).sum();
+    let target = u32::from(available);
+    match total.cmp(&target) {
+        std::cmp::Ordering::Less => {
+            let mut surplus = target - total;
+            for index in by_room(sizes, &bounds, |size, (_, max)| {
+                u32::from(max.saturating_sub(size))
+            }) {
+                if surplus == 0 {
+                    break;
+                }
+                let room = u32::from(bounds[index].1.saturating_sub(sizes[index])).min(surplus);
+                sizes[index] += room as u16;
+                surplus -= room;
+            }
+        }
+        std::cmp::Ordering::Greater => {
+            let mut excess = total - target;
+            for index in by_room(sizes, &bounds, |size, (min, _)| {
+                u32::from(size.saturating_sub(min))
+            }) {
+                if excess == 0 {
+                    break;
+                }
+                let room = u32::from(sizes[index].saturating_sub(bounds[index].0)).min(excess);
+                sizes[index] -= room as u16;
+                excess -= room;
+            }
+        }
+        std::cmp::Ordering::Equal => {}
+    }
+}
+
+/// Pane indices ordered by how much `room` each has, most first, ties by index.
+fn by_room(
+    sizes: &[u16],
+    bounds: &[(u16, u16)],
+    room: impl Fn(u16, (u16, u16)) -> u32,
+) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..sizes.len()).collect();
+    order.sort_by_key(|index| {
+        (
+            std::cmp::Reverse(room(sizes[*index], bounds[*index])),
+            *index,
+        )
+    });
+    order
+}
+
 pub(crate) fn sizes_to_weights(sizes: &[u16]) -> Vec<f32> {
     let total: u16 = sizes.iter().sum();
     if total == 0 {
@@ -405,6 +583,86 @@ pub(crate) fn sizes_to_weights(sizes: &[u16]) -> Vec<f32> {
         .iter()
         .map(|size| (*size as f32) / (total as f32))
         .collect()
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::{SplitterPaneLimits, apply_pane_limits, pane_bounds, sizes_from_weights};
+
+    fn limited(
+        weights: &[f32],
+        available: u16,
+        min_size: u16,
+        limits: &[SplitterPaneLimits],
+    ) -> Vec<u16> {
+        let mut sizes = sizes_from_weights(weights, available, min_size);
+        apply_pane_limits(&mut sizes, limits, min_size, available);
+        sizes
+    }
+
+    /// The bug this exists for: a pane held at its ceiling must hand the cells it
+    /// cannot use to its neighbour, or the split stops covering the splitter and
+    /// the space between the two panes is drawn by nobody.
+    #[test]
+    fn a_capped_pane_gives_its_extra_cells_to_the_neighbour() {
+        let limits = [
+            SplitterPaneLimits::range(16, 80),
+            SplitterPaneLimits::UNBOUNDED,
+        ];
+        // Weights that ask for 130 columns of sidebar in a 199-column split.
+        let sizes = limited(&[130.0, 69.0], 199, 1, &limits);
+        assert_eq!(sizes, vec![80, 119]);
+        assert_eq!(sizes.iter().sum::<u16>(), 199);
+
+        // And the same from below: the floor holds and the neighbour pays for it.
+        let sizes = limited(&[3.0, 196.0], 199, 1, &limits);
+        assert_eq!(sizes, vec![16, 183]);
+        assert_eq!(sizes.iter().sum::<u16>(), 199);
+    }
+
+    /// Cells go to the pane with the most room, so a second capped pane cannot
+    /// swallow what only an unbounded pane can hold.
+    #[test]
+    fn surplus_follows_the_room_a_pane_actually_has() {
+        let limits = [
+            SplitterPaneLimits::max_size(10),
+            SplitterPaneLimits::max_size(12),
+            SplitterPaneLimits::UNBOUNDED,
+        ];
+        let sizes = limited(&[1.0, 1.0, 1.0], 60, 0, &limits);
+        assert_eq!(sizes, vec![10, 12, 38]);
+    }
+
+    /// Floors that do not fit are not floors. The splitter still has to fill its
+    /// bounds exactly, so the ceilings hold alone rather than overflowing it.
+    #[test]
+    fn floors_that_cannot_fit_are_dropped_not_overflowed() {
+        let limits = [
+            SplitterPaneLimits::min_size(40),
+            SplitterPaneLimits::min_size(40),
+        ];
+        let sizes = limited(&[1.0, 1.0], 20, 0, &limits);
+        assert_eq!(sizes.iter().sum::<u16>(), 20);
+    }
+
+    /// Panes past the last entry, and a splitter given no entries at all, keep
+    /// the behavior they had before pane limits existed.
+    #[test]
+    fn unlisted_panes_keep_the_shared_minimum() {
+        assert_eq!(pane_bounds(&[], 0, 3), (3, u16::MAX));
+        assert_eq!(
+            pane_bounds(&[SplitterPaneLimits::max_size(9)], 0, 3),
+            (3, 9)
+        );
+        // A ceiling under the shared floor is not a width any pane can take.
+        assert_eq!(
+            pane_bounds(&[SplitterPaneLimits::max_size(1)], 0, 3),
+            (3, 3)
+        );
+
+        let plain = sizes_from_weights(&[1.0, 1.0], 21, 3);
+        assert_eq!(limited(&[1.0, 1.0], 21, 3, &[]), plain);
+    }
 }
 
 #[cfg(test)]

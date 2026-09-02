@@ -13,6 +13,15 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Splitter::pane_limits` gives each pane its own size bounds, as
+  `SplitterPaneLimits::range(min, max)` (or `min_size` / `max_size` / `UNBOUNDED`), indexed like
+  the children; `min_size` stays one floor shared by every pane. The bounds hold for a drag and
+  for a programmatic weight change: a handle stops where the two panes it separates run out of
+  room, and a pane held at its ceiling hands the cells it cannot use to the panes that can still
+  take them, so the split keeps covering the splitter. Previously a drag ran to wherever the
+  pointer went, leaving an app that clamps its own pane width drawn at that width inside an
+  oversized allocation - a gap beside the pane, and a neighbour laid out wider than the space it
+  was actually given.
 - `FileTree` shows where a symlink points, as `link → target`, the way `ls -l` reports it. On by
   default; `symlink_targets(false)` turns it off, `symlink_target_arrow(...)` replaces the arrow
   for a font that has none, and `symlink_target_style(...)` restyles the suffix (dim by default).
