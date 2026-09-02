@@ -11,6 +11,8 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-02
+
 ### Fixed
 
 - Host terminal palette queries now wait for an ordering reply before restoring cooked input.
@@ -1753,7 +1755,8 @@ Highlights of what ships in 0.1.0:
 See the [README](README.md) for the full feature set and
 [docs.tui-lipan.dev](https://docs.tui-lipan.dev) for documentation.
 
-[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/tui-lipan/tui-lipan/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/tui-lipan/tui-lipan/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/tui-lipan/tui-lipan/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/tui-lipan/tui-lipan/compare/v0.2.0...v0.3.0
