@@ -13,6 +13,9 @@ While the crate is on `0.x.y`:
 
 ### Fixed
 
+- Host terminal palette queries now wait for an ordering reply before restoring cooked input.
+  Terminals that return OSC 10/11 before their separately scheduled OSC 4 reports no longer echo
+  those palette reports onto the primary screen behind a fullscreen application.
 - Built-in terminal path hints recognize Windows drive-relative, rooted, UNC, verbatim, and quoted
   paths, including paths written with backslash separators.
 - A borderless `DocumentView` with `ScrollbarVariant::Integrated` now draws its vertical and
