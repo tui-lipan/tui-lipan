@@ -323,6 +323,20 @@ fn push_gutter_spans<'v, 's>(
     *item_spans_width += reserved_gutter_width;
 }
 
+/// Whether any visual line of `item` carries right-aligned content, and so pads the
+/// row out to its right edge.
+fn item_has_right_content(item: &ListItem) -> bool {
+    fn line_fills(description_spans: &[crate::style::Span], has_spinner: bool) -> bool {
+        !description_spans.is_empty() || has_spinner
+    }
+
+    line_fills(&item.description_spans, item.description_spinner.is_some())
+        || item
+            .extra_lines
+            .iter()
+            .any(|line| line_fills(&line.description_spans, line.description_spinner.is_some()))
+}
+
 struct LineSpinnerDrawCtx {
     base_style: Style,
     style_override: Style,
@@ -775,6 +789,11 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
         let item_selectable = item.is_selectable();
         let is_selected = item_selectable && selected == Some(idx);
         let is_active = item.is_active();
+        // A line carrying right-aligned content is padded out to the row edge, and that
+        // pad takes the row's background. Decide it per item, not per line: otherwise a
+        // multi-line row draws a full-width highlight on the lines that have a
+        // description and a label-width one on the lines that do not.
+        let item_fills_row_edge = item_has_right_content(item);
         let item_symbol_width = item_symbol_width_for_reserved(
             reserved_symbol_width.min(u16::MAX as usize) as u16,
             item,
@@ -1269,7 +1288,7 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
 
             // Pad to push right_spans to the row edge / paint a full-width highlight.
             let mut description_x = item_spans_width;
-            if right_width > 0 || selection_full_width {
+            if right_width > 0 || selection_full_width || item_fills_row_edge {
                 let total_available = max_text_w as usize;
                 let padding = total_available
                     .saturating_sub(item_spans_width)
