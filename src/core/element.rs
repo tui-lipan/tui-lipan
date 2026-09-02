@@ -22,10 +22,24 @@ use crate::widgets::{
     StateDiagram, StatusBarLayout, Tabs, Text, VStack, ZStack,
 };
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) struct MeasureContext {
+    pub ancestor_integrated_v: bool,
+    pub ancestor_integrated_h: bool,
+}
+
+impl MeasureContext {
+    pub(crate) const NONE: Self = Self {
+        ancestor_integrated_v: false,
+        ancestor_integrated_h: false,
+    };
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct MeasureCacheEntry {
     pub max_w: Option<u16>,
     pub max_h: Option<u16>,
+    pub context: MeasureContext,
     pub size: (u16, u16),
 }
 
@@ -749,7 +763,7 @@ impl Default for Element {
 
 #[cfg(test)]
 mod tests {
-    use super::{Element, ElementKind, Group, MeasureCacheEntry};
+    use super::{Element, ElementKind, Group, MeasureCacheEntry, MeasureContext};
     use crate::callback::ScopeId;
     use crate::core::memo::Memo;
     use crate::overlay::{DismissPolicy, OverlayLayer, OverlayPlacement, PointerCapture, Portal};
@@ -775,6 +789,7 @@ mod tests {
             Some(MeasureCacheEntry {
                 max_w: Some(1),
                 max_h: Some(1),
+                context: MeasureContext::NONE,
                 size: (1, 1),
             }),
             None,
