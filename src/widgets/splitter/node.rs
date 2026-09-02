@@ -5,7 +5,9 @@ use crate::core::node::{NodeKind, WidgetNode};
 use crate::style::{Rect, Style};
 use crate::widgets::Orientation;
 
-use super::{Splitter, SplitterHandleMode, SplitterResizeEvent, sizes_to_weights};
+use super::{
+    Splitter, SplitterHandleMode, SplitterPaneLimits, SplitterResizeEvent, sizes_to_weights,
+};
 
 #[derive(Clone)]
 pub struct SplitterNode {
@@ -16,6 +18,7 @@ pub struct SplitterNode {
     pub on_resize_live: Option<Callback<SplitterResizeEvent>>,
     pub on_resize: Option<Callback<SplitterResizeEvent>>,
     pub min_size: u16,
+    pub pane_limits: Vec<SplitterPaneLimits>,
     pub handle_mode: SplitterHandleMode,
     pub handle_symbol: char,
     pub handle_style: Style,
@@ -69,6 +72,7 @@ impl From<Splitter> for SplitterNode {
             on_resize_live: value.on_resize_live.clone(),
             on_resize: value.on_resize.clone(),
             min_size: value.min_size,
+            pane_limits: value.pane_limits,
             handle_mode: value.handle_mode,
             handle_symbol: value.handle_symbol,
             handle_style: value.handle_style,

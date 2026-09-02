@@ -90,7 +90,8 @@ pub(crate) use super::spacer::{SpacerNode, measure_spacer, reconcile_spacer};
 pub(crate) use super::sparkline::{SparklineNode, measure_sparkline, reconcile_sparkline};
 pub(crate) use super::spinner::{SpinnerNode, measure_spinner, reconcile_spinner};
 pub(crate) use super::splitter::{
-    SplitterNode, SplitterReconcile, measure_splitter, reconcile_splitter,
+    SplitterNode, SplitterReconcile, measure_splitter, pane_bounds as splitter_pane_bounds,
+    reconcile_splitter,
 };
 pub(crate) use super::state_diagram::{
     StateDiagramNode, measure_state_diagram, reconcile_state_diagram,

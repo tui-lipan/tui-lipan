@@ -90,6 +90,7 @@ pub(crate) fn reconcile_splitter(
         on_resize_live: splitter.on_resize_live.clone(),
         on_resize: splitter.on_resize.clone(),
         min_size: splitter.min_size,
+        pane_limits: splitter.pane_limits.clone(),
         handle_mode: splitter.handle_mode,
         handle_symbol: splitter.handle_symbol,
         handle_style: splitter.handle_style,

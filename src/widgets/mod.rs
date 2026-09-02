@@ -280,7 +280,7 @@ pub use sparkline::{
     SparklineVariant, SparklineZeroPolicy,
 };
 pub use spinner::{Spinner, SpinnerSpeed, SpinnerStyle};
-pub use splitter::{Splitter, SplitterHandleMode, SplitterResizeEvent};
+pub use splitter::{Splitter, SplitterHandleMode, SplitterPaneLimits, SplitterResizeEvent};
 pub use state_diagram::{StateDiagram, StateDiagramTheme, StateKind, StateSpec, StateTransition};
 pub use status_bar::StatusBar;
 pub use table::{
