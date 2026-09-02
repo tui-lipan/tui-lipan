@@ -11,6 +11,14 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- A `FileTree` symlink's target sits next to the name — `CLAUDE.md → AGENTS.md` — rather than
+  right-aligned at the far edge of the row. It had been put in the description slot, which `List`
+  aligns right, so a wide tree left a field of blanks between a link and where it points. The
+  target is part of the label now: change markers still right-align past it, and a narrow row
+  trims the target with the label instead of dropping the markers.
+
 ## [0.6.0] - 2026-09-02
 
 ### Added
