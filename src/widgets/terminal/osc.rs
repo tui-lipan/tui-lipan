@@ -1,10 +1,10 @@
-//! Parallel OSC 7 / OSC 9;9 / OSC 133 semantic-state observer.
+//! Parallel semantic-state and supplementary terminal-protocol observer.
 //!
 //! [`TerminalScreen`](super::TerminalScreen) feeds every PTY byte stream through the primary
 //! Alacritty grid parser *and* a second, independent [`vte::Parser`](alacritty_terminal::vte::Parser)
-//! driven by [`SemanticObserver`]. The observer only implements [`Perform::osc_dispatch`] (every
-//! other callback keeps the trait's no-op default), so it tracks working-directory and
-//! command-lifecycle escape sequences without touching cell/cursor state or the render snapshot.
+//! driven by [`SemanticObserver`]. OSC dispatch tracks working-directory and command-lifecycle
+//! state; CSI dispatch notices XTVERSION, which the grid parser does not implement. Neither path
+//! touches cell/cursor state or the render snapshot.
 //!
 //! This state is intentionally kept out of [`TerminalRenderSnapshot`](super::TerminalRenderSnapshot):
 //! it is runtime metadata (current working directory, foreground command phase, reported
@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use alacritty_terminal::vte::Perform;
+use alacritty_terminal::vte::{Params, Perform};
 
 /// Upper bound on a decoded OSC 7/9;9/133 value this module will retain.
 ///
@@ -119,14 +119,15 @@ pub struct TerminalSemanticState {
     pub executable: Option<Arc<str>>,
 }
 
-/// Parallel `vte::Perform` implementation that only reacts to `osc_dispatch`.
+/// Parallel `vte::Perform` implementation for metadata and unsupported query detection.
 ///
-/// Every other `Perform` method (print, execute, csi_dispatch, ...) keeps the trait's no-op
-/// default: this observer never touches grid/cursor state and cannot affect rendering.
+/// Every callback besides OSC and CSI dispatch keeps the trait's no-op default: this observer never
+/// touches grid/cursor state and cannot affect rendering.
 #[derive(Debug, Default)]
 pub(super) struct SemanticObserver {
     state: TerminalSemanticState,
     events: Vec<TerminalSemanticEvent>,
+    xtversion_queries: usize,
 }
 
 impl SemanticObserver {
@@ -148,6 +149,10 @@ impl SemanticObserver {
 
     pub(super) fn event_count(&self) -> usize {
         self.events.len()
+    }
+
+    pub(super) fn drain_xtversion_queries(&mut self) -> usize {
+        std::mem::take(&mut self.xtversion_queries)
     }
 
     fn set_cwd(&mut self, cwd: TerminalWorkingDirectory) {
@@ -264,6 +269,22 @@ impl SemanticObserver {
 }
 
 impl Perform for SemanticObserver {
+    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
+        if ignore || action != 'q' || intermediates != b">" {
+            return;
+        }
+
+        let mut params = params.iter();
+        let supported_parameter = match params.next() {
+            None => true,
+            Some(&[0]) => params.next().is_none(),
+            Some(_) => false,
+        };
+        if supported_parameter {
+            self.xtversion_queries = self.xtversion_queries.saturating_add(1);
+        }
+    }
+
     fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
         let Some(&code) = params.first() else {
             return;

@@ -82,6 +82,23 @@ pub struct SemanticMark {
 }
 
 const MAX_SEMANTIC_MARKS: usize = 256;
+const MAX_TERMINAL_IDENTITY_LEN: usize = 256;
+const DEFAULT_TERMINAL_IDENTITY: &str = concat!("tui-lipan ", env!("CARGO_PKG_VERSION"));
+
+fn normalize_terminal_identity(identity: &str) -> Arc<str> {
+    let identity: String = identity
+        .chars()
+        .filter(char::is_ascii)
+        .filter(|character| !character.is_ascii_control())
+        .take(MAX_TERMINAL_IDENTITY_LEN)
+        .collect();
+    let identity = identity.trim();
+    if identity.is_empty() {
+        Arc::from(DEFAULT_TERMINAL_IDENTITY)
+    } else {
+        Arc::from(identity)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PromptBoundary {
@@ -397,11 +414,13 @@ pub struct TerminalScreen {
     processor: VteProcessor,
     term: Term<ResponseCapture>,
     listener: ResponseCapture,
-    /// Parallel OSC 7/9;9/133 observer, driven by the same raw bytes as `processor`.
+    /// Stable child-facing identity returned for XTVERSION queries.
+    terminal_identity: Arc<str>,
+    /// Parallel semantic/protocol observer, driven by the same raw bytes as `processor`.
     ///
-    /// Kept entirely separate from the Alacritty grid parser above: it never sees a callback
-    /// besides `osc_dispatch`, so it cannot affect rendering, and its state is deliberately not
-    /// part of `TerminalRenderSnapshot`.
+    /// Kept entirely separate from the Alacritty grid parser above: it observes selected OSC and
+    /// CSI sequences but cannot affect rendering, and its state is deliberately not part of
+    /// `TerminalRenderSnapshot`.
     semantic_parser: SemanticVteParser,
     semantic: SemanticObserver,
     /// Logical viewport rows (matches the PTY size).
@@ -1024,6 +1043,7 @@ impl TerminalScreen {
             processor: VteProcessor::new(),
             term,
             listener,
+            terminal_identity: Arc::from(DEFAULT_TERMINAL_IDENTITY),
             semantic_parser: SemanticVteParser::new(),
             semantic: SemanticObserver::default(),
             rows,
@@ -1082,7 +1102,21 @@ impl TerminalScreen {
         }
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode(), self.pixel_mouse);
+        let xtversion_queries = self.semantic.drain_xtversion_queries();
+        if xtversion_queries > 0 {
+            let response = self.xtversion_response();
+            let mut responses = self.listener.responses.borrow_mut();
+            responses.extend((0..xtversion_queries).map(|_| response.clone()));
+        }
         self.dirty = true;
+    }
+
+    fn xtversion_response(&self) -> Vec<u8> {
+        let mut response = Vec::with_capacity(self.terminal_identity.len() + 7);
+        response.extend_from_slice(b"\x1bP>|");
+        response.extend_from_slice(self.terminal_identity.as_bytes());
+        response.extend_from_slice(b"\x1b\\");
+        response
     }
 
     fn feed_grid_with_prompt_boundaries(&mut self, bytes: &[u8]) -> usize {
@@ -1282,6 +1316,22 @@ impl TerminalScreen {
             self.sync_viewport();
             self.dirty = true;
         }
+    }
+
+    /// Set the stable terminal name and version reported to child programs through XTVERSION.
+    ///
+    /// The response to `CSI > 0 q` is `DCS > | identity ST`. Multiplexers and applications that
+    /// embed [`TerminalScreen`] should set their own identity at screen construction time rather
+    /// than proxying whichever outer terminal happens to be attached. Control and non-ASCII
+    /// characters are removed, the result is capped at 256 bytes, and an empty result restores the
+    /// default `tui-lipan <version>` identity.
+    pub fn set_terminal_identity(&mut self, identity: impl AsRef<str>) {
+        self.terminal_identity = normalize_terminal_identity(identity.as_ref());
+    }
+
+    /// The child-facing terminal identity returned by XTVERSION.
+    pub fn terminal_identity(&self) -> &str {
+        &self.terminal_identity
     }
 
     /// The cell size reported to the child.
@@ -3368,6 +3418,43 @@ mod tests {
         assert_eq!(palette.ansi[3], UiColor::Yellow);
         assert_eq!(palette.ansi[5], UiColor::Magenta);
         assert_eq!(palette.ansi[6], UiColor::Cyan);
+    }
+
+    #[test]
+    fn answers_fragmented_xtversion_queries_with_its_configured_identity() {
+        let mut screen = TerminalScreen::new(2, 8, 10);
+        assert_eq!(
+            screen.terminal_identity(),
+            concat!("tui-lipan ", env!("CARGO_PKG_VERSION"))
+        );
+        screen.set_terminal_identity(" \x1bRozi 1.2\u{e9}\x07 ");
+        assert_eq!(screen.terminal_identity(), "Rozi 1.2");
+
+        screen.process_bytes(b"\x1b[>");
+        assert!(screen.drain_responses().is_empty());
+        screen.process_bytes(b"0q\x1b[>q\x1b[>1q\x1b[6 q");
+
+        assert_eq!(
+            screen.drain_responses(),
+            vec![
+                b"\x1bP>|Rozi 1.2\x1b\\".to_vec(),
+                b"\x1bP>|Rozi 1.2\x1b\\".to_vec(),
+            ]
+        );
+        assert!(screen.render_snapshot().text.trim().is_empty());
+    }
+
+    #[test]
+    fn reset_preserves_identity_but_discards_a_partial_xtversion_query() {
+        let mut screen = TerminalScreen::new(2, 8, 10);
+        screen.set_terminal_identity("mux 2.0");
+        screen.process_bytes(b"\x1b[>");
+
+        screen.reset();
+        screen.process_bytes(b"0q");
+
+        assert_eq!(screen.terminal_identity(), "mux 2.0");
+        assert!(screen.drain_responses().is_empty());
     }
 
     #[test]
