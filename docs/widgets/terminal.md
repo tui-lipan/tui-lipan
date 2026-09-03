@@ -464,7 +464,8 @@ let replay = screen.export_replay_bytes();
 identity is `tui-lipan <crate version>`. An embedding terminal or multiplexer should call
 `set_terminal_identity(...)` once when constructing each child-facing screen, using an identity
 that remains stable when outer terminals detach or change. The supplied text is restricted to
-printable ASCII and 256 bytes so it cannot terminate or inject into the DCS response.
+printable ASCII and 256 bytes so it cannot terminate or inject into the DCS response. Reporting is
+enabled by default; call `set_xtversion_enabled(false)` to leave the query unanswered.
 
 `drain_clipboard_events()` returns `TerminalClipboardEvent` values for valid UTF-8 OSC 52 store
 requests. Each event identifies the requested `TerminalClipboardTarget` (`Clipboard` or

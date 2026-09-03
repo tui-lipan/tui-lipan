@@ -416,6 +416,8 @@ pub struct TerminalScreen {
     listener: ResponseCapture,
     /// Stable child-facing identity returned for XTVERSION queries.
     terminal_identity: Arc<str>,
+    /// Whether XTVERSION queries receive the configured terminal identity.
+    xtversion_enabled: bool,
     /// Parallel semantic/protocol observer, driven by the same raw bytes as `processor`.
     ///
     /// Kept entirely separate from the Alacritty grid parser above: it observes selected OSC and
@@ -1044,6 +1046,7 @@ impl TerminalScreen {
             term,
             listener,
             terminal_identity: Arc::from(DEFAULT_TERMINAL_IDENTITY),
+            xtversion_enabled: true,
             semantic_parser: SemanticVteParser::new(),
             semantic: SemanticObserver::default(),
             rows,
@@ -1079,11 +1082,15 @@ impl TerminalScreen {
     /// Feed terminal bytes.
     ///
     pub fn process_bytes(&mut self, bytes: &[u8]) {
-        let evicted = self.feed_grid_with_prompt_boundaries(bytes);
+        let xtversion_boundaries = self.xtversion_boundaries(bytes);
+        let evicted = if self.xtversion_enabled && !xtversion_boundaries.is_empty() {
+            self.feed_grid_with_xtversion_boundaries(bytes, &xtversion_boundaries)
+        } else {
+            self.feed_grid_with_prompt_boundaries(bytes)
+        };
         if evicted > 0 {
             self.evicted_lines = self.evicted_lines.saturating_add(evicted as u64);
         }
-        self.semantic_parser.advance(&mut self.semantic, bytes);
         self.settle_graphics(evicted);
         let alt_screen = self.term.mode().contains(TermMode::ALT_SCREEN);
         if self.alt_screen != alt_screen {
@@ -1102,13 +1109,39 @@ impl TerminalScreen {
         }
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode(), self.pixel_mouse);
-        let xtversion_queries = self.semantic.drain_xtversion_queries();
-        if xtversion_queries > 0 {
-            let response = self.xtversion_response();
-            let mut responses = self.listener.responses.borrow_mut();
-            responses.extend((0..xtversion_queries).map(|_| response.clone()));
-        }
         self.dirty = true;
+    }
+
+    fn xtversion_boundaries(&mut self, bytes: &[u8]) -> Vec<usize> {
+        let mut boundaries = Vec::new();
+        let mut processed = 0;
+        while processed < bytes.len() {
+            let consumed = self
+                .semantic_parser
+                .advance_until_terminated(&mut self.semantic, &bytes[processed..]);
+            if consumed == 0 {
+                break;
+            }
+            processed += consumed;
+            if self.semantic.take_xtversion_query() {
+                boundaries.push(processed);
+            }
+        }
+        boundaries
+    }
+
+    fn feed_grid_with_xtversion_boundaries(&mut self, bytes: &[u8], boundaries: &[usize]) -> usize {
+        let mut evicted_total = 0;
+        let mut start = 0;
+        for &end in boundaries {
+            evicted_total += self.feed_grid_with_prompt_boundaries(&bytes[start..end]);
+            self.listener
+                .responses
+                .borrow_mut()
+                .push(self.xtversion_response());
+            start = end;
+        }
+        evicted_total + self.feed_grid_with_prompt_boundaries(&bytes[start..])
     }
 
     fn xtversion_response(&self) -> Vec<u8> {
@@ -1332,6 +1365,19 @@ impl TerminalScreen {
     /// The child-facing terminal identity returned by XTVERSION.
     pub fn terminal_identity(&self) -> &str {
         &self.terminal_identity
+    }
+
+    /// Enable or disable XTVERSION responses.
+    ///
+    /// Enabled by default. Disabling this leaves `CSI > 0 q` unanswered while all other terminal
+    /// query responses continue normally.
+    pub fn set_xtversion_enabled(&mut self, enabled: bool) {
+        self.xtversion_enabled = enabled;
+    }
+
+    /// Whether XTVERSION queries receive the configured terminal identity.
+    pub fn xtversion_enabled(&self) -> bool {
+        self.xtversion_enabled
     }
 
     /// The cell size reported to the child.
@@ -3455,6 +3501,43 @@ mod tests {
 
         assert_eq!(screen.terminal_identity(), "mux 2.0");
         assert!(screen.drain_responses().is_empty());
+    }
+
+    #[test]
+    fn xtversion_reporting_is_enabled_by_default_and_can_be_disabled() {
+        let mut screen = TerminalScreen::new(2, 8, 10);
+        assert!(screen.xtversion_enabled());
+
+        screen.set_xtversion_enabled(false);
+        screen.process_bytes(b"\x1b[>0q");
+        assert!(!screen.xtversion_enabled());
+        assert!(screen.drain_responses().is_empty());
+
+        screen.set_xtversion_enabled(true);
+        screen.process_bytes(b"\x1b[>0q");
+        assert_eq!(
+            screen.drain_responses(),
+            vec![format!("\x1bP>|tui-lipan {}\x1b\\", env!("CARGO_PKG_VERSION")).into_bytes()]
+        );
+    }
+
+    #[test]
+    fn xtversion_response_preserves_order_with_primary_parser_responses() {
+        let mut screen = TerminalScreen::new(2, 8, 10);
+        screen.set_terminal_identity("mux 2.0");
+        let xtversion = b"\x1bP>|mux 2.0\x1b\\";
+
+        screen.process_bytes(b"\x1b[>0q\x1b]10;?\x1b\\");
+        let responses = screen.drain_responses();
+        assert_eq!(responses.len(), 2);
+        assert_eq!(responses[0], xtversion);
+        assert!(responses[1].starts_with(b"\x1b]10;"), "{responses:?}");
+
+        screen.process_bytes(b"\x1b]10;?\x1b\\\x1b[>0q");
+        let responses = screen.drain_responses();
+        assert_eq!(responses.len(), 2);
+        assert!(responses[0].starts_with(b"\x1b]10;"), "{responses:?}");
+        assert_eq!(responses[1], xtversion);
     }
 
     #[test]

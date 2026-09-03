@@ -127,7 +127,7 @@ pub struct TerminalSemanticState {
 pub(super) struct SemanticObserver {
     state: TerminalSemanticState,
     events: Vec<TerminalSemanticEvent>,
-    xtversion_queries: usize,
+    xtversion_query: bool,
 }
 
 impl SemanticObserver {
@@ -151,8 +151,8 @@ impl SemanticObserver {
         self.events.len()
     }
 
-    pub(super) fn drain_xtversion_queries(&mut self) -> usize {
-        std::mem::take(&mut self.xtversion_queries)
+    pub(super) fn take_xtversion_query(&mut self) -> bool {
+        std::mem::take(&mut self.xtversion_query)
     }
 
     fn set_cwd(&mut self, cwd: TerminalWorkingDirectory) {
@@ -281,7 +281,7 @@ impl Perform for SemanticObserver {
             Some(_) => false,
         };
         if supported_parameter {
-            self.xtversion_queries = self.xtversion_queries.saturating_add(1);
+            self.xtversion_query = true;
         }
     }
 
@@ -295,6 +295,10 @@ impl Perform for SemanticObserver {
             b"133" => self.handle_osc133(&params[1..]),
             _ => {}
         }
+    }
+
+    fn terminated(&self) -> bool {
+        self.xtversion_query
     }
 }
 
