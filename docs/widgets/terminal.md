@@ -418,6 +418,8 @@ VT100/VT220 screen emulator (wraps `alacritty_terminal`). Maintains scrollback b
 ```rust
 // Create a screen with given dimensions and scrollback
 let mut screen = TerminalScreen::new(rows, cols, scrollback_lines);
+// Embedding terminals and multiplexers should identify themselves, not the outer terminal.
+screen.set_terminal_identity("my-mux 1.4.0");
 
 // Process PTY output
 screen.process_bytes(&bytes);
@@ -457,6 +459,13 @@ screen.resize(new_rows, new_cols) // Resize the terminal
 // Serialize the full state so a fresh same-sized screen can reproduce it
 let replay = screen.export_replay_bytes();
 ```
+
+`TerminalScreen` answers the XTVERSION query (`CSI > 0 q`) through `drain_responses()`. Its default
+identity is `tui-lipan <crate version>`. An embedding terminal or multiplexer should call
+`set_terminal_identity(...)` once when constructing each child-facing screen, using an identity
+that remains stable when outer terminals detach or change. The supplied text is restricted to
+printable ASCII and 256 bytes so it cannot terminate or inject into the DCS response. Reporting is
+enabled by default; call `set_xtversion_enabled(false)` to leave the query unanswered.
 
 `drain_clipboard_events()` returns `TerminalClipboardEvent` values for valid UTF-8 OSC 52 store
 requests. Each event identifies the requested `TerminalClipboardTarget` (`Clipboard` or

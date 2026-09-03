@@ -11,6 +11,13 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- `TerminalScreen` answers XTVERSION queries with `tui-lipan <version>` by default, and
+  `set_terminal_identity(...)` lets an embedding terminal or multiplexer report its own stable
+  child-facing identity. `set_xtversion_enabled(false)` disables those responses when a host needs
+  the previous no-reply behavior.
+
 ## [0.6.1] - 2026-09-03
 
 ### Fixed
