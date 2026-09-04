@@ -2920,3 +2920,67 @@ fn mouse_region_hover_includes_interactive_descendants() {
     assert!(update_hover_test_backend(&mut backend, outside_x, 0, false));
     assert_eq!(&*hover_changes.borrow(), &[true, false]);
 }
+
+#[test]
+fn clicking_hover_only_mouse_region_preserves_hover_state() {
+    struct HoverOnlyRegion {
+        hover_changes: Rc<RefCell<Vec<bool>>>,
+    }
+
+    impl Component for HoverOnlyRegion {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let hover_changes = Rc::clone(&self.hover_changes);
+            MouseRegion::new()
+                .on_hover_change(Callback::new(move |hovered| {
+                    hover_changes.borrow_mut().push(hovered);
+                }))
+                .child(Text::new("foo"))
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    let hover_changes = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = TestBackend::new(HoverOnlyRegion {
+        hover_changes: Rc::clone(&hover_changes),
+    });
+
+    assert!(update_hover_test_backend(&mut backend, 0, 0, false));
+    let hovered = backend.mouse.hovered.expect("region should be hovered");
+    assert_eq!(&*hover_changes.borrow(), &[true]);
+
+    for kind in [
+        MouseKind::Down(MouseButton::Left),
+        MouseKind::Up(MouseButton::Left),
+    ] {
+        dispatch_mouse_test_backend(
+            &mut backend,
+            MouseEvent {
+                x: 0,
+                y: 0,
+                kind,
+                mods: KeyMods::NONE,
+            },
+        );
+        assert_eq!(backend.mouse.hovered, Some(hovered));
+        assert_eq!(
+            &*hover_changes.borrow(),
+            &[true],
+            "click routing must not synthesize another hover entry"
+        );
+    }
+
+    let region_rect = backend.core.tree.node(backend.core.tree.root).rect;
+    let outside_x = region_rect.x.saturating_add(region_rect.w as i16).max(0) as u16;
+    assert!(update_hover_test_backend(&mut backend, outside_x, 0, false));
+    assert_eq!(&*hover_changes.borrow(), &[true, false]);
+}

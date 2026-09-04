@@ -3540,6 +3540,129 @@ fn mouse_region_hover_tracks_interactive_descendants() {
     assert_eq!(&*changes.borrow(), &[true, false]);
 }
 
+struct StyleOnlyHitTestRegion;
+
+impl Component for StyleOnlyHitTestRegion {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        MouseRegion::new()
+            .hit_test(|x, _| x < 2)
+            .hover_style(Style::new().bg(Color::Blue))
+            .child(
+                Button::new("go")
+                    .width(Length::Px(4))
+                    .on_click(Callback::new(|_| {})),
+            )
+            .into()
+    }
+}
+
+#[test]
+fn style_only_mouse_region_repaints_across_its_hit_test_boundary() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 4,
+        h: 1,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), StyleOnlyHitTestRegion, ());
+    init_runner(&mut runner, StyleOnlyHitTestRegion, viewport);
+
+    assert!(runner.update_hover(0, 0), "entering the region repaints");
+    let hovered = runner.mouse.hovered.expect("button should be hovered");
+    assert_eq!(runner.mouse.mouse_region_hover_chain.len(), 1);
+
+    assert!(
+        runner.update_hover(3, 0),
+        "leaving only the region hit-test must still repaint"
+    );
+    assert_eq!(
+        runner.mouse.hovered,
+        Some(hovered),
+        "the interactive child remains the hover target"
+    );
+    assert!(runner.mouse.mouse_region_hover_chain.is_empty());
+}
+
+struct ConfigurableMouseRegion {
+    enabled: Rc<Cell<bool>>,
+    changes: Rc<RefCell<Vec<bool>>>,
+}
+
+impl Component for ConfigurableMouseRegion {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let changes = Rc::clone(&self.changes);
+        MouseRegion::new()
+            .enabled(self.enabled.get())
+            .on_hover_change(Callback::new(move |hovered| {
+                changes.borrow_mut().push(hovered);
+            }))
+            .hover_style(Style::new().bg(Color::Blue))
+            .child(
+                Button::new("go")
+                    .width(Length::Px(4))
+                    .on_click(Callback::new(|_| {})),
+            )
+            .into()
+    }
+}
+
+#[test]
+fn disabling_hovered_mouse_region_emits_leave_after_reconcile() {
+    let enabled = Rc::new(Cell::new(true));
+    let changes = Rc::new(RefCell::new(Vec::new()));
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 4,
+        h: 1,
+    };
+    let component = ConfigurableMouseRegion {
+        enabled: Rc::clone(&enabled),
+        changes: Rc::clone(&changes),
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component, ());
+    init_runner(
+        &mut runner,
+        ConfigurableMouseRegion {
+            enabled: Rc::clone(&enabled),
+            changes: Rc::clone(&changes),
+        },
+        viewport,
+    );
+
+    assert!(runner.update_hover(0, 0));
+    assert_eq!(&*changes.borrow(), &[true]);
+
+    enabled.set(false);
+    runner
+        .core
+        .render_element(viewport, None, None, runner.mouse.hovered);
+
+    assert!(runner.refresh_hover_from_last_mouse());
+    assert_eq!(&*changes.borrow(), &[true, false]);
+    assert!(runner.mouse.mouse_region_hover_chain.is_empty());
+}
+
 /// A tab strip beside a keyed region whose look depends on hover — the shape of an app with a tab
 /// bar across the top and a sidebar whose rows reveal a hover-only affordance.
 struct KeyedHoverDependencySmoke;

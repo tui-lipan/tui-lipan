@@ -9,7 +9,6 @@ use crate::app::input::drag::{
 use crate::app::input::hex_history::HexHistory;
 use crate::app::input::scrollbar::ScrollbarDrag;
 use crate::app::input::text_area_vim::TextAreaVimState;
-#[cfg(feature = "diff-view")]
 use crate::callback::Callback;
 use crate::core::element::Key;
 use crate::core::event::MouseButton;
@@ -282,6 +281,12 @@ pub(crate) enum HoverPaintTarget {
 #[derive(Default)]
 pub(crate) struct MouseTrackingState {
     pub hovered: Option<NodeId>,
+    /// MouseRegion ancestors currently containing the hovered node.
+    ///
+    /// This is a snapshot from the previous hover pass. Keeping the callback
+    /// and paint flag lets a later reconcile emit leave and repaint even when
+    /// the region moved, became disabled, or changed its hit-test.
+    pub mouse_region_hover_chain: Vec<MouseRegionHoverState>,
     /// For List/Table/Tabs: track which item is hovered to avoid re-renders on same item.
     pub hovered_item_index: Option<usize>,
     /// Richer renderer-level hover target for widgets where an item index is insufficient.
@@ -328,6 +333,13 @@ pub(crate) struct MouseTrackingState {
     /// Diff gutter drag that will emit one inclusive source range on release.
     #[cfg(feature = "diff-view")]
     pub diff_line_range_drag: Option<DiffLineRangeDragState>,
+}
+
+#[derive(Clone)]
+pub(crate) struct MouseRegionHoverState {
+    pub id: NodeId,
+    pub on_hover_change: Option<Callback<bool>>,
+    pub affects_paint: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

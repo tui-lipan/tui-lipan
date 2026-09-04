@@ -1,8 +1,7 @@
 use crate::app::input::focus;
 use crate::app::input::mouse;
-use crate::app::interaction_state::HoverPaintTarget;
+use crate::app::interaction_state::{HoverPaintTarget, MouseRegionHoverState};
 use crate::app::mouse_dispatch;
-use crate::callback::Callback;
 use crate::core::component::Component;
 use crate::core::event::{KeyEvent, MouseEvent};
 #[cfg(feature = "terminal")]
@@ -88,83 +87,16 @@ pub(crate) enum SelectionOwner {
     },
 }
 
-fn mouse_region_hover_callbacks(
-    tree: &crate::core::node::NodeTree,
-    hovered: Option<NodeId>,
-    pos: Option<(u16, u16)>,
-) -> Vec<(NodeId, Callback<bool>)> {
-    let Some((x, y)) = pos else {
-        return Vec::new();
-    };
-    mouse::mouse_region_hover_chain(tree, hovered, x, y)
-        .into_iter()
-        .filter_map(|id| {
-            let NodeKind::MouseRegion(region) = &tree.node(id).kind else {
-                return None;
-            };
-            region
-                .on_hover_change
-                .clone()
-                .map(|callback| (id, callback))
-        })
-        .collect()
-}
-
-fn hover_callback_chains_differ(
-    previous: &[(NodeId, Callback<bool>)],
-    current: &[(NodeId, Callback<bool>)],
-) -> bool {
-    previous
-        .iter()
-        .any(|(id, _)| !current.iter().any(|(candidate, _)| candidate == id))
-        || current
-            .iter()
-            .any(|(id, _)| !previous.iter().any(|(candidate, _)| candidate == id))
-}
-
-fn emit_mouse_region_hover_changes(
-    previous: &[(NodeId, Callback<bool>)],
-    current: &[(NodeId, Callback<bool>)],
-) {
-    for (id, callback) in previous {
-        if !current.iter().any(|(candidate, _)| candidate == id) {
-            callback.emit(false);
-        }
-    }
-    for (id, callback) in current.iter().rev() {
-        if !previous.iter().any(|(candidate, _)| candidate == id) {
-            callback.emit(true);
-        }
-    }
-}
-
-fn node_paints_for_hover(
-    node: &crate::core::node::Node,
-    hovered: Option<NodeId>,
-    mouse_regions: &[NodeId],
-) -> bool {
-    if Some(node.id) == hovered {
-        return node.hover_affects_paint();
-    }
-    (matches!(node.kind, NodeKind::Frame(_)) || mouse_regions.contains(&node.id))
-        && node.hover_affects_paint()
-}
-
-fn hover_paint_nodes(
-    tree: &crate::core::node::NodeTree,
-    hovered: Option<NodeId>,
-    pos: Option<(u16, u16)>,
-) -> Vec<NodeId> {
+fn hover_paint_nodes(tree: &crate::core::node::NodeTree, hovered: Option<NodeId>) -> Vec<NodeId> {
     let mut nodes = Vec::new();
     let Some(mut current) = hovered.filter(|id| tree.is_valid(*id)) else {
         return nodes;
     };
-    let mouse_regions = pos
-        .map(|(x, y)| mouse::mouse_region_hover_chain(tree, hovered, x, y))
-        .unwrap_or_default();
     loop {
         let node = tree.node(current);
-        if node_paints_for_hover(node, hovered, &mouse_regions) {
+        if (Some(current) == hovered || matches!(node.kind, NodeKind::Frame(_)))
+            && node.hover_affects_paint()
+        {
             nodes.push(current);
         }
         let Some(parent) = node.parent.filter(|id| tree.is_valid(*id)) else {
@@ -933,14 +865,15 @@ impl<C: Component> AppRunner<C> {
     fn hover_transition_affects_paint(
         &self,
         prev_hovered: Option<NodeId>,
-        prev_pos: Option<(u16, u16)>,
         hovered: Option<NodeId>,
-        pos: Option<(u16, u16)>,
+        previous_regions: &[MouseRegionHoverState],
+        current_regions: &[MouseRegionHoverState],
     ) -> bool {
-        let previous = hover_paint_nodes(&self.core.tree, prev_hovered, prev_pos);
-        let current = hover_paint_nodes(&self.core.tree, hovered, pos);
+        let previous = hover_paint_nodes(&self.core.tree, prev_hovered);
+        let current = hover_paint_nodes(&self.core.tree, hovered);
         previous.iter().any(|id| !current.contains(id))
             || current.iter().any(|id| !previous.contains(id))
+            || mouse::mouse_region_hover_transition_affects_paint(previous_regions, current_regions)
     }
 
     pub(crate) fn update_hover_impl(&mut self, x: u16, y: u16, force_recompute: bool) -> bool {
@@ -953,14 +886,13 @@ impl<C: Component> AppRunner<C> {
         {
             return true;
         }
-        if !self.core.tree.has_hoverables() {
-            self.mouse.last_mouse.set(Some((x, y)));
-            return false;
-        }
         let prev_mouse = self.mouse.last_mouse.get();
         self.mouse.last_mouse.set(Some((x, y)));
         if prev_mouse != Some((x, y)) {
             self.mouse.suppress_pointer_item_hover_nodes.clear();
+        }
+        if !self.core.tree.has_hoverables() {
+            return mouse::clear_mouse_hover_state(&mut self.mouse);
         }
         let hovered = self
             .core
@@ -969,12 +901,12 @@ impl<C: Component> AppRunner<C> {
             .filter(|id| mouse::should_hover(&self.core.tree, *id, x, y));
         let prev_hovered = self.mouse.hovered;
         let node_changed = hovered != prev_hovered;
-        let previous_region_callbacks =
-            mouse_region_hover_callbacks(&self.core.tree, prev_hovered, prev_mouse);
-        let current_region_callbacks =
-            mouse_region_hover_callbacks(&self.core.tree, hovered, Some((x, y)));
+        let previous_regions = std::mem::take(&mut self.mouse.mouse_region_hover_chain);
+        let current_regions = mouse::mouse_region_hover_state(&self.core.tree, hovered, x, y);
         let region_changed =
-            hover_callback_chains_differ(&previous_region_callbacks, &current_region_callbacks);
+            mouse::mouse_region_hover_chains_differ(&previous_regions, &current_regions);
+        mouse::emit_mouse_region_hover_changes(&previous_regions, &current_regions);
+        self.mouse.mouse_region_hover_chain = current_regions;
         self.mouse.hovered = hovered;
         if node_changed || region_changed {
             let width_lock_cleared = if let Some(prev_id) = prev_hovered
@@ -986,8 +918,6 @@ impl<C: Component> AppRunner<C> {
             } else {
                 false
             };
-
-            emit_mouse_region_hover_changes(&previous_region_callbacks, &current_region_callbacks);
 
             self.mouse.hovered_item_index = None;
             self.mouse.hover_paint_target = None;
@@ -1033,9 +963,9 @@ impl<C: Component> AppRunner<C> {
             return width_lock_cleared
                 || self.hover_transition_affects_paint(
                     prev_hovered,
-                    prev_mouse,
                     hovered,
-                    Some((x, y)),
+                    &previous_regions,
+                    &self.mouse.mouse_region_hover_chain,
                 )
                 || !self.core.hover_change_scopes(hovered).is_empty();
         }

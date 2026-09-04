@@ -52,12 +52,11 @@ pub(crate) fn update_hover_test_backend<C: Component>(
     {
         return true;
     }
-    if !backend.core.tree.has_hoverables() {
-        backend.mouse.last_mouse.set(Some((x, y)));
-        return false;
-    }
     let prev = backend.mouse.last_mouse.get();
     backend.mouse.last_mouse.set(Some((x, y)));
+    if !backend.core.tree.has_hoverables() {
+        return mouse::clear_mouse_hover_state(&mut backend.mouse);
+    }
     if !force_recompute && prev == Some((x, y)) {
         return false;
     }
@@ -68,18 +67,12 @@ pub(crate) fn update_hover_test_backend<C: Component>(
         .filter(|id| mouse::should_hover(&backend.core.tree, *id, x, y));
     let prev_hovered = backend.mouse.hovered;
     let changed = backend.mouse.hovered != hovered;
-    let previous_regions = prev
-        .map(|(prev_x, prev_y)| {
-            mouse::mouse_region_hover_chain(&backend.core.tree, prev_hovered, prev_x, prev_y)
-        })
-        .unwrap_or_default();
-    let current_regions = mouse::mouse_region_hover_chain(&backend.core.tree, hovered, x, y);
-    let region_changed = previous_regions
-        .iter()
-        .any(|id| !current_regions.contains(id))
-        || current_regions
-            .iter()
-            .any(|id| !previous_regions.contains(id));
+    let previous_regions = std::mem::take(&mut backend.mouse.mouse_region_hover_chain);
+    let current_regions = mouse::mouse_region_hover_state(&backend.core.tree, hovered, x, y);
+    let region_changed =
+        mouse::mouse_region_hover_chains_differ(&previous_regions, &current_regions);
+    mouse::emit_mouse_region_hover_changes(&previous_regions, &current_regions);
+    backend.mouse.mouse_region_hover_chain = current_regions;
     backend.mouse.hovered = hovered;
     if changed || region_changed {
         if let Some(prev_id) = prev_hovered
@@ -88,27 +81,6 @@ pub(crate) fn update_hover_test_backend<C: Component>(
                 &mut backend.core.tree.node_mut(prev_id).kind
         {
             tab_bar.width_lock = None;
-        }
-        for id in previous_regions
-            .iter()
-            .filter(|id| !current_regions.contains(id))
-        {
-            if let NodeKind::MouseRegion(region) = &backend.core.tree.node(*id).kind
-                && let Some(callback) = &region.on_hover_change
-            {
-                callback.emit(false);
-            }
-        }
-        for id in current_regions
-            .iter()
-            .rev()
-            .filter(|id| !previous_regions.contains(id))
-        {
-            if let NodeKind::MouseRegion(region) = &backend.core.tree.node(*id).kind
-                && let Some(callback) = &region.on_hover_change
-            {
-                callback.emit(true);
-            }
         }
         backend.mouse.hovered_item_index = None;
         if let Some(id) = hovered {

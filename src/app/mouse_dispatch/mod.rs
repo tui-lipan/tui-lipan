@@ -411,9 +411,6 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
             state.left_down_pos = None;
             state.pending_drag_source = None;
         }
-        if ctx.mouse_state().hovered.take().is_some() {
-            return true;
-        }
         return selection_dirty || hover_dirty;
     };
 
