@@ -30,6 +30,7 @@ pub(crate) enum DamageRejection {
     /// The terminal is showing scrollback rather than the live viewport.
     ScrolledBack,
     /// The terminal carries images, which are not painted from the cell grid.
+    #[cfg_attr(not(feature = "terminal-images"), allow(dead_code))]
     HasImages,
 }
 

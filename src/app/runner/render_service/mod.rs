@@ -34,10 +34,10 @@ use super::{
     scroll_optimize::{capture_scroll_frames, replace_buffer_snapshot},
 };
 
-#[cfg(feature = "devtools")]
 #[cfg(feature = "terminal")]
 mod terminal_damage;
 
+#[cfg(feature = "devtools")]
 mod devtools;
 mod incremental_scroll;
 mod inline;
@@ -1021,11 +1021,6 @@ impl<C: Component> AppRunner<C> {
 
         self.sync_pointer_item_hover_suppression();
 
-        let focused = self.focus.focused;
-        let hovered = self.mouse.hovered;
-        let blink_visible = self.animation.blink_visible;
-        let tree = &self.core.tree;
-        let mouse_pos = self.mouse.last_mouse.get();
         let frame_area = {
             let frame = terminal.get_frame();
             frame.area()
@@ -1036,11 +1031,100 @@ impl<C: Component> AppRunner<C> {
         let _ = execute!(terminal.backend_mut(), Print("\x1b[?2026h"));
         #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
         let draw_start = Instant::now();
-        let current_scroll_frames = capture_scroll_frames(tree);
+        let current_scroll_frames = capture_scroll_frames(&self.core.tree);
         let scroll_plan =
             self.prepare_incremental_scroll_plan(draw_mode, frame_area, &current_scroll_frames);
         let cursor_position = StdCell::new(None);
         self.seed_dnd_snapshot_cells_from_last_frame_if_needed();
+        if scroll_plan.is_some() && self.focused_node_requests_cursor() {
+            cursor_position.set(self.incremental_cursor_position());
+        }
+
+        // The render context borrows `self`, and both draws below need to *write* the retained
+        // frame. Moving the two buffers out for the length of the draw keeps that a disjoint
+        // local rather than a second borrow of the runner.
+        let mut last_snapshot = self.last_frame_snapshot.take();
+        let mut diff_snapshot = self.scroll_diff_snapshot.take();
+        let draw_result = self.with_render_context(&cursor_position, |ctx| {
+            if let Some(plan) = scroll_plan.as_ref() {
+                let previous_snapshot = last_snapshot.as_ref().expect("snapshot exists");
+                replace_buffer_snapshot(&mut diff_snapshot, previous_snapshot);
+
+                let cursor_requested = self.focused_node_requests_cursor();
+                if cursor_requested && cursor_position.get().is_none() {
+                    cursor_position.set(self.incremental_cursor_position());
+                }
+                let last_snapshot = last_snapshot.as_mut().expect("snapshot exists");
+                let diff_snapshot = diff_snapshot.as_mut().expect("diff snapshot exists");
+                Self::draw_incremental_scroll(
+                    terminal,
+                    ctx,
+                    plan,
+                    last_snapshot,
+                    diff_snapshot,
+                    cursor_requested,
+                )
+            } else {
+                let completed = terminal.draw(|f| {
+                    render(f, ctx);
+                })?;
+                replace_buffer_snapshot(&mut last_snapshot, completed.buffer);
+                Ok(())
+            }
+        });
+        self.last_frame_snapshot = last_snapshot;
+        self.scroll_diff_snapshot = diff_snapshot;
+        draw_result?;
+
+        #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
+        let draw_duration = draw_start.elapsed();
+        #[cfg(feature = "profiling-tracing")]
+        tracing::trace!(
+            target: "tui_lipan::perf",
+            draw_ms = draw_duration.as_secs_f64() * 1000.0
+        );
+        let _ = execute!(terminal.backend_mut(), Print("\x1b[?2026l"));
+
+        self.last_scroll_frames = current_scroll_frames;
+
+        self.set_viewport_metrics(frame_area);
+        self.capture_inline_cursor_offset(frame_area, cursor_position.get());
+        self.stabilize_inline_resize_anchor(terminal)?;
+
+        self.terminal.update_cursor(
+            terminal.backend_mut(),
+            &self.core.tree,
+            self.focus.focused,
+            &self.widgets.text_area_vim_state,
+        )?;
+
+        #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
+        {
+            Ok(draw_duration)
+        }
+        #[cfg(not(any(feature = "devtools", feature = "profiling-tracing")))]
+        {
+            Ok(std::time::Duration::ZERO)
+        }
+    }
+
+    /// Build the production [`RenderContext`] and run `f` inside it.
+    ///
+    /// The context borrows a dozen values that live only as long as one draw, so it is handed to
+    /// a closure rather than returned: returning it would mean returning its backing storage too.
+    ///
+    /// Every draw goes through here, which is the point. A partial repaint is then *the ordinary
+    /// paint at a narrower clip* - same focus chain, theme, selection, hover, drag state - rather
+    /// than a second renderer with its own idea of them, and there is no context to keep in sync.
+    ///
+    /// The ambient scopes a draw needs are installed here too, so no caller can forget one. The
+    /// animation registry is not among them: it has to be live before `flush_inline_inserts`,
+    /// which runs well before any context exists.
+    fn with_render_context<R>(
+        &self,
+        cursor_position: &StdCell<Option<Position>>,
+        f: impl FnOnce(&RenderContext<'_>) -> R,
+    ) -> R {
         let tab_drag_preview_label: Option<std::sync::Arc<str>> = match &self.drag.active {
             // Suppress text label when a snapshot preview is available.
             ActiveDrag::DraggableTabBar(d) if d.started && d.preview_snapshot_anchor.is_none() => {
@@ -1149,17 +1233,14 @@ impl<C: Component> AppRunner<C> {
             _ => None,
         };
         let drag_preview_label = drag_preview_label_owned.as_deref();
-        if scroll_plan.is_some() && self.focused_node_requests_cursor() {
-            cursor_position.set(self.incremental_cursor_position());
-        }
 
         let ctx = RenderContext {
-            tree,
-            focused,
-            hovered,
-            mouse_pos,
+            tree: &self.core.tree,
+            focused: self.focus.focused,
+            hovered: self.mouse.hovered,
+            mouse_pos: self.mouse.last_mouse.get(),
             suppress_pointer_item_hover_nodes: Some(&self.mouse.suppress_pointer_item_hover_nodes),
-            blink_visible,
+            blink_visible: self.animation.blink_visible,
             effect_phase: self.animation.effect_phase_tick,
             images_enabled: !self.surface.is_inline(),
             contrast_policy: self.contrast_policy,
@@ -1167,7 +1248,7 @@ impl<C: Component> AppRunner<C> {
             scrollbar_metrics_cache: &self.scrollbar_metrics_cache,
             overlay_bg_snapshot: &self.overlay_bg_snapshot,
             join_index: &self.cached_join_index,
-            cursor_position: &cursor_position,
+            cursor_position,
             terminal_bg: self
                 .terminal_bg
                 .map(crate::backend::ratatui_backend::common::to_ratatui_color),
@@ -1197,63 +1278,7 @@ impl<C: Component> AppRunner<C> {
         let _highlight_scope =
             crate::backend::ratatui_backend::common::push_render_highlight(self.highlight());
 
-        if let Some(plan) = scroll_plan.as_ref() {
-            let previous_snapshot = self.last_frame_snapshot.as_ref().expect("snapshot exists");
-            replace_buffer_snapshot(&mut self.scroll_diff_snapshot, previous_snapshot);
-
-            let cursor_requested = self.focused_node_requests_cursor();
-            if cursor_requested && cursor_position.get().is_none() {
-                cursor_position.set(self.incremental_cursor_position());
-            }
-            let last_snapshot = self.last_frame_snapshot.as_mut().expect("snapshot exists");
-            let diff_snapshot = self
-                .scroll_diff_snapshot
-                .as_mut()
-                .expect("diff snapshot exists");
-            Self::draw_incremental_scroll(
-                terminal,
-                &ctx,
-                plan,
-                last_snapshot,
-                diff_snapshot,
-                cursor_requested,
-            )?;
-        } else {
-            let completed = terminal.draw(|f| {
-                render(f, &ctx);
-            })?;
-            replace_buffer_snapshot(&mut self.last_frame_snapshot, completed.buffer);
-        }
-        #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
-        let draw_duration = draw_start.elapsed();
-        #[cfg(feature = "profiling-tracing")]
-        tracing::trace!(
-            target: "tui_lipan::perf",
-            draw_ms = draw_duration.as_secs_f64() * 1000.0
-        );
-        let _ = execute!(terminal.backend_mut(), Print("\x1b[?2026l"));
-
-        self.last_scroll_frames = current_scroll_frames;
-
-        self.set_viewport_metrics(frame_area);
-        self.capture_inline_cursor_offset(frame_area, cursor_position.get());
-        self.stabilize_inline_resize_anchor(terminal)?;
-
-        self.terminal.update_cursor(
-            terminal.backend_mut(),
-            &self.core.tree,
-            self.focus.focused,
-            &self.widgets.text_area_vim_state,
-        )?;
-
-        #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
-        {
-            Ok(draw_duration)
-        }
-        #[cfg(not(any(feature = "devtools", feature = "profiling-tracing")))]
-        {
-            Ok(std::time::Duration::ZERO)
-        }
+        f(&ctx)
     }
 
     fn prune_widget_caches_if_needed(&mut self) {

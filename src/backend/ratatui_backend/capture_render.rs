@@ -147,7 +147,7 @@ fn render_headless(
 /// Exists to answer one question: does clipping a terminal to a single physical row make the
 /// terminal renderer paint one row, or does it still walk the whole visible grid? The destination
 /// is a full-size buffer either way, so the comparison isolates clipping from any patch mechanics.
-#[cfg(test)]
+#[cfg(all(test, feature = "terminal"))]
 pub(crate) fn render_regions_to_buffer_with_interaction(
     tree: &NodeTree,
     viewport: Rect,
@@ -173,7 +173,7 @@ pub(crate) fn render_regions_to_buffer_with_interaction(
 /// This is the production fast path's shape: the incremental repaint borrows ratatui's current
 /// buffer as scratch, having copied the retained frame's row into it, and relies on the region
 /// clip to leave everything else alone.
-#[cfg(test)]
+#[cfg(all(test, feature = "terminal"))]
 pub(crate) fn render_regions_over_seeded_buffer(
     tree: &NodeTree,
     viewport: Rect,
