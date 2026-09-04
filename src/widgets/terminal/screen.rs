@@ -5,6 +5,7 @@ use std::ops::ControlFlow;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use super::damage::{DamageAccumulator, TerminalDamage};
 use alacritty_terminal::event::{Event as TermEvent, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, GridCell, Scroll};
 use alacritty_terminal::index::{Column, Line};
@@ -439,6 +440,8 @@ pub struct TerminalScreen {
     cache: TerminalRenderSnapshot,
     palette: TerminalColorPalette,
     dirty: bool,
+    /// Viewport rows changed since the last paint took them.
+    damage: DamageAccumulator,
     sequence: u64,
     /// Bounded history of OSC 133 marks anchored to absolute text lines.
     semantic_marks: VecDeque<SemanticMark>,
@@ -1042,6 +1045,7 @@ impl TerminalScreen {
         let listener = ResponseCapture::default();
         let term = Term::new(config, &dimensions, listener.clone());
         let screen = Self {
+            damage: DamageAccumulator::default(),
             processor: VteProcessor::new(),
             term,
             listener,
@@ -1109,7 +1113,31 @@ impl TerminalScreen {
         }
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode(), self.pixel_mouse);
+        self.collect_damage();
         self.dirty = true;
+    }
+
+    /// Fold the emulator's damage for this write into what has accumulated since the last paint.
+    ///
+    /// Taken every write rather than once per frame because `Term::damage` is cleared by reading
+    /// it, and several writes can land between two paints.
+    fn collect_damage(&mut self) {
+        let viewport_rows = usize::from(self.rows);
+        match self.term.damage() {
+            alacritty_terminal::term::TermDamage::Full => self.damage.mark_full(),
+            alacritty_terminal::term::TermDamage::Partial(iter) => {
+                for line in iter {
+                    self.damage
+                        .add_row(line.line, line.left, line.right, viewport_rows);
+                }
+            }
+        }
+        self.term.reset_damage();
+    }
+
+    /// Take the rows that changed since the last call, leaving this screen clean.
+    pub fn take_damage(&mut self) -> TerminalDamage {
+        self.damage.take()
     }
 
     fn xtversion_boundaries(&mut self, bytes: &[u8]) -> Vec<usize> {
