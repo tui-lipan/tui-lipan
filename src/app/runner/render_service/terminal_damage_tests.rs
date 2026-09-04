@@ -22,12 +22,12 @@ use std::cell::{Cell as StdCell, RefCell};
 use std::rc::Rc;
 
 use ratatui::Terminal;
-use ratatui::backend::TestBackend;
+use ratatui::backend::{Backend, TestBackend};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect as RatatuiRect;
+use ratatui::layout::{Position, Rect as RatatuiRect};
 
 use super::AppRunner;
-use super::terminal_damage::{DamageRejection, TerminalDamagePlan, patch_row};
+use super::terminal_damage::{DamageRejection, TerminalDamagePlan, patch_row, place_caret};
 use crate::app::App;
 use crate::app::context::SurfaceMode;
 use crate::backend::ratatui_backend::render;
@@ -60,6 +60,9 @@ struct PaneCfg {
     grid_rows: u16,
     /// Mount a second terminal beside the first.
     second_terminal: bool,
+    /// Focus the second terminal rather than the first, so the caret sits on a row the first
+    /// terminal's output never damages.
+    focus_second: bool,
     /// Run on an inline surface rather than the alternate screen.
     inline: bool,
 }
@@ -222,6 +225,13 @@ fn build(cfg: PaneCfg, setup: &[u8]) -> Harness {
     if cfg.focused {
         runner.focus.focused = Some(first);
     }
+    if cfg.focus_second {
+        runner.focus.focused = Some(
+            *terminal_ids(&runner.core.tree)
+                .get(1)
+                .expect("the pane mounts a second terminal"),
+        );
+    }
     if cfg.hovered {
         runner.mouse.hovered = Some(first);
         runner.mouse.last_mouse.set(Some((3, 1)));
@@ -232,7 +242,7 @@ fn build(cfg: PaneCfg, setup: &[u8]) -> Harness {
 
     let mut term =
         Terminal::new(TestBackend::new(COLS, ROWS)).expect("test terminal should initialize");
-    let retained = full_paint(&runner, &mut term);
+    let (retained, _) = full_paint(&runner, &mut term);
     runner.last_frame_snapshot = Some(retained.clone());
 
     Harness {
@@ -245,14 +255,20 @@ fn build(cfg: PaneCfg, setup: &[u8]) -> Harness {
 }
 
 /// The ordinary draw, verbatim: the production context, `render` over the whole frame.
-fn full_paint(runner: &AppRunner<Pane>, term: &mut Terminal<TestBackend>) -> Buffer {
+///
+/// Returns the caret it placed as well as the cells, because a partial repaint owes the host both.
+fn full_paint(
+    runner: &AppRunner<Pane>,
+    term: &mut Terminal<TestBackend>,
+) -> (Buffer, Option<Position>) {
     let cursor_position = StdCell::new(None);
-    runner.with_render_context(&cursor_position, |ctx| {
+    let buffer = runner.with_render_context(&cursor_position, |ctx| {
         term.draw(|f| render(f, ctx))
             .expect("a full paint should succeed")
             .buffer
             .clone()
-    })
+    });
+    (buffer, cursor_position.get())
 }
 
 fn changed_rows(before: &Buffer, after: &Buffer) -> Vec<u16> {
@@ -311,10 +327,11 @@ fn assert_patch_matches_full_paint(cfg: PaneCfg, setup: &[u8], mutation: &[u8]) 
         for &row in &plan.rows {
             patch_row(term, ctx, &mut patched, frame_area(), row).expect("patching a row");
         }
+        place_caret(term, cursor_position.get()).expect("placing the caret");
     });
 
     let mut oracle = Terminal::new(TestBackend::new(COLS, ROWS)).expect("oracle terminal");
-    let expected = full_paint(runner, &mut oracle);
+    let (expected, expected_caret) = full_paint(runner, &mut oracle);
 
     // Damage has to be complete, not merely correct where it was reported. A row that moved and
     // was not planned is left stale by the patch and matches on both sides of the comparison.
@@ -329,6 +346,24 @@ fn assert_patch_matches_full_paint(cfg: PaneCfg, setup: &[u8], mutation: &[u8]) 
 
     assert_same(&patched, &expected, "retained frame");
     assert_host_matches(term.backend().buffer(), &expected, "host");
+
+    // The caret is the other half of what a draw owes the host, and the half no cell comparison
+    // can see: every backend write leaves it one column past the run it sent, so a patch that
+    // never places it leaves it wherever the last patched row happened to end.
+    assert_eq!(
+        cursor_position.get(),
+        expected_caret,
+        "the patch placed the caret somewhere a full paint did not"
+    );
+    if let Some(caret) = expected_caret {
+        assert_eq!(
+            term.backend_mut()
+                .get_cursor_position()
+                .expect("host caret"),
+            caret,
+            "the host caret is not where the patch asked for it"
+        );
+    }
 }
 
 const SETUP: &[u8] = b"first line here\r\nsecond line here\r\nthird line here\r\n";
@@ -479,6 +514,49 @@ fn a_hidden_blink_matches_a_full_paint() {
         ..PaneCfg::new()
     };
     assert_patch_matches_full_paint(cfg, SETUP, b"\rX");
+}
+
+#[test]
+fn a_caret_outside_the_damaged_rows_is_still_placed() {
+    // The focused terminal is the one that did *not* move, so no damaged row carries its caret.
+    // Nothing else would ever place it, and the host would keep the caret one column past the end
+    // of the row the other terminal just patched.
+    let cfg = PaneCfg {
+        second_terminal: true,
+        focus_second: true,
+        grid_rows: ROWS / 2,
+        ..PaneCfg::new()
+    };
+    assert_patch_matches_full_paint(cfg, SETUP, b"\rX");
+}
+
+#[test]
+fn the_caret_row_is_planned_even_when_the_terminal_did_not_damage_it() {
+    let cfg = PaneCfg {
+        second_terminal: true,
+        focus_second: true,
+        grid_rows: ROWS / 2,
+        ..PaneCfg::new()
+    };
+    let mut harness = build(cfg, SETUP);
+    harness.screen.borrow_mut().process_bytes(b"\rX");
+
+    let caret = harness
+        .runner
+        .incremental_cursor_position()
+        .expect("the focused terminal wants a caret");
+    let plan = plan_for(&mut harness).expect("eligible");
+    assert!(
+        plan.rows.contains(&caret.y),
+        "caret row {} missing from planned rows {:?}",
+        caret.y,
+        plan.rows
+    );
+    assert!(
+        plan.rows.windows(2).all(|pair| pair[0] < pair[1]),
+        "planned rows should stay ascending and unique: {:?}",
+        plan.rows
+    );
 }
 
 #[test]

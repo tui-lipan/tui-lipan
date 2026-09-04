@@ -11,7 +11,7 @@
 
 use ratatui::backend::Backend;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect as RatatuiRect;
+use ratatui::layout::{Position, Rect as RatatuiRect};
 use std::cell::Cell as StdCell;
 
 use crate::app::AppRunner;
@@ -56,7 +56,8 @@ pub(crate) struct TerminalDamagePlan {
     /// a node - but a test asserting *which* terminal was accepted does.
     #[cfg_attr(not(test), allow(dead_code))]
     pub node: NodeId,
-    /// Physical frame rows that moved, ascending, each inside the frame.
+    /// Physical frame rows this repaint has to paint, ascending, each inside the frame: every row
+    /// the terminal moved, plus the row the focused widget's caret sits on.
     ///
     /// Resolved here rather than in the draw: the mapping from a viewport row to a screen row is
     /// geometry, and geometry is what the planner is for. The draw only paints rows.
@@ -149,7 +150,7 @@ where
             .saturating_sub(terminal.padding.top.saturating_add(terminal.padding.bottom));
         let frame_top = i32::from(frame_area.y);
         let frame_bottom = frame_top + i32::from(frame_area.height);
-        let rows: Vec<u16> = rows
+        let mut rows: Vec<u16> = rows
             .iter()
             .filter(|row| row.row < content_rows)
             .map(|row| content_top + i32::from(row.row))
@@ -158,6 +159,21 @@ where
             .collect();
         if rows.is_empty() {
             return Err(DamageRejection::NothingVisible);
+        }
+
+        // The caret is placed by whichever row paints the focused widget: the renderers record it
+        // through `CursorPlacement` as that row is drawn, exactly as in a full paint. A caret on a
+        // row the terminal did not damage would therefore never be recorded, and the draw would
+        // have nothing to place - leaving the host caret wherever the last cell write left it.
+        // Painting that one extra row is what lets the draw treat the recorded position as the
+        // whole answer, including its decision *not* to show a caret at all.
+        if let Some(caret) = self.incremental_cursor_position()
+            && i32::from(caret.y) >= frame_top
+            && i32::from(caret.y) < frame_bottom
+            && !rows.contains(&caret.y)
+        {
+            rows.push(caret.y);
+            rows.sort_unstable();
         }
 
         Ok(TerminalDamagePlan { node: *node, rows })
@@ -217,6 +233,11 @@ where
                 patch_row(terminal, ctx, &mut snapshot, frame_area, row)?;
                 painted.push(row);
             }
+            // Where the paint above asked for the caret, which is the whole answer because the
+            // plan guaranteed the caret's own row was painted. Inside the synchronized update and
+            // inside the render context, for the same reason `Terminal::draw` does it before
+            // returning: the host must not be left showing a caret from a half-finished frame.
+            place_caret(terminal, cursor_position.get())?;
             Ok(())
         });
         let _ = crossterm::execute!(
@@ -306,6 +327,29 @@ pub(super) fn patch_row<B: Backend>(
     }
     // The host has this row. Recording it cannot wait for the rest of the frame to succeed.
     write_row(snapshot, &next);
+    Ok(())
+}
+
+/// Put the host caret where the paint asked for it, or hide it when no paint asked for one.
+///
+/// The rule [`ratatui::Terminal::draw`] applies once a full draw finishes, applied by hand because
+/// this draw never calls it. Without it the caret is not merely stale: every backend write leaves
+/// it one column past the run it just sent, so it wanders to wherever the last patched row
+/// happened to end.
+///
+/// Generic over the backend for the same reason [`patch_row`] is - so a test can watch what the
+/// host was told.
+pub(super) fn place_caret<B: Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+    caret: Option<Position>,
+) -> std::result::Result<(), B::Error> {
+    match caret {
+        Some(position) => {
+            terminal.show_cursor()?;
+            terminal.set_cursor_position(position)?;
+        }
+        None => terminal.hide_cursor()?,
+    }
     Ok(())
 }
 
