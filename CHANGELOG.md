@@ -22,6 +22,13 @@ While the crate is on `0.x.y`:
 
 - `Modal::dismiss_on_escape(false)` now lets Escape reach the focused child even when the modal has
   no `on_close` callback. Root modals without a callback continue trapping Escape by default.
+- `List::on_item_click`, `List::on_activate`, and `Table::on_activate` now handle pointer input
+  without requiring an unrelated `on_select` callback.
+- `List` and `Table` overflow indicators now remain clickable without `on_select` and emit
+  `on_scroll_to` when they change the offset.
+- `MouseRegion` hover callbacks and visuals now cover interactive descendants without stealing
+  their clicks. Clicks no longer replace the independently resolved hover target, and capturing
+  regions respect their custom `hit_test`.
 
 ## [0.6.1] - 2026-09-03
 

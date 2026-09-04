@@ -1,4 +1,49 @@
 use crate::core::node::{NodeId, NodeKind, NodeTree};
+use crate::style::Rect;
+
+pub(crate) fn mouse_region_accepts_point(
+    region: &crate::widgets::internal::MouseRegionNode,
+    rect: Rect,
+    x: u16,
+    y: u16,
+) -> bool {
+    if !region.enabled || !rect.contains(x as i16, y as i16) {
+        return false;
+    }
+    region.hit_test.as_ref().is_none_or(|test| {
+        let local_x = (x as i16).saturating_sub(rect.x) as u16;
+        let local_y = (y as i16).saturating_sub(rect.y) as u16;
+        test(local_x, local_y)
+    })
+}
+
+/// Enabled, hoverable `MouseRegion`s containing the current hover target.
+///
+/// The deepest region comes first. Ancestors remain hovered while the pointer
+/// moves between interactive descendants inside the same wrapper.
+pub(crate) fn mouse_region_hover_chain(
+    tree: &NodeTree,
+    hovered: Option<NodeId>,
+    x: u16,
+    y: u16,
+) -> Vec<NodeId> {
+    let mut regions = Vec::new();
+    let mut current = hovered;
+    while let Some(id) = current {
+        if !tree.is_valid(id) {
+            break;
+        }
+        let node = tree.node(id);
+        if let NodeKind::MouseRegion(region) = &node.kind
+            && node.is_hoverable()
+            && mouse_region_accepts_point(region, node.rect, x, y)
+        {
+            regions.push(id);
+        }
+        current = node.parent;
+    }
+    regions
+}
 
 /// Check if a node should be hovered (for visual feedback).
 pub(crate) fn should_hover(tree: &NodeTree, id: NodeId, x: u16, y: u16) -> bool {

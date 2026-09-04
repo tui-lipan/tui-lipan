@@ -192,6 +192,10 @@ Wrapper that adds pointer callbacks to an arbitrary child subtree.
 | `hover_style` | `Style` | Style underlay while hovered |
 | `enabled` | `bool` | Enable/disable pointer behavior |
 
+Hover covers the full wrapped subtree, including interactive descendants.
+Click routing remains child-first unless `capture_click(true)` is set. Plain
+layout and text children are non-interactive, so they do not require capture.
+
 Drag callbacks use the same click-cancel threshold as built-in draggable widgets,
 so a single click does not emit drag-start, drag, or drag-end callbacks.
 `MouseDragEvent` includes the global and local drag origin, current global and

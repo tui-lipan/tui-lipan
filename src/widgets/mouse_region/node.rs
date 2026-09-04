@@ -63,6 +63,7 @@ impl WidgetNode for MouseRegionNode {
         self.enabled
             && (self.on_click.is_some()
                 || self.on_mouse_up.is_some()
+                || self.on_hover_change.is_some()
                 || self.hover_style.resolves_non_empty(theme, ThemeRole::Hover)
                 || !self.hover_effects.is_empty())
     }

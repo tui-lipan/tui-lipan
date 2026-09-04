@@ -653,6 +653,16 @@ MouseRegion::new()
 
 Use `bubble_mouse_down(true)` for container focus policies where the container
 must learn about descendant presses but the child should still receive its click.
+Without capture, `on_click` handles presses that land on non-interactive content
+such as `Text`, `HStack`, or `VStack`. An interactive descendant such as `Button`,
+`List`, or `Input` keeps the click. Set `capture_click(true)` only when the wrapper
+should take that click instead.
+
+Hover belongs to the whole region subtree. `on_hover_change`, `hover_style`, and
+`hover_effects` remain active while the pointer moves across interactive
+descendants, and only leave when it exits the region or fails its custom
+`hit_test`. Click capture follows that same custom hit-test boundary.
+
 Use `drag_requires_mods(KeyMods::ALT)` or
 `right_drag_requires_mods(KeyMods::ALT)` for compositor-style gestures that
 should only start while Alt is held.

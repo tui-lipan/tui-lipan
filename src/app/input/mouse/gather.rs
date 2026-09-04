@@ -277,7 +277,13 @@ fn diff_line_range_start(
 /// If an ancestor `MouseRegion` has `capture_click = true`, is enabled, and has an
 /// `on_click` handler, that region becomes the click target instead of an
 /// interactive descendant.
-pub(crate) fn resolve_left_click_target(tree: &NodeTree, hit: NodeId, mods: KeyMods) -> NodeId {
+pub(crate) fn resolve_left_click_target(
+    tree: &NodeTree,
+    hit: NodeId,
+    x: u16,
+    y: u16,
+    mods: KeyMods,
+) -> NodeId {
     let hit_node = tree.node(hit);
     let should_bubble_non_clickable_frame = matches!(hit_node.kind, NodeKind::Frame(_))
         && !hit_node.is_focusable()
@@ -290,7 +296,7 @@ pub(crate) fn resolve_left_click_target(tree: &NodeTree, hit: NodeId, mods: KeyM
         }
         let node = tree.node(id);
         if let NodeKind::MouseRegion(region) = &node.kind
-            && region.enabled
+            && super::mouse_region_accepts_point(region, node.rect, x, y)
             && (region.capture_click
                 || mouse_region_captures_mods(region, mods)
                 || should_bubble_non_clickable_frame)
@@ -655,19 +661,28 @@ pub(crate) fn gather_hit_actions(
     };
 
     let list_select = match &node.kind {
-        NodeKind::List(list_node) => list_node.on_select.clone().map(|cb| ListSelect {
-            cb,
-            on_item_click: list_node.on_item_click.clone(),
-            on_activate: list_node.on_activate.clone(),
-            activate_on_click: list_node.activate_on_click,
-            len: list_node.items.len(),
-            border: list_node.border,
-            padding: list_node.padding,
-            scrollbar: list_node.scrollbar,
-            scrollbar_variant: list_node.scrollbar_variant,
-            show_scroll_indicators: list_node.show_scroll_indicators,
-            rect: node.rect,
-        }),
+        NodeKind::List(list_node)
+            if list_node.on_select.is_some()
+                || list_node.on_item_click.is_some()
+                || list_node.on_activate.is_some()
+                || list_node.on_scroll_to.is_some()
+                || list_node.show_scroll_indicators =>
+        {
+            Some(ListSelect {
+                on_select: list_node.on_select.clone(),
+                on_item_click: list_node.on_item_click.clone(),
+                on_activate: list_node.on_activate.clone(),
+                on_scroll_to: list_node.on_scroll_to.clone(),
+                activate_on_click: list_node.activate_on_click,
+                len: list_node.items.len(),
+                border: list_node.border,
+                padding: list_node.padding,
+                scrollbar: list_node.scrollbar,
+                scrollbar_variant: list_node.scrollbar_variant,
+                show_scroll_indicators: list_node.show_scroll_indicators,
+                rect: node.rect,
+            })
+        }
         _ => None,
     };
 
@@ -805,24 +820,32 @@ pub(crate) fn gather_hit_actions(
     let border_tabs_change = gather_border_tabs_change(tree, node, x_i16, y_i16);
 
     let table_select = match &node.kind {
-        NodeKind::Table(table_node) => table_node.on_select.clone().map(|cb| TableSelect {
-            cb,
-            on_activate: table_node.on_activate.clone(),
-            rows: table_node.rows.clone(),
-            offset: table_node.offset,
-            header_height: table_header_reserved_height(
-                table_node.header.as_ref(),
-                table_node.rows.len(),
-                table_node.row_gap,
-            ),
-            row_gap: table_node.row_gap,
-            rect: node.rect,
-            border: table_node.border,
-            padding: table_node.padding,
-            show_scroll_indicators: table_node.show_scroll_indicators,
-            top_indicator: table_node.top_indicator,
-            bottom_indicator: table_node.bottom_indicator,
-        }),
+        NodeKind::Table(table_node)
+            if table_node.on_select.is_some()
+                || table_node.on_activate.is_some()
+                || table_node.on_scroll_to.is_some()
+                || table_node.show_scroll_indicators =>
+        {
+            Some(TableSelect {
+                on_select: table_node.on_select.clone(),
+                on_activate: table_node.on_activate.clone(),
+                on_scroll_to: table_node.on_scroll_to.clone(),
+                rows: table_node.rows.clone(),
+                offset: table_node.offset,
+                header_height: table_header_reserved_height(
+                    table_node.header.as_ref(),
+                    table_node.rows.len(),
+                    table_node.row_gap,
+                ),
+                row_gap: table_node.row_gap,
+                rect: node.rect,
+                border: table_node.border,
+                padding: table_node.padding,
+                show_scroll_indicators: table_node.show_scroll_indicators,
+                top_indicator: table_node.top_indicator,
+                bottom_indicator: table_node.bottom_indicator,
+            })
+        }
         _ => None,
     };
 
@@ -1175,7 +1198,10 @@ mod tests {
     use crate::layout::LayoutEngine;
     use crate::style::Rect;
     use crate::widgets::internal::{MouseRegionNode, TextNode};
-    use crate::widgets::{BorderLabels, Frame, Graph, GraphNode, Tab, TabVariant, Tabs, Text};
+    use crate::widgets::{
+        BorderLabels, Button, Frame, Graph, GraphNode, List, ListItem, MouseRegion, Tab,
+        TabVariant, Table, TableRow, Tabs, Text,
+    };
 
     #[test]
     fn frame_tab_hit_region_accounts_for_grouped_header_padding() {
@@ -1332,6 +1358,109 @@ mod tests {
     }
 
     #[test]
+    fn list_activation_does_not_require_on_select() {
+        let root: crate::Element = List::new()
+            .items([ListItem::new("one")])
+            .on_activate(Callback::new(|_| {}))
+            .into();
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 1,
+            },
+            None,
+        );
+
+        let hit = tree.hit_test(0, 0).expect("activatable list should be hit");
+        let action = gather_hit_actions(&tree, hit, 0, 0, KeyMods::NONE)
+            .list_select
+            .expect("activatable list should gather a row action");
+        assert!(action.on_select.is_none());
+        assert!(action.on_activate.is_some());
+    }
+
+    #[test]
+    fn table_activation_does_not_require_on_select() {
+        let root: crate::Element = Table::new()
+            .rows([TableRow::new(["one"])])
+            .on_activate(Callback::new(|_| {}))
+            .into();
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 1,
+            },
+            None,
+        );
+
+        let hit = tree
+            .hit_test(0, 0)
+            .expect("activatable table should be hit");
+        let action = gather_hit_actions(&tree, hit, 0, 0, KeyMods::NONE)
+            .table_select
+            .expect("activatable table should gather a row action");
+        assert!(action.on_select.is_none());
+        assert!(action.on_activate.is_some());
+    }
+
+    #[test]
+    fn capturing_mouse_region_respects_its_hit_test() {
+        let root: crate::Element = MouseRegion::new()
+            .capture_click(true)
+            .hit_test(|x, _| x == 0)
+            .on_click(noop_mouse_cb())
+            .child(Button::new("button").on_click(noop_mouse_cb()))
+            .into();
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 1,
+            },
+            None,
+        );
+
+        let masked_hit = tree.hit_test(0, 0).expect("button should be hit");
+        let outside_hit = tree.hit_test(1, 0).expect("button should be hit");
+        assert!(matches!(
+            tree.node(resolve_left_click_target(
+                &tree,
+                masked_hit,
+                0,
+                0,
+                KeyMods::NONE,
+            ))
+            .kind,
+            NodeKind::MouseRegion(_)
+        ));
+        assert!(matches!(
+            tree.node(resolve_left_click_target(
+                &tree,
+                outside_hit,
+                1,
+                0,
+                KeyMods::NONE,
+            ))
+            .kind,
+            NodeKind::Button(_)
+        ));
+    }
+
+    #[test]
     fn click_target_prefers_nearest_capturing_mouse_region() {
         let mut tree = NodeTree::new();
 
@@ -1352,6 +1481,12 @@ mod tests {
             let node = tree.node_mut(outer);
             node.parent = Some(root);
             node.children = vec![inner];
+            node.rect = Rect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            };
             node.kind = NodeKind::MouseRegion(MouseRegionNode {
                 on_click: Some(noop_mouse_cb()),
                 on_mouse_down: None,
@@ -1380,6 +1515,12 @@ mod tests {
             let node = tree.node_mut(inner);
             node.parent = Some(outer);
             node.children = vec![leaf];
+            node.rect = Rect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            };
             node.kind = NodeKind::MouseRegion(MouseRegionNode {
                 on_click: Some(noop_mouse_cb()),
                 on_mouse_down: None,
@@ -1411,7 +1552,10 @@ mod tests {
             node.kind = NodeKind::Text(TextNode::default());
         }
 
-        assert_eq!(resolve_left_click_target(&tree, leaf, KeyMods::NONE), inner);
+        assert_eq!(
+            resolve_left_click_target(&tree, leaf, 0, 0, KeyMods::NONE),
+            inner
+        );
     }
 
     #[test]
@@ -1434,6 +1578,12 @@ mod tests {
             let node = tree.node_mut(region);
             node.parent = Some(root);
             node.children = vec![leaf];
+            node.rect = Rect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            };
             node.kind = NodeKind::MouseRegion(MouseRegionNode {
                 on_click: Some(noop_mouse_cb()),
                 on_mouse_down: None,
@@ -1465,7 +1615,10 @@ mod tests {
             node.kind = NodeKind::Text(TextNode::default());
         }
 
-        assert_eq!(resolve_left_click_target(&tree, leaf, KeyMods::NONE), leaf);
+        assert_eq!(
+            resolve_left_click_target(&tree, leaf, 0, 0, KeyMods::NONE),
+            leaf
+        );
     }
 
     #[test]
@@ -1488,6 +1641,12 @@ mod tests {
             let node = tree.node_mut(region);
             node.parent = Some(root);
             node.children = vec![leaf];
+            node.rect = Rect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            };
             node.kind = NodeKind::MouseRegion(MouseRegionNode {
                 on_click: None,
                 on_mouse_down: Some(noop_mouse_cb()),
@@ -1519,12 +1678,20 @@ mod tests {
             node.kind = NodeKind::Text(TextNode::default());
         }
 
-        assert_eq!(resolve_left_click_target(&tree, leaf, KeyMods::NONE), leaf);
-        assert_eq!(resolve_left_click_target(&tree, leaf, KeyMods::ALT), region);
+        assert_eq!(
+            resolve_left_click_target(&tree, leaf, 0, 0, KeyMods::NONE),
+            leaf
+        );
+        assert_eq!(
+            resolve_left_click_target(&tree, leaf, 0, 0, KeyMods::ALT),
+            region
+        );
         assert_eq!(
             resolve_left_click_target(
                 &tree,
                 leaf,
+                0,
+                0,
                 KeyMods {
                     shift: true,
                     ..KeyMods::ALT

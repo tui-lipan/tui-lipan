@@ -326,7 +326,7 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
             | ActiveDrag::HexArea(_)
     );
 
-    let should_update_hover = matches!(mouse.kind, MouseKind::Down(_))
+    let should_update_hover = matches!(mouse.kind, MouseKind::Down(_) | MouseKind::Up(_))
         || (matches!(mouse.kind, MouseKind::Drag(_)) && has_active_drag);
 
     let mut hover_dirty = false;
@@ -394,8 +394,8 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
         return true;
     }
 
-    let hit =
-        hit_before_resolve.map(|id| mouse::resolve_left_click_target(ctx.tree(), id, mouse.mods));
+    let hit = hit_before_resolve
+        .map(|id| mouse::resolve_left_click_target(ctx.tree(), id, x, y, mouse.mods));
 
     if is_down
         && let Some(target) = scrollbar_target
@@ -420,8 +420,6 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
     if is_down {
         ctx.mouse_state().left_down_node = Some(hit);
     }
-
-    ctx.mouse_state().hovered = mouse::should_hover(ctx.tree(), hit, x, y).then_some(hit);
 
     let mut dirty = selection_dirty;
     if is_down && ctx.focus_for_node(hit) {

@@ -93,8 +93,10 @@ impl WidgetNode for TableNode {
         !self.disabled
             && (self.on_click.is_some()
                 || self.on_select.is_some()
+                || self.on_activate.is_some()
                 || self.on_scroll_to.is_some()
                 || self.scrollbar
+                || self.show_scroll_indicators
                 || self.scroll_wheel)
     }
 

@@ -49,7 +49,8 @@ State-style setters use [StyleSlot semantics](../styling.md#state-style-slots):
 | `height` | `Length` | Height |
 | `on_select` | `Callback<ListEvent>` | Selection changed |
 | `on_item_click` | `Callback<ListEvent>` | Row clicked with mouse |
-| `on_activate` | `Callback<ListEvent>` | Item activated (Enter/double-click) |
+| `on_activate` | `Callback<ListEvent>` | Item activated by Enter, a single click by default, or a double-click when `activate_on_click` is false |
+| `activate_on_click` | `bool` | Activate on a single row click (default: `true`); when false, double-click still activates |
 | `on_scroll_to` | `Callback<usize>` | Scroll position changed |
 
 ### ListItem Types
@@ -100,6 +101,9 @@ ListItem::new("description")
 ```
 
 Keyboard/mouse selection and activation skip non-selectable rows (`Header`/`Spacer`).
+Pointer callbacks are independent: `on_item_click` and `on_activate` work without
+an `on_select` callback. Attach `on_select` only when the parent needs to own the
+selected index.
 
 When a list viewport grows while showing its final rows, the retained scroll position moves upward
 as needed to fill the enlarged viewport instead of leaving blank rows below the content.
@@ -239,8 +243,11 @@ Structured data with rows, columns, and optional scrollbar.
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 | `on_select` | `Callback<TableEvent>` | Row selection changed |
-| `on_activate` | `Callback<TableEvent>` | Row activated |
+| `on_activate` | `Callback<TableEvent>` | Row activated by Enter or double-click |
 | `on_scroll_to` | `Callback<usize>` | Scroll position |
+
+`on_activate` works without `on_select`; use both only when activation must also
+update parent-owned selection.
 
 Table style precedence for body cells is: alternating row style, then
 `TableRow::style`, indexed row style (`row_style_at` / `row_styles`), column

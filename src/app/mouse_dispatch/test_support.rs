@@ -68,8 +68,20 @@ pub(crate) fn update_hover_test_backend<C: Component>(
         .filter(|id| mouse::should_hover(&backend.core.tree, *id, x, y));
     let prev_hovered = backend.mouse.hovered;
     let changed = backend.mouse.hovered != hovered;
+    let previous_regions = prev
+        .map(|(prev_x, prev_y)| {
+            mouse::mouse_region_hover_chain(&backend.core.tree, prev_hovered, prev_x, prev_y)
+        })
+        .unwrap_or_default();
+    let current_regions = mouse::mouse_region_hover_chain(&backend.core.tree, hovered, x, y);
+    let region_changed = previous_regions
+        .iter()
+        .any(|id| !current_regions.contains(id))
+        || current_regions
+            .iter()
+            .any(|id| !previous_regions.contains(id));
     backend.mouse.hovered = hovered;
-    if changed {
+    if changed || region_changed {
         if let Some(prev_id) = prev_hovered
             && backend.core.tree.is_valid(prev_id)
             && let NodeKind::DraggableTabBar(tab_bar) =
@@ -77,19 +89,26 @@ pub(crate) fn update_hover_test_backend<C: Component>(
         {
             tab_bar.width_lock = None;
         }
-        if let Some(prev_id) = prev_hovered
-            && backend.core.tree.is_valid(prev_id)
-            && let NodeKind::MouseRegion(region) = &backend.core.tree.node(prev_id).kind
-            && let Some(cb) = region.on_hover_change.clone()
+        for id in previous_regions
+            .iter()
+            .filter(|id| !current_regions.contains(id))
         {
-            cb.emit(false);
+            if let NodeKind::MouseRegion(region) = &backend.core.tree.node(*id).kind
+                && let Some(callback) = &region.on_hover_change
+            {
+                callback.emit(false);
+            }
         }
-        if let Some(new_id) = hovered
-            && backend.core.tree.is_valid(new_id)
-            && let NodeKind::MouseRegion(region) = &backend.core.tree.node(new_id).kind
-            && let Some(cb) = region.on_hover_change.clone()
+        for id in current_regions
+            .iter()
+            .rev()
+            .filter(|id| !previous_regions.contains(id))
         {
-            cb.emit(true);
+            if let NodeKind::MouseRegion(region) = &backend.core.tree.node(*id).kind
+                && let Some(callback) = &region.on_hover_change
+            {
+                callback.emit(true);
+            }
         }
         backend.mouse.hovered_item_index = None;
         if let Some(id) = hovered {
@@ -107,7 +126,7 @@ pub(crate) fn update_hover_test_backend<C: Component>(
                 return true;
             }
         }
-        return changed;
+        return changed || region_changed;
     }
     if !force_recompute && prev == Some((x, y)) {
         return false;
@@ -628,6 +647,9 @@ pub(crate) fn handle_list_click_test_backend<C: Component>(
             if next != node.offset {
                 node.offset = next;
                 node.scroll_override = Some(next);
+                if let Some(callback) = &select.on_scroll_to {
+                    callback.emit(next);
+                }
             }
 
             let (_s, e, t, b) =
@@ -662,6 +684,9 @@ pub(crate) fn handle_list_click_test_backend<C: Component>(
             if next != node.offset {
                 node.offset = next;
                 node.scroll_override = Some(next);
+                if let Some(callback) = &select.on_scroll_to {
+                    callback.emit(next);
+                }
             }
 
             let (_s, e, t, b) =
@@ -692,6 +717,12 @@ pub(crate) fn handle_list_click_test_backend<C: Component>(
                 if !node.items[index].is_selectable() {
                     return true;
                 }
+                if select.on_select.is_none()
+                    && select.on_item_click.is_none()
+                    && select.on_activate.is_none()
+                {
+                    return false;
+                }
                 node.scroll_override = Some(node.offset);
                 let click_count = mouse::click_count_at(&mut backend.mouse.last_click, x, y, true);
                 let is_double = click_count == 2;
@@ -702,7 +733,9 @@ pub(crate) fn handle_list_click_test_backend<C: Component>(
                     .mouse
                     .pointer_driven_item_hover_selection
                     .insert(hit);
-                select.cb.emit(crate::widgets::ListEvent { index });
+                if let Some(cb) = &select.on_select {
+                    cb.emit(crate::widgets::ListEvent { index });
+                }
                 if let Some(cb) = &select.on_activate
                     && (select.activate_on_click || is_double)
                 {
@@ -738,6 +771,9 @@ pub(crate) fn handle_table_click_test_backend<C: Component>(
             if next != table_node.offset {
                 table_node.offset = next;
                 table_node.scroll_override = Some(next);
+                if let Some(callback) = &select.on_scroll_to {
+                    callback.emit(next);
+                }
             }
         }
         return true;
@@ -771,6 +807,9 @@ pub(crate) fn handle_table_click_test_backend<C: Component>(
             if next != table_node.offset {
                 table_node.offset = next;
                 table_node.scroll_override = Some(next);
+                if let Some(callback) = &select.on_scroll_to {
+                    callback.emit(next);
+                }
             }
         }
         return true;
@@ -798,6 +837,9 @@ pub(crate) fn handle_table_click_test_backend<C: Component>(
     );
 
     if let Some(index) = found {
+        if select.on_select.is_none() && select.on_activate.is_none() {
+            return false;
+        }
         if let NodeKind::Table(table_node) = &mut backend.core.tree.node_mut(hit).kind {
             table_node.scroll_override = Some(table_node.offset);
         }
@@ -807,7 +849,9 @@ pub(crate) fn handle_table_click_test_backend<C: Component>(
             .mouse
             .pointer_driven_item_hover_selection
             .insert(hit);
-        select.cb.emit(crate::widgets::TableEvent { index });
+        if let Some(cb) = &select.on_select {
+            cb.emit(crate::widgets::TableEvent { index });
+        }
         if is_double && let Some(cb) = &select.on_activate {
             cb.emit(crate::widgets::TableEvent { index });
         }

@@ -32,9 +32,9 @@ use crate::style::{Color, HostTerminalColors, Length, Rect, Style, Theme};
 use crate::widgets::Terminal;
 use crate::widgets::internal::AnimatedNode;
 use crate::widgets::{
-    Animated, DocumentView, DragPayload, DragSource, DropTarget, Frame, HStack, Input, List,
-    ListItem, ListItemLine, MouseRegion, ScrollView, Spacer, Spinner, SpinnerSpeed, Text, TextArea,
-    TextAreaEvent, VStack,
+    Animated, Button, DocumentView, DragPayload, DragSource, DropTarget, Frame, HStack, Input,
+    List, ListItem, ListItemLine, MouseRegion, ScrollView, Spacer, Spinner, SpinnerSpeed, Text,
+    TextArea, TextAreaEvent, VStack,
 };
 use crossterm::event::{
     Event as CEvent, KeyCode as CKeyCode, KeyEvent as CKeyEvent, KeyModifiers as CKeyModifiers,
@@ -3474,6 +3474,70 @@ fn hover_transition_between_click_only_regions_is_not_dirty() {
         "entering the hover-styled region"
     );
     assert!(runner.update_hover(1, 0), "leaving the hover-styled region");
+}
+
+struct DescendantMouseRegionHover {
+    changes: Rc<RefCell<Vec<bool>>>,
+}
+
+impl Component for DescendantMouseRegionHover {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let changes = Rc::clone(&self.changes);
+        MouseRegion::new()
+            .on_hover_change(Callback::new(move |hovered| {
+                changes.borrow_mut().push(hovered);
+            }))
+            .hover_style(Style::new().bg(Color::Blue))
+            .child(
+                Button::new("go")
+                    .width(Length::Px(4))
+                    .on_click(Callback::new(|_| {})),
+            )
+            .into()
+    }
+}
+
+#[test]
+fn mouse_region_hover_tracks_interactive_descendants() {
+    let changes = Rc::new(RefCell::new(Vec::new()));
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 8,
+        h: 1,
+    };
+    let component = DescendantMouseRegionHover {
+        changes: Rc::clone(&changes),
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component, ());
+    init_runner(
+        &mut runner,
+        DescendantMouseRegionHover {
+            changes: Rc::clone(&changes),
+        },
+        viewport,
+    );
+
+    assert!(runner.update_hover(0, 0));
+    let hovered = runner.mouse.hovered.expect("button should be hovered");
+    assert!(matches!(
+        runner.core.tree.node(hovered).kind,
+        NodeKind::Button(_)
+    ));
+    assert_eq!(&*changes.borrow(), &[true]);
+
+    assert!(runner.update_hover(8, 0));
+    assert_eq!(&*changes.borrow(), &[true, false]);
 }
 
 /// A tab strip beside a keyed region whose look depends on hover — the shape of an app with a tab
