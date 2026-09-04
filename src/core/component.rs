@@ -312,6 +312,11 @@ pub enum UpdateLevel {
     /// Nothing changed; no frame.
     #[default]
     None,
+    /// Redraw from the node tree as it stands, where the only thing that changed is content in
+    /// one or more live terminal screens. Strictly narrower than [`Paint`](Self::Paint): the
+    /// runtime may consult terminal damage and repaint only the rows that moved.
+    #[cfg(feature = "terminal")]
+    TerminalPaint,
     /// Redraw from the node tree as it stands: no `view()`, no layout.
     Paint,
     /// Re-run `view()` and reconcile layout for the dirty scope.
@@ -331,6 +336,26 @@ pub struct Update {
 }
 
 impl Update {
+    /// Request a repaint whose only visual change is new content in live terminal screens.
+    ///
+    /// This is a promise, not a hint. Returning it asserts that nothing else in the tree looks
+    /// different from the last frame - no chrome, no indicator, no animation step - so the runtime
+    /// is free to ask each live [`TerminalScreen`](crate::widgets::TerminalScreen) which rows moved
+    /// and repaint only those. A caller that is unsure, or that also changed something outside a
+    /// terminal, wants [`paint`](Self::paint), which promises nothing and repaints everything.
+    ///
+    /// Anything else marking the same frame dirty - an animation tick, another component's
+    /// `paint()` - widens the frame back to an ordinary repaint on its own, so a wrong answer here
+    /// costs correctness only when this is the sole update in a frame.
+    #[cfg(feature = "terminal")]
+    pub fn terminal_paint() -> Self {
+        Self {
+            dirty: true,
+            level: UpdateLevel::TerminalPaint,
+            command: None,
+        }
+    }
+
     /// Request a paint-only update.
     pub fn paint() -> Self {
         Self {

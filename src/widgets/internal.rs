@@ -117,3 +117,6 @@ pub(crate) use super::text_area::{
     TextAreaNode, measure_text_area, measure_text_area_constrained, reconcile_text_area,
 };
 pub(crate) use super::zstack::{ZStackNode, measure_zstack, reconcile_zstack};
+
+#[cfg(feature = "terminal")]
+pub(crate) use super::terminal::damage::TerminalDamage;

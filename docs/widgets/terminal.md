@@ -154,7 +154,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
     match msg {
         Msg::PtyOutput(bytes) => {
             self.screen.borrow_mut().process_bytes(&bytes);
-            Update::paint()
+            Update::terminal_paint()
         }
         // Chrome outside the screen — a title from OSC 0/2, a tab's activity dot — still needs
         // `view()` to run.
@@ -162,6 +162,16 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
     }
 }
 ```
+
+`Update::terminal_paint()` claims more than `Update::paint()`: that live terminal content is the
+*only* thing that looks different this frame. A frame that keeps the claim repaints only the
+viewport rows the emulator reports as damaged, so a spinner rewriting one character costs one row
+rather than the whole window. Return it wherever nothing but the screen moved, and `paint()`
+wherever something else did — an indicator, a badge, a border colour. The claim is checked rather
+than trusted: any generic paint, layout or full update anywhere in the same frame widens it back,
+and cases a row repaint cannot serve (several terminals moving at once, full damage from a resize
+or screen swap, a scrolled-back or bordered terminal, images, overlays, an inline surface) fall
+back to an ordinary paint on their own.
 
 The runtime pulls each live screen's current snapshot immediately before every draw, and skips
 screens that have not moved. `snapshot` still wins when both are set, so a caller that needs to hand

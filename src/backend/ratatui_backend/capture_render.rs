@@ -33,13 +33,48 @@ pub(crate) struct CaptureInteraction {
     pub mouse_pos: Option<(u16, u16)>,
 }
 
-pub(crate) fn render_to_captured_frame_with_interaction(
+/// A headless render, kept as the renderer left it.
+///
+/// `CapturedFrame` is a capture format: it owns a `String` per cell and drops backend detail that
+/// a capture does not need. Comparing two renders for equality wants the renderer's own state
+/// instead, cursor included - a partial repaint that bypasses `Terminal::draw` can match the
+/// framebuffer cell for cell and still leave the caret somewhere else.
+#[derive(Clone, Debug)]
+pub(crate) struct RenderedBuffer {
+    pub buffer: ratatui::buffer::Buffer,
+    pub cursor: Option<Position>,
+}
+
+/// Render `tree` headlessly and hand back the raw buffer.
+pub(crate) fn render_to_buffer_with_interaction(
     tree: &NodeTree,
     viewport: Rect,
     interaction: CaptureInteraction,
     effect_phase: u64,
     screen_background: Option<ratatui::style::Style>,
-) -> CapturedFrame {
+) -> RenderedBuffer {
+    render_headless(
+        tree,
+        viewport,
+        interaction,
+        effect_phase,
+        screen_background,
+        None,
+        None,
+    )
+}
+
+fn render_headless(
+    tree: &NodeTree,
+    viewport: Rect,
+    interaction: CaptureInteraction,
+    effect_phase: u64,
+    screen_background: Option<ratatui::style::Style>,
+    regions: Option<&[Rect]>,
+    // Prepares the destination before rendering, for a caller reproducing the incremental path's
+    // scratch-buffer seeding. `None` everywhere but its tests.
+    seed: Option<&dyn Fn(&mut ratatui::buffer::Buffer)>,
+) -> RenderedBuffer {
     let CaptureInteraction {
         focused,
         hovered,
@@ -90,16 +125,93 @@ pub(crate) fn render_to_captured_frame_with_interaction(
         crate::backend::ratatui_backend::common::push_render_screen_background(screen_background);
 
     terminal
-        .draw(|frame| render(frame, &ctx))
+        .draw(|frame| {
+            if let Some(seed) = seed {
+                seed(frame.buffer_mut());
+            }
+            match regions {
+                Some(regions) => super::render::render_regions(frame, &ctx, regions),
+                None => render(frame, &ctx),
+            }
+        })
         .expect("capture render should succeed");
 
-    let buffer = terminal.backend().buffer();
-    let area = buffer.area();
+    RenderedBuffer {
+        buffer: terminal.backend().buffer().clone(),
+        cursor: cursor_position.get(),
+    }
+}
+
+/// As [`render_to_buffer_with_interaction`], but painting only `regions`.
+///
+/// Exists to answer one question: does clipping a terminal to a single physical row make the
+/// terminal renderer paint one row, or does it still walk the whole visible grid? The destination
+/// is a full-size buffer either way, so the comparison isolates clipping from any patch mechanics.
+#[cfg(all(test, feature = "terminal"))]
+pub(crate) fn render_regions_to_buffer_with_interaction(
+    tree: &NodeTree,
+    viewport: Rect,
+    interaction: CaptureInteraction,
+    effect_phase: u64,
+    screen_background: Option<ratatui::style::Style>,
+    regions: &[Rect],
+) -> RenderedBuffer {
+    render_headless(
+        tree,
+        viewport,
+        interaction,
+        effect_phase,
+        screen_background,
+        Some(regions),
+        None,
+    )
+}
+
+/// As [`render_regions_to_buffer_with_interaction`], but `seed` prepares the destination buffer
+/// first.
+///
+/// This is the production fast path's shape: the incremental repaint borrows ratatui's current
+/// buffer as scratch, having copied the retained frame's row into it, and relies on the region
+/// clip to leave everything else alone.
+#[cfg(all(test, feature = "terminal"))]
+pub(crate) fn render_regions_over_seeded_buffer(
+    tree: &NodeTree,
+    viewport: Rect,
+    interaction: CaptureInteraction,
+    regions: &[Rect],
+    seed: &dyn Fn(&mut ratatui::buffer::Buffer),
+) -> RenderedBuffer {
+    render_headless(
+        tree,
+        viewport,
+        interaction,
+        0,
+        None,
+        Some(regions),
+        Some(seed),
+    )
+}
+
+pub(crate) fn render_to_captured_frame_with_interaction(
+    tree: &NodeTree,
+    viewport: Rect,
+    interaction: CaptureInteraction,
+    effect_phase: u64,
+    screen_background: Option<ratatui::style::Style>,
+) -> CapturedFrame {
+    let rendered = render_to_buffer_with_interaction(
+        tree,
+        viewport,
+        interaction,
+        effect_phase,
+        screen_background,
+    );
+    let area = *rendered.buffer.area();
     let mut cells = Vec::with_capacity(usize::from(area.width) * usize::from(area.height));
 
     for y in 0..area.height {
         for x in 0..area.width {
-            let cell = &buffer[(x, y)];
+            let cell = &rendered.buffer[(x, y)];
             cells.push(CapturedCell {
                 symbol: cell.symbol().to_owned(),
                 fg: from_ratatui_color(cell.fg),
@@ -110,7 +222,7 @@ pub(crate) fn render_to_captured_frame_with_interaction(
         }
     }
 
-    let cursor = cursor_position.get().map(|pos| CursorState {
+    let cursor = rendered.cursor.map(|pos| CursorState {
         x: pos.x,
         y: pos.y,
         visible: true,

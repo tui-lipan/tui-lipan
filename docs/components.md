@@ -54,6 +54,7 @@ User Action → Event → Message → update() → State Change → Re-render
 | Return | Use when |
 |--------|----------|
 | `Update::none()` | State changed only to mirror widget-owned runtime state, or nothing visual changed |
+| `Update::terminal_paint()` | Repaint only the rows a live `Terminal` screen changed; nothing else on screen moved |
 | `Update::paint()` | Repaint the existing realized tree without rerunning component views or layout |
 | `Update::layout()` | Rerun the emitting component scope's `view()`, then reconcile and lay out that subtree |
 | `Update::layout_with_command(cmd)` | Same component-scoped refresh while also starting background work |

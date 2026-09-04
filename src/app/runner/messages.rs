@@ -51,6 +51,14 @@ impl<C: Component> AppRunner<C> {
                 }
                 dirty.mark_paint();
             }
+            #[cfg(feature = "terminal")]
+            UpdateLevel::TerminalPaint => {
+                #[cfg(debug_assertions)]
+                if scope == ScopeId(1) {
+                    self.debug_paint_claim_root = true;
+                }
+                dirty.mark_terminal_paint();
+            }
             UpdateLevel::Layout => {
                 self.mark_dirty_scope(scope);
                 dirty.mark_layout();
@@ -72,6 +80,8 @@ impl<C: Component> AppRunner<C> {
         {
             let level = match update_level {
                 UpdateLevel::Paint => super::DirtyLevel::PaintOnly,
+                #[cfg(feature = "terminal")]
+                UpdateLevel::TerminalPaint => super::DirtyLevel::TerminalPaintOnly,
                 UpdateLevel::Layout => super::DirtyLevel::LayoutOnly,
                 UpdateLevel::Full => super::DirtyLevel::Full,
                 UpdateLevel::None => unreachable!(),

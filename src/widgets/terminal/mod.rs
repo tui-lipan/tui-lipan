@@ -3,6 +3,7 @@
 mod buffer;
 #[cfg(feature = "terminal")]
 mod copy_mode;
+pub(crate) mod damage;
 mod events;
 #[cfg(feature = "terminal-images")]
 mod graphics;

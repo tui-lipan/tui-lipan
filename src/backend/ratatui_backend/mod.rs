@@ -3,6 +3,8 @@ pub(crate) mod common;
 pub(crate) mod glyph_paint_cache;
 #[cfg(feature = "image")]
 pub(crate) mod image_support;
+#[cfg(all(test, feature = "terminal"))]
+mod region_clip_tests;
 pub(crate) mod render;
 pub(crate) mod renderers;
 #[cfg(feature = "terminal-images")]
