@@ -11,6 +11,16 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- A frame repainted from terminal damage left the hardware caret wherever the last cell write put
+  it, one column past the end of the row it had just patched. The caret appeared to wander a cell
+  at a time as a child program echoed typing, and a block caret parked on top of a prompt glyph
+  read as if the glyph had been deleted. Damage repaints now place the caret exactly as a full
+  paint does, and always paint the row the focused widget's caret sits on so there is a placement
+  to apply even when the terminal did not damage that row. Only `Update::terminal_paint()` frames
+  were affected.
+
 ## [0.7.0] - 2026-09-04
 
 ### Added
