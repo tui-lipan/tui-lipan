@@ -21,6 +21,7 @@ An update's refresh level determines how much of the UI pipeline runs:
 | Return | Use when |
 |--------|----------|
 | `Update::none()` | Only non-visual metadata changed, or a widget already updated its runtime-owned visual state |
+| `Update::terminal_paint()` | A live `Terminal` screen is the only thing that looks different |
 | `Update::paint()` | The realized tree only needs repainting; no `view()` output or layout changed |
 | `Update::layout()` | The emitting component's subtree changed |
 | `Update::layout_with_command(cmd)` | The local subtree changed and background work must start |
@@ -47,6 +48,15 @@ handle to app-owned state the widget reads for itself does not.
 element, so each chunk of PTY output needs `Update::full()`, while
 [`screen`](widgets/terminal.md#live-screens-vs-snapshots) hands over the screen
 and lets the same output be a repaint.
+
+That repaint has a narrower level of its own. `Update::terminal_paint()` claims
+live terminal content is the *only* thing that looks different, and a frame that
+keeps the claim repaints only the viewport rows the emulator reports as damaged
+— so a spinner rewriting one character costs one row rather than every cell in
+the window. Return it for pure screen output, and `paint()` when the same event
+also moves an indicator or a border. Nothing has to be proved by hand: any other
+update in the frame widens the level back on its own, and the cases a row
+repaint cannot serve fall back to an ordinary paint.
 
 Animated colours have the same two shapes. `Context::transition` returns the
 interpolated value, so every frame of a fade must run `view()` for the new colour

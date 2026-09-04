@@ -13,6 +13,19 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `Update::terminal_paint()` says that live terminal content is the only thing that looks
+  different this frame, and a frame that keeps that claim repaints only the viewport rows the
+  emulator reports as damaged instead of the whole window. An app that streams a child program's
+  output into a `Terminal` widget should return it where it currently returns `Update::paint()`,
+  and keep `paint()` for anything that also moves chrome. The claim is checked, not trusted: any
+  generic paint, layout or full update anywhere in the same frame widens it back, and a pure
+  planner rejects every case a row repaint cannot serve — several terminals moving, full damage, a
+  scrolled-back or bordered terminal, images, overlays, an inline surface — falling back to the
+  ordinary paint. In a Rozi client animating a one-character spinner at 30 Hz, cost per update
+  fell from 410 to 205 µs at 80x24, 1,672 to 580 µs at 200x60, and 3,652 to 1,148 µs at 320x90;
+  a 200x60 window at 50 updates a second went from 8.2% of a core to 2.6%. Requires the `terminal`
+  feature.
+
 - `alloc-probe` is a new opt-in feature carrying the allocation instrumentation the numbers below
   came from. It is investigation scaffolding rather than API: it attributes a frame's allocations
   to render phases, and is documented in `src/alloc_probe.rs`.
@@ -23,6 +36,10 @@ While the crate is on `0.x.y`:
   the previous no-reply behavior.
 
 ### Changed
+
+- `UpdateLevel` gained a `TerminalPaint` variant, below `Paint`, so an exhaustive `match` on it
+  needs a new arm or a wildcard. Only builds with the `terminal` feature see the variant.
+  (breaking)
 
 - Building and laying out a frame allocates about a quarter less. A settled `Animated` no longer
   clones its child subtree to clamp a height it is not animating; the five largest `Element`
