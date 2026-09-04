@@ -37,30 +37,34 @@ ScrollView::new()
 
 ## VStack / HStack
 
-Vertical/Horizontal stack containers. Default sizing: `width: Flex(1)`, `height: Flex(1)`.
+Vertical/Horizontal stack containers. They default to `gap: 0`, `width: Flex(1)`, and
+`height: Flex(1)`.
+
+Stacks fill available space by default. Use `Length::Auto` on either axis when a local
+composition wrapper should size itself to its contents.
 
 Layout pitfall checklist:
 - Stacks consume remaining space by default. Use `Length::Px(...)` for fixed bars before giving the main content flexible space.
 - A child can end up with a zero-width or zero-height rect when the parent viewport is too small or fixed siblings consume the available space.
 - For headless debugging, set an explicit `TestBackend` viewport and capture with `UiSnapshotOptions::diagnostic()`; markdown flags zero-area widgets as `zero-area`.
 
-| Prop | Type | Description |
-|------|------|-------------|
-| `gap` | `u16` | Space between children |
-| `padding` | `impl Into<Padding>` | Inner padding |
-| `align` | `Align` | Cross-axis alignment |
-| `justify` | `Justify` | Main-axis packing |
-| `style` | `Style` | Container style |
-| `border` | `bool` | Draw border |
-| `border_style` | `BorderStyle` | Border appearance |
-| `focus_sizing` | `FocusSizing` | Accordion sizing behavior (includes `sticky: bool`, default `true`) |
-| `focus_scope` | `FocusScope` | Subtree traversal behavior (`None`, `Exclude`, or `Contain`) |
-| `tab_titles` | `Vec<String>` | Border-embedded tab titles |
-| `active_tab` | `usize` | Active border tab index |
-| `active_tab_style` | `Style` | Active border tab style |
-| `extend_active_tab_style` / `inherit_active_tab_style` | `Style` / `()` | Extend or inherit the selection theme role for the active border tab |
-| `width` | `Length` | Width override |
-| `height` | `Length` | Height override |
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `gap` | `u16` | `0` | Space between children |
+| `padding` | `impl Into<Padding>` | `Padding::default()` | Inner padding |
+| `align` | `Align` | `Start` (`VStack`), `Center` (`HStack`) | Cross-axis alignment |
+| `justify` | `Justify` | `Start` | Main-axis packing |
+| `style` | `Style` | `Style::default()` | Container style |
+| `border` | `bool` | `false` | Draw border |
+| `border_style` | `BorderStyle` | `Plain` | Border appearance |
+| `focus_sizing` | `FocusSizing` | `None` | Accordion sizing behavior (includes `sticky: bool`, default `true`) |
+| `focus_scope` | `FocusScope` | `None` | Subtree traversal behavior (`None`, `Exclude`, or `Contain`) |
+| `tab_titles` | `Vec<String>` | Empty | Border-embedded tab titles |
+| `active_tab` | `usize` | `0` | Active border tab index |
+| `active_tab_style` | `Style` | Inherited | Active border tab style |
+| `extend_active_tab_style` / `inherit_active_tab_style` | `Style` / `()` | N/A | Extend or inherit the selection theme role for the active border tab |
+| `width` | `Length` | `Flex(1)` | Requested width |
+| `height` | `Length` | `Flex(1)` | Requested height |
 
 **Accordion focus sizing:**
 
