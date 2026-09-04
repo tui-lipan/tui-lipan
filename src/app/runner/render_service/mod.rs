@@ -35,6 +35,9 @@ use super::{
 };
 
 #[cfg(feature = "devtools")]
+#[cfg(feature = "terminal")]
+mod terminal_damage;
+
 mod devtools;
 mod incremental_scroll;
 mod inline;
@@ -840,6 +843,60 @@ impl<C: Component> AppRunner<C> {
     ///
     /// Used when the only change is a cursor blink toggle, spinner frame
     /// advance, or image frame advance.
+    /// Paint a frame whose only change is live terminal content.
+    ///
+    /// Reached only from [`DirtyLevel::TerminalPaintOnly`](crate::app::interaction_state::DirtyLevel),
+    /// which every source in the frame had to agree on, so by the time control arrives here the
+    /// frame has *proven* that nothing outside a terminal looks different. That is what lets this
+    /// mode read the damage and consider repainting only the rows that moved.
+    ///
+    /// This mode refreshes live terminals itself, because it has to see the damage before choosing
+    /// how to draw. Anything it cannot handle falls through to the ordinary paint over the tree it
+    /// already refreshed.
+    #[cfg(feature = "terminal")]
+    pub(super) fn render_terminal_paint_only(
+        &mut self,
+        terminal: &mut crate::backend::ratatui_backend::Terminal,
+    ) -> Result<()> {
+        #[cfg(feature = "profiling-tracing")]
+        let _render_span = trace_span!("app.render_terminal_paint_only").entered();
+
+        #[cfg(debug_assertions)]
+        self.debug_paint_verify_root_view_claim(terminal);
+
+        #[cfg(feature = "devtools")]
+        let total_start = Instant::now();
+
+        if self.surface.is_transcript() && self.surface.inline.transcript_reset_pending {
+            return self.render_expanded_transcript(terminal);
+        }
+
+        let refresh = self.core.tree.refresh_live_terminals_detailed();
+        // The plan is computed but not yet drawn from: this frame still takes the ordinary paint.
+        // Logging it is what makes the eligibility rules observable while the patch renderer that
+        // will consume them is being built.
+        if let Some(plan) = self.prepare_terminal_damage_plan(&refresh) {
+            crate::debug::internal_log!(
+                "[tui-lipan] terminal damage eligible: node {:?}, {} row(s)",
+                plan.node,
+                plan.rows.len()
+            );
+        }
+
+        let draw_duration =
+            self.draw_current_tree_after_live_refresh(terminal, DrawMode::PaintOnly)?;
+        #[cfg(feature = "devtools")]
+        self.record_devtools_frame_metrics(
+            DrawMode::PaintOnly,
+            total_start.elapsed(),
+            std::time::Duration::ZERO,
+            draw_duration,
+        );
+        #[cfg(not(feature = "devtools"))]
+        let _ = draw_duration;
+        Ok(())
+    }
+
     pub(super) fn render_paint_only(
         &mut self,
         terminal: &mut crate::backend::ratatui_backend::Terminal,
@@ -903,14 +960,28 @@ impl<C: Component> AppRunner<C> {
         terminal: &mut crate::backend::ratatui_backend::Terminal,
         draw_mode: DrawMode,
     ) -> Result<std::time::Duration> {
-        #[cfg(feature = "profiling-tracing")]
-        let _draw_span = trace_span!("app.draw_current_tree").entered();
-
         // Every render path funnels through here, so this is the one place a live terminal screen
         // has to be read: a paint-only frame never re-runs `view()`, and the child program's output
-        // still has to reach the buffer.
+        // still has to reach the buffer. Draw modes that have no use for *which* rows moved discard
+        // the detail here, so no caller has to remember the refresh.
         #[cfg(feature = "terminal")]
-        self.core.tree.refresh_live_terminals();
+        let _refresh = self.core.tree.refresh_live_terminals_detailed();
+        self.draw_current_tree_after_live_refresh(terminal, draw_mode)
+    }
+
+    /// Draw the tree as it stands, with live terminals already refreshed.
+    ///
+    /// Split from [`Self::draw_current_tree`] so a mode that needs the refresh's damage *before*
+    /// choosing how to draw can look at it and still fall back to exactly this. Fallback then
+    /// means "do the ordinary paint from the tree that was already refreshed", with no second
+    /// refresh and no terminal-specific branch inside the generic path.
+    fn draw_current_tree_after_live_refresh(
+        &mut self,
+        terminal: &mut crate::backend::ratatui_backend::Terminal,
+        draw_mode: DrawMode,
+    ) -> Result<std::time::Duration> {
+        #[cfg(feature = "profiling-tracing")]
+        let _draw_span = trace_span!("app.draw_current_tree").entered();
 
         // Same reasoning for late-bound paints: the styles in the tree name their transitions, and
         // this is where those names are resolved. Dropped at the end of the draw.

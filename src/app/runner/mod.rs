@@ -2577,12 +2577,9 @@ impl<C: Component> AppRunner<C> {
                     DirtyLevel::PaintOnly => {
                         self.render_paint_only(&mut terminal)?;
                     }
-                    // Renders as an ordinary paint until the incremental terminal path exists;
-                    // the level is carried so the frame can prove eligibility, not so it can
-                    // behave differently yet.
                     #[cfg(feature = "terminal")]
                     DirtyLevel::TerminalPaintOnly => {
-                        self.render_paint_only(&mut terminal)?;
+                        self.render_terminal_paint_only(&mut terminal)?;
                     }
                     DirtyLevel::None => {}
                 }

@@ -10,6 +10,8 @@ pub(crate) use overlay::{
     OverlayRoot, ScrollbarAxis, ScrollbarTarget, ScrollbarZone, ScrollbarZonesParams,
     compute_scrollbar_zones,
 };
+#[cfg(feature = "terminal")]
+pub(crate) use tree::LiveTerminalRefresh;
 #[cfg(test)]
 pub(crate) use tree::scrollbar_zones;
 pub(crate) use tree::{Node, NodeTree};
