@@ -87,9 +87,10 @@ pub(crate) struct InputChange {
 }
 
 pub(crate) struct ListSelect {
-    pub cb: Callback<ListEvent>,
+    pub on_select: Option<Callback<ListEvent>>,
     pub on_item_click: Option<Callback<ListEvent>>,
     pub on_activate: Option<Callback<ListEvent>>,
+    pub on_scroll_to: Option<Callback<usize>>,
     pub activate_on_click: bool,
     pub len: usize,
     pub border: bool,
@@ -101,8 +102,9 @@ pub(crate) struct ListSelect {
 }
 
 pub(crate) struct TableSelect {
-    pub cb: Callback<crate::widgets::TableEvent>,
+    pub on_select: Option<Callback<crate::widgets::TableEvent>>,
     pub on_activate: Option<Callback<crate::widgets::TableEvent>>,
+    pub on_scroll_to: Option<Callback<usize>>,
     pub rows: Arc<[TableRow]>,
     pub offset: usize,
     pub header_height: u16,

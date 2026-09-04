@@ -2,6 +2,8 @@
 mod chart_axis_tick_labels;
 #[path = "suites/widget_behavior/cursor_occlusion.rs"]
 mod cursor_occlusion;
+#[path = "suites/widget_behavior/data_overflow_indicator_clicks.rs"]
+mod data_overflow_indicator_clicks;
 #[path = "suites/widget_behavior/disabled_focus.rs"]
 mod disabled_focus;
 #[path = "suites/widget_behavior/drag_drop_test_backend.rs"]

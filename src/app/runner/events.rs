@@ -1,6 +1,6 @@
 use crate::app::input::focus;
 use crate::app::input::mouse;
-use crate::app::interaction_state::HoverPaintTarget;
+use crate::app::interaction_state::{HoverPaintTarget, MouseRegionHoverState};
 use crate::app::mouse_dispatch;
 use crate::core::component::Component;
 use crate::core::event::{KeyEvent, MouseEvent};
@@ -85,6 +85,26 @@ pub(crate) enum SelectionOwner {
         scroll_view_id: NodeId,
         shared_selection_id: Arc<str>,
     },
+}
+
+fn hover_paint_nodes(tree: &crate::core::node::NodeTree, hovered: Option<NodeId>) -> Vec<NodeId> {
+    let mut nodes = Vec::new();
+    let Some(mut current) = hovered.filter(|id| tree.is_valid(*id)) else {
+        return nodes;
+    };
+    loop {
+        let node = tree.node(current);
+        if (Some(current) == hovered || matches!(node.kind, NodeKind::Frame(_)))
+            && node.hover_affects_paint()
+        {
+            nodes.push(current);
+        }
+        let Some(parent) = node.parent.filter(|id| tree.is_valid(*id)) else {
+            break;
+        };
+        current = parent;
+    }
+    nodes
 }
 
 impl<C: Component> AppRunner<C> {
@@ -846,11 +866,14 @@ impl<C: Component> AppRunner<C> {
         &self,
         prev_hovered: Option<NodeId>,
         hovered: Option<NodeId>,
+        previous_regions: &[MouseRegionHoverState],
+        current_regions: &[MouseRegionHoverState],
     ) -> bool {
-        [prev_hovered, hovered]
-            .into_iter()
-            .flatten()
-            .any(|id| self.core.tree.is_valid(id) && self.core.tree.node(id).hover_affects_paint())
+        let previous = hover_paint_nodes(&self.core.tree, prev_hovered);
+        let current = hover_paint_nodes(&self.core.tree, hovered);
+        previous.iter().any(|id| !current.contains(id))
+            || current.iter().any(|id| !previous.contains(id))
+            || mouse::mouse_region_hover_transition_affects_paint(previous_regions, current_regions)
     }
 
     pub(crate) fn update_hover_impl(&mut self, x: u16, y: u16, force_recompute: bool) -> bool {
@@ -863,14 +886,13 @@ impl<C: Component> AppRunner<C> {
         {
             return true;
         }
-        if !self.core.tree.has_hoverables() {
-            self.mouse.last_mouse.set(Some((x, y)));
-            return false;
-        }
         let prev_mouse = self.mouse.last_mouse.get();
         self.mouse.last_mouse.set(Some((x, y)));
         if prev_mouse != Some((x, y)) {
             self.mouse.suppress_pointer_item_hover_nodes.clear();
+        }
+        if !self.core.tree.has_hoverables() {
+            return mouse::clear_mouse_hover_state(&mut self.mouse);
         }
         let hovered = self
             .core
@@ -879,11 +901,14 @@ impl<C: Component> AppRunner<C> {
             .filter(|id| mouse::should_hover(&self.core.tree, *id, x, y));
         let prev_hovered = self.mouse.hovered;
         let node_changed = hovered != prev_hovered;
+        let previous_regions = std::mem::take(&mut self.mouse.mouse_region_hover_chain);
+        let current_regions = mouse::mouse_region_hover_state(&self.core.tree, hovered, x, y);
+        let region_changed =
+            mouse::mouse_region_hover_chains_differ(&previous_regions, &current_regions);
+        mouse::emit_mouse_region_hover_changes(&previous_regions, &current_regions);
+        self.mouse.mouse_region_hover_chain = current_regions;
         self.mouse.hovered = hovered;
-        if node_changed {
-            // Fire on_hover_change callbacks for enter/leave transitions
-            use crate::core::node::NodeKind;
-
+        if node_changed || region_changed {
             let width_lock_cleared = if let Some(prev_id) = prev_hovered
                 && self.core.tree.is_valid(prev_id)
                 && let NodeKind::DraggableTabBar(tab_bar) =
@@ -893,24 +918,6 @@ impl<C: Component> AppRunner<C> {
             } else {
                 false
             };
-
-            // Fire leave callback for previously hovered node
-            if let Some(prev_id) = prev_hovered
-                && self.core.tree.is_valid(prev_id)
-                && let NodeKind::MouseRegion(region) = &self.core.tree.node(prev_id).kind
-                && let Some(cb) = region.on_hover_change.clone()
-            {
-                cb.emit(false);
-            }
-
-            // Fire enter callback for newly hovered node
-            if let Some(new_id) = hovered
-                && self.core.tree.is_valid(new_id)
-                && let NodeKind::MouseRegion(region) = &self.core.tree.node(new_id).kind
-                && let Some(cb) = region.on_hover_change.clone()
-            {
-                cb.emit(true);
-            }
 
             self.mouse.hovered_item_index = None;
             self.mouse.hover_paint_target = None;
@@ -954,7 +961,12 @@ impl<C: Component> AppRunner<C> {
             // repaints the whole tree on every motion event that crosses such a
             // region's boundary.
             return width_lock_cleared
-                || self.hover_transition_affects_paint(prev_hovered, hovered)
+                || self.hover_transition_affects_paint(
+                    prev_hovered,
+                    hovered,
+                    &previous_regions,
+                    &self.mouse.mouse_region_hover_chain,
+                )
                 || !self.core.hover_change_scopes(hovered).is_empty();
         }
         if !force_recompute && prev_mouse == Some((x, y)) {

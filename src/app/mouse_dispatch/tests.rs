@@ -16,9 +16,9 @@ use crate::style::{Align, Color, Length, Rect, Span};
 use crate::widgets::document_view::FormattedLink;
 use crate::widgets::{
     AsciiCanvas, Button, CenterPin, ContentFormatter, DocumentClickEvent, DocumentView,
-    EffectScope, FormatInput, FormattedBlock, FormattedDocument, FormattedLine, Frame, MouseRegion,
-    ScrollEvent, ScrollView, Spacer, StatusBar, Text, TextArea, TextAreaEvent, TextAreaVimMode,
-    VStack,
+    EffectScope, FormatInput, FormattedBlock, FormattedDocument, FormattedLine, Frame, List,
+    ListItem, MouseRegion, ScrollEvent, ScrollView, Spacer, StatusBar, Table, TableRow, Text,
+    TextArea, TextAreaEvent, TextAreaVimMode, VStack,
 };
 use crate::{CellMask, TextEditor};
 
@@ -693,7 +693,7 @@ fn mouse_region_wrapping_frame_receives_border_clicks() {
     let hit = backend.core.tree.hit_test(x as i16, y as i16);
     assert!(hit.is_some(), "border point should hit MouseRegion subtree");
     let hit = hit.unwrap();
-    let target = mouse::resolve_left_click_target(&backend.core.tree, hit, KeyMods::NONE);
+    let target = mouse::resolve_left_click_target(&backend.core.tree, hit, x, y, KeyMods::NONE);
     assert!(
         matches!(
             backend.core.tree.node(target).kind,
@@ -2727,4 +2727,260 @@ fn document_view_shared_selection_cleared_on_click() {
     } else {
         panic!("expected DocumentView");
     }
+}
+
+#[test]
+fn list_activation_without_selection_keeps_wrapper_hover() {
+    struct ActivatableListRegion {
+        activated: Rc<RefCell<Vec<usize>>>,
+        item_clicked: Rc<RefCell<Vec<usize>>>,
+        hover_changes: Rc<RefCell<Vec<bool>>>,
+    }
+
+    impl Component for ActivatableListRegion {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let activated = Rc::clone(&self.activated);
+            let item_clicked = Rc::clone(&self.item_clicked);
+            let hover_changes = Rc::clone(&self.hover_changes);
+            MouseRegion::new()
+                .on_hover_change(Callback::new(move |hovered| {
+                    hover_changes.borrow_mut().push(hovered);
+                }))
+                .child(
+                    List::new()
+                        .items([ListItem::new("one"), ListItem::new("two")])
+                        .on_item_click(Callback::new(move |event: crate::widgets::ListEvent| {
+                            item_clicked.borrow_mut().push(event.index);
+                        }))
+                        .on_activate(Callback::new(move |event: crate::widgets::ListEvent| {
+                            activated.borrow_mut().push(event.index);
+                        }))
+                        .height(Length::Px(2)),
+                )
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    let activated = Rc::new(RefCell::new(Vec::new()));
+    let item_clicked = Rc::new(RefCell::new(Vec::new()));
+    let hover_changes = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = TestBackend::new(ActivatableListRegion {
+        activated: Rc::clone(&activated),
+        item_clicked: Rc::clone(&item_clicked),
+        hover_changes: Rc::clone(&hover_changes),
+    });
+
+    assert!(update_hover_test_backend(&mut backend, 0, 0, false));
+    let hovered = backend.mouse.hovered.expect("wrapper should be hovered");
+    assert!(matches!(
+        backend.core.tree.node(hovered).kind,
+        NodeKind::MouseRegion(_)
+    ));
+    assert_eq!(&*hover_changes.borrow(), &[true]);
+
+    dispatch_mouse_test_backend(
+        &mut backend,
+        MouseEvent {
+            x: 0,
+            y: 0,
+            kind: MouseKind::Down(MouseButton::Left),
+            mods: KeyMods::NONE,
+        },
+    );
+    dispatch_mouse_test_backend(
+        &mut backend,
+        MouseEvent {
+            x: 0,
+            y: 0,
+            kind: MouseKind::Up(MouseButton::Left),
+            mods: KeyMods::NONE,
+        },
+    );
+
+    assert_eq!(&*activated.borrow(), &[0]);
+    assert_eq!(&*item_clicked.borrow(), &[0]);
+    assert_eq!(backend.mouse.hovered, Some(hovered));
+    assert_eq!(&*hover_changes.borrow(), &[true]);
+}
+
+#[test]
+fn table_activation_does_not_need_selection_callback() {
+    struct ActivatableTable {
+        activated: Rc<RefCell<Vec<usize>>>,
+    }
+
+    impl Component for ActivatableTable {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let activated = Rc::clone(&self.activated);
+            Table::new()
+                .rows([TableRow::new(["one"])])
+                .on_activate(Callback::new(move |event: crate::widgets::TableEvent| {
+                    activated.borrow_mut().push(event.index);
+                }))
+                .height(Length::Px(1))
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    let activated = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = TestBackend::new(ActivatableTable {
+        activated: Rc::clone(&activated),
+    });
+    for _ in 0..2 {
+        dispatch_mouse_test_backend(
+            &mut backend,
+            MouseEvent {
+                x: 0,
+                y: 0,
+                kind: MouseKind::Down(MouseButton::Left),
+                mods: KeyMods::NONE,
+            },
+        );
+        dispatch_mouse_test_backend(
+            &mut backend,
+            MouseEvent {
+                x: 0,
+                y: 0,
+                kind: MouseKind::Up(MouseButton::Left),
+                mods: KeyMods::NONE,
+            },
+        );
+    }
+
+    assert_eq!(&*activated.borrow(), &[0]);
+}
+
+#[test]
+fn mouse_region_hover_includes_interactive_descendants() {
+    struct ButtonRegion {
+        hover_changes: Rc<RefCell<Vec<bool>>>,
+    }
+
+    impl Component for ButtonRegion {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let hover_changes = Rc::clone(&self.hover_changes);
+            MouseRegion::new()
+                .on_hover_change(Callback::new(move |hovered| {
+                    hover_changes.borrow_mut().push(hovered);
+                }))
+                .child(
+                    Button::new("go")
+                        .width(Length::Px(4))
+                        .on_click(Callback::new(|_| {})),
+                )
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    let hover_changes = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = TestBackend::new(ButtonRegion {
+        hover_changes: Rc::clone(&hover_changes),
+    });
+
+    assert!(update_hover_test_backend(&mut backend, 0, 0, false));
+    let hovered = backend.mouse.hovered.expect("button should be hovered");
+    assert!(matches!(
+        backend.core.tree.node(hovered).kind,
+        NodeKind::Button(_)
+    ));
+    assert_eq!(&*hover_changes.borrow(), &[true]);
+
+    let region_rect = backend.core.tree.node(backend.core.tree.root).rect;
+    let outside_x = region_rect.x.saturating_add(region_rect.w as i16).max(0) as u16;
+    assert!(update_hover_test_backend(&mut backend, outside_x, 0, false));
+    assert_eq!(&*hover_changes.borrow(), &[true, false]);
+}
+
+#[test]
+fn clicking_hover_only_mouse_region_preserves_hover_state() {
+    struct HoverOnlyRegion {
+        hover_changes: Rc<RefCell<Vec<bool>>>,
+    }
+
+    impl Component for HoverOnlyRegion {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let hover_changes = Rc::clone(&self.hover_changes);
+            MouseRegion::new()
+                .on_hover_change(Callback::new(move |hovered| {
+                    hover_changes.borrow_mut().push(hovered);
+                }))
+                .child(Text::new("foo"))
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    let hover_changes = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = TestBackend::new(HoverOnlyRegion {
+        hover_changes: Rc::clone(&hover_changes),
+    });
+
+    assert!(update_hover_test_backend(&mut backend, 0, 0, false));
+    let hovered = backend.mouse.hovered.expect("region should be hovered");
+    assert_eq!(&*hover_changes.borrow(), &[true]);
+
+    for kind in [
+        MouseKind::Down(MouseButton::Left),
+        MouseKind::Up(MouseButton::Left),
+    ] {
+        dispatch_mouse_test_backend(
+            &mut backend,
+            MouseEvent {
+                x: 0,
+                y: 0,
+                kind,
+                mods: KeyMods::NONE,
+            },
+        );
+        assert_eq!(backend.mouse.hovered, Some(hovered));
+        assert_eq!(
+            &*hover_changes.borrow(),
+            &[true],
+            "click routing must not synthesize another hover entry"
+        );
+    }
+
+    let region_rect = backend.core.tree.node(backend.core.tree.root).rect;
+    let outside_x = region_rect.x.saturating_add(region_rect.w as i16).max(0) as u16;
+    assert!(update_hover_test_backend(&mut backend, outside_x, 0, false));
+    assert_eq!(&*hover_changes.borrow(), &[true, false]);
 }

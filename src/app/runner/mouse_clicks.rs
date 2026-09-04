@@ -374,6 +374,9 @@ impl<C: Component> AppRunner<C> {
                     if next != node.offset {
                         node.offset = next;
                         node.scroll_override = Some(next);
+                        if let Some(callback) = &select.on_scroll_to {
+                            callback.emit(next);
+                        }
                     }
 
                     let (_s, e, t, b) =
@@ -410,6 +413,9 @@ impl<C: Component> AppRunner<C> {
                     if next != node.offset {
                         node.offset = next;
                         node.scroll_override = Some(next);
+                        if let Some(callback) = &select.on_scroll_to {
+                            callback.emit(next);
+                        }
                     }
 
                     let (_s, e, t, b) =
@@ -441,6 +447,12 @@ impl<C: Component> AppRunner<C> {
                         if !node.items[index].is_selectable() {
                             return true;
                         }
+                        if select.on_select.is_none()
+                            && select.on_item_click.is_none()
+                            && select.on_activate.is_none()
+                        {
+                            return false;
+                        }
                         node.scroll_override = Some(node.offset);
                         let click_count =
                             mouse::click_count_at(&mut self.mouse.last_click, x, y, true);
@@ -449,7 +461,9 @@ impl<C: Component> AppRunner<C> {
                             cb.emit(ListEvent { index });
                         }
                         self.mouse.pointer_driven_item_hover_selection.insert(hit);
-                        select.cb.emit(ListEvent { index });
+                        if let Some(cb) = &select.on_select {
+                            cb.emit(ListEvent { index });
+                        }
                         if let Some(cb) = &select.on_activate
                             && (select.activate_on_click || is_double)
                         {
@@ -484,6 +498,9 @@ impl<C: Component> AppRunner<C> {
                     if next != table_node.offset {
                         table_node.offset = next;
                         table_node.scroll_override = Some(next);
+                        if let Some(callback) = &select.on_scroll_to {
+                            callback.emit(next);
+                        }
                     }
                 }
                 return true;
@@ -517,6 +534,9 @@ impl<C: Component> AppRunner<C> {
                     if next != table_node.offset {
                         table_node.offset = next;
                         table_node.scroll_override = Some(next);
+                        if let Some(callback) = &select.on_scroll_to {
+                            callback.emit(next);
+                        }
                     }
                 }
                 return true;
@@ -542,13 +562,18 @@ impl<C: Component> AppRunner<C> {
                 );
 
                 if let Some(index) = found {
+                    if select.on_select.is_none() && select.on_activate.is_none() {
+                        return false;
+                    }
                     if let NodeKind::Table(table_node) = &mut self.core.tree.node_mut(hit).kind {
                         table_node.scroll_override = Some(table_node.offset);
                     }
                     let click_count = mouse::click_count_at(&mut self.mouse.last_click, x, y, true);
                     let is_double = click_count == 2;
                     self.mouse.pointer_driven_item_hover_selection.insert(hit);
-                    select.cb.emit(crate::widgets::TableEvent { index });
+                    if let Some(cb) = &select.on_select {
+                        cb.emit(crate::widgets::TableEvent { index });
+                    }
                     if is_double && let Some(cb) = &select.on_activate {
                         cb.emit(crate::widgets::TableEvent { index });
                     }

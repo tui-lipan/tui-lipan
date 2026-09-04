@@ -1347,7 +1347,14 @@ fn render_node(
             child_clip = Some(intersect_clip(splitter_clip));
         }
         NodeKind::MouseRegion(region) => {
-            let is_hovered = Some(node_id) == state.ctx.hovered;
+            let is_hovered = state.ctx.hovered.is_some_and(|hovered| {
+                (hovered == node_id || state.ctx.tree.is_descendant(node_id, hovered))
+                    && state.ctx.mouse_pos.is_some_and(|(x, y)| {
+                        crate::app::input::mouse::mouse_region_accepts_point(
+                            region, node.rect, x, y,
+                        )
+                    })
+            });
             render_mouse_region(
                 state.f,
                 region,

@@ -52,12 +52,11 @@ pub(crate) fn update_hover_test_backend<C: Component>(
     {
         return true;
     }
-    if !backend.core.tree.has_hoverables() {
-        backend.mouse.last_mouse.set(Some((x, y)));
-        return false;
-    }
     let prev = backend.mouse.last_mouse.get();
     backend.mouse.last_mouse.set(Some((x, y)));
+    if !backend.core.tree.has_hoverables() {
+        return mouse::clear_mouse_hover_state(&mut backend.mouse);
+    }
     if !force_recompute && prev == Some((x, y)) {
         return false;
     }
@@ -68,28 +67,20 @@ pub(crate) fn update_hover_test_backend<C: Component>(
         .filter(|id| mouse::should_hover(&backend.core.tree, *id, x, y));
     let prev_hovered = backend.mouse.hovered;
     let changed = backend.mouse.hovered != hovered;
+    let previous_regions = std::mem::take(&mut backend.mouse.mouse_region_hover_chain);
+    let current_regions = mouse::mouse_region_hover_state(&backend.core.tree, hovered, x, y);
+    let region_changed =
+        mouse::mouse_region_hover_chains_differ(&previous_regions, &current_regions);
+    mouse::emit_mouse_region_hover_changes(&previous_regions, &current_regions);
+    backend.mouse.mouse_region_hover_chain = current_regions;
     backend.mouse.hovered = hovered;
-    if changed {
+    if changed || region_changed {
         if let Some(prev_id) = prev_hovered
             && backend.core.tree.is_valid(prev_id)
             && let NodeKind::DraggableTabBar(tab_bar) =
                 &mut backend.core.tree.node_mut(prev_id).kind
         {
             tab_bar.width_lock = None;
-        }
-        if let Some(prev_id) = prev_hovered
-            && backend.core.tree.is_valid(prev_id)
-            && let NodeKind::MouseRegion(region) = &backend.core.tree.node(prev_id).kind
-            && let Some(cb) = region.on_hover_change.clone()
-        {
-            cb.emit(false);
-        }
-        if let Some(new_id) = hovered
-            && backend.core.tree.is_valid(new_id)
-            && let NodeKind::MouseRegion(region) = &backend.core.tree.node(new_id).kind
-            && let Some(cb) = region.on_hover_change.clone()
-        {
-            cb.emit(true);
         }
         backend.mouse.hovered_item_index = None;
         if let Some(id) = hovered {
@@ -107,7 +98,7 @@ pub(crate) fn update_hover_test_backend<C: Component>(
                 return true;
             }
         }
-        return changed;
+        return changed || region_changed;
     }
     if !force_recompute && prev == Some((x, y)) {
         return false;
@@ -628,6 +619,9 @@ pub(crate) fn handle_list_click_test_backend<C: Component>(
             if next != node.offset {
                 node.offset = next;
                 node.scroll_override = Some(next);
+                if let Some(callback) = &select.on_scroll_to {
+                    callback.emit(next);
+                }
             }
 
             let (_s, e, t, b) =
@@ -662,6 +656,9 @@ pub(crate) fn handle_list_click_test_backend<C: Component>(
             if next != node.offset {
                 node.offset = next;
                 node.scroll_override = Some(next);
+                if let Some(callback) = &select.on_scroll_to {
+                    callback.emit(next);
+                }
             }
 
             let (_s, e, t, b) =
@@ -692,6 +689,12 @@ pub(crate) fn handle_list_click_test_backend<C: Component>(
                 if !node.items[index].is_selectable() {
                     return true;
                 }
+                if select.on_select.is_none()
+                    && select.on_item_click.is_none()
+                    && select.on_activate.is_none()
+                {
+                    return false;
+                }
                 node.scroll_override = Some(node.offset);
                 let click_count = mouse::click_count_at(&mut backend.mouse.last_click, x, y, true);
                 let is_double = click_count == 2;
@@ -702,7 +705,9 @@ pub(crate) fn handle_list_click_test_backend<C: Component>(
                     .mouse
                     .pointer_driven_item_hover_selection
                     .insert(hit);
-                select.cb.emit(crate::widgets::ListEvent { index });
+                if let Some(cb) = &select.on_select {
+                    cb.emit(crate::widgets::ListEvent { index });
+                }
                 if let Some(cb) = &select.on_activate
                     && (select.activate_on_click || is_double)
                 {
@@ -738,6 +743,9 @@ pub(crate) fn handle_table_click_test_backend<C: Component>(
             if next != table_node.offset {
                 table_node.offset = next;
                 table_node.scroll_override = Some(next);
+                if let Some(callback) = &select.on_scroll_to {
+                    callback.emit(next);
+                }
             }
         }
         return true;
@@ -771,6 +779,9 @@ pub(crate) fn handle_table_click_test_backend<C: Component>(
             if next != table_node.offset {
                 table_node.offset = next;
                 table_node.scroll_override = Some(next);
+                if let Some(callback) = &select.on_scroll_to {
+                    callback.emit(next);
+                }
             }
         }
         return true;
@@ -798,6 +809,9 @@ pub(crate) fn handle_table_click_test_backend<C: Component>(
     );
 
     if let Some(index) = found {
+        if select.on_select.is_none() && select.on_activate.is_none() {
+            return false;
+        }
         if let NodeKind::Table(table_node) = &mut backend.core.tree.node_mut(hit).kind {
             table_node.scroll_override = Some(table_node.offset);
         }
@@ -807,7 +821,9 @@ pub(crate) fn handle_table_click_test_backend<C: Component>(
             .mouse
             .pointer_driven_item_hover_selection
             .insert(hit);
-        select.cb.emit(crate::widgets::TableEvent { index });
+        if let Some(cb) = &select.on_select {
+            cb.emit(crate::widgets::TableEvent { index });
+        }
         if is_double && let Some(cb) = &select.on_activate {
             cb.emit(crate::widgets::TableEvent { index });
         }
