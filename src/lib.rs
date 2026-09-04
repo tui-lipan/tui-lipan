@@ -14,6 +14,27 @@ compile_error!(
 
 pub mod prelude;
 
+/// Attribute allocations in the enclosing scope to `$bucket`.
+///
+/// Expands to nothing without the `alloc-probe` feature, so the argument is only resolved on a
+/// probe build.
+#[cfg(feature = "alloc-probe")]
+macro_rules! probe_bucket {
+    ($bucket:expr) => {
+        let _probe_guard = $crate::alloc_probe::Guard::new($bucket);
+    };
+}
+
+#[cfg(not(feature = "alloc-probe"))]
+macro_rules! probe_bucket {
+    ($bucket:expr) => {};
+}
+
+pub(crate) use probe_bucket;
+
+#[cfg(feature = "alloc-probe")]
+pub mod alloc_probe;
+
 #[macro_use]
 mod widget_manifest;
 

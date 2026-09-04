@@ -1,5 +1,6 @@
 use crate::animation::Transition;
 use crate::core::component::FocusContext;
+use crate::core::element::Element;
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::layout::measure::min_size_constrained;
 use crate::layout::reconcile::{
@@ -216,14 +217,20 @@ pub(crate) fn reconcile_animated(
         (std::mem::take(&mut node.children), height_animating)
     };
 
-    let child_for_reconcile = if height_animating {
-        animated
+    // Only the animating branch needs an owned element, because only it rewrites a constraint.
+    // Cloning in the settled branch too deep-copied the whole animated subtree every frame, which
+    // for a host that wraps each of its panes in an `Animated` was the largest single source of
+    // allocation in the pass.
+    let clamped_child;
+    let child_for_reconcile: &Element = if height_animating {
+        clamped_child = animated
             .child
             .as_ref()
             .clone()
-            .max_height(Length::Px(child_rect.h))
+            .max_height(Length::Px(child_rect.h));
+        &clamped_child
     } else {
-        animated.child.as_ref().clone()
+        animated.child.as_ref()
     };
 
     let new_children = reconcile_single_child(
@@ -235,7 +242,7 @@ pub(crate) fn reconcile_animated(
         },
         SingleChildReconcile {
             parent_id: id,
-            child: Some(&child_for_reconcile),
+            child: Some(child_for_reconcile),
             rect: child_rect,
             old_children,
         },

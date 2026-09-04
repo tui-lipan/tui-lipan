@@ -197,6 +197,7 @@ writing any `update()` logic.
 | `markdown` | Markdown formatter for `DocumentView` |
 | `qr-code` | `QrCode` widget: scannable QR symbols rendered as terminal cells |
 | `profiling-tracing` | `tracing` spans/events for render loop and `DocumentView` hot paths |
+| `alloc-probe` | Counting allocator that attributes a frame's allocations to render phases; investigation scaffolding, not an API |
 | `syntax-syntect` | Lightweight syntax highlighting in `TextArea`, `DocumentView`, and `DiffView`; native uses Oniguruma and WASM uses pure-Rust `fancy-regex` |
 | `syntax-extra` | Opt-in bat-curated grammar set for broad language coverage; adds about 0.6 MiB to the binary and includes `syntax-syntect` |
 | `terminal` | `Terminal` and `ManagedTerminal`: embedded PTY terminal viewport |

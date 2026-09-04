@@ -79,6 +79,7 @@ tui-lipan = { version = "*", features = ["image", "big-text"] }
 | `markdown` | No | Markdown formatter for `DocumentView` + markdown preview example |
 | `qr-code` | No | Scannable QR symbols rendered as terminal cells - `QrCode` |
 | `profiling-tracing` | No | `tracing` spans/events around render loop and `DocumentView` formatting/reconcile hot paths |
+| `alloc-probe` | No | Counting allocator that attributes a frame's allocations to render phases; investigation scaffolding rather than API, documented in `src/alloc_probe.rs` |
 | `syntax-syntect` | No | Lightweight syntax highlighting in `TextArea`, `DocumentView`, and `DiffView` via syntect; WASM uses pure-Rust `fancy-regex` |
 | `syntax-extra` | No | Opt-in bat-curated syntax set with broad grammar coverage; adds about 0.6 MiB and includes `syntax-syntect` |
 | `terminal` | No | Embedded PTY / terminal viewport - `Terminal`, `ManagedTerminal` |

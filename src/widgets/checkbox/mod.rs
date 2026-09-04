@@ -412,7 +412,7 @@ impl Checkbox {
 
 impl From<Checkbox> for Element {
     fn from(value: Checkbox) -> Self {
-        Element::new(ElementKind::Checkbox(value))
+        Element::new(ElementKind::Checkbox(Box::new(value)))
     }
 }
 

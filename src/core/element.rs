@@ -323,14 +323,14 @@ pub(crate) enum ElementKind {
     HexArea(Box<HexArea>),
     /// Terminal viewport.
     #[cfg(feature = "terminal")]
-    Terminal(Terminal),
+    Terminal(Box<Terminal>),
     /// Popover overlay.
     Popover(crate::widgets::Popover),
     Portal(Portal),
     /// Table with columns and rows.
     Table(Box<crate::widgets::Table>),
     /// Tab bar.
-    Tabs(Tabs),
+    Tabs(Box<Tabs>),
     /// Draggable tab bar.
     DraggableTabBar(Box<DraggableTabBar>),
     /// Nested component.
@@ -396,11 +396,11 @@ pub(crate) enum ElementKind {
     /// Heatmap visualization.
     Heatmap(Heatmap),
     /// Checkbox toggle.
-    Checkbox(Checkbox),
+    Checkbox(Box<Checkbox>),
     /// Progress bar.
-    ProgressBar(ProgressBar),
+    ProgressBar(Box<ProgressBar>),
     /// Slider.
-    Slider(crate::widgets::Slider),
+    Slider(Box<crate::widgets::Slider>),
     /// Loading spinner.
     Spinner(Spinner),
     /// Resizable splitter container.
