@@ -423,7 +423,7 @@ impl Tabs {
 
 impl From<Tabs> for Element {
     fn from(value: Tabs) -> Self {
-        Element::new(ElementKind::Tabs(value))
+        Element::new(ElementKind::Tabs(Box::new(value)))
     }
 }
 

@@ -455,7 +455,7 @@ impl ProgressBar {
 
 impl From<ProgressBar> for Element {
     fn from(value: ProgressBar) -> Self {
-        Element::new(ElementKind::ProgressBar(value))
+        Element::new(ElementKind::ProgressBar(Box::new(value)))
     }
 }
 

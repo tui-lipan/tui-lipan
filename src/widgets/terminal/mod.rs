@@ -578,7 +578,7 @@ impl From<Terminal> for Element {
             None
         };
 
-        Element::new(ElementKind::Terminal(terminal))
+        Element::new(ElementKind::Terminal(Box::new(terminal)))
     }
 }
 

@@ -391,7 +391,7 @@ impl From<Slider> for Element {
         }
         // Clamp value to valid range.
         slider.value = slider.value.clamp(slider.min, slider.max);
-        Element::new(crate::core::element::ElementKind::Slider(slider))
+        Element::new(crate::core::element::ElementKind::Slider(Box::new(slider)))
     }
 }
 
