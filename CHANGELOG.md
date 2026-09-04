@@ -13,10 +13,22 @@ While the crate is on `0.x.y`:
 
 ### Added
 
+- `alloc-probe` is a new opt-in feature carrying the allocation instrumentation the numbers below
+  came from. It is investigation scaffolding rather than API: it attributes a frame's allocations
+  to render phases, and is documented in `src/alloc_probe.rs`.
+
 - `TerminalScreen` answers XTVERSION queries with `tui-lipan <version>` by default, and
   `set_terminal_identity(...)` lets an embedding terminal or multiplexer report its own stable
   child-facing identity. `set_xtversion_enabled(false)` disables those responses when a host needs
   the previous no-reply behavior.
+
+### Changed
+
+- Building and laying out a frame allocates about a quarter less. A settled `Animated` no longer
+  clones its child subtree to clamp a height it is not animating; the five largest `Element`
+  variants are boxed, taking an `Element` from 1,248 to 616 bytes; and the thirteen single-child
+  wrappers expand without a `Vec` round trip. Measured on a sixteen-pane terminal layout, the view
+  and layout pass fell from 421 to about 285 µs and from 3,249 to 2,473 allocations.
 
 ### Fixed
 
