@@ -496,6 +496,16 @@ impl TerminalScreenHandle {
         self.0.borrow_mut().render_snapshot()
     }
 
+    /// Take the viewport rows this screen changed since the last call (see
+    /// [`TerminalScreen::take_damage`]).
+    ///
+    /// Damage is cleared by reading it, so exactly one stage of a frame may call this. That stage
+    /// is the live-terminal refresh, which hands the result to whatever else the frame needs it
+    /// for.
+    pub fn take_damage(&self) -> TerminalDamage {
+        self.0.borrow_mut().take_damage()
+    }
+
     /// The cell size in pixels this screen reports to its child (see
     /// [`TerminalScreen::set_cell_size`]).
     pub fn cell_size(&self) -> TerminalCellSize {

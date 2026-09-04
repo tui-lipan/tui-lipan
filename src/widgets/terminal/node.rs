@@ -11,6 +11,7 @@ use crate::style::{
 use crate::utils::hints::HintSpan;
 use crate::widgets::ScrollEvent;
 
+use super::damage::TerminalDamage;
 use super::events::{
     MouseModeState, TerminalInputEvent, TerminalKeyModes, TerminalLinkEvent,
     TerminalPasteShortcutBehavior,
@@ -109,10 +110,14 @@ impl TerminalNode {
     /// output is node-local state in exactly the way a scroll offset is: the element that produced
     /// this node says nothing about it, so refreshing here — rather than by re-running `view()` —
     /// is what keeps a streaming pane from rebuilding the whole window on every chunk.
-    pub(crate) fn refresh_from_live_screen(&mut self) -> bool {
-        let Some(screen) = self.screen.clone() else {
-            return false;
-        };
+    /// Pull this node up to date with its live screen, reporting which viewport rows moved.
+    ///
+    /// `None` means the screen has taken no output since the last refresh. Damage is consumed
+    /// here and only here, so a later consumer - the snapshot rebuild, an incremental repaint -
+    /// takes it from the returned value rather than asking the screen again and starving whoever
+    /// asks second.
+    pub(crate) fn refresh_from_live_screen(&mut self) -> Option<TerminalDamage> {
+        let screen = self.screen.clone()?;
         let snapshot = screen.snapshot();
         let snapshot = if self.decorations.is_empty() {
             snapshot
@@ -120,11 +125,19 @@ impl TerminalNode {
             snapshot.decorated(&self.decorations)
         };
         if self.live_sequence == Some(snapshot.sequence) {
-            return false;
+            return None;
         }
         self.live_sequence = Some(snapshot.sequence);
         self.apply_snapshot(&snapshot);
-        true
+        // Decorations are painted over the snapshot after the fact, so the rows they touch are not
+        // in the emulator's damage. Rather than reconcile the two, a decorated terminal reports
+        // full damage and takes the ordinary path.
+        Some(if self.decorations.is_empty() {
+            screen.take_damage()
+        } else {
+            let _ = screen.take_damage();
+            TerminalDamage::Full
+        })
     }
 
     /// Fill the snapshot-derived fields, keeping the scroll rules `reconcile_terminal` establishes:

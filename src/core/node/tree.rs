@@ -280,6 +280,16 @@ pub(crate) struct NodeTree {
     diff_line_range_preview: Option<DiffLineRangePreview>,
 }
 
+/// What one pass of [`NodeTree::refresh_live_terminals_detailed`] found.
+#[cfg(feature = "terminal")]
+#[derive(Debug, Default)]
+pub(crate) struct LiveTerminalRefresh {
+    /// Whether any live terminal took output since the last refresh.
+    pub changed: bool,
+    /// The rows each terminal that moved reported.
+    pub damage: Vec<(NodeId, crate::widgets::internal::TerminalDamage)>,
+}
+
 impl NodeTree {
     /// Create an empty tree.
     pub fn new() -> Self {
@@ -418,17 +428,29 @@ impl NodeTree {
     /// [`Terminal::screen`](crate::widgets::Terminal::screen).
     #[cfg(feature = "terminal")]
     pub(crate) fn refresh_live_terminals(&mut self) -> bool {
-        let mut changed = false;
+        self.refresh_live_terminals_detailed().changed
+    }
+
+    /// Pull every live terminal up to date, reporting which rows each one changed.
+    ///
+    /// Damage is consumed here, once per frame, because reading it clears it. Callers that only
+    /// want to know whether anything moved use [`refresh_live_terminals`](Self::refresh_live_terminals).
+    #[cfg(feature = "terminal")]
+    pub(crate) fn refresh_live_terminals_detailed(&mut self) -> LiveTerminalRefresh {
+        let mut refresh = LiveTerminalRefresh::default();
         for index in 0..self.live_terminal_ids.len() {
             let id = self.live_terminal_ids[index];
             if !self.is_valid(id) {
                 continue;
             }
-            if let NodeKind::Terminal(terminal) = &mut self.node_mut(id).kind {
-                changed |= terminal.refresh_from_live_screen();
+            if let NodeKind::Terminal(terminal) = &mut self.node_mut(id).kind
+                && let Some(damage) = terminal.refresh_from_live_screen()
+            {
+                refresh.changed = true;
+                refresh.damage.push((id, damage));
             }
         }
-        changed
+        refresh
     }
 
     /// Whether any terminal is reading a live screen a child program can write to at any moment.
