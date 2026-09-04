@@ -11,6 +11,8 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-04
+
 ### Fixed
 
 - A frame repainted from terminal damage left the hardware caret wherever the last cell write put
@@ -1914,7 +1916,8 @@ Highlights of what ships in 0.1.0:
 See the [README](README.md) for the full feature set and
 [docs.tui-lipan.dev](https://docs.tui-lipan.dev) for documentation.
 
-[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/tui-lipan/tui-lipan/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/tui-lipan/tui-lipan/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/tui-lipan/tui-lipan/compare/v0.5.0...v0.6.0
