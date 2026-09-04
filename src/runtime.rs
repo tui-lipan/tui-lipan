@@ -609,7 +609,10 @@ where
             crate::core::nested::frame_diagnostics_enabled().then(web_time::Instant::now);
         self.scroll.begin_view(ScopeId(1));
         self.ctx.begin_memo_dependency_capture();
-        let element = self.component.view(&self.ctx);
+        let element = {
+            crate::probe_bucket!(crate::alloc_probe::VIEW);
+            self.component.view(&self.ctx)
+        };
         self.root_memo_deps = self.ctx.finish_memo_dependency_capture();
         #[cfg(feature = "devtools")]
         if let Some(start) = view_start_devtools {
@@ -635,7 +638,10 @@ where
         let element =
             self.components
                 .expand_in_host(&mut self.root_host, None, element, epoch, bounds);
-        let element = crate::style::apply_document_theme_carve_out(&self.theme, element);
+        let element = {
+            crate::probe_bucket!(crate::alloc_probe::THEME_CARVE_OUT);
+            crate::style::apply_document_theme_carve_out(&self.theme, element)
+        };
         self.ctx.set_active_theme(app_root_theme.clone());
         let extra = self.extra_root_element.clone().map(|extra| {
             let expanded = self.components.expand_in_host(
@@ -653,11 +659,17 @@ where
                 .into()
         });
         self.ctx.set_active_theme(self.theme.clone());
-        self.components.sweep(epoch);
+        {
+            crate::probe_bucket!(crate::alloc_probe::SWEEP);
+            self.components.sweep(epoch);
+        }
         #[cfg(feature = "profiling-tracing")]
         let expand_ms = expand_start.elapsed().as_secs_f64() * 1000.0;
 
-        let overlays = self.overlay_snapshot();
+        let overlays = {
+            crate::probe_bucket!(crate::alloc_probe::OVERLAY_SNAPSHOT);
+            self.overlay_snapshot()
+        };
         // Move element into cache instead of cloning - the previous deep clone
         // was the single largest allocation spike per frame.
         self.cached_expanded_element = Some(element);
@@ -676,14 +688,17 @@ where
         )
         .expect("expanded extra root element should exist before reconciliation");
         self.tree.set_base_active_theme(self.theme.clone());
-        LayoutEngine::reconcile_with_overlays_mode(
-            &mut self.tree,
-            root.as_element(),
-            bounds,
-            Some(self.focus.as_ref()),
-            &overlays,
-            !self.surface_mode.is_inline(),
-        );
+        {
+            crate::probe_bucket!(crate::alloc_probe::RECONCILE);
+            LayoutEngine::reconcile_with_overlays_mode(
+                &mut self.tree,
+                root.as_element(),
+                bounds,
+                Some(self.focus.as_ref()),
+                &overlays,
+                !self.surface_mode.is_inline(),
+            );
+        }
         self.scroll.update_from_tree(&self.tree);
         self.ctx.env().animations.end_frame_gc();
         #[cfg(feature = "profiling-tracing")]

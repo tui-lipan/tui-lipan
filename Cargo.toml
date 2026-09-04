@@ -175,6 +175,8 @@ terminal      = ["dep:portable-pty", "dep:alacritty_terminal"]
 terminal-images = ["terminal", "image", "dep:flate2"]
 terminal-serde = ["terminal", "dep:serde"]
 profiling-tracing = ["dep:tracing"]
+# Investigation-only allocation attribution hooks; see src/alloc_probe.rs.
+alloc-probe = []
 hints-regex = ["dep:regex-lite"]
 theme-reload = ["dep:serde", "dep:toml", "dep:notify"]
 ui-snapshot-json = ["dep:serde", "dep:serde_json"]

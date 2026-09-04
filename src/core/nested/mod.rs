@@ -959,7 +959,10 @@ impl ComponentRegistry {
                 scope = entry.scope.0
             )
             .entered();
-            let element = entry.component.view();
+            let element = {
+                crate::probe_bucket!(crate::alloc_probe::VIEW);
+                entry.component.view()
+            };
             #[cfg(feature = "devtools")]
             record_view_timing(
                 entry.scope,
@@ -1121,6 +1124,10 @@ impl ComponentRegistry {
         epoch: u32,
         viewport: Rect,
     ) -> Vec<Element> {
+        // Outermost bucket for this call. The per-child guards below shadow it while a child is
+        // being expanded, so what lands here is this container's own bookkeeping.
+        crate::probe_bucket!(crate::alloc_probe::EXPAND_CHILDREN_PLAN);
+
         let mut specs = Vec::new();
         for child in &children {
             if let ElementKind::Component(component) = &child.kind {
@@ -1143,7 +1150,10 @@ impl ComponentRegistry {
         let mut plan_cursor = 0usize;
 
         let mut next_ids: Vec<ComponentId> = Vec::with_capacity(specs.len());
-        let mut out: Vec<Element> = Vec::with_capacity(children.len());
+        let mut out: Vec<Element> = {
+            crate::probe_bucket!(crate::alloc_probe::EXPAND_CHILDREN_OUT);
+            Vec::with_capacity(children.len())
+        };
 
         for (idx, child) in children.into_iter().enumerate() {
             let Element {
@@ -1155,6 +1165,7 @@ impl ComponentRegistry {
             } = child;
             match kind {
                 ElementKind::Component(component) => {
+                    crate::probe_bucket!(crate::alloc_probe::EXPAND_COMPONENT);
                     let plan_reuse = plan.get(plan_cursor).copied().unwrap_or(None);
                     plan_cursor += 1;
 
@@ -1233,6 +1244,7 @@ impl ComponentRegistry {
                     });
                 }
                 other => {
+                    crate::probe_bucket!(crate::alloc_probe::EXPAND_ELEMENT);
                     out.push(self.expand_element(
                         host,
                         path,
