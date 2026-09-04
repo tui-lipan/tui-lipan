@@ -255,6 +255,93 @@ pub(crate) struct TerminalRenderCtx<'a> {
     pub flash_range: Option<CopyFeedbackRange>,
 }
 
+/// Everything one terminal row needs in order to be painted, so the full and partial paths share
+/// the row-to-spans conversion rather than each having their own copy of it.
+struct TerminalRowPaint<'a> {
+    node: &'a crate::widgets::internal::TerminalNode,
+    flash_range: &'a Option<CopyFeedbackRange>,
+    paint_selection: &'a Option<GridSelection>,
+    link_hover_style: Style,
+    selection_style: Style,
+    content_style: Style,
+    content_w: u16,
+}
+
+/// Paint `rows` of terminal content into `area`, which is the region those rows occupy.
+///
+/// The caller owns the mapping from content rows to screen rows, because the full path wants the
+/// whole clipped region covered - including any part of it past the end of the content, which must
+/// still be painted blank rather than left showing whatever was underneath - while a partial
+/// repaint wants exactly the rows it names and nothing else.
+fn paint_terminal_rows(
+    f: &mut ratatui::Frame<'_>,
+    paint: &TerminalRowPaint<'_>,
+    rows: std::ops::Range<usize>,
+    area: ratatui::layout::Rect,
+    dx: u16,
+) {
+    if rows.is_empty() || area.height == 0 {
+        return;
+    }
+    let TerminalRowPaint {
+        node,
+        flash_range,
+        paint_selection,
+        link_hover_style,
+        selection_style,
+        content_style,
+        content_w,
+    } = *paint;
+    let lines: Vec<Line<'_>> = rows
+        .clone()
+        .map(|row| {
+            let source = match flash_range.as_ref() {
+                Some(range) if range.selection.columns_for_row(row, 0).is_some() => range.line(row),
+                _ => node.lines.get(row).map(Vec::as_slice),
+            };
+            let hovered_source = node.link_hover.as_ref().and_then(|hover| {
+                let mut row_spans = hover.spans.iter().filter(|span| span.row == row);
+                let first = row_spans.next()?;
+                let line = source?;
+                let mut ranges = vec![(first.start_col..first.end_col, link_hover_style)];
+                ranges
+                    .extend(row_spans.map(|span| (span.start_col..span.end_col, link_hover_style)));
+                Some(restyle_columns(line, &ranges))
+            });
+            let mut spans: Vec<ratatui::text::Span<'_>> = if let Some(line) =
+                hovered_source.as_deref()
+            {
+                apply_selection_to_row(line, row, paint_selection, selection_style, content_style)
+                    .into_iter()
+                    .map(|span| ratatui::text::Span::styled(span.content.into_owned(), span.style))
+                    .collect()
+            } else {
+                source
+                    .map(|line| {
+                        apply_selection_to_row(
+                            line,
+                            row,
+                            paint_selection,
+                            selection_style,
+                            content_style,
+                        )
+                    })
+                    .unwrap_or_default()
+            };
+
+            if spans.is_empty() {
+                spans.push(ratatui::text::Span::styled(
+                    "",
+                    to_ratatui_style(content_style),
+                ));
+            }
+
+            Line::from(clip_spans_no_ellipsis(spans, content_w))
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines).scroll((0, dx)), area);
+}
+
 pub(crate) fn render_terminal(
     f: &mut ratatui::Frame<'_>,
     node: &crate::widgets::internal::TerminalNode,
@@ -378,63 +465,21 @@ pub(crate) fn render_terminal(
             Some(_) => &flash_selection,
             None => &projected,
         };
-        let lines: Vec<Line<'_>> = (0..content_rect.h as usize)
-            .map(|row| {
-                let source = match flash_range.as_ref() {
-                    Some(range) if range.selection.columns_for_row(row, 0).is_some() => {
-                        range.line(row)
-                    }
-                    _ => node.lines.get(row).map(Vec::as_slice),
-                };
-                let hovered_source = node.link_hover.as_ref().and_then(|hover| {
-                    let mut row_spans = hover.spans.iter().filter(|span| span.row == row);
-                    let first = row_spans.next()?;
-                    let line = source?;
-                    let mut ranges = vec![(first.start_col..first.end_col, link_hover_style)];
-                    ranges.extend(
-                        row_spans.map(|span| (span.start_col..span.end_col, link_hover_style)),
-                    );
-                    Some(restyle_columns(line, &ranges))
-                });
-                let mut spans: Vec<ratatui::text::Span<'_>> = if let Some(line) =
-                    hovered_source.as_deref()
-                {
-                    apply_selection_to_row(
-                        line,
-                        row,
-                        paint_selection,
-                        selection_style,
-                        content_style,
-                    )
-                    .into_iter()
-                    .map(|span| ratatui::text::Span::styled(span.content.into_owned(), span.style))
-                    .collect()
-                } else {
-                    source
-                        .map(|line| {
-                            apply_selection_to_row(
-                                line,
-                                row,
-                                paint_selection,
-                                selection_style,
-                                content_style,
-                            )
-                        })
-                        .unwrap_or_default()
-                };
-
-                if spans.is_empty() {
-                    spans.push(ratatui::text::Span::styled(
-                        "",
-                        to_ratatui_style(content_style),
-                    ));
-                }
-
-                Line::from(clip_spans_no_ellipsis(spans, content_w))
-            })
-            .collect();
-
-        f.render_widget(Paragraph::new(lines).scroll((dy, dx)), effective);
+        let paint = TerminalRowPaint {
+            node,
+            flash_range: &flash_range,
+            paint_selection,
+            link_hover_style,
+            selection_style,
+            content_style,
+            content_w,
+        };
+        // Only the rows `effective` can actually show: `Paragraph` used to be handed every content
+        // row and told to skip `dy` of them, which built lines nothing would draw. `effective`
+        // still covers the whole clipped region, so rows past the end of the content stay blank.
+        let first_row = dy as usize;
+        let last_row = (first_row + effective.height as usize).min(content_rect.h as usize);
+        paint_terminal_rows(f, &paint, first_row..last_row, effective, dx);
         rendered_content = true;
 
         #[cfg(feature = "terminal-images")]
