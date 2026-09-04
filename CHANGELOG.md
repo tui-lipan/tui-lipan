@@ -18,6 +18,11 @@ While the crate is on `0.x.y`:
   child-facing identity. `set_xtversion_enabled(false)` disables those responses when a host needs
   the previous no-reply behavior.
 
+### Fixed
+
+- `Modal::dismiss_on_escape(false)` now lets Escape reach the focused child even when the modal has
+  no `on_close` callback. Root modals without a callback continue trapping Escape by default.
+
 ## [0.6.1] - 2026-09-03
 
 ### Fixed

@@ -1062,15 +1062,6 @@ Methods: `TextAreaSnapshot::capture(&TextArea)`, `apply(self, TextArea) -> TextA
 
 ## Overlay & Toast
 
-### `DismissPolicy`
-
-| Variant | Dismissed by |
-|---------|-------------|
-| `DismissPolicy::None` | Nothing (manual only) |
-| `DismissPolicy::ClickOutside` | Click outside overlay **(default)** |
-| `DismissPolicy::ClickInside` | Click inside overlay |
-| `DismissPolicy::ClickOutsideOrEscape` | Click outside or Escape |
-
 ### `ToastPlacement`
 
 | Variant | Position |

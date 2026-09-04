@@ -2052,6 +2052,7 @@ mod tests {
     }
 
     struct ModalEscapeHarness {
+        has_on_close: bool,
         dismiss_on_escape: bool,
     }
 
@@ -2073,17 +2074,22 @@ mod tests {
         }
 
         fn view(&self, ctx: &Context<Self>) -> Element {
-            Modal::new()
+            let modal = Modal::new()
                 .dismiss_on_escape(self.dismiss_on_escape)
-                .on_close(ctx.link().callback(|_| ModalEscapeMsg::Close))
                 .child(
                     Input::new("")
                         .on_key(ctx.link().key_handler(|key| {
                             key.is(KeyCode::Esc).then_some(ModalEscapeMsg::ChildEscape)
                         }))
                         .key("inside"),
-                )
-                .into()
+                );
+            if self.has_on_close {
+                modal
+                    .on_close(ctx.link().callback(|_| ModalEscapeMsg::Close))
+                    .into()
+            } else {
+                modal.into()
+            }
         }
     }
 
@@ -2226,20 +2232,31 @@ mod tests {
     }
 
     #[test]
-    fn modal_escape_dismissal_can_pass_through_to_focused_child() {
-        let mut passthrough = TestBackend::new(ModalEscapeHarness {
-            dismiss_on_escape: false,
-        });
-        assert!(passthrough.send_key(plain_code(KeyCode::Esc)).unwrap());
-        assert_eq!(passthrough.state().child_escapes, 1);
-        assert_eq!(passthrough.state().closes, 0);
+    fn modal_escape_routing_honors_callback_and_dismiss_setting() {
+        let cases = [
+            (true, true, 0, 1),
+            (true, false, 1, 0),
+            (false, true, 0, 0),
+            (false, false, 1, 0),
+        ];
 
-        let mut dismissing = TestBackend::new(ModalEscapeHarness {
-            dismiss_on_escape: true,
-        });
-        assert!(dismissing.send_key(plain_code(KeyCode::Esc)).unwrap());
-        assert_eq!(dismissing.state().child_escapes, 0);
-        assert_eq!(dismissing.state().closes, 1);
+        for (has_on_close, dismiss_on_escape, expected_child_escapes, expected_closes) in cases {
+            let mut backend = TestBackend::new(ModalEscapeHarness {
+                has_on_close,
+                dismiss_on_escape,
+            });
+            assert!(backend.send_key(plain_code(KeyCode::Esc)).unwrap());
+            assert_eq!(
+                backend.state().child_escapes,
+                expected_child_escapes,
+                "has_on_close={has_on_close}, dismiss_on_escape={dismiss_on_escape}"
+            );
+            assert_eq!(
+                backend.state().closes,
+                expected_closes,
+                "has_on_close={has_on_close}, dismiss_on_escape={dismiss_on_escape}"
+            );
+        }
     }
 
     struct PaneWrappedModalHarness;

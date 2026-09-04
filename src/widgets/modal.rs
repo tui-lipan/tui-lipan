@@ -195,6 +195,15 @@ impl Default for Modal {
     }
 }
 
+fn root_dismiss_policy(has_on_close: bool, dismiss_on_escape: bool) -> DismissPolicy {
+    match (has_on_close, dismiss_on_escape) {
+        (true, true) => DismissPolicy::ClickOutsideOrEscape,
+        (true, false) => DismissPolicy::ClickOutsidePassthroughEscape,
+        (false, true) => DismissPolicy::None,
+        (false, false) => DismissPolicy::PassthroughEscape,
+    }
+}
+
 impl From<Modal> for Element {
     fn from(modal: Modal) -> Self {
         let frame_style = if modal.frame_style.bg.is_none() {
@@ -281,13 +290,8 @@ impl From<Modal> for Element {
             }
             OverlayScope::RootPortal => {
                 let frame = base_frame.width(modal.width).height(modal.height);
-                let dismiss_policy = if modal.on_close.is_some() && modal.dismiss_on_escape {
-                    DismissPolicy::ClickOutsideOrEscape
-                } else if modal.on_close.is_some() {
-                    DismissPolicy::ClickOutsidePassthroughEscape
-                } else {
-                    DismissPolicy::None
-                };
+                let dismiss_policy =
+                    root_dismiss_policy(modal.on_close.is_some(), modal.dismiss_on_escape);
                 let portal = Portal {
                     layer: OverlayLayer::Modal,
                     content: Box::new(frame.into()),
@@ -458,6 +462,34 @@ mod tests {
             crate::overlay::DismissPolicy::ClickOutsideOrEscape
         );
         assert!(portal.dismiss_policy.dismiss_on_escape());
+        assert!(!portal.dismiss_policy.escape_passthrough());
+    }
+
+    #[test]
+    fn dismiss_on_escape_false_without_on_close_passthroughs_escape() {
+        let element: Element = Modal::new()
+            .dismiss_on_escape(false)
+            .child(Spacer::new())
+            .into();
+        let ElementKind::Portal(portal) = element.kind else {
+            panic!("root modal is a portal");
+        };
+        assert_eq!(
+            portal.dismiss_policy,
+            crate::overlay::DismissPolicy::PassthroughEscape
+        );
+        assert!(!portal.dismiss_policy.dismiss_on_escape());
+        assert!(portal.dismiss_policy.escape_passthrough());
+    }
+
+    #[test]
+    fn dismiss_on_escape_default_without_on_close_traps_escape() {
+        let element: Element = Modal::new().child(Spacer::new()).into();
+        let ElementKind::Portal(portal) = element.kind else {
+            panic!("root modal is a portal");
+        };
+        assert_eq!(portal.dismiss_policy, crate::overlay::DismissPolicy::None);
+        assert!(!portal.dismiss_policy.dismiss_on_escape());
         assert!(!portal.dismiss_policy.escape_passthrough());
     }
 }

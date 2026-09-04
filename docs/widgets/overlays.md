@@ -29,7 +29,7 @@ Dismissal restores the prior entry, including an unfocused `OnDemand` state.
 | `scope` | `OverlayScope` | `RootPortal` (default) or `Local` |
 | `auto_focus` | `bool` | Focus the first focusable descendant (`true` by default); `false` suspends focus while retaining the modal trap |
 | `on_close` | `Callback<()>` | Close callback (Esc/backdrop click) |
-| `dismiss_on_escape` | `bool` | Whether Esc fires `on_close` (`true` by default). `false` still closes on backdrop click, but lets Esc reach focused widgets so an inner input can blur first |
+| `dismiss_on_escape` | `bool` | Whether Esc fires `on_close` (`true` by default). Without `on_close`, the default traps Esc. `false` always lets Esc reach focused widgets; backdrop clicks still close when `on_close` is set |
 | `width` | `Length` | Dialog width |
 | `height` | `Length` | Dialog height |
 | `max_height` | `Length` | Cap the modal height; pair with `height(Length::Auto)` so the modal hugs its content but never exceeds the cap (inner content scrolls past it) |
