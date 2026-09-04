@@ -1083,7 +1083,15 @@ impl<C: Component> AppRunner<C> {
                 }
                 #[cfg(feature = "terminal")]
                 if let Some(frame) = last_snapshot.as_ref() {
-                    terminal_damage::resync_host_patched_rows(terminal, &host_patched_rows, frame)?;
+                    // The draw above has already placed the caret, and the resync sends cells,
+                    // which moves it. It puts the caret back, from the same sink the renderers
+                    // filled while that frame was painted.
+                    terminal_damage::resync_host_patched_rows(
+                        terminal,
+                        &host_patched_rows,
+                        frame,
+                        cursor_position.get(),
+                    )?;
                 }
                 Ok(())
             }
