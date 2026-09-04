@@ -11,6 +11,14 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-09-04
+
+### Fixed
+
+- `FileTreeEntrySource::Provided` now preserves the root's POSIX or Windows path flavor across
+  clients, including listing requests and virtual change projections. Explicit
+  `FileTreeChangeSource::Provided` changes also take precedence over entry-embedded status.
+
 ## [0.7.2] - 2026-09-04
 
 ### Fixed
@@ -1928,7 +1936,8 @@ Highlights of what ships in 0.1.0:
 See the [README](README.md) for the full feature set and
 [docs.tui-lipan.dev](https://docs.tui-lipan.dev) for documentation.
 
-[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/tui-lipan/tui-lipan/compare/v0.6.1...v0.7.0

@@ -8,6 +8,7 @@ use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config, Matcher, Utf32String};
 
 use super::fs::normalize_path;
+use super::provided_path::ProvidedPath;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ExplorerFilter {
@@ -48,6 +49,15 @@ pub(crate) fn search_candidates(
     candidates: impl IntoIterator<Item = ExplorerCandidate>,
     query: &str,
 ) -> ExplorerFilter {
+    search_candidates_with_path_flavor(root_path, candidates, query, false)
+}
+
+pub(crate) fn search_candidates_with_path_flavor(
+    root_path: &Arc<str>,
+    candidates: impl IntoIterator<Item = ExplorerCandidate>,
+    query: &str,
+    provided_paths: bool,
+) -> ExplorerFilter {
     let query = query.trim();
     if query.is_empty() {
         return ExplorerFilter::default();
@@ -79,7 +89,12 @@ pub(crate) fn search_candidates(
         }
 
         filter.match_count = filter.match_count.saturating_add(1);
-        include_path_with_ancestors(&mut filter.visible_paths, &entry.path, root_path);
+        include_path_with_ancestors(
+            &mut filter.visible_paths,
+            &entry.path,
+            root_path,
+            provided_paths,
+        );
 
         if label_match {
             label_hits.sort_unstable();
@@ -89,8 +104,13 @@ pub(crate) fn search_candidates(
             }
         }
 
-        let entry_dir = entry_directory_path(&entry, root_path);
-        include_path_with_ancestors(&mut filter.expanded_paths, &entry_dir, root_path);
+        let entry_dir = entry_directory_path(&entry, root_path, provided_paths);
+        include_path_with_ancestors(
+            &mut filter.expanded_paths,
+            &entry_dir,
+            root_path,
+            provided_paths,
+        );
         if filter.primary_match_directory.is_none() {
             filter.primary_match_directory = Some(entry_dir);
         }
@@ -186,15 +206,26 @@ fn collect_entries(
     entries
 }
 
-fn entry_directory_path(entry: &ExplorerCandidate, root_path: &Arc<str>) -> Arc<str> {
+fn entry_directory_path(
+    entry: &ExplorerCandidate,
+    root_path: &Arc<str>,
+    provided_paths: bool,
+) -> Arc<str> {
     if entry.is_dir {
         return entry.path.clone();
     }
 
-    Path::new(entry.path.as_ref())
-        .parent()
-        .map(|parent| Arc::<str>::from(parent.to_string_lossy().as_ref()))
-        .unwrap_or_else(|| root_path.clone())
+    if provided_paths {
+        ProvidedPath::from_path(entry.path.as_ref())
+            .parent()
+            .map(|parent| Arc::<str>::from(parent.as_str()))
+            .unwrap_or_else(|| root_path.clone())
+    } else {
+        Path::new(entry.path.as_ref())
+            .parent()
+            .map(|parent| Arc::<str>::from(parent.to_string_lossy().as_ref()))
+            .unwrap_or_else(|| root_path.clone())
+    }
 }
 
 fn is_under_capped_directory(path: &Path, capped_dirs: &HashSet<PathBuf>, root: &Path) -> bool {
@@ -218,7 +249,13 @@ fn include_path_with_ancestors(
     visible: &mut HashSet<Arc<str>>,
     path: &Arc<str>,
     root_path: &Arc<str>,
+    provided_paths: bool,
 ) {
+    if provided_paths {
+        include_provided_path_with_ancestors(visible, path, root_path);
+        return;
+    }
+
     let mut current = PathBuf::from(path.as_ref());
     loop {
         visible.insert(Arc::from(current.to_string_lossy().as_ref()));
@@ -229,6 +266,27 @@ fn include_path_with_ancestors(
             break;
         }
     }
+}
+
+fn include_provided_path_with_ancestors(
+    visible: &mut HashSet<Arc<str>>,
+    path: &Arc<str>,
+    root_path: &Arc<str>,
+) {
+    let root = ProvidedPath::from_path(root_path.as_ref());
+    let Some(current) = ProvidedPath::from_path(path.as_ref()).strip_prefix(&root) else {
+        return;
+    };
+    let mut full_path = root.clone();
+    let components: Vec<_> = current.components().collect();
+    for component in components {
+        if !component.is_normal() {
+            continue;
+        }
+        full_path = full_path.join_name(component.as_normal_str().unwrap_or_default());
+        visible.insert(Arc::from(full_path.as_str()));
+    }
+    visible.insert(Arc::from(root.as_str()));
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -385,6 +443,30 @@ mod tests {
         assert!(!filter.visible_paths.contains(omitted_path.as_ref()));
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn provided_candidate_search_uses_windows_parents_on_a_posix_host() {
+        let root: Arc<str> = Arc::from(r"C:\remote\repo");
+        let candidate = ExplorerCandidate {
+            path: Arc::from(r"C:\remote\repo\src\target.rs"),
+            label: Arc::from("target.rs"),
+            is_dir: false,
+        };
+
+        let filter = search_candidates_with_path_flavor(&root, [candidate], "target", true);
+
+        assert!(filter.visible_paths.contains(r"C:\remote\repo"));
+        assert!(filter.visible_paths.contains(r"C:\remote\repo\src"));
+        assert!(
+            filter
+                .visible_paths
+                .contains(r"C:\remote\repo\src\target.rs")
+        );
+        assert_eq!(
+            filter.primary_match_directory.as_deref(),
+            Some(r"C:\remote\repo\src")
+        );
     }
 
     fn unique_test_dir(name: &str) -> PathBuf {

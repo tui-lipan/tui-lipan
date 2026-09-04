@@ -6,6 +6,7 @@ mod explorer;
 mod fs;
 mod git;
 mod mod_private;
+mod provided_path;
 
 pub use crate::style::FileIconPalette;
 pub use events::{
@@ -1622,6 +1623,21 @@ mod tests {
         let snapshot = git::provided_change_snapshot("/repo", &changes);
 
         assert_eq!(snapshot.changed_paths, vec![Arc::from("/repo/src/main.rs")]);
+    }
+
+    #[test]
+    fn provided_snapshot_preserves_windows_paths_on_a_posix_host() {
+        let changes = [FileTreeChange::new(
+            r"src\main.rs",
+            FileTreeChangeStatus::Modified,
+        )];
+
+        let snapshot = git::provided_change_snapshot(r"C:\repo", &changes);
+
+        assert_eq!(
+            snapshot.changed_paths,
+            vec![Arc::from(r"C:\repo\src\main.rs")]
+        );
     }
 
     #[test]

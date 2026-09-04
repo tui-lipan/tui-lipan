@@ -1151,6 +1151,10 @@ shows after a link's name, since the widget cannot follow a link that lives on a
 Successful listing entries are retained as a shared `Arc<[FileTreeEntry]>`, so cloning widget props
 does not clone every child entry.
 
+Provided listing, change, reveal, selection, expansion, and style paths use the root's path flavor,
+so POSIX roots remain POSIX on Windows clients and Windows roots remain Windows on POSIX clients.
+Relative roots continue to resolve against the local current directory.
+
 ### `FileTreeChangeSource`
 
 | Variant | Description |

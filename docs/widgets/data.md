@@ -508,6 +508,9 @@ Plus all `Tree` styling/scrolling props, including `indent_style` and `scrollbar
   `loading_label`, emits one `FileTreeEntryRequest` for the expanded path, and waits for the app to
   rebuild it with a matching `FileTreeDirectoryListing`. The callback must enqueue remote or other
   blocking work through a `Command`; it must not perform that work on the UI thread.
+- Provided paths use the flavor of the root (`/home/...` stays POSIX and `C:\...` stays Windows),
+  regardless of the client's operating system. Relative roots still resolve against the local
+  current directory.
 - Keep completed listings in app state and batch responses received together into one state update.
   The widget incrementally applies changed directory results, while one batched prop update avoids
   repeated comparison and status-projection work across a large listing set.

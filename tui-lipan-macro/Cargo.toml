@@ -1,6 +1,6 @@
 [package]
 name = "tui-lipan-macro"
-version = "0.7.2"
+version = "0.7.3"
 edition = "2024"
 rust-version = "1.88"
 license = "MPL-2.0"

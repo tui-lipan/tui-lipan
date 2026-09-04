@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use super::fs::FileKind;
 use super::mod_private::FileTreeProps;
+use super::provided_path::ProvidedPath;
 use super::{FileTreeChange, FileTreeChangeStatus};
 use crate::style::Style;
 
@@ -362,8 +363,7 @@ pub(crate) fn provided_change_snapshot(
     root: &str,
     changes: &[FileTreeChange],
 ) -> GitStatusSnapshot {
-    let root_path_buf = provided_root_path(root);
-    let root_path = root_path_buf.as_path();
+    let root_path = ProvidedPath::root(root);
     let mut snapshot = GitStatusSnapshot {
         entries: HashMap::new(),
         changed_paths: Vec::new(),
@@ -372,10 +372,10 @@ pub(crate) fn provided_change_snapshot(
     };
 
     for change in changes {
-        let Some(full_path) = lexical_change_path(root_path, change.path.as_ref()) else {
+        let Some(full_path) = root_path.resolve(change.path.as_ref()) else {
             continue;
         };
-        let path = Arc::<str>::from(full_path.to_string_lossy().as_ref());
+        let path = Arc::<str>::from(full_path.as_str());
         snapshot.changed_paths.push(path.clone());
         if let Some(kind) = change.kind {
             snapshot.kinds.insert(path.clone(), kind);
@@ -386,7 +386,7 @@ pub(crate) fn provided_change_snapshot(
             &mut snapshot.entries,
             &full_path,
             GitFileDecorations::from_status(status, true),
-            root_path,
+            &root_path,
         );
 
         if change.additions > 0 || change.deletions > 0 {
@@ -397,7 +397,7 @@ pub(crate) fn provided_change_snapshot(
                     GitDiffStat::new(change.additions, change.deletions),
                     true,
                 ),
-                root_path,
+                &root_path,
             );
         }
     }
@@ -414,53 +414,6 @@ fn provided_status(status: FileTreeChangeStatus, staged: bool) -> GitFileStatus 
     } else {
         GitFileStatus::new(None, state)
     }
-}
-
-pub(crate) fn provided_root_path(root: &str) -> PathBuf {
-    let root = Path::new(root);
-    if let Ok(canonical) = super::fs::canonicalize_plain(root) {
-        return canonical;
-    }
-
-    let absolute = if root.is_absolute() {
-        root.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(root)
-    };
-    lexical_normalize_path(&absolute)
-}
-
-fn lexical_change_path(root: &Path, path: &str) -> Option<PathBuf> {
-    let input = Path::new(path);
-    let output = if input.is_absolute() {
-        lexical_normalize_path(input)
-    } else {
-        lexical_normalize_path(&root.join(input))
-    };
-
-    if output.starts_with(root) {
-        Some(output)
-    } else {
-        None
-    }
-}
-
-fn lexical_normalize_path(path: &Path) -> PathBuf {
-    let mut output = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::Prefix(prefix) => output.push(prefix.as_os_str()),
-            std::path::Component::RootDir => output.push(component.as_os_str()),
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                output.pop();
-            }
-            std::path::Component::Normal(part) => output.push(part),
-        }
-    }
-    output
 }
 
 pub(crate) fn discover_git_root(path: &Path) -> Option<PathBuf> {
@@ -675,31 +628,30 @@ fn insert_decoration_path_and_parents(
 
 pub(crate) fn insert_provided_decoration_path_and_parents(
     entries: &mut HashMap<Arc<str>, GitFileDecorations>,
-    full_path: &Path,
+    full_path: &ProvidedPath,
     decoration: GitFileDecorations,
-    repo_root: &Path,
+    repo_root: &ProvidedPath,
 ) {
-    insert_decoration(entries, lossy_path_arc(full_path), decoration);
+    insert_decoration(entries, Arc::from(full_path.as_str()), decoration);
 
     let mut current = full_path.parent();
     while let Some(parent) = current {
+        if !parent.starts_with(repo_root) {
+            break;
+        }
         insert_decoration(
             entries,
-            lossy_path_arc(parent),
+            Arc::from(parent.as_str()),
             GitFileDecorations {
                 direct: false,
                 ..decoration
             },
         );
-        if parent == repo_root {
+        if parent == *repo_root {
             break;
         }
         current = parent.parent();
     }
-}
-
-fn lossy_path_arc(path: &Path) -> Arc<str> {
-    Arc::<str>::from(path.to_string_lossy().as_ref())
 }
 
 #[cfg(test)]
