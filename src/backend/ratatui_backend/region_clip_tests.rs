@@ -10,8 +10,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::capture_render::{
-    CaptureInteraction, render_regions_to_buffer_with_interaction,
-    render_to_buffer_with_interaction,
+    CaptureInteraction, render_regions_over_seeded_buffer,
+    render_regions_to_buffer_with_interaction, render_to_buffer_with_interaction,
 };
 use crate::core::component::{Component, Context, Update};
 use crate::style::Rect;
@@ -142,4 +142,73 @@ fn a_one_row_clip_reproduces_that_row_of_a_full_render() {
             .filter(|other| *other != row && !untouched.contains(other))
             .collect::<Vec<_>>()
     );
+}
+
+/// The production fast path's exact mechanism: borrow a full-size buffer as scratch, seed only the
+/// damaged row from the retained frame, clip the render to that row.
+///
+/// Every other row is poisoned first. A render that reproduces the damaged row while leaving the
+/// poison untouched proves the incremental path needs no full-buffer clone and no full-buffer
+/// diff - only the damaged row is read, written, or compared.
+#[test]
+fn seeding_only_the_damaged_row_reproduces_a_full_render() {
+    let (mut backend, screen) = pane_backend();
+    let before = full_render(&backend);
+
+    screen.borrow_mut().process_bytes(b"\rX");
+    backend.core.tree.refresh_live_terminals();
+
+    let expected = full_render(&backend);
+    let row = (0..ROWS)
+        .find(|&row| (0..COLS).any(|col| before[(col, row)] != expected[(col, row)]))
+        .expect("the rewrite moved a row");
+
+    let mut poison = ratatui::buffer::Cell::default();
+    poison.set_symbol("\u{2593}");
+    let seed_row = before.clone();
+    let seed = |buf: &mut ratatui::buffer::Buffer| {
+        for y in 0..ROWS {
+            for x in 0..COLS {
+                if y == row {
+                    // What the retained frame holds for this row, which is what the fast path
+                    // copies in before painting over it.
+                    buf[(x, y)] = seed_row[(x, y)].clone();
+                } else {
+                    buf[(x, y)] = poison.clone();
+                }
+            }
+        }
+    };
+
+    let region = Rect {
+        x: 0,
+        y: row as i16,
+        w: COLS,
+        h: 1,
+    };
+    let patched = render_regions_over_seeded_buffer(
+        &backend.core.tree,
+        viewport(),
+        interaction(),
+        &[region],
+        &seed,
+    )
+    .buffer;
+
+    for col in 0..COLS {
+        assert_eq!(
+            patched[(col, row)],
+            expected[(col, row)],
+            "seeded row {row} column {col} differs from a full render"
+        );
+    }
+    for y in (0..ROWS).filter(|&y| y != row) {
+        for x in 0..COLS {
+            assert_eq!(
+                patched[(x, y)],
+                poison,
+                "row {y} column {x} was touched outside the damaged region"
+            );
+        }
+    }
 }

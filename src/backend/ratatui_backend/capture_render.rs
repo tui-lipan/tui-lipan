@@ -60,6 +60,7 @@ pub(crate) fn render_to_buffer_with_interaction(
         effect_phase,
         screen_background,
         None,
+        None,
     )
 }
 
@@ -70,6 +71,9 @@ fn render_headless(
     effect_phase: u64,
     screen_background: Option<ratatui::style::Style>,
     regions: Option<&[Rect]>,
+    // Prepares the destination before rendering, for a caller reproducing the incremental path's
+    // scratch-buffer seeding. `None` everywhere but its tests.
+    seed: Option<&dyn Fn(&mut ratatui::buffer::Buffer)>,
 ) -> RenderedBuffer {
     let CaptureInteraction {
         focused,
@@ -121,9 +125,14 @@ fn render_headless(
         crate::backend::ratatui_backend::common::push_render_screen_background(screen_background);
 
     terminal
-        .draw(|frame| match regions {
-            Some(regions) => super::render::render_regions(frame, &ctx, regions),
-            None => render(frame, &ctx),
+        .draw(|frame| {
+            if let Some(seed) = seed {
+                seed(frame.buffer_mut());
+            }
+            match regions {
+                Some(regions) => super::render::render_regions(frame, &ctx, regions),
+                None => render(frame, &ctx),
+            }
         })
         .expect("capture render should succeed");
 
@@ -154,6 +163,32 @@ pub(crate) fn render_regions_to_buffer_with_interaction(
         effect_phase,
         screen_background,
         Some(regions),
+        None,
+    )
+}
+
+/// As [`render_regions_to_buffer_with_interaction`], but `seed` prepares the destination buffer
+/// first.
+///
+/// This is the production fast path's shape: the incremental repaint borrows ratatui's current
+/// buffer as scratch, having copied the retained frame's row into it, and relies on the region
+/// clip to leave everything else alone.
+#[cfg(test)]
+pub(crate) fn render_regions_over_seeded_buffer(
+    tree: &NodeTree,
+    viewport: Rect,
+    interaction: CaptureInteraction,
+    regions: &[Rect],
+    seed: &dyn Fn(&mut ratatui::buffer::Buffer),
+) -> RenderedBuffer {
+    render_headless(
+        tree,
+        viewport,
+        interaction,
+        0,
+        None,
+        Some(regions),
+        Some(seed),
     )
 }
 
