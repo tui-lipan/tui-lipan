@@ -1255,6 +1255,58 @@ impl ComponentRegistry {
         out
     }
 
+    /// Expand exactly one child, without the `Vec` round trip a sibling list needs.
+    ///
+    /// Wrapper kinds - `Frame`, `MouseRegion`, `Animated`, `Center`, `Portal` and the rest - hold
+    /// a single child, and routing it through [`Self::expand_children`] cost one `Vec` to pass it
+    /// in and another to carry the result back, per wrapper per frame, for a list that can never
+    /// hold more than one element. A `Component` child still takes the general path: its reuse
+    /// plan and slot bookkeeping are defined over a sibling list.
+    ///
+    /// The caller has already pushed this wrapper's `PathSegment`, exactly as it would before
+    /// calling `expand_children`.
+    fn expand_single(
+        &mut self,
+        host: &mut HostState,
+        parent: Option<ComponentId>,
+        path: &mut ContainerPath,
+        child: Element,
+        epoch: u32,
+        viewport: Rect,
+    ) -> Element {
+        if matches!(child.kind, ElementKind::Component(_)) {
+            return self
+                .expand_children(host, parent, path, vec![child], epoch, viewport)
+                .pop()
+                .expect("expanding one child yields one element");
+        }
+
+        let Element {
+            key,
+            pointer_focus,
+            kind,
+            layout,
+            ..
+        } = child;
+        // A non-component child claims no slot, so this container's slot list is empty - the same
+        // thing `expand_children` records when its `specs` come out empty.
+        host.set_next_ids(path, Vec::new());
+        self.expand_element(
+            host,
+            path,
+            ExpandElementParams {
+                parent,
+                key,
+                pointer_focus,
+                layout,
+                kind,
+                index_in_parent: 0,
+                epoch,
+                viewport,
+            },
+        )
+    }
+
     fn expand_element(
         &mut self,
         host: &mut HostState,
@@ -1539,9 +1591,8 @@ impl ComponentRegistry {
                 path.push(seg);
                 let child = center.child.take().map(|c| *c);
                 if let Some(child) = child {
-                    let mut children =
-                        self.expand_children(host, parent, path, vec![child], epoch, viewport);
-                    center.child = children.pop().map(Box::new);
+                    let expanded = self.expand_single(host, parent, path, child, epoch, viewport);
+                    center.child = Some(Box::new(expanded));
                 }
                 path.pop();
                 Element {
@@ -1618,10 +1669,10 @@ impl ComponentRegistry {
                             tag: ContainerTag::StatusBarLayoutSlot,
                             id: SegmentId::Index(slot_idx),
                         });
-                        let mut children =
-                            self.expand_children(host, parent, path, vec![*boxed], epoch, viewport);
+                        let expanded =
+                            self.expand_single(host, parent, path, *boxed, epoch, viewport);
                         path.pop();
-                        Box::new(children.pop().unwrap())
+                        Box::new(expanded)
                     })
                     .collect::<Vec<_>>()
                     .into_iter();
@@ -1682,13 +1733,8 @@ impl ComponentRegistry {
                 };
                 path.push(seg);
                 let child = *portal.content;
-                let mut children =
-                    self.expand_children(host, parent, path, vec![child], epoch, viewport);
-                portal.content = Box::new(
-                    children
-                        .pop()
-                        .unwrap_or_else(|| crate::widgets::Text::new("").into()),
-                );
+                portal.content =
+                    Box::new(self.expand_single(host, parent, path, child, epoch, viewport));
                 path.pop();
                 Element {
                     key,
@@ -1708,13 +1754,8 @@ impl ComponentRegistry {
                 path.push(seg);
 
                 let child = *group.child;
-                let mut children =
-                    self.expand_children(host, parent, path, vec![child], epoch, viewport);
-                group.child = Box::new(
-                    children
-                        .pop()
-                        .unwrap_or_else(|| crate::widgets::Text::new("").into()),
-                );
+                group.child =
+                    Box::new(self.expand_single(host, parent, path, child, epoch, viewport));
 
                 path.pop();
                 Element {
@@ -1735,13 +1776,9 @@ impl ComponentRegistry {
                 };
                 path.push(seg);
                 self.theme_stack.push(tp.theme.clone());
-                let mut expanded =
-                    self.expand_children(host, parent, path, vec![tp.child], epoch, viewport);
+                let mut child = self.expand_single(host, parent, path, tp.child, epoch, viewport);
                 self.theme_stack.pop();
                 path.pop();
-                let mut child = expanded
-                    .pop()
-                    .unwrap_or_else(|| crate::widgets::Text::new("").into());
                 child.pointer_focus &= pointer_focus;
                 #[cfg(feature = "profiling-tracing")]
                 let theme_start = web_time::Instant::now();
@@ -1801,14 +1838,10 @@ impl ComponentRegistry {
                 );
 
                 self.context_stack.push(provider.clone());
-                let mut expanded =
-                    self.expand_children(host, parent, path, vec![provider.child], epoch, viewport);
+                let mut child =
+                    self.expand_single(host, parent, path, provider.child, epoch, viewport);
                 self.context_stack.pop();
                 path.pop();
-
-                let mut child = expanded
-                    .pop()
-                    .unwrap_or_else(|| crate::widgets::Text::new("").into());
                 child.pointer_focus &= pointer_focus;
                 child
             }
@@ -1888,20 +1921,12 @@ impl ComponentRegistry {
                     #[cfg(feature = "devtools")]
                     record_memo_miss(MemoMissReason::ViewMemoDepsChanged);
                     let rebuilt = (memo.builder)();
-                    let mut expanded =
-                        self.expand_children(host, parent, path, vec![rebuilt], epoch, viewport);
-                    expanded
-                        .pop()
-                        .unwrap_or_else(|| crate::widgets::Text::new("").into())
+                    self.expand_single(host, parent, path, rebuilt, epoch, viewport)
                 } else {
                     #[cfg(feature = "devtools")]
                     record_memo_miss(MemoMissReason::ViewMemoNoCache);
                     let rebuilt = (memo.builder)();
-                    let mut expanded =
-                        self.expand_children(host, parent, path, vec![rebuilt], epoch, viewport);
-                    expanded
-                        .pop()
-                        .unwrap_or_else(|| crate::widgets::Text::new("").into())
+                    self.expand_single(host, parent, path, rebuilt, epoch, viewport)
                 };
 
                 let descendant_ids = collect_component_ids_in_element(&child, &self.scope_to_id);
@@ -1925,9 +1950,8 @@ impl ComponentRegistry {
                 };
                 path.push(seg);
                 if let Some(child) = scope.child.take() {
-                    let mut expanded =
-                        self.expand_children(host, parent, path, vec![*child], epoch, viewport);
-                    scope.child = expanded.pop().map(Box::new);
+                    let expanded = self.expand_single(host, parent, path, *child, epoch, viewport);
+                    scope.child = Some(Box::new(expanded));
                 }
                 path.pop();
                 Element {
@@ -1947,9 +1971,8 @@ impl ComponentRegistry {
                 };
                 path.push(seg);
                 if let Some(child) = region.child.take() {
-                    let mut expanded =
-                        self.expand_children(host, parent, path, vec![*child], epoch, viewport);
-                    region.child = expanded.pop().map(Box::new);
+                    let expanded = self.expand_single(host, parent, path, *child, epoch, viewport);
+                    region.child = Some(Box::new(expanded));
                 }
                 path.pop();
                 Element {
@@ -1969,9 +1992,8 @@ impl ComponentRegistry {
                 };
                 path.push(seg);
                 if let Some(child) = source.child.take() {
-                    let mut expanded =
-                        self.expand_children(host, parent, path, vec![*child], epoch, viewport);
-                    source.child = expanded.pop().map(Box::new);
+                    let expanded = self.expand_single(host, parent, path, *child, epoch, viewport);
+                    source.child = Some(Box::new(expanded));
                 }
                 path.pop();
                 Element {
@@ -1991,9 +2013,8 @@ impl ComponentRegistry {
                 };
                 path.push(seg);
                 if let Some(child) = target.child.take() {
-                    let mut expanded =
-                        self.expand_children(host, parent, path, vec![*child], epoch, viewport);
-                    target.child = expanded.pop().map(Box::new);
+                    let expanded = self.expand_single(host, parent, path, *child, epoch, viewport);
+                    target.child = Some(Box::new(expanded));
                 }
                 path.pop();
                 Element {
@@ -2013,13 +2034,8 @@ impl ComponentRegistry {
                 };
                 path.push(seg);
                 let child = *animated.child;
-                let mut expanded =
-                    self.expand_children(host, parent, path, vec![child], epoch, viewport);
-                animated.child = Box::new(
-                    expanded
-                        .pop()
-                        .unwrap_or_else(|| crate::widgets::Text::new("").into()),
-                );
+                animated.child =
+                    Box::new(self.expand_single(host, parent, path, child, epoch, viewport));
                 path.pop();
                 Element {
                     key,
