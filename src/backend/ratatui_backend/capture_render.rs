@@ -53,6 +53,24 @@ pub(crate) fn render_to_buffer_with_interaction(
     effect_phase: u64,
     screen_background: Option<ratatui::style::Style>,
 ) -> RenderedBuffer {
+    render_headless(
+        tree,
+        viewport,
+        interaction,
+        effect_phase,
+        screen_background,
+        None,
+    )
+}
+
+fn render_headless(
+    tree: &NodeTree,
+    viewport: Rect,
+    interaction: CaptureInteraction,
+    effect_phase: u64,
+    screen_background: Option<ratatui::style::Style>,
+    regions: Option<&[Rect]>,
+) -> RenderedBuffer {
     let CaptureInteraction {
         focused,
         hovered,
@@ -103,13 +121,40 @@ pub(crate) fn render_to_buffer_with_interaction(
         crate::backend::ratatui_backend::common::push_render_screen_background(screen_background);
 
     terminal
-        .draw(|frame| render(frame, &ctx))
+        .draw(|frame| match regions {
+            Some(regions) => super::render::render_regions(frame, &ctx, regions),
+            None => render(frame, &ctx),
+        })
         .expect("capture render should succeed");
 
     RenderedBuffer {
         buffer: terminal.backend().buffer().clone(),
         cursor: cursor_position.get(),
     }
+}
+
+/// As [`render_to_buffer_with_interaction`], but painting only `regions`.
+///
+/// Exists to answer one question: does clipping a terminal to a single physical row make the
+/// terminal renderer paint one row, or does it still walk the whole visible grid? The destination
+/// is a full-size buffer either way, so the comparison isolates clipping from any patch mechanics.
+#[cfg(test)]
+pub(crate) fn render_regions_to_buffer_with_interaction(
+    tree: &NodeTree,
+    viewport: Rect,
+    interaction: CaptureInteraction,
+    effect_phase: u64,
+    screen_background: Option<ratatui::style::Style>,
+    regions: &[Rect],
+) -> RenderedBuffer {
+    render_headless(
+        tree,
+        viewport,
+        interaction,
+        effect_phase,
+        screen_background,
+        Some(regions),
+    )
 }
 
 pub(crate) fn render_to_captured_frame_with_interaction(
