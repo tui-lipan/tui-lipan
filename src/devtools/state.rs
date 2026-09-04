@@ -150,6 +150,8 @@ fn dirty_level_sort_rank(level: DirtyLevel) -> u8 {
         DirtyLevel::Full => 3,
         DirtyLevel::LayoutOnly => 2,
         DirtyLevel::PaintOnly => 1,
+        #[cfg(feature = "terminal")]
+        DirtyLevel::TerminalPaintOnly => 1,
         DirtyLevel::None => 0,
     }
 }

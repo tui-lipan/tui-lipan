@@ -223,6 +223,8 @@ fn apply_dirty_level(dirty: &mut DirtyTracker, level: DirtyLevel) {
     match level {
         DirtyLevel::None => {}
         DirtyLevel::PaintOnly => dirty.mark_paint(),
+        #[cfg(feature = "terminal")]
+        DirtyLevel::TerminalPaintOnly => dirty.mark_terminal_paint(),
         DirtyLevel::LayoutOnly => dirty.mark_layout(),
         DirtyLevel::Full => dirty.mark_full(),
     }
@@ -2573,6 +2575,13 @@ impl<C: Component> AppRunner<C> {
                     }
                     DirtyLevel::LayoutOnly => self.render_layout_only(&mut terminal)?,
                     DirtyLevel::PaintOnly => {
+                        self.render_paint_only(&mut terminal)?;
+                    }
+                    // Renders as an ordinary paint until the incremental terminal path exists;
+                    // the level is carried so the frame can prove eligibility, not so it can
+                    // behave differently yet.
+                    #[cfg(feature = "terminal")]
+                    DirtyLevel::TerminalPaintOnly => {
                         self.render_paint_only(&mut terminal)?;
                     }
                     DirtyLevel::None => {}

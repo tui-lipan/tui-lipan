@@ -654,6 +654,8 @@ impl<C: Component> AppRunner<C> {
                         self.dirty_scope_set.clear();
                     }
                     DirtyLevel::PaintOnly | DirtyLevel::None => return Ok(false),
+                    #[cfg(feature = "terminal")]
+                    DirtyLevel::TerminalPaintOnly => return Ok(false),
                 }
 
                 if pass + 1 == RENDER_STABILITY_MAX_PASSES {

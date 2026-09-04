@@ -28,6 +28,11 @@ pub(crate) enum DirtyLevel {
     /// Nothing to re-render.
     #[default]
     None,
+    /// Draw-only update whose sole change is live terminal content, so terminal damage may be
+    /// used to repaint just the rows that moved. Any other source in the same frame promotes this
+    /// to [`PaintOnly`](Self::PaintOnly).
+    #[cfg(feature = "terminal")]
+    TerminalPaintOnly,
     /// Draw-only update (cursor blink, spinner frame, image frame).
     PaintOnly,
     /// Reconcile/layout update without broader side effects.
@@ -47,7 +52,29 @@ impl DirtyLevel {
             (_, DirtyLevel::LayoutOnly) => *self = DirtyLevel::LayoutOnly,
             (DirtyLevel::None, DirtyLevel::PaintOnly) => *self = DirtyLevel::PaintOnly,
             (DirtyLevel::PaintOnly, DirtyLevel::PaintOnly) => {}
+            // A terminal-only frame survives only while every source in it says the same thing.
+            // Mixing in a generic paint widens it, which is what makes eligibility something the
+            // frame proves rather than something inferred from what was not observed.
+            #[cfg(feature = "terminal")]
+            (DirtyLevel::LayoutOnly, DirtyLevel::TerminalPaintOnly) => {}
+            #[cfg(feature = "terminal")]
+            (DirtyLevel::PaintOnly, DirtyLevel::TerminalPaintOnly) => {}
+            #[cfg(feature = "terminal")]
+            (DirtyLevel::TerminalPaintOnly, DirtyLevel::PaintOnly) => *self = DirtyLevel::PaintOnly,
+            #[cfg(feature = "terminal")]
+            (DirtyLevel::TerminalPaintOnly, DirtyLevel::TerminalPaintOnly) => {}
+            #[cfg(feature = "terminal")]
+            (DirtyLevel::None, DirtyLevel::TerminalPaintOnly) => {
+                *self = DirtyLevel::TerminalPaintOnly
+            }
         }
+    }
+
+    /// Mark a frame whose only change is live terminal content.
+    #[cfg(feature = "terminal")]
+    #[inline]
+    pub fn set_terminal_paint(&mut self) {
+        self.merge(DirtyLevel::TerminalPaintOnly);
     }
 
     #[inline]
@@ -90,6 +117,13 @@ impl DirtyTracker {
     #[inline]
     pub fn mark_paint(&mut self) {
         self.level.set_paint();
+    }
+
+    /// See [`DirtyLevel::set_terminal_paint`].
+    #[cfg(feature = "terminal")]
+    #[inline]
+    pub fn mark_terminal_paint(&mut self) {
+        self.level.set_terminal_paint();
     }
 
     #[inline]
@@ -448,8 +482,18 @@ pub(crate) struct ViewportMetrics {
 mod tests {
     use super::*;
 
+    #[cfg(not(feature = "terminal"))]
     const ALL_LEVELS: [DirtyLevel; 4] = [
         DirtyLevel::None,
+        DirtyLevel::PaintOnly,
+        DirtyLevel::LayoutOnly,
+        DirtyLevel::Full,
+    ];
+
+    #[cfg(feature = "terminal")]
+    const ALL_LEVELS: [DirtyLevel; 5] = [
+        DirtyLevel::None,
+        DirtyLevel::TerminalPaintOnly,
         DirtyLevel::PaintOnly,
         DirtyLevel::LayoutOnly,
         DirtyLevel::Full,
@@ -488,9 +532,13 @@ mod tests {
         fn rank(l: DirtyLevel) -> u8 {
             match l {
                 DirtyLevel::None => 0,
-                DirtyLevel::PaintOnly => 1,
-                DirtyLevel::LayoutOnly => 2,
-                DirtyLevel::Full => 3,
+                // Strictly narrower than a generic paint: it promises more, so it must lose to
+                // one whichever order they merge in.
+                #[cfg(feature = "terminal")]
+                DirtyLevel::TerminalPaintOnly => 1,
+                DirtyLevel::PaintOnly => 2,
+                DirtyLevel::LayoutOnly => 3,
+                DirtyLevel::Full => 4,
             }
         }
 
@@ -597,5 +645,65 @@ mod tests {
         assert!(!state.autoscroll_layout_dirty);
         assert!(state.last_pointer_pos.is_none());
         assert!(state.last_autoscroll_tick.is_none());
+    }
+}
+
+#[cfg(all(test, feature = "terminal"))]
+mod terminal_paint_tests {
+    use super::{DirtyLevel, DirtyTracker};
+
+    /// A frame stays terminal-only while every source agrees it is.
+    #[test]
+    fn terminal_paints_compose_with_each_other() {
+        let mut dirty = DirtyTracker::default();
+        dirty.mark_terminal_paint();
+        dirty.mark_terminal_paint();
+        assert_eq!(dirty.level(), DirtyLevel::TerminalPaintOnly);
+    }
+
+    /// The point of the level: anything that promises nothing widens the frame, whichever order
+    /// the two arrive in. Eligibility has to be proven by the whole frame, not by one message.
+    #[test]
+    fn a_generic_paint_in_the_same_frame_widens_it() {
+        let mut terminal_first = DirtyTracker::default();
+        terminal_first.mark_terminal_paint();
+        terminal_first.mark_paint();
+        assert_eq!(terminal_first.level(), DirtyLevel::PaintOnly);
+
+        let mut paint_first = DirtyTracker::default();
+        paint_first.mark_paint();
+        paint_first.mark_terminal_paint();
+        assert_eq!(paint_first.level(), DirtyLevel::PaintOnly);
+    }
+
+    /// Layout and full are broader still, and swallow it from either direction.
+    #[test]
+    fn broader_levels_swallow_a_terminal_paint() {
+        for (label, mut dirty) in [
+            ("layout after", {
+                let mut dirty = DirtyTracker::default();
+                dirty.mark_terminal_paint();
+                dirty.mark_layout();
+                dirty
+            }),
+            ("layout before", {
+                let mut dirty = DirtyTracker::default();
+                dirty.mark_layout();
+                dirty.mark_terminal_paint();
+                dirty
+            }),
+        ] {
+            assert_eq!(dirty.level(), DirtyLevel::LayoutOnly, "{label}");
+            dirty.mark_full();
+            assert_eq!(dirty.level(), DirtyLevel::Full, "{label}");
+        }
+    }
+
+    /// It is dirty, so a frame actually happens.
+    #[test]
+    fn a_terminal_paint_is_dirty() {
+        let mut dirty = DirtyTracker::default();
+        dirty.mark_terminal_paint();
+        assert!(dirty.is_dirty());
     }
 }
