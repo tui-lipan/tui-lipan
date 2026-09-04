@@ -11,6 +11,16 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- The bookkeeping that follows a terminal-damage repaint walked off with the caret. A repaint
+  writes rows straight to the host, so the next ordinary draw re-sends them to bring Ratatui's own
+  previous buffer back into agreement - and it does that *after* that draw has placed the caret,
+  leaving it one column past the last cell it re-sent. It showed up while anything animated a
+  style over a pane whose terminal was also producing output, such as the border transition on a
+  focus change: for as long as the animation ran, the caret sat at the end of its row instead of
+  where the focused program wanted it. The resync now restores the caret it disturbs.
+
 ## [0.7.1] - 2026-09-04
 
 ### Fixed

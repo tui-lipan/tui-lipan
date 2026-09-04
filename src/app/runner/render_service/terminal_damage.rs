@@ -379,14 +379,22 @@ fn write_row(target: &mut Buffer, row: &Buffer) {
 
 /// Put Ratatui's previous buffer back in agreement with the host over rows a patch wrote directly.
 ///
-/// Called once, on the next ordinary draw, with the rows as the host holds them and the frame that
-/// draw just produced. Every cell that differs is sent again; cells Ratatui's own diff already
-/// sent are simply re-sent, which is cheaper than tracking which ones those were.
+/// Called once, on the next ordinary draw, with the rows as the host holds them, the frame that
+/// draw just produced, and the caret that draw placed. Every cell that differs is sent again;
+/// cells Ratatui's own diff already sent are simply re-sent, which is cheaper than tracking which
+/// ones those were.
+///
+/// The caret is a parameter because this runs *after* the draw placed it, and sending cells moves
+/// it: a backend prints each cell where it sits and ends one column past the last symbol. Anything
+/// re-sent here would therefore leave the caret at the end of the last row this touched. Restoring
+/// it belongs to the function that disturbs it, not to the caller that has already finished.
 pub(super) fn resync_host_patched_rows<B: Backend>(
     terminal: &mut ratatui::Terminal<B>,
     host_rows: &[Buffer],
     frame: &Buffer,
+    caret: Option<Position>,
 ) -> std::result::Result<(), B::Error> {
+    let mut sent = false;
     for previous in host_rows {
         if !frame.area.contains(ratatui::layout::Position::new(
             previous.area.x,
@@ -399,7 +407,11 @@ pub(super) fn resync_host_patched_rows<B: Backend>(
         let updates = previous.diff(&next);
         if !updates.is_empty() {
             terminal.backend_mut().draw(updates.into_iter())?;
+            sent = true;
         }
+    }
+    if sent {
+        place_caret(terminal, caret)?;
     }
     Ok(())
 }

@@ -44,6 +44,110 @@ use crate::widgets::{
 const COLS: u16 = 40;
 const ROWS: u16 = 12;
 
+/// A `TestBackend` that also moves its cursor the way a real one does.
+///
+/// `TestBackend::draw` writes cells and leaves the cursor alone. No terminal behaves that way:
+/// crossterm prints each cell where it sits, so a draw ends with the cursor one column past the
+/// last symbol it sent. Every caret bug this file exists to catch is a caret some draw walked off
+/// with, so a backend that does not model that cannot see any of them.
+struct HostBackend {
+    inner: TestBackend,
+}
+
+impl HostBackend {
+    fn new(width: u16, height: u16) -> Self {
+        Self {
+            inner: TestBackend::new(width, height),
+        }
+    }
+
+    fn buffer(&self) -> &Buffer {
+        self.inner.buffer()
+    }
+}
+
+impl Backend for HostBackend {
+    type Error = <TestBackend as Backend>::Error;
+
+    fn draw<'a, I>(&mut self, content: I) -> std::result::Result<(), Self::Error>
+    where
+        I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    {
+        let cells: Vec<(u16, u16, &ratatui::buffer::Cell)> = content.collect();
+        let landed = cells.last().map(|(x, y, cell)| {
+            let width = unicode_width::UnicodeWidthStr::width(cell.symbol()).max(1) as u16;
+            Position::new(x.saturating_add(width), *y)
+        });
+        self.inner.draw(cells.into_iter())?;
+        if let Some(position) = landed {
+            self.inner.set_cursor_position(position)?;
+        }
+        Ok(())
+    }
+
+    fn hide_cursor(&mut self) -> std::result::Result<(), Self::Error> {
+        self.inner.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> std::result::Result<(), Self::Error> {
+        self.inner.show_cursor()
+    }
+
+    fn get_cursor_position(&mut self) -> std::result::Result<Position, Self::Error> {
+        self.inner.get_cursor_position()
+    }
+
+    fn set_cursor_position<P: Into<Position>>(
+        &mut self,
+        position: P,
+    ) -> std::result::Result<(), Self::Error> {
+        self.inner.set_cursor_position(position)
+    }
+
+    fn clear(&mut self) -> std::result::Result<(), Self::Error> {
+        self.inner.clear()
+    }
+
+    fn clear_region(
+        &mut self,
+        clear_type: ratatui::backend::ClearType,
+    ) -> std::result::Result<(), Self::Error> {
+        self.inner.clear_region(clear_type)
+    }
+
+    fn append_lines(&mut self, count: u16) -> std::result::Result<(), Self::Error> {
+        self.inner.append_lines(count)
+    }
+
+    fn size(&self) -> std::result::Result<ratatui::layout::Size, Self::Error> {
+        self.inner.size()
+    }
+
+    fn window_size(&mut self) -> std::result::Result<ratatui::backend::WindowSize, Self::Error> {
+        self.inner.window_size()
+    }
+
+    fn flush(&mut self) -> std::result::Result<(), Self::Error> {
+        self.inner.flush()
+    }
+
+    fn scroll_region_up(
+        &mut self,
+        region: std::ops::Range<u16>,
+        count: u16,
+    ) -> std::result::Result<(), Self::Error> {
+        self.inner.scroll_region_up(region, count)
+    }
+
+    fn scroll_region_down(
+        &mut self,
+        region: std::ops::Range<u16>,
+        count: u16,
+    ) -> std::result::Result<(), Self::Error> {
+        self.inner.scroll_region_down(region, count)
+    }
+}
+
 /// What the pane under test looks like. Each flag exists because it changes the cells the terminal
 /// renderer produces, so a patch that ignored it would differ from a full paint.
 #[derive(Clone, Copy, Default)]
@@ -164,7 +268,7 @@ fn terminal_ids(tree: &NodeTree) -> Vec<NodeId> {
 /// A runner with a laid-out tree, a live terminal, and a retained frame from a full paint.
 struct Harness {
     runner: AppRunner<Pane>,
-    term: Terminal<TestBackend>,
+    term: Terminal<HostBackend>,
     screen: Rc<RefCell<TerminalScreen>>,
     second: Option<Rc<RefCell<TerminalScreen>>>,
     retained: Buffer,
@@ -241,7 +345,7 @@ fn build(cfg: PaneCfg, setup: &[u8]) -> Harness {
     }
 
     let mut term =
-        Terminal::new(TestBackend::new(COLS, ROWS)).expect("test terminal should initialize");
+        Terminal::new(HostBackend::new(COLS, ROWS)).expect("test terminal should initialize");
     let (retained, _) = full_paint(&runner, &mut term);
     runner.last_frame_snapshot = Some(retained.clone());
 
@@ -259,7 +363,7 @@ fn build(cfg: PaneCfg, setup: &[u8]) -> Harness {
 /// Returns the caret it placed as well as the cells, because a partial repaint owes the host both.
 fn full_paint(
     runner: &AppRunner<Pane>,
-    term: &mut Terminal<TestBackend>,
+    term: &mut Terminal<HostBackend>,
 ) -> (Buffer, Option<Position>) {
     let cursor_position = StdCell::new(None);
     let buffer = runner.with_render_context(&cursor_position, |ctx| {
@@ -330,7 +434,7 @@ fn assert_patch_matches_full_paint(cfg: PaneCfg, setup: &[u8], mutation: &[u8]) 
         place_caret(term, cursor_position.get()).expect("placing the caret");
     });
 
-    let mut oracle = Terminal::new(TestBackend::new(COLS, ROWS)).expect("oracle terminal");
+    let mut oracle = Terminal::new(HostBackend::new(COLS, ROWS)).expect("oracle terminal");
     let (expected, expected_caret) = full_paint(runner, &mut oracle);
 
     // Damage has to be complete, not merely correct where it was reported. A row that moved and
@@ -730,12 +834,98 @@ fn a_patched_row_survives_the_next_ordinary_draw() {
                 .buffer
                 .clone()
         });
-        super::terminal_damage::resync_host_patched_rows(term, &host_rows, &drawn)
-            .expect("resync should succeed");
+        super::terminal_damage::resync_host_patched_rows(
+            term,
+            &host_rows,
+            &drawn,
+            cursor_position.get(),
+        )
+        .expect("resync should succeed");
         drawn
     };
 
     assert_host_matches(harness.term.backend().buffer(), &expected, "host");
+}
+
+#[test]
+fn the_resync_puts_the_caret_back_after_re_sending_a_row() {
+    // The draw places the caret and the resync runs after it, so the cells it re-sends walk the
+    // caret to the end of the last row it touched. In a real session that is what a pane's border
+    // transition looks like: every cell in a patched row differs, the whole row is re-sent, and
+    // the caret sits at the right edge until the animation stops producing ordinary draws.
+    let cfg = PaneCfg {
+        focused: true,
+        ..PaneCfg::new()
+    };
+    let mut harness = build(cfg, SETUP);
+
+    harness.screen.borrow_mut().process_bytes(b"\rXXXXX");
+    let plan = plan_for(&mut harness).expect("eligible");
+    let mut patched = harness.retained.clone();
+    {
+        let cursor_position = StdCell::new(None);
+        let runner = &harness.runner;
+        let term = &mut harness.term;
+        runner.with_render_context(&cursor_position, |ctx| {
+            for &row in &plan.rows {
+                patch_row(term, ctx, &mut patched, frame_area(), row).expect("patching a row");
+            }
+            place_caret(term, cursor_position.get()).expect("placing the caret");
+        });
+    }
+    let host_rows: Vec<Buffer> = plan
+        .rows
+        .iter()
+        .map(|&row| {
+            let mut buffer = Buffer::empty(RatatuiRect::new(0, row, COLS, 1));
+            for x in 0..COLS {
+                buffer[(x, row)] = patched[(x, row)].clone();
+            }
+            buffer
+        })
+        .collect();
+    harness.retained = patched;
+
+    // Rewrite the row long, then send the cursor home. The resync now has cells to re-send well to
+    // the right of where the caret belongs, which is the arrangement that tells the two apart: a
+    // re-sent run that happens to end on the caret proves nothing.
+    harness
+        .screen
+        .borrow_mut()
+        .process_bytes(b"\r\x1b[KZZZZZZZZZZZZZZZZZZZZ\x1b[1;1H");
+    harness.runner.core.tree.refresh_live_terminals();
+
+    let caret = {
+        let runner = &harness.runner;
+        let term = &mut harness.term;
+        let cursor_position = StdCell::new(None);
+        let drawn = runner.with_render_context(&cursor_position, |ctx| {
+            term.draw(|f| render(f, ctx))
+                .expect("full paint")
+                .buffer
+                .clone()
+        });
+        super::terminal_damage::resync_host_patched_rows(
+            term,
+            &host_rows,
+            &drawn,
+            cursor_position.get(),
+        )
+        .expect("resync should succeed");
+        cursor_position
+            .get()
+            .expect("the focused terminal wants a caret")
+    };
+
+    assert_eq!(
+        harness
+            .term
+            .backend_mut()
+            .get_cursor_position()
+            .expect("host caret"),
+        caret,
+        "the resync left the caret where its last re-sent cell ended"
+    );
 }
 
 #[test]
