@@ -872,10 +872,11 @@ impl<C: Component> AppRunner<C> {
         }
 
         let refresh = self.core.tree.refresh_live_terminals_detailed();
+        let frame_area = terminal.get_frame().area();
         // The plan is computed but not yet drawn from: this frame still takes the ordinary paint.
         // Logging it is what makes the eligibility rules observable while the patch renderer that
         // will consume them is being built.
-        if let Some(plan) = self.prepare_terminal_damage_plan(&refresh) {
+        if let Some(plan) = self.prepare_terminal_damage_plan(&refresh, frame_area) {
             crate::debug::internal_log!(
                 "[tui-lipan] terminal damage eligible: node {:?}, {} row(s)",
                 plan.node,

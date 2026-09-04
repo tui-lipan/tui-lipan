@@ -54,6 +54,7 @@ where
     pub(crate) fn plan_terminal_damage(
         &self,
         refresh: &LiveTerminalRefresh,
+        frame_area: ratatui::layout::Rect,
     ) -> Result<TerminalDamagePlan, DamageRejection> {
         if self.surface.is_inline() || !self.core.tree.overlay_roots().is_empty() {
             return Err(DamageRejection::CompositeSurface);
@@ -100,8 +101,11 @@ where
         if node_rect.w == 0 || node_rect.h == 0 {
             return Err(DamageRejection::NoMatchingRetainedFrame);
         }
-        let area = snapshot.area();
-        if u32::from(area.width) * u32::from(area.height) == 0 {
+        // The retained frame is what the patch is applied to and diffed against, so it has to
+        // describe the same screen. Deciding this here rather than in the draw is what makes a
+        // `TerminalDamagePlan` mean "executable" instead of "promising": the draw should never
+        // discover that its plan was invalid.
+        if *snapshot.area() != frame_area || frame_area.width == 0 || frame_area.height == 0 {
             return Err(DamageRejection::NoMatchingRetainedFrame);
         }
 
@@ -115,8 +119,9 @@ where
     pub(crate) fn prepare_terminal_damage_plan(
         &self,
         refresh: &LiveTerminalRefresh,
+        frame_area: ratatui::layout::Rect,
     ) -> Option<TerminalDamagePlan> {
-        match self.plan_terminal_damage(refresh) {
+        match self.plan_terminal_damage(refresh, frame_area) {
             Ok(plan) => Some(plan),
             Err(reason) => {
                 crate::debug::internal_log!("[tui-lipan] terminal damage fallback: {reason:?}");
