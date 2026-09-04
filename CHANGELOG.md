@@ -11,6 +11,8 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-09-04
+
 ### Fixed
 
 - The bookkeeping that follows a terminal-damage repaint walked off with the caret. A repaint
@@ -1926,7 +1928,8 @@ Highlights of what ships in 0.1.0:
 See the [README](README.md) for the full feature set and
 [docs.tui-lipan.dev](https://docs.tui-lipan.dev) for documentation.
 
-[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/tui-lipan/tui-lipan/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/tui-lipan/tui-lipan/compare/v0.6.0...v0.6.1
