@@ -451,6 +451,14 @@ pub struct AppRunner<C: Component> {
     pub(crate) last_frame_snapshot: Option<ratatui::buffer::Buffer>,
     /// Scratch buffer used to build the pre-scroll diff baseline.
     pub(crate) scroll_diff_snapshot: Option<ratatui::buffer::Buffer>,
+    /// Physical rows a terminal-damage repaint wrote straight to the host.
+    ///
+    /// Those writes bypass Ratatui's own previous buffer, which then claims the host still shows
+    /// what the last full draw put there. The next ordinary draw diffs against that stale record
+    /// and would skip a cell whose new content happens to match it, leaving the patch on screen.
+    /// The rows are replayed against the retained frame once, on that draw, and forgotten.
+    #[cfg(feature = "terminal")]
+    pub(crate) host_patched_rows: Vec<u16>,
     /// Reusable scratch terminal for inline transcript element commits.
     pub(crate) inline_commit_scratch:
         Option<ratatui::Terminal<ratatui::backend::CrosstermBackend<Vec<u8>>>>,
@@ -724,6 +732,8 @@ impl<C: Component> AppRunner<C> {
             dnd_snapshot_cells: std::cell::RefCell::new(None),
             last_frame_snapshot: None,
             scroll_diff_snapshot: None,
+            #[cfg(feature = "terminal")]
+            host_patched_rows: Vec::new(),
             inline_commit_scratch: None,
             last_scroll_frames: Vec::new(),
             last_post_reconcile_epoch: 0,

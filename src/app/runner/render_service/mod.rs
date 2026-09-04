@@ -36,6 +36,8 @@ use super::{
 
 #[cfg(feature = "terminal")]
 mod terminal_damage;
+#[cfg(all(test, feature = "terminal"))]
+mod terminal_damage_tests;
 
 #[cfg(feature = "devtools")]
 mod devtools;
@@ -873,15 +875,16 @@ impl<C: Component> AppRunner<C> {
 
         let refresh = self.core.tree.refresh_live_terminals_detailed();
         let frame_area = terminal.get_frame().area();
-        // The plan is computed but not yet drawn from: this frame still takes the ordinary paint.
-        // Logging it is what makes the eligibility rules observable while the patch renderer that
-        // will consume them is being built.
         if let Some(plan) = self.prepare_terminal_damage_plan(&refresh, frame_area) {
-            crate::debug::internal_log!(
-                "[tui-lipan] terminal damage eligible: node {:?}, {} row(s)",
-                plan.node,
-                plan.rows.len()
+            self.draw_terminal_damage(terminal, &plan)?;
+            #[cfg(feature = "devtools")]
+            self.record_devtools_frame_metrics(
+                DrawMode::PaintOnly,
+                total_start.elapsed(),
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
             );
+            return Ok(());
         }
 
         let draw_duration =
@@ -1045,6 +1048,13 @@ impl<C: Component> AppRunner<C> {
         // local rather than a second borrow of the runner.
         let mut last_snapshot = self.last_frame_snapshot.take();
         let mut diff_snapshot = self.scroll_diff_snapshot.take();
+        // Rows a terminal-damage repaint wrote straight to the host, as the host holds them. The
+        // ordinary draw below diffs against Ratatui's previous buffer, which never saw them.
+        #[cfg(feature = "terminal")]
+        let host_patched_rows = terminal_damage::take_host_patched_rows(
+            &mut self.host_patched_rows,
+            last_snapshot.as_ref(),
+        );
         let draw_result = self.with_render_context(&cursor_position, |ctx| {
             if let Some(plan) = scroll_plan.as_ref() {
                 let previous_snapshot = last_snapshot.as_ref().expect("snapshot exists");
@@ -1065,10 +1075,16 @@ impl<C: Component> AppRunner<C> {
                     cursor_requested,
                 )
             } else {
-                let completed = terminal.draw(|f| {
-                    render(f, ctx);
-                })?;
-                replace_buffer_snapshot(&mut last_snapshot, completed.buffer);
+                {
+                    let completed = terminal.draw(|f| {
+                        render(f, ctx);
+                    })?;
+                    replace_buffer_snapshot(&mut last_snapshot, completed.buffer);
+                }
+                #[cfg(feature = "terminal")]
+                if let Some(frame) = last_snapshot.as_ref() {
+                    terminal_damage::resync_host_patched_rows(terminal, &host_patched_rows, frame)?;
+                }
                 Ok(())
             }
         });
