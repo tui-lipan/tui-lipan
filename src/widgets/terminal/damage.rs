@@ -147,3 +147,28 @@ mod tests {
         assert!(matches!(screen.take_damage(), super::TerminalDamage::None));
     }
 }
+
+#[cfg(test)]
+mod cursor_damage_tests {
+    use crate::widgets::TerminalScreen;
+
+    /// A cursor move with no text change must still report damage.
+    ///
+    /// The caret occupies cells, so moving it changes what the screen looks like even though no
+    /// character did. If the emulator reported nothing here, a frame carrying only a cursor move
+    /// would be rejected as `NothingMoved` and the caret would go stale.
+    #[test]
+    fn moving_the_cursor_alone_reports_damage() {
+        let mut screen = TerminalScreen::new(24, 80, 1000);
+        screen.process_bytes(b"hello world");
+        let _ = screen.take_damage();
+
+        // Cursor to row 5, column 10. No cell contents change.
+        screen.process_bytes(b"\x1b[5;10H");
+        let damage = screen.take_damage();
+        assert!(
+            !matches!(damage, super::TerminalDamage::None),
+            "a cursor move reported no damage: {damage:?}"
+        );
+    }
+}
