@@ -274,7 +274,7 @@ struct TerminalRowPaint<'a> {
 /// still be painted blank rather than left showing whatever was underneath - while a partial
 /// repaint wants exactly the rows it names and nothing else.
 fn paint_terminal_rows(
-    f: &mut ratatui::Frame<'_>,
+    buf: &mut ratatui::buffer::Buffer,
     paint: &TerminalRowPaint<'_>,
     rows: std::ops::Range<usize>,
     area: ratatui::layout::Rect,
@@ -339,7 +339,10 @@ fn paint_terminal_rows(
             Line::from(clip_spans_no_ellipsis(spans, content_w))
         })
         .collect();
-    f.render_widget(Paragraph::new(lines).scroll((0, dx)), area);
+    // `Buffer` rather than `Frame`: this is what `Widget::render` takes anyway, and a partial
+    // repaint wants to paint a row into a buffer of its own rather than into the frame the
+    // terminal is about to flush.
+    ratatui::widgets::Widget::render(Paragraph::new(lines).scroll((0, dx)), area, buf);
 }
 
 pub(crate) fn render_terminal(
@@ -479,7 +482,7 @@ pub(crate) fn render_terminal(
         // still covers the whole clipped region, so rows past the end of the content stay blank.
         let first_row = dy as usize;
         let last_row = (first_row + effective.height as usize).min(content_rect.h as usize);
-        paint_terminal_rows(f, &paint, first_row..last_row, effective, dx);
+        paint_terminal_rows(f.buffer_mut(), &paint, first_row..last_row, effective, dx);
         rendered_content = true;
 
         #[cfg(feature = "terminal-images")]
