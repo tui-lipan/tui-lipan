@@ -11,6 +11,8 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-09-06
+
 ### Added
 
 - `TerminalScreen::write_replay_bytes()` writes the same replay stream as
@@ -1942,7 +1944,8 @@ Highlights of what ships in 0.1.0:
 See the [README](README.md) for the full feature set and
 [docs.tui-lipan.dev](https://docs.tui-lipan.dev) for documentation.
 
-[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.4...HEAD
+[0.7.4]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.0...v0.7.1
