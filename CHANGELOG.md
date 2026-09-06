@@ -11,6 +11,12 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- `TerminalScreen::write_replay_bytes()` writes the same replay stream as
+  `export_replay_bytes()` through a `std::io::Write` sink, so a terminal host can frame, compress,
+  or persist a large screen snapshot without first allocating one complete replay `Vec`.
+
 ## [0.7.3] - 2026-09-04
 
 ### Fixed

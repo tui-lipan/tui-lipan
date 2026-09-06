@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 use std::hash::{Hash, Hasher};
+use std::io::{self, Write};
 use std::ops::ControlFlow;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -1623,6 +1624,23 @@ impl TerminalScreen {
     /// keyboard stack depth (the effective flags are preserved), and the current
     /// display offset. The receiver lands on the live view.
     pub fn export_replay_bytes(&mut self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let result = self.write_replay_bytes(&mut bytes);
+        debug_assert!(
+            result.is_ok(),
+            "writing replay bytes into a Vec cannot fail"
+        );
+        bytes
+    }
+
+    /// Write the current terminal state as replayable bytes without first collecting the complete
+    /// stream in memory.
+    ///
+    /// This has the same contents and source-state guarantees as [`Self::export_replay_bytes`].
+    /// The writer may buffer, frame, hash, compress, or persist the stream as it is produced.
+    /// Returning an I/O error stops the export; any temporary alternate-screen mutation is still
+    /// repaired before the error is returned.
+    pub fn write_replay_bytes<W: Write>(&mut self, writer: &mut W) -> io::Result<()> {
         let dirty = self.dirty;
         let cache = self.cache.clone();
         let sequence = self.sequence;
@@ -1631,12 +1649,13 @@ impl TerminalScreen {
         let responses = self.drain_responses();
 
         let was_alt = self.term.mode().contains(TermMode::ALT_SCREEN);
-        let bytes = if was_alt {
+        let result = if was_alt {
+            let saved_selection = self.term.selection.clone();
             let saved_alt_cursor = self.term.grid().cursor.clone();
             let saved_alt_saved_cursor = self.term.grid().saved_cursor.clone();
             let alt_repaint = self.export_active_grid_repaint(false);
             self.term.swap_alt();
-            let mut bytes = self.export_primary_replay();
+            let result = self.write_primary_replay(writer);
 
             // Switching primary -> alt clears the alt grid, so immediately
             // replay the synthesized alt repaint to restore the source screen.
@@ -1645,14 +1664,19 @@ impl TerminalScreen {
             repair_processor.advance(&mut self.term, &alt_repaint);
             self.term.grid_mut().cursor = saved_alt_cursor;
             self.term.grid_mut().saved_cursor = saved_alt_saved_cursor;
-
-            bytes.extend_from_slice(b"\x1b[?1049h");
-            bytes.extend_from_slice(&alt_repaint);
-            self.push_cursor_position(&mut bytes);
-            self.push_modes(&mut bytes);
-            bytes
+            self.term.selection = saved_selection;
+            // Both swaps and the repair repaint mark emulator damage even though export leaves the
+            // source grid unchanged. Real PTY damage was already folded into `self.damage` by the
+            // processing path that produced it.
+            self.term.reset_damage();
+            result.and_then(|()| {
+                writer.write_all(b"\x1b[?1049h")?;
+                writer.write_all(&alt_repaint)?;
+                self.write_cursor_position(writer)?;
+                self.write_modes(writer)
+            })
         } else {
-            self.export_primary_replay()
+            self.write_primary_replay(writer)
         };
 
         *self.listener.responses.borrow_mut() = responses;
@@ -1661,7 +1685,7 @@ impl TerminalScreen {
         self.sequence = sequence;
         self.scrollback_offset = scrollback_offset;
         self.mouse_mode = mouse_mode;
-        bytes
+        result
     }
 
     /// Resize screen dimensions.
@@ -2162,17 +2186,29 @@ impl TerminalScreen {
         self.listener.title.borrow().clone()
     }
 
-    fn export_primary_replay(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"\x1bc");
-        bytes.extend_from_slice(&self.export_active_grid_repaint(true));
-        self.push_cursor_position(&mut bytes);
-        self.push_title(&mut bytes);
-        self.push_modes(&mut bytes);
-        bytes
+    fn write_primary_replay<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        writer.write_all(b"\x1bc")?;
+        self.write_active_grid_repaint(writer, true)?;
+        self.write_cursor_position(writer)?;
+        self.write_title(writer)?;
+        self.write_modes(writer)
     }
 
     fn export_active_grid_repaint(&self, include_scrollback: bool) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let result = self.write_active_grid_repaint(&mut bytes, include_scrollback);
+        debug_assert!(
+            result.is_ok(),
+            "writing replay bytes into a Vec cannot fail"
+        );
+        bytes
+    }
+
+    fn write_active_grid_repaint<W: Write>(
+        &self,
+        writer: &mut W,
+        include_scrollback: bool,
+    ) -> io::Result<()> {
         let grid = self.term.grid();
         let top = if include_scrollback {
             grid.topmost_line()
@@ -2180,11 +2216,10 @@ impl TerminalScreen {
             Line(0)
         };
         let bottom = grid.bottommost_line();
-        let mut bytes = Vec::new();
         // No ED 2 here: on alacritty's primary screen it scrolls the cleared
         // viewport into history, adding a phantom scrollback row. The preceding
         // RIS (primary) or DECSET 1049 (alt) already blanks the target grid.
-        bytes.extend_from_slice(b"\x1b[0m\x1b[H");
+        writer.write_all(b"\x1b[0m\x1b[H")?;
         let mut style = ReplayStyle::default();
         let mut hyperlink = None;
 
@@ -2213,74 +2248,74 @@ impl TerminalScreen {
                 }
                 let next_hyperlink = cell.hyperlink();
                 if next_hyperlink != hyperlink {
-                    push_replay_hyperlink(&mut bytes, next_hyperlink.as_ref());
+                    write_replay_hyperlink(writer, next_hyperlink.as_ref())?;
                     hyperlink = next_hyperlink;
                 }
                 let next_style = ReplayStyle::from(cell);
                 if next_style != style {
-                    next_style.push_sgr(&mut bytes);
+                    next_style.write_sgr(writer)?;
                     style = next_style;
                 }
-                push_cell_text(&mut bytes, cell);
+                write_cell_text(writer, cell)?;
             }
             if line != bottom && !wrapline {
                 if style != ReplayStyle::default() {
-                    ReplayStyle::default().push_sgr(&mut bytes);
+                    ReplayStyle::default().write_sgr(writer)?;
                     style = ReplayStyle::default();
                 }
-                bytes.extend_from_slice(b"\r\n");
+                writer.write_all(b"\r\n")?;
             }
         }
         if hyperlink.is_some() {
-            push_replay_hyperlink(&mut bytes, None);
+            write_replay_hyperlink(writer, None)?;
         }
-        bytes.extend_from_slice(b"\x1b[0m");
-        bytes
+        writer.write_all(b"\x1b[0m")
     }
 
-    fn push_cursor_position(&self, bytes: &mut Vec<u8>) {
+    fn write_cursor_position<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         let cursor = &self.term.grid().cursor;
         let row = (cursor.point.line.0.max(0) as usize + 1).min(self.rows as usize);
         let col = (cursor.point.column.0 + 1).min(self.cols as usize);
-        bytes.extend_from_slice(format!("\x1b[{row};{col}H").as_bytes());
-        ReplayStyle::from(&cursor.template).push_sgr(bytes);
-        push_replay_hyperlink(bytes, cursor.template.hyperlink().as_ref());
+        write!(writer, "\x1b[{row};{col}H")?;
+        ReplayStyle::from(&cursor.template).write_sgr(writer)?;
+        write_replay_hyperlink(writer, cursor.template.hyperlink().as_ref())
     }
 
-    fn push_title(&self, bytes: &mut Vec<u8>) {
+    fn write_title<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         if let Some(title) = self.title().filter(|title| !title.is_empty()) {
-            bytes.extend_from_slice(b"\x1b]2;");
-            bytes.extend_from_slice(title.as_bytes());
-            bytes.extend_from_slice(b"\x1b\\");
+            writer.write_all(b"\x1b]2;")?;
+            writer.write_all(title.as_bytes())?;
+            writer.write_all(b"\x1b\\")?;
         }
+        Ok(())
     }
 
-    fn push_modes(&self, bytes: &mut Vec<u8>) {
+    fn write_modes<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         let mode = *self.term.mode();
-        push_dec_mode(bytes, 1, mode.contains(TermMode::APP_CURSOR));
-        push_dec_mode(bytes, 7, mode.contains(TermMode::LINE_WRAP));
-        push_dec_mode(bytes, 25, mode.contains(TermMode::SHOW_CURSOR));
-        push_dec_mode(bytes, 1000, mode.contains(TermMode::MOUSE_REPORT_CLICK));
-        push_dec_mode(bytes, 1002, mode.contains(TermMode::MOUSE_DRAG));
-        push_dec_mode(bytes, 1003, mode.contains(TermMode::MOUSE_MOTION));
-        push_dec_mode(bytes, 1004, mode.contains(TermMode::FOCUS_IN_OUT));
-        push_dec_mode(bytes, 1005, mode.contains(TermMode::UTF8_MOUSE));
-        push_dec_mode(bytes, 1006, mode.contains(TermMode::SGR_MOUSE));
-        push_dec_mode(bytes, SGR_PIXELS_MOUSE, self.pixel_mouse);
-        push_dec_mode(bytes, 2004, mode.contains(TermMode::BRACKETED_PASTE));
+        write_dec_mode(writer, 1, mode.contains(TermMode::APP_CURSOR))?;
+        write_dec_mode(writer, 7, mode.contains(TermMode::LINE_WRAP))?;
+        write_dec_mode(writer, 25, mode.contains(TermMode::SHOW_CURSOR))?;
+        write_dec_mode(writer, 1000, mode.contains(TermMode::MOUSE_REPORT_CLICK))?;
+        write_dec_mode(writer, 1002, mode.contains(TermMode::MOUSE_DRAG))?;
+        write_dec_mode(writer, 1003, mode.contains(TermMode::MOUSE_MOTION))?;
+        write_dec_mode(writer, 1004, mode.contains(TermMode::FOCUS_IN_OUT))?;
+        write_dec_mode(writer, 1005, mode.contains(TermMode::UTF8_MOUSE))?;
+        write_dec_mode(writer, 1006, mode.contains(TermMode::SGR_MOUSE))?;
+        write_dec_mode(writer, SGR_PIXELS_MOUSE, self.pixel_mouse)?;
+        write_dec_mode(writer, 2004, mode.contains(TermMode::BRACKETED_PASTE))?;
         let kitty_flags = u8::from(mode.contains(TermMode::DISAMBIGUATE_ESC_CODES))
             | (u8::from(mode.contains(TermMode::REPORT_EVENT_TYPES)) << 1)
             | (u8::from(mode.contains(TermMode::REPORT_ALTERNATE_KEYS)) << 2)
             | (u8::from(mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC)) << 3)
             | (u8::from(mode.contains(TermMode::REPORT_ASSOCIATED_TEXT)) << 4);
         if kitty_flags != 0 {
-            bytes.extend_from_slice(format!("\x1b[>{kitty_flags}u").as_bytes());
+            write!(writer, "\x1b[>{kitty_flags}u")?;
         }
-        bytes.extend_from_slice(if mode.contains(TermMode::APP_KEYPAD) {
+        writer.write_all(if mode.contains(TermMode::APP_KEYPAD) {
             b"\x1b="
         } else {
             b"\x1b>"
-        });
+        })
     }
 }
 
@@ -2322,7 +2357,7 @@ impl From<&TermCell> for ReplayStyle {
 }
 
 impl ReplayStyle {
-    fn push_sgr(self, bytes: &mut Vec<u8>) {
+    fn write_sgr<W: Write>(self, writer: &mut W) -> io::Result<()> {
         let mut params = vec!["0".to_string()];
         let flags = self.flags;
         if flags.contains(CellFlags::BOLD) {
@@ -2359,31 +2394,35 @@ impl ReplayStyle {
         if let Some(color) = self.underline_color {
             push_underline_color_sgr(&mut params, color);
         }
-        bytes.extend_from_slice(format!("\x1b[{}m", params.join(";")).as_bytes());
+        write!(writer, "\x1b[{}m", params.join(";"))
     }
 }
 
-fn push_dec_mode(bytes: &mut Vec<u8>, mode: u16, enabled: bool) {
+fn write_dec_mode<W: Write>(writer: &mut W, mode: u16, enabled: bool) -> io::Result<()> {
     let suffix = if enabled { 'h' } else { 'l' };
-    bytes.extend_from_slice(format!("\x1b[?{mode}{suffix}").as_bytes());
+    write!(writer, "\x1b[?{mode}{suffix}")
 }
 
-fn push_cell_text(bytes: &mut Vec<u8>, cell: &TermCell) {
+fn write_cell_text<W: Write>(writer: &mut W, cell: &TermCell) -> io::Result<()> {
     let mut buf = [0; 4];
-    bytes.extend_from_slice(cell.c.encode_utf8(&mut buf).as_bytes());
+    writer.write_all(cell.c.encode_utf8(&mut buf).as_bytes())?;
     if let Some(zerowidth) = cell.zerowidth() {
         for ch in zerowidth {
-            bytes.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+            writer.write_all(ch.encode_utf8(&mut buf).as_bytes())?;
         }
     }
+    Ok(())
 }
 
-fn push_replay_hyperlink(bytes: &mut Vec<u8>, hyperlink: Option<&TermHyperlink>) {
-    bytes.extend_from_slice(b"\x1b]8;;");
+fn write_replay_hyperlink<W: Write>(
+    writer: &mut W,
+    hyperlink: Option<&TermHyperlink>,
+) -> io::Result<()> {
+    writer.write_all(b"\x1b]8;;")?;
     if let Some(hyperlink) = hyperlink {
-        bytes.extend_from_slice(hyperlink.uri().as_bytes());
+        writer.write_all(hyperlink.uri().as_bytes())?;
     }
-    bytes.extend_from_slice(b"\x1b\\");
+    writer.write_all(b"\x1b\\")
 }
 
 fn push_color_sgr(params: &mut Vec<String>, color: TermColor, foreground: bool) {
@@ -3721,6 +3760,93 @@ mod tests {
         let second = screen.export_replay_bytes();
 
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn replay_writer_matches_collected_export() {
+        #[derive(Default)]
+        struct OneByteWriter(Vec<u8>);
+
+        impl std::io::Write for OneByteWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                let accepted = bytes.len().min(1);
+                self.0.extend_from_slice(&bytes[..accepted]);
+                Ok(accepted)
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut screen = TerminalScreen::new(3, 12, 10);
+        screen.process_bytes("primary \x1b[31m漢e\u{301}\r\nline".as_bytes());
+        screen.process_bytes(b"\x1b[?1049halt \x1b]8;;https://example.com\x1b\\link");
+
+        let expected = screen.export_replay_bytes();
+        let mut written = OneByteWriter::default();
+        screen.write_replay_bytes(&mut written).unwrap();
+
+        assert_eq!(written.0, expected);
+    }
+
+    #[test]
+    fn replay_writer_error_still_repairs_alt_screen_source() {
+        struct FailAfter {
+            remaining: usize,
+        }
+
+        impl std::io::Write for FailAfter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.remaining == 0 {
+                    return Err(std::io::Error::other("intentional writer failure"));
+                }
+                let accepted = bytes.len().min(self.remaining);
+                self.remaining -= accepted;
+                Ok(accepted)
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut screen = TerminalScreen::new(3, 12, 20);
+        screen.process_bytes(b"primary one\r\nprimary two\r\nprimary three");
+        screen.process_bytes(b"\x1b[?1049halt \x1b[32mscreen\x1b[2;4H");
+        let _ = screen.take_damage();
+        let mut selection = alacritty_terminal::selection::Selection::new(
+            alacritty_terminal::selection::SelectionType::Simple,
+            alacritty_terminal::index::Point::new(Line(0), Column(0)),
+            alacritty_terminal::index::Side::Left,
+        );
+        selection.update(
+            alacritty_terminal::index::Point::new(Line(0), Column(2)),
+            alacritty_terminal::index::Side::Right,
+        );
+        screen.term.selection = Some(selection.clone());
+        let expected = screen.export_replay_bytes();
+        assert_eq!(screen.term.selection, Some(selection.clone()));
+        assert!(matches!(screen.take_damage(), TerminalDamage::None));
+        let before = screen.render_snapshot();
+
+        for remaining in [0, 1, expected.len() / 2, expected.len() - 1] {
+            let error = screen
+                .write_replay_bytes(&mut FailAfter { remaining })
+                .unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::Other);
+
+            let after = screen.render_snapshot();
+            assert_eq!(after.text, before.text);
+            assert_eq!(after.color_lines, before.color_lines);
+            assert_eq!(after.cursor_row, before.cursor_row);
+            assert_eq!(after.cursor_col, before.cursor_col);
+            assert_eq!(screen.term.selection, Some(selection.clone()));
+            assert!(matches!(screen.take_damage(), TerminalDamage::None));
+            assert_eq!(screen.export_replay_bytes(), expected);
+            assert_eq!(screen.term.selection, Some(selection.clone()));
+            assert!(matches!(screen.take_damage(), TerminalDamage::None));
+        }
     }
 
     #[test]

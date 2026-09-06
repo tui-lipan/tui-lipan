@@ -468,6 +468,9 @@ screen.resize(new_rows, new_cols) // Resize the terminal
 
 // Serialize the full state so a fresh same-sized screen can reproduce it
 let replay = screen.export_replay_bytes();
+
+// Or stream it to any std::io::Write sink without retaining the complete replay
+screen.write_replay_bytes(&mut destination)?;
 ```
 
 `TerminalScreen` answers the XTVERSION query (`CSI > 0 q`) through `drain_responses()`. Its default
@@ -647,13 +650,18 @@ became invalid.
 ### Exporting replay bytes
 
 `TerminalScreen::export_replay_bytes()` serializes the current screen state as a VT byte stream.
-Feeding that stream into a fresh, same-sized `TerminalScreen` (via `process_bytes`) reproduces the
-state, because replay goes through the normal VTE parser rather than a parallel snapshot format —
-so future parser fixes apply to exported state automatically.
+`write_replay_bytes()` produces the identical stream through a `std::io::Write` sink without first
+retaining the complete replay in memory. Feeding either stream into a fresh, same-sized
+`TerminalScreen` (via `process_bytes`) reproduces the state, because replay goes through the normal
+VTE parser rather than a parallel snapshot format — so future parser fixes apply to exported state
+automatically.
 
 ```rust
 // On the source (e.g. a server-owned terminal):
 let replay = source.export_replay_bytes();
+
+// For a large screen, stream to a bounded sink instead:
+source.write_replay_bytes(&mut destination)?;
 
 // On a fresh receiver of the same size (`scrollback_lines` is the app's own capacity):
 let mut screen = TerminalScreen::new(source.rows, source.cols, scrollback_lines);
