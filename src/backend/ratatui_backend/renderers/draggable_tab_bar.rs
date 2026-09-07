@@ -477,6 +477,21 @@ pub(crate) fn render_draggable_tab_bar(
             let is_tab_hovered = hovered_tab == Some(vis.index);
             let is_close_hovered = hovered_close_tab == Some(vis.index);
 
+            // The close control keeps its cells in the tab's measured width whether or not the
+            // symbol is drawn, so a hover-only close would otherwise truncate the label for a
+            // control that is not there. Lend those cells (the leading gap plus the symbol) to
+            // the label while the symbol is hidden: the tab's total width never moves, so
+            // neighbours and close hit zones stay put.
+            let has_close = show_close_buttons && tab.closeable && !is_action_tab;
+            let close_symbol_hidden = has_close && close_on_hover_only && !is_tab_hovered;
+            let label_budget = if close_symbol_hidden {
+                vis.metrics
+                    .label_width
+                    .saturating_add(1 + unicode_width::UnicodeWidthStr::width(close_symbol).max(1))
+            } else {
+                vis.metrics.label_width
+            };
+
             let tab_style = resolve_draggable_tab_style(
                 base_raw_style,
                 DraggableTabStyleCtx {
@@ -520,12 +535,11 @@ pub(crate) fn render_draggable_tab_bar(
 
                     let mut label = truncate_end_with_ellipsis(
                         tab.label.as_ref(),
-                        vis.metrics.label_width.min(u16::MAX as usize) as u16,
+                        label_budget.min(u16::MAX as usize) as u16,
                     )
                     .into_owned();
                     let label_width = unicode_width::UnicodeWidthStr::width(label.as_str());
-                    label
-                        .push_str(&" ".repeat(vis.metrics.label_width.saturating_sub(label_width)));
+                    label.push_str(&" ".repeat(label_budget.saturating_sub(label_width)));
                     tab_spans.push(Span::styled(label, to_ratatui_style(tab_style)));
 
                     if let Some(badge) = &tab.right_badge {
@@ -541,8 +555,7 @@ pub(crate) fn render_draggable_tab_bar(
                         ));
                     }
 
-                    if show_close_buttons && tab.closeable && !is_action_tab {
-                        let show_close_symbol = !close_on_hover_only || is_tab_hovered;
+                    if has_close && !close_symbol_hidden {
                         let close = resolve_hover_control_style(
                             tab_style,
                             close_style,
@@ -555,11 +568,7 @@ pub(crate) fn render_draggable_tab_bar(
                             finalize_style(close, style_backdrop(tab_style), contrast_policy);
                         tab_spans.push(Span::styled(" ", to_ratatui_style(tab_style)));
                         tab_spans.push(Span::styled(
-                            if show_close_symbol {
-                                close_symbol.to_string()
-                            } else {
-                                " ".to_string()
-                            },
+                            close_symbol.to_string(),
                             to_ratatui_style(close),
                         ));
                     }
@@ -610,12 +619,11 @@ pub(crate) fn render_draggable_tab_bar(
 
                     let mut label = truncate_end_with_ellipsis(
                         tab.label.as_ref(),
-                        vis.metrics.label_width.min(u16::MAX as usize) as u16,
+                        label_budget.min(u16::MAX as usize) as u16,
                     )
                     .into_owned();
                     let label_width = unicode_width::UnicodeWidthStr::width(label.as_str());
-                    label
-                        .push_str(&" ".repeat(vis.metrics.label_width.saturating_sub(label_width)));
+                    label.push_str(&" ".repeat(label_budget.saturating_sub(label_width)));
                     tab_spans.push(Span::styled(label, to_ratatui_style(tab_style)));
 
                     if let Some(badge) = &tab.right_badge {
@@ -631,8 +639,7 @@ pub(crate) fn render_draggable_tab_bar(
                         ));
                     }
 
-                    if show_close_buttons && tab.closeable && !is_action_tab {
-                        let show_close_symbol = !close_on_hover_only || is_tab_hovered;
+                    if has_close && !close_symbol_hidden {
                         let close = resolve_hover_control_style(
                             tab_style,
                             close_style,
@@ -645,11 +652,7 @@ pub(crate) fn render_draggable_tab_bar(
                             finalize_style(close, style_backdrop(tab_style), contrast_policy);
                         tab_spans.push(Span::styled(" ", to_ratatui_style(tab_style)));
                         tab_spans.push(Span::styled(
-                            if show_close_symbol {
-                                close_symbol.to_string()
-                            } else {
-                                " ".to_string()
-                            },
+                            close_symbol.to_string(),
                             to_ratatui_style(close),
                         ));
                     }

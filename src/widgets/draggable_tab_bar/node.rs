@@ -175,6 +175,12 @@ impl WidgetNode for DraggableTabBarNode {
                 .tab_hover_style
                 .resolves_non_empty(theme, ThemeRole::ItemHover)
             || !self.close_hover_style.is_empty()
+            // A hover-only close paints differently under the cursor - the symbol appears and the
+            // label gives back the cells it was borrowing - so the bar has to be hover-tracked
+            // even when nothing else about it reacts to the pointer.
+            || (self.close_on_hover_only
+                && self.show_close_buttons
+                && self.tabs.iter().any(|tab| tab.closeable))
     }
 }
 

@@ -14,6 +14,8 @@ mod draggable_tab_bar_clipped_render;
 mod draggable_tab_bar_empty_text_render;
 #[path = "suites/widget_behavior/draggable_tab_bar_empty_transfer.rs"]
 mod draggable_tab_bar_empty_transfer;
+#[path = "suites/widget_behavior/draggable_tab_bar_hover_close_width.rs"]
+mod draggable_tab_bar_hover_close_width;
 #[path = "suites/widget_behavior/file_tree_collapsed_projection.rs"]
 mod file_tree_collapsed_projection;
 #[path = "suites/widget_behavior/file_tree_explorer_focus.rs"]
