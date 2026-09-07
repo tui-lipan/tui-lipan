@@ -11,6 +11,15 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- `DraggableTabBar::close_on_hover_only()` no longer truncates tab labels for a close control that
+  is not on screen. The close cells stay part of every closeable tab's measured width, so the label
+  now spends them while the symbol is hidden and gives them back under the cursor: the tab's total
+  width, its neighbours, and its close hit zone never move. A bar that opts into a hover-only close
+  is also hover-tracked on that alone, so the symbol appears even when nothing else about the bar
+  reacts to the pointer.
+
 ## [0.7.4] - 2026-09-06
 
 ### Added

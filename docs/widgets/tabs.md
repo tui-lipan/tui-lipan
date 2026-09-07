@@ -82,6 +82,14 @@ button under the pointer for rapid repeated closing. Natural or shrink-to-fit
 widths are restored as soon as the pointer leaves the tab bar. Action tabs such
 as a trailing `+` never inherit this lock.
 
+`close_on_hover_only(true)` paints the close symbol only under the pointer, and
+the cells it would occupy are not wasted while it is hidden: the label spends
+them, and gives them back when the pointer arrives. The tab's total width is the
+same either way, so neighbouring tabs never shift and the close hit zone stays
+where it is - only the label's last cells change, gaining an ellipsis on hover if
+the title needs one. A bar that sets this is hover-tracked on that alone, so the
+symbol still appears when nothing else about the bar reacts to the pointer.
+
 | Prop | Type | Description |
 |------|------|-------------|
 | `tabs` | `Vec<DraggableTab>` | Tab items |
