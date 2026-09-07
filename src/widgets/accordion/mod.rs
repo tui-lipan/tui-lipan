@@ -277,6 +277,7 @@ impl From<Accordion> for Element {
             .height(accordion.height);
 
         for (i, item) in accordion.items.into_iter().enumerate() {
+            let expanded = item.expanded;
             let icon = if item.expanded {
                 accordion.expanded_icon.clone()
             } else {
@@ -309,7 +310,8 @@ impl From<Accordion> for Element {
                 header = header.on_click(Callback::new(move |_: MouseEvent| cb.emit(i)));
             }
 
-            stack = stack.child(header);
+            let header: Element = header.into();
+            stack = stack.child(header.semantic_expanded(expanded));
 
             if item.expanded {
                 let content = Frame::new()

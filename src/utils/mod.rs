@@ -1,6 +1,7 @@
 //! Utility functions.
 
 pub(crate) mod arena;
+pub(crate) mod atomic_file;
 /// Braille glyph and sub-cell drawing helpers.
 pub mod braille;
 /// Color readability and contrast helpers.

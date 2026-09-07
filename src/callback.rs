@@ -72,8 +72,41 @@ impl Dispatcher {
     }
 }
 
-pub(crate) type CommandTx = mpsc::Sender<(ScopeId, Box<dyn Any + Send>)>;
-pub(crate) type CommandRx = mpsc::Receiver<(ScopeId, Box<dyn Any + Send>)>;
+#[derive(Clone)]
+pub(crate) struct CommandTx {
+    inner: mpsc::Sender<CommandMessage>,
+    wake: mpsc::Sender<()>,
+}
+
+impl CommandTx {
+    pub(crate) fn channel() -> (Self, CommandRx, mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (inner, rx) = mpsc::channel();
+        let (wake, wake_rx) = mpsc::channel();
+        (
+            Self {
+                inner,
+                wake: wake.clone(),
+            },
+            rx,
+            wake_rx,
+            wake,
+        )
+    }
+
+    pub(crate) fn send(
+        &self,
+        message: CommandMessage,
+    ) -> Result<(), mpsc::SendError<CommandMessage>> {
+        let result = self.inner.send(message);
+        if result.is_ok() {
+            let _ = self.wake.send(());
+        }
+        result
+    }
+}
+
+type CommandMessage = (ScopeId, Box<dyn Any + Send>);
+pub(crate) type CommandRx = mpsc::Receiver<CommandMessage>;
 
 /// Cooperative cancellation state for a background command.
 #[derive(Clone, Debug, Default)]
@@ -97,6 +130,9 @@ pub struct CommandLink<Msg: Send + 'static> {
     scope: ScopeId,
     tx: CommandTx,
     cancellation_token: CancellationToken,
+    clock: crate::core::runtime_env::SessionClock,
+    runtime_id: crate::core::component::RuntimeId,
+    activity: Arc<crate::core::runtime_env::RuntimeActivity>,
     _marker: PhantomData<fn(Msg)>,
 }
 
@@ -109,6 +145,9 @@ impl<Msg: Send + 'static> Clone for CommandLink<Msg> {
             scope: self.scope,
             tx: self.tx.clone(),
             cancellation_token: self.cancellation_token.clone(),
+            clock: self.clock.clone(),
+            runtime_id: self.runtime_id,
+            activity: self.activity.clone(),
             _marker: PhantomData,
         }
     }
@@ -119,11 +158,17 @@ impl<Msg: Send + 'static> CommandLink<Msg> {
         scope: ScopeId,
         tx: CommandTx,
         cancellation_token: CancellationToken,
+        clock: crate::core::runtime_env::SessionClock,
+        runtime_id: crate::core::component::RuntimeId,
+        activity: Arc<crate::core::runtime_env::RuntimeActivity>,
     ) -> Self {
         Self {
             scope,
             tx,
             cancellation_token,
+            clock,
+            runtime_id,
+            activity,
             _marker: PhantomData,
         }
     }
@@ -160,9 +205,18 @@ impl<Msg: Send + 'static> CommandLink<Msg> {
     /// The message is dropped if the command is cancelled before the delay elapses.
     pub fn send_after(&self, delay: std::time::Duration, msg: Msg) {
         let link = self.clone();
-        crate::core::component::schedule_after(delay, move || {
-            link.send_if_not_cancelled(msg);
-        });
+        let token = self.cancellation_token();
+        let activity = self.activity.clone();
+        crate::core::component::schedule_after_for_session(
+            delay,
+            self.clock.clone(),
+            self.runtime_id,
+            token,
+            move || {
+                let _guard = activity.track();
+                link.send_if_not_cancelled(msg);
+            },
+        );
     }
 }
 

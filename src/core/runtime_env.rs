@@ -6,6 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 use web_time::Instant;
 
@@ -14,6 +15,7 @@ use smallvec::SmallVec;
 use crate::animation::AnimationRegistry;
 use crate::app::context::SurfaceMode;
 use crate::app::input::command_registry::CommandRegistry;
+use crate::automation::ClockMode;
 use crate::callback::ScopeId;
 use crate::clipboard::{ClipboardConfig, ClipboardService};
 use crate::core::component::{FocusContext, HoverContext, ScrollContext};
@@ -226,6 +228,109 @@ pub(crate) struct ScrollDependency {
     pub(crate) kind: ScrollDependencyKind,
 }
 
+/// Logical clock owned by one mounted runtime.
+#[derive(Clone)]
+pub(crate) struct SessionClock {
+    inner: Arc<SessionClockInner>,
+}
+
+struct SessionClockInner {
+    mode: ClockMode,
+    origin: Instant,
+    controlled_nanos: AtomicU64,
+}
+
+pub(crate) struct RuntimeActivity {
+    tracked_commands: AtomicUsize,
+    wake: Option<std::sync::mpsc::Sender<()>>,
+}
+
+impl RuntimeActivity {
+    pub(crate) fn new(wake: std::sync::mpsc::Sender<()>) -> Self {
+        Self {
+            tracked_commands: AtomicUsize::new(0),
+            wake: Some(wake),
+        }
+    }
+
+    pub(crate) fn track(self: &Arc<Self>) -> RuntimeActivityGuard {
+        self.tracked_commands.fetch_add(1, Ordering::AcqRel);
+        RuntimeActivityGuard {
+            activity: Arc::clone(self),
+        }
+    }
+
+    pub(crate) fn tracked_commands(&self) -> usize {
+        self.tracked_commands.load(Ordering::Acquire)
+    }
+}
+
+pub(crate) struct RuntimeActivityGuard {
+    activity: Arc<RuntimeActivity>,
+}
+
+impl Drop for RuntimeActivityGuard {
+    fn drop(&mut self) {
+        self.activity
+            .tracked_commands
+            .fetch_sub(1, Ordering::AcqRel);
+        if let Some(wake) = &self.activity.wake {
+            let _ = wake.send(());
+        }
+    }
+}
+
+impl Default for RuntimeActivity {
+    fn default() -> Self {
+        Self {
+            tracked_commands: AtomicUsize::new(0),
+            wake: None,
+        }
+    }
+}
+
+impl SessionClock {
+    pub(crate) fn new(mode: ClockMode) -> Self {
+        Self {
+            inner: Arc::new(SessionClockInner {
+                mode,
+                origin: Instant::now(),
+                controlled_nanos: AtomicU64::new(0),
+            }),
+        }
+    }
+
+    pub(crate) fn mode(&self) -> ClockMode {
+        self.inner.mode
+    }
+
+    pub(crate) fn now(&self) -> Instant {
+        self.inner
+            .origin
+            .checked_add(self.elapsed())
+            .unwrap_or(self.inner.origin)
+    }
+
+    pub(crate) fn elapsed(&self) -> Duration {
+        let controlled = Duration::from_nanos(self.inner.controlled_nanos.load(Ordering::Acquire));
+        match self.inner.mode {
+            ClockMode::Realtime => {
+                controlled.max(Instant::now().saturating_duration_since(self.inner.origin))
+            }
+            ClockMode::Controlled => controlled,
+        }
+    }
+
+    pub(crate) fn advance(&self, dt: Duration) {
+        let nanos = u64::try_from(dt.as_nanos()).unwrap_or(u64::MAX);
+        let _ = self.inner.controlled_nanos.fetch_update(
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |current| Some(current.saturating_add(nanos)),
+        );
+    }
+}
+
 /// Bundle of shared runtime handles cloned into every component context.
 ///
 /// All `Rc`-wrapped fields are cheap to clone; `inline_mode` is `Copy`.
@@ -276,9 +381,10 @@ pub(crate) struct RuntimeEnv {
     /// How long a chord must stay pending before [`Context::command_chord_revealed`] reports it.
     /// Zero (the default) reveals immediately.
     pub command_chord_reveal_delay: Rc<std::cell::Cell<Duration>>,
-    /// Offset added to [`Instant::now`] for headless capture and tests, so time-gated UI
-    /// (chord reveal, animations, blink) can be settled without waiting on the wall clock.
-    pub clock_offset: Rc<Cell<Duration>>,
+    /// Session-owned logical clock.
+    pub(crate) clock: SessionClock,
+    /// Background commands submitted by this runtime and not yet completed.
+    pub(crate) activity: Arc<RuntimeActivity>,
     /// Last pointer in terminal content coordinates, shared with the runner's mouse state.
     ///
     /// Updated on motion even when the event is forwarded to a tracking terminal, so an app can
@@ -313,9 +419,7 @@ impl RuntimeEnv {
     /// [`TestBackend::advance`](crate::TestBackend::advance) shift it forward so delays can
     /// elapse without sleeping.
     pub(crate) fn now(&self) -> Instant {
-        Instant::now()
-            .checked_add(self.clock_offset.get())
-            .unwrap_or_else(Instant::now)
+        self.clock.now()
     }
 
     /// Elapsed time since `start`, honouring the virtual-clock offset.
@@ -331,8 +435,7 @@ impl RuntimeEnv {
     /// not settle it itself, and the harness had no wall clock for it to wait on. Deferred tasks run
     /// inline here, so the messages they send are queued before this returns.
     pub(crate) fn advance_clock(&self, dt: Duration) {
-        self.clock_offset
-            .set(self.clock_offset.get().saturating_add(dt));
+        self.clock.advance(dt);
         crate::core::component::advance_deferred_commands(self.now(), self.runtime_id);
     }
 

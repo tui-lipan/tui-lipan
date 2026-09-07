@@ -41,6 +41,7 @@ mod widget_manifest;
 pub mod core;
 
 pub mod animation;
+pub mod automation;
 pub mod capture;
 pub mod debug;
 #[cfg(feature = "devtools")]
@@ -60,6 +61,7 @@ mod layout;
 mod mockup;
 mod overlay;
 mod runtime;
+mod session;
 mod ui;
 
 pub mod style;
@@ -184,6 +186,14 @@ pub use crate::app::{
 pub use crate::mockup::Mockup;
 
 pub use crate::animation::{ExitAnimation, ExitQueue, ExitTransfer};
+pub use crate::automation::{
+    AutomationError, AutomationId, AutomationIdError, AutomationOptions, AutomationScrollDirection,
+    AutomationSession, AutomationSnapshot, AutomationStep, AutomationStepResult, Checkpoint,
+    CheckpointArtifact, CheckpointBaseline, CheckpointFormat, CheckpointSink, ClockMode,
+    FocusDirection as AutomationFocusDirection, IdleReport, Selector, SelectorMatch,
+    SemanticAction, SemanticChecked, SemanticNode, SemanticRole, SemanticTree, SemanticValue,
+    ValueSensitivity, WaitCondition,
+};
 pub use crate::callback::{Callback, CancellationToken, CommandLink, KeyHandler, Link};
 pub use crate::capture::{CapturedCell, CapturedFrame, CastRecording, CellModifiers, CursorState};
 #[cfg(feature = "ui-snapshot-png")]
@@ -234,13 +244,12 @@ pub use crate::test_backend::TestBackend;
 pub use crate::text::edit::{TextEditEvent, TextEditKind};
 pub use crate::text::editor::TextEditor;
 pub use crate::text::line_index::{LineIndex, TextEncoding, TextPosition, TextRange};
-pub use crate::ui_snapshot::{
-    Action, FocusStep, Recording, ScrollDirection, Sketch, Target, UiSnapshot,
-    UiSnapshotFileFormat, UiSnapshotFormatOptions, UiSnapshotOptions, UiSnapshotSlot, UiWidgetDesc,
-    UiWidgetKind,
-};
 #[cfg(feature = "ui-snapshot-png")]
 pub use crate::ui_snapshot::{BaselineComparison, BaselineOutcome, SnapshotBaseline};
+pub use crate::ui_snapshot::{
+    Recording, Sketch, UiSnapshot, UiSnapshotFileFormat, UiSnapshotFormatOptions,
+    UiSnapshotOptions, UiSnapshotSlot, UiWidgetDesc, UiWidgetKind,
+};
 pub use crate::validation::{StringValidator, ValidationError, Validator};
 pub use crate::widgets::{Badge, BadgePosition, CapSides, CapStyle};
 pub use crate::widgets::{
@@ -396,6 +405,13 @@ pub enum Error {
     /// I/O error.
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    /// More than one realized node carries the same app-authored automation identity.
+    #[error("duplicate automation ID `{id}`")]
+    DuplicateAutomationId {
+        /// Repeated identity.
+        id: crate::automation::AutomationId,
+    },
 
     /// Syntax theme loading error.
     #[error("failed to load syntax theme `{name}`: {message}")]

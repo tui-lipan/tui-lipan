@@ -94,7 +94,7 @@ pub(crate) fn plan_exits(
         return None;
     }
 
-    let now = Instant::now();
+    let now = tree.session_now();
     let mut retained: Vec<ExitingChild> = Vec::new();
 
     // Carry forward anything still collapsing. A key the application described again is
@@ -230,7 +230,7 @@ pub(crate) fn plan_positioned_exits(
         return Vec::new();
     }
 
-    let now = Instant::now();
+    let now = tree.session_now();
     let mut retained: Vec<ExitingChild> = Vec::new();
 
     for entry in previously_retained {

@@ -18,8 +18,8 @@ pub(crate) fn click_count_at(
     x: u16,
     y: u16,
     compare_y: bool,
+    now: Instant,
 ) -> u8 {
-    let now = Instant::now();
     let click_count = if let Some(last) = last_click.as_ref() {
         let same_pos = last.x == x && (!compare_y || last.y == y);
         if same_pos && now.duration_since(last.time) < Duration::from_millis(400) {
@@ -89,6 +89,7 @@ pub(crate) fn process_textarea_click(
     x: u16,
     y: u16,
     last_click: &mut Option<ClickState>,
+    now: Instant,
 ) -> (usize, Option<usize>, usize) {
     let inner = change.rect.inner(change.border, change.padding);
 
@@ -108,7 +109,7 @@ pub(crate) fn process_textarea_click(
         change, x, y, inner, true,
     ));
 
-    let click_count = click_count_at(last_click, x, y, true);
+    let click_count = click_count_at(last_click, x, y, true, now);
     let click_count = if change.multi_click_select {
         click_count
     } else {
@@ -260,6 +261,7 @@ pub(crate) fn process_input_click(
     change: &InputChange,
     x: u16,
     last_click: &mut Option<ClickState>,
+    now: Instant,
 ) -> (usize, Option<usize>, usize) {
     let inner = change.rect.inner(change.border, change.padding);
 
@@ -275,7 +277,7 @@ pub(crate) fn process_input_click(
         inner,
     );
 
-    let click_count = click_count_at(last_click, x, 0, false);
+    let click_count = click_count_at(last_click, x, 0, false, now);
 
     let text = change.value.as_ref();
     let line = text.lines().next().unwrap_or("");

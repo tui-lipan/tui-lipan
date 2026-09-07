@@ -28,6 +28,14 @@ pub use crate::app::{
     FocusChanged, FocusEntry, FocusPolicy, InlineHeight, InlineStartupPolicy, ScreenBackground,
     SurfaceMode, TextAreaNewlineBinding,
 };
+pub use crate::automation::{
+    AutomationError, AutomationId, AutomationIdError, AutomationOptions, AutomationScrollDirection,
+    AutomationSession, AutomationSnapshot, AutomationStep, AutomationStepResult, Checkpoint,
+    CheckpointBaseline, CheckpointFormat, CheckpointSink, ClockMode,
+    FocusDirection as AutomationFocusDirection, IdleReport, Selector, SemanticAction,
+    SemanticChecked, SemanticNode, SemanticRole, SemanticTree, SemanticValue, ValueSensitivity,
+    WaitCondition,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::app::AppRunner;

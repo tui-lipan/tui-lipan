@@ -224,11 +224,11 @@ fn compare_outcome(
     }
 
     if !baseline_path.exists() {
-        std::fs::write(baseline_path, current_png)?;
+        crate::utils::atomic_file::write(baseline_path, current_png)?;
         return Ok(BaselineOutcome::Created);
     }
     if update_mode() {
-        std::fs::write(baseline_path, current_png)?;
+        crate::utils::atomic_file::write(baseline_path, current_png)?;
         return Ok(BaselineOutcome::Updated);
     }
 
@@ -261,8 +261,11 @@ fn compare_outcome(
 
     let diff_path = diff_path_for(baseline_path);
     let diff = render_diff(&baseline, &current);
-    diff.save(&diff_path)
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(diff)
+        .write_to(&mut encoded, image::ImageFormat::Png)
         .map_err(|err| std::io::Error::other(err.to_string()))?;
+    crate::utils::atomic_file::write(&diff_path, encoded.get_ref())?;
 
     Ok(BaselineOutcome::Changed {
         ratio,

@@ -3,7 +3,7 @@
 //! Setting `TUI_LIPAN_CONTROL=<path>` makes [`AppRunner::run`](super::AppRunner::run)
 //! listen on a Unix socket. A client sends one command per line and reads a
 //! length-prefixed reply, so an agent can inspect and drive a live TUI the way a
-//! browser tool drives a page: take a snapshot, pick a widget by key, act, look
+//! browser tool drives a page: take a snapshot, pick a widget by automation ID, act, look
 //! again.
 //!
 //! # Threading
@@ -16,35 +16,36 @@
 //!
 //! # Protocol
 //!
-//! Requests are single `\n`-terminated lines:
+//! Requests are bounded, versioned `\n`-terminated frames:
 //!
 //! ```text
-//! ping                      liveness check
-//! keys                      list reconciliation keys currently rendered
-//! snapshot                  markdown snapshot of the current UI
-//! snapshot json             JSON snapshot (needs `ui-snapshot-json`)
-//! snapshot png <path>       write a PNG to <path> (needs `ui-snapshot-png`)
-//! act <script>              run an action script (`click:#add; type:hi`)
-//! highlight <key>           outline a widget by key
-//! highlight <col>,<row>     outline the widget under a cell
-//! highlight clear           remove the outline
-//! quit                      ask the app to exit
+//! tui-lipan/1 <request-id> <deadline-ms> <command>\n
 //! ```
 //!
-//! Replies are a status line followed by exactly that many bytes:
+//! `hello` negotiates capabilities. Commands include `keys`, `snapshot`,
+//! `snapshot json`, `snapshot png`, `act <script>`, `highlight`, `cancel
+//! <request-id>`, and `quit`. PNG bytes are returned to the client; the server
+//! never accepts an output path.
+//!
+//! Replies are a status line followed by exactly the declared bytes:
 //!
 //! ```text
-//! ok <byte-length>\n<payload>
-//! err <byte-length>\n<message>
+//! tui-lipan/1 <request-id> ok - <byte-length>\n<payload>
+//! tui-lipan/1 <request-id> err <code> <byte-length>\n<message>
 //! ```
 //!
 //! Length prefixing keeps payloads binary- and newline-safe without escaping, so
 //! a client in any language is a few lines of code.
 
-use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Write};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::collections::{HashMap, VecDeque};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex};
+
+const PROTOCOL_VERSION: u16 = 1;
+const MAX_REQUEST_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Socket path; setting it enables the control channel.
 pub(crate) const CONTROL_ENV: &str = "TUI_LIPAN_CONTROL";
@@ -53,33 +54,94 @@ pub(crate) const CONTROL_ENV: &str = "TUI_LIPAN_CONTROL";
 ///
 /// The queue carries the payload and [`RunnerEvent::Control`] is only a wakeup,
 /// so the event enum stays cheap to clone and compare.
-pub(crate) type ControlQueue = Arc<Mutex<VecDeque<ControlRequest>>>;
+#[derive(Clone, Default)]
+pub(crate) struct ControlQueue {
+    state: Arc<ControlState>,
+}
+
+#[derive(Default)]
+struct ControlState {
+    pending: Mutex<VecDeque<ControlRequest>>,
+    cancellations: Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
+
+impl ControlQueue {
+    fn push(&self, request: ControlRequest) -> Result<(), ()> {
+        self.state
+            .pending
+            .lock()
+            .map_err(|_| ())?
+            .push_back(request);
+        Ok(())
+    }
+
+    pub(crate) fn pop(&self) -> Option<ControlRequest> {
+        self.state.pending.lock().ok()?.pop_front()
+    }
+
+    fn register(&self, id: &str, cancelled: Arc<AtomicBool>) -> Result<(), ()> {
+        let mut registrations = self.state.cancellations.lock().map_err(|_| ())?;
+        if registrations.contains_key(id) {
+            return Err(());
+        }
+        registrations.insert(id.to_owned(), cancelled);
+        Ok(())
+    }
+
+    fn unregister(&self, id: &str) {
+        if let Ok(mut registrations) = self.state.cancellations.lock() {
+            registrations.remove(id);
+        }
+    }
+
+    fn cancel(&self, id: &str) -> bool {
+        let Ok(registrations) = self.state.cancellations.lock() else {
+            return false;
+        };
+        let Some(cancelled) = registrations.get(id) else {
+            return false;
+        };
+        cancelled.store(true, Ordering::Release);
+        true
+    }
+}
 
 /// A command from a client, with the channel its reply must go back on.
 pub(crate) struct ControlRequest {
+    /// Client-chosen request identity.
+    pub(crate) id: String,
     /// Raw command line, without the trailing newline.
     pub(crate) command: String,
+    /// Wall-clock deadline.
+    pub(crate) deadline: std::time::Instant,
+    /// Cooperative cancellation set by another request or deadline.
+    pub(crate) cancelled: Arc<AtomicBool>,
     /// Where the UI thread sends the reply.
     pub(crate) reply: Sender<ControlReply>,
 }
 
 /// The result of running one command.
+#[derive(Debug)]
 pub(crate) enum ControlReply {
     /// Success, with a payload that may be empty.
-    Ok(String),
-    /// Failure, with a message explaining what went wrong.
-    Err(String),
+    Ok(Vec<u8>),
+    /// Failure, with a stable wire code and message.
+    Err { code: &'static str, message: String },
 }
 
 impl ControlReply {
     /// Serialise as a status line plus length-prefixed payload.
-    fn encode(&self) -> Vec<u8> {
-        let (status, payload) = match self {
-            Self::Ok(payload) => ("ok", payload.as_str()),
-            Self::Err(message) => ("err", message.as_str()),
+    fn encode(&self, id: &str) -> Vec<u8> {
+        let (status, code, payload): (&str, &str, &[u8]) = match self {
+            Self::Ok(payload) => ("ok", "-", payload),
+            Self::Err { code, message } => ("err", code, message.as_bytes()),
         };
-        let mut out = format!("{status} {}\n", payload.len()).into_bytes();
-        out.extend_from_slice(payload.as_bytes());
+        let mut out = format!(
+            "tui-lipan/{PROTOCOL_VERSION} {id} {status} {code} {}\n",
+            payload.len()
+        )
+        .into_bytes();
+        out.extend_from_slice(payload);
         out
     }
 }
@@ -133,12 +195,13 @@ pub(crate) fn spawn(
         .spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { break };
-                // Connections are served one at a time: the UI is a single
-                // shared surface, so interleaving two drivers would produce a
-                // session neither of them asked for.
-                if serve(stream, &queue, &events).is_err() {
-                    break;
-                }
+                let queue = queue.clone();
+                let events = events.clone();
+                let _ = std::thread::Builder::new()
+                    .name("tui-lipan-control-client".into())
+                    .spawn(move || {
+                        let _ = serve(stream, &queue, &events);
+                    });
             }
         })?;
 
@@ -168,49 +231,166 @@ fn serve(
         Ok(stream) => stream,
         Err(_) => return Ok(()),
     };
-    let reader = BufReader::new(stream);
+    let mut reader = BufReader::new(stream);
 
-    for line in reader.lines() {
-        let Ok(command) = line else { return Ok(()) };
-        let command = command.trim().to_owned();
-        if command.is_empty() {
-            continue;
+    loop {
+        let mut line = String::new();
+        let read = match reader
+            .by_ref()
+            .take((MAX_REQUEST_BYTES + 1) as u64)
+            .read_line(&mut line)
+        {
+            Ok(read) => read,
+            Err(_) => return Ok(()),
+        };
+        if read == 0 {
+            return Ok(());
         }
+        if read > MAX_REQUEST_BYTES || !line.ends_with('\n') {
+            let reply = ControlReply::Err {
+                code: "REQUEST_TOO_LARGE",
+                message: format!("request exceeds {MAX_REQUEST_BYTES} bytes"),
+            };
+            let _ = writer.write_all(&reply.encode("-"));
+            let _ = writer.flush();
+            return Ok(());
+        }
+        let (id, timeout, command) = match parse_request_header(line.trim_end()) {
+            Ok(request) => request,
+            Err(reply) => {
+                if writer.write_all(&reply.encode("-")).is_err() || writer.flush().is_err() {
+                    return Ok(());
+                }
+                continue;
+            }
+        };
 
-        let reply = match exchange(command, queue, events) {
+        let reply = match exchange(id.clone(), timeout, command, queue, events) {
             Ok(reply) => reply,
             // The UI thread is gone; stop listening rather than hanging clients.
             Err(()) => return Err(()),
         };
-        if writer.write_all(&reply.encode()).is_err() || writer.flush().is_err() {
+        if writer.write_all(&reply.encode(&id)).is_err() || writer.flush().is_err() {
             return Ok(());
         }
     }
-    Ok(())
 }
 
 /// Hand one command to the UI thread and wait for its reply.
 fn exchange(
+    id: String,
+    timeout: std::time::Duration,
     command: String,
     queue: &ControlQueue,
     events: &Sender<super::RunnerEvent>,
 ) -> Result<ControlReply, ()> {
+    if let Some(target_id) = command.strip_prefix("cancel ").map(str::trim) {
+        return Ok(if queue.cancel(target_id) {
+            ControlReply::Ok(Vec::new())
+        } else {
+            ControlReply::Err {
+                code: "UNKNOWN_REQUEST",
+                message: format!("no active request `{target_id}`"),
+            }
+        });
+    }
     let (reply_tx, reply_rx): (Sender<ControlReply>, Receiver<ControlReply>) = channel();
-    queue.lock().map_err(|_| ())?.push_back(ControlRequest {
-        command,
-        reply: reply_tx,
-    });
+    let deadline = std::time::Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(std::time::Instant::now);
+    let cancelled = Arc::new(AtomicBool::new(false));
+    if queue.register(&id, Arc::clone(&cancelled)).is_err() {
+        return Ok(ControlReply::Err {
+            code: "DUPLICATE_REQUEST_ID",
+            message: format!("request `{id}` is already active"),
+        });
+    }
+    if queue
+        .push(ControlRequest {
+            id: id.clone(),
+            command,
+            deadline,
+            cancelled: Arc::clone(&cancelled),
+            reply: reply_tx,
+        })
+        .is_err()
+    {
+        queue.unregister(&id);
+        return Err(());
+    }
     // The event only wakes the loop; the payload travels in the queue.
-    events.send(super::RunnerEvent::Control).map_err(|_| ())?;
-    reply_rx.recv().map_err(|_| ())
+    if events.send(super::RunnerEvent::Control).is_err() {
+        queue.unregister(&id);
+        return Err(());
+    }
+    let reply = match reply_rx.recv_timeout(timeout) {
+        Ok(reply) => Ok(reply),
+        Err(RecvTimeoutError::Timeout) => {
+            cancelled.store(true, Ordering::Release);
+            Ok(ControlReply::Err {
+                code: "DEADLINE_EXCEEDED",
+                message: "request deadline elapsed".into(),
+            })
+        }
+        Err(RecvTimeoutError::Disconnected) => Err(()),
+    };
+    queue.unregister(&id);
+    reply
+}
+
+fn parse_request_header(line: &str) -> Result<(String, std::time::Duration, String), ControlReply> {
+    let Some(rest) = line.strip_prefix(&format!("tui-lipan/{PROTOCOL_VERSION} ")) else {
+        return Err(ControlReply::Err {
+            code: "UNSUPPORTED_VERSION",
+            message: format!("expected tui-lipan/{PROTOCOL_VERSION} request"),
+        });
+    };
+    let mut parts = rest.splitn(3, ' ');
+    let id = parts.next().unwrap_or_default();
+    let timeout_ms = parts.next().unwrap_or_default();
+    let command = parts.next().unwrap_or_default().trim();
+    if id.is_empty()
+        || id.len() > 64
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(ControlReply::Err {
+            code: "INVALID_REQUEST_ID",
+            message: "request ID must be 1-64 ASCII letters, digits, '-' or '_'".into(),
+        });
+    }
+    let timeout_ms: u64 = timeout_ms.parse().map_err(|_| ControlReply::Err {
+        code: "INVALID_DEADLINE",
+        message: "deadline must be milliseconds".into(),
+    })?;
+    if timeout_ms == 0 || timeout_ms > 60_000 {
+        return Err(ControlReply::Err {
+            code: "INVALID_DEADLINE",
+            message: "deadline must be between 1 and 60000 milliseconds".into(),
+        });
+    }
+    if command.is_empty() {
+        return Err(ControlReply::Err {
+            code: "MALFORMED_REQUEST",
+            message: "request command is empty".into(),
+        });
+    }
+    Ok((
+        id.to_owned(),
+        std::time::Duration::from_millis(timeout_ms),
+        command.to_owned(),
+    ))
 }
 
 /// A parsed control command.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ControlCommand {
+    /// Negotiate protocol capabilities.
+    Hello,
     /// Liveness check.
     Ping,
-    /// List rendered reconciliation keys.
+    /// List rendered automation IDs.
     Keys,
     /// Capture the UI in the requested format.
     Snapshot(SnapshotFormat),
@@ -225,8 +405,8 @@ pub(crate) enum ControlCommand {
 /// What a `highlight` command points at.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum HighlightTarget {
-    /// The widget carrying this reconciliation key.
-    Key(String),
+    /// The widget carrying this automation ID.
+    AutomationId(String),
     /// The smallest widget covering this cell, the way an inspector picks.
     Cell(u16, u16),
 }
@@ -238,8 +418,8 @@ pub(crate) enum SnapshotFormat {
     Markdown,
     /// Structured JSON.
     Json,
-    /// PNG written to a path.
-    Png(std::path::PathBuf),
+    /// PNG bytes returned in the reply.
+    Png,
 }
 
 /// Parse one command line.
@@ -251,6 +431,7 @@ pub(crate) fn parse_command(line: &str) -> Result<ControlCommand, String> {
     };
 
     match verb {
+        "hello" => Ok(ControlCommand::Hello),
         "ping" => Ok(ControlCommand::Ping),
         "keys" => Ok(ControlCommand::Keys),
         "quit" => Ok(ControlCommand::Quit),
@@ -270,9 +451,9 @@ pub(crate) fn parse_command(line: &str) -> Result<ControlCommand, String> {
                         .map_err(|_| format!("invalid highlight row in `{target}`"))?;
                     Ok(ControlCommand::Highlight(Some(HighlightTarget::Cell(x, y))))
                 }
-                None => Ok(ControlCommand::Highlight(Some(HighlightTarget::Key(
-                    target.trim_start_matches('#').to_owned(),
-                )))),
+                None => Ok(ControlCommand::Highlight(Some(
+                    HighlightTarget::AutomationId(target.trim_start_matches('#').to_owned()),
+                ))),
             },
         },
         "act" => {
@@ -284,17 +465,18 @@ pub(crate) fn parse_command(line: &str) -> Result<ControlCommand, String> {
         "snapshot" => match rest {
             "" | "md" | "markdown" => Ok(ControlCommand::Snapshot(SnapshotFormat::Markdown)),
             "json" => Ok(ControlCommand::Snapshot(SnapshotFormat::Json)),
-            other => match other.split_once(char::is_whitespace) {
-                Some(("png", path)) if !path.trim().is_empty() => Ok(ControlCommand::Snapshot(
-                    SnapshotFormat::Png(std::path::PathBuf::from(path.trim())),
-                )),
-                _ => Err(format!(
-                    "unknown snapshot format `{other}`; expected markdown, json, or `png <path>`"
-                )),
-            },
+            "png" => Ok(ControlCommand::Snapshot(SnapshotFormat::Png)),
+            other => Err(format!(
+                "unknown snapshot format `{other}`; expected markdown, json, or png"
+            )),
         },
+        // `cancel <id>` never reaches here - the transport answers it without the UI thread - but
+        // a `cancel` missing its argument does, and the list is the only place a client is told
+        // the verb exists at all.
+        "cancel" => Err("cancel needs a request ID, e.g. `cancel req-7`".into()),
         other => Err(format!(
-            "unknown command `{other}`; expected ping, keys, snapshot, act, highlight, or quit"
+            "unknown command `{other}`; expected hello, ping, keys, snapshot, act, highlight, \
+             cancel, or quit"
         )),
     }
 }
@@ -305,11 +487,21 @@ mod tests {
 
     #[test]
     fn replies_are_status_line_plus_length_prefixed_payload() {
-        assert_eq!(ControlReply::Ok("hi".into()).encode(), b"ok 2\nhi".to_vec());
-        assert_eq!(ControlReply::Ok(String::new()).encode(), b"ok 0\n".to_vec());
         assert_eq!(
-            ControlReply::Err("nope".into()).encode(),
-            b"err 4\nnope".to_vec()
+            ControlReply::Ok(b"hi".to_vec()).encode("req"),
+            b"tui-lipan/1 req ok - 2\nhi".to_vec()
+        );
+        assert_eq!(
+            ControlReply::Ok(Vec::new()).encode("req"),
+            b"tui-lipan/1 req ok - 0\n".to_vec()
+        );
+        assert_eq!(
+            ControlReply::Err {
+                code: "TEST",
+                message: "nope".into(),
+            }
+            .encode("req"),
+            b"tui-lipan/1 req err TEST 4\nnope".to_vec()
         );
     }
 
@@ -318,13 +510,14 @@ mod tests {
         // Length prefixing is the whole reason a markdown snapshot can be sent
         // verbatim; a line-delimited reply would have to escape it.
         let payload = "line one\nline two\n";
-        let encoded = ControlReply::Ok(payload.into()).encode();
-        assert!(encoded.starts_with(b"ok 18\n"));
+        let encoded = ControlReply::Ok(payload.as_bytes().to_vec()).encode("req");
+        assert!(encoded.starts_with(b"tui-lipan/1 req ok - 18\n"));
         assert!(encoded.ends_with(payload.as_bytes()));
     }
 
     #[test]
     fn simple_verbs_parse() {
+        assert_eq!(parse_command("hello"), Ok(ControlCommand::Hello));
         assert_eq!(parse_command("ping"), Ok(ControlCommand::Ping));
         assert_eq!(parse_command("  keys  "), Ok(ControlCommand::Keys));
         assert_eq!(parse_command("quit"), Ok(ControlCommand::Quit));
@@ -345,11 +538,32 @@ mod tests {
             Ok(ControlCommand::Snapshot(SnapshotFormat::Json))
         );
         assert_eq!(
-            parse_command("snapshot png /tmp/a.png"),
-            Ok(ControlCommand::Snapshot(SnapshotFormat::Png(
-                "/tmp/a.png".into()
-            )))
+            parse_command("snapshot png"),
+            Ok(ControlCommand::Snapshot(SnapshotFormat::Png))
         );
+    }
+
+    #[test]
+    fn request_headers_are_versioned_bounded_and_deadlined() {
+        let (id, timeout, command) =
+            parse_request_header("tui-lipan/1 req_1 500 snapshot png").unwrap();
+        assert_eq!(id, "req_1");
+        assert_eq!(timeout, std::time::Duration::from_millis(500));
+        assert_eq!(command, "snapshot png");
+        assert!(parse_request_header("ping").is_err());
+        assert!(parse_request_header("tui-lipan/1 ! 500 ping").is_err());
+        assert!(parse_request_header("tui-lipan/1 req 0 ping").is_err());
+    }
+
+    #[test]
+    fn cancellation_registry_targets_only_active_request_ids() {
+        let queue = ControlQueue::default();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        queue.register("active", Arc::clone(&cancelled)).unwrap();
+        assert!(queue.cancel("active"));
+        assert!(cancelled.load(Ordering::Acquire));
+        queue.unregister("active");
+        assert!(!queue.cancel("active"));
     }
 
     #[test]
@@ -361,21 +575,21 @@ mod tests {
     }
 
     #[test]
-    fn highlight_takes_a_key_or_clears() {
+    fn highlight_takes_an_automation_id_or_clears() {
         assert_eq!(
             parse_command("highlight add"),
-            Ok(ControlCommand::Highlight(Some(HighlightTarget::Key(
-                "add".into()
-            ))))
+            Ok(ControlCommand::Highlight(Some(
+                HighlightTarget::AutomationId("add".into())
+            )))
         );
         // A leading `#` is accepted for symmetry with action-script targets.
         assert_eq!(
             parse_command("highlight #add"),
-            Ok(ControlCommand::Highlight(Some(HighlightTarget::Key(
-                "add".into()
-            ))))
+            Ok(ControlCommand::Highlight(Some(
+                HighlightTarget::AutomationId("add".into())
+            )))
         );
-        // Unkeyed widgets are still inspectable by cell.
+        // Widgets without IDs are still inspectable by cell.
         assert_eq!(
             parse_command("highlight 61,2"),
             Ok(ControlCommand::Highlight(Some(HighlightTarget::Cell(
@@ -394,7 +608,7 @@ mod tests {
 
     #[test]
     fn malformed_commands_explain_themselves() {
-        for line in ["frobnicate", "act", "snapshot sideways", "snapshot png"] {
+        for line in ["frobnicate", "act", "snapshot sideways"] {
             let err = parse_command(line).expect_err(line);
             assert!(!err.is_empty(), "{line} should explain the problem");
         }

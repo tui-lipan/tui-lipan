@@ -76,8 +76,7 @@ const DEFAULT_VIEWPORT: Rect = Rect {
 /// - exercising `Command` scheduling and message routing
 /// - testing keyboard-driven flows via [`send_key`](Self::send_key)
 pub struct TestBackend<C: Component> {
-    pub(crate) core: RuntimeCore<C>,
-    viewport: Rect,
+    pub(crate) core: crate::session::SessionEngine<C>,
     pub(crate) focused: Option<NodeId>,
     pub(crate) focused_key: Option<Key>,
     pub(crate) focused_tag: Option<Tag>,
@@ -133,12 +132,36 @@ where
 
     /// Mount a root component using the same app configuration as [`AppRunner`](crate::AppRunner).
     pub fn new_with_app(app: App, component: C, props: C::Properties) -> Self {
-        Self::new_with_app_inner(app, component, props, false)
+        Self::new_with_app_inner(
+            app,
+            component,
+            props,
+            false,
+            crate::automation::ClockMode::Controlled,
+            DEFAULT_VIEWPORT,
+        )
     }
 
     #[allow(missing_docs)]
     pub fn new_transcript_with_props(component: C, props: C::Properties) -> Self {
-        Self::new_with_app_inner(App::new(), component, props, true)
+        Self::new_with_app_inner(
+            App::new(),
+            component,
+            props,
+            true,
+            crate::automation::ClockMode::Controlled,
+            DEFAULT_VIEWPORT,
+        )
+    }
+
+    pub(crate) fn new_with_app_clock(
+        app: App,
+        component: C,
+        props: C::Properties,
+        clock_mode: crate::automation::ClockMode,
+        viewport: Rect,
+    ) -> Self {
+        Self::new_with_app_inner(app, component, props, false, clock_mode, viewport)
     }
 
     fn new_with_app_inner(
@@ -146,8 +169,9 @@ where
         component: C,
         props: C::Properties,
         inline_transcript_mode: bool,
+        clock_mode: crate::automation::ClockMode,
+        viewport: Rect,
     ) -> Self {
-        let viewport = DEFAULT_VIEWPORT;
         let clipboard_provider = app.clipboard_provider;
         let clipboard_reporter = app.clipboard_reporter.clone();
         let mouse_capture = Rc::new(Cell::new(app.mouse_enabled.unwrap_or(true)));
@@ -170,13 +194,14 @@ where
                 mouse_capture,
             )
         } else {
-            RuntimeCore::new_test(
+            RuntimeCore::new_test_with_clock(
                 component,
                 props,
                 viewport,
                 app.theme.clone(),
                 app.surface_mode,
                 mouse_capture,
+                clock_mode,
             )
         };
         if let Some(provider) = clipboard_provider {
@@ -202,10 +227,11 @@ where
         };
         let on_focus_changed = app.on_focus_changed.clone();
         let last_mouse = core.ctx.env().last_mouse.clone();
+        let drag = DragState::with_clock(core.ctx.env().clock.clone());
+        let copy_feedback = CopyFeedbackState::new(core.ctx.env().clock.clone());
 
         let mut backend = Self {
-            core,
-            viewport,
+            core: core.into(),
             focused: None,
             focused_key: None,
             focused_tag: None,
@@ -225,9 +251,9 @@ where
             last_notified_focus: None,
             on_focus_changed,
             mouse: MouseTrackingState::with_pointer_cell(last_mouse),
-            drag: DragState::default(),
+            drag,
             read_only_selection: HashMap::new(),
-            copy_feedback: CopyFeedbackState::default(),
+            copy_feedback,
             screen_background: None,
             key_dispatch_config,
             key_dispatch_state,
@@ -245,12 +271,19 @@ where
         props: C::Properties,
         inline_transcript_mode: bool,
     ) -> Self {
-        Self::new_with_app_inner(App::new(), component, props, inline_transcript_mode)
+        Self::new_with_app_inner(
+            App::new(),
+            component,
+            props,
+            inline_transcript_mode,
+            crate::automation::ClockMode::Controlled,
+            DEFAULT_VIEWPORT,
+        )
     }
 
     /// Returns the current viewport used for layout.
     pub fn viewport(&self) -> Rect {
-        self.viewport
+        self.core.viewport()
     }
 
     /// Returns whether the simulated host terminal/window has focus.
@@ -297,8 +330,7 @@ where
 
     /// Set the viewport used for layout.
     pub fn set_viewport(&mut self, viewport: Rect) {
-        self.viewport = viewport;
-        self.core.ctx.set_viewport(viewport);
+        self.core.set_viewport(viewport);
     }
 
     /// Returns a cloneable link to the root component.
@@ -921,7 +953,7 @@ where
         #[cfg(feature = "terminal")]
         self.core.tree.refresh_live_terminals();
         self.drain_copy_feedback_requests();
-        let bounds = self.viewport;
+        let bounds = self.core.viewport();
         self.core.render_element(
             bounds,
             self.focused,
@@ -1093,7 +1125,7 @@ where
         ));
         crate::backend::ratatui_backend::capture_render::render_to_captured_frame_with_interaction(
             &self.core.tree,
-            self.viewport,
+            self.core.viewport(),
             self.capture_interaction(),
             0,
             self.screen_background_ratatui(),
@@ -1123,7 +1155,7 @@ where
     ) -> crate::ui_snapshot::UiSnapshot {
         crate::ui_snapshot::build_ui_snapshot(
             &self.core.tree,
-            self.viewport,
+            self.core.viewport(),
             self.capture_interaction(),
             0,
             self.screen_background_ratatui(),
@@ -1168,7 +1200,7 @@ where
         margin_h: u16,
         capture: impl FnOnce(&Self) -> T,
     ) -> T {
-        let original_viewport = self.viewport;
+        let original_viewport = self.core.viewport();
         let (min_w, min_h) = self.content_min_size();
         let target_viewport = Rect {
             x: 0,
@@ -1199,7 +1231,7 @@ where
     pub(crate) fn capture_frame_with_effect_phase(&self, effect_phase: u64) -> CapturedFrame {
         crate::backend::ratatui_backend::capture_render::render_to_captured_frame_with_interaction(
             &self.core.tree,
-            self.viewport,
+            self.core.viewport(),
             self.capture_interaction(),
             effect_phase,
             self.screen_background_ratatui(),
@@ -1637,8 +1669,8 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
 impl<C: Component> TestBackend<C> {
     /// Rect of the widget carrying `key`, if it is in the current tree.
     ///
-    /// Layout coordinates, so this is what an action script resolves `#key`
-    /// against before clicking.
+    /// This is a reconciliation-oriented test helper. Automation scripts resolve
+    /// `#name` through [`AutomationId`](crate::AutomationId), not this key.
     pub fn rect_of_key(&self, key: &Key) -> Option<Rect> {
         self.core
             .tree
@@ -1672,40 +1704,138 @@ impl<C: Component> TestBackend<C> {
     }
 }
 
-impl<C: Component> crate::ui_snapshot::ActionHost for TestBackend<C> {
-    fn rect_of_key(&self, key: &Key) -> Option<Rect> {
-        TestBackend::rect_of_key(self, key)
+impl<C: Component> crate::session::OperationHost for TestBackend<C> {
+    fn duplicate_automation_id(&self) -> Option<crate::automation::AutomationId> {
+        self.core.duplicate_automation_id().cloned()
     }
 
-    fn perform_key(&mut self, key: KeyEvent) -> Result<()> {
-        self.send_key(key)?;
-        Ok(())
+    fn semantics(&self) -> crate::automation::SemanticTree {
+        self.core.semantic_tree(self.focused)
     }
 
-    fn perform_mouse(&mut self, event: MouseEvent) -> Result<()> {
-        self.send_mouse(event)?;
-        Ok(())
+    fn current_pointer(&self) -> Option<(u16, u16)> {
+        self.mouse.last_mouse.get()
     }
 
-    fn perform_focus_key(&mut self, key: &Key) -> Result<bool> {
-        Ok(TestBackend::focus_key(self, key))
+    fn clock_mode(&self) -> crate::automation::ClockMode {
+        self.core.ctx.env().clock.mode()
     }
 
-    fn perform_focus_step(&mut self, step: crate::ui_snapshot::FocusStep) -> Result<()> {
-        match step {
-            crate::ui_snapshot::FocusStep::Next => self.focus_next(),
-            crate::ui_snapshot::FocusStep::Prev => self.focus_prev(),
+    fn send_key(&mut self, key: KeyEvent) -> Result<()> {
+        TestBackend::send_key(self, key).map(|_| ())
+    }
+
+    fn send_mouse(&mut self, event: MouseEvent) -> Result<()> {
+        TestBackend::send_mouse(self, event).map(|_| ())
+    }
+
+    fn focus_node(&mut self, node: NodeId) -> Result<bool> {
+        if !self.core.tree.node(node).is_focusable() {
+            return Ok(false);
+        }
+        self.set_focused(node);
+        self.notify_focus_change();
+        Ok(true)
+    }
+
+    fn focus_step(&mut self, direction: crate::automation::FocusDirection) -> Result<()> {
+        match direction {
+            crate::automation::FocusDirection::Next => self.focus_next(),
+            crate::automation::FocusDirection::Previous => self.focus_prev(),
         }
         Ok(())
     }
 
-    fn perform_wait(&mut self, dt: Duration) -> Result<()> {
-        self.advance(dt);
+    fn resize(
+        &mut self,
+        width: u16,
+        height: u16,
+    ) -> std::result::Result<(), crate::automation::AutomationError> {
+        self.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: width,
+            h: height,
+        });
         Ok(())
     }
 
-    fn perform_sleep(&mut self, dt: Duration) -> Result<()> {
-        self.settle(dt)
+    fn advance(
+        &mut self,
+        duration: Duration,
+    ) -> std::result::Result<(), crate::automation::AutomationError> {
+        TestBackend::advance(self, duration);
+        Ok(())
+    }
+
+    fn sleep(
+        &mut self,
+        duration: Duration,
+    ) -> std::result::Result<(), crate::automation::AutomationError> {
+        self.settle(duration)
+            .map_err(crate::automation::AutomationError::from)
+    }
+
+    fn drain_round(&mut self) -> std::result::Result<bool, crate::automation::AutomationError> {
+        self.core.drain_due_timers();
+        self.pump()
+            .map_err(crate::automation::AutomationError::from)
+    }
+
+    fn idle_report(&self, dirty: bool) -> crate::automation::IdleReport {
+        let (due_timers, future_timers) = self.core.deferred_timer_counts();
+        crate::automation::IdleReport {
+            queued_messages: self.core.queue.borrow().len(),
+            due_timers,
+            future_timers,
+            dirty,
+            tracked_commands: self.core.ctx.env().activity.tracked_commands(),
+            external_links_untracked: true,
+        }
+    }
+
+    fn logical_elapsed(&self) -> Duration {
+        self.core.ctx.env().clock.elapsed()
+    }
+
+    fn wait_for_activity(&mut self, timeout: Duration) {
+        let _ = self.core.wait_for_command(timeout);
+    }
+
+    fn commit_after_drain(
+        &mut self,
+    ) -> std::result::Result<(), crate::automation::AutomationError> {
+        self.render();
+        if let Some(id) = self.core.duplicate_automation_id() {
+            return Err(crate::automation::AutomationError::DuplicateAutomationId {
+                id: id.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn checkpoint(
+        &mut self,
+        name: &str,
+    ) -> std::result::Result<crate::automation::Checkpoint, crate::automation::AutomationError>
+    {
+        crate::automation::validate_checkpoint_name(name)?;
+        let directory = std::env::var_os("TUI_LIPAN_AUTOMATION_ARTIFACTS")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("automation-artifacts"));
+        let path = directory.join(format!("{name}.md"));
+        let bytes = crate::automation::semantic_markdown(&self.semantics());
+        crate::utils::atomic_file::write(&path, &bytes)?;
+        Ok(crate::automation::Checkpoint {
+            name: std::sync::Arc::from(name),
+            generation: self.core.generation(),
+            artifacts: vec![crate::automation::CheckpointArtifact {
+                format: crate::automation::CheckpointFormat::Markdown,
+                bytes: None,
+                path: Some(path),
+                baseline: None,
+            }],
+        })
     }
 }
 
@@ -3378,7 +3508,7 @@ mod tests {
             .command_chord_pending_since()
             .expect("a pending chord records when it started");
 
-        std::thread::sleep(delay + std::time::Duration::from_millis(20));
+        backend.advance(delay + std::time::Duration::from_millis(20));
         assert!(backend.core.ctx.command_chord_revealed());
         assert_eq!(
             backend.core.ctx.command_chord_pending_since(),

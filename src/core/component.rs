@@ -72,6 +72,14 @@ pub(crate) fn advance_deferred_commands(horizon: Instant, runtime_id: RuntimeId)
     TimerService::global().advance_owned(horizon, runtime_id)
 }
 
+pub(crate) fn deferred_command_counts(horizon: Instant, runtime_id: RuntimeId) -> (usize, usize) {
+    TimerService::global().pending_owned(horizon, runtime_id)
+}
+
+pub(crate) fn cancel_deferred_commands(runtime_id: RuntimeId) {
+    TimerService::global().cancel_owned(runtime_id);
+}
+
 impl std::fmt::Debug for Command {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Command").finish_non_exhaustive()
@@ -162,6 +170,14 @@ pub(crate) struct CommandRuntime {
     pub(crate) tx: CommandTx,
     /// Which runtime is running this command, so a deferred timer can be attributed to it.
     pub(crate) runtime_id: RuntimeId,
+    /// Logical time at command submission.
+    pub(crate) now: Instant,
+    /// Whether this runtime follows wall time.
+    pub(crate) clock_mode: crate::automation::ClockMode,
+    /// Session clock shared with links retained by command code.
+    pub(crate) clock: crate::core::runtime_env::SessionClock,
+    /// Per-runtime accounting for background work.
+    pub(crate) activity: Arc<crate::core::runtime_env::RuntimeActivity>,
 }
 
 /// Identity of one runtime within the process.
@@ -217,8 +233,20 @@ struct SpawnKeyedAction<Msg, F> {
 /// has no [`CommandRuntime`] to build a [`Command`] against (see [`CommandLink::send_after`]).
 ///
 /// [`CommandLink::send_after`]: crate::callback::CommandLink::send_after
-pub(crate) fn schedule_after(delay: std::time::Duration, f: impl FnOnce() + Send + 'static) {
-    TimerService::global().schedule(delay, Task::with_token(f, CancellationToken::default()));
+pub(crate) fn schedule_after_for_session(
+    delay: std::time::Duration,
+    clock: crate::core::runtime_env::SessionClock,
+    runtime_id: RuntimeId,
+    token: CancellationToken,
+    f: impl FnOnce() + Send + 'static,
+) {
+    TimerService::global().schedule_session_owned(
+        delay,
+        clock.now(),
+        clock.mode(),
+        Task::with_token(f, token),
+        Some(runtime_id),
+    );
 }
 
 struct AfterAction<Msg, F> {
@@ -238,10 +266,26 @@ where
         };
 
         let token = CancellationToken::default();
-        let link = CommandLink::new(runtime.scope, runtime.tx, token.clone());
-        TimerService::global().schedule_owned(
+        let link = CommandLink::new(
+            runtime.scope,
+            runtime.tx,
+            token.clone(),
+            runtime.clock.clone(),
+            runtime.runtime_id,
+            runtime.activity.clone(),
+        );
+        let activity = runtime.activity;
+        TimerService::global().schedule_session_owned(
             self.delay,
-            Task::with_token(move || f(link), token),
+            runtime.now,
+            runtime.clock_mode,
+            Task::with_token(
+                move || {
+                    let _guard = activity.track();
+                    f(link);
+                },
+                token,
+            ),
             Some(runtime.runtime_id),
         );
     }
@@ -258,8 +302,22 @@ where
         };
 
         let token = CancellationToken::default();
-        let link = CommandLink::new(runtime.scope, runtime.tx, token.clone());
-        TaskExecutor::global().execute(Task::with_token(move || f(link), token));
+        let link = CommandLink::new(
+            runtime.scope,
+            runtime.tx,
+            token.clone(),
+            runtime.clock.clone(),
+            runtime.runtime_id,
+            runtime.activity.clone(),
+        );
+        let guard = runtime.activity.track();
+        TaskExecutor::global().execute(Task::with_token(
+            move || {
+                let _guard = guard;
+                f(link);
+            },
+            token,
+        ));
     }
 }
 
@@ -276,8 +334,26 @@ where
         let key = Arc::clone(&self.key);
         let policy = self.policy;
         let token = CancellationToken::default();
-        let link = CommandLink::new(runtime.scope, runtime.tx, token.clone());
-        TaskExecutor::global().execute_keyed(key, policy, Task::with_token(move || f(link), token));
+        let link = CommandLink::new(
+            runtime.scope,
+            runtime.tx,
+            token.clone(),
+            runtime.clock.clone(),
+            runtime.runtime_id,
+            runtime.activity.clone(),
+        );
+        let guard = runtime.activity.track();
+        TaskExecutor::global().execute_keyed(
+            key,
+            policy,
+            Task::with_token(
+                move || {
+                    let _guard = guard;
+                    f(link);
+                },
+                token,
+            ),
+        );
     }
 }
 

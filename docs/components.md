@@ -341,6 +341,13 @@ link.send_after(Duration::from_millis(800), Msg::Deadline);
 Delay first, then work: the closure body still runs on the pool, so a delayed fetch or filesystem
 sweep is fine inside `Command::after` — only the *waiting* moves off the pool.
 
+Delayed commands use the owning session's clock. In a controlled
+`AutomationSession` or `TestBackend`, they remain pending during wall sleep and
+run only after `advance(...)` reaches their deadline. Realtime terminal and web
+sessions remain eligible for the global timer worker. Background
+`Command::spawn` work may complete in either mode without moving controlled
+logical time.
+
 ### Thread Safety
 
 Commands use channels internally. The component itself never needs to be `Send` or `Sync`.

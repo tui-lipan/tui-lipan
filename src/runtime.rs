@@ -115,6 +115,10 @@ pub(crate) struct RuntimeCore<C: Component> {
     pub(crate) transcript_history: TranscriptHistory,
     pub(crate) command_tx: CommandTx,
     pub(crate) command_rx: CommandRx,
+    activity_rx: std::sync::mpsc::Receiver<()>,
+    accepting_messages: Rc<Cell<bool>>,
+    initialized: bool,
+    unmounted: bool,
     pub(crate) focus: Rc<FocusContext>,
     pub(crate) hover: Rc<HoverContext>,
     pub(crate) scroll: Rc<ScrollContext>,
@@ -138,6 +142,7 @@ pub(crate) struct RuntimeCoreConfig {
     pub viewport: Rect,
     pub theme: Theme,
     pub surface_mode: SurfaceMode,
+    pub clock_mode: crate::automation::ClockMode,
     pub mouse_capture: Rc<Cell<bool>>,
     pub clipboard: Rc<crate::clipboard::ClipboardService>,
     pub clipboard_config: crate::clipboard::ClipboardConfig,
@@ -159,18 +164,25 @@ where
             viewport,
             theme,
             surface_mode,
+            clock_mode,
             mouse_capture,
             clipboard,
             clipboard_config,
             host_terminal_color_refresh_enabled,
         } = config;
         let queue: MsgQueue = Rc::new(RefCell::new(VecDeque::new()));
+        let accepting_messages = Rc::new(Cell::new(true));
         let dispatcher = {
             let queue = queue.clone();
-            Dispatcher::new(move |scope, msg| queue.borrow_mut().push_back((scope, msg)))
+            let accepting_messages = accepting_messages.clone();
+            Dispatcher::new(move |scope, msg| {
+                if accepting_messages.get() {
+                    queue.borrow_mut().push_back((scope, msg));
+                }
+            })
         };
 
-        let (command_tx, command_rx): (CommandTx, CommandRx) = std::sync::mpsc::channel();
+        let (command_tx, command_rx, activity_rx, activity_tx) = CommandTx::channel();
         let quit = Rc::new(Cell::new(false));
 
         let focus = Rc::new(FocusContext::default());
@@ -178,7 +190,8 @@ where
         let scroll = Rc::new(ScrollContext::default());
         let animations = Rc::new(crate::animation::AnimationRegistry::default());
         let focus_request = Rc::new(RefCell::new(None));
-        let overlay_manager = Rc::new(RefCell::new(OverlayManager::new()));
+        let clock = crate::core::runtime_env::SessionClock::new(clock_mode);
+        let overlay_manager = Rc::new(RefCell::new(OverlayManager::with_clock(clock.clone())));
         overlay_manager
             .borrow_mut()
             .set_inline_mode(surface_mode.is_inline());
@@ -240,7 +253,10 @@ where
             copy_feedback_request,
             command_chord_pending_since,
             command_chord_reveal_delay,
-            clock_offset: Rc::new(Cell::new(std::time::Duration::ZERO)),
+            clock,
+            activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::new(
+                activity_tx,
+            )),
             last_mouse,
         };
 
@@ -265,6 +281,10 @@ where
             transcript_history,
             command_tx,
             command_rx,
+            activity_rx,
+            accepting_messages,
+            initialized: false,
+            unmounted: false,
             focus,
             hover,
             scroll,
@@ -296,7 +316,7 @@ where
         self.extra_root_element = element;
     }
 
-    /// Create a `RuntimeCore` with a no-op clipboard for tests.
+    #[cfg(test)]
     pub(crate) fn new_test(
         component: C,
         props: C::Properties,
@@ -305,6 +325,26 @@ where
         surface_mode: SurfaceMode,
         mouse_capture: Rc<Cell<bool>>,
     ) -> Self {
+        Self::new_test_with_clock(
+            component,
+            props,
+            viewport,
+            theme,
+            surface_mode,
+            mouse_capture,
+            crate::automation::ClockMode::Realtime,
+        )
+    }
+
+    pub(crate) fn new_test_with_clock(
+        component: C,
+        props: C::Properties,
+        viewport: Rect,
+        theme: Theme,
+        surface_mode: SurfaceMode,
+        mouse_capture: Rc<Cell<bool>>,
+        clock_mode: crate::automation::ClockMode,
+    ) -> Self {
         Self::new(
             component,
             props,
@@ -312,6 +352,7 @@ where
                 viewport,
                 theme,
                 surface_mode,
+                clock_mode,
                 mouse_capture,
                 clipboard: crate::clipboard::test_clipboard(),
                 clipboard_config: crate::clipboard::ClipboardConfig::default(),
@@ -337,6 +378,7 @@ where
                     height: crate::app::context::InlineHeight::Fixed(8),
                     startup: crate::app::context::InlineStartupPolicy::PreserveHost,
                 },
+                clock_mode: crate::automation::ClockMode::Controlled,
                 mouse_capture,
                 clipboard: crate::clipboard::test_clipboard(),
                 clipboard_config: crate::clipboard::ClipboardConfig::default(),
@@ -361,14 +403,39 @@ where
     }
 
     pub(crate) fn init(&mut self) {
+        if self.initialized || self.unmounted {
+            return;
+        }
+        self.initialized = true;
         self.ctx.set_active_theme(self.theme.clone());
         if let Some(cmd) = self.component.init(&mut self.ctx) {
             cmd.run(CommandRuntime {
                 scope: ScopeId(1),
                 tx: self.command_tx.clone(),
                 runtime_id: self.ctx.env().runtime_id,
+                now: self.ctx.env().now(),
+                clock_mode: self.ctx.env().clock.mode(),
+                clock: self.ctx.env().clock.clone(),
+                activity: std::sync::Arc::clone(&self.ctx.env().activity),
             });
         }
+    }
+
+    pub(crate) fn shutdown(&mut self) {
+        if self.unmounted {
+            return;
+        }
+        self.accepting_messages.set(false);
+        crate::core::component::cancel_deferred_commands(self.ctx.env().runtime_id);
+        self.queue.borrow_mut().clear();
+        if self.initialized {
+            self.component.unmount(&mut self.ctx);
+        }
+        self.unmounted = true;
+    }
+
+    pub(crate) fn is_shutdown(&self) -> bool {
+        self.unmounted
     }
 
     pub(crate) fn queue_focus_changed_message(&self, change: &crate::app::context::FocusChanged) {
@@ -385,6 +452,28 @@ where
             let msg: Box<dyn Any> = msg;
             queue.push_back((scope, msg));
         }
+    }
+
+    pub(crate) fn wait_for_command(&mut self, timeout: std::time::Duration) -> bool {
+        let woke = self.activity_rx.recv_timeout(timeout).is_ok();
+        if woke {
+            self.drain_commands();
+        }
+        woke
+    }
+
+    pub(crate) fn drain_due_timers(&self) -> usize {
+        crate::core::component::advance_deferred_commands(
+            self.ctx.env().now(),
+            self.ctx.env().runtime_id,
+        )
+    }
+
+    pub(crate) fn deferred_timer_counts(&self) -> (usize, usize) {
+        crate::core::component::deferred_command_counts(
+            self.ctx.env().now(),
+            self.ctx.env().runtime_id,
+        )
     }
 
     pub(crate) fn has_pending_transcript_entries(&self) -> bool {
@@ -454,6 +543,10 @@ where
                 scope,
                 tx: self.command_tx.clone(),
                 runtime_id: self.ctx.env().runtime_id,
+                now: self.ctx.env().now(),
+                clock_mode: self.ctx.env().clock.mode(),
+                clock: self.ctx.env().clock.clone(),
+                activity: std::sync::Arc::clone(&self.ctx.env().activity),
             });
         }
 
@@ -476,6 +569,10 @@ where
                 scope: ScopeId(1),
                 tx: self.command_tx.clone(),
                 runtime_id: self.ctx.env().runtime_id,
+                now: self.ctx.env().now(),
+                clock_mode: self.ctx.env().clock.mode(),
+                clock: self.ctx.env().clock.clone(),
+                activity: std::sync::Arc::clone(&self.ctx.env().activity),
             });
         }
         update_level
@@ -510,6 +607,10 @@ where
                     scope: cur,
                     tx: self.command_tx.clone(),
                     runtime_id: self.ctx.env().runtime_id,
+                    now: self.ctx.env().now(),
+                    clock_mode: self.ctx.env().clock.mode(),
+                    clock: self.ctx.env().clock.clone(),
+                    activity: std::sync::Arc::clone(&self.ctx.env().activity),
                 });
             }
 
@@ -688,6 +789,7 @@ where
         )
         .expect("expanded extra root element should exist before reconciliation");
         self.tree.set_base_active_theme(self.theme.clone());
+        self.tree.set_session_now(self.ctx.env().now());
         {
             crate::probe_bucket!(crate::alloc_probe::RECONCILE);
             LayoutEngine::reconcile_with_overlays_mode(
@@ -757,6 +859,7 @@ where
         )
         .expect("expanded extra root element should exist before reconciliation");
         self.tree.set_base_active_theme(self.theme.clone());
+        self.tree.set_session_now(self.ctx.env().now());
         LayoutEngine::reconcile_with_overlays_mode(
             &mut self.tree,
             root.as_element(),
@@ -903,6 +1006,12 @@ where
         }
 
         false
+    }
+}
+
+impl<C: Component> Drop for RuntimeCore<C> {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 

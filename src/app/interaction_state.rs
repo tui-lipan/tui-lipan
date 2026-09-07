@@ -185,6 +185,7 @@ impl ActiveDrag {
 
 #[derive(Default)]
 pub(crate) struct DragState {
+    clock: Option<crate::core::runtime_env::SessionClock>,
     /// The currently active drag operation.
     pub active: ActiveDrag,
     /// Scrollbar-specific: whether recalculation is needed after resize.
@@ -201,6 +202,13 @@ pub(crate) struct DragState {
 }
 
 impl DragState {
+    pub(crate) fn with_clock(clock: crate::core::runtime_env::SessionClock) -> Self {
+        Self {
+            clock: Some(clock),
+            ..Self::default()
+        }
+    }
+
     /// Check if any drag operation is active.
     pub fn is_active(&self) -> bool {
         self.active.is_active()
@@ -218,7 +226,11 @@ impl DragState {
 
     pub fn remember_pointer(&mut self, x: u16, y: u16) {
         self.last_pointer_pos = Some((x, y));
-        self.last_autoscroll_tick = Some(Instant::now());
+        self.last_autoscroll_tick = Some(
+            self.clock
+                .as_ref()
+                .map_or_else(Instant::now, |clock| clock.now()),
+        );
     }
 }
 
@@ -241,6 +253,7 @@ pub(crate) struct HexPendingEdit {
 }
 
 pub(crate) struct AnimationState {
+    pub(crate) clock: crate::core::runtime_env::SessionClock,
     pub last_blink: Instant,
     pub blink_visible: bool,
     pub last_spinner_tick: Instant,
@@ -267,36 +280,44 @@ pub(crate) struct AnimationState {
 }
 
 impl AnimationState {
-    /// Reset blink to visible state and restart the blink timer.
-    pub fn reset_blink(&mut self) {
-        self.blink_visible = true;
-        self.last_blink = Instant::now();
-    }
-}
-
-impl Default for AnimationState {
-    fn default() -> Self {
+    pub(crate) fn new(clock: crate::core::runtime_env::SessionClock) -> Self {
+        let now = clock.now();
         Self {
-            last_blink: Instant::now(),
+            clock,
+            last_blink: now,
             blink_visible: true,
-            last_spinner_tick: Instant::now(),
+            last_spinner_tick: now,
             spinner_frame: 0,
-            last_animated_tick: Instant::now(),
-            last_effect_tick: Instant::now(),
+            last_animated_tick: now,
+            last_effect_tick: now,
             command_chord_revealed: false,
             #[cfg(feature = "image")]
-            last_image_tick: Instant::now(),
+            last_image_tick: now,
             #[cfg(feature = "image")]
             last_image_protocol_epoch: 0,
             #[cfg(feature = "image")]
             image_animation_suspend_until: None,
             #[cfg(feature = "image")]
             last_image_layout_hash: None,
-            last_overlay_tick: Instant::now(),
+            last_overlay_tick: now,
             effect_phase_tick: 0,
             #[cfg(feature = "image")]
             image_rendering_was_suspended: false,
         }
+    }
+
+    /// Reset blink to visible state and restart the blink timer.
+    pub fn reset_blink(&mut self) {
+        self.blink_visible = true;
+        self.last_blink = self.clock.now();
+    }
+}
+
+impl Default for AnimationState {
+    fn default() -> Self {
+        Self::new(crate::core::runtime_env::SessionClock::new(
+            crate::automation::ClockMode::Realtime,
+        ))
     }
 }
 

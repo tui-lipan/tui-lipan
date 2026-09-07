@@ -82,6 +82,12 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
         let node = ctx.tree.node_mut(id);
         node.epoch = epoch;
         node.key = el.key.clone();
+        node.automation_id = el.automation_id.clone();
+        node.semantic_role = el.semantic_role;
+        node.semantic_name = el.semantic_name.clone();
+        node.semantic_selected = el.semantic_selected;
+        node.semantic_expanded = el.semantic_expanded;
+        node.semantic_value_sensitive = el.semantic_value_sensitive;
         node.pointer_focus = el.pointer_focus;
         node.parent = parent;
         node.rect = rect;
@@ -104,6 +110,12 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
         let node = ctx.tree.node_mut(id);
         node.epoch = epoch;
         node.key = el.key.clone();
+        node.automation_id = el.automation_id.clone();
+        node.semantic_role = el.semantic_role;
+        node.semantic_name = el.semantic_name.clone();
+        node.semantic_selected = el.semantic_selected;
+        node.semantic_expanded = el.semantic_expanded;
+        node.semantic_value_sensitive = el.semantic_value_sensitive;
         node.pointer_focus = el.pointer_focus;
         node.parent = parent;
         node.set_active_theme(active_theme);

@@ -235,6 +235,33 @@ capture, outside/escape dismissal, toast ticking, and overlay-local tab traversa
 In inline viewport mode, root overlays are intentionally suppressed. See
 [Inline mode](inline-mode.md) and [Overlay widgets](widgets/overlays.md).
 
+## Session and automation boundary
+
+`RuntimeCore<C>` owns component state, scoped messages, commands, nested
+components, and reconciliation. Session-facing frontends add lifecycle,
+interaction state, viewport, clock, rendering, and coherent committed
+generations around that core:
+
+```text
+RuntimeCore<C>
+      |
+SessionEngine<C>
+      +-- AppRunner
+      +-- TestBackend / WebTerminal
+      +-- AutomationSession
+```
+
+Typed `AutomationStep` values are the operation boundary. Scripts, recordings,
+environment captures, live control, and future transports compile into that IR;
+they do not inspect or mutate `NodeTree` directly. Semantic selection runs
+against the last committed hierarchical `SemanticTree`, whose public form never
+contains `NodeId`.
+
+Each runtime owns an immutable clock mode and runtime-scoped timers. Controlled
+timers are excluded from the global realtime worker and run only through
+explicit advancement. The persistent headless loop drains control requests,
+runtime timer deadlines, and command output on the same UI thread.
+
 ## Testing
 
 `TestBackend` provides a headless runtime that exercises the same message queue,

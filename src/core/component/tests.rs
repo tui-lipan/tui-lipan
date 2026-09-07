@@ -26,7 +26,7 @@ use crate::test_backend::TestBackend;
 
 fn new_registry() -> ComponentRegistry {
     let dispatcher = Dispatcher::new(|_, _| {});
-    let (command_tx, _command_rx) = mpsc::channel();
+    let (command_tx, _command_rx, _wake_rx, _wake_tx) = super::CommandTx::channel();
     let quit = Rc::new(Cell::new(false));
     let overlay_manager = Rc::new(RefCell::new(OverlayManager::new()));
 
@@ -68,7 +68,10 @@ fn new_registry() -> ComponentRegistry {
             copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
             command_chord_pending_since: Rc::new(Cell::new(None)),
             command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),
-            clock_offset: Rc::new(Cell::new(std::time::Duration::ZERO)),
+            clock: crate::core::runtime_env::SessionClock::new(
+                crate::automation::ClockMode::Controlled,
+            ),
+            activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
             last_mouse: Rc::new(Cell::new(None)),
         },
     })
@@ -553,11 +556,15 @@ fn keyed_command_latest_only_coalesces_pending_tasks() {
         .expect("first update should succeed");
     let cmd1 = update1.command.expect("first update should have command");
 
-    let (dummy_cmd_tx, _dummy_cmd_rx) = mpsc::channel();
+    let (dummy_cmd_tx, _dummy_cmd_rx, _wake_rx, _wake_tx) = super::CommandTx::channel();
     cmd1.run(CommandRuntime {
         scope,
         tx: dummy_cmd_tx.clone(),
         runtime_id: super::RuntimeId::next(),
+        now: web_time::Instant::now(),
+        clock_mode: crate::automation::ClockMode::Realtime,
+        clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
+        activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
     });
 
     started_rx
@@ -573,6 +580,10 @@ fn keyed_command_latest_only_coalesces_pending_tasks() {
         scope,
         tx: dummy_cmd_tx.clone(),
         runtime_id: super::RuntimeId::next(),
+        now: web_time::Instant::now(),
+        clock_mode: crate::automation::ClockMode::Realtime,
+        clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
+        activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
     });
 
     // Third update: task C replaces pending B.
@@ -584,6 +595,10 @@ fn keyed_command_latest_only_coalesces_pending_tasks() {
         scope,
         tx: dummy_cmd_tx,
         runtime_id: super::RuntimeId::next(),
+        now: web_time::Instant::now(),
+        clock_mode: crate::automation::ClockMode::Realtime,
+        clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
+        activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
     });
 
     // Release the active task.
@@ -613,9 +628,16 @@ fn keyed_command_latest_only_coalesces_pending_tasks() {
 
 #[test]
 fn command_link_send_if_not_cancelled_suppresses_messages() {
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx, _wake_rx, _wake_tx) = super::CommandTx::channel();
     let token = CancellationToken::default();
-    let link = CommandLink::new(ScopeId(7), tx, token.clone());
+    let link = CommandLink::new(
+        ScopeId(7),
+        tx,
+        token.clone(),
+        crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
+        super::RuntimeId::next(),
+        std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
+    );
 
     token.cancel();
 
@@ -632,11 +654,15 @@ fn command_link_send_if_not_cancelled_suppresses_messages() {
 /// requiring prompt work to run proves the waiting happens elsewhere.
 #[test]
 fn after_does_not_occupy_executor_workers_while_waiting() {
-    let (cmd_tx, _cmd_rx) = mpsc::channel();
+    let (cmd_tx, _cmd_rx, _wake_rx, _wake_tx) = super::CommandTx::channel();
     let runtime = || CommandRuntime {
         scope: ScopeId(1),
         tx: cmd_tx.clone(),
         runtime_id: super::RuntimeId::next(),
+        now: web_time::Instant::now(),
+        clock_mode: crate::automation::ClockMode::Realtime,
+        clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
+        activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
     };
 
     // Far more long timers than the pool has workers (worker count is capped at 8).
@@ -658,7 +684,7 @@ fn after_does_not_occupy_executor_workers_while_waiting() {
 
 #[test]
 fn after_runs_the_task_once_the_delay_elapses() {
-    let (cmd_tx, _cmd_rx) = mpsc::channel();
+    let (cmd_tx, _cmd_rx, _wake_rx, _wake_tx) = super::CommandTx::channel();
     let (ran_tx, ran_rx) = mpsc::channel();
 
     let start = std::time::Instant::now();
@@ -669,6 +695,10 @@ fn after_runs_the_task_once_the_delay_elapses() {
         scope: ScopeId(1),
         tx: cmd_tx,
         runtime_id: super::RuntimeId::next(),
+        now: web_time::Instant::now(),
+        clock_mode: crate::automation::ClockMode::Realtime,
+        clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
+        activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
     });
 
     ran_rx
@@ -684,11 +714,15 @@ fn after_runs_the_task_once_the_delay_elapses() {
 /// after a long tick would be held behind it.
 #[test]
 fn after_fires_in_due_order_regardless_of_submission_order() {
-    let (cmd_tx, _cmd_rx) = mpsc::channel();
+    let (cmd_tx, _cmd_rx, _wake_rx, _wake_tx) = super::CommandTx::channel();
     let runtime = || CommandRuntime {
         scope: ScopeId(1),
         tx: cmd_tx.clone(),
         runtime_id: super::RuntimeId::next(),
+        now: web_time::Instant::now(),
+        clock_mode: crate::automation::ClockMode::Realtime,
+        clock: crate::core::runtime_env::SessionClock::new(crate::automation::ClockMode::Realtime),
+        activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
     };
     let (order_tx, order_rx) = mpsc::channel();
 

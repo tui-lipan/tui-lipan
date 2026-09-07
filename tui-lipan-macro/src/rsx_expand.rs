@@ -265,7 +265,7 @@ fn add_method_for_parent(parent_ty: &str) -> Ident {
 fn is_element_constraint(name: &str) -> bool {
     matches!(
         name,
-        "min_width" | "max_width" | "min_height" | "max_height"
+        "min_width" | "max_width" | "min_height" | "max_height" | "automation_id"
     )
 }
 

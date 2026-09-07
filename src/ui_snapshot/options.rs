@@ -47,10 +47,8 @@ pub enum UiSnapshotFileFormat {
     /// Markdown report (always available).
     Markdown,
     /// JSON export (`ui-snapshot-json` feature).
-    #[cfg(feature = "ui-snapshot-json")]
     Json,
     /// PNG image export (`ui-snapshot-png` feature).
-    #[cfg(feature = "ui-snapshot-png")]
     Png,
 }
 
@@ -71,25 +69,18 @@ impl Default for UiSnapshotFileFormat {
 impl UiSnapshotFileFormat {
     /// Route a snapshot path to a format by file extension.
     ///
-    /// Returns [`Self::Json`] for `.json` and [`Self::Png`] for `.png` when the
-    /// matching feature is enabled, and [`Self::Markdown`] for anything else -
-    /// including a `.png` path in a build without `ui-snapshot-png`, so a missing
-    /// feature degrades to a readable report instead of failing.
+    /// Returns [`Self::Json`] for `.json`, [`Self::Png`] for `.png`, and
+    /// [`Self::Markdown`] for any other extension. Encoding reports a clear error
+    /// when the selected format's feature is absent.
     pub fn from_path(path: &std::path::Path) -> Self {
         let Some(extension) = path.extension() else {
             return Self::Markdown;
         };
         if extension.eq_ignore_ascii_case("json") {
-            #[cfg(feature = "ui-snapshot-json")]
-            {
-                return Self::Json;
-            }
+            return Self::Json;
         }
         if extension.eq_ignore_ascii_case("png") {
-            #[cfg(feature = "ui-snapshot-png")]
-            {
-                return Self::Png;
-            }
+            return Self::Png;
         }
         Self::Markdown
     }

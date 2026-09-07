@@ -111,6 +111,55 @@ enum RunnerEvent {
 type ExitViewFn<C> = dyn Fn(&C, &Context<C>) -> Element;
 
 const HOST_COLOR_REFRESH_QUIET_WINDOW: Duration = Duration::from_millis(50);
+const HEADLESS_AUTOMATION_ENV: &str = "TUI_LIPAN_AUTOMATION_HEADLESS";
+const HEADLESS_AUTOMATION_VIEWPORT_ENV: &str = "TUI_LIPAN_AUTOMATION_VIEWPORT";
+
+fn headless_automation_viewport() -> Result<Rect> {
+    let raw =
+        std::env::var(HEADLESS_AUTOMATION_VIEWPORT_ENV).unwrap_or_else(|_| "80x24".to_owned());
+    let (width, height) = raw.split_once('x').ok_or_else(|| {
+        std::io::Error::other(format!(
+            "{HEADLESS_AUTOMATION_VIEWPORT_ENV} must be WIDTHxHEIGHT"
+        ))
+    })?;
+    let width = width.parse::<u16>().map_err(|_| {
+        std::io::Error::other(format!(
+            "{HEADLESS_AUTOMATION_VIEWPORT_ENV} width must be an integer"
+        ))
+    })?;
+    let height = height.parse::<u16>().map_err(|_| {
+        std::io::Error::other(format!(
+            "{HEADLESS_AUTOMATION_VIEWPORT_ENV} height must be an integer"
+        ))
+    })?;
+    Ok(Rect {
+        x: 0,
+        y: 0,
+        w: width.max(1),
+        h: height.max(1),
+    })
+}
+
+fn automation_error_code(error: &crate::automation::AutomationError) -> &'static str {
+    use crate::automation::AutomationError;
+
+    match error {
+        AutomationError::Cancelled => "CANCELLED",
+        AutomationError::DeadlineExceeded | AutomationError::WaitTimeout { .. } => {
+            "DEADLINE_EXCEEDED"
+        }
+        AutomationError::NoMatch { .. } => "NO_MATCH",
+        AutomationError::AmbiguousMatch { .. } => "AMBIGUOUS_MATCH",
+        AutomationError::NotActionable => "NOT_ACTIONABLE",
+        AutomationError::NotInView => "NOT_IN_VIEW",
+        AutomationError::DuplicateAutomationId { .. } => "DUPLICATE_AUTOMATION_ID",
+        AutomationError::UnsupportedFormat(_) => "UNSUPPORTED_FORMAT",
+        AutomationError::DrainDidNotConverge { .. } => "DRAIN_DID_NOT_CONVERGE",
+        AutomationError::SessionClosed => "SESSION_CLOSED",
+        AutomationError::Script(_) => "MALFORMED_OPERATION",
+        _ => "OPERATION_ERROR",
+    }
+}
 
 #[allow(deprecated)]
 fn invalidate_previous_frame<B: ratatui::backend::Backend>(terminal: &mut RatatuiTerminal<B>) {
@@ -386,7 +435,7 @@ impl PlatformInputCoordinator {
 pub struct AppRunner<C: Component> {
     pub(crate) title: Option<String>,
     pub(crate) surface: SurfaceDriver,
-    pub(crate) core: RuntimeCore<C>,
+    pub(crate) core: crate::session::SessionEngine<C>,
     pub(crate) focus: FocusState,
     on_focus_changed: Option<crate::app::context::FocusChangedHook>,
     pub(crate) drag: DragState,
@@ -521,6 +570,14 @@ impl<C: Component> AppRunner<C> {
         let mouse_enabled = app.mouse_enabled.unwrap_or(!inline_mode);
         let mouse_capture_requested = Rc::new(Cell::new(mouse_enabled));
         let host_terminal_color_refresh_enabled = app.live_host_terminal_colors || app.system_theme;
+        let clock_mode = if std::env::var_os("TUI_LIPAN_SNAPSHOT").is_some()
+            || std::env::var_os("TUI_LIPAN_RECORD").is_some()
+            || std::env::var_os(HEADLESS_AUTOMATION_ENV).is_some()
+        {
+            crate::automation::ClockMode::Controlled
+        } else {
+            crate::automation::ClockMode::Realtime
+        };
 
         let mut clipboard_config = app.clipboard_config;
         let system_provider: Box<dyn ClipboardProvider> =
@@ -560,6 +617,7 @@ impl<C: Component> AppRunner<C> {
                 viewport: Rect::default(),
                 theme: app.theme.clone(),
                 surface_mode: app.surface_mode,
+                clock_mode,
                 mouse_capture: mouse_capture_requested.clone(),
                 clipboard: clipboard.clone(),
                 clipboard_config: clipboard_config.clone(),
@@ -664,10 +722,10 @@ impl<C: Component> AppRunner<C> {
         #[cfg(feature = "image")]
         let animation = AnimationState {
             last_image_protocol_epoch: image_protocol_ready_epoch(),
-            ..AnimationState::default()
+            ..AnimationState::new(core.ctx.env().clock.clone())
         };
         #[cfg(not(feature = "image"))]
-        let animation = AnimationState::default();
+        let animation = AnimationState::new(core.ctx.env().clock.clone());
 
         #[cfg(feature = "devtools")]
         let devtools_log_queue = Arc::new(Mutex::new(VecDeque::new()));
@@ -685,6 +743,9 @@ impl<C: Component> AppRunner<C> {
         };
         let on_focus_changed = app.on_focus_changed.clone();
         let last_mouse = core.ctx.env().last_mouse.clone();
+        let drag = DragState::with_clock(core.ctx.env().clock.clone());
+        let copy_feedback =
+            crate::app::copy_feedback::CopyFeedbackState::new(core.ctx.env().clock.clone());
         let frame_interval = crate::app::context::frame_interval(app.frame_rate);
         // A style-only fade is a subset of self-driven frames and must never outrun the app-wide
         // ceiling, even when the two setters are called in the opposite order.
@@ -695,13 +756,13 @@ impl<C: Component> AppRunner<C> {
         AppRunner {
             title: app.title,
             surface,
-            core,
+            core: core.into(),
             focus,
             on_focus_changed,
-            drag: DragState::default(),
+            drag,
             mouse: MouseTrackingState::with_pointer_cell(last_mouse),
             animation,
-            copy_feedback: Default::default(),
+            copy_feedback,
             widgets: WidgetState::default(),
             terminal: TerminalManager::default(),
             clipboard,
@@ -1125,6 +1186,7 @@ impl<C: Component> AppRunner<C> {
     }
 
     /// Rect of the widget carrying `key`, if it is in the current tree.
+    #[cfg(test)]
     fn rect_for_key(&self, key: &crate::core::element::Key) -> Option<crate::style::Rect> {
         self.core
             .tree
@@ -1133,16 +1195,30 @@ impl<C: Component> AppRunner<C> {
             .map(|node| node.rect)
     }
 
+    fn rect_for_automation_id(
+        &self,
+        automation_id: &crate::automation::AutomationId,
+    ) -> Option<crate::style::Rect> {
+        self.core
+            .tree
+            .iter()
+            .find(|node| node.automation_id.as_ref() == Some(automation_id))
+            .map(|node| node.rect)
+    }
+
     /// Run one scripted action, then settle the frame it produced.
     fn headless_action(
         &mut self,
-        action: &crate::ui_snapshot::Action,
+        action: &crate::automation::AutomationStep,
         bounds: crate::style::Rect,
     ) -> Result<()> {
-        crate::ui_snapshot::execute(
+        crate::ui_snapshot::execute_step(
             &mut HeadlessActionHost {
                 runner: self,
                 bounds,
+                deadline: None,
+                cancelled: None,
+                controlled_operations: true,
             },
             action,
         )
@@ -1152,12 +1228,7 @@ impl<C: Component> AppRunner<C> {
     fn drain_control_requests(&mut self) -> bool {
         let mut dirty = false;
         loop {
-            let Some(request) = self
-                .control_queue
-                .lock()
-                .ok()
-                .and_then(|mut queue| queue.pop_front())
-            else {
+            let Some(request) = self.control_queue.pop() else {
                 return dirty;
             };
             dirty |= self.handle_control(request);
@@ -1170,39 +1241,90 @@ impl<C: Component> AppRunner<C> {
     fn handle_control(&mut self, request: control::ControlRequest) -> bool {
         use control::{ControlCommand, ControlReply};
 
+        if request.cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            let _ = request.reply.send(ControlReply::Err {
+                code: "CANCELLED",
+                message: format!("request `{}` was cancelled", request.id),
+            });
+            return false;
+        }
+        if std::time::Instant::now() >= request.deadline {
+            let _ = request.reply.send(ControlReply::Err {
+                code: "DEADLINE_EXCEEDED",
+                message: format!("request `{}` expired before execution", request.id),
+            });
+            return false;
+        }
         let command = match control::parse_command(&request.command) {
             Ok(command) => command,
             Err(message) => {
-                let _ = request.reply.send(ControlReply::Err(message));
+                let _ = request.reply.send(ControlReply::Err {
+                    code: "MALFORMED_REQUEST",
+                    message,
+                });
                 return false;
             }
         };
 
         let mut dirty = false;
         let reply = match command {
-            ControlCommand::Ping => ControlReply::Ok("pong".into()),
-            ControlCommand::Keys => ControlReply::Ok(self.control_keys()),
+            ControlCommand::Hello => ControlReply::Ok(
+                format!(
+                    "{{\"protocol\":1,\"max_request_bytes\":65536,\"max_response_bytes\":16777216,\
+                     \"semantic_json\":{},\"png\":{},\"semantic_value_redaction\":true,\
+                     \"pixel_redaction\":false,\
+                     \"semantic_selectors\":true,\"persistent_operations\":true,\
+                     \"controlled_clock\":{}}}",
+                    cfg!(feature = "ui-snapshot-json"),
+                    cfg!(feature = "ui-snapshot-png"),
+                    self.core.ctx.env().clock.mode() == crate::automation::ClockMode::Controlled
+                )
+                .into_bytes(),
+            ),
+            ControlCommand::Ping => ControlReply::Ok(b"pong".to_vec()),
+            ControlCommand::Keys => ControlReply::Ok(self.control_keys().into_bytes()),
             ControlCommand::Quit => {
                 self.core.ctx.request_quit();
-                ControlReply::Ok(String::new())
+                ControlReply::Ok(Vec::new())
             }
             ControlCommand::Highlight(target) => match self.control_highlight(target.as_ref()) {
                 Ok(message) => {
                     dirty = true;
-                    ControlReply::Ok(message)
+                    ControlReply::Ok(message.into_bytes())
                 }
-                Err(err) => ControlReply::Err(err.to_string()),
+                Err(err) => ControlReply::Err {
+                    code: "TARGET_ERROR",
+                    message: err.to_string(),
+                },
             },
-            ControlCommand::Act(script) => match self.control_act(&script) {
-                Ok(()) => {
-                    dirty = true;
-                    ControlReply::Ok(String::new())
+            ControlCommand::Act(script) => {
+                match self.control_act(&script, request.deadline, &request.cancelled) {
+                    Ok(payload) => {
+                        dirty = true;
+                        ControlReply::Ok(payload)
+                    }
+                    Err(err) => ControlReply::Err {
+                        code: automation_error_code(&err),
+                        message: err.to_string(),
+                    },
                 }
-                Err(err) => ControlReply::Err(err.to_string()),
-            },
+            }
             ControlCommand::Snapshot(format) => match self.control_snapshot(format) {
-                Ok(payload) => ControlReply::Ok(payload),
-                Err(err) => ControlReply::Err(err.to_string()),
+                Ok(payload) if payload.len() <= control::MAX_RESPONSE_BYTES => {
+                    ControlReply::Ok(payload)
+                }
+                Ok(payload) => ControlReply::Err {
+                    code: "RESPONSE_TOO_LARGE",
+                    message: format!(
+                        "response is {} bytes; limit is {}",
+                        payload.len(),
+                        control::MAX_RESPONSE_BYTES
+                    ),
+                },
+                Err(err) => ControlReply::Err {
+                    code: "SNAPSHOT_ERROR",
+                    message: err.to_string(),
+                },
             },
         };
 
@@ -1210,45 +1332,70 @@ impl<C: Component> AppRunner<C> {
         dirty
     }
 
-    /// Newline-separated reconciliation keys currently in the tree.
+    /// Newline-separated automation IDs currently in the tree.
     ///
     /// This is the client's index of what it can target, the way a browser tool
     /// lists element refs.
     fn control_keys(&self) -> String {
-        let mut keys: Vec<String> = self
-            .core
-            .tree
-            .iter()
-            .filter_map(|node| node.key.as_ref().map(|key| key.as_ref().to_owned()))
+        let semantic_tree = self.core.semantic_tree(self.focus.focused);
+        let mut ids: Vec<String> = semantic_tree
+            .nodes()
+            .filter_map(|node| node.automation_id.as_ref().map(|id| id.as_ref().to_owned()))
             .collect();
-        keys.sort();
-        keys.dedup();
-        keys.join("\n")
+        ids.sort();
+        ids.dedup();
+        ids.join("\n")
     }
 
     /// Run an action script against the live tree.
-    fn control_act(&mut self, script: &str) -> Result<()> {
-        let actions = crate::ui_snapshot::parse_script(script)?;
-        let bounds = self.last_bounds;
+    fn control_act(
+        &mut self,
+        script: &str,
+        deadline: std::time::Instant,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> std::result::Result<Vec<u8>, crate::automation::AutomationError> {
+        let actions = crate::ui_snapshot::compile_script(script)?;
+        let mut checkpoint_results = Vec::new();
         for action in &actions {
-            self.control_action(action, bounds)?;
+            if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                return Err(crate::automation::AutomationError::Cancelled);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(crate::automation::AutomationError::DeadlineExceeded);
+            }
+            let bounds = self.core.viewport();
+            if let Some(checkpoint) = self.control_action(action, bounds, deadline, cancelled)? {
+                for artifact in checkpoint.artifacts {
+                    if let Some(path) = artifact.path {
+                        checkpoint_results.push(path.display().to_string());
+                    } else if let Some(bytes) = artifact.bytes {
+                        checkpoint_results.push(String::from_utf8_lossy(&bytes).into_owned());
+                    }
+                }
+            }
         }
-        Ok(())
+        Ok(checkpoint_results.join("\n").into_bytes())
     }
 
     /// Run one action against the live tree.
     fn control_action(
         &mut self,
-        action: &crate::ui_snapshot::Action,
+        action: &crate::automation::AutomationStep,
         bounds: crate::style::Rect,
-    ) -> Result<()> {
-        crate::ui_snapshot::execute(
-            &mut HeadlessActionHost {
-                runner: self,
-                bounds,
-            },
-            action,
-        )
+        deadline: std::time::Instant,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> std::result::Result<
+        Option<crate::automation::Checkpoint>,
+        crate::automation::AutomationError,
+    > {
+        let mut host = HeadlessActionHost {
+            runner: self,
+            bounds,
+            deadline: Some(deadline),
+            cancelled: Some(cancelled),
+            controlled_operations: false,
+        };
+        crate::session::execute_operation(&mut host, &action.kind)
     }
 
     /// The inspector highlight rect, if one is set.
@@ -1256,19 +1403,21 @@ impl<C: Component> AppRunner<C> {
         self.highlight
     }
 
-    /// Outline a widget by key, or clear the outline when `key` is `None`.
+    /// Outline a widget by automation ID, or clear the outline.
     fn control_highlight(&mut self, target: Option<&control::HighlightTarget>) -> Result<String> {
         let Some(target) = target else {
             self.highlight = None;
             return Ok(String::new());
         };
         let rect = match target {
-            control::HighlightTarget::Key(key) => {
-                let key = crate::core::element::Key::from(key.clone());
-                self.rect_for_key(&key).ok_or_else(|| {
+            control::HighlightTarget::AutomationId(id) => {
+                let id = crate::automation::AutomationId::try_new(id.clone()).map_err(|error| {
+                    std::io::Error::other(format!("invalid automation ID: {error}"))
+                })?;
+                self.rect_for_automation_id(&id).ok_or_else(|| {
                     std::io::Error::other(format!(
-                        "no widget with key `{}` is currently rendered",
-                        key.as_ref()
+                        "no widget with automation ID `{}` is currently rendered",
+                        id.as_ref()
                     ))
                 })?
             }
@@ -1302,24 +1451,30 @@ impl<C: Component> AppRunner<C> {
     }
 
     /// Capture the live UI in the requested format.
-    fn control_snapshot(&mut self, format: control::SnapshotFormat) -> Result<String> {
+    fn control_snapshot(&mut self, format: control::SnapshotFormat) -> Result<Vec<u8>> {
+        if let Some(id) = self.core.duplicate_automation_id() {
+            return Err(std::io::Error::other(format!("duplicate automation ID `{id}`")).into());
+        }
         let _highlight =
             crate::backend::ratatui_backend::common::push_render_highlight(self.highlight);
-        let snapshot = crate::ui_snapshot::build_ui_snapshot(
+        let _snapshot = crate::ui_snapshot::build_ui_snapshot(
             &self.core.tree,
-            self.last_bounds,
+            self.core.viewport(),
             self.headless_interaction(),
             self.core.ctx.env().effect_phase.get(),
             self.resolved_screen_background(),
             &crate::ui_snapshot::UiSnapshotOptions::default(),
         );
+        let semantics = self.core.semantic_tree(self.focus.focused);
 
         match format {
-            control::SnapshotFormat::Markdown => Ok(snapshot.to_markdown()),
+            control::SnapshotFormat::Markdown => {
+                Ok(crate::automation::semantic_markdown(&semantics))
+            }
             control::SnapshotFormat::Json => {
                 #[cfg(feature = "ui-snapshot-json")]
                 {
-                    Ok(snapshot.to_json_pretty())
+                    Ok(crate::automation::semantic_json(&semantics))
                 }
                 #[cfg(not(feature = "ui-snapshot-json"))]
                 {
@@ -1329,15 +1484,13 @@ impl<C: Component> AppRunner<C> {
                     )
                 }
             }
-            control::SnapshotFormat::Png(path) => {
+            control::SnapshotFormat::Png => {
                 #[cfg(feature = "ui-snapshot-png")]
                 {
-                    std::fs::write(&path, snapshot.to_png_default()?)?;
-                    Ok(path.display().to_string())
+                    _snapshot.to_png_default()
                 }
                 #[cfg(not(feature = "ui-snapshot-png"))]
                 {
-                    let _ = path;
                     Err(
                         std::io::Error::other("PNG snapshots need `--features ui-snapshot-png`")
                             .into(),
@@ -1518,8 +1671,8 @@ impl<C: Component> AppRunner<C> {
 
         for action in &config.actions {
             // A wait spends timeline rather than taking a step plus a pause.
-            if let crate::ui_snapshot::Action::Wait(dt) = action {
-                self.headless_hold(&mut cast, &mut frames, &mut clock, *dt, step, bounds)?;
+            if let Some(dt) = action.advance_duration() {
+                self.headless_hold(&mut cast, &mut frames, &mut clock, dt, step, bounds)?;
                 continue;
             }
             self.headless_action(action, bounds)?;
@@ -1712,6 +1865,46 @@ impl<C: Component> AppRunner<C> {
         Ok(())
     }
 
+    /// Keep an off-screen controlled session alive for external automation clients.
+    fn run_headless_automation(mut self) -> Result<()> {
+        crate::debug::init_logging();
+        let path = control::control_path().ok_or_else(|| {
+            std::io::Error::other(
+                "TUI_LIPAN_AUTOMATION_HEADLESS requires TUI_LIPAN_CONTROL=<socket-path>",
+            )
+        })?;
+        let bounds = headless_automation_viewport()?;
+        self.core.set_viewport(bounds);
+        self.last_bounds = bounds;
+        self.core.init();
+        self.headless_render(bounds);
+
+        let (event_tx, event_rx) = mpsc::channel();
+        let _control_guard = control::spawn(path, self.control_queue.clone(), event_tx)?;
+        while !self.core.ctx.env().quit.get() {
+            match event_rx.recv_timeout(Duration::from_millis(10)) {
+                Ok(RunnerEvent::Control) => {
+                    if self.drain_control_requests() {
+                        let viewport = self.core.viewport();
+                        self.headless_render(viewport);
+                    }
+                }
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+
+            self.core.drain_due_timers();
+            let mut dirty = DirtyTracker::default();
+            self.drain_messages_and_commands(&mut dirty)?;
+            if dirty.is_dirty() {
+                let viewport = self.core.viewport();
+                self.headless_render(viewport);
+            }
+        }
+        self.core.shutdown();
+        Ok(())
+    }
+
     /// Run the application event loop.
     ///
     /// With `TUI_LIPAN_SNAPSHOT` set, this instead renders one frame off-screen,
@@ -1724,6 +1917,9 @@ impl<C: Component> AppRunner<C> {
         }
         if let Some(config) = headless_snapshot::HeadlessSnapshotConfig::from_env() {
             return self.run_headless_snapshot(config?);
+        }
+        if std::env::var_os(HEADLESS_AUTOMATION_ENV).is_some() {
+            return self.run_headless_automation();
         }
         crate::debug::init_logging();
         #[cfg(feature = "devtools")]
@@ -1893,7 +2089,7 @@ impl<C: Component> AppRunner<C> {
                     Some(sender) => {
                         _control_guard = Some(control::spawn(
                             path.clone(),
-                            Arc::clone(&self.control_queue),
+                            self.control_queue.clone(),
                             sender,
                         )?);
                         crate::debug::internal_log!(
@@ -2629,7 +2825,7 @@ impl<C: Component> AppRunner<C> {
                 terminal.backend_mut().flush()?;
             }
 
-            self.core.component.unmount(&mut self.core.ctx);
+            self.core.shutdown();
             Ok(())
         })();
 
@@ -2849,26 +3045,51 @@ mod run_tests;
 struct HeadlessActionHost<'a, C: Component> {
     runner: &'a mut AppRunner<C>,
     bounds: crate::style::Rect,
+    deadline: Option<std::time::Instant>,
+    cancelled: Option<&'a std::sync::atomic::AtomicBool>,
+    controlled_operations: bool,
 }
 
-impl<C: Component> crate::ui_snapshot::ActionHost for HeadlessActionHost<'_, C> {
-    fn rect_of_key(&self, key: &crate::core::element::Key) -> Option<crate::style::Rect> {
-        self.runner.rect_for_key(key)
+impl<C: Component> crate::session::OperationHost for HeadlessActionHost<'_, C> {
+    fn duplicate_automation_id(&self) -> Option<crate::automation::AutomationId> {
+        self.runner.core.duplicate_automation_id().cloned()
     }
 
-    fn perform_key(&mut self, key: crate::core::event::KeyEvent) -> Result<()> {
+    fn cancelled(&self) -> bool {
+        self.cancelled
+            .is_some_and(|cancelled| cancelled.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    fn wall_deadline(&self) -> Option<std::time::Instant> {
+        self.deadline
+    }
+
+    fn semantics(&self) -> crate::automation::SemanticTree {
+        self.runner.core.semantic_tree(self.runner.focus.focused)
+    }
+
+    fn current_pointer(&self) -> Option<(u16, u16)> {
+        self.runner.mouse.last_mouse.get()
+    }
+
+    fn clock_mode(&self) -> crate::automation::ClockMode {
+        if self.controlled_operations {
+            crate::automation::ClockMode::Controlled
+        } else {
+            self.runner.core.ctx.env().clock.mode()
+        }
+    }
+
+    fn send_key(&mut self, key: crate::core::event::KeyEvent) -> Result<()> {
         self.runner.headless_dispatch_key(key, self.bounds)
     }
 
-    fn perform_mouse(&mut self, event: MouseEvent) -> Result<()> {
+    fn send_mouse(&mut self, event: MouseEvent) -> Result<()> {
         match event.kind {
             crate::core::event::MouseKind::Moved => {
                 self.runner.dispatch_mouse(event);
             }
             crate::core::event::MouseKind::ScrollUp | crate::core::event::MouseKind::ScrollDown => {
-                // A scripted wheel action is one raw tick; `dispatch_mouse_scroll` takes ticks and
-                // applies `scroll_wheel_multiplier` itself, so passing the multiplier here would
-                // square it.
                 self.runner.dispatch_mouse_scroll(event, 1);
             }
             _ => {
@@ -2876,50 +3097,149 @@ impl<C: Component> crate::ui_snapshot::ActionHost for HeadlessActionHost<'_, C> 
             }
         }
         self.runner.notify_focus_change();
-
-        let mut dirty = DirtyTracker::default();
-        self.runner.drain_messages_and_commands(&mut dirty)?;
-        self.runner.headless_render(self.bounds);
         Ok(())
     }
 
-    fn perform_focus_key(&mut self, key: &crate::core::element::Key) -> Result<bool> {
-        let Some(id) = self
-            .runner
-            .core
-            .tree
-            .iter()
-            .find(|node| node.key.as_ref() == Some(key))
-            .map(|node| node.id)
-        else {
-            return Ok(false);
-        };
-        if !self.runner.core.tree.node(id).is_focusable() {
+    fn focus_node(&mut self, node: NodeId) -> Result<bool> {
+        if !self.runner.core.tree.node(node).is_focusable() {
             return Ok(false);
         }
-        self.runner.focus.focused = Some(id);
-        self.runner.focus.focused_key = Some(key.clone());
+        self.runner.focus.focused = Some(node);
+        self.runner.focus.focused_key = self.runner.core.tree.node(node).key.clone();
         self.runner.notify_focus_change();
-        self.runner.headless_render(self.bounds);
         Ok(true)
     }
 
-    fn perform_focus_step(&mut self, step: crate::ui_snapshot::FocusStep) -> Result<()> {
-        let direction = match step {
-            crate::ui_snapshot::FocusStep::Next => focus::FocusDirection::Next,
-            crate::ui_snapshot::FocusStep::Prev => focus::FocusDirection::Prev,
+    fn focus_step(&mut self, direction: crate::automation::FocusDirection) -> Result<()> {
+        let direction = match direction {
+            crate::automation::FocusDirection::Next => focus::FocusDirection::Next,
+            crate::automation::FocusDirection::Previous => focus::FocusDirection::Prev,
         };
         self.runner.framework_focus_step(direction);
         self.runner.notify_focus_change();
+        Ok(())
+    }
+
+    fn resize(
+        &mut self,
+        width: u16,
+        height: u16,
+    ) -> std::result::Result<(), crate::automation::AutomationError> {
+        self.bounds.w = width;
+        self.bounds.h = height;
+        self.runner.last_bounds = self.bounds;
         self.runner.headless_render(self.bounds);
         Ok(())
     }
 
-    fn perform_wait(&mut self, dt: std::time::Duration) -> Result<()> {
-        self.runner.headless_advance_clock(dt, self.bounds)
+    fn advance(
+        &mut self,
+        duration: Duration,
+    ) -> std::result::Result<(), crate::automation::AutomationError> {
+        let mut remaining = duration;
+        while !remaining.is_zero() {
+            if self.cancelled() {
+                return Err(crate::automation::AutomationError::Cancelled);
+            }
+            if self
+                .wall_deadline()
+                .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+            {
+                return Err(crate::automation::AutomationError::DeadlineExceeded);
+            }
+            let step = remaining.min(Duration::from_millis(16));
+            self.runner.headless_advance_clock(step, self.bounds)?;
+            remaining = remaining.saturating_sub(step);
+        }
+        Ok(())
     }
 
-    fn perform_sleep(&mut self, dt: std::time::Duration) -> Result<()> {
-        self.runner.headless_settle(dt, self.bounds)
+    fn sleep(
+        &mut self,
+        duration: Duration,
+    ) -> std::result::Result<(), crate::automation::AutomationError> {
+        let start = std::time::Instant::now();
+        let deadline = start.checked_add(duration).unwrap_or(start);
+        while std::time::Instant::now() < deadline {
+            if self.cancelled() {
+                return Err(crate::automation::AutomationError::Cancelled);
+            }
+            if self
+                .wall_deadline()
+                .is_some_and(|request_deadline| std::time::Instant::now() >= request_deadline)
+            {
+                return Err(crate::automation::AutomationError::DeadlineExceeded);
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            self.runner
+                .headless_settle(remaining.min(Duration::from_millis(10)), self.bounds)?;
+        }
+        Ok(())
+    }
+
+    fn drain_round(&mut self) -> std::result::Result<bool, crate::automation::AutomationError> {
+        self.runner.core.drain_due_timers();
+        let mut dirty = DirtyTracker::default();
+        self.runner.drain_messages_and_commands(&mut dirty)?;
+        if dirty.is_dirty() {
+            self.runner.headless_render(self.bounds);
+        }
+        Ok(dirty.is_dirty())
+    }
+
+    fn idle_report(&self, dirty: bool) -> crate::automation::IdleReport {
+        let (due_timers, future_timers) = self.runner.core.deferred_timer_counts();
+        crate::automation::IdleReport {
+            queued_messages: self.runner.core.queue.borrow().len(),
+            due_timers,
+            future_timers,
+            dirty,
+            tracked_commands: self.runner.core.ctx.env().activity.tracked_commands(),
+            external_links_untracked: true,
+        }
+    }
+
+    fn logical_elapsed(&self) -> Duration {
+        self.runner.core.ctx.env().clock.elapsed()
+    }
+
+    fn wait_for_activity(&mut self, timeout: Duration) {
+        let _ = self.runner.core.wait_for_command(timeout);
+    }
+
+    fn commit_after_drain(
+        &mut self,
+    ) -> std::result::Result<(), crate::automation::AutomationError> {
+        self.runner.headless_render(self.bounds);
+        if let Some(id) = self.runner.core.duplicate_automation_id() {
+            return Err(crate::automation::AutomationError::DuplicateAutomationId {
+                id: id.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    fn checkpoint(
+        &mut self,
+        name: &str,
+    ) -> std::result::Result<crate::automation::Checkpoint, crate::automation::AutomationError>
+    {
+        crate::automation::validate_checkpoint_name(name)?;
+        let directory = std::env::var_os("TUI_LIPAN_AUTOMATION_ARTIFACTS")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("automation-artifacts"));
+        let path = directory.join(format!("{name}.md"));
+        let bytes = crate::automation::semantic_markdown(&self.semantics());
+        crate::utils::atomic_file::write(&path, &bytes)?;
+        Ok(crate::automation::Checkpoint {
+            name: Arc::from(name),
+            generation: self.runner.core.generation(),
+            artifacts: vec![crate::automation::CheckpointArtifact {
+                format: crate::automation::CheckpointFormat::Markdown,
+                bytes: None,
+                path: Some(path),
+                baseline: None,
+            }],
+        })
     }
 }

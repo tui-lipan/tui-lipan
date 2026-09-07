@@ -810,7 +810,7 @@ impl<C: Component> AppRunner<C> {
 
                 let autoscrolled = self.maybe_autoscroll_selection_scroll_view_drag_edge(id, y)
                     || self.maybe_autoscroll_text_area_drag_edge(id, y);
-                self.drag.last_autoscroll_tick = Some(web_time::Instant::now());
+                self.drag.last_autoscroll_tick = Some(self.core.ctx.env().now());
                 if !autoscrolled {
                     return false;
                 }
@@ -828,7 +828,7 @@ impl<C: Component> AppRunner<C> {
                 } else {
                     false
                 };
-                self.drag.last_autoscroll_tick = Some(web_time::Instant::now());
+                self.drag.last_autoscroll_tick = Some(self.core.ctx.env().now());
                 if !autoscrolled {
                     return false;
                 }
@@ -837,7 +837,7 @@ impl<C: Component> AppRunner<C> {
             }
             ActiveDrag::DragDrop(drag) => {
                 let sv_id = drag.scroll_view_id;
-                self.drag.last_autoscroll_tick = Some(web_time::Instant::now());
+                self.drag.last_autoscroll_tick = Some(self.core.ctx.env().now());
                 let Some(sv_id) = sv_id else { return false };
                 let autoscrolled = self.maybe_autoscroll_scroll_view_edge_for(sv_id, y);
                 if autoscrolled {
@@ -853,7 +853,7 @@ impl<C: Component> AppRunner<C> {
                     return false;
                 }
                 let autoscrolled = self.maybe_autoscroll_terminal_drag_edge(id, y);
-                self.drag.last_autoscroll_tick = Some(web_time::Instant::now());
+                self.drag.last_autoscroll_tick = Some(self.core.ctx.env().now());
                 if !autoscrolled {
                     return false;
                 }

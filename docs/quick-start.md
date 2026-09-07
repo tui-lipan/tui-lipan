@@ -68,8 +68,8 @@ tui-lipan = { version = "*", features = ["image", "big-text"] }
 |---------|---------|-----------------|
 | `clipboard` | **Yes** | System clipboard via arboard (X11/Wayland/macOS/Windows) |
 | `devtools` | No | In-app DevTools overlay (`F12` by default, rebindable) with frame stats and debug log console; controllable from `Context` and configurable via `DevToolsConfig` |
-| `ui-snapshot-json` | No | JSON export for `UiSnapshot::to_json()` (markdown export is always available) |
-| `ui-snapshot-png` | No | Font-backed PNG export for `UiSnapshot::to_png()` / `to_png_default()` and `CapturedFrame::to_png()` |
+| `ui-snapshot-json` | No | JSON export for `UiSnapshot` and semantic automation checkpoints |
+| `ui-snapshot-png` | No | PNG capture, automation checkpoint, recording-frame, and visual-baseline support |
 | `clipboard-images` | No | Image clipboard read/write (without `Image` rendering widget) |
 | `big-text` | No | Large ASCII/pixel text via FIGlet and pixel fonts - `BigText` |
 | `diff-view` | No | Side-by-side/unified diff viewer - `DiffView` |

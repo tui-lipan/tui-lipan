@@ -5,7 +5,6 @@ use crate::app::input::keymap::{FrameworkAction, FrameworkKeymap, UserKeymapPoli
 #[cfg(not(target_arch = "wasm32"))]
 use crate::app::runner::AppRunner;
 use crate::clipboard::{ClipboardConfig, ClipboardError, ClipboardProvider, ClipboardReporter};
-#[cfg(not(target_arch = "wasm32"))]
 use crate::core::component::Component;
 use crate::input::KeyBindings;
 use crate::layout::tag::Tag;
@@ -811,6 +810,32 @@ impl App {
     pub fn system_theme(mut self) -> Self {
         self.system_theme = true;
         self
+    }
+
+    /// Mount a persistent headless automation session with default properties.
+    pub fn automation<C>(
+        self,
+        component: C,
+        options: crate::automation::AutomationOptions,
+    ) -> Result<crate::automation::AutomationSession<C>, crate::automation::AutomationError>
+    where
+        C: Component,
+        C::Properties: Default,
+    {
+        self.automation_with_props(component, C::Properties::default(), options)
+    }
+
+    /// Mount a persistent headless automation session with explicit properties.
+    pub fn automation_with_props<C>(
+        self,
+        component: C,
+        props: C::Properties,
+        options: crate::automation::AutomationOptions,
+    ) -> Result<crate::automation::AutomationSession<C>, crate::automation::AutomationError>
+    where
+        C: Component,
+    {
+        crate::automation::AutomationSession::with_app(self, component, props, options)
     }
 
     /// Configure runtime devtools subsystem behavior.

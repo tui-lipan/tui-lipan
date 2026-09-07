@@ -54,7 +54,7 @@ pub(super) struct HeadlessRecordConfig {
     /// Capture rate, at least 1.
     pub(super) fps: u16,
     /// Actions to play, in order.
-    pub(super) actions: Vec<crate::ui_snapshot::Action>,
+    pub(super) actions: Vec<crate::automation::AutomationStep>,
     /// Pause held after each key.
     pub(super) key_delay: Duration,
     /// Hold on the final frame.

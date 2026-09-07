@@ -230,6 +230,11 @@ fn describe_node(
         _ => {}
     }
 
+    if node.semantic_value_sensitive {
+        desc.value = None;
+        desc.value_masked = true;
+    }
+
     Some(desc)
 }
 

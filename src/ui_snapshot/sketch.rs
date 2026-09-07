@@ -81,6 +81,7 @@ pub struct Sketch<C: Component> {
     focus_steps: usize,
     options: UiSnapshotOptions,
     key_script: Option<String>,
+    action_script: Option<String>,
     advance: Duration,
     #[cfg(feature = "ui-snapshot-png")]
     baseline_dir: Option<PathBuf>,
@@ -119,6 +120,7 @@ where
             focus_steps: 0,
             options: UiSnapshotOptions::default(),
             key_script: None,
+            action_script: None,
             advance: Duration::ZERO,
             #[cfg(feature = "ui-snapshot-png")]
             baseline_dir: None,
@@ -217,6 +219,16 @@ where
     #[must_use]
     pub fn keys(mut self, script: impl AsRef<str>) -> Self {
         self.key_script = Some(script.as_ref().to_owned());
+        self
+    }
+
+    /// Execute an automation script before capturing.
+    ///
+    /// `#name` targets an app-authored automation ID. This takes precedence over
+    /// [`Self::keys`].
+    #[must_use]
+    pub fn script(mut self, script: impl AsRef<str>) -> Self {
+        self.action_script = Some(script.as_ref().to_owned());
         self
     }
 
@@ -320,6 +332,7 @@ where
             focus_steps,
             options,
             key_script,
+            action_script,
             advance,
             #[cfg(feature = "ui-snapshot-png")]
             baseline_dir,
@@ -331,9 +344,17 @@ where
             png,
             json,
         };
-        let keys = match key_script.as_deref() {
-            Some(script) => super::keys::parse_key_script(script)?,
-            None => Vec::new(),
+        let actions = if let Some(script) = action_script.as_deref() {
+            super::compile_script(script)
+                .map_err(|error| std::io::Error::other(error.to_string()))?
+        } else {
+            match key_script.as_deref() {
+                Some(script) => super::keys::parse_key_script(script)?
+                    .into_iter()
+                    .map(crate::automation::AutomationStep::key)
+                    .collect(),
+                None => Vec::new(),
+            }
         };
 
         let dir = dir.unwrap_or_else(default_sketch_dir);
@@ -384,10 +405,9 @@ where
                 backend.render();
             }
 
-            // Keys run after layout exists, so handlers see real rects and a
-            // resolved focus target.
-            for key in &keys {
-                backend.send_key(*key)?;
+            // Actions run after layout exists, so selectors and handlers see real rects.
+            for action in &actions {
+                super::execute_step(&mut backend, action)?;
             }
             if !advance.is_zero() {
                 backend.advance(advance);

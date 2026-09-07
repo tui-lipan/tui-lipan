@@ -347,15 +347,18 @@ impl From<Radio> for Element {
                     }));
                 }
 
-                if is_active {
+                let element = if is_active {
                     checkbox.key(focus_key.clone())
                 } else {
                     checkbox.into()
-                }
+                };
+                element
+                    .semantic_role(crate::automation::SemanticRole::Radio)
+                    .semantic_selected(is_selected)
             })
             .collect();
 
-        match radio.layout {
+        let group: Element = match radio.layout {
             RadioLayout::Vertical => {
                 let mut stack = VStack::new().gap(radio.gap);
                 for item in items {
@@ -370,7 +373,8 @@ impl From<Radio> for Element {
                 }
                 stack.into()
             }
-        }
+        };
+        group.semantic_role(crate::automation::SemanticRole::RadioGroup)
     }
 }
 

@@ -332,6 +332,8 @@ impl Toast {
             element = element.max_width(max_width);
         }
         element
+            .semantic_role(crate::automation::SemanticRole::Alert)
+            .semantic_name(self.message)
     }
 }
 

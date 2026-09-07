@@ -11,7 +11,61 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- Added persistent typed automation sessions with app-authored `AutomationId` selectors,
+  hierarchical value-redacted `SemanticTree` snapshots, controlled and realtime session clocks,
+  semantic waits, activity-aware idle reports, resize-preserving execution, and atomic named
+  checkpoints.
+- `Sketch::script(...)`, recordings, environment captures, and live control now compile scripts
+  into the shared `AutomationStep` operation model.
+- `TUI_LIPAN_AUTOMATION_HEADLESS=1` runs an app as a persistent off-screen control server with
+  controlled time, semantic selectors and snapshots, waits, resize, and named checkpoints.
+- `rsx!` accepts `automation_id:` as an element modifier.
+
+### Changed
+
+- Action-script `#name` targets an `AutomationId` instead of a sibling-scoped reconciliation
+  `Key`; add `.automation_id("name")` to stable script targets. The public exhaustive `Action`,
+  `Target`, `FocusStep`, and `ScrollDirection` snapshot APIs were removed in favor of
+  `AutomationStep`, `Selector`, and `AutomationScrollDirection`. (breaking)
+- `TestBackend` now uses a controlled session clock: wall sleep no longer fires framework timers;
+  call `advance(...)` explicitly. (breaking)
+- The Unix control socket now requires versioned request IDs and wall deadlines, returns structured
+  length-prefixed errors and capture bytes, enforces 64 KiB request / 16 MiB response bounds, and
+  supports cooperative cancellation. Server-side PNG output paths were removed. (breaking)
+- Automation IDs now reject empty, oversized, or script-unsafe values, semantic snapshots use the
+  `tui-lipan.semantic/1` schema, checkpoint baseline outcomes are typed, and public automation
+  records and enums are non-exhaustive. (breaking)
+- `Error` now includes `DuplicateAutomationId` so native and web render commits reject invalid
+  semantic identity instead of deferring the failure to automation. (breaking)
 ### Fixed
+
+- Controlled sessions now route command-link delays, overlays, animation, drag timing, and copy
+  feedback through the session clock. Ready work drains to a bounded fixed point and reports
+  `DrainDidNotConverge` instead of returning a false idle result.
+- Semantic click, focus, scroll, and drag operations now reject disabled nodes or nodes that do not
+  advertise the required action. Live control and test scripts use the same selector and input
+  executor.
+- Duplicate automation IDs return `DuplicateAutomationId` in all build profiles instead of
+  panicking, and semantic list, table, and tab children expose `ListItem`, `Row`, `Cell`, and `Tab`
+  roles.
+- Control scripts preserve resized viewports between operations, and all hosts now share
+  per-pointer-event settlement, rich wait timeout diagnostics, mandatory commits, and
+  cancellation-safe composite pointer gestures.
+- Web builds once again compile with the public automation mount methods.
+- Semantic Markdown and JSON redact sensitive values; documentation and protocol capabilities now
+  identify PNGs, recordings, and visual baselines as unredacted rendered pixels.
+- A hoisted overlay portal declares its semantic role, accessible name, and automation ID on the
+  content it moved, not on the empty placeholder it left behind. A `Modal` used to project an
+  invisible zero-area `Dialog` next to the `Group` holding the actual dialog, so `@dialog` matched
+  a node that could never be in view and a `.automation_id(...)` on the modal itself pointed at
+  nothing clickable. A declaration on the portal's content still wins over the portal's own.
+- Action scripts can spell every `WaitCondition`. `wait-for:` gained `selected`, `selected=false`,
+  `value=...`, `text=...`, and `count=...` alongside the six predicates it already accepted; a
+  predicate's value rides inside the first field so a comma-bearing selector still parses.
+- The control protocol's unknown-command error lists `cancel`, and a `cancel` missing its request
+  ID says so instead of reporting the verb as unknown.
 
 - `DraggableTabBar::close_on_hover_only()` no longer truncates tab labels for a close control that
   is not on screen. The close cells stay part of every closeable tab's measured width, so the label

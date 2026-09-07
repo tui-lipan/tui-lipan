@@ -38,6 +38,21 @@ Before adding a framework primitive, verify that it:
 - includes user-facing docs, examples or tests when appropriate, and a changelog
   entry when the behavior or API is user-visible.
 
+### Automation semantics
+
+Every realized primitive receives a stable `SemanticRole`, accessible name,
+redaction-safe value, applicable checked/selected/expanded state, and its
+supported semantic actions in `src/automation/semantic.rs`. Composite widgets
+must override implementation-detail roles on their semantic root and meaningful
+children—for example, a radio group must project `RadioGroup` and `Radio`, not
+only its internal stacks and buttons.
+
+Automation identity is app-authored. Builders inherit
+`.automation_id("name")` through `IntoElement`; never generate IDs or reuse
+`.key(...)` as a fallback. Add tests for duplicate IDs, masked/sensitive values,
+overlay traversal, and selector actionability when the widget participates in
+those contracts.
+
 ---
 
 ## 2. End-to-End Checklist (Primitive Widget)

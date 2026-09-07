@@ -81,7 +81,13 @@ impl<C: Component> WebTerminal<C> {
             w: cols.max(1),
             h: rows.max(1),
         };
-        let mut backend = TestBackend::new_with_props(component, props);
+        let mut backend = TestBackend::new_with_app_clock(
+            crate::app::App::new(),
+            component,
+            props,
+            crate::automation::ClockMode::Realtime,
+            viewport,
+        );
         #[cfg(all(target_arch = "wasm32", feature = "web"))]
         {
             backend
@@ -91,8 +97,6 @@ impl<C: Component> WebTerminal<C> {
                 .clipboard
                 .replace_provider(Box::new(WebClipboardProvider::new()));
         }
-        backend.set_viewport(viewport);
-        backend.render();
         let _ = backend.pump()?;
         let mut s = Self {
             backend,
@@ -174,6 +178,7 @@ impl<C: Component> WebTerminal<C> {
     fn paint_now(&mut self) -> Result<()> {
         self.effect_phase = self.effect_phase.wrapping_add(1);
         self.backend.core.set_effect_phase(self.effect_phase);
+        self.backend.core.ensure_valid_commit()?;
         let frame = self
             .backend
             .capture_frame_with_effect_phase(self.effect_phase);

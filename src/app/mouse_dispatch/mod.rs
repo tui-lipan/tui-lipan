@@ -1121,8 +1121,13 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
             change.focusable,
         );
         if is_active {
-            let (new_cursor, new_anchor, anchor_for_drag) =
-                mouse::process_textarea_click(&change, x, y, &mut self.mouse.last_click);
+            let (new_cursor, new_anchor, anchor_for_drag) = mouse::process_textarea_click(
+                &change,
+                x,
+                y,
+                &mut self.mouse.last_click,
+                self.core.ctx.env().now(),
+            );
             self.drag.last_pointer_pos = None;
             self.drag.last_autoscroll_tick = None;
             self.drag.autoscroll_layout_dirty = false;
@@ -1186,8 +1191,12 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
             change.focusable,
         );
         if is_active {
-            let (new_cursor, new_anchor, anchor_for_drag) =
-                mouse::process_input_click(&change, x, &mut self.mouse.last_click);
+            let (new_cursor, new_anchor, anchor_for_drag) = mouse::process_input_click(
+                &change,
+                x,
+                &mut self.mouse.last_click,
+                self.core.ctx.env().now(),
+            );
             self.drag.active = ActiveDrag::Input(crate::app::input::drag::InputDrag {
                 id: change.node_id,
                 anchor: anchor_for_drag,
