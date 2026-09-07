@@ -454,8 +454,13 @@ impl<C: Component> AppRunner<C> {
                             return false;
                         }
                         node.scroll_override = Some(node.offset);
-                        let click_count =
-                            mouse::click_count_at(&mut self.mouse.last_click, x, y, true);
+                        let click_count = mouse::click_count_at(
+                            &mut self.mouse.last_click,
+                            x,
+                            y,
+                            true,
+                            self.core.ctx.env().now(),
+                        );
                         let is_double = click_count == 2;
                         if let Some(cb) = &select.on_item_click {
                             cb.emit(ListEvent { index });
@@ -568,7 +573,13 @@ impl<C: Component> AppRunner<C> {
                     if let NodeKind::Table(table_node) = &mut self.core.tree.node_mut(hit).kind {
                         table_node.scroll_override = Some(table_node.offset);
                     }
-                    let click_count = mouse::click_count_at(&mut self.mouse.last_click, x, y, true);
+                    let click_count = mouse::click_count_at(
+                        &mut self.mouse.last_click,
+                        x,
+                        y,
+                        true,
+                        self.core.ctx.env().now(),
+                    );
                     let is_double = click_count == 2;
                     self.mouse.pointer_driven_item_hover_selection.insert(hit);
                     if let Some(cb) = &select.on_select {
@@ -623,7 +634,13 @@ impl<C: Component> AppRunner<C> {
                 };
 
                 // Get click count for double/triple click detection
-                let click_count = mouse::click_count_at(&mut self.mouse.last_click, x, y, true);
+                let click_count = mouse::click_count_at(
+                    &mut self.mouse.last_click,
+                    x,
+                    y,
+                    true,
+                    self.core.ctx.env().now(),
+                );
 
                 let (viewport_selection, viewport_anchor) = match click_count {
                     2 => {
@@ -778,8 +795,13 @@ impl<C: Component> AppRunner<C> {
         let inner = change.rect.inner(change.border, change.padding);
 
         if is_active && inner.w > 0 && inner.h > 0 && change.rect.contains(x as i16, y as i16) {
-            let (new_cursor, new_anchor, anchor_for_drag) =
-                mouse::process_textarea_click(&change, x, y, &mut self.mouse.last_click);
+            let (new_cursor, new_anchor, anchor_for_drag) = mouse::process_textarea_click(
+                &change,
+                x,
+                y,
+                &mut self.mouse.last_click,
+                self.core.ctx.env().now(),
+            );
 
             // Start drag tracking for selection
             self.drag.last_pointer_pos = None;
@@ -898,7 +920,13 @@ impl<C: Component> AppRunner<C> {
             )
         {
             let cursor = cursor.min(doc.visual_cache.flat_text.len());
-            let click_count = mouse::click_count_at(&mut self.mouse.last_click, x, y, true);
+            let click_count = mouse::click_count_at(
+                &mut self.mouse.last_click,
+                x,
+                y,
+                true,
+                self.core.ctx.env().now(),
+            );
             let click_count = if doc.multi_click_select {
                 click_count
             } else {
@@ -1071,8 +1099,12 @@ impl<C: Component> AppRunner<C> {
         let inner = change.rect.inner(change.border, change.padding);
 
         if is_active && inner.w > 0 && change.rect.contains(x as i16, change.rect.y) {
-            let (new_cursor, new_anchor, anchor_for_drag) =
-                mouse::process_input_click(&change, x, &mut self.mouse.last_click);
+            let (new_cursor, new_anchor, anchor_for_drag) = mouse::process_input_click(
+                &change,
+                x,
+                &mut self.mouse.last_click,
+                self.core.ctx.env().now(),
+            );
 
             // Start drag tracking for selection
             self.drag.active = ActiveDrag::Input(crate::app::input::drag::InputDrag {

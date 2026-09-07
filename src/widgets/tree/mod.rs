@@ -443,5 +443,6 @@ impl Tree {
 impl From<Tree> for Element {
     fn from(tree: Tree) -> Self {
         crate::child(TreeComponent::new, tree.props)
+            .semantic_role(crate::automation::SemanticRole::Tree)
     }
 }

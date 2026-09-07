@@ -187,6 +187,7 @@ impl Component for TodoApp {
                                         _ => None,
                                     }),
                                 key: "draft",
+                                automation_id: "draft",
                             },
                             Button {
                                 label: "Add",
@@ -203,6 +204,7 @@ impl Component for TodoApp {
                                         _ => None,
                                     }),
                                 key: "add",
+                                automation_id: "add",
                             },
                         },
                         Divider::horizontal().style(Style::new().fg(Color::indexed(239))),

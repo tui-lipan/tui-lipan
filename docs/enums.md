@@ -6,6 +6,23 @@ Quick reference for all public enums and types used in widget props and API call
 
 ---
 
+## Automation
+
+| Type | Variants / purpose |
+|------|--------------------|
+| `ClockMode` | `Realtime`, `Controlled` (default) |
+| `SemanticRole` | Stable roles such as `Button`, `TextBox`, `Dialog`, `List`, `Tree`, and `Terminal` |
+| `SemanticChecked` | `False`, `True`, `Mixed` |
+| `SemanticAction` | `Click`, `Focus`, `SetValue`, `Toggle`, `Scroll`, `Drag`, `Expand`, `Collapse` |
+| `ValueSensitivity` | `Public`, `Sensitive`, `Masked` |
+| `Selector` | Explicit `Id`, `Role`, `TextContains`, or unstable `Point` strategy |
+| `WaitCondition` | `Exists`, `Missing`, `InView`, `Focused`, `Enabled`, `Selected`, `ValueEquals`, `TextContains`, `Count` |
+| `CheckpointSink` | `Markdown`, `Json`, `Png`, `RecordingMarker`, `Baseline` |
+| `CheckpointBaseline` | `Created`, `Matched { ratio }`, `Updated` |
+
+`AutomationStep` is intentionally opaque; construct operations with methods such
+as `click`, `focus`, `resize`, `advance`, `wait_for`, and `checkpoint`.
+
 ## Text Coordinates
 
 ### `TextPosition`

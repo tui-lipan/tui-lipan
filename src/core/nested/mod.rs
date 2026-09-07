@@ -405,6 +405,15 @@ impl ComponentEntry {
     }
 }
 
+impl Drop for ComponentEntry {
+    fn drop(&mut self) {
+        if self.initialized {
+            self.component.unmount();
+            self.initialized = false;
+        }
+    }
+}
+
 /// Runtime registry for nested component instances.
 pub(crate) struct ComponentRegistry {
     dispatcher: Dispatcher,
@@ -436,12 +445,68 @@ pub(crate) struct ComponentRegistryConfig {
 struct ExpandElementParams {
     parent: Option<ComponentId>,
     key: Option<Key>,
+    metadata: ElementMetadata,
     pointer_focus: bool,
     layout: LayoutConstraints,
     kind: ElementKind,
     index_in_parent: usize,
     epoch: u32,
     viewport: Rect,
+}
+
+struct ElementMetadata {
+    automation_id: Option<crate::automation::AutomationId>,
+    semantic_role: Option<crate::automation::SemanticRole>,
+    semantic_name: Option<Arc<str>>,
+    semantic_selected: Option<bool>,
+    semantic_expanded: Option<bool>,
+    semantic_value_sensitive: bool,
+}
+
+impl ElementMetadata {
+    fn rebuild(
+        self,
+        key: Option<Key>,
+        pointer_focus: bool,
+        kind: ElementKind,
+        layout: LayoutConstraints,
+    ) -> Element {
+        Element {
+            key,
+            automation_id: self.automation_id,
+            semantic_role: self.semantic_role,
+            semantic_name: self.semantic_name,
+            semantic_selected: self.semantic_selected,
+            semantic_expanded: self.semantic_expanded,
+            semantic_value_sensitive: self.semantic_value_sensitive,
+            pointer_focus,
+            kind,
+            layout,
+            layout_hash_cache: Cell::new(None),
+            measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
+            split_wrap_probe_cache: Cell::new(None),
+        }
+    }
+
+    fn apply_to(self, mut element: Element) -> Element {
+        if self.automation_id.is_some() {
+            element.automation_id = self.automation_id;
+        }
+        if self.semantic_role.is_some() {
+            element.semantic_role = self.semantic_role;
+        }
+        if self.semantic_name.is_some() {
+            element.semantic_name = self.semantic_name;
+        }
+        if self.semantic_selected.is_some() {
+            element.semantic_selected = self.semantic_selected;
+        }
+        if self.semantic_expanded.is_some() {
+            element.semantic_expanded = self.semantic_expanded;
+        }
+        element.semantic_value_sensitive |= self.semantic_value_sensitive;
+        element
+    }
 }
 
 struct ExpandVecContainerParams {
@@ -638,6 +703,10 @@ impl ComponentRegistry {
                             scope: entry.scope,
                             tx: self.command_tx.clone(),
                             runtime_id: self.env.runtime_id,
+                            now: self.env.now(),
+                            clock_mode: self.env.clock.mode(),
+                            clock: self.env.clock.clone(),
+                            activity: std::sync::Arc::clone(&self.env.activity),
                         });
                     }
                 }
@@ -816,6 +885,10 @@ impl ComponentRegistry {
                         scope: entry.scope,
                         tx: self.command_tx.clone(),
                         runtime_id: self.env.runtime_id,
+                        now: self.env.now(),
+                        clock_mode: self.env.clock.mode(),
+                        clock: self.env.clock.clone(),
+                        activity: std::sync::Arc::clone(&self.env.activity),
                     });
                 }
                 entry.initialized = true;
@@ -1158,11 +1231,25 @@ impl ComponentRegistry {
         for (idx, child) in children.into_iter().enumerate() {
             let Element {
                 key,
+                automation_id,
+                semantic_role,
+                semantic_name,
+                semantic_selected,
+                semantic_expanded,
+                semantic_value_sensitive,
                 pointer_focus,
                 kind,
                 layout,
                 ..
             } = child;
+            let metadata = ElementMetadata {
+                automation_id,
+                semantic_role,
+                semantic_name,
+                semantic_selected,
+                semantic_expanded,
+                semantic_value_sensitive,
+            };
             match kind {
                 ElementKind::Component(component) => {
                     crate::probe_bucket!(crate::alloc_probe::EXPAND_COMPONENT);
@@ -1230,18 +1317,15 @@ impl ComponentRegistry {
                     let expanded = self.expand_component_instance(id, epoch, viewport);
                     let scope = self.arena.get(id).scope;
 
-                    out.push(Element {
+                    out.push(metadata.rebuild(
                         key,
                         pointer_focus,
-                        kind: ElementKind::Group(Group {
+                        ElementKind::Group(Group {
                             scope,
                             child: Box::new(expanded),
                         }),
                         layout,
-                        layout_hash_cache: Cell::new(None),
-                        measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                        split_wrap_probe_cache: Cell::new(None),
-                    });
+                    ));
                 }
                 other => {
                     crate::probe_bucket!(crate::alloc_probe::EXPAND_ELEMENT);
@@ -1251,6 +1335,7 @@ impl ComponentRegistry {
                         ExpandElementParams {
                             parent,
                             key,
+                            metadata,
                             pointer_focus,
                             layout,
                             kind: other,
@@ -1295,11 +1380,25 @@ impl ComponentRegistry {
 
         let Element {
             key,
+            automation_id,
+            semantic_role,
+            semantic_name,
+            semantic_selected,
+            semantic_expanded,
+            semantic_value_sensitive,
             pointer_focus,
             kind,
             layout,
             ..
         } = child;
+        let metadata = ElementMetadata {
+            automation_id,
+            semantic_role,
+            semantic_name,
+            semantic_selected,
+            semantic_expanded,
+            semantic_value_sensitive,
+        };
         // A non-component child claims no slot, so this container's slot list is empty - the same
         // thing `expand_children` records when its `specs` come out empty.
         host.set_next_ids(path, Vec::new());
@@ -1309,6 +1408,7 @@ impl ComponentRegistry {
             ExpandElementParams {
                 parent,
                 key,
+                metadata,
                 pointer_focus,
                 layout,
                 kind,
@@ -1328,6 +1428,7 @@ impl ComponentRegistry {
         let ExpandElementParams {
             parent,
             key,
+            metadata,
             pointer_focus,
             layout,
             kind,
@@ -1350,15 +1451,7 @@ impl ComponentRegistry {
                         viewport,
                     },
                 );
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::VStack(vs),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::VStack(vs), layout)
             }
             ElementKind::HStack(mut hs) => {
                 self.expand_vec_container(
@@ -1374,15 +1467,7 @@ impl ComponentRegistry {
                         viewport,
                     },
                 );
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::HStack(hs),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::HStack(hs), layout)
             }
             ElementKind::Flow(mut flow) => {
                 self.expand_vec_container(
@@ -1398,15 +1483,7 @@ impl ComponentRegistry {
                         viewport,
                     },
                 );
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::Flow(flow),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::Flow(flow), layout)
             }
             ElementKind::ScrollView(mut sv) => {
                 self.expand_vec_container(
@@ -1422,15 +1499,7 @@ impl ComponentRegistry {
                         viewport,
                     },
                 );
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::ScrollView(sv),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::ScrollView(sv), layout)
             }
             ElementKind::Splitter(mut splitter) => {
                 self.expand_vec_container(
@@ -1446,15 +1515,7 @@ impl ComponentRegistry {
                         viewport,
                     },
                 );
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::Splitter(splitter),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::Splitter(splitter), layout)
             }
             ElementKind::Grid(mut grid) => {
                 let placements: Vec<_> = grid.items.iter().map(|i| (i.placement, i.span)).collect();
@@ -1484,15 +1545,7 @@ impl ComponentRegistry {
                         span,
                     })
                     .collect();
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::Grid(grid),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::Grid(grid), layout)
             }
             ElementKind::Canvas(mut canvas) => {
                 let rects: Vec<_> = canvas.items.iter().map(|item| item.rect).collect();
@@ -1518,15 +1571,7 @@ impl ComponentRegistry {
                     .zip(rects)
                     .map(|(element, rect)| crate::widgets::CanvasItem { rect, element })
                     .collect();
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::Canvas(canvas),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::Canvas(canvas), layout)
             }
             ElementKind::Frame(mut frame) => {
                 let seg = PathSegment {
@@ -1561,15 +1606,7 @@ impl ComponentRegistry {
                 }
 
                 path.pop();
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::Frame(frame),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::Frame(frame), layout)
             }
             ElementKind::ZStack(mut zs) => {
                 self.expand_vec_container(
@@ -1585,15 +1622,7 @@ impl ComponentRegistry {
                         viewport,
                     },
                 );
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::ZStack(zs),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::ZStack(zs), layout)
             }
             ElementKind::Center(mut center) => {
                 let seg = PathSegment {
@@ -1607,15 +1636,7 @@ impl ComponentRegistry {
                     center.child = Some(Box::new(expanded));
                 }
                 path.pop();
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::Center(center),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::Center(center), layout)
             }
             ElementKind::CenterPin(mut cp) => {
                 let seg = PathSegment {
@@ -1652,15 +1673,7 @@ impl ComponentRegistry {
                 cp.center = iter.next().flatten().map(Box::new);
                 cp.bottom = iter.next().flatten().map(Box::new);
                 path.pop();
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::CenterPin(cp),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::CenterPin(cp), layout)
             }
             ElementKind::StatusBarLayout(mut status_layout) => {
                 let seg = PathSegment {
@@ -1692,15 +1705,12 @@ impl ComponentRegistry {
                 status_layout.center = expanded.next().unwrap();
                 status_layout.right = expanded.next().unwrap();
                 path.pop();
-                Element {
+                metadata.rebuild(
                     key,
                     pointer_focus,
-                    kind: ElementKind::StatusBarLayout(status_layout),
+                    ElementKind::StatusBarLayout(status_layout),
                     layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                )
             }
             ElementKind::Popover(mut popover) => {
                 let seg = PathSegment {
@@ -1728,15 +1738,7 @@ impl ComponentRegistry {
                         .unwrap_or_else(|| crate::widgets::Text::new("").into()),
                 );
                 path.pop();
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::Popover(popover),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::Popover(popover), layout)
             }
             ElementKind::Portal(mut portal) => {
                 let seg = PathSegment {
@@ -1748,15 +1750,7 @@ impl ComponentRegistry {
                 portal.content =
                     Box::new(self.expand_single(host, parent, path, child, epoch, viewport));
                 path.pop();
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::Portal(portal),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::Portal(portal), layout)
             }
             ElementKind::Group(mut group) => {
                 let seg = PathSegment {
@@ -1770,15 +1764,7 @@ impl ComponentRegistry {
                     Box::new(self.expand_single(host, parent, path, child, epoch, viewport));
 
                 path.pop();
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::Group(group),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::Group(group), layout)
             }
             ElementKind::ThemeProvider(tp) => {
                 let tp = *tp;
@@ -1800,20 +1786,17 @@ impl ComponentRegistry {
                     target: "tui_lipan::perf",
                     apply_theme_ms = theme_start.elapsed().as_secs_f64() * 1000.0,
                 );
-                Element {
+                metadata.rebuild(
                     key,
                     pointer_focus,
-                    kind: ElementKind::ThemeProvider(Box::new(
+                    ElementKind::ThemeProvider(Box::new(
                         crate::core::element::ThemeProviderElement {
                             theme: tp.theme,
                             child,
                         },
                     )),
                     layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                )
             }
             ElementKind::ContextProvider(cp) => {
                 let cp = *cp;
@@ -1855,7 +1838,7 @@ impl ComponentRegistry {
                 self.context_stack.pop();
                 path.pop();
                 child.pointer_focus &= pointer_focus;
-                child
+                metadata.apply_to(child)
             }
             ElementKind::Memo(memo) => {
                 let seg = PathSegment {
@@ -1922,7 +1905,7 @@ impl ComponentRegistry {
                                 );
                                 path.pop();
                                 child.pointer_focus &= pointer_focus;
-                                return child;
+                                return metadata.apply_to(child);
                             }
                         }
                     }
@@ -1953,7 +1936,7 @@ impl ComponentRegistry {
                 );
                 path.pop();
                 child.pointer_focus &= pointer_focus;
-                child
+                metadata.apply_to(child)
             }
             ElementKind::EffectScope(mut scope) => {
                 let seg = PathSegment {
@@ -1966,15 +1949,7 @@ impl ComponentRegistry {
                     scope.child = Some(Box::new(expanded));
                 }
                 path.pop();
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::EffectScope(scope),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::EffectScope(scope), layout)
             }
             ElementKind::MouseRegion(mut region) => {
                 let seg = PathSegment {
@@ -1987,15 +1962,7 @@ impl ComponentRegistry {
                     region.child = Some(Box::new(expanded));
                 }
                 path.pop();
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::MouseRegion(region),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::MouseRegion(region), layout)
             }
             ElementKind::DragSource(mut source) => {
                 let seg = PathSegment {
@@ -2008,15 +1975,7 @@ impl ComponentRegistry {
                     source.child = Some(Box::new(expanded));
                 }
                 path.pop();
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::DragSource(source),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::DragSource(source), layout)
             }
             ElementKind::DropTarget(mut target) => {
                 let seg = PathSegment {
@@ -2029,15 +1988,7 @@ impl ComponentRegistry {
                     target.child = Some(Box::new(expanded));
                 }
                 path.pop();
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::DropTarget(target),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::DropTarget(target), layout)
             }
             ElementKind::Animated(mut animated) => {
                 let seg = PathSegment {
@@ -2049,40 +2000,21 @@ impl ComponentRegistry {
                 animated.child =
                     Box::new(self.expand_single(host, parent, path, child, epoch, viewport));
                 path.pop();
-                Element {
-                    key,
-                    pointer_focus,
-                    kind: ElementKind::Animated(animated),
-                    layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                metadata.rebuild(key, pointer_focus, ElementKind::Animated(animated), layout)
             }
             ElementKind::Component(component) => {
                 debug_assert!(
                     false,
                     "component elements must be expanded in parent context"
                 );
-                Element {
+                metadata.rebuild(
                     key,
                     pointer_focus,
-                    kind: ElementKind::Component(component),
+                    ElementKind::Component(component),
                     layout,
-                    layout_hash_cache: Cell::new(None),
-                    measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                    split_wrap_probe_cache: Cell::new(None),
-                }
+                )
             }
-            other => Element {
-                key,
-                pointer_focus,
-                kind: other,
-                layout,
-                layout_hash_cache: Cell::new(None),
-                measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
-                split_wrap_probe_cache: Cell::new(None),
-            },
+            other => metadata.rebuild(key, pointer_focus, other, layout),
         }
     }
 
@@ -2215,7 +2147,7 @@ mod tests {
 
     fn new_registry() -> ComponentRegistry {
         let dispatcher = Dispatcher::new(|_, _| {});
-        let (command_tx, _command_rx) = std::sync::mpsc::channel();
+        let (command_tx, _command_rx, _wake_rx, _wake_tx) = crate::callback::CommandTx::channel();
         let quit = Rc::new(Cell::new(false));
         let overlay_manager = Rc::new(RefCell::new(crate::overlay::OverlayManager::new()));
 
@@ -2257,7 +2189,10 @@ mod tests {
                 copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
                 command_chord_pending_since: Rc::new(Cell::new(None)),
                 command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),
-                clock_offset: Rc::new(Cell::new(std::time::Duration::ZERO)),
+                clock: crate::core::runtime_env::SessionClock::new(
+                    crate::automation::ClockMode::Controlled,
+                ),
+                activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
                 last_mouse: Rc::new(Cell::new(None)),
             },
         })
@@ -2481,7 +2416,7 @@ mod tests {
     #[test]
     fn keyed_children_keep_state_when_reordered() {
         let dispatcher = Dispatcher::new(|_, _| {});
-        let (command_tx, _command_rx) = std::sync::mpsc::channel();
+        let (command_tx, _command_rx, _wake_rx, _wake_tx) = crate::callback::CommandTx::channel();
         let quit = Rc::new(Cell::new(false));
         let overlay_manager = Rc::new(RefCell::new(crate::overlay::OverlayManager::new()));
 
@@ -2523,7 +2458,10 @@ mod tests {
                 copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
                 command_chord_pending_since: Rc::new(Cell::new(None)),
                 command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),
-                clock_offset: Rc::new(Cell::new(std::time::Duration::ZERO)),
+                clock: crate::core::runtime_env::SessionClock::new(
+                    crate::automation::ClockMode::Controlled,
+                ),
+                activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
                 last_mouse: Rc::new(Cell::new(None)),
             },
         });
@@ -2688,7 +2626,7 @@ mod tests {
     #[test]
     fn nested_components_are_scoped_per_parent() {
         let dispatcher = Dispatcher::new(|_, _| {});
-        let (command_tx, _command_rx) = std::sync::mpsc::channel();
+        let (command_tx, _command_rx, _wake_rx, _wake_tx) = crate::callback::CommandTx::channel();
         let quit = Rc::new(Cell::new(false));
         let overlay_manager = Rc::new(RefCell::new(crate::overlay::OverlayManager::new()));
 
@@ -2730,7 +2668,10 @@ mod tests {
                 copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
                 command_chord_pending_since: Rc::new(Cell::new(None)),
                 command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),
-                clock_offset: Rc::new(Cell::new(std::time::Duration::ZERO)),
+                clock: crate::core::runtime_env::SessionClock::new(
+                    crate::automation::ClockMode::Controlled,
+                ),
+                activity: std::sync::Arc::new(crate::core::runtime_env::RuntimeActivity::default()),
                 last_mouse: Rc::new(Cell::new(None)),
             },
         });

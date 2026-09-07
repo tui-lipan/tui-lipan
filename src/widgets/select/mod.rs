@@ -509,6 +509,9 @@ impl From<Select> for Element {
         } else {
             select.placeholder.clone()
         };
+        let semantic_name = label.clone();
+        let semantic_selected = select.selected.is_some();
+        let semantic_expanded = select.expanded;
 
         let mut button = Button::new(label)
             .variant(select.button_variant)
@@ -715,6 +718,10 @@ impl From<Select> for Element {
             popover = popover.on_close(Callback::new(move |_| cb.emit(false)));
         }
 
-        popover.into()
+        Element::from(popover)
+            .semantic_role(crate::automation::SemanticRole::ComboBox)
+            .semantic_name(semantic_name)
+            .semantic_selected(semantic_selected)
+            .semantic_expanded(semantic_expanded)
     }
 }

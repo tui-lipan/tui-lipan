@@ -187,8 +187,7 @@ impl OverlayEntry {
     }
 
     pub(crate) fn copy_feedback_active(&self) -> bool {
-        self.copy_feedback_until
-            .is_some_and(|deadline| Instant::now() < deadline)
+        self.copy_feedback_until.is_some()
     }
 }
 
@@ -199,6 +198,7 @@ pub(crate) struct TickResult {
 }
 
 pub(crate) struct OverlayManager {
+    clock: crate::core::runtime_env::SessionClock,
     entries: Vec<OverlayEntry>,
     next_id: u64,
     generation: u64,
@@ -209,8 +209,16 @@ pub(crate) struct OverlayManager {
 }
 
 impl OverlayManager {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
+        Self::with_clock(crate::core::runtime_env::SessionClock::new(
+            crate::automation::ClockMode::Realtime,
+        ))
+    }
+
+    pub(crate) fn with_clock(clock: crate::core::runtime_env::SessionClock) -> Self {
         Self {
+            clock,
             entries: Vec::new(),
             next_id: 0,
             generation: 0,
@@ -219,6 +227,10 @@ impl OverlayManager {
             toast_gap: 1,
             toast_margin: Padding::BORDER,
         }
+    }
+
+    fn now(&self) -> Instant {
+        self.clock.now()
     }
 
     fn enter_transition() -> Transition<f32> {
@@ -290,13 +302,14 @@ impl OverlayManager {
     }
 
     pub(crate) fn push(&mut self, mut entry: OverlayEntry) -> OverlayId {
+        let now = self.now();
         let id = self.allocate_id();
         if self.inline_mode {
             return id;
         }
         entry.id = id;
         entry.order = id.value();
-        entry.created_at = Instant::now();
+        entry.created_at = now;
         entry.pending_dismiss = false;
         entry.opacity_transition = Some(Self::enter_transition());
         entry.transition_tick_at = Some(entry.created_at);
@@ -306,8 +319,9 @@ impl OverlayManager {
     }
 
     pub(crate) fn dismiss(&mut self, id: OverlayId) -> bool {
+        let now = self.now();
         if let Some(entry) = self.entries.iter_mut().find(|entry| entry.id == id) {
-            let changed = Self::begin_dismiss(entry, Instant::now());
+            let changed = Self::begin_dismiss(entry, now);
             if changed {
                 self.bump_generation();
             }
@@ -338,13 +352,14 @@ impl OverlayManager {
     /// Returns `false` when the toast is gone or already fading, since neither can be extended -
     /// callers that still want it on screen must push a fresh one.
     pub(crate) fn renew(&mut self, id: OverlayId) -> bool {
+        let now = self.now();
         let Some(entry) = self.entries.iter_mut().find(|entry| entry.id == id) else {
             return false;
         };
         if entry.pending_dismiss {
             return false;
         }
-        entry.created_at = Instant::now();
+        entry.created_at = now;
         if entry.hover_remaining.is_some() {
             entry.hover_remaining = entry.timeout;
         }
@@ -352,7 +367,7 @@ impl OverlayManager {
     }
 
     pub(crate) fn set_hovered_toast(&mut self, hovered: Option<OverlayId>) -> bool {
-        let now = Instant::now();
+        let now = self.now();
         let mut dirty = false;
 
         for entry in &mut self.entries {
@@ -462,6 +477,7 @@ impl OverlayManager {
     }
 
     pub(crate) fn trigger_copy_feedback(&mut self, id: OverlayId, duration: Duration) -> bool {
+        let now = self.now();
         if duration.is_zero() {
             return false;
         }
@@ -471,7 +487,7 @@ impl OverlayManager {
         if entry.pending_dismiss || entry.copy_text.is_none() {
             return false;
         }
-        entry.copy_feedback_until = Some(Instant::now() + duration);
+        entry.copy_feedback_until = Some(now + duration);
         self.bump_generation();
         true
     }
@@ -494,7 +510,7 @@ impl OverlayManager {
 
     pub(crate) fn dismiss_toasts(&mut self) {
         let mut changed = false;
-        let now = Instant::now();
+        let now = self.now();
         for entry in &mut self.entries {
             if entry.layer == OverlayLayer::Toast {
                 changed |= Self::begin_dismiss(entry, now);
@@ -540,7 +556,7 @@ impl OverlayManager {
             },
             dismiss_policy,
             on_dismiss: None,
-            created_at: Instant::now(),
+            created_at: self.now(),
             timeout: Some(Duration::from_secs_f64(duration)),
             captures_focus: false,
             auto_focus: false,

@@ -1,18 +1,16 @@
 #[cfg(feature = "image")]
-use std::collections::hash_map::DefaultHasher;
-#[cfg(feature = "image")]
-use std::hash::{Hash, Hasher};
-#[cfg(any(test, feature = "image"))]
-use std::time::Duration;
-#[cfg(feature = "image")]
-use web_time::Instant;
-
 #[cfg(feature = "image")]
 use crate::backend::ratatui_backend::image_support;
 use crate::core::component::Component;
 use crate::core::node::NodeKind;
 #[cfg(feature = "image")]
 use crate::style::Rect;
+#[cfg(feature = "image")]
+use std::collections::hash_map::DefaultHasher;
+#[cfg(feature = "image")]
+use std::hash::{Hash, Hasher};
+#[cfg(any(test, feature = "image"))]
+use std::time::Duration;
 
 use super::{AppRunner, spinner_frame_for_speed};
 
@@ -147,12 +145,12 @@ impl<C: Component> AppRunner<C> {
     pub(crate) fn image_animations_suspended(&self) -> bool {
         self.animation
             .image_animation_suspend_until
-            .is_some_and(|deadline| Instant::now() < deadline)
+            .is_some_and(|deadline| self.core.ctx.env().now() < deadline)
     }
 
     #[cfg(feature = "image")]
     pub(crate) fn suspend_image_animations_for(&mut self, duration: Duration) {
-        let now = Instant::now();
+        let now = self.core.ctx.env().now();
         let requested_deadline = now + duration;
         self.animation.image_animation_suspend_until = Some(
             self.animation
@@ -168,7 +166,7 @@ impl<C: Component> AppRunner<C> {
         if self.surface.is_inline() {
             self.animation.last_image_layout_hash = None;
             self.animation.image_animation_suspend_until = None;
-            self.animation.last_image_tick = Instant::now();
+            self.animation.last_image_tick = self.core.ctx.env().now();
             return;
         }
 
@@ -181,7 +179,7 @@ impl<C: Component> AppRunner<C> {
                 image_support::suspend_image_rendering_for(pause);
             } else {
                 self.animation.image_animation_suspend_until = None;
-                self.animation.last_image_tick = Instant::now();
+                self.animation.last_image_tick = self.core.ctx.env().now();
             }
         }
     }

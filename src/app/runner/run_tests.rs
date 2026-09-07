@@ -1438,7 +1438,8 @@ where
         Theme::default(),
         SurfaceMode::Fullscreen,
         Rc::new(Cell::new(false)),
-    );
+    )
+    .into();
     runner.core.init();
     runner.core.render_element(viewport, None, None, None);
 }
@@ -7640,7 +7641,7 @@ fn key_script_config(
 ) -> super::headless_snapshot::HeadlessSnapshotConfig {
     let actions = keys
         .into_iter()
-        .map(crate::ui_snapshot::Action::Key)
+        .map(crate::automation::AutomationStep::key)
         .collect();
     super::headless_snapshot::HeadlessSnapshotConfig {
         format: crate::ui_snapshot::UiSnapshotFileFormat::from_path(&path),
@@ -7753,7 +7754,7 @@ fn chord_reveal_snapshot_config(
         suffix_viewports: false,
         frames: 1,
         focus_steps: 0,
-        actions: vec![crate::ui_snapshot::Action::Key(KeyEvent {
+        actions: vec![crate::automation::AutomationStep::key(KeyEvent {
             code: KeyCode::Char('x'),
             mods: KeyMods::CTRL,
         })],
@@ -7888,10 +7889,11 @@ impl Component for ControlSmoke {
     fn view(&self, ctx: &Context<Self>) -> Element {
         let label = if ctx.state { "clicked" } else { "idle" };
         VStack::new()
-            .child(Text::new(label).key("label"))
+            .child(Text::new(label).automation_id("label").key("label"))
             .child(
                 crate::widgets::Button::new("Go")
                     .on_click(ctx.link().callback(|_| ()))
+                    .automation_id("go")
                     .key("go"),
             )
             .into()
@@ -7905,12 +7907,17 @@ fn control_exchange(
 ) -> std::result::Result<String, String> {
     let (tx, rx) = std::sync::mpsc::channel();
     runner.handle_control(super::control::ControlRequest {
+        id: "test".into(),
         command: command.to_owned(),
+        deadline: std::time::Instant::now() + Duration::from_secs(5),
+        cancelled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         reply: tx,
     });
     match rx.recv().expect("a reply is always sent") {
-        super::control::ControlReply::Ok(payload) => Ok(payload),
-        super::control::ControlReply::Err(message) => Err(message),
+        super::control::ControlReply::Ok(payload) => {
+            Ok(String::from_utf8(payload).expect("test replies are text"))
+        }
+        super::control::ControlReply::Err { message, .. } => Err(message),
     }
 }
 
@@ -7937,7 +7944,19 @@ fn control_ping_answers_pong() {
 }
 
 #[test]
-fn control_keys_lists_rendered_widget_keys() {
+fn control_automation_errors_have_stable_codes() {
+    assert_eq!(
+        super::automation_error_code(&crate::automation::AutomationError::Cancelled),
+        "CANCELLED"
+    );
+    assert_eq!(
+        super::automation_error_code(&crate::automation::AutomationError::NotActionable),
+        "NOT_ACTIONABLE"
+    );
+}
+
+#[test]
+fn control_keys_lists_rendered_automation_ids() {
     let mut runner = control_runner();
     let keys = control_exchange(&mut runner, "keys").expect("keys");
     let listed: Vec<&str> = keys.lines().collect();
@@ -7957,7 +7976,7 @@ fn control_snapshot_reflects_the_live_viewport() {
 }
 
 #[test]
-fn control_act_clicks_a_widget_by_key() {
+fn control_act_clicks_a_widget_by_automation_id() {
     let mut runner = control_runner();
     assert_eq!(
         control_exchange(&mut runner, "act click:#go"),
@@ -7972,7 +7991,22 @@ fn control_act_clicks_a_widget_by_key() {
 }
 
 #[test]
-fn control_act_on_a_missing_key_reports_an_error() {
+fn control_act_uses_semantic_selectors_and_persistent_resize() {
+    let mut runner = control_runner();
+    assert_eq!(
+        control_exchange(&mut runner, "act resize:52x11;click:@button=Go"),
+        Ok(String::new())
+    );
+
+    assert_eq!(runner.core.viewport().w, 52);
+    assert_eq!(runner.core.viewport().h, 11);
+    let markdown = control_exchange(&mut runner, "snapshot").expect("snapshot");
+    assert!(markdown.contains("clicked"), "{markdown}");
+    assert!(markdown.contains("52x11"), "{markdown}");
+}
+
+#[test]
+fn control_act_on_a_missing_automation_id_reports_an_error() {
     let mut runner = control_runner();
     let err = control_exchange(&mut runner, "act click:#nope").expect_err("must fail");
     assert!(err.contains("nope"), "{err}");
@@ -8369,9 +8403,9 @@ fn a_script_sleep_waits_in_real_time_where_the_author_put_it() {
     // only, so it cannot serve this: an author who needs to wait after a key has nowhere else to say
     // so, and settling again afterwards would finish every animation the key started.
     let mut config = settle_snapshot_config(dir.join("slept.md"), Duration::ZERO, Duration::ZERO);
-    config.actions = vec![crate::ui_snapshot::Action::Sleep(Duration::from_millis(
-        400,
-    ))];
+    config.actions = vec![crate::automation::AutomationStep::sleep(
+        Duration::from_millis(400),
+    )];
     let slept = capture_to_string(AsyncArrivalSmoke, config);
     assert!(
         slept.contains("arrived"),
@@ -8380,7 +8414,9 @@ fn a_script_sleep_waits_in_real_time_where_the_author_put_it() {
 
     // Same script with a virtual wait instead: the clock moves, the thread does not.
     let mut config = settle_snapshot_config(dir.join("waited.md"), Duration::ZERO, Duration::ZERO);
-    config.actions = vec![crate::ui_snapshot::Action::Wait(Duration::from_secs(5))];
+    config.actions = vec![crate::automation::AutomationStep::advance(
+        Duration::from_secs(5),
+    )];
     let waited = capture_to_string(AsyncArrivalSmoke, config);
     assert!(
         waited.contains("waiting"),

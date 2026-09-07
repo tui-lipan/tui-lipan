@@ -25,8 +25,9 @@ pub use options::{UiSnapshotFileFormat, UiSnapshotFormatOptions, UiSnapshotOptio
 pub use recording::Recording;
 pub(crate) use recording::resolve_actions;
 pub(crate) use request::UiSnapshotRequest;
-pub use script::{Action, FocusStep, ScrollDirection, Target};
-pub(crate) use script::{ActionHost, execute, parse_script};
+pub(crate) use script::{compile_script, execute_step};
+#[cfg(test)]
+pub(crate) use script::{execute, parse_script};
 pub use sketch::Sketch;
 pub use slot::UiSnapshotSlot;
 
@@ -75,8 +76,22 @@ pub(crate) fn write_snapshot(
         UiSnapshotFileFormat::Markdown => snapshot.to_markdown().into_bytes(),
         #[cfg(feature = "ui-snapshot-json")]
         UiSnapshotFileFormat::Json => snapshot.to_json_pretty().into_bytes(),
+        #[cfg(not(feature = "ui-snapshot-json"))]
+        UiSnapshotFileFormat::Json => {
+            return Err(std::io::Error::other(
+                "JSON snapshots require the `ui-snapshot-json` feature",
+            )
+            .into());
+        }
         #[cfg(feature = "ui-snapshot-png")]
         UiSnapshotFileFormat::Png => snapshot.to_png_default()?,
+        #[cfg(not(feature = "ui-snapshot-png"))]
+        UiSnapshotFileFormat::Png => {
+            return Err(std::io::Error::other(
+                "PNG snapshots require the `ui-snapshot-png` feature",
+            )
+            .into());
+        }
     };
     std::fs::write(path, content).map_err(crate::Error::from)
 }

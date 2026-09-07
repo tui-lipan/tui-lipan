@@ -822,6 +822,7 @@ impl<C: Component> AppRunner<C> {
         self.refresh_active_selection_drag_from_last_pointer();
         self.refresh_hover_from_last_mouse();
         self.prune_widget_caches_if_needed();
+        self.core.commit_checked(self.core.ctx.viewport())?;
 
         // Tree structure changed - rebuild the JoinIndex for frame adjacency lookups.
         self.cached_join_index =
@@ -942,17 +943,18 @@ impl<C: Component> AppRunner<C> {
             return;
         }
         self.debug_paint_claim_root = false;
-        let Some(prev) = self.core.debug_last_root_view_before_expand.as_ref() else {
+        let Some(prev) = self.core.debug_last_root_view_before_expand.clone() else {
             return;
         };
         let Ok(size) = terminal.size() else {
             return;
         };
         let bounds = self.content_bounds(size.width, size.height);
+        let theme = self.core.theme.clone();
         self.core.ctx.set_viewport(bounds);
-        self.core.ctx.set_active_theme(self.core.theme.clone());
+        self.core.ctx.set_active_theme(theme);
         let current = self.core.component.view(&self.core.ctx);
-        if !crate::core::element_debug::debug_element_tree_eq(prev, &current) {
+        if !crate::core::element_debug::debug_element_tree_eq(&prev, &current) {
             crate::debug::internal_log!(
                 "[tui-lipan] Update::paint() at root but root view() output changed; use Update::layout() or Update::full() instead"
             );
@@ -1692,7 +1694,8 @@ mod tests {
             Theme::default(),
             SurfaceMode::Fullscreen,
             Rc::new(Cell::new(false)),
-        );
+        )
+        .into();
         runner.core.init();
         runner
             .render_element_until_scroll_stable(viewport)
@@ -1730,7 +1733,8 @@ mod tests {
             Theme::default(),
             SurfaceMode::Fullscreen,
             Rc::new(Cell::new(false)),
-        );
+        )
+        .into();
         runner.core.init();
         runner.core.render_element(viewport, None, None, None);
 
@@ -1767,7 +1771,8 @@ mod tests {
             Theme::default(),
             SurfaceMode::Fullscreen,
             Rc::new(Cell::new(false)),
-        );
+        )
+        .into();
         runner.core.init();
         runner.core.render_element(viewport, None, None, None);
 
@@ -1812,7 +1817,8 @@ mod tests {
             Theme::default(),
             SurfaceMode::Fullscreen,
             Rc::new(Cell::new(false)),
-        );
+        )
+        .into();
         runner.core.init();
         runner.core.render_element(viewport, None, None, None);
 
@@ -1905,7 +1911,8 @@ mod tests {
             Theme::default(),
             SurfaceMode::Fullscreen,
             Rc::new(Cell::new(false)),
-        );
+        )
+        .into();
         runner.core.init();
         runner.core.render_element(viewport, None, None, None);
 
@@ -1935,7 +1942,8 @@ mod tests {
             Theme::default(),
             SurfaceMode::Fullscreen,
             Rc::new(Cell::new(false)),
-        );
+        )
+        .into();
         runner.core.init();
         runner
             .render_element_until_scroll_stable(viewport)
@@ -2009,7 +2017,8 @@ mod tests {
             Theme::default(),
             SurfaceMode::Fullscreen,
             Rc::new(Cell::new(false)),
-        );
+        )
+        .into();
         runner.core.init();
         runner.core.render_element(viewport, None, None, None);
 
@@ -2289,7 +2298,8 @@ mod tests {
             Theme::default(),
             SurfaceMode::Fullscreen,
             Rc::new(Cell::new(false)),
-        );
+        )
+        .into();
         runner.core.init();
         runner.core.render_element(viewport, None, None, None);
 
@@ -2322,7 +2332,8 @@ mod tests {
             Theme::default(),
             SurfaceMode::Fullscreen,
             Rc::new(Cell::new(false)),
-        );
+        )
+        .into();
         runner.core.init();
         runner.core.render_element(viewport, None, None, None);
 
@@ -2376,7 +2387,8 @@ mod tests {
             Theme::default(),
             SurfaceMode::Fullscreen,
             Rc::new(Cell::new(false)),
-        );
+        )
+        .into();
         runner.core.init();
         runner.core.render_element(viewport, None, None, None);
         let _ = crate::core::nested::take_memo_frame_stats();

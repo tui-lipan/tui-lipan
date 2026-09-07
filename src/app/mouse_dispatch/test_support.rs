@@ -696,7 +696,13 @@ pub(crate) fn handle_list_click_test_backend<C: Component>(
                     return false;
                 }
                 node.scroll_override = Some(node.offset);
-                let click_count = mouse::click_count_at(&mut backend.mouse.last_click, x, y, true);
+                let click_count = mouse::click_count_at(
+                    &mut backend.mouse.last_click,
+                    x,
+                    y,
+                    true,
+                    backend.core.ctx.env().now(),
+                );
                 let is_double = click_count == 2;
                 if let Some(cb) = &select.on_item_click {
                     cb.emit(crate::widgets::ListEvent { index });
@@ -815,7 +821,13 @@ pub(crate) fn handle_table_click_test_backend<C: Component>(
         if let NodeKind::Table(table_node) = &mut backend.core.tree.node_mut(hit).kind {
             table_node.scroll_override = Some(table_node.offset);
         }
-        let click_count = mouse::click_count_at(&mut backend.mouse.last_click, x, y, true);
+        let click_count = mouse::click_count_at(
+            &mut backend.mouse.last_click,
+            x,
+            y,
+            true,
+            backend.core.ctx.env().now(),
+        );
         let is_double = click_count == 2;
         backend
             .mouse
@@ -920,7 +932,13 @@ pub(crate) fn handle_document_view_click_test_backend<C: Component>(
     };
     let cursor = cursor.min(doc.visual_cache.flat_text.len());
     let click_count = if doc.multi_click_select {
-        mouse::click_count_at(&mut backend.mouse.last_click, x, y, true)
+        mouse::click_count_at(
+            &mut backend.mouse.last_click,
+            x,
+            y,
+            true,
+            backend.core.ctx.env().now(),
+        )
     } else {
         1
     };

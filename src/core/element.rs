@@ -82,6 +82,18 @@ impl std::fmt::Display for Key {
 pub struct Element {
     /// Optional key for stable identity.
     pub(crate) key: Option<Key>,
+    /// Optional app-authored identity for automation.
+    pub(crate) automation_id: Option<crate::automation::AutomationId>,
+    /// Optional semantic role override used by composite widgets.
+    pub(crate) semantic_role: Option<crate::automation::SemanticRole>,
+    /// Optional accessible name override.
+    pub(crate) semantic_name: Option<Arc<str>>,
+    /// Selection-state override used by composites.
+    pub(crate) semantic_selected: Option<bool>,
+    /// Expansion-state override used by composites.
+    pub(crate) semantic_expanded: Option<bool>,
+    /// Whether automation must redact this widget's value.
+    pub(crate) semantic_value_sensitive: bool,
     /// Whether pointer presses may acquire focus in this subtree.
     pub(crate) pointer_focus: bool,
     /// Concrete element kind.
@@ -101,6 +113,12 @@ impl Element {
     pub(crate) fn new(kind: ElementKind) -> Self {
         Self {
             key: None,
+            automation_id: None,
+            semantic_role: None,
+            semantic_name: None,
+            semantic_selected: None,
+            semantic_expanded: None,
+            semantic_value_sensitive: false,
             pointer_focus: true,
             kind,
             layout: LayoutConstraints::default(),
@@ -123,6 +141,48 @@ impl Element {
     /// compatible.
     pub fn key(mut self, key: impl Into<Key>) -> Self {
         self.key = Some(key.into());
+        self
+    }
+
+    /// Assign a tree-wide app-authored automation identity.
+    ///
+    /// A committed session rejects duplicate IDs in every build. This identity
+    /// is independent of the sibling-scoped reconciliation [`Key`].
+    pub fn automation_id(
+        mut self,
+        automation_id: impl Into<crate::automation::AutomationId>,
+    ) -> Self {
+        self.automation_id = Some(automation_id.into());
+        self
+    }
+
+    /// Mark this widget's semantic value as sensitive.
+    ///
+    /// Sensitive values are redacted from semantic snapshots and semantic
+    /// checkpoint or control-protocol formats. Pixel captures still contain
+    /// whatever the widget renders.
+    pub fn sensitive_value(mut self, sensitive: bool) -> Self {
+        self.semantic_value_sensitive = sensitive;
+        self
+    }
+
+    pub(crate) fn semantic_role(mut self, role: crate::automation::SemanticRole) -> Self {
+        self.semantic_role = Some(role);
+        self
+    }
+
+    pub(crate) fn semantic_name(mut self, name: impl Into<Arc<str>>) -> Self {
+        self.semantic_name = Some(name.into());
+        self
+    }
+
+    pub(crate) fn semantic_selected(mut self, selected: bool) -> Self {
+        self.semantic_selected = Some(selected);
+        self
+    }
+
+    pub(crate) fn semantic_expanded(mut self, expanded: bool) -> Self {
+        self.semantic_expanded = Some(expanded);
         self
     }
 
@@ -705,6 +765,16 @@ pub trait IntoElement: Into<Element> + Sized {
     /// multi-child container reconciliation.
     fn key(self, key: impl Into<Key>) -> Element {
         self.into().key(key)
+    }
+
+    /// Convert into an element and assign a tree-wide automation identity.
+    fn automation_id(self, automation_id: impl Into<crate::automation::AutomationId>) -> Element {
+        self.into().automation_id(automation_id)
+    }
+
+    /// Convert into an element and set semantic-value sensitivity.
+    fn sensitive_value(self, sensitive: bool) -> Element {
+        self.into().sensitive_value(sensitive)
     }
 
     /// Convert into an element and control pointer focus acquisition for its subtree.

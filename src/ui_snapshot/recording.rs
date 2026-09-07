@@ -25,8 +25,6 @@ use crate::capture::CastRecording;
 use crate::core::component::Component;
 use crate::core::element::Element;
 use crate::mockup::Mockup;
-use crate::style::Rect;
-use crate::test_backend::TestBackend;
 
 /// Default capture rate.
 const DEFAULT_FPS: u16 = 30;
@@ -133,8 +131,8 @@ where
 
     /// Actions to play, e.g. `"click:#open; wait:300; key:esc"`.
     ///
-    /// Widgets are targeted by reconciliation key. Takes precedence over
-    /// [`Self::keys`]. See [`Action`](crate::Action) for the full syntax.
+    /// `#name` targets an app-authored automation ID. Takes precedence over
+    /// [`Self::keys`]. See [`AutomationStep`](crate::AutomationStep) for typed operations.
     #[must_use]
     pub fn script(mut self, script: impl AsRef<str>) -> Self {
         self.action_script = Some(script.as_ref().to_owned());
@@ -200,30 +198,32 @@ where
         let actions = resolve_actions(action_script.as_deref(), key_script.as_deref())?;
 
         let (w, h) = viewport;
-        let mut backend = TestBackend::new(component);
-        backend.set_viewport(Rect { x: 0, y: 0, w, h });
-        backend.render();
+        let mut session = crate::automation::AutomationSession::new(
+            component,
+            crate::automation::AutomationOptions::default().viewport(w, h),
+        )
+        .map_err(automation_error)?;
 
         let step = Duration::from_secs_f64(1.0 / f64::from(fps));
         let mut clock = Duration::ZERO;
 
-        sink(clock.as_secs_f64(), &backend.capture_frame())?;
+        sink(clock.as_secs_f64(), &session.snapshot().frame)?;
 
         for action in &actions {
             // A wait is timeline, not input: it spends its own duration rather
             // than taking a step and then the usual pause.
-            if let super::Action::Wait(dt) = action {
-                hold(&mut backend, &mut sink, &mut clock, *dt, step)?;
+            if let Some(dt) = action.advance_duration() {
+                hold(&mut session, &mut sink, &mut clock, dt, step)?;
                 continue;
             }
 
-            super::execute(&mut backend, action)?;
+            session.execute(action.clone()).map_err(automation_error)?;
             clock += step;
-            sink(clock.as_secs_f64(), &backend.capture_frame())?;
-            hold(&mut backend, &mut sink, &mut clock, key_delay, step)?;
+            sink(clock.as_secs_f64(), &session.snapshot().frame)?;
+            hold(&mut session, &mut sink, &mut clock, key_delay, step)?;
         }
 
-        hold(&mut backend, &mut sink, &mut clock, settle, step)?;
+        hold(&mut session, &mut sink, &mut clock, settle, step)?;
         Ok(())
     }
 
@@ -329,14 +329,14 @@ where
 pub(crate) fn resolve_actions(
     action_script: Option<&str>,
     key_script: Option<&str>,
-) -> Result<Vec<super::Action>> {
+) -> Result<Vec<crate::automation::AutomationStep>> {
     if let Some(script) = action_script {
-        return super::parse_script(script);
+        return super::compile_script(script).map_err(automation_error);
     }
     match key_script {
         Some(script) => Ok(super::keys::parse_key_script(script)?
             .into_iter()
-            .map(super::Action::Key)
+            .map(crate::automation::AutomationStep::key)
             .collect()),
         None => Ok(Vec::new()),
     }
@@ -347,7 +347,7 @@ pub(crate) fn resolve_actions(
 /// Animations are ticked in clamped increments so a long hold cannot skip a
 /// transition, matching how the runner paces its own frames.
 fn hold<C: Component>(
-    backend: &mut TestBackend<C>,
+    session: &mut crate::automation::AutomationSession<C>,
     sink: &mut impl FnMut(f64, &crate::capture::CapturedFrame) -> Result<()>,
     clock: &mut Duration,
     total: Duration,
@@ -364,24 +364,31 @@ fn hold<C: Component>(
         let mut advanced = Duration::ZERO;
         while advanced < frame_span {
             let tick = (frame_span - advanced).min(MAX_TICK);
-            backend.advance_frame(tick);
+            session
+                .execute(crate::automation::AutomationStep::advance(tick))
+                .map_err(automation_error)?;
             advanced += tick;
         }
 
         *clock += frame_span;
-        sink(clock.as_secs_f64(), &backend.capture_frame())?;
+        sink(clock.as_secs_f64(), &session.snapshot().frame)?;
         remaining = remaining.saturating_sub(frame_span);
     }
     Ok(())
+}
+
+fn automation_error(error: crate::automation::AutomationError) -> crate::Error {
+    std::io::Error::other(error.to_string()).into()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::component::{Context, KeyUpdate, Update};
-    use crate::core::element::{IntoElement, Key};
+    use crate::core::element::IntoElement;
     use crate::core::event::{KeyCode, KeyEvent};
     use crate::widgets::Text;
+    use crate::{Rect, TestBackend};
 
     struct Echo;
 
@@ -655,11 +662,9 @@ mod tests {
         backend.render();
         assert!(backend.hovered().is_none(), "nothing hovered initially");
 
-        crate::ui_snapshot::execute(
+        crate::ui_snapshot::execute_step(
             &mut backend,
-            &crate::ui_snapshot::Action::Hover(crate::ui_snapshot::Target::Key(Key::from(
-                "go".to_owned(),
-            ))),
+            &crate::automation::AutomationStep::hover(crate::automation::Selector::id("go")),
         )
         .expect("hover succeeds");
 
@@ -672,13 +677,13 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_a_missing_key_fails_loudly() {
+    fn a_click_on_a_missing_automation_id_fails_loudly() {
         let err = Recording::component("missing", Clicker)
             .viewport(30, 5)
             .script("click:#nope")
             .quiet(true)
             .record()
-            .expect_err("a missing key must not silently click nothing");
+            .expect_err("a missing automation ID must not silently click nothing");
         assert!(err.to_string().contains("nope"), "{err}");
     }
 
@@ -723,6 +728,7 @@ mod tests {
                 .child(
                     crate::widgets::Button::new("Go")
                         .on_click(ctx.link().callback(|_| ()))
+                        .automation_id("go")
                         .key("go"),
                 )
                 .into()

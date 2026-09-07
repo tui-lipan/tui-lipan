@@ -710,7 +710,7 @@ mod tests {
         assert_eq!(backend.state().resize_apply_count, 0);
         assert_eq!(backend.state().screen.semantic_marks(), marks);
 
-        std::thread::sleep(Duration::from_millis(64));
+        backend.advance(Duration::from_millis(64));
         backend.pump().unwrap();
 
         // Only the final, different width reaches the resize path.
@@ -734,7 +734,7 @@ mod tests {
         backend
             .dispatch(ManagedTerminalMsg::Resize { cols: 90, rows: 24 })
             .unwrap();
-        std::thread::sleep(Duration::from_millis(48));
+        backend.advance(Duration::from_millis(48));
         backend.pump().unwrap();
         assert_eq!(backend.state().cols, 90);
         assert_eq!(backend.state().resize_apply_count, 1);
@@ -744,7 +744,7 @@ mod tests {
         backend
             .dispatch(ManagedTerminalMsg::Resize { cols: 70, rows: 24 })
             .unwrap();
-        std::thread::sleep(Duration::from_millis(48));
+        backend.advance(Duration::from_millis(48));
         backend.pump().unwrap();
         assert_eq!(backend.state().cols, 70);
         assert_eq!(backend.state().resize_apply_count, 2);

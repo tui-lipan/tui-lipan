@@ -41,6 +41,8 @@ struct Entry {
     /// queue is shared. Without this, one runtime skipping virtual time would fire every other
     /// runtime's pending timers early, delivering messages into harnesses that never asked for them.
     owner: Option<super::RuntimeId>,
+    /// Whether the global wall-clock worker may run this entry.
+    realtime: bool,
     task: Task,
 }
 
@@ -86,23 +88,41 @@ impl TimerService {
     ///
     /// A zero delay still goes through the queue rather than running inline, so callers cannot
     /// accidentally run a "delayed" task synchronously inside `update()`.
+    #[cfg(test)]
     pub(super) fn schedule(&self, delay: Duration, task: Task) {
         self.schedule_owned(delay, task, None);
     }
 
     /// Like [`schedule`](Self::schedule), recording which runtime armed the timer so
     /// [`advance`](Self::advance) can claim only its own.
+    #[cfg(test)]
     pub(super) fn schedule_owned(
         &self,
         delay: Duration,
         task: Task,
         owner: Option<super::RuntimeId>,
     ) {
+        self.schedule_session_owned(
+            delay,
+            Instant::now(),
+            crate::automation::ClockMode::Realtime,
+            task,
+            owner,
+        );
+    }
+
+    /// Queue a timer against one session's logical clock.
+    pub(super) fn schedule_session_owned(
+        &self,
+        delay: Duration,
+        now: Instant,
+        mode: crate::automation::ClockMode,
+        task: Task,
+        owner: Option<super::RuntimeId>,
+    ) {
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let due = Instant::now()
-            .checked_add(delay)
-            .unwrap_or_else(Instant::now);
+        let due = now.checked_add(delay).unwrap_or(now);
         let Ok(mut queue) = self.state.queue.lock() else {
             // A poisoned queue means the timer thread is gone; cancelling is closer to the caller's
             // intent than silently dropping a task it believes is pending.
@@ -113,6 +133,7 @@ impl TimerService {
             due,
             seq,
             owner,
+            realtime: mode == crate::automation::ClockMode::Realtime,
             task,
         }));
         drop(queue);
@@ -179,6 +200,46 @@ impl TimerService {
         }
         ran
     }
+
+    pub(super) fn pending_owned(
+        &self,
+        horizon: Instant,
+        owner: super::RuntimeId,
+    ) -> (usize, usize) {
+        let Ok(queue) = self.state.queue.lock() else {
+            return (0, 0);
+        };
+        let mut due = 0;
+        let mut future = 0;
+        for Reverse(entry) in &queue.entries {
+            if entry.owner != Some(owner) {
+                continue;
+            }
+            if entry.due <= horizon {
+                due += 1;
+            } else {
+                future += 1;
+            }
+        }
+        (due, future)
+    }
+
+    pub(super) fn cancel_owned(&self, owner: super::RuntimeId) {
+        let Ok(mut queue) = self.state.queue.lock() else {
+            return;
+        };
+        let mut retained = BinaryHeap::new();
+        while let Some(Reverse(entry)) = queue.entries.pop() {
+            if entry.owner == Some(owner) {
+                entry.task.cancel();
+            } else {
+                retained.push(Reverse(entry));
+            }
+        }
+        queue.entries = retained;
+        drop(queue);
+        self.state.wakeup.notify_one();
+    }
 }
 
 fn run_timer(state: &Arc<TimerState>) {
@@ -188,10 +249,14 @@ fn run_timer(state: &Arc<TimerState>) {
         };
         loop {
             let now = Instant::now();
-            let wait = match queue.entries.peek() {
-                Some(Reverse(entry)) if entry.due <= now => break,
-                Some(Reverse(entry)) => entry.due.saturating_duration_since(now),
-                // Nothing pending: park until something is scheduled.
+            let next_realtime = queue
+                .entries
+                .iter()
+                .filter_map(|Reverse(entry)| entry.realtime.then_some(entry.due))
+                .min();
+            let wait = match next_realtime {
+                Some(due) if due <= now => break,
+                Some(due) => due.saturating_duration_since(now),
                 None => Duration::from_secs(3600),
             };
             let Ok((next, _)) = state.wakeup.wait_timeout(queue, wait) else {
@@ -202,11 +267,15 @@ fn run_timer(state: &Arc<TimerState>) {
         // Drain everything already due in this wakeup rather than reacquiring per entry.
         let mut due = Vec::new();
         let now = Instant::now();
-        while matches!(queue.entries.peek(), Some(Reverse(entry)) if entry.due <= now) {
-            if let Some(Reverse(entry)) = queue.entries.pop() {
+        let mut retained = BinaryHeap::new();
+        while let Some(Reverse(entry)) = queue.entries.pop() {
+            if entry.realtime && entry.due <= now {
                 due.push(entry.task);
+            } else {
+                retained.push(Reverse(entry));
             }
         }
+        queue.entries = retained;
         drop(queue);
         for task in due {
             super::TaskExecutor::global().execute(task);

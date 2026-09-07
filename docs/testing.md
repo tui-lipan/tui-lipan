@@ -93,6 +93,10 @@ time-gated UI without `thread::sleep`. It covers `Animated` transitions, smooth
 scrolls, the property transitions behind `Context::transition`, overlay
 `tick_at`, copy-feedback, and command-chord reveal.
 
+`TestBackend` uses `ClockMode::Controlled`: wall sleep alone does not move this
+clock or fire `Command::after`. Background `Command::spawn` output can still
+arrive while logical time is frozen.
+
 ```rust
 backend.render();
 let start = width_of(&backend, "panel");
@@ -452,6 +456,37 @@ Recording::view("demo", view)
     .write_frames("target/recordings/frames")?;
 ```
 
+### Persistent automation sessions
+
+`App::automation(component, options)` mounts one persistent headless session.
+Operations preserve component state and commit a coherent viewport, semantic
+tree, and frame generation after each step.
+
+```rust
+let mut session = App::new().automation(
+    MyApp,
+    AutomationOptions::default().viewport(100, 30),
+)?;
+session.execute(AutomationStep::click(Selector::id("add")))?;
+session.wait_for(
+    WaitCondition::exists(Selector::id("editor")),
+    Duration::from_secs(1),
+)?;
+let snapshot = session.snapshot();
+# Ok::<(), tui_lipan::AutomationError>(())
+```
+
+Controlled mode is the default. Wall sleep does not move its logical clock;
+`AutomationStep::advance(...)` deterministically fires due framework timers.
+`drain_ready()` reaches a fixed point at the current logical time.
+`wait_for_idle(timeout, quiet_window)` waits for bounded quiescence and reports
+queued messages, timers, and runtime-owned commands.
+
+Checkpoint sinks are configured in `AutomationOptions`. A checkpoint may commit
+semantic Markdown or JSON, PNG, an in-memory recording marker, and a baseline
+comparison for the same generation. Unsupported feature-gated formats fail
+before any destination file is created.
+
 ### Action scripts
 
 A key script can only type. An action script can also click, hover, focus,
@@ -470,7 +505,7 @@ Steps are separated by `;` or newlines.
 |------|--------|
 | `key:ctrl+n` | One key event, in keybinding syntax |
 | `type:hello world` | Literal text, one key event per character |
-| `click:#submit` | Left click the centre of the widget keyed `submit` |
+| `click:#submit` | Left click the centre of the widget with automation ID `submit` |
 | `click:12,7` | Left click a cell |
 | `rclick:` / `mclick:` | Right / middle click |
 | `hover:#sidebar` | Move the pointer over a widget |
@@ -489,20 +524,21 @@ starting" before the script runs; `sleep:` is for waiting *between* actions, whi
 settle deliberately does not run again afterwards — that would finish every animation the script had
 just started and make a mid-animation capture impossible.
 
-**Target widgets by key, not by coordinate.** `#submit` resolves through the
+**Target widgets by automation ID, not by coordinate.** `#submit` resolves through the
 current tree to that widget's rect and clicks its centre, so it survives the
-widget moving and **fails loudly** when the key is absent:
+widget moving and **fails loudly** when the ID is absent:
 
 ```
-Error: no widget with key `does-not-exist` is currently rendered
+Error: no widget with automation ID `does-not-exist` is rendered
 ```
 
 A coordinate cannot do that - a layout change silently turns `click:42,7` into a
 click on empty space while the script still reports success. Coordinates remain
-available for what keys cannot express.
+available for what stable IDs cannot express.
 
-Give widgets stable keys (`.key("add")`) to make them scriptable; the keys a
-running app exposes are listed in any markdown snapshot.
+Give widgets stable IDs (`.automation_id("add")`) to make them scriptable.
+Reconciliation `.key(...)` remains sibling-scoped and is never used as an
+automation fallback.
 
 In code, `Recording::script(...)` takes the same syntax, and `Recording::keys(...)`
 remains the shorthand for the typing-only case.
@@ -511,37 +547,52 @@ remains the shorthand for the typing-only case.
 
 `TUI_LIPAN_CONTROL=<path>` makes a running app listen on a Unix socket, so an
 agent can inspect and drive a live TUI the way a browser tool drives a page:
-snapshot, pick a widget by key, act, look again.
+snapshot, pick a widget by automation ID, act, look again.
 
 ```sh
 TUI_LIPAN_CONTROL=/tmp/app.sock cargo run --example todo
 ```
 
-Requests are single `\n`-terminated lines:
+Add `TUI_LIPAN_AUTOMATION_HEADLESS=1` to run the same control loop off-screen
+without opening a terminal. The headless clock is controlled. Use `wait:` or
+`advance:` operations to move it.
+
+Requests are bounded, versioned lines:
+
+```text
+tui-lipan/1 <request-id> <deadline-ms> <command>\n
+```
 
 | Command | Reply |
 |---------|-------|
+| `hello` | Protocol limits and build capabilities |
 | `ping` | `pong` |
-| `keys` | Newline-separated reconciliation keys currently rendered |
-| `snapshot` | Markdown snapshot |
-| `snapshot json` | JSON snapshot (needs `ui-snapshot-json`) |
-| `snapshot png <path>` | Writes a PNG, replies with the path (needs `ui-snapshot-png`) |
-| `act <script>` | Runs an action script; empty payload on success |
-| `highlight <key>` | Outlines a widget; replies with the resolved rect |
+| `keys` | Newline-separated automation IDs currently rendered |
+| `snapshot` | Semantic Markdown snapshot |
+| `snapshot json` | Semantic JSON snapshot (needs `ui-snapshot-json`) |
+| `snapshot png` | Returns PNG bytes (needs `ui-snapshot-png`) |
+| `act <script>` | Runs typed operations; returns checkpoint paths when requested |
+| `highlight <automation-id>` | Outlines a widget; replies with the resolved rect |
 | `highlight <col>,<row>` | Outlines the smallest widget covering a cell |
 | `highlight clear` | Removes the outline |
+| `cancel <request-id>` | Cooperatively cancels an active request |
 | `quit` | Asks the app to exit |
 
 Replies are a status line plus exactly that many bytes:
 
 ```text
-ok <byte-length>\n<payload>
-err <byte-length>\n<message>
+tui-lipan/1 <request-id> ok - <byte-length>\n<payload>
+tui-lipan/1 <request-id> err <code> <byte-length>\n<message>
 ```
 
-Length prefixing keeps payloads newline- and binary-safe without escaping, so a
-client is a few lines in any language. `keys` is the index of what `act` can
-target - the equivalent of a browser tool's element refs.
+Request lines are limited to 64 KiB, replies to 16 MiB, IDs to 64 safe ASCII
+characters, and deadlines to 60 seconds. Expired or cancelled requests are
+rejected before the next operation mutates the UI. Length prefixing keeps
+payloads newline- and binary-safe. `keys` is the index of what `act` can target.
+
+Scripts target `#automation-id`, `@role`, `@role=Accessible name`, or
+`text~substring`. Persistent operations include `resize:120x40`, `drain`,
+`checkpoint:name`, and `wait-for:exists,#id,1000`.
 
 `highlight` is an inspector marker, drawn over the finished frame in magenta. It
 does not depend on the widget styling itself for hover or focus, so it marks
@@ -560,7 +611,8 @@ inspectable.
 - Unix only. The socket is created `0600`, because anything that can reach it can
   type into your application. Do not place it on a shared filesystem.
 - `AF_UNIX` paths are limited to about 100 bytes; a long path fails to bind.
-- Connections are served one at a time - the UI is a single shared surface.
+- Client connections may overlap, but the UI thread executes operations against
+  one shared session.
 - Runtime state stays single-threaded: the listener thread queues requests and
   the event loop answers them, the same pattern the terminal reader uses.
 

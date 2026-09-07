@@ -186,8 +186,8 @@ writing any `update()` logic.
 |---------|-------------|
 | `clipboard` | System clipboard via arboard - **enabled by default** |
 | `devtools` | In-app DevTools overlay (`F12`) with frame stats and debug log console; configurable via `DevToolsConfig` |
-| `ui-snapshot-json` | JSON export for agent UI snapshots; markdown export is always available |
-| `ui-snapshot-png` | Font-backed PNG export for agent UI snapshots and captured frames |
+| `ui-snapshot-json` | JSON export for agent snapshots and semantic automation checkpoints |
+| `ui-snapshot-png` | PNG snapshots, checkpoints, recording frames, and visual baselines |
 | `clipboard-images` | Image clipboard read/write (without the `Image` rendering widget) |
 | `big-text` | `BigText` widget: large text via FIGlet and pixel fonts |
 | `diff-view` | `DiffView` widget: side-by-side and unified diff viewer |
@@ -257,6 +257,18 @@ Companion variables include `TUI_LIPAN_SNAPSHOT_VIEWPORT`,
 `TUI_LIPAN_SNAPSHOT_VIEWPORTS` (several sizes in one run),
 `TUI_LIPAN_SNAPSHOT_KEYS`, and `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` (virtual clock
 for time-gated UI such as a which-key panel). See [`docs/testing.md`](docs/testing.md).
+
+For a long-lived off-screen app that an external agent can drive:
+
+```sh
+TUI_LIPAN_AUTOMATION_HEADLESS=1 \
+TUI_LIPAN_CONTROL=/tmp/todo.sock \
+cargo run --example todo
+```
+
+The bounded Unix-socket protocol supports semantic selectors, controlled clock
+advancement, waits, resize, checkpoints, and Markdown, JSON, or PNG snapshots.
+See [`docs/automation.md`](docs/automation.md).
 
 For a screen that does not exist yet, `Sketch` renders a plain view function at
 several viewports in one call:

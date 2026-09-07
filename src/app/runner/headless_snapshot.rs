@@ -66,7 +66,7 @@ pub(super) struct HeadlessSnapshotConfig {
     /// Focus advances before capture.
     pub(super) focus_steps: usize,
     /// Actions performed before capture, in order.
-    pub(super) actions: Vec<crate::ui_snapshot::Action>,
+    pub(super) actions: Vec<crate::automation::AutomationStep>,
     /// Whether to capture with diagnostic describe options.
     pub(super) diagnostic: bool,
     /// Virtual time to advance (and tick) before capturing.

@@ -101,12 +101,19 @@ pub(crate) struct CopyFeedbackDispatch {
     pub(crate) dirty_override: Option<DirtyLevel>,
 }
 
-#[derive(Default)]
 pub(crate) struct CopyFeedbackState {
+    clock: crate::core::runtime_env::SessionClock,
     flashes: HashMap<NodeId, CopyFeedbackFlash>,
 }
 
 impl CopyFeedbackState {
+    pub(crate) fn new(clock: crate::core::runtime_env::SessionClock) -> Self {
+        Self {
+            clock,
+            flashes: HashMap::new(),
+        }
+    }
+
     pub fn trigger(&mut self, id: NodeId, duration: Duration) {
         self.trigger_range(id, duration, None);
     }
@@ -133,7 +140,7 @@ impl CopyFeedbackState {
     }
 
     pub fn is_active(&self, id: NodeId) -> bool {
-        let now = Instant::now();
+        let now = self.clock.now();
         self.flashes
             .get(&id)
             .is_some_and(|flash| match flash.phase {
@@ -176,6 +183,14 @@ impl CopyFeedbackState {
         });
 
         tick
+    }
+}
+
+impl Default for CopyFeedbackState {
+    fn default() -> Self {
+        Self::new(crate::core::runtime_env::SessionClock::new(
+            crate::automation::ClockMode::Realtime,
+        ))
     }
 }
 

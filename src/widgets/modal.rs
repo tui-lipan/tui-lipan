@@ -206,6 +206,7 @@ fn root_dismiss_policy(has_on_close: bool, dismiss_on_escape: bool) -> DismissPo
 
 impl From<Modal> for Element {
     fn from(modal: Modal) -> Self {
+        let semantic_name = modal.title.clone();
         let frame_style = if modal.frame_style.bg.is_none() {
             modal.frame_style.bg(Color::Backdrop)
         } else {
@@ -229,7 +230,7 @@ impl From<Modal> for Element {
             base_frame = base_frame.header(header);
         }
 
-        match modal.scope {
+        let element = match modal.scope {
             OverlayScope::Local => {
                 let mut backdrop = MouseRegion::new().capture_click(true);
 
@@ -311,6 +312,11 @@ impl From<Modal> for Element {
                     None => element,
                 }
             }
+        };
+        let element = element.semantic_role(crate::automation::SemanticRole::Dialog);
+        match semantic_name {
+            Some(name) => element.semantic_name(name.plain_content().into_owned()),
+            None => element,
         }
     }
 }

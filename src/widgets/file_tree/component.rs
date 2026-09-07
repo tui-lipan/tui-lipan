@@ -3049,6 +3049,10 @@ mod tests {
             scope: crate::callback::ScopeId(1),
             tx: runtime.command_tx.clone(),
             runtime_id: runtime.ctx.env().runtime_id,
+            now: runtime.ctx.env().now(),
+            clock_mode: runtime.ctx.env().clock.mode(),
+            clock: runtime.ctx.env().clock.clone(),
+            activity: std::sync::Arc::clone(&runtime.ctx.env().activity),
         });
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);

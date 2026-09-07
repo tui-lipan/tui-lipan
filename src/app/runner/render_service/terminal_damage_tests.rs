@@ -310,7 +310,8 @@ fn build(cfg: PaneCfg, setup: &[u8]) -> Harness {
         Theme::default(),
         SurfaceMode::Fullscreen,
         Rc::new(StdCell::new(false)),
-    );
+    )
+    .into();
     runner.core.init();
     runner.core.render_element(viewport(), None, None, None);
     runner.core.tree.refresh_live_terminals();

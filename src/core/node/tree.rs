@@ -16,6 +16,7 @@ use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::rc::Rc;
+use web_time::Instant;
 
 thread_local! {
     static DEFAULT_ACTIVE_THEME: Rc<Theme> = Rc::new(Theme::default());
@@ -70,6 +71,18 @@ pub(crate) struct Node {
     pub id: NodeId,
     /// Optional user-provided key.
     pub key: Option<Key>,
+    /// Optional app-authored identity for automation.
+    pub(crate) automation_id: Option<crate::automation::AutomationId>,
+    /// Semantic role override carried by a composite widget.
+    pub(crate) semantic_role: Option<crate::automation::SemanticRole>,
+    /// Accessible-name override carried by a composite widget.
+    pub(crate) semantic_name: Option<std::sync::Arc<str>>,
+    /// Selection-state override carried by a composite widget.
+    pub(crate) semantic_selected: Option<bool>,
+    /// Expansion-state override carried by a composite widget.
+    pub(crate) semantic_expanded: Option<bool>,
+    /// Whether semantic output must redact this node's value.
+    pub(crate) semantic_value_sensitive: bool,
     /// Whether pointer presses may acquire focus in this subtree.
     pub pointer_focus: bool,
     /// Layout rectangle.
@@ -182,6 +195,12 @@ impl Node {
         Self {
             id,
             key: None,
+            automation_id: None,
+            semantic_role: None,
+            semantic_name: None,
+            semantic_selected: None,
+            semantic_expanded: None,
+            semantic_value_sensitive: false,
             pointer_focus: true,
             rect: Rect::default(),
             parent: None,
@@ -196,6 +215,12 @@ impl Node {
     pub(crate) fn reset_for_reuse(&mut self, id: NodeId) {
         self.id = id;
         self.key = None;
+        self.automation_id = None;
+        self.semantic_role = None;
+        self.semantic_name = None;
+        self.semantic_selected = None;
+        self.semantic_expanded = None;
+        self.semantic_value_sensitive = false;
         self.pointer_focus = true;
         self.parent = None;
         self.rect = Rect::default();
@@ -227,7 +252,7 @@ struct DiffLineRangePreview {
     end_logical_line: usize,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct NodeTree {
     /// Root id.
     pub root: NodeId,
@@ -256,6 +281,7 @@ pub(crate) struct NodeTree {
     #[cfg(feature = "image")]
     animated_image_ids: Vec<NodeId>,
     epoch: u32,
+    session_now: Instant,
     /// Cached sorted focusable node list, lazily populated on first
     /// `focusables()` call per epoch and cleared in `begin_epoch()`.
     cached_focusables: RefCell<Option<Vec<NodeId>>>,
@@ -278,6 +304,12 @@ pub(crate) struct NodeTree {
     active_theme_stack: Vec<Rc<Theme>>,
     #[cfg(feature = "diff-view")]
     diff_line_range_preview: Option<DiffLineRangePreview>,
+}
+
+impl Default for NodeTree {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// What one pass of [`NodeTree::refresh_live_terminals_detailed`] found.
@@ -319,6 +351,7 @@ impl NodeTree {
             #[cfg(feature = "image")]
             animated_image_ids: Vec::new(),
             epoch: 0,
+            session_now: Instant::now(),
             cached_focusables: RefCell::new(None),
             scroll_was_at_bottom_by_key: FxHashMap::default(),
             remembered_scroll_anchor_by_key: FxHashMap::default(),
@@ -329,6 +362,14 @@ impl NodeTree {
             #[cfg(feature = "diff-view")]
             diff_line_range_preview: None,
         }
+    }
+
+    pub(crate) fn set_session_now(&mut self, now: Instant) {
+        self.session_now = now;
+    }
+
+    pub(crate) fn session_now(&self) -> Instant {
+        self.session_now
     }
 
     #[cfg(feature = "diff-view")]
@@ -1220,6 +1261,31 @@ impl NodeTree {
                 );
             }
         }
+    }
+
+    /// Return the first duplicate app-authored automation ID.
+    ///
+    /// Automation IDs are global to the realized tree, unlike reconciliation
+    /// keys. Overlay traversal may reach one node twice, so IDs are checked only
+    /// once per realized node.
+    pub(crate) fn duplicate_automation_id(&self) -> Option<crate::automation::AutomationId> {
+        use rustc_hash::{FxHashMap, FxHashSet};
+
+        let mut seen_nodes: FxHashSet<NodeId> = FxHashSet::default();
+        let mut seen: FxHashMap<&crate::automation::AutomationId, NodeId> = FxHashMap::default();
+        for node in self.iter_with_overlays() {
+            if !seen_nodes.insert(node.id) {
+                continue;
+            }
+            let Some(automation_id) = node.automation_id.as_ref() else {
+                continue;
+            };
+            if let Some(previous) = seen.insert(automation_id, node.id) {
+                let _ = previous;
+                return Some(automation_id.clone());
+            }
+        }
+        None
     }
 
     fn depth_first_test(&self, start: NodeId, x: i16, y: i16, kind: TestKind) -> Option<NodeId> {
