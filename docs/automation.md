@@ -50,6 +50,14 @@ synthetic root. Application content appears first, followed by overlay roots in
 their effective stacking order. A realized widget appears exactly once, even
 when an overlay portal is reachable from more than one internal traversal.
 
+An overlay portal moves its content out of the place the app declared it and
+leaves an empty placeholder behind. The role, accessible name, and automation ID
+the widget author put on that declaration belong to the content, so the
+projection carries them onto the hoisted root and omits the placeholder: a
+`Modal` is one `Dialog` node with the dialog's own bounds and actions, not an
+invisible `Dialog` beside a `Group` that holds the real thing. A declaration on
+the content itself always wins over the one on the portal.
+
 Each semantic node reports:
 
 - an optional automation ID;
@@ -119,7 +127,10 @@ API types as their protocol.
 
 Text selectors use `#id`, `@role`, `@role=Accessible name`, or
 `text~substring`. Persistent scripts also accept `resize:120x40`, `drain`,
-`checkpoint:name`, and `wait-for:exists,#id,1000`.
+`checkpoint:name`, and `wait-for:PREDICATE,SELECTOR,MILLISECONDS`. Every
+condition below has a script spelling; the ones carrying a value write it into
+the predicate, as `value=ready`, `text=Connected`, `count=3`, or
+`selected=false`. `docs/testing.md` has the full table.
 
 ## Clocks and idle
 

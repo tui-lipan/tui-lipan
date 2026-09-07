@@ -56,6 +56,16 @@ While the crate is on `0.x.y`:
 - Web builds once again compile with the public automation mount methods.
 - Semantic Markdown and JSON redact sensitive values; documentation and protocol capabilities now
   identify PNGs, recordings, and visual baselines as unredacted rendered pixels.
+- A hoisted overlay portal declares its semantic role, accessible name, and automation ID on the
+  content it moved, not on the empty placeholder it left behind. A `Modal` used to project an
+  invisible zero-area `Dialog` next to the `Group` holding the actual dialog, so `@dialog` matched
+  a node that could never be in view and a `.automation_id(...)` on the modal itself pointed at
+  nothing clickable. A declaration on the portal's content still wins over the portal's own.
+- Action scripts can spell every `WaitCondition`. `wait-for:` gained `selected`, `selected=false`,
+  `value=...`, `text=...`, and `count=...` alongside the six predicates it already accepted; a
+  predicate's value rides inside the first field so a comma-bearing selector still parses.
+- The control protocol's unknown-command error lists `cancel`, and a `cancel` missing its request
+  ID says so instead of reporting the verb as unknown.
 
 - `DraggableTabBar::close_on_hover_only()` no longer truncates tab labels for a close control that
   is not on screen. The close cells stay part of every closeable tab's measured width, so the label

@@ -185,7 +185,10 @@ pub struct SemanticNode {
     pub actions: Vec<SemanticAction>,
     /// Child semantic nodes.
     pub children: Vec<SemanticNode>,
-    /// Overlay stacking index. Set only on semantic overlay roots.
+    /// Overlay stacking index, set on an overlay root and inherited by its whole subtree.
+    ///
+    /// `None` for application content. A higher index is stacked above a lower one, which is how
+    /// a point selector picks the topmost node under a cell.
     pub overlay_order: Option<u64>,
     pub(crate) runtime_node: Option<NodeId>,
 }
@@ -262,24 +265,26 @@ pub(crate) fn project_semantic_tree(
     generation: u64,
 ) -> SemanticTree {
     let mut seen = HashSet::new();
-    let overlay_ids: HashSet<NodeId> = tree.overlay_roots().iter().map(|root| root.id).collect();
+    // A hoisted portal leaves two nodes behind: an empty placeholder where the app declared it,
+    // and the content it moved to an overlay root. The placeholder is where the widget author's
+    // role, name, and automation ID sit, so both are skipped in the application pass and the
+    // declaration is carried onto the root that actually has area and actions.
+    let mut skipped: HashSet<NodeId> = tree.overlay_roots().iter().map(|root| root.id).collect();
+    for overlay in tree.overlay_roots() {
+        if let Some(placeholder) = hoisted_portal_placeholder(tree, overlay.id) {
+            skipped.insert(placeholder);
+        }
+    }
     let mut children = Vec::new();
     if tree.is_valid(tree.root)
         && let Some(root) = project_node(
-            tree,
-            tree.root,
-            viewport,
-            viewport,
-            focused,
-            &overlay_ids,
-            &mut seen,
-            None,
+            tree, tree.root, viewport, viewport, focused, &skipped, &mut seen, None,
         )
     {
         children.push(root);
     }
     for overlay in tree.overlay_roots() {
-        if let Some(node) = project_node(
+        if let Some(mut node) = project_node(
             tree,
             overlay.id,
             viewport,
@@ -289,6 +294,9 @@ pub(crate) fn project_semantic_tree(
             &mut seen,
             Some(overlay.order),
         ) {
+            if let Some(placeholder) = hoisted_portal_placeholder(tree, overlay.id) {
+                inherit_portal_semantics(&mut node, tree.node(overlay.id), tree.node(placeholder));
+            }
             children.push(node);
         }
     }
@@ -315,6 +323,43 @@ pub(crate) fn project_semantic_tree(
             overlay_order: None,
             runtime_node: None,
         },
+    }
+}
+
+/// The empty placeholder left behind when `root` is a portal's hoisted content.
+///
+/// Returns `None` for an overlay root that is not a portal's content, such as a popover or a
+/// toast, and for an inline portal whose content was never hoisted.
+fn hoisted_portal_placeholder(tree: &NodeTree, root: NodeId) -> Option<NodeId> {
+    let parent = tree.node(root).parent?;
+    if !tree.is_valid(parent) {
+        return None;
+    }
+    match &tree.node(parent).kind {
+        NodeKind::Portal(portal) if *portal.content == root => Some(parent),
+        _ => None,
+    }
+}
+
+/// Move a portal placeholder's declared identity onto the overlay root it hoisted.
+///
+/// Only identity is carried. State and actions belong to the realized content, which is what a
+/// selector goes on to click or focus. A declaration on the content itself always wins.
+fn inherit_portal_semantics(node: &mut SemanticNode, root: &Node, placeholder: &Node) {
+    if root.semantic_role.is_none()
+        && let Some(role) = placeholder.semantic_role
+    {
+        node.role = role;
+    }
+    if root.semantic_name.is_none()
+        && let Some(name) = &placeholder.semantic_name
+    {
+        node.name = Some(name.to_string());
+    }
+    if root.automation_id.is_none()
+        && let Some(automation_id) = &placeholder.automation_id
+    {
+        node.automation_id = Some(automation_id.clone());
     }
 }
 

@@ -594,6 +594,24 @@ Scripts target `#automation-id`, `@role`, `@role=Accessible name`, or
 `text~substring`. Persistent operations include `resize:120x40`, `drain`,
 `checkpoint:name`, and `wait-for:exists,#id,1000`.
 
+A wait is `wait-for:PREDICATE,SELECTOR,MILLISECONDS`. Every
+[`WaitCondition`](automation.md#wait-conditions) has a spelling:
+
+| Predicate | Waits until |
+|-----------|-------------|
+| `exists` / `missing` | The selector has, or has no, match |
+| `in-view` | The one match intersects the viewport |
+| `focused` | The one match holds focus |
+| `enabled` / `disabled` | The one match is enabled, or is not |
+| `selected` / `selected=false` | The one match has that selection state |
+| `value=ready` | The one match's safe value is exactly `ready` |
+| `text=Connected` | A match's safe text contains `Connected` |
+| `count=3` | The selector resolves to exactly three nodes |
+
+A predicate's value rides inside the first field so the three comma-separated
+fields stay fixed, which is what keeps a comma-bearing selector - a `12,7` point
+or a `text~a, b` needle - parsable. A value cannot itself contain a comma.
+
 `highlight` is an inspector marker, drawn over the finished frame in magenta. It
 does not depend on the widget styling itself for hover or focus, so it marks
 anything - including widgets with no interactive styling at all. Large rects are

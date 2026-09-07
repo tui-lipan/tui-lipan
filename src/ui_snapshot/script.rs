@@ -152,33 +152,72 @@ fn parse_selector(arg: &str, step: &str) -> std::result::Result<Selector, Automa
     ))
 }
 
+/// Parse `wait-for:PREDICATE,SELECTOR,MILLISECONDS`.
+///
+/// A predicate that needs a value carries it inline as `PREDICATE=VALUE`, keeping the three
+/// comma-separated fields fixed so a selector that contains a comma - a point, or a `text~`
+/// needle - still parses. A value therefore cannot contain a comma itself.
 fn parse_wait_for(arg: &str, step: &str) -> std::result::Result<AutomationStep, AutomationError> {
-    let (predicate_and_selector, timeout) = arg
-        .rsplit_once(',')
-        .ok_or_else(|| invalid(step, "expected `wait-for:PREDICATE,SELECTOR,MILLISECONDS`"))?;
+    const SHAPE: &str = "expected `wait-for:PREDICATE,SELECTOR,MILLISECONDS`";
+
+    let (predicate_and_selector, timeout) =
+        arg.rsplit_once(',').ok_or_else(|| invalid(step, SHAPE))?;
     let (predicate, selector) = predicate_and_selector
         .split_once(',')
-        .ok_or_else(|| invalid(step, "expected `wait-for:PREDICATE,SELECTOR,MILLISECONDS`"))?;
+        .ok_or_else(|| invalid(step, SHAPE))?;
     let selector = parse_selector(selector.trim(), step)?;
     let timeout = parse_duration(timeout.trim(), step)?;
-    let condition = match predicate.trim() {
-        "exists" => WaitCondition::exists(selector),
-        "missing" => WaitCondition::missing(selector),
-        "in-view" => WaitCondition::in_view(selector),
-        "focused" => WaitCondition::focused(selector),
-        "enabled" => WaitCondition::enabled(selector),
-        "disabled" => WaitCondition::disabled(selector),
-        other => {
+    let predicate = predicate.trim();
+    let (predicate, value) = match predicate.split_once('=') {
+        Some((predicate, value)) => (predicate.trim(), Some(value.trim())),
+        None => (predicate, None),
+    };
+    let condition = match (predicate, value) {
+        ("exists", None) => WaitCondition::exists(selector),
+        ("missing", None) => WaitCondition::missing(selector),
+        ("in-view", None) => WaitCondition::in_view(selector),
+        ("focused", None) => WaitCondition::focused(selector),
+        ("enabled", None) => WaitCondition::enabled(selector),
+        ("disabled", None) => WaitCondition::disabled(selector),
+        ("selected", value) => WaitCondition::selected(selector, parse_wait_bool(value, step)?),
+        ("value", Some(value)) => WaitCondition::value_equals(selector, value),
+        ("text", Some(text)) => WaitCondition::text_contains(selector, text),
+        ("count", Some(count)) => WaitCondition::count(
+            selector,
+            count
+                .parse()
+                .map_err(|_| invalid(step, "count must be a whole number"))?,
+        ),
+        ("value" | "text" | "count", None) => {
+            return Err(invalid(
+                step,
+                &format!("wait predicate `{predicate}` needs a value, as `{predicate}=...`"),
+            ));
+        }
+        (other, _) => {
             return Err(invalid(
                 step,
                 &format!(
                     "unknown wait predicate `{other}`; expected exists, missing, in-view, \
-                     focused, enabled, or disabled"
+                     focused, enabled, disabled, selected[=true|false], value=..., text=..., \
+                     or count=..."
                 ),
             ));
         }
     };
     Ok(AutomationStep::wait_for(condition, timeout))
+}
+
+/// A bare `selected` means selected; `selected=false` is how a script waits for the opposite.
+fn parse_wait_bool(value: Option<&str>, step: &str) -> std::result::Result<bool, AutomationError> {
+    match value {
+        None | Some("true") => Ok(true),
+        Some("false") => Ok(false),
+        Some(other) => Err(invalid(
+            step,
+            &format!("expected `true` or `false`, not `{other}`"),
+        )),
+    }
 }
 
 fn parse_role(role: &str, step: &str) -> std::result::Result<SemanticRole, AutomationError> {
@@ -312,6 +351,64 @@ mod tests {
                 Duration::from_millis(500),
             )
         );
+    }
+
+    #[test]
+    fn every_wait_predicate_has_a_script_spelling() {
+        assert_eq!(
+            parse_one("wait-for:selected,#tab,500"),
+            AutomationStep::wait_for(
+                WaitCondition::selected(Selector::id("tab"), true),
+                Duration::from_millis(500),
+            )
+        );
+        assert_eq!(
+            parse_one("wait-for:selected=false,#tab,500"),
+            AutomationStep::wait_for(
+                WaitCondition::selected(Selector::id("tab"), false),
+                Duration::from_millis(500),
+            )
+        );
+        assert_eq!(
+            parse_one("wait-for:value=ready,#draft,500"),
+            AutomationStep::wait_for(
+                WaitCondition::value_equals(Selector::id("draft"), "ready"),
+                Duration::from_millis(500),
+            )
+        );
+        assert_eq!(
+            parse_one("wait-for:text=Connected,@list,500"),
+            AutomationStep::wait_for(
+                WaitCondition::text_contains(Selector::role(SemanticRole::List), "Connected"),
+                Duration::from_millis(500),
+            )
+        );
+        assert_eq!(
+            parse_one("wait-for:count=3,@list-item,500"),
+            AutomationStep::wait_for(
+                WaitCondition::count(Selector::role(SemanticRole::ListItem), 3),
+                Duration::from_millis(500),
+            )
+        );
+    }
+
+    #[test]
+    fn a_valued_predicate_keeps_a_comma_bearing_selector_parsable() {
+        // The value rides inside the first field, so the selector is still everything between
+        // the first and last comma.
+        assert_eq!(
+            parse_one("wait-for:value=ready,45,4,500"),
+            AutomationStep::wait_for(
+                WaitCondition::value_equals(Selector::point(45, 4), "ready"),
+                Duration::from_millis(500),
+            )
+        );
+    }
+
+    #[test]
+    fn a_valued_predicate_without_its_value_is_rejected() {
+        let error = parse_script("wait-for:count,@list-item,500").unwrap_err();
+        assert!(error.to_string().contains("needs a value"), "{error}");
     }
 
     #[test]

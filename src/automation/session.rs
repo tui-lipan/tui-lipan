@@ -627,7 +627,7 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    use crate::automation::SemanticRole;
+    use crate::automation::{AutomationId, SemanticRole};
     use crate::core::component::{Command, Context, Update};
     use crate::core::element::{Element, IntoElement};
     use crate::widgets::{Button, Input, List, ListItem, Tab, Table, TableRow, Tabs, Text, VStack};
@@ -1103,6 +1103,79 @@ mod tests {
         assert!(!markdown.contains("super-secret"));
         assert!(markdown.contains("redacted:Sensitive"));
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    struct Dialog;
+
+    impl Component for Dialog {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            VStack::new()
+                .child(Text::new("behind"))
+                .child(
+                    crate::widgets::Modal::new()
+                        .title("Confirm Delete")
+                        .child(
+                            Button::new("Delete")
+                                .on_click(ctx.link().callback(|_| ()))
+                                .automation_id("confirm-delete"),
+                        )
+                        .automation_id("confirm"),
+                )
+                .into()
+        }
+    }
+
+    #[test]
+    fn a_hoisted_portal_declares_its_role_on_the_content_that_has_area() {
+        let session = AutomationSession::new(Dialog, AutomationOptions::default()).unwrap();
+        let semantics = &session.snapshot().semantics;
+
+        // The empty placeholder the portal left behind must not shadow the dialog: exactly one
+        // node answers to the modal, and it is the one a selector can act on.
+        let dialogs: Vec<_> = semantics
+            .nodes()
+            .filter(|node| node.role == SemanticRole::Dialog)
+            .collect();
+        assert_eq!(dialogs.len(), 1, "{dialogs:#?}");
+        let dialog = dialogs[0];
+        assert_eq!(dialog.name.as_deref(), Some("Confirm Delete"));
+        assert_eq!(
+            dialog.automation_id.as_ref().map(AutomationId::as_ref),
+            Some("confirm")
+        );
+        assert!(dialog.in_view, "{dialog:#?}");
+        assert!(dialog.clipped_bounds.w > 0 && dialog.clipped_bounds.h > 0);
+        assert!(dialog.overlay_order.is_some());
+        assert_eq!(semantics.by_id(&AutomationId::from("confirm")).len(), 1);
+
+        // The dialog's own content is still reachable underneath it.
+        let button = semantics.by_id(&AutomationId::from("confirm-delete"));
+        assert_eq!(button.len(), 1);
+        assert!(button[0].actionable, "{:#?}", button[0]);
+        assert_eq!(button[0].overlay_order, dialog.overlay_order);
+    }
+
+    #[test]
+    fn a_hoisted_portal_is_addressable_by_its_declared_identity() {
+        let mut session = AutomationSession::new(Dialog, AutomationOptions::default()).unwrap();
+        // The placeholder has no area, so an operation aimed at the modal's own ID used to fail
+        // as out of view no matter where the dialog was on screen.
+        session
+            .execute(AutomationStep::hover(Selector::id("confirm")))
+            .expect("the modal's declared ID points at the content on screen");
+        session
+            .execute(AutomationStep::click(Selector::id("confirm-delete")))
+            .expect("the dialog button is actionable");
     }
 
     struct CollectionRoles;

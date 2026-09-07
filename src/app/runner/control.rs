@@ -470,8 +470,13 @@ pub(crate) fn parse_command(line: &str) -> Result<ControlCommand, String> {
                 "unknown snapshot format `{other}`; expected markdown, json, or png"
             )),
         },
+        // `cancel <id>` never reaches here - the transport answers it without the UI thread - but
+        // a `cancel` missing its argument does, and the list is the only place a client is told
+        // the verb exists at all.
+        "cancel" => Err("cancel needs a request ID, e.g. `cancel req-7`".into()),
         other => Err(format!(
-            "unknown command `{other}`; expected hello, ping, keys, snapshot, act, highlight, or quit"
+            "unknown command `{other}`; expected hello, ping, keys, snapshot, act, highlight, \
+             cancel, or quit"
         )),
     }
 }
