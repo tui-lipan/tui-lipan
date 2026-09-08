@@ -482,10 +482,14 @@ Built-in transition curves used by `TransitionConfig` and animated widgets.
 | `Easing::EaseInOutSine` | Sinusoidal acceleration and deceleration |
 | `Easing::EaseOutElastic` | Decaying repeated overshoot |
 | `Easing::EaseOutBack { overshoot_permille }` | One overshoot followed by a settle; amplitude is thousandths of the animated distance |
+| `Easing::CubicBezier(curve)` | CSS/Hyprland cubic Bézier timing curve |
 
 `Easing::EASE_OUT_BACK` selects the standard easings.net curve with a `100` permille (10%)
 overshoot. `0` produces a plain cubic ease-out. Values above
 `animation::MAX_BACK_OVERSHOOT_PERMILLE` (`500`) saturate at that ceiling.
+
+Create a custom curve with `CubicBezier::new(x1, y1, x2, y2)`. The x coordinates must be in
+`[0, 1]`; y coordinates may undershoot or overshoot. Construction rejects non-finite values.
 
 ### `ScrollDistanceConfig`
 

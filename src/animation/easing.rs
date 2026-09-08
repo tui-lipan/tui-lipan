@@ -2,6 +2,241 @@
 
 use std::f32::consts::PI;
 
+/// A coordinate in a CSS-style cubic Bézier control point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CubicBezierCoordinate {
+    /// The first control point's x coordinate.
+    X1,
+    /// The first control point's y coordinate.
+    Y1,
+    /// The second control point's x coordinate.
+    X2,
+    /// The second control point's y coordinate.
+    Y2,
+}
+
+impl std::fmt::Display for CubicBezierCoordinate {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            Self::X1 => "x1",
+            Self::Y1 => "y1",
+            Self::X2 => "x2",
+            Self::Y2 => "y2",
+        };
+        formatter.write_str(name)
+    }
+}
+
+/// Why a cubic Bézier control point was rejected.
+#[derive(Clone, Copy, Debug, thiserror::Error, PartialEq, Eq)]
+pub enum CubicBezierError {
+    /// A control point coordinate was not finite.
+    #[error("{coordinate} must be finite")]
+    NonFinite {
+        /// The rejected coordinate.
+        coordinate: CubicBezierCoordinate,
+    },
+    /// An x coordinate was outside the CSS-compatible `[0, 1]` range.
+    #[error("{coordinate} must be in the range [0, 1]")]
+    XOutOfRange {
+        /// The rejected coordinate.
+        coordinate: CubicBezierCoordinate,
+    },
+}
+
+/// A validated CSS-style cubic Bézier timing curve.
+///
+/// The curve starts at `(0, 0)` and ends at `(1, 1)`. Its x coordinates are
+/// constrained to `[0, 1]`, while its y coordinates may overshoot that range.
+/// This is the same control-point representation used by CSS and Hyprland.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CubicBezier {
+    x1: u32,
+    y1: u32,
+    x2: u32,
+    y2: u32,
+}
+
+impl std::fmt::Debug for CubicBezier {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CubicBezier")
+            .field("x1", &self.x1())
+            .field("y1", &self.y1())
+            .field("x2", &self.x2())
+            .field("y2", &self.y2())
+            .finish()
+    }
+}
+
+impl CubicBezier {
+    /// Creates a validated cubic Bézier curve from its four control points.
+    pub fn new(x1: f32, y1: f32, x2: f32, y2: f32) -> Result<Self, CubicBezierError> {
+        validate_coordinate(CubicBezierCoordinate::X1, x1, true)?;
+        validate_coordinate(CubicBezierCoordinate::Y1, y1, false)?;
+        validate_coordinate(CubicBezierCoordinate::X2, x2, true)?;
+        validate_coordinate(CubicBezierCoordinate::Y2, y2, false)?;
+
+        Ok(Self::from_values(x1, y1, x2, y2))
+    }
+
+    /// Returns the first control point's x coordinate.
+    pub fn x1(self) -> f32 {
+        f32::from_bits(self.x1)
+    }
+
+    /// Returns the first control point's y coordinate.
+    pub fn y1(self) -> f32 {
+        f32::from_bits(self.y1)
+    }
+
+    /// Returns the second control point's x coordinate.
+    pub fn x2(self) -> f32 {
+        f32::from_bits(self.x2)
+    }
+
+    /// Returns the second control point's y coordinate.
+    pub fn y2(self) -> f32 {
+        f32::from_bits(self.y2)
+    }
+
+    /// Returns the temporal reverse of this curve.
+    ///
+    /// The reversed control points are exactly `(1-x2, 1-y2, 1-x1, 1-y1)`.
+    pub fn reversed(self) -> Self {
+        Self::from_values(
+            1.0 - self.x2(),
+            1.0 - self.y2(),
+            1.0 - self.x1(),
+            1.0 - self.y1(),
+        )
+    }
+
+    fn from_values(x1: f32, y1: f32, x2: f32, y2: f32) -> Self {
+        Self {
+            x1: normalized_bits(x1),
+            y1: normalized_bits(y1),
+            x2: normalized_bits(x2),
+            y2: normalized_bits(y2),
+        }
+    }
+
+    fn apply(self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        if t == 0.0 {
+            return 0.0;
+        }
+        if t == 1.0 {
+            return 1.0;
+        }
+
+        let parameter = solve_parameter(f64::from(t), f64::from(self.x1()), f64::from(self.x2()));
+        finite_f32(cubic_value(
+            parameter,
+            f64::from(self.y1()),
+            f64::from(self.y2()),
+        ))
+    }
+}
+
+/// Validates one control-point coordinate.
+fn validate_coordinate(
+    coordinate: CubicBezierCoordinate,
+    value: f32,
+    is_x: bool,
+) -> Result<(), CubicBezierError> {
+    if !value.is_finite() {
+        return Err(CubicBezierError::NonFinite { coordinate });
+    }
+    if is_x && !(0.0..=1.0).contains(&value) {
+        return Err(CubicBezierError::XOutOfRange { coordinate });
+    }
+    Ok(())
+}
+
+fn normalized_bits(value: f32) -> u32 {
+    if value == 0.0 {
+        0.0f32.to_bits()
+    } else {
+        value.to_bits()
+    }
+}
+
+/// Solves the monotone x component while keeping every trial inside its bracket.
+fn solve_parameter(target: f64, x1: f64, x2: f64) -> f64 {
+    let mut lower = 0.0;
+    let mut upper = 1.0;
+    let mut parameter = target;
+
+    // Newton converges quickly for ordinary curves. A trial that would leave the
+    // bracket, or a derivative too small to trust, immediately falls back to its
+    // bracket midpoint.
+    for _ in 0..8 {
+        let value = cubic_value(parameter, x1, x2);
+        let residual = value - target;
+        if residual.abs() <= 1e-14 {
+            return parameter;
+        }
+        if residual < 0.0 {
+            lower = parameter;
+        } else {
+            upper = parameter;
+        }
+
+        let derivative = cubic_derivative(parameter, x1, x2);
+        let newton = if derivative > 1e-14 {
+            parameter - residual / derivative
+        } else {
+            f64::NAN
+        };
+        parameter = if newton.is_finite() && newton > lower && newton < upper {
+            newton
+        } else {
+            (lower + upper) * 0.5
+        };
+    }
+
+    // Bisection is the reliable path for endpoint-flat curves and the final
+    // precision pass for curves for which Newton did not settle.
+    for _ in 0..64 {
+        parameter = (lower + upper) * 0.5;
+        let residual = cubic_value(parameter, x1, x2) - target;
+        if residual.abs() <= 1e-14 || upper - lower <= 1e-14 {
+            break;
+        }
+        if residual < 0.0 {
+            lower = parameter;
+        } else {
+            upper = parameter;
+        }
+    }
+    parameter
+}
+
+fn cubic_value(parameter: f64, first: f64, second: f64) -> f64 {
+    let remaining = 1.0 - parameter;
+    3.0 * remaining * remaining * parameter * first
+        + 3.0 * remaining * parameter * parameter * second
+        + parameter * parameter * parameter
+}
+
+fn cubic_derivative(parameter: f64, first: f64, second: f64) -> f64 {
+    let remaining = 1.0 - parameter;
+    3.0 * remaining * remaining * first
+        + 6.0 * remaining * parameter * (second - first)
+        + 3.0 * parameter * parameter * (1.0 - second)
+}
+
+fn finite_f32(value: f64) -> f32 {
+    if value > f64::from(f32::MAX) {
+        f32::MAX
+    } else if value < f64::from(f32::MIN) {
+        f32::MIN
+    } else {
+        value as f32
+    }
+}
+
 /// Function type for easing curves.
 pub type EasingFn = fn(f32) -> f32;
 
@@ -145,6 +380,8 @@ pub enum Easing {
         /// values above [`MAX_BACK_OVERSHOOT_PERMILLE`] saturate at that ceiling.
         overshoot_permille: u16,
     },
+    /// A CSS-style cubic Bézier timing curve.
+    CubicBezier(CubicBezier),
 }
 
 impl Easing {
@@ -163,6 +400,7 @@ impl Easing {
             Self::EaseInOutSine => ease_in_out_sine(t),
             Self::EaseOutElastic => ease_out_elastic(t),
             Self::EaseOutBack { overshoot_permille } => ease_out_back(t, overshoot_permille),
+            Self::CubicBezier(curve) => curve.apply(t),
         }
     }
 }
@@ -170,6 +408,130 @@ impl Easing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    fn curve_hash(curve: CubicBezier) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        curve.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn cubic_bezier_rejects_non_finite_coordinates() {
+        for (coordinate, values) in [
+            (CubicBezierCoordinate::X1, (f32::NAN, 0.0, 0.0, 0.0)),
+            (CubicBezierCoordinate::Y1, (0.0, f32::INFINITY, 0.0, 0.0)),
+            (
+                CubicBezierCoordinate::X2,
+                (0.0, 0.0, f32::NEG_INFINITY, 0.0),
+            ),
+            (CubicBezierCoordinate::Y2, (0.0, 0.0, 0.0, f32::NAN)),
+        ] {
+            let error = CubicBezier::new(values.0, values.1, values.2, values.3)
+                .expect_err("non-finite coordinate should be rejected");
+            assert_eq!(error, CubicBezierError::NonFinite { coordinate });
+        }
+    }
+
+    #[test]
+    fn cubic_bezier_rejects_x_coordinates_outside_the_unit_interval() {
+        for (coordinate, values) in [
+            (CubicBezierCoordinate::X1, (-0.01, 0.0, 0.0, 0.0)),
+            (CubicBezierCoordinate::X1, (1.01, 0.0, 0.0, 0.0)),
+            (CubicBezierCoordinate::X2, (0.0, 0.0, -0.01, 0.0)),
+            (CubicBezierCoordinate::X2, (0.0, 0.0, 1.01, 0.0)),
+        ] {
+            let error = CubicBezier::new(values.0, values.1, values.2, values.3)
+                .expect_err("out-of-range x coordinate should be rejected");
+            assert_eq!(error, CubicBezierError::XOutOfRange { coordinate });
+        }
+    }
+
+    #[test]
+    fn cubic_bezier_accessors_and_reverse_preserve_control_points() {
+        let curve = CubicBezier::new(0.2, -0.4, 0.8, 1.2).unwrap();
+        assert_eq!(
+            (curve.x1(), curve.y1(), curve.x2(), curve.y2()),
+            (0.2, -0.4, 0.8, 1.2)
+        );
+
+        let reversed = curve.reversed();
+        assert_eq!(
+            (reversed.x1(), reversed.y1(), reversed.x2(), reversed.y2()),
+            (
+                1.0 - curve.x2(),
+                1.0 - curve.y2(),
+                1.0 - curve.x1(),
+                1.0 - curve.y1()
+            )
+        );
+        let twice_reversed = reversed.reversed();
+        assert!((twice_reversed.x1() - curve.x1()).abs() <= f32::EPSILON);
+        assert!((twice_reversed.y1() - curve.y1()).abs() <= f32::EPSILON);
+        assert!((twice_reversed.x2() - curve.x2()).abs() <= f32::EPSILON);
+        assert!((twice_reversed.y2() - curve.y2()).abs() <= f32::EPSILON);
+    }
+
+    #[test]
+    fn cubic_bezier_normalizes_signed_zero_for_equality_and_hashing() {
+        let negative = CubicBezier::new(-0.0, -0.0, -0.0, -0.0).unwrap();
+        let positive = CubicBezier::new(0.0, 0.0, 0.0, 0.0).unwrap();
+        assert_eq!(negative, positive);
+        assert_eq!(curve_hash(negative), curve_hash(positive));
+        assert_eq!(Easing::CubicBezier(negative), Easing::CubicBezier(positive));
+    }
+
+    #[test]
+    fn cubic_bezier_clamps_input_and_has_exact_endpoints() {
+        let easing = Easing::CubicBezier(CubicBezier::new(0.25, 0.1, 0.25, 1.0).unwrap());
+        assert_eq!(easing.apply(-1.0), 0.0);
+        assert_eq!(easing.apply(0.0), 0.0);
+        assert_eq!(easing.apply(1.0), 1.0);
+        assert_eq!(easing.apply(2.0), 1.0);
+    }
+
+    #[test]
+    fn cubic_bezier_matches_css_reference_samples() {
+        let easing = Easing::CubicBezier(CubicBezier::new(0.25, 0.1, 0.25, 1.0).unwrap());
+        assert!((easing.apply(0.25) - 0.4085106).abs() < 1e-5);
+        assert!((easing.apply(0.5) - 0.8024034).abs() < 1e-5);
+        assert!((easing.apply(0.75) - 0.960_459).abs() < 1e-5);
+
+        let linear = Easing::CubicBezier(CubicBezier::new(0.0, 0.0, 1.0, 1.0).unwrap());
+        for sample in [0.1, 0.5, 0.9] {
+            assert!((linear.apply(sample) - sample).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn cubic_bezier_preserves_y_overshoot() {
+        let easing = Easing::CubicBezier(CubicBezier::new(0.0, 2.0, 1.0, 2.0).unwrap());
+        assert!(easing.apply(0.5) > 1.5);
+    }
+
+    #[test]
+    fn cubic_bezier_handles_degenerate_x_slopes_with_bisection() {
+        for curve in [
+            CubicBezier::new(0.0, 0.0, 0.0, 1.0).unwrap(),
+            CubicBezier::new(1.0, 0.0, 1.0, 1.0).unwrap(),
+        ] {
+            let easing = Easing::CubicBezier(curve);
+            for sample in [0.000_001, 0.01, 0.5, 0.99, 0.999_999] {
+                let value = easing.apply(sample);
+                assert!(value.is_finite());
+                assert!((0.0..=1.0).contains(&value));
+            }
+        }
+    }
+
+    #[test]
+    fn cubic_bezier_keeps_extreme_finite_y_values_finite() {
+        let easing = Easing::CubicBezier(CubicBezier::new(0.25, f32::MAX, 0.75, f32::MIN).unwrap());
+        for sample in [0.001, 0.25, 0.5, 0.75, 0.999] {
+            assert!(easing.apply(sample).is_finite());
+        }
+    }
 
     #[test]
     fn easing_curves_are_clamped_for_out_of_range_inputs() {

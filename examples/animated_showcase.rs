@@ -507,6 +507,13 @@ fn easing_name(easing: Easing) -> String {
         Easing::EaseInOutCubic => "EaseInOutCubic".to_string(),
         Easing::EaseInOutSine => "EaseInOutSine".to_string(),
         Easing::EaseOutElastic => "EaseOutElastic".to_string(),
+        Easing::CubicBezier(curve) => format!(
+            "CubicBezier ({:.2}, {:.2}, {:.2}, {:.2})",
+            curve.x1(),
+            curve.y1(),
+            curve.x2(),
+            curve.y2(),
+        ),
         // The amplitude is part of the identity of this one, so show it.
         Easing::EaseOutBack { overshoot_permille } => {
             format!("EaseOutBack {overshoot_permille}\u{2030}")

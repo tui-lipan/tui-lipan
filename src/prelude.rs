@@ -59,7 +59,8 @@ pub use crate::{CommandBuilder, CommandEntry, CommandId, CommandRegistry};
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub use crate::animation::{
-    Easing, ExitAnimation, ExitQueue, ExitTransfer, Transition, TransitionConfig,
+    CubicBezier, CubicBezierCoordinate, CubicBezierError, Easing, ExitAnimation, ExitQueue,
+    ExitTransfer, Transition, TransitionConfig,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

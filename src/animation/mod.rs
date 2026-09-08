@@ -7,9 +7,9 @@ pub(crate) mod registry;
 pub mod transition;
 
 pub use easing::{
-    Easing, EasingFn, MAX_BACK_OVERSHOOT_PERMILLE, STANDARD_BACK_OVERSHOOT_PERMILLE,
-    ease_in_out_cubic, ease_in_out_sine, ease_in_quad, ease_out_back, ease_out_elastic,
-    ease_out_quad, linear,
+    CubicBezier, CubicBezierCoordinate, CubicBezierError, Easing, EasingFn,
+    MAX_BACK_OVERSHOOT_PERMILLE, STANDARD_BACK_OVERSHOOT_PERMILLE, ease_in_out_cubic,
+    ease_in_out_sine, ease_in_quad, ease_out_back, ease_out_elastic, ease_out_quad, linear,
 };
 pub use exit_animation::ExitAnimation;
 pub use exit_queue::{ExitQueue, ExitTransfer};

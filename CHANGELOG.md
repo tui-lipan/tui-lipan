@@ -11,6 +11,12 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-08
+
+### Added
+
+- Added validated CSS/Hyprland `CubicBezier` curves through `Easing::CubicBezier` (breaking)
+
 ## [0.8.0] - 2026-09-07
 
 ### Added
@@ -2009,7 +2015,8 @@ Highlights of what ships in 0.1.0:
 See the [README](README.md) for the full feature set and
 [docs.tui-lipan.dev](https://docs.tui-lipan.dev) for documentation.
 
-[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/tui-lipan/tui-lipan/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.4...v0.8.0
 [0.7.4]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/tui-lipan/tui-lipan/compare/v0.7.2...v0.7.3
