@@ -8,7 +8,7 @@ depend on it directly - it is re-exported through `tui-lipan`:
 
 ```toml
 [dependencies]
-tui-lipan = "0.8"
+tui-lipan = "0.9"
 ```
 
 ```rust
