@@ -12,7 +12,9 @@
 //! somebody has to remember to delete.
 //!
 //! Not every terminal implements it, so [`host_reads_shared_memory`] records what the startup probe
-//! found and the caller keeps the inline path for everything else.
+//! found and the caller keeps the inline path for everything else. The probe is not put to every
+//! host either: see [`worth_asking_about_shared_memory`] for which ones are asked, and why asking
+//! the rest costs more than the answer is worth.
 //!
 //! # Why the objects are pooled
 //!
@@ -597,12 +599,99 @@ mod imp {
 
 pub(crate) use imp::SharedFrame;
 
+/// Environment override for the shared-memory question, for a host judged wrongly.
+///
+/// `1`/`true`/`on`/`yes` asks a host that would not have been asked - a terminal that implements
+/// the protocol under a `TERM` nothing here recognizes. The opposites never ask, which is the
+/// escape hatch for a host that mangles the question but is not reached over a network.
+#[cfg(feature = "terminal-images")]
+const ASK_ENV: &str = "TUI_LIPAN_GRAPHICS_SHM";
+
+/// Whether it is worth asking the host whether it reads shared memory, judged from the environment
+/// before anything at all is written to the terminal.
+///
+/// The question is a graphics-protocol query, and a query is an `APC` string. ECMA-48 has a terminal
+/// consume an `APC` it does not implement and most do, but the ones that do not print the whole
+/// thing as text - and this question is asked before the alternate screen is entered, so on those
+/// hosts the base64 lands in the user's scrollback and stays there. That is a poor trade for a
+/// question whose answer is already known in two ordinary cases:
+///
+/// - A terminal on the other end of a network connection cannot resolve a name in *this* machine's
+///   shared-memory namespace, whatever protocol it speaks. This was always so; the difference is
+///   that it used to be learned by asking.
+/// - A terminal that does not implement the graphics protocol has no `t=s` medium to support.
+///
+/// So the question is put only to a local host recognizable as one of the terminals that implement
+/// the protocol. A host that is capable but unrecognized loses the shared-memory path and keeps the
+/// inline one - the same fallback every unsupported host already takes - and [`ASK_ENV`] settles it
+/// either way for a host judged wrongly.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn worth_asking_about_shared_memory() -> bool {
+    worth_asking(|name| std::env::var(name).ok())
+}
+
+/// The decision behind [`worth_asking_about_shared_memory`], taken over a lookup rather than the
+/// real environment so it can be tested without a process-wide `set_var`.
+#[cfg(feature = "terminal-images")]
+fn worth_asking(var: impl Fn(&str) -> Option<String>) -> bool {
+    let set = |name: &str| var(name).is_some_and(|value| !value.trim().is_empty());
+
+    if let Some(forced) = var(ASK_ENV).as_deref().and_then(parse_override) {
+        return forced;
+    }
+    if ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]
+        .iter()
+        .any(|name| set(name))
+    {
+        return false;
+    }
+    if [
+        "KITTY_WINDOW_ID",
+        "GHOSTTY_RESOURCES_DIR",
+        "GHOSTTY_BIN_DIR",
+        "WEZTERM_PANE",
+        "KONSOLE_VERSION",
+    ]
+    .iter()
+    .any(|name| set(name))
+    {
+        return true;
+    }
+    if matches!(
+        var("TERM_PROGRAM")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "ghostty" | "wezterm"
+    ) {
+        return true;
+    }
+    let term = var("TERM").unwrap_or_default().to_ascii_lowercase();
+    ["kitty", "ghostty", "wezterm"]
+        .iter()
+        .any(|name| term.contains(name))
+}
+
+/// A boolean spelled the way an environment variable usually spells one. Anything else is not an
+/// answer, and leaves the judgement to make itself.
+#[cfg(feature = "terminal-images")]
+fn parse_override(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "on" | "yes" => Some(true),
+        "0" | "false" | "off" | "no" => Some(false),
+        _ => None,
+    }
+}
+
 /// Ask whether the host can read a transmission out of shared memory, and the object to ask about.
 ///
 /// The question cannot be asked in the abstract: the protocol's query action reports on a real
 /// transmission, so a terminal handed a name it cannot resolve answers that the *name* was bad rather
 /// than that the medium is unsupported. Nothing here hands the object over - a terminal that declines
 /// does not read it, and one that reads it unlinks it, so the caller's drop is right either way.
+///
+/// This only builds the question. Whether it is worth putting to this host is
+/// [`worth_asking_about_shared_memory`], which the caller decides first.
 #[cfg(feature = "terminal-images")]
 pub(crate) fn kitty_shared_memory_probe(id: u32) -> Option<(SharedFrame, String)> {
     use base64::Engine as _;
@@ -612,4 +701,96 @@ pub(crate) fn kitty_shared_memory_probe(id: u32) -> Option<(SharedFrame, String)
     base64::engine::general_purpose::STANDARD.encode_string(frame.name(), &mut query);
     query.push_str("\x1b\\");
     Some((frame, query))
+}
+
+#[cfg(all(test, feature = "terminal-images"))]
+mod worth_asking_tests {
+    use super::worth_asking;
+
+    /// A stand-in environment, so the decision is tested without a process-wide `set_var` that
+    /// every other test in the binary would race against.
+    fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + use<'a> {
+        move |name| {
+            pairs
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_string())
+        }
+    }
+
+    /// The case this gate exists for. `TERM` survives `ssh`, so a session opened from a terminal
+    /// that does implement the protocol still looks capable from in here - and is still the wrong
+    /// thing to hand a name in this machine's memory, because it is not this machine's terminal.
+    #[test]
+    fn a_host_reached_over_a_network_is_not_asked_however_capable_it_looks() {
+        assert!(!worth_asking(env(&[
+            ("TERM", "xterm-kitty"),
+            ("SSH_CONNECTION", "10.0.0.2 51000 10.0.0.1 22"),
+        ])));
+        assert!(!worth_asking(env(&[
+            ("TERM", "xterm-256color"),
+            ("SSH_TTY", "/dev/pts/3"),
+        ])));
+    }
+
+    /// An empty variable is not a session. Login shells and CI images both leave these defined and
+    /// blank, and reading that as "remote" would switch the medium off on the machine it works on.
+    #[test]
+    fn an_empty_ssh_variable_does_not_make_a_host_remote() {
+        assert!(worth_asking(env(&[
+            ("TERM", "xterm-kitty"),
+            ("SSH_CLIENT", ""),
+        ])));
+    }
+
+    /// The terminals that implement the protocol, by the marker each one actually sets. Konsole is
+    /// the reason a bare `TERM` match is not enough: it reports `xterm-256color` and says who it is
+    /// only in its own variable.
+    #[test]
+    fn a_local_terminal_that_implements_the_protocol_is_asked() {
+        for pairs in [
+            vec![("TERM", "xterm-kitty")],
+            vec![("TERM", "xterm-ghostty")],
+            vec![("TERM", "xterm-256color"), ("KITTY_WINDOW_ID", "1")],
+            vec![("TERM", "xterm-256color"), ("KONSOLE_VERSION", "230804")],
+            vec![("TERM", "xterm-256color"), ("TERM_PROGRAM", "WezTerm")],
+        ] {
+            assert!(worth_asking(env(&pairs)), "{pairs:?} implements it");
+        }
+    }
+
+    /// Everything else keeps the inline path rather than being asked a question it may echo. A
+    /// multiplexer is in this set on its own merits: the reader of the sequence is `tmux`, not the
+    /// terminal, so the answer would not have been the terminal's anyway.
+    #[test]
+    fn an_unrecognized_local_host_is_not_asked() {
+        for pairs in [
+            vec![("TERM", "xterm-256color")],
+            vec![("TERM", "tmux-256color")],
+            vec![("TERM", "dumb")],
+            vec![],
+        ] {
+            assert!(!worth_asking(env(&pairs)), "{pairs:?} is not recognized");
+        }
+    }
+
+    /// The escape hatch in both directions, for the host judged wrongly: a terminal that implements
+    /// the protocol under an unknown `TERM`, and a local one that mangles the question. A value
+    /// that is not a boolean is not an instruction, and leaves the judgement to make itself.
+    #[test]
+    fn the_override_settles_it_either_way() {
+        assert!(worth_asking(env(&[
+            ("TERM", "xterm-256color"),
+            ("SSH_TTY", "/dev/pts/3"),
+            ("TUI_LIPAN_GRAPHICS_SHM", "1"),
+        ])));
+        assert!(!worth_asking(env(&[
+            ("TERM", "xterm-kitty"),
+            ("TUI_LIPAN_GRAPHICS_SHM", "off"),
+        ])));
+        assert!(worth_asking(env(&[
+            ("TERM", "xterm-kitty"),
+            ("TUI_LIPAN_GRAPHICS_SHM", "maybe"),
+        ])));
+    }
 }

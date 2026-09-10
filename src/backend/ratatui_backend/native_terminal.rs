@@ -194,8 +194,14 @@ impl TerminalGuard {
         let mut stdout = io::stdout();
         // The object outlives the query so a terminal that declines it still finds it there, and is
         // unlinked when this scope ends whether or not the terminal read it.
+        //
+        // Nothing is asked of a host that cannot answer. This runs before the alternate screen is
+        // entered, so a terminal that prints an `APC` string instead of consuming one leaves the
+        // question in the user's scrollback for good.
         #[cfg(feature = "terminal-images")]
-        let graphics_probe = super::shared_frame::kitty_shared_memory_probe(GRAPHICS_PROBE_ID);
+        let graphics_probe = super::shared_frame::worth_asking_about_shared_memory()
+            .then(|| super::shared_frame::kitty_shared_memory_probe(GRAPHICS_PROBE_ID))
+            .flatten();
         #[cfg(feature = "terminal-images")]
         let probe_bytes = graphics_probe
             .as_ref()

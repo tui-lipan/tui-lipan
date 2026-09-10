@@ -327,7 +327,9 @@ A pane showing pixels rather than text has a second cost, on the way out to the
 host: a full window of them, every frame, deflated and base64-encoded and written
 down stdout. Where the host can read a POSIX shared-memory object — asked at
 startup, answered by the terminal itself — the pixels go there instead and the
-escape sequence carries only a name. Nothing configures this; see
+escape sequence carries only a name. Nothing configures this, and a host that
+could not answer — one reached over `ssh`, one that does not implement the
+protocol — is not asked at all; see
 [terminal images](widgets/terminal-images.md#out-the-other-side-to-the-host).
 
 The frame itself is passed on at the size it arrived, with the host told which

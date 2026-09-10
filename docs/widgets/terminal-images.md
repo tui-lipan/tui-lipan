@@ -164,10 +164,26 @@ undo all of it.
 So a frame goes into a POSIX shared-memory object and the escape sequence carries its name. Nothing
 configures this. At startup the host is asked - with a `t=s` query it can only answer by reading a
 real object - and only a terminal that answers `OK` is handed frames that way; everything else keeps
-the inline path, including a terminal reached through `tmux`, whose reader is not the terminal, and
-one on another machine, which cannot resolve a name in this machine's memory and says so. Objects are
-unlinked by the host as it reads them, and by this process for any frame the host was never told
-about.
+the inline path, including a terminal reached through `tmux`, whose reader is not the terminal.
+Objects are unlinked by the host as it reads them, and by this process for any frame the host was
+never told about.
+
+The question is only put to a host that could answer it, and that is judged from the environment
+before anything is written. A terminal on the other end of an `ssh` connection is never asked: it
+cannot resolve a name in this machine's memory whatever protocol it speaks, and `TERM` survives the
+hop, so it would otherwise look local and capable. Neither is a terminal that is not recognizably one
+of the implementations - `kitty`, Ghostty, WezTerm and Konsole, by `TERM`, `TERM_PROGRAM`, or the
+variable each one sets.
+
+That matters because the query is an `APC` string sent before the alternate screen is entered. A
+terminal is supposed to consume an `APC` it does not implement, and most do; the ones that do not
+print it as text, and the mess lands in the scrollback and stays there. Not asking is cheap - an
+unasked host keeps the inline path, which is what an unsupported host does anyway.
+
+For a host judged wrongly, `TUI_LIPAN_GRAPHICS_SHM` settles it: `1` asks a terminal that implements
+the protocol under a `TERM` this does not know, and `0` never asks, for a local terminal that mangles
+the question. The host must still answer `OK` either way - the variable controls the asking, not the
+result.
 
 On Linux the objects are pooled, which is why `/dev/shm` holds a handful of `tui-lipan-pool-<pid>-*`
 names for as long as a pane is drawing. A fresh object per frame is a fresh *allocation* per frame -
