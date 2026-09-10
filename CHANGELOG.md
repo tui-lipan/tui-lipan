@@ -11,6 +11,15 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- The startup shared-memory graphics query is no longer put to a host that could not answer it: a
+  terminal reached over `ssh`, which cannot read this machine's shared memory whatever protocol it
+  speaks, or one that is not a recognized implementation of the protocol. The query is an `APC`
+  string written before the alternate screen is entered, so a terminal that prints `APC` strings
+  instead of consuming them left it in the user's scrollback. `TUI_LIPAN_GRAPHICS_SHM=1` asks a host
+  this does not recognize; `=0` never asks.
+
 ## [0.9.0] - 2026-09-08
 
 ### Added
