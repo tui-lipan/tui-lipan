@@ -19,6 +19,11 @@ While the crate is on `0.x.y`:
   string written before the alternate screen is entered, so a terminal that prints `APC` strings
   instead of consuming them left it in the user's scrollback. `TUI_LIPAN_GRAPHICS_SHM=1` asks a host
   this does not recognize; `=0` never asks.
+- The startup capability probe now erases itself from the screen when the host printed it instead of
+  consuming it. The cursor is reported on both sides of the probe in the same round trip: a host that
+  consumed it reports the same cell twice and nothing is written at all, and one that echoed has the
+  spoiled part of that line erased. An echo that left its row is left alone, since the screen may
+  have scrolled and the saved position would no longer name the same cell.
 
 ## [0.9.0] - 2026-09-08
 

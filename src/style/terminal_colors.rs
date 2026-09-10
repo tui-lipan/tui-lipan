@@ -185,6 +185,10 @@ fn settle_startup_reply(was_outstanding: bool) {
 /// whose reply is an `APC` sequence the parser does not surface at all - hence `graphics_probe`,
 /// written verbatim before the sentinel, whose `OK` reply is reported as `graphics_query_ok`.
 ///
+/// A `CSI 6 n` on each side of the batch brackets it, so that a host which prints one of these
+/// sequences rather than consuming it can have the mess erased again. That erase is the only thing
+/// here that ever writes to the screen, and it happens only on a host whose two reports differ.
+///
 /// Returns `None` when `/dev/tty` cannot be opened or raw mode cannot be set; callers should treat
 /// that as "nothing supported".
 #[cfg(unix)]
@@ -201,9 +205,13 @@ pub fn query_host_capabilities(graphics_probe: &[u8]) -> Option<HostCapabilities
     let _fd_guard = FdGuard(fd);
     let _raw_guard = RawModeGuard::new(fd)?;
 
-    let mut probe = Vec::with_capacity(graphics_probe.len() + 24);
+    let mut probe = Vec::with_capacity(graphics_probe.len() + 32);
+    // The cursor, before and after everything that could be echoed rather than consumed. Two
+    // reports in the same batch cost no extra round trip and are what `erase_echoed_probe` reads.
+    probe.extend_from_slice(b"\x1b[6n");
     probe.extend_from_slice(b"\x1b[?u\x1b[?1016$p");
     probe.extend_from_slice(graphics_probe);
+    probe.extend_from_slice(b"\x1b[6n");
     probe.extend_from_slice(b"\x1b[c");
     // Timed from before the write: what teardown needs to budget for is the whole trip, including
     // however long the host sat on the request before answering it.
@@ -217,6 +225,7 @@ pub fn query_host_capabilities(graphics_probe: &[u8]) -> Option<HostCapabilities
 
     let mut buffer = Vec::with_capacity(64);
     let deadline = Instant::now() + Duration::from_millis(250);
+    let mut answered = None;
     while Instant::now() < deadline {
         let timeout = deadline
             .saturating_duration_since(Instant::now())
@@ -234,15 +243,96 @@ pub fn query_host_capabilities(graphics_probe: &[u8]) -> Option<HostCapabilities
             record_round_trip(Some(asked.elapsed()));
             // The sentinel came back and was consumed here, so nothing is owed downstream.
             set_startup_reply_outstanding(false);
-            return Some(capabilities);
+            answered = Some(capabilities);
+            break;
         }
     }
+
+    erase_echoed_probe(fd, &buffer);
+
     // No decisive reply within the budget: treat as unsupported, and leave the round trip unknown -
     // nothing here measured one. The owed-reply flag stays set. An empty buffer does not prove the
     // host is silent, only that nothing arrived inside 250ms, which is also what a link slower than
     // that looks like with a reply still in flight. Erring towards "owed" costs one bounded wait at
     // the next flush; erring the other way is the leak.
-    Some(HostCapabilities::default())
+    Some(answered.unwrap_or_default())
+}
+
+/// Wipe the probe off the screen when the host printed it instead of consuming it.
+///
+/// The probe is written to the primary screen, before the alternate screen is entered, because what
+/// it learns decides how the terminal is entered. A host that prints a sequence it does not
+/// implement therefore leaves the mess in the user's scrollback, where it outlives the process.
+/// `DECRQM` is the one that provokes this in practice - a standard `CSI ? 1016 $ p` whose `$`
+/// intermediate some emulators drop, printing the final `p` - and it cannot be dropped from the
+/// probe, because pixel-mouse reporting is worth having on every host that does implement it.
+///
+/// Cleaning up is only safe where the damage can be located exactly, so this asks rather than
+/// assumes. The cursor was reported on both sides of the probe: a host that consumed everything
+/// reports the same position twice and nothing is written, which is the case that must stay free of
+/// side effects. A host that echoed reports a column further along, and the difference is what gets
+/// erased - the line is already spoiled, so erasing to its end cannot destroy anything the echo had
+/// not destroyed first.
+///
+/// A move to another row is left alone. It means the echo wrapped, and possibly scrolled, and the
+/// saved position no longer names the same cell; erasing from a stale origin would take the user's
+/// own output with it. Leaving a mess is better than that.
+#[cfg(unix)]
+fn erase_echoed_probe(fd: i32, response: &[u8]) {
+    let Some(column) = echoed_from_column(response) else {
+        return;
+    };
+    // CHA back to where the probe began, then erase what follows on that line.
+    let _ = tty_write_all(fd, format!("\x1b[{column}G\x1b[K").as_bytes());
+}
+
+/// The column the probe began at, if the host echoed it and the mess is confined to that one line.
+///
+/// `None` covers every case that is not demonstrably safe to erase: a host that consumed the probe,
+/// one that never answered `CSI 6 n`, and one whose echo left the row it started on.
+#[cfg(unix)]
+fn echoed_from_column(response: &[u8]) -> Option<u16> {
+    let reports = cursor_reports(response);
+    let [(before_row, before_column), (after_row, after_column)] = reports[..] else {
+        return None;
+    };
+    (after_row == before_row && after_column > before_column).then_some(before_column)
+}
+
+/// The first two `CSI row ; column R` reports in a response, in the order the host sent them.
+///
+/// Scanned rather than parsed in sequence because the replies to the rest of the probe are
+/// interleaved with these and arrive in whatever order the host schedules them.
+#[cfg(unix)]
+fn cursor_reports(response: &[u8]) -> Vec<(u16, u16)> {
+    let mut reports = Vec::with_capacity(2);
+    let mut rest = response;
+    while let Some(introducer) = rest.windows(2).position(|pair| pair == [0x1b, b'[']) {
+        rest = &rest[introducer + 2..];
+        let Some(final_byte) = rest
+            .iter()
+            .position(|byte| !matches!(byte, b'0'..=b'9' | b';'))
+        else {
+            break;
+        };
+        if rest[final_byte] == b'R'
+            && let Some(report) = parse_cursor_report(&rest[..final_byte])
+        {
+            reports.push(report);
+            if reports.len() == 2 {
+                break;
+            }
+        }
+        rest = &rest[final_byte..];
+    }
+    reports
+}
+
+/// The `row ; column` of a cursor report, both 1-based as the terminal counts them.
+#[cfg(unix)]
+fn parse_cursor_report(params: &[u8]) -> Option<(u16, u16)> {
+    let (row, column) = std::str::from_utf8(params).ok()?.split_once(';')?;
+    Some((row.parse().ok()?, column.parse().ok()?))
 }
 
 /// Query stub for non-Unix hosts (crossterm handles Windows keyboard enhancement natively).
@@ -791,9 +881,9 @@ mod tests {
 
     use super::{
         EXIT_FLUSH_CEILING, EXIT_FLUSH_FLOOR, ExitFlush, HostCapabilities, build_query_batch,
-        exit_flush_plan, host_color_query_settled, probe_round_trip, record_round_trip,
-        scan_host_capabilities, set_startup_reply_outstanding, settle_startup_reply,
-        startup_reply_outstanding,
+        cursor_reports, echoed_from_column, exit_flush_plan, host_color_query_settled,
+        probe_round_trip, record_round_trip, scan_host_capabilities, set_startup_reply_outstanding,
+        settle_startup_reply, startup_reply_outstanding,
     };
 
     fn keyboard(enhancement: bool) -> Option<HostCapabilities> {
@@ -1040,5 +1130,67 @@ mod tests {
             None,
             "and unknown round-trips as unknown"
         );
+    }
+
+    /// The batch has to bracket everything that could be echoed, or the second report describes a
+    /// position the mess has already moved past and the erase starts in the wrong place.
+    #[test]
+    fn the_probe_asks_for_the_cursor_on_both_sides_of_itself() {
+        let probe = b"\x1b[6n\x1b[?u\x1b[?1016$p\x1b[6n\x1b[c";
+        assert!(probe.starts_with(b"\x1b[6n"), "before anything is written");
+        assert!(
+            probe.ends_with(b"\x1b[6n\x1b[c"),
+            "and after everything but the sentinel"
+        );
+    }
+
+    /// The case this exists for, as a terminal that drops the `$` of `CSI ? 1016 $ p` produces it:
+    /// the final `p` is printed, so the cursor comes back one column further along the same row.
+    #[test]
+    fn a_host_that_echoed_one_line_is_erased_from_where_it_started() {
+        let response = b"\x1b[12;1R\x1b[?1016;2$y\x1b[12;2R\x1b[?62;1;6c";
+        assert_eq!(echoed_from_column(response), Some(1));
+    }
+
+    /// A host that consumed the probe reports the same cell twice, and must be left completely
+    /// alone: erasing to the end of that line would take a right-hand prompt with it.
+    #[test]
+    fn a_host_that_consumed_the_probe_is_not_written_to() {
+        let response = b"\x1b[12;40R\x1b[?5u\x1b[12;40R\x1b[?62;1;6c";
+        assert_eq!(echoed_from_column(response), None);
+    }
+
+    /// An echo that left its row may have scrolled the screen, which makes the first report a stale
+    /// name for a cell that has moved. Erasing from it would delete the user's own output.
+    #[test]
+    fn an_echo_that_wrapped_to_another_row_is_left_alone() {
+        assert_eq!(
+            echoed_from_column(b"\x1b[12;70R\x1b[13;9R\x1b[?62;1;6c"),
+            None
+        );
+    }
+
+    /// Nothing is written on the strength of a report that never came. A host silent about the
+    /// cursor is the ordinary case for a pipe or a harness, not an error.
+    #[test]
+    fn a_host_that_does_not_report_its_cursor_is_not_written_to() {
+        assert_eq!(echoed_from_column(b"\x1b[?62;1;6c"), None);
+        assert_eq!(echoed_from_column(b"\x1b[12;1R\x1b[?62;1;6c"), None);
+        assert_eq!(echoed_from_column(b""), None);
+    }
+
+    /// The reports are picked out of whatever else the host said, in the order it said them, and
+    /// the scan stops at two so a later `R` cannot be read as the pair's second half.
+    #[test]
+    fn cursor_reports_are_found_among_the_other_replies() {
+        let response = b"\x1b[?5u\x1b[3;7R\x1b_Gi=4294967295;OK\x1b\\\x1b[3;9R\x1b[3;11R";
+        assert_eq!(cursor_reports(response), vec![(3, 7), (3, 9)]);
+    }
+
+    /// A malformed or truncated report is not a position. Reading one as `(0, 0)` would send the
+    /// erase to the top-left corner of the screen.
+    #[test]
+    fn a_report_that_is_not_a_position_is_not_one() {
+        assert_eq!(cursor_reports(b"\x1b[R\x1b[;R\x1b[4R\x1b[9;"), Vec::new());
     }
 }
