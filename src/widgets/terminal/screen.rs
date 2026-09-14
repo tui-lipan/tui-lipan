@@ -2633,12 +2633,15 @@ fn renderable_content_lines(
     let mut hyperlinks: Vec<TerminalHyperlink> = Vec::new();
     let mut current_row: Option<usize> = None;
     let mut run_style: Option<Style> = None;
+    let mut run_key: Option<StyleRunKey> = None;
     let mut run_text = String::new();
 
     let flush_run = |row: usize,
                      run_style: &mut Option<Style>,
+                     run_key: &mut Option<StyleRunKey>,
                      run_text: &mut String,
                      lines: &mut Vec<Vec<Span>>| {
+        *run_key = None;
         if run_text.is_empty() {
             *run_style = None;
             return;
@@ -2661,7 +2664,13 @@ fn renderable_content_lines(
         let row = point.line;
         if current_row != Some(row) {
             if let Some(prev_row) = current_row {
-                flush_run(prev_row, &mut run_style, &mut run_text, &mut lines);
+                flush_run(
+                    prev_row,
+                    &mut run_style,
+                    &mut run_key,
+                    &mut run_text,
+                    &mut lines,
+                );
             }
             current_row = Some(row);
         }
@@ -2686,18 +2695,34 @@ fn renderable_content_lines(
             continue;
         }
 
-        let style = style_from_term_cell(cell, &palette);
-        if run_style != Some(style) {
-            if let Some(prev_row) = current_row {
-                flush_run(prev_row, &mut run_style, &mut run_text, &mut lines);
+        let bits = style_run_bits(cell.flags);
+        match style_run_progress(run_key.as_mut(), cell, bits, &palette) {
+            None => {}
+            Some((mapped_fg, mapped_bg)) => {
+                if let Some(prev_row) = current_row {
+                    flush_run(
+                        prev_row,
+                        &mut run_style,
+                        &mut run_key,
+                        &mut run_text,
+                        &mut lines,
+                    );
+                }
+                run_style = Some(style_from_mapped(mapped_fg, mapped_bg, bits));
+                run_key = Some(StyleRunKey {
+                    fg: cell.fg,
+                    bg: cell.bg,
+                    mapped_fg,
+                    mapped_bg,
+                    bits,
+                });
             }
-            run_style = Some(style);
         }
         push_cell_text_str(&mut run_text, cell);
     }
 
     if let Some(row) = current_row {
-        flush_run(row, &mut run_style, &mut run_text, &mut lines);
+        flush_run(row, &mut run_style, &mut run_key, &mut run_text, &mut lines);
     }
 
     for line in &mut lines {
@@ -2901,24 +2926,85 @@ fn mouse_mode_from_term(mode: TermMode, pixel_mouse: bool) -> MouseModeState {
     }
 }
 
-fn style_from_term_cell(cell: &TermCell, palette: &TerminalColorPalette) -> Style {
-    let fg = map_term_color(cell.fg, palette).map(Into::into);
-    let bg = map_term_color(cell.bg, palette).map(Into::into);
-    let flags = cell.flags;
+const RUN_BOLD: u8 = 1;
+const RUN_DIM: u8 = 1 << 1;
+const RUN_ITALIC: u8 = 1 << 2;
+const RUN_UNDERLINE: u8 = 1 << 3;
+const RUN_REVERSE: u8 = 1 << 4;
+const RUN_STRIKETHROUGH: u8 = 1 << 5;
 
+/// Normalizes the cell flags that affect `Style`. This is the only place that decides which
+/// flags matter: `style_from_mapped` reads these bits, so equal bits always mean equal flags.
+fn style_run_bits(flags: CellFlags) -> u8 {
+    let bit = |present: bool, bit: u8| if present { bit } else { 0 };
+    bit(flags.contains(CellFlags::BOLD), RUN_BOLD)
+        | bit(flags.contains(CellFlags::DIM), RUN_DIM)
+        | bit(flags.contains(CellFlags::ITALIC), RUN_ITALIC)
+        | bit(flags.intersects(CellFlags::ALL_UNDERLINES), RUN_UNDERLINE)
+        | bit(flags.contains(CellFlags::INVERSE), RUN_REVERSE)
+        | bit(flags.contains(CellFlags::STRIKEOUT), RUN_STRIKETHROUGH)
+}
+
+#[derive(Clone, Copy)]
+struct StyleRunKey {
+    fg: TermColor,
+    bg: TermColor,
+    mapped_fg: Option<UiColor>,
+    mapped_bg: Option<UiColor>,
+    bits: u8,
+}
+
+/// Returns `None` when `cell` continues the run described by `key`, or the cell's mapped colors
+/// when it starts a new run. A continuation through a different color representation that maps
+/// to the same colors (`Named(Red)` then `Indexed(1)`) moves the key to that representation, so
+/// later cells in the run take the raw-color fast path again.
+fn style_run_progress(
+    key: Option<&mut StyleRunKey>,
+    cell: &TermCell,
+    bits: u8,
+    palette: &TerminalColorPalette,
+) -> Option<(Option<UiColor>, Option<UiColor>)> {
+    let Some(key) = key.filter(|key| key.bits == bits) else {
+        return Some((
+            map_term_color(cell.fg, palette),
+            map_term_color(cell.bg, palette),
+        ));
+    };
+    if cell.fg == key.fg && cell.bg == key.bg {
+        return None;
+    }
+    let mapped_fg = if cell.fg == key.fg {
+        key.mapped_fg
+    } else {
+        map_term_color(cell.fg, palette)
+    };
+    let mapped_bg = if cell.bg == key.bg {
+        key.mapped_bg
+    } else {
+        map_term_color(cell.bg, palette)
+    };
+    if mapped_fg != key.mapped_fg || mapped_bg != key.mapped_bg {
+        return Some((mapped_fg, mapped_bg));
+    }
+    key.fg = cell.fg;
+    key.bg = cell.bg;
+    None
+}
+
+fn style_from_mapped(fg: Option<UiColor>, bg: Option<UiColor>, bits: u8) -> Style {
     Style {
-        fg,
-        bg,
+        fg: fg.map(Into::into),
+        bg: bg.map(Into::into),
         fg_transform: None,
         bg_transform: None,
         contrast_policy: None,
-        bold: Some(flags.contains(CellFlags::BOLD)),
-        dim: Some(flags.contains(CellFlags::DIM)),
-        italic: Some(flags.contains(CellFlags::ITALIC)),
-        underline: Some(flags.intersects(CellFlags::ALL_UNDERLINES)),
-        reverse: Some(flags.contains(CellFlags::INVERSE)),
+        bold: Some(bits & RUN_BOLD != 0),
+        dim: Some(bits & RUN_DIM != 0),
+        italic: Some(bits & RUN_ITALIC != 0),
+        underline: Some(bits & RUN_UNDERLINE != 0),
+        reverse: Some(bits & RUN_REVERSE != 0),
         dim_amount: None,
-        strikethrough: Some(flags.contains(CellFlags::STRIKEOUT)),
+        strikethrough: Some(bits & RUN_STRIKETHROUGH != 0),
         underline_color: None,
         tint: None,
     }
@@ -3261,6 +3347,213 @@ mod tests {
         );
         assert!(snapshot.hyperlinks[0].contains(0, 5));
         assert!(!snapshot.hyperlinks[0].contains(1, 0));
+    }
+
+    #[test]
+    fn snapshot_keeps_one_run_across_default_space_tails() {
+        let mut screen = TerminalScreen::new(1, 20, 0);
+        screen.process_bytes(b"hello");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0].len(), 1);
+        assert_eq!(
+            snapshot.color_lines[0][0].content.as_ref(),
+            "hello               "
+        );
+    }
+
+    #[test]
+    fn snapshot_merges_named_and_indexed_palette_red() {
+        let mut screen = TerminalScreen::new(1, 4, 0);
+        screen.process_bytes(b"\x1b[31mA\x1b[38;5;1mB");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "AB");
+        assert_eq!(
+            snapshot.color_lines[0][0].style.fg,
+            Some(UiColor::Red.into())
+        );
+    }
+
+    #[test]
+    fn snapshot_merges_underline_variants() {
+        let mut screen = TerminalScreen::new(1, 4, 0);
+        screen.process_bytes(b"\x1b[4mA\x1b[4:2mB");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "AB");
+        assert_eq!(snapshot.color_lines[0][0].style.underline, Some(true));
+    }
+
+    #[test]
+    fn snapshot_splits_when_bold_changes() {
+        let mut screen = TerminalScreen::new(1, 4, 0);
+        screen.process_bytes(b"\x1b[1mA\x1b[22mB");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "A");
+        assert_eq!(snapshot.color_lines[0][0].style.bold, Some(true));
+        assert_eq!(snapshot.color_lines[0][1].content.as_ref(), "B  ");
+        assert_eq!(snapshot.color_lines[0][1].style.bold, Some(false));
+    }
+
+    #[test]
+    fn snapshot_keeps_hidden_cells_in_the_same_run() {
+        let mut screen = TerminalScreen::new(1, 6, 0);
+        screen.process_bytes(b"ab\x1b[8mcd\x1b[28mef");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0].len(), 1);
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "ab  ef");
+    }
+
+    #[test]
+    fn snapshot_hyperlink_does_not_split_style_run() {
+        let mut screen = TerminalScreen::new(1, 8, 0);
+        screen.process_bytes(b"ab\x1b]8;;https://e.com\x1b\\cd\x1b]8;;\x1b\\ef");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0].len(), 1);
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "abcdef  ");
+        assert_eq!(snapshot.hyperlinks.len(), 1);
+        assert_eq!(snapshot.hyperlinks[0].start_col, 2);
+        assert_eq!(snapshot.hyperlinks[0].end_col, 4);
+    }
+
+    #[test]
+    fn snapshot_wide_char_spacer_stays_in_one_run() {
+        let mut screen = TerminalScreen::new(1, 4, 0);
+        screen.process_bytes("あx".as_bytes());
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0].len(), 1);
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "あx ");
+    }
+
+    #[test]
+    fn snapshot_alternating_styles_create_one_span_per_run() {
+        let mut screen = TerminalScreen::new(1, 4, 0);
+        screen.process_bytes(b"\x1b[31mA\x1b[32mB\x1b[31mC\x1b[32mD");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0].len(), 4);
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "A");
+        assert_eq!(snapshot.color_lines[0][1].content.as_ref(), "B");
+        assert_eq!(snapshot.color_lines[0][2].content.as_ref(), "C");
+        assert_eq!(snapshot.color_lines[0][3].content.as_ref(), "D");
+    }
+
+    #[test]
+    fn snapshot_inverse_and_dim_split_runs() {
+        let mut screen = TerminalScreen::new(1, 4, 0);
+        screen.process_bytes(b"\x1b[7mA\x1b[27mB\x1b[2mC");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0][0].style.reverse, Some(true));
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "A");
+        assert_eq!(snapshot.color_lines[0][1].style.reverse, Some(false));
+        assert_eq!(snapshot.color_lines[0][1].content.as_ref(), "B");
+        assert_eq!(snapshot.color_lines[0][2].style.dim, Some(true));
+        assert_eq!(snapshot.color_lines[0][2].content.as_ref(), "C");
+    }
+
+    #[test]
+    fn alias_continuation_moves_the_run_key_to_the_new_color() {
+        let palette = TerminalColorPalette::default();
+        let named = TermCell {
+            fg: TermColor::Named(NamedColor::Red),
+            ..TermCell::default()
+        };
+        let indexed = TermCell {
+            fg: TermColor::Indexed(1),
+            ..TermCell::default()
+        };
+        let bits = style_run_bits(named.flags);
+        let (mapped_fg, mapped_bg) =
+            style_run_progress(None, &named, bits, &palette).expect("first cell starts a run");
+        let mut key = StyleRunKey {
+            fg: named.fg,
+            bg: named.bg,
+            mapped_fg,
+            mapped_bg,
+            bits,
+        };
+
+        assert!(style_run_progress(Some(&mut key), &indexed, bits, &palette).is_none());
+        assert_eq!(key.fg, indexed.fg);
+        assert_eq!(key.bg, indexed.bg);
+        assert_eq!(key.mapped_fg, mapped_fg);
+        assert_eq!(key.mapped_bg, mapped_bg);
+    }
+
+    #[test]
+    fn snapshot_keeps_one_run_after_an_alias_color_change() {
+        let mut screen = TerminalScreen::new(1, 6, 0);
+        screen.process_bytes(b"\x1b[31mA\x1b[38;5;1mBCDEF");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0].len(), 1);
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "ABCDEF");
+    }
+
+    #[test]
+    fn style_run_bits_match_style_for_every_flag_combination() {
+        let style_flags = [
+            CellFlags::BOLD,
+            CellFlags::DIM,
+            CellFlags::ITALIC,
+            CellFlags::UNDERLINE,
+            CellFlags::INVERSE,
+            CellFlags::STRIKEOUT,
+        ];
+        let combos: Vec<CellFlags> = (0..1u8 << style_flags.len())
+            .map(|mask| {
+                style_flags
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| mask & (1 << index) != 0)
+                    .fold(CellFlags::empty(), |flags, (_, flag)| flags | *flag)
+            })
+            .collect();
+
+        for &flags in &combos {
+            let style = style_from_mapped(None, None, style_run_bits(flags));
+            assert_eq!(style.bold, Some(flags.contains(CellFlags::BOLD)));
+            assert_eq!(style.dim, Some(flags.contains(CellFlags::DIM)));
+            assert_eq!(style.italic, Some(flags.contains(CellFlags::ITALIC)));
+            assert_eq!(
+                style.underline,
+                Some(flags.intersects(CellFlags::ALL_UNDERLINES))
+            );
+            assert_eq!(style.reverse, Some(flags.contains(CellFlags::INVERSE)));
+            assert_eq!(
+                style.strikethrough,
+                Some(flags.contains(CellFlags::STRIKEOUT))
+            );
+        }
+        for &a in &combos {
+            for &b in &combos {
+                assert_eq!(
+                    style_run_bits(a) == style_run_bits(b),
+                    style_from_mapped(None, None, style_run_bits(a))
+                        == style_from_mapped(None, None, style_run_bits(b)),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn style_run_bits_ignore_non_style_flags() {
+        let hidden = TermCell {
+            flags: CellFlags::HIDDEN | CellFlags::WRAPLINE | CellFlags::WIDE_CHAR,
+            ..TermCell::default()
+        };
+        assert_eq!(
+            style_run_bits(hidden.flags),
+            style_run_bits(TermCell::default().flags)
+        );
+        let underline = TermCell {
+            flags: CellFlags::UNDERLINE,
+            ..TermCell::default()
+        };
+        let double = TermCell {
+            flags: CellFlags::DOUBLE_UNDERLINE,
+            ..TermCell::default()
+        };
+        assert_eq!(
+            style_run_bits(underline.flags),
+            style_run_bits(double.flags)
+        );
     }
 
     #[test]

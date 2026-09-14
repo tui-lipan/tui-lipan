@@ -11,6 +11,11 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Changed
+
+- Terminal snapshots group style runs from cell colors and style flags instead of building a
+  `Style` for every visible cell.
+
 ### Fixed
 
 - The startup shared-memory graphics query is no longer put to a host that could not answer it: a
