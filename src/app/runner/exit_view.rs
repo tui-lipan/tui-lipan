@@ -1,19 +1,16 @@
 use std::cell::{Cell, RefCell};
 use std::io::Write;
-use std::time::Duration;
 
 use crossterm::{execute, style::Print};
 use ratatui::TerminalOptions;
-use ratatui::backend::{Backend, CrosstermBackend};
 
 use crate::Result;
 use crate::app::ContrastPolicy;
-use crate::backend::ratatui_backend::OwnedTerminal;
 use crate::backend::ratatui_backend::common::to_ratatui_color;
 use crate::backend::ratatui_backend::render::{
     RenderContext, build_join_index, render as render_tree,
 };
-use crate::backend::ratatui_backend::tty_liveness::{cursor_row, host_tty_hung_up};
+use crate::backend::ratatui_backend::{HostBackend, OwnedTerminal};
 use crate::core::element::Element;
 use crate::core::node::NodeTree;
 use crate::layout::measure::min_size_constrained;
@@ -25,11 +22,6 @@ pub(crate) fn render(
     contrast_policy: ContrastPolicy,
     terminal_bg: Option<Color>,
 ) -> Result<()> {
-    // Nobody is left to read it, and placing an inline viewport asks the terminal where the cursor
-    // is, which would spin forever on a hung-up tty.
-    if host_tty_hung_up() {
-        return Ok(());
-    }
     let width = crossterm::terminal::size()?.0.max(1);
     let height = min_size_constrained(&element, Some(width), None).1;
 
@@ -81,14 +73,13 @@ pub(crate) fn render(
     };
 
     {
-        let mut backend = CrosstermBackend::new(std::io::stdout());
-        let Some(area) = inline_area(&mut backend, height)? else {
-            return Ok(());
-        };
+        // The inline viewport asks where the cursor is; `HostBackend` answers without crossterm's
+        // reader, which the runner has already stopped by the time this runs.
+        let backend = HostBackend::new(std::io::stdout());
         let mut terminal = OwnedTerminal::new(ratatui::Terminal::with_options(
             backend,
             TerminalOptions {
-                viewport: ratatui::Viewport::Fixed(area),
+                viewport: ratatui::Viewport::Inline(height),
             },
         )?);
         terminal.draw(|f| render_tree(f, &ctx))?;
@@ -98,30 +89,4 @@ pub(crate) fn render(
     execute!(stdout, Print("\n"))?;
     stdout.flush()?;
     Ok(())
-}
-
-/// Where `height` rows of output go below the cursor, scrolling to make room: the placement
-/// ratatui's `Viewport::Inline` makes, with the cursor row read by [`cursor_row`] instead of
-/// crossterm, which cannot give up on a terminal that hangs up while it waits. `None` when the
-/// terminal does not say where its cursor is.
-fn inline_area(
-    backend: &mut CrosstermBackend<std::io::Stdout>,
-    height: u16,
-) -> std::io::Result<Option<ratatui::layout::Rect>> {
-    const CURSOR_REPLY_TIMEOUT: Duration = Duration::from_secs(2);
-
-    let Some(mut row) = cursor_row(CURSOR_REPLY_TIMEOUT) else {
-        return Ok(None);
-    };
-    let size = backend.size()?;
-    let lines_after_cursor = height.saturating_sub(1);
-    backend.append_lines(lines_after_cursor)?;
-    let available_lines = size.height.saturating_sub(row).saturating_sub(1);
-    row = row.saturating_sub(lines_after_cursor.saturating_sub(available_lines));
-    Ok(Some(ratatui::layout::Rect {
-        x: 0,
-        y: row,
-        width: size.width,
-        height: size.height.min(height),
-    }))
 }

@@ -12,13 +12,13 @@ use crossterm::event;
 
 use crate::app::context::SurfaceMode;
 
+use super::host_input::{HostEvent, read_host_event};
 use super::native_terminal::surface_terminal_policy;
 use super::terminal_transition::{
     CrosstermTransitionExecutor, execute_plan_with_rollback, resume_plan, suspend_plan,
 };
 #[cfg(unix)]
 use super::terminal_transition::{execute_plan, pixel_mouse_plan, theme_notification_plan};
-use super::tty_liveness::{HostEvent, read_host_event};
 
 static STDIN_READER_PAUSED: AtomicBool = AtomicBool::new(false);
 
@@ -73,8 +73,9 @@ static FULL_REPAINT_AFTER_HANDOFF: AtomicBool = AtomicBool::new(false);
 
 const READER_PAUSE_SETTLE: Duration = Duration::from_millis(125);
 
-/// Pause the fullscreen crossterm reader thread so stdin is not consumed while
-/// an external program runs.
+/// Whether the Windows crossterm reader thread should leave console input alone, so an external
+/// program or a terminal query gets it instead.
+#[cfg(not(unix))]
 pub(crate) fn stdin_reader_is_paused() -> bool {
     STDIN_READER_PAUSED.load(Ordering::SeqCst)
 }
@@ -195,8 +196,14 @@ fn for_each_host_event(
 ) -> io::Result<()> {
     for _ in 0..max_events {
         match read_host_event(wait)? {
-            HostEvent::Event(ev) => on_event(ev),
-            HostEvent::Quiet | HostEvent::HungUp => break,
+            HostEvent::Input(ev) => on_event(ev),
+            #[cfg(unix)]
+            HostEvent::Pointer(ev, _) => on_event(ev),
+            #[cfg(unix)]
+            HostEvent::ThemeRefresh => {}
+            #[cfg(unix)]
+            HostEvent::HungUp => break,
+            HostEvent::Quiet => break,
         }
     }
     Ok(())

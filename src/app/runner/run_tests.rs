@@ -190,19 +190,6 @@ fn host_terminal_color_refresh_request_is_opt_in() {
     );
 }
 
-#[cfg(unix)]
-#[test]
-fn termina_live_input_is_unix_fullscreen_and_opt_in_only() {
-    let fullscreen = super::SurfaceDriver::new(SurfaceMode::Fullscreen);
-    let inline = super::SurfaceDriver::new(SurfaceMode::InlineEphemeral {
-        height: crate::app::InlineHeight::Fixed(4),
-    });
-
-    assert!(super::uses_termina_live_input(&fullscreen, true));
-    assert!(!super::uses_termina_live_input(&fullscreen, false));
-    assert!(!super::uses_termina_live_input(&inline, true));
-}
-
 #[test]
 fn focus_gained_host_color_refresh_request_is_opt_in() {
     let disabled = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
@@ -408,7 +395,6 @@ fn host_terminal_color_refresh_waits_for_quiet_window() {
 
 #[test]
 fn resize_burst_followed_by_key_preserves_key_as_pending_event() {
-    let runner = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
     let (tx, rx) = std::sync::mpsc::channel();
     tx.send(super::RunnerEvent::Terminal(CEvent::Resize(81, 24)))
         .unwrap();
@@ -417,7 +403,7 @@ fn resize_burst_followed_by_key_preserves_key_as_pending_event() {
     tx.send(super::RunnerEvent::Terminal(c_key('x'))).unwrap();
 
     let mut pending_event = None;
-    while let Some(next_ev) = runner.try_recv_event(Some(&rx)).unwrap() {
+    while let Some(next_ev) = super::try_recv_channel(Some(&rx)).unwrap() {
         if matches!(next_ev, super::RunnerEvent::Terminal(CEvent::Resize(_, _))) {
             continue;
         }
@@ -429,7 +415,7 @@ fn resize_burst_followed_by_key_preserves_key_as_pending_event() {
         pending_event,
         Some(super::RunnerEvent::Terminal(CEvent::Key(_)))
     ));
-    assert!(runner.try_recv_event(Some(&rx)).unwrap().is_none());
+    assert!(super::try_recv_channel(Some(&rx)).unwrap().is_none());
 }
 
 #[test]
@@ -453,7 +439,7 @@ fn mouse_move_burst_followed_by_key_or_resize_preserves_non_mouse_event() {
             .unwrap();
 
         let mut pending_event = None;
-        while let Some(next_ev) = runner.try_recv_event(Some(&rx)).unwrap() {
+        while let Some(next_ev) = super::try_recv_channel(Some(&rx)).unwrap() {
             if let super::RunnerEvent::Terminal(CEvent::Mouse(next_m)) = next_ev {
                 if let Some(next_mouse) = runner.convert_mouse_event(next_m)
                     && matches!(next_mouse.kind, MouseKind::Moved)
@@ -467,7 +453,7 @@ fn mouse_move_burst_followed_by_key_or_resize_preserves_non_mouse_event() {
         }
 
         assert_eq!(pending_event, Some(super::RunnerEvent::Terminal(trailing)));
-        assert!(runner.try_recv_event(Some(&rx)).unwrap().is_none());
+        assert!(super::try_recv_channel(Some(&rx)).unwrap().is_none());
     }
 }
 
@@ -490,7 +476,7 @@ fn scroll_burst_followed_by_non_scroll_event_preserves_event() {
     tx.send(super::RunnerEvent::Terminal(c_key('s'))).unwrap();
 
     let mut pending_event = None;
-    while let Some(next_ev) = runner.try_recv_event(Some(&rx)).unwrap() {
+    while let Some(next_ev) = super::try_recv_channel(Some(&rx)).unwrap() {
         if let super::RunnerEvent::Terminal(CEvent::Mouse(next_m)) = next_ev {
             if let Some(next_mouse) = runner.convert_mouse_event(next_m)
                 && next_mouse.kind == MouseKind::ScrollDown
@@ -507,7 +493,7 @@ fn scroll_burst_followed_by_non_scroll_event_preserves_event() {
         pending_event,
         Some(super::RunnerEvent::Terminal(CEvent::Key(_)))
     ));
-    assert!(runner.try_recv_event(Some(&rx)).unwrap().is_none());
+    assert!(super::try_recv_channel(Some(&rx)).unwrap().is_none());
 }
 
 #[test]
@@ -526,7 +512,6 @@ fn frame_skip_preserve_does_not_overwrite_existing_pending_event() {
 
 #[test]
 fn host_color_refresh_event_does_not_drop_queued_ordinary_input() {
-    let runner = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
     let (tx, rx) = std::sync::mpsc::channel();
     let colors = host_colors(Color::rgb(3, 4, 5));
     tx.send(super::RunnerEvent::HostTerminalColors(colors))
@@ -544,35 +529,33 @@ fn host_color_refresh_event_does_not_drop_queued_ordinary_input() {
     tx.send(super::RunnerEvent::Terminal(c_key('k'))).unwrap();
 
     assert_eq!(
-        runner.try_recv_event(Some(&rx)).unwrap(),
+        super::try_recv_channel(Some(&rx)).unwrap(),
         Some(super::RunnerEvent::HostTerminalColors(colors))
     );
     assert!(matches!(
-        runner.try_recv_event(Some(&rx)).unwrap(),
+        super::try_recv_channel(Some(&rx)).unwrap(),
         Some(super::RunnerEvent::Terminal(CEvent::Resize(90, 30)))
     ));
     assert!(matches!(
-        runner.try_recv_event(Some(&rx)).unwrap(),
+        super::try_recv_channel(Some(&rx)).unwrap(),
         Some(super::RunnerEvent::Terminal(CEvent::Mouse(_)))
     ));
     assert!(matches!(
-        runner.try_recv_event(Some(&rx)).unwrap(),
+        super::try_recv_channel(Some(&rx)).unwrap(),
         Some(super::RunnerEvent::Terminal(CEvent::Paste(_)))
     ));
     assert!(matches!(
-        runner.try_recv_event(Some(&rx)).unwrap(),
+        super::try_recv_channel(Some(&rx)).unwrap(),
         Some(super::RunnerEvent::Terminal(CEvent::Key(_)))
     ));
 }
 
 #[test]
 fn fullscreen_input_channel_disconnect_is_an_error() {
-    let runner = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
     let (tx, rx) = std::sync::mpsc::channel();
     drop(tx);
 
-    let recv_error = runner
-        .recv_event(Duration::ZERO, Some(&rx))
+    let recv_error = super::recv_channel(Some(&rx), Duration::ZERO)
         .expect_err("disconnected blocking receiver should fail");
     assert!(matches!(
         recv_error,
@@ -581,8 +564,7 @@ fn fullscreen_input_channel_disconnect_is_an_error() {
 
     let (tx, rx) = std::sync::mpsc::channel();
     drop(tx);
-    let try_error = runner
-        .try_recv_event(Some(&rx))
+    let try_error = super::try_recv_channel(Some(&rx))
         .expect_err("disconnected non-blocking receiver should fail");
     assert!(matches!(
         try_error,

@@ -1,5 +1,6 @@
 use std::io::{self, BufWriter, Stdout};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use crate::app::context::SurfaceMode;
 use crate::style::{
@@ -29,14 +30,118 @@ const TERMINAL_BUFFER_CAPACITY: usize = 64 * 1024;
 #[cfg(feature = "terminal-images")]
 const GRAPHICS_PROBE_ID: u32 = u32::MAX;
 
-pub(crate) type Terminal = ratatui::Terminal<CrosstermBackend<TerminalWriter>>;
+pub(crate) type Terminal = ratatui::Terminal<HostBackend<TerminalWriter>>;
+
+/// How long a cursor position query waits for the terminal, as crossterm's own query does.
+const CURSOR_REPLY_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The crossterm backend with its cursor position query read through [`host_input`].
+///
+/// ratatui asks for the cursor whenever it places an inline viewport: on creation, on autoresize,
+/// and around `insert_before`. crossterm answers that by reading its own Unix event source, which
+/// spins forever if the terminal hangs up during the wait, and which would compete with the
+/// runner's reader for the reply. Everything else passes straight through.
+///
+/// [`host_input`]: super::host_input
+pub(crate) struct HostBackend<W: io::Write>(CrosstermBackend<W>);
+
+impl<W: io::Write> HostBackend<W> {
+    pub(crate) fn new(writer: W) -> Self {
+        Self(CrosstermBackend::new(writer))
+    }
+}
+
+impl<W: io::Write> io::Write for HostBackend<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        io::Write::flush(&mut self.0)
+    }
+}
+
+impl<W: io::Write> Backend for HostBackend<W> {
+    type Error = io::Error;
+
+    fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
+    where
+        I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+    {
+        self.0.draw(content)
+    }
+
+    fn append_lines(&mut self, n: u16) -> io::Result<()> {
+        self.0.append_lines(n)
+    }
+
+    fn hide_cursor(&mut self) -> io::Result<()> {
+        self.0.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> io::Result<()> {
+        self.0.show_cursor()
+    }
+
+    fn get_cursor_position(&mut self) -> io::Result<ratatui::layout::Position> {
+        // Anything still buffered has to reach the terminal before it can say where the cursor is.
+        io::Write::flush(&mut self.0)?;
+        match super::host_input::cursor_position(CURSOR_REPLY_TIMEOUT)? {
+            Some((x, y)) => Ok(ratatui::layout::Position { x, y }),
+            None => Err(io::Error::other("the cursor position could not be read")),
+        }
+    }
+
+    fn set_cursor_position<P: Into<ratatui::layout::Position>>(
+        &mut self,
+        position: P,
+    ) -> io::Result<()> {
+        self.0.set_cursor_position(position)
+    }
+
+    fn clear(&mut self) -> io::Result<()> {
+        self.0.clear()
+    }
+
+    fn clear_region(&mut self, clear_type: ratatui::backend::ClearType) -> io::Result<()> {
+        self.0.clear_region(clear_type)
+    }
+
+    fn size(&self) -> io::Result<ratatui::layout::Size> {
+        self.0.size()
+    }
+
+    fn window_size(&mut self) -> io::Result<ratatui::backend::WindowSize> {
+        self.0.window_size()
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Backend::flush(&mut self.0)
+    }
+
+    fn scroll_region_up(
+        &mut self,
+        region: std::ops::Range<u16>,
+        line_count: u16,
+    ) -> io::Result<()> {
+        self.0.scroll_region_up(region, line_count)
+    }
+
+    fn scroll_region_down(
+        &mut self,
+        region: std::ops::Range<u16>,
+        line_count: u16,
+    ) -> io::Result<()> {
+        self.0.scroll_region_down(region, line_count)
+    }
+}
 
 fn buffered_stdout() -> TerminalWriter {
     BufWriter::with_capacity(TERMINAL_BUFFER_CAPACITY, io::stdout())
 }
 
 pub(crate) fn create_inline_terminal(height: u16) -> io::Result<Terminal> {
-    let backend = CrosstermBackend::new(buffered_stdout());
+    let backend = HostBackend::new(buffered_stdout());
     let options = TerminalOptions {
         viewport: Viewport::Inline(height.max(1)),
     };
@@ -184,7 +289,7 @@ pub(crate) fn set_mouse_capture_enabled(
 /// `panic = "abort"` that is a core dump on the way out of an otherwise clean exit. So the cursor is
 /// shown here first, and a terminal that cannot take even that is not dropped at all. Nothing can
 /// use it by then, and its buffers go when the process does.
-pub(crate) struct OwnedTerminal<B: Backend = CrosstermBackend<TerminalWriter>>(
+pub(crate) struct OwnedTerminal<B: Backend = HostBackend<TerminalWriter>>(
     Option<ratatui::Terminal<B>>,
 );
 
@@ -235,7 +340,6 @@ impl TerminalGuard {
         mouse_enabled: bool,
         panic_keyboard_enhancement: &AtomicBool,
     ) -> io::Result<(OwnedTerminal, Self)> {
-        super::tty_liveness::note_host_tty();
         let policy = surface_terminal_policy(surface_mode);
         let mut stdout = io::stdout();
         // The object outlives the query so a terminal that declines it still finds it there, and is
@@ -294,7 +398,7 @@ impl TerminalGuard {
 
         let terminal = if policy.uses_alternate_screen {
             let backend =
-                CrosstermBackend::new(BufWriter::with_capacity(TERMINAL_BUFFER_CAPACITY, stdout));
+                HostBackend::new(BufWriter::with_capacity(TERMINAL_BUFFER_CAPACITY, stdout));
             match ratatui::Terminal::new(backend) {
                 Ok(terminal) => terminal,
                 Err(err) => {

@@ -4,7 +4,7 @@ When your app spawns an interactive program that needs the **real TTY** (Neovim,
 
 - raw mode and the alternate screen (fullscreen apps),
 - mouse and focus-tracking sequences,
-- and, in **fullscreen** mode, the background thread that reads stdin for crossterm events.
+- and, in **fullscreen** mode, the background thread that reads terminal input.
 
 Otherwise the subprocess and the TUI will **fight over stdin and the display** (garbled input, cursor blink on top of the editor, incomplete redraw after exit).
 
@@ -33,7 +33,7 @@ use tui_lipan::terminal_handoff::{
 
 The framework consumes that request on the next tick: it promotes the frame to a **full** render, invalidates Ratatui's previous frame in memory, and drops incremental scroll snapshots so the UI matches the TTY again. The next complete frame is emitted through the normal draw path without first flushing a cleared terminal. You can still call [`Context::request_full_repaint()`](components.md#context-methods) for other cases where the host display may be stale.
 
-**Stale stdin:** Before the event reader is unpaused, `resume_after_external_process` drains the crossterm event queue and, on Unix, `tcflush(TCIFLUSH)` on stdin so CSI/OSC/DA tails and other mode-switch bytes are not delivered as fake key input to the focused widget.
+**Stale stdin:** Before the event reader is unpaused, `resume_after_external_process` discards pending terminal input and, on Unix, runs `tcflush(TCIFLUSH)` on stdin so CSI/OSC/DA tails and other mode-switch bytes are not delivered as fake key input to the focused widget.
 
 **Parameters must match the running app:**
 
