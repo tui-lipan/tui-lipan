@@ -11,6 +11,12 @@ fn corpus(kind: &str, lines: usize) -> Vec<u8> {
     let line = match kind {
         "tails" => "short log record\r\n".to_owned(),
         "shell" => "東京 e\u{301} 🦀 log record\r\n".to_owned(),
+        "alias_tail" => {
+            let mut text = String::from("\x1b[31ma\x1b[38;5;1m");
+            text.extend((1..COLS).map(|col| char::from(b'a' + (col % 26) as u8)));
+            text.push_str("\r\n");
+            text
+        }
         "alternating" => {
             let mut text = String::new();
             for col in 0..COLS {
@@ -37,7 +43,7 @@ fn populated(kind: &str) -> TerminalScreen {
 
 fn snapshots(c: &mut Criterion) {
     let mut group = c.benchmark_group("terminal_snapshot");
-    for kind in ["tails", "shell", "alternating"] {
+    for kind in ["tails", "shell", "alias_tail", "alternating"] {
         group.bench_function(BenchmarkId::from_parameter(kind), |b| {
             b.iter_batched_ref(
                 || populated(kind),

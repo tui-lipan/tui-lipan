@@ -2696,7 +2696,7 @@ fn renderable_content_lines(
         }
 
         let bits = style_run_bits(cell.flags);
-        match style_run_progress(run_key.as_ref(), cell, bits, &palette) {
+        match style_run_progress(run_key.as_mut(), cell, bits, &palette) {
             None => {}
             Some((mapped_fg, mapped_bg)) => {
                 if let Some(prev_row) = current_row {
@@ -2708,7 +2708,7 @@ fn renderable_content_lines(
                         &mut lines,
                     );
                 }
-                run_style = Some(style_from_mapped(mapped_fg, mapped_bg, cell.flags));
+                run_style = Some(style_from_mapped(mapped_fg, mapped_bg, bits));
                 run_key = Some(StyleRunKey {
                     fg: cell.fg,
                     bg: cell.bg,
@@ -2926,13 +2926,23 @@ fn mouse_mode_from_term(mode: TermMode, pixel_mouse: bool) -> MouseModeState {
     }
 }
 
+const RUN_BOLD: u8 = 1;
+const RUN_DIM: u8 = 1 << 1;
+const RUN_ITALIC: u8 = 1 << 2;
+const RUN_UNDERLINE: u8 = 1 << 3;
+const RUN_REVERSE: u8 = 1 << 4;
+const RUN_STRIKETHROUGH: u8 = 1 << 5;
+
+/// Normalizes the cell flags that affect `Style`. This is the only place that decides which
+/// flags matter: `style_from_mapped` reads these bits, so equal bits always mean equal flags.
 fn style_run_bits(flags: CellFlags) -> u8 {
-    u8::from(flags.contains(CellFlags::BOLD))
-        | u8::from(flags.contains(CellFlags::DIM)) << 1
-        | u8::from(flags.contains(CellFlags::ITALIC)) << 2
-        | u8::from(flags.intersects(CellFlags::ALL_UNDERLINES)) << 3
-        | u8::from(flags.contains(CellFlags::INVERSE)) << 4
-        | u8::from(flags.contains(CellFlags::STRIKEOUT)) << 5
+    let bit = |present: bool, bit: u8| if present { bit } else { 0 };
+    bit(flags.contains(CellFlags::BOLD), RUN_BOLD)
+        | bit(flags.contains(CellFlags::DIM), RUN_DIM)
+        | bit(flags.contains(CellFlags::ITALIC), RUN_ITALIC)
+        | bit(flags.intersects(CellFlags::ALL_UNDERLINES), RUN_UNDERLINE)
+        | bit(flags.contains(CellFlags::INVERSE), RUN_REVERSE)
+        | bit(flags.contains(CellFlags::STRIKEOUT), RUN_STRIKETHROUGH)
 }
 
 #[derive(Clone, Copy)]
@@ -2944,44 +2954,57 @@ struct StyleRunKey {
     bits: u8,
 }
 
+/// Returns `None` when `cell` continues the run described by `key`, or the cell's mapped colors
+/// when it starts a new run. A continuation through a different color representation that maps
+/// to the same colors (`Named(Red)` then `Indexed(1)`) moves the key to that representation, so
+/// later cells in the run take the raw-color fast path again.
 fn style_run_progress(
-    key: Option<&StyleRunKey>,
+    key: Option<&mut StyleRunKey>,
     cell: &TermCell,
     bits: u8,
     palette: &TerminalColorPalette,
 ) -> Option<(Option<UiColor>, Option<UiColor>)> {
-    match key {
-        Some(key) if bits == key.bits && cell.fg == key.fg && cell.bg == key.bg => None,
-        Some(key) if bits == key.bits => {
-            let mapped_fg = map_term_color(cell.fg, palette);
-            let mapped_bg = map_term_color(cell.bg, palette);
-            if mapped_fg == key.mapped_fg && mapped_bg == key.mapped_bg {
-                None
-            } else {
-                Some((mapped_fg, mapped_bg))
-            }
-        }
-        _ => Some((
+    let Some(key) = key.filter(|key| key.bits == bits) else {
+        return Some((
             map_term_color(cell.fg, palette),
             map_term_color(cell.bg, palette),
-        )),
+        ));
+    };
+    if cell.fg == key.fg && cell.bg == key.bg {
+        return None;
     }
+    let mapped_fg = if cell.fg == key.fg {
+        key.mapped_fg
+    } else {
+        map_term_color(cell.fg, palette)
+    };
+    let mapped_bg = if cell.bg == key.bg {
+        key.mapped_bg
+    } else {
+        map_term_color(cell.bg, palette)
+    };
+    if mapped_fg != key.mapped_fg || mapped_bg != key.mapped_bg {
+        return Some((mapped_fg, mapped_bg));
+    }
+    key.fg = cell.fg;
+    key.bg = cell.bg;
+    None
 }
 
-fn style_from_mapped(fg: Option<UiColor>, bg: Option<UiColor>, flags: CellFlags) -> Style {
+fn style_from_mapped(fg: Option<UiColor>, bg: Option<UiColor>, bits: u8) -> Style {
     Style {
         fg: fg.map(Into::into),
         bg: bg.map(Into::into),
         fg_transform: None,
         bg_transform: None,
         contrast_policy: None,
-        bold: Some(flags.contains(CellFlags::BOLD)),
-        dim: Some(flags.contains(CellFlags::DIM)),
-        italic: Some(flags.contains(CellFlags::ITALIC)),
-        underline: Some(flags.intersects(CellFlags::ALL_UNDERLINES)),
-        reverse: Some(flags.contains(CellFlags::INVERSE)),
+        bold: Some(bits & RUN_BOLD != 0),
+        dim: Some(bits & RUN_DIM != 0),
+        italic: Some(bits & RUN_ITALIC != 0),
+        underline: Some(bits & RUN_UNDERLINE != 0),
+        reverse: Some(bits & RUN_REVERSE != 0),
         dim_amount: None,
-        strikethrough: Some(flags.contains(CellFlags::STRIKEOUT)),
+        strikethrough: Some(bits & RUN_STRIKETHROUGH != 0),
         underline_color: None,
         tint: None,
     }
@@ -3423,6 +3446,90 @@ mod tests {
         assert_eq!(snapshot.color_lines[0][1].content.as_ref(), "B");
         assert_eq!(snapshot.color_lines[0][2].style.dim, Some(true));
         assert_eq!(snapshot.color_lines[0][2].content.as_ref(), "C");
+    }
+
+    #[test]
+    fn alias_continuation_moves_the_run_key_to_the_new_color() {
+        let palette = TerminalColorPalette::default();
+        let named = TermCell {
+            fg: TermColor::Named(NamedColor::Red),
+            ..TermCell::default()
+        };
+        let indexed = TermCell {
+            fg: TermColor::Indexed(1),
+            ..TermCell::default()
+        };
+        let bits = style_run_bits(named.flags);
+        let (mapped_fg, mapped_bg) =
+            style_run_progress(None, &named, bits, &palette).expect("first cell starts a run");
+        let mut key = StyleRunKey {
+            fg: named.fg,
+            bg: named.bg,
+            mapped_fg,
+            mapped_bg,
+            bits,
+        };
+
+        assert!(style_run_progress(Some(&mut key), &indexed, bits, &palette).is_none());
+        assert_eq!(key.fg, indexed.fg);
+        assert_eq!(key.bg, indexed.bg);
+        assert_eq!(key.mapped_fg, mapped_fg);
+        assert_eq!(key.mapped_bg, mapped_bg);
+    }
+
+    #[test]
+    fn snapshot_keeps_one_run_after_an_alias_color_change() {
+        let mut screen = TerminalScreen::new(1, 6, 0);
+        screen.process_bytes(b"\x1b[31mA\x1b[38;5;1mBCDEF");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0].len(), 1);
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "ABCDEF");
+    }
+
+    #[test]
+    fn style_run_bits_match_style_for_every_flag_combination() {
+        let style_flags = [
+            CellFlags::BOLD,
+            CellFlags::DIM,
+            CellFlags::ITALIC,
+            CellFlags::UNDERLINE,
+            CellFlags::INVERSE,
+            CellFlags::STRIKEOUT,
+        ];
+        let combos: Vec<CellFlags> = (0..1u8 << style_flags.len())
+            .map(|mask| {
+                style_flags
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| mask & (1 << index) != 0)
+                    .fold(CellFlags::empty(), |flags, (_, flag)| flags | *flag)
+            })
+            .collect();
+
+        for &flags in &combos {
+            let style = style_from_mapped(None, None, style_run_bits(flags));
+            assert_eq!(style.bold, Some(flags.contains(CellFlags::BOLD)));
+            assert_eq!(style.dim, Some(flags.contains(CellFlags::DIM)));
+            assert_eq!(style.italic, Some(flags.contains(CellFlags::ITALIC)));
+            assert_eq!(
+                style.underline,
+                Some(flags.intersects(CellFlags::ALL_UNDERLINES))
+            );
+            assert_eq!(style.reverse, Some(flags.contains(CellFlags::INVERSE)));
+            assert_eq!(
+                style.strikethrough,
+                Some(flags.contains(CellFlags::STRIKEOUT))
+            );
+        }
+        for &a in &combos {
+            for &b in &combos {
+                assert_eq!(
+                    style_run_bits(a) == style_run_bits(b),
+                    style_from_mapped(None, None, style_run_bits(a))
+                        == style_from_mapped(None, None, style_run_bits(b)),
+                );
+            }
+        }
     }
 
     #[test]
