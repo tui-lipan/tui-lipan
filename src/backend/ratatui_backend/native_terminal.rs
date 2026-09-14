@@ -9,7 +9,7 @@ use crate::style::{
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::style::Print;
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::{TerminalOptions, Viewport};
 
 use super::terminal_handoff::reset_handoff_state_for_terminal_restore;
@@ -177,6 +177,51 @@ pub(crate) fn set_mouse_capture_enabled(
     Ok(())
 }
 
+/// A ratatui terminal dropped so that a host which has gone away cannot abort the exit.
+///
+/// ratatui's own `Drop` shows a cursor it hid and reports a failure with `eprintln!`. Once the host
+/// terminal has hung up, the write and the report both fail, and a failed `eprintln!` panics: under
+/// `panic = "abort"` that is a core dump on the way out of an otherwise clean exit. So the cursor is
+/// shown here first, and a terminal that cannot take even that is not dropped at all. Nothing can
+/// use it by then, and its buffers go when the process does.
+pub(crate) struct OwnedTerminal<B: Backend = CrosstermBackend<TerminalWriter>>(
+    Option<ratatui::Terminal<B>>,
+);
+
+impl<B: Backend> OwnedTerminal<B> {
+    pub(crate) fn new(terminal: ratatui::Terminal<B>) -> Self {
+        Self(Some(terminal))
+    }
+}
+
+impl<B: Backend> std::ops::Deref for OwnedTerminal<B> {
+    type Target = ratatui::Terminal<B>;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+            .as_ref()
+            .expect("the terminal is only taken when dropped")
+    }
+}
+
+impl<B: Backend> std::ops::DerefMut for OwnedTerminal<B> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0
+            .as_mut()
+            .expect("the terminal is only taken when dropped")
+    }
+}
+
+impl<B: Backend> Drop for OwnedTerminal<B> {
+    fn drop(&mut self) {
+        if let Some(mut terminal) = self.0.take()
+            && terminal.show_cursor().is_err()
+        {
+            std::mem::forget(terminal);
+        }
+    }
+}
+
 pub(crate) struct TerminalGuard {
     stdout: Stdout,
     policy: SurfaceTerminalPolicy,
@@ -189,7 +234,8 @@ impl TerminalGuard {
         surface_mode: SurfaceMode,
         mouse_enabled: bool,
         panic_keyboard_enhancement: &AtomicBool,
-    ) -> io::Result<(Terminal, Self)> {
+    ) -> io::Result<(OwnedTerminal, Self)> {
+        super::tty_liveness::note_host_tty();
         let policy = surface_terminal_policy(surface_mode);
         let mut stdout = io::stdout();
         // The object outlives the query so a terminal that declines it still finds it there, and is
@@ -279,7 +325,7 @@ impl TerminalGuard {
             keyboard_enhancement,
             theme_notifications: false,
         };
-        Ok((terminal, guard))
+        Ok((OwnedTerminal::new(terminal), guard))
     }
 
     pub(crate) fn enable_theme_notifications(&mut self) -> io::Result<bool> {

@@ -11,6 +11,19 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- An app whose terminal goes away while it is exiting now exits. crossterm's Unix event reader
+  retries a read that returns end-of-file forever, without checking its own timeout, and a hung-up
+  pty returns exactly that. So a terminal window closed, or an `ssh` connection dropped, while the
+  app was still tidying up left it spinning a core indefinitely: in the input drains, in the
+  background reader, or while the exit view asked where the cursor was. The framework now waits on
+  the terminal itself, checks for a hang-up before handing a read to crossterm, and reads the exit
+  view's cursor position directly.
+- Losing the terminal at exit no longer aborts the process. The terminal's teardown reported a
+  failed cursor restore with `eprintln!`, and a failed print to a vanished stderr panics, which
+  under `panic = "abort"` left a core dump behind an otherwise clean exit.
+
 ## [0.9.1] - 2026-09-14
 
 ### Changed

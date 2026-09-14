@@ -18,6 +18,7 @@ use super::terminal_transition::{
 };
 #[cfg(unix)]
 use super::terminal_transition::{execute_plan, pixel_mouse_plan, theme_notification_plan};
+use super::tty_liveness::{HostEvent, read_host_event};
 
 static STDIN_READER_PAUSED: AtomicBool = AtomicBool::new(false);
 
@@ -167,29 +168,35 @@ fn collect_pending_terminal_events(
     max_events: usize,
     preserved: &mut Vec<event::Event>,
 ) -> io::Result<()> {
-    for _ in 0..max_events {
-        if !event::poll(Duration::ZERO)? {
-            break;
-        }
-        let ev = event::read()?;
+    for_each_host_event(max_events, Duration::ZERO, |ev| {
         if is_preservable_input(&ev) {
             preserved.push(ev);
         }
-    }
-    Ok(())
+    })
 }
 
 fn collect_terminal_events_until_quiet(
     max_events: usize,
     preserved: &mut Vec<event::Event>,
 ) -> io::Result<()> {
-    for _ in 0..max_events {
-        if !event::poll(Duration::from_millis(10))? {
-            break;
-        }
-        let ev = event::read()?;
+    for_each_host_event(max_events, Duration::from_millis(10), |ev| {
         if is_preservable_input(&ev) {
             preserved.push(ev);
+        }
+    })
+}
+
+/// Hand each event to `on_event` until `wait` passes without one, `max_events` have been read, or
+/// the terminal hangs up.
+fn for_each_host_event(
+    max_events: usize,
+    wait: Duration,
+    mut on_event: impl FnMut(event::Event),
+) -> io::Result<()> {
+    for _ in 0..max_events {
+        match read_host_event(wait)? {
+            HostEvent::Event(ev) => on_event(ev),
+            HostEvent::Quiet | HostEvent::HungUp => break,
         }
     }
     Ok(())
@@ -222,23 +229,11 @@ fn discard_pending_terminal_input() -> io::Result<()> {
 }
 
 fn drain_crossterm_events(max_events: usize) -> io::Result<()> {
-    for _ in 0..max_events {
-        if !event::poll(Duration::ZERO)? {
-            break;
-        }
-        let _ = event::read()?;
-    }
-    Ok(())
+    for_each_host_event(max_events, Duration::ZERO, drop)
 }
 
 fn drain_crossterm_events_until_quiet(max_events: usize) -> io::Result<()> {
-    for _ in 0..max_events {
-        if !event::poll(Duration::from_millis(10))? {
-            break;
-        }
-        let _ = event::read()?;
-    }
-    Ok(())
+    for_each_host_event(max_events, Duration::from_millis(10), drop)
 }
 
 #[cfg(unix)]

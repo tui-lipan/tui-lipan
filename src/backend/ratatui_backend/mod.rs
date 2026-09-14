@@ -16,10 +16,12 @@ mod native_terminal;
 pub mod terminal_handoff;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod terminal_transition;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod tty_liveness;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use native_terminal::{
-    Terminal, TerminalGuard, create_inline_terminal, restore_terminal_on_panic,
+    OwnedTerminal, Terminal, TerminalGuard, create_inline_terminal, restore_terminal_on_panic,
     set_mouse_all_motion_enabled, set_mouse_capture_enabled,
 };
 

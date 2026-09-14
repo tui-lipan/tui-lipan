@@ -28,6 +28,7 @@ use crate::backend::ratatui_backend::terminal_handoff::{
     drain_terminal_query_responses_preserving_input, pause_stdin_reader_for_terminal_query_with,
     stdin_reader_is_paused, take_handoff_full_repaint_request,
 };
+use crate::backend::ratatui_backend::tty_liveness::{HostEvent, read_host_event};
 use crate::callback::{Callback, ScopeId};
 #[cfg(not(feature = "clipboard"))]
 use crate::clipboard::NoOpClipboardProvider;
@@ -2050,20 +2051,17 @@ impl<C: Component> AppRunner<C> {
                                 while stdin_reader_is_paused() {
                                     std::thread::sleep(Duration::from_millis(25));
                                 }
-                                match crossterm::event::poll(Duration::from_millis(100)) {
-                                    Ok(true) => match crossterm::event::read() {
-                                        Ok(ev) => {
-                                            if tx.send(RunnerEvent::Terminal(ev)).is_err() {
-                                                break;
-                                            }
-                                        }
-                                        Err(err) => {
-                                            let _ =
-                                                tx.send(RunnerEvent::InputError(err.to_string()));
+                                match read_host_event(Duration::from_millis(100)) {
+                                    Ok(HostEvent::Event(ev)) => {
+                                        if tx.send(RunnerEvent::Terminal(ev)).is_err() {
                                             break;
                                         }
-                                    },
-                                    Ok(false) => {}
+                                    }
+                                    Ok(HostEvent::Quiet) => {}
+                                    // Stop reading, but do not fail the loop: an app that handles
+                                    // `SIGHUP` is still tidying up, and ending its run here would
+                                    // cut that short. One that does not is already being killed.
+                                    Ok(HostEvent::HungUp) => break,
                                     Err(err) => {
                                         let _ = tx.send(RunnerEvent::InputError(err.to_string()));
                                         break;
