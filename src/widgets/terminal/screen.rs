@@ -2633,12 +2633,15 @@ fn renderable_content_lines(
     let mut hyperlinks: Vec<TerminalHyperlink> = Vec::new();
     let mut current_row: Option<usize> = None;
     let mut run_style: Option<Style> = None;
+    let mut run_key: Option<StyleRunKey> = None;
     let mut run_text = String::new();
 
     let flush_run = |row: usize,
                      run_style: &mut Option<Style>,
+                     run_key: &mut Option<StyleRunKey>,
                      run_text: &mut String,
                      lines: &mut Vec<Vec<Span>>| {
+        *run_key = None;
         if run_text.is_empty() {
             *run_style = None;
             return;
@@ -2661,7 +2664,13 @@ fn renderable_content_lines(
         let row = point.line;
         if current_row != Some(row) {
             if let Some(prev_row) = current_row {
-                flush_run(prev_row, &mut run_style, &mut run_text, &mut lines);
+                flush_run(
+                    prev_row,
+                    &mut run_style,
+                    &mut run_key,
+                    &mut run_text,
+                    &mut lines,
+                );
             }
             current_row = Some(row);
         }
@@ -2686,18 +2695,34 @@ fn renderable_content_lines(
             continue;
         }
 
-        let style = style_from_term_cell(cell, &palette);
-        if run_style != Some(style) {
-            if let Some(prev_row) = current_row {
-                flush_run(prev_row, &mut run_style, &mut run_text, &mut lines);
+        let bits = style_run_bits(cell.flags);
+        match style_run_progress(run_key.as_ref(), cell, bits, &palette) {
+            None => {}
+            Some((mapped_fg, mapped_bg)) => {
+                if let Some(prev_row) = current_row {
+                    flush_run(
+                        prev_row,
+                        &mut run_style,
+                        &mut run_key,
+                        &mut run_text,
+                        &mut lines,
+                    );
+                }
+                run_style = Some(style_from_mapped(mapped_fg, mapped_bg, cell.flags));
+                run_key = Some(StyleRunKey {
+                    fg: cell.fg,
+                    bg: cell.bg,
+                    mapped_fg,
+                    mapped_bg,
+                    bits,
+                });
             }
-            run_style = Some(style);
         }
         push_cell_text_str(&mut run_text, cell);
     }
 
     if let Some(row) = current_row {
-        flush_run(row, &mut run_style, &mut run_text, &mut lines);
+        flush_run(row, &mut run_style, &mut run_key, &mut run_text, &mut lines);
     }
 
     for line in &mut lines {
@@ -2901,14 +2926,52 @@ fn mouse_mode_from_term(mode: TermMode, pixel_mouse: bool) -> MouseModeState {
     }
 }
 
-fn style_from_term_cell(cell: &TermCell, palette: &TerminalColorPalette) -> Style {
-    let fg = map_term_color(cell.fg, palette).map(Into::into);
-    let bg = map_term_color(cell.bg, palette).map(Into::into);
-    let flags = cell.flags;
+fn style_run_bits(flags: CellFlags) -> u8 {
+    u8::from(flags.contains(CellFlags::BOLD))
+        | u8::from(flags.contains(CellFlags::DIM)) << 1
+        | u8::from(flags.contains(CellFlags::ITALIC)) << 2
+        | u8::from(flags.intersects(CellFlags::ALL_UNDERLINES)) << 3
+        | u8::from(flags.contains(CellFlags::INVERSE)) << 4
+        | u8::from(flags.contains(CellFlags::STRIKEOUT)) << 5
+}
 
+#[derive(Clone, Copy)]
+struct StyleRunKey {
+    fg: TermColor,
+    bg: TermColor,
+    mapped_fg: Option<UiColor>,
+    mapped_bg: Option<UiColor>,
+    bits: u8,
+}
+
+fn style_run_progress(
+    key: Option<&StyleRunKey>,
+    cell: &TermCell,
+    bits: u8,
+    palette: &TerminalColorPalette,
+) -> Option<(Option<UiColor>, Option<UiColor>)> {
+    match key {
+        Some(key) if bits == key.bits && cell.fg == key.fg && cell.bg == key.bg => None,
+        Some(key) if bits == key.bits => {
+            let mapped_fg = map_term_color(cell.fg, palette);
+            let mapped_bg = map_term_color(cell.bg, palette);
+            if mapped_fg == key.mapped_fg && mapped_bg == key.mapped_bg {
+                None
+            } else {
+                Some((mapped_fg, mapped_bg))
+            }
+        }
+        _ => Some((
+            map_term_color(cell.fg, palette),
+            map_term_color(cell.bg, palette),
+        )),
+    }
+}
+
+fn style_from_mapped(fg: Option<UiColor>, bg: Option<UiColor>, flags: CellFlags) -> Style {
     Style {
-        fg,
-        bg,
+        fg: fg.map(Into::into),
+        bg: bg.map(Into::into),
         fg_transform: None,
         bg_transform: None,
         contrast_policy: None,
@@ -3261,6 +3324,129 @@ mod tests {
         );
         assert!(snapshot.hyperlinks[0].contains(0, 5));
         assert!(!snapshot.hyperlinks[0].contains(1, 0));
+    }
+
+    #[test]
+    fn snapshot_keeps_one_run_across_default_space_tails() {
+        let mut screen = TerminalScreen::new(1, 20, 0);
+        screen.process_bytes(b"hello");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0].len(), 1);
+        assert_eq!(
+            snapshot.color_lines[0][0].content.as_ref(),
+            "hello               "
+        );
+    }
+
+    #[test]
+    fn snapshot_merges_named_and_indexed_palette_red() {
+        let mut screen = TerminalScreen::new(1, 4, 0);
+        screen.process_bytes(b"\x1b[31mA\x1b[38;5;1mB");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "AB");
+        assert_eq!(
+            snapshot.color_lines[0][0].style.fg,
+            Some(UiColor::Red.into())
+        );
+    }
+
+    #[test]
+    fn snapshot_merges_underline_variants() {
+        let mut screen = TerminalScreen::new(1, 4, 0);
+        screen.process_bytes(b"\x1b[4mA\x1b[4:2mB");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "AB");
+        assert_eq!(snapshot.color_lines[0][0].style.underline, Some(true));
+    }
+
+    #[test]
+    fn snapshot_splits_when_bold_changes() {
+        let mut screen = TerminalScreen::new(1, 4, 0);
+        screen.process_bytes(b"\x1b[1mA\x1b[22mB");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "A");
+        assert_eq!(snapshot.color_lines[0][0].style.bold, Some(true));
+        assert_eq!(snapshot.color_lines[0][1].content.as_ref(), "B  ");
+        assert_eq!(snapshot.color_lines[0][1].style.bold, Some(false));
+    }
+
+    #[test]
+    fn snapshot_keeps_hidden_cells_in_the_same_run() {
+        let mut screen = TerminalScreen::new(1, 6, 0);
+        screen.process_bytes(b"ab\x1b[8mcd\x1b[28mef");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0].len(), 1);
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "ab  ef");
+    }
+
+    #[test]
+    fn snapshot_hyperlink_does_not_split_style_run() {
+        let mut screen = TerminalScreen::new(1, 8, 0);
+        screen.process_bytes(b"ab\x1b]8;;https://e.com\x1b\\cd\x1b]8;;\x1b\\ef");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0].len(), 1);
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "abcdef  ");
+        assert_eq!(snapshot.hyperlinks.len(), 1);
+        assert_eq!(snapshot.hyperlinks[0].start_col, 2);
+        assert_eq!(snapshot.hyperlinks[0].end_col, 4);
+    }
+
+    #[test]
+    fn snapshot_wide_char_spacer_stays_in_one_run() {
+        let mut screen = TerminalScreen::new(1, 4, 0);
+        screen.process_bytes("あx".as_bytes());
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0].len(), 1);
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "あx ");
+    }
+
+    #[test]
+    fn snapshot_alternating_styles_create_one_span_per_run() {
+        let mut screen = TerminalScreen::new(1, 4, 0);
+        screen.process_bytes(b"\x1b[31mA\x1b[32mB\x1b[31mC\x1b[32mD");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0].len(), 4);
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "A");
+        assert_eq!(snapshot.color_lines[0][1].content.as_ref(), "B");
+        assert_eq!(snapshot.color_lines[0][2].content.as_ref(), "C");
+        assert_eq!(snapshot.color_lines[0][3].content.as_ref(), "D");
+    }
+
+    #[test]
+    fn snapshot_inverse_and_dim_split_runs() {
+        let mut screen = TerminalScreen::new(1, 4, 0);
+        screen.process_bytes(b"\x1b[7mA\x1b[27mB\x1b[2mC");
+        let snapshot = screen.render_snapshot();
+        assert_eq!(snapshot.color_lines[0][0].style.reverse, Some(true));
+        assert_eq!(snapshot.color_lines[0][0].content.as_ref(), "A");
+        assert_eq!(snapshot.color_lines[0][1].style.reverse, Some(false));
+        assert_eq!(snapshot.color_lines[0][1].content.as_ref(), "B");
+        assert_eq!(snapshot.color_lines[0][2].style.dim, Some(true));
+        assert_eq!(snapshot.color_lines[0][2].content.as_ref(), "C");
+    }
+
+    #[test]
+    fn style_run_bits_ignore_non_style_flags() {
+        let hidden = TermCell {
+            flags: CellFlags::HIDDEN | CellFlags::WRAPLINE | CellFlags::WIDE_CHAR,
+            ..TermCell::default()
+        };
+        assert_eq!(
+            style_run_bits(hidden.flags),
+            style_run_bits(TermCell::default().flags)
+        );
+        let underline = TermCell {
+            flags: CellFlags::UNDERLINE,
+            ..TermCell::default()
+        };
+        let double = TermCell {
+            flags: CellFlags::DOUBLE_UNDERLINE,
+            ..TermCell::default()
+        };
+        assert_eq!(
+            style_run_bits(underline.flags),
+            style_run_bits(double.flags)
+        );
     }
 
     #[test]
