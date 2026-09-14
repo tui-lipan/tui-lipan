@@ -12,6 +12,7 @@ use crossterm::event;
 
 use crate::app::context::SurfaceMode;
 
+use super::host_input::{HostEvent, read_host_event};
 use super::native_terminal::surface_terminal_policy;
 use super::terminal_transition::{
     CrosstermTransitionExecutor, execute_plan_with_rollback, resume_plan, suspend_plan,
@@ -72,8 +73,9 @@ static FULL_REPAINT_AFTER_HANDOFF: AtomicBool = AtomicBool::new(false);
 
 const READER_PAUSE_SETTLE: Duration = Duration::from_millis(125);
 
-/// Pause the fullscreen crossterm reader thread so stdin is not consumed while
-/// an external program runs.
+/// Whether the Windows crossterm reader thread should leave console input alone, so an external
+/// program or a terminal query gets it instead.
+#[cfg(not(unix))]
 pub(crate) fn stdin_reader_is_paused() -> bool {
     STDIN_READER_PAUSED.load(Ordering::SeqCst)
 }
@@ -167,29 +169,41 @@ fn collect_pending_terminal_events(
     max_events: usize,
     preserved: &mut Vec<event::Event>,
 ) -> io::Result<()> {
-    for _ in 0..max_events {
-        if !event::poll(Duration::ZERO)? {
-            break;
-        }
-        let ev = event::read()?;
+    for_each_host_event(max_events, Duration::ZERO, |ev| {
         if is_preservable_input(&ev) {
             preserved.push(ev);
         }
-    }
-    Ok(())
+    })
 }
 
 fn collect_terminal_events_until_quiet(
     max_events: usize,
     preserved: &mut Vec<event::Event>,
 ) -> io::Result<()> {
-    for _ in 0..max_events {
-        if !event::poll(Duration::from_millis(10))? {
-            break;
-        }
-        let ev = event::read()?;
+    for_each_host_event(max_events, Duration::from_millis(10), |ev| {
         if is_preservable_input(&ev) {
             preserved.push(ev);
+        }
+    })
+}
+
+/// Hand each event to `on_event` until `wait` passes without one, `max_events` have been read, or
+/// the terminal hangs up.
+fn for_each_host_event(
+    max_events: usize,
+    wait: Duration,
+    mut on_event: impl FnMut(event::Event),
+) -> io::Result<()> {
+    for _ in 0..max_events {
+        match read_host_event(wait)? {
+            HostEvent::Input(ev) => on_event(ev),
+            #[cfg(unix)]
+            HostEvent::Pointer(ev, _) => on_event(ev),
+            #[cfg(unix)]
+            HostEvent::ThemeRefresh => {}
+            #[cfg(unix)]
+            HostEvent::HungUp => break,
+            HostEvent::Quiet => break,
         }
     }
     Ok(())
@@ -222,23 +236,11 @@ fn discard_pending_terminal_input() -> io::Result<()> {
 }
 
 fn drain_crossterm_events(max_events: usize) -> io::Result<()> {
-    for _ in 0..max_events {
-        if !event::poll(Duration::ZERO)? {
-            break;
-        }
-        let _ = event::read()?;
-    }
-    Ok(())
+    for_each_host_event(max_events, Duration::ZERO, drop)
 }
 
 fn drain_crossterm_events_until_quiet(max_events: usize) -> io::Result<()> {
-    for _ in 0..max_events {
-        if !event::poll(Duration::from_millis(10))? {
-            break;
-        }
-        let _ = event::read()?;
-    }
-    Ok(())
+    for_each_host_event(max_events, Duration::from_millis(10), drop)
 }
 
 #[cfg(unix)]

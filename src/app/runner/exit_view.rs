@@ -3,7 +3,6 @@ use std::io::Write;
 
 use crossterm::{execute, style::Print};
 use ratatui::TerminalOptions;
-use ratatui::backend::CrosstermBackend;
 
 use crate::Result;
 use crate::app::ContrastPolicy;
@@ -11,6 +10,7 @@ use crate::backend::ratatui_backend::common::to_ratatui_color;
 use crate::backend::ratatui_backend::render::{
     RenderContext, build_join_index, render as render_tree,
 };
+use crate::backend::ratatui_backend::{HostBackend, OwnedTerminal};
 use crate::core::element::Element;
 use crate::core::node::NodeTree;
 use crate::layout::measure::min_size_constrained;
@@ -73,13 +73,15 @@ pub(crate) fn render(
     };
 
     {
-        let backend = CrosstermBackend::new(std::io::stdout());
-        let mut terminal = ratatui::Terminal::with_options(
+        // The inline viewport asks where the cursor is; `HostBackend` answers without crossterm's
+        // reader, which the runner has already stopped by the time this runs.
+        let backend = HostBackend::new(std::io::stdout());
+        let mut terminal = OwnedTerminal::new(ratatui::Terminal::with_options(
             backend,
             TerminalOptions {
                 viewport: ratatui::Viewport::Inline(height),
             },
-        )?;
+        )?);
         terminal.draw(|f| render_tree(f, &ctx))?;
     }
 

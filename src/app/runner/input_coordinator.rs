@@ -24,6 +24,7 @@ use termina::{EventReader, PlatformTerminal, Terminal as _};
 use web_time::Instant;
 
 use crate::app::input::pixel_mouse::{self, PointerReport};
+use crate::backend::ratatui_backend::host_input::is_hang_up;
 use crate::backend::ratatui_backend::terminal_handoff::{
     InputHandoffControl, InputHandoffSlot, register_input_handoff_control,
     unregister_input_handoff_control,
@@ -50,6 +51,7 @@ pub(super) struct TerminaInputCoordinator {
 
 impl TerminaInputCoordinator {
     pub(super) fn start(
+        host_colors: bool,
         initial_colors: Option<HostTerminalColors>,
         panic_control: InputHandoffSlot,
     ) -> io::Result<Self> {
@@ -62,6 +64,7 @@ impl TerminaInputCoordinator {
             commands: command_tx,
             wake: Mutex::new(Box::new(move || waker.wake())),
             refresh: RefreshRequests::default(),
+            host_colors,
             paused: AtomicBool::new(false),
             worker_thread: Mutex::new(None),
         });
@@ -127,6 +130,8 @@ struct WorkerControl {
     commands: mpsc::Sender<WorkerCommand>,
     wake: Mutex<Box<dyn Fn() -> io::Result<()> + Send + Sync>>,
     refresh: RefreshRequests,
+    /// Whether the app asked for live host colors.
+    host_colors: bool,
     paused: AtomicBool,
     worker_thread: Mutex<Option<std::thread::ThreadId>>,
 }
@@ -254,17 +259,30 @@ fn run_worker(
     if let Ok(mut worker_thread) = control.worker_thread.lock() {
         *worker_thread = Some(std::thread::current().id());
     }
+    // Every way out of the loop that is not a shutdown or a closed channel is one of these. A terminal
+    // that has gone away ends reading without failing the run: the app may still be tidying up after
+    // the `SIGHUP` that came with it, and the runner decides how long to wait for that.
+    let stop = |err: io::Error| {
+        let event = if is_hang_up(&err) {
+            RunnerEvent::HostHungUp
+        } else {
+            RunnerEvent::InputError(err.to_string())
+        };
+        let _ = events.send(event);
+    };
     loop {
         match process_worker_commands(&mut reader, &commands, &control) {
             Ok(true) => {}
             Ok(false) => break,
             Err(err) => {
-                let _ = events.send(RunnerEvent::InputError(err.to_string()));
+                stop(err);
                 break;
             }
         }
 
-        if control.refresh.take() {
+        // A refresh can be requested by a resume or a theme report even when the app never asked for
+        // host colors; only an app that did gets them queried.
+        if control.refresh.take() && control.host_colors {
             match coalesced_host_color_refresh(&control.refresh, || {
                 let colors =
                     query_host_colors(&reader, &events, &control.refresh, last_colors.as_ref())?;
@@ -283,7 +301,7 @@ fn run_worker(
                 }
                 Ok(None) => {}
                 Err(err) => {
-                    let _ = events.send(RunnerEvent::InputError(err.to_string()));
+                    stop(err);
                     break;
                 }
             }
@@ -302,13 +320,13 @@ fn run_worker(
                 // `process_worker_commands` collect what the wake was for.
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
                 Err(err) => {
-                    let _ = events.send(RunnerEvent::InputError(err.to_string()));
+                    stop(err);
                     break;
                 }
             },
             Ok(false) => {}
             Err(err) => {
-                let _ = events.send(RunnerEvent::InputError(err.to_string()));
+                stop(err);
                 break;
             }
         }
@@ -480,7 +498,7 @@ fn dynamic_color_response(
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum TerminaEventAction {
+pub(crate) enum TerminaEventAction {
     Input(CrosstermEvent),
     /// A pointer position the host reported in pixels, split into cell and sub-cell parts.
     Pointer(CrosstermEvent, (u16, u16)),
@@ -516,7 +534,7 @@ fn dispatch_termina_event(
     }
 }
 
-fn map_termina_event(event: TerminaEvent) -> TerminaEventAction {
+pub(crate) fn map_termina_event(event: TerminaEvent) -> TerminaEventAction {
     match event {
         TerminaEvent::Key(key) => {
             TerminaEventAction::Input(CrosstermEvent::Key(map_key_event(key)))
@@ -908,6 +926,7 @@ mod tests {
                 Ok(())
             })),
             refresh: RefreshRequests::default(),
+            host_colors: false,
             paused: AtomicBool::new(false),
             worker_thread: Mutex::new(None),
         };
@@ -1005,5 +1024,70 @@ mod tests {
             receiver.recv().unwrap(),
             RunnerEvent::InputError(message) if message.contains("contained worker panic")
         ));
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn worker_stops_cleanly_when_the_terminal_hangs_up_during_a_read() {
+        use crate::backend::ratatui_backend::host_input::pty_test::{
+            child_report, cpu_time, run_and_hang_up,
+        };
+        use crate::backend::ratatui_backend::terminal_handoff::input_handoff_slot;
+
+        let name = "worker_stops_cleanly_when_the_terminal_hangs_up_during_a_read";
+        if let Some(report) = child_report() {
+            let coordinator =
+                TerminaInputCoordinator::start(false, None, input_handoff_slot()).expect("start");
+            report.line("ready", 1);
+            let started = Instant::now();
+            loop {
+                match coordinator
+                    .receiver()
+                    .recv_timeout(Duration::from_millis(100))
+                {
+                    Ok(RunnerEvent::HostHungUp) => break,
+                    Ok(RunnerEvent::InputError(message)) => {
+                        report.line("input_error", message);
+                        return;
+                    }
+                    Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        report.line("error", "channel disconnected");
+                        return;
+                    }
+                }
+                if started.elapsed() > Duration::from_secs(10) {
+                    report.line("error", "no hang-up within 10s");
+                    return;
+                }
+            }
+            report.line("hung_up", 1);
+            let cpu_before = cpu_time();
+            std::thread::sleep(Duration::from_millis(500));
+            report.line("cpu_ms", (cpu_time() - cpu_before).as_millis());
+            let join_started = Instant::now();
+            drop(coordinator);
+            report.line("join_ms", join_started.elapsed().as_millis());
+            report.line("done", 1);
+            return;
+        }
+
+        let module = module_path!();
+        let module = module.split_once("::").map_or(module, |(_, rest)| rest);
+        let report = run_and_hang_up(&format!("{module}::{name}"));
+        assert_eq!(report.get("input_error"), None, "{report:?}");
+        assert_eq!(report.get("error"), None, "{report:?}");
+        assert_eq!(
+            report.get("done").map(String::as_str),
+            Some("1"),
+            "{report:?}"
+        );
+        let cpu_ms: u64 = report["cpu_ms"].parse().unwrap();
+        assert!(
+            cpu_ms < 100,
+            "the stopped worker used {cpu_ms}ms of CPU in 500ms"
+        );
+        let join_ms: u64 = report["join_ms"].parse().unwrap();
+        assert!(join_ms < 1_000, "joining the worker took {join_ms}ms");
     }
 }

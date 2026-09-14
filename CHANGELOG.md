@@ -11,6 +11,26 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Changed
+
+- Unix apps read terminal input through Termina on every surface. Fullscreen runs use the Termina
+  worker that pixel pointer reports and live host colors already used, whether or not either is
+  enabled; inline runs read on the UI thread. ratatui's cursor position queries for inline
+  viewports go through the same reader. Windows keeps crossterm, and its reader thread is now
+  stopped and joined before the terminal is restored.
+
+### Fixed
+
+- An app whose terminal goes away now exits instead of spinning a core forever. crossterm's Unix
+  event source retries a read that returns end-of-file without checking its own timeout, and a
+  hung-up pty returns exactly that: a terminal window closed or an `ssh` connection dropped left the
+  app stuck in its input reader, in the drains around a handoff, or in the exit view's cursor query.
+  Termina ends the read instead. The run now treats a hang-up as the end of input rather than an
+  input error, giving the app 10 seconds to finish its own `SIGHUP` handling before the run ends.
+- Losing the terminal at exit no longer aborts the process. The terminal's teardown reported a
+  failed cursor restore with `eprintln!`, and a failed print to a vanished stderr panics, which
+  under `panic = "abort"` left a core dump behind an otherwise clean exit.
+
 ## [0.9.1] - 2026-09-14
 
 ### Changed

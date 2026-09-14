@@ -11,6 +11,8 @@ pub(crate) mod renderers;
 pub(crate) mod shared_frame;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod host_input;
+#[cfg(not(target_arch = "wasm32"))]
 mod native_terminal;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod terminal_handoff;
@@ -19,8 +21,8 @@ pub(crate) mod terminal_transition;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use native_terminal::{
-    Terminal, TerminalGuard, create_inline_terminal, restore_terminal_on_panic,
-    set_mouse_all_motion_enabled, set_mouse_capture_enabled,
+    HostBackend, OwnedTerminal, Terminal, TerminalGuard, create_inline_terminal,
+    restore_terminal_on_panic, set_mouse_all_motion_enabled, set_mouse_capture_enabled,
 };
 
 pub(crate) use render::{RenderContext, render, render_regions};

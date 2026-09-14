@@ -24,9 +24,11 @@ use crate::backend::ratatui_backend::image_support;
 use crate::backend::ratatui_backend::render::JoinIndex;
 #[cfg(feature = "image")]
 use crate::backend::ratatui_backend::renderers::image::image_protocol_ready_epoch;
+#[cfg(not(unix))]
+use crate::backend::ratatui_backend::terminal_handoff::stdin_reader_is_paused;
 use crate::backend::ratatui_backend::terminal_handoff::{
     drain_terminal_query_responses_preserving_input, pause_stdin_reader_for_terminal_query_with,
-    stdin_reader_is_paused, take_handoff_full_repaint_request,
+    take_handoff_full_repaint_request,
 };
 use crate::callback::{Callback, ScopeId};
 #[cfg(not(feature = "clipboard"))]
@@ -105,6 +107,9 @@ enum RunnerEvent {
     /// Wakeup for a queued live-control request.
     Control,
     HostTerminalColors(HostTerminalColors),
+    /// The host terminal has gone away. Input has stopped; see [`HOST_HANG_UP_GRACE`].
+    #[cfg(unix)]
+    HostHungUp,
     InputError(String),
 }
 
@@ -330,28 +335,31 @@ fn host_color_refresh_wait_remaining(
         .map(|deadline| deadline.saturating_duration_since(now))
 }
 
-#[cfg(unix)]
-/// Whether Termina decodes this run's input rather than crossterm.
+/// How long a run keeps going after its terminal hangs up.
 ///
-/// Live host colours need it, being a running conversation with the host rather than a startup
-/// question. Pixel-precise pointer reporting needs it for a harder reason: mode 1016 replaces the
-/// cell coordinates in a mouse report with pixel ones, and a decoder that does not know that reads
-/// one as the other and lands every click hundreds of columns away. So the mode is only ever asked
-/// for on this path, and asking for it is only possible on this path.
-fn uses_termina_live_input(surface: &SurfaceDriver, host_color_refresh_enabled: bool) -> bool {
-    if surface.is_inline() {
-        return false;
-    }
-    #[cfg(unix)]
-    if crate::app::input::pixel_mouse::is_active() {
-        return true;
-    }
-    host_color_refresh_enabled
-}
+/// An app that handles `SIGHUP` is usually still tidying up when its input reports the hang-up,
+/// and ending the run at once would cut that short. One that ignores the signal would otherwise wait
+/// forever for input that cannot arrive, so the run ends once this has passed.
+#[cfg(unix)]
+const HOST_HANG_UP_GRACE: Duration = Duration::from_secs(10);
 
+/// The one reader of the host terminal for a run.
+///
+/// On Unix that is Termina, whose event source ends a read at end-of-file where crossterm's spins
+/// forever. A fullscreen run reads through a managed worker thread. An inline run reads on the UI
+/// thread instead, because ratatui's inline viewport asks the terminal where the cursor is, and a
+/// second reader running alongside would take the reply. Termina is also the only decoder that can
+/// read a pixel pointer report: mode 1016 puts pixels where a report's cells go, and a decoder that
+/// does not know that lands every click hundreds of columns away.
+///
+/// Windows reads console input through crossterm on a managed worker thread.
 struct PlatformInputCoordinator {
     #[cfg(unix)]
     termina: Option<input_coordinator::TerminaInputCoordinator>,
+    #[cfg(unix)]
+    inline: Option<crate::backend::ratatui_backend::host_input::InlineHostReader>,
+    #[cfg(not(unix))]
+    crossterm: Option<CrosstermReader>,
 }
 
 impl PlatformInputCoordinator {
@@ -363,25 +371,40 @@ impl PlatformInputCoordinator {
     ) -> std::io::Result<Self> {
         #[cfg(unix)]
         {
-            let termina = uses_termina_live_input(surface, host_color_refresh_enabled)
-                .then(|| {
-                    input_coordinator::TerminaInputCoordinator::start(
-                        initial_colors,
-                        panic_input_control,
-                    )
-                })
-                .transpose()?;
-            Ok(Self { termina })
+            if surface.is_inline() {
+                let _ = (
+                    host_color_refresh_enabled,
+                    initial_colors,
+                    panic_input_control,
+                );
+                return Ok(Self {
+                    termina: None,
+                    inline: Some(
+                        crate::backend::ratatui_backend::host_input::InlineHostReader::start()?,
+                    ),
+                });
+            }
+            let termina = input_coordinator::TerminaInputCoordinator::start(
+                host_color_refresh_enabled,
+                initial_colors,
+                panic_input_control,
+            )?;
+            Ok(Self {
+                termina: Some(termina),
+                inline: None,
+            })
         }
         #[cfg(not(unix))]
         {
             let _ = (
-                surface,
                 host_color_refresh_enabled,
                 initial_colors,
                 panic_input_control,
             );
-            Ok(Self {})
+            let crossterm = (!surface.is_inline())
+                .then(CrosstermReader::start)
+                .transpose()?;
+            Ok(Self { crossterm })
         }
     }
 
@@ -392,31 +415,25 @@ impl PlatformInputCoordinator {
         return false;
     }
 
-    fn receiver<'a>(
-        &'a self,
-        fallback: Option<&'a mpsc::Receiver<RunnerEvent>>,
-    ) -> Option<&'a mpsc::Receiver<RunnerEvent>> {
+    fn receiver(&self) -> Option<&mpsc::Receiver<RunnerEvent>> {
         #[cfg(unix)]
-        if let Some(coordinator) = &self.termina {
-            return Some(coordinator.receiver());
-        }
-        fallback
+        return self
+            .termina
+            .as_ref()
+            .map(|coordinator| coordinator.receiver());
+        #[cfg(not(unix))]
+        return self.crossterm.as_ref().map(|reader| &reader.events);
     }
 
-    /// A sender into whichever channel [`Self::receiver`] will drain.
-    ///
-    /// The control channel must reach the loop's *actual* receiver; on the
-    /// fullscreen Unix path that is the platform coordinator's own channel, not
-    /// the crossterm reader's.
-    fn sender(
-        &self,
-        fallback: Option<&mpsc::Sender<RunnerEvent>>,
-    ) -> Option<mpsc::Sender<RunnerEvent>> {
+    /// A sender into the channel [`Self::receiver`] drains, so the control channel wakes the loop.
+    fn sender(&self) -> Option<mpsc::Sender<RunnerEvent>> {
         #[cfg(unix)]
-        if let Some(coordinator) = &self.termina {
-            return Some(coordinator.sender());
-        }
-        fallback.cloned()
+        return self
+            .termina
+            .as_ref()
+            .map(|coordinator| coordinator.sender());
+        #[cfg(not(unix))]
+        return self.crossterm.as_ref().map(|reader| reader.sender.clone());
     }
 
     fn route_host_color_refresh(&self, requested: bool) -> bool {
@@ -428,6 +445,71 @@ impl PlatformInputCoordinator {
             return false;
         }
         requested
+    }
+}
+
+/// crossterm's console reader on a thread the run stops and joins before it restores the terminal.
+#[cfg(not(unix))]
+struct CrosstermReader {
+    events: mpsc::Receiver<RunnerEvent>,
+    sender: mpsc::Sender<RunnerEvent>,
+    stop: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(not(unix))]
+impl CrosstermReader {
+    fn start() -> std::io::Result<Self> {
+        let (sender, events) = mpsc::channel::<RunnerEvent>();
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker = std::thread::Builder::new()
+            .name("crossterm-reader".into())
+            .spawn({
+                let tx = sender.clone();
+                let stop = Arc::clone(&stop);
+                move || {
+                    while !stop.load(Ordering::SeqCst) {
+                        if stdin_reader_is_paused() {
+                            std::thread::sleep(Duration::from_millis(25));
+                            continue;
+                        }
+                        match crossterm::event::poll(Duration::from_millis(100)) {
+                            Ok(true) => match crossterm::event::read() {
+                                Ok(ev) => {
+                                    if tx.send(RunnerEvent::Terminal(ev)).is_err() {
+                                        break;
+                                    }
+                                }
+                                Err(err) => {
+                                    let _ = tx.send(RunnerEvent::InputError(err.to_string()));
+                                    break;
+                                }
+                            },
+                            Ok(false) => {}
+                            Err(err) => {
+                                let _ = tx.send(RunnerEvent::InputError(err.to_string()));
+                                break;
+                            }
+                        }
+                    }
+                }
+            })?;
+        Ok(Self {
+            events,
+            sender,
+            stop,
+            worker: Some(worker),
+        })
+    }
+}
+
+#[cfg(not(unix))]
+impl Drop for CrosstermReader {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
     }
 }
 
@@ -1970,16 +2052,16 @@ impl<C: Component> AppRunner<C> {
             let _stop_signal_guard = crate::app::job_control::install_stop_handler();
             self.refresh_host_terminal_colors(false, false);
 
-            // Fullscreen Unix apps that opted into live host colors use Termina
-            // as their sole runtime decoder. Startup probing above deliberately
-            // finishes before this worker takes ownership of terminal input.
+            // Startup probing above deliberately finishes before the platform reader takes
+            // ownership of terminal input.
             let platform_input = PlatformInputCoordinator::start(
                 &self.surface,
                 self.host_terminal_color_refresh_enabled(),
                 self.core.ctx.host_terminal_colors(),
                 Arc::clone(&panic_input_control),
             )?;
-            if platform_input.owns_fullscreen_input() {
+            if platform_input.owns_fullscreen_input() && self.host_terminal_color_refresh_enabled()
+            {
                 let notifications_enabled = guard.enable_theme_notifications()?;
                 panic_theme_notifications.store(notifications_enabled, Ordering::SeqCst);
             }
@@ -2032,60 +2114,11 @@ impl<C: Component> AppRunner<C> {
             // Initial render.
             self.render(&mut terminal)?;
 
-            // Inline mode must read events on the main thread because ratatui
-            // inline autoresize queries cursor position from stdin. A concurrent
-            // crossterm reader thread can consume cursor-report bytes and cause
-            // viewport desync/timeouts during resize.
-            let mut crossterm_event_rx: Option<mpsc::Receiver<RunnerEvent>> = None;
-            let mut control_reader_tx: Option<mpsc::Sender<RunnerEvent>> = None;
-            if !self.surface.is_inline() && !platform_input.owns_fullscreen_input() {
-                // Fullscreen path keeps the background reader for low-latency wakeups.
-                let (event_tx, rx) = mpsc::channel::<RunnerEvent>();
-                std::thread::Builder::new()
-                    .name("crossterm-reader".into())
-                    .spawn({
-                        let tx = event_tx.clone();
-                        move || {
-                            loop {
-                                while stdin_reader_is_paused() {
-                                    std::thread::sleep(Duration::from_millis(25));
-                                }
-                                match crossterm::event::poll(Duration::from_millis(100)) {
-                                    Ok(true) => match crossterm::event::read() {
-                                        Ok(ev) => {
-                                            if tx.send(RunnerEvent::Terminal(ev)).is_err() {
-                                                break;
-                                            }
-                                        }
-                                        Err(err) => {
-                                            let _ =
-                                                tx.send(RunnerEvent::InputError(err.to_string()));
-                                            break;
-                                        }
-                                    },
-                                    Ok(false) => {}
-                                    Err(err) => {
-                                        let _ = tx.send(RunnerEvent::InputError(err.to_string()));
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    })?;
-                // Keep one copy for control fan-in; dropping the rest closes the
-                // channel when the loop ends.
-                control_reader_tx = Some(event_tx.clone());
-                drop(event_tx);
-                crossterm_event_rx = Some(rx);
-            }
-
             // Held only for its Drop, which unlinks the socket when run() ends.
             let mut _control_guard = None;
             if let Some(path) = control::control_path() {
-                // Send into the channel the loop actually drains. On the
-                // fullscreen Unix path that is the platform coordinator's, so a
-                // private channel here would be read by nobody.
-                match platform_input.sender(control_reader_tx.as_ref()) {
+                // Send into the channel the loop actually drains, so a request wakes it.
+                match platform_input.sender() {
                     Some(sender) => {
                         _control_guard = Some(control::spawn(
                             path.clone(),
@@ -2105,7 +2138,9 @@ impl<C: Component> AppRunner<C> {
                 }
             }
 
-            let event_rx = platform_input.receiver(crossterm_event_rx.as_ref());
+            let event_rx = &platform_input;
+            #[cfg(unix)]
+            let mut host_hung_up_at: Option<Instant> = None;
 
             let mut pending_event: Option<RunnerEvent> = None;
             let mut host_color_refresh_quiet_until: Option<Instant> = None;
@@ -2142,7 +2177,7 @@ impl<C: Component> AppRunner<C> {
                 // tick and force a full redraw when it drifts. Only relevant on
                 // the background-reader (fullscreen) path; inline mode reads
                 // events on the main thread and relies on ratatui autoresize.
-                if event_rx.is_some()
+                if event_rx.receiver().is_some()
                     && let Ok(size) = terminal.size()
                     && size != last_known_size
                 {
@@ -2157,7 +2192,8 @@ impl<C: Component> AppRunner<C> {
                     dirty.mark_full();
                 }
 
-                let actual_timeout = if dirty.is_dirty()
+                #[cfg_attr(not(unix), allow(unused_mut))]
+                let mut actual_timeout = if dirty.is_dirty()
                     || pending_event.is_some()
                     || !self.pending_reinjected_input.is_empty()
                 {
@@ -2165,6 +2201,18 @@ impl<C: Component> AppRunner<C> {
                 } else {
                     poll_timeout.max(Duration::from_millis(1))
                 };
+                #[cfg(unix)]
+                if let Some(hung_up_at) = host_hung_up_at {
+                    let remaining = HOST_HANG_UP_GRACE.saturating_sub(hung_up_at.elapsed());
+                    if remaining.is_zero() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "the host terminal hung up",
+                        )
+                        .into());
+                    }
+                    actual_timeout = actual_timeout.min(remaining);
+                }
 
                 let maybe_event = if let Some(ev) = pending_event.take() {
                     Some(ev)
@@ -2183,6 +2231,11 @@ impl<C: Component> AppRunner<C> {
                     }
                     Some(RunnerEvent::InputError(message)) => {
                         return Err(std::io::Error::other(message).into());
+                    }
+                    #[cfg(unix)]
+                    Some(RunnerEvent::HostHungUp) => {
+                        host_hung_up_at.get_or_insert_with(Instant::now);
+                        None
                     }
                     Some(RunnerEvent::Control) => {
                         if self.drain_control_requests() {
@@ -2934,55 +2987,86 @@ impl<C: Component> AppRunner<C> {
         Ok(())
     }
 
-    fn recv_event(
-        &self,
+    /// Read one inline-surface event on the UI thread, waiting at most `timeout`.
+    fn recv_inline_event(
+        input: &PlatformInputCoordinator,
         timeout: Duration,
-        event_rx: Option<&mpsc::Receiver<RunnerEvent>>,
     ) -> Result<Option<RunnerEvent>> {
-        if self.surface.is_inline() {
+        #[cfg(unix)]
+        {
+            use crate::backend::ratatui_backend::host_input::HostEvent;
+
+            let Some(reader) = &input.inline else {
+                return Ok(None);
+            };
+            Ok(match reader.read(timeout)? {
+                HostEvent::Input(event) => Some(RunnerEvent::Terminal(event)),
+                HostEvent::Pointer(event, sub_cell) => {
+                    Some(RunnerEvent::Pointer { event, sub_cell })
+                }
+                HostEvent::HungUp => Some(RunnerEvent::HostHungUp),
+                HostEvent::ThemeRefresh | HostEvent::Quiet => None,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = input;
             if crossterm::event::poll(timeout)? {
                 return Ok(Some(RunnerEvent::Terminal(crossterm::event::read()?)));
             }
-            return Ok(None);
-        }
-
-        let Some(rx) = event_rx else {
-            return Ok(None);
-        };
-        match rx.recv_timeout(timeout) {
-            Ok(event) => Ok(Some(event)),
-            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
-            Err(mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "fullscreen input worker disconnected",
-            )
-            .into()),
+            Ok(None)
         }
     }
 
-    fn try_recv_event(
+    fn recv_event(
         &self,
-        event_rx: Option<&mpsc::Receiver<RunnerEvent>>,
+        timeout: Duration,
+        input: &PlatformInputCoordinator,
     ) -> Result<Option<RunnerEvent>> {
         if self.surface.is_inline() {
-            if crossterm::event::poll(Duration::from_millis(0))? {
-                return Ok(Some(RunnerEvent::Terminal(crossterm::event::read()?)));
-            }
-            return Ok(None);
+            return Self::recv_inline_event(input, timeout);
         }
+        recv_channel(input.receiver(), timeout)
+    }
 
-        let Some(rx) = event_rx else {
-            return Ok(None);
-        };
-        match rx.try_recv() {
-            Ok(event) => Ok(Some(event)),
-            Err(mpsc::TryRecvError::Empty) => Ok(None),
-            Err(mpsc::TryRecvError::Disconnected) => Err(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "fullscreen input worker disconnected",
-            )
-            .into()),
+    fn try_recv_event(&self, input: &PlatformInputCoordinator) -> Result<Option<RunnerEvent>> {
+        if self.surface.is_inline() {
+            return Self::recv_inline_event(input, Duration::ZERO);
         }
+        try_recv_channel(input.receiver())
+    }
+}
+
+fn recv_channel(
+    rx: Option<&mpsc::Receiver<RunnerEvent>>,
+    timeout: Duration,
+) -> Result<Option<RunnerEvent>> {
+    let Some(rx) = rx else {
+        return Ok(None);
+    };
+    match rx.recv_timeout(timeout) {
+        Ok(event) => Ok(Some(event)),
+        Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "fullscreen input worker disconnected",
+        )
+        .into()),
+    }
+}
+
+fn try_recv_channel(rx: Option<&mpsc::Receiver<RunnerEvent>>) -> Result<Option<RunnerEvent>> {
+    let Some(rx) = rx else {
+        return Ok(None);
+    };
+    match rx.try_recv() {
+        Ok(event) => Ok(Some(event)),
+        Err(mpsc::TryRecvError::Empty) => Ok(None),
+        Err(mpsc::TryRecvError::Disconnected) => Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "fullscreen input worker disconnected",
+        )
+        .into()),
     }
 }
 
