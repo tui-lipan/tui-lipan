@@ -316,7 +316,7 @@ fn label_ellipsis_still_gets_caps() {
 }
 
 #[test]
-fn frame_line_keeps_the_accent_when_caps_are_set() {
+fn frame_line_accent_sits_outside_the_pill() {
     let frame = render(BarApp {
         caps: Some((LEFT_CAP, RIGHT_CAP)),
         active_bg: true,
@@ -324,18 +324,24 @@ fn frame_line_keeps_the_accent_when_caps_are_set() {
         variant: DraggableTabBarVariant::FrameLine,
         close_buttons: false,
     });
-    // FrameLine tab "B" after tab "A" (width 4): accent, pad, label, pad. Caps wrap Bordered
-    // padding cells only; this variant's left chrome is the accent marker.
-    assert_eq!(frame.cell(4, 0).symbol, "▎");
-    assert_eq!(frame.cell(4, 0).bg, ACCENT);
-    assert_eq!(frame.cell(5, 0).symbol, " ");
-    assert_eq!(frame.cell(5, 0).bg, ACCENT);
+    // FrameLine tab "B" after tab "A" (width 4): accent on the strip, then the Bordered-style pill.
+    let accent = frame.cell(4, 0);
+    assert_eq!(accent.symbol, "▎");
+    assert_eq!(
+        accent.bg, PANEL,
+        "accent sits on the strip, not the tab fill"
+    );
+
+    let left = frame.cell(5, 0);
+    assert_eq!(left.symbol, LEFT_CAP.to_string());
+    assert_eq!(left.fg, ACCENT);
+    assert_eq!(left.bg, PANEL);
+
     assert_eq!(frame.cell(6, 0).symbol, "B");
-    assert_eq!(frame.cell(7, 0).symbol, " ");
-    assert_eq!(frame.cell(7, 0).bg, ACCENT);
-    for x in 0..20 {
-        let symbol = &frame.cell(x, 0).symbol;
-        assert_ne!(symbol, &LEFT_CAP.to_string(), "no left cap at col {x}");
-        assert_ne!(symbol, &RIGHT_CAP.to_string(), "no right cap at col {x}");
-    }
+    assert_eq!(frame.cell(6, 0).bg, ACCENT);
+
+    let right = frame.cell(7, 0);
+    assert_eq!(right.symbol, RIGHT_CAP.to_string());
+    assert_eq!(right.fg, ACCENT);
+    assert_eq!(right.bg, PANEL);
 }

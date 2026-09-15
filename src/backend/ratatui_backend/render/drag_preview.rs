@@ -139,6 +139,7 @@ pub(crate) fn render_drag_snapshot_preview(
     let top = i32::from(area.y);
     let right = i32::from(area.right());
     let bottom = i32::from(area.bottom());
+    let punch = snapshot_punch_mask(src_w, src_h, &snapshot);
     for dy in 0..preview_h {
         for dx in 0..preview_w {
             let dst_x = origin_x + i32::from(dx);
@@ -150,7 +151,11 @@ pub(crate) fn render_drag_snapshot_preview(
                 buf.cell_mut(ratatui::layout::Position::new(dst_x as u16, dst_y as u16))
             {
                 let src_i = (dy as usize) * (src_w as usize) + (dx as usize);
-                *dst = snapshot[src_i].clone();
+                write_snapshot_cell(
+                    dst,
+                    &snapshot[src_i],
+                    punch.get(src_i).copied().unwrap_or(false),
+                );
             }
         }
     }
@@ -203,6 +208,7 @@ pub(crate) fn render_drag_snapshot_at_target(
     let render_h = src_h.min(target_rect.height);
 
     let buf = state.f.buffer_mut();
+    let punch = snapshot_punch_mask(src_w, src_h, &snapshot);
     for dy in 0..render_h {
         for dx in 0..render_w {
             let dst_x = target_rect.x + dx;
@@ -212,15 +218,71 @@ pub(crate) fn render_drag_snapshot_at_target(
             }
             if let Some(dst) = buf.cell_mut(ratatui::layout::Position::new(dst_x, dst_y)) {
                 let src_i = (dy as usize) * (src_w as usize) + (dx as usize);
-                *dst = snapshot[src_i].clone();
+                write_snapshot_cell(
+                    dst,
+                    &snapshot[src_i],
+                    punch.get(src_i).copied().unwrap_or(false),
+                );
             }
         }
     }
 }
 
+fn write_snapshot_cell(
+    dst: &mut ratatui::buffer::Cell,
+    src: &ratatui::buffer::Cell,
+    punch_bg: bool,
+) {
+    if punch_bg {
+        let bg = dst.bg;
+        *dst = src.clone();
+        dst.bg = bg;
+    } else {
+        *dst = src.clone();
+    }
+}
+
+/// Prefix/suffix cells that do not share the row's fill background keep the destination
+/// background when floated. Powerline caps and FrameLine accents use the strip as `bg` and
+/// the tab fill as `fg`; copying that strip `bg` onto the preview turns the pill into a
+/// rectangle.
+fn snapshot_punch_mask(width: u16, height: u16, cells: &[ratatui::buffer::Cell]) -> Vec<bool> {
+    let w = width as usize;
+    let h = height as usize;
+    let mut mask = vec![false; w.saturating_mul(h)];
+    if w == 0 || h != 1 || cells.len() < w {
+        return mask;
+    }
+    let fill = cells[w / 2].bg;
+    let mut i = 0;
+    while i < w && cells[i].bg != fill {
+        mask[i] = true;
+        i += 1;
+    }
+    let mut j = w;
+    while j > i {
+        j -= 1;
+        if cells[j].bg != fill {
+            mask[j] = true;
+        } else {
+            break;
+        }
+    }
+    mask
+}
+
 #[cfg(test)]
 mod tests {
-    use super::drag_snapshot_preview_origin;
+    use ratatui::buffer::Cell;
+    use ratatui::style::Color as RColor;
+
+    use super::{drag_snapshot_preview_origin, snapshot_punch_mask, write_snapshot_cell};
+
+    fn bg_cell(bg: RColor) -> Cell {
+        let mut cell = Cell::default();
+        cell.set_bg(bg);
+        cell
+    }
 
     #[test]
     fn snapshot_origin_follows_grab_and_may_leave_viewport() {
@@ -243,5 +305,54 @@ mod tests {
             ),
             (60, 12)
         );
+    }
+
+    #[test]
+    fn punch_mask_clears_powerline_cap_cells() {
+        let strip = RColor::Rgb(40, 44, 60);
+        let fill = RColor::Rgb(120, 200, 255);
+        let row = vec![bg_cell(strip), bg_cell(fill), bg_cell(strip)];
+        assert_eq!(snapshot_punch_mask(3, 1, &row), vec![true, false, true]);
+    }
+
+    #[test]
+    fn punch_mask_clears_frameline_accent_and_caps() {
+        let strip = RColor::Rgb(40, 44, 60);
+        let fill = RColor::Rgb(120, 200, 255);
+        let row = vec![
+            bg_cell(strip),
+            bg_cell(strip),
+            bg_cell(fill),
+            bg_cell(strip),
+        ];
+        assert_eq!(
+            snapshot_punch_mask(4, 1, &row),
+            vec![true, true, false, true]
+        );
+    }
+
+    #[test]
+    fn punch_mask_ignores_uniform_rows_and_tall_snapshots() {
+        let fill = RColor::Rgb(10, 10, 10);
+        let row = vec![bg_cell(fill), bg_cell(fill), bg_cell(fill)];
+        assert_eq!(snapshot_punch_mask(3, 1, &row), vec![false, false, false]);
+        let tall = vec![bg_cell(fill); 6];
+        assert_eq!(snapshot_punch_mask(3, 2, &tall), vec![false; 6]);
+    }
+
+    #[test]
+    fn punched_cap_cells_keep_the_destination_background() {
+        let strip = RColor::Rgb(40, 44, 60);
+        let fill = RColor::Rgb(120, 200, 255);
+        let dest = RColor::Rgb(200, 80, 40);
+        let snapshot = vec![bg_cell(strip), bg_cell(fill), bg_cell(strip)];
+        let punch = snapshot_punch_mask(3, 1, &snapshot);
+        let mut row = [bg_cell(dest), bg_cell(dest), bg_cell(dest)];
+        for i in 0..3 {
+            write_snapshot_cell(&mut row[i], &snapshot[i], punch[i]);
+        }
+        assert_eq!(row[0].bg, dest);
+        assert_eq!(row[1].bg, fill);
+        assert_eq!(row[2].bg, dest);
     }
 }

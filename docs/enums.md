@@ -355,9 +355,8 @@ draws its tabs there whatever the edge says.
 
 ### `CapStyle` and `CapSides`
 
-`Badge` uses these enums for optional segment caps. `Tabs` and `DraggableTabBar` (`Bordered`) accept
-the same named sets through `CapStyle::chars()` passed to `.caps(...)`. `FrameLine` keeps its accent
-marker and does not draw caps.
+`Badge` uses these enums for optional segment caps. `Tabs` and `DraggableTabBar` accept the same
+named sets through `CapStyle::chars()` passed to `.caps(...)`.
 
 | `CapStyle` variant | Effect |
 |--------------------|--------|
