@@ -734,7 +734,8 @@ impl DraggableTabBar {
     /// ellipsis from [`Self::tab_max_width`] or [`DraggableTabBarOverflow::ShrinkThenScroll`]
     /// does not drop caps, because those shrink the label, not the padding cells. Caps must be
     /// single-width because a wider glyph would push later tabs off the columns the widget
-    /// hit-tests against.
+    /// hit-tests against. On [`DraggableTabBarVariant::FrameLine`], a shaped tab spends the accent
+    /// slot on the left cap so the marker is not stacked in front of the pill.
     pub fn caps(mut self, caps: Option<(char, char)>) -> Self {
         self.caps = caps;
         self

@@ -316,7 +316,7 @@ fn label_ellipsis_still_gets_caps() {
 }
 
 #[test]
-fn frame_line_caps_replace_padding_after_the_accent() {
+fn frame_line_caps_replace_the_accent_slot() {
     let frame = render(BarApp {
         caps: Some((LEFT_CAP, RIGHT_CAP)),
         active_bg: true,
@@ -324,10 +324,15 @@ fn frame_line_caps_replace_padding_after_the_accent() {
         variant: DraggableTabBarVariant::FrameLine,
         close_buttons: false,
     });
-    // FrameLine tab "B": accent, pad, label, pad. After tab "A" (width 4) with no separator.
-    assert_eq!(frame.cell(5, 0).symbol, LEFT_CAP.to_string());
+    // FrameLine tab "B" after tab "A" (width 4): left cap in the accent slot, inner pad, label,
+    // right cap. The accent marker is not stacked in front of the pill.
+    assert_eq!(frame.cell(4, 0).symbol, LEFT_CAP.to_string());
+    assert_eq!(frame.cell(4, 0).fg, ACCENT);
+    assert_eq!(frame.cell(4, 0).bg, PANEL);
+    assert_eq!(frame.cell(5, 0).symbol, " ");
+    assert_eq!(frame.cell(5, 0).bg, ACCENT);
     assert_eq!(frame.cell(6, 0).symbol, "B");
     assert_eq!(frame.cell(7, 0).symbol, RIGHT_CAP.to_string());
-    assert_eq!(frame.cell(5, 0).fg, ACCENT);
-    assert_eq!(frame.cell(5, 0).bg, PANEL);
+    assert_eq!(frame.cell(7, 0).fg, ACCENT);
+    assert_eq!(frame.cell(7, 0).bg, PANEL);
 }
