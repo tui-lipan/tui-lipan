@@ -20,9 +20,8 @@ While the crate is on `0.x.y`:
   `CapStyle::Round.chars()` (or `Arrow` / `Half`) for the named sets. A tab falls back to flat
   padding when it is clipped by horizontal scroll, when its background matches the strip's, or when
   either cap is not single-width. Label ellipsis from `tab_max_width` or `ShrinkThenScroll` does
-  not drop caps. On `FrameLine`, a shaped tab spends the accent slot on the left cap instead of
-  stacking the marker in front of the pill. Defaults to `None` (flat padding). See
-  `docs/widgets/tabs.md`.
+  not drop caps. `FrameLine` keeps its accent marker and does not draw caps. Defaults to `None`
+  (flat padding). See `docs/widgets/tabs.md`.
 - `DraggableTab::capped(bool)`, opting an inactive, unhovered tab into `DraggableTabBar::caps` end
   caps. A tab that carries its own background for an app-specific reason — an unsaved marker, an
   error state — is emphasized in a way the widget cannot infer, and previously read as a flat

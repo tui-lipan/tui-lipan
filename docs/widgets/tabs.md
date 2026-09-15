@@ -129,7 +129,7 @@ symbol still appears when nothing else about the bar reacts to the pointer.
 | `close_style` | `Style` | Close button style |
 | `close_hover_style` | `Style` | Close button hover style |
 | `divider` | `char` | Tab separator character |
-| `caps` | `Option<(char, char)>` | End-cap glyphs drawn around the active and hovered tabs, plus any tab opted in with `DraggableTab::capped(true)`. Each cap replaces one padding cell (the tab keeps its measured width and hit region), painted in the tab's own background over the strip background, so the tab reads as a rounded/pointed pill. `None` (default) keeps flat padding. Pass `CapStyle::Round.chars()` / `CapStyle::Arrow.chars()` / `CapStyle::Half.chars()` for the named sets. A tab falls back to flat padding when it is clipped by horizontal scroll, when its background matches the strip's, or when either cap is not single-width. Label ellipsis from `tab_max_width` or `ShrinkThenScroll` does not drop caps, because those shrink the label, not the padding cells. On `FrameLine`, a shaped tab spends the accent slot on the left cap instead of stacking the marker in front of the pill. |
+| `caps` | `Option<(char, char)>` | End-cap glyphs drawn around the active and hovered tabs, plus any tab opted in with `DraggableTab::capped(true)`. Each cap replaces one padding cell (the tab keeps its measured width and hit region), painted in the tab's own background over the strip background, so the tab reads as a rounded/pointed pill. `None` (default) keeps flat padding. Pass `CapStyle::Round.chars()` / `CapStyle::Arrow.chars()` / `CapStyle::Half.chars()` for the named sets. A tab falls back to flat padding when it is clipped by horizontal scroll, when its background matches the strip's, or when either cap is not single-width. Label ellipsis from `tab_max_width` or `ShrinkThenScroll` does not drop caps, because those shrink the label, not the padding cells. `FrameLine` keeps the accent marker and does not draw caps. |
 | `accent_symbol` | `char` | Left/right accent character |
 | `active_accent_symbol` | `char` | Active tab accent |
 | `accent_style` | `Style` | Accent style |
@@ -354,7 +354,6 @@ rsx! {
         file_icon_style: FileIconStyle::NerdFontColored,
         show_close_buttons: true,
         show_overflow_controls: true,
-        caps: CapStyle::Round.chars(),
         active_style: Style::new().fg(Color::Cyan).bold(),
         on_change: ctx.link().callback(|e| Msg::SetActive(e.index)),
         on_close: ctx.link().callback(Msg::CloseTab),

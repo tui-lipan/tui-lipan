@@ -228,7 +228,6 @@ impl TabsHubDemo {
             .drag_group("editor")
             .variant(DraggableTabBarVariant::FrameLine)
             .style(Style::new().bg(Color::indexed(236)).fg(Color::indexed(252)))
-            .caps(CapStyle::Round.chars())
             .tab_hover_style(Style::new().bg(Color::indexed(238)))
             .active_style(Style::new().bg(Color::indexed(25)).fg(Color::White).bold())
             .accent_symbol('▏')

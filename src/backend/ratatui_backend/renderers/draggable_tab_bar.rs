@@ -546,13 +546,20 @@ pub(crate) fn render_draggable_tab_bar(
             let tab_style = finalize_style(tab_style, style_backdrop(base_style), contrast_policy);
             let tab_rs = to_ratatui_style(tab_style);
             let cap_rs = cap_ratatui_style(tab_style, base_style);
-            let cap_glyphs = tab_cap_glyphs(
-                caps,
-                is_active || is_tab_hovered || tab.capped,
-                fully_visible,
-                tab_style,
-                base_style,
-            );
+            // FrameLine's left chrome is the accent marker. Painting caps there either
+            // replaces ▎ or stacks a Powerline glyph against it; both read worse than
+            // leaving the variant's accent alone. Caps wrap Bordered padding cells only.
+            let cap_glyphs = if matches!(variant, DraggableTabBarVariant::FrameLine) {
+                None
+            } else {
+                tab_cap_glyphs(
+                    caps,
+                    is_active || is_tab_hovered || tab.capped,
+                    fully_visible,
+                    tab_style,
+                    base_style,
+                )
+            };
             let (left_cap, right_cap) = match cap_glyphs {
                 Some((left, right)) => (Some(left), Some(right)),
                 None => (None, None),
@@ -631,39 +638,29 @@ pub(crate) fn render_draggable_tab_bar(
                     } else {
                         accent_symbol
                     };
-                    let accent_w = unicode_width::UnicodeWidthChar::width(accent_ch).unwrap_or(1);
-                    // Caps and the FrameLine accent are the same job: terminate the tab. Stacking
-                    // them (▎ then ) reads as a square bar glued to a round pill, so a 1-cell
-                    // accent slot becomes the left cap when this tab is shaped.
-                    if left_cap.is_some() && accent_w == 1 {
-                        push_pad_or_cap(&mut tab_spans, left_cap, tab_rs, cap_rs);
-                        tab_spans.push(Span::styled(" ", tab_rs));
+                    let accent = if is_active {
+                        resolve_draggable_accent_style(
+                            tab_style,
+                            active_accent_style,
+                            tab.active_accent_style,
+                            disabled_style,
+                            disabled,
+                        )
                     } else {
-                        let accent = if is_active {
-                            resolve_draggable_accent_style(
-                                tab_style,
-                                active_accent_style,
-                                tab.active_accent_style,
-                                disabled_style,
-                                disabled,
-                            )
-                        } else {
-                            resolve_draggable_accent_style(
-                                tab_style,
-                                accent_style,
-                                tab.accent_style,
-                                disabled_style,
-                                disabled,
-                            )
-                        };
-                        let accent =
-                            finalize_style(accent, style_backdrop(tab_style), contrast_policy);
-                        tab_spans.push(Span::styled(
-                            accent_ch.to_string(),
-                            to_ratatui_style(accent),
-                        ));
-                        push_pad_or_cap(&mut tab_spans, left_cap, tab_rs, cap_rs);
-                    }
+                        resolve_draggable_accent_style(
+                            tab_style,
+                            accent_style,
+                            tab.accent_style,
+                            disabled_style,
+                            disabled,
+                        )
+                    };
+                    let accent = finalize_style(accent, style_backdrop(tab_style), contrast_policy);
+                    tab_spans.push(Span::styled(
+                        accent_ch.to_string(),
+                        to_ratatui_style(accent),
+                    ));
+                    tab_spans.push(Span::styled(" ", tab_rs));
 
                     if let Some(icon) = &icon {
                         let icon_style = finalize_style(
@@ -718,7 +715,7 @@ pub(crate) fn render_draggable_tab_bar(
                         ));
                     }
 
-                    push_pad_or_cap(&mut tab_spans, right_cap, tab_rs, cap_rs);
+                    tab_spans.push(Span::styled(" ", tab_rs));
                 }
             }
 
