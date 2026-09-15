@@ -734,8 +734,10 @@ impl DraggableTabBar {
     /// ellipsis from [`Self::tab_max_width`] or [`DraggableTabBarOverflow::ShrinkThenScroll`]
     /// does not drop caps, because those shrink the label, not the padding cells. Caps must be
     /// single-width because a wider glyph would push later tabs off the columns the widget
-    /// hit-tests against. [`DraggableTabBarVariant::FrameLine`] keeps its accent marker and does
-    /// not draw caps: that variant's left chrome is the accent, not a pill edge.
+    /// hit-tests against. On [`DraggableTabBarVariant::FrameLine`], a shaped tab draws the accent
+    /// marker outside the pill on the strip (no tab background); caps wrap the padding cells like
+    /// [`DraggableTabBarVariant::Bordered`]. A dragged snapshot keeps the destination background on
+    /// those cap and accent cells so the float reads as a pill, not a strip-colored rectangle.
     pub fn caps(mut self, caps: Option<(char, char)>) -> Self {
         self.caps = caps;
         self
@@ -963,7 +965,10 @@ impl DraggableTabBar {
         self
     }
 
-    /// Show a floating label near the pointer while dragging a tab (default: `true`).
+    /// Show a floating snapshot of the tab near the pointer while dragging (default: `true`).
+    ///
+    /// Cap cells (and a FrameLine accent) keep the destination background, so the float reads as a
+    /// pill instead of a strip-colored rectangle.
     pub fn drag_preview(mut self, enabled: bool) -> Self {
         self.drag_preview = enabled;
         self
