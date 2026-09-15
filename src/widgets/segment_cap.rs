@@ -1,5 +1,7 @@
 //! Composable segment caps used by widgets such as [`crate::widgets::Badge`].
 
+use unicode_width::UnicodeWidthChar;
+
 use crate::app::ContrastPolicy;
 use crate::core::element::Element;
 use crate::style::{Color, Length, Style};
@@ -29,6 +31,20 @@ impl CapStyle {
             Self::Half => Some(("\u{2590}", "\u{258c}")),
             Self::Round => Some(("\u{e0b6}", "\u{e0b4}")),
             Self::Arrow => Some(("\u{e0b2}", "\u{e0b0}")),
+        }
+    }
+
+    /// Return the `(left, right)` cap characters for tab widgets, or `None` for
+    /// [`CapStyle::Padded`].
+    ///
+    /// Pass the result to [`crate::widgets::Tabs::caps`] or
+    /// [`crate::widgets::DraggableTabBar::caps`].
+    pub const fn chars(self) -> Option<(char, char)> {
+        match self {
+            Self::Padded => None,
+            Self::Half => Some(('\u{2590}', '\u{258c}')),
+            Self::Round => Some(('\u{e0b6}', '\u{e0b4}')),
+            Self::Arrow => Some(('\u{e0b2}', '\u{e0b0}')),
         }
     }
 
@@ -66,6 +82,11 @@ pub enum CapSides {
     Right,
     /// Draw neither cap.
     None,
+}
+
+/// Whether both cap glyphs occupy exactly the one cell of padding they replace.
+pub(crate) fn caps_fit_padding((left, right): (char, char)) -> bool {
+    UnicodeWidthChar::width(left) == Some(1) && UnicodeWidthChar::width(right) == Some(1)
 }
 
 impl CapSides {
@@ -144,6 +165,12 @@ mod tests {
         assert_eq!(CapStyle::Half.glyphs(), Some(("\u{2590}", "\u{258c}")));
         assert_eq!(CapStyle::Round.glyphs(), Some(("\u{e0b6}", "\u{e0b4}")));
         assert_eq!(CapStyle::Arrow.glyphs(), Some(("\u{e0b2}", "\u{e0b0}")));
+        assert_eq!(CapStyle::Padded.chars(), None);
+        assert_eq!(CapStyle::Half.chars(), Some(('\u{2590}', '\u{258c}')));
+        assert_eq!(CapStyle::Round.chars(), Some(('\u{e0b6}', '\u{e0b4}')));
+        assert_eq!(CapStyle::Arrow.chars(), Some(('\u{e0b2}', '\u{e0b0}')));
+        assert!(caps_fit_padding(('\u{e0b6}', '\u{e0b4}')));
+        assert!(!caps_fit_padding(('【', '】')));
     }
 
     #[test]

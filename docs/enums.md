@@ -355,7 +355,8 @@ draws its tabs there whatever the edge says.
 
 ### `CapStyle` and `CapSides`
 
-`Badge` uses these enums for optional segment caps:
+`Badge` uses these enums for optional segment caps. `Tabs` and `DraggableTabBar` accept the same
+named sets through `CapStyle::chars()` passed to `.caps(...)`.
 
 | `CapStyle` variant | Effect |
 |--------------------|--------|
@@ -368,6 +369,8 @@ draws its tabs there whatever the edge says.
 while `None` disables both. `CapStyle::requires_nerd_font()` identifies `Round`
 and `Arrow`; `font_safe()` degrades either to `Padded`. An explicitly selected
 `Half` remains unchanged. `CapStyle::all()` returns the canonical style cycle.
+`CapStyle::chars()` returns `Option<(char, char)>` for tab widgets (`None` for
+`Padded`); `glyphs()` returns the string form used by `Badge`.
 
 ### `Overflow`
 

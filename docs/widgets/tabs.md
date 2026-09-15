@@ -15,7 +15,7 @@ inherit scoped theme roles.
 | `tab(Tab)` | method | Add a single tab |
 | `active` | `usize` | Active tab index |
 | `divider` | `char` | Separator between tabs |
-| `caps` | `Option<(char, char)>` | End-cap glyphs drawn around the active and hovered tabs, plus any tab opted in with `Tab::capped(true)`. Each cap replaces one padding cell (the tab keeps its measured width), painted in the tab's own background over the strip background, so the tab reads as a rounded/pointed pill. `None` (default) keeps flat padding. A tab falls back to flat padding when it overflow-truncates, when its background matches the strip's, or when either cap is not single-width. |
+| `caps` | `Option<(char, char)>` | End-cap glyphs drawn around the active and hovered tabs, plus any tab opted in with `Tab::capped(true)`. Each cap replaces one padding cell (the tab keeps its measured width), painted in the tab's own background over the strip background, so the tab reads as a rounded/pointed pill. `None` (default) keeps flat padding. Pass `CapStyle::Round.chars()` / `CapStyle::Arrow.chars()` / `CapStyle::Half.chars()` for the named sets; `CapStyle::Padded.chars()` is `None`. A tab falls back to flat padding when it overflow-truncates, when its background matches the strip's, or when either cap is not single-width. |
 | `border` | `bool` | Show border |
 | `border_style` | `BorderStyle` | Border style |
 | `padding` | `impl Into<Padding>` | Padding |
@@ -129,6 +129,7 @@ symbol still appears when nothing else about the bar reacts to the pointer.
 | `close_style` | `Style` | Close button style |
 | `close_hover_style` | `Style` | Close button hover style |
 | `divider` | `char` | Tab separator character |
+| `caps` | `Option<(char, char)>` | End-cap glyphs drawn around the active and hovered tabs, plus any tab opted in with `DraggableTab::capped(true)`. Each cap replaces one padding cell (the tab keeps its measured width and hit region), painted in the tab's own background over the strip background, so the tab reads as a rounded/pointed pill. `None` (default) keeps flat padding. Pass `CapStyle::Round.chars()` / `CapStyle::Arrow.chars()` / `CapStyle::Half.chars()` for the named sets. A tab falls back to flat padding when it is clipped by horizontal scroll, when its background matches the strip's, or when either cap is not single-width. Label ellipsis from `tab_max_width` or `ShrinkThenScroll` does not drop caps, because those shrink the label, not the padding cells. On `FrameLine`, caps replace the padding cells around the body; the accent marker stays. |
 | `accent_symbol` | `char` | Left/right accent character |
 | `active_accent_symbol` | `char` | Active tab accent |
 | `accent_style` | `Style` | Accent style |
@@ -163,6 +164,14 @@ DraggableTab::new("main.rs")
     .path("src/main.rs")         // For file icon auto-lookup
     .icon(Span::new("󰙱 ").fg(Color::Red))  // Manual icon override
     .right_badge(Span::new("M").fg(Color::Yellow))  // Git status marker
+
+// A tab the widget cannot know is emphasized — an unsaved marker, an error state — carrying its
+// own background. `capped(true)` shapes it like the active and hovered tabs instead of leaving
+// it a flat colored block. The other cap conditions still apply: fully visible, a background
+// distinct from the strip, and caps that fit the padding cells they replace.
+DraggableTab::new("Draft")
+    .style(Style::new().fg(Color::Black).bg(Color::Yellow))
+    .capped(true)
 ```
 
 `DraggableTab::active_style(...)` patches over the bar's `active_style` for
@@ -345,6 +354,7 @@ rsx! {
         file_icon_style: FileIconStyle::NerdFontColored,
         show_close_buttons: true,
         show_overflow_controls: true,
+        caps: CapStyle::Round.chars(),
         active_style: Style::new().fg(Color::Cyan).bold(),
         on_change: ctx.link().callback(|e| Msg::SetActive(e.index)),
         on_close: ctx.link().callback(Msg::CloseTab),
