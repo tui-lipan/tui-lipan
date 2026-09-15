@@ -11,6 +11,8 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-09-15
+
 ### Added
 
 - `DraggableTabBar::caps(Option<(char, char)>)` draws `(left, right)` end-cap glyphs around the
@@ -2080,7 +2082,8 @@ Highlights of what ships in 0.1.0:
 See the [README](README.md) for the full feature set and
 [docs.tui-lipan.dev](https://docs.tui-lipan.dev) for documentation.
 
-[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.9.3...HEAD
+[0.9.3]: https://github.com/tui-lipan/tui-lipan/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/tui-lipan/tui-lipan/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/tui-lipan/tui-lipan/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/tui-lipan/tui-lipan/compare/v0.8.0...v0.9.0
