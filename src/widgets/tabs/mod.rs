@@ -283,6 +283,10 @@ impl Tabs {
     /// with), or when either cap is not exactly one cell wide. Caps must be
     /// single-width because a wider glyph would push later tabs off the columns the
     /// widget hit-tests against.
+    ///
+    /// Named sets live on [`crate::widgets::CapStyle`]: `.caps(CapStyle::Round.chars())`
+    /// for pills, `Arrow` for chevrons, `Half` for font-safe half-blocks. `Padded`
+    /// is `None`.
     pub fn caps(mut self, caps: Option<(char, char)>) -> Self {
         self.caps = caps;
         self

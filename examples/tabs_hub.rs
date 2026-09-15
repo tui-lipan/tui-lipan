@@ -199,6 +199,8 @@ impl TabsHubDemo {
             .variant(DraggableTabBarVariant::Bordered)
             .border(true)
             .border_style(BorderStyle::Rounded)
+            .style(Style::new().bg(Color::indexed(236)).fg(Color::indexed(252)))
+            .caps(CapStyle::Round.chars())
             .tab_hover_style(Style::new().bg(Color::indexed(238)))
             .active_style(Style::new().bg(Color::indexed(24)).fg(Color::White).bold())
             .close_style(Style::new().fg(Color::indexed(246)))

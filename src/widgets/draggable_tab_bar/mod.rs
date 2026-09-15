@@ -200,6 +200,7 @@ pub struct DraggableTab {
     pub(crate) leading: Option<TabLeadingContent>,
     pub(crate) path: Option<Arc<str>>,
     pub(crate) right_badge: Option<Span>,
+    pub(crate) capped: bool,
 }
 
 impl DraggableTab {
@@ -218,6 +219,7 @@ impl DraggableTab {
             leading: None,
             path: None,
             right_badge: None,
+            capped: false,
         }
     }
 
@@ -305,6 +307,21 @@ impl DraggableTab {
     /// Set a generic right-side badge rendered after the label.
     pub fn right_badge(mut self, badge: impl Into<Span>) -> Self {
         self.right_badge = Some(badge.into());
+        self
+    }
+
+    /// Draw this tab's end caps even when it is neither active nor hovered.
+    ///
+    /// [`DraggableTabBar::caps`] normally shapes only the active and hovered tabs, because those
+    /// are the two the widget knows are emphasized. A tab carrying its own background for an
+    /// app-specific reason, such as an unsaved marker or an error state, is emphasized too, and
+    /// without this reads as a flat colored block beside shaped peers.
+    ///
+    /// The remaining cap conditions still apply: the tab must be fully visible in the viewport, its
+    /// background must differ from the strip's, and the caps must fit the padding cells they
+    /// replace.
+    pub fn capped(mut self, capped: bool) -> Self {
+        self.capped = capped;
         self
     }
 }
@@ -449,6 +466,7 @@ pub struct DraggableTabBar {
     pub(crate) close_style: Style,
     pub(crate) close_hover_style: Style,
     pub(crate) divider: char,
+    pub(crate) caps: Option<(char, char)>,
     pub(crate) border: bool,
     pub(crate) border_style: BorderStyle,
     pub(crate) padding: Padding,
@@ -510,6 +528,7 @@ impl Default for DraggableTabBar {
             close_style: Style::default(),
             close_hover_style: Style::default(),
             divider: '│',
+            caps: None,
             border: false,
             border_style: BorderStyle::Plain,
             padding: Padding::default(),
@@ -699,6 +718,26 @@ impl DraggableTabBar {
     /// Set divider character for bordered variant.
     pub fn divider(mut self, ch: char) -> Self {
         self.divider = ch;
+        self
+    }
+
+    /// Set the `(left, right)` end-cap glyphs drawn around the active and hovered tabs.
+    ///
+    /// Each cap replaces one of the tab's two padding cells, so the tab keeps its measured width
+    /// and hit region. The glyphs are painted in the tab's own background color over the strip
+    /// background, so the tab reads as a rounded or pointed pill. Pass
+    /// [`crate::widgets::CapStyle::chars`] for the named padded, half, round, and arrow sets.
+    /// `None` (the default) keeps flat space padding on every tab.
+    ///
+    /// A tab falls back to flat padding when it is clipped by horizontal scroll, when its
+    /// background matches the strip's, or when either cap is not exactly one cell wide. Label
+    /// ellipsis from [`Self::tab_max_width`] or [`DraggableTabBarOverflow::ShrinkThenScroll`]
+    /// does not drop caps, because those shrink the label, not the padding cells. Caps must be
+    /// single-width because a wider glyph would push later tabs off the columns the widget
+    /// hit-tests against. [`DraggableTabBarVariant::FrameLine`] keeps its accent marker and does
+    /// not draw caps: that variant's left chrome is the accent, not a pill edge.
+    pub fn caps(mut self, caps: Option<(char, char)>) -> Self {
+        self.caps = caps;
         self
     }
 
@@ -2159,7 +2198,7 @@ mod tests {
         DraggableTab, DraggableTabBar, DraggableTabBarOverflow, DraggableTabBarVariant,
         DraggableTabHitPart,
     };
-    use crate::widgets::FileIconStyle;
+    use crate::widgets::{CapStyle, FileIconStyle};
 
     #[test]
     fn hit_at_col_detects_close_region() {
@@ -2716,6 +2755,17 @@ mod tests {
 
         assert_eq!(node.empty_text.as_deref(), Some("No open tabs"));
         assert_eq!(node.empty_text_style, Style::default().dim());
+    }
+
+    #[test]
+    fn caps_builders_feed_the_node() {
+        let bar = DraggableTabBar::new()
+            .caps(CapStyle::Round.chars())
+            .tab(DraggableTab::new("A").capped(true));
+        let node: crate::widgets::internal::DraggableTabBarNode = bar.into();
+
+        assert_eq!(node.caps, CapStyle::Round.chars());
+        assert!(node.tabs[0].capped);
     }
 
     #[test]

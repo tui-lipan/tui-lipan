@@ -11,6 +11,26 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- `DraggableTabBar::caps(Option<(char, char)>)` draws `(left, right)` end-cap glyphs around the
+  active and hovered tabs, matching `Tabs::caps`. Each cap replaces one of the tab's two padding
+  cells, so the tab keeps its measured width and hit region, and is painted in the tab's own
+  background over the strip background so the tab reads as a rounded or pointed pill. Pass
+  `CapStyle::Round.chars()` (or `Arrow` / `Half`) for the named sets. A tab falls back to flat
+  padding when it is clipped by horizontal scroll, when its background matches the strip's, or when
+  either cap is not single-width. Label ellipsis from `tab_max_width` or `ShrinkThenScroll` does
+  not drop caps. `FrameLine` keeps its accent marker and does not draw caps. Defaults to `None`
+  (flat padding). See `docs/widgets/tabs.md`.
+- `DraggableTab::capped(bool)`, opting an inactive, unhovered tab into `DraggableTabBar::caps` end
+  caps. A tab that carries its own background for an app-specific reason — an unsaved marker, an
+  error state — is emphasized in a way the widget cannot infer, and previously read as a flat
+  colored block beside shaped peers. The remaining cap conditions are unchanged: fully visible, a
+  background distinct from the strip, and caps that fit the padding cells they replace.
+- `CapStyle::chars()`, returning `Option<(char, char)>` for `Tabs::caps` and
+  `DraggableTabBar::caps`. `Padded` is `None`; `Half` / `Round` / `Arrow` are the matching
+  single-width glyphs. `glyphs()` is unchanged and still returns the string form used by `Badge`.
+
 ## [0.9.2] - 2026-09-14
 
 ### Changed

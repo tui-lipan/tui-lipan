@@ -93,7 +93,7 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 
 | Example | Description |
 |---------|-------------|
-| `tabs_hub` | Tabs demos hub: `TabVariant` styles + draggable tab bar behaviors |
+| `tabs_hub` | Tabs demos hub: `TabVariant` styles plus `DraggableTabBar` reorder, transfer, and pill caps |
 | `pagination_composed` | Composed pagination controls with page-size dropdown |
 
 ---

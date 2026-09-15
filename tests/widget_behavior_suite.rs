@@ -8,6 +8,8 @@ mod data_overflow_indicator_clicks;
 mod disabled_focus;
 #[path = "suites/widget_behavior/drag_drop_test_backend.rs"]
 mod drag_drop_test_backend;
+#[path = "suites/widget_behavior/draggable_tab_bar_caps_render.rs"]
+mod draggable_tab_bar_caps_render;
 #[path = "suites/widget_behavior/draggable_tab_bar_clipped_render.rs"]
 mod draggable_tab_bar_clipped_render;
 #[path = "suites/widget_behavior/draggable_tab_bar_empty_text_render.rs"]

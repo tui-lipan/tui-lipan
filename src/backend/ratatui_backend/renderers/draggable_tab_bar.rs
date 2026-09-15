@@ -20,7 +20,7 @@ use crate::widgets::draggable_tab_bar::{
 };
 use crate::widgets::{
     DraggableTab, DraggableTabBar, DraggableTabBarOverflow, DraggableTabBarVariant,
-    DraggableTabHitPart, DraggableTabKind, FileIconStyle,
+    DraggableTabHitPart, DraggableTabKind, FileIconStyle, caps_fit_padding,
 };
 use std::collections::HashMap;
 
@@ -152,6 +152,38 @@ fn resolve_draggable_accent_style(
     tab_style.patch(accent)
 }
 
+fn tab_cap_glyphs(
+    caps: Option<(char, char)>,
+    paint_caps: bool,
+    fully_visible: bool,
+    tab_style: Style,
+    base_style: Style,
+) -> Option<(char, char)> {
+    caps.filter(|caps| {
+        paint_caps && fully_visible && tab_style.bg != base_style.bg && caps_fit_padding(*caps)
+    })
+}
+
+fn cap_ratatui_style(tab_style: Style, base_style: Style) -> ratatui::style::Style {
+    let mut cap_style = Style::new();
+    cap_style.fg = tab_style.bg;
+    cap_style.bg = base_style.bg;
+    to_ratatui_style(cap_style)
+}
+
+fn push_pad_or_cap(
+    spans: &mut Vec<Span<'_>>,
+    cap: Option<char>,
+    tab_rs: ratatui::style::Style,
+    cap_rs: ratatui::style::Style,
+) {
+    if let Some(glyph) = cap {
+        spans.push(Span::styled(glyph.to_string(), cap_rs));
+    } else {
+        spans.push(Span::styled(" ", tab_rs));
+    }
+}
+
 pub(crate) struct DraggableTabBarRenderCtx<'a> {
     pub style: Style,
     pub focus_style: Style,
@@ -161,6 +193,7 @@ pub(crate) struct DraggableTabBarRenderCtx<'a> {
     pub close_style: Style,
     pub close_hover_style: Style,
     pub divider: char,
+    pub caps: Option<(char, char)>,
     pub border: bool,
     pub border_style: BorderStyle,
     pub padding: Padding,
@@ -212,6 +245,7 @@ pub(crate) fn render_draggable_tab_bar(
         close_style,
         close_hover_style,
         divider,
+        caps,
         border,
         border_style,
         padding,
@@ -476,6 +510,9 @@ pub(crate) fn render_draggable_tab_bar(
             let is_action_tab = tab.kind == DraggableTabKind::Action;
             let is_tab_hovered = hovered_tab == Some(vis.index);
             let is_close_hovered = hovered_close_tab == Some(vis.index);
+            let is_active = !is_action_tab && vis.index == active;
+            let fully_visible =
+                vis.clip_left == 0 && vis.end.saturating_sub(vis.start) == vis.metrics.width;
 
             // The close control keeps its cells in the tab's measured width whether or not the
             // symbol is drawn, so a hover-only close would otherwise truncate the label for a
@@ -502,11 +539,31 @@ pub(crate) fn render_draggable_tab_bar(
                     tab_active_style: tab.active_style,
                     disabled_style,
                     is_hovered: is_tab_hovered,
-                    is_active: !is_action_tab && vis.index == active,
+                    is_active,
                     disabled,
                 },
             );
             let tab_style = finalize_style(tab_style, style_backdrop(base_style), contrast_policy);
+            let tab_rs = to_ratatui_style(tab_style);
+            let cap_rs = cap_ratatui_style(tab_style, base_style);
+            // FrameLine's left chrome is the accent marker. Painting caps there either
+            // replaces ▎ or stacks a Powerline glyph against it; both read worse than
+            // leaving the variant's accent alone. Caps wrap Bordered padding cells only.
+            let cap_glyphs = if matches!(variant, DraggableTabBarVariant::FrameLine) {
+                None
+            } else {
+                tab_cap_glyphs(
+                    caps,
+                    is_active || is_tab_hovered || tab.capped,
+                    fully_visible,
+                    tab_style,
+                    base_style,
+                )
+            };
+            let (left_cap, right_cap) = match cap_glyphs {
+                Some((left, right)) => (Some(left), Some(right)),
+                None => (None, None),
+            };
 
             let icon = crate::widgets::draggable_tab_bar::resolve_tab_icon(
                 tab,
@@ -518,7 +575,7 @@ pub(crate) fn render_draggable_tab_bar(
 
             match variant {
                 DraggableTabBarVariant::Bordered => {
-                    tab_spans.push(Span::styled(" ", to_ratatui_style(tab_style)));
+                    push_pad_or_cap(&mut tab_spans, left_cap, tab_rs, cap_rs);
 
                     if let Some(icon) = &icon {
                         let icon_style = finalize_style(
@@ -573,10 +630,15 @@ pub(crate) fn render_draggable_tab_bar(
                         ));
                     }
 
-                    tab_spans.push(Span::styled(" ", to_ratatui_style(tab_style)));
+                    push_pad_or_cap(&mut tab_spans, right_cap, tab_rs, cap_rs);
                 }
                 DraggableTabBarVariant::FrameLine => {
-                    let accent = if !is_action_tab && vis.index == active {
+                    let accent_ch = if is_active {
+                        active_accent_symbol
+                    } else {
+                        accent_symbol
+                    };
+                    let accent = if is_active {
                         resolve_draggable_accent_style(
                             tab_style,
                             active_accent_style,
@@ -595,14 +657,10 @@ pub(crate) fn render_draggable_tab_bar(
                     };
                     let accent = finalize_style(accent, style_backdrop(tab_style), contrast_policy);
                     tab_spans.push(Span::styled(
-                        if !is_action_tab && vis.index == active {
-                            active_accent_symbol.to_string()
-                        } else {
-                            accent_symbol.to_string()
-                        },
+                        accent_ch.to_string(),
                         to_ratatui_style(accent),
                     ));
-                    tab_spans.push(Span::styled(" ", to_ratatui_style(tab_style)));
+                    tab_spans.push(Span::styled(" ", tab_rs));
 
                     if let Some(icon) = &icon {
                         let icon_style = finalize_style(
@@ -657,7 +715,7 @@ pub(crate) fn render_draggable_tab_bar(
                         ));
                     }
 
-                    tab_spans.push(Span::styled(" ", to_ratatui_style(tab_style)));
+                    tab_spans.push(Span::styled(" ", tab_rs));
                 }
             }
 
@@ -766,6 +824,7 @@ pub(crate) fn render_draggable_tab_bar_node(
             close_style: with_theme_muted(theme, node.close_style),
             close_hover_style: with_theme_role(theme, ThemeRole::Hover, node.close_hover_style),
             divider: node.divider,
+            caps: node.caps,
             border: node.border,
             border_style: node.border_style,
             padding: node.padding,

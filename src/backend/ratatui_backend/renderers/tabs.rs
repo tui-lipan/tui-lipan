@@ -1,6 +1,5 @@
 use ratatui::text::{Line, Span, Text as RText};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use unicode_width::UnicodeWidthChar;
 
 use crate::app::ContrastPolicy;
 use crate::backend::ratatui_backend::common::{
@@ -12,7 +11,9 @@ use crate::backend::ratatui_backend::renderers::theme::{with_theme_muted, with_t
 use crate::core::node::NodeId;
 use crate::style::resolve::{Durability, StateLayer, resolve_state_cascade};
 use crate::style::{BorderStyle, Padding, Style, ThemeRole, resolve_slot};
-use crate::widgets::{Tab, TabsOverflow, tab_divider_width, tab_segment_width, tab_width_budgets};
+use crate::widgets::{
+    Tab, TabsOverflow, caps_fit_padding, tab_divider_width, tab_segment_width, tab_width_budgets,
+};
 
 fn resolve_tabs_base_style(
     style: Style,
@@ -47,11 +48,6 @@ fn resolve_tabs_base_style(
         });
     }
     resolve_state_cascade(style, &layers)
-}
-
-/// Whether both cap glyphs occupy exactly the one cell of padding they replace.
-fn caps_fit_padding((left, right): (char, char)) -> bool {
-    UnicodeWidthChar::width(left) == Some(1) && UnicodeWidthChar::width(right) == Some(1)
 }
 
 struct TabsTabStyleCtx {

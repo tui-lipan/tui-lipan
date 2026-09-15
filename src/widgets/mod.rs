@@ -264,6 +264,7 @@ pub use search_palette::{
     SearchHighlight, SearchItem, SearchMatchMode, SearchPalette, rank_search_palette_indices,
     rank_search_palette_indices_with_mode, rank_search_palette_indices_with_score,
 };
+pub(crate) use segment_cap::caps_fit_padding;
 pub use segment_cap::{CapSides, CapStyle};
 pub use select::Select;
 pub use selection::TripleClickSelectionMode;

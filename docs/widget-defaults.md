@@ -870,7 +870,7 @@ Source: `src/widgets/tabs/mod.rs:125` (`Tabs`).
 
 ## DraggableTabBar
 
-Source: `src/widgets/draggable_tab_bar/mod.rs:502` (`DraggableTabBar`).
+Source: `src/widgets/draggable_tab_bar/mod.rs:520` (`DraggableTabBar`).
 
 | Field | Default initializer |
 |---|---|
@@ -884,6 +884,7 @@ Source: `src/widgets/draggable_tab_bar/mod.rs:502` (`DraggableTabBar`).
 | `close_style` | `Style::default()` |
 | `close_hover_style` | `Style::default()` |
 | `divider` | `'│'` |
+| `caps` | `None` |
 | `border` | `false` |
 | `border_style` | `BorderStyle::Plain` |
 | `padding` | `Padding::default()` |
@@ -1011,7 +1012,7 @@ Source: `src/widgets/document_view/mod.rs:331` (`DocumentView`).
 
 ## FileTree
 
-Source: `src/widgets/file_tree/mod.rs:360` (`FileTree`).
+Source: `src/widgets/file_tree/mod.rs:361` (`FileTree`).
 
 | Field | Default initializer |
 |---|---|
@@ -1261,7 +1262,7 @@ Source: `src/widgets/tree/mod.rs:27` (`Tree`).
 
 ## Terminal
 
-Source: `src/widgets/terminal/mod.rs:93` (`Terminal`).
+Source: `src/widgets/terminal/mod.rs:94` (`Terminal`).
 
 | Field | Default initializer |
 |---|---|
