@@ -7,13 +7,12 @@ use std::time::Duration;
 use web_time::Instant;
 
 use image::AnimationDecoder;
-use unicode_width::UnicodeWidthStr;
 
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::layout::reconcile::{apply_constraints, reuse_or_replace_kind};
 use crate::style::{LayoutConstraints, Length, Rect};
 
-use super::layout::{pixels_to_cells, source_natural_size};
+use super::layout::{ImageAxis, sized_with_alt, source_pixel_size};
 use super::node::{ImageAnimation, ImageNode, source_hash};
 use super::{Image, ImageSource};
 
@@ -202,39 +201,30 @@ pub fn reconcile_image(
         }
     }
 
-    let natural_size = if let Some(animated) = &animation {
+    let pixels = if let Some(animated) = &animation {
         animated
             .current_image()
-            .map(|frame| pixels_to_cells(frame.width(), frame.height()))
-            .unwrap_or((0, 0))
+            .map(|frame| (frame.width(), frame.height()))
     } else if let Some(decoded) = &decoded {
-        pixels_to_cells(decoded.width(), decoded.height())
+        Some((decoded.width(), decoded.height()))
     } else {
-        source_natural_size(&image.source, hash).unwrap_or((0, 0))
+        source_pixel_size(&image.source, hash)
     };
-
-    let alt_w = image
-        .alt
-        .as_ref()
-        .map(|alt| UnicodeWidthStr::width(alt.as_ref()).min(u16::MAX as usize) as u16)
-        .unwrap_or(0);
 
     let avail_w = rect.w;
     let avail_h = rect.h;
     let mut rect = rect;
-    if matches!(image.width, Length::Auto) {
-        rect.w = natural_size.0.max(alt_w).min(rect.w);
-    }
-    if matches!(image.height, Length::Auto) {
-        rect.h = if natural_size.1 > 0 {
-            natural_size.1
-        } else if alt_w > 0 {
-            1
-        } else {
-            0
-        }
-        .min(rect.h);
-    }
+    let axis = |length: Length, allocated: u16| match length {
+        Length::Auto => ImageAxis::Auto(Some(allocated)),
+        _ => ImageAxis::Fixed(allocated),
+    };
+    let (w, h) = sized_with_alt(
+        image,
+        pixels,
+        axis(image.width, rect.w),
+        axis(image.height, rect.h),
+    );
+    (rect.w, rect.h) = (w, h);
     apply_constraints(&mut rect, constraints, avail_w, avail_h);
 
     let node = tree.node_mut(id);
@@ -346,7 +336,8 @@ mod tests {
         let mut tree = NodeTree::new();
         let id = tree.alloc();
 
-        let widget = Image::from_bytes(png_bytes(9, 17));
+        // Two cells each way at the 10x20 pixel half-block cells the test picker reports.
+        let widget = Image::from_bytes(png_bytes(19, 39));
         let rect = Rect {
             x: 0,
             y: 0,

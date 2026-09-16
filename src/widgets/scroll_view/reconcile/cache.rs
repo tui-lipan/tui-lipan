@@ -577,6 +577,12 @@ pub(crate) fn scroll_child_height_depends_on_width(el: &Element) -> bool {
         ElementKind::TextArea(area) => {
             matches!(area.height, Length::Auto) && (area.wrap || area.h_scrollbar)
         }
+        // An auto-height picture that scales follows its width: narrower means fewer rows.
+        #[cfg(feature = "image")]
+        ElementKind::Image(image) => {
+            matches!(image.height, Length::Auto)
+                && !matches!(image.fit, crate::widgets::ImageFit::Crop)
+        }
         ElementKind::ScrollView(_)
         | ElementKind::VStack(_)
         | ElementKind::HStack(_)

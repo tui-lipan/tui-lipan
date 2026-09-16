@@ -11,6 +11,24 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- `ImageFit::Cover` scales an image up or down to fill its whole area, keeping aspect ratio, and
+  crops the overflow evenly from both sides, like CSS `object-fit: cover`. `Crop` fills only when
+  the image is already larger than the area, and `Scale` letterboxes. Exhaustive `match`es on
+  `ImageFit` need a new arm (breaking)
+
+### Fixed
+
+- An `Image` partly scrolled out of a `ScrollView` draws its visible cells instead of an empty
+  placeholder frame. Kitty placements clip in place; other protocols encode the visible cells of
+  the image as laid out at full size, synchronously for crops up to 512x512 pixels so scrolling does
+  not blank them.
+- An auto-sized `Image` whose width is capped (by `max_width`, a fixed width, or its parent) takes
+  only the rows of the picture scaled to that width, so a frame around it no longer keeps empty
+  rows below. Image layout also uses the terminal's reported cell size instead of assuming 8x16
+  pixel cells, so the reserved area matches what is drawn.
+
 ## [0.9.3] - 2026-09-15
 
 ### Added
