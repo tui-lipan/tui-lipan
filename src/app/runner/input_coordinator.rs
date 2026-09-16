@@ -620,7 +620,7 @@ fn map_key_event(key: TerminaKeyEvent) -> CrosstermKeyEvent {
     }
 
     CrosstermKeyEvent::new_with_kind_and_state(
-        map_key_code(key.code),
+        map_reported_key_code(key.code, key.kind),
         map_modifiers(key.modifiers),
         match key.kind {
             TerminaKeyEventKind::Press => CrosstermKeyEventKind::Press,
@@ -629,6 +629,17 @@ fn map_key_event(key: TerminaKeyEvent) -> CrosstermKeyEvent {
         },
         state,
     )
+}
+
+fn map_reported_key_code(code: TerminaKeyCode, kind: TerminaKeyEventKind) -> CrosstermKeyCode {
+    // Some Kitty-protocol terminals append `:0` as the shifted alternate for a Shift release.
+    // Termina 0.4 treats that zero as U+0000 and replaces the already-decoded Shift key with it,
+    // so the release would never reach modifier-state tracking. REPORT_ALL_KEYS makes ordinary
+    // modified text report its physical non-NUL key, which keeps this release-only repair narrow.
+    if matches!(kind, TerminaKeyEventKind::Release) && matches!(code, TerminaKeyCode::Char('\0')) {
+        return CrosstermKeyCode::Modifier(CrosstermModifierKeyCode::LeftShift);
+    }
+    map_key_code(code)
 }
 
 fn map_key_code(code: TerminaKeyCode) -> CrosstermKeyCode {
@@ -859,6 +870,21 @@ mod tests {
             map_termina_event(TerminaEvent::Paste("hello".into())),
             TerminaEventAction::Input(CrosstermEvent::Paste("hello".into()))
         );
+    }
+
+    #[test]
+    fn null_release_from_shift_alternate_maps_back_to_shift() {
+        let TerminaEventAction::Input(CrosstermEvent::Key(mapped)) =
+            map_termina_event(parsed_event(b"\x1b[57441:0;2:3u"))
+        else {
+            panic!("Shift release should map to Crossterm input");
+        };
+
+        assert_eq!(
+            mapped.code,
+            CrosstermKeyCode::Modifier(CrosstermModifierKeyCode::LeftShift)
+        );
+        assert_eq!(mapped.kind, CrosstermKeyEventKind::Release);
     }
 
     #[test]

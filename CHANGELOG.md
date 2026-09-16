@@ -20,6 +20,11 @@ While the crate is on `0.x.y`:
   held Ctrl, Alt, Shift, and Super keys. Modifier state clears when the host window loses focus,
   and `TestBackend::set_held_modifiers` drives the same lifecycle in tests.
 
+### Fixed
+
+- Shift release reports carrying a zero alternate key are restored to modifier releases after
+  Termina decodes that alternate as `U+0000`, so scoped held-modifier tracking clears Shift.
+
 ## [0.10.3] - 2026-09-16
 
 ### Fixed
