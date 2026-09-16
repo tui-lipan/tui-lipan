@@ -779,7 +779,57 @@ fn tty_write_all(fd: i32, mut bytes: &[u8]) -> Option<()> {
     Some(())
 }
 
-#[cfg(unix)]
+/// Wait for `/dev/tty` to become readable.
+///
+/// macOS `poll(2)` does not support devices: on `/dev/tty` it returns at once with `POLLNVAL`, so
+/// every probe would stop reading before the host answered and restore cooked mode with the replies
+/// still in flight. They then echo onto the primary screen, hidden by the alternate screen until
+/// exit. `select(2)` works on terminal devices there.
+#[cfg(target_os = "macos")]
+fn poll_readable(fd: i32, timeout_ms: i32) -> Option<bool> {
+    if !(0..libc::FD_SETSIZE as i32).contains(&fd) {
+        return None;
+    }
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(0) as u64);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let mut timeout = libc::timeval {
+            tv_sec: remaining.as_secs() as libc::time_t,
+            tv_usec: remaining.subsec_micros() as libc::suseconds_t,
+        };
+        // SAFETY: `fd_set` is plain data; FD_ZERO initializes it before use, and `fd` was checked
+        // against FD_SETSIZE above.
+        let mut readable: libc::fd_set = unsafe { std::mem::zeroed() };
+        unsafe {
+            libc::FD_ZERO(&mut readable);
+            libc::FD_SET(fd, &mut readable);
+        }
+        // SAFETY: Every pointer refers to initialized local storage that outlives the call.
+        let rc = unsafe {
+            libc::select(
+                fd + 1,
+                &mut readable,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut timeout,
+            )
+        };
+        if rc < 0 {
+            let err = std::io::Error::last_os_error().raw_os_error();
+            if err == Some(libc::EINTR) {
+                continue;
+            }
+            return None;
+        }
+        if rc == 0 {
+            return Some(false);
+        }
+        // SAFETY: `readable` was initialized above and `fd` is in range.
+        return Some(unsafe { libc::FD_ISSET(fd, &readable) });
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
 fn poll_readable(fd: i32, timeout_ms: i32) -> Option<bool> {
     loop {
         let mut pfd = libc::pollfd {
