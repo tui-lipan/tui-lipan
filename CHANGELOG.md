@@ -11,6 +11,12 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Changed
+
+- An `Image` with `Contain` or `Scale` fit that does not fill its box is drawn centered in it,
+  like CSS `object-fit: contain`, instead of at the box's top-left corner. `Crop` stays at the
+  top-left and `Cover` fills the box.
+
 ### Fixed
 
 - `TerminalScreen` replay exports now retain Kitty image data, direct placements, virtual
