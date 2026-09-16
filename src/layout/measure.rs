@@ -6,7 +6,7 @@ use crate::core::element::{Element, ElementKind, MeasureCacheEntry, MeasureConte
 #[cfg(feature = "big-text")]
 use crate::widgets::internal::measure_big_text;
 #[cfg(feature = "image")]
-use crate::widgets::internal::measure_image;
+use crate::widgets::internal::measure_image_constrained;
 #[cfg(feature = "terminal")]
 use crate::widgets::internal::measure_terminal;
 use crate::widgets::internal::{
@@ -323,7 +323,7 @@ fn min_size_unconstrained_constrained(
         ElementKind::Input(i) => measure_input(i),
         ElementKind::HexArea(h) => measure_hex_area(h),
         #[cfg(feature = "image")]
-        ElementKind::Image(i) => measure_image(i),
+        ElementKind::Image(i) => measure_image_constrained(i, max_w, max_h),
         ElementKind::List(l) => crate::widgets::list::layout::measure_list_constrained(l, max_w),
         ElementKind::TextArea(t) => measure_text_area(t),
         #[cfg(feature = "terminal")]

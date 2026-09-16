@@ -23,6 +23,10 @@ While the crate is on `0.x.y`:
   placeholder frame. Kitty placements clip in place; other protocols encode the visible cells of
   the image as laid out at full size, synchronously for crops up to 512x512 pixels so scrolling does
   not blank them.
+- An auto-sized `Image` whose width is capped (by `max_width`, a fixed width, or its parent) takes
+  only the rows of the picture scaled to that width, so a frame around it no longer keeps empty
+  rows below. Image layout also uses the terminal's reported cell size instead of assuming 8x16
+  pixel cells, so the reserved area matches what is drawn.
 
 ## [0.9.3] - 2026-09-15
 

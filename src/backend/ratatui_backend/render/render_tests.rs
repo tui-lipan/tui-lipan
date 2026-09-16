@@ -5513,3 +5513,84 @@ fn image_scrolled_partly_out_of_view_draws_its_visible_rows() {
         }
     }
 }
+
+#[cfg(feature = "image")]
+struct CappedImageFrameComponent;
+
+#[cfg(feature = "image")]
+impl Component for CappedImageFrameComponent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(800, 400))
+            .write_to(&mut png, image::ImageFormat::Png)
+            .expect("PNG encoding should succeed");
+
+        // The messenger example's attachment bubble.
+        VStack::new()
+            .child(
+                HStack::new().height(Length::Auto).child(
+                    crate::core::element::Element::from(
+                        Frame::new()
+                            .border(true)
+                            .width(Length::Auto)
+                            .height(Length::Auto)
+                            .child(
+                                crate::widgets::Image::from_bytes(png.into_inner())
+                                    .width(Length::Auto)
+                                    .height(Length::Auto),
+                            ),
+                    )
+                    .max_width(Length::Px(40))
+                    .max_height(Length::Px(15)),
+                ),
+            )
+            .into()
+    }
+}
+
+/// A bordered frame capped narrower than its image wraps the picture as scaled into the cap,
+/// instead of keeping the rows of the unscaled height empty below it.
+#[cfg(feature = "image")]
+#[test]
+fn auto_frame_around_a_capped_image_has_no_empty_rows() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 60,
+        h: 30,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        CappedImageFrameComponent,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    runtime.render_element(viewport, None, None, None);
+
+    let rect_of = |is: fn(&NodeKind) -> bool| {
+        runtime
+            .tree
+            .iter()
+            .find(|node| is(&node.kind))
+            .map(|node| node.rect)
+            .expect("node should be laid out")
+    };
+    let frame = rect_of(|kind| matches!(kind, NodeKind::Frame(_)));
+    let image = rect_of(|kind| matches!(kind, NodeKind::Image(_)));
+    // 800x400 pixels at 10x20 pixel cells is 80x20; scaled into 38 columns it needs 10 rows.
+    assert_eq!((image.w, image.h), (38, 10));
+    assert_eq!((frame.w, frame.h), (40, 12));
+}

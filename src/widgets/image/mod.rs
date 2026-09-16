@@ -4,7 +4,7 @@ mod layout;
 mod node;
 mod reconcile;
 
-pub use layout::measure_image;
+pub(crate) use layout::measure_image_constrained;
 pub use node::ImageNode;
 pub use reconcile::reconcile_image;
 

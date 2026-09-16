@@ -61,7 +61,7 @@ pub(crate) use super::grid::{GridNode, GridReconcile, measure_grid, reconcile_gr
 pub(crate) use super::heatmap::{HeatmapNode, measure_heatmap, reconcile_heatmap_node};
 pub(crate) use super::hex_area::{HexAreaNode, measure_hex_area, reconcile_hex_area};
 #[cfg(feature = "image")]
-pub(crate) use super::image::{ImageNode, measure_image, reconcile_image};
+pub(crate) use super::image::{ImageNode, measure_image_constrained, reconcile_image};
 pub(crate) use super::input::{InputNode, measure_input, reconcile_input};
 pub(crate) use super::list::{ListNode, reconcile_list};
 pub(crate) use super::mouse_region::{
