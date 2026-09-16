@@ -1262,9 +1262,18 @@ fn resolve_image_render_rect(node: &ImageNode, bounds: Rect) -> Rect {
     let target_w_cells = target_w_px.div_ceil(cell_w).max(1).min(u32::from(bounds.w)) as u16;
     let target_h_cells = target_h_px.div_ceil(cell_h).max(1).min(u32::from(bounds.h)) as u16;
 
+    // A picture scaled to fit sits in the middle of the room it does not fill, like CSS
+    // `object-fit: contain`. A crop keeps the top-left pixels it cut, so it stays at the origin.
+    let (x, y) = match node.fit {
+        ImageFit::Contain | ImageFit::Scale => (
+            bounds.x + ((bounds.w - target_w_cells) / 2) as i16,
+            bounds.y + ((bounds.h - target_h_cells) / 2) as i16,
+        ),
+        ImageFit::Crop | ImageFit::Cover => (bounds.x, bounds.y),
+    };
     Rect {
-        x: bounds.x,
-        y: bounds.y,
+        x,
+        y,
         w: target_w_cells,
         h: target_h_cells,
     }
@@ -2140,6 +2149,29 @@ mod tests {
                 "row below the clip stays empty"
             );
         }
+    }
+
+    /// A picture scaled into a box it does not fill is centered on the spare axis; a crop stays at
+    /// the top-left, where the pixels it kept came from.
+    #[test]
+    fn fitted_pictures_are_centered_in_their_box() {
+        let rect_for = |width: u32, height: u32, fit: ImageFit| {
+            let mut node = ImageNode::from(crate::widgets::Image::from_bytes(Vec::new()).fit(fit));
+            node.decoded = Some(Arc::new(image::DynamicImage::new_rgba8(width, height)));
+            let bounds = Rect {
+                x: 2,
+                y: 1,
+                w: 40,
+                h: 20,
+            };
+            let rect = resolve_image_render_rect(&node, bounds);
+            (rect.x, rect.y, rect.w, rect.h)
+        };
+        // 10x20 pixel cells: a 2:1 picture fills the width and half the height.
+        assert_eq!(rect_for(200, 100, ImageFit::Scale), (2, 6, 40, 10));
+        assert_eq!(rect_for(100, 200, ImageFit::Scale), (12, 1, 20, 20));
+        assert_eq!(rect_for(100, 100, ImageFit::Contain), (17, 8, 10, 5));
+        assert_eq!(rect_for(100, 100, ImageFit::Crop), (2, 1, 10, 5));
     }
 
     fn key(source_hash: u64) -> RenderCacheKey {
