@@ -11,6 +11,8 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-16
+
 ### Added
 
 - `ImageFit::Cover` scales an image up or down to fill its whole area, keeping aspect ratio, and
@@ -2100,7 +2102,8 @@ Highlights of what ships in 0.1.0:
 See the [README](README.md) for the full feature set and
 [docs.tui-lipan.dev](https://docs.tui-lipan.dev) for documentation.
 
-[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.9.3...HEAD
+[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/tui-lipan/tui-lipan/compare/v0.9.3...v0.10.0
 [0.9.3]: https://github.com/tui-lipan/tui-lipan/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/tui-lipan/tui-lipan/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/tui-lipan/tui-lipan/compare/v0.9.0...v0.9.1
