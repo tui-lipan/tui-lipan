@@ -201,6 +201,26 @@ impl EncodedProtocol {
         }
     }
 
+    /// Draw the part of a full-size encode inside `clip`, when the protocol can do that without
+    /// re-encoding. Returns `false` when it cannot, and nothing was drawn.
+    fn render_clipped(&self, f: &mut ratatui::Frame<'_>, image_rect: Rect, clip: Rect) -> bool {
+        match self {
+            Self::Ratatui { .. } => {
+                let _ = (f, image_rect, clip);
+                false
+            }
+            #[cfg(feature = "terminal-images")]
+            Self::CompressedKitty(protocol) => {
+                protocol.render_clipped(
+                    f,
+                    (i32::from(image_rect.x), i32::from(image_rect.y)),
+                    to_ratatui_rect(clip),
+                );
+                true
+            }
+        }
+    }
+
     fn transmission_pending(&self) -> bool {
         match self {
             Self::Ratatui {
@@ -278,23 +298,51 @@ impl CompressedKitty {
     }
 
     fn render(&self, f: &mut ratatui::Frame<'_>, area: ratatui::layout::Rect) {
+        self.render_clipped(f, (i32::from(area.x), i32::from(area.y)), area);
+    }
+
+    /// Draw the placeholder cells of the image placed at `origin` that fall inside `clip`. Every
+    /// placeholder names its own image row and column, so the host shows exactly the visible part
+    /// of the one transmitted image, with nothing to re-encode as it scrolls. `origin` may lie
+    /// above or left of the screen.
+    fn render_clipped(
+        &self,
+        f: &mut ratatui::Frame<'_>,
+        origin: (i32, i32),
+        clip: ratatui::layout::Rect,
+    ) {
         const UNIT_WIDTH: CellDiffOption =
             CellDiffOption::ForcedWidth(NonZeroU16::new(1).expect("one is non-zero"));
 
-        let full_width = area.width.min(self.size.width);
-        if full_width == 0 {
+        let (origin_x, origin_y) = origin;
+        let row_start = origin_x.max(i32::from(clip.x));
+        let row_end = (origin_x + i32::from(self.size.width)).min(i32::from(clip.right()));
+        if row_start >= row_end {
             return;
         }
-        let row_end = area.x.saturating_add(full_width);
-        let height = area.height.min(self.size.height).min(297);
+        let (row_start, row_end) = (row_start as u16, row_end as u16);
+        let height = self.size.height.min(297);
         let mut transmit = self.take_transmission();
         let mut symbol = String::new();
         let holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
         let mut painted_placeholders = false;
+        let area = ratatui::layout::Rect::new(
+            row_start,
+            origin_y.max(i32::from(clip.y)) as u16,
+            row_end - row_start,
+            (origin_y + i32::from(height))
+                .min(i32::from(clip.bottom()))
+                .saturating_sub(origin_y.max(i32::from(clip.y)))
+                .max(0) as u16,
+        );
 
         for y in 0..height {
-            let row_y = area.y.saturating_add(y);
-            let spans = uncovered_x_spans(area.x, row_end, row_y, &holes);
+            let row_y = origin_y + i32::from(y);
+            if row_y < i32::from(clip.y) || row_y >= i32::from(clip.bottom()) {
+                continue;
+            }
+            let row_y = row_y as u16;
+            let spans = uncovered_x_spans(row_start, row_end, row_y, &holes);
             for &(start, end) in &spans {
                 let span_width = end.saturating_sub(start);
                 if span_width == 0 {
@@ -308,7 +356,7 @@ impl CompressedKitty {
                 if let Some(sequence) = transmit.take() {
                     symbol.push_str(&sequence);
                 }
-                let col = start.saturating_sub(area.x);
+                let col = (i32::from(start) - origin_x) as u16;
                 let right = span_width.saturating_sub(1);
                 let _ = write!(
                     symbol,
@@ -483,12 +531,25 @@ fn kitty_transmit_compressed_format_for(
 struct RenderCacheKey {
     source_hash: u64,
     frame_index: usize,
+    /// Encoded size in cells: the visible part when `crop` is set.
     width: u16,
     height: u16,
+    /// The visible cells of an image partly scrolled out of view.
+    crop: Option<CellCrop>,
     background_rgb: Option<(u8, u8, u8)>,
     fit: ImageFit,
     protocol: ImageProtocol,
     resolved_protocol: ImageProtocol,
+}
+
+/// Which cells of an image laid out at `full_width` x `full_height` are visible: `width` x
+/// `height` cells of the key, starting at `x`, `y`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct CellCrop {
+    x: u16,
+    y: u16,
+    full_width: u16,
+    full_height: u16,
 }
 
 struct CacheEntry {
@@ -686,6 +747,7 @@ fn stream_encoding_compatible(
     cached_stream == requested_stream
         && cached.width == requested.width
         && cached.height == requested.height
+        && cached.crop == requested.crop
         && cached.background_rgb == requested.background_rgb
         && cached.fit == requested.fit
         && cached.protocol == requested.protocol
@@ -723,7 +785,6 @@ impl AsyncEncoder {
         inner.cache.get(key)
     }
 
-    #[cfg(feature = "terminal-images")]
     fn encode_synchronously(&self, request: EncodeRequest) -> Option<Arc<EncodedProtocol>> {
         let protocol = Arc::new(encode_request(&request)?);
         let Ok(mut inner) = self.inner.lock() else {
@@ -1202,6 +1263,7 @@ fn build_encode_request(
         frame_index: node.current_frame_index(),
         width: draw_rect.w,
         height: draw_rect.h,
+        crop: None,
         background_rgb: effective_background_rgb,
         fit: node.fit,
         protocol: node.protocol,
@@ -1249,6 +1311,18 @@ fn encode_request(request: &EncodeRequest) -> Option<EncodedProtocol> {
 
     let size = ratatui::layout::Size::new(request.key.width, request.key.height);
     let resize = fit_to_resize(request.key.fit);
+    if let Some(crop) = request.key.crop {
+        let cropped = crop_to_visible_cells(request, picker.font_size(), crop);
+        #[cfg(feature = "terminal-images")]
+        if matches!(request.key.resolved_protocol, ImageProtocol::Kitty) {
+            let id = kitty_image_id(request);
+            return CompressedKitty::new(&cropped, size, id).map(EncodedProtocol::CompressedKitty);
+        }
+        return picker
+            .new_protocol(cropped, size, Resize::Fit(None))
+            .map(|protocol| EncodedProtocol::ratatui(protocol, request.key.resolved_protocol))
+            .ok();
+    }
     if matches!(request.key.fit, ImageFit::Cover) {
         let font_size = picker.font_size();
         let covered = cover_image(
@@ -1319,6 +1393,51 @@ fn encode_request(request: &EncodeRequest) -> Option<EncodedProtocol> {
     }
 }
 
+/// The pixels of the cells `crop` leaves visible, from the image drawn the way an unclipped encode
+/// would lay it out over `crop.full_width` x `crop.full_height` cells. Cells the fitted image does
+/// not reach stay transparent, or the flattening background for protocols without alpha.
+fn crop_to_visible_cells(
+    request: &EncodeRequest,
+    font_size: ratatui_image::FontSize,
+    crop: CellCrop,
+) -> image::DynamicImage {
+    let cell_w = u32::from(font_size.width.max(1));
+    let cell_h = u32::from(font_size.height.max(1));
+    let full = ratatui::layout::Size::new(crop.full_width, crop.full_height);
+    let background = request
+        .key
+        .background_rgb
+        .map_or(image::Rgba([0, 0, 0, 0]), |(r, g, b)| {
+            image::Rgba([r, g, b, 255])
+        });
+
+    let fitted = match request.key.fit {
+        ImageFit::Cover => cover_image(
+            request.image.as_ref(),
+            u32::from(full.width) * cell_w,
+            u32::from(full.height) * cell_h,
+        ),
+        fit => {
+            let resize = fit_to_resize(fit);
+            let encoded = resize.size_for(request.image.as_ref(), font_size, full);
+            resize.resize(request.image.as_ref(), font_size, encoded, Some(background))
+        }
+    };
+
+    let mut canvas = image::RgbaImage::from_pixel(
+        u32::from(full.width) * cell_w,
+        u32::from(full.height) * cell_h,
+        background,
+    );
+    image::imageops::overlay(&mut canvas, &fitted.to_rgba8(), 0, 0);
+    image::DynamicImage::ImageRgba8(canvas).crop_imm(
+        u32::from(crop.x) * cell_w,
+        u32::from(crop.y) * cell_h,
+        u32::from(request.key.width) * cell_w,
+        u32::from(request.key.height) * cell_h,
+    )
+}
+
 enum ProtocolResolve {
     Ready(Arc<EncodedProtocol>),
     Stale(Arc<EncodedProtocol>),
@@ -1382,6 +1501,7 @@ pub(crate) fn draw_encoded_image(
         frame_index: 0,
         width: area.width,
         height: area.height,
+        crop: None,
         background_rgb: None,
         fit: ImageFit::Scale,
         protocol: ImageProtocol::Auto,
@@ -1448,14 +1568,11 @@ pub(crate) fn render_image(
     // ScrollView.
     let image_rect = resolve_image_render_rect(node, rect);
 
-    // If the clip rect cuts into the image rect, the image is only partially
-    // visible (e.g. scrolled halfway out of a ScrollView).  Terminal image
-    // protocols cannot crop an already-encoded image, so render a placeholder
-    // instead of showing a shrunk version.
-    let image_clipped = clip_rect.is_some_and(|clip| {
-        let visible = image_rect.intersection(&clip);
-        visible.w < image_rect.w || visible.h < image_rect.h
-    });
+    // The clip rect cuts into the image when it is partly scrolled out of a ScrollView. Only the
+    // visible cells are drawn, cut from the image laid out at its full size.
+    let visible_rect = clip_rect.map(|clip| image_rect.intersection(&clip));
+    let image_clipped =
+        visible_rect.is_some_and(|visible| visible.w < image_rect.w || visible.h < image_rect.h);
 
     let lipan_style = resolve_base_style(theme, node.style);
     let mut style = to_ratatui_style(lipan_style);
@@ -1488,8 +1605,19 @@ pub(crate) fn render_image(
     }
 
     if image_clipped {
-        clear_image_region(f, draw_rect, style);
-        render_placeholder_frame_clipped(f, image_rect, draw_rect, style, None);
+        let visible = visible_rect.unwrap_or(image_rect);
+        if visible.is_empty() {
+            return;
+        }
+        render_clipped_image(
+            f,
+            node,
+            image_rect,
+            visible,
+            draw_rect,
+            style,
+            background_rgb,
+        );
         return;
     }
 
@@ -1511,6 +1639,64 @@ pub(crate) fn render_image(
                 .unwrap_or("[image]");
             let line = Line::from(vec![Span::styled(fallback.to_string(), style)]);
             f.render_widget(Paragraph::new(line), to_ratatui_rect(image_rect));
+        }
+    }
+}
+
+/// Draw the `visible` cells of an image laid out over `image_rect`.
+///
+/// Kitty placeholders clip a full-size encode in place. Every other protocol draws one picture per
+/// escape, so the visible cells are cut from the pixels and encoded on their own - synchronously
+/// while that stays cheap, so scrolling a thumbnail does not blank it for a frame at every step.
+fn render_clipped_image(
+    f: &mut ratatui::Frame<'_>,
+    node: &ImageNode,
+    image_rect: Rect,
+    visible: Rect,
+    draw_rect: Rect,
+    style: ratatui::style::Style,
+    background_rgb: Option<(u8, u8, u8)>,
+) {
+    /// Visible pixels up to which a crop is encoded inside the paint.
+    const SYNC_CROP_MAX_PIXELS: u32 = 512 * 512;
+
+    let encoder = async_encoder();
+    if let Some(full) = build_encode_request(node, image_rect, background_rgb)
+        && let Some(protocol) = encoder.cache_get(&full.key)
+        && protocol.render_clipped(f, image_rect, visible)
+    {
+        return;
+    }
+
+    let Some(mut request) = build_encode_request(node, visible, background_rgb) else {
+        clear_image_region(f, draw_rect, style);
+        return;
+    };
+    request.key.crop = Some(CellCrop {
+        x: (visible.x - image_rect.x) as u16,
+        y: (visible.y - image_rect.y) as u16,
+        full_width: image_rect.w,
+        full_height: image_rect.h,
+    });
+
+    let protocol = encoder.cache_get(&request.key).or_else(|| {
+        let font_size = image_support::picker_snapshot().font_size();
+        let pixels = u32::from(visible.w)
+            * u32::from(font_size.width)
+            * u32::from(visible.h)
+            * u32::from(font_size.height);
+        if pixels <= SYNC_CROP_MAX_PIXELS {
+            encoder.encode_synchronously(request)
+        } else {
+            encoder.enqueue(request);
+            None
+        }
+    });
+    match protocol {
+        Some(protocol) => protocol.render(f, to_ratatui_rect(visible)),
+        None => {
+            clear_image_region(f, draw_rect, style);
+            render_placeholder_frame_clipped(f, image_rect, draw_rect, style, None);
         }
     }
 }
@@ -1824,12 +2010,92 @@ mod tests {
         assert_eq!((covered.width(), covered.height()), (90, 30));
     }
 
+    /// An image scrolled one row out of the top of its view keeps the rows below: the crop is cut
+    /// from the image as laid out at full size, not squeezed into the visible rows.
+    #[test]
+    fn a_crop_keeps_the_visible_cells_of_the_full_layout() {
+        let mut halves = image::RgbaImage::new(20, 40);
+        for (_, y, pixel) in halves.enumerate_pixels_mut() {
+            *pixel = if y < 20 {
+                image::Rgba([255, 0, 0, 255])
+            } else {
+                image::Rgba([0, 0, 255, 255])
+            };
+        }
+        let crop = CellCrop {
+            x: 0,
+            y: 1,
+            full_width: 2,
+            full_height: 2,
+        };
+        let mut key = key(1);
+        (key.width, key.height, key.crop, key.fit) = (2, 1, Some(crop), ImageFit::Crop);
+        let request = EncodeRequest::new(
+            1,
+            key,
+            Arc::new(image::DynamicImage::ImageRgba8(halves)),
+            CacheRetention::Variants,
+        );
+
+        let cropped = crop_to_visible_cells(&request, (10, 20).into(), crop).to_rgba8();
+        assert_eq!((cropped.width(), cropped.height()), (20, 20));
+        assert!(
+            cropped
+                .pixels()
+                .all(|pixel| *pixel == image::Rgba([0, 0, 255, 255]))
+        );
+    }
+
+    /// A Kitty placement whose top row is above the screen starts its first visible row at image
+    /// row one, and draws nothing outside the clip.
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn clipped_kitty_placeholders_name_the_rows_they_show() {
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::new(40, 60));
+        let protocol = CompressedKitty::new(&image, ratatui::layout::Size::new(4, 3), 7)
+            .expect("kitty encode should succeed");
+        let area = ratatui::layout::Rect::new(0, 0, 6, 3);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(area.width, area.height))
+                .expect("terminal should init");
+        terminal
+            .draw(|f| {
+                protocol.render_clipped(f, (1, -1), ratatui::layout::Rect::new(0, 0, 6, 1));
+            })
+            .expect("render should succeed");
+        let buffer = terminal.backend().buffer();
+
+        let first = buffer[(1, 0)].symbol();
+        let row_one = format!(
+            "{}{}",
+            crate::widgets::kitty_diacritic(1),
+            crate::widgets::kitty_diacritic(0)
+        );
+        assert!(
+            first.contains(&row_one),
+            "first visible row should name image row 1, got {first:?}"
+        );
+        assert_eq!(
+            buffer[(0, 0)].symbol(),
+            " ",
+            "left of the image stays empty"
+        );
+        for x in 0..area.width {
+            assert_eq!(
+                buffer[(x, 1)].symbol(),
+                " ",
+                "row below the clip stays empty"
+            );
+        }
+    }
+
     fn key(source_hash: u64) -> RenderCacheKey {
         RenderCacheKey {
             source_hash,
             frame_index: 0,
             width: 80,
             height: 24,
+            crop: None,
             background_rgb: None,
             fit: ImageFit::Scale,
             protocol: ImageProtocol::Auto,
