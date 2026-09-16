@@ -450,7 +450,7 @@ QOI, TGA, or TIFF.
 |------|------|-------------|
 | `src` | `impl Into<String>` | **Constructor** - image file path |
 | `bytes` | `Arc<[u8]>` | In-memory image (use `Image::from_bytes(...)`) |
-| `fit` | `ImageFit` | `Contain` (default), `Crop`, `Scale` |
+| `fit` | `ImageFit` | `Contain` (default), `Crop`, `Scale`, `Cover` |
 | `protocol` | `ImageProtocol` | `Auto`, `Kitty`, `Iterm2`, `Sixel`, `Halfblocks` |
 | `style` | `Style` | Container style |
 | `alt` | `String` | Alt text shown when protocol fails |

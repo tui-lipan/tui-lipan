@@ -922,7 +922,24 @@ fn fit_to_resize(fit: ImageFit) -> Resize {
         ImageFit::Contain => Resize::Fit(None),
         ImageFit::Crop => Resize::Crop(None),
         ImageFit::Scale => Resize::Scale(None),
+        // `encode_request` scales and crops a cover to its box's exact pixel size first, so what
+        // reaches ratatui-image already fits.
+        ImageFit::Cover => Resize::Fit(None),
     }
+}
+
+/// Scale `image` to cover `pixel_width` x `pixel_height`, keeping aspect ratio, and crop the
+/// overflow evenly from both sides.
+fn cover_image(
+    image: &image::DynamicImage,
+    pixel_width: u32,
+    pixel_height: u32,
+) -> image::DynamicImage {
+    image.resize_to_fill(
+        pixel_width.max(1),
+        pixel_height.max(1),
+        image::imageops::FilterType::Triangle,
+    )
 }
 
 fn protocol_type_to_public(protocol: ProtocolType) -> ImageProtocol {
@@ -1131,6 +1148,7 @@ fn resolve_image_render_rect(node: &ImageNode, bounds: Rect) -> Rect {
         }
         ImageFit::Scale => fit_pixels_proportionally(image_w, image_h, max_w_px, max_h_px),
         ImageFit::Crop => (image_w.min(max_w_px), image_h.min(max_h_px)),
+        ImageFit::Cover => (max_w_px, max_h_px),
     };
 
     let target_w_cells = target_w_px.div_ceil(cell_w).max(1).min(u32::from(bounds.w)) as u16;
@@ -1231,6 +1249,23 @@ fn encode_request(request: &EncodeRequest) -> Option<EncodedProtocol> {
 
     let size = ratatui::layout::Size::new(request.key.width, request.key.height);
     let resize = fit_to_resize(request.key.fit);
+    if matches!(request.key.fit, ImageFit::Cover) {
+        let font_size = picker.font_size();
+        let covered = cover_image(
+            request.image.as_ref(),
+            u32::from(size.width) * u32::from(font_size.width.max(1)),
+            u32::from(size.height) * u32::from(font_size.height.max(1)),
+        );
+        #[cfg(feature = "terminal-images")]
+        if matches!(request.key.resolved_protocol, ImageProtocol::Kitty) {
+            let id = kitty_image_id(request);
+            return CompressedKitty::new(&covered, size, id).map(EncodedProtocol::CompressedKitty);
+        }
+        return picker
+            .new_protocol(covered, size, resize)
+            .map(|protocol| EncodedProtocol::ratatui(protocol, request.key.resolved_protocol))
+            .ok();
+    }
     #[cfg(feature = "terminal-images")]
     if matches!(request.key.resolved_protocol, ImageProtocol::Kitty) {
         let encoded_size = resize.size_for(request.image.as_ref(), picker.font_size(), size);
@@ -1764,6 +1799,29 @@ mod tests {
             !host_scales_into_cells(ImageFit::Scale, &image(880, 440), 0, 0),
             "a box with no pixels in it is not a box to scale into"
         );
+    }
+
+    /// A cover fills its box at any source size: a small wide image is scaled up to the box
+    /// height and loses its sides, a tall one loses its top and bottom.
+    #[test]
+    fn cover_fills_the_box_and_crops_the_overflow_evenly() {
+        let mut wide = image::RgbImage::new(40, 10);
+        for (x, _, pixel) in wide.enumerate_pixels_mut() {
+            *pixel = if (10..30).contains(&x) {
+                image::Rgb([255, 255, 255])
+            } else {
+                image::Rgb([0, 0, 0])
+            };
+        }
+        let covered = cover_image(&image::DynamicImage::ImageRgb8(wide), 80, 80);
+        assert_eq!((covered.width(), covered.height()), (80, 80));
+        let covered = covered.to_rgb8();
+        assert_eq!(covered.get_pixel(0, 40), &image::Rgb([255, 255, 255]));
+        assert_eq!(covered.get_pixel(79, 40), &image::Rgb([255, 255, 255]));
+
+        let tall = image::DynamicImage::ImageRgb8(image::RgbImage::new(10, 400));
+        let covered = cover_image(&tall, 90, 30);
+        assert_eq!((covered.width(), covered.height()), (90, 30));
     }
 
     fn key(source_hash: u64) -> RenderCacheKey {

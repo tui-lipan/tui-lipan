@@ -127,8 +127,21 @@ impl Component for ImageDemo {
                                     .width(Length::Flex(1))
                                     .padding(1)
                                     .child(
-                                        Image::from_bytes(sample)
+                                        Image::from_bytes(Arc::clone(&sample))
                                             .fit(ImageFit::Contain)
+                                            .protocol(ImageProtocol::Auto)
+                                            .width(Length::Flex(1))
+                                            .height(Length::Flex(1)),
+                                    ),
+                            )
+                            .child(
+                                Frame::new()
+                                    .header_left("Static PNG (Cover)")
+                                    .width(Length::Flex(1))
+                                    .padding(1)
+                                    .child(
+                                        Image::from_bytes(Arc::clone(&sample))
+                                            .fit(ImageFit::Cover)
                                             .protocol(ImageProtocol::Auto)
                                             .width(Length::Flex(1))
                                             .height(Length::Flex(1)),

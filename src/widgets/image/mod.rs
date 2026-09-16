@@ -32,6 +32,9 @@ pub enum ImageFit {
     Crop,
     /// Keep aspect ratio and scale both up and down to fit.
     Scale,
+    /// Keep aspect ratio and scale both up and down to fill the whole area, cropping the overflow
+    /// evenly from both sides (CSS `object-fit: cover`).
+    Cover,
 }
 
 /// Requested terminal image protocol.
