@@ -11,6 +11,8 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-16
+
 ### Fixed
 
 - Terminal Kitty images preserve the child placement's z-index when they are re-encoded for the
@@ -2111,7 +2113,8 @@ Highlights of what ships in 0.1.0:
 See the [README](README.md) for the full feature set and
 [docs.tui-lipan.dev](https://docs.tui-lipan.dev) for documentation.
 
-[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/tui-lipan/tui-lipan/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/tui-lipan/tui-lipan/compare/v0.9.3...v0.10.0
 [0.9.3]: https://github.com/tui-lipan/tui-lipan/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/tui-lipan/tui-lipan/compare/v0.9.1...v0.9.2
