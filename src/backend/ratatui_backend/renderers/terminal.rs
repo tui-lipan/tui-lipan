@@ -161,6 +161,7 @@ fn render_terminal_images(
                 placement.image.source_hash(),
                 crop,
             ),
+            placement.z,
             || {
                 if whole {
                     Arc::clone(pixels)
