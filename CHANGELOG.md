@@ -11,6 +11,15 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- Terminal Kitty images preserve the child placement's z-index when they are re-encoded for the
+  host, so applications that place images below text or cell backgrounds no longer draw those
+  images over later content.
+- Kitty placements emitted inside a synchronized terminal update use the cursor position from that
+  update instead of the previous frame's cursor. OpenTUI applications using `DEC ?2026h/l` no
+  longer send images to an unrelated lower-right position in an embedded terminal.
+
 ## [0.10.0] - 2026-09-16
 
 ### Added

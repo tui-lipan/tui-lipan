@@ -257,7 +257,12 @@ struct CompressedKitty {
 
 #[cfg(feature = "terminal-images")]
 impl CompressedKitty {
-    fn new(image: &image::DynamicImage, size: ratatui::layout::Size, id: u32) -> Option<Self> {
+    fn new(
+        image: &image::DynamicImage,
+        size: ratatui::layout::Size,
+        id: u32,
+        z_index: i32,
+    ) -> Option<Self> {
         let width = image.width();
         let height = image.height();
         let converted;
@@ -273,7 +278,15 @@ impl CompressedKitty {
             // Naming the pixels: no deflate, no base64 of megabytes, no chunked write, and the
             // terminal reads them straight out of memory.
             Some(frame) => (
-                kitty_transmit_shared_memory(frame.name(), width, height, format, id, size),
+                kitty_transmit_shared_memory_at_z(
+                    frame.name(),
+                    width,
+                    height,
+                    format,
+                    id,
+                    size,
+                    z_index,
+                ),
                 Some(frame),
             ),
             None => {
@@ -281,7 +294,15 @@ impl CompressedKitty {
                 encoder.write_all(pixels).ok()?;
                 let compressed = encoder.finish().ok()?;
                 (
-                    kitty_transmit_compressed_format(&compressed, width, height, format, id, size),
+                    kitty_transmit_compressed_format(
+                        &compressed,
+                        width,
+                        height,
+                        format,
+                        id,
+                        size,
+                        z_index,
+                    ),
                     None,
                 )
             }
@@ -437,7 +458,7 @@ fn shared_frame(pixels: &[u8]) -> Option<SharedFrame> {
 }
 
 /// A `t=s` transmission: the pixels are in `name`, and this only says where.
-#[cfg(feature = "terminal-images")]
+#[cfg(all(feature = "terminal-images", test))]
 pub(crate) fn kitty_transmit_shared_memory(
     name: &str,
     width: u32,
@@ -446,9 +467,27 @@ pub(crate) fn kitty_transmit_shared_memory(
     id: u32,
     cells: ratatui::layout::Size,
 ) -> String {
+    kitty_transmit_shared_memory_at_z(name, width, height, format, id, cells, 0)
+}
+
+#[cfg(feature = "terminal-images")]
+fn kitty_transmit_shared_memory_at_z(
+    name: &str,
+    width: u32,
+    height: u32,
+    format: u8,
+    id: u32,
+    cells: ratatui::layout::Size,
+    z_index: i32,
+) -> String {
     let (columns, rows) = (cells.width, cells.height);
+    let z_index = if z_index != 0 {
+        format!(",z={z_index}")
+    } else {
+        String::new()
+    };
     let mut data = format!(
-        "\x1b_Gq=2,i={id},a=T,U=1,f={format},t=s,s={width},v={height},c={columns},r={rows};"
+        "\x1b_Gq=2,i={id},a=T,U=1,f={format},t=s,s={width},v={height},c={columns},r={rows}{z_index};"
     );
     BASE64.encode_string(name, &mut data);
     data.push_str("\x1b\\");
@@ -463,14 +502,15 @@ fn kitty_transmit_compressed_format(
     format: u8,
     id: u32,
     cells: ratatui::layout::Size,
+    z_index: i32,
 ) -> String {
     kitty_transmit_compressed_format_for(
         payload,
-        width,
-        height,
+        (width, height),
         format,
         id,
         cells,
+        z_index,
         std::env::var_os("TMUX").is_some(),
     )
 }
@@ -484,21 +524,22 @@ pub(crate) fn kitty_transmit_compressed_for(
     cells: ratatui::layout::Size,
     is_tmux: bool,
 ) -> String {
-    kitty_transmit_compressed_format_for(payload, width, height, 32, id, cells, is_tmux)
+    kitty_transmit_compressed_format_for(payload, (width, height), 32, id, cells, 0, is_tmux)
 }
 
 #[cfg(feature = "terminal-images")]
 fn kitty_transmit_compressed_format_for(
     payload: &[u8],
-    width: u32,
-    height: u32,
+    dimensions: (u32, u32),
     format: u8,
     id: u32,
     cells: ratatui::layout::Size,
+    z_index: i32,
     is_tmux: bool,
 ) -> String {
     const CHUNK_BYTES: usize = 3072;
 
+    let (width, height) = dimensions;
     let (start, escape, end) = if is_tmux {
         ("\x1bPtmux;", "\x1b\x1b", "\x1b\\")
     } else {
@@ -517,6 +558,9 @@ fn kitty_transmit_compressed_format_for(
                 "i={id},a=T,U=1,f={format},o=z,t=d,s={width},v={height},c={columns},r={rows},"
             )
             .expect("writing to a String cannot fail");
+            if z_index != 0 {
+                write!(data, "z={z_index},").expect("writing to a String cannot fail");
+            }
         }
         let more = u8::from(index + 1 < chunk_count);
         write!(data, "m={more};").expect("writing to a String cannot fail");
@@ -540,6 +584,8 @@ struct RenderCacheKey {
     fit: ImageFit,
     protocol: ImageProtocol,
     resolved_protocol: ImageProtocol,
+    /// Kitty placement depth. It is part of the encoding because the host owns compositing.
+    z_index: i32,
 }
 
 /// Which cells of an image laid out at `full_width` x `full_height` are visible: `width` x
@@ -752,6 +798,7 @@ fn stream_encoding_compatible(
         && cached.fit == requested.fit
         && cached.protocol == requested.protocol
         && cached.resolved_protocol == requested.resolved_protocol
+        && cached.z_index == requested.z_index
 }
 
 #[derive(Default)]
@@ -1268,6 +1315,7 @@ fn build_encode_request(
         fit: node.fit,
         protocol: node.protocol,
         resolved_protocol: resolved,
+        z_index: 0,
     };
 
     Some(EncodeRequest::new(
@@ -1316,7 +1364,8 @@ fn encode_request(request: &EncodeRequest) -> Option<EncodedProtocol> {
         #[cfg(feature = "terminal-images")]
         if matches!(request.key.resolved_protocol, ImageProtocol::Kitty) {
             let id = kitty_image_id(request);
-            return CompressedKitty::new(&cropped, size, id).map(EncodedProtocol::CompressedKitty);
+            return CompressedKitty::new(&cropped, size, id, request.key.z_index)
+                .map(EncodedProtocol::CompressedKitty);
         }
         return picker
             .new_protocol(cropped, size, Resize::Fit(None))
@@ -1333,7 +1382,8 @@ fn encode_request(request: &EncodeRequest) -> Option<EncodedProtocol> {
         #[cfg(feature = "terminal-images")]
         if matches!(request.key.resolved_protocol, ImageProtocol::Kitty) {
             let id = kitty_image_id(request);
-            return CompressedKitty::new(&covered, size, id).map(EncodedProtocol::CompressedKitty);
+            return CompressedKitty::new(&covered, size, id, request.key.z_index)
+                .map(EncodedProtocol::CompressedKitty);
         }
         return picker
             .new_protocol(covered, size, resize)
@@ -1366,7 +1416,8 @@ fn encode_request(request: &EncodeRequest) -> Option<EncodedProtocol> {
             });
         let image = resized.as_ref().unwrap_or(request.image.as_ref());
         let id = kitty_image_id(request);
-        return CompressedKitty::new(image, encoded_size, id).map(EncodedProtocol::CompressedKitty);
+        return CompressedKitty::new(image, encoded_size, id, request.key.z_index)
+            .map(EncodedProtocol::CompressedKitty);
     }
 
     if matches!(request.key.fit, ImageFit::Scale) {
@@ -1490,6 +1541,7 @@ pub(crate) fn draw_encoded_image(
     area: ratatui::layout::Rect,
     stream_key: u64,
     source_hash: u64,
+    z_index: i32,
     pixels: impl FnOnce() -> Arc<image::DynamicImage>,
 ) -> bool {
     if area.width == 0 || area.height == 0 || image_support::image_rendering_suspended() {
@@ -1508,6 +1560,7 @@ pub(crate) fn draw_encoded_image(
         resolved_protocol: protocol_type_to_public(
             image_support::picker_snapshot().protocol_type(),
         ),
+        z_index,
     };
 
     let encoder = async_encoder();
@@ -2052,7 +2105,7 @@ mod tests {
     #[test]
     fn clipped_kitty_placeholders_name_the_rows_they_show() {
         let image = image::DynamicImage::ImageRgba8(image::RgbaImage::new(40, 60));
-        let protocol = CompressedKitty::new(&image, ratatui::layout::Size::new(4, 3), 7)
+        let protocol = CompressedKitty::new(&image, ratatui::layout::Size::new(4, 3), 7, 0)
             .expect("kitty encode should succeed");
         let area = ratatui::layout::Rect::new(0, 0, 6, 3);
         let mut terminal =
@@ -2100,6 +2153,7 @@ mod tests {
             fit: ImageFit::Scale,
             protocol: ImageProtocol::Auto,
             resolved_protocol: ImageProtocol::Halfblocks,
+            z_index: 0,
         }
     }
 
@@ -2147,6 +2201,20 @@ mod tests {
         assert!(!stream_encoding_compatible(7, &previous, 8, &next));
     }
 
+    #[test]
+    fn previous_pixels_with_another_z_index_are_not_compatible() {
+        let previous = key(10);
+        let mut moved_behind_text = key(11);
+        moved_behind_text.z_index = -1;
+
+        assert!(!stream_encoding_compatible(
+            7,
+            &previous,
+            7,
+            &moved_behind_text
+        ));
+    }
+
     #[cfg(feature = "terminal-images")]
     #[test]
     fn terminal_kitty_image_id_stays_stable_across_frames() {
@@ -2179,6 +2247,27 @@ mod tests {
 
         assert!(encoded.transmission_pending());
         assert!(encoder.cache_get(&key).is_some());
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn terminal_kitty_encoding_preserves_the_child_z_index() {
+        let mut request = request(7, 10);
+        request.key.width = 1;
+        request.key.height = 1;
+        request.key.resolved_protocol = ImageProtocol::Kitty;
+        request.key.z_index = -1_500_000_000;
+
+        let EncodedProtocol::CompressedKitty(encoded) =
+            encode_request(&request).expect("Kitty encoding")
+        else {
+            panic!("terminal Kitty pixels should use the compressed encoder");
+        };
+        let transmission = encoded.transmit.lock().expect("transmission lock");
+        let transmission = transmission.as_deref().expect("pending transmission");
+
+        assert!(transmission.contains("a=T,U=1"));
+        assert!(transmission.contains(",z=-1500000000"));
     }
 
     #[cfg(feature = "terminal-images")]
@@ -2320,7 +2409,8 @@ mod tests {
     #[test]
     fn compressed_kitty_releases_transmission_after_render() {
         let image = image::DynamicImage::new_rgba8(400, 200);
-        let protocol = CompressedKitty::new(&image, ratatui::layout::Size::new(40, 10), 7).unwrap();
+        let protocol =
+            CompressedKitty::new(&image, ratatui::layout::Size::new(40, 10), 7, 0).unwrap();
         let encoded_len = protocol
             .transmit
             .lock()
@@ -2344,7 +2434,8 @@ mod tests {
     fn compressed_kitty_transmits_before_switching_native_placeholders() {
         let image = image::DynamicImage::new_rgb8(10, 20);
         let size = ratatui::layout::Size::new(1, 1);
-        let next = EncodedProtocol::CompressedKitty(CompressedKitty::new(&image, size, 8).unwrap());
+        let next =
+            EncodedProtocol::CompressedKitty(CompressedKitty::new(&image, size, 8, 0).unwrap());
         let backend = ratatui::backend::TestBackend::new(1, 1);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
 

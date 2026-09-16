@@ -18,6 +18,8 @@ use alacritty_terminal::term::{
 };
 use alacritty_terminal::vte::Parser as SemanticVteParser;
 use alacritty_terminal::vte::ansi::Processor as VteProcessor;
+#[cfg(feature = "terminal-images")]
+use alacritty_terminal::vte::ansi::Timeout as _;
 use alacritty_terminal::vte::ansi::{
     Color as TermColor, CursorShape as TermCursorShape, CursorStyle as TermCursorStyle, NamedColor,
     Rgb as TermRgb,
@@ -1271,6 +1273,41 @@ impl TerminalScreen {
     /// Run one graphics command against the store, then apply what it implies to the grid.
     #[cfg(feature = "terminal-images")]
     fn apply_graphics(&mut self, command: GraphicsCommand) -> usize {
+        // VTE buffers all grid and cursor changes between BSU/ESU synchronized-update markers.
+        // A graphics command is intercepted before VTE sees it, so reading the committed grid here
+        // would otherwise anchor the placement at the previous frame's cursor. Commit the prefix,
+        // apply the command at that cursor, then resume synchronization for the rest of the frame.
+        let synchronized = self.processor.sync_timeout().pending_timeout()
+            || self.processor.sync_bytes_count() != 0;
+        let mut evicted = if synchronized {
+            self.stop_vte_sync()
+        } else {
+            0
+        };
+        evicted += self.apply_graphics_at_cursor(command);
+        if synchronized {
+            evicted += self.advance_vte(b"\x1b[?2026h");
+        }
+        evicted
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn stop_vte_sync(&mut self) -> usize {
+        let mut ledger = LedgerTerm::new(
+            &mut self.term,
+            self.scrollback_len,
+            self.ledger_capacity,
+            HostModes {
+                pixel_mouse: &mut self.pixel_mouse,
+                responses: &self.listener.responses,
+            },
+        );
+        self.processor.stop_sync(&mut ledger);
+        ledger.evicted()
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn apply_graphics_at_cursor(&mut self, command: GraphicsCommand) -> usize {
         let ctx = GraphicsContext {
             cursor_line: self.cursor_absolute_line(),
             cursor_col: u16::try_from(self.term.grid().cursor.point.column.0).unwrap_or(u16::MAX),
@@ -4550,6 +4587,29 @@ mod tests {
 
             // Kitty leaves the cursor on the image's last row, just past its right edge.
             assert_eq!((snapshot.cursor_row, snapshot.cursor_col), (2, 4));
+        }
+
+        #[test]
+        fn a_placement_inside_a_synchronized_update_uses_that_updates_cursor() {
+            let mut screen = screen(30, 70, 10);
+            let payload = BASE64.encode([0x80, 0x80, 0x80]);
+            let stream = format!(
+                "\x1b[30;70H\
+                 \x1b[?2026h\
+                 \x1b[2;6H\
+                 \x1b_Ga=t,f=24,s=1,v=1,t=d,i=7;{payload}\x1b\\\
+                 \x1b_Ga=p,i=7,p=1,c=14,r=6,C=1,z=-1499999999\x1b\\\
+                 \x1b[?2026l"
+            );
+
+            screen.process_bytes(stream.as_bytes());
+
+            let snapshot = screen.render_snapshot();
+            assert_eq!(snapshot.images.len(), 1);
+            let placement = &snapshot.images[0];
+            assert_eq!((placement.row, placement.col), (1, 5));
+            assert_eq!((placement.rows, placement.cols), (6, 14));
+            assert_eq!(placement.z, -1_499_999_999);
         }
 
         #[test]
