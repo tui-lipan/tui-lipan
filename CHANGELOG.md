@@ -11,6 +11,13 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- On macOS, host color and capability probes wait for the terminal's replies instead of giving up
+  at once. `poll(2)` does not support `/dev/tty` there, so the replies echoed onto the primary
+  screen as `^[]4;0;rgb:…` and showed up in the shell after exit, host colors went undetected, and
+  exit stalled for half a second draining a reply that was never read.
+
 ## [0.10.2] - 2026-09-16
 
 ### Changed
