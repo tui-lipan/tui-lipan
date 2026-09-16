@@ -40,7 +40,6 @@ use crate::clipboard::{
 };
 use crate::core::component::{Component, Context};
 use crate::core::element::Element;
-#[cfg(feature = "terminal")]
 use crate::core::event::KeyMods;
 use crate::core::event::{KeyCode, MouseEvent, MouseKind};
 use crate::core::node::NodeId;
@@ -2154,6 +2153,7 @@ impl<C: Component> AppRunner<C> {
                 let frame_start = Instant::now();
 
                 let mut dirty = DirtyTracker::default();
+                guard.set_modifier_key_reporting(self.core.ctx.modifier_key_reporting_enabled())?;
                 #[cfg(feature = "devtools")]
                 self.ingest_pending_devtools_logs();
                 if deferred_full {
@@ -2268,6 +2268,8 @@ impl<C: Component> AppRunner<C> {
                         }
                         CEvent::FocusLost => {
                             self.set_window_focused(false, &mut dirty);
+                            let update = self.core.on_modifiers_changed(KeyMods::NONE);
+                            self.apply_root_update(&mut dirty, update);
                             #[cfg(feature = "terminal")]
                             if self.refresh_terminal_link_hover_at_pointer(KeyMods::NONE) {
                                 dirty.mark_paint();
@@ -2277,10 +2279,12 @@ impl<C: Component> AppRunner<C> {
                         }
                         CEvent::Key(k) => {
                             #[cfg(feature = "terminal")]
-                            if let Some(mods) = modifier_key_state(k)
-                                && self.refresh_terminal_link_hover_at_pointer(mods)
-                            {
-                                dirty.mark_paint();
+                            if let Some(mods) = modifier_key_state(k) {
+                                if self.refresh_terminal_link_hover_at_pointer(mods) {
+                                    dirty.mark_paint();
+                                }
+                                let update = self.core.on_modifiers_changed(mods);
+                                self.apply_root_update(&mut dirty, update);
                             }
                             if let Some(key) = to_key_event(k) {
                                 if matches!(key.code, KeyCode::Esc)

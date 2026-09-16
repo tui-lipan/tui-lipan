@@ -31,7 +31,7 @@ use crate::capture::CapturedFrame;
 use crate::clipboard::ClipboardConfig;
 use crate::core::component::Component;
 use crate::core::element::{Element, Key};
-use crate::core::event::{KeyCode, KeyEvent, MouseEvent};
+use crate::core::event::{KeyCode, KeyEvent, KeyMods, MouseEvent};
 use crate::core::node::{NodeId, OverlayRoot};
 use crate::core::runtime_env::TranscriptEntry;
 use crate::layout::tag::Tag;
@@ -82,6 +82,7 @@ pub struct TestBackend<C: Component> {
     pub(crate) focused_tag: Option<Tag>,
     pub(crate) focus_policy: FocusPolicy,
     window_focused: bool,
+    held_modifiers: KeyMods,
     keymap: Keymap,
     keymap_runtime: KeymapRuntime,
     text_area_newline_binding: TextAreaNewlineBinding,
@@ -237,6 +238,7 @@ where
             focused_tag: None,
             focus_policy: app.focus_policy,
             window_focused: true,
+            held_modifiers: KeyMods::NONE,
             keymap,
             keymap_runtime,
             text_area_newline_binding: app.text_area_newline_binding,
@@ -303,8 +305,37 @@ where
         }
 
         self.window_focused = focused;
-        let lifecycle_dirty = !matches!(
+        let mut lifecycle_dirty = !matches!(
             self.core.on_window_focus_changed(focused),
+            crate::UpdateLevel::None
+        );
+        if !focused && !self.held_modifiers.is_empty() {
+            self.held_modifiers = KeyMods::NONE;
+            lifecycle_dirty |= !matches!(
+                self.core.on_modifiers_changed(KeyMods::NONE),
+                crate::UpdateLevel::None
+            );
+        }
+        let pump_dirty = self.pump()?;
+        if lifecycle_dirty && !pump_dirty {
+            self.render();
+        }
+        Ok(true)
+    }
+
+    /// Simulate a change to the set of physically held modifier keys.
+    ///
+    /// Calls the root component's [`Component::on_modifiers_changed`] callback once per changed
+    /// value and applies its returned update. This models enhanced-keyboard modifier press/release
+    /// events; use [`Self::send_key`] for ordinary combined key events.
+    pub fn set_held_modifiers(&mut self, modifiers: KeyMods) -> Result<bool> {
+        if self.held_modifiers == modifiers {
+            return Ok(false);
+        }
+
+        self.held_modifiers = modifiers;
+        let lifecycle_dirty = !matches!(
+            self.core.on_modifiers_changed(modifiers),
             crate::UpdateLevel::None
         );
         let pump_dirty = self.pump()?;
@@ -312,6 +343,11 @@ where
             self.render();
         }
         Ok(true)
+    }
+
+    /// Returns whether the app currently requests standalone modifier-key reports.
+    pub fn modifier_key_reporting_enabled(&self) -> bool {
+        self.core.ctx.modifier_key_reporting_enabled()
     }
 
     #[allow(missing_docs)]
@@ -7310,6 +7346,64 @@ mod tests {
         }
 
         panic!("expected focus lifecycle command to update state");
+    }
+
+    struct ModifierStateHarness;
+
+    impl Component for ModifierStateHarness {
+        type Message = ();
+        type Properties = ();
+        type State = KeyMods;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            KeyMods::NONE
+        }
+
+        fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+            ctx.set_modifier_key_reporting(true);
+            None
+        }
+
+        fn on_modifiers_changed(&mut self, modifiers: KeyMods, ctx: &mut Context<Self>) -> Update {
+            ctx.state = modifiers;
+            Update::full()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            Text::new(format!("{:?}", ctx.state)).into()
+        }
+    }
+
+    #[test]
+    fn held_modifier_transitions_are_idempotent_and_clear_on_focus_loss() {
+        let mut backend = TestBackend::new(ModifierStateHarness);
+        let modifiers = KeyMods {
+            ctrl: true,
+            shift: true,
+            ..KeyMods::NONE
+        };
+
+        assert!(backend.modifier_key_reporting_enabled());
+        assert!(
+            backend
+                .set_held_modifiers(modifiers)
+                .expect("modifier press should succeed")
+        );
+        assert_eq!(*backend.state(), modifiers);
+        assert!(
+            !backend
+                .set_held_modifiers(modifiers)
+                .expect("repeated modifier state should succeed")
+        );
+
+        backend
+            .set_window_focused(false)
+            .expect("focus loss should succeed");
+        assert_eq!(*backend.state(), KeyMods::NONE);
     }
 
     struct ThemedText;

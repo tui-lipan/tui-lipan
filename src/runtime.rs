@@ -213,6 +213,7 @@ where
         let host_terminal_color_generation = Rc::new(Cell::new(0));
         let host_terminal_color_refresh_requested = Rc::new(Cell::new(false));
         let mouse_capture_generation = Rc::new(Cell::new(1));
+        let modifier_key_reporting = Rc::new(Cell::new(false));
         let memo_dependency_recorder = Rc::new(RefCell::new(None));
         let command_chord_pending_since = Rc::new(Cell::new(None));
         let command_chord_reveal_delay = Rc::new(Cell::new(std::time::Duration::ZERO));
@@ -229,6 +230,7 @@ where
             overlay_manager: overlay_manager.clone(),
             focus_request,
             mouse_capture,
+            modifier_key_reporting,
             surface_mode,
             transcript_history: transcript_history.clone(),
             pending_transcript_entries: pending_transcript_entries.clone(),
@@ -559,6 +561,18 @@ where
         let update = self
             .component
             .on_window_focus_changed(focused, &mut self.ctx);
+        self.run_root_update(update)
+    }
+
+    /// Invoke the root-only held-modifier lifecycle callback.
+    pub(crate) fn on_modifiers_changed(
+        &mut self,
+        modifiers: crate::core::event::KeyMods,
+    ) -> UpdateLevel {
+        self.ctx.set_active_theme(self.theme.clone());
+        let update = self
+            .component
+            .on_modifiers_changed(modifiers, &mut self.ctx);
         self.run_root_update(update)
     }
 

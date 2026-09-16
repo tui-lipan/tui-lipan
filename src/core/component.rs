@@ -11,7 +11,7 @@ use crate::app::input::command_registry::CommandRegistry;
 use crate::callback::{CancellationToken, CommandLink, CommandTx, Dispatcher, Link, ScopeId};
 use crate::core::context_value::ContextValue;
 use crate::core::element::{Element, Key};
-use crate::core::event::KeyEvent;
+use crate::core::event::{KeyEvent, KeyMods};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::core::runtime_env::{
     CopyFeedbackRequest, DevToolsRequest, MemoDependency, MemoDependencySnapshot, RuntimeEnv,
@@ -577,6 +577,15 @@ pub trait Component: Sized + 'static {
     /// Return `KeyUpdate::handled` to stop bubbling.
     fn on_key(&mut self, _key: KeyEvent, _ctx: &mut Context<Self>) -> KeyUpdate {
         KeyUpdate::unhandled(Update::none())
+    }
+
+    /// Called on the root component when the set of physically held modifier keys changes.
+    ///
+    /// Host terminals report standalone modifier press/release events only when an enhanced
+    /// keyboard protocol is active. Combined key events remain available through [`Self::on_key`]
+    /// on every terminal.
+    fn on_modifiers_changed(&mut self, _modifiers: KeyMods, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
     }
 
     /// Called on the root component when the host terminal/window gains or loses focus.
@@ -1323,6 +1332,21 @@ impl<C: Component> Context<C> {
         let next = !self.env.mouse_capture.get();
         self.set_mouse_capture(next);
         next
+    }
+
+    /// Request standalone modifier press/release events from the host terminal.
+    ///
+    /// Keep this enabled only while the app is explicitly capturing a physical shortcut.
+    /// Enhanced keyboard reporting exposes the unshifted physical key rather than composed text,
+    /// so leaving it active during ordinary text input would mishandle layouts, AltGr, dead keys,
+    /// and IME input. Unsupported terminals ignore the request.
+    pub fn set_modifier_key_reporting(&self, enabled: bool) {
+        self.env.modifier_key_reporting.set(enabled);
+    }
+
+    /// Returns whether standalone modifier-key reporting is requested.
+    pub fn modifier_key_reporting_enabled(&self) -> bool {
+        self.env.modifier_key_reporting.get()
     }
 
     /// Stop the app to the shell, the way `ctrl+z` does in an ordinary program.

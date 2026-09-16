@@ -22,6 +22,7 @@ impl Component for MyApp {
 | `update` | Yes | `(&mut self, Msg, &mut Context<Self>) -> Update` | Handle messages |
 | `init` | No | `(&mut self, &mut Context<Self>) -> Option<Command>` | One-time setup on mount |
 | `on_key` | No | `(&mut self, KeyEvent, &mut Context<Self>) -> KeyUpdate` | Handle unhandled key events |
+| `on_modifiers_changed` | No, root only | `(&mut self, KeyMods, &mut Context<Self>) -> Update` | React to physically held modifier keys |
 | `on_window_focus_changed` | No, root only | `(&mut self, bool, &mut Context<Self>) -> Update` | React to host terminal/window focus transitions |
 | `on_props_changed` | No | `(&mut self, &Props, &mut Context<Self>) -> Update` | React to property changes |
 | `unmount` | No | `(&mut self, &mut Context<Self>)` | Teardown before removal |
@@ -30,6 +31,13 @@ impl Component for MyApp {
 focus transition. It is not widget focus: use widget `.on_focus` / `.on_blur` callbacks and the
 focus APIs for keyboard routing. It is also separate from a child `Terminal` requesting CSI
 `?1004` focus reporting; the runner continues to send those sequences only to that terminal.
+
+`on_modifiers_changed` runs only on the mounted root and reports the effective set of physically
+held Ctrl, Alt, Shift, and Super keys. Call `ctx.set_modifier_key_reporting(true)` only while
+capturing a physical shortcut, and disable it on every path out of that capture: the enhanced mode
+reports physical keys instead of composed text and is unsuitable for normal text input. Terminals
+without the protocol still report modifiers on ordinary combined `KeyEvent`s. Losing host focus
+clears the held set. Tests can drive the callback with `TestBackend::set_held_modifiers`.
 
 ## State Flow
 

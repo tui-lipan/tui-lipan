@@ -11,6 +11,13 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- Root components can temporarily request standalone modifier-key reports with
+  `Context::set_modifier_key_reporting` and implement `on_modifiers_changed` to react to physically
+  held Ctrl, Alt, Shift, and Super keys. Modifier state clears when the host window loses focus,
+  and `TestBackend::set_held_modifiers` drives the same lifecycle in tests.
+
 ## [0.10.3] - 2026-09-16
 
 ### Fixed

@@ -34,6 +34,7 @@ pub(crate) enum TerminalOp {
     HideCursor,
     ClearScreen,
     PushKeyboardEnhancement,
+    PushModifierKeyReporting,
     PopKeyboardEnhancement,
     EnableThemeNotifications,
     DisableThemeNotifications,
@@ -60,6 +61,7 @@ impl TerminalOp {
             Self::ShowCursor => Some(Self::HideCursor),
             Self::HideCursor => Some(Self::ShowCursor),
             Self::PushKeyboardEnhancement => Some(Self::PopKeyboardEnhancement),
+            Self::PushModifierKeyReporting => Some(Self::PopKeyboardEnhancement),
             Self::PopKeyboardEnhancement => Some(Self::PushKeyboardEnhancement),
             Self::EnableThemeNotifications => Some(Self::DisableThemeNotifications),
             Self::DisableThemeNotifications => Some(Self::EnableThemeNotifications),
@@ -200,6 +202,18 @@ pub(crate) fn theme_notification_plan(enabled: bool) -> TerminalTransitionPlan {
     ])
 }
 
+pub(crate) fn modifier_key_reporting_plan(enabled: bool) -> TerminalTransitionPlan {
+    TerminalTransitionPlan::new(vec![
+        TerminalOp::PopKeyboardEnhancement,
+        if enabled {
+            TerminalOp::PushModifierKeyReporting
+        } else {
+            TerminalOp::PushKeyboardEnhancement
+        },
+        TerminalOp::Flush,
+    ])
+}
+
 pub(crate) trait TerminalTransitionExecutor {
     fn execute_op(&mut self, op: TerminalOp) -> io::Result<()>;
 }
@@ -264,6 +278,10 @@ fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
         | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
 }
 
+fn modifier_key_reporting_flags() -> KeyboardEnhancementFlags {
+    keyboard_enhancement_flags() | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+}
+
 impl<W: Write> TerminalTransitionExecutor for CrosstermTransitionExecutor<W> {
     fn execute_op(&mut self, op: TerminalOp) -> io::Result<()> {
         let flags = keyboard_enhancement_flags();
@@ -288,6 +306,10 @@ impl<W: Write> TerminalTransitionExecutor for CrosstermTransitionExecutor<W> {
             TerminalOp::PushKeyboardEnhancement => {
                 execute!(self.writer, PushKeyboardEnhancementFlags(flags))
             }
+            TerminalOp::PushModifierKeyReporting => execute!(
+                self.writer,
+                PushKeyboardEnhancementFlags(modifier_key_reporting_flags())
+            ),
             TerminalOp::PopKeyboardEnhancement => {
                 execute!(self.writer, PopKeyboardEnhancementFlags)
             }
@@ -483,5 +505,25 @@ mod tests {
                 TerminalOp::DisableThemeNotifications,
             ]
         }));
+    }
+
+    #[test]
+    fn modifier_reporting_replaces_and_restores_the_baseline_keyboard_mode() {
+        assert_eq!(
+            modifier_key_reporting_plan(true).ops(),
+            &[
+                TerminalOp::PopKeyboardEnhancement,
+                TerminalOp::PushModifierKeyReporting,
+                TerminalOp::Flush,
+            ]
+        );
+        assert_eq!(
+            modifier_key_reporting_plan(false).ops(),
+            &[
+                TerminalOp::PopKeyboardEnhancement,
+                TerminalOp::PushKeyboardEnhancement,
+                TerminalOp::Flush,
+            ]
+        );
     }
 }

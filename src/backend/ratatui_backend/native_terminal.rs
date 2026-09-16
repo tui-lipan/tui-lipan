@@ -18,6 +18,7 @@ use super::terminal_handoff::reset_handoff_state_for_terminal_restore;
 use super::terminal_transition::theme_notification_plan;
 use super::terminal_transition::{
     CrosstermTransitionExecutor, enter_plan, execute_plan, execute_plan_with_rollback, exit_plan,
+    modifier_key_reporting_plan,
 };
 
 #[cfg(feature = "image")]
@@ -331,6 +332,7 @@ pub(crate) struct TerminalGuard {
     stdout: Stdout,
     policy: SurfaceTerminalPolicy,
     keyboard_enhancement: bool,
+    modifier_key_reporting: bool,
     theme_notifications: bool,
 }
 
@@ -427,6 +429,7 @@ impl TerminalGuard {
             stdout: io::stdout(),
             policy,
             keyboard_enhancement,
+            modifier_key_reporting: false,
             theme_notifications: false,
         };
         Ok((OwnedTerminal::new(terminal), guard))
@@ -446,6 +449,17 @@ impl TerminalGuard {
             self.theme_notifications = true;
             Ok(true)
         }
+    }
+
+    pub(crate) fn set_modifier_key_reporting(&mut self, enabled: bool) -> io::Result<bool> {
+        if !self.keyboard_enhancement || self.modifier_key_reporting == enabled {
+            return Ok(false);
+        }
+        let plan = modifier_key_reporting_plan(enabled);
+        let mut executor = CrosstermTransitionExecutor::new(&mut self.stdout);
+        execute_plan_with_rollback(&mut executor, &plan)?;
+        self.modifier_key_reporting = enabled;
+        Ok(true)
     }
 }
 
