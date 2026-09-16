@@ -11,6 +11,12 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- `TerminalScreen` replay exports now retain Kitty image data, direct placements, virtual
+  placements, and image identifiers, so a fresh screen reconstructed from replay bytes displays
+  the same images across primary-screen scrollback and alternate screens.
+
 ## [0.10.1] - 2026-09-16
 
 ### Fixed

@@ -39,8 +39,10 @@
 //!
 //! [Kitty graphics protocol]: https://sw.kovidgoyal.net/kitty/graphics-protocol/
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::io;
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1184,6 +1186,19 @@ struct StoredImage {
     virtual_cells: Option<(u32, u32)>,
 }
 
+impl StoredImage {
+    fn replay_payload(&self) -> (Cow<'_, [u8]>, u32, bool) {
+        match &self.image.source {
+            ImageSource::Decoded(image) => (Cow::Owned(image.to_rgba8().into_raw()), 32, false),
+            ImageSource::Deferred { input, .. } => (
+                Cow::Borrowed(input.payload.as_slice()),
+                input.format,
+                input.compressed,
+            ),
+        }
+    }
+}
+
 /// A live placement of a stored image.
 #[derive(Clone, Debug)]
 struct Placement {
@@ -1867,6 +1882,116 @@ impl TerminalGraphics {
         self.placements.retain(|placement| placement.image_id != id);
     }
 
+    /// Write the retained image definitions before a replay repaints either grid.
+    ///
+    /// Images are always sent inline: a named file or shared-memory source may no longer exist by
+    /// the time a session is reattached, while `finish_transmit` has already claimed its contents.
+    pub(super) fn write_replay_transmissions<W: io::Write>(
+        &self,
+        writer: &mut W,
+    ) -> io::Result<()> {
+        // Advance a fresh screen to the source's next automatic assignment so later id-less
+        // commands from the live stream resolve identically. The marker is restored or removed
+        // below if its id still names a retained image.
+        if self.next_auto_id > FIRST_AUTO_ID {
+            let marker_id = self.next_auto_id - 1;
+            write_replay_image(
+                writer,
+                marker_id,
+                None,
+                None,
+                1,
+                1,
+                32,
+                false,
+                &[0, 0, 0, 0],
+            )?;
+            write!(writer, "\x1b_Ga=d,d=I,i={marker_id},q=2;\x1b\\")?;
+        }
+
+        let mut ids: Vec<_> = self.images.keys().copied().collect();
+        ids.sort_unstable();
+        for id in ids {
+            self.write_stored_replay_image(writer, id, &self.images[&id])?;
+        }
+        Ok(())
+    }
+
+    fn write_stored_replay_image<W: io::Write>(
+        &self,
+        writer: &mut W,
+        id: u32,
+        stored: &StoredImage,
+    ) -> io::Result<()> {
+        let (payload, format, compressed) = stored.replay_payload();
+        let mut numbers: Vec<_> = self
+            .numbers
+            .iter()
+            .filter_map(|(number, mapped)| (*mapped == id).then_some(*number))
+            .collect();
+        numbers.sort_unstable();
+        if numbers.is_empty() {
+            numbers.push(0);
+        }
+        for number in numbers {
+            write_replay_image(
+                writer,
+                id,
+                (number != 0).then_some(number),
+                stored.virtual_cells,
+                stored.image.width,
+                stored.image.height,
+                format,
+                compressed,
+                payload.as_ref(),
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn has_replay_placements(&self, line: usize, alt_screen: bool) -> bool {
+        self.placements
+            .iter()
+            .any(|placement| placement.line == line && placement.alt_screen == alt_screen)
+    }
+
+    /// Recreate direct placements as their anchor line is repainted into the replay stream.
+    pub(super) fn write_replay_placements<W: io::Write>(
+        &self,
+        writer: &mut W,
+        line: usize,
+        alt_screen: bool,
+    ) -> io::Result<()> {
+        for placement in self
+            .placements
+            .iter()
+            .filter(|placement| placement.line == line && placement.alt_screen == alt_screen)
+        {
+            write!(
+                writer,
+                "\x1b[{}G\x1b_Ga=p,i={}",
+                placement.col + 1,
+                placement.image_id
+            )?;
+            if placement.placement_id != 0 {
+                write!(writer, ",p={}", placement.placement_id)?;
+            }
+            if let Some(crop) = placement.crop {
+                write!(
+                    writer,
+                    ",x={},y={},w={},h={}",
+                    crop.x, crop.y, crop.width, crop.height
+                )?;
+            }
+            write!(
+                writer,
+                ",c={},r={},z={},C=1,q=2;\x1b\\\r",
+                placement.cols, placement.rows, placement.z
+            )?;
+        }
+        Ok(())
+    }
+
     /// Drop least-recently-used images until the decoded-pixel budget is met.
     ///
     /// Placed images are not exempt: a session that keeps drawing must not be able to pin memory
@@ -1901,6 +2026,11 @@ impl TerminalGraphics {
     /// The id a transmission stores under, assigning one when the client did not.
     fn resolve_id(&mut self, id: u32, number: u32) -> u32 {
         if id != 0 {
+            // Keep automatic ids clear of explicitly named images. Replay uses this to restore the
+            // source screen's next assignment without a private side channel.
+            if id >= self.next_auto_id && id < u32::MAX {
+                self.next_auto_id = id + 1;
+            }
             return id;
         }
         if number != 0
@@ -1912,6 +2042,76 @@ impl TerminalGraphics {
         self.next_auto_id = self.next_auto_id.checked_add(1).unwrap_or(FIRST_AUTO_ID);
         assigned
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_replay_image<W: io::Write>(
+    writer: &mut W,
+    id: u32,
+    number: Option<u32>,
+    virtual_cells: Option<(u32, u32)>,
+    width: u32,
+    height: u32,
+    format: u32,
+    compressed: bool,
+    payload: &[u8],
+) -> io::Result<()> {
+    const RAW_CHUNK_BYTES: usize = 3 * 1024;
+
+    let mut chunks = payload.chunks(RAW_CHUNK_BYTES).peekable();
+    let mut first = true;
+    while let Some(chunk) = chunks.next() {
+        let more = u8::from(chunks.peek().is_some());
+        if first {
+            first = false;
+            write_replay_image_header(
+                writer,
+                id,
+                number,
+                virtual_cells,
+                width,
+                height,
+                format,
+                compressed,
+                more,
+            )?;
+        } else {
+            write!(writer, "\x1b_Gq=2,m={more};")?;
+        }
+        let encoded = BASE64.encode(chunk);
+        writer.write_all(encoded.as_bytes())?;
+        writer.write_all(b"\x1b\\")?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_replay_image_header<W: io::Write>(
+    writer: &mut W,
+    id: u32,
+    number: Option<u32>,
+    virtual_cells: Option<(u32, u32)>,
+    width: u32,
+    height: u32,
+    format: u32,
+    compressed: bool,
+    more: u8,
+) -> io::Result<()> {
+    let action = if virtual_cells.is_some() { 'T' } else { 't' };
+    write!(
+        writer,
+        "\x1b_Ga={action},f={format},s={width},v={height},t=d,i={id},q=2"
+    )?;
+    if let Some(number) = number {
+        write!(writer, ",I={number}")?;
+    }
+    if compressed {
+        writer.write_all(b",o=z")?;
+    }
+    if let Some((cols, rows)) = virtual_cells {
+        write!(writer, ",U=1,c={cols},r={rows}")?;
+    }
+    write!(writer, ",m={more};")
 }
 
 fn source_crop(command: &GraphicsCommand, width: u32, height: u32) -> Option<TerminalImageCrop> {
