@@ -15,7 +15,8 @@ While the crate is on `0.x.y`:
 
 - `ImageFit::Cover` scales an image up or down to fill its whole area, keeping aspect ratio, and
   crops the overflow evenly from both sides, like CSS `object-fit: cover`. `Crop` fills only when
-  the image is already larger than the area, and `Scale` letterboxes.
+  the image is already larger than the area, and `Scale` letterboxes. Exhaustive `match`es on
+  `ImageFit` need a new arm (breaking)
 
 ### Fixed
 
