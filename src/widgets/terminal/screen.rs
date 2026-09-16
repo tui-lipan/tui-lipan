@@ -1651,11 +1651,10 @@ impl TerminalScreen {
     /// Serialize the current terminal state as bytes that can be replayed by a
     /// fresh same-sized [`TerminalScreen`].
     ///
-    /// The stream captures scrollback, primary/alternate screen contents, the
-    /// current cursor position/template, title, and common terminal modes. It is
-    /// intentionally a replay stream rather than a stable data format: replaying
-    /// it goes through the normal VTE parser and future parser fixes naturally
-    /// apply to exported state.
+    /// The stream captures scrollback, primary/alternate screen contents, retained Kitty images
+    /// and placements, the current cursor position/template, title, and common terminal modes. It
+    /// is intentionally a replay stream rather than a stable data format: replaying it goes through
+    /// the normal VTE parser and future parser fixes naturally apply to exported state.
     ///
     /// Non-goals: tab stops, custom scrolling regions, cursor style, exact Kitty
     /// keyboard stack depth (the effective flags are preserved), and the current
@@ -1708,7 +1707,7 @@ impl TerminalScreen {
             self.term.reset_damage();
             result.and_then(|()| {
                 writer.write_all(b"\x1b[?1049h")?;
-                writer.write_all(&alt_repaint)?;
+                self.write_active_grid_repaint(writer, false, Some(true))?;
                 self.write_cursor_position(writer)?;
                 self.write_modes(writer)
             })
@@ -2225,7 +2224,9 @@ impl TerminalScreen {
 
     fn write_primary_replay<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         writer.write_all(b"\x1bc")?;
-        self.write_active_grid_repaint(writer, true)?;
+        #[cfg(feature = "terminal-images")]
+        self.graphics.write_replay_transmissions(writer)?;
+        self.write_active_grid_repaint(writer, true, Some(false))?;
         self.write_cursor_position(writer)?;
         self.write_title(writer)?;
         self.write_modes(writer)
@@ -2233,7 +2234,7 @@ impl TerminalScreen {
 
     fn export_active_grid_repaint(&self, include_scrollback: bool) -> Vec<u8> {
         let mut bytes = Vec::new();
-        let result = self.write_active_grid_repaint(&mut bytes, include_scrollback);
+        let result = self.write_active_grid_repaint(&mut bytes, include_scrollback, None);
         debug_assert!(
             result.is_ok(),
             "writing replay bytes into a Vec cannot fail"
@@ -2245,6 +2246,7 @@ impl TerminalScreen {
         &self,
         writer: &mut W,
         include_scrollback: bool,
+        _graphics_screen: Option<bool>,
     ) -> io::Result<()> {
         let grid = self.term.grid();
         let top = if include_scrollback {
@@ -2259,12 +2261,35 @@ impl TerminalScreen {
         writer.write_all(b"\x1b[0m\x1b[H")?;
         let mut style = ReplayStyle::default();
         let mut hyperlink = None;
+        #[cfg(feature = "terminal-images")]
+        let mut pending_wrap = false;
 
         for line in top.0..=bottom.0 {
+            #[cfg(feature = "terminal-images")]
+            let absolute_line = usize::try_from(line - top.0).unwrap_or(0);
             let line = Line(line);
+            #[cfg(feature = "terminal-images")]
+            if let Some(alt_screen) = _graphics_screen {
+                // A full preceding row has only scheduled an autowrap; the next printable cell
+                // normally performs it. Force that transition before a placement's cursor-address
+                // command would cancel it, then erase the temporary cell.
+                if pending_wrap
+                    && self
+                        .graphics
+                        .has_replay_placements(absolute_line, alt_screen)
+                {
+                    writer.write_all(b" \x08\x1b[X")?;
+                }
+                self.graphics
+                    .write_replay_placements(writer, absolute_line, alt_screen)?;
+            }
             let wrapline = grid[line][grid.last_column()]
                 .flags
                 .contains(CellFlags::WRAPLINE);
+            #[cfg(feature = "terminal-images")]
+            {
+                pending_wrap = wrapline;
+            }
             let end_col = if wrapline {
                 grid.columns()
             } else {
@@ -4610,6 +4635,147 @@ mod tests {
             assert_eq!((placement.row, placement.col), (1, 5));
             assert_eq!((placement.rows, placement.cols), (6, 14));
             assert_eq!(placement.z, -1_499_999_999);
+        }
+
+        #[test]
+        fn replay_restores_direct_images_in_scrollback() {
+            let mut source = screen(5, 20, 50);
+            source.process_bytes(b"zero\r\none\r\ntwo\r\n");
+            source.process_bytes(&place(
+                40,
+                60,
+                "i=7,p=3,C=1,c=2,r=2,x=10,y=20,w=20,h=40,z=-9",
+            ));
+            source.process_bytes(b"\r\n".repeat(6).as_slice());
+
+            let replay = source.export_replay_bytes();
+            let mut restored = screen(5, 20, 50);
+            restored.process_bytes(&replay);
+            assert!(restored.has_images());
+
+            source.set_scrollback(4);
+            restored.set_scrollback(4);
+            let expected = source.render_snapshot();
+            let actual = restored.render_snapshot();
+            assert_eq!(actual.images.len(), 1);
+            assert_eq!(actual.images[0].image_id, expected.images[0].image_id);
+            assert_eq!(
+                (actual.images[0].row, actual.images[0].col),
+                (expected.images[0].row, expected.images[0].col)
+            );
+            assert_eq!((actual.images[0].rows, actual.images[0].cols), (2, 2));
+            assert_eq!(actual.images[0].z, -9);
+            assert_eq!(
+                actual.images[0].source_crop,
+                Some(TerminalImageCrop {
+                    x: 10,
+                    y: 20,
+                    width: 20,
+                    height: 40,
+                })
+            );
+            assert_eq!(
+                actual.images[0].image.pixels().unwrap().to_rgba8(),
+                expected.images[0].image.pixels().unwrap().to_rgba8()
+            );
+        }
+
+        #[test]
+        fn replay_places_an_image_on_a_wrapped_continuation_line() {
+            let mut source = screen(4, 5, 20);
+            source.process_bytes(b"abcdef");
+            source.process_bytes(&place(10, 20, "i=7,C=1"));
+
+            let replay = source.export_replay_bytes();
+            let mut restored = screen(4, 5, 20);
+            restored.process_bytes(&replay);
+            let expected = source.render_snapshot();
+            let actual = restored.render_snapshot();
+            assert_eq!(actual.text, expected.text);
+            assert_eq!(actual.wrapped_rows, expected.wrapped_rows);
+            assert_eq!(actual.images.len(), 1);
+            assert_eq!(
+                (actual.images[0].row, actual.images[0].col),
+                (expected.images[0].row, expected.images[0].col)
+            );
+        }
+
+        #[test]
+        fn replay_restores_virtual_images_and_image_number_aliases() {
+            let cell = TerminalCellSize::new(10, 20);
+            let mut source = screen(10, 40, 50);
+            source.process_bytes(&placeholders(7, 6, 3, cell));
+            source.process_bytes(b"\x1b_Ga=t,f=24,s=1,v=1,t=d,i=7,I=42,q=2;YGBg\x1b\\");
+
+            let replay = source.export_replay_bytes();
+            let mut restored = screen(10, 40, 50);
+            restored.process_bytes(&replay);
+            assert_eq!(restored.render_snapshot().images.len(), 1);
+
+            source.process_bytes(b"\x1b[5;9H\x1b_Ga=p,I=42,c=1,r=1,C=1,q=2;\x1b\\");
+            restored.process_bytes(b"\x1b[5;9H\x1b_Ga=p,I=42,c=1,r=1,C=1,q=2;\x1b\\");
+            let expected = source.render_snapshot();
+            let actual = restored.render_snapshot();
+            assert_eq!(actual.images.len(), expected.images.len());
+            assert_eq!(
+                (actual.images[1].row, actual.images[1].col),
+                (expected.images[1].row, expected.images[1].col)
+            );
+        }
+
+        #[test]
+        fn replay_keeps_automatic_image_ids_in_sync_with_future_output() {
+            let mut source = screen(6, 20, 10);
+            source.process_bytes(&place(10, 20, "C=1"));
+
+            let replay = source.export_replay_bytes();
+            let mut restored = screen(6, 20, 10);
+            restored.process_bytes(&replay);
+
+            source.process_bytes(b"\x1b[2;1H");
+            restored.process_bytes(b"\x1b[2;1H");
+            source.process_bytes(&place(10, 20, "C=1"));
+            restored.process_bytes(&place(10, 20, "C=1"));
+            let expected_ids: Vec<_> = source
+                .render_snapshot()
+                .images
+                .iter()
+                .map(|placement| placement.image_id)
+                .collect();
+            let actual_ids: Vec<_> = restored
+                .render_snapshot()
+                .images
+                .iter()
+                .map(|placement| placement.image_id)
+                .collect();
+            assert_eq!(actual_ids, expected_ids);
+        }
+
+        #[test]
+        fn replay_restores_images_on_both_alternate_screen_grids() {
+            let mut source = screen(6, 20, 10);
+            source.process_bytes(&place(10, 20, "i=1,C=1"));
+            source.process_bytes(b"\x1b[?1049h\x1b[3;4H");
+            source.process_bytes(&place(20, 40, "i=2,C=1,z=5"));
+
+            let replay = source.export_replay_bytes();
+            let mut restored = screen(6, 20, 10);
+            restored.process_bytes(&replay);
+            let alt = restored.render_snapshot();
+            assert_eq!(alt.images.len(), 1);
+            assert_eq!(alt.images[0].image_id, 2);
+            assert_eq!((alt.images[0].row, alt.images[0].col), (2, 3));
+
+            source.process_bytes(b"\x1b[?1049l");
+            restored.process_bytes(b"\x1b[?1049l");
+            let expected = source.render_snapshot();
+            let primary = restored.render_snapshot();
+            assert_eq!(primary.images.len(), 1);
+            assert_eq!(primary.images[0].image_id, 1);
+            assert_eq!(
+                (primary.images[0].row, primary.images[0].col),
+                (expected.images[0].row, expected.images[0].col)
+            );
         }
 
         #[test]
