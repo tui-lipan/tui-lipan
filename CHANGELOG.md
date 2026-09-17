@@ -11,6 +11,8 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-17
+
 ### Added
 
 - `KeyCapture`, an invisible focus target that hands every key, including Tab, Esc, and chord
@@ -2206,7 +2208,8 @@ Highlights of what ships in 0.1.0:
 See the [README](README.md) for the full feature set and
 [docs.tui-lipan.dev](https://docs.tui-lipan.dev) for documentation.
 
-[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.10.6...HEAD
+[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/tui-lipan/tui-lipan/compare/v0.10.6...v0.11.0
 [0.10.6]: https://github.com/tui-lipan/tui-lipan/compare/v0.10.5...v0.10.6
 [0.10.5]: https://github.com/tui-lipan/tui-lipan/compare/v0.10.4...v0.10.5
 [0.10.4]: https://github.com/tui-lipan/tui-lipan/compare/v0.10.3...v0.10.4
