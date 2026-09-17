@@ -359,6 +359,7 @@ fn min_size_unconstrained_constrained(
         ElementKind::Frame(frame) => measure_frame(frame, max_w, max_h).outer_size(),
         ElementKind::Divider(d) => measure_divider(d),
         ElementKind::Spacer(s) => measure_spacer(s),
+        ElementKind::KeyCapture(capture) => crate::widgets::internal::measure_key_capture(capture),
         ElementKind::Sparkline(s) => measure_sparkline(s),
         ElementKind::Chart(chart) => measure_chart(chart),
         ElementKind::Graph(graph) => measure_graph(graph),

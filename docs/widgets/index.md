@@ -65,6 +65,7 @@ For layout reorders, wrap the moving subtree in `Animated::new(...)`, enable `.p
 | `Button` | Interactive button with icon/shortcut support |
 | `DragSource` | Wrapper that initiates generic drag-and-drop |
 | `DropTarget` | Wrapper that receives generic drag-and-drop payloads |
+| `KeyCapture` | Invisible focus target that hands every key to one handler |
 | `Hyperlink` | Clickable text link with keyboard activation |
 | `Input` | Single-line text field |
 | `TextArea` | Multi-line editor; Vim modal editing, syntax highlighting, images, custom inline sentinels (payloads, ids, snapshots) |

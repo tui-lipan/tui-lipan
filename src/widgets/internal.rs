@@ -63,6 +63,7 @@ pub(crate) use super::hex_area::{HexAreaNode, measure_hex_area, reconcile_hex_ar
 #[cfg(feature = "image")]
 pub(crate) use super::image::{ImageNode, measure_image_constrained, reconcile_image};
 pub(crate) use super::input::{InputNode, measure_input, reconcile_input};
+pub(crate) use super::key_capture::{KeyCaptureNode, measure_key_capture, reconcile_key_capture};
 pub(crate) use super::list::{ListNode, reconcile_list};
 pub(crate) use super::mouse_region::{
     MouseRegionNode, measure_mouse_region, reconcile_mouse_region,

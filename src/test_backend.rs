@@ -2425,6 +2425,71 @@ mod tests {
         }
     }
 
+    /// A modal whose only focusable widget opts out of Tab traversal. Focus reaches it by key;
+    /// typed keys must then reach it rather than being swallowed as if the overlay were empty.
+    struct TabStoplessModalHarness;
+
+    impl Component for TabStoplessModalHarness {
+        type Message = InputEvent;
+        type Properties = ();
+        type State = crate::text::input::TextInput;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            crate::text::input::TextInput::new("")
+        }
+
+        fn update(&mut self, event: Self::Message, ctx: &mut Context<Self>) -> Update {
+            event.apply_to(&mut ctx.state);
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            Modal::new()
+                .child(
+                    Input::bound(&ctx.state)
+                        .tab_stop(false)
+                        .on_change(ctx.link().callback(|event| event))
+                        .key("only"),
+                )
+                .into()
+        }
+    }
+
+    /// A modal holding only a `KeyCapture` that claims letters and Tab and declines the rest.
+    struct KeyCaptureHarness;
+
+    impl Component for KeyCaptureHarness {
+        type Message = KeyEvent;
+        type Properties = ();
+        type State = (Vec<KeyEvent>, usize);
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            (Vec::new(), 0)
+        }
+
+        fn update(&mut self, key: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state.0.push(key);
+            Update::full()
+        }
+
+        fn on_key(&mut self, _key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
+            ctx.state.1 += 1;
+            KeyUpdate::handled(Update::none())
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            Modal::new()
+                .child(
+                    crate::widgets::KeyCapture::new()
+                        .on_key(ctx.link().key_handler(|key| {
+                            matches!(key.code, KeyCode::Char(_) | KeyCode::Tab).then_some(key)
+                        }))
+                        .key("capture"),
+                )
+                .into()
+        }
+    }
+
     struct PaneWrappedModalHarness;
 
     impl Component for PaneWrappedModalHarness {
@@ -3001,6 +3066,46 @@ mod tests {
                 .expect("Escape should dismiss modal")
         );
         assert_eq!(backend.focused(), Some(background));
+    }
+
+    #[test]
+    fn a_modal_without_tab_stops_still_routes_keys_to_its_focused_widget() {
+        let mut backend = TestBackend::new(TabStoplessModalHarness);
+        assert!(backend.focus_key(&Key::from("only")));
+        backend
+            .send_key(KeyEvent {
+                code: KeyCode::Char('x'),
+                mods: KeyMods::default(),
+            })
+            .unwrap();
+        assert_eq!(backend.state().text(), "x");
+    }
+
+    #[test]
+    fn key_capture_takes_focus_and_hands_its_handler_every_key() {
+        let mut backend = TestBackend::new(KeyCaptureHarness);
+        assert_eq!(backend.focused_key(), Some(&Key::from("capture")));
+        for code in [KeyCode::Char('a'), KeyCode::Tab, KeyCode::F(5)] {
+            backend
+                .send_key(KeyEvent {
+                    code,
+                    mods: KeyMods::default(),
+                })
+                .unwrap();
+        }
+        let codes = backend
+            .state()
+            .0
+            .iter()
+            .map(|key| key.code)
+            .collect::<Vec<_>>();
+        assert_eq!(codes, [KeyCode::Char('a'), KeyCode::Tab]);
+        assert_eq!(
+            backend.state().1,
+            1,
+            "a declined key bubbles to the component"
+        );
+        assert_eq!(backend.focused_key(), Some(&Key::from("capture")));
     }
 
     #[test]

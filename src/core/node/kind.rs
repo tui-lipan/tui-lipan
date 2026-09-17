@@ -116,6 +116,7 @@ macro_rules! node_kind_delegate_match {
             Self::DraggableTabBar(n) => n.$method($($arg),*),
             Self::Divider(n) => n.$method($($arg),*),
             Self::Spacer(n) => n.$method($($arg),*),
+            Self::KeyCapture(n) => n.$method($($arg),*),
             Self::Checkbox(n) => n.$method($($arg),*),
             Self::ProgressBar(n) => n.$method($($arg),*),
             Self::Slider(n) => n.$method($($arg),*),
@@ -299,6 +300,9 @@ pub(crate) enum NodeKind {
 
     /// Spacer node.
     Spacer(crate::widgets::internal::SpacerNode),
+
+    /// KeyCapture node.
+    KeyCapture(crate::widgets::internal::KeyCaptureNode),
 
     /// Checkbox node.
     Checkbox(CheckboxNode),

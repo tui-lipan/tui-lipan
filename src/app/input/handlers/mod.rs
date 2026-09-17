@@ -26,6 +26,7 @@ pub mod document_view;
 pub mod graph;
 pub mod hex_area;
 pub mod input_widget;
+pub mod key_capture;
 pub mod list_table;
 pub mod pan_view;
 pub mod scroll_view;
@@ -84,6 +85,7 @@ pub(crate) enum InteractiveTag {
     Graph,
     Input,
     HexArea,
+    KeyCapture,
     List,
     Table,
     TextArea,
@@ -107,6 +109,7 @@ pub(crate) fn classify_interactive(kind: &NodeKind) -> InteractiveTag {
         NodeKind::Graph(_) => InteractiveTag::Graph,
         NodeKind::Input(_) => InteractiveTag::Input,
         NodeKind::HexArea(_) => InteractiveTag::HexArea,
+        NodeKind::KeyCapture(_) => InteractiveTag::KeyCapture,
         NodeKind::List(_) => InteractiveTag::List,
         NodeKind::Table(_) => InteractiveTag::Table,
         NodeKind::TextArea(_) => InteractiveTag::TextArea,

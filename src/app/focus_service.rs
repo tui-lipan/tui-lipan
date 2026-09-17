@@ -141,10 +141,12 @@ pub(crate) fn overlay_ring(tree: &NodeTree, overlay_id: NodeId) -> Vec<NodeId> {
 
 /// Whether the top capturing overlay exists and has nothing focusable in it.
 ///
-/// Gates keys that should keep working over an inert overlay (e.g. quit).
+/// Gates keys that should keep working over an inert overlay (e.g. quit). A widget that opts out
+/// of Tab traversal still holds focus and receives keys, so it keeps the overlay from reading as
+/// empty even though the Tab ring is.
 pub(crate) fn top_capturing_overlay_is_empty(tree: &NodeTree) -> bool {
     tree.top_capturing_overlay()
-        .is_some_and(|overlay| overlay_ring(tree, overlay.id).is_empty())
+        .is_some_and(|overlay| !tree.has_focusable_in_subtree(overlay.id))
 }
 
 /// Give a capturing overlay focus, or suspend focus underneath it.

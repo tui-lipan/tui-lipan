@@ -285,6 +285,9 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
             },
         ),
         ElementKind::Spacer(spacer) => reconcile_spacer(ctx.tree, id, spacer, rect, &el.layout),
+        ElementKind::KeyCapture(capture) => {
+            crate::widgets::internal::reconcile_key_capture(ctx.tree, id, capture, rect, &el.layout)
+        }
         ElementKind::VStack(vs) => {
             let old_children = {
                 let node = ctx.tree.node_mut(id);

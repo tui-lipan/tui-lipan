@@ -11,6 +11,43 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- `KeyCapture`, an invisible focus target that hands every key, including Tab, to one handler, for
+  shortcut recorders and other controls whose keys are all app-defined.
+- `KeyBinding::to_source` and `KeyBindings::to_source` return a stable config spelling
+  (`super-shift-p`, `ctrl-minus`) that always parses back to an equal binding, so applications can
+  persist bindings without depending on display formatting.
+- `KeyBinding::from_key_event` is public. It records only the modifiers an event reports; a
+  character's case never implies Shift.
+- `KeyBinding::conflicts_with` reports whether two bindings are equal or one's steps start the
+  other's.
+- `KeyMods::label` writes held modifiers in label order (`Ctrl+Shift`), and `KeyMods::SUPER` joins
+  the existing modifier constants.
+
+### Changed
+
+- `KeyBinding` names the Super modifier `Super` in its canonical form, labels, and lowercase text
+  instead of `Cmd`. `cmd`, `command`, `meta`, `win`, and `windows` remain accepted input aliases.
+  (breaking)
+- `Display` for `KeyBinding` and `KeyBindings`, `format_binding`, and `format_bindings` write the new
+  keycap label notation: modifier chords are keycaps with an explicit `Shift` (`Ctrl+Shift+A`),
+  standalone printable keys show the character they type (`s`, `S`, `?`), and named keys keep
+  their modifiers (`Shift+Tab`). Chord steps after the first are no longer uppercased
+  (`Ctrl+X b`). (breaking)
+- Command palette shortcut hints derived from the keymap use the label notation instead of
+  lowercase canonical text. (breaking)
+
+### Removed
+
+- `KeyBinding::compact_display`, `KeyBindings::compact_display`, `format_binding_compact`, and
+  `format_bindings_compact`. Use `label`, `format_binding`, and `format_bindings`. (breaking)
+
+### Fixed
+
+- A capturing overlay whose focusable widgets all opt out of Tab traversal no longer swallows every
+  key. It counted as empty, so keys never reached the widget holding focus.
+
 ## [0.10.6] - 2026-09-17
 
 ### Fixed

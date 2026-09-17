@@ -1062,6 +1062,24 @@ impl NodeTree {
         out
     }
 
+    /// Whether anything under `root` can hold keyboard focus, including widgets that opt out of
+    /// Tab traversal. Descends through `FocusScope::Contain` panes; skips inert and excluded
+    /// subtrees.
+    pub(crate) fn has_focusable_in_subtree(&self, root: NodeId) -> bool {
+        if !self.is_valid(root) {
+            return false;
+        }
+        let node = self.node(root);
+        if node.inert || node.focus_scope() == crate::widgets::FocusScope::Exclude {
+            return false;
+        }
+        node.is_focusable()
+            || node
+                .children
+                .iter()
+                .any(|&child| self.has_focusable_in_subtree(child))
+    }
+
     fn collect_focusables(
         &self,
         id: NodeId,
