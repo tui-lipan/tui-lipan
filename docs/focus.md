@@ -12,6 +12,12 @@ Widget `.on_focus` / `.on_blur`, `ctx.request_focus`, and traversal still descri
 widget receives keyboard input. A child `Terminal` that enables CSI `?1004` receives its own focus
 sequences from the runner and is not the root lifecycle callback.
 
+Losing host-window focus clears pointer hover: widget hover styles, `MouseRegion`
+`on_hover_change(false)`, toast hover pauses, and modifier-held terminal link hover. Terminals do
+not report the pointer leaving the window while it stays focused, so hover can remain until the next
+mouse event or a focus-out. An inline viewport also clears hover when a mouse report falls outside
+that viewport.
+
 ## Focus Policy
 
 Configure framework-initiated focus movement on `App`:

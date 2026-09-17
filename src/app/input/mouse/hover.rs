@@ -123,6 +123,37 @@ pub(crate) fn clear_mouse_hover_state(state: &mut MouseTrackingState) -> bool {
     state.hovered.take().is_some() || previous_regions.iter().any(|region| region.affects_paint)
 }
 
+/// Drop hover as if the pointer left the app surface.
+///
+/// Hosts do not always send a motion event for that: `FocusLost` is the usual
+/// signal, and inline viewports treat an out-of-viewport report the same way.
+pub(crate) fn release_pointer_hover(
+    state: &mut MouseTrackingState,
+    tree: &mut NodeTree,
+    overlays: &mut crate::overlay::OverlayManager,
+) -> bool {
+    let toast_dirty = overlays.set_hovered_toast(None);
+    #[cfg(feature = "terminal")]
+    let link_dirty = {
+        let previous = state.terminal_link_hover_node.take();
+        if let Some(id) = previous.filter(|id| tree.is_valid(*id))
+            && let NodeKind::Terminal(term) = &mut tree.node_mut(id).kind
+        {
+            term.link_hover.take().is_some()
+        } else {
+            false
+        }
+    };
+    #[cfg(not(feature = "terminal"))]
+    let link_dirty = {
+        let _ = tree;
+        false
+    };
+    state.last_mouse.set(None);
+    state.sub_cell.set(None);
+    clear_mouse_hover_state(state) || toast_dirty || link_dirty
+}
+
 pub(crate) fn mouse_region_hover_transition_affects_paint(
     previous: &[MouseRegionHoverState],
     current: &[MouseRegionHoverState],

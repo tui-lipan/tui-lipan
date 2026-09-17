@@ -665,8 +665,8 @@ should take that click instead.
 
 Hover belongs to the whole region subtree. `on_hover_change`, `hover_style`, and
 `hover_effects` remain active while the pointer moves across interactive
-descendants, and only leave when it exits the region or fails its custom
-`hit_test`. Click capture follows that same custom hit-test boundary.
+descendants, and only leave when it exits the region, fails its custom
+`hit_test`, leaves an inline viewport, or the host window loses focus. Click capture follows that same custom hit-test boundary.
 
 Use `drag_requires_mods(KeyMods::ALT)` or
 `right_drag_requires_mods(KeyMods::ALT)` for compositor-style gestures that

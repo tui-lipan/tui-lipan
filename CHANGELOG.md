@@ -11,6 +11,12 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- Pointer hover now clears when the host terminal loses focus, and when a mouse report falls
+  outside an inline viewport. Terminals still do not report the cursor leaving the window while it
+  stays focused.
+
 ## [0.11.0] - 2026-09-17
 
 ### Added

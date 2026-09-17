@@ -1181,6 +1181,9 @@ impl<C: Component> AppRunner<C> {
         }
 
         self.focus.window_focused = focused;
+        if !focused {
+            self.apply_pointer_leave(dirty);
+        }
         let update_level = self.core.on_window_focus_changed(focused);
         self.apply_root_update(dirty, update_level);
         true
@@ -2283,10 +2286,6 @@ impl<C: Component> AppRunner<C> {
                         CEvent::FocusLost => {
                             self.set_window_focused(false, &mut dirty);
                             self.set_held_modifiers(KeyMods::NONE, &mut dirty);
-                            #[cfg(feature = "terminal")]
-                            if self.refresh_terminal_link_hover_at_pointer(KeyMods::NONE) {
-                                dirty.mark_paint();
-                            }
                             self.animation.reset_blink();
                             dirty.mark_paint();
                         }
@@ -2474,66 +2473,74 @@ impl<C: Component> AppRunner<C> {
                                     if matches!(mouse.kind, MouseKind::Moved) {
                                         let mut sub_cell = self.mouse.sub_cell.get();
                                         let mut dispatched_coalesced_move = false;
+                                        let mut left_viewport = false;
                                         while let Some(next_ev) = self.try_recv_event(event_rx)? {
                                             match split_pointer_event(next_ev) {
                                                 Ok((next_ev, next_sub_cell)) => {
-                                                    if let Some(next_mouse) = self
-                                                        .convert_coalesced_pointer(
-                                                            next_ev,
-                                                            next_sub_cell,
-                                                        )
-                                                    {
-                                                        if matches!(
-                                                            next_mouse.kind,
-                                                            MouseKind::Moved
-                                                        ) {
-                                                            mouse = next_mouse;
-                                                            sub_cell = next_sub_cell;
-                                                        } else {
-                                                            self.mouse.sub_cell.set(sub_cell);
-                                                            if self.dispatch_mouse(mouse) {
-                                                                let hover_level =
-                                                                    self.motion_hover_dirty_level();
-                                                                apply_dirty_level(
-                                                                    &mut dirty,
-                                                                    mouse_dispatch_dirty_level(
-                                                                        mouse.kind,
-                                                                        None,
-                                                                        None,
-                                                                        hover_level,
-                                                                    ),
-                                                                );
-                                                            }
-                                                            dispatched_coalesced_move = true;
-                                                            self.mouse.sub_cell.set(next_sub_cell);
-                                                            let drag_before =
-                                                                active_drag_dirty_level(
-                                                                    &self.drag.active,
-                                                                );
-                                                            if self.dispatch_mouse(next_mouse) {
-                                                                let after = active_drag_dirty_level(
-                                                                    &self.drag.active,
-                                                                );
-                                                                let hover_level =
-                                                                    self.motion_hover_dirty_level();
-                                                                let level =
-                                                                    mouse_dispatch_dirty_level(
-                                                                        next_mouse.kind,
-                                                                        drag_before,
-                                                                        after,
-                                                                        hover_level,
+                                                    if let CEvent::Mouse(m) = next_ev {
+                                                        if let Some(next_mouse) =
+                                                            self.convert_mouse_event(m)
+                                                        {
+                                                            if matches!(
+                                                                next_mouse.kind,
+                                                                MouseKind::Moved
+                                                            ) {
+                                                                mouse = next_mouse;
+                                                                sub_cell = next_sub_cell;
+                                                            } else {
+                                                                self.mouse.sub_cell.set(sub_cell);
+                                                                if self.dispatch_mouse(mouse) {
+                                                                    let hover_level = self
+                                                                        .motion_hover_dirty_level();
+                                                                    apply_dirty_level(
+                                                                        &mut dirty,
+                                                                        mouse_dispatch_dirty_level(
+                                                                            mouse.kind,
+                                                                            None,
+                                                                            None,
+                                                                            hover_level,
+                                                                        ),
                                                                     );
-                                                                #[cfg(feature = "devtools")]
-                                                                self.apply_input_dirty(
-                                                                    &mut dirty,
-                                                                    level,
-                                                                    "input:mouse",
-                                                                );
-                                                                #[cfg(not(feature = "devtools"))]
-                                                                apply_dirty_level(
-                                                                    &mut dirty, level,
-                                                                );
+                                                                }
+                                                                dispatched_coalesced_move = true;
+                                                                self.mouse
+                                                                    .sub_cell
+                                                                    .set(next_sub_cell);
+                                                                let drag_before =
+                                                                    active_drag_dirty_level(
+                                                                        &self.drag.active,
+                                                                    );
+                                                                if self.dispatch_mouse(next_mouse) {
+                                                                    let after =
+                                                                        active_drag_dirty_level(
+                                                                            &self.drag.active,
+                                                                        );
+                                                                    let hover_level = self
+                                                                        .motion_hover_dirty_level();
+                                                                    let level =
+                                                                        mouse_dispatch_dirty_level(
+                                                                            next_mouse.kind,
+                                                                            drag_before,
+                                                                            after,
+                                                                            hover_level,
+                                                                        );
+                                                                    #[cfg(feature = "devtools")]
+                                                                    self.apply_input_dirty(
+                                                                        &mut dirty,
+                                                                        level,
+                                                                        "input:mouse",
+                                                                    );
+                                                                    #[cfg(not(
+                                                                        feature = "devtools"
+                                                                    ))]
+                                                                    apply_dirty_level(
+                                                                        &mut dirty, level,
+                                                                    );
+                                                                }
+                                                                break;
                                                             }
+                                                        } else if to_mouse_event(m).is_some() {
+                                                            left_viewport = true;
                                                             break;
                                                         }
                                                     }
@@ -2547,7 +2554,9 @@ impl<C: Component> AppRunner<C> {
                                                 }
                                             }
                                         }
-                                        if !dispatched_coalesced_move {
+                                        if left_viewport {
+                                            self.apply_pointer_leave(&mut dirty);
+                                        } else if !dispatched_coalesced_move {
                                             self.mouse.sub_cell.set(sub_cell);
                                             if self.dispatch_mouse(mouse) {
                                                 let hover_level = self.motion_hover_dirty_level();
@@ -2671,6 +2680,8 @@ impl<C: Component> AppRunner<C> {
                                         }
                                     }
                                 }
+                            } else if to_mouse_event(m).is_some() {
+                                self.apply_pointer_leave(&mut dirty);
                             }
                         }
                         CEvent::Resize(_, _) => {

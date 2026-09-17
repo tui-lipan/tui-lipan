@@ -1174,6 +1174,18 @@ impl<C: Component> AppRunner<C> {
         self.update_hover_impl(x, y, false)
     }
 
+    pub(crate) fn apply_pointer_leave(&mut self, dirty: &mut super::DirtyTracker) {
+        let overlays = std::rc::Rc::clone(&self.core.overlay_manager);
+        let hover_dirty = mouse::release_pointer_hover(
+            &mut self.mouse,
+            &mut self.core.tree,
+            &mut overlays.borrow_mut(),
+        );
+        if hover_dirty {
+            super::apply_dirty_level(dirty, self.motion_hover_dirty_level());
+        }
+    }
+
     pub(crate) fn refresh_hover_from_last_mouse(&mut self) -> bool {
         let Some((x, y)) = self.mouse.last_mouse.get() else {
             return false;

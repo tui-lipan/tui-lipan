@@ -217,6 +217,26 @@ mod tests {
                 mods: KeyMods::default(),
             }),
         );
+
+        let outside = MouseEvent {
+            x: 2,
+            y: 2,
+            kind: MouseKind::Moved,
+            mods: KeyMods::default(),
+        };
+        assert!(
+            inline
+                .convert_mouse_event(
+                    outside,
+                    crate::app::runner::ViewportMetrics {
+                        x: 0,
+                        y: 4,
+                        width: 80,
+                        height: 4,
+                    },
+                )
+                .is_none()
+        );
     }
 
     #[test]

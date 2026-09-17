@@ -3523,6 +3523,39 @@ fn mouse_region_hover_tracks_interactive_descendants() {
     assert_eq!(&*changes.borrow(), &[true, false]);
 }
 
+#[test]
+fn host_focus_loss_clears_pointer_hover() {
+    let changes = Rc::new(RefCell::new(Vec::new()));
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 8,
+        h: 1,
+    };
+    let component = DescendantMouseRegionHover {
+        changes: Rc::clone(&changes),
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component, ());
+    init_runner(
+        &mut runner,
+        DescendantMouseRegionHover {
+            changes: Rc::clone(&changes),
+        },
+        viewport,
+    );
+
+    assert!(runner.update_hover(0, 0));
+    assert!(runner.mouse.hovered.is_some());
+    assert_eq!(&*changes.borrow(), &[true]);
+
+    let mut dirty = DirtyTracker::default();
+    assert!(runner.set_window_focused(false, &mut dirty));
+    assert!(runner.mouse.hovered.is_none());
+    assert!(runner.mouse.last_mouse.get().is_none());
+    assert_eq!(&*changes.borrow(), &[true, false]);
+    assert!(!matches!(dirty.level(), DirtyLevel::None));
+}
+
 struct StyleOnlyHitTestRegion;
 
 impl Component for StyleOnlyHitTestRegion {
