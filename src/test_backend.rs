@@ -488,6 +488,17 @@ where
         let clipboard_config = self.core.ctx.env().clipboard_config.clone();
         self.framework_effects.clear();
 
+        // Mirrors `AppRunner::dispatch_layered_key`: a focused KeyCapture sees the key first.
+        if crate::app::input::handlers::key_capture::preflight(&self.core.tree, self.focused, key) {
+            self.keymap_runtime.reset();
+            self.reset_command_chord();
+            let pump_dirty = self.pump()?;
+            if !pump_dirty {
+                self.render();
+            }
+            return Ok(true);
+        }
+
         // Mirrors `AppRunner::dispatch_layered_key`: a cancelling Esc is consumed, so tests see the
         // same thing production does rather than a stray `ESC` reaching the focused widget.
         if matches!(key.code, KeyCode::Esc) && self.reset_command_chord() {
@@ -1065,7 +1076,7 @@ where
     }
 
     fn top_capturing_overlay_is_empty(&self) -> bool {
-        focus_service::top_capturing_overlay_is_empty(&self.core.tree)
+        focus_service::top_capturing_overlay_is_empty(&self.core.tree, self.focused)
     }
 
     fn focus_overlay_next(&mut self) -> bool {
@@ -1330,7 +1341,7 @@ struct TestBackendDispatchOps<'a, C: Component> {
 
 impl<C: Component> TestBackendDispatchOps<'_, C> {
     fn top_capturing_overlay_is_empty(&self) -> bool {
-        focus_service::top_capturing_overlay_is_empty(&self.core.tree)
+        focus_service::top_capturing_overlay_is_empty(&self.core.tree, *self.focused)
     }
 
     fn handle_overlay_escape(&mut self) -> bool {
@@ -3082,6 +3093,24 @@ mod tests {
     }
 
     #[test]
+    fn an_unfocused_modal_without_tab_stops_still_lets_quit_through() {
+        let app = crate::App::new().user_keymap_policy(crate::UserKeymapPolicy::Disabled);
+        let mut backend = TestBackend::new_with_app(app, TabStoplessModalHarness, ());
+        assert_eq!(backend.focused_key(), None, "nothing to auto-focus");
+        assert!(backend.top_capturing_overlay_is_empty());
+
+        assert!(backend.send_key(ctrl_key('q')).unwrap());
+        assert!(backend.core.ctx.should_quit());
+
+        let mut backend = TestBackend::new(TabStoplessModalHarness);
+        assert!(backend.focus_key(&Key::from("only")));
+        assert!(
+            !backend.top_capturing_overlay_is_empty(),
+            "a focused widget makes the overlay live"
+        );
+    }
+
+    #[test]
     fn key_capture_takes_focus_and_hands_its_handler_every_key() {
         let mut backend = TestBackend::new(KeyCaptureHarness);
         assert_eq!(backend.focused_key(), Some(&Key::from("capture")));
@@ -3106,6 +3135,42 @@ mod tests {
             "a declined key bubbles to the component"
         );
         assert_eq!(backend.focused_key(), Some(&Key::from("capture")));
+    }
+
+    #[test]
+    fn key_capture_records_keys_that_start_framework_and_command_chords() {
+        let app = crate::App::new()
+            .user_keymap_policy(crate::UserKeymapPolicy::Disabled)
+            .key_dispatch_policy(crate::KeyDispatchPolicy::AppCommandsFirst)
+            .framework_keymap(crate::FrameworkKeymap::default().bind(
+                crate::FrameworkAction::Quit,
+                crate::KeyBindings::from_str("ctrl-x b").unwrap(),
+            ));
+        let mut backend = TestBackend::new_with_app(app, KeyCaptureHarness, ());
+        backend.core.ctx.command_registry().register(
+            crate::CommandEntry::builder("test.chord")
+                .shortcut(crate::KeyBinding::from_str("ctrl-a d").unwrap())
+                .handler(Callback::new(|_| {}))
+                .build(),
+        );
+
+        let plain_b = KeyEvent {
+            code: KeyCode::Char('b'),
+            mods: KeyMods::NONE,
+        };
+        let sent = [ctrl_key('x'), plain_b, ctrl_key('a')];
+        for event in sent {
+            assert!(backend.send_key(event).unwrap());
+        }
+
+        assert_eq!(
+            backend.state().0,
+            sent,
+            "the recorder saw every chord prefix"
+        );
+        assert_eq!(backend.state().1, 0);
+        assert!(!backend.core.ctx.should_quit());
+        assert!(!backend.core.ctx.command_chord_pending());
     }
 
     #[test]

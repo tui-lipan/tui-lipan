@@ -16,9 +16,11 @@ use crate::style::Length;
 ///
 /// Use it where a view needs keyboard input without a visible control: a shortcut recorder, a
 /// "press any key" prompt, or a card whose keys are all app-defined. It draws nothing and takes no
-/// space by default. While focused it is the focused widget, so each key reaches
-/// [`Self::on_key`] before component `on_key` handlers and framework focus traversal; Tab included.
-/// Keys the handler declines bubble like any other unhandled key.
+/// space by default. While it holds focus, each key reaches [`Self::on_key`] before anything else
+/// sees it: pending and prefix chords (framework and app command), clipboard shortcuts, overlay
+/// dismissal, component `on_key` handlers, and focus traversal. Tab and Esc are included. A
+/// consumed key also cancels any chord in progress. Keys the handler declines continue through
+/// normal dispatch as if the target were not there.
 #[derive(Clone)]
 pub struct KeyCapture {
     pub(crate) on_key: Option<KeyHandler>,

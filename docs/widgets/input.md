@@ -231,10 +231,13 @@ keys are all app-defined.
 | `on_blur` | `Callback<()>` | none | Fired when the target loses focus |
 | `width` / `height` | `Length` | `Auto` | `Auto` measures zero, so the target takes no space |
 
-It draws nothing. While focused it is the focused widget, so keys reach `on_key` before component
-`on_key` handlers and framework focus traversal, including Tab. Keys the handler declines bubble
-like any other unhandled key. Place it inside the card it serves; a capturing overlay gives it
-focus automatically when it is the overlay's first tab stop.
+It draws nothing. While it holds focus, keys reach `on_key` before anything else sees them:
+framework and app command chords (including a key that would start one), clipboard shortcuts,
+overlay dismissal, component `on_key` handlers, and focus traversal. Tab and Esc are included, so a
+recorder can bind them. A consumed key also cancels any chord in progress. Keys the handler
+declines continue through normal dispatch, so declining Esc still dismisses the overlay. Place it
+inside the card it serves; a capturing overlay gives it focus automatically when it is the
+overlay's first tab stop.
 
 ```rust
 KeyCapture::new()

@@ -13,11 +13,13 @@ While the crate is on `0.x.y`:
 
 ### Added
 
-- `KeyCapture`, an invisible focus target that hands every key, including Tab, to one handler, for
-  shortcut recorders and other controls whose keys are all app-defined.
+- `KeyCapture`, an invisible focus target that hands every key, including Tab, Esc, and chord
+  prefixes, to one handler before any other key handling, for shortcut recorders and other controls
+  whose keys are all app-defined.
 - `KeyBinding::to_source` and `KeyBindings::to_source` return a stable config spelling
-  (`super-shift-p`, `ctrl-minus`) that always parses back to an equal binding, so applications can
-  persist bindings without depending on display formatting.
+  (`super-shift-p`, `ctrl-minus`, `ctrl-comma`) that always parses back to an equal binding, so
+  applications can persist bindings without depending on display formatting. Binding text accepts
+  `comma` as the name of the `,` key.
 - `KeyBinding::from_key_event` is public. It records only the modifiers an event reports; a
   character's case never implies Shift.
 - `KeyBinding::conflicts_with` reports whether two bindings are equal or one's steps start the
@@ -46,7 +48,8 @@ While the crate is on `0.x.y`:
 ### Fixed
 
 - A capturing overlay whose focusable widgets all opt out of Tab traversal no longer swallows every
-  key. It counted as empty, so keys never reached the widget holding focus.
+  key once one of them is focused. It counted as empty, so keys never reached the widget holding
+  focus. While none is focused the overlay still counts as empty, so quit keeps working.
 
 ## [0.10.6] - 2026-09-17
 

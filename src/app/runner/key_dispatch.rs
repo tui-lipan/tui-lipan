@@ -5,7 +5,7 @@ use crate::app::focus_service::{self, FocusRefs, FocusStackEntry, OverlayKey};
 use crate::app::input::command_registry::{CommandRegistry, CommandShortcutResult};
 use crate::app::input::focus;
 use crate::app::input::focus::FocusDirection;
-use crate::app::input::handlers::KeyCtx;
+use crate::app::input::handlers::{KeyCtx, key_capture};
 use crate::app::input::key_dispatch::{
     CommandDispatchState, DispatchOps, DispatchOutcome, FocusKind, FrameworkDispatch,
     TerminalPreflightDispatch, dispatch_key,
@@ -48,6 +48,16 @@ impl<C: Component> AppRunner<C> {
 
     pub(crate) fn dispatch_layered_key(&mut self, key: KeyEvent) -> LayeredKeyEventResult {
         self.framework_effects.clear();
+
+        if key_capture::preflight(&self.core.tree, self.focus.focused, key) {
+            self.keymap_runtime.reset();
+            self.reset_command_chord();
+            return LayeredKeyEventResult {
+                consumed: true,
+                mark_full: true,
+                ..Default::default()
+            };
+        }
 
         if matches!(key.code, KeyCode::Esc) {
             // A keystroke that cancels a chord is spent on the cancel. Forwarding it as well would
@@ -290,7 +300,7 @@ struct RunnerDispatchOps<'a, 'b, C: Component> {
 
 impl<C: Component> RunnerDispatchOps<'_, '_, C> {
     fn top_capturing_overlay_is_empty(&self) -> bool {
-        focus_service::top_capturing_overlay_is_empty(&self.core.tree)
+        focus_service::top_capturing_overlay_is_empty(&self.core.tree, *self.focused)
     }
 
     fn handle_overlay_escape(&mut self) -> bool {

@@ -154,8 +154,8 @@ impl KeyBinding {
     /// binding.
     ///
     /// Modifiers are written `ctrl`, `alt`, `super`, `shift` in that order and joined to the key
-    /// with `-`; keys are lowercase names (`enter`, `pageup`, `f5`, `space`), with the `-` and `+`
-    /// keys written `minus` and `plus` so the separator stays unambiguous. Chord steps are
+    /// with `-`; keys are lowercase names (`enter`, `pageup`, `f5`, `space`), with the `-`, `+`
+    /// and `,` keys written `minus`, `plus` and `comma` so no separator is ambiguous. Chord steps are
     /// separated by spaces. Unlike [`Self::canonical`], this format is a compatibility promise:
     /// applications can persist it without depending on display or identity formatting.
     pub fn to_source(&self) -> String {
@@ -443,6 +443,7 @@ fn source_step(step: &str) -> String {
     parts.push(match rest {
         "-" => "minus",
         "+" => "plus",
+        "," => "comma",
         key => key,
     });
     parts.join("-")
@@ -497,9 +498,19 @@ pub(crate) fn normalize_binding(raw: &str) -> String {
 }
 
 fn normalize_chord_step(step: &str) -> String {
-    let step = step.to_ascii_lowercase();
+    let mut step = step.to_ascii_lowercase();
     if step == "+" || step == "plus" {
         return "+".to_string();
+    }
+    // `comma` names the `,` key so it can be written inside a comma-separated list.
+    if step == "comma" {
+        return ",".to_string();
+    }
+    for suffix in ["-comma", "+comma"] {
+        if let Some(rest) = step.strip_suffix(suffix) {
+            step = format!("{rest}-,");
+            break;
+        }
     }
 
     let (mods, plus_key) = if let Some(rest) = step.strip_suffix("-plus") {
@@ -1437,6 +1448,35 @@ mod tests {
         }
         let set = KeyBindings::from_str("cmd-w, ctrl-a x").unwrap();
         assert_eq!(set.to_source(), "super-w, ctrl-a x");
+        assert_eq!(KeyBindings::from_str(&set.to_source()).unwrap(), set);
+    }
+
+    #[test]
+    fn comma_key_source_does_not_collide_with_the_alternatives_separator() {
+        let comma = KeyBinding::from_key_event(KeyEvent {
+            code: KeyCode::Char(','),
+            mods: KeyMods::NONE,
+        });
+        let ctrl_comma = KeyBinding::from_key_event(KeyEvent {
+            code: KeyCode::Char(','),
+            mods: KeyMods::CTRL,
+        });
+        let chord = KeyBinding::from_str("ctrl-x comma").unwrap();
+        assert_eq!(comma, KeyBinding::from_str(",").unwrap());
+        assert_eq!(ctrl_comma, KeyBinding::from_str("ctrl-,").unwrap());
+        assert_eq!(chord.label(), "Ctrl+X ,");
+
+        for (binding, source) in [
+            (&comma, "comma"),
+            (&ctrl_comma, "ctrl-comma"),
+            (&chord, "ctrl-x comma"),
+        ] {
+            assert_eq!(binding.to_source(), source);
+            assert_eq!(&KeyBinding::from_str(source).unwrap(), binding, "{source}");
+        }
+
+        let set = KeyBindings::from_bindings([comma, ctrl_comma, chord]);
+        assert_eq!(set.to_source(), "comma, ctrl-comma, ctrl-x comma");
         assert_eq!(KeyBindings::from_str(&set.to_source()).unwrap(), set);
     }
 

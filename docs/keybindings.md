@@ -245,8 +245,9 @@ modifiers moving.
 `to_source()` is a compatibility promise: it always parses back to an equal binding, and its
 format does not follow display changes. Modifiers are `ctrl`, `alt`, `super`, `shift` in that
 order, joined to the key with `-`. Keys are lowercase names (`enter`, `pageup`, `f5`, `space`),
-and the `-` and `+` keys are `minus` and `plus`. Chord steps are separated by spaces.
-`KeyBindings::to_source()` joins alternatives with `, `.
+and the `-`, `+`, and `,` keys are `minus`, `plus`, and `comma`. Chord steps are separated by
+spaces. `KeyBindings::to_source()` joins alternatives with `, `, so a comma key inside a list of
+alternatives must be written `comma`.
 
 ### Recording and checking bindings
 

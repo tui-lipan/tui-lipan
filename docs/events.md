@@ -781,7 +781,7 @@ Quick lookup - which callbacks does each widget support?
 
 | Callback | Payload | When |
 |----------|---------|------|
-| `on_key` | `KeyHandler` | Every key while focused, including Tab; declined keys bubble |
+| `on_key` | `KeyHandler` | Every key while focused, before chords and other handling; declined keys continue |
 | `on_focus` / `on_blur` | `()` | Focus gained / lost |
 
 ### TextArea
