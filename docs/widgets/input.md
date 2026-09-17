@@ -235,7 +235,7 @@ It draws nothing. While it holds focus, keys reach `on_key` before anything else
 framework and app command chords (including a key that would start one), clipboard shortcuts,
 overlay dismissal, component `on_key` handlers, and focus traversal. Tab and Esc are included, so a
 recorder can bind them. A consumed key also cancels any chord in progress. Keys the handler
-declines continue through normal dispatch, so declining Esc still dismisses the overlay. Place it
+declines, Esc included, continue through normal dispatch as if the target were not there. Place it
 inside the card it serves; a capturing overlay gives it focus automatically when it is the
 overlay's first tab stop.
 
