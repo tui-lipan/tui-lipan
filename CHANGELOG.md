@@ -11,6 +11,8 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-09-18
+
 ### Added
 
 - `List::navigation_wrap` opts into wrapping Up/Down at the first and last selectable rows (off by
@@ -2240,7 +2242,8 @@ Highlights of what ships in 0.1.0:
 See the [README](README.md) for the full feature set and
 [docs.tui-lipan.dev](https://docs.tui-lipan.dev) for documentation.
 
-[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.11.3...HEAD
+[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.11.4...HEAD
+[0.11.4]: https://github.com/tui-lipan/tui-lipan/compare/v0.11.3...v0.11.4
 [0.11.3]: https://github.com/tui-lipan/tui-lipan/compare/v0.11.2...v0.11.3
 [0.11.2]: https://github.com/tui-lipan/tui-lipan/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/tui-lipan/tui-lipan/compare/v0.11.0...v0.11.1
