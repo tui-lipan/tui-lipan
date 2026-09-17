@@ -11,6 +11,12 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- List selection start/end caps now consume `item_horizontal_padding` on the selected row, so
+  unselected rows keep their inset while the highlight's caps sit in those cells instead of
+  stacking beside them.
+
 ## [0.11.1] - 2026-09-17
 
 ### Fixed

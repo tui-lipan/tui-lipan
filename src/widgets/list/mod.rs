@@ -62,6 +62,7 @@ pub struct ListConfig {
     /// Whether non-selectable rows participate in gutter alignment.
     pub gutter_for_non_selectable: bool,
     /// Left/right padding for normal rows (interior to the selection highlight).
+    /// Selection start/end caps consume this inset on the selected row.
     pub item_horizontal_padding: Padding,
     /// Left/right padding for header rows.
     pub header_horizontal_padding: Padding,
@@ -1735,9 +1736,11 @@ impl List {
     ///
     /// This mirrors [`Self::selection_symbol`] (the leading symbol) on the right
     /// side, enabling "pill"/capsule selection styles: pair a left cap (e.g.
-    /// `""`) via `selection_symbol` with a right cap (e.g. `""`) here, and
+    /// `""`) via `selection_symbol` with a right cap (e.g. `""`) here, and
     /// color both with [`Self::selection_symbol_style`] so their foreground
-    /// equals the selection background. Combine with
+    /// equals the selection background. On the selected row the caps consume
+    /// [`Self::item_horizontal_padding`], so unselected rows keep their inset
+    /// while the highlight's caps sit in those cells. Combine with
     /// `selection_full_width(false)` so the highlight hugs the label and the
     /// caps sit on the surrounding background.
     ///
