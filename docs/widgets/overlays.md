@@ -483,7 +483,7 @@ to extend or inherit the scoped theme roles.
 | `extend_list_active_style` / `inherit_list_active_style` | `Style` / `()` | Extend or inherit the active item theme role instead of replacing it |
 | `list_active_symbol` | `impl Into<Arc<str>>` | Active item symbol |
 | `list_active_symbol_style` | `Style` | Active symbol style |
-| `list_item_horizontal_padding` | `impl Into<Padding>` | Normal row padding (left/right used) |
+| `list_item_horizontal_padding` | `impl Into<Padding>` | Normal row padding (left/right used). Selection caps consume this inset on the selected row. |
 | `list_header_horizontal_padding` | `impl Into<Padding>` | Header row padding (left/right used) |
 | `list_focusable` | `bool` | Allow list keyboard focus (default: `true`) |
 | `list_scrollbar` | `bool` | Show scrollbar |

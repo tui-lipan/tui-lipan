@@ -915,11 +915,19 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
             });
         }
 
-        let row_padding = if matches!(item.role, crate::widgets::list::ListItemRole::Header) {
+        let mut row_padding = if matches!(item.role, crate::widgets::list::ListItemRole::Header) {
             header_horizontal_padding
         } else {
             item_horizontal_padding
         };
+        if is_selected {
+            row_padding.left = row_padding
+                .left
+                .saturating_sub(hl_symbol_width.min(u16::MAX as usize) as u16);
+            row_padding.right = row_padding
+                .right
+                .saturating_sub(selection_right_symbol_width.min(u16::MAX as usize) as u16);
+        }
 
         if let Some(rule_style) = item.rule {
             let row_style = item_row_style;
@@ -1354,9 +1362,10 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
             // region*, rendered last (after content, any fill, and right padding).
             // The highlighted region only spans the full row width when the caller
             // opts in via `selection_full_width` (or when right-aligned content must
-            // be pushed to the edge); plain `item_horizontal_padding` stays interior
-            // to the highlight and does not force a full-width bar. `edge_cap_width`
-            // reserves the cap cell so the fill stops one column short of it.
+            // be pushed to the edge). Caps consume `item_horizontal_padding` on the
+            // selected row so they sit in the inset cells instead of stacking beside
+            // them; unselected rows keep the full inset. `edge_cap_width` reserves
+            // the cap cell so the fill stops one column short of it.
             let render_selection_cap =
                 selection_right_symbol_width > 0 && sub_line == item.symbol_line;
             let edge_cap_width = if render_selection_cap {
@@ -2106,6 +2115,98 @@ mod tests {
         assert!(row1.contains("Bb"), "row1 = {row1:?}");
         assert!(!row1.contains('['), "row1 = {row1:?}");
         assert!(!row1.contains(']'), "row1 = {row1:?}");
+    }
+
+    #[test]
+    fn selection_caps_consume_item_padding_only_on_the_selected_row() {
+        let items = [
+            ListItem::from_spans([Span::new("Aa")]),
+            ListItem::from_spans([Span::new("Bb")]),
+        ];
+
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 2,
+        };
+        let backend = TestBackend::new(rect.w, rect.h);
+        let mut terminal = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Fixed(ratatui::layout::Rect::new(0, 0, rect.w, rect.h)),
+            },
+        )
+        .expect("terminal");
+
+        terminal
+            .draw(|f| {
+                render_list(ListRenderParams {
+                    f,
+                    items: &items,
+                    selected: Some(0),
+                    offset: 0,
+                    style: Style::default(),
+                    hover_style: Style::default(),
+                    item_hover_style: Style::default(),
+                    active_style: Style::default(),
+                    selection_style: Style::default(),
+                    active_symbol: None,
+                    active_symbol_position: ListSymbolPosition::Left,
+                    active_symbol_style: None,
+                    selection_symbol: Some("["),
+                    selection_symbol_right: Some("]"),
+                    selection_symbol_style: None,
+                    unselected_symbol: Some(""),
+                    symbol_column: true,
+                    gutter_gap: 0,
+                    gutter_for_non_selectable: false,
+                    selection_full_width: true,
+                    item_horizontal_padding: Padding::from((0, 1)),
+                    header_horizontal_padding: Padding::from((0, 1)),
+                    border: false,
+                    border_style: BorderStyle::Plain,
+                    title: None,
+                    title_style: Style::default(),
+                    padding: Padding::default(),
+                    scrollbar: false,
+                    scrollbar_variant: ScrollbarVariant::Standalone,
+                    scrollbar_gap: 0,
+                    scrollbar_thumb: None,
+                    scrollbar_thumb_style: None,
+                    scrollbar_thumb_focus_style: None,
+                    scrollbar_track_style: None,
+                    show_scroll_indicators: false,
+                    scroll_indicator_style: Style::default(),
+                    top_indicator: false,
+                    bottom_indicator: false,
+                    bottom_count: 0,
+                    empty_text: None,
+                    empty_text_style: Style::default(),
+                    is_focused: true,
+                    is_hovered: false,
+                    mouse_pos: None,
+                    disabled: false,
+                    disabled_style: Style::default(),
+                    rect,
+                    rrect: ratatui::layout::Rect::new(0, 0, rect.w, rect.h),
+                    parent_integrated_v: None,
+                    clip_rect: None,
+                    contrast_policy: ContrastPolicy::Off,
+                });
+            })
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let row0 = (0..rect.w)
+            .map(|x| buffer[(x, 0)].symbol())
+            .collect::<String>();
+        let row1 = (0..rect.w)
+            .map(|x| buffer[(x, 1)].symbol())
+            .collect::<String>();
+
+        assert_eq!(row0, "[Aa        ]", "row0 = {row0:?}");
+        assert_eq!(row1, " Bb         ", "row1 = {row1:?}");
     }
 
     #[test]
