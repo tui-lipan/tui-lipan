@@ -2297,6 +2297,7 @@ impl<C: Component> AppRunner<C> {
                                     dirty.mark_paint();
                                 }
                             }
+                            #[cfg(feature = "terminal")]
                             if self.core.ctx.modifier_key_reporting_enabled() {
                                 self.set_held_modifiers(key_modifier_state(k), &mut dirty);
                             }

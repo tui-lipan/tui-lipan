@@ -11,6 +11,10 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- The runner compiles without the `terminal` feature after held-modifier reconciliation was added.
+
 ## [0.10.5] - 2026-09-17
 
 ### Fixed
