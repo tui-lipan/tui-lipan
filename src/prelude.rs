@@ -178,7 +178,7 @@ pub use crate::widgets::{
     GanttTaskStart, GanttTaskStatus, GitChangeState, GitFileStatus, GitIconStyle, Graph,
     GraphDirection, GraphLayout, GraphNode, GraphNodeEvent, GraphNodePath, Grid, GridItem,
     GridProps, HStack, Hyperlink, HyperlinkEvent, IndentStyle, Input, InputEvent, ItemDescription,
-    LifelineTheme, List, ListConfig, ListEvent, ListItem, ListItemGutter, ListItemLine,
+    KeyCapture, LifelineTheme, List, ListConfig, ListEvent, ListItem, ListItemGutter, ListItemLine,
     ListItemRole, ListItemStatus, ListSymbolPosition, LogBuffer, LogEntry, LogFilterMode, LogLevel,
     LogView, LogViewEvent, MessageGlyphs, MessageStyle, Modal, MouseRegion, Msg, MultiSelect,
     MultiSelectChangeEvent, MultiSelectCommitEvent, MultiSelectDescriptionOverflow,

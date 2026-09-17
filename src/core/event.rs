@@ -138,9 +138,35 @@ impl KeyMods {
         super_key: false,
     };
 
+    /// Super modifier only.
+    pub const SUPER: Self = Self {
+        ctrl: false,
+        alt: false,
+        shift: false,
+        super_key: true,
+    };
+
     /// Returns true when no modifiers are set.
     pub fn is_empty(&self) -> bool {
         !self.ctrl && !self.alt && !self.shift && !self.super_key
+    }
+
+    /// The held modifiers in the order [`KeyBinding::label`](crate::input::KeyBinding::label)
+    /// writes them (`Ctrl+Alt+Super+Shift`), or an empty string when none are held.
+    ///
+    /// A shortcut recorder can show `Ctrl+Shift+` while keys are held and the finished
+    /// `Ctrl+Shift+A` label afterwards without the modifiers reordering.
+    pub fn label(&self) -> String {
+        [
+            (self.ctrl, "Ctrl"),
+            (self.alt, "Alt"),
+            (self.super_key, "Super"),
+            (self.shift, "Shift"),
+        ]
+        .into_iter()
+        .filter_map(|(held, name)| held.then_some(name))
+        .collect::<Vec<_>>()
+        .join("+")
     }
 }
 

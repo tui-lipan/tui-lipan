@@ -177,7 +177,19 @@ If one key is both a full single-step binding and a prefix of a longer chord, th
 
 Re-exported from the crate root and **`prelude`** (`ChordMatcher`, `ChordResult`).
 
-### Formatting helpers
+### Three string forms
+
+A `KeyBinding` has three string forms, each with one job. None of them affects parsing, equality,
+or matching.
+
+| Form | Method | Example (`super-shift-p`) | Use it for |
+| --- | --- | --- | --- |
+| Label | `label()`, `Display` | `Super+Shift+P` | Text shown to people |
+| Source | `to_source()` | `super-shift-p` | Text written back to a config file |
+| Canonical | `canonical()` | `Super+Shift+P` | Identity and debugging |
+
+The modifier is named `Super` in every form; `cmd`, `command`, `meta`, `win`, and `windows` are
+accepted as input aliases.
 
 ```rust
 use std::str::FromStr;
@@ -185,41 +197,82 @@ use tui_lipan::input::{
     KeyBinding,
     KeyBindings,
     format_binding,
-    format_binding_compact,
     format_binding_lowercase,
     format_bindings,
-    format_bindings_compact,
     format_bindings_lowercase,
 };
 
-let one = KeyBinding::from_str("super+p")?;
-assert_eq!(one.to_string(), "Cmd+P");
+let one = KeyBinding::from_str("cmd+p")?;
+assert_eq!(one.to_string(), "Super+P");
+assert_eq!(one.to_source(), "super-p");
 
 let many = KeyBindings::from_str("ctrl+d, ctrl+q")?;
 assert_eq!(many.to_string(), "Ctrl+D / Ctrl+Q");
+assert_eq!(many.to_source(), "ctrl-d, ctrl-q");
 
 let chord = KeyBinding::from_str("ctrl+x b")?;
 assert!(chord.is_chord());
-assert_eq!(chord.to_string(), "Ctrl+X B");
+assert_eq!(chord.to_string(), "Ctrl+X b");
+assert_eq!(chord.canonical(), "Ctrl+X B");
 
 assert_eq!(format_binding("control-shift-up")?, "Ctrl+Shift+Up");
-assert_eq!(format_bindings("super-c, ctrl-insert")?, "Cmd+C / Ctrl+Insert");
+assert_eq!(format_binding("shift-m")?, "M");
+assert_eq!(format_bindings("?, shift-/, ctrl-shift-3")?, "? / Ctrl+Shift+3");
 assert_eq!(format_binding_lowercase("Esc")?, "esc");
-assert_eq!(format_bindings_lowercase("ctrl+d, super+q")?, "ctrl+d / cmd+q");
-assert_eq!(format_binding_compact("shift-m")?, "M");
-assert_eq!(format_bindings_compact("?, shift-/, ctrl-#, ctrl-shift-3")?, "? / ctrl+#");
-
-assert_eq!(one.canonical_lowercase(), "cmd+p");
-assert_eq!(many.canonical_lowercase(), "ctrl+d / ctrl+q");
+assert_eq!(format_bindings_lowercase("ctrl+d, super+q")?, "ctrl+d / super+q");
 ```
 
-`compact_display()` is an opt-in hint format. It lowercases ordinary keys and modifiers, renders
-shift-only ASCII letters and US-layout punctuation as their produced glyphs (`shift-m` → `M`,
-`shift-/` → `?`), and stable-deduplicates equivalent alternatives. Shift stays explicit for
-special keys and letters combined with another modifier (`shift-tab` → `shift+tab`,
-`ctrl-shift-x` → `ctrl+shift+x`); shifted punctuation can collapse with other modifiers
-(`ctrl-shift-3` → `ctrl+#`). Chord steps remain separated by spaces, and this formatting never
-changes binding equality, parsing, or matching.
+#### Labels
+
+`label()` writes keycap notation:
+
+- A printable key with `Ctrl`, `Alt`, or `Super` is a keycap chord. Every modifier is written out,
+  letters are uppercase, and case carries no meaning: `Ctrl+A`, `Ctrl+Shift+A`, `Ctrl+Shift+/`.
+- A printable key on its own shows the character it types: `s`, `S`, `?`. Shifted punctuation uses
+  the US layout (`shift-/` → `?`).
+- A named key always writes its modifiers out: `Tab`, `Shift+Tab`, `Ctrl+Shift+Left`.
+
+Chord steps are separated by spaces (`Ctrl+X b`). `KeyBindings::label()` joins alternatives with
+` / ` and drops repeats, so `?, shift-/` shows one `?`. The command palette shows shortcut hints in
+this notation.
+
+`KeyMods::label()` writes held modifiers in the same order (`Ctrl+Shift`), so a shortcut recorder
+can show `Ctrl+Shift+` while keys are held and `Ctrl+Shift+A` once one is pressed, without the
+modifiers moving.
+
+#### Source spelling
+
+`to_source()` is a compatibility promise: it always parses back to an equal binding, and its
+format does not follow display changes. Modifiers are `ctrl`, `alt`, `super`, `shift` in that
+order, joined to the key with `-`. Keys are lowercase names (`enter`, `pageup`, `f5`, `space`),
+and the `-`, `+`, and `,` keys are `minus`, `plus`, and `comma`. Chord steps are separated by
+spaces. `KeyBindings::to_source()` joins alternatives with `, `, so a comma key inside a list of
+alternatives must be written `comma`.
+
+### Recording and checking bindings
+
+`KeyBinding::from_key_event(event)` builds the one-step binding an event stands for. Modifiers come
+only from what the event reports: a character's case never implies Shift, because Caps Lock
+produces capitals without it and legacy terminal encodings cannot report Shift alongside Ctrl.
+`Char('A')` with Ctrl alone records as `ctrl-a`. Raw control characters become their Ctrl chord,
+and `BackTab` becomes `shift-tab`, exactly as `matches_sequence` treats the same events.
+
+`KeyBinding::conflicts_with(&other)` is true when one binding would fire before the other could
+finish: they are equal, or one's steps start the other's (`ctrl+x` and `ctrl+x b`). Run it before
+assigning a binding to a second command.
+
+```rust
+use std::str::FromStr;
+use tui_lipan::input::KeyBinding;
+use tui_lipan::prelude::{KeyCode, KeyEvent, KeyMods};
+
+let recorded = KeyBinding::from_key_event(KeyEvent {
+    code: KeyCode::Char('A'),
+    mods: KeyMods::CTRL,
+});
+assert_eq!(recorded.to_source(), "ctrl-a");
+assert!(recorded.conflicts_with(&KeyBinding::from_str("ctrl-a x")?));
+```
 
 ### Expanding a binding into key events
 

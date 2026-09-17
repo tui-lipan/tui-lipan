@@ -248,6 +248,10 @@ pub fn element_sizes() -> Vec<(&'static str, usize)> {
     out.push(("Divider", std::mem::size_of::<Divider>()));
     out.push(("Spacer", std::mem::size_of::<Spacer>()));
     out.push((
+        "KeyCapture",
+        std::mem::size_of::<crate::widgets::KeyCapture>(),
+    ));
+    out.push((
         "Sparkline",
         std::mem::size_of::<crate::widgets::Sparkline>(),
     ));

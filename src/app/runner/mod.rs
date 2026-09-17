@@ -2292,10 +2292,10 @@ impl<C: Component> AppRunner<C> {
                         }
                         CEvent::Key(k) => {
                             #[cfg(feature = "terminal")]
-                            if let Some(mods) = modifier_key_state(k) {
-                                if self.refresh_terminal_link_hover_at_pointer(mods) {
-                                    dirty.mark_paint();
-                                }
+                            if let Some(mods) = modifier_key_state(k)
+                                && self.refresh_terminal_link_hover_at_pointer(mods)
+                            {
+                                dirty.mark_paint();
                             }
                             #[cfg(feature = "terminal")]
                             if self.core.ctx.modifier_key_reporting_enabled() {

@@ -409,6 +409,8 @@ pub(crate) fn dispatch_key(
         handlers::InteractiveTag::Graph => handlers::graph::handle_key(tree, id, key),
         handlers::InteractiveTag::Input => handlers::input_widget::handle_key(tree, id, key, ctx),
         handlers::InteractiveTag::HexArea => handlers::hex_area::handle_key(tree, id, key, ctx),
+        // Already offered the key in `handlers::key_capture::preflight`; a declined key bubbles.
+        handlers::InteractiveTag::KeyCapture => false,
         handlers::InteractiveTag::List => handlers::list_table::handle_list_key(tree, id, key),
         handlers::InteractiveTag::Table => {
             handlers::list_table::handle_table_key(tree, id, key, rect)
