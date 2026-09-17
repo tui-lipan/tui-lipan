@@ -59,6 +59,7 @@ macro_rules! for_all_widget_variants {
                 DraggableTabBar,
                 Divider,
                 Spacer,
+                KeyCapture,
                 Checkbox,
                 ProgressBar,
                 Slider,

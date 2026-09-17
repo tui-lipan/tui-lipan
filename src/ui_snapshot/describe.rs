@@ -69,7 +69,7 @@ fn describe_node(
     let kind = UiWidgetKind::from_node_kind(&node.kind);
     if !options.include_chrome {
         match &node.kind {
-            NodeKind::Spacer(_) => return None,
+            NodeKind::Spacer(_) | NodeKind::KeyCapture(_) => return None,
             NodeKind::Divider(_) => return None,
             _ => {}
         }

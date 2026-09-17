@@ -1025,22 +1025,19 @@ Public shortcut binding types from `tui_lipan::input`. Parsing: **whitespace** =
 
 | Type | Description |
 |------|-------------|
-| `KeyBinding` | One shortcut or chord (`FromStr`, `Display`, `matches_sequence`, `is_chord`, `step_count`, `canonical_lowercase`, `compact_display`) |
-| `KeyBindings` | Comma-separated alternatives (`FromStr`, `Display`, `canonical_lowercase`, `compact_display`, `iter`, `primary`, `is_empty`, `len`) |
+| `KeyBinding` | One shortcut or chord (`FromStr`, `Display`, `from_key_event`, `matches_sequence`, `conflicts_with`, `is_chord`, `step_count`, `label`, `to_source`, `canonical`, `canonical_lowercase`) |
+| `KeyBindings` | Comma-separated alternatives (`FromStr`, `Display`, `label`, `to_source`, `canonical_lowercase`, `iter`, `primary`, `is_empty`, `len`) |
 | `ChordMatcher<T>` | Stateful incremental matcher for chords (`feed`, `reset`, `is_pending`) |
 | `ChordResult<T>` | `None` / `Pending` / `Matched` from `ChordMatcher::feed` |
 | `KeyBindingParseError` | Parse error type for invalid binding strings |
 
-Lowercase and compact display helpers are also available:
+`label()` and `Display` give keycap notation for people, `to_source()` the stable spelling for
+config files, and `canonical()` the identity string; see
+[`keybindings.md`](keybindings.md#three-string-forms). String helpers:
 
-- `KeyBinding::canonical_lowercase()`
-- `KeyBindings::canonical_lowercase()`
-- `KeyBinding::compact_display()`
-- `KeyBindings::compact_display()`
-- `format_binding_lowercase(...)`
-- `format_bindings_lowercase(...)`
-- `format_binding_compact(...)`
-- `format_bindings_compact(...)`
+- `format_binding(...)` / `format_bindings(...)` return labels
+- `format_binding_lowercase(...)` / `format_bindings_lowercase(...)` return lowercase canonical text
+- `KeyMods::label()` writes held modifiers in label order (`Ctrl+Shift`)
 
 ### `SentinelId`
 

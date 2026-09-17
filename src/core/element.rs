@@ -17,7 +17,7 @@ use crate::widgets::Terminal;
 use crate::widgets::{
     Animated, AsciiCanvas, Button, Canvas, Center, CenterPin, Chart, Checkbox, ClassDiagram,
     Divider, DocumentView, DragSource, DraggableTabBar, DropTarget, EffectScope, ErDiagram, Flow,
-    Flowchart, Frame, GanttDiagram, Graph, Grid, HStack, Heatmap, HexArea, Input, List,
+    Flowchart, Frame, GanttDiagram, Graph, Grid, HStack, Heatmap, HexArea, Input, KeyCapture, List,
     MouseRegion, PanView, ProgressBar, ScrollView, SequenceDiagram, Spacer, Spinner, Splitter,
     StateDiagram, StatusBarLayout, Tabs, Text, VStack, ZStack,
 };
@@ -435,6 +435,8 @@ pub(crate) enum ElementKind {
     Divider(Divider),
     /// Flexible empty space.
     Spacer(Spacer),
+    /// Invisible focus target that hands every key to one handler.
+    KeyCapture(KeyCapture),
     /// Sparkline chart.
     Sparkline(crate::widgets::Sparkline),
     /// Multi-series chart.

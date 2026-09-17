@@ -63,6 +63,7 @@ mod hyperlink;
 #[cfg(feature = "image")]
 mod image;
 mod input;
+mod key_capture;
 pub(crate) mod list;
 pub(crate) mod log_view;
 #[cfg(feature = "terminal")]
@@ -225,6 +226,7 @@ pub use hyperlink::{Hyperlink, HyperlinkEvent};
 #[cfg(feature = "image")]
 pub use image::{Image, ImageFit, ImagePlayback, ImageProtocol, ImageRepeat, ImageSource};
 pub use input::{Input, InputEvent};
+pub use key_capture::KeyCapture;
 pub use list::{
     List, ListConfig, ListEvent, ListItem, ListItemGutter, ListItemLine, ListItemRole,
     ListItemStatus, ListSymbolPosition,

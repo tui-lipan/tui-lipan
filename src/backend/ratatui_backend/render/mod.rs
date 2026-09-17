@@ -1438,7 +1438,11 @@ fn render_node(
             }
             child_clip = Some(intersect_clip(rect));
         }
-        NodeKind::Popover(_) | NodeKind::Portal(_) | NodeKind::Group(_) | NodeKind::Spacer(_) => {}
+        NodeKind::Popover(_)
+        | NodeKind::Portal(_)
+        | NodeKind::Group(_)
+        | NodeKind::Spacer(_)
+        | NodeKind::KeyCapture(_) => {}
         NodeKind::DocumentView(dv) => {
             let is_focused = state.focus_chain.contains(&node_id);
             let is_hovered = Some(node_id) == state.ctx.hovered;

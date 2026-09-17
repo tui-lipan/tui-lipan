@@ -8405,3 +8405,65 @@ fn a_script_sleep_waits_in_real_time_where_the_author_put_it() {
         "a virtual wait must not stand in for real time:\n{waited}"
     );
 }
+
+struct KeyCaptureRecorder {
+    keys: Rc<RefCell<Vec<KeyEvent>>>,
+}
+
+impl Component for KeyCaptureRecorder {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let keys = self.keys.clone();
+        crate::widgets::KeyCapture::new()
+            .on_key(crate::callback::KeyHandler::new(move |key| {
+                keys.borrow_mut().push(key);
+                true
+            }))
+            .key("capture")
+    }
+}
+
+#[test]
+fn key_capture_records_a_framework_chord_prefix_before_the_chord_claims_it() {
+    let keys = Rc::new(RefCell::new(Vec::new()));
+    let app = crate::App::new()
+        .user_keymap_policy(crate::UserKeymapPolicy::Disabled)
+        .framework_keymap(crate::FrameworkKeymap::default().bind(
+            crate::FrameworkAction::Quit,
+            crate::KeyBindings::from_str("ctrl-x b").expect("binding"),
+        ));
+    let mut runner = AppRunner::new(app, KeyCaptureRecorder { keys: keys.clone() }, ());
+    init_runner(
+        &mut runner,
+        KeyCaptureRecorder { keys: keys.clone() },
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 5,
+        },
+    );
+    runner.focus.focused = Some(node_id_by_key(&runner.core.tree, "capture"));
+
+    let prefix = runner.dispatch_layered_key(ctrl_char('x'));
+    let second = runner.dispatch_layered_key(key(KeyCode::Char('b')));
+
+    assert!(prefix.consumed && second.consumed);
+    assert!(
+        !second.quit,
+        "the recorder spent both keys, so no chord completed"
+    );
+    assert_eq!(
+        keys.borrow().as_slice(),
+        &[ctrl_char('x'), key(KeyCode::Char('b'))]
+    );
+}

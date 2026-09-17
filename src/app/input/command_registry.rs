@@ -161,7 +161,7 @@ impl CommandBuilder {
     pub fn keybinding_from_keymap(mut self, keymap: &Keymap, action: Action) -> Self {
         self.keybinding_hint = keymap
             .binding_for_action(action)
-            .map(|binding| Arc::<str>::from(binding.canonical_lowercase()));
+            .map(|binding| Arc::<str>::from(binding.label()));
         self
     }
 

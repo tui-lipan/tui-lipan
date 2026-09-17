@@ -121,7 +121,7 @@ impl<C: Component> AppRunner<C> {
     }
 
     pub(crate) fn top_capturing_overlay_is_empty(&self) -> bool {
-        focus_service::top_capturing_overlay_is_empty(&self.core.tree)
+        focus_service::top_capturing_overlay_is_empty(&self.core.tree, self.focus.focused)
     }
 
     pub(crate) fn focus_overlay_next(&mut self) -> bool {

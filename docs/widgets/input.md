@@ -216,6 +216,37 @@ MouseRegion::new()
 
 ---
 
+## KeyCapture
+
+Invisible focus target that hands every key to one handler. Use it where a view needs keyboard
+input without a visible control: a shortcut recorder, a "press any key" prompt, or a card whose
+keys are all app-defined.
+
+| Prop | Type | Default | Description |
+|------|------|---------|-------------|
+| `on_key` | `KeyHandler` | none | Receives each key while focused; return `true` to consume it |
+| `tab_stop` | `bool` | `true` | When `false`, focusable by key or click but skipped by Tab |
+| `disabled` | `bool` | `false` | A disabled target cannot take focus |
+| `on_focus` | `Callback<()>` | none | Fired when the target gains focus |
+| `on_blur` | `Callback<()>` | none | Fired when the target loses focus |
+| `width` / `height` | `Length` | `Auto` | `Auto` measures zero, so the target takes no space |
+
+It draws nothing. While it holds focus, keys reach `on_key` before anything else sees them:
+framework and app command chords (including a key that would start one), clipboard shortcuts,
+overlay dismissal, component `on_key` handlers, and focus traversal. Tab and Esc are included, so a
+recorder can bind them. A consumed key also cancels any chord in progress. Keys the handler
+declines continue through normal dispatch, so declining Esc still dismisses the overlay. Place it
+inside the card it serves; a capturing overlay gives it focus automatically when it is the
+overlay's first tab stop.
+
+```rust
+KeyCapture::new()
+    .on_key(ctx.link().key_handler(|key| Some(Msg::Recorded(KeyBinding::from_key_event(key)))))
+    .key("recorder")
+```
+
+---
+
 ## Hyperlink
 
 Clickable text link built on top of `Button` with link-style defaults.

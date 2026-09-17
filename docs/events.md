@@ -777,6 +777,13 @@ Quick lookup - which callbacks does each widget support?
 | `on_change` | `String` | Every keystroke (new full value) |
 | `on_edit` | `TextEditEvent` | Structured edit events |
 
+### KeyCapture
+
+| Callback | Payload | When |
+|----------|---------|------|
+| `on_key` | `KeyHandler` | Every key while focused, before chords and other handling; declined keys continue |
+| `on_focus` / `on_blur` | `()` | Focus gained / lost |
+
 ### TextArea
 
 | Callback | Payload | When |
