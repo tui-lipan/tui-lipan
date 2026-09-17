@@ -58,6 +58,7 @@ pub(crate) fn handle_list_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) ->
     } else {
         let selected_val = node.selected;
         let scroll_keys_val = node.scroll_keys;
+        let navigation_wrap = node.navigation_wrap;
         let on_select = node.on_select.clone();
         let on_activate = node.on_activate.clone();
         let on_key = node.on_key.clone();
@@ -117,6 +118,7 @@ pub(crate) fn handle_list_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) ->
                     items.as_ref(),
                     &key,
                     scroll_keys_val,
+                    navigation_wrap,
                 ) {
                     if next != selected {
                         cb.emit(ListEvent { index: next });

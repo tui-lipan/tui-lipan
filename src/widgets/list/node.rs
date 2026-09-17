@@ -68,6 +68,7 @@ pub struct ListNode {
     pub on_key: Option<KeyHandler>,
     pub focusable: bool,
     pub tab_stop: bool,
+    pub navigation_wrap: bool,
     pub on_focus: Option<Callback<()>>,
     pub on_blur: Option<Callback<()>>,
 }

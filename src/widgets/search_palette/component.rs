@@ -379,6 +379,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
             .header_horizontal_padding(ctx.props.list_config.header_horizontal_padding)
             .focusable(ctx.props.list_focusable)
             .tab_stop(ctx.props.tab_stop)
+            .navigation_wrap(ctx.props.navigation_wrap)
             .scrollbar(ctx.props.list_config.scrollbar)
             .scrollbar_config(ctx.props.list_config.scrollbar_config.clone());
         if let Some(cb) = ctx.props.on_focus.clone() {
@@ -942,14 +943,13 @@ fn emit_search_event<T: Clone>(
 }
 
 fn navigate_up<T: Clone>(props: &SearchPaletteProps<T>, state: &mut SearchState) {
-    let len = state.results.len();
-    if len == 0 {
+    let Some(next) = List::step_index(
+        state.selected,
+        state.results.len(),
+        -1,
+        props.navigation_wrap,
+    ) else {
         return;
-    }
-    let next = if state.selected == 0 {
-        if props.navigation_wrap { len - 1 } else { 0 }
-    } else {
-        state.selected - 1
     };
     if next != state.selected {
         state.selected = next;
@@ -959,14 +959,13 @@ fn navigate_up<T: Clone>(props: &SearchPaletteProps<T>, state: &mut SearchState)
 }
 
 fn navigate_down<T: Clone>(props: &SearchPaletteProps<T>, state: &mut SearchState) {
-    let len = state.results.len();
-    if len == 0 {
+    let Some(next) = List::step_index(
+        state.selected,
+        state.results.len(),
+        1,
+        props.navigation_wrap,
+    ) else {
         return;
-    }
-    let next = if state.selected + 1 >= len {
-        if props.navigation_wrap { 0 } else { len - 1 }
-    } else {
-        state.selected + 1
     };
     if next != state.selected {
         state.selected = next;

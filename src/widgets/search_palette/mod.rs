@@ -617,6 +617,8 @@ pub(crate) struct SearchPaletteProps<T> {
     /// When `true`, keep matched items in source order instead of sorting them by match score.
     /// Useful when the caller has already established a meaningful result order.
     preserve_item_order: bool,
+    /// When `true`, Up/Down wrap at the first and last result. Forwarded to the inner
+    /// [`List`](crate::widgets::List).
     navigation_wrap: bool,
     // Matching config
     match_mode: SearchMatchMode,
@@ -1015,8 +1017,11 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
 
     /// Control whether Up/Down navigation wraps at list boundaries.
     ///
-    /// Enabled by default. Disable for boundary rows such as "current position"
-    /// where wrapping from the last row to the first row would jump unexpectedly.
+    /// Enabled by default. The inner [`List`](crate::widgets::List) uses the same
+    /// flag, and input-focused result navigation uses
+    /// [`List::step_index`](crate::widgets::List::step_index).
+    /// Disable for boundary rows such as "current position" where wrapping from
+    /// the last row to the first row would jump unexpectedly.
     pub fn navigation_wrap(mut self, wrap: bool) -> Self {
         self.props.navigation_wrap = wrap;
         self

@@ -605,7 +605,8 @@ impl From<Select> for Element {
                     return true;
                 }
 
-                if let Some(next) = List::selection_for_action_in_len(selected, options_len, action)
+                if let Some(next) =
+                    List::selection_for_action_in_len(selected, options_len, action, false)
                     && next != selected
                     && let Some(cb) = &change_cb
                 {

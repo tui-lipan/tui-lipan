@@ -259,7 +259,7 @@ Source: `src/widgets/text_area/mod.rs:457` (`TextArea`).
 
 ## List
 
-Source: `src/widgets/list/mod.rs:1444` (`List`).
+Source: `src/widgets/list/mod.rs:1469` (`List`).
 
 | Field | Default initializer |
 |---|---|
@@ -314,10 +314,11 @@ Source: `src/widgets/list/mod.rs:1444` (`List`).
 | `empty_text` | `None` |
 | `empty_text_style` | `Style::default()` |
 | `force_scroll_to_selected` | `false` |
+| `navigation_wrap` | `false` |
 
 ## ListConfig
 
-Source: `src/widgets/list/mod.rs:78` (`ListConfig`).
+Source: `src/widgets/list/mod.rs:79` (`ListConfig`).
 
 | Field | Default initializer |
 |---|---|
@@ -1126,7 +1127,7 @@ Source: `src/widgets/file_tree/mod.rs:361` (`FileTree`).
 
 ## SearchPalette
 
-Source: `src/widgets/search_palette/mod.rs:801` (`SearchPalette`).
+Source: `src/widgets/search_palette/mod.rs:803` (`SearchPalette`).
 
 | Field | Default initializer |
 |---|---|

@@ -811,7 +811,7 @@ impl Table {
         scroll_keys: ScrollKeymap,
     ) -> Option<usize> {
         let action = scroll_action_from_key(key, scroll_keys)?;
-        crate::widgets::list::List::selection_for_action_in_len(selected, len, action)
+        crate::widgets::list::List::selection_for_action_in_len(selected, len, action, false)
     }
 }
 
