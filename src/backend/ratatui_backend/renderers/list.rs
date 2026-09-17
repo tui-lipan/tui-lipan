@@ -136,11 +136,19 @@ fn resolve_symbol_style(
     symbol_style: Option<Style>,
     contrast_policy: ContrastPolicy,
 ) -> ratatui::style::Style {
-    let resolved = symbol_style.map_or(row_style, |style| row_style.patch(style));
+    let (resolved, policy) = match symbol_style {
+        Some(style) => {
+            let policy = style.contrast_policy.unwrap_or(ContrastPolicy::Off);
+            let mut resolved = row_style.patch(style);
+            resolved.contrast_policy = style.contrast_policy;
+            (resolved, policy)
+        }
+        None => (row_style, contrast_policy),
+    };
     to_ratatui_style(finalize_style(
         resolved,
-        style_backdrop(row_style),
-        contrast_policy,
+        style_backdrop(resolved).or_else(|| style_backdrop(row_style)),
+        policy,
     ))
 }
 
@@ -2207,6 +2215,107 @@ mod tests {
 
         assert_eq!(row0, "[Aa        ]", "row0 = {row0:?}");
         assert_eq!(row1, " Bb         ", "row1 = {row1:?}");
+    }
+
+    #[test]
+    fn selection_caps_keep_authored_fill_under_wcag_contrast() {
+        let fill = Color::rgb(73, 166, 232);
+        let body = Color::rgb(252, 252, 252);
+        let items = [ListItem::from_spans([Span::new("Aa")])];
+
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 1,
+        };
+        let backend = TestBackend::new(rect.w, rect.h);
+        let mut terminal = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Fixed(ratatui::layout::Rect::new(0, 0, rect.w, rect.h)),
+            },
+        )
+        .expect("terminal");
+
+        terminal
+            .draw(|f| {
+                render_list(ListRenderParams {
+                    f,
+                    items: &items,
+                    selected: Some(0),
+                    offset: 0,
+                    style: Style::new().bg(body),
+                    hover_style: Style::default(),
+                    item_hover_style: Style::default(),
+                    active_style: Style::default(),
+                    selection_style: Style::new().fg(body).bg(fill),
+                    active_symbol: None,
+                    active_symbol_position: ListSymbolPosition::Left,
+                    active_symbol_style: None,
+                    selection_symbol: Some("["),
+                    selection_symbol_right: Some("]"),
+                    selection_symbol_style: Some(Style::new().fg(fill).bg(body)),
+                    unselected_symbol: Some(""),
+                    symbol_column: true,
+                    gutter_gap: 0,
+                    gutter_for_non_selectable: false,
+                    selection_full_width: true,
+                    item_horizontal_padding: Padding::from((0, 1)),
+                    header_horizontal_padding: Padding::from((0, 1)),
+                    border: false,
+                    border_style: BorderStyle::Plain,
+                    title: None,
+                    title_style: Style::default(),
+                    padding: Padding::default(),
+                    scrollbar: false,
+                    scrollbar_variant: ScrollbarVariant::Standalone,
+                    scrollbar_gap: 0,
+                    scrollbar_thumb: None,
+                    scrollbar_thumb_style: None,
+                    scrollbar_thumb_focus_style: None,
+                    scrollbar_track_style: None,
+                    show_scroll_indicators: false,
+                    scroll_indicator_style: Style::default(),
+                    top_indicator: false,
+                    bottom_indicator: false,
+                    bottom_count: 0,
+                    empty_text: None,
+                    empty_text_style: Style::default(),
+                    is_focused: true,
+                    is_hovered: false,
+                    mouse_pos: None,
+                    disabled: false,
+                    disabled_style: Style::default(),
+                    rect,
+                    rrect: ratatui::layout::Rect::new(0, 0, rect.w, rect.h),
+                    parent_integrated_v: None,
+                    clip_rect: None,
+                    contrast_policy: ContrastPolicy::Wcag,
+                });
+            })
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer();
+        let expected = ratatui::style::Color::Rgb(73, 166, 232);
+        assert_eq!(
+            buffer[(0, 0)].fg,
+            expected,
+            "left cap should keep the selection fill, got {:?}",
+            buffer[(0, 0)].fg
+        );
+        assert_eq!(
+            buffer[(11, 0)].fg,
+            expected,
+            "right cap should keep the selection fill, got {:?}",
+            buffer[(11, 0)].fg
+        );
+        assert_eq!(
+            buffer[(1, 0)].bg,
+            expected,
+            "highlight should keep the selection fill, got {:?}",
+            buffer[(1, 0)].bg
+        );
     }
 
     #[test]
