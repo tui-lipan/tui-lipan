@@ -145,13 +145,17 @@ pub(crate) fn release_pointer_hover(
         }
     };
     #[cfg(not(feature = "terminal"))]
-    let link_dirty = {
-        let _ = tree;
+    let link_dirty = false;
+    let width_lock_cleared = if let Some(id) = state.hovered.filter(|id| tree.is_valid(*id))
+        && let NodeKind::DraggableTabBar(tab_bar) = &mut tree.node_mut(id).kind
+    {
+        tab_bar.width_lock.take().is_some()
+    } else {
         false
     };
     state.last_mouse.set(None);
     state.sub_cell.set(None);
-    clear_mouse_hover_state(state) || toast_dirty || link_dirty
+    clear_mouse_hover_state(state) || toast_dirty || link_dirty || width_lock_cleared
 }
 
 pub(crate) fn mouse_region_hover_transition_affects_paint(
