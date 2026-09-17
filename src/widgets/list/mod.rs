@@ -1737,8 +1737,10 @@ impl List {
     /// This mirrors [`Self::selection_symbol`] (the leading symbol) on the right
     /// side, enabling "pill"/capsule selection styles: pair a left cap (e.g.
     /// `""`) via `selection_symbol` with a right cap (e.g. `""`) here, and
-    /// color both with [`Self::selection_symbol_style`] so their foreground
-    /// equals the selection background. On the selected row the caps consume
+    /// Color both with [`Self::selection_symbol_style`] so their foreground
+    /// equals the selection background. That foreground is a fill, not text, so
+    /// it is not WCAG-adjusted against the row body unless the symbol style sets
+    /// its own `contrast_policy`. On the selected row the caps consume
     /// [`Self::item_horizontal_padding`], so unselected rows keep their inset
     /// while the highlight's caps sit in those cells. Combine with
     /// `selection_full_width(false)` so the highlight hugs the label and the
@@ -1783,6 +1785,8 @@ impl List {
     /// Set style for the highlight symbol.
     ///
     /// If not set, it defaults to the computed row style (with `selection_style` applied).
+    /// An explicit style is treated as a fill (pill caps): contrast stays off unless
+    /// the style sets its own `contrast_policy`.
     pub fn selection_symbol_style(mut self, style: Style) -> Self {
         self.selection_symbol_style = Some(style);
         self

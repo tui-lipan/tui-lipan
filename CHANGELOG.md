@@ -11,6 +11,12 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- List selection start/end caps keep their authored fill color. They are decorative glyphs, not
+  text, so WCAG no longer darkens them against the row body on light themes while the highlight
+  stays the original pigment.
+
 ## [0.11.2] - 2026-09-17
 
 ### Fixed
