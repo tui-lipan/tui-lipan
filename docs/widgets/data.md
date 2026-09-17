@@ -58,7 +58,13 @@ State-style setters use [StyleSlot semantics](../styling.md#state-style-slots):
 ```rust
 ListItem::new("Normal item")          // Selectable row
 ListItem::header("Section Title")      // Non-selectable header row
+ListItem::divider("Section Title")     // Header drawn as ── Section Title ──, centered at any width
 ListItem::spacer()                     // Non-selectable blank row
+
+// Divider with a styled label and rule
+ListItem::from_spans([Span::new("SECTION").style(Style::new().fg(Color::Cyan).bold())])
+    .role(ListItemRole::Header)
+    .rule(Style::new().fg(Color::DarkGray))
 ListItem::new("Service").active(true)  // Marks row as active
 ListItem::role(ListItemRole::Header)   // Explicit role
 

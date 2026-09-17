@@ -26,6 +26,9 @@ While the crate is on `0.x.y`:
   other's.
 - `KeyMods::label` writes held modifiers in label order (`Ctrl+Shift`), and `KeyMods::SUPER` joins
   the existing modifier constants.
+- `ListItem::divider` and `ListItem::rule` draw a header row as a horizontal rule with its label
+  centered. The rule is laid out at render time, so it fills the row and stays centered at any list
+  width.
 
 ### Changed
 
