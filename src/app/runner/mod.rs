@@ -55,7 +55,7 @@ use crate::app::context::DevToolsConfig;
 use crate::app::context::{App, ContrastPolicy, SurfaceMode, TextAreaNewlineBinding};
 use crate::app::input::command_registry::CommandEntry;
 #[cfg(feature = "terminal")]
-use crate::app::input::convert::modifier_key_state;
+use crate::app::input::convert::{key_modifier_state, modifier_key_state};
 use crate::app::input::convert::{to_key_event, to_mouse_event};
 use crate::app::input::focus;
 use crate::app::input::keyboard;
@@ -518,6 +518,7 @@ pub struct AppRunner<C: Component> {
     pub(crate) surface: SurfaceDriver,
     pub(crate) core: crate::session::SessionEngine<C>,
     pub(crate) focus: FocusState,
+    held_modifiers: KeyMods,
     on_focus_changed: Option<crate::app::context::FocusChangedHook>,
     pub(crate) drag: DragState,
     pub(crate) mouse: MouseTrackingState,
@@ -839,6 +840,7 @@ impl<C: Component> AppRunner<C> {
             surface,
             core: core.into(),
             focus,
+            held_modifiers: KeyMods::NONE,
             on_focus_changed,
             drag,
             mouse: MouseTrackingState::with_pointer_cell(last_mouse),
@@ -1182,6 +1184,15 @@ impl<C: Component> AppRunner<C> {
         let update_level = self.core.on_window_focus_changed(focused);
         self.apply_root_update(dirty, update_level);
         true
+    }
+
+    fn set_held_modifiers(&mut self, modifiers: KeyMods, dirty: &mut DirtyTracker) {
+        if self.held_modifiers == modifiers {
+            return;
+        }
+        self.held_modifiers = modifiers;
+        let update = self.core.on_modifiers_changed(modifiers);
+        self.apply_root_update(dirty, update);
     }
 
     #[cfg(feature = "devtools")]
@@ -2153,7 +2164,10 @@ impl<C: Component> AppRunner<C> {
                 let frame_start = Instant::now();
 
                 let mut dirty = DirtyTracker::default();
-                guard.set_modifier_key_reporting(self.core.ctx.modifier_key_reporting_enabled())?;
+                let modifier_reporting = self.core.ctx.modifier_key_reporting_enabled();
+                if guard.set_modifier_key_reporting(modifier_reporting)? {
+                    self.set_held_modifiers(KeyMods::NONE, &mut dirty);
+                }
                 #[cfg(feature = "devtools")]
                 self.ingest_pending_devtools_logs();
                 if deferred_full {
@@ -2268,8 +2282,7 @@ impl<C: Component> AppRunner<C> {
                         }
                         CEvent::FocusLost => {
                             self.set_window_focused(false, &mut dirty);
-                            let update = self.core.on_modifiers_changed(KeyMods::NONE);
-                            self.apply_root_update(&mut dirty, update);
+                            self.set_held_modifiers(KeyMods::NONE, &mut dirty);
                             #[cfg(feature = "terminal")]
                             if self.refresh_terminal_link_hover_at_pointer(KeyMods::NONE) {
                                 dirty.mark_paint();
@@ -2283,8 +2296,9 @@ impl<C: Component> AppRunner<C> {
                                 if self.refresh_terminal_link_hover_at_pointer(mods) {
                                     dirty.mark_paint();
                                 }
-                                let update = self.core.on_modifiers_changed(mods);
-                                self.apply_root_update(&mut dirty, update);
+                            }
+                            if self.core.ctx.modifier_key_reporting_enabled() {
+                                self.set_held_modifiers(key_modifier_state(k), &mut dirty);
                             }
                             if let Some(key) = to_key_event(k) {
                                 if matches!(key.code, KeyCode::Esc)

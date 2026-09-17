@@ -620,7 +620,7 @@ fn map_key_event(key: TerminaKeyEvent) -> CrosstermKeyEvent {
     }
 
     CrosstermKeyEvent::new_with_kind_and_state(
-        map_reported_key_code(key.code, key.kind),
+        map_reported_key_code(key.code, key.kind, key.modifiers),
         map_modifiers(key.modifiers),
         match key.kind {
             TerminaKeyEventKind::Press => CrosstermKeyEventKind::Press,
@@ -631,7 +631,20 @@ fn map_key_event(key: TerminaKeyEvent) -> CrosstermKeyEvent {
     )
 }
 
-fn map_reported_key_code(code: TerminaKeyCode, kind: TerminaKeyEventKind) -> CrosstermKeyCode {
+fn map_reported_key_code(
+    code: TerminaKeyCode,
+    kind: TerminaKeyEventKind,
+    modifiers: TerminaModifiers,
+) -> CrosstermKeyCode {
+    // Ghostty/Wayland can pair a LeftShift press (57441) with a CapsLock-coded release (57358)
+    // while the release's modifier mask still contains Shift. Treat that exact release shape as
+    // Shift; a real CapsLock release without Shift remains CapsLock.
+    if matches!(kind, TerminaKeyEventKind::Release)
+        && matches!(code, TerminaKeyCode::CapsLock)
+        && modifiers.contains(TerminaModifiers::SHIFT)
+    {
+        return CrosstermKeyCode::Modifier(CrosstermModifierKeyCode::LeftShift);
+    }
     // Some Kitty-protocol terminals append `:0` as the shifted alternate for a Shift release.
     // Termina 0.4 treats that zero as U+0000 and replaces the already-decoded Shift key with it,
     // so the release would never reach modifier-state tracking. REPORT_ALL_KEYS makes ordinary
@@ -873,7 +886,18 @@ mod tests {
     }
 
     #[test]
-    fn null_release_from_shift_alternate_maps_back_to_shift() {
+    fn malformed_shift_releases_map_back_to_shift() {
+        let TerminaEventAction::Input(CrosstermEvent::Key(capslock_coded)) =
+            map_termina_event(parsed_event(b"\x1b[57358;130:3u"))
+        else {
+            panic!("CapsLock-coded Shift release should map to Crossterm input");
+        };
+        assert_eq!(
+            capslock_coded.code,
+            CrosstermKeyCode::Modifier(CrosstermModifierKeyCode::LeftShift)
+        );
+        assert_eq!(capslock_coded.kind, CrosstermKeyEventKind::Release);
+
         let TerminaEventAction::Input(CrosstermEvent::Key(mapped)) =
             map_termina_event(parsed_event(b"\x1b[57441:0;2:3u"))
         else {

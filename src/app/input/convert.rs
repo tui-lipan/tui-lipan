@@ -36,6 +36,25 @@ pub(crate) fn to_key_event(k: crossterm::event::KeyEvent) -> Option<KeyEvent> {
 
 #[cfg(feature = "terminal")]
 pub(crate) fn modifier_key_state(k: crossterm::event::KeyEvent) -> Option<KeyMods> {
+    use crossterm::event::{KeyCode as CKeyCode, ModifierKeyCode};
+
+    match k.code {
+        CKeyCode::Modifier(
+            ModifierKeyCode::LeftControl
+            | ModifierKeyCode::RightControl
+            | ModifierKeyCode::LeftAlt
+            | ModifierKeyCode::RightAlt
+            | ModifierKeyCode::LeftShift
+            | ModifierKeyCode::RightShift
+            | ModifierKeyCode::LeftSuper
+            | ModifierKeyCode::RightSuper,
+        ) => Some(key_modifier_state(k)),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "terminal")]
+pub(crate) fn key_modifier_state(k: crossterm::event::KeyEvent) -> KeyMods {
     use crossterm::event::{KeyCode as CKeyCode, KeyEventKind, ModifierKeyCode};
 
     let mut mods = to_key_mods(k.modifiers);
@@ -53,9 +72,9 @@ pub(crate) fn modifier_key_state(k: crossterm::event::KeyEvent) -> Option<KeyMod
         CKeyCode::Modifier(ModifierKeyCode::LeftSuper | ModifierKeyCode::RightSuper) => {
             mods.super_key = active;
         }
-        _ => return None,
+        _ => {}
     }
-    Some(mods)
+    mods
 }
 
 fn to_key_mods(modifiers: crossterm::event::KeyModifiers) -> KeyMods {
@@ -184,6 +203,28 @@ mod tests {
             KeyEventState::NONE,
         );
         assert_eq!(modifier_key_state(release), Some(KeyMods::NONE));
+    }
+
+    #[cfg(feature = "terminal")]
+    #[test]
+    fn every_enhanced_key_event_can_reconcile_the_modifier_mask() {
+        use crossterm::event::{KeyEventKind, KeyEventState};
+
+        let shifted_press = CrosstermKeyEvent::new_with_kind_and_state(
+            CrosstermKeyCode::Char('x'),
+            KeyModifiers::SHIFT,
+            KeyEventKind::Press,
+            KeyEventState::NONE,
+        );
+        assert_eq!(key_modifier_state(shifted_press), KeyMods::SHIFT);
+
+        let identity_lost_release = CrosstermKeyEvent::new_with_kind_and_state(
+            CrosstermKeyCode::Char('\0'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+            KeyEventState::NONE,
+        );
+        assert_eq!(key_modifier_state(identity_lost_release), KeyMods::NONE);
     }
 
     #[test]

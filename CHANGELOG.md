@@ -11,6 +11,11 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- Scoped held-modifier tracking reconciles every enhanced key event's modifier mask, including
+  Shift releases whose key identity was lost to a zero alternate or a CapsLock-coded Ghostty event.
+
 ## [0.10.4] - 2026-09-17
 
 ### Added
@@ -19,11 +24,6 @@ While the crate is on `0.x.y`:
   `Context::set_modifier_key_reporting` and implement `on_modifiers_changed` to react to physically
   held Ctrl, Alt, Shift, and Super keys. Modifier state clears when the host window loses focus,
   and `TestBackend::set_held_modifiers` drives the same lifecycle in tests.
-
-### Fixed
-
-- Shift release reports carrying a zero alternate key are restored to modifier releases after
-  Termina decodes that alternate as `U+0000`, so scoped held-modifier tracking clears Shift.
 
 ## [0.10.3] - 2026-09-16
 
