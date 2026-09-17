@@ -1461,6 +1461,7 @@ pub struct List {
     pub(crate) empty_text: Option<Arc<str>>,
     pub(crate) empty_text_style: Style,
     pub(crate) force_scroll_to_selected: bool,
+    pub(crate) navigation_wrap: bool,
 }
 
 impl Default for List {
@@ -1517,6 +1518,7 @@ impl Default for List {
             empty_text: None,
             empty_text_style: Style::default(),
             force_scroll_to_selected: false,
+            navigation_wrap: false,
         }
     }
 }
@@ -1578,6 +1580,15 @@ impl List {
     /// Configure which keys move the selection.
     pub fn scroll_keys(mut self, keys: ScrollKeymap) -> Self {
         self.scroll_keys = keys;
+        self
+    }
+
+    /// Control whether Up/Down wrap at the first and last selectable rows.
+    ///
+    /// Off by default, so a focused list stops at the ends. [`SearchPalette`](super::SearchPalette)
+    /// turns this on so a short choice list loops.
+    pub fn navigation_wrap(mut self, wrap: bool) -> Self {
+        self.navigation_wrap = wrap;
         self
     }
 
@@ -2078,68 +2089,116 @@ impl List {
         selected: usize,
         items: &[ListItem],
         action: ScrollAction,
+        wrap: bool,
     ) -> Option<usize> {
         let len = items.len();
         if len == 0 {
             return None;
         }
 
-        let mut selected = Self::nearest_selectable_index(items, selected)?;
+        let selected = Self::nearest_selectable_index(items, selected)?;
 
-        let next = match action {
+        match action {
             ScrollAction::LineUp(lines) => {
-                for _ in 0..lines {
-                    if selected == 0 {
-                        break;
-                    }
-
-                    let Some(prev) = Self::selectable_at_or_before(items, selected - 1) else {
-                        break;
-                    };
-                    selected = prev;
-                }
-                selected
+                Self::step_selectable(selected, items, -(lines as isize), wrap)
             }
             ScrollAction::LineDown(lines) => {
-                for _ in 0..lines {
-                    if selected.saturating_add(1) >= len {
-                        break;
-                    }
-
-                    let Some(next) = Self::selectable_at_or_after(items, selected + 1) else {
-                        break;
-                    };
-                    selected = next;
-                }
-                selected
+                Self::step_selectable(selected, items, lines as isize, wrap)
             }
-            ScrollAction::LineLeft(_) | ScrollAction::LineRight(_) => return None,
-            ScrollAction::Home => Self::first_selectable_index(items)?,
-            ScrollAction::End => Self::last_selectable_index(items)?,
-        };
+            ScrollAction::LineLeft(_) | ScrollAction::LineRight(_) => None,
+            ScrollAction::Home => Self::first_selectable_index(items),
+            ScrollAction::End => Self::last_selectable_index(items),
+        }
+    }
 
-        Some(next)
+    /// Next dense index after moving `delta` rows.
+    ///
+    /// `wrap` loops at the ends; otherwise the index stops at `0` and `len - 1`.
+    pub fn step_index(selected: usize, len: usize, delta: isize, wrap: bool) -> Option<usize> {
+        if len == 0 {
+            return None;
+        }
+        let last = len.saturating_sub(1);
+        let selected = selected.min(last);
+        if wrap {
+            Some(
+                (selected as isize)
+                    .saturating_add(delta)
+                    .rem_euclid(len as isize) as usize,
+            )
+        } else {
+            Some(selected.saturating_add_signed(delta).min(last))
+        }
+    }
+
+    /// Next matching row after moving `delta` matching steps.
+    ///
+    /// `matches[i]` is `true` when row `i` can be selected. Use this when the caller
+    /// intercepts keys and does not have [`ListItem`]s. [`SearchPalette`](super::SearchPalette)
+    /// uses [`Self::step_index`] for dense result lists; grouped lists should pass the
+    /// selectable mask here.
+    pub fn step_matching(
+        matches: &[bool],
+        selected: usize,
+        delta: isize,
+        wrap: bool,
+    ) -> Option<usize> {
+        let rows: Vec<usize> = matches
+            .iter()
+            .enumerate()
+            .filter_map(|(index, selectable)| selectable.then_some(index))
+            .collect();
+        Self::step_among(&rows, selected, delta, wrap)
+    }
+
+    /// Next selectable row after moving `delta` selectable steps, skipping headers
+    /// and spacers.
+    pub fn step_selectable(
+        selected: usize,
+        items: &[ListItem],
+        delta: isize,
+        wrap: bool,
+    ) -> Option<usize> {
+        let rows: Vec<usize> = items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| item.is_selectable().then_some(index))
+            .collect();
+        Self::step_among(&rows, selected, delta, wrap)
+    }
+
+    fn step_among(rows: &[usize], selected: usize, delta: isize, wrap: bool) -> Option<usize> {
+        let count = rows.len();
+        let last = count.checked_sub(1)?;
+        let position = rows.iter().position(|&row| row == selected).unwrap_or(0);
+        let next = if wrap {
+            (position as isize)
+                .saturating_add(delta)
+                .rem_euclid(count as isize) as usize
+        } else {
+            position.saturating_add_signed(delta).min(last)
+        };
+        Some(rows[next])
     }
 
     pub(crate) fn selection_for_action_in_len(
         selected: usize,
         len: usize,
         action: ScrollAction,
+        wrap: bool,
     ) -> Option<usize> {
         if len == 0 {
             return None;
         }
 
         let selected = selected.min(len.saturating_sub(1));
-        let next = match action {
-            ScrollAction::LineUp(lines) => selected.saturating_sub(lines),
-            ScrollAction::LineDown(lines) => (selected + lines).min(len.saturating_sub(1)),
-            ScrollAction::LineLeft(_) | ScrollAction::LineRight(_) => return None,
-            ScrollAction::Home => 0,
-            ScrollAction::End => len.saturating_sub(1),
-        };
-
-        Some(next)
+        match action {
+            ScrollAction::LineUp(lines) => Self::step_index(selected, len, -(lines as isize), wrap),
+            ScrollAction::LineDown(lines) => Self::step_index(selected, len, lines as isize, wrap),
+            ScrollAction::LineLeft(_) | ScrollAction::LineRight(_) => None,
+            ScrollAction::Home => Some(0),
+            ScrollAction::End => Some(len.saturating_sub(1)),
+        }
     }
 
     pub(crate) fn next_selection(
@@ -2147,9 +2206,10 @@ impl List {
         items: &[ListItem],
         key: &KeyEvent,
         scroll_keys: ScrollKeymap,
+        wrap: bool,
     ) -> Option<usize> {
         let action = scroll_action_from_key(key, scroll_keys)?;
-        Self::selection_for_action(selected, items, action)
+        Self::selection_for_action(selected, items, action, wrap)
     }
 }
 
@@ -2304,10 +2364,22 @@ mod tests {
     #[test]
     fn keyboard_navigation_skips_headers_and_spacers() {
         let items = fixture_items();
-        let next = List::next_selection(1, &items, &key(KeyCode::Down), ScrollKeymap::default());
+        let next = List::next_selection(
+            1,
+            &items,
+            &key(KeyCode::Down),
+            ScrollKeymap::default(),
+            false,
+        );
         assert_eq!(next, Some(2));
 
-        let next = List::next_selection(2, &items, &key(KeyCode::Down), ScrollKeymap::default());
+        let next = List::next_selection(
+            2,
+            &items,
+            &key(KeyCode::Down),
+            ScrollKeymap::default(),
+            false,
+        );
         assert_eq!(next, Some(5));
     }
 
@@ -2315,10 +2387,22 @@ mod tests {
     fn home_end_resolve_to_selectable_rows() {
         let items = fixture_items();
 
-        let home = List::next_selection(5, &items, &key(KeyCode::Home), ScrollKeymap::default());
+        let home = List::next_selection(
+            5,
+            &items,
+            &key(KeyCode::Home),
+            ScrollKeymap::default(),
+            false,
+        );
         assert_eq!(home, Some(1));
 
-        let end = List::next_selection(1, &items, &key(KeyCode::End), ScrollKeymap::default());
+        let end = List::next_selection(
+            1,
+            &items,
+            &key(KeyCode::End),
+            ScrollKeymap::default(),
+            false,
+        );
         assert_eq!(end, Some(5));
     }
 
@@ -2328,8 +2412,52 @@ mod tests {
 
         assert_eq!(List::first_selectable_index(&items), None);
         assert_eq!(
-            List::next_selection(0, &items, &key(KeyCode::Down), ScrollKeymap::default()),
+            List::next_selection(
+                0,
+                &items,
+                &key(KeyCode::Down),
+                ScrollKeymap::default(),
+                false
+            ),
             None
+        );
+    }
+
+    #[test]
+    fn line_up_down_wrap_at_selectable_ends() {
+        let items = fixture_items();
+        let keys = ScrollKeymap::default();
+
+        assert_eq!(
+            List::next_selection(1, &items, &key(KeyCode::Up), keys, true),
+            Some(5)
+        );
+        assert_eq!(
+            List::next_selection(5, &items, &key(KeyCode::Down), keys, true),
+            Some(1)
+        );
+        assert_eq!(
+            List::next_selection(1, &items, &key(KeyCode::Up), keys, false),
+            Some(1)
+        );
+        assert_eq!(
+            List::next_selection(5, &items, &key(KeyCode::Down), keys, false),
+            Some(5)
+        );
+        assert_eq!(
+            List::next_selection(5, &items, &key(KeyCode::Home), keys, true),
+            Some(1)
+        );
+        assert_eq!(
+            List::next_selection(1, &items, &key(KeyCode::End), keys, true),
+            Some(5)
+        );
+        assert_eq!(List::step_index(0, 3, -1, true), Some(2));
+        assert_eq!(List::step_index(2, 3, 1, true), Some(0));
+        assert_eq!(List::step_index(0, 3, -1, false), Some(0));
+        assert_eq!(
+            List::step_matching(&[false, true, false, true], 1, -1, true),
+            Some(3)
         );
     }
 

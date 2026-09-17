@@ -11,6 +11,13 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- `List::navigation_wrap` opts into wrapping Up/Down at the first and last selectable rows (off by
+  default). `SearchPalette` still wraps by default and now uses the List helpers, including
+  `List::step_index` for dense result lists and `List::step_matching` for callers that intercept
+  keys themselves.
+
 ## [0.11.3] - 2026-09-17
 
 ### Fixed

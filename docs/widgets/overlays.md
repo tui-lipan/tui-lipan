@@ -408,6 +408,7 @@ order is the visual order navigation walks.
 | `preserve_item_order` | `bool` | Keep matched rows in source order instead of fuzzy-score order; applies to synchronous and asynchronous results |
 | `initial_query` | `impl Into<Arc<str>>` | Pre-populate search field |
 | `initial_selected_item_index` | `Option<usize>` | Seed selection from this `items` index (else first row); changing the prop reseeds, while an unchanged value does not override navigation during refresh/reranking |
+| `navigation_wrap` | `bool` | Wrap Up/Down at the first and last result (default: `true`). Forwards to the inner `List` and uses `List::step_index` for input-focused navigation |
 | `placeholder` | `impl Into<Arc<str>>` | Input placeholder (default: `"Search..."`) |
 | `width` | `Length` | Requested palette width (default: `Flex(1)`) |
 | `height` | `Length` | Requested palette height (default: `Flex(1)`) |
