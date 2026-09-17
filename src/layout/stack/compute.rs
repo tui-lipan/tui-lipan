@@ -702,9 +702,11 @@ fn run_stack_layout_pass(
 
         // Tier 3: rigid Px/Percent yield only when a wrapping Auto sibling is
         // still sitting on its wrap-height floor. Non-reflowing Auto children
-        // still drop so a Px pane can keep its requested size.
+        // still drop so a Px pane can keep its requested size. A Flow with an
+        // explicit Px/Percent/Flex size is not this case.
         let protect_wrap = entries.iter().any(|e| {
             !e.compact
+                && matches!(e.len, Length::Auto)
                 && e.reflows
                 && e.shrink_priority != ShrinkPriority::First
                 && e.size >= e.min_content
@@ -719,7 +721,7 @@ fn run_stack_layout_pass(
                         && !e.protected
                         && !e.shrinkable
                         && matches!(e.len, Length::Px(_) | Length::Percent(_))
-                        && e.size > 1
+                        && e.size > e.min_size.max(1)
                 })
                 .map(|(idx, _)| idx)
                 .collect();
@@ -729,7 +731,8 @@ fn run_stack_layout_pass(
                     break;
                 }
                 let entry = &mut entries[idx];
-                let cap = entry.size.saturating_sub(1);
+                let floor = entry.min_size.max(1);
+                let cap = entry.size.saturating_sub(floor);
                 if cap == 0 {
                     continue;
                 }
@@ -788,7 +791,9 @@ fn run_stack_layout_pass(
                         && !e.protected
                         && e.shrinkable
                         && e.size > 0
-                        && !(e.reflows && e.shrink_priority != ShrinkPriority::First)
+                        && !(matches!(e.len, Length::Auto)
+                            && e.reflows
+                            && e.shrink_priority != ShrinkPriority::First)
                 })
                 .collect();
             // Drop yielding (`First`) children before rigid ones, mirroring the
@@ -817,6 +822,7 @@ fn run_stack_layout_pass(
                 .enumerate()
                 .filter(|(_, e)| {
                     !e.compact
+                        && matches!(e.len, Length::Auto)
                         && e.reflows
                         && e.shrink_priority != ShrinkPriority::First
                         && e.size > e.min_size
@@ -842,7 +848,12 @@ fn run_stack_layout_pass(
             let wrap_drop: Vec<usize> = (0..entries.len())
                 .filter(|&idx| {
                     let e = &entries[idx];
-                    !e.compact && !e.protected && e.shrinkable && e.reflows && e.size > 0
+                    !e.compact
+                        && !e.protected
+                        && e.shrinkable
+                        && matches!(e.len, Length::Auto)
+                        && e.reflows
+                        && e.size > 0
                 })
                 .collect();
             for idx in wrap_drop {

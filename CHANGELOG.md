@@ -48,8 +48,9 @@ While the crate is on `0.x.y`:
 ### Fixed
 
 - A wrapping Auto `Flow` in a bounded stack keeps its wrap height. Flex and Px siblings yield
-  first; `Flow::shrinkable` still truncates below that floor. The wrap clips only after every other
-  sibling has already yielded.
+  first, stopping at their hard `min_width` / `min_height`. `Flow::shrinkable` still truncates
+  below that floor. A Flow with an explicit Px/Percent/Flex size is not this floor. The wrap clips
+  only after every other sibling has already yielded.
 - A capturing overlay whose focusable widgets all opt out of Tab traversal no longer swallows every
   key once one of them is focused. It counted as empty, so keys never reached the widget holding
   focus. While none is focused the overlay still counts as empty, so quit keeps working.
