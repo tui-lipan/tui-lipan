@@ -2421,7 +2421,7 @@ mod tests {
         let image = image::DynamicImage::new_rgb8(10, 20);
         let size = ratatui::layout::Size::new(1, 1);
         let next = EncodedProtocol::ratatui(
-            Protocol::Kitty(Kitty::new(image, size, 8, false).unwrap()),
+            Protocol::Kitty(Kitty::new(image, size, 8, false, false).unwrap()),
             ImageProtocol::Kitty,
         );
         let backend = ratatui::backend::TestBackend::new(1, 1);
@@ -2430,11 +2430,17 @@ mod tests {
         terminal
             .draw(|frame| next.render(frame, frame.area()))
             .unwrap();
-        let symbol = terminal.backend().buffer().cell((0, 0)).unwrap().symbol();
-        let transmission = symbol.find("i=8").unwrap();
-        let placeholders = symbol.find("\x1b[s").unwrap();
-        assert!(transmission < placeholders);
-        assert!(symbol.contains("\x1b[38;2;0;0;8m"));
+        let cell = terminal.backend().buffer().cell((0, 0)).unwrap();
+        let symbol = cell.symbol();
+        let transmission = symbol.find("i=8").expect("kitty transmission");
+        let placeholder = symbol
+            .find('\u{10EEEE}')
+            .expect("kitty unicode placeholder");
+        assert!(
+            transmission < placeholder,
+            "transmission must precede the placeholder; got {symbol:?}"
+        );
+        assert_eq!(cell.fg, ratatui::style::Color::Rgb(0, 0, 8));
     }
 
     #[cfg(feature = "terminal-images")]

@@ -51,6 +51,7 @@ While the crate is on `0.x.y`:
   first, stopping at their hard `min_width` / `min_height`. `Flow::shrinkable` still truncates
   below that floor. A Flow with an explicit Px/Percent/Flex size is not this floor. The wrap clips
   only after every other sibling has already yielded.
+- Tests compile against `ratatui-image` 11.1.0, whose `Kitty::new` now takes a compression flag.
 - A capturing overlay whose focusable widgets all opt out of Tab traversal no longer swallows every
   key once one of them is focused. It counted as empty, so keys never reached the widget holding
   focus. While none is focused the overlay still counts as empty, so quit keeps working.

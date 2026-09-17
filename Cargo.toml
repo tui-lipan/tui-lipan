@@ -68,7 +68,7 @@ codegen-units = 16
 # ─── Required ────────────────────────────────────────────────────────────────
 
 [dependencies]
-ratatui-image = { version = "11.0.6", default-features = false, features = ["crossterm"], optional = true }
+ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"], optional = true }
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"], optional = true }
 
 arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"], optional = true }
