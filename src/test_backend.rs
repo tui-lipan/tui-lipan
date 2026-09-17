@@ -297,15 +297,27 @@ where
     ///
     /// Calls the root component's [`Component::on_window_focus_changed`] callback once per
     /// changed value, runs its returned command, drains messages already available, and renders
-    /// when an update requests it. Background commands remain asynchronous; call [`Self::pump`]
-    /// later to process messages they produce. This does not affect widget focus.
+    /// when an update requests it. Losing focus also clears pointer hover. Background commands
+    /// remain asynchronous; call [`Self::pump`] later to process messages they produce. This does
+    /// not affect widget focus.
     pub fn set_window_focused(&mut self, focused: bool) -> Result<bool> {
         if self.window_focused == focused {
             return Ok(false);
         }
 
         self.window_focused = focused;
-        let mut lifecycle_dirty = !matches!(
+        let mut lifecycle_dirty = false;
+        if !focused {
+            lifecycle_dirty |= {
+                let overlays = std::rc::Rc::clone(&self.core.overlay_manager);
+                crate::app::input::mouse::release_pointer_hover(
+                    &mut self.mouse,
+                    &mut self.core.tree,
+                    &mut overlays.borrow_mut(),
+                )
+            };
+        }
+        lifecycle_dirty |= !matches!(
             self.core.on_window_focus_changed(focused),
             crate::UpdateLevel::None
         );
@@ -7270,6 +7282,32 @@ mod tests {
         let cell = first_cell_with_symbol(&frame, "H");
 
         assert_eq!(cell.fg, Color::Rgb(0x50, 0x50, 0x53));
+        assert_eq!(cell.bg, Color::Rgb(0x15, 0x15, 0x19));
+    }
+
+    #[test]
+    fn window_focus_loss_clears_pointer_hover() {
+        let mut backend = TestBackend::new(HoverCaptureButtonRoot);
+
+        backend
+            .send_mouse(MouseEvent {
+                x: 1,
+                y: 0,
+                kind: MouseKind::Moved,
+                mods: Default::default(),
+            })
+            .expect("mouse move should succeed");
+        assert!(backend.hovered().is_some());
+
+        backend
+            .set_window_focused(false)
+            .expect("focus loss should succeed");
+        assert!(backend.hovered().is_none());
+        assert!(backend.core.ctx.last_mouse().is_none());
+
+        let frame = backend.capture_frame();
+        let cell = first_cell_with_symbol(&frame, "H");
+        assert_eq!(cell.fg, Color::White);
         assert_eq!(cell.bg, Color::Rgb(0x15, 0x15, 0x19));
     }
 

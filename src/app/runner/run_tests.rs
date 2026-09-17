@@ -15,7 +15,7 @@ use crate::TextEditor;
 use crate::animation::{Easing, TransitionConfig};
 #[cfg(feature = "devtools")]
 use crate::app::context::DevToolsConfig;
-use crate::app::context::{App, FocusPolicy, SurfaceMode};
+use crate::app::context::{App, FocusPolicy, InlineHeight, SurfaceMode};
 use crate::app::input::runtime_dispatch::should_dispatch_text_area_tab_first;
 use crate::callback::{Callback, ScopeId};
 use crate::clipboard::{ClipboardConfig, ClipboardError, ClipboardProvider};
@@ -38,7 +38,7 @@ use crate::widgets::{
 };
 use crossterm::event::{
     Event as CEvent, KeyCode as CKeyCode, KeyEvent as CKeyEvent, KeyModifiers as CKeyModifiers,
-    MouseEvent as CMouseEvent, MouseEventKind as CMouseEventKind,
+    MouseButton as CMouseButton, MouseEvent as CMouseEvent, MouseEventKind as CMouseEventKind,
 };
 use ratatui::Terminal as RatatuiTerminal;
 use ratatui::backend::TestBackend;
@@ -494,6 +494,164 @@ fn scroll_burst_followed_by_non_scroll_event_preserves_event() {
         Some(super::RunnerEvent::Terminal(CEvent::Key(_)))
     ));
     assert!(super::try_recv_channel(Some(&rx)).unwrap().is_none());
+}
+
+fn set_inline_viewport<C: Component>(runner: &mut AppRunner<C>, y: u16, height: u16) {
+    runner.surface = super::SurfaceDriver::new(SurfaceMode::InlineEphemeral {
+        height: InlineHeight::Fixed(height),
+    });
+    runner.set_viewport_metrics(ratatui::layout::Rect {
+        x: 0,
+        y,
+        width: 80,
+        height,
+    });
+}
+
+#[test]
+fn convert_coalesced_pointer_reports_outside_inline_viewport() {
+    let mut runner = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
+    init_runner(
+        &mut runner,
+        RunnerKeymapSmoke,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 80,
+            h: 24,
+        },
+    );
+    set_inline_viewport(&mut runner, 4, 4);
+
+    let inside = runner.convert_coalesced_pointer(
+        c_mouse(CMouseEventKind::Drag(CMouseButton::Left), 2, 5),
+        None,
+    );
+    assert!(
+        matches!(inside, super::CoalescedPointer::Inside(mouse) if mouse.kind == MouseKind::Drag(MouseButton::Left) && mouse.y == 1),
+        "{inside:?}"
+    );
+
+    let outside = runner.convert_coalesced_pointer(
+        c_mouse(CMouseEventKind::Drag(CMouseButton::Left), 2, 2),
+        None,
+    );
+    assert_eq!(outside, super::CoalescedPointer::OutsideViewport);
+
+    let ignored =
+        runner.convert_coalesced_pointer(c_mouse(CMouseEventKind::ScrollLeft, 2, 5), None);
+    assert_eq!(ignored, super::CoalescedPointer::Ignored);
+}
+
+#[test]
+fn coalesced_drag_that_leaves_inline_viewport_is_not_skipped() {
+    let mut runner = AppRunner::new(App::new(), RunnerKeymapSmoke, ());
+    init_runner(
+        &mut runner,
+        RunnerKeymapSmoke,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 80,
+            h: 24,
+        },
+    );
+    set_inline_viewport(&mut runner, 4, 4);
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(super::RunnerEvent::Terminal(c_mouse(
+        CMouseEventKind::Drag(CMouseButton::Left),
+        2,
+        5,
+    )))
+    .unwrap();
+    tx.send(super::RunnerEvent::Terminal(c_mouse(
+        CMouseEventKind::Drag(CMouseButton::Left),
+        2,
+        2,
+    )))
+    .unwrap();
+    tx.send(super::RunnerEvent::Terminal(c_key('x'))).unwrap();
+
+    let mut last_inside = None;
+    let mut left_viewport = false;
+    let mut pending_event = None;
+    while let Some(next_ev) = super::try_recv_channel(Some(&rx)).unwrap() {
+        match super::split_pointer_event(next_ev) {
+            Ok((next_ev, next_sub_cell)) => {
+                match runner.convert_coalesced_pointer(next_ev, next_sub_cell) {
+                    super::CoalescedPointer::Inside(mouse)
+                        if matches!(mouse.kind, MouseKind::Drag(_)) =>
+                    {
+                        last_inside = Some(mouse);
+                    }
+                    super::CoalescedPointer::OutsideViewport => {
+                        left_viewport = true;
+                        break;
+                    }
+                    super::CoalescedPointer::Inside(_) | super::CoalescedPointer::Ignored => {}
+                }
+            }
+            Err(other) => {
+                super::preserve_pending_event(&mut pending_event, *other);
+                break;
+            }
+        }
+    }
+
+    assert!(last_inside.is_some(), "kept the last in-bounds drag");
+    assert!(left_viewport, "outside-viewport drag must not be skipped");
+    assert!(pending_event.is_none());
+    assert!(matches!(
+        super::try_recv_channel(Some(&rx)).unwrap(),
+        Some(super::RunnerEvent::Terminal(CEvent::Key(_)))
+    ));
+}
+
+#[test]
+fn coalesced_drag_outside_viewport_clears_hover_after_last_in_bounds_drag() {
+    let changes = Rc::new(RefCell::new(Vec::new()));
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 8,
+        h: 1,
+    };
+    let component = DescendantMouseRegionHover {
+        changes: Rc::clone(&changes),
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component, ());
+    init_runner(
+        &mut runner,
+        DescendantMouseRegionHover {
+            changes: Rc::clone(&changes),
+        },
+        viewport,
+    );
+    set_inline_viewport(&mut runner, 4, 4);
+
+    assert!(runner.update_hover(0, 0));
+    assert!(runner.mouse.hovered.is_some());
+
+    let super::CoalescedPointer::Inside(drag) = runner.convert_coalesced_pointer(
+        c_mouse(CMouseEventKind::Drag(CMouseButton::Left), 2, 5),
+        None,
+    ) else {
+        panic!("in-bounds drag should convert");
+    };
+    let _ = runner.dispatch_mouse(drag);
+    assert_eq!(
+        runner.convert_coalesced_pointer(
+            c_mouse(CMouseEventKind::Drag(CMouseButton::Left), 2, 2),
+            None,
+        ),
+        super::CoalescedPointer::OutsideViewport
+    );
+
+    let mut dirty = DirtyTracker::default();
+    runner.apply_pointer_leave(&mut dirty);
+    assert!(runner.mouse.hovered.is_none());
+    assert_eq!(&*changes.borrow(), &[true, false]);
 }
 
 #[test]
@@ -3523,6 +3681,39 @@ fn mouse_region_hover_tracks_interactive_descendants() {
     assert_eq!(&*changes.borrow(), &[true, false]);
 }
 
+#[test]
+fn host_focus_loss_clears_pointer_hover() {
+    let changes = Rc::new(RefCell::new(Vec::new()));
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 8,
+        h: 1,
+    };
+    let component = DescendantMouseRegionHover {
+        changes: Rc::clone(&changes),
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component, ());
+    init_runner(
+        &mut runner,
+        DescendantMouseRegionHover {
+            changes: Rc::clone(&changes),
+        },
+        viewport,
+    );
+
+    assert!(runner.update_hover(0, 0));
+    assert!(runner.mouse.hovered.is_some());
+    assert_eq!(&*changes.borrow(), &[true]);
+
+    let mut dirty = DirtyTracker::default();
+    assert!(runner.set_window_focused(false, &mut dirty));
+    assert!(runner.mouse.hovered.is_none());
+    assert!(runner.mouse.last_mouse.get().is_none());
+    assert_eq!(&*changes.borrow(), &[true, false]);
+    assert!(!matches!(dirty.level(), DirtyLevel::None));
+}
+
 struct StyleOnlyHitTestRegion;
 
 impl Component for StyleOnlyHitTestRegion {
@@ -4060,6 +4251,43 @@ fn draggable_tab_width_lock_clears_when_pointer_leaves_bar() {
         unreachable!();
     };
     assert_eq!(bar.width_lock, None);
+}
+
+#[test]
+fn host_focus_loss_clears_draggable_tab_width_lock() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 2,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), DraggableTabStripHoverSmoke, ());
+    init_runner(&mut runner, DraggableTabStripHoverSmoke, viewport);
+
+    let bar_id = runner
+        .core
+        .tree
+        .iter()
+        .find(|node| matches!(node.kind, NodeKind::DraggableTabBar(_)))
+        .map(|node| node.id)
+        .expect("draggable tab bar node");
+    assert!(runner.update_hover(1, 0));
+    let NodeKind::DraggableTabBar(bar) = &mut runner.core.tree.node_mut(bar_id).kind else {
+        unreachable!();
+    };
+    bar.width_lock = Some(crate::widgets::draggable_tab_bar::TabWidthLock {
+        index: 0,
+        width: 12,
+    });
+
+    let mut dirty = DirtyTracker::default();
+    assert!(runner.set_window_focused(false, &mut dirty));
+    assert!(runner.mouse.hovered.is_none());
+    let NodeKind::DraggableTabBar(bar) = &runner.core.tree.node(bar_id).kind else {
+        unreachable!();
+    };
+    assert_eq!(bar.width_lock, None);
+    assert!(!matches!(dirty.level(), DirtyLevel::None));
 }
 
 struct TextAreaSentinelHoverSmoke;
