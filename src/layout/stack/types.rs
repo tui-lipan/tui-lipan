@@ -1,7 +1,7 @@
 //! Stack layout types.
 
 use crate::layout::axis::Axis;
-use crate::style::{Rect, ShrinkPriority};
+use crate::style::{Length, Rect, ShrinkPriority};
 use crate::widgets::containers::FocusAccordion;
 
 #[derive(Clone, Debug)]
@@ -17,6 +17,8 @@ pub(crate) struct StackChildLayout {
     pub min_content: u16,
     pub shrinkable: bool,
     pub shrink_priority: ShrinkPriority,
+    pub len: Length,
+    pub reflows: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

@@ -45,6 +45,7 @@ composition wrapper should size itself to its contents.
 
 Layout pitfall checklist:
 - Stacks consume remaining space by default. Use `Length::Px(...)` for fixed bars before giving the main content flexible space.
+- A wrapping Auto `Flow` treats its wrap height as a floor. Put a `Flex` list (optionally `max_height`-capped) or a `Px` pane next to it: those siblings shrink so the wrapped chips stay whole, but not below a hard `min_height` / `min_width`. A Flow with an explicit Px or Percent size stays rigid. Use `Flow::shrinkable(true)` only when the Flow should truncate first.
 - A child can end up with a zero-width or zero-height rect when the parent viewport is too small or fixed siblings consume the available space.
 - For headless debugging, set an explicit `TestBackend` viewport and capture with `UiSnapshotOptions::diagnostic()`; markdown flags zero-area widgets as `zero-area`.
 
@@ -108,7 +109,7 @@ Wrapping layout container for chip/tag-like content. `Flow` packs children left-
 | `style` | `Style` | Container style |
 | `width` | `Length` | Width override |
 | `height` | `Length` | Height override |
-| `shrinkable` | `bool` | Yield width before normal siblings, allowing item truncation under pressure |
+| `shrinkable` | `bool` | Yield before normal siblings and truncate items under pressure. Default `false` keeps the wrap-height floor in a bounded stack. |
 
 ```rust
 Flow::new()
@@ -121,7 +122,7 @@ Flow::new()
     ])
 ```
 
-Use `Flow` for mixed-width chips, badges, and quick filters where the number of items is dynamic and row breaks must adapt to container resizing.
+Use `Flow` for mixed-width chips, badges, and quick filters where the number of items is dynamic and row breaks must adapt to container resizing. In a bounded stack, an Auto wrapping Flow's wrap height is a floor unless you set `shrinkable(true)`: Flex and Px siblings shrink so every chip stays whole, stopping at a hard `min_height` / `min_width`. An explicit Px or Percent Flow height stays rigid.
 
 `justify` distributes each row's leftover width independently: `SpaceBetween` pins the first item of every row to the left edge and the last to the right edge, `Center`/`End` shift whole rows, and `SpaceAround`/`SpaceEvenly` pad the edges too. Unlike `HStack`/`VStack`, Flow items are always measured at their natural size, so the space variants work without giving children explicit non-flex sizing:
 

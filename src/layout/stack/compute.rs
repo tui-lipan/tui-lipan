@@ -189,8 +189,9 @@ fn measured_main_at(child: &Element, axis: Axis, main: u16, cross: Option<u16>) 
 /// push a right-hand group to the edge instead of it hugging a left group with
 /// empty trailing space. `First` children may shrink below `min_content` (they
 /// truncate); others stay at >= `min_content`. Gradual wrapping is handled
-/// earlier by the two-tier shrink (everything reaches its `min_content` floor
-/// before any `First` child truncates), so no redistribution is needed here.
+/// earlier by shrinking everyone to `min_content` before any `First` child
+/// truncates; a wrapping Auto Flow is clipped below that floor only after
+/// Flex/Px siblings have already yielded.
 fn fit_reflow_children_to_content<C: Borrow<Element>>(
     children: &[C],
     child_bases: &[StackChildBaseLayout],
@@ -444,6 +445,8 @@ fn build_child_base_layouts<C: Borrow<Element>>(
                     min_content: 0,
                     shrinkable: false,
                     shrink_priority: ShrinkPriority::Normal,
+                    len: Length::Px(0),
+                    reflows: false,
                 })
                 .collect::<Vec<_>>(),
             &reserve_gaps,
@@ -591,6 +594,8 @@ fn run_stack_layout_pass(
             },
             shrinkable: child.shrinkable,
             shrink_priority: child.shrink_priority,
+            len: child.len,
+            reflows: child.reflows,
         });
     }
 
@@ -663,29 +668,71 @@ fn run_stack_layout_pass(
             overflow = overflow.saturating_sub(take);
         }
 
-        // Tier 2: still overflowing — let children that may go below their
-        // readable floor (reflowing groups, which then truncate) yield the rest.
-        // `First` priority truncates before `Normal`; within a class, largest
-        // first.
+        // Tier 2: still overflowing — only `First` children (Flow::shrinkable,
+        // etc.) may go below their readable floor and truncate. A wrapping Auto
+        // Flow's wrap height is otherwise a floor: clip it only after Flex/Px
+        // siblings have yielded.
         if overflow > 0 {
             let mut tier2: Vec<usize> = entries
                 .iter()
                 .enumerate()
-                .filter(|(_, e)| !e.compact && e.shrinkable && e.size > e.min_size)
+                .filter(|(_, e)| {
+                    !e.compact
+                        && e.shrinkable
+                        && e.shrink_priority == ShrinkPriority::First
+                        && e.size > e.min_size
+                })
                 .map(|(idx, _)| idx)
                 .collect();
-            tier2.sort_by_key(|&idx| {
-                (
-                    std::cmp::Reverse(entries[idx].shrink_priority),
-                    std::cmp::Reverse(entries[idx].size),
-                )
-            });
+            tier2.sort_by_key(|&idx| std::cmp::Reverse(entries[idx].size));
             for idx in tier2 {
                 if overflow == 0 {
                     break;
                 }
                 let entry = &mut entries[idx];
                 let cap = entry.size.saturating_sub(entry.min_size);
+                if cap == 0 {
+                    continue;
+                }
+                let take = overflow.min(cap);
+                entry.size = entry.size.saturating_sub(take);
+                overflow = overflow.saturating_sub(take);
+            }
+        }
+
+        // Tier 3: rigid Px/Percent yield only when a wrapping Auto sibling is
+        // still sitting on its wrap-height floor. Non-reflowing Auto children
+        // still drop so a Px pane can keep its requested size. A Flow with an
+        // explicit Px/Percent/Flex size is not this case.
+        let protect_wrap = entries.iter().any(|e| {
+            !e.compact
+                && matches!(e.len, Length::Auto)
+                && e.reflows
+                && e.shrink_priority != ShrinkPriority::First
+                && e.size >= e.min_content
+                && e.min_content > e.min_size
+        });
+        if overflow > 0 && protect_wrap {
+            let mut tier3: Vec<usize> = entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| {
+                    !e.compact
+                        && !e.protected
+                        && !e.shrinkable
+                        && matches!(e.len, Length::Px(_) | Length::Percent(_))
+                        && e.size > e.min_size.max(1)
+                })
+                .map(|(idx, _)| idx)
+                .collect();
+            tier3.sort_by_key(|&idx| std::cmp::Reverse(entries[idx].size));
+            for idx in tier3 {
+                if overflow == 0 {
+                    break;
+                }
+                let entry = &mut entries[idx];
+                let floor = entry.min_size.max(1);
+                let cap = entry.size.saturating_sub(floor);
                 if cap == 0 {
                     continue;
                 }
@@ -732,17 +779,21 @@ fn run_stack_layout_pass(
             }
         }
 
-        // If shrinking/collapse can't absorb the deficit, drop non-protected shrinkable
-        // children entirely (size 0, gap suppressed) one at a time. Forward
-        // source order: the children closest to the rigid Px/Percent anchor
-        // (typically last) stay visible longest. This honors Px as rigid -
-        // rather than squashing it below its requested size, whole Auto/Flex
-        // siblings hide progressively from the top.
+        // If shrinking/collapse can't absorb the deficit, drop non-protected
+        // shrinkable children entirely (size 0, gap suppressed) one at a time.
+        // Keep a wrapping Auto Flow at its wrap-height floor until Flex/Px and
+        // `First` siblings are gone; clip that wrap only as a last resort.
         if overflow > 0 {
             let mut drop_order: Vec<usize> = (0..entries.len())
                 .filter(|&idx| {
                     let e = &entries[idx];
-                    !e.compact && !e.protected && e.shrinkable && e.size > 0
+                    !e.compact
+                        && !e.protected
+                        && e.shrinkable
+                        && e.size > 0
+                        && !(matches!(e.len, Length::Auto)
+                            && e.reflows
+                            && e.shrink_priority != ShrinkPriority::First)
                 })
                 .collect();
             // Drop yielding (`First`) children before rigid ones, mirroring the
@@ -751,6 +802,61 @@ fn run_stack_layout_pass(
             drop_order.sort_by_key(|&idx| std::cmp::Reverse(entries[idx].shrink_priority));
 
             for idx in drop_order {
+                if overflow == 0 {
+                    break;
+                }
+                let prev_total = total_with_gaps(&entries, &gaps);
+                entries[idx].size = 0;
+                update_gaps(&mut gaps, &entries);
+                let new_total = total_with_gaps(&entries, &gaps);
+                let saved = prev_total.saturating_sub(new_total);
+                overflow = overflow.saturating_sub(saved);
+            }
+        }
+
+        // Last resort: clip wrapping Auto children below min_content, then drop
+        // them, once every other sibling has already yielded.
+        if overflow > 0 {
+            let mut wrap_clip: Vec<usize> = entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| {
+                    !e.compact
+                        && matches!(e.len, Length::Auto)
+                        && e.reflows
+                        && e.shrink_priority != ShrinkPriority::First
+                        && e.size > e.min_size
+                })
+                .map(|(idx, _)| idx)
+                .collect();
+            wrap_clip.sort_by_key(|&idx| std::cmp::Reverse(entries[idx].size));
+            for idx in wrap_clip {
+                if overflow == 0 {
+                    break;
+                }
+                let entry = &mut entries[idx];
+                let cap = entry.size.saturating_sub(entry.min_size);
+                if cap == 0 {
+                    continue;
+                }
+                let take = overflow.min(cap);
+                entry.size = entry.size.saturating_sub(take);
+                overflow = overflow.saturating_sub(take);
+            }
+        }
+        if overflow > 0 {
+            let wrap_drop: Vec<usize> = (0..entries.len())
+                .filter(|&idx| {
+                    let e = &entries[idx];
+                    !e.compact
+                        && !e.protected
+                        && e.shrinkable
+                        && matches!(e.len, Length::Auto)
+                        && e.reflows
+                        && e.size > 0
+                })
+                .collect();
+            for idx in wrap_drop {
                 if overflow == 0 {
                     break;
                 }

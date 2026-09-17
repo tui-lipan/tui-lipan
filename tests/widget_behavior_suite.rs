@@ -24,6 +24,8 @@ mod file_tree_collapsed_projection;
 mod file_tree_explorer_focus;
 #[path = "suites/widget_behavior/flow_in_hstack_wraps.rs"]
 mod flow_in_hstack_wraps;
+#[path = "suites/widget_behavior/flow_wrap_height_floor.rs"]
+mod flow_wrap_height_floor;
 #[path = "suites/widget_behavior/gantt_diagram_render.rs"]
 mod gantt_diagram_render;
 #[path = "suites/widget_behavior/list_description_spinner_render.rs"]
