@@ -73,6 +73,64 @@ fn list_rich_text_span_style(base: Style, span: Style) -> Style {
     }
 }
 
+struct RuleRow<'a> {
+    spans: &'a [crate::style::Span],
+    row_style: Style,
+    rule_style: ratatui::style::Style,
+    width: usize,
+    padding_left: usize,
+    padding_right: usize,
+    contrast_policy: ContrastPolicy,
+}
+
+/// A header row drawn as `──── label ────`, with the label centered in the width that remains
+/// after the row padding. When the label does not fit, only the label is drawn and it is clipped
+/// like any other row.
+fn rule_row_line(row: RuleRow<'_>) -> Line<'static> {
+    const RULE: &str = "─";
+    let base = to_ratatui_style(finalize_style(
+        row.row_style,
+        style_backdrop(row.row_style),
+        row.contrast_policy,
+    ));
+    let label = row
+        .spans
+        .iter()
+        .filter(|span| !span.content.is_empty())
+        .map(|span| {
+            let style = finalize_style(
+                list_rich_text_span_style(row.row_style, span.style),
+                style_backdrop(row.row_style),
+                row.contrast_policy,
+            );
+            Span::styled(span.content.to_string(), to_ratatui_style(style))
+        })
+        .collect::<Vec<_>>();
+    let label_width = label
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum::<usize>();
+    // One blank column on each side of a non-empty label keeps it off the rule.
+    let gap = usize::from(label_width > 0);
+    let inner = row
+        .width
+        .saturating_sub(row.padding_left)
+        .saturating_sub(row.padding_right);
+    let mut spans = vec![Span::styled(spaces(row.padding_left), base)];
+    let Some(rule) = inner.checked_sub(label_width + gap * 2) else {
+        spans.extend(label);
+        return Line::from(spans);
+    };
+    let left = rule / 2;
+    spans.push(Span::styled(RULE.repeat(left), row.rule_style));
+    spans.push(Span::styled(spaces(gap), base));
+    spans.extend(label);
+    spans.push(Span::styled(spaces(gap), base));
+    spans.push(Span::styled(RULE.repeat(rule - left), row.rule_style));
+    spans.push(Span::styled(spaces(row.padding_right), base));
+    Line::from(spans)
+}
+
 fn resolve_symbol_style(
     row_style: Style,
     symbol_style: Option<Style>,
@@ -862,6 +920,27 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
         } else {
             item_horizontal_padding
         };
+
+        if let Some(rule_style) = item.rule {
+            let row_style = item_row_style;
+            let rule_rs = to_ratatui_style(finalize_style(
+                row_style.patch(rule_style),
+                style_backdrop(row_style),
+                contrast_policy,
+            ));
+            lines.push(rule_row_line(RuleRow {
+                spans: &item.spans,
+                row_style,
+                rule_style: rule_rs,
+                width: max_text_w as usize,
+                padding_left: row_padding.left as usize,
+                padding_right: row_padding.right as usize,
+                contrast_policy,
+            }));
+            line_idx = line_idx.saturating_add(render_lines);
+            used_item_lines = used_item_lines.saturating_add(render_lines);
+            continue;
+        }
 
         for sub_line in 0..render_lines {
             let (
@@ -2579,6 +2658,98 @@ mod tests {
             ),
             "contrast policy should rewrite red-on-red spinner, got {:?}",
             spinner_cell.fg
+        );
+    }
+
+    #[test]
+    fn divider_rows_center_their_label_at_every_width() {
+        fn first_row(items: &[ListItem], width: u16, padding: Padding) -> String {
+            let rect = Rect {
+                x: 0,
+                y: 0,
+                w: width,
+                h: 1,
+            };
+            let backend = TestBackend::new(rect.w, rect.h);
+            let mut terminal = Terminal::with_options(
+                backend,
+                TerminalOptions {
+                    viewport: Viewport::Fixed(ratatui::layout::Rect::new(0, 0, rect.w, rect.h)),
+                },
+            )
+            .expect("terminal");
+            terminal
+                .draw(|f| {
+                    render_list(ListRenderParams {
+                        f,
+                        items,
+                        selected: None,
+                        offset: 0,
+                        style: Style::default(),
+                        hover_style: Style::default(),
+                        item_hover_style: Style::default(),
+                        active_style: Style::default(),
+                        selection_style: Style::default(),
+                        active_symbol: None,
+                        active_symbol_position: ListSymbolPosition::Left,
+                        active_symbol_style: None,
+                        selection_symbol: None,
+                        selection_symbol_right: None,
+                        selection_symbol_style: None,
+                        unselected_symbol: None,
+                        symbol_column: false,
+                        gutter_gap: 1,
+                        gutter_for_non_selectable: false,
+                        selection_full_width: false,
+                        item_horizontal_padding: Padding::default(),
+                        header_horizontal_padding: padding,
+                        border: false,
+                        border_style: BorderStyle::Plain,
+                        title: None,
+                        title_style: Style::default(),
+                        padding: Padding::default(),
+                        scrollbar: false,
+                        scrollbar_variant: ScrollbarVariant::Standalone,
+                        scrollbar_gap: 0,
+                        scrollbar_thumb: None,
+                        scrollbar_thumb_style: None,
+                        scrollbar_thumb_focus_style: None,
+                        scrollbar_track_style: None,
+                        show_scroll_indicators: false,
+                        scroll_indicator_style: Style::default(),
+                        top_indicator: false,
+                        bottom_indicator: false,
+                        bottom_count: 0,
+                        empty_text: None,
+                        empty_text_style: Style::default(),
+                        is_focused: false,
+                        is_hovered: false,
+                        mouse_pos: None,
+                        disabled: false,
+                        disabled_style: Style::default(),
+                        rect,
+                        rrect: ratatui::layout::Rect::new(0, 0, rect.w, rect.h),
+                        parent_integrated_v: None,
+                        clip_rect: None,
+                        contrast_policy: ContrastPolicy::Off,
+                    });
+                })
+                .expect("draw");
+            let buffer = terminal.backend().buffer();
+            (0..width).map(|x| buffer[(x, 0)].symbol()).collect()
+        }
+
+        let items = [ListItem::divider("APP")];
+        assert_eq!(first_row(&items, 13, Padding::default()), "──── APP ────");
+        assert_eq!(first_row(&items, 9, Padding::default()), "── APP ──");
+        // An odd remainder goes to the right half; padding stays blank on both ends.
+        assert_eq!(first_row(&items, 12, Padding::from((0, 1))), " ── APP ─── ");
+        // Too narrow for any rule: the label alone, clipped like any row.
+        assert_eq!(first_row(&items, 3, Padding::default()), "APP");
+        // A plain header is unchanged.
+        assert_eq!(
+            first_row(&[ListItem::header("APP")], 7, Padding::default()),
+            "APP    "
         );
     }
 

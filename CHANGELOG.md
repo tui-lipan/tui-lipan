@@ -11,6 +11,12 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- `ListItem::divider` and `ListItem::rule` draw a header row as a horizontal rule with its label
+  centered. The rule is laid out at render time, so it fills the row and stays centered at any list
+  width.
+
 ## [0.10.6] - 2026-09-17
 
 ### Fixed

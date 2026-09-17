@@ -527,6 +527,9 @@ pub struct ListItem {
     pub(crate) primary_max_label_width: Option<u16>,
     pub(crate) primary_max_description_width: Option<u16>,
     pub(crate) symbol_line: usize,
+    /// When set, the row is drawn as a horizontal rule in this style with the label centered on
+    /// it. See [`ListItem::divider`].
+    pub(crate) rule: Option<Style>,
 }
 
 /// An additional rendered line for a [`ListItem`].
@@ -741,6 +744,7 @@ impl ListItem {
             primary_max_label_width: None,
             primary_max_description_width: None,
             symbol_line: 0,
+            rule: None,
         }
     }
 
@@ -749,6 +753,23 @@ impl ListItem {
         Self::new(content)
             .role(ListItemRole::Header)
             .style(Style::default())
+    }
+
+    /// Create a non-selectable section header drawn as a horizontal rule with the label centered
+    /// on it, like a labelled [`Divider`](crate::widgets::Divider).
+    ///
+    /// The rule is laid out when the row is rendered, so it spans the row and stays centered at
+    /// any list width. For a styled label, build the row with [`ListItem::from_spans`], then set
+    /// [`role`](Self::role) to [`ListItemRole::Header`] and [`rule`](Self::rule).
+    pub fn divider(content: impl Into<Arc<str>>) -> Self {
+        Self::header(content).rule(Style::default())
+    }
+
+    /// Draw this row as a horizontal rule in `style`, with its label centered on the rule. The
+    /// label keeps its own span styles. Intended for [`ListItemRole::Header`] rows.
+    pub fn rule(mut self, style: Style) -> Self {
+        self.rule = Some(style);
+        self
     }
 
     /// Create a non-selectable blank spacer row.
@@ -781,6 +802,7 @@ impl ListItem {
             primary_max_label_width: None,
             primary_max_description_width: None,
             symbol_line: 0,
+            rule: None,
         }
     }
 
@@ -814,6 +836,7 @@ impl ListItem {
             primary_max_label_width: None,
             primary_max_description_width: None,
             symbol_line: 0,
+            rule: None,
         }
     }
 
