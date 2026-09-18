@@ -266,6 +266,7 @@ pub fn reconcile_list(tree: &mut NodeTree, id: NodeId, list: &List, rect: Rect) 
             disabled_style: list.disabled_style,
             empty_text: list.empty_text.clone(),
             empty_text_style: list.empty_text_style,
+            empty_text_padding: list.empty_text_padding,
             on_select: list.on_select.clone(),
             on_item_click: list.on_item_click.clone(),
             on_activate: list.on_activate.clone(),

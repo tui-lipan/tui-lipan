@@ -857,6 +857,7 @@ impl<T: Clone + PartialEq> Default for SearchPalette<T> {
                     item_horizontal_padding: Padding::default(),
                     header_horizontal_padding: Padding::default(),
                     empty_text_style: Style::default(),
+                    empty_text_padding: Padding::default(),
                     item_hover_style: None,
                     scrollbar: false,
                     scrollbar_config: ScrollbarConfig::default(),
@@ -1569,6 +1570,16 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// Set empty text style.
     pub fn empty_text_style(mut self, style: Style) -> Self {
         self.props.list_config.empty_text_style = style;
+        self
+    }
+
+    /// Set an extra inset around empty-state text.
+    ///
+    /// Empty copy is prose rather than a row. Row padding, gutters, and selection caps do not
+    /// apply when there are no items, so this insets the placeholder independently. Combined
+    /// with [`Self::list_item_horizontal_padding`]. Defaults to none.
+    pub fn empty_text_padding(mut self, padding: impl Into<Padding>) -> Self {
+        self.props.list_config.empty_text_padding = padding.into();
         self
     }
 

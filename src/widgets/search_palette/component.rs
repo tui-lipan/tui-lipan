@@ -441,7 +441,8 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
         if let Some(text) = ctx.props.empty_text.clone() {
             list = list
                 .empty_text(text)
-                .empty_text_style(ctx.props.list_config.empty_text_style);
+                .empty_text_style(ctx.props.list_config.empty_text_style)
+                .empty_text_padding(ctx.props.list_config.empty_text_padding);
         }
 
         let mut stack = VStack::new()
@@ -1283,6 +1284,15 @@ mod tests {
         assert!(!palette.props.list_config.symbol_column);
         assert_eq!(palette.props.list_config.gutter_gap, 2);
         assert!(palette.props.list_config.gutter_for_non_selectable);
+    }
+
+    #[test]
+    fn empty_text_padding_updates_list_config() {
+        let palette = SearchPalette::<usize>::new().empty_text_padding((0, 0, 0, 1));
+        assert_eq!(
+            palette.props.list_config.empty_text_padding,
+            crate::style::Padding::from((0, 0, 0, 1))
+        );
     }
 
     #[test]

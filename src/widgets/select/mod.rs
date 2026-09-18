@@ -94,6 +94,7 @@ impl Default for Select {
                 item_horizontal_padding: Padding::default(),
                 header_horizontal_padding: Padding::default(),
                 empty_text_style: Style::default(),
+                empty_text_padding: Padding::default(),
                 item_hover_style: None,
                 scrollbar: false,
                 scrollbar_config: ScrollbarConfig::default(),
@@ -672,6 +673,7 @@ impl From<Select> for Element {
             .item_horizontal_padding(select.list_config.item_horizontal_padding)
             .header_horizontal_padding(select.list_config.header_horizontal_padding)
             .empty_text_style(select.list_config.empty_text_style)
+            .empty_text_padding(select.list_config.empty_text_padding)
             .disabled_style(select.list_disabled_style)
             .disabled(select.disabled);
         list = list

@@ -491,6 +491,7 @@ to extend or inherit the scoped theme roles.
 | `list_scrollbar_config` | `ScrollbarConfig` | Full scrollbar configuration (variant, gap, thumb, thumb styles) |
 | `empty_text` | `impl Into<Arc<str>>` | Empty state text (default: `"No matches"`) |
 | `empty_text_style` | `Style` | Empty state text style |
+| `empty_text_padding` | `impl Into<Padding>` | Extra inset around empty-state text, independent of row padding. Combined with `list_item_horizontal_padding`. Defaults to none |
 
 > `list_item_horizontal_padding` and `list_header_horizontal_padding` accept `Padding`, but only `left` and `right` are applied by `List`.
 

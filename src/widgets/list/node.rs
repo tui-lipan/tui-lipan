@@ -59,6 +59,7 @@ pub struct ListNode {
     pub disabled_style: Style,
     pub empty_text: Option<Arc<str>>,
     pub empty_text_style: Style,
+    pub empty_text_padding: Padding,
     pub on_select: Option<Callback<ListEvent>>,
     pub on_item_click: Option<Callback<ListEvent>>,
     pub on_activate: Option<Callback<ListEvent>>,

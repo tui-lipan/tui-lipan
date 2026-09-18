@@ -115,6 +115,7 @@ impl Default for ComboBox {
                 item_horizontal_padding: Padding::default(),
                 header_horizontal_padding: Padding::default(),
                 empty_text_style: Style::default(),
+                empty_text_padding: Padding::default(),
                 item_hover_style: None,
                 scrollbar: false,
                 scrollbar_config: ScrollbarConfig::default(),
@@ -750,7 +751,8 @@ impl From<ComboBox> for Element {
             .disabled(combo.disabled)
             .item_horizontal_padding(combo.list_config.item_horizontal_padding)
             .header_horizontal_padding(combo.list_config.header_horizontal_padding)
-            .empty_text_style(combo.list_config.empty_text_style);
+            .empty_text_style(combo.list_config.empty_text_style)
+            .empty_text_padding(combo.list_config.empty_text_padding);
         list = list
             .selection_style_slot(combo.list_config.selection_style)
             .unfocused_selection_style_slot(combo.list_config.unfocused_selection_style)
