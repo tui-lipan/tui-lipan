@@ -11,6 +11,8 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+## [0.11.5] - 2026-09-18
+
 ### Added
 
 - `List::empty_text_padding` / `SearchPalette::empty_text_padding` (and `ListConfig`) inset
@@ -2249,7 +2251,8 @@ Highlights of what ships in 0.1.0:
 See the [README](README.md) for the full feature set and
 [docs.tui-lipan.dev](https://docs.tui-lipan.dev) for documentation.
 
-[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.11.4...HEAD
+[Unreleased]: https://github.com/tui-lipan/tui-lipan/compare/v0.11.5...HEAD
+[0.11.5]: https://github.com/tui-lipan/tui-lipan/compare/v0.11.4...v0.11.5
 [0.11.4]: https://github.com/tui-lipan/tui-lipan/compare/v0.11.3...v0.11.4
 [0.11.3]: https://github.com/tui-lipan/tui-lipan/compare/v0.11.2...v0.11.3
 [0.11.2]: https://github.com/tui-lipan/tui-lipan/compare/v0.11.1...v0.11.2
