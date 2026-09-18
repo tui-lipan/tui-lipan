@@ -25,6 +25,7 @@ State-style setters use [StyleSlot semantics](../styling.md#state-style-slots):
 | `padding` | `impl Into<Padding>` | Inner padding |
 | `empty_text` | `String` | Text when list is empty |
 | `empty_text_style` | `Style` | Empty text style |
+| `empty_text_padding` | `impl Into<Padding>` | Extra inset around empty-state text, independent of row padding. Combined with `item_horizontal_padding`. Defaults to none |
 | `active_style` | `Style` | Style for rows where `ListItem::active(true)` |
 | `extend_active_style` / `inherit_active_style` | `Style` / `()` | Extend or inherit the active-row theme role instead of replacing it |
 | `active_symbol` | `Option<impl Into<Arc<str>>>` | Prefix symbol for active rows |
@@ -184,6 +185,7 @@ builder-style or typed configuration:
 | `item_horizontal_padding` | `Padding` | Left/right padding for normal rows (interior to the highlight). Selection start/end caps consume this inset on the selected row. |
 | `header_horizontal_padding` | `Padding` | Left/right padding for header rows |
 | `empty_text_style` | `Style` | Style for the empty-state placeholder text |
+| `empty_text_padding` | `Padding` | Extra inset around empty-state text, independent of row padding. Combined with `item_horizontal_padding`. Defaults to none |
 | `scrollbar` | `bool` | Show a vertical scrollbar when content overflows |
 | `scrollbar_config` | `ScrollbarConfig` | Full scrollbar configuration |
 

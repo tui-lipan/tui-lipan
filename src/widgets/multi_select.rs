@@ -167,6 +167,7 @@ impl Default for MultiSelect {
                 item_horizontal_padding: Padding::default(),
                 header_horizontal_padding: Padding::default(),
                 empty_text_style: Style::default(),
+                empty_text_padding: Padding::default(),
                 item_hover_style: None,
                 scrollbar: false,
                 scrollbar_config: ScrollbarConfig::default(),
@@ -616,7 +617,8 @@ impl From<MultiSelect> for Element {
             .tab_stop(multi.tab_stop)
             .item_horizontal_padding(multi.list_config.item_horizontal_padding)
             .header_horizontal_padding(multi.list_config.header_horizontal_padding)
-            .empty_text_style(multi.list_config.empty_text_style);
+            .empty_text_style(multi.list_config.empty_text_style)
+            .empty_text_padding(multi.list_config.empty_text_padding);
         list = list
             .selection_style_slot(multi.list_config.selection_style)
             .unfocused_selection_style_slot(multi.list_config.unfocused_selection_style)

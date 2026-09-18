@@ -11,6 +11,13 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Added
+
+- `List::empty_text_padding` / `SearchPalette::empty_text_padding` (and `ListConfig`) inset
+  empty-state text independently of row padding. Gutters, selection caps, and
+  `item_horizontal_padding` describe populated rows; a placeholder is prose and often needs
+  a different inset. Combined with `item_horizontal_padding`. Defaults to none.
+
 ## [0.11.4] - 2026-09-18
 
 ### Added

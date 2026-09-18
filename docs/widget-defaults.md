@@ -259,7 +259,7 @@ Source: `src/widgets/text_area/mod.rs:457` (`TextArea`).
 
 ## List
 
-Source: `src/widgets/list/mod.rs:1469` (`List`).
+Source: `src/widgets/list/mod.rs:1483` (`List`).
 
 | Field | Default initializer |
 |---|---|
@@ -313,12 +313,13 @@ Source: `src/widgets/list/mod.rs:1469` (`List`).
 | `scroll_indicator_style` | `Style::default()` |
 | `empty_text` | `None` |
 | `empty_text_style` | `Style::default()` |
+| `empty_text_padding` | `Padding::default()` |
 | `force_scroll_to_selected` | `false` |
 | `navigation_wrap` | `false` |
 
 ## ListConfig
 
-Source: `src/widgets/list/mod.rs:79` (`ListConfig`).
+Source: `src/widgets/list/mod.rs:81` (`ListConfig`).
 
 | Field | Default initializer |
 |---|---|
@@ -340,6 +341,7 @@ Source: `src/widgets/list/mod.rs:79` (`ListConfig`).
 | `item_horizontal_padding` | `Padding::default()` |
 | `header_horizontal_padding` | `Padding::default()` |
 | `empty_text_style` | `Style::default()` |
+| `empty_text_padding` | `Padding::default()` |
 | `scrollbar` | `false` |
 | `scrollbar_config` | `ScrollbarConfig::default()` |
 
@@ -514,7 +516,7 @@ Source: `src/widgets/select/mod.rs:56` (`Select`).
 | `button_suffix_style` | `Style::default()` |
 | `list_title` | `None` |
 | `list_title_style` | `Style::default()` |
-| `list_config` | `ListConfig { border: true, border_style: BorderStyle::Plain, padding: Padding::default(), style: Style::default(), selection_style: StyleSlot::Inherit, unfocused_selection_style: StyleSlot::Inherit, selection_full_width: false, selection_symbol: Some("> ".into()), selection_symbol_right: None, selection_symbol_style: None, unfocused_selection_symbol_style: None, symbol_column: true, gutter_gap: 0, gutter_for_non_selectable: false, item_horizontal_padding: Padding::default(), header_horizontal_padding: Padding::default(), empty_text_style: Style::default(), item_hover_style: None, scrollbar: false, scrollbar_config: ScrollbarConfig::default(), }` |
+| `list_config` | `ListConfig { border: true, border_style: BorderStyle::Plain, padding: Padding::default(), style: Style::default(), selection_style: StyleSlot::Inherit, unfocused_selection_style: StyleSlot::Inherit, selection_full_width: false, selection_symbol: Some("> ".into()), selection_symbol_right: None, selection_symbol_style: None, unfocused_selection_symbol_style: None, symbol_column: true, gutter_gap: 0, gutter_for_non_selectable: false, item_horizontal_padding: Padding::default(), header_horizontal_padding: Padding::default(), empty_text_style: Style::default(), empty_text_padding: Padding::default(), item_hover_style: None, scrollbar: false, scrollbar_config: ScrollbarConfig::default(), }` |
 | `list_width` | `None` |
 | `list_height` | `Length::Px(6)` |
 | `match_button_width` | `false` |
@@ -560,7 +562,7 @@ Source: `src/widgets/combo_box.rs:71` (`ComboBox`).
 | `input_suffix_closed` | `" ▼".into()` |
 | `input_suffix_style` | `Style::default()` |
 | `input_focus_suffix_style` | `Style::default()` |
-| `list_config` | `ListConfig { border: true, border_style: BorderStyle::Plain, padding: Padding::default(), style: Style::default(), selection_style: StyleSlot::Inherit, unfocused_selection_style: StyleSlot::Inherit, selection_full_width: false, selection_symbol: None, selection_symbol_right: None, selection_symbol_style: None, unfocused_selection_symbol_style: None, symbol_column: true, gutter_gap: 0, gutter_for_non_selectable: false, item_horizontal_padding: Padding::default(), header_horizontal_padding: Padding::default(), empty_text_style: Style::default(), item_hover_style: None, scrollbar: false, scrollbar_config: ScrollbarConfig::default(), }` |
+| `list_config` | `ListConfig { border: true, border_style: BorderStyle::Plain, padding: Padding::default(), style: Style::default(), selection_style: StyleSlot::Inherit, unfocused_selection_style: StyleSlot::Inherit, selection_full_width: false, selection_symbol: None, selection_symbol_right: None, selection_symbol_style: None, unfocused_selection_symbol_style: None, symbol_column: true, gutter_gap: 0, gutter_for_non_selectable: false, item_horizontal_padding: Padding::default(), header_horizontal_padding: Padding::default(), empty_text_style: Style::default(), empty_text_padding: Padding::default(), item_hover_style: None, scrollbar: false, scrollbar_config: ScrollbarConfig::default(), }` |
 | `empty_text` | `Some("No matches".into())` |
 | `on_query_change` | `None` |
 | `on_open_change` | `None` |
@@ -586,7 +588,7 @@ Source: `src/widgets/multi_select.rs:143` (`MultiSelect`).
 | `title_style` | `Style::default()` |
 | `width` | `Length::Flex(1)` |
 | `height` | `Length::Flex(1)` |
-| `list_config` | `ListConfig { border: true, border_style: BorderStyle::Plain, padding: Padding::default(), style: Style::default(), selection_style: StyleSlot::Inherit, unfocused_selection_style: StyleSlot::Inherit, selection_full_width: false, selection_symbol: Some("[ ] ".into()), selection_symbol_right: None, selection_symbol_style: None, unfocused_selection_symbol_style: None, symbol_column: true, gutter_gap: 0, gutter_for_non_selectable: false, item_horizontal_padding: Padding::default(), header_horizontal_padding: Padding::default(), empty_text_style: Style::default(), item_hover_style: None, scrollbar: false, scrollbar_config: ScrollbarConfig::default(), }` |
+| `list_config` | `ListConfig { border: true, border_style: BorderStyle::Plain, padding: Padding::default(), style: Style::default(), selection_style: StyleSlot::Inherit, unfocused_selection_style: StyleSlot::Inherit, selection_full_width: false, selection_symbol: Some("[ ] ".into()), selection_symbol_right: None, selection_symbol_style: None, unfocused_selection_symbol_style: None, symbol_column: true, gutter_gap: 0, gutter_for_non_selectable: false, item_horizontal_padding: Padding::default(), header_horizontal_padding: Padding::default(), empty_text_style: Style::default(), empty_text_padding: Padding::default(), item_hover_style: None, scrollbar: false, scrollbar_config: ScrollbarConfig::default(), }` |
 | `active_symbol` | `Some("[x] ".into())` |
 | `active_symbol_style` | `None` |
 | `active_style` | `StyleSlot::Inherit` |
@@ -1164,7 +1166,7 @@ Source: `src/widgets/search_palette/mod.rs:803` (`SearchPalette`).
 | `input_focus_prefix_style` | `Style::default()` |
 | `input_suffix_style` | `Style::default()` |
 | `input_focus_suffix_style` | `Style::default()` |
-| `list_config` | `ListConfig { border: false, border_style: BorderStyle::Plain, padding: Padding::default(), style: Style::default(), selection_style: StyleSlot::Inherit, unfocused_selection_style: StyleSlot::Inherit, selection_full_width: false, selection_symbol: Some("> ".into()), selection_symbol_right: None, selection_symbol_style: None, unfocused_selection_symbol_style: None, symbol_column: true, gutter_gap: 0, gutter_for_non_selectable: false, item_horizontal_padding: Padding::default(), header_horizontal_padding: Padding::default(), empty_text_style: Style::default(), item_hover_style: None, scrollbar: false, scrollbar_config: ScrollbarConfig::default(), }` |
+| `list_config` | `ListConfig { border: false, border_style: BorderStyle::Plain, padding: Padding::default(), style: Style::default(), selection_style: StyleSlot::Inherit, unfocused_selection_style: StyleSlot::Inherit, selection_full_width: false, selection_symbol: Some("> ".into()), selection_symbol_right: None, selection_symbol_style: None, unfocused_selection_symbol_style: None, symbol_column: true, gutter_gap: 0, gutter_for_non_selectable: false, item_horizontal_padding: Padding::default(), header_horizontal_padding: Padding::default(), empty_text_style: Style::default(), empty_text_padding: Padding::default(), item_hover_style: None, scrollbar: false, scrollbar_config: ScrollbarConfig::default(), }` |
 | `list_symbol_column` | `None` |
 | `list_hover_style` | `StyleSlot::Inherit` |
 | `list_active_style` | `StyleSlot::Inherit` |

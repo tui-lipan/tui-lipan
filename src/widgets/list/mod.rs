@@ -68,6 +68,8 @@ pub struct ListConfig {
     pub header_horizontal_padding: Padding,
     /// Style for the empty-state placeholder text.
     pub empty_text_style: Style,
+    /// Extra inset around empty-state text, independent of row padding.
+    pub empty_text_padding: Padding,
     /// Whether to show a vertical scrollbar when content overflows.
     pub scrollbar: bool,
     /// Scrollbar configuration.
@@ -95,6 +97,7 @@ impl Default for ListConfig {
             item_horizontal_padding: Padding::default(),
             header_horizontal_padding: Padding::default(),
             empty_text_style: Style::default(),
+            empty_text_padding: Padding::default(),
             scrollbar: false,
             scrollbar_config: ScrollbarConfig::default(),
         }
@@ -243,6 +246,16 @@ impl ListConfig {
     /// Set the empty-state placeholder text style.
     pub fn empty_text_style(mut self, style: Style) -> Self {
         self.empty_text_style = style;
+        self
+    }
+
+    /// Set an extra inset around empty-state text.
+    ///
+    /// Empty copy is prose rather than a row. Row padding, gutters, and selection caps do not
+    /// apply when there are no items, so this insets the placeholder independently. Combined
+    /// with [`Self::item_horizontal_padding`]. Defaults to none.
+    pub fn empty_text_padding(mut self, padding: impl Into<Padding>) -> Self {
+        self.empty_text_padding = padding.into();
         self
     }
 
@@ -1460,6 +1473,7 @@ pub struct List {
     pub(crate) scroll_indicator_style: Style,
     pub(crate) empty_text: Option<Arc<str>>,
     pub(crate) empty_text_style: Style,
+    pub(crate) empty_text_padding: Padding,
     pub(crate) force_scroll_to_selected: bool,
     pub(crate) navigation_wrap: bool,
 }
@@ -1517,6 +1531,7 @@ impl Default for List {
             scroll_indicator_style: Style::default(),
             empty_text: None,
             empty_text_style: Style::default(),
+            empty_text_padding: Padding::default(),
             force_scroll_to_selected: false,
             navigation_wrap: false,
         }
@@ -2019,6 +2034,16 @@ impl List {
         self
     }
 
+    /// Set an extra inset around empty-state text.
+    ///
+    /// Empty copy is prose rather than a row. Row padding, gutters, and selection caps do not
+    /// apply when there are no items, so this insets the placeholder independently. Combined
+    /// with [`Self::item_horizontal_padding`]. Defaults to none.
+    pub fn empty_text_padding(mut self, padding: impl Into<Padding>) -> Self {
+        self.empty_text_padding = padding.into();
+        self
+    }
+
     pub(crate) fn first_selectable_index(items: &[ListItem]) -> Option<usize> {
         items.iter().position(ListItem::is_selectable)
     }
@@ -2301,6 +2326,7 @@ impl crate::layout::hash::LayoutHash for List {
         self.padding.hash(hasher);
         self.item_horizontal_padding.hash(hasher);
         self.header_horizontal_padding.hash(hasher);
+        self.empty_text_padding.hash(hasher);
         self.symbol_column.hash(hasher);
         self.gutter_gap.hash(hasher);
         self.gutter_for_non_selectable.hash(hasher);
@@ -2550,6 +2576,18 @@ mod tests {
             .into();
 
         assert_ne!(element_layout_hash(&base), element_layout_hash(&wrapped));
+    }
+
+    #[test]
+    fn empty_state_builders_update_padding() {
+        let list = List::new();
+        assert_eq!(list.empty_text_padding, Padding::default());
+
+        let list = list
+            .empty_text("No sessions")
+            .empty_text_padding((0, 0, 0, 1));
+        assert_eq!(list.empty_text.as_deref(), Some("No sessions"));
+        assert_eq!(list.empty_text_padding, Padding::from((0, 0, 0, 1)));
     }
 }
 

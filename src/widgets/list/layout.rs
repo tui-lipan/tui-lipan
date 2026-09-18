@@ -119,8 +119,12 @@ pub fn measure_list(list: &List) -> (u16, u16) {
     if h == 0
         && let Some(empty) = &list.empty_text
     {
-        w = w.max(UnicodeWidthStr::width(empty.as_ref()));
-        h = 1;
+        w = w.max(
+            UnicodeWidthStr::width(empty.as_ref())
+                .saturating_add(list.item_horizontal_padding.horizontal() as usize)
+                .saturating_add(list.empty_text_padding.horizontal() as usize),
+        );
+        h = 1usize.saturating_add(list.empty_text_padding.vertical() as usize);
     }
 
     w = w.saturating_add(list.padding.horizontal() as usize);
@@ -310,5 +314,16 @@ mod tests {
         let (w, h) = measure_list(&list);
         assert_eq!(w, 12);
         assert_eq!(h, 4);
+    }
+
+    #[test]
+    fn measure_accounts_for_empty_text_padding() {
+        let list = List::new()
+            .empty_text("No sessions")
+            .item_horizontal_padding((0, 1, 0, 0))
+            .empty_text_padding((0, 0, 0, 1));
+        let (w, h) = measure_list(&list);
+        assert_eq!(w, 13);
+        assert_eq!(h, 1);
     }
 }
