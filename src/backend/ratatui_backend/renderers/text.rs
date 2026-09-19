@@ -543,6 +543,14 @@ fn render_wrapped_text_via_temp_buffer(
 
     let temp_area = ratatui::layout::Rect::new(0, 0, width, temp_h);
     let mut temp_buf = Buffer::empty(temp_area);
+    // Paragraph leaves cells outside its graphemes untouched. Mark those cells so copying the
+    // clipped result preserves the same transparency instead of replacing the underlay with the
+    // temporary buffer's blank initialization. Plain text strips control characters before this
+    // path, so NUL cannot collide with a rendered glyph.
+    const UNTOUCHED: &str = "\0";
+    for cell in &mut temp_buf.content {
+        cell.set_symbol(UNTOUCHED);
+    }
 
     Paragraph::new(wrapped_lines)
         .scroll((dy, dx))
@@ -551,6 +559,7 @@ fn render_wrapped_text_via_temp_buffer(
     for y in 0..effective_rrect.height {
         for x in 0..effective_rrect.width {
             if let Some(cell) = temp_buf.cell((x, y))
+                && cell.symbol() != UNTOUCHED
                 && let Some(dst_cell) =
                     main_buf.cell_mut((effective_rrect.x + x, effective_rrect.y + y))
             {
@@ -677,6 +686,48 @@ mod tests {
         assert_eq!(buffer[(0, 0)].symbol(), "a");
         assert_eq!(buffer[(1, 0)].symbol(), "b");
         assert_eq!(buffer[(2, 0)].symbol(), " ");
+    }
+
+    #[test]
+    fn clipped_wrapped_text_only_overwrites_cells_it_paints() {
+        let full = Rect {
+            x: 0,
+            y: 0,
+            w: 8,
+            h: 2,
+        };
+        let visible = Rect { w: 5, ..full };
+        let render = |content: &str| {
+            let backend = TestBackend::new(visible.w, visible.h);
+            let mut terminal = Terminal::new(backend).expect("terminal should init");
+            terminal
+                .draw(|f| {
+                    for cell in &mut f.buffer_mut().content {
+                        cell.set_symbol("─");
+                    }
+                    render_text(
+                        f,
+                        &[Span::from(content.to_owned())],
+                        Style::default(),
+                        Overflow::Wrap,
+                        TextRenderCtx {
+                            rect: full,
+                            rrect: to_ratatui_rect(visible),
+                            clip_rect: Some(visible),
+                            terminal_bg: None,
+                        },
+                    );
+                })
+                .expect("draw should succeed");
+            std::array::from_fn(|y| {
+                (0..visible.w)
+                    .map(|x| terminal.backend().buffer()[(x, y as u16)].symbol())
+                    .collect::<String>()
+            })
+        };
+
+        assert_eq!(render("x"), ["x────", "─────"]);
+        assert_eq!(render(""), ["─────", "─────"]);
     }
 
     #[test]
