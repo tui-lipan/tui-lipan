@@ -15,6 +15,7 @@ authors = ["Adam Mikołajczyk <adam@tui-lipan.dev>"]
 exclude = [
     ".agents/",
     ".claude/",
+    ".opencode/",
     ".zed/",
     ".github/",
     "plans/",

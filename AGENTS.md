@@ -14,18 +14,18 @@ The crate is approaching stability and is published under semver `0.x.y`
 (minor bump = breaking allowed, patch bump = backward-compatible only).
 
 - Breaking changes are still acceptable when a clearly better design emerges,
-  but each one **must** be recorded in `CHANGELOG.md` under `[Unreleased]`
-  with the suffix "(breaking)"
-- Delete deprecated code rather than keeping shims - but log the removal in
-  the changelog
-- Rename freely if better names exist; record the rename in the changelog
+  but each one **must** be called out in the PR summary with a concrete
+  migration step and documented in the relevant API guide
+- Delete deprecated code rather than keeping shims, but document the replacement
+- Rename freely if better names exist; update docs and examples in the same change
 - Update examples/tests/docs to match new APIs in the same PR
 
-## CHANGELOG Policy
+## Release-note policy
 
-Every user-visible change requires a `CHANGELOG.md` entry under `[Unreleased]`
-(public API, widget behavior, feature flags, or user-facing docs). See
-[`CONTRIBUTING.md`](CONTRIBUTING.md) for the format, sections, and what to skip.
+GitHub Releases is the canonical changelog. Do not recreate `CHANGELOG.md` or add
+per-PR note fragments. Rosie generates release notes from the exact tagged diff,
+so keep PR titles, summaries, migration steps, and user documentation concrete.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for details.
 
 ## Hard Constraints
 
@@ -105,7 +105,7 @@ python3 scripts/check-widget-variant-parity.py
 python3 scripts/generate-node-kind-delegate-arms.py
 python3 scripts/check-widget-style-slots.py
 python3 scripts/check-children-replace.py
-python3 scripts/check-changelog.py
+python3 -m unittest scripts.test_release_notes
 find src tests benches examples tui-lipan-macro -name '*.rs' -print0 \
   | xargs -0 -r ./scripts/format-rust-with-macros --check
 python3 scripts/check-feature-tables.py
@@ -386,9 +386,9 @@ Other expectations:
 
 ## Releases (maintainers)
 
-Releases are tag-driven: bumping versions + `CHANGELOG.md`, then pushing a
-`vX.Y.Z` tag triggers `.github/workflows/release.yml`, which verifies the tag
-against both crate versions and the changelog, runs the test suite, and
-publishes to crates.io via Trusted Publishing. Contributors never need to
-publish - keeping `CHANGELOG.md` accurate is the contribution that makes
-releases painless.
+Releases are tag-driven: bump both crate versions and the root macro dependency,
+then push a `vX.Y.Z` tag. `.github/workflows/release.yml` verifies the versions
+and test suite while Rosie inspects the exact diff since the previous published
+release. Generated notes are validated and must succeed before either crate can
+publish through crates.io Trusted Publishing. The same frozen notes become the
+GitHub Release body.

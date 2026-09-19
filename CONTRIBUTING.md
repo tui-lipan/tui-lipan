@@ -13,7 +13,7 @@ Before opening a PR:
       (catches broken intra-doc links, which the other lints do not)
 - [ ] `cargo test --workspace --all-features` passes
 - [ ] Macro-body formatting: `./scripts/format-rust-with-macros --check` passes
-- [ ] User-visible changes are listed in `CHANGELOG.md` under `[Unreleased]`
+- [ ] The PR summary calls out user-visible and breaking changes with migration steps
 - [ ] Docs in `docs/` are updated if the behavior or API surface changed
 - [ ] If you added a new widget, all checklist steps in
       [`docs/widget-authoring.md`](docs/widget-authoring.md) are completed
@@ -63,8 +63,8 @@ period. For example: `fix(scroll_view): clip last row on odd content height`.
 Use [Conventional Commits](https://www.conventionalcommits.org/): a `<type>`
 (`feat`, `fix`, `docs`, `refactor`, `test`, `style`, `perf`, `chore`, `ci`,
 `release`) with an optional scope, an imperative summary, `<= 72` chars, and no
-trailing period. Mark breaking changes with a "(breaking)" suffix on the
-relevant `CHANGELOG.md` line.
+trailing period. Explain breaking changes and their migration steps in the PR
+summary and relevant documentation.
 
 ## Toolchain
 
@@ -107,47 +107,25 @@ cargo run --profile dev-fast --example scroll_view_opencode_repro \
     --features "markdown diff-view syntax-syntect"
 ```
 
-## CHANGELOG policy
+## Release notes
 
-Every PR with a user-visible change **must** add an entry under `[Unreleased]`
-in `CHANGELOG.md`. The format follows [Keep a Changelog](https://keepachangelog.com/):
+[GitHub Releases](https://github.com/tui-lipan/tui-lipan/releases) is the
+canonical changelog. The repository intentionally has no `CHANGELOG.md` and
+does not use per-PR note fragments.
 
-```markdown
-## [Unreleased]
+Rosie generates each release body from the exact tagged diff. Commit titles are
+only context; the release workflow inspects the actual code changes. Make that
+evidence useful:
 
-### Added
-- New `Foo` widget with `.bar()` builder.
+- Keep PR titles specific and use a Conventional Commit type that matches the
+  primary user-visible effect.
+- Explain changed defaults, renamed or removed APIs, feature-flag changes, MSRV
+  changes, and other compatibility effects in the PR summary.
+- Give a concrete replacement or migration step for every breaking change.
+- Update app-author documentation and examples in the same PR.
 
-### Changed
-- `Frame` now uses positional `BorderLabels` header/footer groups instead of its
-  former title/status API (breaking).
-
-### Removed
-- Deprecated `LegacyButton` widget.
-
-### Fixed
-- `ScrollView` no longer clips the last row when content height is odd.
-```
-
-Use these section headings: **Added**, **Changed**, **Deprecated**, **Removed**,
-**Fixed**, **Security**.
-
-Each heading may appear at most once per release and must use that order. Run
-`python3 scripts/check-changelog.py --fix` to merge duplicate heading blocks and
-restore the canonical order without rewriting entries. CI runs the check-only
-form, `python3 scripts/check-changelog.py`.
-
-Classify entries by their primary effect: new APIs and capabilities are
-**Added**, changes to existing behavior or APIs are **Changed**, removals are
-**Removed**, and corrections to unintended behavior are **Fixed**.
-
-**Breaking changes** must end their entry with "(breaking)" so they are trivial
-to grep at release time. The changelog check enforces this for `[Unreleased]`;
-released entries retain their historical wording.
-
-**Skip the changelog only for:** internal refactors with no API/behavior change,
-docs-only changes, CI/tooling changes, test-only changes. When in doubt, add an
-entry - it's cheaper than missing one.
+Internal refactors, tests, formatting, CI, and documentation-only commits are
+excluded from release notes unless their diff proves a user-visible effect.
 
 ## Adding a new widget
 
@@ -167,24 +145,31 @@ After implementation:
 
 1. Add a runnable example in `examples/<widget_name>.rs`.
 2. Add a per-widget doc page or section in `docs/widgets/`.
-3. Add a `CHANGELOG.md` entry under `### Added`.
-4. If the widget is feature-gated, register the example in `Cargo.toml`
+3. If the widget is feature-gated, register the example in `Cargo.toml`
    under `[[example]]` with `required-features`.
 
 ## Releasing (maintainers)
 
-1. Move `[Unreleased]` entries into a new `## [X.Y.Z] - YYYY-MM-DD` section.
-2. Bump `version` in both `Cargo.toml` files (root and `tui-lipan-macro/`).
-3. Update the dependency line `tui-lipan-macro = { ..., version = "X.Y.Z" }`.
-4. Update the comparison links at the bottom of `CHANGELOG.md`.
-5. Commit with message `release: vX.Y.Z`, tag `vX.Y.Z`, push the tag.
-6. Pushing the tag triggers `.github/workflows/release.yml`, which verifies
-   the tag against both crate versions and the changelog, runs the test
-   suite, and publishes `tui-lipan-macro` then `tui-lipan` to crates.io via
-   crates.io Trusted Publishing - no API token needed. Manual fallback:
-   `cargo publish -p tui-lipan-macro`, wait ~30s for the index, then
-   `cargo publish -p tui-lipan`.
-7. Create a GitHub release referencing the changelog section.
+1. Keep `GOOGLE_GENERATIVE_AI_API_KEY` configured in the protected `release`
+   environment. Rosie uses `google/gemini-3.8-flash`; OpenCode receives no
+   GitHub or crates.io publication token.
+2. Bump `version` in both `Cargo.toml` files and update the root
+   `tui-lipan-macro` dependency to the same version.
+3. Run `python3 -m unittest scripts.test_release_notes` with the normal
+   formatting, lint, documentation, and test checks.
+4. Commit with message `release: vX.Y.Z` and a DCO sign-off, create the
+   `vX.Y.Z` tag, and push the commit and tag.
+5. `.github/workflows/release.yml` resolves the previous published Release and
+   the new tag to exact commits, proves ancestry, and gives Rosie every
+   candidate commit and changed path. Rosie inspects each candidate with
+   `git show`, then writes `Added`, `Changed`, `Fixed`, `Compatibility`, and
+   `Security` sections.
+6. The workflow validates and freezes the generated Markdown as an artifact.
+   Note generation is a hard gate: a missing key, model failure, permission
+   failure, or invalid output stops publication.
+7. After verification and note generation succeed, Trusted Publishing
+   publishes `tui-lipan-macro` and then `tui-lipan`. The workflow creates the
+   GitHub Release from the same frozen notes.
 
 ## Filing issues
 

@@ -49,10 +49,8 @@ jobs:
       - name: Check children()/child() ordering
         run: python3 scripts/check-children-replace.py
 
-      - name: Check changelog structure
-        run: |
-          python3 scripts/test_check_changelog.py
-          python3 scripts/check-changelog.py
+      - name: Test release-note range and format policy
+        run: python3 -m unittest scripts.test_release_notes
 
       - name: Check macro and rust formatting
         shell: bash

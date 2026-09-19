@@ -24,7 +24,7 @@ and developer tools - anything that runs in a terminal.
 [Website](https://tui-lipan.dev) ·
 [Documentation](https://docs.tui-lipan.dev) ·
 [Examples](examples/) ·
-[Changelog](CHANGELOG.md)
+[Releases](https://github.com/tui-lipan/tui-lipan/releases)
 
 </div>
 
@@ -465,9 +465,9 @@ OpenCode TUI clone, among others).
 - **API stability:** the public surface (component lifecycle, builder API,
   `ui!` / `rsx!` / `mockup!` macros, widget props) is stable in spirit.
   Targeted breaking changes still happen when a clearly better design
-  emerges, but each is called out in `CHANGELOG.md`.
+  emerges, but each is called out with migration steps in the GitHub Release.
 - **Compatibility:** all changes - breaking and non-breaking - are tracked
-  in [`CHANGELOG.md`](CHANGELOG.md).
+  in [GitHub Releases](https://github.com/tui-lipan/tui-lipan/releases).
 - **Docs and examples:** kept in sync with current architecture; out-of-date
   examples are fixed before release.
 
@@ -477,7 +477,7 @@ OpenCode TUI clone, among others).
 
 Contributions are very welcome - bug reports, feature ideas, docs, and PRs.
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the dev loop, MSRV, and the
-CHANGELOG policy.
+release-note policy.
 
 If tui-lipan is useful to you, consider
 [sponsoring its development](https://github.com/sponsors/Razuer) ♥

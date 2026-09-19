@@ -9,7 +9,7 @@ the squashed commit subject. Make the title a valid Conventional Commit:
     fix(scroll_view): clip last row on odd content height
     feat(modal): add max_height + reserve_max_height
 
-Mark a breaking change by appending "(breaking)" to the relevant CHANGELOG line.
+Call out breaking changes and concrete migration steps in the summary.
 -->
 
 ## Summary
@@ -25,8 +25,7 @@ Mirrors `CONTRIBUTING.md` (single source of truth). Run before requesting review
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` passes
 - [ ] `cargo test --workspace --all-features` passes
-- [ ] User-visible changes are recorded in `CHANGELOG.md` under `[Unreleased]`
-      (breaking lines suffixed with "(breaking)")
+- [ ] User-visible and breaking changes are explained, with migration steps where needed
 - [ ] Docs in `docs/` updated if behavior or public API changed
 - [ ] New widget? All steps in `docs/widget-authoring.md` are complete
 - [ ] Every commit is signed off (`git commit -s`, DCO)

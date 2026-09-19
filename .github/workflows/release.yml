@@ -9,6 +9,72 @@ permissions:
   contents: read
 
 jobs:
+  release-notes:
+    name: Generate release notes
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@v7
+        with:
+          # Rosie compares this tag with the previous published release and needs both histories.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Install pinned OpenCode CLI
+        run: npm install --global opencode-ai@1.18.31
+
+      - name: Prepare exact release range
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/release_notes.py prepare \
+            --repository "$GITHUB_REPOSITORY" \
+            --to-tag "$GITHUB_REF_NAME" \
+            --expected-to-sha "$GITHUB_SHA" \
+            --input release-notes-input.md \
+            --metadata release-notes-range.json
+
+      # OpenCode receives no GitHub or publication token. Its dedicated config permits reading
+      # source, running `git show`, and writing release-notes.md; every other operation is denied.
+      - name: Inspect diffs and write user-facing notes
+        env:
+          GOOGLE_GENERATIVE_AI_API_KEY: ${{ secrets.GOOGLE_GENERATIVE_AI_API_KEY }}
+          OPENCODE_CONFIG: ${{ github.workspace }}/.opencode/release-notes.json
+          OPENCODE_DISABLE_AUTOUPDATE: "true"
+        run: |
+          set -euo pipefail
+          test -n "$GOOGLE_GENERATIVE_AI_API_KEY"
+          opencode run --variant low --command changelog
+          test -s release-notes.md
+
+      - name: Validate and freeze generated Markdown
+        run: |
+          python3 scripts/release_notes.py validate \
+            --input release-notes.md \
+            --output release-notes.md
+
+      - name: Upload immutable release-note input and result
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: |
+            release-notes.md
+            release-notes-input.md
+            release-notes-range.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14
+
   verify:
     name: Verify release
     runs-on: ubuntu-latest
@@ -37,17 +103,8 @@ jobs:
           grep -Fq "version = \"$VERSION\"" <(grep 'tui-lipan-macro = ' Cargo.toml) \
             || { echo "tui-lipan-macro dependency version in Cargo.toml does not match tag"; exit 1; }
 
-      - name: Check changelog has this version
-        shell: bash
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          grep -Fq "## [$VERSION]" CHANGELOG.md \
-            || { echo "CHANGELOG.md has no section for $VERSION"; exit 1; }
-
-      - name: Check changelog structure
-        run: |
-          python3 scripts/test_check_changelog.py
-          python3 scripts/check-changelog.py
+      - name: Test release-note range and format policy
+        run: python3 -m unittest scripts.test_release_notes
 
       - name: Run cargo tests
         run: cargo test --workspace --all-features
@@ -55,7 +112,7 @@ jobs:
   publish:
     name: Publish to crates.io
     runs-on: ubuntu-latest
-    needs: verify
+    needs: [verify, release-notes]
     environment: release
     permissions:
       contents: read
@@ -134,18 +191,26 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      - name: Download generated release notes
+        uses: actions/download-artifact@v8
+        with:
+          name: release-notes
+          path: release-notes
+
       - name: Create GitHub Release
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "$GITHUB_REF_NAME already has a GitHub Release"
-            exit 0
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "tui-lipan $GITHUB_REF_NAME" \
+              --notes-file release-notes/release-notes.md \
+              --latest
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "tui-lipan $GITHUB_REF_NAME" \
+              --notes-file release-notes/release-notes.md \
+              --latest \
+              --verify-tag
           fi
-          python3 scripts/check-changelog.py --release-notes "$VERSION" > notes.md
-          gh release create "$GITHUB_REF_NAME" \
-            --title "tui-lipan $GITHUB_REF_NAME" \
-            --notes-file notes.md \
-            --latest
         env:
           GH_TOKEN: ${{ github.token }}

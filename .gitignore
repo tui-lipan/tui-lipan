@@ -20,12 +20,13 @@ docs/node_modules/
 .idea/
 *.swp
 *.swo
-.opencode/
 .zed/
 .cursor/
 
 # Tool caches
 .ruff_cache/
+__pycache__/
+*.py[cod]
 
 # Agent / planning artifacts
 .claude/
@@ -47,3 +48,8 @@ Thumbs.db
 /perf.data
 /perf.data.*
 /test
+
+# Release-note generation artifacts
+/release-notes.md
+/release-notes-input.md
+/release-notes-range.json

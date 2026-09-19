@@ -38,7 +38,8 @@ public API surface are mature. While the crate is on `0.x.y`:
 - A **minor** bump (`0.1` → `0.2`) signals breaking changes.
 - A **patch** bump (`0.1.0` → `0.1.1`) is backward-compatible only.
 
-All changes are tracked in [`CHANGELOG.md`](https://github.com/tui-lipan/tui-lipan/blob/main/CHANGELOG.md).
+All changes are tracked in
+[GitHub Releases](https://github.com/tui-lipan/tui-lipan/releases).
 
 ## License
 
