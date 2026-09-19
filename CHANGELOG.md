@@ -11,6 +11,11 @@ While the crate is on `0.x.y`:
 
 ## [Unreleased]
 
+### Fixed
+
+- Partially clipped wrapped `Text` no longer replaces untouched cells with blanks, so transparent
+  overlays and input-only regions preserve content rendered underneath them.
+
 ## [0.11.5] - 2026-09-18
 
 ### Added
