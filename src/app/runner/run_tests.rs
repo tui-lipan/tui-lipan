@@ -671,7 +671,8 @@ fn frame_skip_preserve_does_not_overwrite_existing_pending_event() {
 #[test]
 fn host_color_refresh_event_does_not_drop_queued_ordinary_input() {
     let (tx, rx) = std::sync::mpsc::channel();
-    tx.send(super::RunnerEvent::HostTerminalColorRefreshRequested)
+    let colors = host_colors(Color::rgb(3, 4, 5));
+    tx.send(super::RunnerEvent::HostTerminalColors(colors))
         .unwrap();
     tx.send(super::RunnerEvent::Terminal(CEvent::Resize(90, 30)))
         .unwrap();
@@ -687,7 +688,7 @@ fn host_color_refresh_event_does_not_drop_queued_ordinary_input() {
 
     assert_eq!(
         super::try_recv_channel(Some(&rx)).unwrap(),
-        Some(super::RunnerEvent::HostTerminalColorRefreshRequested)
+        Some(super::RunnerEvent::HostTerminalColors(colors))
     );
     assert!(matches!(
         super::try_recv_channel(Some(&rx)).unwrap(),
