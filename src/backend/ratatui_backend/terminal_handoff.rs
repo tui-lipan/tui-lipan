@@ -71,8 +71,6 @@ pub(crate) fn pause_input_for_terminal_restore() {
 /// and schedule a full frame (host TTY may not match the last draw after alt-screen handoff).
 static FULL_REPAINT_AFTER_HANDOFF: AtomicBool = AtomicBool::new(false);
 
-const READER_PAUSE_SETTLE: Duration = Duration::from_millis(125);
-
 /// Whether the Windows crossterm reader thread should leave console input alone, so an external
 /// program or a terminal query gets it instead.
 #[cfg(not(unix))]
@@ -87,104 +85,6 @@ pub(crate) fn take_handoff_full_repaint_request() -> bool {
 pub(crate) fn reset_handoff_state_for_terminal_restore() {
     STDIN_READER_PAUSED.store(false, Ordering::SeqCst);
     FULL_REPAINT_AFTER_HANDOFF.store(false, Ordering::SeqCst);
-}
-
-pub(crate) struct StdinReaderPauseGuard {
-    /// When set, blanket-discard everything left in the input queue on drop.
-    /// Correct after an external full-screen process (arbitrary mode-switch
-    /// garbage), but destructive for a quick OSC color probe where genuine user
-    /// input may have queued during the round-trip. The color path clears this
-    /// and drains selectively via [`drain_terminal_query_responses_preserving_input`].
-    flush_on_drop: bool,
-}
-
-impl Drop for StdinReaderPauseGuard {
-    fn drop(&mut self) {
-        if self.flush_on_drop
-            && let Err(err) = discard_pending_terminal_input()
-        {
-            crate::debug::internal_log!(
-                "[tui-lipan] terminal_handoff: discard pending input failed (non-fatal): {}",
-                err
-            );
-        }
-        STDIN_READER_PAUSED.store(false, Ordering::SeqCst);
-    }
-}
-
-/// Pause the fullscreen crossterm reader while the UI thread probes the TTY.
-///
-/// When a reader thread exists, wait for its 100ms poll window to settle before
-/// issuing OSC queries so palette responses are not consumed as normal input.
-///
-/// With `flush_on_drop = true` the input queue is blanket-discarded on drop
-/// (correct for external-process handoff). With `false` the caller is responsible
-/// for draining query-response garbage (see
-/// [`drain_terminal_query_responses_preserving_input`]) before the guard drops,
-/// which preserves genuine user input that queued during the probe.
-pub(crate) fn pause_stdin_reader_for_terminal_query_with(
-    wait_for_reader: bool,
-    flush_on_drop: bool,
-) -> StdinReaderPauseGuard {
-    STDIN_READER_PAUSED.store(true, Ordering::SeqCst);
-    if wait_for_reader {
-        std::thread::sleep(READER_PAUSE_SETTLE);
-    }
-    StdinReaderPauseGuard { flush_on_drop }
-}
-
-/// Drain pending terminal input after an OSC color query, dropping query-response
-/// garbage while preserving genuine user input so the caller can re-deliver it.
-///
-/// crossterm parses leaked OSC/DA color-query responses (`ESC ] … ST`) as bogus
-/// `Key` events but can never turn them into `Mouse`, `Resize`, `Paste`, or focus
-/// events. So we drop `Key` events — matching the previous blanket discard, which
-/// lost any keystrokes typed during the probe anyway — and return the rest.
-///
-/// Without this, a wheel scroll performed right after the window regains focus is
-/// silently flushed for the duration of the blocking color round-trip (the reader
-/// is paused, then the whole queue is `tcflush`ed), so scrolling appears dead for
-/// a beat after focus.
-///
-/// Must run while the reader thread is still paused so only this call competes with
-/// `event::read`.
-pub(crate) fn drain_terminal_query_responses_preserving_input() -> io::Result<Vec<event::Event>> {
-    let mut preserved = Vec::new();
-    collect_pending_terminal_events(8192, &mut preserved)?;
-    #[cfg(unix)]
-    {
-        // Hard-reset any residual partial response fragment that has not yet
-        // assembled into a full event. The genuine, fully-arrived input was
-        // already recovered above, so this only competes with a microsecond-wide
-        // tail rather than the whole probe window.
-        flush_stdin_input_queue_unix();
-    }
-    collect_terminal_events_until_quiet(4096, &mut preserved)?;
-    Ok(preserved)
-}
-
-/// Read currently-available parsed events, keeping genuine input and dropping
-/// `Key` events (which is where leaked OSC/DA query responses surface).
-fn collect_pending_terminal_events(
-    max_events: usize,
-    preserved: &mut Vec<event::Event>,
-) -> io::Result<()> {
-    for_each_host_event(max_events, Duration::ZERO, |ev| {
-        if is_preservable_input(&ev) {
-            preserved.push(ev);
-        }
-    })
-}
-
-fn collect_terminal_events_until_quiet(
-    max_events: usize,
-    preserved: &mut Vec<event::Event>,
-) -> io::Result<()> {
-    for_each_host_event(max_events, Duration::from_millis(10), |ev| {
-        if is_preservable_input(&ev) {
-            preserved.push(ev);
-        }
-    })
 }
 
 /// Hand each event to `on_event` until `wait` passes without one, `max_events` have been read, or
@@ -207,18 +107,6 @@ fn for_each_host_event(
         }
     }
     Ok(())
-}
-
-/// Whether an event read while draining query responses is genuine user input
-/// worth re-delivering, as opposed to OSC/DA color-query garbage.
-///
-/// crossterm only ever surfaces leaked `ESC ] … ST` / `ESC [ … c` responses as
-/// `Key` events, so dropping `Key` discards the garbage. The previous blanket
-/// flush dropped any keystrokes typed during the probe anyway, so this is not a
-/// regression for typing; it specifically rescues mouse/scroll, resize, paste,
-/// and focus events.
-fn is_preservable_input(ev: &event::Event) -> bool {
-    !matches!(ev, event::Event::Key(_))
 }
 
 /// Drop pending stdin so CSI/OSC/DA responses and mode-switch garbage are not read as keys.
@@ -389,41 +277,4 @@ pub fn resume_after_external_process(
         crate::app::input::pixel_mouse::note_mode_enabled(true);
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crossterm::event::KeyModifiers;
-    use crossterm::event::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
-
-    fn mouse(kind: MouseEventKind) -> Event {
-        Event::Mouse(MouseEvent {
-            kind,
-            column: 0,
-            row: 0,
-            modifiers: KeyModifiers::NONE,
-        })
-    }
-
-    #[test]
-    fn preserves_genuine_input_drops_key_garbage() {
-        // OSC/DA color-query responses only ever surface as Key events; those
-        // are the garbage to drop. Everything else is genuine user input the
-        // color probe must not eat (notably wheel scrolls after FocusGained).
-        assert!(is_preservable_input(&mouse(MouseEventKind::ScrollUp)));
-        assert!(is_preservable_input(&mouse(MouseEventKind::ScrollDown)));
-        assert!(is_preservable_input(&mouse(MouseEventKind::Down(
-            MouseButton::Left
-        ))));
-        assert!(is_preservable_input(&Event::Resize(80, 24)));
-        assert!(is_preservable_input(&Event::FocusGained));
-        assert!(is_preservable_input(&Event::FocusLost));
-        assert!(is_preservable_input(&Event::Paste("x".into())));
-
-        assert!(!is_preservable_input(&Event::Key(KeyEvent::new(
-            KeyCode::Char('a'),
-            KeyModifiers::NONE
-        ))));
-    }
 }

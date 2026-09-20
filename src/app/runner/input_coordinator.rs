@@ -1,8 +1,13 @@
-use std::io::{self, Write};
+#![allow(unsafe_code)]
+
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{
     Event as CrosstermEvent, KeyCode as CrosstermKeyCode, KeyEvent as CrosstermKeyEvent,
@@ -11,8 +16,8 @@ use crossterm::event::{
     ModifierKeyCode as CrosstermModifierKeyCode, MouseButton as CrosstermMouseButton,
     MouseEvent as CrosstermMouseEvent, MouseEventKind as CrosstermMouseEventKind,
 };
+use termina::Parser;
 use termina::escape::csi::{Csi, Mode};
-use termina::escape::osc::{ColorOrQuery, DynamicColorNumber, Osc};
 use termina::event::{
     Event as TerminaEvent, KeyCode as TerminaKeyCode, KeyEvent as TerminaKeyEvent,
     KeyEventKind as TerminaKeyEventKind, KeyEventState as TerminaKeyEventState,
@@ -20,8 +25,6 @@ use termina::event::{
     Modifiers as TerminaModifiers, MouseButton as TerminaMouseButton,
     MouseEvent as TerminaMouseEvent, MouseEventKind as TerminaMouseEventKind,
 };
-use termina::{EventReader, PlatformTerminal, Terminal as _};
-use web_time::Instant;
 
 use crate::app::input::pixel_mouse::{self, PointerReport};
 use crate::backend::ratatui_backend::host_input::is_hang_up;
@@ -32,13 +35,14 @@ use crate::backend::ratatui_backend::terminal_handoff::{
 use crate::backend::ratatui_backend::terminal_transition::{
     CrosstermTransitionExecutor, execute_plan, pixel_mouse_plan,
 };
-use crate::style::{Color, HostTerminalColors};
+use crate::style::HostTerminalColors;
+use crate::style::terminal_colors::{HostColorResponseParser, build_live_color_query_batch};
 
 use super::RunnerEvent;
 
 const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const COLOR_QUERY_TIMEOUT: Duration = Duration::from_millis(200);
-const MAX_COALESCED_COLOR_QUERIES: usize = 4;
+const ESCAPE_DISAMBIGUATION: Duration = Duration::from_millis(10);
+const HOST_COLOR_QUERY_TIMEOUT: Duration = Duration::from_millis(200);
 
 pub(super) struct TerminaInputCoordinator {
     events: mpsc::Receiver<RunnerEvent>,
@@ -50,21 +54,15 @@ pub(super) struct TerminaInputCoordinator {
 }
 
 impl TerminaInputCoordinator {
-    pub(super) fn start(
-        host_colors: bool,
-        initial_colors: Option<HostTerminalColors>,
-        panic_control: InputHandoffSlot,
-    ) -> io::Result<Self> {
-        let reader = open_event_reader()?;
-        let waker = reader.waker();
+    pub(super) fn start(panic_control: InputHandoffSlot) -> io::Result<Self> {
+        let terminal = open_terminal_input()?;
+        let (wake_reader, wake_writer) = worker_wake_pipe()?;
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, events) = mpsc::channel();
         let spare_sender = event_tx.clone();
         let control = Arc::new(WorkerControl {
             commands: command_tx,
-            wake: Mutex::new(Box::new(move || waker.wake())),
-            refresh: RefreshRequests::default(),
-            host_colors,
+            wake: Mutex::new(wake_writer),
             paused: AtomicBool::new(false),
             worker_thread: Mutex::new(None),
         });
@@ -74,7 +72,7 @@ impl TerminaInputCoordinator {
             .name("termina-reader".into())
             .spawn(move || {
                 contain_worker_panic(&panic_events, || {
-                    run_worker(reader, command_rx, event_tx, worker_control, initial_colors);
+                    run_worker(terminal, wake_reader, command_rx, event_tx, worker_control);
                 });
             })?;
 
@@ -102,8 +100,16 @@ impl TerminaInputCoordinator {
         self.sender.clone()
     }
 
-    pub(super) fn request_host_color_refresh(&self) {
-        self.control.request_refresh();
+    pub(super) fn request_host_colors(
+        &self,
+        previous: Option<HostTerminalColors>,
+    ) -> io::Result<()> {
+        self.control
+            .commands
+            .send(WorkerCommand::RefreshHostColors(previous))
+            .map_err(|_| worker_stopped())?;
+        self.control.wake();
+        Ok(())
     }
 }
 
@@ -123,35 +129,21 @@ impl Drop for TerminaInputCoordinator {
 enum WorkerCommand {
     Pause(mpsc::SyncSender<()>),
     Resume(mpsc::SyncSender<io::Result<()>>),
+    RefreshHostColors(Option<HostTerminalColors>),
     Shutdown,
 }
 
 struct WorkerControl {
     commands: mpsc::Sender<WorkerCommand>,
-    wake: Mutex<Box<dyn Fn() -> io::Result<()> + Send + Sync>>,
-    refresh: RefreshRequests,
-    /// Whether the app asked for live host colors.
-    host_colors: bool,
+    wake: Mutex<UnixStream>,
     paused: AtomicBool,
     worker_thread: Mutex<Option<std::thread::ThreadId>>,
 }
 
 impl WorkerControl {
     fn wake(&self) {
-        if let Ok(wake) = self.wake.lock() {
-            let _ = wake();
-        }
-    }
-
-    fn replace_wake(&self, wake: impl Fn() -> io::Result<()> + Send + Sync + 'static) {
-        if let Ok(mut current) = self.wake.lock() {
-            *current = Box::new(wake);
-        }
-    }
-
-    fn request_refresh(&self) {
-        if self.refresh.request() {
-            self.wake();
+        if let Ok(mut wake) = self.wake.lock() {
+            let _ = wake.write(&[1]);
         }
     }
 
@@ -205,19 +197,6 @@ impl InputHandoffControl for WorkerControl {
     }
 }
 
-#[derive(Default)]
-struct RefreshRequests(AtomicBool);
-
-impl RefreshRequests {
-    fn request(&self) -> bool {
-        !self.0.swap(true, Ordering::SeqCst)
-    }
-
-    fn take(&self) -> bool {
-        self.0.swap(false, Ordering::SeqCst)
-    }
-}
-
 fn worker_stopped() -> io::Error {
     io::Error::new(io::ErrorKind::BrokenPipe, "Termina input worker stopped")
 }
@@ -237,24 +216,30 @@ fn contain_worker_panic(events: &mpsc::Sender<RunnerEvent>, worker: impl FnOnce(
     }
 }
 
-fn open_event_reader() -> io::Result<EventReader> {
-    let terminal = PlatformTerminal::new()?;
-    if let Ok(size) = terminal.get_dimensions() {
-        pixel_mouse::note_window_size(size.cols, size.rows, size.pixel_width, size.pixel_height);
+fn worker_wake_pipe() -> io::Result<(UnixStream, UnixStream)> {
+    let (reader, writer) = UnixStream::pair()?;
+    reader.set_nonblocking(true)?;
+    writer.set_nonblocking(true)?;
+    Ok((reader, writer))
+}
+
+fn open_terminal_input() -> io::Result<File> {
+    let terminal = OpenOptions::new().read(true).write(true).open("/dev/tty")?;
+    if let Ok(size) = crossterm::terminal::window_size() {
+        pixel_mouse::note_window_size(size.columns, size.rows, Some(size.width), Some(size.height));
     }
-    let reader = terminal.event_reader();
     // Asked for here rather than in the enter plan: the host's own answer arrived before this, but
     // the cell size a pixel report is divided by is only known now.
     sync_pixel_mouse_mode();
-    Ok(reader)
+    Ok(terminal)
 }
 
 fn run_worker(
-    mut reader: EventReader,
+    mut terminal: File,
+    mut wake_reader: UnixStream,
     commands: mpsc::Receiver<WorkerCommand>,
     events: mpsc::Sender<RunnerEvent>,
     control: Arc<WorkerControl>,
-    mut last_colors: Option<HostTerminalColors>,
 ) {
     if let Ok(mut worker_thread) = control.worker_thread.lock() {
         *worker_thread = Some(std::thread::current().id());
@@ -270,101 +255,121 @@ fn run_worker(
         };
         let _ = events.send(event);
     };
+    let mut input = WorkerInput::default();
+    let mut query = None;
+    let mut settle_at = None;
+    let mut last_window_size = crossterm::terminal::window_size().ok();
     loop {
-        match process_worker_commands(&mut reader, &commands, &control) {
+        match process_worker_commands(
+            &mut terminal,
+            &commands,
+            &control,
+            &events,
+            &mut input,
+            &mut query,
+        ) {
             Ok(true) => {}
             Ok(false) => break,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
             Err(err) => {
                 stop(err);
                 break;
             }
         }
 
-        // A refresh can be requested by a resume or a theme report even when the app never asked for
-        // host colors; only an app that did gets them queried.
-        if control.refresh.take() && control.host_colors {
-            match coalesced_host_color_refresh(&control.refresh, || {
-                let colors =
-                    query_host_colors(&reader, &events, &control.refresh, last_colors.as_ref())?;
-                if let Some(colors) = colors {
-                    last_colors = Some(colors);
-                }
-                Ok(colors)
-            }) {
-                Ok(Some(colors)) => {
-                    if events
-                        .send(RunnerEvent::HostTerminalColors(colors))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Ok(None) => {}
-                Err(err) => {
+        match poll_terminal_input(&terminal, &wake_reader, Duration::ZERO) {
+            Ok(ready) if ready.wake => {
+                if let Err(err) = drain_worker_wake(&mut wake_reader) {
                     stop(err);
                     break;
                 }
+                continue;
             }
+            Ok(ready) if ready.terminal => {
+                match read_terminal_bytes(&mut terminal, &mut input, &events) {
+                    Ok(true) => {
+                        settle_at = Some(Instant::now() + ESCAPE_DISAMBIGUATION);
+                    }
+                    Ok(false) => break,
+                    Err(err) => {
+                        stop(err);
+                        break;
+                    }
+                }
+                if !refresh_window_size(&events, &mut last_window_size) {
+                    break;
+                }
+                continue;
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => {
+                stop(err);
+                break;
+            }
+        }
+
+        if let Err(err) =
+            start_color_query_if_ready(&mut terminal, &mut input, &mut query, settle_at.is_none())
+        {
+            stop(err);
+            break;
+        }
+        if finish_color_query_if_ready(&events, &mut input, &mut query) {
             continue;
         }
-
-        match reader.poll(Some(INPUT_POLL_INTERVAL), |_| true) {
-            Ok(true) => match reader.read(|_| true) {
-                Ok(event) => {
-                    if !dispatch_termina_event(event, &events, &control.refresh) {
-                        break;
-                    }
-                }
-                // The waker unblocks this read to hand the worker a command, so an interrupt is
-                // the signal working as intended rather than a failed read. Loop around and let
-                // `process_worker_commands` collect what the wake was for.
-                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-                Err(err) => {
+        match poll_terminal_input(
+            &terminal,
+            &wake_reader,
+            next_poll_timeout(settle_at, query.as_ref()),
+        ) {
+            Ok(ready) if ready.wake => {
+                if let Err(err) = drain_worker_wake(&mut wake_reader) {
                     stop(err);
                     break;
                 }
-            },
-            Ok(false) => {}
+                continue;
+            }
+            Ok(ready) if ready.terminal => {
+                match read_terminal_bytes(&mut terminal, &mut input, &events) {
+                    Ok(true) => {
+                        settle_at = Some(Instant::now() + ESCAPE_DISAMBIGUATION);
+                    }
+                    Ok(false) => break,
+                    Err(err) => {
+                        stop(err);
+                        break;
+                    }
+                }
+            }
+            Ok(_) => {
+                if settle_at.is_some_and(|deadline| Instant::now() >= deadline) {
+                    if !input.settle(&events) {
+                        break;
+                    }
+                    settle_at = None;
+                }
+                finish_color_query_if_ready(&events, &mut input, &mut query);
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
             Err(err) => {
                 stop(err);
                 break;
             }
         }
-    }
-}
-
-fn coalesced_host_color_refresh(
-    refresh: &RefreshRequests,
-    mut query: impl FnMut() -> io::Result<Option<HostTerminalColors>>,
-) -> io::Result<Option<HostTerminalColors>> {
-    let mut latest = None;
-    for attempt in 0..MAX_COALESCED_COLOR_QUERIES {
-        let result = query()?;
-        if let Some(colors) = result {
-            latest = Some(colors);
-        }
-        let retry_requested = refresh.take();
-        if result.is_none() {
-            if retry_requested {
-                refresh.request();
-            }
-            break;
-        }
-        if !retry_requested {
-            break;
-        }
-        if attempt + 1 == MAX_COALESCED_COLOR_QUERIES {
-            refresh.request();
+        if !refresh_window_size(&events, &mut last_window_size) {
             break;
         }
     }
-    Ok(latest)
 }
 
 fn process_worker_commands(
-    reader: &mut EventReader,
+    terminal: &mut File,
     commands: &mpsc::Receiver<WorkerCommand>,
     control: &WorkerControl,
+    events: &mpsc::Sender<RunnerEvent>,
+    input: &mut WorkerInput,
+    query: &mut Option<ActiveColorQuery>,
 ) -> io::Result<bool> {
     while let Ok(command) = commands.try_recv() {
         match command {
@@ -373,13 +378,13 @@ fn process_worker_commands(
                 let _ = ack.send(());
                 loop {
                     match commands.recv().map_err(|_| worker_stopped())? {
-                        WorkerCommand::Resume(ack) => match open_event_reader() {
-                            Ok(new_reader) => {
-                                let waker = new_reader.waker();
-                                *reader = new_reader;
-                                control.replace_wake(move || waker.wake());
+                        WorkerCommand::Resume(ack) => match open_terminal_input() {
+                            Ok(new_terminal) => {
+                                *terminal = new_terminal;
+                                *input = WorkerInput::default();
+                                *query = None;
                                 control.paused.store(false, Ordering::SeqCst);
-                                control.refresh.request();
+                                let _ = events.send(RunnerEvent::HostTerminalColorRefreshRequested);
                                 let _ = ack.send(Ok(()));
                                 break;
                             }
@@ -390,6 +395,7 @@ fn process_worker_commands(
                                 return Err(io::Error::new(kind, message));
                             }
                         },
+                        WorkerCommand::RefreshHostColors(_) => {}
                         WorkerCommand::Shutdown => return Ok(false),
                         WorkerCommand::Pause(ack) => {
                             let _ = ack.send(());
@@ -400,101 +406,263 @@ fn process_worker_commands(
             WorkerCommand::Resume(ack) => {
                 let _ = ack.send(Ok(()));
             }
+            WorkerCommand::RefreshHostColors(previous) => {
+                queue_color_refresh(query, previous);
+            }
             WorkerCommand::Shutdown => return Ok(false),
         }
     }
     Ok(true)
 }
 
-fn query_host_colors(
-    reader: &EventReader,
+#[derive(Default)]
+struct WorkerInput {
+    // Both decoders observe every byte read from the TTY for the worker's full lifetime. The color
+    // scanner never takes ownership of a suffix that Termina's parser expects to finish later.
+    parser: Parser,
+    colors: HostColorResponseParser,
+}
+
+impl WorkerInput {
+    fn push(&mut self, bytes: &[u8], events: &mpsc::Sender<RunnerEvent>) -> bool {
+        self.colors.push(bytes);
+        self.parser.parse(bytes, true);
+        self.dispatch(events)
+    }
+
+    fn settle(&mut self, events: &mpsc::Sender<RunnerEvent>) -> bool {
+        self.parser.parse(&[], false);
+        self.colors.settle_input();
+        self.dispatch(events)
+    }
+
+    fn dispatch(&mut self, events: &mpsc::Sender<RunnerEvent>) -> bool {
+        while let Some(event) = self.parser.pop() {
+            if !dispatch_termina_event(event, events) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+fn read_terminal_bytes(
+    terminal: &mut impl Read,
+    input: &mut WorkerInput,
     events: &mpsc::Sender<RunnerEvent>,
-    refresh: &RefreshRequests,
-    previous: Option<&HostTerminalColors>,
-) -> io::Result<Option<HostTerminalColors>> {
-    let foreground_query = Osc::ChangeDynamicColors(
-        DynamicColorNumber::TextForegroundColor,
-        vec![ColorOrQuery::Query],
-    );
-    let background_query = Osc::ChangeDynamicColors(
-        DynamicColorNumber::TextBackgroundColor,
-        vec![ColorOrQuery::Query],
-    );
-    let mut output = io::stdout().lock();
-    write!(output, "{foreground_query}{background_query}")?;
-    output.flush()?;
-    drop(output);
-
-    let mut foreground = None;
-    let mut background = None;
-    let deadline = Instant::now() + COLOR_QUERY_TIMEOUT;
-    while Instant::now() < deadline && (foreground.is_none() || background.is_none()) {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if !reader.poll(Some(remaining), |_| true)? {
-            break;
-        }
-        let event = match reader.read(|_| true) {
-            Ok(event) => event,
-            // A command is waiting. Abandon the query rather than making the worker unreachable
-            // until the deadline, and re-arm the refresh so the colors still resolve afterwards.
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => {
-                refresh.request();
-                return Ok(None);
+) -> io::Result<bool> {
+    let mut bytes = [0; 1024];
+    loop {
+        match terminal.read(&mut bytes) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "terminal input reached end-of-file",
+                ));
             }
+            Ok(read) => return Ok(input.push(&bytes[..read], events)),
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
             Err(err) => return Err(err),
-        };
-        if let Some((slot, color)) = dynamic_color_response(&event) {
-            match slot {
-                DynamicColorNumber::TextForegroundColor => foreground = Some(color),
-                DynamicColorNumber::TextBackgroundColor => background = Some(color),
-                _ => {}
-            }
-            continue;
-        }
-        if !dispatch_termina_event(event, events, refresh) {
-            return Ok(None);
         }
     }
+}
 
-    let (Some(foreground), Some(background)) = (foreground, background) else {
-        return Ok(None);
+struct ActiveColorQuery {
+    deadline: Option<Instant>,
+    previous: Option<HostTerminalColors>,
+    refresh_pending: bool,
+}
+
+fn queue_color_refresh(query: &mut Option<ActiveColorQuery>, previous: Option<HostTerminalColors>) {
+    match query {
+        Some(active) if active.deadline.is_some() => active.refresh_pending = true,
+        Some(active) => active.previous = previous,
+        None => {
+            *query = Some(ActiveColorQuery {
+                deadline: None,
+                previous,
+                refresh_pending: false,
+            });
+        }
+    }
+}
+
+fn start_color_query_if_ready(
+    terminal: &mut impl Write,
+    input: &mut WorkerInput,
+    query: &mut Option<ActiveColorQuery>,
+    input_is_quiet: bool,
+) -> io::Result<()> {
+    let Some(active) = query.as_mut() else {
+        return Ok(());
     };
-    Ok(Some(host_terminal_colors(previous, foreground, background)))
+    if active.deadline.is_some() || !input_is_quiet || !input.colors.at_input_boundary() {
+        return Ok(());
+    }
+    terminal.write_all(&build_live_color_query_batch())?;
+    terminal.flush()?;
+    input.colors.start_query();
+    active.deadline = Some(Instant::now() + HOST_COLOR_QUERY_TIMEOUT);
+    Ok(())
 }
 
-fn host_terminal_colors(
-    previous: Option<&HostTerminalColors>,
-    foreground: termina::style::RgbColor,
-    background: termina::style::RgbColor,
-) -> HostTerminalColors {
-    HostTerminalColors {
-        // Termina 0.3 parses OSC 10/11 but not OSC 4. Keep the last resolved
-        // ANSI palette rather than degrading app-owned truecolor tokens to
-        // unresolved indices after the first runtime refresh.
-        ansi: previous.map_or_else(resolved_default_ansi, |colors| colors.ansi),
-        fg: Color::Rgb(foreground.red, foreground.green, foreground.blue),
-        bg: Color::Rgb(background.red, background.green, background.blue),
+fn finish_color_query_if_ready(
+    events: &mpsc::Sender<RunnerEvent>,
+    input: &mut WorkerInput,
+    query: &mut Option<ActiveColorQuery>,
+) -> bool {
+    let Some(active) = query.as_ref() else {
+        return false;
+    };
+    let Some(deadline) = active.deadline else {
+        return false;
+    };
+    if !input.colors.query_complete() && Instant::now() < deadline {
+        return false;
+    }
+    let Some(active) = query.take() else {
+        return false;
+    };
+    if let Some(colors) = input.colors.finish_query(active.previous.as_ref()) {
+        let _ = events.send(RunnerEvent::HostTerminalColors(colors));
+    }
+    if active.refresh_pending {
+        let _ = events.send(RunnerEvent::HostTerminalColorRefreshRequested);
+    }
+    true
+}
+
+fn next_poll_timeout(settle_at: Option<Instant>, query: Option<&ActiveColorQuery>) -> Duration {
+    let now = Instant::now();
+    [settle_at, query.and_then(|query| query.deadline)]
+        .into_iter()
+        .flatten()
+        .map(|deadline| deadline.saturating_duration_since(now))
+        .fold(INPUT_POLL_INTERVAL, Duration::min)
+}
+
+fn refresh_window_size(
+    events: &mpsc::Sender<RunnerEvent>,
+    previous: &mut Option<crossterm::terminal::WindowSize>,
+) -> bool {
+    let Ok(size) = crossterm::terminal::window_size() else {
+        return true;
+    };
+    let changed = previous.as_ref().is_none_or(|old| {
+        (old.columns, old.rows, old.width, old.height)
+            != (size.columns, size.rows, size.width, size.height)
+    });
+    if !changed {
+        return true;
+    }
+    let (columns, rows, width, height) = (size.columns, size.rows, size.width, size.height);
+    *previous = Some(size);
+    pixel_mouse::note_window_size(columns, rows, Some(width), Some(height));
+    sync_pixel_mouse_mode();
+    events
+        .send(RunnerEvent::Terminal(CrosstermEvent::Resize(columns, rows)))
+        .is_ok()
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct WorkerReady {
+    terminal: bool,
+    wake: bool,
+}
+
+fn drain_worker_wake(wake_reader: &mut UnixStream) -> io::Result<()> {
+    let mut buffer = [0; 64];
+    loop {
+        match wake_reader.read(&mut buffer) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "input worker wake channel closed",
+                ));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => return Err(err),
+        }
     }
 }
 
-fn resolved_default_ansi() -> [Color; 16] {
-    std::array::from_fn(|index| {
-        let (red, green, blue) = Color::Indexed(index as u8).to_rgb().unwrap_or((0, 0, 0));
-        Color::Rgb(red, green, blue)
+#[cfg(not(target_os = "macos"))]
+fn poll_terminal_input(
+    terminal: &impl AsRawFd,
+    wake_reader: &impl AsRawFd,
+    timeout: Duration,
+) -> io::Result<WorkerReady> {
+    let mut descriptors = [
+        libc::pollfd {
+            fd: terminal.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        libc::pollfd {
+            fd: wake_reader.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+    ];
+    let timeout = timeout.as_millis().min(i32::MAX as u128) as i32;
+    let result = unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, timeout) };
+    if result < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if descriptors
+        .iter()
+        .any(|fd| fd.revents & libc::POLLNVAL != 0)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "input worker polling failed",
+        ));
+    }
+    let ready = |descriptor: &libc::pollfd| {
+        result > 0 && descriptor.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0
+    };
+    Ok(WorkerReady {
+        terminal: ready(&descriptors[0]),
+        wake: ready(&descriptors[1]),
     })
 }
 
-fn dynamic_color_response(
-    event: &TerminaEvent,
-) -> Option<(DynamicColorNumber, termina::style::RgbColor)> {
-    let TerminaEvent::Osc(Osc::ChangeDynamicColors(slot, colors)) = event else {
-        return None;
+#[cfg(target_os = "macos")]
+fn poll_terminal_input(
+    terminal: &impl AsRawFd,
+    wake_reader: &impl AsRawFd,
+    timeout: Duration,
+) -> io::Result<WorkerReady> {
+    let terminal_fd = terminal.as_raw_fd();
+    let wake_fd = wake_reader.as_raw_fd();
+    let mut read_fds = unsafe { std::mem::zeroed::<libc::fd_set>() };
+    unsafe {
+        libc::FD_ZERO(&mut read_fds);
+        libc::FD_SET(terminal_fd, &mut read_fds);
+        libc::FD_SET(wake_fd, &mut read_fds);
+    }
+    let mut timeout = libc::timeval {
+        tv_sec: timeout.as_secs().min(libc::time_t::MAX as u64) as libc::time_t,
+        tv_usec: timeout.subsec_micros() as libc::suseconds_t,
     };
-    let color = colors.iter().find_map(|color| match color {
-        ColorOrQuery::Color(color) => Some(*color),
-        ColorOrQuery::Query => None,
-    })?;
-    Some((*slot, color))
+    let result = unsafe {
+        libc::select(
+            terminal_fd.max(wake_fd) + 1,
+            &mut read_fds,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut timeout,
+        )
+    };
+    if result < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(WorkerReady {
+        terminal: result > 0 && unsafe { libc::FD_ISSET(terminal_fd, &read_fds) },
+        wake: result > 0 && unsafe { libc::FD_ISSET(wake_fd, &read_fds) },
+    })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -506,11 +674,7 @@ pub(crate) enum TerminaEventAction {
     Ignore,
 }
 
-fn dispatch_termina_event(
-    event: TerminaEvent,
-    events: &mpsc::Sender<RunnerEvent>,
-    refresh: &RefreshRequests,
-) -> bool {
+fn dispatch_termina_event(event: TerminaEvent, events: &mpsc::Sender<RunnerEvent>) -> bool {
     let action = map_termina_event(event);
     // A resize is where a padded window can first divide evenly, and so where the mode can first be
     // worth asking for. The ask lives here rather than in the mapping because it writes to the host,
@@ -526,10 +690,9 @@ fn dispatch_termina_event(
         TerminaEventAction::Pointer(event, sub_cell) => events
             .send(RunnerEvent::Pointer { event, sub_cell })
             .is_ok(),
-        TerminaEventAction::ThemeRefresh => {
-            refresh.request();
-            true
-        }
+        TerminaEventAction::ThemeRefresh => events
+            .send(RunnerEvent::HostTerminalColorRefreshRequested)
+            .is_ok(),
         TerminaEventAction::Ignore => true,
     }
 }
@@ -784,10 +947,10 @@ fn map_mouse_button(button: TerminaMouseButton) -> CrosstermMouseButton {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicUsize;
-    use termina::Parser;
     use termina::escape::csi::ThemeMode;
+    use termina::escape::osc::Osc;
     use termina::event::KeyEventState;
+    use web_time::Instant;
 
     fn parsed_event(bytes: &[u8]) -> TerminaEvent {
         let mut parser = Parser::default();
@@ -808,6 +971,125 @@ mod tests {
             );
             assert_eq!(map_termina_event(event), TerminaEventAction::ThemeRefresh);
         }
+    }
+
+    #[test]
+    fn theme_report_wakes_runner_for_full_palette_refresh() {
+        let (events, receiver) = mpsc::channel();
+
+        assert!(dispatch_termina_event(
+            parsed_event(b"\x1b[?997;1n"),
+            &events
+        ));
+        assert_eq!(
+            receiver.recv().unwrap(),
+            RunnerEvent::HostTerminalColorRefreshRequested
+        );
+    }
+
+    #[test]
+    fn palette_query_keeps_the_persistent_parser_across_split_input() {
+        let (events, receiver) = mpsc::channel();
+        let mut input = WorkerInput::default();
+
+        assert!(input.push(b"\x1b[200~abc \x1b]4;1;rgb:1111/", &events));
+        input.colors.start_query();
+        assert!(input.push(b"1111/1111\x1b\\ def \xf0\x9f\x99\x82\x1b[201~", &events));
+
+        let RunnerEvent::Terminal(CrosstermEvent::Paste(text)) = receiver.recv().unwrap() else {
+            panic!("the split bracketed paste should remain one input event");
+        };
+        assert_eq!(text, "abc \x1b]4;1;rgb:1111/1111/1111\x1b\\ def 🙂");
+        let previous = HostTerminalColors {
+            ansi: std::array::from_fn(|index| crate::style::Color::Rgb(index as u8, 1, 2)),
+            fg: crate::style::Color::Rgb(230, 230, 230),
+            bg: crate::style::Color::Rgb(20, 20, 20),
+        };
+        let colors = input.colors.finish_query(Some(&previous)).unwrap();
+        assert_eq!(
+            colors.ansi[1], previous.ansi[1],
+            "an OSC 4-looking string inside paste content is not a palette response"
+        );
+    }
+
+    #[test]
+    fn persistent_parser_keeps_a_split_utf8_character() {
+        let (events, receiver) = mpsc::channel();
+        let mut input = WorkerInput::default();
+
+        assert!(input.push(&[0xc3], &events));
+        assert!(receiver.try_recv().is_err());
+        input.colors.start_query();
+        assert!(input.push(&[0xa9], &events));
+
+        assert!(matches!(
+            receiver.recv().unwrap(),
+            RunnerEvent::Terminal(CrosstermEvent::Key(event))
+                if event.code == CrosstermKeyCode::Char('é')
+        ));
+    }
+
+    #[test]
+    fn pending_palette_query_waits_for_a_split_ss3_key() {
+        let (events, receiver) = mpsc::channel();
+        let mut input = WorkerInput::default();
+        let mut query = Some(ActiveColorQuery {
+            deadline: None,
+            previous: None,
+            refresh_pending: false,
+        });
+        let mut output = Vec::new();
+
+        assert!(input.push(b"\x1bO", &events));
+        start_color_query_if_ready(&mut output, &mut input, &mut query, true).unwrap();
+        assert!(output.is_empty());
+        assert!(query.as_ref().unwrap().deadline.is_none());
+
+        assert!(input.push(b"P", &events));
+        assert!(matches!(
+            receiver.recv().unwrap(),
+            RunnerEvent::Terminal(CrosstermEvent::Key(event))
+                if event.code == CrosstermKeyCode::F(1)
+        ));
+        start_color_query_if_ready(&mut output, &mut input, &mut query, true).unwrap();
+        assert_eq!(output, build_live_color_query_batch());
+        assert!(query.as_ref().unwrap().deadline.is_some());
+    }
+
+    #[test]
+    fn refresh_during_active_query_rearms_after_applying_completed_colors() {
+        let previous = HostTerminalColors {
+            ansi: std::array::from_fn(|index| crate::style::Color::Rgb(index as u8, 1, 2)),
+            fg: crate::style::Color::Rgb(230, 230, 230),
+            bg: crate::style::Color::Rgb(20, 20, 20),
+        };
+        let newer_baseline = HostTerminalColors {
+            ansi: std::array::from_fn(|index| crate::style::Color::Rgb(index as u8, 3, 4)),
+            fg: crate::style::Color::Rgb(240, 240, 240),
+            bg: crate::style::Color::Rgb(10, 10, 10),
+        };
+        let mut input = WorkerInput::default();
+        input.colors.start_query();
+        let mut query = Some(ActiveColorQuery {
+            deadline: Some(std::time::Instant::now() - Duration::from_millis(1)),
+            previous: Some(previous),
+            refresh_pending: false,
+        });
+
+        queue_color_refresh(&mut query, Some(newer_baseline));
+        assert!(query.as_ref().unwrap().refresh_pending);
+
+        let (events, receiver) = mpsc::channel();
+        assert!(finish_color_query_if_ready(&events, &mut input, &mut query));
+        assert_eq!(
+            receiver.recv().unwrap(),
+            RunnerEvent::HostTerminalColors(previous)
+        );
+        assert_eq!(
+            receiver.recv().unwrap(),
+            RunnerEvent::HostTerminalColorRefreshRequested
+        );
+        assert!(query.is_none());
     }
 
     #[test]
@@ -924,143 +1206,98 @@ mod tests {
     }
 
     #[test]
-    fn typed_dynamic_color_responses_are_recognized() {
-        let foreground = parsed_event(b"\x1b]10;rgb:ffff/0000/8080\x1b\\");
-        let (slot, color) = dynamic_color_response(&foreground).expect("typed foreground response");
-        assert_eq!(slot, DynamicColorNumber::TextForegroundColor);
-        assert_eq!((color.red, color.green, color.blue), (255, 0, 128));
-
-        let mut previous = HostTerminalColors {
-            ansi: resolved_default_ansi(),
-            fg: Color::Rgb(9, 9, 9),
-            bg: Color::Rgb(8, 8, 8),
-        };
-        previous.ansi[5] = Color::Rgb(17, 34, 51);
-        let colors = host_terminal_colors(
-            Some(&previous),
-            color,
-            termina::style::RgbColor::new(1, 2, 3),
-        );
-        assert_eq!(colors.fg, Color::Rgb(255, 0, 128));
-        assert_eq!(colors.bg, Color::Rgb(1, 2, 3));
-        assert_eq!(colors.ansi, previous.ansi);
-        assert_eq!(colors.ansi[5], Color::Rgb(17, 34, 51));
-        assert!(
-            colors
-                .ansi
-                .iter()
-                .all(|color| matches!(color, Color::Rgb(..)))
-        );
-    }
-
-    #[test]
-    fn refresh_requests_coalesce_until_taken() {
-        let requests = RefreshRequests::default();
-        assert!(requests.request());
-        assert!(!requests.request());
-        assert!(requests.take());
-        assert!(!requests.take());
-        assert!(requests.request());
-    }
-
-    #[test]
-    fn replacing_reader_replaces_control_waker() {
-        let old_wakes = Arc::new(AtomicUsize::new(0));
-        let new_wakes = Arc::new(AtomicUsize::new(0));
-        let (commands, _command_rx) = mpsc::channel();
-        let old_wakes_for_callback = Arc::clone(&old_wakes);
+    fn worker_control_wake_makes_poll_immediately_ready() {
+        let (terminal_reader, _terminal_writer) = UnixStream::pair().unwrap();
+        let (mut wake_reader, wake_writer) = worker_wake_pipe().unwrap();
+        let (commands, _command_receiver) = mpsc::channel();
         let control = WorkerControl {
             commands,
-            wake: Mutex::new(Box::new(move || {
-                old_wakes_for_callback.fetch_add(1, Ordering::SeqCst);
-                Ok(())
-            })),
-            refresh: RefreshRequests::default(),
-            host_colors: false,
+            wake: Mutex::new(wake_writer),
             paused: AtomicBool::new(false),
             worker_thread: Mutex::new(None),
         };
 
         control.wake();
-        let new_wakes_for_callback = Arc::clone(&new_wakes);
-        control.replace_wake(move || {
-            new_wakes_for_callback.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        });
-        control.wake();
-
-        assert_eq!(old_wakes.load(Ordering::SeqCst), 1);
-        assert_eq!(new_wakes.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn coalesced_refresh_delivers_only_latest_successful_query() {
-        let requests = RefreshRequests::default();
-        let first = host_terminal_colors(
-            None,
-            termina::style::RgbColor::new(10, 20, 30),
-            termina::style::RgbColor::new(1, 2, 3),
-        );
-        let second = host_terminal_colors(
-            Some(&first),
-            termina::style::RgbColor::new(40, 50, 60),
-            termina::style::RgbColor::new(4, 5, 6),
-        );
-        let mut calls = 0;
-
-        let colors = coalesced_host_color_refresh(&requests, || {
-            calls += 1;
-            if calls == 1 {
-                requests.request();
-                Ok(Some(first))
-            } else {
-                Ok(Some(second))
-            }
-        })
-        .unwrap();
-
-        assert_eq!(calls, 2);
-        assert_eq!(colors, Some(second));
-        assert!(!requests.take());
-    }
-
-    #[test]
-    fn coalesced_refresh_retries_are_bounded() {
-        let requests = RefreshRequests::default();
-        let mut calls = 0;
-
-        let colors = coalesced_host_color_refresh(&requests, || {
-            calls += 1;
-            requests.request();
-            Ok(Some(host_terminal_colors(
-                None,
-                termina::style::RgbColor::new(calls as u8, 0, 0),
-                termina::style::RgbColor::new(0, calls as u8, 0),
-            )))
-        })
-        .unwrap()
-        .expect("the final bounded query should be retained");
-
-        assert_eq!(calls, MAX_COALESCED_COLOR_QUERIES);
         assert_eq!(
-            colors.fg,
-            Color::Rgb(MAX_COALESCED_COLOR_QUERIES as u8, 0, 0)
+            poll_terminal_input(&terminal_reader, &wake_reader, INPUT_POLL_INTERVAL).unwrap(),
+            WorkerReady {
+                terminal: false,
+                wake: true,
+            }
         );
-        assert!(requests.take());
+        drain_worker_wake(&mut wake_reader).unwrap();
+        assert_eq!(
+            poll_terminal_input(&terminal_reader, &wake_reader, Duration::ZERO).unwrap(),
+            WorkerReady::default()
+        );
     }
 
     #[test]
-    fn failed_coalesced_refresh_keeps_racing_request_pending() {
-        let requests = RefreshRequests::default();
+    fn simultaneous_wake_and_tty_readiness_defers_probe_until_input_completes() {
+        let (mut terminal_reader, mut terminal_writer) = UnixStream::pair().unwrap();
+        let (mut wake_reader, wake_writer) = worker_wake_pipe().unwrap();
+        let (commands, command_receiver) = mpsc::channel();
+        let control = WorkerControl {
+            commands,
+            wake: Mutex::new(wake_writer),
+            paused: AtomicBool::new(false),
+            worker_thread: Mutex::new(None),
+        };
 
-        let colors = coalesced_host_color_refresh(&requests, || {
-            requests.request();
-            Ok(None)
-        })
-        .unwrap();
+        terminal_writer.write_all(b"\x1bO").unwrap();
+        control
+            .commands
+            .send(WorkerCommand::RefreshHostColors(None))
+            .unwrap();
+        control.wake();
+        assert_eq!(
+            poll_terminal_input(&terminal_reader, &wake_reader, Duration::ZERO).unwrap(),
+            WorkerReady {
+                terminal: true,
+                wake: true,
+            }
+        );
+        drain_worker_wake(&mut wake_reader).unwrap();
 
-        assert_eq!(colors, None);
-        assert!(requests.take());
+        let mut query = None;
+        let WorkerCommand::RefreshHostColors(previous) = command_receiver.recv().unwrap() else {
+            panic!("refresh command should remain queued after the wake");
+        };
+        queue_color_refresh(&mut query, previous);
+
+        let (events, receiver) = mpsc::channel();
+        let mut input = WorkerInput::default();
+        assert_eq!(
+            poll_terminal_input(&terminal_reader, &wake_reader, Duration::ZERO).unwrap(),
+            WorkerReady {
+                terminal: true,
+                wake: false,
+            }
+        );
+        assert!(read_terminal_bytes(&mut terminal_reader, &mut input, &events).unwrap());
+        assert!(receiver.try_recv().is_err());
+
+        let mut output = Vec::new();
+        start_color_query_if_ready(&mut output, &mut input, &mut query, false).unwrap();
+        assert!(input.settle(&events));
+        start_color_query_if_ready(&mut output, &mut input, &mut query, true).unwrap();
+        assert!(output.is_empty());
+
+        terminal_writer.write_all(b"P").unwrap();
+        assert!(
+            poll_terminal_input(&terminal_reader, &wake_reader, Duration::ZERO)
+                .unwrap()
+                .terminal
+        );
+        assert!(read_terminal_bytes(&mut terminal_reader, &mut input, &events).unwrap());
+        assert!(matches!(
+            receiver.recv().unwrap(),
+            RunnerEvent::Terminal(CrosstermEvent::Key(event))
+                if event.code == CrosstermKeyCode::F(1)
+        ));
+        assert!(input.settle(&events));
+        start_color_query_if_ready(&mut output, &mut input, &mut query, true).unwrap();
+        assert_eq!(output, build_live_color_query_batch());
     }
 
     #[test]
@@ -1086,8 +1323,7 @@ mod tests {
 
         let name = "worker_stops_cleanly_when_the_terminal_hangs_up_during_a_read";
         if let Some(report) = child_report() {
-            let coordinator =
-                TerminaInputCoordinator::start(false, None, input_handoff_slot()).expect("start");
+            let coordinator = TerminaInputCoordinator::start(input_handoff_slot()).expect("start");
             report.line("ready", 1);
             let started = Instant::now();
             loop {

@@ -32,40 +32,34 @@ pub fn query_host_colors() -> Option<HostTerminalColors> {
 
     tty_write_all(fd, &build_query_batch())?;
 
-    let mut buffer = Vec::with_capacity(4096);
     let mut ordered_response = Vec::with_capacity(4096);
-    let mut parsed = Parsed::default();
+    let mut parser = HostColorResponseParser::default();
+    parser.start_query();
 
     let deadline = Instant::now() + Duration::from_millis(200);
     while Instant::now() < deadline {
         let timeout = deadline
             .saturating_duration_since(Instant::now())
             .as_millis() as i32;
-        if timeout <= 0 || !poll_readable(fd, timeout)? {
+        if timeout <= 0 || !poll_readable(fd, timeout).unwrap_or(false) {
             break;
         }
 
         let mut chunk = [0u8; 1024];
-        let n = tty_read(fd, &mut chunk)?;
+        let Some(n) = tty_read(fd, &mut chunk) else {
+            break;
+        };
         if n == 0 {
             break;
         }
-        buffer.extend_from_slice(&chunk[..n]);
         ordered_response.extend_from_slice(&chunk[..n]);
-        parse_frames(&mut buffer, &mut parsed);
+        parser.push(&chunk[..n]);
         if host_color_query_settled(&ordered_response) {
             break;
         }
     }
 
-    let fg = parsed.fg?;
-    let bg = parsed.bg?;
-    let mut ansi = [Color::Reset; 16];
-    for (i, slot) in ansi.iter_mut().enumerate() {
-        *slot = parsed.ansi[i].unwrap_or_else(|| default_ansi(i as u8));
-    }
-
-    Some(HostTerminalColors { ansi, fg, bg })
+    parser.finish_query(None)
 }
 
 /// Whether the DA1 ordering sentinel at the end of a host-color query has come back.
@@ -633,60 +627,239 @@ struct Parsed {
 }
 
 #[cfg(unix)]
-fn build_query_batch() -> Vec<u8> {
+fn resolve_host_colors(
+    parsed: &Parsed,
+    previous: Option<&HostTerminalColors>,
+) -> Option<HostTerminalColors> {
+    let fg = parsed.fg.or_else(|| previous.map(|colors| colors.fg))?;
+    let bg = parsed.bg.or_else(|| previous.map(|colors| colors.bg))?;
+    let ansi = std::array::from_fn(|index| {
+        parsed.ansi[index]
+            .or_else(|| previous.map(|colors| colors.ansi[index]))
+            .unwrap_or_else(|| default_ansi(index as u8))
+    });
+    Some(HostTerminalColors { ansi, fg, bg })
+}
+
+#[cfg(unix)]
+pub(crate) fn build_live_color_query_batch() -> Vec<u8> {
     let mut out = Vec::with_capacity(256);
     for i in 0..16 {
         out.extend_from_slice(format!("\x1b]4;{i};?\x1b\\").as_bytes());
     }
-    // Primary DA is an ordering sentinel. Its reply can only arrive after the terminal has
-    // processed the preceding palette queries, so the temporary raw-mode guard stays active until
-    // no palette report can be echoed by cooked mode.
-    out.extend_from_slice(b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[c");
+    out.extend_from_slice(b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\");
     out
 }
 
 #[cfg(unix)]
-fn parse_frames(buffer: &mut Vec<u8>, parsed: &mut Parsed) {
-    let mut scan = 0usize;
-    while scan + 2 <= buffer.len() {
-        let Some(start_rel) = buffer[scan..].windows(2).position(|w| w == b"\x1b]") else {
-            break;
-        };
-        let start = scan + start_rel;
-        let body_start = start + 2;
-        let Some((body_end, frame_end)) = find_terminator(buffer, body_start) else {
-            if start > 0 {
-                buffer.drain(..start);
-            }
-            return;
-        };
-        parse_body(&buffer[body_start..body_end], parsed);
-        buffer.drain(..frame_end);
-        scan = 0;
+fn build_query_batch() -> Vec<u8> {
+    let mut out = build_live_color_query_batch();
+    // Primary DA is an ordering sentinel. Its reply can only arrive after the terminal has
+    // processed the preceding palette queries, so the temporary raw-mode guard stays active until
+    // no palette report can be echoed by cooked mode.
+    out.extend_from_slice(b"\x1b[c");
+    out
+}
+
+#[cfg(unix)]
+#[derive(Default)]
+pub(crate) struct HostColorResponseParser {
+    // This mirrors every incomplete input family in Termina's parser. Protocol state survives
+    // between queries, so `at_input_boundary` cannot start a probe in the middle of a key, mouse,
+    // string, UTF-8 character, or bracketed paste event.
+    state: ResponseScanState,
+    parsed: Parsed,
+    collecting: bool,
+}
+
+#[cfg(unix)]
+#[derive(Default)]
+enum ResponseScanState {
+    #[default]
+    Ground,
+    Escape,
+    Ss3,
+    Utf8(u8),
+    Osc(Vec<u8>),
+    OscEscape(Vec<u8>),
+    Dcs,
+    DcsEscape,
+    CsiStart,
+    CsiDoubleBracket,
+    CsiNormalMouse(u8),
+    CsiSgrMouse,
+    CsiQuestion(u16),
+    CsiGreater(u8),
+    CsiNumbered(Vec<u8>),
+    Paste(usize),
+}
+
+#[cfg(unix)]
+impl HostColorResponseParser {
+    pub(crate) fn start_query(&mut self) {
+        self.parsed = Parsed::default();
+        self.collecting = true;
     }
-    let keep = usize::from(buffer.last() == Some(&0x1b));
-    if keep == 0 {
-        buffer.clear();
-    } else {
-        let last = buffer[buffer.len() - 1];
-        buffer.clear();
-        buffer.push(last);
+
+    pub(crate) fn push(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.push_byte(byte);
+        }
+    }
+
+    pub(crate) fn finish_query(
+        &mut self,
+        previous: Option<&HostTerminalColors>,
+    ) -> Option<HostTerminalColors> {
+        self.collecting = false;
+        resolve_host_colors(&self.parsed, previous)
+    }
+
+    pub(crate) fn query_complete(&self) -> bool {
+        self.parsed.fg.is_some()
+            && self.parsed.bg.is_some()
+            && self.parsed.ansi.iter().all(Option::is_some)
+    }
+
+    pub(crate) fn at_input_boundary(&self) -> bool {
+        matches!(self.state, ResponseScanState::Ground)
+    }
+
+    pub(crate) fn settle_input(&mut self) {
+        // This is the only incomplete shape Termina resolves when `maybe_more` becomes false.
+        // All other states remain buffered until their protocol terminator arrives.
+        if matches!(self.state, ResponseScanState::Escape) {
+            self.state = ResponseScanState::Ground;
+        }
+    }
+
+    fn push_byte(&mut self, byte: u8) {
+        const PASTE_END: &[u8] = b"\x1b[201~";
+        let state = std::mem::take(&mut self.state);
+        self.state = match state {
+            ResponseScanState::Ground if byte == 0x1b => ResponseScanState::Escape,
+            ResponseScanState::Ground => utf8_tail(byte)
+                .map(ResponseScanState::Utf8)
+                .unwrap_or(ResponseScanState::Ground),
+            ResponseScanState::Escape if byte == b']' => ResponseScanState::Osc(Vec::new()),
+            ResponseScanState::Escape if byte == b'[' => ResponseScanState::CsiStart,
+            ResponseScanState::Escape if byte == b'P' => ResponseScanState::Dcs,
+            ResponseScanState::Escape if byte == b'O' => ResponseScanState::Ss3,
+            ResponseScanState::Escape if byte == 0x1b => ResponseScanState::Ground,
+            ResponseScanState::Escape => utf8_tail(byte)
+                .map(ResponseScanState::Utf8)
+                .unwrap_or(ResponseScanState::Ground),
+            ResponseScanState::Ss3 => ResponseScanState::Ground,
+            ResponseScanState::Utf8(remaining) if byte & 0b1100_0000 == 0b1000_0000 => {
+                if remaining == 1 {
+                    ResponseScanState::Ground
+                } else {
+                    ResponseScanState::Utf8(remaining - 1)
+                }
+            }
+            ResponseScanState::Utf8(_) => ResponseScanState::Ground,
+            ResponseScanState::Osc(body) if byte == 0x07 => {
+                self.capture_body(&body);
+                ResponseScanState::Ground
+            }
+            ResponseScanState::Osc(body) if byte == 0x1b => ResponseScanState::OscEscape(body),
+            ResponseScanState::Osc(mut body) => {
+                body.push(byte);
+                ResponseScanState::Osc(body)
+            }
+            ResponseScanState::OscEscape(body) if byte == b'\\' => {
+                self.capture_body(&body);
+                ResponseScanState::Ground
+            }
+            ResponseScanState::OscEscape(mut body) if byte == 0x1b => {
+                body.push(0x1b);
+                ResponseScanState::OscEscape(body)
+            }
+            ResponseScanState::OscEscape(mut body) => {
+                body.extend_from_slice(&[0x1b, byte]);
+                ResponseScanState::Osc(body)
+            }
+            ResponseScanState::Dcs if byte == 0x1b => ResponseScanState::DcsEscape,
+            ResponseScanState::Dcs => ResponseScanState::Dcs,
+            ResponseScanState::DcsEscape if byte == b'\\' => ResponseScanState::Ground,
+            ResponseScanState::DcsEscape if byte == 0x1b => ResponseScanState::DcsEscape,
+            ResponseScanState::DcsEscape => ResponseScanState::Dcs,
+            ResponseScanState::CsiStart => match byte {
+                b'[' => ResponseScanState::CsiDoubleBracket,
+                b'M' => ResponseScanState::CsiNormalMouse(3),
+                b'<' => ResponseScanState::CsiSgrMouse,
+                b'?' => ResponseScanState::CsiQuestion(0),
+                b'>' => ResponseScanState::CsiGreater(b'>'),
+                b'0'..=b'9' => ResponseScanState::CsiNumbered(vec![byte]),
+                _ => ResponseScanState::Ground,
+            },
+            ResponseScanState::CsiDoubleBracket => ResponseScanState::Ground,
+            ResponseScanState::CsiNormalMouse(remaining) => {
+                if remaining == 1 {
+                    ResponseScanState::Ground
+                } else {
+                    ResponseScanState::CsiNormalMouse(remaining - 1)
+                }
+            }
+            ResponseScanState::CsiSgrMouse if matches!(byte, b'M' | b'm') => {
+                ResponseScanState::Ground
+            }
+            ResponseScanState::CsiSgrMouse => ResponseScanState::CsiSgrMouse,
+            ResponseScanState::CsiQuestion(_) if matches!(byte, b'c' | b'n' | b'y') => {
+                ResponseScanState::Ground
+            }
+            ResponseScanState::CsiQuestion(seen) if byte == b'u' && seen >= 1 => {
+                ResponseScanState::Ground
+            }
+            ResponseScanState::CsiQuestion(seen) => {
+                ResponseScanState::CsiQuestion(seen.saturating_add(1))
+            }
+            ResponseScanState::CsiGreater(previous) if previous == b' ' && byte == b'q' => {
+                ResponseScanState::Ground
+            }
+            ResponseScanState::CsiGreater(_) => ResponseScanState::CsiGreater(byte),
+            ResponseScanState::CsiNumbered(mut body) => {
+                body.push(byte);
+                if (0x40..=0x7e).contains(&byte) {
+                    if body == b"200~" {
+                        ResponseScanState::Paste(0)
+                    } else {
+                        ResponseScanState::Ground
+                    }
+                } else {
+                    ResponseScanState::CsiNumbered(body)
+                }
+            }
+            ResponseScanState::Paste(mut matched) => {
+                if byte == PASTE_END[matched] {
+                    matched += 1;
+                    if matched == PASTE_END.len() {
+                        ResponseScanState::Ground
+                    } else {
+                        ResponseScanState::Paste(matched)
+                    }
+                } else {
+                    ResponseScanState::Paste(usize::from(byte == PASTE_END[0]))
+                }
+            }
+        };
+    }
+
+    fn capture_body(&mut self, body: &[u8]) {
+        if self.collecting {
+            parse_body(body, &mut self.parsed);
+        }
     }
 }
 
 #[cfg(unix)]
-fn find_terminator(buf: &[u8], start: usize) -> Option<(usize, usize)> {
-    let mut i = start;
-    while i < buf.len() {
-        if buf[i] == 0x07 {
-            return Some((i, i + 1));
-        }
-        if buf[i] == 0x1b && i + 1 < buf.len() && buf[i + 1] == b'\\' {
-            return Some((i, i + 2));
-        }
-        i += 1;
+fn utf8_tail(byte: u8) -> Option<u8> {
+    match byte {
+        0xc0..=0xdf => Some(1),
+        0xe0..=0xef => Some(2),
+        0xf0..=0xf7 => Some(3),
+        _ => None,
     }
-    None
 }
 
 #[cfg(unix)]
@@ -930,11 +1103,13 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        EXIT_FLUSH_CEILING, EXIT_FLUSH_FLOOR, ExitFlush, HostCapabilities, build_query_batch,
-        cursor_reports, echoed_from_column, exit_flush_plan, host_color_query_settled,
-        probe_round_trip, record_round_trip, scan_host_capabilities, set_startup_reply_outstanding,
-        settle_startup_reply, startup_reply_outstanding,
+        EXIT_FLUSH_CEILING, EXIT_FLUSH_FLOOR, ExitFlush, HostCapabilities, HostColorResponseParser,
+        Parsed, build_query_batch, cursor_reports, echoed_from_column, exit_flush_plan,
+        host_color_query_settled, probe_round_trip, record_round_trip, resolve_host_colors,
+        scan_host_capabilities, set_startup_reply_outstanding, settle_startup_reply,
+        startup_reply_outstanding,
     };
+    use crate::style::{Color, HostTerminalColors};
 
     fn keyboard(enhancement: bool) -> Option<HostCapabilities> {
         Some(HostCapabilities {
@@ -959,6 +1134,118 @@ mod tests {
             build_query_batch().ends_with(b"\x1b[c"),
             "the query must put DA after every OSC color request"
         );
+    }
+
+    #[test]
+    fn partial_live_palette_keeps_previous_slots_and_dynamic_colors() {
+        let previous = HostTerminalColors {
+            ansi: std::array::from_fn(|index| Color::Rgb(index as u8, 10, 20)),
+            fg: Color::Rgb(230, 230, 230),
+            bg: Color::Rgb(20, 20, 20),
+        };
+        let mut parsed = Parsed::default();
+        parsed.ansi[4] = Some(Color::Rgb(80, 120, 240));
+
+        let colors = resolve_host_colors(&parsed, Some(&previous)).unwrap();
+
+        assert_eq!(colors.ansi[4], Color::Rgb(80, 120, 240));
+        assert_eq!(colors.ansi[3], previous.ansi[3]);
+        assert_eq!(colors.fg, previous.fg);
+        assert_eq!(colors.bg, previous.bg);
+    }
+
+    #[test]
+    fn live_palette_parser_ignores_osc_inside_split_bracketed_paste() {
+        let mut parser = HostColorResponseParser::default();
+        parser.push(b"\x1b[20");
+        parser.push(b"0~literal \x1b]4;1;rgb:1111/1111/1111\x1b\\");
+        assert!(
+            !parser.at_input_boundary(),
+            "a live query must wait for the paste terminator"
+        );
+        parser.start_query();
+        parser.push(b" and \x1b[12c\x1b[20");
+        parser.push(
+            b"1~\x1b]4;0;rgb:0000/0000/0000\x1b\\\
+              \x1b]10;rgb:ffff/ffff/ffff\x1b\\\
+              \x1b]11;rgb:2222/2222/2222\x1b\\",
+        );
+        assert!(parser.at_input_boundary());
+
+        let colors = parser.finish_query(None).unwrap();
+        assert_eq!(colors.ansi[0], Color::Rgb(0, 0, 0));
+        assert_eq!(
+            colors.ansi[1],
+            super::default_ansi(1),
+            "an OSC 4 frame inside paste content must not become a palette reply"
+        );
+        assert_eq!(colors.fg, Color::Rgb(255, 255, 255));
+        assert_eq!(colors.bg, Color::Rgb(34, 34, 34));
+    }
+
+    #[test]
+    fn input_boundary_tracks_every_incomplete_termina_escape_family() {
+        let mut parser = HostColorResponseParser::default();
+
+        for (prefix, suffix) in [
+            (b"\x1bO".as_slice(), b"P".as_slice()),
+            (b"\x1bP1$r0;4m\x1b".as_slice(), b"\\".as_slice()),
+            (b"\x1b[M !".as_slice(), b"!".as_slice()),
+            (b"\x1b[[", b"A"),
+            (b"\x1b[<0;1;1", b"M"),
+            (b"\x1b[?1".as_slice(), b"u".as_slice()),
+            (b"\x1b[>1;2 ".as_slice(), b"q".as_slice()),
+            (b"\x1b[1;2".as_slice(), b"A".as_slice()),
+            (
+                b"\x1b]10;rgb:ffff/ffff/ffff\x1b".as_slice(),
+                b"\\".as_slice(),
+            ),
+            (b"\xc3".as_slice(), b"\xa9".as_slice()),
+            (b"\x1b\xc3".as_slice(), b"\xa9".as_slice()),
+        ] {
+            let mut termina = termina::Parser::default();
+            parser.push(prefix);
+            termina.parse(prefix, true);
+            assert!(
+                !parser.at_input_boundary(),
+                "{prefix:?} is still incomplete for Termina"
+            );
+            assert!(
+                termina.pop().is_none(),
+                "{prefix:?} unexpectedly completed a Termina event"
+            );
+            parser.push(suffix);
+            termina.parse(suffix, true);
+            assert!(
+                parser.at_input_boundary(),
+                "{prefix:?}{suffix:?} completes the input event"
+            );
+            assert!(
+                termina.pop().is_some(),
+                "{prefix:?}{suffix:?} should complete a Termina event"
+            );
+        }
+
+        parser.push(b"\x1b");
+        assert!(!parser.at_input_boundary());
+        parser.settle_input();
+        assert!(parser.at_input_boundary());
+    }
+
+    #[test]
+    fn live_palette_parser_ignores_osc_inside_dcs() {
+        let previous = HostTerminalColors {
+            ansi: std::array::from_fn(|index| super::default_ansi(index as u8)),
+            fg: Color::Rgb(230, 230, 230),
+            bg: Color::Rgb(20, 20, 20),
+        };
+        let mut parser = HostColorResponseParser::default();
+        parser.start_query();
+        parser.push(b"\x1bPignored \x1b]4;1;rgb:1111/1111/1111\x07 text\x1b\\");
+
+        let colors = parser.finish_query(Some(&previous)).unwrap();
+        assert_eq!(colors.ansi[1], previous.ansi[1]);
+        assert!(parser.at_input_boundary());
     }
 
     #[test]
