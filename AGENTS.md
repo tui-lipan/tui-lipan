@@ -23,8 +23,9 @@ The crate is approaching stability and is published under semver `0.x.y`
 ## Release-note policy
 
 GitHub Releases is the canonical changelog. Do not recreate `CHANGELOG.md` or add
-per-PR note fragments. Rosie generates release notes from the exact tagged diff,
-so keep PR titles, summaries, migration steps, and user documentation concrete.
+per-PR note fragments. Rosie generates release notes from the candidate commit
+subjects in the tagged range, so keep PR titles, summaries, migration steps, and
+user documentation concrete.
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for details.
 
 ## Hard Constraints
@@ -388,7 +389,7 @@ Other expectations:
 
 Releases are tag-driven: bump both crate versions and the root macro dependency,
 then push a `vX.Y.Z` tag. `.github/workflows/release.yml` verifies the versions
-and test suite while Rosie inspects the exact diff since the previous published
-release. Generated notes are validated and must succeed before either crate can
-publish through crates.io Trusted Publishing. The same frozen notes become the
-GitHub Release body.
+and test suite while Rosie writes notes from the candidate commit subjects since
+the previous published release. Generated notes are validated and must succeed
+before either crate can publish through crates.io Trusted Publishing. The same
+frozen notes become the GitHub Release body.

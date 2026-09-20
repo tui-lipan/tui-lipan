@@ -229,7 +229,7 @@ def write_input(
     lines.extend(["## Deterministically excluded commits", ""])
     if excluded:
         lines.extend(
-            f"- `{commit.sha}` — {commit.subject} ({commit.exclusion_reason})"
+            f"- `{commit.sha}` - {commit.subject} ({commit.exclusion_reason})"
             for commit in excluded
         )
     else:

@@ -113,19 +113,19 @@ cargo run --profile dev-fast --example scroll_view_opencode_repro \
 canonical changelog. The repository intentionally has no `CHANGELOG.md` and
 does not use per-PR note fragments.
 
-Rosie generates each release body from the exact tagged diff. Commit titles are
-only context; the release workflow inspects the actual code changes. Make that
-evidence useful:
+Rosie generates each release body from the candidate commit subjects in that
+range. Keep those subjects useful:
 
 - Keep PR titles specific and use a Conventional Commit type that matches the
   primary user-visible effect.
-- Explain changed defaults, renamed or removed APIs, feature-flag changes, MSRV
-  changes, and other compatibility effects in the PR summary.
+- Name changed defaults, renamed or removed APIs, feature flags, MSRV changes,
+  and other compatibility effects in the title or summary so the notes can
+  repeat them.
 - Give a concrete replacement or migration step for every breaking change.
 - Update app-author documentation and examples in the same PR.
 
 Internal refactors, tests, formatting, CI, and documentation-only commits are
-excluded from release notes unless their diff proves a user-visible effect.
+excluded from release notes.
 
 ## Adding a new widget
 
@@ -161,9 +161,8 @@ After implementation:
    `vX.Y.Z` tag, and push the commit and tag.
 5. `.github/workflows/release.yml` resolves the previous published Release and
    the new tag to exact commits, proves ancestry, and gives Rosie every
-   candidate commit and changed path. Rosie inspects each candidate with
-   `git show`, then writes `Added`, `Changed`, `Fixed`, `Compatibility`, and
-   `Security` sections.
+   candidate commit subject and changed path. Rosie writes `Added`, `Changed`,
+   `Fixed`, `Compatibility`, and `Security` sections from those subjects.
 6. The workflow validates and freezes the generated Markdown as an artifact.
    Note generation is a hard gate: a missing key, model failure, permission
    failure, or invalid output stops publication.
