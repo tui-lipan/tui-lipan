@@ -353,12 +353,7 @@ fn process_worker_commands(
                 let _ = ack.send(Ok(()));
             }
             WorkerCommand::RefreshHostColors(previous) => {
-                if query.is_none() {
-                    *query = Some(ActiveColorQuery {
-                        deadline: None,
-                        previous,
-                    });
-                }
+                queue_color_refresh(query, previous);
             }
             WorkerCommand::Shutdown => return Ok(false),
         }
@@ -400,6 +395,21 @@ impl WorkerInput {
 struct ActiveColorQuery {
     deadline: Option<Instant>,
     previous: Option<HostTerminalColors>,
+    refresh_pending: bool,
+}
+
+fn queue_color_refresh(query: &mut Option<ActiveColorQuery>, previous: Option<HostTerminalColors>) {
+    match query {
+        Some(active) if active.deadline.is_some() => active.refresh_pending = true,
+        Some(active) => active.previous = previous,
+        None => {
+            *query = Some(ActiveColorQuery {
+                deadline: None,
+                previous,
+                refresh_pending: false,
+            });
+        }
+    }
 }
 
 fn start_color_query_if_ready(
@@ -440,6 +450,9 @@ fn finish_color_query_if_ready(
     };
     if let Some(colors) = input.colors.finish_query(active.previous.as_ref()) {
         let _ = events.send(RunnerEvent::HostTerminalColors(colors));
+    }
+    if active.refresh_pending {
+        let _ = events.send(RunnerEvent::HostTerminalColorRefreshRequested);
     }
     true
 }
@@ -895,6 +908,7 @@ mod tests {
         let mut query = Some(ActiveColorQuery {
             deadline: None,
             previous: None,
+            refresh_pending: false,
         });
         let mut output = Vec::new();
 
@@ -912,6 +926,42 @@ mod tests {
         start_color_query_if_ready(&mut output, &mut input, &mut query, true).unwrap();
         assert_eq!(output, build_live_color_query_batch());
         assert!(query.as_ref().unwrap().deadline.is_some());
+    }
+
+    #[test]
+    fn refresh_during_active_query_rearms_after_applying_completed_colors() {
+        let previous = HostTerminalColors {
+            ansi: std::array::from_fn(|index| crate::style::Color::Rgb(index as u8, 1, 2)),
+            fg: crate::style::Color::Rgb(230, 230, 230),
+            bg: crate::style::Color::Rgb(20, 20, 20),
+        };
+        let newer_baseline = HostTerminalColors {
+            ansi: std::array::from_fn(|index| crate::style::Color::Rgb(index as u8, 3, 4)),
+            fg: crate::style::Color::Rgb(240, 240, 240),
+            bg: crate::style::Color::Rgb(10, 10, 10),
+        };
+        let mut input = WorkerInput::default();
+        input.colors.start_query();
+        let mut query = Some(ActiveColorQuery {
+            deadline: Some(std::time::Instant::now() - Duration::from_millis(1)),
+            previous: Some(previous),
+            refresh_pending: false,
+        });
+
+        queue_color_refresh(&mut query, Some(newer_baseline));
+        assert!(query.as_ref().unwrap().refresh_pending);
+
+        let (events, receiver) = mpsc::channel();
+        assert!(finish_color_query_if_ready(&events, &mut input, &mut query));
+        assert_eq!(
+            receiver.recv().unwrap(),
+            RunnerEvent::HostTerminalColors(previous)
+        );
+        assert_eq!(
+            receiver.recv().unwrap(),
+            RunnerEvent::HostTerminalColorRefreshRequested
+        );
+        assert!(query.is_none());
     }
 
     #[test]
