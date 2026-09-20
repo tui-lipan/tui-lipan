@@ -26,6 +26,21 @@ pub struct HostTerminalColors {
 /// respond within ~200ms.
 #[cfg(unix)]
 pub fn query_host_colors() -> Option<HostTerminalColors> {
+    query_host_colors_with_fallback(None)?.colors
+}
+
+pub(crate) struct HostColorQueryResult {
+    pub(crate) colors: Option<HostTerminalColors>,
+    #[cfg(unix)]
+    pub(crate) preserved_input: Vec<u8>,
+}
+
+/// Query live host colors while retaining the last resolved values for any response the terminal
+/// omits. Runtime palette refreshes use this so a partial OSC 4 reply cannot erase known slots.
+#[cfg(unix)]
+pub(crate) fn query_host_colors_with_fallback(
+    previous: Option<&HostTerminalColors>,
+) -> Option<HostColorQueryResult> {
     let fd = tty_open()?;
     let _fd_guard = FdGuard(fd);
     let _raw_guard = RawModeGuard::new(fd)?;
@@ -41,12 +56,14 @@ pub fn query_host_colors() -> Option<HostTerminalColors> {
         let timeout = deadline
             .saturating_duration_since(Instant::now())
             .as_millis() as i32;
-        if timeout <= 0 || !poll_readable(fd, timeout)? {
+        if timeout <= 0 || !poll_readable(fd, timeout).unwrap_or(false) {
             break;
         }
 
         let mut chunk = [0u8; 1024];
-        let n = tty_read(fd, &mut chunk)?;
+        let Some(n) = tty_read(fd, &mut chunk) else {
+            break;
+        };
         if n == 0 {
             break;
         }
@@ -58,14 +75,10 @@ pub fn query_host_colors() -> Option<HostTerminalColors> {
         }
     }
 
-    let fg = parsed.fg?;
-    let bg = parsed.bg?;
-    let mut ansi = [Color::Reset; 16];
-    for (i, slot) in ansi.iter_mut().enumerate() {
-        *slot = parsed.ansi[i].unwrap_or_else(|| default_ansi(i as u8));
-    }
-
-    Some(HostTerminalColors { ansi, fg, bg })
+    Some(HostColorQueryResult {
+        colors: resolve_host_colors(parsed, previous),
+        preserved_input: preserve_non_probe_input(&ordered_response),
+    })
 }
 
 /// Whether the DA1 ordering sentinel at the end of a host-color query has come back.
@@ -82,6 +95,13 @@ fn host_color_query_settled(response: &[u8]) -> bool {
 /// Query stub for non-Unix hosts.
 #[cfg(not(unix))]
 pub fn query_host_colors() -> Option<HostTerminalColors> {
+    None
+}
+
+#[cfg(not(unix))]
+pub(crate) fn query_host_colors_with_fallback(
+    _previous: Option<&HostTerminalColors>,
+) -> Option<HostColorQueryResult> {
     None
 }
 
@@ -633,6 +653,21 @@ struct Parsed {
 }
 
 #[cfg(unix)]
+fn resolve_host_colors(
+    parsed: Parsed,
+    previous: Option<&HostTerminalColors>,
+) -> Option<HostTerminalColors> {
+    let fg = parsed.fg.or_else(|| previous.map(|colors| colors.fg))?;
+    let bg = parsed.bg.or_else(|| previous.map(|colors| colors.bg))?;
+    let ansi = std::array::from_fn(|index| {
+        parsed.ansi[index]
+            .or_else(|| previous.map(|colors| colors.ansi[index]))
+            .unwrap_or_else(|| default_ansi(index as u8))
+    });
+    Some(HostTerminalColors { ansi, fg, bg })
+}
+
+#[cfg(unix)]
 fn build_query_batch() -> Vec<u8> {
     let mut out = Vec::with_capacity(256);
     for i in 0..16 {
@@ -672,6 +707,72 @@ fn parse_frames(buffer: &mut Vec<u8>, parsed: &mut Parsed) {
         buffer.clear();
         buffer.push(last);
     }
+}
+
+#[cfg(unix)]
+fn preserve_non_probe_input(bytes: &[u8]) -> Vec<u8> {
+    const PASTE_START: &[u8] = b"\x1b[200~";
+    const PASTE_END: &[u8] = b"\x1b[201~";
+
+    let mut preserved = Vec::new();
+    let mut cursor = 0;
+    let mut in_bracketed_paste = false;
+    while cursor < bytes.len() {
+        if bytes[cursor..].starts_with(PASTE_START) {
+            preserved.extend_from_slice(PASTE_START);
+            cursor += PASTE_START.len();
+            in_bracketed_paste = true;
+            continue;
+        }
+        if in_bracketed_paste {
+            if bytes[cursor..].starts_with(PASTE_END) {
+                preserved.extend_from_slice(PASTE_END);
+                cursor += PASTE_END.len();
+                in_bracketed_paste = false;
+            } else {
+                preserved.push(bytes[cursor]);
+                cursor += 1;
+            }
+            continue;
+        }
+        if bytes[cursor..].starts_with(b"\x1b]") {
+            let body_start = cursor + 2;
+            if let Some((body_end, frame_end)) = find_terminator(bytes, body_start) {
+                if !is_host_color_response(&bytes[body_start..body_end]) {
+                    preserved.extend_from_slice(&bytes[cursor..frame_end]);
+                }
+                cursor = frame_end;
+                continue;
+            }
+        } else if bytes[cursor..].starts_with(b"\x1b[")
+            && let Some(frame_end) = csi_frame_end(&bytes[cursor..])
+        {
+            if bytes[cursor + frame_end - 1] != b'c' {
+                preserved.extend_from_slice(&bytes[cursor..cursor + frame_end]);
+            }
+            cursor += frame_end;
+            continue;
+        }
+
+        preserved.push(bytes[cursor]);
+        cursor += 1;
+    }
+    preserved
+}
+
+#[cfg(unix)]
+fn is_host_color_response(body: &[u8]) -> bool {
+    let command = body.split(|byte| *byte == b';').next().unwrap_or_default();
+    matches!(command, b"4" | b"10" | b"11")
+}
+
+#[cfg(unix)]
+fn csi_frame_end(bytes: &[u8]) -> Option<usize> {
+    bytes
+        .iter()
+        .enumerate()
+        .skip(2)
+        .find_map(|(index, byte)| (0x40..=0x7e).contains(byte).then_some(index + 1))
 }
 
 #[cfg(unix)]
@@ -930,11 +1031,13 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        EXIT_FLUSH_CEILING, EXIT_FLUSH_FLOOR, ExitFlush, HostCapabilities, build_query_batch,
-        cursor_reports, echoed_from_column, exit_flush_plan, host_color_query_settled,
-        probe_round_trip, record_round_trip, scan_host_capabilities, set_startup_reply_outstanding,
+        EXIT_FLUSH_CEILING, EXIT_FLUSH_FLOOR, ExitFlush, HostCapabilities, Parsed,
+        build_query_batch, cursor_reports, echoed_from_column, exit_flush_plan,
+        host_color_query_settled, preserve_non_probe_input, probe_round_trip, record_round_trip,
+        resolve_host_colors, scan_host_capabilities, set_startup_reply_outstanding,
         settle_startup_reply, startup_reply_outstanding,
     };
+    use crate::style::{Color, HostTerminalColors};
 
     fn keyboard(enhancement: bool) -> Option<HostCapabilities> {
         Some(HostCapabilities {
@@ -958,6 +1061,43 @@ mod tests {
         assert!(
             build_query_batch().ends_with(b"\x1b[c"),
             "the query must put DA after every OSC color request"
+        );
+    }
+
+    #[test]
+    fn partial_live_palette_keeps_previous_slots_and_dynamic_colors() {
+        let previous = HostTerminalColors {
+            ansi: std::array::from_fn(|index| Color::Rgb(index as u8, 10, 20)),
+            fg: Color::Rgb(230, 230, 230),
+            bg: Color::Rgb(20, 20, 20),
+        };
+        let mut parsed = Parsed::default();
+        parsed.ansi[4] = Some(Color::Rgb(80, 120, 240));
+
+        let colors = resolve_host_colors(parsed, Some(&previous)).unwrap();
+
+        assert_eq!(colors.ansi[4], Color::Rgb(80, 120, 240));
+        assert_eq!(colors.ansi[3], previous.ansi[3]);
+        assert_eq!(colors.fg, previous.fg);
+        assert_eq!(colors.bg, previous.bg);
+    }
+
+    #[test]
+    fn live_palette_probe_preserves_interleaved_terminal_input() {
+        let bytes = b"a\
+            \x1b]4;0;rgb:0000/0000/0000\x1b\\\
+            \x1b[?997;2n\
+            \x1b]10;rgb:ffff/ffff/ffff\x1b\\\
+            \x1b[<64;2;3M\
+            \x1b[?62;1;6c\
+            \x1b[200~literal \x1b]4;1;rgb:1111/1111/1111\x1b\\ and \x1b[12c\x1b[201~\
+            \x1b]52;c;dXNlci1vc2M=\x1b\\";
+
+        assert_eq!(
+            preserve_non_probe_input(bytes),
+            b"a\x1b[?997;2n\x1b[<64;2;3M\
+              \x1b[200~literal \x1b]4;1;rgb:1111/1111/1111\x1b\\ and \x1b[12c\x1b[201~\
+              \x1b]52;c;dXNlci1vc2M=\x1b\\"
         );
     }
 

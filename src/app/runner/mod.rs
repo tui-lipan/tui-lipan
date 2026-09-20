@@ -44,7 +44,7 @@ use crate::core::event::KeyMods;
 use crate::core::event::{KeyCode, MouseEvent, MouseKind};
 use crate::core::node::NodeId;
 use crate::runtime::{RuntimeCore, RuntimeCoreConfig};
-use crate::style::{HostTerminalColors, Rect, Theme, query_host_colors};
+use crate::style::{HostTerminalColors, Rect, Theme, query_host_colors_with_fallback};
 use crate::widgets::SpinnerSpeed;
 use crossterm::event::Event as CEvent;
 use crossterm::{cursor::MoveTo, execute, style::Print};
@@ -105,7 +105,8 @@ enum RunnerEvent {
     },
     /// Wakeup for a queued live-control request.
     Control,
-    HostTerminalColors(HostTerminalColors),
+    /// The input reader observed a terminal theme report or resumed after an external handoff.
+    HostTerminalColorRefreshRequested,
     /// The host terminal has gone away. Input has stopped; see [`HOST_HANG_UP_GRACE`].
     #[cfg(unix)]
     HostHungUp,
@@ -391,11 +392,8 @@ impl PlatformInputCoordinator {
                     ),
                 });
             }
-            let termina = input_coordinator::TerminaInputCoordinator::start(
-                host_color_refresh_enabled,
-                initial_colors,
-                panic_input_control,
-            )?;
+            let _ = (host_color_refresh_enabled, initial_colors);
+            let termina = input_coordinator::TerminaInputCoordinator::start(panic_input_control)?;
             Ok(Self {
                 termina: Some(termina),
                 inline: None,
@@ -441,17 +439,6 @@ impl PlatformInputCoordinator {
             .map(|coordinator| coordinator.sender());
         #[cfg(not(unix))]
         return self.crossterm.as_ref().map(|reader| reader.sender.clone());
-    }
-
-    fn route_host_color_refresh(&self, requested: bool) -> bool {
-        #[cfg(unix)]
-        if let Some(coordinator) = &self.termina {
-            if requested {
-                coordinator.request_host_color_refresh();
-            }
-            return false;
-        }
-        requested
     }
 }
 
@@ -556,7 +543,7 @@ pub struct AppRunner<C: Component> {
     /// probe (e.g. wheel scrolls performed right after a `FocusGained`). Re-fed
     /// into the event loop ahead of the channel so the probe's blocking round-trip
     /// no longer eats them. See [`drain_terminal_query_responses_preserving_input`].
-    pub(crate) pending_reinjected_input: VecDeque<CEvent>,
+    pending_reinjected_input: VecDeque<RunnerEvent>,
     pub(crate) mouse_capture_requested: Rc<Cell<bool>>,
     pub(crate) mouse_capture_active: bool,
     pub(crate) mouse_all_motion_enabled: bool,
@@ -933,6 +920,7 @@ impl<C: Component> AppRunner<C> {
         &mut self,
         wait_for_reader: bool,
         request_repaint: bool,
+        platform_input: Option<&PlatformInputCoordinator>,
     ) -> bool {
         if !self.host_terminal_color_refresh_enabled() {
             return false;
@@ -943,16 +931,35 @@ impl<C: Component> AppRunner<C> {
         // FocusGained) can queue during the blocking probe. Recover it below and
         // re-inject it into the event loop; only OSC response garbage is dropped.
         let _pause = pause_stdin_reader_for_terminal_query_with(wait_for_reader, false);
-        let colors = query_host_colors();
+        let previous = self.core.ctx.host_terminal_colors();
+        let query_result = query_host_colors_with_fallback(previous.as_ref());
+        if let Some(receiver) = platform_input.and_then(PlatformInputCoordinator::receiver) {
+            while let Ok(event) = receiver.try_recv() {
+                self.pending_reinjected_input.push_back(event);
+            }
+        }
+        #[cfg(unix)]
+        if let Some(result) = &query_result {
+            self.pending_reinjected_input
+                .extend(input_coordinator::decode_preserved_input(
+                    &result.preserved_input,
+                ));
+        }
         match drain_terminal_query_responses_preserving_input() {
-            Ok(preserved) => self.pending_reinjected_input.extend(preserved),
+            Ok(drained) => {
+                self.pending_reinjected_input
+                    .extend(drained.events.into_iter().map(RunnerEvent::Terminal));
+                if drained.host_color_refresh_requested {
+                    self.request_host_terminal_color_refresh_from_event();
+                }
+            }
             Err(err) => crate::debug::internal_log!(
                 "[tui-lipan] host color refresh: preserve-drain failed (non-fatal): {}",
                 err
             ),
         }
 
-        let Some(colors) = colors else {
+        let Some(colors) = query_result.and_then(|result| result.colors) else {
             return false;
         };
 
@@ -2071,7 +2078,7 @@ impl<C: Component> AppRunner<C> {
             // Route SIGTSTP through the loop for as long as we own the terminal,
             // so a stop — ours or an external `kill -TSTP` — releases it first.
             let _stop_signal_guard = crate::app::job_control::install_stop_handler();
-            self.refresh_host_terminal_colors(false, false);
+            self.refresh_host_terminal_colors(false, false, None);
 
             // Startup probing above deliberately finishes before the platform reader takes
             // ownership of terminal input.
@@ -2245,13 +2252,15 @@ impl<C: Component> AppRunner<C> {
                     // Genuine input recovered from a prior host-color OSC probe,
                     // replayed ahead of the channel so it is not lost to the blocking
                     // round-trip that ran while it was queued.
-                    Some(RunnerEvent::Terminal(ev))
+                    Some(ev)
                 } else {
                     self.recv_event(actual_timeout, event_rx)?
                 };
                 let maybe_event = match maybe_event {
-                    Some(RunnerEvent::HostTerminalColors(colors)) => {
-                        self.apply_host_terminal_colors(colors, true);
+                    Some(RunnerEvent::HostTerminalColorRefreshRequested) => {
+                        host_color_refresh_quiet_until =
+                            Some(deferred_host_color_refresh_deadline(Instant::now()));
+                        self.request_host_terminal_color_refresh_from_event();
                         None
                     }
                     Some(RunnerEvent::InputError(message)) => {
@@ -2818,10 +2827,9 @@ impl<C: Component> AppRunner<C> {
 
                 // A FocusIn refresh is commonly followed by resize events. Keep
                 // the request pending until queued events drain and focus/resize
-                // activity has been quiet briefly. The legacy lane then performs
-                // its blocking OSC 4/10/11 probe; Termina fullscreen runs hand
-                // the request to their input worker for a typed OSC 10/11 query
-                // while preserving the startup probe's resolved ANSI slots.
+                // activity has been quiet briefly, then pause whichever input
+                // reader owns the terminal and perform one complete OSC 4/10/11
+                // probe.
                 let host_color_refresh = if pending_event.is_some() {
                     false
                 } else if let Some(next) = self.try_recv_event(event_rx)? {
@@ -2836,10 +2844,12 @@ impl<C: Component> AppRunner<C> {
                     false
                 } else {
                     host_color_refresh_quiet_until = None;
-                    if platform_input
-                        .route_host_color_refresh(self.take_host_terminal_color_refresh_request())
-                    {
-                        self.refresh_host_terminal_colors(!self.surface.is_inline(), true)
+                    if self.take_host_terminal_color_refresh_request() {
+                        self.refresh_host_terminal_colors(
+                            !self.surface.is_inline(),
+                            true,
+                            Some(&platform_input),
+                        )
                     } else {
                         false
                     }

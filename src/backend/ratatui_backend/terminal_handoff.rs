@@ -22,9 +22,15 @@ use super::terminal_transition::{execute_plan, pixel_mouse_plan, theme_notificat
 
 static STDIN_READER_PAUSED: AtomicBool = AtomicBool::new(false);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InputResumeKind {
+    TerminalQuery,
+    ExternalProcess,
+}
+
 pub(crate) trait InputHandoffControl {
     fn pause(&self) -> io::Result<()>;
-    fn resume(&self) -> io::Result<()>;
+    fn resume(&self, kind: InputResumeKind) -> io::Result<()>;
     fn is_paused(&self) -> bool;
 }
 
@@ -96,6 +102,9 @@ pub(crate) struct StdinReaderPauseGuard {
     /// input may have queued during the round-trip. The color path clears this
     /// and drains selectively via [`drain_terminal_query_responses_preserving_input`].
     flush_on_drop: bool,
+    /// Termina owns fullscreen input on Unix. Keep its paused worker alive until the query
+    /// responses have been drained, then resume it without recursively requesting another probe.
+    input_control: Option<Arc<dyn InputHandoffControl + Send + Sync>>,
 }
 
 impl Drop for StdinReaderPauseGuard {
@@ -108,14 +117,23 @@ impl Drop for StdinReaderPauseGuard {
                 err
             );
         }
+        if let Some(control) = self.input_control.take()
+            && let Err(err) = control.resume(InputResumeKind::TerminalQuery)
+        {
+            crate::debug::internal_log!(
+                "[tui-lipan] terminal_handoff: resume after terminal query failed: {}",
+                err
+            );
+        }
         STDIN_READER_PAUSED.store(false, Ordering::SeqCst);
     }
 }
 
-/// Pause the fullscreen crossterm reader while the UI thread probes the TTY.
+/// Pause the fullscreen input reader while the UI thread probes the TTY.
 ///
-/// When a reader thread exists, wait for its 100ms poll window to settle before
-/// issuing OSC queries so palette responses are not consumed as normal input.
+/// Termina is paused through its handoff control. When only the crossterm reader
+/// exists, wait for its 100ms poll window to settle before issuing OSC queries
+/// so palette responses are not consumed as normal input.
 ///
 /// With `flush_on_drop = true` the input queue is blanket-discarded on drop
 /// (correct for external-process handoff). With `false` the caller is responsible
@@ -127,10 +145,23 @@ pub(crate) fn pause_stdin_reader_for_terminal_query_with(
     flush_on_drop: bool,
 ) -> StdinReaderPauseGuard {
     STDIN_READER_PAUSED.store(true, Ordering::SeqCst);
-    if wait_for_reader {
+    let input_control = input_handoff_control().and_then(|control| match control.pause() {
+        Ok(()) => Some(control),
+        Err(err) => {
+            crate::debug::internal_log!(
+                "[tui-lipan] terminal_handoff: pause for terminal query failed: {}",
+                err
+            );
+            None
+        }
+    });
+    if input_control.is_none() && wait_for_reader {
         std::thread::sleep(READER_PAUSE_SETTLE);
     }
-    StdinReaderPauseGuard { flush_on_drop }
+    StdinReaderPauseGuard {
+        flush_on_drop,
+        input_control,
+    }
 }
 
 /// Drain pending terminal input after an OSC color query, dropping query-response
@@ -148,9 +179,16 @@ pub(crate) fn pause_stdin_reader_for_terminal_query_with(
 ///
 /// Must run while the reader thread is still paused so only this call competes with
 /// `event::read`.
-pub(crate) fn drain_terminal_query_responses_preserving_input() -> io::Result<Vec<event::Event>> {
+pub(crate) struct DrainedTerminalQueryInput {
+    pub(crate) events: Vec<event::Event>,
+    pub(crate) host_color_refresh_requested: bool,
+}
+
+pub(crate) fn drain_terminal_query_responses_preserving_input()
+-> io::Result<DrainedTerminalQueryInput> {
     let mut preserved = Vec::new();
-    collect_pending_terminal_events(8192, &mut preserved)?;
+    let mut host_color_refresh_requested = false;
+    collect_pending_terminal_events(8192, &mut preserved, &mut host_color_refresh_requested)?;
     #[cfg(unix)]
     {
         // Hard-reset any residual partial response fragment that has not yet
@@ -159,8 +197,11 @@ pub(crate) fn drain_terminal_query_responses_preserving_input() -> io::Result<Ve
         // tail rather than the whole probe window.
         flush_stdin_input_queue_unix();
     }
-    collect_terminal_events_until_quiet(4096, &mut preserved)?;
-    Ok(preserved)
+    collect_terminal_events_until_quiet(4096, &mut preserved, &mut host_color_refresh_requested)?;
+    Ok(DrainedTerminalQueryInput {
+        events: preserved,
+        host_color_refresh_requested,
+    })
 }
 
 /// Read currently-available parsed events, keeping genuine input and dropping
@@ -168,23 +209,35 @@ pub(crate) fn drain_terminal_query_responses_preserving_input() -> io::Result<Ve
 fn collect_pending_terminal_events(
     max_events: usize,
     preserved: &mut Vec<event::Event>,
+    host_color_refresh_requested: &mut bool,
 ) -> io::Result<()> {
-    for_each_host_event(max_events, Duration::ZERO, |ev| {
-        if is_preservable_input(&ev) {
-            preserved.push(ev);
-        }
-    })
+    for_each_host_event(
+        max_events,
+        Duration::ZERO,
+        |ev| {
+            if is_preservable_input(&ev) {
+                preserved.push(ev);
+            }
+        },
+        || *host_color_refresh_requested = true,
+    )
 }
 
 fn collect_terminal_events_until_quiet(
     max_events: usize,
     preserved: &mut Vec<event::Event>,
+    host_color_refresh_requested: &mut bool,
 ) -> io::Result<()> {
-    for_each_host_event(max_events, Duration::from_millis(10), |ev| {
-        if is_preservable_input(&ev) {
-            preserved.push(ev);
-        }
-    })
+    for_each_host_event(
+        max_events,
+        Duration::from_millis(10),
+        |ev| {
+            if is_preservable_input(&ev) {
+                preserved.push(ev);
+            }
+        },
+        || *host_color_refresh_requested = true,
+    )
 }
 
 /// Hand each event to `on_event` until `wait` passes without one, `max_events` have been read, or
@@ -193,6 +246,7 @@ fn for_each_host_event(
     max_events: usize,
     wait: Duration,
     mut on_event: impl FnMut(event::Event),
+    mut on_theme_refresh: impl FnMut(),
 ) -> io::Result<()> {
     for _ in 0..max_events {
         match read_host_event(wait)? {
@@ -200,7 +254,7 @@ fn for_each_host_event(
             #[cfg(unix)]
             HostEvent::Pointer(ev, _) => on_event(ev),
             #[cfg(unix)]
-            HostEvent::ThemeRefresh => {}
+            HostEvent::ThemeRefresh => on_theme_refresh(),
             #[cfg(unix)]
             HostEvent::HungUp => break,
             HostEvent::Quiet => break,
@@ -236,11 +290,11 @@ fn discard_pending_terminal_input() -> io::Result<()> {
 }
 
 fn drain_crossterm_events(max_events: usize) -> io::Result<()> {
-    for_each_host_event(max_events, Duration::ZERO, drop)
+    for_each_host_event(max_events, Duration::ZERO, drop, || {})
 }
 
 fn drain_crossterm_events_until_quiet(max_events: usize) -> io::Result<()> {
-    for_each_host_event(max_events, Duration::from_millis(10), drop)
+    for_each_host_event(max_events, Duration::from_millis(10), drop, || {})
 }
 
 #[cfg(unix)]
@@ -291,7 +345,7 @@ pub fn suspend_for_external_process(surface_mode: SurfaceMode) -> io::Result<()>
         if let Err(err) = execute_plan_with_rollback(&mut executor, &theme_notification_plan(false))
         {
             if let Some(control) = input_handoff_control() {
-                let _ = control.resume();
+                let _ = control.resume(InputResumeKind::ExternalProcess);
             }
             STDIN_READER_PAUSED.store(false, Ordering::SeqCst);
             return Err(err);
@@ -316,7 +370,7 @@ pub fn suspend_for_external_process(surface_mode: SurfaceMode) -> io::Result<()>
         if termina_paused {
             let _ = execute_plan(&mut executor, &theme_notification_plan(true));
             if let Some(control) = input_handoff_control() {
-                let _ = control.resume();
+                let _ = control.resume(InputResumeKind::ExternalProcess);
             }
         }
         STDIN_READER_PAUSED.store(false, Ordering::SeqCst);
@@ -353,14 +407,14 @@ pub fn resume_after_external_process(
                 execute_plan_with_rollback(&mut executor, &theme_notification_plan(true))
             {
                 if let Some(control) = input_handoff_control() {
-                    let _ = control.resume();
+                    let _ = control.resume(InputResumeKind::ExternalProcess);
                 }
                 STDIN_READER_PAUSED.store(false, Ordering::SeqCst);
                 crate::style::flush_pending_terminal_responses_on_exit();
                 return Err(err);
             }
             if let Some(control) = input_handoff_control()
-                && let Err(err) = control.resume()
+                && let Err(err) = control.resume(InputResumeKind::ExternalProcess)
             {
                 let disable_plan = theme_notification_plan(false);
                 let _ = execute_plan(&mut executor, &disable_plan);
@@ -396,6 +450,7 @@ mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
     use crossterm::event::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+    use std::sync::atomic::AtomicUsize;
 
     fn mouse(kind: MouseEventKind) -> Event {
         Event::Mouse(MouseEvent {
@@ -425,5 +480,52 @@ mod tests {
             KeyCode::Char('a'),
             KeyModifiers::NONE
         ))));
+    }
+
+    struct MockInputHandoff {
+        pauses: AtomicUsize,
+        resume_kinds: Mutex<Vec<InputResumeKind>>,
+        paused: AtomicBool,
+    }
+
+    impl InputHandoffControl for MockInputHandoff {
+        fn pause(&self) -> io::Result<()> {
+            self.pauses.fetch_add(1, Ordering::SeqCst);
+            self.paused.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn resume(&self, kind: InputResumeKind) -> io::Result<()> {
+            self.resume_kinds.lock().unwrap().push(kind);
+            self.paused.store(false, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn is_paused(&self) -> bool {
+            self.paused.load(Ordering::SeqCst)
+        }
+    }
+
+    #[test]
+    fn terminal_query_pauses_termina_without_requesting_recursive_refresh() {
+        let mock = Arc::new(MockInputHandoff {
+            pauses: AtomicUsize::new(0),
+            resume_kinds: Mutex::new(Vec::new()),
+            paused: AtomicBool::new(false),
+        });
+        let control: Arc<dyn InputHandoffControl + Send + Sync> = mock.clone();
+        register_input_handoff_control(Arc::downgrade(&control));
+
+        let guard = pause_stdin_reader_for_terminal_query_with(false, false);
+        assert_eq!(mock.pauses.load(Ordering::SeqCst), 1);
+        assert!(mock.paused.load(Ordering::SeqCst));
+        drop(guard);
+
+        assert_eq!(
+            *mock.resume_kinds.lock().unwrap(),
+            vec![InputResumeKind::TerminalQuery]
+        );
+        assert!(!mock.paused.load(Ordering::SeqCst));
+        unregister_input_handoff_control();
     }
 }
