@@ -3,6 +3,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
+use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
@@ -55,11 +56,13 @@ pub(super) struct TerminaInputCoordinator {
 impl TerminaInputCoordinator {
     pub(super) fn start(panic_control: InputHandoffSlot) -> io::Result<Self> {
         let terminal = open_terminal_input()?;
+        let (wake_reader, wake_writer) = worker_wake_pipe()?;
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, events) = mpsc::channel();
         let spare_sender = event_tx.clone();
         let control = Arc::new(WorkerControl {
             commands: command_tx,
+            wake: Mutex::new(wake_writer),
             paused: AtomicBool::new(false),
             worker_thread: Mutex::new(None),
         });
@@ -69,7 +72,7 @@ impl TerminaInputCoordinator {
             .name("termina-reader".into())
             .spawn(move || {
                 contain_worker_panic(&panic_events, || {
-                    run_worker(terminal, command_rx, event_tx, worker_control);
+                    run_worker(terminal, wake_reader, command_rx, event_tx, worker_control);
                 });
             })?;
 
@@ -104,7 +107,9 @@ impl TerminaInputCoordinator {
         self.control
             .commands
             .send(WorkerCommand::RefreshHostColors(previous))
-            .map_err(|_| worker_stopped())
+            .map_err(|_| worker_stopped())?;
+        self.control.wake();
+        Ok(())
     }
 }
 
@@ -130,11 +135,18 @@ enum WorkerCommand {
 
 struct WorkerControl {
     commands: mpsc::Sender<WorkerCommand>,
+    wake: Mutex<UnixStream>,
     paused: AtomicBool,
     worker_thread: Mutex<Option<std::thread::ThreadId>>,
 }
 
 impl WorkerControl {
+    fn wake(&self) {
+        if let Ok(mut wake) = self.wake.lock() {
+            let _ = wake.write(&[1]);
+        }
+    }
+
     fn pause(&self) -> io::Result<()> {
         if self
             .worker_thread
@@ -150,6 +162,7 @@ impl WorkerControl {
         self.commands
             .send(WorkerCommand::Pause(ack_tx))
             .map_err(|_| worker_stopped())?;
+        self.wake();
         ack_rx.recv().map_err(|_| worker_stopped())
     }
 
@@ -166,6 +179,7 @@ impl WorkerControl {
 
     fn shutdown(&self) {
         let _ = self.commands.send(WorkerCommand::Shutdown);
+        self.wake();
     }
 }
 
@@ -202,6 +216,13 @@ fn contain_worker_panic(events: &mpsc::Sender<RunnerEvent>, worker: impl FnOnce(
     }
 }
 
+fn worker_wake_pipe() -> io::Result<(UnixStream, UnixStream)> {
+    let (reader, writer) = UnixStream::pair()?;
+    reader.set_nonblocking(true)?;
+    writer.set_nonblocking(true)?;
+    Ok((reader, writer))
+}
+
 fn open_terminal_input() -> io::Result<File> {
     let terminal = OpenOptions::new().read(true).write(true).open("/dev/tty")?;
     if let Ok(size) = crossterm::terminal::window_size() {
@@ -215,6 +236,7 @@ fn open_terminal_input() -> io::Result<File> {
 
 fn run_worker(
     mut terminal: File,
+    mut wake_reader: UnixStream,
     commands: mpsc::Receiver<WorkerCommand>,
     events: mpsc::Sender<RunnerEvent>,
     control: Arc<WorkerControl>,
@@ -264,8 +286,19 @@ fn run_worker(
         if finish_color_query_if_ready(&events, &mut input, &mut query) {
             continue;
         }
-        match poll_terminal_input(&terminal, next_poll_timeout(settle_at, query.as_ref())) {
-            Ok(true) => {
+        match poll_terminal_input(
+            &terminal,
+            &wake_reader,
+            next_poll_timeout(settle_at, query.as_ref()),
+        ) {
+            Ok(ready) if ready.wake => {
+                if let Err(err) = drain_worker_wake(&mut wake_reader) {
+                    stop(err);
+                    break;
+                }
+                continue;
+            }
+            Ok(ready) if ready.terminal => {
                 let mut bytes = [0; 1024];
                 match terminal.read(&mut bytes) {
                     Ok(0) => {
@@ -288,7 +321,7 @@ fn run_worker(
                     }
                 }
             }
-            Ok(false) => {
+            Ok(_) => {
                 if settle_at.is_some_and(|deadline| Instant::now() >= deadline) {
                     if !input.settle(&events) {
                         break;
@@ -489,34 +522,84 @@ fn refresh_window_size(
         .is_ok()
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct WorkerReady {
+    terminal: bool,
+    wake: bool,
+}
+
+fn drain_worker_wake(wake_reader: &mut UnixStream) -> io::Result<()> {
+    let mut buffer = [0; 64];
+    loop {
+        match wake_reader.read(&mut buffer) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "input worker wake channel closed",
+                ));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => return Err(err),
+        }
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
-fn poll_terminal_input(terminal: &File, timeout: Duration) -> io::Result<bool> {
-    let mut descriptor = libc::pollfd {
-        fd: terminal.as_raw_fd(),
-        events: libc::POLLIN,
-        revents: 0,
-    };
+fn poll_terminal_input(
+    terminal: &impl AsRawFd,
+    wake_reader: &impl AsRawFd,
+    timeout: Duration,
+) -> io::Result<WorkerReady> {
+    let mut descriptors = [
+        libc::pollfd {
+            fd: terminal.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        libc::pollfd {
+            fd: wake_reader.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+    ];
     let timeout = timeout.as_millis().min(i32::MAX as u128) as i32;
-    let result = unsafe { libc::poll(&mut descriptor, 1, timeout) };
+    let result = unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, timeout) };
     if result < 0 {
         return Err(io::Error::last_os_error());
     }
-    if descriptor.revents & libc::POLLNVAL != 0 {
+    if descriptors
+        .iter()
+        .any(|fd| fd.revents & libc::POLLNVAL != 0)
+    {
         return Err(io::Error::new(
             io::ErrorKind::BrokenPipe,
-            "terminal input polling failed",
+            "input worker polling failed",
         ));
     }
-    Ok(result > 0 && descriptor.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0)
+    let ready = |descriptor: &libc::pollfd| {
+        result > 0 && descriptor.revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) != 0
+    };
+    Ok(WorkerReady {
+        terminal: ready(&descriptors[0]),
+        wake: ready(&descriptors[1]),
+    })
 }
 
 #[cfg(target_os = "macos")]
-fn poll_terminal_input(terminal: &File, timeout: Duration) -> io::Result<bool> {
-    let fd = terminal.as_raw_fd();
+fn poll_terminal_input(
+    terminal: &impl AsRawFd,
+    wake_reader: &impl AsRawFd,
+    timeout: Duration,
+) -> io::Result<WorkerReady> {
+    let terminal_fd = terminal.as_raw_fd();
+    let wake_fd = wake_reader.as_raw_fd();
     let mut read_fds = unsafe { std::mem::zeroed::<libc::fd_set>() };
     unsafe {
         libc::FD_ZERO(&mut read_fds);
-        libc::FD_SET(fd, &mut read_fds);
+        libc::FD_SET(terminal_fd, &mut read_fds);
+        libc::FD_SET(wake_fd, &mut read_fds);
     }
     let mut timeout = libc::timeval {
         tv_sec: timeout.as_secs().min(libc::time_t::MAX as u64) as libc::time_t,
@@ -524,7 +607,7 @@ fn poll_terminal_input(terminal: &File, timeout: Duration) -> io::Result<bool> {
     };
     let result = unsafe {
         libc::select(
-            fd + 1,
+            terminal_fd.max(wake_fd) + 1,
             &mut read_fds,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -534,7 +617,10 @@ fn poll_terminal_input(terminal: &File, timeout: Duration) -> io::Result<bool> {
     if result < 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(result > 0)
+    Ok(WorkerReady {
+        terminal: result > 0 && unsafe { libc::FD_ISSET(terminal_fd, &read_fds) },
+        wake: result > 0 && unsafe { libc::FD_ISSET(wake_fd, &read_fds) },
+    })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1074,6 +1160,33 @@ mod tests {
         assert_eq!(
             map_termina_event(TerminaEvent::Osc(Osc::SetWindowTitle("ignored"))),
             TerminaEventAction::Ignore
+        );
+    }
+
+    #[test]
+    fn worker_control_wake_makes_poll_immediately_ready() {
+        let (terminal_reader, _terminal_writer) = UnixStream::pair().unwrap();
+        let (mut wake_reader, wake_writer) = worker_wake_pipe().unwrap();
+        let (commands, _command_receiver) = mpsc::channel();
+        let control = WorkerControl {
+            commands,
+            wake: Mutex::new(wake_writer),
+            paused: AtomicBool::new(false),
+            worker_thread: Mutex::new(None),
+        };
+
+        control.wake();
+        assert_eq!(
+            poll_terminal_input(&terminal_reader, &wake_reader, INPUT_POLL_INTERVAL).unwrap(),
+            WorkerReady {
+                terminal: false,
+                wake: true,
+            }
+        );
+        drain_worker_wake(&mut wake_reader).unwrap();
+        assert_eq!(
+            poll_terminal_input(&terminal_reader, &wake_reader, Duration::ZERO).unwrap(),
+            WorkerReady::default()
         );
     }
 
