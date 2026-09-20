@@ -1,7 +1,10 @@
 use std::cell::{Cell, RefCell};
 use std::io::Write;
 
-use crossterm::style::{Print, PrintStyledContent};
+use crossterm::style::{
+    Attribute, Color as CrosstermColor, Print, PrintStyledContent, SetAttribute,
+    SetBackgroundColor, SetForegroundColor, SetUnderlineColor,
+};
 use crossterm::{execute, queue};
 use ratatui::backend::{IntoCrossterm, TestBackend};
 use ratatui::buffer::{Buffer, Cell as RatatuiCell, CellDiffOption, CellWidth};
@@ -107,52 +110,57 @@ fn write_buffer(writer: &mut impl Write, buffer: &Buffer) -> std::io::Result<()>
         queue!(writer, Print("\r\n"))?;
     }
 
+    reset_style(writer)?;
+
     Ok(())
 }
 
 fn write_row(writer: &mut impl Write, buffer: &Buffer, y: u16) -> std::io::Result<()> {
     let area = *buffer.area();
-    let mut last = 0;
+    let last = row_content_end(buffer, y);
+    let mut x = 0;
+
+    while x < last {
+        let cell = &buffer[(x, y)];
+        let width = cell.cell_width().max(1);
+        if cell.diff_option != CellDiffOption::Skip {
+            queue!(
+                writer,
+                crossterm::cursor::MoveToColumn(x),
+                PrintStyledContent(cell.style().into_crossterm().apply(cell.symbol()))
+            )?;
+        }
+        x = x.saturating_add(width).min(area.width);
+    }
+
+    Ok(())
+}
+
+fn row_content_end(buffer: &Buffer, y: u16) -> u16 {
+    let area = *buffer.area();
+    let mut end = 0;
     let mut x = 0;
 
     while x < area.width {
         let cell = &buffer[(x, y)];
         let width = cell.cell_width().max(1);
         if cell.diff_option != CellDiffOption::Skip && !is_empty_cell(cell) {
-            last = x.saturating_add(width).min(area.width);
+            end = x.saturating_add(width).min(area.width);
         }
-        x = x.saturating_add(width);
+        x = x.saturating_add(width).min(area.width);
     }
 
-    x = 0;
-    while x < last {
-        while x < last && buffer[(x, y)].diff_option == CellDiffOption::Skip {
-            x += 1;
-        }
-        if x == last {
-            break;
-        }
+    end
+}
 
-        let style = buffer[(x, y)].style();
-        let mut text = String::new();
-
-        while x < last && buffer[(x, y)].style() == style {
-            let cell = &buffer[(x, y)];
-            if cell.diff_option != CellDiffOption::Skip {
-                text.push_str(cell.symbol());
-            }
-            x = x.saturating_add(cell.cell_width().max(1));
-        }
-
-        if !text.is_empty() {
-            queue!(
-                writer,
-                PrintStyledContent(style.into_crossterm().apply(text))
-            )?;
-        }
-    }
-
-    Ok(())
+fn reset_style(writer: &mut impl Write) -> std::io::Result<()> {
+    queue!(
+        writer,
+        SetForegroundColor(CrosstermColor::Reset),
+        SetBackgroundColor(CrosstermColor::Reset),
+        SetUnderlineColor(CrosstermColor::Reset),
+        SetAttribute(Attribute::Reset),
+    )
 }
 
 fn is_empty_cell(cell: &RatatuiCell) -> bool {
@@ -174,15 +182,78 @@ mod tests {
             .child(Text::new("Detached from dev"))
             .child(Text::new("Reattach: rozi sessions attach dev"))
             .child(Text::new("界x"))
+            .child(Text::new("❤️x"))
+            .child(Text::new("1️⃣x"))
             .into();
         let mut output = Vec::new();
 
         render_to_writer(element, ContrastPolicy::Off, None, 80, &mut output).unwrap();
 
         let output = String::from_utf8(output).unwrap();
-        assert!(output.contains("Detached from dev"));
-        assert!(output.contains("Reattach: rozi sessions attach dev"));
-        assert!(output.contains("界x"), "{output:?}");
+        let visible = visible_text(&output);
+        assert!(visible.contains("Detached from dev"));
+        assert!(visible.contains("Reattach: rozi sessions attach dev"));
+        assert!(visible.contains("界x"), "{visible:?}");
+        assert_following_cell_positioned(&output, "❤️", 2, "x");
+        assert_following_cell_positioned(&output, "1️⃣", 2, "x");
         assert!(!output.contains("\x1b[6n"));
+    }
+
+    #[test]
+    fn exit_view_resets_underline_color_before_returning_to_the_shell() {
+        let element = Text::new("underlined")
+            .style(Style::new().underline_color(Color::Red))
+            .into();
+        let mut output = Vec::new();
+
+        render_to_writer(element, ContrastPolicy::Off, None, 80, &mut output).unwrap();
+
+        let mut underline_red = Vec::new();
+        queue!(underline_red, SetUnderlineColor(CrosstermColor::DarkRed)).unwrap();
+        let mut reset = Vec::new();
+        reset_style(&mut reset).unwrap();
+        assert!(
+            output
+                .windows(underline_red.len())
+                .any(|window| window == underline_red)
+        );
+        assert!(output.ends_with(&reset));
+    }
+
+    fn visible_text(output: &str) -> String {
+        crate::style::parse_ansi(output)
+            .into_iter()
+            .fold(String::new(), |mut text, span| {
+                text.push_str(&span.content);
+                text
+            })
+    }
+
+    fn assert_following_cell_positioned(
+        output: &str,
+        symbol: &str,
+        expected_column: u16,
+        following: &str,
+    ) {
+        let row = output
+            .split("\r\n")
+            .find(|row| row.contains(symbol))
+            .expect("emoji row should be present");
+        let symbol_end = row.find(symbol).unwrap() + symbol.len();
+        let after_symbol = &row[symbol_end..];
+        let mut move_to_column = Vec::new();
+        queue!(
+            move_to_column,
+            crossterm::cursor::MoveToColumn(expected_column)
+        )
+        .unwrap();
+        let move_to_column = String::from_utf8(move_to_column).unwrap();
+        let repositioned = after_symbol
+            .find(&move_to_column)
+            .expect("following cell should have an explicit column");
+        let following = after_symbol
+            .find(following)
+            .expect("following cell should be rendered");
+        assert!(repositioned < following, "{row:?}");
     }
 }
