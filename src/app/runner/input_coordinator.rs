@@ -277,6 +277,38 @@ fn run_worker(
             }
         }
 
+        match poll_terminal_input(&terminal, &wake_reader, Duration::ZERO) {
+            Ok(ready) if ready.wake => {
+                if let Err(err) = drain_worker_wake(&mut wake_reader) {
+                    stop(err);
+                    break;
+                }
+                continue;
+            }
+            Ok(ready) if ready.terminal => {
+                match read_terminal_bytes(&mut terminal, &mut input, &events) {
+                    Ok(true) => {
+                        settle_at = Some(Instant::now() + ESCAPE_DISAMBIGUATION);
+                    }
+                    Ok(false) => break,
+                    Err(err) => {
+                        stop(err);
+                        break;
+                    }
+                }
+                if !refresh_window_size(&events, &mut last_window_size) {
+                    break;
+                }
+                continue;
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => {
+                stop(err);
+                break;
+            }
+        }
+
         if let Err(err) =
             start_color_query_if_ready(&mut terminal, &mut input, &mut query, settle_at.is_none())
         {
@@ -299,22 +331,11 @@ fn run_worker(
                 continue;
             }
             Ok(ready) if ready.terminal => {
-                let mut bytes = [0; 1024];
-                match terminal.read(&mut bytes) {
-                    Ok(0) => {
-                        stop(io::Error::new(
-                            io::ErrorKind::UnexpectedEof,
-                            "terminal input reached end-of-file",
-                        ));
-                        break;
-                    }
-                    Ok(read) => {
-                        if !input.push(&bytes[..read], &events) {
-                            break;
-                        }
+                match read_terminal_bytes(&mut terminal, &mut input, &events) {
+                    Ok(true) => {
                         settle_at = Some(Instant::now() + ESCAPE_DISAMBIGUATION);
                     }
-                    Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                    Ok(false) => break,
                     Err(err) => {
                         stop(err);
                         break;
@@ -422,6 +443,27 @@ impl WorkerInput {
             }
         }
         true
+    }
+}
+
+fn read_terminal_bytes(
+    terminal: &mut impl Read,
+    input: &mut WorkerInput,
+    events: &mpsc::Sender<RunnerEvent>,
+) -> io::Result<bool> {
+    let mut bytes = [0; 1024];
+    loop {
+        match terminal.read(&mut bytes) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "terminal input reached end-of-file",
+                ));
+            }
+            Ok(read) => return Ok(input.push(&bytes[..read], events)),
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => return Err(err),
+        }
     }
 }
 
@@ -1188,6 +1230,74 @@ mod tests {
             poll_terminal_input(&terminal_reader, &wake_reader, Duration::ZERO).unwrap(),
             WorkerReady::default()
         );
+    }
+
+    #[test]
+    fn simultaneous_wake_and_tty_readiness_defers_probe_until_input_completes() {
+        let (mut terminal_reader, mut terminal_writer) = UnixStream::pair().unwrap();
+        let (mut wake_reader, wake_writer) = worker_wake_pipe().unwrap();
+        let (commands, command_receiver) = mpsc::channel();
+        let control = WorkerControl {
+            commands,
+            wake: Mutex::new(wake_writer),
+            paused: AtomicBool::new(false),
+            worker_thread: Mutex::new(None),
+        };
+
+        terminal_writer.write_all(b"\x1bO").unwrap();
+        control
+            .commands
+            .send(WorkerCommand::RefreshHostColors(None))
+            .unwrap();
+        control.wake();
+        assert_eq!(
+            poll_terminal_input(&terminal_reader, &wake_reader, Duration::ZERO).unwrap(),
+            WorkerReady {
+                terminal: true,
+                wake: true,
+            }
+        );
+        drain_worker_wake(&mut wake_reader).unwrap();
+
+        let mut query = None;
+        let WorkerCommand::RefreshHostColors(previous) = command_receiver.recv().unwrap() else {
+            panic!("refresh command should remain queued after the wake");
+        };
+        queue_color_refresh(&mut query, previous);
+
+        let (events, receiver) = mpsc::channel();
+        let mut input = WorkerInput::default();
+        assert_eq!(
+            poll_terminal_input(&terminal_reader, &wake_reader, Duration::ZERO).unwrap(),
+            WorkerReady {
+                terminal: true,
+                wake: false,
+            }
+        );
+        assert!(read_terminal_bytes(&mut terminal_reader, &mut input, &events).unwrap());
+        assert!(receiver.try_recv().is_err());
+
+        let mut output = Vec::new();
+        start_color_query_if_ready(&mut output, &mut input, &mut query, false).unwrap();
+        assert!(input.settle(&events));
+        start_color_query_if_ready(&mut output, &mut input, &mut query, true).unwrap();
+        assert!(output.is_empty());
+
+        terminal_writer.write_all(b"P").unwrap();
+        assert!(
+            poll_terminal_input(&terminal_reader, &wake_reader, Duration::ZERO)
+                .unwrap()
+                .terminal
+        );
+        assert!(read_terminal_bytes(&mut terminal_reader, &mut input, &events).unwrap());
+        assert!(matches!(
+            receiver.recv().unwrap(),
+            RunnerEvent::Terminal(CrosstermEvent::Key(event))
+                if event.code == CrosstermKeyCode::F(1)
+        ));
+        assert!(input.settle(&events));
+        start_color_query_if_ready(&mut output, &mut input, &mut query, true).unwrap();
+        assert_eq!(output, build_live_color_query_batch());
     }
 
     #[test]
