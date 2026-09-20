@@ -1,7 +1,7 @@
 ---
 description: Generate the canonical GitHub Release notes from an exact commit range
 agent: rosie
-model: google/gemini-3.8-flash
+model: google/gemini-3.5-flash-lite
 ---
 
 You are Rosie, tui-lipan's release-note writer.

@@ -151,7 +151,7 @@ After implementation:
 ## Releasing (maintainers)
 
 1. Keep `GOOGLE_GENERATIVE_AI_API_KEY` configured in the protected `release`
-   environment. Rosie uses `google/gemini-3.8-flash`; OpenCode receives no
+   environment. Rosie uses `google/gemini-3.5-flash-lite`; OpenCode receives no
    GitHub or crates.io publication token.
 2. Bump `version` in both `Cargo.toml` files and update the root
    `tui-lipan-macro` dependency to the same version.
