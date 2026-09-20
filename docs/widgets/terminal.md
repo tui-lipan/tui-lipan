@@ -670,8 +670,10 @@ makes adjacent range scans lossless without returning a wrapped line twice.
 
 Search matches use UTF-8 byte offsets into `line.text()`. Convert their inclusive start and
 exclusive end with `start_position` and `end_position`; the two methods deliberately choose opposite
-sides of an exact soft-wrap boundary. The resulting `TerminalTextPosition` reports the absolute grid
-row and display column needed for scrolling or decoration.
+sides of an exact soft-wrap boundary. They similarly choose the start or end of an Alacritty cell
+when a byte boundary falls inside a multi-scalar cell such as a combining sequence. The resulting
+`TerminalTextPosition` reports the authoritative absolute grid row and column needed for scrolling
+or decoration.
 
 ### Exporting replay bytes
 

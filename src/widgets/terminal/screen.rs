@@ -24,7 +24,6 @@ use alacritty_terminal::vte::ansi::{
     Color as TermColor, CursorShape as TermCursorShape, CursorStyle as TermCursorStyle, NamedColor,
     Rgb as TermRgb,
 };
-use unicode_width::UnicodeWidthStr;
 
 use super::events::{
     KittyKeyboardFlags, MouseEncoding, MouseMode, MouseModeState, TerminalKeyModes,
@@ -100,6 +99,16 @@ struct LogicalTextRow {
     absolute_line: usize,
     byte_start: usize,
     byte_end: usize,
+    cell_start: usize,
+    cell_end: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LogicalTextCell {
+    byte_start: usize,
+    byte_end: usize,
+    column_start: usize,
+    column_end: usize,
 }
 
 /// A borrowed logical line assembled from one or more soft-wrapped terminal grid rows.
@@ -110,6 +119,7 @@ struct LogicalTextRow {
 pub struct TerminalLogicalLine<'a> {
     text: &'a str,
     rows: &'a [LogicalTextRow],
+    cells: &'a [LogicalTextCell],
 }
 
 impl<'a> TerminalLogicalLine<'a> {
@@ -131,6 +141,7 @@ impl<'a> TerminalLogicalLine<'a> {
     /// Map an inclusive text-range start byte to its retained grid position.
     ///
     /// At a soft-wrap boundary this chooses the beginning of the continuation row.
+    /// A boundary inside a multi-scalar terminal cell chooses the beginning of that cell.
     pub fn start_position(self, byte_index: usize) -> Option<TerminalTextPosition> {
         self.position(byte_index, false)
     }
@@ -138,6 +149,7 @@ impl<'a> TerminalLogicalLine<'a> {
     /// Map an exclusive text-range end byte to its retained grid position.
     ///
     /// At a soft-wrap boundary this chooses the end of the preceding row.
+    /// A boundary inside a multi-scalar terminal cell chooses the end of that cell.
     pub fn end_position(self, byte_index: usize) -> Option<TerminalTextPosition> {
         self.position(byte_index, true)
     }
@@ -155,10 +167,26 @@ impl<'a> TerminalLogicalLine<'a> {
         } else {
             self.rows.iter().rfind(|row| byte_index >= row.byte_start)
         }?;
-        let local_end = byte_index.clamp(row.byte_start, row.byte_end);
+        let cells = &self.cells[row.cell_start..row.cell_end];
+        let column = if byte_index == row.byte_start {
+            0
+        } else if prefer_preceding_at_boundary {
+            cells
+                .iter()
+                .find(|cell| byte_index <= cell.byte_end)
+                .map_or(0, |cell| cell.column_end)
+        } else {
+            cells
+                .iter()
+                .find(|cell| byte_index < cell.byte_end)
+                .map_or_else(
+                    || cells.last().map_or(0, |cell| cell.column_end),
+                    |cell| cell.column_start,
+                )
+        };
         Some(TerminalTextPosition {
             absolute_line: row.absolute_line,
-            column: UnicodeWidthStr::width(&self.text[row.byte_start..local_end]),
+            column,
         })
     }
 }
@@ -2054,8 +2082,8 @@ impl TerminalScreen {
     /// rules let callers process adjacent physical-row ranges without duplicating or splitting a
     /// logical line.
     ///
-    /// The same text and row scratch allocations are reused for every visit. The borrowed
-    /// [`TerminalLogicalLine`] is therefore valid only for that callback invocation.
+    /// The same text and position-metadata scratch allocations are reused for every visit. The
+    /// borrowed [`TerminalLogicalLine`] is therefore valid only for that callback invocation.
     pub fn try_for_each_logical_text_line(
         &self,
         start: usize,
@@ -2081,16 +2109,26 @@ impl TerminalScreen {
 
         let mut text = String::with_capacity(grid.columns());
         let mut rows = Vec::new();
+        let mut cells = Vec::with_capacity(grid.columns());
         while absolute < end {
             text.clear();
             rows.clear();
+            cells.clear();
             loop {
                 let byte_start = text.len();
-                push_plain_line_text(grid, Line(top + absolute as i32), &mut text);
+                let cell_start = cells.len();
+                push_plain_line_text_with_cells(
+                    grid,
+                    Line(top + absolute as i32),
+                    &mut text,
+                    &mut cells,
+                );
                 rows.push(LogicalTextRow {
                     absolute_line: absolute,
                     byte_start,
                     byte_end: text.len(),
+                    cell_start,
+                    cell_end: cells.len(),
                 });
                 let wrapped = wraps(absolute);
                 absolute += 1;
@@ -2101,6 +2139,7 @@ impl TerminalScreen {
             visitor(TerminalLogicalLine {
                 text: &text,
                 rows: &rows,
+                cells: &cells,
             })?;
         }
         ControlFlow::Continue(())
@@ -3060,6 +3099,24 @@ fn push_plain_line_text(
     line: Line,
     out: &mut String,
 ) {
+    push_plain_line_text_impl(grid, line, out, |_| {});
+}
+
+fn push_plain_line_text_with_cells(
+    grid: &alacritty_terminal::grid::Grid<TermCell>,
+    line: Line,
+    out: &mut String,
+    cells: &mut Vec<LogicalTextCell>,
+) {
+    push_plain_line_text_impl(grid, line, out, |cell| cells.push(cell));
+}
+
+fn push_plain_line_text_impl(
+    grid: &alacritty_terminal::grid::Grid<TermCell>,
+    line: Line,
+    out: &mut String,
+    mut record_cell: impl FnMut(LogicalTextCell),
+) {
     let wrapline = grid[line][grid.last_column()]
         .flags
         .contains(CellFlags::WRAPLINE);
@@ -3078,7 +3135,14 @@ fn push_plain_line_text(
         {
             continue;
         }
+        let byte_start = out.len();
         push_cell_text_str(out, cell);
+        record_cell(LogicalTextCell {
+            byte_start,
+            byte_end: out.len(),
+            column_start: col,
+            column_end: col + usize::from(cell.flags.contains(CellFlags::WIDE_CHAR)) + 1,
+        });
     }
 }
 
@@ -4598,6 +4662,62 @@ mod tests {
             ControlFlow::Continue(())
         });
         assert!(checked);
+    }
+
+    #[test]
+    fn logical_text_positions_follow_terminal_cells_for_unicode_sequences() {
+        for (text, x_column, inside_cell_boundary) in [
+            ("1️⃣x", 1, Some('1'.len_utf8())),
+            ("❤️x", 1, Some('❤'.len_utf8())),
+            ("e\u{301}x", 1, Some('e'.len_utf8())),
+            ("漢x", 2, None),
+        ] {
+            let mut screen = TerminalScreen::new(2, 8, 0);
+            screen.process_bytes(text.as_bytes());
+            let mut checked = false;
+
+            let _ = screen.try_for_each_logical_text_line(0, 1, |line| {
+                if line.text() != text {
+                    return ControlFlow::Continue(());
+                }
+                let x_offset = line.text().find('x').unwrap();
+                let x_position = TerminalTextPosition {
+                    absolute_line: 0,
+                    column: x_column,
+                };
+                assert_eq!(line.start_position(x_offset), Some(x_position), "{text:?}");
+                assert_eq!(line.end_position(x_offset), Some(x_position), "{text:?}");
+                assert_eq!(
+                    line.end_position(x_offset + 'x'.len_utf8()),
+                    Some(TerminalTextPosition {
+                        absolute_line: 0,
+                        column: x_column + 1,
+                    }),
+                    "{text:?}"
+                );
+                if let Some(byte_index) = inside_cell_boundary {
+                    assert_eq!(
+                        line.start_position(byte_index),
+                        Some(TerminalTextPosition {
+                            absolute_line: 0,
+                            column: 0,
+                        }),
+                        "{text:?}"
+                    );
+                    assert_eq!(
+                        line.end_position(byte_index),
+                        Some(TerminalTextPosition {
+                            absolute_line: 0,
+                            column: x_column,
+                        }),
+                        "{text:?}"
+                    );
+                }
+                checked = true;
+                ControlFlow::Continue(())
+            });
+            assert!(checked, "missing logical line for {text:?}");
+        }
     }
 
     #[test]
