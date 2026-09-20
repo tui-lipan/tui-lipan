@@ -664,8 +664,9 @@ fn build_query_batch() -> Vec<u8> {
 #[cfg(unix)]
 #[derive(Default)]
 pub(crate) struct HostColorResponseParser {
-    // Protocol state survives between queries so a refresh begun in the middle of a bracketed
-    // paste cannot mistake pasted OSC-looking text for a terminal response.
+    // This mirrors every incomplete input family in Termina's parser. Protocol state survives
+    // between queries, so `at_input_boundary` cannot start a probe in the middle of a key, mouse,
+    // string, UTF-8 character, or bracketed paste event.
     state: ResponseScanState,
     parsed: Parsed,
     collecting: bool,
@@ -677,9 +678,19 @@ enum ResponseScanState {
     #[default]
     Ground,
     Escape,
+    Ss3,
+    Utf8(u8),
     Osc(Vec<u8>),
     OscEscape(Vec<u8>),
-    Csi(Vec<u8>),
+    Dcs,
+    DcsEscape,
+    CsiStart,
+    CsiDoubleBracket,
+    CsiNormalMouse(u8),
+    CsiSgrMouse,
+    CsiQuestion(u16),
+    CsiGreater(u8),
+    CsiNumbered(Vec<u8>),
     Paste(usize),
 }
 
@@ -714,42 +725,100 @@ impl HostColorResponseParser {
         matches!(self.state, ResponseScanState::Ground)
     }
 
+    pub(crate) fn settle_input(&mut self) {
+        // This is the only incomplete shape Termina resolves when `maybe_more` becomes false.
+        // All other states remain buffered until their protocol terminator arrives.
+        if matches!(self.state, ResponseScanState::Escape) {
+            self.state = ResponseScanState::Ground;
+        }
+    }
+
     fn push_byte(&mut self, byte: u8) {
         const PASTE_END: &[u8] = b"\x1b[201~";
         let state = std::mem::take(&mut self.state);
         self.state = match state {
             ResponseScanState::Ground if byte == 0x1b => ResponseScanState::Escape,
-            ResponseScanState::Ground => ResponseScanState::Ground,
+            ResponseScanState::Ground => utf8_tail(byte)
+                .map(ResponseScanState::Utf8)
+                .unwrap_or(ResponseScanState::Ground),
             ResponseScanState::Escape if byte == b']' => ResponseScanState::Osc(Vec::new()),
-            ResponseScanState::Escape if byte == b'[' => ResponseScanState::Csi(Vec::new()),
-            ResponseScanState::Escape if byte == 0x1b => ResponseScanState::Escape,
-            ResponseScanState::Escape => ResponseScanState::Ground,
+            ResponseScanState::Escape if byte == b'[' => ResponseScanState::CsiStart,
+            ResponseScanState::Escape if byte == b'P' => ResponseScanState::Dcs,
+            ResponseScanState::Escape if byte == b'O' => ResponseScanState::Ss3,
+            ResponseScanState::Escape if byte == 0x1b => ResponseScanState::Ground,
+            ResponseScanState::Escape => utf8_tail(byte)
+                .map(ResponseScanState::Utf8)
+                .unwrap_or(ResponseScanState::Ground),
+            ResponseScanState::Ss3 => ResponseScanState::Ground,
+            ResponseScanState::Utf8(remaining) if byte & 0b1100_0000 == 0b1000_0000 => {
+                if remaining == 1 {
+                    ResponseScanState::Ground
+                } else {
+                    ResponseScanState::Utf8(remaining - 1)
+                }
+            }
+            ResponseScanState::Utf8(_) => ResponseScanState::Ground,
             ResponseScanState::Osc(body) if byte == 0x07 => {
                 self.capture_body(&body);
                 ResponseScanState::Ground
             }
             ResponseScanState::Osc(body) if byte == 0x1b => ResponseScanState::OscEscape(body),
             ResponseScanState::Osc(mut body) => {
-                if body.len() < 4096 {
-                    body.push(byte);
-                    ResponseScanState::Osc(body)
-                } else {
-                    ResponseScanState::Ground
-                }
+                body.push(byte);
+                ResponseScanState::Osc(body)
             }
             ResponseScanState::OscEscape(body) if byte == b'\\' => {
                 self.capture_body(&body);
                 ResponseScanState::Ground
             }
+            ResponseScanState::OscEscape(mut body) if byte == 0x1b => {
+                body.push(0x1b);
+                ResponseScanState::OscEscape(body)
+            }
             ResponseScanState::OscEscape(mut body) => {
-                if body.len() < 4095 {
-                    body.extend_from_slice(&[0x1b, byte]);
-                    ResponseScanState::Osc(body)
-                } else {
+                body.extend_from_slice(&[0x1b, byte]);
+                ResponseScanState::Osc(body)
+            }
+            ResponseScanState::Dcs if byte == 0x1b => ResponseScanState::DcsEscape,
+            ResponseScanState::Dcs => ResponseScanState::Dcs,
+            ResponseScanState::DcsEscape if byte == b'\\' => ResponseScanState::Ground,
+            ResponseScanState::DcsEscape if byte == 0x1b => ResponseScanState::DcsEscape,
+            ResponseScanState::DcsEscape => ResponseScanState::Dcs,
+            ResponseScanState::CsiStart => match byte {
+                b'[' => ResponseScanState::CsiDoubleBracket,
+                b'M' => ResponseScanState::CsiNormalMouse(3),
+                b'<' => ResponseScanState::CsiSgrMouse,
+                b'?' => ResponseScanState::CsiQuestion(0),
+                b'>' => ResponseScanState::CsiGreater(b'>'),
+                b'0'..=b'9' => ResponseScanState::CsiNumbered(vec![byte]),
+                _ => ResponseScanState::Ground,
+            },
+            ResponseScanState::CsiDoubleBracket => ResponseScanState::Ground,
+            ResponseScanState::CsiNormalMouse(remaining) => {
+                if remaining == 1 {
                     ResponseScanState::Ground
+                } else {
+                    ResponseScanState::CsiNormalMouse(remaining - 1)
                 }
             }
-            ResponseScanState::Csi(mut body) => {
+            ResponseScanState::CsiSgrMouse if matches!(byte, b'M' | b'm') => {
+                ResponseScanState::Ground
+            }
+            ResponseScanState::CsiSgrMouse => ResponseScanState::CsiSgrMouse,
+            ResponseScanState::CsiQuestion(_) if matches!(byte, b'c' | b'n' | b'y') => {
+                ResponseScanState::Ground
+            }
+            ResponseScanState::CsiQuestion(seen) if byte == b'u' && seen >= 1 => {
+                ResponseScanState::Ground
+            }
+            ResponseScanState::CsiQuestion(seen) => {
+                ResponseScanState::CsiQuestion(seen.saturating_add(1))
+            }
+            ResponseScanState::CsiGreater(previous) if previous == b' ' && byte == b'q' => {
+                ResponseScanState::Ground
+            }
+            ResponseScanState::CsiGreater(_) => ResponseScanState::CsiGreater(byte),
+            ResponseScanState::CsiNumbered(mut body) => {
                 body.push(byte);
                 if (0x40..=0x7e).contains(&byte) {
                     if body == b"200~" {
@@ -757,10 +826,8 @@ impl HostColorResponseParser {
                     } else {
                         ResponseScanState::Ground
                     }
-                } else if body.len() < 64 {
-                    ResponseScanState::Csi(body)
                 } else {
-                    ResponseScanState::Ground
+                    ResponseScanState::CsiNumbered(body)
                 }
             }
             ResponseScanState::Paste(mut matched) => {
@@ -782,6 +849,16 @@ impl HostColorResponseParser {
         if self.collecting {
             parse_body(body, &mut self.parsed);
         }
+    }
+}
+
+#[cfg(unix)]
+fn utf8_tail(byte: u8) -> Option<u8> {
+    match byte {
+        0xc0..=0xdf => Some(1),
+        0xe0..=0xef => Some(2),
+        0xf0..=0xf7 => Some(3),
+        _ => None,
     }
 }
 
@@ -1104,6 +1181,71 @@ mod tests {
         );
         assert_eq!(colors.fg, Color::Rgb(255, 255, 255));
         assert_eq!(colors.bg, Color::Rgb(34, 34, 34));
+    }
+
+    #[test]
+    fn input_boundary_tracks_every_incomplete_termina_escape_family() {
+        let mut parser = HostColorResponseParser::default();
+
+        for (prefix, suffix) in [
+            (b"\x1bO".as_slice(), b"P".as_slice()),
+            (b"\x1bP1$r0;4m\x1b".as_slice(), b"\\".as_slice()),
+            (b"\x1b[M !".as_slice(), b"!".as_slice()),
+            (b"\x1b[[", b"A"),
+            (b"\x1b[<0;1;1", b"M"),
+            (b"\x1b[?1".as_slice(), b"u".as_slice()),
+            (b"\x1b[>1;2 ".as_slice(), b"q".as_slice()),
+            (b"\x1b[1;2".as_slice(), b"A".as_slice()),
+            (
+                b"\x1b]10;rgb:ffff/ffff/ffff\x1b".as_slice(),
+                b"\\".as_slice(),
+            ),
+            (b"\xc3".as_slice(), b"\xa9".as_slice()),
+            (b"\x1b\xc3".as_slice(), b"\xa9".as_slice()),
+        ] {
+            let mut termina = termina::Parser::default();
+            parser.push(prefix);
+            termina.parse(prefix, true);
+            assert!(
+                !parser.at_input_boundary(),
+                "{prefix:?} is still incomplete for Termina"
+            );
+            assert!(
+                termina.pop().is_none(),
+                "{prefix:?} unexpectedly completed a Termina event"
+            );
+            parser.push(suffix);
+            termina.parse(suffix, true);
+            assert!(
+                parser.at_input_boundary(),
+                "{prefix:?}{suffix:?} completes the input event"
+            );
+            assert!(
+                termina.pop().is_some(),
+                "{prefix:?}{suffix:?} should complete a Termina event"
+            );
+        }
+
+        parser.push(b"\x1b");
+        assert!(!parser.at_input_boundary());
+        parser.settle_input();
+        assert!(parser.at_input_boundary());
+    }
+
+    #[test]
+    fn live_palette_parser_ignores_osc_inside_dcs() {
+        let previous = HostTerminalColors {
+            ansi: std::array::from_fn(|index| super::default_ansi(index as u8)),
+            fg: Color::Rgb(230, 230, 230),
+            bg: Color::Rgb(20, 20, 20),
+        };
+        let mut parser = HostColorResponseParser::default();
+        parser.start_query();
+        parser.push(b"\x1bPignored \x1b]4;1;rgb:1111/1111/1111\x07 text\x1b\\");
+
+        let colors = parser.finish_query(Some(&previous)).unwrap();
+        assert_eq!(colors.ansi[1], previous.ansi[1]);
+        assert!(parser.at_input_boundary());
     }
 
     #[test]

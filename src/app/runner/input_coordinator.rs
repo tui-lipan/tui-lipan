@@ -383,6 +383,7 @@ impl WorkerInput {
 
     fn settle(&mut self, events: &mpsc::Sender<RunnerEvent>) -> bool {
         self.parser.parse(&[], false);
+        self.colors.settle_input();
         self.dispatch(events)
     }
 
@@ -402,7 +403,7 @@ struct ActiveColorQuery {
 }
 
 fn start_color_query_if_ready(
-    terminal: &mut File,
+    terminal: &mut impl Write,
     input: &mut WorkerInput,
     query: &mut Option<ActiveColorQuery>,
     input_is_quiet: bool,
@@ -885,6 +886,32 @@ mod tests {
             RunnerEvent::Terminal(CrosstermEvent::Key(event))
                 if event.code == CrosstermKeyCode::Char('é')
         ));
+    }
+
+    #[test]
+    fn pending_palette_query_waits_for_a_split_ss3_key() {
+        let (events, receiver) = mpsc::channel();
+        let mut input = WorkerInput::default();
+        let mut query = Some(ActiveColorQuery {
+            deadline: None,
+            previous: None,
+        });
+        let mut output = Vec::new();
+
+        assert!(input.push(b"\x1bO", &events));
+        start_color_query_if_ready(&mut output, &mut input, &mut query, true).unwrap();
+        assert!(output.is_empty());
+        assert!(query.as_ref().unwrap().deadline.is_none());
+
+        assert!(input.push(b"P", &events));
+        assert!(matches!(
+            receiver.recv().unwrap(),
+            RunnerEvent::Terminal(CrosstermEvent::Key(event))
+                if event.code == CrosstermKeyCode::F(1)
+        ));
+        start_color_query_if_ready(&mut output, &mut input, &mut query, true).unwrap();
+        assert_eq!(output, build_live_color_query_batch());
+        assert!(query.as_ref().unwrap().deadline.is_some());
     }
 
     #[test]
