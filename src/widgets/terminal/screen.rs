@@ -4586,6 +4586,13 @@ mod tests {
             if line.text().starts_with('漢') {
                 assert_eq!(line.start_position(1), None);
                 assert_eq!(line.end_position(line.text().len() + 1), None);
+                assert_eq!(
+                    line.start_position("漢".len()),
+                    Some(TerminalTextPosition {
+                        absolute_line: 0,
+                        column: 2,
+                    })
+                );
                 checked = true;
             }
             ControlFlow::Continue(())
