@@ -46,7 +46,8 @@ pub use pty::{TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent
 pub use screen::{
     SemanticMark, SemanticMarkKind, TerminalCellSize, TerminalClipboardEvent,
     TerminalClipboardTarget, TerminalColorPalette, TerminalDecoration, TerminalHyperlink,
-    TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle, TerminalViewport,
+    TerminalLogicalLine, TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle,
+    TerminalTextPosition, TerminalViewport,
 };
 #[cfg(feature = "terminal")]
 pub use selection::{

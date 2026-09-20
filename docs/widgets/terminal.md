@@ -647,6 +647,32 @@ input. Shells without OSC 133 integration retain ordinary terminal reflow.
 a child hard reset (RIS) does not imply its last-known working directory or command lifecycle
 became invalid.
 
+### Reading logical text lines
+
+`try_for_each_text_line` visits physical terminal grid rows. For search, indexing, or other text
+features that must not split a soft-wrapped command or output line, use
+`try_for_each_logical_text_line` instead:
+
+```rust
+use std::ops::ControlFlow;
+
+screen.try_for_each_logical_text_line(0, screen.total_text_lines(), |line| {
+    index(line.text());
+    let occupied_rows = line.absolute_lines();
+    ControlFlow::Continue(())
+});
+```
+
+The range is still expressed in absolute physical rows so callers can retain bounded-work cursors.
+Only logical lines whose first row falls inside the range are visited. A line that starts in the
+range is completed past its end; a continuation whose first row precedes the range is skipped. This
+makes adjacent range scans lossless without returning a wrapped line twice.
+
+Search matches use UTF-8 byte offsets into `line.text()`. Convert their inclusive start and
+exclusive end with `start_position` and `end_position`; the two methods deliberately choose opposite
+sides of an exact soft-wrap boundary. The resulting `TerminalTextPosition` reports the absolute grid
+row and display column needed for scrolling or decoration.
+
 ### Exporting replay bytes
 
 `TerminalScreen::export_replay_bytes()` serializes the current screen state as a VT byte stream.
