@@ -85,6 +85,112 @@ pub struct SemanticMark {
     pub exit_status: Option<i32>,
 }
 
+/// A position in the retained terminal grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TerminalTextPosition {
+    /// Absolute retained-line index (`0` = oldest retained grid row).
+    pub absolute_line: usize,
+    /// Display column within that grid row.
+    pub column: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LogicalTextRow {
+    absolute_line: usize,
+    byte_start: usize,
+    byte_end: usize,
+    cell_start: usize,
+    cell_end: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LogicalTextCell {
+    byte_start: usize,
+    byte_end: usize,
+    column_start: usize,
+    column_end: usize,
+}
+
+/// A borrowed logical line assembled from one or more soft-wrapped terminal grid rows.
+///
+/// Values are valid only during the callback passed to
+/// [`TerminalScreen::try_for_each_logical_text_line`].
+#[derive(Clone, Copy, Debug)]
+pub struct TerminalLogicalLine<'a> {
+    text: &'a str,
+    rows: &'a [LogicalTextRow],
+    cells: &'a [LogicalTextCell],
+}
+
+impl<'a> TerminalLogicalLine<'a> {
+    /// Plain text with soft-wrap boundaries removed.
+    pub fn text(self) -> &'a str {
+        self.text
+    }
+
+    /// Half-open range of absolute grid rows occupied by this logical line.
+    pub fn absolute_lines(self) -> std::ops::Range<usize> {
+        let start = self.rows.first().map_or(0, |row| row.absolute_line);
+        let end = self
+            .rows
+            .last()
+            .map_or(start, |row| row.absolute_line.saturating_add(1));
+        start..end
+    }
+
+    /// Map an inclusive text-range start byte to its retained grid position.
+    ///
+    /// At a soft-wrap boundary this chooses the beginning of the continuation row.
+    /// A boundary inside a multi-scalar terminal cell chooses the beginning of that cell.
+    pub fn start_position(self, byte_index: usize) -> Option<TerminalTextPosition> {
+        self.position(byte_index, false)
+    }
+
+    /// Map an exclusive text-range end byte to its retained grid position.
+    ///
+    /// At a soft-wrap boundary this chooses the end of the preceding row.
+    /// A boundary inside a multi-scalar terminal cell chooses the end of that cell.
+    pub fn end_position(self, byte_index: usize) -> Option<TerminalTextPosition> {
+        self.position(byte_index, true)
+    }
+
+    fn position(
+        self,
+        byte_index: usize,
+        prefer_preceding_at_boundary: bool,
+    ) -> Option<TerminalTextPosition> {
+        if byte_index > self.text.len() || !self.text.is_char_boundary(byte_index) {
+            return None;
+        }
+        let row = if prefer_preceding_at_boundary {
+            self.rows.iter().find(|row| byte_index <= row.byte_end)
+        } else {
+            self.rows.iter().rfind(|row| byte_index >= row.byte_start)
+        }?;
+        let cells = &self.cells[row.cell_start..row.cell_end];
+        let column = if byte_index == row.byte_start {
+            0
+        } else if prefer_preceding_at_boundary {
+            cells
+                .iter()
+                .find(|cell| byte_index <= cell.byte_end)
+                .map_or(0, |cell| cell.column_end)
+        } else {
+            cells
+                .iter()
+                .find(|cell| byte_index < cell.byte_end)
+                .map_or_else(
+                    || cells.last().map_or(0, |cell| cell.column_end),
+                    |cell| cell.column_start,
+                )
+        };
+        Some(TerminalTextPosition {
+            absolute_line: row.absolute_line,
+            column,
+        })
+    }
+}
+
 const MAX_SEMANTIC_MARKS: usize = 256;
 const MAX_TERMINAL_IDENTITY_LEN: usize = 256;
 const DEFAULT_TERMINAL_IDENTITY: &str = concat!("tui-lipan ", env!("CARGO_PKG_VERSION"));
@@ -1968,6 +2074,77 @@ impl TerminalScreen {
         ControlFlow::Continue(())
     }
 
+    /// Visit logical text lines whose first grid row lies in `[start, end)`.
+    ///
+    /// Unlike [`try_for_each_text_line`](Self::try_for_each_text_line), this joins rows connected by
+    /// terminal soft wraps. A continuation already in progress at `start` is skipped, while a line
+    /// beginning before `end` is completed even when its continuation extends beyond `end`. These
+    /// rules let callers process adjacent physical-row ranges without duplicating or splitting a
+    /// logical line.
+    ///
+    /// The same text and position-metadata scratch allocations are reused for every visit. The
+    /// borrowed [`TerminalLogicalLine`] is therefore valid only for that callback invocation.
+    pub fn try_for_each_logical_text_line(
+        &self,
+        start: usize,
+        end: usize,
+        mut visitor: impl FnMut(TerminalLogicalLine<'_>) -> ControlFlow<()>,
+    ) -> ControlFlow<()> {
+        let total = self.total_text_lines();
+        let start = start.min(total);
+        let end = end.min(total).max(start);
+        let grid = self.term.grid();
+        let top = grid.topmost_line().0;
+        let last_column = grid.last_column();
+        let wraps = |absolute: usize| {
+            grid[Line(top + absolute as i32)][last_column]
+                .flags
+                .contains(CellFlags::WRAPLINE)
+        };
+        let mut absolute = start;
+
+        while absolute < end && absolute > 0 && wraps(absolute - 1) {
+            absolute += 1;
+        }
+
+        let mut text = String::with_capacity(grid.columns());
+        let mut rows = Vec::new();
+        let mut cells = Vec::with_capacity(grid.columns());
+        while absolute < end {
+            text.clear();
+            rows.clear();
+            cells.clear();
+            loop {
+                let byte_start = text.len();
+                let cell_start = cells.len();
+                push_plain_line_text_with_cells(
+                    grid,
+                    Line(top + absolute as i32),
+                    &mut text,
+                    &mut cells,
+                );
+                rows.push(LogicalTextRow {
+                    absolute_line: absolute,
+                    byte_start,
+                    byte_end: text.len(),
+                    cell_start,
+                    cell_end: cells.len(),
+                });
+                let wrapped = wraps(absolute);
+                absolute += 1;
+                if !wrapped || absolute >= total {
+                    break;
+                }
+            }
+            visitor(TerminalLogicalLine {
+                text: &text,
+                rows: &rows,
+                cells: &cells,
+            })?;
+        }
+        ControlFlow::Continue(())
+    }
+
     /// Plain text of grid lines in `[start, end)`, addressed from the oldest retained line.
     ///
     /// Does not mutate display offset or go through the render pipeline. Out-of-range bounds
@@ -2922,6 +3099,24 @@ fn push_plain_line_text(
     line: Line,
     out: &mut String,
 ) {
+    push_plain_line_text_impl(grid, line, out, |_| {});
+}
+
+fn push_plain_line_text_with_cells(
+    grid: &alacritty_terminal::grid::Grid<TermCell>,
+    line: Line,
+    out: &mut String,
+    cells: &mut Vec<LogicalTextCell>,
+) {
+    push_plain_line_text_impl(grid, line, out, |cell| cells.push(cell));
+}
+
+fn push_plain_line_text_impl(
+    grid: &alacritty_terminal::grid::Grid<TermCell>,
+    line: Line,
+    out: &mut String,
+    mut record_cell: impl FnMut(LogicalTextCell),
+) {
     let wrapline = grid[line][grid.last_column()]
         .flags
         .contains(CellFlags::WRAPLINE);
@@ -2940,7 +3135,14 @@ fn push_plain_line_text(
         {
             continue;
         }
+        let byte_start = out.len();
         push_cell_text_str(out, cell);
+        record_cell(LogicalTextCell {
+            byte_start,
+            byte_end: out.len(),
+            column_start: col,
+            column_end: col + usize::from(cell.flags.contains(CellFlags::WIDE_CHAR)) + 1,
+        });
     }
 }
 
@@ -4384,6 +4586,138 @@ mod tests {
             panic!("a reversed half-open range must be empty")
         });
         assert_eq!(flow, ControlFlow::Continue(()));
+    }
+
+    #[test]
+    fn logical_text_lines_join_soft_wraps_and_partition_physical_ranges() {
+        let mut screen = TerminalScreen::new(4, 5, 10);
+        screen.process_bytes(b"abcdefgh\r\nnext");
+        let total = screen.total_text_lines();
+        let mut lines = Vec::new();
+
+        let flow = screen.try_for_each_logical_text_line(0, total, |line| {
+            lines.push((
+                line.text().to_string(),
+                line.absolute_lines(),
+                line.start_position(5),
+                line.end_position(5),
+            ));
+            ControlFlow::Continue(())
+        });
+
+        assert_eq!(flow, ControlFlow::Continue(()));
+        let wrapped = lines
+            .iter()
+            .find(|(text, _, _, _)| text == "abcdefgh")
+            .expect("soft-wrapped logical line");
+        assert_eq!(wrapped.1, 0..2);
+        assert_eq!(
+            wrapped.2,
+            Some(TerminalTextPosition {
+                absolute_line: 1,
+                column: 0,
+            })
+        );
+        assert_eq!(
+            wrapped.3,
+            Some(TerminalTextPosition {
+                absolute_line: 0,
+                column: 5,
+            })
+        );
+
+        let mut first_range = Vec::new();
+        let _ = screen.try_for_each_logical_text_line(0, 1, |line| {
+            first_range.push(line.text().to_string());
+            ControlFlow::Continue(())
+        });
+        let mut continuation_range = Vec::new();
+        let _ = screen.try_for_each_logical_text_line(1, 2, |line| {
+            continuation_range.push(line.text().to_string());
+            ControlFlow::Continue(())
+        });
+        assert_eq!(first_range, ["abcdefgh"]);
+        assert!(continuation_range.is_empty());
+    }
+
+    #[test]
+    fn logical_text_positions_reject_invalid_utf8_boundaries() {
+        let mut screen = TerminalScreen::new(2, 5, 0);
+        screen.process_bytes("漢字abc".as_bytes());
+        let mut checked = false;
+
+        let _ = screen.try_for_each_logical_text_line(0, 1, |line| {
+            if line.text().starts_with('漢') {
+                assert_eq!(line.start_position(1), None);
+                assert_eq!(line.end_position(line.text().len() + 1), None);
+                assert_eq!(
+                    line.start_position("漢".len()),
+                    Some(TerminalTextPosition {
+                        absolute_line: 0,
+                        column: 2,
+                    })
+                );
+                checked = true;
+            }
+            ControlFlow::Continue(())
+        });
+        assert!(checked);
+    }
+
+    #[test]
+    fn logical_text_positions_follow_terminal_cells_for_unicode_sequences() {
+        for (text, x_column, inside_cell_boundary) in [
+            ("1️⃣x", 1, Some('1'.len_utf8())),
+            ("❤️x", 1, Some('❤'.len_utf8())),
+            ("e\u{301}x", 1, Some('e'.len_utf8())),
+            ("漢x", 2, None),
+        ] {
+            let mut screen = TerminalScreen::new(2, 8, 0);
+            screen.process_bytes(text.as_bytes());
+            let mut checked = false;
+
+            let _ = screen.try_for_each_logical_text_line(0, 1, |line| {
+                if line.text() != text {
+                    return ControlFlow::Continue(());
+                }
+                let x_offset = line.text().find('x').unwrap();
+                let x_position = TerminalTextPosition {
+                    absolute_line: 0,
+                    column: x_column,
+                };
+                assert_eq!(line.start_position(x_offset), Some(x_position), "{text:?}");
+                assert_eq!(line.end_position(x_offset), Some(x_position), "{text:?}");
+                assert_eq!(
+                    line.end_position(x_offset + 'x'.len_utf8()),
+                    Some(TerminalTextPosition {
+                        absolute_line: 0,
+                        column: x_column + 1,
+                    }),
+                    "{text:?}"
+                );
+                if let Some(byte_index) = inside_cell_boundary {
+                    assert_eq!(
+                        line.start_position(byte_index),
+                        Some(TerminalTextPosition {
+                            absolute_line: 0,
+                            column: 0,
+                        }),
+                        "{text:?}"
+                    );
+                    assert_eq!(
+                        line.end_position(byte_index),
+                        Some(TerminalTextPosition {
+                            absolute_line: 0,
+                            column: x_column,
+                        }),
+                        "{text:?}"
+                    );
+                }
+                checked = true;
+                ControlFlow::Continue(())
+            });
+            assert!(checked, "missing logical line for {text:?}");
+        }
     }
 
     #[test]

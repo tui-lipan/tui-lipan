@@ -250,13 +250,13 @@ pub use crate::widgets::{
     SemanticMark, SemanticMarkKind, Terminal, TerminalBuffer, TerminalCellSize,
     TerminalClipboardEvent, TerminalClipboardTarget, TerminalColorPalette, TerminalCommandPhase,
     TerminalCopyMode, TerminalDecoration, TerminalHyperlink, TerminalInputEvent, TerminalInputKind,
-    TerminalKeyModes, TerminalLinkEvent, TerminalPasteShortcutBehavior, TerminalPos, TerminalPty,
-    TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent, TerminalRenderSnapshot, TerminalScreen,
-    TerminalScreenHandle, TerminalSelection, TerminalSelectionEvent, TerminalSemanticEvent,
-    TerminalSemanticState, TerminalViewport, TerminalWorkingDirectory,
-    TerminalWorkingDirectorySource, absolute_line, encode_paste, focus_sequences, from_viewport,
-    key_event_to_bytes, mouse_event_to_bytes, paste_sequences, terminal_selection_text,
-    to_viewport, viewport_row,
+    TerminalKeyModes, TerminalLinkEvent, TerminalLogicalLine, TerminalPasteShortcutBehavior,
+    TerminalPos, TerminalPty, TerminalPtyConfig, TerminalPtyError, TerminalPtyEvent,
+    TerminalRenderSnapshot, TerminalScreen, TerminalScreenHandle, TerminalSelection,
+    TerminalSelectionEvent, TerminalSemanticEvent, TerminalSemanticState, TerminalTextPosition,
+    TerminalViewport, TerminalWorkingDirectory, TerminalWorkingDirectorySource, absolute_line,
+    encode_paste, focus_sequences, from_viewport, key_event_to_bytes, mouse_event_to_bytes,
+    paste_sequences, terminal_selection_text, to_viewport, viewport_row,
 };
 #[cfg(feature = "terminal-images")]
 pub use crate::widgets::{
