@@ -2,7 +2,9 @@ import unittest
 
 from scripts.release_notes import (
     ReleaseNotesError,
+    commit_summary,
     exclusion_reason,
+    pull_request_url,
     select_previous_release,
     validate_notes,
 )
@@ -82,6 +84,70 @@ class FilteringTests(unittest.TestCase):
         )
 
 
+class SummaryTests(unittest.TestCase):
+    def test_keeps_the_summary_section_and_drops_checklists(self):
+        body = """\
+## Summary
+
+Exit views no longer query cursor position after teardown.
+
+## Checklist
+
+- [x] `cargo test` passes
+
+Signed-off-by: Ada <ada@example.com>
+"""
+        self.assertEqual(
+            commit_summary(body),
+            "Exit views no longer query cursor position after teardown.",
+        )
+
+    def test_uses_the_preamble_when_there_is_no_summary_heading(self):
+        body = """\
+Live System theme updates refresh all 16 ANSI slots.
+
+## Notes for reviewers
+
+This uses one persistent parser.
+
+---------
+Co-authored-by: Ada <ada@example.com>
+"""
+        self.assertEqual(
+            commit_summary(body),
+            "Live System theme updates refresh all 16 ANSI slots.",
+        )
+
+    def test_strips_html_comments(self):
+        body = """\
+<!-- PR titles land in main's history -->
+
+## Summary
+
+`List::empty_text_padding` insets empty-state text.
+"""
+        self.assertEqual(
+            commit_summary(body),
+            "`List::empty_text_padding` insets empty-state text.",
+        )
+
+
+class PullRequestUrlTests(unittest.TestCase):
+    def test_reads_the_squash_merge_trailer(self):
+        self.assertEqual(
+            pull_request_url(
+                "tui-lipan/tui-lipan",
+                "fix(runner): render exit views without cursor queries (#250)",
+            ),
+            "https://github.com/tui-lipan/tui-lipan/pull/250",
+        )
+
+    def test_ignores_subjects_without_a_trailer(self):
+        self.assertIsNone(
+            pull_request_url("tui-lipan/tui-lipan", "release: v0.11.7")
+        )
+
+
 class ValidationTests(unittest.TestCase):
     def test_accepts_nonempty_sections_in_fixed_order(self):
         notes = """\
@@ -97,6 +163,15 @@ class ValidationTests(unittest.TestCase):
 ## Compatibility
 
 - `LegacyButton` has been removed. Use `Button` instead.
+"""
+        self.assertEqual(validate_notes(notes), notes)
+
+    def test_accepts_pull_request_links(self):
+        notes = """\
+## Fixed
+
+- Exit views no longer query cursor position after teardown.
+  ([#250](https://github.com/tui-lipan/tui-lipan/pull/250))
 """
         self.assertEqual(validate_notes(notes), notes)
 

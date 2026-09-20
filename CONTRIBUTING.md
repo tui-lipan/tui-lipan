@@ -113,14 +113,14 @@ cargo run --profile dev-fast --example scroll_view_opencode_repro \
 canonical changelog. The repository intentionally has no `CHANGELOG.md` and
 does not use per-PR note fragments.
 
-Rosie generates each release body from the candidate commit subjects in that
-range. Keep those subjects useful:
+The `/changelog` command is the source of truth for release-note structure.
+Rosie writes the prose from each PR Summary. Keep titles and summaries useful:
 
 - Keep PR titles specific and use a Conventional Commit type that matches the
   primary user-visible effect.
-- Name changed defaults, renamed or removed APIs, feature flags, MSRV changes,
-  and other compatibility effects in the title or summary so the notes can
-  repeat them.
+- Put the user-visible effect in the Summary: what broke or changed, and what
+  happens now. Name APIs, defaults, feature flags, MSRV changes, and migration
+  steps there so the notes can repeat them.
 - Give a concrete replacement or migration step for every breaking change.
 - Update app-author documentation and examples in the same PR.
 
@@ -161,8 +161,9 @@ After implementation:
    `vX.Y.Z` tag, and push the commit and tag.
 5. `.github/workflows/release.yml` resolves the previous published Release and
    the new tag to exact commits, proves ancestry, and gives Rosie every
-   candidate commit subject and changed path. Rosie writes `Added`, `Changed`,
-   `Fixed`, `Compatibility`, and `Security` sections from those subjects.
+   candidate commit subject, summary, and changed path. Rosie writes `Added`,
+   `Changed`, `Fixed`, `Compatibility`, and `Security` sections from those
+   summaries.
 6. The workflow validates and freezes the generated Markdown as an artifact.
    Note generation is a hard gate: a missing key, model failure, permission
    failure, or invalid output stops publication.
