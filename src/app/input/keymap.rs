@@ -262,6 +262,8 @@ pub(crate) struct Binding {
 
 #[derive(Debug, Clone)]
 pub struct Keymap {
+    config: KeymapConfig,
+    user_keymap: ParsedKeymapConfig,
     bindings: Vec<Binding>,
     /// Index from combination to the index of the first matching binding.
     index: StdHashMap<KeyBinding, Vec<usize>>,
@@ -436,7 +438,7 @@ fn parse_keymap_config(path: &Path, contents: &str) -> Vec<Binding> {
     parse_keymap_file(path, contents).bindings
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct ParsedKeymapConfig {
     bindings: Vec<Binding>,
     overridden_actions: HashSet<Action>,
@@ -672,6 +674,10 @@ fn build_binding_index(bindings: &[Binding]) -> StdHashMap<KeyBinding, Vec<usize
 impl Keymap {
     pub(crate) fn new(config: KeymapConfig) -> Self {
         let user_keymap = load_user_bindings(&config);
+        Self::from_config_and_user_keymap(config, user_keymap)
+    }
+
+    fn from_config_and_user_keymap(config: KeymapConfig, user_keymap: ParsedKeymapConfig) -> Self {
         let mut bindings = Vec::new();
         bindings.extend(user_keymap.bindings.iter().cloned());
 
@@ -689,7 +695,19 @@ impl Keymap {
         }
         apply_framework_keymap_overrides(&mut bindings, &config.framework_keymap);
         let index = build_binding_index(&bindings);
-        Self { bindings, index }
+        Self {
+            config,
+            user_keymap,
+            bindings,
+            index,
+        }
+    }
+
+    pub(crate) fn reconfigure_clipboard(&mut self, config: &ClipboardConfig) {
+        let mut keymap_config = self.config.clone();
+        keymap_config.enable_performable_ctrl_c_copy = config.enable_performable_ctrl_c_copy;
+        keymap_config.paste_shift_insert_behavior = config.paste_shift_insert_behavior;
+        *self = Self::from_config_and_user_keymap(keymap_config, self.user_keymap.clone());
     }
 
     pub(crate) fn resolve_action(&self, key: KeyEvent) -> Action {
@@ -768,7 +786,12 @@ pub(crate) fn binding_for_test(key: &str, action: Action, mode: BindingMode) -> 
 #[cfg(test)]
 pub(crate) fn keymap_for_test(bindings: Vec<Binding>) -> Keymap {
     let index = build_binding_index(&bindings);
-    Keymap { bindings, index }
+    Keymap {
+        config: KeymapConfig::from_clipboard_config(&ClipboardConfig::default()),
+        user_keymap: ParsedKeymapConfig::default(),
+        bindings,
+        index,
+    }
 }
 
 #[cfg(test)]
@@ -874,6 +897,32 @@ mod tests {
         let path = std::env::temp_dir().join(format!("tui-lipan-keymap-{unique}.conf"));
         fs::write(&path, contents).expect("write test keymap");
         path
+    }
+
+    #[test]
+    fn clipboard_reconfiguration_preserves_the_loaded_user_keymap() {
+        let path = write_temp_keymap("copy = alt-c\n");
+        let config =
+            KeymapConfig::from_clipboard_config(&ClipboardConfig::default()).keymap_path(&path);
+        let mut keymap = Keymap::new(config);
+        fs::remove_file(&path).expect("remove test keymap");
+
+        keymap.reconfigure_clipboard(&ClipboardConfig {
+            enable_performable_ctrl_c_copy: false,
+            ..ClipboardConfig::default()
+        });
+
+        assert_eq!(
+            keymap.resolve_action(KeyEvent {
+                code: KeyCode::Char('c'),
+                mods: KeyMods {
+                    alt: true,
+                    ..KeyMods::default()
+                },
+            }),
+            Action::Copy
+        );
+        assert_eq!(keymap.resolve_action(ctrl_key('c')), Action::None);
     }
 
     #[test]

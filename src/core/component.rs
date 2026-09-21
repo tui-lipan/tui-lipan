@@ -1148,6 +1148,28 @@ impl<C: Component> Context<C> {
         )
     }
 
+    /// Return the effective clipboard policy currently used by the runtime.
+    ///
+    /// The value may differ from a previously requested configuration when the active clipboard
+    /// provider does not support primary selection.
+    pub fn clipboard_config(&self) -> crate::clipboard::ClipboardConfig {
+        self.env.clipboard_config.borrow().clone()
+    }
+
+    /// Change clipboard behavior for the running application.
+    ///
+    /// The requested configuration is normalized against the active clipboard provider before it
+    /// becomes visible. The runtime then updates mouse behavior, programmatic clipboard handles,
+    /// and clipboard-derived key bindings together at the end of the current update.
+    pub fn set_clipboard_config(&self, config: crate::clipboard::ClipboardConfig) {
+        let config = crate::clipboard::normalize_config_for_primary_support(
+            config,
+            self.env.clipboard.supports_primary_selection(),
+        );
+        *self.env.clipboard_config.borrow_mut() = config;
+        self.env.clipboard_config_changed.set(true);
+    }
+
     /// Access the command registry API.
     pub fn command_registry(&self) -> CommandRegistry {
         self.env.command_registry.clone()
@@ -1631,10 +1653,6 @@ impl<C: Component> Context<C> {
 
     pub(crate) fn env(&self) -> &RuntimeEnv {
         &self.env
-    }
-
-    pub(crate) fn set_clipboard_config(&mut self, config: crate::clipboard::ClipboardConfig) {
-        self.env.clipboard_config = config;
     }
 
     pub(crate) fn set_viewport(&mut self, viewport: Rect) {

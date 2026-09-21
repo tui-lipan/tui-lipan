@@ -55,7 +55,10 @@ impl<C: Component> AppRunner<C> {
     }
 
     fn copy_overlay_text(&self, overlay: &OverlayRoot, text: &str) {
-        let clipboard = ClipboardHandle::new(self.clipboard.clone(), self.clipboard_config.clone());
+        let clipboard = ClipboardHandle::new(
+            self.clipboard.clone(),
+            self.core.ctx.env().clipboard_config.clone(),
+        );
         if let Err(err) = clipboard.copy(text) {
             self.clipboard.report_error(err);
             return;
