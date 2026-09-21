@@ -176,16 +176,6 @@ where
         let clipboard_provider = app.clipboard_provider;
         let clipboard_reporter = app.clipboard_reporter.clone();
         let mouse_capture = Rc::new(Cell::new(app.mouse_enabled.unwrap_or(true)));
-        let clipboard_config = app.clipboard_config.clone();
-        let mut keymap_config = KeymapConfig::from_clipboard_config(&clipboard_config);
-        if let Some(path) = app.keymap_path.clone() {
-            keymap_config = keymap_config.keymap_path(path);
-        }
-        keymap_config = keymap_config
-            .framework_keymap(app.framework_keymap.clone())
-            .user_keymap_policy(app.user_keymap_policy);
-        let keymap = Keymap::new(keymap_config);
-        let keymap_runtime = KeymapRuntime::new(&keymap);
         let mut core = if inline_transcript_mode {
             RuntimeCore::new_test_transcript(
                 component,
@@ -205,7 +195,6 @@ where
                 clock_mode,
             )
         };
-        core.ctx.set_clipboard_config(clipboard_config);
         if let Some(provider) = clipboard_provider {
             core.ctx.env().clipboard.replace_provider(provider);
         }
@@ -213,6 +202,20 @@ where
             .env()
             .clipboard
             .replace_reporter(clipboard_reporter);
+        let clipboard_config = crate::clipboard::normalize_config_for_primary_support(
+            app.clipboard_config.clone(),
+            core.ctx.env().clipboard.supports_primary_selection(),
+        );
+        core.ctx.set_clipboard_config(clipboard_config.clone());
+        let mut keymap_config = KeymapConfig::from_clipboard_config(&clipboard_config);
+        if let Some(path) = app.keymap_path.clone() {
+            keymap_config = keymap_config.keymap_path(path);
+        }
+        keymap_config = keymap_config
+            .framework_keymap(app.framework_keymap.clone())
+            .user_keymap_policy(app.user_keymap_policy);
+        let keymap = Keymap::new(keymap_config);
+        let keymap_runtime = KeymapRuntime::new(&keymap);
         let command_registry = core.ctx.command_registry();
         let key_dispatch_state =
             RuntimeKeyDispatchState::new(&command_registry, app.command_conflict_policy);
@@ -1993,6 +1996,18 @@ mod tests {
 
     struct CopyFeedbackHarness;
 
+    struct NoPrimaryClipboardProvider;
+
+    impl crate::ClipboardProvider for NoPrimaryClipboardProvider {
+        fn read_clipboard_text(&mut self) -> Result<String, crate::ClipboardError> {
+            Ok("clipboard paste".to_string())
+        }
+
+        fn write_clipboard_text(&mut self, _text: &str) -> Result<(), crate::ClipboardError> {
+            Ok(())
+        }
+    }
+
     impl Component for CopyFeedbackHarness {
         type Message = NodeId;
         type Properties = ();
@@ -2011,6 +2026,47 @@ mod tests {
                 .child(Button::new("Other"))
                 .into()
         }
+    }
+
+    #[test]
+    fn app_clipboard_config_is_normalized_before_building_test_keymap() {
+        let app = crate::App::new()
+            .clipboard_provider(NoPrimaryClipboardProvider)
+            .clipboard_config(crate::ClipboardConfig {
+                enable_primary_selection: true,
+                paste_shift_insert_behavior: crate::PasteShiftInsertBehavior::PrimarySelection,
+                copy_on_mouse_select: crate::CopyOnSelect::PrimarySelection,
+                middle_click_paste: crate::PasteSource::PrimarySelection,
+                ..crate::ClipboardConfig::default()
+            });
+
+        let backend = TestBackend::new_with_app(app, CopyFeedbackHarness, ());
+        let config = &backend.core.ctx.env().clipboard_config;
+        assert!(!config.enable_primary_selection);
+        assert_eq!(config.copy_on_mouse_select, crate::CopyOnSelect::Disabled);
+        assert_eq!(config.middle_click_paste, crate::PasteSource::Disabled);
+        assert_eq!(
+            config.paste_shift_insert_behavior,
+            crate::PasteShiftInsertBehavior::Clipboard
+        );
+
+        let matches = backend.keymap.matches(KeyEvent {
+            code: KeyCode::Insert,
+            mods: KeyMods {
+                shift: true,
+                ..KeyMods::NONE
+            },
+        });
+        assert!(
+            matches
+                .iter()
+                .any(|binding| binding.action == Action::Paste)
+        );
+        assert!(
+            matches
+                .iter()
+                .all(|binding| binding.action != Action::PasteFromSelection)
+        );
     }
 
     impl Component for FocusEventHarness {

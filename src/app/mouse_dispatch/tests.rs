@@ -23,6 +23,8 @@ use crate::widgets::{
     ListItem, MouseRegion, ScrollEvent, ScrollView, Spacer, StatusBar, Table, TableRow, Text,
     TextArea, TextAreaEvent, TextAreaVimMode, VStack,
 };
+#[cfg(feature = "terminal")]
+use crate::widgets::{MouseEncoding, MouseMode, MouseModeState, Terminal, TerminalRenderSnapshot};
 use crate::{CellMask, TextEditor};
 
 #[derive(Default)]
@@ -111,6 +113,22 @@ fn text_area_id(backend: &TestBackend<ClipboardEditor>) -> NodeId {
         .find(|node| matches!(node.kind, NodeKind::TextArea(_)))
         .map(|node| node.id)
         .expect("expected TextArea")
+}
+
+fn click_left(backend: &mut TestBackend<ClipboardEditor>, x: u16, y: u16) {
+    for kind in [
+        MouseKind::Down(MouseButton::Left),
+        MouseKind::Up(MouseButton::Left),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                x,
+                y,
+                kind,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
 }
 
 struct MockComponent;
@@ -3056,6 +3074,47 @@ fn completed_mouse_selection_updates_primary_without_overwriting_clipboard() {
 }
 
 #[test]
+fn double_click_word_selection_updates_primary() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
+    let config = ClipboardConfig {
+        enable_primary_selection: true,
+        enable_osc52: false,
+        copy_on_mouse_select: CopyOnSelect::PrimarySelection,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = mouse_clipboard_backend("alpha beta", Rc::clone(&clipboard), config);
+    let rect = backend.core.tree.node(text_area_id(&backend)).rect;
+    let x = rect.x.max(0) as u16 + 1;
+    let y = rect.y.max(0) as u16;
+
+    click_left(&mut backend, x, y);
+    click_left(&mut backend, x, y);
+
+    assert_eq!(clipboard.borrow().primary, "alpha");
+}
+
+#[test]
+fn triple_click_line_selection_updates_primary() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
+    let config = ClipboardConfig {
+        enable_primary_selection: true,
+        enable_osc52: false,
+        copy_on_mouse_select: CopyOnSelect::PrimarySelection,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = mouse_clipboard_backend("alpha beta", Rc::clone(&clipboard), config);
+    let rect = backend.core.tree.node(text_area_id(&backend)).rect;
+    let x = rect.x.max(0) as u16 + 1;
+    let y = rect.y.max(0) as u16;
+
+    click_left(&mut backend, x, y);
+    click_left(&mut backend, x, y);
+    click_left(&mut backend, x, y);
+
+    assert_eq!(clipboard.borrow().primary, "alpha beta");
+}
+
+#[test]
 fn middle_click_pastes_primary_selection_into_focused_editor() {
     let clipboard = Rc::new(RefCell::new(MouseClipboardState {
         clipboard: "regular".to_string(),
@@ -3081,6 +3140,75 @@ fn middle_click_pastes_primary_selection_into_focused_editor() {
         .unwrap();
 
     assert_eq!(backend.state().text(), "unix");
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn tracked_terminal_middle_click_is_forwarded_instead_of_locally_pasted() {
+    struct TrackedTerminal {
+        forwarded: Rc<RefCell<Vec<Vec<u8>>>>,
+    }
+
+    impl Component for TrackedTerminal {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let forwarded = Rc::clone(&self.forwarded);
+            Terminal::new()
+                .snapshot(TerminalRenderSnapshot {
+                    mouse_mode: MouseModeState {
+                        mode: MouseMode::Normal,
+                        encoding: MouseEncoding::Sgr,
+                        focus_events_enabled: false,
+                    },
+                    ..TerminalRenderSnapshot::default()
+                })
+                .on_mouse_forward(Callback::new(move |bytes| {
+                    forwarded.borrow_mut().push(bytes);
+                }))
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    let forwarded = Rc::new(RefCell::new(Vec::new()));
+    let mut backend = TestBackend::new(TrackedTerminal {
+        forwarded: Rc::clone(&forwarded),
+    });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 3,
+    });
+    backend.render();
+    let terminal_id = backend
+        .core
+        .tree
+        .iter()
+        .find(|node| matches!(node.kind, NodeKind::Terminal(_)))
+        .map(|node| node.id)
+        .expect("expected Terminal");
+    backend.set_focused(terminal_id);
+    let rect = backend.core.tree.node(terminal_id).rect;
+
+    backend
+        .send_mouse(MouseEvent {
+            x: rect.x.max(0) as u16,
+            y: rect.y.max(0) as u16,
+            kind: MouseKind::Down(MouseButton::Middle),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+
+    assert_eq!(forwarded.borrow().len(), 1);
 }
 
 #[test]

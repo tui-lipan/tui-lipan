@@ -33,9 +33,7 @@ use crate::callback::{Callback, ScopeId};
 use crate::clipboard::NoOpClipboardProvider;
 #[cfg(feature = "clipboard")]
 use crate::clipboard::SystemClipboardProvider;
-use crate::clipboard::{
-    ClipboardConfig, ClipboardProvider, ClipboardService, PasteShiftInsertBehavior,
-};
+use crate::clipboard::{ClipboardConfig, ClipboardProvider, ClipboardService};
 use crate::core::component::{Component, Context};
 use crate::core::element::Element;
 use crate::core::event::KeyMods;
@@ -661,7 +659,7 @@ impl<C: Component> AppRunner<C> {
             crate::automation::ClockMode::Realtime
         };
 
-        let mut clipboard_config = app.clipboard_config;
+        let clipboard_config = app.clipboard_config;
         let system_provider: Box<dyn ClipboardProvider> =
             app.clipboard_provider.unwrap_or_else(|| {
                 #[cfg(feature = "clipboard")]
@@ -673,32 +671,10 @@ impl<C: Component> AppRunner<C> {
                     Box::new(NoOpClipboardProvider)
                 }
             });
-        if clipboard_config.enable_primary_selection
-            && !system_provider.supports_primary_selection()
-        {
-            clipboard_config.enable_primary_selection = false;
-            clipboard_config.copy_on_mouse_select = match clipboard_config.copy_on_mouse_select {
-                crate::clipboard::CopyOnSelect::PrimarySelection => {
-                    crate::clipboard::CopyOnSelect::Disabled
-                }
-                crate::clipboard::CopyOnSelect::Both => crate::clipboard::CopyOnSelect::Clipboard,
-                target => target,
-            };
-            if matches!(
-                clipboard_config.middle_click_paste,
-                crate::clipboard::PasteSource::PrimarySelection
-            ) {
-                clipboard_config.middle_click_paste = crate::clipboard::PasteSource::Disabled;
-            }
-        }
-        if !clipboard_config.enable_primary_selection
-            && matches!(
-                clipboard_config.paste_shift_insert_behavior,
-                PasteShiftInsertBehavior::PrimarySelection
-            )
-        {
-            clipboard_config.paste_shift_insert_behavior = PasteShiftInsertBehavior::Clipboard;
-        }
+        let clipboard_config = crate::clipboard::normalize_config_for_primary_support(
+            clipboard_config,
+            system_provider.supports_primary_selection(),
+        );
 
         let clipboard = Rc::new(ClipboardService::new(
             system_provider,
