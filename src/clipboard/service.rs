@@ -17,6 +17,41 @@ pub enum PasteShiftInsertBehavior {
     PrimarySelection,
 }
 
+/// Clipboard target updated after completing a mouse text selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyOnSelect {
+    /// Do not copy completed mouse selections automatically.
+    Disabled,
+    /// Write only the platform primary selection.
+    PrimarySelection,
+    /// Write only the regular clipboard.
+    Clipboard,
+    /// Write both the primary selection and regular clipboard.
+    Both,
+}
+
+/// Clipboard source used by a mouse paste gesture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasteSource {
+    /// Do not perform a paste.
+    Disabled,
+    /// Read from the platform primary selection.
+    PrimarySelection,
+    /// Read from the regular clipboard.
+    Clipboard,
+}
+
+/// Action performed by an otherwise-unhandled right click.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RightClickAction {
+    /// Preserve widget and application right-click behavior without a clipboard fallback.
+    Disabled,
+    /// Paste the regular clipboard into the focused editable widget.
+    PasteClipboard,
+    /// Copy an active text selection, or paste the regular clipboard when none exists.
+    CopyOrPaste,
+}
+
 #[derive(Debug, Clone)]
 /// Clipboard configuration for the runtime.
 pub struct ClipboardConfig {
@@ -26,6 +61,12 @@ pub struct ClipboardConfig {
     pub enable_primary_selection: bool,
     /// Configure Shift+Insert paste behavior.
     pub paste_shift_insert_behavior: PasteShiftInsertBehavior,
+    /// Configure which clipboard receives a completed mouse text selection.
+    pub copy_on_mouse_select: CopyOnSelect,
+    /// Configure middle-click paste behavior.
+    pub middle_click_paste: PasteSource,
+    /// Configure fallback right-click clipboard behavior.
+    pub right_click_action: RightClickAction,
     /// Maximum number of bytes to paste at once (0 disables clamping).
     pub paste_max_bytes: usize,
     /// Emit OSC52 escape sequence on copy/cut.
@@ -47,11 +88,24 @@ impl Default for ClipboardConfig {
         } else {
             PasteShiftInsertBehavior::Clipboard
         };
+        let copy_on_mouse_select = if enable_primary_selection {
+            CopyOnSelect::PrimarySelection
+        } else {
+            CopyOnSelect::Disabled
+        };
+        let middle_click_paste = if enable_primary_selection {
+            PasteSource::PrimarySelection
+        } else {
+            PasteSource::Disabled
+        };
 
         Self {
             enable_performable_ctrl_c_copy: true,
             enable_primary_selection,
             paste_shift_insert_behavior,
+            copy_on_mouse_select,
+            middle_click_paste,
+            right_click_action: RightClickAction::Disabled,
             paste_max_bytes: 1_000_000,
             enable_osc52: true,
             paste_max_image_bytes: 10_000_000,

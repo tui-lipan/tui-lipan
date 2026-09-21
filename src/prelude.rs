@@ -134,7 +134,10 @@ pub use crate::input::{KeyBinding, KeyBindings};
 // Clipboard
 // ─────────────────────────────────────────────────────────────────────────────
 
-pub use crate::clipboard::{ClipboardConfig, ClipboardPasteContent, PasteShiftInsertBehavior};
+pub use crate::clipboard::{
+    ClipboardConfig, ClipboardPasteContent, CopyOnSelect, PasteShiftInsertBehavior, PasteSource,
+    RightClickAction,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Curated widgets

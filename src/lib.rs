@@ -200,7 +200,8 @@ pub use crate::capture::{CapturedCell, CapturedFrame, CastRecording, CellModifie
 pub use crate::capture::{PngOptions, PngTextRenderer};
 pub use crate::clipboard::{
     ClipboardConfig, ClipboardError, ClipboardHandle, ClipboardPasteContent, ClipboardProvider,
-    ImageContent, ImageFormat, PasteShiftInsertBehavior,
+    CopyOnSelect, ImageContent, ImageFormat, PasteShiftInsertBehavior, PasteSource,
+    RightClickAction,
 };
 pub use crate::core::component::{
     Breakpoint, Command, Component, Context, KeyUpdate, ScrollbarVisibility, TaskPolicy, Update,

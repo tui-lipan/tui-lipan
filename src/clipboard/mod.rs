@@ -17,7 +17,10 @@ pub(crate) use provider::SystemClipboardProvider;
 pub(crate) use provider::WebClipboardProvider;
 pub use provider::{ClipboardPasteContent, ClipboardProvider, ImageContent, ImageFormat};
 pub(crate) use service::default_clipboard_reporter;
-pub use service::{ClipboardConfig, ClipboardReporter, ClipboardService, PasteShiftInsertBehavior};
+pub use service::{
+    ClipboardConfig, ClipboardReporter, ClipboardService, CopyOnSelect, PasteShiftInsertBehavior,
+    PasteSource, RightClickAction,
+};
 
 /// Create a no-op `Rc<ClipboardService>` for use in tests.
 pub(crate) fn test_clipboard() -> std::rc::Rc<ClipboardService> {

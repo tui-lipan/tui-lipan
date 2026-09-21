@@ -186,7 +186,7 @@ where
             .user_keymap_policy(app.user_keymap_policy);
         let keymap = Keymap::new(keymap_config);
         let keymap_runtime = KeymapRuntime::new(&keymap);
-        let core = if inline_transcript_mode {
+        let mut core = if inline_transcript_mode {
             RuntimeCore::new_test_transcript(
                 component,
                 props,
@@ -205,6 +205,7 @@ where
                 clock_mode,
             )
         };
+        core.ctx.set_clipboard_config(clipboard_config);
         if let Some(provider) = clipboard_provider {
             core.ctx.env().clipboard.replace_provider(provider);
         }
@@ -761,6 +762,58 @@ where
         }
 
         Ok(handled)
+    }
+
+    pub(crate) fn paste_from_source_for_mouse(
+        &mut self,
+        source: crate::clipboard::PasteSource,
+    ) -> bool {
+        let clipboard = Rc::clone(&self.core.ctx.env().clipboard);
+        let clipboard_config = self.core.ctx.env().clipboard_config.clone();
+        let Some(text) =
+            crate::ui::router::read_paste_source(source, &clipboard, &clipboard_config)
+        else {
+            return false;
+        };
+
+        let focused = self.focused;
+        let mut key_ctx = make_key_ctx(
+            Some(&self.read_only_selection),
+            &mut self.input_history,
+            &mut self.textarea_history,
+            &mut self.text_area_vim_state,
+            &mut self.hex_history,
+            &mut self.hex_pending_edit,
+            &self.keymap,
+            self.text_area_newline_binding,
+            &clipboard,
+            &clipboard_config,
+            &mut self.copy_feedback,
+        );
+        keyboard::dispatch_paste(&mut self.core.tree, focused, &text, &mut key_ctx)
+    }
+
+    pub(crate) fn copy_active_selection_for_mouse(
+        &mut self,
+        target: crate::clipboard::CopyOnSelect,
+        preferred_id: Option<NodeId>,
+    ) -> bool {
+        let clipboard = Rc::clone(&self.core.ctx.env().clipboard);
+        let clipboard_config = self.core.ctx.env().clipboard_config.clone();
+        let mut key_ctx = make_key_ctx(
+            Some(&self.read_only_selection),
+            &mut self.input_history,
+            &mut self.textarea_history,
+            &mut self.text_area_vim_state,
+            &mut self.hex_history,
+            &mut self.hex_pending_edit,
+            &self.keymap,
+            self.text_area_newline_binding,
+            &clipboard,
+            &clipboard_config,
+            &mut self.copy_feedback,
+        );
+        keyboard::copy_active_selection(&mut self.core.tree, preferred_id, target, &mut key_ctx)
     }
 
     /// Dispatch a mouse event through the same pipeline as the real runner.

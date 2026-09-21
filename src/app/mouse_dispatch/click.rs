@@ -169,13 +169,14 @@ pub(crate) fn transition_right_click<C: Component, T: MouseDispatchCtx<C>>(
         // ancestors that gate behind a modifier. This lets right-drag-to-resize work
         // anywhere inside a window without an explicit modifier, while keeping plain
         // left-drag from being stolen by an enclosing region.
-        if let Some(target) = find_ancestor_mouse_region_drag_target(
+        let drag_target = find_ancestor_mouse_region_drag_target(
             ctx.tree(),
             hit,
             MouseButton::Right,
             mouse.mods,
             true,
-        ) {
+        );
+        if let Some(target) = drag_target {
             let origin_local =
                 mouse_region_local_position(ctx.tree(), target, x, y).unwrap_or((0, 0));
             ctx.mouse_state().mouse_region_drag =
@@ -197,9 +198,27 @@ pub(crate) fn transition_right_click<C: Component, T: MouseDispatchCtx<C>>(
             return Some(true);
         }
 
+        if drag_target.is_none() && ctx.handle_right_click_clipboard() {
+            return Some(true);
+        }
+
         return Some(hover_dirty);
     }
     None
+}
+
+pub(crate) fn transition_middle_click<C: Component, T: MouseDispatchCtx<C>>(
+    ctx: &mut T,
+    mouse: MouseEvent,
+    hover_dirty: bool,
+) -> Option<bool> {
+    if !matches!(mouse.kind, MouseKind::Down(MouseButton::Middle)) {
+        return None;
+    }
+    if ctx.forward_terminal_mouse(mouse) {
+        return Some(true);
+    }
+    Some(ctx.handle_middle_click_paste() || hover_dirty)
 }
 
 pub(crate) fn transition_hit_test_and_scrollbar<C: Component, T: MouseDispatchCtx<C>>(

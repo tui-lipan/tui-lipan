@@ -677,6 +677,19 @@ impl<C: Component> AppRunner<C> {
             && !system_provider.supports_primary_selection()
         {
             clipboard_config.enable_primary_selection = false;
+            clipboard_config.copy_on_mouse_select = match clipboard_config.copy_on_mouse_select {
+                crate::clipboard::CopyOnSelect::PrimarySelection => {
+                    crate::clipboard::CopyOnSelect::Disabled
+                }
+                crate::clipboard::CopyOnSelect::Both => crate::clipboard::CopyOnSelect::Clipboard,
+                target => target,
+            };
+            if matches!(
+                clipboard_config.middle_click_paste,
+                crate::clipboard::PasteSource::PrimarySelection
+            ) {
+                clipboard_config.middle_click_paste = crate::clipboard::PasteSource::Disabled;
+            }
         }
         if !clipboard_config.enable_primary_selection
             && matches!(
@@ -1059,6 +1072,37 @@ impl<C: Component> AppRunner<C> {
             dirty_override: None,
         };
         keyboard::dispatch_paste(&mut self.core.tree, focused, text, &mut key_ctx)
+    }
+
+    pub(crate) fn paste_from_source(&mut self, source: crate::clipboard::PasteSource) -> bool {
+        let Some(text) =
+            crate::ui::router::read_paste_source(source, &self.clipboard, &self.clipboard_config)
+        else {
+            return false;
+        };
+        self.dispatch_focused_paste(&text)
+    }
+
+    pub(crate) fn copy_active_selection(
+        &mut self,
+        target: crate::clipboard::CopyOnSelect,
+        preferred_id: Option<NodeId>,
+    ) -> bool {
+        let mut key_ctx = crate::app::input::handlers::KeyCtx {
+            read_only_selection: Some(&self.widgets.read_only_selection),
+            input_history: &mut self.widgets.input_history,
+            textarea_history: &mut self.widgets.textarea_history,
+            text_area_vim_state: &mut self.widgets.text_area_vim_state,
+            hex_history: &mut self.widgets.hex_history,
+            hex_pending_edit: &mut self.widgets.hex_pending_edit,
+            keymap: &self.keymap,
+            text_area_newline_binding: self.text_area_newline_binding,
+            clipboard: &self.clipboard,
+            clipboard_config: &self.clipboard_config,
+            copy_feedback: &mut self.copy_feedback,
+            dirty_override: None,
+        };
+        keyboard::copy_active_selection(&mut self.core.tree, preferred_id, target, &mut key_ctx)
     }
 
     #[cfg(feature = "devtools")]

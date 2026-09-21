@@ -1633,6 +1633,10 @@ impl<C: Component> Context<C> {
         &self.env
     }
 
+    pub(crate) fn set_clipboard_config(&mut self, config: crate::clipboard::ClipboardConfig) {
+        self.env.clipboard_config = config;
+    }
+
     pub(crate) fn set_viewport(&mut self, viewport: Rect) {
         self.viewport = viewport;
     }
