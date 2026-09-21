@@ -16,8 +16,11 @@ pub(crate) use provider::SystemClipboardProvider;
 #[cfg(all(target_arch = "wasm32", feature = "web"))]
 pub(crate) use provider::WebClipboardProvider;
 pub use provider::{ClipboardPasteContent, ClipboardProvider, ImageContent, ImageFormat};
-pub(crate) use service::default_clipboard_reporter;
-pub use service::{ClipboardConfig, ClipboardReporter, ClipboardService, PasteShiftInsertBehavior};
+pub use service::{
+    ClipboardConfig, ClipboardReporter, ClipboardService, CopyOnSelect, PasteShiftInsertBehavior,
+    PasteSource, RightClickAction,
+};
+pub(crate) use service::{default_clipboard_reporter, normalize_config_for_primary_support};
 
 /// Create a no-op `Rc<ClipboardService>` for use in tests.
 pub(crate) fn test_clipboard() -> std::rc::Rc<ClipboardService> {

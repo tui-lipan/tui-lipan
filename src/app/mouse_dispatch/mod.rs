@@ -139,6 +139,13 @@ pub(crate) trait MouseDispatchCtx<C: Component> {
         hit: crate::core::node::NodeId,
         mouse: MouseEvent,
     ) -> bool;
+    fn handle_middle_click_paste(&mut self) -> bool {
+        false
+    }
+    fn handle_right_click_clipboard(&mut self) -> bool {
+        false
+    }
+    fn copy_selection_on_release(&mut self, _id: crate::core::node::NodeId) {}
 
     fn selection_owner_for_node(&self, start: crate::core::node::NodeId) -> Option<SelectionOwner>;
     fn clear_selectable_widget_selections(&mut self, keep: Option<SelectionOwner>) -> bool;
@@ -335,6 +342,10 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
     }
 
     if let Some(result) = transition_scroll_wheel(ctx, mouse, x, y) {
+        return result;
+    }
+
+    if let Some(result) = transition_middle_click(ctx, mouse, hover_dirty) {
         return result;
     }
 
@@ -599,6 +610,28 @@ impl<C: Component> MouseDispatchCtx<C> for AppRunner<C> {
         mouse: MouseEvent,
     ) -> bool {
         AppRunner::<C>::handle_right_click_textarea(self, hit, mouse)
+    }
+
+    fn handle_middle_click_paste(&mut self) -> bool {
+        self.paste_from_source(self.clipboard_config.middle_click_paste)
+    }
+
+    fn handle_right_click_clipboard(&mut self) -> bool {
+        match self.clipboard_config.right_click_action {
+            crate::clipboard::RightClickAction::Disabled => false,
+            crate::clipboard::RightClickAction::PasteClipboard => {
+                self.paste_from_source(crate::clipboard::PasteSource::Clipboard)
+            }
+            crate::clipboard::RightClickAction::CopyOrPaste => {
+                self.copy_active_selection(crate::clipboard::CopyOnSelect::Clipboard, None)
+                    || self.paste_from_source(crate::clipboard::PasteSource::Clipboard)
+            }
+        }
+    }
+
+    fn copy_selection_on_release(&mut self, id: crate::core::node::NodeId) {
+        let target = self.clipboard_config.copy_on_mouse_select;
+        self.copy_active_selection(target, Some(id));
     }
 
     fn selection_owner_for_node(&self, start: crate::core::node::NodeId) -> Option<SelectionOwner> {
@@ -1006,6 +1039,32 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
             return true;
         }
         false
+    }
+
+    fn handle_middle_click_paste(&mut self) -> bool {
+        let source = self.core.ctx.env().clipboard_config.middle_click_paste;
+        self.paste_from_source_for_mouse(source)
+    }
+
+    fn handle_right_click_clipboard(&mut self) -> bool {
+        let action = self.core.ctx.env().clipboard_config.right_click_action;
+        match action {
+            crate::clipboard::RightClickAction::Disabled => false,
+            crate::clipboard::RightClickAction::PasteClipboard => {
+                self.paste_from_source_for_mouse(crate::clipboard::PasteSource::Clipboard)
+            }
+            crate::clipboard::RightClickAction::CopyOrPaste => {
+                self.copy_active_selection_for_mouse(
+                    crate::clipboard::CopyOnSelect::Clipboard,
+                    None,
+                ) || self.paste_from_source_for_mouse(crate::clipboard::PasteSource::Clipboard)
+            }
+        }
+    }
+
+    fn copy_selection_on_release(&mut self, id: crate::core::node::NodeId) {
+        let target = self.core.ctx.env().clipboard_config.copy_on_mouse_select;
+        self.copy_active_selection_for_mouse(target, Some(id));
     }
 
     fn selection_owner_for_node(&self, start: crate::core::node::NodeId) -> Option<SelectionOwner> {

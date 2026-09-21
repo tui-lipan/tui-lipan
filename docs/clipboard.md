@@ -28,8 +28,11 @@ use tui_lipan::style::Style;
 App::new()
     .clipboard_config(ClipboardConfig {
         enable_performable_ctrl_c_copy: true,  // Bind Ctrl+C to copy when selection exists
-        enable_primary_selection: true,         // X11 primary selection
+        enable_primary_selection: true,         // Linux primary selection
         paste_shift_insert_behavior: PasteShiftInsertBehavior::PrimarySelection,
+        copy_on_mouse_select: CopyOnSelect::PrimarySelection,
+        middle_click_paste: PasteSource::PrimarySelection,
+        right_click_action: RightClickAction::Disabled,
         paste_max_bytes: 1_000_000,            // Clamp large text pastes
         enable_osc52: true,                    // OSC52 for SSH clipboard
         paste_max_image_bytes: 10_000_000,     // Clamp large image pastes (default 10MB)
@@ -43,13 +46,42 @@ App::new()
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
 | `enable_performable_ctrl_c_copy` | `bool` | `true` | Bind `Ctrl+C` to copy when selection exists; otherwise it falls through |
-| `enable_primary_selection` | `bool` | platform | Enable X11 primary (middle-click) clipboard |
+| `enable_primary_selection` | `bool` | platform | Enable the Linux primary-selection clipboard |
 | `paste_shift_insert_behavior` | `PasteShiftInsertBehavior` | platform | `PrimarySelection` or `Clipboard` |
+| `copy_on_mouse_select` | `CopyOnSelect` | platform | Clipboard target updated when a mouse text selection completes |
+| `middle_click_paste` | `PasteSource` | platform | Clipboard source pasted by middle click |
+| `right_click_action` | `RightClickAction` | `Disabled` | Fallback clipboard action for an otherwise-unhandled right click |
 | `paste_max_bytes` | `usize` | unbounded | Clamp large text pastes to avoid stalls |
 | `enable_osc52` | `bool` | `true` | Emit OSC52 escape on copy/cut (useful over SSH) |
 | `paste_max_image_bytes` | `usize` | 10MB | Clamp large image pastes |
 | `copy_feedback_duration_ms` | `u16` | `150` | Brief paint-only selection flash after successful copy (`0` disables) |
 | `copy_feedback_style` | `Style` | lighten | Style merged onto the selection during the flash |
+
+On local Linux desktops, `copy_on_mouse_select` and `middle_click_paste` default to
+`PrimarySelection`. This restores the traditional Unix workflow that terminal mouse reporting
+otherwise intercepts:
+
+```text
+left-drag selection -> PRIMARY
+middle click        -> paste PRIMARY
+Ctrl+C / Ctrl+V     -> regular CLIPBOARD
+```
+
+The regular clipboard is deliberately left unchanged by the default selection gesture. Apps that
+want selection followed by `Ctrl+V` can choose `CopyOnSelect::Clipboard` or
+`CopyOnSelect::Both`. On macOS, Windows, web, and Linux sessions without a detected display,
+mouse copy and middle-click paste default to disabled.
+
+`RightClickAction::PasteClipboard` and `RightClickAction::CopyOrPaste` are opt-in. Existing
+overlay, nested-terminal, `TextArea::on_click`, and right-drag handlers take precedence; the
+configured action is only a fallback for an otherwise-unhandled right-button press.
+
+Mouse paste targets the currently focused editable `Input`, `TextArea`, or `Terminal`; it does not
+move focus or reposition the caret. Copy-on-select runs once when a non-empty mouse selection is
+completed, including word and line selections, rather than on every drag update.
+
+Primary-selection mouse behavior currently uses the local clipboard provider. Regular clipboard
+writes can still use OSC 52, but remote PRIMARY reads and OSC 52 `p` writes are not performed.
 
 All clipboard shortcuts are performable by default: copy/cut only consume when the action can run on
 a selection, and paste only consumes when the focused widget can accept pasted content. Copy

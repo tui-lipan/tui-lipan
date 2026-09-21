@@ -6,6 +6,9 @@ use std::sync::Arc;
 use super::*;
 use crate::app::interaction_state::{DragState, MouseRegionDragState, MouseTrackingState};
 use crate::callback::Callback;
+use crate::clipboard::{
+    ClipboardConfig, ClipboardError, ClipboardProvider, CopyOnSelect, PasteSource, RightClickAction,
+};
 use crate::core::component::{Component, Context, Update};
 use crate::core::element::{Element, IntoElement, Key};
 use crate::core::event::{
@@ -20,7 +23,116 @@ use crate::widgets::{
     ListItem, MouseRegion, ScrollEvent, ScrollView, Spacer, StatusBar, Table, TableRow, Text,
     TextArea, TextAreaEvent, TextAreaVimMode, VStack,
 };
+#[cfg(feature = "terminal")]
+use crate::widgets::{MouseEncoding, MouseMode, MouseModeState, Terminal, TerminalRenderSnapshot};
 use crate::{CellMask, TextEditor};
+
+#[derive(Default)]
+struct MouseClipboardState {
+    clipboard: String,
+    primary: String,
+    clipboard_reads: usize,
+}
+
+struct MouseClipboardProvider(Rc<RefCell<MouseClipboardState>>);
+
+impl ClipboardProvider for MouseClipboardProvider {
+    fn read_clipboard_text(&mut self) -> Result<String, ClipboardError> {
+        let mut state = self.0.borrow_mut();
+        state.clipboard_reads += 1;
+        Ok(state.clipboard.clone())
+    }
+
+    fn write_clipboard_text(&mut self, text: &str) -> Result<(), ClipboardError> {
+        self.0.borrow_mut().clipboard = text.to_string();
+        Ok(())
+    }
+
+    fn read_primary_selection_text(&mut self) -> Result<String, ClipboardError> {
+        Ok(self.0.borrow().primary.clone())
+    }
+
+    fn write_primary_selection_text(&mut self, text: &str) -> Result<(), ClipboardError> {
+        self.0.borrow_mut().primary = text.to_string();
+        Ok(())
+    }
+
+    fn supports_primary_selection(&self) -> bool {
+        true
+    }
+}
+
+struct ClipboardEditor(&'static str);
+
+impl Component for ClipboardEditor {
+    type Message = TextAreaEvent;
+    type Properties = ();
+    type State = TextEditor;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        TextEditor::new(self.0)
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        TextArea::bound(&ctx.state)
+            .border(false)
+            .padding(0)
+            .width(Length::Px(20))
+            .height(Length::Px(1))
+            .on_change(ctx.link().callback(|event| event))
+            .into()
+    }
+
+    fn update(&mut self, event: Self::Message, ctx: &mut Context<Self>) -> Update {
+        event.apply_to(&mut ctx.state);
+        Update::full()
+    }
+}
+
+fn mouse_clipboard_backend(
+    initial_text: &'static str,
+    state: Rc<RefCell<MouseClipboardState>>,
+    config: ClipboardConfig,
+) -> TestBackend<ClipboardEditor> {
+    let app = crate::App::new()
+        .clipboard_provider(MouseClipboardProvider(state))
+        .clipboard_config(config);
+    let mut backend = TestBackend::new_with_app(app, ClipboardEditor(initial_text), ());
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 1,
+    });
+    backend.render();
+    backend
+}
+
+fn text_area_id(backend: &TestBackend<ClipboardEditor>) -> NodeId {
+    backend
+        .core
+        .tree
+        .iter()
+        .find(|node| matches!(node.kind, NodeKind::TextArea(_)))
+        .map(|node| node.id)
+        .expect("expected TextArea")
+}
+
+fn click_left(backend: &mut TestBackend<ClipboardEditor>, x: u16, y: u16) {
+    for kind in [
+        MouseKind::Down(MouseButton::Left),
+        MouseKind::Up(MouseButton::Left),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                x,
+                y,
+                kind,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
+}
 
 struct MockComponent;
 
@@ -2919,6 +3031,231 @@ fn mouse_region_hover_includes_interactive_descendants() {
     let outside_x = region_rect.x.saturating_add(region_rect.w as i16).max(0) as u16;
     assert!(update_hover_test_backend(&mut backend, outside_x, 0, false));
     assert_eq!(&*hover_changes.borrow(), &[true, false]);
+}
+
+#[test]
+fn completed_mouse_selection_updates_primary_without_overwriting_clipboard() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState {
+        clipboard: "keep me".to_string(),
+        ..MouseClipboardState::default()
+    }));
+    let config = ClipboardConfig {
+        enable_primary_selection: true,
+        enable_osc52: false,
+        copy_on_mouse_select: CopyOnSelect::PrimarySelection,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = mouse_clipboard_backend("alpha beta", Rc::clone(&clipboard), config);
+    let id = text_area_id(&backend);
+    let rect = backend.core.tree.node(id).rect;
+    let x = rect.x.max(0) as u16;
+    let y = rect.y.max(0) as u16;
+
+    for kind in [
+        MouseKind::Down(MouseButton::Left),
+        MouseKind::Drag(MouseButton::Left),
+        MouseKind::Up(MouseButton::Left),
+    ] {
+        let event_x = if matches!(kind, MouseKind::Down(_)) {
+            x
+        } else {
+            x + 5
+        };
+        backend
+            .send_mouse(MouseEvent {
+                x: event_x,
+                y,
+                kind,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
+
+    let clipboard = clipboard.borrow();
+    assert_eq!(clipboard.primary, "alpha");
+    assert_eq!(clipboard.clipboard, "keep me");
+}
+
+#[test]
+fn double_click_word_selection_updates_primary() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
+    let config = ClipboardConfig {
+        enable_primary_selection: true,
+        enable_osc52: false,
+        copy_on_mouse_select: CopyOnSelect::PrimarySelection,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = mouse_clipboard_backend("alpha beta", Rc::clone(&clipboard), config);
+    let rect = backend.core.tree.node(text_area_id(&backend)).rect;
+    let x = rect.x.max(0) as u16 + 1;
+    let y = rect.y.max(0) as u16;
+
+    click_left(&mut backend, x, y);
+    click_left(&mut backend, x, y);
+
+    assert_eq!(clipboard.borrow().primary, "alpha");
+}
+
+#[test]
+fn triple_click_line_selection_updates_primary() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
+    let config = ClipboardConfig {
+        enable_primary_selection: true,
+        enable_osc52: false,
+        copy_on_mouse_select: CopyOnSelect::PrimarySelection,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = mouse_clipboard_backend("alpha beta", Rc::clone(&clipboard), config);
+    let rect = backend.core.tree.node(text_area_id(&backend)).rect;
+    let x = rect.x.max(0) as u16 + 1;
+    let y = rect.y.max(0) as u16;
+
+    click_left(&mut backend, x, y);
+    click_left(&mut backend, x, y);
+    click_left(&mut backend, x, y);
+
+    assert_eq!(clipboard.borrow().primary, "alpha beta");
+}
+
+#[test]
+fn middle_click_pastes_primary_selection_into_focused_editor() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState {
+        clipboard: "regular".to_string(),
+        primary: "unix".to_string(),
+        ..MouseClipboardState::default()
+    }));
+    let config = ClipboardConfig {
+        enable_primary_selection: true,
+        middle_click_paste: PasteSource::PrimarySelection,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = mouse_clipboard_backend("", clipboard, config);
+    let id = text_area_id(&backend);
+    backend.set_focused(id);
+    let rect = backend.core.tree.node(id).rect;
+
+    backend
+        .send_mouse(MouseEvent {
+            x: rect.x.max(0) as u16,
+            y: rect.y.max(0) as u16,
+            kind: MouseKind::Down(MouseButton::Middle),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+
+    assert_eq!(backend.state().text(), "unix");
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn tracked_terminal_middle_click_is_forwarded_instead_of_locally_pasted() {
+    struct TrackedTerminal {
+        forwarded: Rc<RefCell<Vec<Vec<u8>>>>,
+    }
+
+    impl Component for TrackedTerminal {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let forwarded = Rc::clone(&self.forwarded);
+            Terminal::new()
+                .snapshot(TerminalRenderSnapshot {
+                    mouse_mode: MouseModeState {
+                        mode: MouseMode::Normal,
+                        encoding: MouseEncoding::Sgr,
+                        focus_events_enabled: false,
+                    },
+                    ..TerminalRenderSnapshot::default()
+                })
+                .on_mouse_forward(Callback::new(move |bytes| {
+                    forwarded.borrow_mut().push(bytes);
+                }))
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    let forwarded = Rc::new(RefCell::new(Vec::new()));
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState {
+        clipboard: "must not paste".to_string(),
+        ..MouseClipboardState::default()
+    }));
+    let app = crate::App::new()
+        .clipboard_provider(MouseClipboardProvider(Rc::clone(&clipboard)))
+        .clipboard_config(ClipboardConfig {
+            middle_click_paste: PasteSource::Clipboard,
+            ..ClipboardConfig::default()
+        });
+    let mut backend = TestBackend::new_with_app(
+        app,
+        TrackedTerminal {
+            forwarded: Rc::clone(&forwarded),
+        },
+        (),
+    );
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 3,
+    });
+    backend.render();
+    let terminal_id = backend
+        .core
+        .tree
+        .iter()
+        .find(|node| matches!(node.kind, NodeKind::Terminal(_)))
+        .map(|node| node.id)
+        .expect("expected Terminal");
+    backend.set_focused(terminal_id);
+    let rect = backend.core.tree.node(terminal_id).rect;
+
+    backend
+        .send_mouse(MouseEvent {
+            x: rect.x.max(0) as u16,
+            y: rect.y.max(0) as u16,
+            kind: MouseKind::Down(MouseButton::Middle),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+
+    assert_eq!(forwarded.borrow().len(), 1);
+    assert_eq!(clipboard.borrow().clipboard_reads, 0);
+}
+
+#[test]
+fn opt_in_right_click_pastes_regular_clipboard() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState {
+        clipboard: "regular".to_string(),
+        primary: "unix".to_string(),
+        ..MouseClipboardState::default()
+    }));
+    let config = ClipboardConfig {
+        right_click_action: RightClickAction::PasteClipboard,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = mouse_clipboard_backend("", clipboard, config);
+    let id = text_area_id(&backend);
+    backend.set_focused(id);
+    let rect = backend.core.tree.node(id).rect;
+
+    backend
+        .send_mouse(MouseEvent {
+            x: rect.x.max(0) as u16,
+            y: rect.y.max(0) as u16,
+            kind: MouseKind::Down(MouseButton::Right),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+
+    assert_eq!(backend.state().text(), "regular");
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use crate::core::component::Component;
 use crate::core::event::{KeyMods, MouseButton, MouseDragEvent, MouseEvent, MouseKind};
-use crate::core::node::NodeKind;
+use crate::core::node::{NodeId, NodeKind};
 use crate::widgets::DEFAULT_DRAG_THRESHOLD;
 
 use super::MouseDispatchCtx;
@@ -558,6 +558,7 @@ pub(crate) fn transition_drag_release<C: Component, T: MouseDispatchCtx<C>>(
     let mut drag_consumed_up = false;
 
     if is_up {
+        let selection_id = active_selection_drag_id(&ctx.active_drag());
         if let Some(result) = ctx.handle_drag_release(x, y) {
             drag_dirty = result;
             if ctx.mouse_state().drag_threshold_exceeded {
@@ -566,7 +567,21 @@ pub(crate) fn transition_drag_release<C: Component, T: MouseDispatchCtx<C>>(
         }
         ctx.mouse_state().pending_drag_source = None;
         ctx.drag_state().autoscroll_layout_dirty = false;
+        if let Some(id) = selection_id {
+            ctx.copy_selection_on_release(id);
+        }
     }
 
     (drag_dirty, drag_consumed_up)
+}
+
+fn active_selection_drag_id(active: &crate::app::interaction_state::ActiveDrag) -> Option<NodeId> {
+    match active {
+        crate::app::interaction_state::ActiveDrag::TextArea(drag) => Some(drag.id),
+        crate::app::interaction_state::ActiveDrag::DocumentView(drag) => Some(drag.id),
+        crate::app::interaction_state::ActiveDrag::Input(drag) => Some(drag.id),
+        #[cfg(feature = "terminal")]
+        crate::app::interaction_state::ActiveDrag::Terminal(drag) => Some(drag.id),
+        _ => None,
+    }
 }

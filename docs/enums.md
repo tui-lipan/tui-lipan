@@ -23,6 +23,18 @@ Quick reference for all public enums and types used in widget props and API call
 `AutomationStep` is intentionally opaque; construct operations with methods such
 as `click`, `focus`, `resize`, `advance`, `wait_for`, and `checkpoint`.
 
+## Clipboard mouse behavior
+
+| Type | Variants / purpose |
+|------|--------------------|
+| `CopyOnSelect` | `Disabled`, `PrimarySelection`, `Clipboard`, `Both` |
+| `PasteSource` | `Disabled`, `PrimarySelection`, `Clipboard` |
+| `RightClickAction` | `Disabled`, `PasteClipboard`, `CopyOrPaste` |
+| `PasteShiftInsertBehavior` | `PrimarySelection`, `Clipboard` |
+
+`PrimarySelection` is the Linux select-to-copy buffer normally pasted with the middle mouse
+button. It is separate from the regular clipboard used by `Ctrl+C` and `Ctrl+V`.
+
 ## Text Coordinates
 
 ### `TextPosition`

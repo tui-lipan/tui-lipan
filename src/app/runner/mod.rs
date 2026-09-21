@@ -33,9 +33,7 @@ use crate::callback::{Callback, ScopeId};
 use crate::clipboard::NoOpClipboardProvider;
 #[cfg(feature = "clipboard")]
 use crate::clipboard::SystemClipboardProvider;
-use crate::clipboard::{
-    ClipboardConfig, ClipboardProvider, ClipboardService, PasteShiftInsertBehavior,
-};
+use crate::clipboard::{ClipboardConfig, ClipboardProvider, ClipboardService};
 use crate::core::component::{Component, Context};
 use crate::core::element::Element;
 use crate::core::event::KeyMods;
@@ -661,7 +659,7 @@ impl<C: Component> AppRunner<C> {
             crate::automation::ClockMode::Realtime
         };
 
-        let mut clipboard_config = app.clipboard_config;
+        let clipboard_config = app.clipboard_config;
         let system_provider: Box<dyn ClipboardProvider> =
             app.clipboard_provider.unwrap_or_else(|| {
                 #[cfg(feature = "clipboard")]
@@ -673,19 +671,10 @@ impl<C: Component> AppRunner<C> {
                     Box::new(NoOpClipboardProvider)
                 }
             });
-        if clipboard_config.enable_primary_selection
-            && !system_provider.supports_primary_selection()
-        {
-            clipboard_config.enable_primary_selection = false;
-        }
-        if !clipboard_config.enable_primary_selection
-            && matches!(
-                clipboard_config.paste_shift_insert_behavior,
-                PasteShiftInsertBehavior::PrimarySelection
-            )
-        {
-            clipboard_config.paste_shift_insert_behavior = PasteShiftInsertBehavior::Clipboard;
-        }
+        let clipboard_config = crate::clipboard::normalize_config_for_primary_support(
+            clipboard_config,
+            system_provider.supports_primary_selection(),
+        );
 
         let clipboard = Rc::new(ClipboardService::new(
             system_provider,
@@ -1059,6 +1048,37 @@ impl<C: Component> AppRunner<C> {
             dirty_override: None,
         };
         keyboard::dispatch_paste(&mut self.core.tree, focused, text, &mut key_ctx)
+    }
+
+    pub(crate) fn paste_from_source(&mut self, source: crate::clipboard::PasteSource) -> bool {
+        let Some(text) =
+            crate::ui::router::read_paste_source(source, &self.clipboard, &self.clipboard_config)
+        else {
+            return false;
+        };
+        self.dispatch_focused_paste(&text)
+    }
+
+    pub(crate) fn copy_active_selection(
+        &mut self,
+        target: crate::clipboard::CopyOnSelect,
+        preferred_id: Option<NodeId>,
+    ) -> bool {
+        let mut key_ctx = crate::app::input::handlers::KeyCtx {
+            read_only_selection: Some(&self.widgets.read_only_selection),
+            input_history: &mut self.widgets.input_history,
+            textarea_history: &mut self.widgets.textarea_history,
+            text_area_vim_state: &mut self.widgets.text_area_vim_state,
+            hex_history: &mut self.widgets.hex_history,
+            hex_pending_edit: &mut self.widgets.hex_pending_edit,
+            keymap: &self.keymap,
+            text_area_newline_binding: self.text_area_newline_binding,
+            clipboard: &self.clipboard,
+            clipboard_config: &self.clipboard_config,
+            copy_feedback: &mut self.copy_feedback,
+            dirty_override: None,
+        };
+        keyboard::copy_active_selection(&mut self.core.tree, preferred_id, target, &mut key_ctx)
     }
 
     #[cfg(feature = "devtools")]

@@ -18,6 +18,24 @@ use crate::utils::SelectionEnd;
 #[cfg(feature = "terminal")]
 use crate::widgets::internal::terminal_node_selection_text;
 
+#[derive(Clone, Copy)]
+enum SelectionClipboardRequest {
+    Shortcut { key: KeyEvent, cut_requested: bool },
+    CopyOnSelect(crate::clipboard::CopyOnSelect),
+}
+
+impl SelectionClipboardRequest {
+    fn cut_requested(self) -> bool {
+        matches!(
+            self,
+            Self::Shortcut {
+                cut_requested: true,
+                ..
+            }
+        )
+    }
+}
+
 fn selection_clipboard_cut_requested(keymap: &Keymap, key: KeyEvent) -> Option<bool> {
     let mut has_clipboard_shortcut = false;
     let mut cut_requested = false;
@@ -53,6 +71,34 @@ fn dispatch_clipboard_with_feedback(
     ctx.record_copy_feedback_dispatch(dispatch)
 }
 
+fn dispatch_selection_context(
+    context: &mut dyn crate::ui::capabilities::ClipboardContext,
+    request: SelectionClipboardRequest,
+    ctx: &mut KeyCtx<'_>,
+    id: NodeId,
+) -> bool {
+    match request {
+        SelectionClipboardRequest::Shortcut { key, .. } => {
+            dispatch_clipboard_with_feedback(key, context, ctx, id)
+        }
+        SelectionClipboardRequest::CopyOnSelect(target) => {
+            let Some(text) = context.selection_text().filter(|text| !text.is_empty()) else {
+                return false;
+            };
+            if !context.can_copy() || context.block_copy_cut() {
+                return false;
+            }
+            crate::ui::router::write_mouse_selection(
+                &text,
+                target,
+                ctx.clipboard,
+                ctx.clipboard_config,
+            );
+            true
+        }
+    }
+}
+
 pub(crate) fn dispatch_selection_clipboard_shortcut(
     tree: &mut NodeTree,
     key: KeyEvent,
@@ -61,6 +107,39 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
     let Some(cut_requested) = selection_clipboard_cut_requested(ctx.keymap, key) else {
         return false;
     };
+
+    dispatch_selection_clipboard_request(
+        tree,
+        SelectionClipboardRequest::Shortcut { key, cut_requested },
+        None,
+        ctx,
+    )
+}
+
+pub(crate) fn copy_active_selection(
+    tree: &mut NodeTree,
+    preferred_id: Option<NodeId>,
+    target: crate::clipboard::CopyOnSelect,
+    ctx: &mut KeyCtx<'_>,
+) -> bool {
+    if matches!(target, crate::clipboard::CopyOnSelect::Disabled) {
+        return false;
+    }
+    dispatch_selection_clipboard_request(
+        tree,
+        SelectionClipboardRequest::CopyOnSelect(target),
+        preferred_id,
+        ctx,
+    )
+}
+
+fn dispatch_selection_clipboard_request(
+    tree: &mut NodeTree,
+    request: SelectionClipboardRequest,
+    preferred_id: Option<NodeId>,
+    ctx: &mut KeyCtx<'_>,
+) -> bool {
+    let cut_requested = request.cut_requested();
 
     let read_only_selection = ctx.read_only_selection;
 
@@ -92,6 +171,11 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
 
     candidates.sort_unstable_by_key(|id| std::cmp::Reverse((id.index, id.generation)));
     candidates.dedup();
+    if let Some(preferred_id) = preferred_id
+        && let Some(index) = candidates.iter().position(|id| *id == preferred_id)
+    {
+        candidates.swap(0, index);
+    }
 
     let mut handled_shared_groups = std::collections::HashSet::new();
     #[cfg(feature = "diff-view")]
@@ -132,6 +216,9 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
                             true,
                             is_masked,
                         );
+                        let SelectionClipboardRequest::Shortcut { key, .. } = request else {
+                            unreachable!("only shortcuts can cut an input selection")
+                        };
                         crate::app::copy_feedback::dispatch_clipboard_with_feedback_result(
                             key,
                             ctx.keymap,
@@ -150,7 +237,7 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
                         !is_masked,
                         is_masked,
                     );
-                    dispatch_clipboard_with_feedback(key, &mut context, ctx, id)
+                    dispatch_selection_context(&mut context, request, ctx, id)
                 }
             }
             NodeKind::TextArea(node) => {
@@ -201,6 +288,9 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
                                 editable: true,
                             },
                         );
+                        let SelectionClipboardRequest::Shortcut { key, .. } = request else {
+                            unreachable!("only shortcuts can cut a text area selection")
+                        };
                         crate::app::copy_feedback::dispatch_clipboard_with_feedback_result(
                             key,
                             ctx.keymap,
@@ -228,7 +318,7 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
                             .with_sentinel(sentinel, &image_placeholder)
                             .with_excluded_bytes(excluded)
                             .with_clipboard_transform(clipboard_transform.clone());
-                    dispatch_clipboard_with_feedback(key, &mut context, ctx, id)
+                    dispatch_selection_context(&mut context, request, ctx, id)
                 }
             }
             NodeKind::DocumentView(node) => {
@@ -247,7 +337,7 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
                                 true,
                                 false,
                             );
-                            dispatch_clipboard_with_feedback(key, &mut context, ctx, id)
+                            dispatch_selection_context(&mut context, request, ctx, id)
                         }
                     } else if let Some(shared) =
                         drag::document_view_shared_selection_text(tree, id, true)
@@ -262,7 +352,7 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
                                 true,
                                 false,
                             );
-                            dispatch_clipboard_with_feedback(key, &mut context, ctx, id)
+                            dispatch_selection_context(&mut context, request, ctx, id)
                         }
                     } else {
                         let selected_text = selection_range(
@@ -286,7 +376,7 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
                         } else {
                             ReadOnlyClipboardContext::new(text, selection, true, false)
                         };
-                        dispatch_clipboard_with_feedback(key, &mut context, ctx, id)
+                        dispatch_selection_context(&mut context, request, ctx, id)
                     }
                 }
                 #[cfg(not(feature = "diff-view"))]
@@ -303,7 +393,7 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
                                 true,
                                 false,
                             );
-                            dispatch_clipboard_with_feedback(key, &mut context, ctx, id)
+                            dispatch_selection_context(&mut context, request, ctx, id)
                         }
                     } else {
                         let selected_text = selection_range(
@@ -327,7 +417,7 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
                         } else {
                             ReadOnlyClipboardContext::new(text, selection, true, false)
                         };
-                        dispatch_clipboard_with_feedback(key, &mut context, ctx, id)
+                        dispatch_selection_context(&mut context, request, ctx, id)
                     }
                 }
             }
@@ -348,7 +438,7 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
                     true,
                     false,
                 );
-                dispatch_clipboard_with_feedback(key, &mut context, ctx, id)
+                dispatch_selection_context(&mut context, request, ctx, id)
             }
             _ => false,
         };
@@ -374,7 +464,7 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
             true,
             false,
         );
-        if dispatch_clipboard_with_feedback(key, &mut context, ctx, node.id) {
+        if dispatch_selection_context(&mut context, request, ctx, node.id) {
             return true;
         }
     }

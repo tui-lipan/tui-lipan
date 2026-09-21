@@ -1,6 +1,7 @@
 use crate::app::input::keymap::{Action, BindingMatch, BindingMode, Keymap};
 use crate::clipboard::{
-    ClipboardCommand, ClipboardConfig, ClipboardError, ClipboardService, ImageContent, write_osc52,
+    ClipboardCommand, ClipboardConfig, ClipboardError, ClipboardService, CopyOnSelect,
+    ImageContent, PasteSource, write_osc52,
 };
 use crate::core::event::KeyEvent;
 use crate::ui::capabilities::ClipboardContext;
@@ -180,6 +181,33 @@ pub(crate) fn dispatch_text_paste(
         return true;
     }
     context.insert_text(&text)
+}
+
+/// Read text from an exact clipboard source for a mouse paste gesture.
+pub(crate) fn read_paste_source(
+    source: PasteSource,
+    clipboard: &ClipboardService,
+    config: &ClipboardConfig,
+) -> Option<String> {
+    let result = match source {
+        PasteSource::Disabled => return None,
+        PasteSource::Clipboard => clipboard.read_clipboard_text(),
+        PasteSource::PrimarySelection
+            if config.enable_primary_selection && clipboard.supports_primary_selection() =>
+        {
+            clipboard.read_primary_selection_text()
+        }
+        PasteSource::PrimarySelection => return None,
+    };
+
+    match result {
+        Ok(text) => Some(text),
+        Err(ClipboardError::Unsupported { .. }) => None,
+        Err(err) => {
+            clipboard.report_error(err);
+            None
+        }
+    }
 }
 
 struct ClipboardBinding {
@@ -366,6 +394,59 @@ pub(crate) fn write_to_clipboard(
     }
 
     wrote
+}
+
+/// Write a completed mouse selection to its configured clipboard target.
+pub(crate) fn write_mouse_selection(
+    text: &str,
+    target: CopyOnSelect,
+    clipboard: &ClipboardService,
+    config: &ClipboardConfig,
+) -> bool {
+    match target {
+        CopyOnSelect::Disabled => false,
+        CopyOnSelect::PrimarySelection => write_primary_selection(text, clipboard, config),
+        CopyOnSelect::Clipboard => write_regular_clipboard(text, clipboard, config),
+        CopyOnSelect::Both => {
+            let clipboard_wrote = write_regular_clipboard(text, clipboard, config);
+            write_primary_selection(text, clipboard, config) || clipboard_wrote
+        }
+    }
+}
+
+fn write_regular_clipboard(
+    text: &str,
+    clipboard: &ClipboardService,
+    config: &ClipboardConfig,
+) -> bool {
+    let mut wrote = false;
+    match clipboard.write_clipboard_text(text) {
+        Ok(()) => wrote = true,
+        Err(err) => clipboard.report_error(err),
+    }
+    if config.enable_osc52 {
+        write_osc52(text);
+        wrote = true;
+    }
+    wrote
+}
+
+fn write_primary_selection(
+    text: &str,
+    clipboard: &ClipboardService,
+    config: &ClipboardConfig,
+) -> bool {
+    if !config.enable_primary_selection || !clipboard.supports_primary_selection() {
+        return false;
+    }
+    match clipboard.write_primary_selection_text(text) {
+        Ok(()) => true,
+        Err(ClipboardError::Unsupported { .. }) => false,
+        Err(err) => {
+            clipboard.report_error(err);
+            false
+        }
+    }
 }
 
 /// Returns true when `text` looks like HTML clipboard content (e.g. the `text/html` MIME type
@@ -570,6 +651,38 @@ mod tests {
     }
 
     #[derive(Default)]
+    struct TargetState {
+        clipboard: String,
+        primary: String,
+    }
+
+    struct TargetProvider(Rc<RefCell<TargetState>>);
+
+    impl ClipboardProvider for TargetProvider {
+        fn read_clipboard_text(&mut self) -> Result<String, ClipboardError> {
+            Ok(self.0.borrow().clipboard.clone())
+        }
+
+        fn write_clipboard_text(&mut self, text: &str) -> Result<(), ClipboardError> {
+            self.0.borrow_mut().clipboard = text.to_string();
+            Ok(())
+        }
+
+        fn read_primary_selection_text(&mut self) -> Result<String, ClipboardError> {
+            Ok(self.0.borrow().primary.clone())
+        }
+
+        fn write_primary_selection_text(&mut self, text: &str) -> Result<(), ClipboardError> {
+            self.0.borrow_mut().primary = text.to_string();
+            Ok(())
+        }
+
+        fn supports_primary_selection(&self) -> bool {
+            true
+        }
+    }
+
+    #[derive(Default)]
     struct MockContext {
         selection: Option<String>,
         can_copy: bool,
@@ -616,6 +729,48 @@ mod tests {
         fn accepts_image(&self) -> bool {
             self.accepts_image
         }
+    }
+
+    #[test]
+    fn mouse_selection_targets_keep_primary_and_clipboard_distinct() {
+        let state = Rc::new(RefCell::new(TargetState {
+            clipboard: "clipboard-before".to_string(),
+            primary: "primary-before".to_string(),
+        }));
+        let clipboard =
+            ClipboardService::new(Box::new(TargetProvider(Rc::clone(&state))), Rc::new(|_| {}));
+        let config = ClipboardConfig {
+            enable_primary_selection: true,
+            enable_osc52: false,
+            ..ClipboardConfig::default()
+        };
+
+        assert!(write_mouse_selection(
+            "primary-only",
+            CopyOnSelect::PrimarySelection,
+            &clipboard,
+            &config,
+        ));
+        assert_eq!(state.borrow().primary, "primary-only");
+        assert_eq!(state.borrow().clipboard, "clipboard-before");
+
+        assert!(write_mouse_selection(
+            "clipboard-only",
+            CopyOnSelect::Clipboard,
+            &clipboard,
+            &config,
+        ));
+        assert_eq!(state.borrow().primary, "primary-only");
+        assert_eq!(state.borrow().clipboard, "clipboard-only");
+
+        assert!(write_mouse_selection(
+            "both",
+            CopyOnSelect::Both,
+            &clipboard,
+            &config,
+        ));
+        assert_eq!(state.borrow().primary, "both");
+        assert_eq!(state.borrow().clipboard, "both");
     }
 
     #[test]
