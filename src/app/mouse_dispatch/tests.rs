@@ -31,13 +31,16 @@ use crate::{CellMask, TextEditor};
 struct MouseClipboardState {
     clipboard: String,
     primary: String,
+    clipboard_reads: usize,
 }
 
 struct MouseClipboardProvider(Rc<RefCell<MouseClipboardState>>);
 
 impl ClipboardProvider for MouseClipboardProvider {
     fn read_clipboard_text(&mut self) -> Result<String, ClipboardError> {
-        Ok(self.0.borrow().clipboard.clone())
+        let mut state = self.0.borrow_mut();
+        state.clipboard_reads += 1;
+        Ok(state.clipboard.clone())
     }
 
     fn write_clipboard_text(&mut self, text: &str) -> Result<(), ClipboardError> {
@@ -3034,7 +3037,7 @@ fn mouse_region_hover_includes_interactive_descendants() {
 fn completed_mouse_selection_updates_primary_without_overwriting_clipboard() {
     let clipboard = Rc::new(RefCell::new(MouseClipboardState {
         clipboard: "keep me".to_string(),
-        primary: String::new(),
+        ..MouseClipboardState::default()
     }));
     let config = ClipboardConfig {
         enable_primary_selection: true,
@@ -3119,6 +3122,7 @@ fn middle_click_pastes_primary_selection_into_focused_editor() {
     let clipboard = Rc::new(RefCell::new(MouseClipboardState {
         clipboard: "regular".to_string(),
         primary: "unix".to_string(),
+        ..MouseClipboardState::default()
     }));
     let config = ClipboardConfig {
         enable_primary_selection: true,
@@ -3179,9 +3183,23 @@ fn tracked_terminal_middle_click_is_forwarded_instead_of_locally_pasted() {
     }
 
     let forwarded = Rc::new(RefCell::new(Vec::new()));
-    let mut backend = TestBackend::new(TrackedTerminal {
-        forwarded: Rc::clone(&forwarded),
-    });
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState {
+        clipboard: "must not paste".to_string(),
+        ..MouseClipboardState::default()
+    }));
+    let app = crate::App::new()
+        .clipboard_provider(MouseClipboardProvider(Rc::clone(&clipboard)))
+        .clipboard_config(ClipboardConfig {
+            middle_click_paste: PasteSource::Clipboard,
+            ..ClipboardConfig::default()
+        });
+    let mut backend = TestBackend::new_with_app(
+        app,
+        TrackedTerminal {
+            forwarded: Rc::clone(&forwarded),
+        },
+        (),
+    );
     backend.set_viewport(Rect {
         x: 0,
         y: 0,
@@ -3209,6 +3227,7 @@ fn tracked_terminal_middle_click_is_forwarded_instead_of_locally_pasted() {
         .unwrap();
 
     assert_eq!(forwarded.borrow().len(), 1);
+    assert_eq!(clipboard.borrow().clipboard_reads, 0);
 }
 
 #[test]
@@ -3216,6 +3235,7 @@ fn opt_in_right_click_pastes_regular_clipboard() {
     let clipboard = Rc::new(RefCell::new(MouseClipboardState {
         clipboard: "regular".to_string(),
         primary: "unix".to_string(),
+        ..MouseClipboardState::default()
     }));
     let config = ClipboardConfig {
         right_click_action: RightClickAction::PasteClipboard,
