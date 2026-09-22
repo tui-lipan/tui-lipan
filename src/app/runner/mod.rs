@@ -1073,7 +1073,7 @@ impl<C: Component> AppRunner<C> {
         &mut self,
         target: crate::clipboard::CopyOnSelect,
         intent: keyboard::CopyIntent,
-        preferred_id: Option<NodeId>,
+        scope: keyboard::SelectionScope,
     ) -> bool {
         let mut key_ctx = crate::app::input::handlers::KeyCtx {
             read_only_selection: Some(&self.widgets.read_only_selection),
@@ -1089,13 +1089,7 @@ impl<C: Component> AppRunner<C> {
             copy_feedback: &mut self.copy_feedback,
             dirty_override: None,
         };
-        keyboard::copy_active_selection(
-            &mut self.core.tree,
-            preferred_id,
-            target,
-            intent,
-            &mut key_ctx,
-        )
+        keyboard::copy_active_selection(&mut self.core.tree, scope, target, intent, &mut key_ctx)
     }
 
     #[cfg(feature = "devtools")]

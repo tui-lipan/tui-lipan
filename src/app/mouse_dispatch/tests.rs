@@ -19,8 +19,8 @@ use crate::style::{Align, Color, Length, Rect, Span};
 use crate::widgets::document_view::FormattedLink;
 use crate::widgets::{
     AsciiCanvas, Button, CenterPin, ContentFormatter, DocumentClickEvent, DocumentView,
-    EffectScope, FormatInput, FormattedBlock, FormattedDocument, FormattedLine, Frame, List,
-    ListItem, MouseRegion, ScrollEvent, ScrollView, Spacer, StatusBar, Table, TableRow, Text,
+    EffectScope, FormatInput, FormattedBlock, FormattedDocument, FormattedLine, Frame, HStack,
+    List, ListItem, MouseRegion, ScrollEvent, ScrollView, Spacer, StatusBar, Table, TableRow, Text,
     TextArea, TextAreaEvent, TextAreaVimMode, VStack,
 };
 #[cfg(feature = "terminal")]
@@ -139,6 +139,96 @@ fn click_left(backend: &mut TestBackend<ClipboardEditor>, x: u16, y: u16) {
             })
             .unwrap();
     }
+}
+
+/// A row of non-editable chrome above two side-by-side editors, for pointer-targeting tests.
+struct PairedEditors(&'static str);
+
+impl Component for PairedEditors {
+    type Message = (usize, TextAreaEvent);
+    type Properties = ();
+    type State = [TextEditor; 2];
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        [TextEditor::new(self.0), TextEditor::new("")]
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let editor = |index: usize| {
+            TextArea::bound(&ctx.state[index])
+                .border(false)
+                .padding(0)
+                .width(Length::Px(10))
+                .height(Length::Px(1))
+                .on_change(ctx.link().callback(move |event| (index, event)))
+        };
+        VStack::new()
+            .child(
+                MouseRegion::new()
+                    .on_mouse_down(Callback::new(|_| {}))
+                    .child(Text::new("chrome").height(Length::Px(1))),
+            )
+            .child(
+                HStack::new()
+                    .height(Length::Px(1))
+                    .child(editor(0))
+                    .child(editor(1)),
+            )
+            .into()
+    }
+
+    fn update(&mut self, (index, event): Self::Message, ctx: &mut Context<Self>) -> Update {
+        event.apply_to(&mut ctx.state[index]);
+        Update::full()
+    }
+}
+
+fn paired_editors_backend(
+    left_text: &'static str,
+    state: Rc<RefCell<MouseClipboardState>>,
+    config: ClipboardConfig,
+) -> TestBackend<PairedEditors> {
+    let app = crate::App::new()
+        .clipboard_provider(MouseClipboardProvider(state))
+        .clipboard_config(config);
+    let mut backend = TestBackend::new_with_app(app, PairedEditors(left_text), ());
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 2,
+    });
+    backend.render();
+    backend
+}
+
+/// The left and right editors, in that order.
+fn paired_editor_ids(backend: &TestBackend<PairedEditors>) -> [NodeId; 2] {
+    let mut ids: Vec<NodeId> = backend
+        .core
+        .tree
+        .iter()
+        .filter(|node| matches!(node.kind, NodeKind::TextArea(_)))
+        .map(|node| node.id)
+        .collect();
+    ids.sort_by_key(|id| backend.core.tree.node(*id).rect.x);
+    ids.try_into().expect("expected two TextAreas")
+}
+
+fn press<C: Component>(backend: &mut TestBackend<C>, button: MouseButton, x: u16, y: u16) {
+    backend
+        .send_mouse(MouseEvent {
+            x,
+            y,
+            kind: MouseKind::Down(button),
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+}
+
+fn node_origin<C: Component>(backend: &TestBackend<C>, id: NodeId) -> (u16, u16) {
+    let rect = backend.core.tree.node(id).rect;
+    (rect.x.max(0) as u16, rect.y.max(0) as u16)
 }
 
 /// Drag-select the first five cells of the editor, then press the right button.
@@ -3359,6 +3449,202 @@ fn failed_right_click_copy_does_not_flash_or_paste() {
     assert!(!backend.copy_feedback.is_active(id));
     assert_eq!(backend.state().text(), "alpha beta");
     assert_eq!(clipboard.borrow().clipboard_reads, 0);
+}
+
+#[test]
+fn right_click_pastes_into_the_editor_under_the_pointer() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState {
+        clipboard: "regular".to_string(),
+        ..MouseClipboardState::default()
+    }));
+    let config = ClipboardConfig {
+        right_click_action: RightClickAction::PasteClipboard,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = paired_editors_backend("", clipboard, config);
+    let [left, right] = paired_editor_ids(&backend);
+    backend.set_focused(left);
+
+    let (x, y) = node_origin(&backend, right);
+    press(&mut backend, MouseButton::Right, x, y);
+
+    assert_eq!(backend.state()[0].text(), "");
+    assert_eq!(backend.state()[1].text(), "regular");
+    assert_eq!(backend.focused, Some(right));
+}
+
+#[test]
+fn right_click_outside_an_editor_does_not_paste() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState {
+        clipboard: "regular".to_string(),
+        ..MouseClipboardState::default()
+    }));
+    let config = ClipboardConfig {
+        right_click_action: RightClickAction::CopyOrPaste,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = paired_editors_backend("", Rc::clone(&clipboard), config);
+    let [left, _] = paired_editor_ids(&backend);
+    backend.set_focused(left);
+    let chrome = backend
+        .core
+        .tree
+        .hit_test(0, 0)
+        .expect("chrome should be hit-testable");
+    assert!(matches!(
+        backend.core.tree.node(chrome).kind,
+        NodeKind::MouseRegion(_)
+    ));
+
+    press(&mut backend, MouseButton::Right, 0, 0);
+
+    assert_eq!(backend.state()[0].text(), "");
+    assert_eq!(backend.state()[1].text(), "");
+    assert_eq!(backend.focused, Some(left));
+    assert_eq!(clipboard.borrow().clipboard_reads, 0);
+}
+
+#[test]
+fn middle_click_pastes_into_the_editor_under_the_pointer() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState {
+        primary: "unix".to_string(),
+        ..MouseClipboardState::default()
+    }));
+    let config = ClipboardConfig {
+        enable_primary_selection: true,
+        middle_click_paste: PasteSource::PrimarySelection,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = paired_editors_backend("", clipboard, config);
+    let [left, right] = paired_editor_ids(&backend);
+    backend.set_focused(left);
+
+    press(&mut backend, MouseButton::Middle, 0, 0);
+    assert_eq!(backend.state()[0].text(), "");
+
+    let (x, y) = node_origin(&backend, right);
+    press(&mut backend, MouseButton::Middle, x, y);
+
+    assert_eq!(backend.state()[0].text(), "");
+    assert_eq!(backend.state()[1].text(), "unix");
+    assert_eq!(backend.focused, Some(right));
+}
+
+#[test]
+fn right_click_copy_ignores_a_selection_the_pointer_is_not_on() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState {
+        clipboard: "regular".to_string(),
+        ..MouseClipboardState::default()
+    }));
+    let config = ClipboardConfig {
+        enable_osc52: false,
+        copy_on_mouse_select: CopyOnSelect::Disabled,
+        right_click_action: RightClickAction::CopyOrPaste,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = paired_editors_backend("alpha beta", Rc::clone(&clipboard), config);
+    let [left, right] = paired_editor_ids(&backend);
+    let (x, y) = node_origin(&backend, left);
+    for (event_x, kind) in [
+        (x, MouseKind::Down(MouseButton::Left)),
+        (x + 5, MouseKind::Drag(MouseButton::Left)),
+        (x + 5, MouseKind::Up(MouseButton::Left)),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                x: event_x,
+                y,
+                kind,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
+
+    let (x, y) = node_origin(&backend, right);
+    press(&mut backend, MouseButton::Right, x, y);
+
+    assert_eq!(clipboard.borrow().clipboard, "regular");
+    assert!(!backend.copy_feedback.is_active(left));
+    assert_eq!(backend.state()[0].text(), "alpha beta");
+    assert_eq!(backend.state()[1].text(), "regular");
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn right_click_pastes_into_the_terminal_under_the_pointer() {
+    struct PairedTerminals {
+        pastes: Rc<RefCell<Vec<usize>>>,
+    }
+
+    impl Component for PairedTerminals {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let terminal = |index: usize| {
+                let pastes = Rc::clone(&self.pastes);
+                Terminal::new()
+                    .width(Length::Px(10))
+                    .on_input(Callback::new(
+                        move |event: crate::widgets::TerminalInputEvent| {
+                            if event.kind == crate::widgets::TerminalInputKind::Paste {
+                                pastes.borrow_mut().push(index);
+                            }
+                        },
+                    ))
+            };
+            HStack::new().child(terminal(0)).child(terminal(1)).into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    let pastes = Rc::new(RefCell::new(Vec::new()));
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState {
+        clipboard: "regular".to_string(),
+        ..MouseClipboardState::default()
+    }));
+    let app = crate::App::new()
+        .clipboard_provider(MouseClipboardProvider(clipboard))
+        .clipboard_config(ClipboardConfig {
+            right_click_action: RightClickAction::CopyOrPaste,
+            ..ClipboardConfig::default()
+        });
+    let mut backend = TestBackend::new_with_app(
+        app,
+        PairedTerminals {
+            pastes: Rc::clone(&pastes),
+        },
+        (),
+    );
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 3,
+    });
+    backend.render();
+    let mut terminals: Vec<NodeId> = backend
+        .core
+        .tree
+        .iter()
+        .filter(|node| matches!(node.kind, NodeKind::Terminal(_)))
+        .map(|node| node.id)
+        .collect();
+    terminals.sort_by_key(|id| backend.core.tree.node(*id).rect.x);
+    let [left, right] = terminals.try_into().expect("expected two Terminals");
+    backend.set_focused(left);
+
+    let (x, y) = node_origin(&backend, right);
+    press(&mut backend, MouseButton::Right, x, y);
+
+    assert_eq!(&*pastes.borrow(), &[1]);
+    assert_eq!(backend.focused, Some(right));
 }
 
 #[test]

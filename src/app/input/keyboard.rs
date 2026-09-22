@@ -28,6 +28,47 @@ pub(crate) enum CopyIntent {
     Explicit,
 }
 
+/// Which selections a clipboard request may copy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SelectionScope {
+    /// Any selection in the tree, trying `preferred` first.
+    Anywhere { preferred: Option<NodeId> },
+    /// Only the selection owned by this node.
+    Node(NodeId),
+    /// Only one shared-selection group of `DocumentView`s under a scroll view. Other groups in
+    /// the same scroll view are copied independently, so they stay out of scope.
+    DocumentShared {
+        scroll_view_id: NodeId,
+        shared_selection_id: std::sync::Arc<str>,
+    },
+}
+
+impl SelectionScope {
+    /// Whether `id` is in scope. Candidates can include stale ids from `read_only_selection`, so
+    /// this is total over arbitrary ids and never reads a node that is no longer in the tree.
+    fn admits(&self, tree: &NodeTree, id: NodeId) -> bool {
+        if !tree.is_valid(id) {
+            return false;
+        }
+        match self {
+            Self::Anywhere { .. } => true,
+            Self::Node(owner) => *owner == id,
+            Self::DocumentShared {
+                scroll_view_id,
+                shared_selection_id,
+            } => {
+                let NodeKind::DocumentView(doc) = &tree.node(id).kind else {
+                    return false;
+                };
+                drag::shared_selection_id_matches(
+                    doc.shared_selection_id.as_deref(),
+                    shared_selection_id,
+                ) && drag::nearest_ancestor_scroll_view(tree, id) == Some(*scroll_view_id)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum SelectionClipboardRequest {
     Shortcut {
@@ -140,14 +181,14 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
     dispatch_selection_clipboard_request(
         tree,
         SelectionClipboardRequest::Shortcut { key, cut_requested },
-        None,
+        SelectionScope::Anywhere { preferred: None },
         ctx,
     )
 }
 
 pub(crate) fn copy_active_selection(
     tree: &mut NodeTree,
-    preferred_id: Option<NodeId>,
+    scope: SelectionScope,
     target: crate::clipboard::CopyOnSelect,
     intent: CopyIntent,
     ctx: &mut KeyCtx<'_>,
@@ -158,7 +199,7 @@ pub(crate) fn copy_active_selection(
     dispatch_selection_clipboard_request(
         tree,
         SelectionClipboardRequest::Write { target, intent },
-        preferred_id,
+        scope,
         ctx,
     )
 }
@@ -166,7 +207,7 @@ pub(crate) fn copy_active_selection(
 fn dispatch_selection_clipboard_request(
     tree: &mut NodeTree,
     request: SelectionClipboardRequest,
-    preferred_id: Option<NodeId>,
+    scope: SelectionScope,
     ctx: &mut KeyCtx<'_>,
 ) -> bool {
     let cut_requested = request.cut_requested();
@@ -198,10 +239,13 @@ fn dispatch_selection_clipboard_request(
 
         has_selection.then_some(node.id)
     }));
+    candidates.retain(|id| scope.admits(tree, *id));
 
     candidates.sort_unstable_by_key(|id| std::cmp::Reverse((id.index, id.generation)));
     candidates.dedup();
-    if let Some(preferred_id) = preferred_id
+    if let SelectionScope::Anywhere {
+        preferred: Some(preferred_id),
+    } = scope
         && let Some(index) = candidates.iter().position(|id| *id == preferred_id)
     {
         candidates.swap(0, index);
@@ -482,8 +526,23 @@ fn dispatch_selection_clipboard_request(
         let NodeKind::ScrollView(_) = &node.kind else {
             continue;
         };
+        // A shared-group scope reads only its own group's off-screen rows; other scopes that
+        // admit the scroll view read whichever off-screen selection it holds.
+        let group = match &scope {
+            SelectionScope::DocumentShared {
+                scroll_view_id,
+                shared_selection_id,
+            } => {
+                if node.id != *scroll_view_id {
+                    continue;
+                }
+                Some(shared_selection_id.as_ref())
+            }
+            SelectionScope::Anywhere { .. } => None,
+            SelectionScope::Node(_) => continue,
+        };
         let Some(selected_text) =
-            drag::scroll_view_offscreen_document_selection_text(tree, node.id, true)
+            drag::scroll_view_offscreen_document_selection_text(tree, node.id, group, true)
         else {
             continue;
         };
@@ -631,7 +690,9 @@ pub(crate) fn dispatch_ambient_page_scroll(tree: &mut NodeTree, key: KeyEvent) -
 
 #[cfg(test)]
 mod tests {
-    use super::dispatch_selection_clipboard_shortcut;
+    use super::{
+        CopyIntent, SelectionScope, copy_active_selection, dispatch_selection_clipboard_shortcut,
+    };
     use crate::app::context::TextAreaNewlineBinding;
     use crate::app::input::handlers::KeyCtx;
     use crate::app::input::handlers::text_area::{
@@ -732,6 +793,250 @@ mod tests {
         };
 
         dispatch_selection_clipboard_shortcut(tree, key, &mut ctx)
+    }
+
+    /// Explicitly copy whatever `scope` admits, as a right-click copy does.
+    fn copy_in_scope(
+        tree: &mut NodeTree,
+        read_only_selection: Option<&HashMap<NodeId, (usize, Option<usize>)>>,
+        scope: SelectionScope,
+        clipboard: &ClipboardService,
+    ) -> bool {
+        let keymap = keymap_for_test(Vec::new());
+        let clipboard_config = ClipboardConfig {
+            enable_osc52: false,
+            ..Default::default()
+        };
+        let mut input_history = HashMap::new();
+        let mut textarea_history = HashMap::new();
+        let mut text_area_vim_state = HashMap::new();
+        let mut hex_history = HashMap::new();
+        let mut hex_pending_edit = HashMap::new();
+        let mut copy_feedback = crate::app::copy_feedback::CopyFeedbackState::default();
+        let mut ctx = KeyCtx {
+            read_only_selection,
+            input_history: &mut input_history,
+            textarea_history: &mut textarea_history,
+            text_area_vim_state: &mut text_area_vim_state,
+            hex_history: &mut hex_history,
+            hex_pending_edit: &mut hex_pending_edit,
+            keymap: &keymap,
+            text_area_newline_binding: TextAreaNewlineBinding::default(),
+            clipboard,
+            clipboard_config: &clipboard_config,
+            copy_feedback: &mut copy_feedback,
+            dirty_override: None,
+        };
+
+        copy_active_selection(
+            tree,
+            scope,
+            crate::clipboard::CopyOnSelect::Clipboard,
+            CopyIntent::Explicit,
+            &mut ctx,
+        )
+    }
+
+    fn shared_scope(tree: &NodeTree, group: &str) -> SelectionScope {
+        let scroll_view_id = tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::ScrollView(_)))
+            .map(|node| node.id)
+            .expect("scroll view exists");
+        SelectionScope::DocumentShared {
+            scroll_view_id,
+            shared_selection_id: group.into(),
+        }
+    }
+
+    #[test]
+    fn shared_group_scope_ignores_other_group_in_same_scroll_view() {
+        let root = ScrollView::new()
+            .children(
+                [
+                    ("alpha", "messages"),
+                    ("beta", "messages"),
+                    ("gamma", "logs"),
+                    ("delta", "logs"),
+                ]
+                .map(|(text, group)| {
+                    DocumentView::new(text)
+                        .focusable(false)
+                        .shared_selection_id(group)
+                        .into()
+                }),
+            )
+            .into();
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 20,
+                h: 12,
+            },
+            None,
+        );
+        let log_ids: Vec<_> = tree
+            .iter()
+            .filter(|node| {
+                matches!(
+                    &node.kind,
+                    NodeKind::DocumentView(doc) if doc.shared_selection_id.as_deref() == Some("logs")
+                )
+            })
+            .map(|node| node.id)
+            .collect();
+        assert_eq!(log_ids.len(), 2, "expected two log docs");
+        for id in log_ids {
+            if let NodeKind::DocumentView(doc) = &mut tree.node_mut(id).kind {
+                doc.selection_cursor = doc.visual_cache.flat_text.len();
+                doc.selection_anchor = Some(0);
+            }
+        }
+
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let clipboard = ClipboardService::new(
+            Box::new(RecordingClipboard {
+                writes: writes.clone(),
+            }),
+            Rc::new(|_| {}),
+        );
+
+        let messages = shared_scope(&tree, "messages");
+        assert!(!copy_in_scope(&mut tree, None, messages, &clipboard));
+        assert!(writes.borrow().is_empty());
+
+        let logs = shared_scope(&tree, "logs");
+        assert!(copy_in_scope(&mut tree, None, logs, &clipboard));
+        assert_eq!(writes.borrow().as_slice(), &["gamma\n\ndelta"]);
+    }
+
+    #[test]
+    fn shared_group_scope_ignores_other_group_offscreen() {
+        fn root(offset: usize) -> Element {
+            ScrollView::new()
+                .offset(offset)
+                .children((0..12).map(|i| {
+                    DocumentView::new(format!("row {i}"))
+                        .border(false)
+                        .scrollbar(false)
+                        .h_scrollbar(false)
+                        .focusable(false)
+                        .height(Length::Auto)
+                        .shared_selection_id(if i % 2 == 0 { "messages" } else { "logs" })
+                        .key(format!("row-{i}"))
+                }))
+                .into()
+        }
+
+        let mut tree = NodeTree::new();
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 2,
+        };
+        LayoutEngine::reconcile_with_focus(&mut tree, &root(0), viewport, None);
+        let log_row = tree
+            .iter()
+            .find(|node| {
+                matches!(
+                    &node.kind,
+                    NodeKind::DocumentView(doc) if doc.shared_selection_id.as_deref() == Some("logs")
+                )
+            })
+            .map(|node| node.id)
+            .expect("first log row is on screen");
+        if let NodeKind::DocumentView(doc) = &mut tree.node_mut(log_row).kind {
+            doc.selection_cursor = doc.visual_cache.flat_text.len();
+            doc.selection_anchor = Some(0);
+        }
+        LayoutEngine::reconcile_with_focus(&mut tree, &root(4), viewport, None);
+        assert!(tree.iter().all(|node| match &node.kind {
+            NodeKind::DocumentView(doc) => doc.selection_anchor.is_none(),
+            _ => true,
+        }));
+
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let clipboard = ClipboardService::new(
+            Box::new(RecordingClipboard {
+                writes: writes.clone(),
+            }),
+            Rc::new(|_| {}),
+        );
+
+        let messages = shared_scope(&tree, "messages");
+        assert!(!copy_in_scope(&mut tree, None, messages, &clipboard));
+        assert!(writes.borrow().is_empty());
+
+        let logs = shared_scope(&tree, "logs");
+        assert!(copy_in_scope(&mut tree, None, logs, &clipboard));
+        assert_eq!(writes.borrow().as_slice(), &["row 1"]);
+    }
+
+    #[test]
+    fn shared_group_scope_skips_stale_read_only_selection_ids() {
+        fn root(with_input: bool) -> Element {
+            let mut stack = crate::widgets::VStack::new();
+            if with_input {
+                stack = stack.child(
+                    Input::new("stale text")
+                        .read_only(true)
+                        .focusable(false)
+                        .key("stale-input"),
+                );
+            }
+            stack
+                .child(
+                    ScrollView::new()
+                        .children(["alpha", "beta"].map(|text| {
+                            DocumentView::new(text)
+                                .focusable(false)
+                                .shared_selection_id("messages")
+                                .into()
+                        }))
+                        .key("docs"),
+                )
+                .into()
+        }
+
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 12,
+        };
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(&mut tree, &root(true), viewport, None);
+        let stale_input = tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::Input(_)))
+            .map(|node| node.id)
+            .expect("read-only input exists");
+        let read_only_selection = HashMap::from([(stale_input, (5, Some(0)))]);
+
+        LayoutEngine::reconcile_with_focus(&mut tree, &root(false), viewport, None);
+        assert!(!tree.is_valid(stale_input), "input id should now be stale");
+
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let clipboard = ClipboardService::new(
+            Box::new(RecordingClipboard {
+                writes: writes.clone(),
+            }),
+            Rc::new(|_| {}),
+        );
+
+        let messages = shared_scope(&tree, "messages");
+        assert!(!copy_in_scope(
+            &mut tree,
+            Some(&read_only_selection),
+            messages,
+            &clipboard,
+        ));
+        assert!(writes.borrow().is_empty());
     }
 
     fn enter_key(mods: KeyMods) -> KeyEvent {
