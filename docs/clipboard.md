@@ -102,9 +102,25 @@ a right-click copy from a right-click paste. Copy-on-select stays silent because
 completed selection. A failed right-click copy reports the clipboard error and does not fall
 through to a paste.
 
-Mouse paste targets the currently focused editable `Input`, `TextArea`, or `Terminal`; it does not
-move focus or reposition the caret. Copy-on-select runs once when a non-empty mouse selection is
-completed, including word and line selections, rather than on every drag update.
+Mouse clipboard gestures act on the widget under the pointer, never on whatever happens to hold
+focus:
+
+- Middle-click paste and right-click paste target the editable `Input`, `TextArea`, or `Terminal`
+  under the pointer. If that widget is not focused, it takes focus first, so the paste lands where
+  the user clicked, the way a terminal emulator or tmux pastes into the pane under the mouse. A
+  widget that cannot take pointer focus, for example because `FocusPolicy::Manual` is set or it is
+  not focusable, receives nothing. The caret is not repositioned.
+- A `CopyOrPaste` right click copies only the selection owned by the widget under the pointer, or a
+  shared document selection within the same scroll view. A selection elsewhere is left alone, and
+  the click falls through to a paste at the pointer.
+- A press over anything else, such as a status bar, tab strip, frame border, or empty space, does
+  nothing.
+
+Apps that track focus themselves can follow a paste-driven focus change through
+`Component::on_focus_changed`, just like a left click.
+
+Copy-on-select runs once when a non-empty mouse selection is completed, including word and line
+selections, rather than on every drag update.
 
 Primary-selection mouse behavior currently uses the local clipboard provider. Regular clipboard
 writes can still use OSC 52, but remote PRIMARY reads and OSC 52 `p` writes are not performed.

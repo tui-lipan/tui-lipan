@@ -139,10 +139,30 @@ pub(crate) trait MouseDispatchCtx<C: Component> {
         hit: crate::core::node::NodeId,
         mouse: MouseEvent,
     ) -> bool;
-    fn handle_middle_click_paste(&mut self) -> bool {
+    /// The configured right-click action and middle-click paste source.
+    fn pointer_clipboard_actions(
+        &self,
+    ) -> (
+        crate::clipboard::RightClickAction,
+        crate::clipboard::PasteSource,
+    ) {
+        (
+            crate::clipboard::RightClickAction::Disabled,
+            crate::clipboard::PasteSource::Disabled,
+        )
+    }
+    fn focused_node(&self) -> Option<crate::core::node::NodeId> {
+        None
+    }
+    fn paste_into_focused(&mut self, _source: crate::clipboard::PasteSource) -> bool {
         false
     }
-    fn handle_right_click_clipboard(&mut self) -> bool {
+    fn copy_selection(
+        &mut self,
+        _target: crate::clipboard::CopyOnSelect,
+        _intent: crate::app::input::keyboard::CopyIntent,
+        _scope: crate::app::input::keyboard::SelectionScope,
+    ) -> bool {
         false
     }
     fn copy_selection_on_release(&mut self, _id: crate::core::node::NodeId) {}
@@ -345,7 +365,7 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
         return result;
     }
 
-    if let Some(result) = transition_middle_click(ctx, mouse, hover_dirty) {
+    if let Some(result) = transition_middle_click(ctx, mouse, x, y, hover_dirty) {
         return result;
     }
 
@@ -612,24 +632,33 @@ impl<C: Component> MouseDispatchCtx<C> for AppRunner<C> {
         AppRunner::<C>::handle_right_click_textarea(self, hit, mouse)
     }
 
-    fn handle_middle_click_paste(&mut self) -> bool {
-        self.paste_from_source(self.clipboard_config.middle_click_paste)
+    fn pointer_clipboard_actions(
+        &self,
+    ) -> (
+        crate::clipboard::RightClickAction,
+        crate::clipboard::PasteSource,
+    ) {
+        (
+            self.clipboard_config.right_click_action,
+            self.clipboard_config.middle_click_paste,
+        )
     }
 
-    fn handle_right_click_clipboard(&mut self) -> bool {
-        match self.clipboard_config.right_click_action {
-            crate::clipboard::RightClickAction::Disabled => false,
-            crate::clipboard::RightClickAction::PasteClipboard => {
-                self.paste_from_source(crate::clipboard::PasteSource::Clipboard)
-            }
-            crate::clipboard::RightClickAction::CopyOrPaste => {
-                self.copy_active_selection(
-                    crate::clipboard::CopyOnSelect::Clipboard,
-                    crate::app::input::keyboard::CopyIntent::Explicit,
-                    None,
-                ) || self.paste_from_source(crate::clipboard::PasteSource::Clipboard)
-            }
-        }
+    fn focused_node(&self) -> Option<crate::core::node::NodeId> {
+        self.focus.focused
+    }
+
+    fn paste_into_focused(&mut self, source: crate::clipboard::PasteSource) -> bool {
+        self.paste_from_source(source)
+    }
+
+    fn copy_selection(
+        &mut self,
+        target: crate::clipboard::CopyOnSelect,
+        intent: crate::app::input::keyboard::CopyIntent,
+        scope: crate::app::input::keyboard::SelectionScope,
+    ) -> bool {
+        self.copy_active_selection(target, intent, scope)
     }
 
     fn copy_selection_on_release(&mut self, id: crate::core::node::NodeId) {
@@ -637,7 +666,9 @@ impl<C: Component> MouseDispatchCtx<C> for AppRunner<C> {
         self.copy_active_selection(
             target,
             crate::app::input::keyboard::CopyIntent::Implicit,
-            Some(id),
+            crate::app::input::keyboard::SelectionScope::Anywhere {
+                preferred: Some(id),
+            },
         );
     }
 
@@ -1048,38 +1079,31 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
         false
     }
 
-    fn handle_middle_click_paste(&mut self) -> bool {
-        let source = self
-            .core
-            .ctx
-            .env()
-            .clipboard_config
-            .borrow()
-            .middle_click_paste;
+    fn pointer_clipboard_actions(
+        &self,
+    ) -> (
+        crate::clipboard::RightClickAction,
+        crate::clipboard::PasteSource,
+    ) {
+        let config = self.core.ctx.env().clipboard_config.borrow();
+        (config.right_click_action, config.middle_click_paste)
+    }
+
+    fn focused_node(&self) -> Option<crate::core::node::NodeId> {
+        self.focused
+    }
+
+    fn paste_into_focused(&mut self, source: crate::clipboard::PasteSource) -> bool {
         self.paste_from_source_for_mouse(source)
     }
 
-    fn handle_right_click_clipboard(&mut self) -> bool {
-        let action = self
-            .core
-            .ctx
-            .env()
-            .clipboard_config
-            .borrow()
-            .right_click_action;
-        match action {
-            crate::clipboard::RightClickAction::Disabled => false,
-            crate::clipboard::RightClickAction::PasteClipboard => {
-                self.paste_from_source_for_mouse(crate::clipboard::PasteSource::Clipboard)
-            }
-            crate::clipboard::RightClickAction::CopyOrPaste => {
-                self.copy_active_selection_for_mouse(
-                    crate::clipboard::CopyOnSelect::Clipboard,
-                    crate::app::input::keyboard::CopyIntent::Explicit,
-                    None,
-                ) || self.paste_from_source_for_mouse(crate::clipboard::PasteSource::Clipboard)
-            }
-        }
+    fn copy_selection(
+        &mut self,
+        target: crate::clipboard::CopyOnSelect,
+        intent: crate::app::input::keyboard::CopyIntent,
+        scope: crate::app::input::keyboard::SelectionScope,
+    ) -> bool {
+        self.copy_active_selection_for_mouse(target, intent, scope)
     }
 
     fn copy_selection_on_release(&mut self, id: crate::core::node::NodeId) {
@@ -1093,7 +1117,9 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
         self.copy_active_selection_for_mouse(
             target,
             crate::app::input::keyboard::CopyIntent::Implicit,
-            Some(id),
+            crate::app::input::keyboard::SelectionScope::Anywhere {
+                preferred: Some(id),
+            },
         );
     }
 
@@ -1406,6 +1432,8 @@ fn selection_owner_for_node_shared(
             NodeKind::Input(_) | NodeKind::TextArea(_) | NodeKind::HexArea(_) => {
                 return Some(SelectionOwner::Node(id));
             }
+            #[cfg(feature = "terminal")]
+            NodeKind::Terminal(_) => return Some(SelectionOwner::Node(id)),
             NodeKind::DocumentView(doc) => {
                 if let Some(shared_selection_id) = doc.shared_selection_id.clone()
                     && let Some(scroll_view_id) = drag::nearest_ancestor_scroll_view(tree, id)

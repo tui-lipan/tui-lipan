@@ -1,10 +1,13 @@
+use crate::app::input::keyboard::{CopyIntent, SelectionScope};
 use crate::app::input::mouse;
+use crate::clipboard::{CopyOnSelect, PasteSource, RightClickAction};
 use crate::core::component::Component;
 use crate::core::event::{MouseButton, MouseEvent, MouseKind};
-use crate::core::node::NodeKind;
+use crate::core::node::{NodeId, NodeKind, NodeTree};
 
 use super::{
-    MouseDispatchCtx, find_ancestor_mouse_region_drag_target, mouse_region_local_position,
+    MouseDispatchCtx, SelectionOwner, find_ancestor_mouse_region_drag_target,
+    mouse_region_local_position,
 };
 
 pub(crate) fn transition_overlay_click<C: Component, T: MouseDispatchCtx<C>>(
@@ -198,7 +201,7 @@ pub(crate) fn transition_right_click<C: Component, T: MouseDispatchCtx<C>>(
             return Some(true);
         }
 
-        if drag_target.is_none() && ctx.handle_right_click_clipboard() {
+        if drag_target.is_none() && right_click_clipboard(ctx, hit) {
             return Some(true);
         }
 
@@ -210,6 +213,8 @@ pub(crate) fn transition_right_click<C: Component, T: MouseDispatchCtx<C>>(
 pub(crate) fn transition_middle_click<C: Component, T: MouseDispatchCtx<C>>(
     ctx: &mut T,
     mouse: MouseEvent,
+    x: u16,
+    y: u16,
     hover_dirty: bool,
 ) -> Option<bool> {
     if !matches!(mouse.kind, MouseKind::Down(MouseButton::Middle)) {
@@ -218,7 +223,75 @@ pub(crate) fn transition_middle_click<C: Component, T: MouseDispatchCtx<C>>(
     if ctx.forward_terminal_mouse(mouse) {
         return Some(true);
     }
-    Some(ctx.handle_middle_click_paste() || hover_dirty)
+    let Some(hit) = ctx.tree().hit_test(x as i16, y as i16) else {
+        return Some(hover_dirty);
+    };
+    let (_, source) = ctx.pointer_clipboard_actions();
+    Some(paste_at_pointer(ctx, hit, source) || hover_dirty)
+}
+
+/// Run the configured right-click clipboard action against the widget under the pointer.
+fn right_click_clipboard<C: Component, T: MouseDispatchCtx<C>>(ctx: &mut T, hit: NodeId) -> bool {
+    let (action, _) = ctx.pointer_clipboard_actions();
+    match action {
+        RightClickAction::Disabled => false,
+        RightClickAction::PasteClipboard => paste_at_pointer(ctx, hit, PasteSource::Clipboard),
+        RightClickAction::CopyOrPaste => {
+            copy_at_pointer(ctx, hit) || paste_at_pointer(ctx, hit, PasteSource::Clipboard)
+        }
+    }
+}
+
+/// Copy the selection owned by the widget under the pointer. A selection elsewhere in the tree
+/// is left alone, so a right click never copies text the user is not pointing at.
+fn copy_at_pointer<C: Component, T: MouseDispatchCtx<C>>(ctx: &mut T, hit: NodeId) -> bool {
+    let scope = match ctx.selection_owner_for_node(hit) {
+        Some(SelectionOwner::Node(id)) => SelectionScope::Node(id),
+        Some(SelectionOwner::DocumentShared { scroll_view_id, .. }) => {
+            SelectionScope::Within(scroll_view_id)
+        }
+        None => return false,
+    };
+    ctx.copy_selection(CopyOnSelect::Clipboard, CopyIntent::Explicit, scope)
+}
+
+/// Paste into the editable widget under the pointer, focusing it first so the paste lands where
+/// the user clicked rather than wherever focus happened to be. A press over anything that is not
+/// editable, or over a widget that cannot take pointer focus, pastes nowhere.
+fn paste_at_pointer<C: Component, T: MouseDispatchCtx<C>>(
+    ctx: &mut T,
+    hit: NodeId,
+    source: PasteSource,
+) -> bool {
+    if source == PasteSource::Disabled {
+        return false;
+    }
+    let Some(target) = pointer_paste_target(ctx.tree(), hit) else {
+        return false;
+    };
+    let focus_dirty = ctx.focused_node() != Some(target) && ctx.focus_for_node(target);
+    if ctx.focused_node() != Some(target) {
+        return focus_dirty;
+    }
+    ctx.paste_into_focused(source) || focus_dirty
+}
+
+/// The nearest `Input`, `TextArea`, or `Terminal` at or above `hit`.
+fn pointer_paste_target(tree: &NodeTree, hit: NodeId) -> Option<NodeId> {
+    let mut current = Some(hit);
+    while let Some(id) = current {
+        if !tree.is_valid(id) {
+            return None;
+        }
+        let node = tree.node(id);
+        match &node.kind {
+            NodeKind::Input(_) | NodeKind::TextArea(_) => return Some(id),
+            #[cfg(feature = "terminal")]
+            NodeKind::Terminal(_) => return Some(id),
+            _ => current = node.parent,
+        }
+    }
+    None
 }
 
 pub(crate) fn transition_hit_test_and_scrollbar<C: Component, T: MouseDispatchCtx<C>>(

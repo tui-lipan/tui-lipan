@@ -28,6 +28,28 @@ pub(crate) enum CopyIntent {
     Explicit,
 }
 
+/// Which selections a clipboard request may copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SelectionScope {
+    /// Any selection in the tree, trying `preferred` first.
+    Anywhere { preferred: Option<NodeId> },
+    /// Only the selection owned by this node.
+    Node(NodeId),
+    /// Only selections inside this subtree, such as a document selection shared across a
+    /// scroll view.
+    Within(NodeId),
+}
+
+impl SelectionScope {
+    fn admits(self, tree: &NodeTree, id: NodeId) -> bool {
+        match self {
+            Self::Anywhere { .. } => true,
+            Self::Node(owner) => owner == id,
+            Self::Within(root) => tree.is_descendant(root, id),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum SelectionClipboardRequest {
     Shortcut {
@@ -140,14 +162,14 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
     dispatch_selection_clipboard_request(
         tree,
         SelectionClipboardRequest::Shortcut { key, cut_requested },
-        None,
+        SelectionScope::Anywhere { preferred: None },
         ctx,
     )
 }
 
 pub(crate) fn copy_active_selection(
     tree: &mut NodeTree,
-    preferred_id: Option<NodeId>,
+    scope: SelectionScope,
     target: crate::clipboard::CopyOnSelect,
     intent: CopyIntent,
     ctx: &mut KeyCtx<'_>,
@@ -158,7 +180,7 @@ pub(crate) fn copy_active_selection(
     dispatch_selection_clipboard_request(
         tree,
         SelectionClipboardRequest::Write { target, intent },
-        preferred_id,
+        scope,
         ctx,
     )
 }
@@ -166,7 +188,7 @@ pub(crate) fn copy_active_selection(
 fn dispatch_selection_clipboard_request(
     tree: &mut NodeTree,
     request: SelectionClipboardRequest,
-    preferred_id: Option<NodeId>,
+    scope: SelectionScope,
     ctx: &mut KeyCtx<'_>,
 ) -> bool {
     let cut_requested = request.cut_requested();
@@ -198,10 +220,13 @@ fn dispatch_selection_clipboard_request(
 
         has_selection.then_some(node.id)
     }));
+    candidates.retain(|id| scope.admits(tree, *id));
 
     candidates.sort_unstable_by_key(|id| std::cmp::Reverse((id.index, id.generation)));
     candidates.dedup();
-    if let Some(preferred_id) = preferred_id
+    if let SelectionScope::Anywhere {
+        preferred: Some(preferred_id),
+    } = scope
         && let Some(index) = candidates.iter().position(|id| *id == preferred_id)
     {
         candidates.swap(0, index);
@@ -482,6 +507,9 @@ fn dispatch_selection_clipboard_request(
         let NodeKind::ScrollView(_) = &node.kind else {
             continue;
         };
+        if !scope.admits(tree, node.id) {
+            continue;
+        }
         let Some(selected_text) =
             drag::scroll_view_offscreen_document_selection_text(tree, node.id, true)
         else {
