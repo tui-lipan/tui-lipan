@@ -1340,22 +1340,55 @@ pub(crate) fn apply_visual_effects_over_backdrop(
     }
 }
 
-fn normalize_wide_grapheme_rows(buf: &mut Buffer, rows: RRect) {
+fn normalize_wide_grapheme_rows(buf: &mut Buffer, affected: RRect) {
     let area = buf.area;
-    let max_x = area.x.saturating_add(area.width);
-    for y in rows.y..rows.y.saturating_add(rows.height) {
-        for x in area.x..max_x {
+    let area_max_x = area.x.saturating_add(area.width);
+    // Include the preceding cell because a double-width leader may cross the left edge.
+    let scan_min_x = affected.x.saturating_sub(1).max(area.x);
+    let scan_max_x = affected.x.saturating_add(affected.width).min(area_max_x);
+    for y in affected.y..affected.y.saturating_add(affected.height) {
+        for x in scan_min_x..scan_max_x {
             let width = buf
                 .cell((x, y))
                 .map(|cell| UnicodeWidthStr::width(cell.symbol()))
                 .unwrap_or_default();
-            let continuation_end = (usize::from(x) + width).min(usize::from(max_x));
+            let continuation_end = (usize::from(x) + width).min(usize::from(area_max_x));
             for continuation_x in usize::from(x) + 1..continuation_end {
                 if let Some(cell) = buf.cell_mut((continuation_x as u16, y)) {
                     cell.reset();
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod wide_grapheme_tests {
+    use super::*;
+
+    #[test]
+    fn normalization_checks_a_leader_before_the_affected_region() {
+        let mut buf = Buffer::empty(RRect::new(0, 0, 8, 1));
+        buf[(1, 0)].set_symbol("你");
+        buf[(2, 0)].set_symbol("B");
+        buf[(5, 0)].set_symbol("你");
+        buf[(6, 0)].set_symbol("Z");
+
+        normalize_wide_grapheme_rows(&mut buf, RRect::new(2, 0, 1, 1));
+
+        assert_eq!(buf[(2, 0)].symbol(), " ");
+        assert_eq!(buf[(6, 0)].symbol(), "Z");
+    }
+
+    #[test]
+    fn normalization_clears_a_continuation_after_the_affected_region() {
+        let mut buf = Buffer::empty(RRect::new(0, 0, 8, 1));
+        buf[(2, 0)].set_symbol("你");
+        buf[(3, 0)].set_symbol("B");
+
+        normalize_wide_grapheme_rows(&mut buf, RRect::new(2, 0, 1, 1));
+
+        assert_eq!(buf[(3, 0)].symbol(), " ");
     }
 }
 
