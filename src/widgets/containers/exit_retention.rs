@@ -1486,12 +1486,24 @@ mod tests {
         assert!(inert_found, "the collapsing subtree should be marked inert");
     }
 
+    /// What a [`Generations`] step asks of focus after replacing the layer.
+    #[derive(Clone, Copy)]
+    enum Refocus {
+        /// Nothing: focus must survive the swap on its own.
+        None,
+        /// Request the focusable field by key.
+        Field,
+        /// Request the non-focusable panel wrapping it, which resolves to a descendant.
+        Panel,
+    }
+
     /// A layer keyed by a generation, replaced wholesale when the generation moves. Its successor
-    /// describes the same focusable key while the old layer is still retained for its exit.
+    /// describes the same keys - a non-focusable `panel` wrapping a focusable `field` - while the
+    /// old layer is still retained for its exit.
     struct Generations;
 
     impl Component for Generations {
-        type Message = ();
+        type Message = Refocus;
         type Properties = ();
         type State = u32;
 
@@ -1501,7 +1513,8 @@ mod tests {
 
         fn view(&self, ctx: &Context<Self>) -> Element {
             let field: Element = crate::widgets::Input::new("text").into();
-            let layer: Element = Animated::new(field.key("field"))
+            let panel: Element = VStack::new().child(field.key("field")).into();
+            let layer: Element = Animated::new(panel.key("panel"))
                 .auto_exit(ExitAnimation::new(200))
                 .into();
             ZStack::new()
@@ -1509,20 +1522,24 @@ mod tests {
                 .into()
         }
 
-        fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        fn update(&mut self, refocus: Self::Message, ctx: &mut Context<Self>) -> Update {
             ctx.state += 1;
-            ctx.request_focus("field");
+            match refocus {
+                Refocus::None => {}
+                Refocus::Field => ctx.request_focus("field"),
+                Refocus::Panel => ctx.request_focus("panel"),
+            }
             Update::full()
         }
     }
 
-    #[test]
-    fn a_successor_may_reuse_the_focusable_keys_of_a_retained_layer() {
-        let mut backend = TestBackend::new(Generations);
-        backend.render();
-        // Two live copies of `field` would trip the duplicate-focus-key assertion; the retained
-        // one is inert, so it must not count, and focus must land on the live one.
-        backend.dispatch(()).unwrap();
+    /// Replace the layer, then check the outgoing copy is retained and focus sits on the live
+    /// `field`.
+    fn assert_focus_lands_on_the_live_field(
+        backend: &mut TestBackend<Generations>,
+        refocus: Refocus,
+    ) {
+        backend.dispatch(refocus).unwrap();
         backend.render();
 
         let tree = &backend.core.tree;
@@ -1536,11 +1553,53 @@ mod tests {
             inert_fields, 1,
             "the outgoing layer should still be retained"
         );
-        let focused = backend.focused().expect("focus requested by key");
+        let focused = backend.focused().expect("focus should survive the swap");
         assert!(
             !tree.node(focused).inert,
-            "focus must not land on the retained copy"
+            "focus must not stay on the retained copy"
         );
         assert_eq!(backend.focused_key().map(|key| key.as_ref()), Some("field"));
+    }
+
+    /// Two live copies of `field` would trip the duplicate-focus-key assertion; the retained one
+    /// is inert, so it must not count, and a keyed request must land on the live one.
+    #[test]
+    fn a_successor_may_reuse_the_focusable_keys_of_a_retained_layer() {
+        let mut backend = TestBackend::new(Generations);
+        backend.render();
+        assert_focus_lands_on_the_live_field(&mut backend, Refocus::Field);
+    }
+
+    /// The field that already holds focus goes inert when its layer is replaced. Its node is still
+    /// valid, so focus restore must not keep it just because it exists: it moves to the successor
+    /// by key without anyone asking again.
+    #[test]
+    fn existing_focus_migrates_off_a_layer_that_starts_exiting() {
+        let mut backend = TestBackend::new(Generations);
+        backend.render();
+        assert!(backend.focus_key(&"field".into()));
+        assert_focus_lands_on_the_live_field(&mut backend, Refocus::None);
+    }
+
+    /// A request for a non-focusable key descends to its first focusable child; neither the
+    /// retained `panel` nor the retained `field` beneath it may be chosen.
+    #[test]
+    fn resolving_a_container_key_skips_retained_descendants() {
+        let mut backend = TestBackend::new(Generations);
+        backend.render();
+        assert_focus_lands_on_the_live_field(&mut backend, Refocus::Panel);
+    }
+
+    /// `TestBackend::focus_key` resolves keys like framework focus does.
+    #[test]
+    fn test_backend_focus_key_ignores_a_retained_copy() {
+        let mut backend = TestBackend::new(Generations);
+        backend.render();
+        backend.dispatch(Refocus::None).unwrap();
+        backend.render();
+
+        assert!(backend.focus_key(&"field".into()));
+        let focused = backend.focused().expect("focus_key focused the field");
+        assert!(!backend.core.tree.node(focused).inert);
     }
 }

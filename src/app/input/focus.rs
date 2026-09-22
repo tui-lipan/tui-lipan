@@ -140,12 +140,7 @@ pub(crate) fn restore_focus(
         && let Some(tag) = *focused_tag
         && let Some(id) = tree
             .iter_with_overlays()
-            .find(|n| {
-                !n.inert
-                    && n.is_focusable()
-                    && !in_excluded_scope(tree, n.id)
-                    && tag_of_node(n) == tag
-            })
+            .find(|n| n.is_focusable() && !in_excluded_scope(tree, n.id) && tag_of_node(n) == tag)
             .map(|n| n.id)
     {
         *focused = Some(id);
