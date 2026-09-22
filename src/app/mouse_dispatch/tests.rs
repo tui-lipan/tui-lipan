@@ -1707,7 +1707,11 @@ fn textarea_vim_double_click_selection_enters_visual_mode() {
     assert_eq!(backend.state().editor.anchor(), Some(0));
     assert_eq!(backend.state().editor.cursor(), 5);
     assert_eq!(backend.state().modes.as_slice(), [TextAreaVimMode::Visual]);
-    let state = backend.text_area_vim_state.get(&text_area_id).unwrap();
+    let state = backend
+        .widgets
+        .text_area_vim_state
+        .get(&text_area_id)
+        .unwrap();
     assert_eq!(state.mode, TextAreaVimMode::Visual);
     assert_eq!(state.visual_anchor, Some(0));
 }
@@ -1807,7 +1811,11 @@ fn textarea_vim_mouse_selection_clears_pending_search_feedback() {
     assert_eq!(backend.state().editor.anchor(), Some(0));
     assert_eq!(backend.state().editor.cursor(), 5);
     assert_eq!(backend.state().modes.as_slice(), [TextAreaVimMode::Visual]);
-    let state = backend.text_area_vim_state.get(&text_area_id).unwrap();
+    let state = backend
+        .widgets
+        .text_area_vim_state
+        .get(&text_area_id)
+        .unwrap();
     assert_eq!(state.mode, TextAreaVimMode::Visual);
     assert_eq!(state.pending, None);
     let NodeKind::TextArea(node) = &backend.core.tree.node(text_area_id).kind else {

@@ -1315,29 +1315,7 @@ impl<C: Component> AppRunner<C> {
         }
         self.last_post_reconcile_epoch = epoch;
 
-        self.widgets
-            .read_only_selection
-            .retain(|id, _| self.core.tree.is_valid(*id));
-        self.widgets.input_history.retain(|id, _| {
-            self.core.tree.is_valid(*id)
-                && matches!(self.core.tree.node(*id).kind, NodeKind::Input(_))
-        });
-        self.widgets.textarea_history.retain(|id, _| {
-            self.core.tree.is_valid(*id)
-                && matches!(self.core.tree.node(*id).kind, NodeKind::TextArea(_))
-        });
-        self.widgets.text_area_vim_state.retain(|id, _| {
-            self.core.tree.is_valid(*id)
-                && matches!(&self.core.tree.node(*id).kind, NodeKind::TextArea(ta) if ta.vim_motions)
-        });
-        self.widgets.hex_history.retain(|id, _| {
-            self.core.tree.is_valid(*id)
-                && matches!(self.core.tree.node(*id).kind, NodeKind::HexArea(_))
-        });
-        self.widgets.hex_pending_edit.retain(|id, _| {
-            self.core.tree.is_valid(*id)
-                && matches!(self.core.tree.node(*id).kind, NodeKind::HexArea(_))
-        });
+        self.widgets.prune(&self.core.tree);
     }
 
     pub(super) fn focused_node_has_cursor_anchor(&self) -> bool {

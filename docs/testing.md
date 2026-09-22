@@ -142,6 +142,12 @@ is coupled to `AppRunner` (animation state, drag autoscroll, DevTools, image
 suspension). Photographing a specific spinner or blink phase belongs on the
 env-var / headless path until a later deterministic-time project.
 
+`TestBackend::render()` does share the runner's post-reconcile cleanup: both
+drop a hover on a node that is gone and prune the per-node widget caches
+(read-only selections, undo history, Vim and hex state) whose node left the tree
+or changed kind. A test therefore sees the same state after a rerender as the
+live runner would, and a stale `NodeId` never survives into a later dispatch.
+
 ### Viewport resize
 
 ```rust
