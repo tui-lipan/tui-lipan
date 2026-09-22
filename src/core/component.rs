@@ -1161,7 +1161,7 @@ impl<C: Component> Context<C> {
     /// The requested configuration is normalized against the active clipboard provider before it
     /// becomes visible. The runtime then updates mouse behavior, programmatic clipboard handles,
     /// and clipboard-derived key bindings together at the end of the current update.
-    pub fn set_clipboard_config(&self, config: crate::clipboard::ClipboardConfig) {
+    pub fn set_clipboard_config(&mut self, config: crate::clipboard::ClipboardConfig) {
         let config = crate::clipboard::normalize_config_for_primary_support(
             config,
             self.env.clipboard.supports_primary_selection(),
