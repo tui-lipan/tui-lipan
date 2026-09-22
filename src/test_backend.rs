@@ -2087,8 +2087,9 @@ mod tests {
             "dragging a read-only input records its selection"
         );
 
+        // `dispatch` pumps the `Update::full()` through a render, so the ordinary public
+        // workflow is what has to leave no stale state behind.
         backend.dispatch(()).unwrap();
-        backend.render();
 
         assert!(!backend.core.tree.is_valid(input_id));
         assert!(
