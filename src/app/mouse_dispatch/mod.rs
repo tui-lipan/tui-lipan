@@ -623,15 +623,22 @@ impl<C: Component> MouseDispatchCtx<C> for AppRunner<C> {
                 self.paste_from_source(crate::clipboard::PasteSource::Clipboard)
             }
             crate::clipboard::RightClickAction::CopyOrPaste => {
-                self.copy_active_selection(crate::clipboard::CopyOnSelect::Clipboard, None)
-                    || self.paste_from_source(crate::clipboard::PasteSource::Clipboard)
+                self.copy_active_selection(
+                    crate::clipboard::CopyOnSelect::Clipboard,
+                    crate::app::input::keyboard::CopyIntent::Explicit,
+                    None,
+                ) || self.paste_from_source(crate::clipboard::PasteSource::Clipboard)
             }
         }
     }
 
     fn copy_selection_on_release(&mut self, id: crate::core::node::NodeId) {
         let target = self.clipboard_config.copy_on_mouse_select;
-        self.copy_active_selection(target, Some(id));
+        self.copy_active_selection(
+            target,
+            crate::app::input::keyboard::CopyIntent::Implicit,
+            Some(id),
+        );
     }
 
     fn selection_owner_for_node(&self, start: crate::core::node::NodeId) -> Option<SelectionOwner> {
@@ -1068,6 +1075,7 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
             crate::clipboard::RightClickAction::CopyOrPaste => {
                 self.copy_active_selection_for_mouse(
                     crate::clipboard::CopyOnSelect::Clipboard,
+                    crate::app::input::keyboard::CopyIntent::Explicit,
                     None,
                 ) || self.paste_from_source_for_mouse(crate::clipboard::PasteSource::Clipboard)
             }
@@ -1082,7 +1090,11 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
             .clipboard_config
             .borrow()
             .copy_on_mouse_select;
-        self.copy_active_selection_for_mouse(target, Some(id));
+        self.copy_active_selection_for_mouse(
+            target,
+            crate::app::input::keyboard::CopyIntent::Implicit,
+            Some(id),
+        );
     }
 
     fn selection_owner_for_node(&self, start: crate::core::node::NodeId) -> Option<SelectionOwner> {

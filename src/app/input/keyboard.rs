@@ -18,10 +18,26 @@ use crate::utils::SelectionEnd;
 #[cfg(feature = "terminal")]
 use crate::widgets::internal::terminal_node_selection_text;
 
+/// Whether the user asked for a selection copy or it happened as a side effect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CopyIntent {
+    /// Copy-on-select after a mouse selection completes. Stays silent because it runs on
+    /// every release, not only when the user means to copy.
+    Implicit,
+    /// A deliberate copy gesture, such as right-click copy. Flashes like a copy shortcut.
+    Explicit,
+}
+
 #[derive(Clone, Copy)]
 enum SelectionClipboardRequest {
-    Shortcut { key: KeyEvent, cut_requested: bool },
-    CopyOnSelect(crate::clipboard::CopyOnSelect),
+    Shortcut {
+        key: KeyEvent,
+        cut_requested: bool,
+    },
+    Write {
+        target: crate::clipboard::CopyOnSelect,
+        intent: CopyIntent,
+    },
 }
 
 impl SelectionClipboardRequest {
@@ -81,20 +97,33 @@ fn dispatch_selection_context(
         SelectionClipboardRequest::Shortcut { key, .. } => {
             dispatch_clipboard_with_feedback(key, context, ctx, id)
         }
-        SelectionClipboardRequest::CopyOnSelect(target) => {
+        SelectionClipboardRequest::Write { target, intent } => {
             let Some(text) = context.selection_text().filter(|text| !text.is_empty()) else {
                 return false;
             };
             if !context.can_copy() || context.block_copy_cut() {
                 return false;
             }
-            crate::ui::router::write_mouse_selection(
+            let copied = crate::ui::router::write_mouse_selection(
                 &text,
                 target,
                 ctx.clipboard,
                 ctx.clipboard_config,
             );
-            true
+            if intent == CopyIntent::Implicit {
+                return true;
+            }
+            let dispatch = crate::app::copy_feedback::dispatch_result_from_outcome(
+                ctx.copy_feedback,
+                ctx.clipboard_config,
+                id,
+                crate::ui::router::ClipboardDispatchOutcome {
+                    handled: true,
+                    copied,
+                    mutated: false,
+                },
+            );
+            ctx.record_copy_feedback_dispatch(dispatch)
         }
     }
 }
@@ -120,6 +149,7 @@ pub(crate) fn copy_active_selection(
     tree: &mut NodeTree,
     preferred_id: Option<NodeId>,
     target: crate::clipboard::CopyOnSelect,
+    intent: CopyIntent,
     ctx: &mut KeyCtx<'_>,
 ) -> bool {
     if matches!(target, crate::clipboard::CopyOnSelect::Disabled) {
@@ -127,7 +157,7 @@ pub(crate) fn copy_active_selection(
     }
     dispatch_selection_clipboard_request(
         tree,
-        SelectionClipboardRequest::CopyOnSelect(target),
+        SelectionClipboardRequest::Write { target, intent },
         preferred_id,
         ctx,
     )

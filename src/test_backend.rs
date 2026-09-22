@@ -802,6 +802,7 @@ where
     pub(crate) fn copy_active_selection_for_mouse(
         &mut self,
         target: crate::clipboard::CopyOnSelect,
+        intent: keyboard::CopyIntent,
         preferred_id: Option<NodeId>,
     ) -> bool {
         let clipboard = Rc::clone(&self.core.ctx.env().clipboard);
@@ -819,7 +820,13 @@ where
             &clipboard_config,
             &mut self.copy_feedback,
         );
-        keyboard::copy_active_selection(&mut self.core.tree, preferred_id, target, &mut key_ctx)
+        keyboard::copy_active_selection(
+            &mut self.core.tree,
+            preferred_id,
+            target,
+            intent,
+            &mut key_ctx,
+        )
     }
 
     /// Dispatch a mouse event through the same pipeline as the real runner.

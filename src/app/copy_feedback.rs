@@ -227,7 +227,7 @@ pub(crate) fn dispatch_clipboard_with_feedback_result(
     dispatch_result_from_outcome(feedback, config, node_id, outcome)
 }
 
-fn dispatch_result_from_outcome(
+pub(crate) fn dispatch_result_from_outcome(
     feedback: &mut CopyFeedbackState,
     config: &ClipboardConfig,
     node_id: NodeId,
