@@ -1234,7 +1234,8 @@ impl NodeTree {
     /// Focus restore resolves keys with a tree-wide first match
     /// (`iter_with_overlays().find(...)`), so colliding focusable keys silently
     /// teleport focus. Non-focusable keys stay sibling-scoped for reconcile and
-    /// are ignored here.
+    /// are ignored here, and so are inert nodes: a subtree retained for its exit
+    /// animation is invisible to focus, so its successor may reuse its keys.
     #[cfg(debug_assertions)]
     pub(crate) fn assert_unique_focus_keys(&self) {
         use rustc_hash::FxHashSet;
@@ -1247,7 +1248,7 @@ impl NodeTree {
             if !seen_ids.insert(node.id) {
                 continue;
             }
-            if !node.is_focusable() {
+            if node.inert || !node.is_focusable() {
                 continue;
             }
             let Some(key) = node.key.as_ref() else {

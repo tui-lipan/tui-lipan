@@ -497,7 +497,7 @@ mod tests {
     use crate::style::Length;
     use crate::test_backend::TestBackend;
     use crate::widgets::animated::AnimatedNode;
-    use crate::widgets::{Animated, HStack, Text, VStack};
+    use crate::widgets::{Animated, HStack, Text, VStack, ZStack};
 
     #[derive(Clone, Default)]
     struct Rows {
@@ -1484,5 +1484,63 @@ mod tests {
             stack.extend(node.children.iter().copied());
         }
         assert!(inert_found, "the collapsing subtree should be marked inert");
+    }
+
+    /// A layer keyed by a generation, replaced wholesale when the generation moves. Its successor
+    /// describes the same focusable key while the old layer is still retained for its exit.
+    struct Generations;
+
+    impl Component for Generations {
+        type Message = ();
+        type Properties = ();
+        type State = u32;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            0
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let field: Element = crate::widgets::Input::new("text").into();
+            let layer: Element = Animated::new(field.key("field"))
+                .auto_exit(ExitAnimation::new(200))
+                .into();
+            ZStack::new()
+                .child(layer.key(format!("layer-{}", ctx.state)))
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state += 1;
+            ctx.request_focus("field");
+            Update::full()
+        }
+    }
+
+    #[test]
+    fn a_successor_may_reuse_the_focusable_keys_of_a_retained_layer() {
+        let mut backend = TestBackend::new(Generations);
+        backend.render();
+        // Two live copies of `field` would trip the duplicate-focus-key assertion; the retained
+        // one is inert, so it must not count, and focus must land on the live one.
+        backend.dispatch(()).unwrap();
+        backend.render();
+
+        let tree = &backend.core.tree;
+        let inert_fields = tree
+            .iter()
+            .filter(|node| {
+                node.inert && node.key.as_ref().is_some_and(|key| key.as_ref() == "field")
+            })
+            .count();
+        assert_eq!(
+            inert_fields, 1,
+            "the outgoing layer should still be retained"
+        );
+        let focused = backend.focused().expect("focus requested by key");
+        assert!(
+            !tree.node(focused).inert,
+            "focus must not land on the retained copy"
+        );
+        assert_eq!(backend.focused_key().map(|key| key.as_ref()), Some("field"));
     }
 }

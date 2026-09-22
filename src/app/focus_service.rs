@@ -332,16 +332,22 @@ pub(crate) fn apply_focus_request(
     }
 }
 
+/// The live node carrying `key`. A subtree retained for its exit animation is inert and may share
+/// keys with the subtree replacing it, so it is never a focus target.
 fn keyed_node(tree: &NodeTree, key: &Key, capture: Option<NodeId>) -> Option<NodeId> {
     capture
         .and_then(|capture| {
             tree.iter_with_overlays()
-                .find(|node| node.key.as_ref() == Some(key) && tree.is_descendant(capture, node.id))
+                .find(|node| {
+                    !node.inert
+                        && node.key.as_ref() == Some(key)
+                        && tree.is_descendant(capture, node.id)
+                })
                 .map(|node| node.id)
         })
         .or_else(|| {
             tree.iter_with_overlays()
-                .find(|node| node.key.as_ref() == Some(key))
+                .find(|node| !node.inert && node.key.as_ref() == Some(key))
                 .map(|node| node.id)
         })
 }

@@ -110,7 +110,7 @@ pub(crate) fn restore_focus(
         // Find the node with the matching key.
         if let Some(id) = tree
             .iter_with_overlays()
-            .find(|n| n.key.as_ref() == Some(key))
+            .find(|n| !n.inert && n.key.as_ref() == Some(key))
             .map(|n| n.id)
         {
             // If the node itself is focusable, use it.
@@ -140,7 +140,12 @@ pub(crate) fn restore_focus(
         && let Some(tag) = *focused_tag
         && let Some(id) = tree
             .iter_with_overlays()
-            .find(|n| n.is_focusable() && !in_excluded_scope(tree, n.id) && tag_of_node(n) == tag)
+            .find(|n| {
+                !n.inert
+                    && n.is_focusable()
+                    && !in_excluded_scope(tree, n.id)
+                    && tag_of_node(n) == tag
+            })
             .map(|n| n.id)
     {
         *focused = Some(id);
