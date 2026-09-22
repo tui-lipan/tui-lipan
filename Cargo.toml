@@ -86,7 +86,7 @@ rustc-hash = "2"
 
 smallvec = "1"
 
-base64 = "0.22.1"
+base64 = "0.23.1"
 
 thiserror = "2.0.19"
 tracing = { version = "0.1", optional = true }
