@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -18,11 +19,11 @@ use super::service::{ClipboardConfig, ClipboardService};
 #[derive(Clone)]
 pub struct ClipboardHandle {
     service: Rc<ClipboardService>,
-    config: ClipboardConfig,
+    config: Rc<RefCell<ClipboardConfig>>,
 }
 
 impl ClipboardHandle {
-    pub(crate) fn new(service: Rc<ClipboardService>, config: ClipboardConfig) -> Self {
+    pub(crate) fn new(service: Rc<ClipboardService>, config: Rc<RefCell<ClipboardConfig>>) -> Self {
         Self { service, config }
     }
 
@@ -31,18 +32,19 @@ impl ClipboardHandle {
     /// Also emits OSC 52 when enabled (for clipboard over SSH) and writes to
     /// the primary selection on supported platforms.
     pub fn copy(&self, text: &str) -> Result<(), super::error::ClipboardError> {
-        if self.config.enable_osc52 {
+        let config = self.config.borrow().clone();
+        if config.enable_osc52 {
             write_osc52(text);
         }
 
         let clipboard_result = self.service.write_clipboard_text(text);
 
-        if self.config.enable_primary_selection && self.service.supports_primary_selection() {
+        if config.enable_primary_selection && self.service.supports_primary_selection() {
             // Best-effort; don't fail the overall copy if primary selection fails.
             let _ = self.service.write_primary_selection_text(text);
         }
 
-        if self.config.enable_osc52 {
+        if config.enable_osc52 {
             Ok(())
         } else {
             clipboard_result
@@ -63,7 +65,7 @@ impl ClipboardHandle {
     /// configuration. Enabled requests use the same native-plus-outer-terminal behavior as
     /// [`copy`](Self::copy).
     pub fn accept_osc52_store(&self, text: &str) -> Result<bool, super::error::ClipboardError> {
-        if !self.config.enable_osc52 {
+        if !self.config.borrow().enable_osc52 {
             return Ok(false);
         }
         self.copy(text)?;
@@ -200,7 +202,10 @@ mod tests {
             Box::new(RecordingProvider(Rc::clone(&recorded))),
             default_clipboard_reporter(),
         );
-        ClipboardHandle::new(Rc::new(service), ClipboardConfig::default())
+        ClipboardHandle::new(
+            Rc::new(service),
+            Rc::new(RefCell::new(ClipboardConfig::default())),
+        )
     }
 
     /// A provider that only implements the two required methods must report
@@ -236,7 +241,10 @@ mod tests {
     fn osc52_copy_succeeds_when_the_native_provider_is_unavailable() {
         let service =
             ClipboardService::new(Box::new(FailingProvider), default_clipboard_reporter());
-        let handle = ClipboardHandle::new(Rc::new(service), ClipboardConfig::default());
+        let handle = ClipboardHandle::new(
+            Rc::new(service),
+            Rc::new(RefCell::new(ClipboardConfig::default())),
+        );
 
         assert!(handle.copy("remote text").is_ok());
     }
@@ -247,10 +255,10 @@ mod tests {
             ClipboardService::new(Box::new(FailingProvider), default_clipboard_reporter());
         let handle = ClipboardHandle::new(
             Rc::new(service),
-            ClipboardConfig {
+            Rc::new(RefCell::new(ClipboardConfig {
                 enable_osc52: false,
                 ..ClipboardConfig::default()
-            },
+            })),
         );
 
         assert!(handle.copy("local text").is_err());
@@ -265,10 +273,10 @@ mod tests {
         );
         let handle = ClipboardHandle::new(
             Rc::new(service),
-            ClipboardConfig {
+            Rc::new(RefCell::new(ClipboardConfig {
                 enable_osc52: false,
                 ..ClipboardConfig::default()
-            },
+            })),
         );
 
         assert!(!handle.accept_osc52_store("blocked").unwrap());
@@ -281,6 +289,22 @@ mod tests {
         let handle = handle_with(Rc::clone(&recorded));
 
         assert!(handle.accept_osc52_store("accepted").unwrap());
+        assert_eq!(recorded.borrow().texts_written, ["accepted"]);
+    }
+
+    #[test]
+    fn retained_handle_observes_runtime_config_updates() {
+        let recorded = Rc::new(RefCell::new(Recorded::default()));
+        let service = ClipboardService::new(
+            Box::new(RecordingProvider(Rc::clone(&recorded))),
+            default_clipboard_reporter(),
+        );
+        let config = Rc::new(RefCell::new(ClipboardConfig::default()));
+        let handle = ClipboardHandle::new(Rc::new(service), Rc::clone(&config));
+
+        assert!(handle.accept_osc52_store("accepted").unwrap());
+        config.borrow_mut().enable_osc52 = false;
+        assert!(!handle.accept_osc52_store("blocked").unwrap());
         assert_eq!(recorded.borrow().texts_written, ["accepted"]);
     }
 

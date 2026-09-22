@@ -249,6 +249,7 @@ impl<C: Component> AppRunner<C> {
                     .ctx
                     .env()
                     .clipboard_config
+                    .borrow()
                     .copy_feedback_duration_ms as u64,
             );
             if !duration.is_zero() {

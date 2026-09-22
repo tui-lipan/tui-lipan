@@ -43,6 +43,26 @@ App::new()
     .run()
 ```
 
+For preferences that can change while an app is running, update the complete policy from a
+component message:
+
+```rust
+fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
+    if let Msg::ClipboardConfigChanged(config) = msg {
+        ctx.set_clipboard_config(config);
+    }
+    Update::none()
+}
+```
+
+`Context::set_clipboard_config` normalizes the requested policy against the active clipboard
+provider, publishes the effective value to every component context, and updates mouse behavior and
+clipboard-derived key bindings at the end of the current update. It preserves the app's keymap
+path, user-keymap policy, and `FrameworkKeymap` overrides. Use `ctx.clipboard_config()` to read the
+effective normalized policy; for example, a request for primary selection may read back as regular
+clipboard or disabled when the provider has no primary-selection support. The setter requires a
+mutable context, so call it from lifecycle methods such as `init()` or `update()`, not `view()`.
+
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
 | `enable_performable_ctrl_c_copy` | `bool` | `true` | Bind `Ctrl+C` to copy when selection exists; otherwise it falls through |

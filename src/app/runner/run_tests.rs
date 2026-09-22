@@ -90,6 +90,22 @@ impl ClipboardProvider for RecordingClipboardProvider {
     }
 }
 
+struct PrimaryClipboardProvider;
+
+impl ClipboardProvider for PrimaryClipboardProvider {
+    fn read_clipboard_text(&mut self) -> Result<String, ClipboardError> {
+        Ok(String::new())
+    }
+
+    fn write_clipboard_text(&mut self, _text: &str) -> Result<(), ClipboardError> {
+        Ok(())
+    }
+
+    fn supports_primary_selection(&self) -> bool {
+        true
+    }
+}
+
 impl Component for RunnerKeymapSmoke {
     type Message = ();
     type Properties = ();
@@ -3041,6 +3057,123 @@ fn default_runner_keymap_keeps_ctrl_q_quit_without_ctrl_c() {
         ctrl_q
             .iter()
             .any(|binding| binding.action == crate::app::input::keymap::Action::Quit)
+    );
+}
+
+#[test]
+fn runtime_clipboard_config_updates_runner_environment_and_derived_keymap() {
+    let app = App::new()
+        .mouse(false)
+        .framework_keymap(crate::FrameworkKeymap::default().unbind(crate::FrameworkAction::Quit))
+        .clipboard_provider(PrimaryClipboardProvider);
+    let mut runner = AppRunner::new(app, RunnerKeymapSmoke, ());
+    let requested = ClipboardConfig {
+        enable_performable_ctrl_c_copy: false,
+        enable_primary_selection: true,
+        paste_shift_insert_behavior: crate::PasteShiftInsertBehavior::PrimarySelection,
+        copy_on_mouse_select: crate::CopyOnSelect::Both,
+        middle_click_paste: crate::PasteSource::PrimarySelection,
+        right_click_action: crate::RightClickAction::CopyOrPaste,
+        ..ClipboardConfig::default()
+    };
+
+    runner.core.ctx.set_clipboard_config(requested);
+    runner.sync_clipboard_config();
+
+    let effective = runner.core.ctx.clipboard_config();
+    assert!(!effective.enable_performable_ctrl_c_copy);
+    assert!(effective.enable_primary_selection);
+    assert_eq!(
+        effective.paste_shift_insert_behavior,
+        crate::PasteShiftInsertBehavior::PrimarySelection
+    );
+    assert_eq!(
+        runner.clipboard_config.copy_on_mouse_select,
+        crate::CopyOnSelect::Both
+    );
+    assert_eq!(
+        runner.clipboard_config.middle_click_paste,
+        crate::PasteSource::PrimarySelection
+    );
+    assert_eq!(
+        runner.clipboard_config.right_click_action,
+        crate::RightClickAction::CopyOrPaste
+    );
+
+    assert!(
+        runner
+            .keymap
+            .matches(ctrl_char('c'))
+            .iter()
+            .all(|binding| binding.action != crate::app::input::keymap::Action::Copy)
+    );
+    assert!(
+        runner
+            .keymap
+            .matches(KeyEvent {
+                code: KeyCode::Insert,
+                mods: KeyMods {
+                    shift: true,
+                    ..KeyMods::default()
+                },
+            })
+            .iter()
+            .any(|binding| binding.action == crate::app::input::keymap::Action::PasteFromSelection)
+    );
+    assert!(
+        runner
+            .keymap
+            .matches(ctrl_char('q'))
+            .iter()
+            .all(|binding| binding.action != crate::app::input::keymap::Action::Quit)
+    );
+
+    runner.core.ctx.set_clipboard_config(ClipboardConfig {
+        enable_primary_selection: false,
+        copy_on_mouse_select: crate::CopyOnSelect::Both,
+        middle_click_paste: crate::PasteSource::PrimarySelection,
+        ..ClipboardConfig::default()
+    });
+    runner.sync_clipboard_config();
+    let effective = runner.core.ctx.clipboard_config();
+    assert_eq!(
+        effective.copy_on_mouse_select,
+        crate::CopyOnSelect::Clipboard
+    );
+    assert_eq!(effective.middle_click_paste, crate::PasteSource::Disabled);
+}
+
+#[test]
+fn runtime_clipboard_config_normalizes_against_the_active_provider() {
+    let writes = Rc::new(RefCell::new(Vec::new()));
+    let app = App::new()
+        .mouse(false)
+        .clipboard_provider(RecordingClipboardProvider { writes });
+    let mut runner = AppRunner::new(app, RunnerKeymapSmoke, ());
+
+    runner.core.ctx.set_clipboard_config(ClipboardConfig {
+        enable_primary_selection: false,
+        paste_shift_insert_behavior: crate::PasteShiftInsertBehavior::PrimarySelection,
+        copy_on_mouse_select: crate::CopyOnSelect::Both,
+        middle_click_paste: crate::PasteSource::PrimarySelection,
+        ..ClipboardConfig::default()
+    });
+    runner.sync_clipboard_config();
+
+    let effective = runner.core.ctx.clipboard_config();
+    assert!(!effective.enable_primary_selection);
+    assert_eq!(
+        effective.paste_shift_insert_behavior,
+        crate::PasteShiftInsertBehavior::Clipboard
+    );
+    assert_eq!(
+        effective.copy_on_mouse_select,
+        crate::CopyOnSelect::Clipboard
+    );
+    assert_eq!(effective.middle_click_paste, crate::PasteSource::Disabled);
+    assert_eq!(
+        runner.clipboard_config.copy_on_mouse_select,
+        crate::CopyOnSelect::Clipboard
     );
 }
 

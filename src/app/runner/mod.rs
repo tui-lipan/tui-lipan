@@ -641,6 +641,16 @@ pub struct AppRunner<C: Component> {
 }
 
 impl<C: Component> AppRunner<C> {
+    fn sync_clipboard_config(&mut self) {
+        if !self.core.ctx.env().clipboard_config_changed.replace(false) {
+            return;
+        }
+        let config = self.core.ctx.env().clipboard_config.borrow().clone();
+        self.clipboard_config = config.clone();
+        self.keymap.reconfigure_clipboard(&config);
+        self.keymap_runtime = KeymapRuntime::new(&self.keymap);
+    }
+
     pub(crate) fn new(app: App, component: C, props: C::Properties) -> Self {
         #[cfg(feature = "devtools")]
         crate::debug::set_devtools_logs_enabled(app.devtools_config.logs);
@@ -1632,6 +1642,7 @@ impl<C: Component> AppRunner<C> {
             self.mouse.hovered,
         );
         self.pop_drag_layout_collapse_hint();
+        self.sync_clipboard_config();
         self.apply_pending_focus_request();
         focus::restore_focus(
             &self.core.tree,

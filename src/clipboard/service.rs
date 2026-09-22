@@ -119,8 +119,8 @@ pub(crate) fn normalize_config_for_primary_support(
     mut config: ClipboardConfig,
     supports_primary_selection: bool,
 ) -> ClipboardConfig {
-    if config.enable_primary_selection && !supports_primary_selection {
-        config.enable_primary_selection = false;
+    config.enable_primary_selection &= supports_primary_selection;
+    if !config.enable_primary_selection {
         config.copy_on_mouse_select = match config.copy_on_mouse_select {
             CopyOnSelect::PrimarySelection => CopyOnSelect::Disabled,
             CopyOnSelect::Both => CopyOnSelect::Clipboard,
@@ -129,15 +129,12 @@ pub(crate) fn normalize_config_for_primary_support(
         if matches!(config.middle_click_paste, PasteSource::PrimarySelection) {
             config.middle_click_paste = PasteSource::Disabled;
         }
-    }
-
-    if !config.enable_primary_selection
-        && matches!(
+        if matches!(
             config.paste_shift_insert_behavior,
             PasteShiftInsertBehavior::PrimarySelection
-        )
-    {
-        config.paste_shift_insert_behavior = PasteShiftInsertBehavior::Clipboard;
+        ) {
+            config.paste_shift_insert_behavior = PasteShiftInsertBehavior::Clipboard;
+        }
     }
 
     config

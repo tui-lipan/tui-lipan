@@ -176,7 +176,7 @@ where
         let clipboard_provider = app.clipboard_provider;
         let clipboard_reporter = app.clipboard_reporter.clone();
         let mouse_capture = Rc::new(Cell::new(app.mouse_enabled.unwrap_or(true)));
-        let mut core = if inline_transcript_mode {
+        let core = if inline_transcript_mode {
             RuntimeCore::new_test_transcript(
                 component,
                 props,
@@ -206,7 +206,7 @@ where
             app.clipboard_config.clone(),
             core.ctx.env().clipboard.supports_primary_selection(),
         );
-        core.ctx.set_clipboard_config(clipboard_config.clone());
+        *core.ctx.env().clipboard_config.borrow_mut() = clipboard_config.clone();
         let mut keymap_config = KeymapConfig::from_clipboard_config(&clipboard_config);
         if let Some(path) = app.keymap_path.clone() {
             keymap_config = keymap_config.keymap_path(path);
@@ -482,8 +482,11 @@ where
     /// versus [`crate::UpdateLevel::Full`] is the difference between a repaint and rebuilding the
     /// whole window.
     pub fn update_level(&mut self, msg: C::Message) -> Result<crate::UpdateLevel> {
-        self.core
-            .update_from_boxed(crate::callback::ScopeId(1), Box::new(msg))
+        let level = self
+            .core
+            .update_from_boxed(crate::callback::ScopeId(1), Box::new(msg))?;
+        self.sync_clipboard_config();
+        Ok(level)
     }
 
     /// Inject a key event through the same dispatch pipeline as the real runner.
@@ -501,7 +504,7 @@ where
     /// `preventDefault` without stealing shortcuts when unrelated updates flush.
     pub fn send_key(&mut self, key: KeyEvent) -> Result<bool> {
         let clipboard = Rc::clone(&self.core.ctx.env().clipboard);
-        let clipboard_config = self.core.ctx.env().clipboard_config.clone();
+        let clipboard_config = self.core.ctx.env().clipboard_config.borrow().clone();
         self.framework_effects.clear();
 
         // Mirrors `AppRunner::dispatch_layered_key`: a focused KeyCapture sees the key first.
@@ -739,7 +742,7 @@ where
         }
 
         let clipboard = Rc::clone(&self.core.ctx.env().clipboard);
-        let clipboard_config = self.core.ctx.env().clipboard_config.clone();
+        let clipboard_config = self.core.ctx.env().clipboard_config.borrow().clone();
 
         let mut key_ctx = KeyCtx {
             read_only_selection: None,
@@ -772,7 +775,7 @@ where
         source: crate::clipboard::PasteSource,
     ) -> bool {
         let clipboard = Rc::clone(&self.core.ctx.env().clipboard);
-        let clipboard_config = self.core.ctx.env().clipboard_config.clone();
+        let clipboard_config = self.core.ctx.env().clipboard_config.borrow().clone();
         let Some(text) =
             crate::ui::router::read_paste_source(source, &clipboard, &clipboard_config)
         else {
@@ -802,7 +805,7 @@ where
         preferred_id: Option<NodeId>,
     ) -> bool {
         let clipboard = Rc::clone(&self.core.ctx.env().clipboard);
-        let clipboard_config = self.core.ctx.env().clipboard_config.clone();
+        let clipboard_config = self.core.ctx.env().clipboard_config.borrow().clone();
         let mut key_ctx = make_key_ctx(
             Some(&self.read_only_selection),
             &mut self.input_history,
@@ -913,6 +916,15 @@ where
         focus_service::apply_focus_request(&self.core.tree, &mut focus_refs!(self), request);
     }
 
+    fn sync_clipboard_config(&mut self) {
+        if !self.core.ctx.env().clipboard_config_changed.replace(false) {
+            return;
+        }
+        let config = self.core.ctx.env().clipboard_config.borrow().clone();
+        self.keymap.reconfigure_clipboard(&config);
+        self.keymap_runtime = KeymapRuntime::new(&self.keymap);
+    }
+
     /// Process all queued messages and any messages produced by background commands.
     ///
     /// Returns `true` if any update requested a re-render.
@@ -932,6 +944,8 @@ where
                 crate::core::component::UpdateLevel::None
             );
         }
+
+        self.sync_clipboard_config();
 
         dirty |= self.drain_copy_feedback_requests();
 
@@ -1075,6 +1089,7 @@ where
             self.focused_key.as_ref(),
             self.mouse.hovered,
         );
+        self.sync_clipboard_config();
         if let Some(request) = self.core.ctx.take_focus_request() {
             self.apply_focus_request(request);
         }
@@ -1105,6 +1120,7 @@ where
                 .ctx
                 .env()
                 .clipboard_config
+                .borrow()
                 .copy_feedback_duration_ms as u64,
         );
         if duration.is_zero() {
@@ -1996,6 +2012,10 @@ mod tests {
 
     struct CopyFeedbackHarness;
 
+    struct RuntimeClipboardHarness;
+
+    struct InitClipboardHarness;
+
     struct NoPrimaryClipboardProvider;
 
     impl crate::ClipboardProvider for NoPrimaryClipboardProvider {
@@ -2028,6 +2048,47 @@ mod tests {
         }
     }
 
+    impl Component for RuntimeClipboardHarness {
+        type Message = crate::ClipboardConfig;
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, config: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.set_clipboard_config(config);
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            Input::new("").into()
+        }
+    }
+
+    impl Component for InitClipboardHarness {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::Command> {
+            ctx.set_clipboard_config(crate::ClipboardConfig {
+                enable_performable_ctrl_c_copy: false,
+                ..crate::ClipboardConfig::default()
+            });
+            None
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            Input::new("").into()
+        }
+    }
+
     #[test]
     fn app_clipboard_config_is_normalized_before_building_test_keymap() {
         let app = crate::App::new()
@@ -2041,7 +2102,7 @@ mod tests {
             });
 
         let backend = TestBackend::new_with_app(app, CopyFeedbackHarness, ());
-        let config = &backend.core.ctx.env().clipboard_config;
+        let config = backend.core.ctx.env().clipboard_config.borrow();
         assert!(!config.enable_primary_selection);
         assert_eq!(config.copy_on_mouse_select, crate::CopyOnSelect::Disabled);
         assert_eq!(config.middle_click_paste, crate::PasteSource::Disabled);
@@ -2067,6 +2128,48 @@ mod tests {
                 .iter()
                 .all(|binding| binding.action != Action::PasteFromSelection)
         );
+    }
+
+    #[test]
+    fn runtime_clipboard_config_rebuilds_the_test_backend_keymap() {
+        let mut backend = TestBackend::new(RuntimeClipboardHarness);
+        backend
+            .dispatch(crate::ClipboardConfig {
+                enable_performable_ctrl_c_copy: false,
+                paste_shift_insert_behavior: crate::PasteShiftInsertBehavior::Clipboard,
+                ..crate::ClipboardConfig::default()
+            })
+            .unwrap();
+
+        let ctrl_c = backend.keymap.matches(KeyEvent {
+            code: KeyCode::Char('c'),
+            mods: KeyMods {
+                ctrl: true,
+                ..KeyMods::NONE
+            },
+        });
+        assert!(ctrl_c.iter().all(|binding| binding.action != Action::Copy));
+        assert!(
+            !backend
+                .core
+                .ctx
+                .clipboard_config()
+                .enable_performable_ctrl_c_copy
+        );
+    }
+
+    #[test]
+    fn clipboard_config_set_during_init_applies_before_the_first_input() {
+        let backend = TestBackend::new(InitClipboardHarness);
+        let ctrl_c = backend.keymap.matches(KeyEvent {
+            code: KeyCode::Char('c'),
+            mods: KeyMods {
+                ctrl: true,
+                ..KeyMods::NONE
+            },
+        });
+
+        assert!(ctrl_c.iter().all(|binding| binding.action != Action::Copy));
     }
 
     impl Component for FocusEventHarness {

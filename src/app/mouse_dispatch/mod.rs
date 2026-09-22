@@ -1042,12 +1042,24 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
     }
 
     fn handle_middle_click_paste(&mut self) -> bool {
-        let source = self.core.ctx.env().clipboard_config.middle_click_paste;
+        let source = self
+            .core
+            .ctx
+            .env()
+            .clipboard_config
+            .borrow()
+            .middle_click_paste;
         self.paste_from_source_for_mouse(source)
     }
 
     fn handle_right_click_clipboard(&mut self) -> bool {
-        let action = self.core.ctx.env().clipboard_config.right_click_action;
+        let action = self
+            .core
+            .ctx
+            .env()
+            .clipboard_config
+            .borrow()
+            .right_click_action;
         match action {
             crate::clipboard::RightClickAction::Disabled => false,
             crate::clipboard::RightClickAction::PasteClipboard => {
@@ -1063,7 +1075,13 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
     }
 
     fn copy_selection_on_release(&mut self, id: crate::core::node::NodeId) {
-        let target = self.core.ctx.env().clipboard_config.copy_on_mouse_select;
+        let target = self
+            .core
+            .ctx
+            .env()
+            .clipboard_config
+            .borrow()
+            .copy_on_mouse_select;
         self.copy_active_selection_for_mouse(target, Some(id));
     }
 

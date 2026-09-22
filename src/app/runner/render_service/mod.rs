@@ -775,6 +775,7 @@ impl<C: Component> AppRunner<C> {
         terminal: &mut crate::backend::ratatui_backend::Terminal,
         draw_mode: DrawMode,
     ) -> Result<std::time::Duration> {
+        self.sync_clipboard_config();
         #[cfg(feature = "image")]
         self.refresh_image_layout_suspension();
         if let ActiveDrag::Scrollbar(drag) = &self.drag.active {

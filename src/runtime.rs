@@ -204,6 +204,8 @@ where
         let devtools_metrics = Rc::new(crate::core::runtime_env::DevToolsMetrics::default());
         let ui_snapshot_request = Rc::new(RefCell::new(None));
         let copy_feedback_request = Rc::new(RefCell::new(Vec::new()));
+        let clipboard_config = Rc::new(RefCell::new(clipboard_config));
+        let clipboard_config_changed = Rc::new(Cell::new(false));
         let active_theme = Rc::new(RefCell::new(theme.clone()));
         let active_theme_generation = Rc::new(Cell::new(1));
         let effect_phase = Rc::new(Cell::new(0));
@@ -236,6 +238,7 @@ where
             pending_transcript_entries: pending_transcript_entries.clone(),
             clipboard,
             clipboard_config,
+            clipboard_config_changed,
             active_theme,
             active_theme_generation,
             effect_phase,

@@ -350,7 +350,9 @@ pub(crate) struct RuntimeEnv {
     pub transcript_history: Rc<RefCell<Vec<TranscriptEntry>>>,
     pub pending_transcript_entries: Rc<RefCell<VecDeque<TranscriptEntry>>>,
     pub clipboard: Rc<ClipboardService>,
-    pub clipboard_config: ClipboardConfig,
+    pub clipboard_config: Rc<RefCell<ClipboardConfig>>,
+    /// Set when a component changes clipboard policy and the runner must refresh derived state.
+    pub clipboard_config_changed: Rc<Cell<bool>>,
     pub active_theme: Rc<RefCell<Theme>>,
     pub active_theme_generation: Rc<Cell<u64>>,
     pub effect_phase: Rc<Cell<u64>>,
