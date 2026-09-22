@@ -247,9 +247,13 @@ fn right_click_clipboard<C: Component, T: MouseDispatchCtx<C>>(ctx: &mut T, hit:
 fn copy_at_pointer<C: Component, T: MouseDispatchCtx<C>>(ctx: &mut T, hit: NodeId) -> bool {
     let scope = match ctx.selection_owner_for_node(hit) {
         Some(SelectionOwner::Node(id)) => SelectionScope::Node(id),
-        Some(SelectionOwner::DocumentShared { scroll_view_id, .. }) => {
-            SelectionScope::Within(scroll_view_id)
-        }
+        Some(SelectionOwner::DocumentShared {
+            scroll_view_id,
+            shared_selection_id,
+        }) => SelectionScope::DocumentShared {
+            scroll_view_id,
+            shared_selection_id,
+        },
         None => return false,
     };
     ctx.copy_selection(CopyOnSelect::Clipboard, CopyIntent::Explicit, scope)

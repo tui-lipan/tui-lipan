@@ -510,11 +510,18 @@ fn offscreen_single_selection_text(sel: &SingleDocSelection) -> Option<Arc<str>>
 /// `ScrollView` children. This covers virtualized rows that are not present in
 /// the live node tree while preserving shared-selection group order where
 /// possible.
+///
+/// With `group`, only selections in that shared-selection group are considered;
+/// otherwise the first selection in the scroll view wins.
 pub(crate) fn scroll_view_offscreen_document_selection_text(
     tree: &NodeTree,
     scroll_view_id: NodeId,
+    group: Option<&str>,
     apply_exclusions: bool,
 ) -> Option<Arc<str>> {
+    let in_group = |shared_id: Option<&str>| {
+        group.is_none_or(|group| shared_selection_id_matches(shared_id, group))
+    };
     if !tree.is_valid(scroll_view_id) {
         return None;
     }
@@ -538,7 +545,7 @@ pub(crate) fn scroll_view_offscreen_document_selection_text(
                 || sel
                     .selection_anchor
                     .is_some_and(|anchor| anchor != sel.selection_cursor);
-            if !has_selection {
+            if !has_selection || !in_group(sel.shared_selection_id.as_deref()) {
                 continue;
             }
             if let Some(shared_id) = &sel.shared_selection_id
@@ -571,6 +578,9 @@ pub(crate) fn scroll_view_offscreen_document_selection_text(
             continue;
         };
         for sel in &off.docs {
+            if !in_group(sel.shared_selection_id.as_deref()) {
+                continue;
+            }
             if let Some(text) = offscreen_single_selection_text(sel)
                 && !text.is_empty()
             {

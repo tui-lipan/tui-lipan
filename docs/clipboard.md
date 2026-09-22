@@ -110,9 +110,10 @@ focus:
   the user clicked, the way a terminal emulator or tmux pastes into the pane under the mouse. A
   widget that cannot take pointer focus, for example because `FocusPolicy::Manual` is set or it is
   not focusable, receives nothing. The caret is not repositioned.
-- A `CopyOrPaste` right click copies only the selection owned by the widget under the pointer, or a
-  shared document selection within the same scroll view. A selection elsewhere is left alone, and
-  the click falls through to a paste at the pointer.
+- A `CopyOrPaste` right click copies only the selection owned by the widget under the pointer. For a
+  `DocumentView` with a `shared_selection_id`, that is the selection of its own group in its scroll
+  view, including rows scrolled off screen; other groups in the same scroll view are left alone. If
+  the pointer is not on a selection, the click falls through to a paste at the pointer.
 - A press over anything else, such as a status bar, tab strip, frame border, or empty space, does
   nothing.
 
