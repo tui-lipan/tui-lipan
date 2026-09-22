@@ -44,7 +44,12 @@ pub(crate) enum SelectionScope {
 }
 
 impl SelectionScope {
+    /// Whether `id` is in scope. Candidates can include stale ids from `read_only_selection`, so
+    /// this is total over arbitrary ids and never reads a node that is no longer in the tree.
     fn admits(&self, tree: &NodeTree, id: NodeId) -> bool {
+        if !tree.is_valid(id) {
+            return false;
+        }
         match self {
             Self::Anywhere { .. } => true,
             Self::Node(owner) => *owner == id,
@@ -793,6 +798,7 @@ mod tests {
     /// Explicitly copy whatever `scope` admits, as a right-click copy does.
     fn copy_in_scope(
         tree: &mut NodeTree,
+        read_only_selection: Option<&HashMap<NodeId, (usize, Option<usize>)>>,
         scope: SelectionScope,
         clipboard: &ClipboardService,
     ) -> bool {
@@ -808,7 +814,7 @@ mod tests {
         let mut hex_pending_edit = HashMap::new();
         let mut copy_feedback = crate::app::copy_feedback::CopyFeedbackState::default();
         let mut ctx = KeyCtx {
-            read_only_selection: None,
+            read_only_selection,
             input_history: &mut input_history,
             textarea_history: &mut textarea_history,
             text_area_vim_state: &mut text_area_vim_state,
@@ -900,11 +906,11 @@ mod tests {
         );
 
         let messages = shared_scope(&tree, "messages");
-        assert!(!copy_in_scope(&mut tree, messages, &clipboard));
+        assert!(!copy_in_scope(&mut tree, None, messages, &clipboard));
         assert!(writes.borrow().is_empty());
 
         let logs = shared_scope(&tree, "logs");
-        assert!(copy_in_scope(&mut tree, logs, &clipboard));
+        assert!(copy_in_scope(&mut tree, None, logs, &clipboard));
         assert_eq!(writes.borrow().as_slice(), &["gamma\n\ndelta"]);
     }
 
@@ -963,12 +969,74 @@ mod tests {
         );
 
         let messages = shared_scope(&tree, "messages");
-        assert!(!copy_in_scope(&mut tree, messages, &clipboard));
+        assert!(!copy_in_scope(&mut tree, None, messages, &clipboard));
         assert!(writes.borrow().is_empty());
 
         let logs = shared_scope(&tree, "logs");
-        assert!(copy_in_scope(&mut tree, logs, &clipboard));
+        assert!(copy_in_scope(&mut tree, None, logs, &clipboard));
         assert_eq!(writes.borrow().as_slice(), &["row 1"]);
+    }
+
+    #[test]
+    fn shared_group_scope_skips_stale_read_only_selection_ids() {
+        fn root(with_input: bool) -> Element {
+            let mut stack = crate::widgets::VStack::new();
+            if with_input {
+                stack = stack.child(
+                    Input::new("stale text")
+                        .read_only(true)
+                        .focusable(false)
+                        .key("stale-input"),
+                );
+            }
+            stack
+                .child(
+                    ScrollView::new()
+                        .children(["alpha", "beta"].map(|text| {
+                            DocumentView::new(text)
+                                .focusable(false)
+                                .shared_selection_id("messages")
+                                .into()
+                        }))
+                        .key("docs"),
+                )
+                .into()
+        }
+
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 12,
+        };
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(&mut tree, &root(true), viewport, None);
+        let stale_input = tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::Input(_)))
+            .map(|node| node.id)
+            .expect("read-only input exists");
+        let read_only_selection = HashMap::from([(stale_input, (5, Some(0)))]);
+
+        LayoutEngine::reconcile_with_focus(&mut tree, &root(false), viewport, None);
+        assert!(!tree.is_valid(stale_input), "input id should now be stale");
+
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let clipboard = ClipboardService::new(
+            Box::new(RecordingClipboard {
+                writes: writes.clone(),
+            }),
+            Rc::new(|_| {}),
+        );
+
+        let messages = shared_scope(&tree, "messages");
+        assert!(!copy_in_scope(
+            &mut tree,
+            Some(&read_only_selection),
+            messages,
+            &clipboard,
+        ));
+        assert!(writes.borrow().is_empty());
     }
 
     fn enter_key(mods: KeyMods) -> KeyEvent {
