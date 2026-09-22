@@ -762,7 +762,7 @@ impl FocusContext {
         {
             if let Some(id) = tree
                 .iter()
-                .find(|n| n.key.as_ref() == Some(key))
+                .find(|n| !n.inert && n.key.as_ref() == Some(key))
                 .map(|n| n.id)
             {
                 cur = Some(id);

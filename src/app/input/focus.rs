@@ -110,7 +110,7 @@ pub(crate) fn restore_focus(
         // Find the node with the matching key.
         if let Some(id) = tree
             .iter_with_overlays()
-            .find(|n| n.key.as_ref() == Some(key))
+            .find(|n| !n.inert && n.key.as_ref() == Some(key))
             .map(|n| n.id)
         {
             // If the node itself is focusable, use it.

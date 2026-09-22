@@ -1818,12 +1818,15 @@ impl<C: Component> TestBackend<C> {
     }
 
     /// Focus the widget carrying `key`. Returns whether focus moved.
+    ///
+    /// Resolves keys the way framework focus does: a subtree retained for its exit animation is
+    /// inert and may share keys with its successor, so only live widgets are candidates.
     pub fn focus_key(&mut self, key: &Key) -> bool {
         let Some(id) = self
             .core
             .tree
             .iter()
-            .find(|node| node.key.as_ref() == Some(key))
+            .find(|node| !node.inert && node.key.as_ref() == Some(key))
             .map(|node| node.id)
         else {
             return false;

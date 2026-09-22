@@ -134,17 +134,20 @@ impl Node {
     /// Returns true if this node can receive focus.
     ///
     /// A disabled widget is never focusable: it cannot act on a key, so parking focus on it
-    /// would strand keyboard users on a dead stop. The rule lives here rather than in each
-    /// widget's [`WidgetNode::is_focusable`] so a new widget cannot forget it.
+    /// would strand keyboard users on a dead stop. Neither is an [`inert`](Self::inert) one: it
+    /// is retained only to finish an exit animation, its callbacks may close over a scope that is
+    /// gone, and a successor may already carry its key. The rules live here rather than in each
+    /// widget's [`WidgetNode::is_focusable`] or at each focus-resolution site so that neither a
+    /// new widget nor a new focus path can forget them.
     pub fn is_focusable(&self) -> bool {
-        !self.kind.is_disabled() && self.kind.is_focusable()
+        !self.inert && !self.kind.is_disabled() && self.kind.is_focusable()
     }
 
     /// Returns true if this node participates in Tab traversal.
     ///
-    /// Disabled widgets are excluded for the same reason as [`Self::is_focusable`].
+    /// Disabled and inert widgets are excluded for the same reasons as [`Self::is_focusable`].
     pub fn is_tab_stop(&self) -> bool {
-        !self.kind.is_disabled() && self.kind.is_tab_stop()
+        !self.inert && !self.kind.is_disabled() && self.kind.is_tab_stop()
     }
 
     pub(crate) fn on_focus_callback(&self) -> Option<&crate::callback::Callback<()>> {
@@ -1234,7 +1237,8 @@ impl NodeTree {
     /// Focus restore resolves keys with a tree-wide first match
     /// (`iter_with_overlays().find(...)`), so colliding focusable keys silently
     /// teleport focus. Non-focusable keys stay sibling-scoped for reconcile and
-    /// are ignored here.
+    /// are ignored here, and so are inert nodes: a subtree retained for its exit
+    /// animation is invisible to focus, so its successor may reuse its keys.
     #[cfg(debug_assertions)]
     pub(crate) fn assert_unique_focus_keys(&self) {
         use rustc_hash::FxHashSet;
