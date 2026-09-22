@@ -153,12 +153,16 @@ After implementation:
 1. Keep `GOOGLE_GENERATIVE_AI_API_KEY` configured in the protected `release`
    environment. Rosie uses `google/gemini-3.5-flash-lite`; OpenCode receives no
    GitHub or crates.io publication token.
-2. Bump `version` in both `Cargo.toml` files and update the root
-   `tui-lipan-macro` dependency to the same version.
-3. Run `python3 -m unittest scripts.test_release_notes` with the normal
-   formatting, lint, documentation, and test checks.
-4. Commit with message `release: vX.Y.Z` and a DCO sign-off, create the
-   `vX.Y.Z` tag, and push the commit and tag.
+2. From a clean, up-to-date `main`, run
+   `python3 scripts/bump_version.py X.Y.Z --commit`. It bumps `version` in both
+   `Cargo.toml` files and the root `tui-lipan-macro` dependency, rewrites the
+   documented install snippets when the release series changes, runs
+   `cargo check --workspace`, and creates the signed-off `release: vX.Y.Z`
+   commit and `vX.Y.Z` tag. Use `--dry-run` to preview, or omit `--commit` to
+   review the diff before committing by hand.
+3. Run `python3 -m unittest scripts.test_release_notes scripts.test_bump_version`
+   with the normal formatting, lint, documentation, and test checks.
+4. Push the commit and tag: `git push origin main vX.Y.Z`.
 5. `.github/workflows/release.yml` resolves the previous published Release and
    the new tag to exact commits, proves ancestry, and gives Rosie every
    candidate commit subject, summary, and changed path. Rosie writes `Added`,

@@ -49,8 +49,8 @@ jobs:
       - name: Check children()/child() ordering
         run: python3 scripts/check-children-replace.py
 
-      - name: Test release-note range and format policy
-        run: python3 -m unittest scripts.test_release_notes
+      - name: Test release tooling
+        run: python3 -m unittest scripts.test_release_notes scripts.test_bump_version
 
       - name: Check macro and rust formatting
         shell: bash

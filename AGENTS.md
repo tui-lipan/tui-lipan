@@ -106,7 +106,7 @@ python3 scripts/check-widget-variant-parity.py
 python3 scripts/generate-node-kind-delegate-arms.py
 python3 scripts/check-widget-style-slots.py
 python3 scripts/check-children-replace.py
-python3 -m unittest scripts.test_release_notes
+python3 -m unittest scripts.test_release_notes scripts.test_bump_version
 find src tests benches examples tui-lipan-macro -name '*.rs' -print0 \
   | xargs -0 -r ./scripts/format-rust-with-macros --check
 python3 scripts/check-feature-tables.py
@@ -387,8 +387,10 @@ Other expectations:
 
 ## Releases (maintainers)
 
-Releases are tag-driven: bump both crate versions and the root macro dependency,
-then push a `vX.Y.Z` tag. `.github/workflows/release.yml` verifies the versions
+Releases are tag-driven. `python3 scripts/bump_version.py X.Y.Z --commit` bumps
+both crate versions, the root macro dependency, and (on a series bump) the
+install snippets, then creates the signed-off `release: vX.Y.Z` commit and tag;
+push them with `git push origin main vX.Y.Z`. `.github/workflows/release.yml` verifies the versions
 and test suite while the `/changelog` command has Rosie write notes from each
 PR Summary since the previous published release. Generated notes
 are validated and must succeed before either crate can publish through crates.io
