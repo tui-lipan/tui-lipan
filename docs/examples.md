@@ -127,6 +127,7 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 | `visual_effects` | `EffectScope` post-processing: monochrome, palettes, scanlines, rainbow, CRT presets |
 | `effects_ripple` | Phase-owned ripple effects: looping background wave plus one-shot burst |
 | `effect_scope_dot_field` | Tabbed full-screen custom `EffectScope` shaders: neon bloom, veiled lights, ember drift, hearth glow |
+| `effect_backdrop_transitions` | Screen transitions from custom effects that read their backdrop: iris, wipe, dissolve, per-cell crossfade |
 
 ---
 

@@ -272,6 +272,9 @@ required-features = ["big-text"]
 name = "effect_scope_dot_field"
 
 [[example]]
+name = "effect_backdrop_transitions"
+
+[[example]]
 name = "markdown_hub"
 required-features = ["markdown"]
 

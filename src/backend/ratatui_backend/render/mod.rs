@@ -14,8 +14,9 @@ use crate::app::copy_feedback::CopyFeedbackState;
 #[cfg(feature = "diff-view")]
 use crate::backend::ratatui_backend::common::finalize_style;
 use crate::backend::ratatui_backend::common::{
-    apply_effect_style_clipped, apply_visual_effects_clipped, current_render_screen_background,
-    from_ratatui_color, push_render_terminal_bg, render_placeholder_frame, to_ratatui_rect,
+    BufferSnapshot, apply_effect_style_clipped, apply_visual_effects_clipped,
+    apply_visual_effects_over_backdrop, current_render_screen_background, from_ratatui_color,
+    push_render_terminal_bg, render_placeholder_frame, snapshot_buffer_rect, to_ratatui_rect,
     to_ratatui_style,
 };
 use crate::backend::ratatui_backend::glyph_paint_cache::{ActiveMemoGuard, PaintGlyphCaches};
@@ -65,6 +66,7 @@ use crate::backend::ratatui_backend::renderers::{
     text_area::render_text_area_node,
 };
 use crate::core::node::{NodeId, NodeKind, NodeTree};
+use crate::style::VisualEffect;
 use crate::style::resolve::{resolve_base_style, resolve_force_accent_style};
 use crate::style::{Rect, ScrollbarVariant, Style, StyleSlot, ThemeRole, resolve_slot};
 use crate::utils::scrollbar::ScrollbarMetricsCache;
@@ -570,12 +572,13 @@ fn render_subtree(
             Option<crate::style::Rect>,
             RenderOffset,
             EffectPhase,
+            Option<BufferSnapshot>,
         ),
         AnimatedPost(
             NodeId,
             Option<crate::style::Rect>,
             RenderOffset,
-            Option<AnimatedRestoreSnapshot>,
+            Option<BufferSnapshot>,
         ),
         SplitterPost(NodeId, Option<crate::style::Rect>, RenderOffset),
         DropTargetPost(NodeId, Option<crate::style::Rect>, RenderOffset),
@@ -630,11 +633,25 @@ fn render_subtree(
                     divider_junctions.finish(state.f, prepared);
                 }
                 if defer_effect_scope_render {
+                    // Taken before any child paints: this is what lies beneath the scope, for
+                    // effects that composite over it rather than post-process its content.
+                    let backdrop = match &node.kind {
+                        NodeKind::EffectScope(scope)
+                            if scope.effects.iter().any(VisualEffect::uses_backdrop) =>
+                        {
+                            let mut rect = node_offset.apply_to_rect(node.rect);
+                            rect.x = rect.x.saturating_add(state.content.x as i16);
+                            rect.y = rect.y.saturating_add(state.content.y as i16);
+                            snapshot_buffer_rect(state.f, rect, node_clip)
+                        }
+                        _ => None,
+                    };
                     stack.push(RenderStackItem::EffectScopePost(
                         id,
                         node_clip,
                         node_offset,
                         state.ctx.effect_phase,
+                        backdrop,
                     ));
                 }
                 let animated_restore_snapshot = if let NodeKind::Animated(animated) = &node.kind {
@@ -652,7 +669,7 @@ fn render_subtree(
                         } else {
                             rect.x = rect.x.saturating_add(state.content.x as i16);
                             rect.y = rect.y.saturating_add(state.content.y as i16);
-                            snapshot_animated_restore_rect(state.f, rect, node_clip)
+                            snapshot_buffer_rect(state.f, rect, node_clip)
                         }
                     } else {
                         None
@@ -683,7 +700,13 @@ fn render_subtree(
                     }
                 }
             }
-            RenderStackItem::EffectScopePost(id, current_clip, node_offset, effect_phase) => {
+            RenderStackItem::EffectScopePost(
+                id,
+                current_clip,
+                node_offset,
+                effect_phase,
+                backdrop,
+            ) => {
                 if !tree.is_valid(id) {
                     continue;
                 }
@@ -694,13 +717,14 @@ fn render_subtree(
                 let mut rect = node_offset.apply_to_rect(node.rect);
                 rect.x = rect.x.saturating_add(state.content.x as i16);
                 rect.y = rect.y.saturating_add(state.content.y as i16);
-                apply_visual_effects_clipped(
+                apply_visual_effects_over_backdrop(
                     state.f,
                     rect,
                     &scope.effects,
                     effect_phase,
                     current_clip,
                     state.ctx.terminal_bg,
+                    backdrop.as_ref(),
                 );
             }
             RenderStackItem::AnimatedPost(id, current_clip, node_offset, restore_snapshot) => {

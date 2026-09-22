@@ -311,3 +311,72 @@ pub(crate) fn clear_fg_preserve_bg_clipped(
         }
     }
 }
+
+/// Copy of the buffer cells under a rectangle, taken before a subtree paints over them.
+///
+/// Translucent `Animated` layers composite over it, and effect scopes hand it to effects that
+/// read their backdrop (see [`crate::style::CellEffect::uses_backdrop`]).
+pub(crate) struct BufferSnapshot {
+    rect: RRect,
+    cells: Vec<Cell>,
+}
+
+impl BufferSnapshot {
+    pub(crate) fn rect(&self) -> RRect {
+        self.rect
+    }
+
+    pub(crate) fn cells(&self) -> &[Cell] {
+        &self.cells
+    }
+
+    pub(crate) fn cell_at(&self, x: u16, y: u16) -> Option<&Cell> {
+        if x < self.rect.x
+            || y < self.rect.y
+            || x >= self.rect.x.saturating_add(self.rect.width)
+            || y >= self.rect.y.saturating_add(self.rect.height)
+        {
+            return None;
+        }
+
+        let dx = x.saturating_sub(self.rect.x) as usize;
+        let dy = y.saturating_sub(self.rect.y) as usize;
+        let index = dy
+            .saturating_mul(self.rect.width as usize)
+            .saturating_add(dx);
+        self.cells.get(index)
+    }
+}
+
+pub(crate) fn snapshot_buffer_rect(
+    f: &mut ratatui::Frame<'_>,
+    rect: Rect,
+    clip_rect: Option<Rect>,
+) -> Option<BufferSnapshot> {
+    let mut draw_rect = rect;
+    if let Some(clip) = clip_rect {
+        draw_rect = draw_rect.intersection(&clip);
+    }
+    if draw_rect.is_empty() {
+        return None;
+    }
+
+    let r_rect = to_ratatui_rect(draw_rect);
+    let intersection = f.area().intersection(r_rect);
+    if intersection.width == 0 || intersection.height == 0 {
+        return None;
+    }
+
+    let buf = f.buffer_mut();
+    let mut cells = Vec::with_capacity(intersection.width as usize * intersection.height as usize);
+    for y in intersection.y..intersection.y + intersection.height {
+        for x in intersection.x..intersection.x + intersection.width {
+            cells.push(buf.cell((x, y)).cloned().unwrap_or(Cell::EMPTY));
+        }
+    }
+
+    Some(BufferSnapshot {
+        rect: intersection,
+        cells,
+    })
+}
