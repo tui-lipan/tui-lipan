@@ -67,6 +67,29 @@ impl PreparedCellEffect for Wipe {
     }
 }
 
+/// Reveals the backdrop from `split` onward, so the frontier can bisect a wide grapheme.
+#[derive(Debug)]
+struct ReverseWipe(i16);
+
+impl CellEffect for ReverseWipe {
+    fn apply(&self, _cell: &mut EffectCell, _ctx: &EffectContext) {}
+
+    fn uses_backdrop(&self) -> bool {
+        true
+    }
+
+    fn apply_with_backdrop(
+        &self,
+        cell: &mut EffectCell,
+        backdrop: &EffectCell,
+        ctx: &EffectContext,
+    ) {
+        if ctx.x - ctx.bounds.x >= self.0 {
+            *cell = backdrop.clone();
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Effect {
     Wipe { split: i16, reads_backdrop: bool },
@@ -147,4 +170,71 @@ fn an_effect_that_does_not_ask_for_its_backdrop_never_sees_one() {
         })),
         "BBBBBBBB"
     );
+}
+
+struct WideLayers {
+    backdrop: &'static str,
+    incoming: &'static str,
+    reverse: bool,
+}
+
+impl Component for WideLayers {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let scope = if self.reverse {
+            EffectScope::new().custom_effect(ReverseWipe(1))
+        } else {
+            EffectScope::new().custom_effect(Wipe {
+                split: 1,
+                reads_backdrop: true,
+            })
+        };
+        ZStack::new()
+            .child(Text::new(self.backdrop))
+            .child(scope.child(Text::new(self.incoming)))
+            .into()
+    }
+}
+
+fn render_wide(backdrop: &'static str, incoming: &'static str, reverse: bool) -> CapturedFrame {
+    let mut backend = TestBackend::new(WideLayers {
+        backdrop,
+        incoming,
+        reverse,
+    });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 3,
+        h: 1,
+    });
+    backend.render();
+    backend.capture_frame()
+}
+
+#[test]
+fn a_wipe_clears_a_backdrop_cell_beneath_an_incoming_wide_grapheme() {
+    let frame = render_wide("ABx", "你x", true);
+
+    assert_eq!(frame.cell(0, 0).symbol, "你");
+    assert_eq!(frame.cell(1, 0).symbol, " ");
+    assert_eq!(frame.cell(2, 0).symbol, "x");
+}
+
+#[test]
+fn a_wipe_clears_an_incoming_cell_beneath_a_backdrop_wide_grapheme() {
+    let frame = render_wide("你x", "ABx", false);
+
+    assert_eq!(frame.cell(0, 0).symbol, "你");
+    assert_eq!(frame.cell(1, 0).symbol, " ");
+    assert_eq!(frame.cell(2, 0).symbol, "x");
 }

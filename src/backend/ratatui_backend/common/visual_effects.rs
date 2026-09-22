@@ -1,6 +1,7 @@
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::Rect as RRect;
 use ratatui::style::{Color as RColor, Modifier as RMod};
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::ContrastPolicy;
 use crate::style::{
@@ -1201,6 +1202,7 @@ pub(crate) fn apply_visual_effects_over_backdrop(
     }
 
     let buf = f.buffer_mut();
+    let mut composited_backdrop = false;
     for effect in effects {
         let gate = |x: u16, y: u16| cell_passes_visual_clip(effect, draw_rect, x as i16, y as i16);
 
@@ -1272,6 +1274,7 @@ pub(crate) fn apply_visual_effects_over_backdrop(
             terminal_bg,
         };
         let reads_backdrop = peeled.uses_backdrop();
+        composited_backdrop |= reads_backdrop;
         for y in intersection.y..intersection.y + intersection.height {
             for x in intersection.x..intersection.x + intersection.width {
                 if !gate(x, y) {
@@ -1327,6 +1330,29 @@ pub(crate) fn apply_visual_effects_over_backdrop(
                 }
                 if let Some(backgrounds) = &original_backgrounds {
                     cell.bg = backgrounds[index];
+                }
+            }
+        }
+    }
+
+    if composited_backdrop {
+        normalize_wide_grapheme_rows(buf, intersection);
+    }
+}
+
+fn normalize_wide_grapheme_rows(buf: &mut Buffer, rows: RRect) {
+    let area = buf.area;
+    let max_x = area.x.saturating_add(area.width);
+    for y in rows.y..rows.y.saturating_add(rows.height) {
+        for x in area.x..max_x {
+            let width = buf
+                .cell((x, y))
+                .map(|cell| UnicodeWidthStr::width(cell.symbol()))
+                .unwrap_or_default();
+            let continuation_end = (usize::from(x) + width).min(usize::from(max_x));
+            for continuation_x in usize::from(x) + 1..continuation_end {
+                if let Some(cell) = buf.cell_mut((continuation_x as u16, y)) {
+                    cell.reset();
                 }
             }
         }

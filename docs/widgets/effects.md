@@ -177,7 +177,14 @@ or mix the two for a per-cell blend.
 That makes an `EffectScope` a compositor between two layers, which is what reveals, wipes, irises,
 dissolves, and per-cell crossfades need. Put the outgoing content beneath the scope in a `ZStack`.
 When the outgoing content is leaving the tree, `Animated::auto_exit` keeps it painted underneath for
-the length of the transition.
+the length of the transition. Its default exit animation fades to opacity 0, so keep the retained
+layer fully opaque and let the backdrop effect perform the transition:
+
+```rust
+Animated::new(old_screen)
+    .auto_exit(ExitAnimation::new(duration_ms).keep_opacity())
+    .key(old_screen_key)
+```
 
 ```rust
 /// Iris transition: the new content opens from the centre over the old.
