@@ -18,6 +18,8 @@ mod draggable_tab_bar_empty_text_render;
 mod draggable_tab_bar_empty_transfer;
 #[path = "suites/widget_behavior/draggable_tab_bar_hover_close_width.rs"]
 mod draggable_tab_bar_hover_close_width;
+#[path = "suites/widget_behavior/effect_scope_backdrop.rs"]
+mod effect_scope_backdrop;
 #[path = "suites/widget_behavior/file_tree_collapsed_projection.rs"]
 mod file_tree_collapsed_projection;
 #[path = "suites/widget_behavior/file_tree_explorer_focus.rs"]

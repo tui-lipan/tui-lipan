@@ -1,10 +1,11 @@
 use ratatui::buffer::Cell as BufferCell;
 use ratatui::style::Color as RColor;
 
+use crate::backend::ratatui_backend::common::BufferSnapshot;
 use crate::backend::ratatui_backend::common::{
     apply_effect_style_clipped, from_ratatui_color, to_ratatui_color, to_ratatui_rect,
 };
-use crate::backend::ratatui_backend::render::{AnimatedRestoreSnapshot, blend_ratatui_toward};
+use crate::backend::ratatui_backend::render::blend_ratatui_toward;
 use crate::style::{ColorTransform, Rect, Style};
 use crate::widgets::internal::AnimatedNode;
 
@@ -13,7 +14,7 @@ pub(crate) fn render_animated(
     node: &AnimatedNode,
     rect: Rect,
     clip_rect: Option<Rect>,
-    underlay: Option<&AnimatedRestoreSnapshot>,
+    underlay: Option<&BufferSnapshot>,
     terminal_bg: Option<ratatui::style::Color>,
 ) {
     let opacity = node.opacity.clamp(0.0, 1.0);
@@ -109,7 +110,7 @@ fn composite_opacity_over_underlay(
     fg_only: bool,
     rect: Rect,
     clip_rect: Option<Rect>,
-    underlay: &AnimatedRestoreSnapshot,
+    underlay: &BufferSnapshot,
     terminal_bg: Option<RColor>,
     opacity: f32,
 ) {

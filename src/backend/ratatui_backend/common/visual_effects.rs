@@ -1,6 +1,7 @@
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::Rect as RRect;
 use ratatui::style::{Color as RColor, Modifier as RMod};
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::ContrastPolicy;
 use crate::style::{
@@ -11,6 +12,7 @@ use crate::utils::color_contrast::{
     readable_text_color, readable_text_color_apca, readable_text_color_black_or_white,
 };
 
+use super::cells::BufferSnapshot;
 use super::colors::{from_ratatui_color, to_ratatui_color};
 use super::convert::to_ratatui_rect;
 
@@ -1079,7 +1081,14 @@ fn apply_visual_effect_to_cell(
                 phase,
                 terminal_bg: params.terminal_bg,
             };
-            effect.apply(cell, &ctx);
+            if effect.uses_backdrop() {
+                // No pre-paint copy on this path (style and hover effects): the backdrop is the
+                // cell as painted, so a compositing effect leaves it alone.
+                let painted = cell.clone();
+                effect.apply_with_backdrop(cell, &painted, &ctx);
+            } else {
+                effect.apply(cell, &ctx);
+            }
         }
         VisualEffect::Clipped { .. } | VisualEffect::Channels { .. } => {}
     }
@@ -1158,6 +1167,22 @@ pub(crate) fn apply_visual_effects_clipped(
     clip_rect: Option<Rect>,
     terminal_bg: Option<RColor>,
 ) {
+    apply_visual_effects_over_backdrop(f, rect, effects, phase, clip_rect, terminal_bg, None);
+}
+
+/// [`apply_visual_effects_clipped`] for an effect scope that kept a copy of what lay beneath it.
+///
+/// Effects that read their backdrop get the matching `backdrop` cell; without one, or outside
+/// it, they are handed the cell as painted. See [`crate::style::CellEffect::uses_backdrop`].
+pub(crate) fn apply_visual_effects_over_backdrop(
+    f: &mut ratatui::Frame<'_>,
+    rect: Rect,
+    effects: &[VisualEffect],
+    phase: u64,
+    clip_rect: Option<Rect>,
+    terminal_bg: Option<RColor>,
+    backdrop: Option<&BufferSnapshot>,
+) {
     if effects.is_empty() {
         return;
     }
@@ -1177,6 +1202,7 @@ pub(crate) fn apply_visual_effects_clipped(
     }
 
     let buf = f.buffer_mut();
+    let mut composited_backdrop = false;
     for effect in effects {
         let gate = |x: u16, y: u16| cell_passes_visual_clip(effect, draw_rect, x as i16, y as i16);
 
@@ -1247,6 +1273,8 @@ pub(crate) fn apply_visual_effects_clipped(
             retro_refresh_waves: retro_refresh_waves.as_slice(),
             terminal_bg,
         };
+        let reads_backdrop = peeled.uses_backdrop();
+        composited_backdrop |= reads_backdrop;
         for y in intersection.y..intersection.y + intersection.height {
             for x in intersection.x..intersection.x + intersection.width {
                 if !gate(x, y) {
@@ -1262,7 +1290,21 @@ pub(crate) fn apply_visual_effects_clipped(
                                 phase,
                                 terminal_bg,
                             };
-                            if let Some(prepared) = prepared_custom.as_deref() {
+                            if reads_backdrop {
+                                let painted;
+                                let under = match backdrop.and_then(|under| under.cell_at(x, y)) {
+                                    Some(under) => under,
+                                    None => {
+                                        painted = cell.clone();
+                                        &painted
+                                    }
+                                };
+                                if let Some(prepared) = prepared_custom.as_deref() {
+                                    prepared.apply_with_backdrop(cell, under, &ctx);
+                                } else {
+                                    effect.apply_with_backdrop(cell, under, &ctx);
+                                }
+                            } else if let Some(prepared) = prepared_custom.as_deref() {
                                 prepared.apply(cell, &ctx);
                             } else {
                                 effect.apply(cell, &ctx);
@@ -1288,6 +1330,29 @@ pub(crate) fn apply_visual_effects_clipped(
                 }
                 if let Some(backgrounds) = &original_backgrounds {
                     cell.bg = backgrounds[index];
+                }
+            }
+        }
+    }
+
+    if composited_backdrop {
+        normalize_wide_grapheme_rows(buf, intersection);
+    }
+}
+
+fn normalize_wide_grapheme_rows(buf: &mut Buffer, rows: RRect) {
+    let area = buf.area;
+    let max_x = area.x.saturating_add(area.width);
+    for y in rows.y..rows.y.saturating_add(rows.height) {
+        for x in area.x..max_x {
+            let width = buf
+                .cell((x, y))
+                .map(|cell| UnicodeWidthStr::width(cell.symbol()))
+                .unwrap_or_default();
+            let continuation_end = (usize::from(x) + width).min(usize::from(max_x));
+            for continuation_x in usize::from(x) + 1..continuation_end {
+                if let Some(cell) = buf.cell_mut((continuation_x as u16, y)) {
+                    cell.reset();
                 }
             }
         }

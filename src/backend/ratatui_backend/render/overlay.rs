@@ -3,8 +3,8 @@ use ratatui::style::Color as RColor;
 use ratatui::widgets::Block;
 
 use crate::backend::ratatui_backend::common::{
-    apply_effect_style_clipped, blend_paint_over_ratatui, from_ratatui_color, paint_to_ratatui_bg,
-    preserve_palette_blend, to_ratatui_color, to_ratatui_rect,
+    BufferSnapshot, apply_effect_style_clipped, blend_paint_over_ratatui, from_ratatui_color,
+    paint_to_ratatui_bg, preserve_palette_blend, to_ratatui_color, to_ratatui_rect,
 };
 use crate::core::node::NodeKind;
 use crate::style::{ColorTransform, Paint, Rect, Style};
@@ -223,75 +223,18 @@ pub(crate) fn blend_ratatui_toward(
     (to_ratatui_color(result), false)
 }
 
-pub(crate) struct AnimatedRestoreSnapshot {
-    rect: ratatui::layout::Rect,
-    cells: Vec<BufferCell>,
-}
-
-impl AnimatedRestoreSnapshot {
-    pub(crate) fn cell_at(&self, x: u16, y: u16) -> Option<&BufferCell> {
-        if x < self.rect.x
-            || y < self.rect.y
-            || x >= self.rect.x.saturating_add(self.rect.width)
-            || y >= self.rect.y.saturating_add(self.rect.height)
-        {
-            return None;
-        }
-
-        let dx = x.saturating_sub(self.rect.x) as usize;
-        let dy = y.saturating_sub(self.rect.y) as usize;
-        let index = dy
-            .saturating_mul(self.rect.width as usize)
-            .saturating_add(dx);
-        self.cells.get(index)
-    }
-}
-
-pub(crate) fn snapshot_animated_restore_rect(
-    f: &mut ratatui::Frame<'_>,
-    rect: Rect,
-    clip_rect: Option<Rect>,
-) -> Option<AnimatedRestoreSnapshot> {
-    let mut draw_rect = rect;
-    if let Some(clip) = clip_rect {
-        draw_rect = draw_rect.intersection(&clip);
-    }
-    if draw_rect.is_empty() {
-        return None;
-    }
-
-    let r_rect = to_ratatui_rect(draw_rect);
-    let intersection = f.area().intersection(r_rect);
-    if intersection.width == 0 || intersection.height == 0 {
-        return None;
-    }
-
-    let buf = f.buffer_mut();
-    let mut cells = Vec::with_capacity(intersection.width as usize * intersection.height as usize);
-    for y in intersection.y..intersection.y + intersection.height {
-        for x in intersection.x..intersection.x + intersection.width {
-            cells.push(buf.cell((x, y)).cloned().unwrap_or(BufferCell::EMPTY));
-        }
-    }
-
-    Some(AnimatedRestoreSnapshot {
-        rect: intersection,
-        cells,
-    })
-}
-
 pub(crate) fn restore_fully_transparent_animated(
     f: &mut ratatui::Frame<'_>,
-    snapshot: AnimatedRestoreSnapshot,
+    snapshot: BufferSnapshot,
     fg_only: bool,
 ) {
     let buf = f.buffer_mut();
-    for dy in 0..snapshot.rect.height {
-        for dx in 0..snapshot.rect.width {
-            let index = dy as usize * snapshot.rect.width as usize + dx as usize;
-            let saved = &snapshot.cells[index];
-            let x = snapshot.rect.x + dx;
-            let y = snapshot.rect.y + dy;
+    for dy in 0..snapshot.rect().height {
+        for dx in 0..snapshot.rect().width {
+            let index = dy as usize * snapshot.rect().width as usize + dx as usize;
+            let saved = &snapshot.cells()[index];
+            let x = snapshot.rect().x + dx;
+            let y = snapshot.rect().y + dy;
             let Some(cell) = buf.cell_mut((x, y)) else {
                 continue;
             };

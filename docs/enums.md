@@ -614,7 +614,7 @@ Used with `EffectScope::effect(...)`, `EffectScope::effects(...)`, and `MouseReg
 | `VisualEffect::Channels { channels, inner }` | Restrict another effect to `EffectChannels::Both`, `Foreground`, or `Background` |
 | `VisualEffect::ColorTransform { fg, bg }` | Apply relative `ColorTransform`s to fg and/or bg |
 | `VisualEffect::ContrastPolicy(policy)` | Apply readable-foreground contrast adjustment |
-| `VisualEffect::Custom(Arc<dyn CellEffect>)` | User-defined per-cell effect; can optionally prepare frame-constant state with `CellEffect::prepare` |
+| `VisualEffect::Custom(Arc<dyn CellEffect>)` | User-defined per-cell effect; can optionally prepare frame-constant state with `CellEffect::prepare`, and composite over the cells beneath its scope with `CellEffect::uses_backdrop` / `apply_with_backdrop` |
 
 ### `EffectOrigin`
 

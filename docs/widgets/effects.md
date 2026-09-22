@@ -164,3 +164,60 @@ let view = EffectScope::new()
 ```
 
 Use `is_animated()` when the effect depends on `ctx.phase` so the runtime schedules redraws. Override `animation_interval()` when an animated custom effect should update below the default ~60 FPS cadence, for example a slow atmospheric glow that looks the same at 30 FPS. Override `cache_key()` when changing effect parameters should invalidate layout/render hashes; the default `0` is safe because custom effect hashes also include `Arc` identity. Custom effect equality uses `Arc` identity too, so two different `Arc`s with the same cache key are not equal.
+
+### Compositing over the backdrop
+
+A custom effect normally post-processes what its scope painted: by the time it runs, anything that
+was beneath the scope has been painted over. Override `uses_backdrop()` to return `true` and the
+renderer keeps a copy of the cells under the scope, taken before its children paint, and calls
+`apply_with_backdrop(cell, backdrop, ctx)` instead of `apply`. Assign `*cell = backdrop.clone()` to
+let what was underneath show through at that cell; leave `cell` alone to keep the scope's content;
+or mix the two for a per-cell blend.
+
+That makes an `EffectScope` a compositor between two layers, which is what reveals, wipes, irises,
+dissolves, and per-cell crossfades need. Put the outgoing content beneath the scope in a `ZStack`.
+When the outgoing content is leaving the tree, `Animated::auto_exit` keeps it painted underneath for
+the length of the transition. Its default exit animation fades to opacity 0, so keep the retained
+layer fully opaque and let the backdrop effect perform the transition:
+
+```rust
+Animated::new(old_screen)
+    .auto_exit(ExitAnimation::new(duration_ms).keep_opacity())
+    .key(old_screen_key)
+```
+
+```rust
+/// Iris transition: the new content opens from the centre over the old.
+#[derive(Debug)]
+struct Iris {
+    progress: f32,
+}
+
+impl CellEffect for Iris {
+    fn apply(&self, _cell: &mut EffectCell, _ctx: &EffectContext) {}
+
+    // Only while opening: at rest there is nothing to composite, so skip the per-frame copy.
+    fn uses_backdrop(&self) -> bool {
+        self.progress < 1.0
+    }
+
+    fn apply_with_backdrop(&self, cell: &mut EffectCell, backdrop: &EffectCell, ctx: &EffectContext) {
+        let dx = (ctx.x - ctx.bounds.x) as f32 - ctx.bounds.w as f32 * 0.5;
+        let dy = ((ctx.y - ctx.bounds.y) as f32 - ctx.bounds.h as f32 * 0.5) * 2.0;
+        let reach = (ctx.bounds.w as f32).hypot(ctx.bounds.h as f32 * 2.0) * 0.5;
+        if dx.hypot(dy) > self.progress * reach {
+            *cell = backdrop.clone();
+        }
+    }
+}
+
+// `progress` runs 0.0 -> 1.0 over the transition, from an animation the view drives.
+let view = ZStack::new()
+    .child(old_screen)
+    .child(EffectScope::new().custom_effect(Iris { progress }).child(new_screen));
+```
+
+The backdrop is copied once per scope cell per frame, so report `false` from `uses_backdrop()` once
+the effect settles. `PreparedCellEffect::apply_with_backdrop` is the prepared counterpart. Effects
+applied outside an `EffectScope` (through a `Style`, or as hover effects) have no pre-paint copy;
+there the backdrop is the cell as painted, so a compositing effect leaves the cell unchanged.

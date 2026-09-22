@@ -45,6 +45,20 @@ pub struct EffectPrepareContext {
 pub trait PreparedCellEffect: Send + Sync + std::fmt::Debug + 'static {
     /// Apply this prepared effect to one cell inside the prepared scope.
     fn apply(&self, cell: &mut EffectCell, ctx: &EffectContext);
+
+    /// Apply this prepared effect with the cell that lay beneath the scope before it painted.
+    ///
+    /// Called instead of [`Self::apply`] when the effect that prepared this one reports
+    /// [`CellEffect::uses_backdrop`]. The default ignores the backdrop.
+    fn apply_with_backdrop(
+        &self,
+        cell: &mut EffectCell,
+        backdrop: &EffectCell,
+        ctx: &EffectContext,
+    ) {
+        let _ = backdrop;
+        self.apply(cell, ctx);
+    }
 }
 
 /// User-defined per-cell visual post-processing effect.
@@ -54,6 +68,42 @@ pub trait PreparedCellEffect: Send + Sync + std::fmt::Debug + 'static {
 pub trait CellEffect: Send + Sync + std::fmt::Debug + 'static {
     /// Apply this effect to one cell. Called once per cell inside the effect scope, per frame.
     fn apply(&self, cell: &mut EffectCell, ctx: &EffectContext);
+
+    /// Whether this effect reads its **backdrop**: the cells that lay beneath the effect scope
+    /// before the scope's children painted over them.
+    ///
+    /// Return `true` and the renderer keeps a copy of that area each frame and calls
+    /// [`Self::apply_with_backdrop`] instead of [`Self::apply`]. That turns an effect from a
+    /// post-process into a compositor: it can let what was underneath show through per cell,
+    /// which is what reveals, wipes, dissolves, and per-cell crossfades between two layers need.
+    ///
+    /// Stack the outgoing content under an [`EffectScope`](crate::widgets::EffectScope) in a
+    /// [`ZStack`](crate::widgets::ZStack) (for example retained with
+    /// [`Animated::auto_exit`](crate::widgets::Animated::auto_exit)) and the scope sees it as its
+    /// backdrop. Where no pre-paint copy exists - an effect applied through a
+    /// [`Style`](crate::style::Style) or a hover effect - the backdrop is the cell as painted, so a
+    /// backdrop-reading effect degrades to leaving the cell alone.
+    ///
+    /// The copy costs one cell clone per scope cell per frame, so return `true` only while the
+    /// effect actually composites; an idle reveal should report `false`.
+    fn uses_backdrop(&self) -> bool {
+        false
+    }
+
+    /// Apply this effect with `backdrop`, the cell that lay beneath this one before the scope
+    /// painted. Called instead of [`Self::apply`] when [`Self::uses_backdrop`] returns `true`.
+    ///
+    /// `*cell = backdrop.clone()` reveals the backdrop at this cell; leaving `cell` alone keeps
+    /// the scope's content. The default ignores the backdrop and calls [`Self::apply`].
+    fn apply_with_backdrop(
+        &self,
+        cell: &mut EffectCell,
+        backdrop: &EffectCell,
+        ctx: &EffectContext,
+    ) {
+        let _ = backdrop;
+        self.apply(cell, ctx);
+    }
 
     /// Prepare this effect once for the current scope bounds and render phase.
     ///
@@ -600,6 +650,16 @@ impl VisualEffect {
             Self::Clipped { inner, .. } => inner.is_animated(),
             Self::Channels { inner, .. } => inner.is_animated(),
             Self::Custom(effect) => effect.is_animated(),
+            _ => false,
+        }
+    }
+
+    /// Returns whether this effect reads the cells beneath its scope. See
+    /// [`CellEffect::uses_backdrop`]; only custom effects can.
+    pub fn uses_backdrop(&self) -> bool {
+        match self {
+            Self::Clipped { inner, .. } | Self::Channels { inner, .. } => inner.uses_backdrop(),
+            Self::Custom(effect) => effect.uses_backdrop(),
             _ => false,
         }
     }
