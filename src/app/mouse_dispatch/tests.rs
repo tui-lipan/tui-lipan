@@ -32,6 +32,7 @@ struct MouseClipboardState {
     clipboard: String,
     primary: String,
     clipboard_reads: usize,
+    fail_clipboard_writes: bool,
 }
 
 struct MouseClipboardProvider(Rc<RefCell<MouseClipboardState>>);
@@ -44,7 +45,13 @@ impl ClipboardProvider for MouseClipboardProvider {
     }
 
     fn write_clipboard_text(&mut self, text: &str) -> Result<(), ClipboardError> {
-        self.0.borrow_mut().clipboard = text.to_string();
+        let mut state = self.0.borrow_mut();
+        if state.fail_clipboard_writes {
+            return Err(ClipboardError::Unsupported {
+                operation: crate::clipboard::error::ClipboardOperation::WriteClipboard,
+            });
+        }
+        state.clipboard = text.to_string();
         Ok(())
     }
 
@@ -126,6 +133,28 @@ fn click_left(backend: &mut TestBackend<ClipboardEditor>, x: u16, y: u16) {
         backend
             .send_mouse(MouseEvent {
                 x,
+                y,
+                kind,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
+}
+
+/// Drag-select the first five cells of the editor, then press the right button.
+fn select_then_right_click(backend: &mut TestBackend<ClipboardEditor>) {
+    let rect = backend.core.tree.node(text_area_id(backend)).rect;
+    let x = rect.x.max(0) as u16;
+    let y = rect.y.max(0) as u16;
+    for (event_x, kind) in [
+        (x, MouseKind::Down(MouseButton::Left)),
+        (x + 5, MouseKind::Drag(MouseButton::Left)),
+        (x + 5, MouseKind::Up(MouseButton::Left)),
+        (x + 2, MouseKind::Down(MouseButton::Right)),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                x: event_x,
                 y,
                 kind,
                 mods: KeyMods::NONE,
@@ -3256,6 +3285,80 @@ fn opt_in_right_click_pastes_regular_clipboard() {
         .unwrap();
 
     assert_eq!(backend.state().text(), "regular");
+}
+
+#[test]
+fn right_click_copy_flashes_like_a_copy_shortcut() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
+    let config = ClipboardConfig {
+        enable_osc52: false,
+        copy_on_mouse_select: CopyOnSelect::Disabled,
+        right_click_action: RightClickAction::CopyOrPaste,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = mouse_clipboard_backend("alpha beta", Rc::clone(&clipboard), config);
+    let id = text_area_id(&backend);
+
+    select_then_right_click(&mut backend);
+
+    assert_eq!(clipboard.borrow().clipboard, "alpha");
+    assert!(backend.copy_feedback.is_active(id));
+}
+
+#[test]
+fn copy_on_select_stays_silent() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState::default()));
+    let config = ClipboardConfig {
+        enable_osc52: false,
+        copy_on_mouse_select: CopyOnSelect::Clipboard,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = mouse_clipboard_backend("alpha beta", Rc::clone(&clipboard), config);
+    let id = text_area_id(&backend);
+    let rect = backend.core.tree.node(id).rect;
+    let x = rect.x.max(0) as u16;
+    let y = rect.y.max(0) as u16;
+
+    for (event_x, kind) in [
+        (x, MouseKind::Down(MouseButton::Left)),
+        (x + 5, MouseKind::Drag(MouseButton::Left)),
+        (x + 5, MouseKind::Up(MouseButton::Left)),
+    ] {
+        backend
+            .send_mouse(MouseEvent {
+                x: event_x,
+                y,
+                kind,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    }
+
+    assert_eq!(clipboard.borrow().clipboard, "alpha");
+    assert!(!backend.copy_feedback.is_active(id));
+}
+
+#[test]
+fn failed_right_click_copy_does_not_flash_or_paste() {
+    let clipboard = Rc::new(RefCell::new(MouseClipboardState {
+        clipboard: "stale".to_string(),
+        fail_clipboard_writes: true,
+        ..MouseClipboardState::default()
+    }));
+    let config = ClipboardConfig {
+        enable_osc52: false,
+        copy_on_mouse_select: CopyOnSelect::Disabled,
+        right_click_action: RightClickAction::CopyOrPaste,
+        ..ClipboardConfig::default()
+    };
+    let mut backend = mouse_clipboard_backend("alpha beta", Rc::clone(&clipboard), config);
+    let id = text_area_id(&backend);
+
+    select_then_right_click(&mut backend);
+
+    assert!(!backend.copy_feedback.is_active(id));
+    assert_eq!(backend.state().text(), "alpha beta");
+    assert_eq!(clipboard.borrow().clipboard_reads, 0);
 }
 
 #[test]

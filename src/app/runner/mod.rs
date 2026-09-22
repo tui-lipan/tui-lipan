@@ -1072,6 +1072,7 @@ impl<C: Component> AppRunner<C> {
     pub(crate) fn copy_active_selection(
         &mut self,
         target: crate::clipboard::CopyOnSelect,
+        intent: keyboard::CopyIntent,
         preferred_id: Option<NodeId>,
     ) -> bool {
         let mut key_ctx = crate::app::input::handlers::KeyCtx {
@@ -1088,7 +1089,13 @@ impl<C: Component> AppRunner<C> {
             copy_feedback: &mut self.copy_feedback,
             dirty_override: None,
         };
-        keyboard::copy_active_selection(&mut self.core.tree, preferred_id, target, &mut key_ctx)
+        keyboard::copy_active_selection(
+            &mut self.core.tree,
+            preferred_id,
+            target,
+            intent,
+            &mut key_ctx,
+        )
     }
 
     #[cfg(feature = "devtools")]

@@ -96,6 +96,12 @@ mouse copy and middle-click paste default to disabled.
 overlay, nested-terminal, `TextArea::on_click`, and right-drag handlers take precedence; the
 configured action is only a fallback for an otherwise-unhandled right-button press.
 
+The copy flash follows intent, not input device. A deliberate copy, whether a copy shortcut or a
+`CopyOrPaste` right click, flashes the copied selection once the write succeeds, so users can tell
+a right-click copy from a right-click paste. Copy-on-select stays silent because it fires on every
+completed selection. A failed right-click copy reports the clipboard error and does not fall
+through to a paste.
+
 Mouse paste targets the currently focused editable `Input`, `TextArea`, or `Terminal`; it does not
 move focus or reposition the caret. Copy-on-select runs once when a non-empty mouse selection is
 completed, including word and line selections, rather than on every drag update.
