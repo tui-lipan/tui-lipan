@@ -12,7 +12,7 @@ use crate::app::input::text_area_vim::TextAreaVimState;
 use crate::callback::Callback;
 use crate::core::element::Key;
 use crate::core::event::MouseButton;
-use crate::core::node::NodeId;
+use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::layout::tag::Tag;
 use crate::style::Rect;
 use crate::text::editor::TextEditor;
@@ -243,6 +243,33 @@ pub(crate) struct WidgetState {
     pub text_area_vim_state: HashMap<NodeId, TextAreaVimState>,
     pub hex_history: HashMap<NodeId, HexHistory>,
     pub hex_pending_edit: HashMap<NodeId, HexPendingEdit>,
+}
+
+impl WidgetState {
+    /// Drop per-node caches whose node has left the tree or changed kind.
+    ///
+    /// Every runtime calls this after reconciliation. A cache that keeps a stale [`NodeId`] hands
+    /// it back as a candidate later, and reading it trips the arena's validity assertion or, in a
+    /// release build, reads whatever now occupies that slot.
+    pub(crate) fn prune(&mut self, tree: &NodeTree) {
+        self.read_only_selection.retain(|id, _| tree.is_valid(*id));
+        self.input_history.retain(|id, _| {
+            tree.is_valid(*id) && matches!(tree.node(*id).kind, NodeKind::Input(_))
+        });
+        self.textarea_history.retain(|id, _| {
+            tree.is_valid(*id) && matches!(tree.node(*id).kind, NodeKind::TextArea(_))
+        });
+        self.text_area_vim_state.retain(|id, _| {
+            tree.is_valid(*id)
+                && matches!(&tree.node(*id).kind, NodeKind::TextArea(ta) if ta.vim_motions)
+        });
+        self.hex_history.retain(|id, _| {
+            tree.is_valid(*id) && matches!(tree.node(*id).kind, NodeKind::HexArea(_))
+        });
+        self.hex_pending_edit.retain(|id, _| {
+            tree.is_valid(*id) && matches!(tree.node(*id).kind, NodeKind::HexArea(_))
+        });
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -60,7 +60,7 @@ pub(super) fn sync_textarea_vim_external_selection<C: Component>(
         anchor,
     } = params;
     if !vim_motions || read_only || !has_on_change {
-        backend.text_area_vim_state.remove(&id);
+        backend.widgets.text_area_vim_state.remove(&id);
         if backend.core.tree.is_valid(id)
             && let NodeKind::TextArea(node) = &mut backend.core.tree.node_mut(id).kind
         {
@@ -72,7 +72,7 @@ pub(super) fn sync_textarea_vim_external_selection<C: Component>(
     }
 
     let (mode, visual_line_caret) = {
-        let state = backend.text_area_vim_state.entry(id).or_default();
+        let state = backend.widgets.text_area_vim_state.entry(id).or_default();
         if let Some(mode) = sync_visual_mode_for_external_selection(state, cursor, anchor)
             && let Some(cb) = on_vim_mode_change
         {
@@ -81,12 +81,16 @@ pub(super) fn sync_textarea_vim_external_selection<C: Component>(
         (state.mode, state.visual_line_caret)
     };
     let search_feedback = if backend.core.tree.is_valid(id) {
-        backend.text_area_vim_state.get(&id).and_then(|state| {
-            let NodeKind::TextArea(node) = &backend.core.tree.node(id).kind else {
-                return None;
-            };
-            text_area_vim_search_feedback_for_text(state, node.value.as_ref(), cursor)
-        })
+        backend
+            .widgets
+            .text_area_vim_state
+            .get(&id)
+            .and_then(|state| {
+                let NodeKind::TextArea(node) = &backend.core.tree.node(id).kind else {
+                    return None;
+                };
+                text_area_vim_search_feedback_for_text(state, node.value.as_ref(), cursor)
+            })
     } else {
         None
     };
@@ -1273,7 +1277,8 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
                     anchor: new_anchor,
                 });
             } else if change.read_only {
-                self.read_only_selection
+                self.widgets
+                    .read_only_selection
                     .insert(change.node_id, (new_cursor, new_anchor));
             }
             return true;
@@ -1323,7 +1328,8 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
                     anchor: new_anchor,
                 });
             } else if change.read_only {
-                self.read_only_selection
+                self.widgets
+                    .read_only_selection
                     .insert(change.node_id, (new_cursor, new_anchor));
             }
             return true;

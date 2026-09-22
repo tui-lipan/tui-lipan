@@ -290,13 +290,16 @@ pub(crate) fn clear_selectable_widget_selections_test_backend<C: Component>(
     });
 
     let mut dirty = false;
-    let before = backend.read_only_selection.len();
+    let before = backend.widgets.read_only_selection.len();
     if let Some(SelectionOwner::Node(keep_id)) = keep.as_ref() {
-        backend.read_only_selection.retain(|id, _| *id == *keep_id);
+        backend
+            .widgets
+            .read_only_selection
+            .retain(|id, _| *id == *keep_id);
     } else {
-        backend.read_only_selection.clear();
+        backend.widgets.read_only_selection.clear();
     }
-    if backend.read_only_selection.len() != before {
+    if backend.widgets.read_only_selection.len() != before {
         dirty = true;
     }
 
@@ -890,7 +893,7 @@ pub(crate) fn handle_hex_area_click_test_backend<C: Component>(
             id: hit,
             anchor: anchor_for_drag,
         });
-        backend.hex_pending_edit.remove(&hit);
+        backend.widgets.hex_pending_edit.remove(&hit);
         if let NodeKind::HexArea(hex_node) = &mut backend.core.tree.node_mut(hit).kind {
             hex_node.pending_high_nibble = None;
         }
@@ -1233,6 +1236,7 @@ pub(crate) fn dispatch_active_drag_test_backend<C: Component>(
                     });
                 } else if read_only {
                     backend
+                        .widgets
                         .read_only_selection
                         .insert(drag_state.id, (cursor, anchor_opt));
                 }
@@ -1252,6 +1256,7 @@ pub(crate) fn dispatch_active_drag_test_backend<C: Component>(
                     });
                 } else if read_only {
                     backend
+                        .widgets
                         .read_only_selection
                         .insert(drag_state.id, (cursor, anchor_opt));
                 }

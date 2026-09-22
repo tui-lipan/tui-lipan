@@ -1,5 +1,4 @@
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -9,7 +8,6 @@ use crate::app::copy_feedback::CopyFeedbackState;
 use crate::app::input::command_registry::CommandShortcutResult;
 use crate::app::input::focus;
 use crate::app::input::handlers::KeyCtx;
-use crate::app::input::hex_history::HexHistory;
 use crate::app::input::key_dispatch::{
     CommandDispatchState, DispatchOps, DispatchOutcome, FrameworkDispatch,
     TerminalPreflightDispatch,
@@ -21,8 +19,7 @@ use crate::app::input::runtime_dispatch::{
     RuntimeKeyDispatchState, make_key_ctx, outcome_to_dispatch_result,
     selection_clipboard_shortcut,
 };
-use crate::app::input::text_area_vim::TextAreaVimState;
-use crate::app::interaction_state::{DragState, HexPendingEdit, MouseTrackingState};
+use crate::app::interaction_state::{DragState, MouseTrackingState, WidgetState};
 
 use crate::app::focus_service::{self, FocusRefs, FocusStackEntry, OverlayKey};
 use crate::app::input::focus::FocusDirection;
@@ -55,8 +52,6 @@ macro_rules! focus_refs {
 }
 use crate::runtime::{FocusRequest, RuntimeCore};
 use crate::style::Rect;
-use crate::text::editor::TextEditor;
-use crate::text::input::TextInput;
 
 const DEFAULT_VIEWPORT: Rect = Rect {
     x: 0,
@@ -86,11 +81,8 @@ pub struct TestBackend<C: Component> {
     keymap: Keymap,
     keymap_runtime: KeymapRuntime,
     text_area_newline_binding: TextAreaNewlineBinding,
-    pub(crate) input_history: HashMap<NodeId, TextInput>,
-    pub(crate) textarea_history: HashMap<NodeId, TextEditor>,
-    pub(crate) text_area_vim_state: HashMap<NodeId, TextAreaVimState>,
-    pub(crate) hex_history: HashMap<NodeId, HexHistory>,
-    pub(crate) hex_pending_edit: HashMap<NodeId, HexPendingEdit>,
+    pub(crate) widgets: WidgetState,
+    last_post_reconcile_epoch: u32,
     focus_stack: Vec<FocusStackEntry>,
     unclassified_focus_request: Option<Key>,
     deferred_outside_focus: Option<Key>,
@@ -98,7 +90,6 @@ pub struct TestBackend<C: Component> {
     on_focus_changed: Option<crate::app::context::FocusChangedHook>,
     pub(crate) mouse: MouseTrackingState,
     pub(crate) drag: DragState,
-    pub(crate) read_only_selection: HashMap<NodeId, (usize, Option<usize>)>,
     pub(crate) copy_feedback: CopyFeedbackState,
     pub(crate) screen_background: Option<crate::style::Style>,
     key_dispatch_config: RuntimeKeyDispatchConfig,
@@ -246,11 +237,8 @@ where
             keymap,
             keymap_runtime,
             text_area_newline_binding: app.text_area_newline_binding,
-            input_history: HashMap::new(),
-            textarea_history: HashMap::new(),
-            text_area_vim_state: HashMap::new(),
-            hex_history: HashMap::new(),
-            hex_pending_edit: HashMap::new(),
+            widgets: WidgetState::default(),
+            last_post_reconcile_epoch: 0,
             focus_stack: Vec::new(),
             unclassified_focus_request: None,
             deferred_outside_focus: None,
@@ -258,7 +246,6 @@ where
             on_focus_changed,
             mouse: MouseTrackingState::with_pointer_cell(last_mouse),
             drag,
-            read_only_selection: HashMap::new(),
             copy_feedback,
             screen_background: None,
             key_dispatch_config,
@@ -527,12 +514,12 @@ where
 
         let selection_handled = {
             let mut key_ctx = make_key_ctx(
-                Some(&self.read_only_selection),
-                &mut self.input_history,
-                &mut self.textarea_history,
-                &mut self.text_area_vim_state,
-                &mut self.hex_history,
-                &mut self.hex_pending_edit,
+                Some(&self.widgets.read_only_selection),
+                &mut self.widgets.input_history,
+                &mut self.widgets.textarea_history,
+                &mut self.widgets.text_area_vim_state,
+                &mut self.widgets.hex_history,
+                &mut self.widgets.hex_pending_edit,
                 &self.keymap,
                 self.text_area_newline_binding,
                 &clipboard,
@@ -632,11 +619,15 @@ where
             keymap,
             keymap_runtime,
             text_area_newline_binding,
-            input_history,
-            textarea_history,
-            text_area_vim_state,
-            hex_history,
-            hex_pending_edit,
+            widgets:
+                WidgetState {
+                    input_history,
+                    textarea_history,
+                    text_area_vim_state,
+                    hex_history,
+                    hex_pending_edit,
+                    ..
+                },
             key_dispatch_state,
             framework_effects,
             copy_feedback,
@@ -746,11 +737,11 @@ where
 
         let mut key_ctx = KeyCtx {
             read_only_selection: None,
-            input_history: &mut self.input_history,
-            textarea_history: &mut self.textarea_history,
-            text_area_vim_state: &mut self.text_area_vim_state,
-            hex_history: &mut self.hex_history,
-            hex_pending_edit: &mut self.hex_pending_edit,
+            input_history: &mut self.widgets.input_history,
+            textarea_history: &mut self.widgets.textarea_history,
+            text_area_vim_state: &mut self.widgets.text_area_vim_state,
+            hex_history: &mut self.widgets.hex_history,
+            hex_pending_edit: &mut self.widgets.hex_pending_edit,
             keymap: &self.keymap,
             text_area_newline_binding: self.text_area_newline_binding,
             clipboard: &clipboard,
@@ -784,12 +775,12 @@ where
 
         let focused = self.focused;
         let mut key_ctx = make_key_ctx(
-            Some(&self.read_only_selection),
-            &mut self.input_history,
-            &mut self.textarea_history,
-            &mut self.text_area_vim_state,
-            &mut self.hex_history,
-            &mut self.hex_pending_edit,
+            Some(&self.widgets.read_only_selection),
+            &mut self.widgets.input_history,
+            &mut self.widgets.textarea_history,
+            &mut self.widgets.text_area_vim_state,
+            &mut self.widgets.hex_history,
+            &mut self.widgets.hex_pending_edit,
             &self.keymap,
             self.text_area_newline_binding,
             &clipboard,
@@ -808,12 +799,12 @@ where
         let clipboard = Rc::clone(&self.core.ctx.env().clipboard);
         let clipboard_config = self.core.ctx.env().clipboard_config.borrow().clone();
         let mut key_ctx = make_key_ctx(
-            Some(&self.read_only_selection),
-            &mut self.input_history,
-            &mut self.textarea_history,
-            &mut self.text_area_vim_state,
-            &mut self.hex_history,
-            &mut self.hex_pending_edit,
+            Some(&self.widgets.read_only_selection),
+            &mut self.widgets.input_history,
+            &mut self.widgets.textarea_history,
+            &mut self.widgets.text_area_vim_state,
+            &mut self.widgets.hex_history,
+            &mut self.widgets.hex_pending_edit,
             &self.keymap,
             self.text_area_newline_binding,
             &clipboard,
@@ -1107,7 +1098,22 @@ where
             .focus
             .update_from_tree(&self.core.tree, self.focused, self.focused_key.as_ref());
         self.notify_focus_change();
+        self.mouse.hovered = self.mouse.hovered.filter(|id| self.core.tree.is_valid(*id));
         self.refresh_hover_from_last_mouse();
+        self.prune_widget_caches_if_needed();
+    }
+
+    /// Drop per-node widget caches whose node left the tree, as `AppRunner` does after its own
+    /// reconciliation. Without this a stale [`NodeId`] survives into later dispatches, where
+    /// reading it trips the arena's validity assertion.
+    fn prune_widget_caches_if_needed(&mut self) {
+        let epoch = self.core.tree.epoch();
+        if self.last_post_reconcile_epoch == epoch {
+            return;
+        }
+        self.last_post_reconcile_epoch = epoch;
+
+        self.widgets.prune(&self.core.tree);
     }
 
     fn drain_copy_feedback_requests(&mut self) -> bool {
@@ -2009,6 +2015,88 @@ mod tests {
         TextAreaVimCurrentLineHighlight, TextAreaVimMode, TextAreaVirtualText, ThemeProvider,
         Tooltip, Tree, TreeNode, VStack,
     };
+
+    /// A read-only `Input` that the app can remove, to check cache pruning after reconciliation.
+    struct RemovableReadOnlyInput;
+
+    impl Component for RemovableReadOnlyInput {
+        type Message = ();
+        type Properties = ();
+        type State = bool;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            true
+        }
+
+        fn update(&mut self, _msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state = false;
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let mut stack = VStack::new();
+            if ctx.state {
+                stack = stack.child(
+                    Input::new("alpha beta")
+                        .read_only(true)
+                        .border(false)
+                        .width(Length::Px(20))
+                        .height(Length::Px(1)),
+                );
+            }
+            stack.child(Text::new("footer")).into()
+        }
+    }
+
+    #[test]
+    fn render_prunes_widget_caches_for_nodes_that_left_the_tree() {
+        let mut backend = TestBackend::new(RemovableReadOnlyInput);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 2,
+        });
+        backend.render();
+
+        let input_id = backend
+            .core
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::Input(_)))
+            .map(|node| node.id)
+            .expect("read-only input exists");
+        let rect = backend.core.tree.node(input_id).rect;
+        let y = rect.y.max(0) as u16;
+        for (x, kind) in [
+            (rect.x.max(0) as u16, MouseKind::Down(MouseButton::Left)),
+            (rect.x.max(0) as u16 + 5, MouseKind::Drag(MouseButton::Left)),
+            (rect.x.max(0) as u16 + 5, MouseKind::Up(MouseButton::Left)),
+        ] {
+            backend
+                .send_mouse(MouseEvent {
+                    x,
+                    y,
+                    kind,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+        }
+        assert!(
+            backend.widgets.read_only_selection.contains_key(&input_id),
+            "dragging a read-only input records its selection"
+        );
+
+        // `dispatch` pumps the `Update::full()` through a render, so the ordinary public
+        // workflow is what has to leave no stale state behind.
+        backend.dispatch(()).unwrap();
+
+        assert!(!backend.core.tree.is_valid(input_id));
+        assert!(
+            backend.widgets.read_only_selection.is_empty(),
+            "a cache entry for a node that left the tree is pruned"
+        );
+    }
 
     struct FocusEventHarness {
         log: Rc<RefCell<Vec<String>>>,
