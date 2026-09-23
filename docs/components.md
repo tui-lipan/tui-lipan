@@ -146,6 +146,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 | `ctx.request_full_repaint()` | Next frame does a **full** reconcile + paint (use after the host terminal was used by another process; see [External programs](external-programs.md)) |
 | `ctx.request_ui_snapshot_to(path)` | Queue a UI snapshot file write after the next paint (see [Agent snapshots](#agent--design-review-snapshots)) |
 | `ctx.request_ui_snapshot_to_slot(slot)` | Queue in-memory UI snapshot delivery into `UiSnapshotSlot` after the next paint |
+| `ctx.request_ui_snapshot(callback)` | Call `callback` with a `UiSnapshot` of the next paint; callbacks accumulate, so every caller before that paint gets the same snapshot |
 
 `ctx.effect_phase()` is a snapshot, not a render subscription. Use it to store a start tick in component state during `update()` / `init()`, then build phase-based effects like `VisualEffect::centered_burst_ripple(...)` from that stored value.
 

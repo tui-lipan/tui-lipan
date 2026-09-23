@@ -218,7 +218,7 @@ let snapshot = backend.capture_ui_snapshot_with_margin(
 
 `capture_frame_with_margin(20, 8)` provides the same fit-to-content viewport behavior when you only need the rendered `CapturedFrame`.
 
-**Live apps:** snapshot export is **queued until after the next paint** (not synchronous from `update()`). Each request replaces any earlier pending one. Requests schedule a repaint so idle apps still deliver. File routing follows the path extension: `.md` writes markdown, `.json` writes JSON with `ui-snapshot-json`, and `.png` writes the current viewport as PNG with `ui-snapshot-png`.
+**Live apps:** snapshot export is **queued until after the next paint** (not synchronous from `update()`). A file or slot request replaces any earlier pending one; `request_ui_snapshot(callback)` callbacks accumulate instead, and every one registered before the paint receives that paint's snapshot. Requests schedule a repaint so idle apps still deliver. File routing follows the path extension: `.md` writes markdown, `.json` writes JSON with `ui-snapshot-json`, and `.png` writes the current viewport as PNG with `ui-snapshot-png`.
 
 ```rust
 // Store the slot in component state:
@@ -235,6 +235,17 @@ if let Some(snap) = ctx.state.slot.take() {
     // use snap
 }
 ```
+
+To act on the snapshot as soon as it exists, pass a callback instead of polling a slot. It runs after the paint, and the message it sends is handled without waiting for further input:
+
+```rust
+// In update():
+ctx.request_ui_snapshot(ctx.link().callback(Msg::Captured));
+
+// Msg::Captured(snapshot) then arrives through update() like any other message.
+```
+
+`TestBackend` serves pending requests the same way: `render()` delivers them, and `pump()` renders when one is pending and then handles the messages its callbacks sent.
 
 See `examples/ui_snapshot.rs`.
 

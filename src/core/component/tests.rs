@@ -66,7 +66,7 @@ fn new_registry() -> ComponentRegistry {
             devtools_request: Rc::new(RefCell::new(None)),
             #[cfg(feature = "devtools")]
             devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
-            ui_snapshot_request: Rc::new(RefCell::new(None)),
+            pending_ui_snapshot: Rc::default(),
             copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
             command_chord_pending_since: Rc::new(Cell::new(None)),
             command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),
@@ -170,6 +170,197 @@ impl Component for DisabledDevToolsMetricsProbe {
 #[cfg(not(feature = "devtools"))]
 fn expensive_metric() -> usize {
     42
+}
+
+struct SnapshotCallbackProbe;
+
+enum SnapshotCallbackMsg {
+    Request(u8),
+    Captured(u8, crate::ui_snapshot::UiSnapshot),
+}
+
+impl Component for SnapshotCallbackProbe {
+    type Message = SnapshotCallbackMsg;
+    type Properties = ();
+    /// Each delivered snapshot's tag and first captured row.
+    type State = Vec<(u8, String)>;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        Vec::new()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        Text::new("snapshot callback probe").into()
+    }
+
+    fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        match msg {
+            SnapshotCallbackMsg::Request(tag) => {
+                let callback = ctx
+                    .link()
+                    .callback(move |snapshot| SnapshotCallbackMsg::Captured(tag, snapshot));
+                ctx.request_ui_snapshot(callback);
+            }
+            SnapshotCallbackMsg::Captured(tag, snapshot) => {
+                let row = snapshot.frame.to_fixed_grid_lines().remove(0);
+                ctx.state.push((tag, row.trim_end().to_string()));
+            }
+        }
+        Update::none()
+    }
+}
+
+#[test]
+fn request_ui_snapshot_serves_every_caller_from_the_next_paint() {
+    let mut backend = TestBackend::new(SnapshotCallbackProbe);
+    backend.render();
+
+    // Neither update asks for a repaint; the pending snapshot has to force one on its own.
+    backend.enqueue(SnapshotCallbackMsg::Request(1));
+    backend.enqueue(SnapshotCallbackMsg::Request(2));
+    backend.pump().expect("pump should succeed");
+
+    assert_eq!(
+        backend.state(),
+        &vec![
+            (1, "snapshot callback probe".to_string()),
+            (2, "snapshot callback probe".to_string()),
+        ],
+        "both callbacks should get the same paint, and their messages should be handled by the same pump",
+    );
+    assert!(backend.core.ctx.take_pending_ui_snapshot().is_empty());
+}
+
+#[test]
+fn request_ui_snapshot_shares_a_paint_with_a_slot_request() {
+    struct SlotAndCallback;
+
+    impl Component for SlotAndCallback {
+        type Message = ();
+        type Properties = ();
+        type State = (crate::ui_snapshot::UiSnapshotSlot, Rc<Cell<usize>>);
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            Default::default()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            Text::new("shared").into()
+        }
+
+        fn update(&mut self, _msg: (), ctx: &mut Context<Self>) -> Update {
+            ctx.request_ui_snapshot_to_slot(&ctx.state.0);
+            let delivered = Rc::clone(&ctx.state.1);
+            ctx.request_ui_snapshot(crate::callback::Callback::new(move |_| {
+                delivered.set(delivered.get() + 1);
+            }));
+            Update::none()
+        }
+    }
+
+    let mut backend = TestBackend::new(SlotAndCallback);
+    backend.dispatch(()).expect("dispatch should succeed");
+
+    assert!(backend.state().0.take().is_some());
+    assert_eq!(backend.state().1.get(), 1);
+}
+
+#[test]
+fn a_slot_snapshot_leaves_messages_the_render_queued_for_the_next_pump() {
+    // Only a callback's message is the answer a pump waits for, as in the runner. A render that
+    // queues something of its own while serving a slot must not have it handled early.
+    struct QueuesOnRender;
+
+    impl Component for QueuesOnRender {
+        type Message = bool;
+        type Properties = ();
+        type State = (crate::ui_snapshot::UiSnapshotSlot, usize);
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            Default::default()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            ctx.link().send(false);
+            Text::new("queues on render").into()
+        }
+
+        fn update(&mut self, request: bool, ctx: &mut Context<Self>) -> Update {
+            if request {
+                ctx.request_ui_snapshot_to_slot(&ctx.state.0);
+            } else {
+                ctx.state.1 += 1;
+            }
+            Update::none()
+        }
+    }
+
+    let mut backend = TestBackend::new(QueuesOnRender);
+    backend.render();
+    backend.pump().expect("pump should succeed");
+    let handled = backend.state().1;
+
+    backend.dispatch(true).expect("dispatch should succeed");
+
+    assert!(backend.state().0.take().is_some());
+    assert_eq!(
+        backend.state().1,
+        handled,
+        "the snapshot's render queued a message that should wait for the next pump",
+    );
+    backend.pump().expect("pump should succeed");
+    assert_eq!(backend.state().1, handled + 1);
+}
+
+#[test]
+fn a_chain_of_snapshot_callbacks_runs_on_a_constant_stack() {
+    // Each captured frame asks for the next one, as a recording loop would. The runner serves that
+    // one iteration at a time; `pump` must not grow the stack per capture either.
+    struct Chain;
+
+    enum ChainMsg {
+        Start,
+        Captured,
+    }
+
+    const LINKS: usize = 2_000;
+
+    impl Component for Chain {
+        type Message = ChainMsg;
+        type Properties = ();
+        type State = usize;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            0
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            Text::new("chain").into()
+        }
+
+        fn update(&mut self, msg: ChainMsg, ctx: &mut Context<Self>) -> Update {
+            if let ChainMsg::Captured = msg {
+                ctx.state += 1;
+            }
+            if ctx.state < LINKS {
+                ctx.request_ui_snapshot(ctx.link().callback(|_| ChainMsg::Captured));
+            }
+            Update::none()
+        }
+    }
+
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            let mut backend = TestBackend::new(Chain);
+            backend
+                .dispatch(ChainMsg::Start)
+                .expect("dispatch should succeed");
+            assert_eq!(*backend.state(), LINKS, "one pump serves the whole chain");
+        })
+        .expect("spawn the small-stack thread")
+        .join()
+        .expect("the chain should not overflow the stack");
 }
 
 #[cfg(feature = "ui-snapshot-png")]
@@ -334,14 +525,16 @@ fn scroll_view_dependency_ignores_another_scope_with_the_same_key() {
 fn request_ui_snapshot_to_routes_png_extension_when_feature_enabled() {
     let mut backend = TestBackend::new(SnapshotRequester);
 
+    // `update_level` stops short of the render that would serve the request by writing the file.
     backend
-        .dispatch(SnapshotRequestMsg::Write("/tmp/ui-snapshot.PNG"))
-        .expect("dispatch should succeed");
+        .update_level(SnapshotRequestMsg::Write("/tmp/ui-snapshot.PNG"))
+        .expect("update should succeed");
 
     let request = backend
         .core
         .ctx
-        .take_ui_snapshot_request()
+        .take_pending_ui_snapshot()
+        .request
         .expect("snapshot request");
     match request {
         crate::ui_snapshot::UiSnapshotRequest::Write { path, format } => {

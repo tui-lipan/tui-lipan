@@ -1282,10 +1282,14 @@ impl<C: Component> AppRunner<C> {
         root
     }
 
-    fn apply_pending_ui_snapshot_request(&mut self) -> crate::Result<()> {
-        let Some(request) = self.core.ctx.take_ui_snapshot_request() else {
-            return Ok(());
-        };
+    /// Serve pending snapshot requests from the frame just painted. Returns whether any callback
+    /// ran, since a callback's message is queued outside the loop's usual drain.
+    fn apply_pending_ui_snapshot_request(&mut self) -> crate::Result<bool> {
+        let pending = self.core.ctx.take_pending_ui_snapshot();
+        if pending.is_empty() {
+            return Ok(false);
+        }
+        let ran_callbacks = !pending.callbacks.is_empty();
         let screen_background = self.resolved_screen_background();
         let interaction = crate::backend::ratatui_backend::capture_render::CaptureInteraction {
             focused: self.focus.focused,
@@ -1300,15 +1304,8 @@ impl<C: Component> AppRunner<C> {
             screen_background,
             &crate::ui_snapshot::UiSnapshotOptions::default(),
         );
-        match request {
-            crate::ui_snapshot::UiSnapshotRequest::Write { path, format } => {
-                crate::ui_snapshot::write_snapshot(&snapshot, &path, format)?;
-            }
-            crate::ui_snapshot::UiSnapshotRequest::Deliver(slot) => {
-                *slot.borrow_mut() = Some(snapshot);
-            }
-        }
-        Ok(())
+        pending.deliver(snapshot)?;
+        Ok(ran_callbacks)
     }
 
     /// Rect of the widget carrying `key`, if it is in the current tree.
@@ -2190,6 +2187,8 @@ impl<C: Component> AppRunner<C> {
             let mut pending_event: Option<RunnerEvent> = None;
             let mut host_color_refresh_quiet_until: Option<Instant> = None;
             let mut deferred_full = false;
+            // A snapshot callback ran after the last paint and may have queued a message.
+            let mut snapshot_answered = false;
             // Last terminal size we observed. Used as a fallback for missed
             // SIGWINCH/Resize events (see the size-poll check below).
             let mut last_known_size = terminal.size().unwrap_or_default();
@@ -2242,7 +2241,12 @@ impl<C: Component> AppRunner<C> {
                 }
 
                 #[cfg_attr(not(unix), allow(unused_mut))]
-                let mut actual_timeout = if dirty.is_dirty() || pending_event.is_some() {
+                // The message a snapshot callback sent is its caller's answer; it must not wait for
+                // unrelated input.
+                let mut actual_timeout = if dirty.is_dirty()
+                    || pending_event.is_some()
+                    || std::mem::take(&mut snapshot_answered)
+                {
                     Duration::from_millis(0)
                 } else {
                     poll_timeout.max(Duration::from_millis(1))
@@ -2967,7 +2971,7 @@ impl<C: Component> AppRunner<C> {
                 }
 
                 if !matches!(frame_level, DirtyLevel::None) {
-                    self.apply_pending_ui_snapshot_request()?;
+                    snapshot_answered = self.apply_pending_ui_snapshot_request()?;
                 }
 
                 #[cfg(feature = "profiling-tracing")]
