@@ -1998,9 +1998,10 @@ impl TerminalScreen {
     ///
     /// The frame holds the emulator's own cells, before any widget presentation such as
     /// selection, focus, or decorations. Colors keep their terminal meaning and ignore
-    /// [`Self::set_palette`]: default foreground and background stay [`Color::Reset`], the 16 ANSI
-    /// slots stay named colors, and 256-color and truecolor values pass through. A serializer that
-    /// needs concrete colors, such as `CapturedFrame::to_png`, resolves them itself.
+    /// [`Self::set_palette`]: default foreground and background stay [`Color::Reset`], the 16 named
+    /// ANSI colors stay named, and indexed and truecolor values pass through as written, so
+    /// `SGR 38;5;1` captures as `Indexed(1)`, not red. A serializer that needs concrete colors,
+    /// such as `CapturedFrame::to_png`, resolves them itself.
     ///
     /// A wide glyph occupies its own cell, and the column it covers holds an empty symbol, so
     /// joining a row's symbols yields text at its true display width. Hidden text and image
@@ -2010,7 +2011,6 @@ impl TerminalScreen {
     pub fn capture_frame(&self) -> CapturedFrame {
         let content = self.term.renderable_content();
         let display_offset = content.display_offset;
-        let palette = TerminalColorPalette::default();
         let width = self.cols;
         let height = self.rows;
         let blank = CapturedCell {
@@ -2039,12 +2039,11 @@ impl TerminalScreen {
                 push_cell_text_str(&mut symbol, cell);
                 symbol
             };
-            let color = |color| map_term_color(color, &palette).unwrap_or(UiColor::Reset);
             cells[point.line * usize::from(width) + point.column.0] = CapturedCell {
                 symbol,
-                fg: color(cell.fg),
-                bg: color(cell.bg),
-                underline_color: cell.underline_color().map_or(UiColor::Reset, color),
+                fg: capture_color(cell.fg),
+                bg: capture_color(cell.bg),
+                underline_color: cell.underline_color().map_or(UiColor::Reset, capture_color),
                 modifiers: CellModifiers {
                     bold: cell.flags.contains(CellFlags::BOLD),
                     dim: cell.flags.contains(CellFlags::DIM),
@@ -3370,6 +3369,41 @@ fn map_term_color(color: TermColor, palette: &TerminalColorPalette) -> Option<Ui
     }
 }
 
+/// A terminal color as the program set it, with no palette applied.
+///
+/// Unlike [`map_term_color`], `SGR 38;5;1` stays `Indexed(1)` rather than becoming the palette's
+/// red. The difference is visible: `SGR 58` can only express indexed and RGB colors, so an
+/// underline color turned into a named one would be lost when the frame is written back out.
+fn capture_color(color: TermColor) -> UiColor {
+    match color {
+        TermColor::Spec(TermRgb { r, g, b }) => UiColor::Rgb(r, g, b),
+        TermColor::Indexed(index) => UiColor::Indexed(index),
+        TermColor::Named(named) => match named {
+            NamedColor::Black | NamedColor::DimBlack => UiColor::Black,
+            NamedColor::Red | NamedColor::DimRed => UiColor::Red,
+            NamedColor::Green | NamedColor::DimGreen => UiColor::Green,
+            NamedColor::Yellow | NamedColor::DimYellow => UiColor::Yellow,
+            NamedColor::Blue | NamedColor::DimBlue => UiColor::Blue,
+            NamedColor::Magenta | NamedColor::DimMagenta => UiColor::Magenta,
+            NamedColor::Cyan | NamedColor::DimCyan => UiColor::Cyan,
+            NamedColor::White | NamedColor::DimWhite => UiColor::Gray,
+            NamedColor::BrightBlack => UiColor::DarkGray,
+            NamedColor::BrightRed => UiColor::LightRed,
+            NamedColor::BrightGreen => UiColor::LightGreen,
+            NamedColor::BrightYellow => UiColor::LightYellow,
+            NamedColor::BrightBlue => UiColor::LightBlue,
+            NamedColor::BrightMagenta => UiColor::LightMagenta,
+            NamedColor::BrightCyan => UiColor::LightCyan,
+            NamedColor::BrightWhite => UiColor::White,
+            NamedColor::Foreground
+            | NamedColor::BrightForeground
+            | NamedColor::DimForeground
+            | NamedColor::Background
+            | NamedColor::Cursor => UiColor::Reset,
+        },
+    }
+}
+
 fn map_named_color(color: NamedColor, palette: &TerminalColorPalette) -> Option<UiColor> {
     match color {
         NamedColor::Black => Some(palette.ansi[0]),
@@ -3698,6 +3732,21 @@ mod tests {
         assert_eq!(row[3].fg, UiColor::Indexed(200));
         assert_eq!(row[4].fg, UiColor::Rgb(1, 2, 3));
         assert_eq!((row[5].fg, row[5].bg), (UiColor::Reset, UiColor::Blue));
+    }
+
+    #[test]
+    fn capture_frame_keeps_low_indexed_colors_indexed() {
+        let mut screen = TerminalScreen::new(1, 4, 10);
+        screen.process_bytes(b"\x1b[38;5;1mf\x1b[0;48;5;1mb\x1b[0;4;58;5;1mu\x1b[0m");
+        let frame = screen.capture_frame();
+        let row = frame.row(0);
+
+        assert_eq!(row[0].fg, UiColor::Indexed(1));
+        assert_eq!(row[1].bg, UiColor::Indexed(1));
+        assert_eq!(row[2].underline_color, UiColor::Indexed(1));
+        // A named underline color has no SGR 58 form, so this is what keeps it in the output.
+        let underlined = frame.to_ansi_text();
+        assert!(underlined.contains("\x1b[58;5;1mu"), "{underlined:?}");
     }
 
     #[test]

@@ -531,8 +531,8 @@ still treats every row as a line of its own and always returns single-span match
 
 ### Capturing the visible screen
 
-`screen.capture_frame()` returns the visible viewport as a `CapturedFrame`, the same cell grid a
-headless UI capture produces, so every frame serializer applies to it:
+`screen.capture_frame()` returns the visible viewport as a `CapturedFrame`, the same
+representation a headless UI capture produces, so every frame serializer applies to it:
 
 ```rust
 let frame = screen.capture_frame();
@@ -543,8 +543,8 @@ let png = frame.to_png(&PngOptions::default())?; // feature `ui-snapshot-png`
 
 The frame holds the emulator's cells, not what a `Terminal` widget paints: no selection,
 decorations, or focus styling. Colors keep their terminal meaning and ignore `set_palette`. Default
-foreground and background stay `Color::Reset`, the 16 ANSI slots stay named colors, and 256-color
-and truecolor values pass through unchanged. A PNG therefore takes its default colors from
+foreground and background stay `Color::Reset`, the 16 named ANSI colors stay named, and indexed and
+truecolor values pass through as written: `SGR 38;5;1` captures as `Color::Indexed(1)`, not red. A PNG therefore takes its default colors from
 `PngOptions::default_fg` and `default_bg`.
 
 Print or save a capture with `to_ansi_text()`, not `to_ansi()`. `to_ansi()` is a repaint stream
