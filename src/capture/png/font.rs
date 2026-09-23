@@ -205,8 +205,8 @@ impl FontRenderer {
             bold_offset,
         );
 
-        // Fonts place a combining mark after the base glyph's advance, reaching back over it.
-        let pen = origin + coverage.advance.round() as i32;
+        // Combining glyph origins differ between fonts, especially when the mark comes from a
+        // fallback face. Center its ink over the base glyph instead of relying on its side bearing.
         for mark in chars {
             if mark == ZERO_WIDTH_JOINER {
                 // Joining the rest of a sequence needs shaping; the first component stands in.
@@ -225,12 +225,14 @@ impl FontRenderer {
                 continue;
             };
             if let Some(mark_coverage) = self.outline(mark_face, mark_glyph, size) {
+                let (mark_origin, mark_baseline) =
+                    place_mark(cell_rect, &coverage, origin, &mark_coverage, baseline);
                 blit(
                     image,
                     cell_rect,
                     &mark_coverage,
-                    pen,
-                    baseline,
+                    mark_origin,
+                    mark_baseline,
                     color,
                     bold_offset,
                 );
@@ -402,6 +404,23 @@ fn candidate_order(db: &Database) -> Vec<ID> {
 
 fn font_size(cell_rect: CellPixels) -> u32 {
     (cell_rect.height * 82 / 100).max(1)
+}
+
+/// Place a combining glyph's ink over the base and keep it visible inside the cell.
+fn place_mark(
+    cell_rect: CellPixels,
+    base: &Coverage,
+    base_origin: i32,
+    mark: &Coverage,
+    baseline: i32,
+) -> (i32, i32) {
+    let base_center = base_origin + base.left + base.width as i32 / 2;
+    let mark_origin = base_center - mark.left - mark.width as i32 / 2;
+    let mark_top = baseline + mark.top;
+    let cell_top = cell_rect.y0 as i32;
+    let lowest_top = cell_top + cell_rect.height.saturating_sub(mark.height) as i32;
+    let visible_top = mark_top.clamp(cell_top, lowest_top);
+    (mark_origin, baseline + visible_top - mark_top)
 }
 
 fn is_variation_selector(ch: char) -> bool {
@@ -627,6 +646,35 @@ impl OutlineBuilder for RasterBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn combining_mark_is_centered_and_kept_inside_the_cell() {
+        let cell = CellPixels {
+            x0: 0,
+            y0: 0,
+            width: 16,
+            height: 32,
+        };
+        let base = Coverage {
+            left: 1,
+            top: -13,
+            width: 10,
+            height: 13,
+            advance: 12.0,
+            alpha: Vec::new(),
+        };
+        let mark = Coverage {
+            left: 2,
+            top: -29,
+            width: 4,
+            height: 3,
+            advance: 0.0,
+            alpha: Vec::new(),
+        };
+        let (origin, baseline) = place_mark(cell, &base, 2, &mark, 25);
+        assert_eq!(origin + mark.left + mark.width as i32 / 2, 8);
+        assert_eq!(baseline + mark.top, 0);
+    }
 
     #[test]
     fn raster_builder_fills_a_closed_outline() {
