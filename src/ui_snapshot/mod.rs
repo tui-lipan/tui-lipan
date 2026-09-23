@@ -24,7 +24,7 @@ pub use kind::UiWidgetKind;
 pub use options::{UiSnapshotFileFormat, UiSnapshotFormatOptions, UiSnapshotOptions};
 pub use recording::Recording;
 pub(crate) use recording::resolve_actions;
-pub(crate) use request::UiSnapshotRequest;
+pub(crate) use request::{PendingUiSnapshot, UiSnapshotRequest};
 pub(crate) use script::{compile_script, execute_step};
 #[cfg(test)]
 pub(crate) use script::{execute, parse_script};

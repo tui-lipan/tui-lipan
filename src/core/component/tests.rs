@@ -66,7 +66,7 @@ fn new_registry() -> ComponentRegistry {
             devtools_request: Rc::new(RefCell::new(None)),
             #[cfg(feature = "devtools")]
             devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
-            ui_snapshot_request: Rc::new(RefCell::new(None)),
+            pending_ui_snapshot: Rc::default(),
             copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
             command_chord_pending_since: Rc::new(Cell::new(None)),
             command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),
@@ -170,6 +170,99 @@ impl Component for DisabledDevToolsMetricsProbe {
 #[cfg(not(feature = "devtools"))]
 fn expensive_metric() -> usize {
     42
+}
+
+struct SnapshotCallbackProbe;
+
+enum SnapshotCallbackMsg {
+    Request(u8),
+    Captured(u8, crate::ui_snapshot::UiSnapshot),
+}
+
+impl Component for SnapshotCallbackProbe {
+    type Message = SnapshotCallbackMsg;
+    type Properties = ();
+    /// Each delivered snapshot's tag and first captured row.
+    type State = Vec<(u8, String)>;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        Vec::new()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        Text::new("snapshot callback probe").into()
+    }
+
+    fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        match msg {
+            SnapshotCallbackMsg::Request(tag) => {
+                let callback = ctx
+                    .link()
+                    .callback(move |snapshot| SnapshotCallbackMsg::Captured(tag, snapshot));
+                ctx.request_ui_snapshot(callback);
+            }
+            SnapshotCallbackMsg::Captured(tag, snapshot) => {
+                let row = snapshot.frame.to_fixed_grid_lines().remove(0);
+                ctx.state.push((tag, row.trim_end().to_string()));
+            }
+        }
+        Update::none()
+    }
+}
+
+#[test]
+fn request_ui_snapshot_serves_every_caller_from_the_next_paint() {
+    let mut backend = TestBackend::new(SnapshotCallbackProbe);
+    backend.render();
+
+    // Neither update asks for a repaint; the pending snapshot has to force one on its own.
+    backend.enqueue(SnapshotCallbackMsg::Request(1));
+    backend.enqueue(SnapshotCallbackMsg::Request(2));
+    backend.pump().expect("pump should succeed");
+
+    assert_eq!(
+        backend.state(),
+        &vec![
+            (1, "snapshot callback probe".to_string()),
+            (2, "snapshot callback probe".to_string()),
+        ],
+        "both callbacks should get the same paint, and their messages should be handled by the same pump",
+    );
+    assert!(backend.core.ctx.take_pending_ui_snapshot().is_empty());
+}
+
+#[test]
+fn request_ui_snapshot_shares_a_paint_with_a_slot_request() {
+    struct SlotAndCallback;
+
+    impl Component for SlotAndCallback {
+        type Message = ();
+        type Properties = ();
+        type State = (crate::ui_snapshot::UiSnapshotSlot, Rc<Cell<usize>>);
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            Default::default()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            Text::new("shared").into()
+        }
+
+        fn update(&mut self, _msg: (), ctx: &mut Context<Self>) -> Update {
+            ctx.request_ui_snapshot_to_slot(&ctx.state.0);
+            let delivered = Rc::clone(&ctx.state.1);
+            ctx.request_ui_snapshot(crate::callback::Callback::new(move |_| {
+                delivered.set(delivered.get() + 1);
+            }));
+            Update::none()
+        }
+    }
+
+    let mut backend = TestBackend::new(SlotAndCallback);
+    backend.dispatch(()).expect("dispatch should succeed");
+
+    assert!(backend.state().0.take().is_some());
+    assert_eq!(backend.state().1.get(), 1);
 }
 
 #[cfg(feature = "ui-snapshot-png")]
@@ -334,14 +427,16 @@ fn scroll_view_dependency_ignores_another_scope_with_the_same_key() {
 fn request_ui_snapshot_to_routes_png_extension_when_feature_enabled() {
     let mut backend = TestBackend::new(SnapshotRequester);
 
+    // `update_level` stops short of the render that would serve the request by writing the file.
     backend
-        .dispatch(SnapshotRequestMsg::Write("/tmp/ui-snapshot.PNG"))
-        .expect("dispatch should succeed");
+        .update_level(SnapshotRequestMsg::Write("/tmp/ui-snapshot.PNG"))
+        .expect("update should succeed");
 
     let request = backend
         .core
         .ctx
-        .take_ui_snapshot_request()
+        .take_pending_ui_snapshot()
+        .request
         .expect("snapshot request");
     match request {
         crate::ui_snapshot::UiSnapshotRequest::Write { path, format } => {

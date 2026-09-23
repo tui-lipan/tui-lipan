@@ -946,8 +946,18 @@ where
             dirty = true;
         }
 
+        // A requested snapshot forces a paint, as it does in the runner.
+        let snapshot_pending = !self.core.ctx.env().pending_ui_snapshot.borrow().is_empty();
+        dirty |= snapshot_pending;
+
         if dirty {
             self.render();
+        }
+
+        // Snapshot callbacks ran during that render, and the messages they sent are the answer the
+        // caller is pumping for. Anything else the render queued waits for the next pump, as before.
+        if snapshot_pending && !self.core.queue.borrow().is_empty() {
+            dirty |= self.pump()?;
         }
 
         Ok(dirty)
@@ -1101,6 +1111,19 @@ where
         self.mouse.hovered = self.mouse.hovered.filter(|id| self.core.tree.is_valid(*id));
         self.refresh_hover_from_last_mouse();
         self.prune_widget_caches_if_needed();
+        self.deliver_pending_ui_snapshot();
+    }
+
+    /// Serve the app's pending `Context::request_ui_snapshot*` calls from the frame just rendered,
+    /// as the runner does after each paint. Messages their callbacks send wait for [`Self::pump`].
+    fn deliver_pending_ui_snapshot(&mut self) {
+        let pending = self.core.ctx.take_pending_ui_snapshot();
+        if pending.is_empty() {
+            return;
+        }
+        pending
+            .deliver(self.capture_ui_snapshot())
+            .expect("the app's requested UI snapshot file should be writable");
     }
 
     /// Drop per-node widget caches whose node left the tree, as `AppRunner` does after its own

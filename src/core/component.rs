@@ -8,7 +8,9 @@ use web_time::Instant;
 use crate::app::context::SurfaceMode;
 use crate::app::input::command_registry::CommandEntry;
 use crate::app::input::command_registry::CommandRegistry;
-use crate::callback::{CancellationToken, CommandLink, CommandTx, Dispatcher, Link, ScopeId};
+use crate::callback::{
+    Callback, CancellationToken, CommandLink, CommandTx, Dispatcher, Link, ScopeId,
+};
 use crate::core::context_value::ContextValue;
 use crate::core::element::{Element, Key};
 use crate::core::event::{KeyEvent, KeyMods};
@@ -1876,7 +1878,7 @@ impl<C: Component> Context<C> {
     pub fn request_ui_snapshot_to(&self, path: impl AsRef<std::path::Path>) {
         let path = path.as_ref().to_path_buf();
         let format = crate::ui_snapshot::UiSnapshotFileFormat::from_path(&path);
-        *self.env.ui_snapshot_request.borrow_mut() =
+        self.env.pending_ui_snapshot.borrow_mut().request =
             Some(crate::ui_snapshot::UiSnapshotRequest::Write { path, format });
         self.request_full_repaint();
     }
@@ -1886,14 +1888,38 @@ impl<C: Component> Context<C> {
     /// A pending request replaces any earlier one (last writer wins). Triggers a full
     /// repaint so idle apps still deliver the snapshot.
     pub fn request_ui_snapshot_to_slot(&self, slot: &crate::ui_snapshot::UiSnapshotSlot) {
-        *self.env.ui_snapshot_request.borrow_mut() = Some(
+        self.env.pending_ui_snapshot.borrow_mut().request = Some(
             crate::ui_snapshot::UiSnapshotRequest::Deliver(slot.shared()),
         );
         self.request_full_repaint();
     }
 
-    pub(crate) fn take_ui_snapshot_request(&self) -> Option<crate::ui_snapshot::UiSnapshotRequest> {
-        self.env.ui_snapshot_request.borrow_mut().take()
+    /// Call `callback` with a UI snapshot of the next painted frame.
+    ///
+    /// Unlike [`Self::request_ui_snapshot_to`] and [`Self::request_ui_snapshot_to_slot`],
+    /// callbacks accumulate instead of replacing each other: every callback registered before
+    /// the next paint receives that paint's snapshot. Independent callers can therefore each
+    /// ask for the screen without coordinating. Triggers a full repaint so idle apps still
+    /// deliver the snapshot.
+    ///
+    /// The callback runs after the frame is drawn, outside `update()`. Route it back into the
+    /// component with a [`Link`] callback; the runner processes that message without waiting
+    /// for further input:
+    ///
+    /// ```ignore
+    /// ctx.request_ui_snapshot(ctx.link().callback(Msg::Captured));
+    /// ```
+    pub fn request_ui_snapshot(&self, callback: Callback<crate::ui_snapshot::UiSnapshot>) {
+        self.env
+            .pending_ui_snapshot
+            .borrow_mut()
+            .callbacks
+            .push(callback);
+        self.request_full_repaint();
+    }
+
+    pub(crate) fn take_pending_ui_snapshot(&self) -> crate::ui_snapshot::PendingUiSnapshot {
+        std::mem::take(&mut *self.env.pending_ui_snapshot.borrow_mut())
     }
 
     pub(crate) fn should_quit(&self) -> bool {

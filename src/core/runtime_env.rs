@@ -373,7 +373,7 @@ pub(crate) struct RuntimeEnv {
     #[cfg(feature = "devtools")]
     pub devtools_metrics: Rc<DevToolsMetrics>,
     /// Pending UI snapshot export/delivery after the next render.
-    pub ui_snapshot_request: Rc<RefCell<Option<crate::ui_snapshot::UiSnapshotRequest>>>,
+    pub pending_ui_snapshot: Rc<RefCell<crate::ui_snapshot::PendingUiSnapshot>>,
     /// Pending requests to flash copy feedback on specific nodes.
     pub copy_feedback_request: Rc<RefCell<Vec<CopyFeedbackRequest>>>,
     /// When the currently pending multi-step command chord started, or `None` when no chord is

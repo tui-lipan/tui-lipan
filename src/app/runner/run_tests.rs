@@ -5846,6 +5846,37 @@ fn ui_snapshot_slot_delivered_after_render() {
     assert!(slot.take().is_some());
 }
 
+#[test]
+fn ui_snapshot_callbacks_share_the_delivered_snapshot() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 24,
+        h: 5,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), UiSnapshotRoot, ());
+    let slot = crate::ui_snapshot::UiSnapshotSlot::new();
+    let widths = Rc::new(RefCell::new(Vec::new()));
+    runner.core.ctx.request_ui_snapshot_to_slot(&slot);
+    for _ in 0..2 {
+        let widths = Rc::clone(&widths);
+        runner
+            .core
+            .ctx
+            .request_ui_snapshot(crate::callback::Callback::new(
+                move |snapshot: crate::ui_snapshot::UiSnapshot| {
+                    widths.borrow_mut().push(snapshot.viewport.w);
+                },
+            ));
+    }
+    runner.core.render_element(viewport, None, None, None);
+    runner
+        .apply_pending_ui_snapshot_request()
+        .expect("snapshot delivery should succeed");
+    assert!(slot.take().is_some());
+    assert_eq!(*widths.borrow(), vec![24, 24]);
+}
+
 struct HScrollOffsetSmoke;
 
 impl Component for HScrollOffsetSmoke {
