@@ -948,3 +948,249 @@ fn to_ansi_text_keeps_row_width_when_a_cell_cannot_hold_its_symbol() {
 
     assert_eq!(strip_sgr(&frame.to_ansi_text()), " a \n");
 }
+
+/// 16x32-pixel cells from the built-in font, so pixel checks do not depend on system fonts.
+#[cfg(feature = "ui-snapshot-png")]
+fn bitmap_png_options() -> tui_lipan::PngOptions {
+    tui_lipan::PngOptions {
+        cell_width: 8,
+        cell_height: 16,
+        scale: 2,
+        text_renderer: tui_lipan::PngTextRenderer::Bitmap,
+        default_fg: Color::White,
+        default_bg: Color::Black,
+        ..Default::default()
+    }
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+fn render(frame: &tui_lipan::CapturedFrame, options: &tui_lipan::PngOptions) -> image::RgbImage {
+    let png = frame.to_png(options).expect("png should encode");
+    image::load_from_memory(&png)
+        .expect("png should decode")
+        .to_rgb8()
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+#[test]
+fn png_ansi_palette_paints_named_and_low_indexed_colors() {
+    let mut frame = symbol_frame(&[&[" ", " ", " "]]);
+    frame.cells[0].bg = Color::Red;
+    frame.cells[1].bg = Color::Indexed(1);
+    frame.cells[2].bg = Color::Indexed(200);
+    let mut options = bitmap_png_options();
+    options.ansi_palette[1] = Color::Rgb(1, 2, 3);
+
+    let themed = render(&frame, &options);
+    assert_eq!(themed.get_pixel(8, 16).0, [1, 2, 3]);
+    assert_eq!(themed.get_pixel(24, 16).0, [1, 2, 3]);
+    // Only the 16 ANSI slots come from the palette.
+    let indexed = Color::Indexed(200).to_rgb().expect("indexed color has rgb");
+    assert_eq!(
+        themed.get_pixel(40, 16).0,
+        [indexed.0, indexed.1, indexed.2]
+    );
+
+    // The default palette keeps the xterm values.
+    let plain = render(&frame, &bitmap_png_options());
+    assert_eq!(plain.get_pixel(8, 16).0, [205, 0, 0]);
+    assert_eq!(plain.get_pixel(24, 16).0, [205, 0, 0]);
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+#[test]
+fn png_underline_without_a_color_takes_the_text_color() {
+    let mut frame = single_cell_frame(" ", Color::Rgb(200, 10, 20), Color::Black);
+    frame.cells[0].modifiers.underline = Some(tui_lipan::UnderlineStyle::Single);
+    assert_eq!(
+        render(&frame, &bitmap_png_options()).get_pixel(8, 31).0,
+        [200, 10, 20]
+    );
+
+    frame.cells[0].underline_color = Color::Rgb(0, 200, 255);
+    assert_eq!(
+        render(&frame, &bitmap_png_options()).get_pixel(8, 31).0,
+        [0, 200, 255]
+    );
+}
+
+/// Which pixels of the bottom half of a four-cell underlined run are painted.
+#[cfg(feature = "ui-snapshot-png")]
+fn underline_pixels(shape: tui_lipan::UnderlineStyle) -> Vec<Vec<bool>> {
+    let mut frame = symbol_frame(&[&[" ", " ", " ", " "]]);
+    for cell in &mut frame.cells {
+        cell.modifiers.underline = Some(shape);
+    }
+    let image = render(&frame, &bitmap_png_options());
+    (16..32)
+        .map(|y| {
+            (0..64)
+                .map(|x| image.get_pixel(x, y).0 != [0, 0, 0])
+                .collect()
+        })
+        .collect()
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+#[test]
+fn png_draws_each_underline_shape() {
+    use tui_lipan::UnderlineStyle;
+    let full = |row: &[bool]| row.iter().all(|&set| set);
+    let empty = |row: &[bool]| row.iter().all(|&set| !set);
+    let painted = |row: &[bool]| row.iter().filter(|&&set| set).count();
+
+    // Rows are indexed from pixel row 16; the 2px underline sits on rows 30-31 (14-15 here).
+    let single = underline_pixels(UnderlineStyle::Single);
+    assert!(full(&single[14]) && full(&single[15]));
+    assert!(single[..14].iter().all(|row| empty(row)));
+
+    let double = underline_pixels(UnderlineStyle::Double);
+    assert!(full(&double[14]) && full(&double[10]) && full(&double[11]));
+    assert!(
+        empty(&double[12]) && empty(&double[13]),
+        "double lines need a gap"
+    );
+
+    let dotted = underline_pixels(UnderlineStyle::Dotted);
+    assert_eq!(painted(&dotted[15]), 32, "dots and gaps alternate");
+
+    let dashed = underline_pixels(UnderlineStyle::Dashed);
+    let dashes = painted(&dashed[15]);
+    assert!(
+        (40..=48).contains(&dashes),
+        "dashes cover about two thirds, got {dashes}"
+    );
+    assert_ne!(dashed[15], dotted[15]);
+
+    let curly = underline_pixels(UnderlineStyle::Curly);
+    let rows_used = curly.iter().filter(|row| !empty(row)).count();
+    assert!(rows_used >= 3, "a wave spans several rows, got {rows_used}");
+    for x in 0..64 {
+        assert!(
+            curly.iter().any(|row| row[x]),
+            "the wave has a gap at column {x}"
+        );
+    }
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+#[test]
+fn png_bitmap_draws_accented_latin_and_the_base_of_a_combining_sequence() {
+    let options = bitmap_png_options();
+    let precomposed = render(
+        &single_cell_frame("é", Color::White, Color::Black),
+        &options,
+    );
+    let plain = render(
+        &single_cell_frame("e", Color::White, Color::Black),
+        &options,
+    );
+    let combining = render(
+        &single_cell_frame("e\u{301}", Color::White, Color::Black),
+        &options,
+    );
+
+    assert_ne!(precomposed, plain, "é has its own glyph");
+    // The built-in font has no combining marks, so the sequence falls back to its base letter
+    // rather than a missing-glyph box.
+    assert_eq!(combining, plain);
+}
+
+/// Whether an installed face has `ch`, as an outline or, with `color`, as a color bitmap.
+#[cfg(feature = "ui-snapshot-png")]
+fn system_font_has(ch: char, color: bool) -> bool {
+    let mut db = fontdb::Database::new();
+    db.load_system_fonts();
+    db.faces().any(|face| {
+        db.with_face_data(face.id, |data, index| {
+            let Ok(face) = ttf_parser::Face::parse(data, index) else {
+                return false;
+            };
+            face.glyph_index(ch).is_some_and(|glyph| {
+                if color {
+                    face.glyph_raster_image(glyph, u16::MAX).is_some()
+                } else {
+                    face.glyph_bounding_box(glyph).is_some()
+                }
+            })
+        })
+        .unwrap_or(false)
+    })
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+fn font_png_options() -> tui_lipan::PngOptions {
+    tui_lipan::PngOptions {
+        text_renderer: tui_lipan::PngTextRenderer::Font,
+        ..bitmap_png_options()
+    }
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+#[test]
+fn png_font_renderer_falls_back_to_any_font_with_the_glyph() {
+    if !system_font_has('中', false) {
+        eprintln!("skipped: no installed font covers CJK");
+        return;
+    }
+    let frame = symbol_frame(&[&["中", ""]]);
+    let font = render(&frame, &font_png_options());
+    let bitmap = render(&frame, &bitmap_png_options());
+
+    assert_ne!(
+        font, bitmap,
+        "the bitmap renderer draws a missing-glyph box"
+    );
+    // Ink lands in both columns the wide glyph covers.
+    let inked = |x_range: std::ops::Range<u32>| {
+        x_range
+            .flat_map(|x| (0..32).map(move |y| (x, y)))
+            .any(|(x, y)| font.get_pixel(x, y).0 != [0, 0, 0])
+    };
+    assert!(inked(0..16) && inked(16..32));
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+#[test]
+fn png_font_renderer_draws_combining_marks_over_their_base() {
+    let Some(font_family) = available_test_monospace_family() else {
+        return;
+    };
+    let options = tui_lipan::PngOptions {
+        font_family: Some(std::sync::Arc::from(font_family.as_str())),
+        ..font_png_options()
+    };
+    let top_ink = |symbol: &str| {
+        let image = render(
+            &single_cell_frame(symbol, Color::White, Color::Black),
+            &options,
+        );
+        (0..16)
+            .flat_map(|x| (0..12).map(move |y| (x, y)))
+            .filter(|&(x, y)| image.get_pixel(x, y).0 != [0, 0, 0])
+            .count()
+    };
+
+    assert!(
+        top_ink("e\u{301}") > top_ink("e"),
+        "the acute accent draws above the e"
+    );
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+#[test]
+fn png_font_renderer_draws_color_emoji() {
+    if !system_font_has('🦀', true) {
+        eprintln!("skipped: no installed color emoji font");
+        return;
+    }
+    let image = render(&symbol_frame(&[&["🦀", ""]]), &font_png_options());
+
+    assert!(
+        image.pixels().any(|pixel| {
+            let [r, g, b] = pixel.0;
+            r.abs_diff(g) > 40 || g.abs_diff(b) > 40
+        }),
+        "a color emoji is not drawn in the white foreground"
+    );
+}

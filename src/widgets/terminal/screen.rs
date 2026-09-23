@@ -41,7 +41,7 @@ use super::scrollback_ledger::{
     HostModes, LedgerTerm, SGR_PIXELS_MOUSE, ledger_capacity, settle_history,
 };
 use super::selection::{ScrollbackLineage, TerminalSelection};
-use crate::capture::{CapturedCell, CapturedFrame, CellModifiers, CursorState};
+use crate::capture::{CapturedCell, CapturedFrame, CellModifiers, CursorState, UnderlineStyle};
 use crate::style::{CaretShape, Color as UiColor, HostTerminalColors, Rect, Span, Style, Theme};
 use crate::utils::{GridPos, GridSelection, SelectionEnd};
 
@@ -2048,7 +2048,7 @@ impl TerminalScreen {
                     bold: cell.flags.contains(CellFlags::BOLD),
                     dim: cell.flags.contains(CellFlags::DIM),
                     italic: cell.flags.contains(CellFlags::ITALIC),
-                    underline: cell.flags.intersects(CellFlags::ALL_UNDERLINES),
+                    underline: capture_underline(cell.flags),
                     reverse: cell.flags.contains(CellFlags::INVERSE),
                     strikethrough: cell.flags.contains(CellFlags::STRIKEOUT),
                 },
@@ -3369,6 +3369,19 @@ fn map_term_color(color: TermColor, palette: &TerminalColorPalette) -> Option<Ui
     }
 }
 
+/// The underline a cell's flags ask for. A cell carries at most one underline flag.
+fn capture_underline(flags: CellFlags) -> Option<UnderlineStyle> {
+    [
+        (CellFlags::UNDERLINE, UnderlineStyle::Single),
+        (CellFlags::DOUBLE_UNDERLINE, UnderlineStyle::Double),
+        (CellFlags::UNDERCURL, UnderlineStyle::Curly),
+        (CellFlags::DOTTED_UNDERLINE, UnderlineStyle::Dotted),
+        (CellFlags::DASHED_UNDERLINE, UnderlineStyle::Dashed),
+    ]
+    .into_iter()
+    .find_map(|(flag, style)| flags.contains(flag).then_some(style))
+}
+
 /// A terminal color as the program set it, with no palette applied.
 ///
 /// Unlike [`map_term_color`], `SGR 38;5;1` stays `Indexed(1)` rather than becoming the palette's
@@ -3763,7 +3776,7 @@ mod tests {
                 m.bold,
                 m.dim,
                 m.italic,
-                m.underline,
+                m.underline.is_some(),
                 m.reverse,
                 m.strikethrough,
             ]
@@ -3779,10 +3792,45 @@ mod tests {
                 cell.symbol
             );
         }
-        // A curly underline still reads as underlined, and keeps its own color.
+        // A curly underline keeps its shape and its own color.
+        assert_eq!(row[3].modifiers.underline, Some(UnderlineStyle::Curly));
         assert_eq!(row[3].underline_color, UiColor::Rgb(9, 8, 7));
         assert_eq!(row[0].underline_color, UiColor::Reset);
         assert_eq!(modifiers(&row[6]), [false; 6]);
+    }
+
+    #[test]
+    fn capture_frame_keeps_each_underline_shape() {
+        let mut screen = TerminalScreen::new(1, 6, 10);
+        screen.process_bytes(b"\x1b[4ma\x1b[4:2mb\x1b[4:3mc\x1b[4:4md\x1b[4:5me\x1b[4:0mf");
+        let frame = screen.capture_frame();
+        let shapes: Vec<_> = frame.row(0).iter().map(|c| c.modifiers.underline).collect();
+
+        assert_eq!(
+            shapes,
+            [
+                Some(UnderlineStyle::Single),
+                Some(UnderlineStyle::Double),
+                Some(UnderlineStyle::Curly),
+                Some(UnderlineStyle::Dotted),
+                Some(UnderlineStyle::Dashed),
+                None,
+            ]
+        );
+        // Written back out, each shape keeps its `SGR 4:n` form.
+        let ansi = frame.to_ansi_text();
+        for expected in [
+            "\x1b[4ma",
+            "\x1b[4:2mb",
+            "\x1b[4:3mc",
+            "\x1b[4:4md",
+            "\x1b[4:5me",
+        ] {
+            assert!(
+                ansi.contains(expected),
+                "{expected:?} missing from {ansi:?}"
+            );
+        }
     }
 
     #[test]

@@ -355,7 +355,7 @@ fn list_inherit_uses_theme_verbatim() {
 
     assert_eq!(cell.fg, THEME_FG);
     assert_eq!(cell.bg, THEME_BG);
-    assert!(cell.modifiers.underline);
+    assert!(cell.modifiers.underline.is_some());
 }
 
 #[test]
@@ -375,7 +375,7 @@ fn text_area_inherit_uses_text_selection_theme_role() {
     assert_eq!(cell.symbol, "a");
     assert_eq!(cell.fg, ALT_THEME_FG);
     assert_eq!(cell.bg, ALT_THEME_BG);
-    assert!(cell.modifiers.underline);
+    assert!(cell.modifiers.underline.is_some());
 }
 
 #[test]
@@ -403,7 +403,7 @@ fn text_area_opt_out_hides_unfocused_selection() {
 
     assert_eq!(cell.symbol, "a");
     assert_ne!(cell.bg, ALT_THEME_BG);
-    assert!(!cell.modifiers.underline);
+    assert!(!cell.modifiers.underline.is_some());
 }
 
 #[test]
@@ -418,7 +418,7 @@ fn text_area_unfocused_inherit_uses_text_selection_theme_role() {
     assert_eq!(cell.symbol, "a");
     assert_eq!(cell.fg, ALT_THEME_FG);
     assert_eq!(cell.bg, ALT_THEME_BG);
-    assert!(cell.modifiers.underline);
+    assert!(cell.modifiers.underline.is_some());
 }
 
 #[test]

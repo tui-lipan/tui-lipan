@@ -5929,8 +5929,8 @@ mod tests {
         assert!(!pending_rows[usize::from(search_y)].contains("alpha"));
         assert_eq!(pending.cell(0, search_y).symbol, "");
         assert_eq!(pending.cell(2, search_y).symbol, "");
-        assert!(pending.cell(3, 0).modifiers.underline);
-        assert!(pending.cell(4, 0).modifiers.underline);
+        assert!(pending.cell(3, 0).modifiers.underline.is_some());
+        assert!(pending.cell(4, 0).modifiers.underline.is_some());
         assert!(!pending_rows[0].contains("[2/2]"));
         assert_ne!(pending.cell(3, 0).bg, Color::Blue);
         assert_eq!(pending.cell(14, 0).bg, Color::Blue);
@@ -5955,8 +5955,8 @@ mod tests {
         assert!(!committed.cell(19, 0).modifiers.reverse);
         assert_eq!(committed.cell(20, 0).symbol, "[");
         assert!(committed.cell(20, 0).modifiers.reverse);
-        assert!(committed.cell(3, 0).modifiers.underline);
-        assert!(committed.cell(4, 0).modifiers.underline);
+        assert!(committed.cell(3, 0).modifiers.underline.is_some());
+        assert!(committed.cell(4, 0).modifiers.underline.is_some());
         assert_eq!(committed.cell(14, 0).bg, Color::Blue);
         assert_eq!(committed.cell(15, 0).bg, Color::Blue);
 
@@ -6386,7 +6386,7 @@ mod tests {
         assert!(pending_rows[usize::from(search_y)].starts_with(""));
         for (x, y) in [(2, 0), (3, 0), (4, 0), (0, 1)] {
             assert!(
-                pending.cell(x, y).modifiers.underline,
+                pending.cell(x, y).modifiers.underline.is_some(),
                 "missing underline at ({x}, {y})"
             );
             assert_eq!(
