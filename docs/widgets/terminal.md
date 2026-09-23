@@ -529,6 +529,29 @@ A hint crossing a wrap is one `HintMatch` carrying one `HintSpan` per row it cov
 `row()` / `start_col()` and `end_row()` / `end_col()` read the first and last of them. `HintScan::scan`
 still treats every row as a line of its own and always returns single-span matches.
 
+### Capturing the visible screen
+
+`screen.capture_frame()` returns the visible viewport as a `CapturedFrame`, the same cell grid a
+headless UI capture produces, so every frame serializer applies to it:
+
+```rust
+let frame = screen.capture_frame();
+let text = frame.plain_text();
+let png = frame.to_png(&PngOptions::default())?; // feature `ui-snapshot-png`
+```
+
+The frame holds the emulator's cells, not what a `Terminal` widget paints: no selection,
+decorations, or focus styling. Colors keep their terminal meaning and ignore `set_palette`. Default
+foreground and background stay `Color::Reset`, the 16 ANSI slots stay named colors, and 256-color
+and truecolor values pass through unchanged. A PNG therefore takes its default colors from
+`PngOptions::default_fg` and `default_bg`.
+
+A wide glyph sits in its first cell and the column it covers holds an empty symbol, so a row's
+symbols join to text at its true display width. A row that wrapped a wide glyph early keeps the
+blank column it left. Hidden text and image placeholders capture as spaces. `cursor` is set while
+the cursor lies in the viewport, and is visible only when the program shows it and the view is not
+scrolled back.
+
 ### Selection, decoration, and copy mode
 
 `TerminalSelection` uses absolute retained-line indices from the oldest available line, while its
