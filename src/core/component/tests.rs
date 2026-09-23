@@ -265,6 +265,104 @@ fn request_ui_snapshot_shares_a_paint_with_a_slot_request() {
     assert_eq!(backend.state().1.get(), 1);
 }
 
+#[test]
+fn a_slot_snapshot_leaves_messages_the_render_queued_for_the_next_pump() {
+    // Only a callback's message is the answer a pump waits for, as in the runner. A render that
+    // queues something of its own while serving a slot must not have it handled early.
+    struct QueuesOnRender;
+
+    impl Component for QueuesOnRender {
+        type Message = bool;
+        type Properties = ();
+        type State = (crate::ui_snapshot::UiSnapshotSlot, usize);
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            Default::default()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            ctx.link().send(false);
+            Text::new("queues on render").into()
+        }
+
+        fn update(&mut self, request: bool, ctx: &mut Context<Self>) -> Update {
+            if request {
+                ctx.request_ui_snapshot_to_slot(&ctx.state.0);
+            } else {
+                ctx.state.1 += 1;
+            }
+            Update::none()
+        }
+    }
+
+    let mut backend = TestBackend::new(QueuesOnRender);
+    backend.render();
+    backend.pump().expect("pump should succeed");
+    let handled = backend.state().1;
+
+    backend.dispatch(true).expect("dispatch should succeed");
+
+    assert!(backend.state().0.take().is_some());
+    assert_eq!(
+        backend.state().1,
+        handled,
+        "the snapshot's render queued a message that should wait for the next pump",
+    );
+    backend.pump().expect("pump should succeed");
+    assert_eq!(backend.state().1, handled + 1);
+}
+
+#[test]
+fn a_chain_of_snapshot_callbacks_runs_on_a_constant_stack() {
+    // Each captured frame asks for the next one, as a recording loop would. The runner serves that
+    // one iteration at a time; `pump` must not grow the stack per capture either.
+    struct Chain;
+
+    enum ChainMsg {
+        Start,
+        Captured,
+    }
+
+    const LINKS: usize = 2_000;
+
+    impl Component for Chain {
+        type Message = ChainMsg;
+        type Properties = ();
+        type State = usize;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            0
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            Text::new("chain").into()
+        }
+
+        fn update(&mut self, msg: ChainMsg, ctx: &mut Context<Self>) -> Update {
+            if let ChainMsg::Captured = msg {
+                ctx.state += 1;
+            }
+            if ctx.state < LINKS {
+                ctx.request_ui_snapshot(ctx.link().callback(|_| ChainMsg::Captured));
+            }
+            Update::none()
+        }
+    }
+
+    std::thread::Builder::new()
+        .stack_size(512 * 1024)
+        .spawn(|| {
+            let mut backend = TestBackend::new(Chain);
+            backend
+                .dispatch(ChainMsg::Start)
+                .expect("dispatch should succeed");
+            assert_eq!(*backend.state(), LINKS, "one pump serves the whole chain");
+        })
+        .expect("spawn the small-stack thread")
+        .join()
+        .expect("the chain should not overflow the stack");
+}
+
 #[cfg(feature = "ui-snapshot-png")]
 struct SnapshotRequester;
 

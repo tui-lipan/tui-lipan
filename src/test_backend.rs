@@ -920,7 +920,26 @@ where
     /// Process all queued messages and any messages produced by background commands.
     ///
     /// Returns `true` if any update requested a re-render.
+    ///
+    /// A pending UI snapshot forces a render, as it does in the runner. When that render runs
+    /// `Context::request_ui_snapshot` callbacks, the messages they sent are handled by the same
+    /// call, again as the runner does; anything else a render queues waits for the next pump.
     pub fn pump(&mut self) -> Result<bool> {
+        let mut dirty = false;
+        // A loop rather than recursion: a callback's message may request another snapshot, which the
+        // runner serves on its next iteration with constant stack depth.
+        loop {
+            let (rendered, callbacks_ran) = self.pump_once()?;
+            dirty |= rendered;
+            if !callbacks_ran || self.core.queue.borrow().is_empty() {
+                return Ok(dirty);
+            }
+        }
+    }
+
+    /// One drain and, when needed, one render. Returns whether it re-rendered, and whether that
+    /// render ran snapshot callbacks.
+    fn pump_once(&mut self) -> Result<(bool, bool)> {
         let mut dirty = false;
 
         loop {
@@ -947,20 +966,10 @@ where
         }
 
         // A requested snapshot forces a paint, as it does in the runner.
-        let snapshot_pending = !self.core.ctx.env().pending_ui_snapshot.borrow().is_empty();
-        dirty |= snapshot_pending;
+        dirty |= !self.core.ctx.env().pending_ui_snapshot.borrow().is_empty();
 
-        if dirty {
-            self.render();
-        }
-
-        // Snapshot callbacks ran during that render, and the messages they sent are the answer the
-        // caller is pumping for. Anything else the render queued waits for the next pump, as before.
-        if snapshot_pending && !self.core.queue.borrow().is_empty() {
-            dirty |= self.pump()?;
-        }
-
-        Ok(dirty)
+        let callbacks_ran = dirty && self.render_frame();
+        Ok((dirty, callbacks_ran))
     }
 
     /// Advance the virtual clock by `dt`, ticking animations in runner-sized steps.
@@ -1081,6 +1090,11 @@ where
 
     /// Recompute the current `Element` tree and layout.
     pub fn render(&mut self) {
+        self.render_frame();
+    }
+
+    /// [`Self::render`], reporting whether serving pending snapshot requests ran any callback.
+    fn render_frame(&mut self) -> bool {
         #[cfg(feature = "terminal")]
         self.core.tree.refresh_live_terminals();
         self.drain_copy_feedback_requests();
@@ -1111,19 +1125,22 @@ where
         self.mouse.hovered = self.mouse.hovered.filter(|id| self.core.tree.is_valid(*id));
         self.refresh_hover_from_last_mouse();
         self.prune_widget_caches_if_needed();
-        self.deliver_pending_ui_snapshot();
+        self.deliver_pending_ui_snapshot()
     }
 
     /// Serve the app's pending `Context::request_ui_snapshot*` calls from the frame just rendered,
-    /// as the runner does after each paint. Messages their callbacks send wait for [`Self::pump`].
-    fn deliver_pending_ui_snapshot(&mut self) {
+    /// as the runner does after each paint. Returns whether any callback ran; the messages callbacks
+    /// send wait for [`Self::pump`].
+    fn deliver_pending_ui_snapshot(&mut self) -> bool {
         let pending = self.core.ctx.take_pending_ui_snapshot();
         if pending.is_empty() {
-            return;
+            return false;
         }
+        let ran_callbacks = !pending.callbacks.is_empty();
         pending
             .deliver(self.capture_ui_snapshot())
             .expect("the app's requested UI snapshot file should be writable");
+        ran_callbacks
     }
 
     /// Drop per-node widget caches whose node left the tree, as `AppRunner` does after its own
