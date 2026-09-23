@@ -41,12 +41,42 @@ pub struct CellModifiers {
     pub dim: bool,
     /// Italic text.
     pub italic: bool,
-    /// Underlined text.
-    pub underline: bool,
+    /// Underline shape, or `None` when the text is not underlined.
+    pub underline: Option<UnderlineStyle>,
     /// Reverse-video text.
     pub reverse: bool,
     /// Strikethrough text.
     pub strikethrough: bool,
+}
+
+/// Shape of an underline, as `SGR 4:n` selects it.
+///
+/// UI renders only produce [`Self::Single`]; terminal captures keep what the program asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum UnderlineStyle {
+    /// One straight line (`SGR 4`).
+    Single,
+    /// Two straight lines (`SGR 4:2`).
+    Double,
+    /// A wavy line (`SGR 4:3`).
+    Curly,
+    /// A dotted line (`SGR 4:4`).
+    Dotted,
+    /// A dashed line (`SGR 4:5`).
+    Dashed,
+}
+
+impl UnderlineStyle {
+    /// The `SGR 4:n` sub-parameter, or `None` for plain `SGR 4`.
+    fn sgr_subparam(self) -> Option<u8> {
+        match self {
+            Self::Single => None,
+            Self::Double => Some(2),
+            Self::Curly => Some(3),
+            Self::Dotted => Some(4),
+            Self::Dashed => Some(5),
+        }
+    }
 }
 
 /// Cursor metadata captured from a rendered frame.
@@ -95,6 +125,14 @@ pub struct PngOptions {
     pub default_fg: Color,
     /// Background color used when a cell background resolves to reset, transparent, or backdrop.
     pub default_bg: Color,
+    /// Colors for the 16 ANSI slots: black, red, green, yellow, blue, magenta, cyan, white, then
+    /// their bright forms.
+    ///
+    /// A named color such as [`Color::Red`] and its indexed form `Color::Indexed(1)` both paint
+    /// with slot 1. Defaults to the xterm values [`Color::to_rgb`] gives the named colors. A
+    /// terminal capture keeps these colors symbolic, so this is where a screenshot takes its
+    /// theme.
+    pub ansi_palette: [Color; 16],
     /// Whether to draw a cursor outline when the captured frame contains a visible cursor.
     ///
     /// Defaults to `true`.
@@ -131,6 +169,24 @@ impl Default for PngOptions {
             scale: 2,
             default_fg: Color::White,
             default_bg: Color::Black,
+            ansi_palette: [
+                Color::Black,
+                Color::Red,
+                Color::Green,
+                Color::Yellow,
+                Color::Blue,
+                Color::Magenta,
+                Color::Cyan,
+                Color::Gray,
+                Color::DarkGray,
+                Color::LightRed,
+                Color::LightGreen,
+                Color::LightYellow,
+                Color::LightBlue,
+                Color::LightMagenta,
+                Color::LightCyan,
+                Color::White,
+            ],
             render_cursor: true,
             text_renderer: PngTextRenderer::Auto,
             font_family: None,
@@ -150,7 +206,7 @@ impl CapturedCell {
             bold: Some(self.modifiers.bold),
             dim: Some(self.modifiers.dim),
             italic: Some(self.modifiers.italic),
-            underline: Some(self.modifiers.underline),
+            underline: Some(self.modifiers.underline.is_some()),
             reverse: Some(self.modifiers.reverse),
             strikethrough: Some(self.modifiers.strikethrough),
             underline_color: Some(self.underline_color.into()),
@@ -171,11 +227,14 @@ impl CapturedCell {
                 bold: m.bold,
                 dim: m.dim,
                 italic: m.italic,
-                underline: m.underline,
+                underline: m.underline == Some(UnderlineStyle::Single),
                 reverse: m.reverse,
                 strikethrough: m.strikethrough,
             },
         );
+        if let Some(n) = m.underline.and_then(UnderlineStyle::sgr_subparam) {
+            let _ = write!(out, "\x1b[4:{n}m");
+        }
     }
 
     /// Returns true when this cell's visual style matches `other`.

@@ -122,6 +122,7 @@ use tui_lipan::{PngOptions, PngTextRenderer};
 | `scale` | `u16` | `2` | Output cell scale multiplier |
 | `default_fg` | `Color` | `Color::White` | Fallback when a cell foreground resolves to reset/transparent |
 | `default_bg` | `Color` | `Color::Black` | Fallback when a cell background resolves to reset/transparent/backdrop |
+| `ansi_palette` | `[Color; 16]` | xterm values | Colors for the 16 ANSI slots; a named color and its `Indexed(0..16)` form both paint with their slot |
 | `render_cursor` | `bool` | `true` | Draw the captured cursor outline when visible |
 | `text_renderer` | `PngTextRenderer` | `Auto` | `Auto` uses fonts when found and falls back to bitmap; `Font` tries font rendering first with the same fallback; `Bitmap` forces coarse cell glyphs |
 | `font_family` | `Option<Arc<str>>` | `None` | Preferred system font family, e.g. a Nerd Font |
@@ -129,12 +130,58 @@ use tui_lipan::{PngOptions, PngTextRenderer};
 
 ### `PngTextRenderer` (`ui-snapshot-png`)
 
-Controls PNG text rasterization: `Auto` (default) uses fontdue/fontdb to render
-antialiased real-font text when a system font is found, then falls back to the
-built-in font8x8 bitmap renderer; `Font` requests font rendering with the same
-family/path selection; `Bitmap` forces deterministic coarse cell rendering.
-Use `font_family` or `font_path` for system/Nerd Font captures, and force
-`Bitmap` when stable fallback-style screenshots matter more than glyph fidelity.
+Controls PNG text rasterization: `Auto` (default) renders antialiased text from
+installed fonts when there are any, then falls back to the built-in font8x8 bitmap
+renderer; `Font` requests font rendering with the same family/path selection;
+`Bitmap` forces deterministic coarse cell rendering. Use `font_family` or
+`font_path` for system/Nerd Font captures, and force `Bitmap` when stable
+fallback-style screenshots matter more than glyph fidelity.
+
+The font renderer tries `font_path`, then `font_family`, then a list of common
+monospace families. A character none of those has is looked up across every
+installed face, so CJK text, symbols, and emoji draw whenever some font on the
+system covers them. Emoji and text followed by `U+FE0F` prefer a color bitmap
+font such as Noto Color Emoji, drawn in its own colors. Combining marks are drawn
+over their base character. Box-drawing and block characters always use the
+built-in glyphs so they meet their neighbors edge to edge. There is no text
+shaping: a joined emoji sequence such as a family draws its first member only.
+
+The bitmap renderer covers ASCII, Latin-1, Greek, box drawing, and blocks. It
+has no combining marks and draws the base character of such a sequence alone;
+anything else becomes a missing-glyph box.
+
+Underlines follow `CellModifiers::underline`: single, double, curly, dotted, and
+dashed each have their own shape. An underline with no color of its own takes
+the text color.
+
+#### Cost
+
+Font discovery and every glyph a renderer rasterizes are kept for the life of
+the process, per `font_path`/`font_family` pair, so only the first capture pays
+for them. Encoding holds that shared renderer for the whole frame: concurrent
+font-backed encodes run one at a time. Font data is memory-mapped from the
+installed files, not copied.
+
+Measured on Linux with 776 installed faces, a 120x36 terminal frame, `scale: 1`,
+release build:
+
+| | Time |
+|---|---|
+| `Bitmap`, each frame | ~2-3 ms |
+| `Font`, first frame in the process | ~20-30 ms, most of it discovering fonts |
+| `Font`, each later frame | ~2-3 ms |
+| First character no preferred font has | up to ~115 ms, the worst-case full search; once per character |
+
+Binary size added by `ui-snapshot-png` to a stripped release binary (thin LTO,
+one codegen unit, `panic = "abort"`) that already uses `terminal-images`:
+
+| Renderer linked | Added |
+|---|---|
+| `Bitmap` only | ~130 KB |
+| `Font` and `Bitmap` | ~480 KB |
+
+A binary that never selects `Font` or `Auto` still links the font renderer; the
+figures above show what it would take to drop it.
 
 ---
 

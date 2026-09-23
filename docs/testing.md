@@ -173,7 +173,7 @@ assert_eq!(frame.height, 10);
 | `to_ansi_diff(prev)` | `String` | Incremental ANSI update from a previous frame |
 | `to_png(&PngOptions)` | `Result<Vec<u8>>` | PNG bytes with font-backed or bitmap rendering (`ui-snapshot-png`) |
 
-`CapturedCell` fields: `symbol`, `fg`, `bg`, `underline_color`, `modifiers` (`CellModifiers` with bool fields `bold`, `dim`, `italic`, `underline`, `reverse`, `strikethrough`).
+`CapturedCell` fields: `symbol`, `fg`, `bg`, `underline_color`, `modifiers` (`CellModifiers` with bool fields `bold`, `dim`, `italic`, `reverse`, `strikethrough`, and `underline: Option<UnderlineStyle>`: `Single`, `Double`, `Curly`, `Dotted`, or `Dashed`). UI renders only produce `Single`; terminal captures keep the shape the program asked for.
 
 ### Agent / design-review snapshots
 
@@ -187,7 +187,9 @@ than replacing them. Both return `Result`, so an encoder failure surfaces at the
 call rather than as a zero-byte file.
 
 The PNG renderer uses antialiased real-font text by default when a system font is
-available, with font8x8 bitmap rendering as the fallback. `PngOptions` is a
+available, falling back to any installed font for characters such as CJK and
+emoji, with font8x8 bitmap rendering as the last resort. See
+[`PngTextRenderer`](enums.md#pngtextrenderer-ui-snapshot-png) for coverage and cost. `PngOptions` is a
 crate-root import (not prelude) and can select `PngTextRenderer::Auto`, `Font`,
 or `Bitmap`; `font_family` / `font_path` let captures use system or Nerd Fonts.
 Force `Bitmap` for deterministic coarse cell output and fallback-style reviews.

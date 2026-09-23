@@ -6,7 +6,7 @@ use ratatui::layout::Position;
 use ratatui::style::Modifier;
 
 use crate::app::ContrastPolicy;
-use crate::capture::{CapturedCell, CapturedFrame, CellModifiers, CursorState};
+use crate::capture::{CapturedCell, CapturedFrame, CellModifiers, CursorState, UnderlineStyle};
 use crate::core::node::{NodeId, NodeTree};
 use crate::style::Rect;
 use crate::style::Style;
@@ -19,7 +19,9 @@ fn convert_modifiers(modifier: Modifier) -> CellModifiers {
         bold: modifier.contains(Modifier::BOLD),
         dim: modifier.contains(Modifier::DIM),
         italic: modifier.contains(Modifier::ITALIC),
-        underline: modifier.contains(Modifier::UNDERLINED),
+        underline: modifier
+            .contains(Modifier::UNDERLINED)
+            .then_some(UnderlineStyle::Single),
         reverse: modifier.contains(Modifier::REVERSED),
         strikethrough: modifier.contains(Modifier::CROSSED_OUT),
     }

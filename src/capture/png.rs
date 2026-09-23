@@ -1,14 +1,15 @@
-use std::fs;
 use std::io::Cursor;
 
-use font8x8::{BASIC_FONTS, BLOCK_FONTS, BOX_FONTS, UnicodeFonts};
-use fontdb::{Database, Family, Query};
-use fontdue::{Font, FontSettings};
+use font8x8::{BASIC_FONTS, BLOCK_FONTS, BOX_FONTS, GREEK_FONTS, LATIN_FONTS, UnicodeFonts};
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use unicode_segmentation::UnicodeSegmentation;
 
-use super::{CapturedCell, CapturedFrame, PngOptions, PngTextRenderer};
+use super::{CapturedCell, CapturedFrame, PngOptions, PngTextRenderer, UnderlineStyle};
 use crate::style::Color;
+
+mod font;
+
+use font::FontRenderer;
 
 type Rgb8 = (u8, u8, u8);
 
@@ -25,15 +26,6 @@ struct EffectiveCellStyle {
     fg: Rgb8,
     bg: Rgb8,
     underline: Rgb8,
-}
-
-struct FontRenderer {
-    fonts: Vec<Font>,
-}
-
-enum ActiveTextRenderer {
-    Font(FontRenderer),
-    Bitmap,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +48,19 @@ pub(super) fn encode_frame(
     frame: &CapturedFrame,
     options: &PngOptions,
 ) -> image::ImageResult<Vec<u8>> {
+    match options.text_renderer {
+        PngTextRenderer::Bitmap => encode_with(frame, options, None),
+        PngTextRenderer::Auto | PngTextRenderer::Font => {
+            font::with_renderer(options, |fonts| encode_with(frame, options, fonts))
+        }
+    }
+}
+
+fn encode_with(
+    frame: &CapturedFrame,
+    options: &PngOptions,
+    mut fonts: Option<&mut FontRenderer>,
+) -> image::ImageResult<Vec<u8>> {
     let cell_width = u32::from(options.cell_width.max(1));
     let cell_height = u32::from(options.cell_height.max(1));
     let scale = u32::from(options.scale.max(1));
@@ -66,7 +71,6 @@ pub(super) fn encode_frame(
 
     let mut image = RgbImage::new(width, height);
     let columns = usize::from(frame.width);
-    let text_renderer = ActiveTextRenderer::from_options(options);
 
     for y in 0..frame.height {
         let mut x = 0;
@@ -82,7 +86,7 @@ pub(super) fn encode_frame(
                     width: final_cell_width.saturating_mul(u32::from(cell_span)),
                     height: final_cell_height,
                 };
-                draw_cell(&mut image, cell_rect, cell, options, &text_renderer);
+                draw_cell(&mut image, cell_rect, cell, options, fonts.as_deref_mut());
                 x = x.saturating_add(cell_span);
             } else {
                 x = x.saturating_add(1);
@@ -116,12 +120,12 @@ fn draw_cell(
     cell_rect: CellPixels,
     cell: &CapturedCell,
     options: &PngOptions,
-    text_renderer: &ActiveTextRenderer,
+    fonts: Option<&mut FontRenderer>,
 ) {
     let style = effective_colors(cell, options);
 
     fill_background(image, cell_rect, style.bg);
-    draw_glyph(image, cell_rect, cell, style.fg, text_renderer);
+    draw_glyph(image, cell_rect, cell, style.fg, fonts);
     draw_decorations(image, cell_rect, cell, style);
 }
 
@@ -130,6 +134,8 @@ fn glyph_for(ch: char) -> Option<[u8; 8]> {
         .get(ch)
         .or_else(|| BOX_FONTS.get(ch))
         .or_else(|| BLOCK_FONTS.get(ch))
+        .or_else(|| LATIN_FONTS.get(ch))
+        .or_else(|| GREEK_FONTS.get(ch))
 }
 
 fn effective_colors(cell: &CapturedCell, options: &PngOptions) -> EffectiveCellStyle {
@@ -146,7 +152,8 @@ fn effective_colors(cell: &CapturedCell, options: &PngOptions) -> EffectiveCellS
     EffectiveCellStyle {
         fg,
         bg,
-        underline: resolve_fg(cell.underline_color, options),
+        // An underline with no color of its own is drawn in the text's color, as terminals do.
+        underline: resolve_color(cell.underline_color, options).unwrap_or(fg),
     }
 }
 
@@ -169,33 +176,24 @@ fn primary_grapheme(symbol: &str) -> Option<&str> {
     })
 }
 
-fn primary_char_for_bitmap(symbol: &str) -> Option<char> {
-    let grapheme = primary_grapheme(symbol)?;
-    let mut chars = grapheme.chars();
-    let ch = chars.next()?;
-    if chars.next().is_some() || ch.is_control() || ch.is_whitespace() {
-        None
-    } else {
-        Some(ch)
-    }
+/// The character a grapheme is built on: its first, ahead of any combining marks, variation
+/// selectors, or joined sequence members.
+fn base_char(grapheme: &str) -> Option<char> {
+    grapheme
+        .chars()
+        .next()
+        .filter(|ch| !ch.is_control() && !ch.is_whitespace())
 }
 
-fn resolve_glyph(symbol: &str) -> Option<ResolvedBitmapGlyph> {
-    let grapheme = primary_grapheme(symbol)?;
-    let Some(ch) = primary_char_for_bitmap(grapheme) else {
-        return Some(ResolvedBitmapGlyph::Fallback(
-            BitmapGlyphFallback::MissingBox,
-        ));
-    };
-
-    if let Some(glyph) = glyph_for(ch) {
-        return Some(ResolvedBitmapGlyph::Glyph {
+/// The built-in font has no combining marks, so a bitmap grapheme draws its base character alone.
+fn resolve_bitmap_glyph(ch: char) -> ResolvedBitmapGlyph {
+    match glyph_for(ch) {
+        Some(glyph) => ResolvedBitmapGlyph::Glyph {
             glyph,
             fill_full_cell: is_box_or_block(ch),
-        });
+        },
+        None => ResolvedBitmapGlyph::Fallback(classify_fallback(ch)),
     }
-
-    Some(ResolvedBitmapGlyph::Fallback(classify_fallback(ch)))
 }
 
 fn is_box_or_block(ch: char) -> bool {
@@ -227,19 +225,22 @@ fn draw_glyph(
     cell_rect: CellPixels,
     cell: &CapturedCell,
     color: Rgb8,
-    text_renderer: &ActiveTextRenderer,
+    fonts: Option<&mut FontRenderer>,
 ) {
-    let Some(resolved) = resolve_glyph(cell.symbol.as_str()) else {
+    let Some(grapheme) = primary_grapheme(cell.symbol.as_str()) else {
         return;
     };
-    if let ActiveTextRenderer::Font(renderer) = text_renderer
-        && let Some(ch) = primary_char_for_bitmap(cell.symbol.as_str())
-        && !is_box_or_block(ch)
-        && renderer.draw_char(image, cell_rect, ch, color, cell.modifiers.bold)
+    let Some(base) = base_char(grapheme) else {
+        return;
+    };
+    // Box and block characters stay on the built-in glyphs, which fill the cell edge to edge.
+    if let Some(fonts) = fonts
+        && !is_box_or_block(base)
+        && fonts.draw(image, cell_rect, grapheme, color, cell.modifiers.bold)
     {
         return;
     }
-    match resolved {
+    match resolve_bitmap_glyph(base) {
         ResolvedBitmapGlyph::Glyph {
             glyph,
             fill_full_cell,
@@ -280,167 +281,16 @@ fn draw_glyph(
     }
 }
 
-impl ActiveTextRenderer {
-    fn from_options(options: &PngOptions) -> Self {
-        match options.text_renderer {
-            PngTextRenderer::Bitmap => Self::Bitmap,
-            PngTextRenderer::Auto | PngTextRenderer::Font => FontRenderer::from_options(options)
-                .map(Self::Font)
-                .unwrap_or(Self::Bitmap),
-        }
-    }
-}
-
-impl FontRenderer {
-    fn from_options(options: &PngOptions) -> Option<Self> {
-        let mut fonts = Vec::new();
-        if let Some(font) = options.font_path.as_ref().and_then(|path| {
-            fs::read(path)
-                .ok()
-                .and_then(|bytes| Font::from_bytes(bytes, FontSettings::default()).ok())
-        }) {
-            fonts.push(font);
-        }
-
-        let mut db = Database::new();
-        db.load_system_fonts();
-
-        if let Some(family) = options.font_family.as_deref()
-            && let Some(font) = load_font_family(&db, family)
-        {
-            fonts.push(font);
-        }
-
-        for family in [
-            "Symbols Nerd Font Mono",
-            "JetBrainsMono Nerd Font",
-            "JetBrains Mono",
-            "FiraCode Nerd Font Mono",
-            "Fira Code",
-            "DejaVu Sans Mono",
-            "Liberation Mono",
-            "Noto Sans Mono",
-            "monospace",
-        ] {
-            if let Some(font) = load_font_family(&db, family) {
-                fonts.push(font);
-            }
-        }
-
-        (!fonts.is_empty()).then_some(Self { fonts })
-    }
-
-    fn draw_char(
-        &self,
-        image: &mut RgbImage,
-        cell_rect: CellPixels,
-        ch: char,
-        color: Rgb8,
-        bold: bool,
-    ) -> bool {
-        for font in &self.fonts {
-            if font.lookup_glyph_index(ch) == 0 {
-                continue;
-            }
-            if rasterize_font_char(image, cell_rect, font, ch, color, bold) {
-                return true;
-            }
-        }
-        false
-    }
-}
-
-fn load_font_family(db: &Database, family: &str) -> Option<Font> {
-    let families = if family.eq_ignore_ascii_case("monospace") {
-        [Family::Monospace]
-    } else {
-        [Family::Name(family)]
-    };
-    let query = Query {
-        families: &families,
-        ..Query::default()
-    };
-    let id = db.query(&query)?;
-    db.with_face_data(id, |data, face_index| {
-        let settings = FontSettings {
-            collection_index: face_index,
-            ..FontSettings::default()
-        };
-        Font::from_bytes(data, settings).ok()
-    })?
-}
-
-fn rasterize_font_char(
-    image: &mut RgbImage,
-    cell_rect: CellPixels,
-    font: &Font,
-    ch: char,
-    color: Rgb8,
-    bold: bool,
-) -> bool {
-    if cell_rect.width == 0 || cell_rect.height == 0 {
-        return false;
-    }
-
-    let font_size = (cell_rect.height as f32 * 0.82).max(1.0);
-    let (metrics, bitmap) = font.rasterize(ch, font_size);
-    if metrics.width == 0 || metrics.height == 0 || bitmap.is_empty() {
-        return false;
-    }
-
-    let advance = metrics.advance_width.max(metrics.width as f32);
-    let x_base = cell_rect.x0 as i32
-        + ((cell_rect.width as f32 - advance).max(0.0) / 2.0).round() as i32
-        + metrics.xmin;
-    let baseline = cell_rect.y0 as i32 + (cell_rect.height as f32 * 0.78).round() as i32;
-    let y_base = baseline - metrics.height as i32 - metrics.ymin;
-    let bold_offset = bold_offset(cell_rect) as i32;
-    let passes = if bold { 2 } else { 1 };
-    let mut drew = false;
-
-    for pass in 0..passes {
-        let x_pass_offset = if pass == 0 { 0 } else { bold_offset.max(1) };
-        for glyph_y in 0..metrics.height {
-            for glyph_x in 0..metrics.width {
-                let coverage = bitmap[glyph_y * metrics.width + glyph_x];
-                if coverage == 0 {
-                    continue;
-                }
-                let px = x_base + glyph_x as i32 + x_pass_offset;
-                let py = y_base + glyph_y as i32;
-                if px < cell_rect.x0 as i32
-                    || py < cell_rect.y0 as i32
-                    || px >= cell_rect.x0.saturating_add(cell_rect.width) as i32
-                    || py >= cell_rect.y0.saturating_add(cell_rect.height) as i32
-                {
-                    continue;
-                }
-                blend_rgb(image, px as u32, py as u32, color, coverage);
-                drew = true;
-            }
-        }
-    }
-
-    drew
-}
-
 fn draw_decorations(
     image: &mut RgbImage,
     cell_rect: CellPixels,
     cell: &CapturedCell,
     style: EffectiveCellStyle,
 ) {
-    if cell.modifiers.underline && cell_rect.height > 0 {
-        let thickness = decoration_thickness(cell_rect);
-        let y = cell_rect.y0 + cell_rect.height.saturating_sub(thickness);
-        fill_rect(
-            image,
-            cell_rect.x0,
-            y,
-            cell_rect.width,
-            thickness,
-            style.underline,
-        );
+    if let Some(shape) = cell.modifiers.underline
+        && cell_rect.height > 0
+    {
+        draw_underline(image, cell_rect, shape, style.underline);
     }
     if cell.modifiers.strikethrough {
         let thickness = decoration_thickness(cell_rect);
@@ -449,6 +299,76 @@ fn draw_decorations(
             .saturating_add(cell_rect.height / 2)
             .saturating_sub(thickness / 2);
         fill_rect(image, cell_rect.x0, y, cell_rect.width, thickness, style.fg);
+    }
+}
+
+/// Draw an underline along the bottom of `cell_rect`.
+///
+/// Patterned shapes take their phase from the absolute pixel column, so an underline running
+/// across several cells stays continuous.
+fn draw_underline(image: &mut RgbImage, cell_rect: CellPixels, shape: UnderlineStyle, color: Rgb8) {
+    let thickness = decoration_thickness(cell_rect);
+    let bottom = cell_rect.y0 + cell_rect.height.saturating_sub(thickness);
+    let columns = cell_rect.x0..cell_rect.x0.saturating_add(cell_rect.width);
+    match shape {
+        UnderlineStyle::Single => {
+            fill_rect(
+                image,
+                cell_rect.x0,
+                bottom,
+                cell_rect.width,
+                thickness,
+                color,
+            );
+        }
+        UnderlineStyle::Double => {
+            let upper = bottom.saturating_sub(thickness * 2).max(cell_rect.y0);
+            fill_rect(
+                image,
+                cell_rect.x0,
+                bottom,
+                cell_rect.width,
+                thickness,
+                color,
+            );
+            fill_rect(
+                image,
+                cell_rect.x0,
+                upper,
+                cell_rect.width,
+                thickness,
+                color,
+            );
+        }
+        UnderlineStyle::Dotted => {
+            for x in columns.filter(|x| (x / thickness).is_multiple_of(2)) {
+                fill_rect(image, x, bottom, 1, thickness, color);
+            }
+        }
+        UnderlineStyle::Dashed => {
+            let unit = (cell_rect.height / 6).max(2);
+            for x in columns.filter(|x| (x / unit) % 3 != 2) {
+                fill_rect(image, x, bottom, 1, thickness, color);
+            }
+        }
+        UnderlineStyle::Curly => {
+            let amplitude = (cell_rect.height / 12).max(1);
+            let wavelength = (cell_rect.height / 2).max(4) as f32;
+            let centre = bottom.saturating_sub(amplitude).max(cell_rect.y0);
+            let mut previous: Option<u32> = None;
+            for x in columns {
+                let phase = x as f32 / wavelength * std::f32::consts::TAU;
+                let y = (centre as f32 + amplitude as f32 * phase.sin()).round() as u32;
+                let y = y.clamp(cell_rect.y0, bottom);
+                // Join steep steps so a thin wave has no gaps.
+                let (top, span) = match previous {
+                    Some(prev) => (y.min(prev), y.abs_diff(prev) + thickness),
+                    None => (y, thickness),
+                };
+                fill_rect(image, x, top, 1, span, color);
+                previous = Some(y);
+            }
+        }
     }
 }
 
@@ -604,19 +524,10 @@ fn cursor_color(
     let idx = usize::from(y)
         .saturating_mul(columns)
         .saturating_add(usize::from(x));
-    let Some(cell) = frame.cells.get(idx) else {
-        return resolve_fg(options.default_fg, options);
-    };
-
-    let mut fg = resolve_fg(cell.fg, options);
-    let mut bg = resolve_bg(cell.bg, options);
-    if cell.modifiers.reverse {
-        std::mem::swap(&mut fg, &mut bg);
+    match frame.cells.get(idx) {
+        Some(cell) => effective_colors(cell, options).fg,
+        None => resolve_fg(options.default_fg, options),
     }
-    if cell.modifiers.dim {
-        fg = (fg.0 / 2, fg.1 / 2, fg.2 / 2);
-    }
-    fg
 }
 
 fn fill_rect(image: &mut RgbImage, x0: u32, y0: u32, width: u32, height: u32, color: Rgb8) {
@@ -659,23 +570,64 @@ fn blend_rgb(image: &mut RgbImage, x: u32, y: u32, color: Rgb8, alpha: u8) {
 }
 
 fn resolve_fg(color: Color, options: &PngOptions) -> Rgb8 {
-    resolve_color(
-        color,
-        options.default_fg.to_rgb().unwrap_or((255, 255, 255)),
-    )
+    resolve_color(color, options)
+        .or_else(|| resolve_color(options.default_fg, options))
+        .unwrap_or((255, 255, 255))
 }
 
 fn resolve_bg(color: Color, options: &PngOptions) -> Rgb8 {
-    resolve_color(color, options.default_bg.to_rgb().unwrap_or((0, 0, 0)))
+    resolve_color(color, options)
+        .or_else(|| resolve_color(options.default_bg, options))
+        .unwrap_or((0, 0, 0))
 }
 
-fn resolve_color(color: Color, fallback: Rgb8) -> Rgb8 {
-    color.to_rgb().unwrap_or(fallback)
+/// The RGB value of `color`, taking the 16 ANSI slots from the palette. `None` for a sentinel
+/// such as [`Color::Reset`], which the caller resolves to a default.
+fn resolve_color(color: Color, options: &PngOptions) -> Option<Rgb8> {
+    ansi_slot(color)
+        .map_or(color, |slot| options.ansi_palette[slot])
+        .to_rgb()
+}
+
+/// The ANSI palette slot `color` names, as a named color or as `Indexed(0..16)`.
+fn ansi_slot(color: Color) -> Option<usize> {
+    Some(match color {
+        Color::Black => 0,
+        Color::Red => 1,
+        Color::Green => 2,
+        Color::Yellow => 3,
+        Color::Blue => 4,
+        Color::Magenta => 5,
+        Color::Cyan => 6,
+        Color::Gray => 7,
+        Color::DarkGray => 8,
+        Color::LightRed => 9,
+        Color::LightGreen => 10,
+        Color::LightYellow => 11,
+        Color::LightBlue => 12,
+        Color::LightMagenta => 13,
+        Color::LightCyan => 14,
+        Color::White => 15,
+        Color::Indexed(index) if index < 16 => usize::from(index),
+        Color::Reset
+        | Color::Backdrop
+        | Color::Transparent
+        | Color::Rgb(..)
+        | Color::Indexed(_) => return None,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn primary_char_for_bitmap(symbol: &str) -> Option<char> {
+        base_char(primary_grapheme(symbol)?)
+    }
+
+    fn resolve_glyph(symbol: &str) -> Option<ResolvedBitmapGlyph> {
+        primary_char_for_bitmap(symbol).map(resolve_bitmap_glyph)
+    }
 
     #[test]
     fn private_use_codepoints_use_icon_placeholder_not_question_mark() {
