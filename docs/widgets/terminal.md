@@ -537,6 +537,7 @@ headless UI capture produces, so every frame serializer applies to it:
 ```rust
 let frame = screen.capture_frame();
 let text = frame.plain_text();
+let ansi = frame.to_ansi_text();
 let png = frame.to_png(&PngOptions::default())?; // feature `ui-snapshot-png`
 ```
 
@@ -545,6 +546,10 @@ decorations, or focus styling. Colors keep their terminal meaning and ignore `se
 foreground and background stay `Color::Reset`, the 16 ANSI slots stay named colors, and 256-color
 and truecolor values pass through unchanged. A PNG therefore takes its default colors from
 `PngOptions::default_fg` and `default_bg`.
+
+Print or save a capture with `to_ansi_text()`, not `to_ansi()`. `to_ansi()` is a repaint stream
+for a terminal backend: it clears the screen and scrollback and moves the cursor. `to_ansi_text()`
+emits SGR only, keeps every row at the frame's width, and does not draw the cursor.
 
 A wide glyph sits in its first cell and the column it covers holds an empty symbol, so a row's
 symbols join to text at its true display width. A row that wrapped a wide glyph early keeps the

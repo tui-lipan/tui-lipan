@@ -838,3 +838,113 @@ fn single_cell_frame(symbol: &str, fg: Color, bg: Color) -> tui_lipan::CapturedF
         cursor: None,
     }
 }
+
+fn symbol_frame(rows: &[&[&str]]) -> tui_lipan::CapturedFrame {
+    let width = rows[0].len() as u16;
+    let height = rows.len() as u16;
+    tui_lipan::CapturedFrame {
+        viewport: Rect {
+            x: 0,
+            y: 0,
+            w: width,
+            h: height,
+        },
+        width,
+        height,
+        cells: rows
+            .iter()
+            .flat_map(|row| row.iter())
+            .map(|symbol| tui_lipan::CapturedCell {
+                symbol: symbol.to_string(),
+                fg: Color::Reset,
+                bg: Color::Reset,
+                underline_color: Color::Reset,
+                modifiers: tui_lipan::CellModifiers::default(),
+            })
+            .collect(),
+        cursor: None,
+    }
+}
+
+/// Strips SGR sequences, failing on any other escape sequence.
+fn strip_sgr(ansi: &str) -> String {
+    let mut text = String::new();
+    let mut rest = ansi;
+    while let Some(start) = rest.find('\x1b') {
+        text.push_str(&rest[..start]);
+        let sequence = &rest[start + 1..];
+        let end = sequence
+            .find(|ch: char| ch.is_ascii_alphabetic())
+            .expect("escape sequence should terminate");
+        assert!(
+            sequence.starts_with('[') && sequence[end..].starts_with('m'),
+            "only SGR allowed, found ESC{}",
+            &sequence[..=end]
+        );
+        rest = &sequence[end + 1..];
+    }
+    text.push_str(rest);
+    text
+}
+
+#[test]
+fn to_ansi_text_is_a_fixed_width_sgr_only_document() {
+    let mut frame = symbol_frame(&[&["a", "b", " ", " "], &["c", " ", " ", " "]]);
+    frame.cells[0].fg = Color::Red;
+    frame.cells[1].modifiers.bold = true;
+    // A styled blank at the end of a row must survive.
+    frame.cells[3].bg = Color::Blue;
+    frame.cursor = Some(tui_lipan::CursorState {
+        x: 1,
+        y: 1,
+        visible: true,
+    });
+
+    let ansi = frame.to_ansi_text();
+
+    assert_eq!(strip_sgr(&ansi), "ab  \nc   \n");
+    assert!(ansi.ends_with("\x1b[0m\n"));
+    assert_eq!(ansi.matches("\x1b[0m\n").count(), 2);
+    // The blue blank is emitted with its style, not trimmed away.
+    assert!(ansi.contains("\x1b[44m \x1b[0m\n"), "{ansi:?}");
+    // The cursor is not drawn: dropping it changes nothing.
+    frame.cursor = None;
+    assert_eq!(frame.to_ansi_text(), ansi);
+}
+
+#[test]
+fn to_ansi_text_styles_each_run_once() {
+    let mut frame = symbol_frame(&[&["r", "e", "d", "x"]]);
+    for cell in &mut frame.cells[..3] {
+        cell.fg = Color::Red;
+    }
+
+    let ansi = frame.to_ansi_text();
+
+    assert_eq!(ansi.matches("\x1b[31m").count(), 1, "{ansi:?}");
+    let spans = tui_lipan::style::parse_ansi(&ansi);
+    let red: String = spans
+        .iter()
+        .filter(|span| span.style.fg == Some(Color::Red.into()))
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert_eq!(red, "red");
+}
+
+#[test]
+fn to_ansi_text_skips_the_column_a_wide_glyph_covers() {
+    // A terminal capture leaves the covered column empty; a rendered UI leaves a space there.
+    let terminal = symbol_frame(&[&["a", "中", "", "b"]]);
+    let rendered = symbol_frame(&[&["a", "中", " ", "b"]]);
+
+    assert_eq!(strip_sgr(&terminal.to_ansi_text()), "a中b\n");
+    assert_eq!(strip_sgr(&rendered.to_ansi_text()), "a中b\n");
+}
+
+#[test]
+fn to_ansi_text_keeps_row_width_when_a_cell_cannot_hold_its_symbol() {
+    // A wide glyph in the last column and a stray empty cell would each change the row's width.
+    let frame = symbol_frame(&[&["", "a", "中"]]);
+
+    assert_eq!(strip_sgr(&frame.to_ansi_text()), " a \n");
+}

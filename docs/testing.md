@@ -169,6 +169,7 @@ assert_eq!(frame.height, 10);
 | `styled_lines()` | `Vec<Vec<(String, Style)>>` | Rows grouped into style runs |
 | `to_fixed_grid()` | `String` | Full-width rows without trailing trim (layout-faithful) |
 | `to_ansi()` | `String` | ANSI styled frame (full terminal repaint prelude) |
+| `to_ansi_text()` | `String` | Static ANSI document: SGR only, full-width rows, each ending in a reset and a newline |
 | `to_ansi_diff(prev)` | `String` | Incremental ANSI update from a previous frame |
 | `to_png(&PngOptions)` | `Result<Vec<u8>>` | PNG bytes with font-backed or bitmap rendering (`ui-snapshot-png`) |
 

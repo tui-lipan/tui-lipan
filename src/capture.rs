@@ -6,6 +6,8 @@ use std::path::PathBuf;
 #[cfg(feature = "ui-snapshot-png")]
 use std::sync::Arc;
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::style::ansi::write_cell_style_sgr;
 use crate::style::{Color, Rect, Style};
 
@@ -183,6 +185,19 @@ impl CapturedCell {
             && self.underline_color == other.underline_color
             && self.modifiers == other.modifiers
     }
+
+    /// Columns this cell covers at column `x` of a `frame_width`-wide row.
+    ///
+    /// A wide glyph covers the next column too, whatever placeholder that cell holds: an empty
+    /// symbol from a terminal capture, or a space from a rendered UI. At the last column there is
+    /// nothing left to cover.
+    pub(crate) fn span_at(&self, x: u16, frame_width: u16) -> u16 {
+        if UnicodeWidthStr::width(self.symbol.as_str()) >= 2 && x + 1 < frame_width {
+            2
+        } else {
+            1
+        }
+    }
 }
 
 impl CapturedFrame {
@@ -222,6 +237,44 @@ impl CapturedFrame {
     /// Returns the frame rendered as a static ANSI string (full terminal repaint prelude).
     pub fn to_ansi(&self) -> String {
         self.to_ansi_diff(None)
+    }
+
+    /// Returns the frame as a static ANSI-styled document.
+    ///
+    /// Unlike [`Self::to_ansi`], this is text to print or save, not a repaint stream: it holds
+    /// SGR sequences only, with no screen clearing, cursor movement, or cursor visibility, and it
+    /// does not draw the cursor. Every row keeps the frame's full width, styled blank cells
+    /// included, and ends with a style reset and a newline. A wide glyph takes its display width
+    /// and the column it covers is skipped, so neither a terminal capture's empty placeholder nor
+    /// a rendered UI's space shifts the row.
+    pub fn to_ansi_text(&self) -> String {
+        let mut out =
+            String::with_capacity(usize::from(self.width) * usize::from(self.height) * 4 + 64);
+        for y in 0..self.height {
+            let row = self.row(y);
+            let mut styled: Option<&CapturedCell> = None;
+            let mut x = 0;
+            while x < self.width {
+                let cell = &row[usize::from(x)];
+                if !styled.is_some_and(|prev| prev.ansi_style_matches(cell)) {
+                    cell.write_ansi_style(&mut out);
+                    styled = Some(cell);
+                }
+                let span = cell.span_at(x, self.width);
+                // A glyph wider than the columns left, or an uncovered empty cell, would change
+                // the row's width; a space keeps it.
+                if cell.symbol.is_empty()
+                    || (span == 1 && UnicodeWidthStr::width(cell.symbol.as_str()) > 1)
+                {
+                    out.push(' ');
+                } else {
+                    out.push_str(&cell.symbol);
+                }
+                x += span;
+            }
+            out.push_str("\x1b[0m\n");
+        }
+        out
     }
 
     /// Returns an ANSI string updating `prev` to this frame.

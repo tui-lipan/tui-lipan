@@ -6,7 +6,6 @@ use fontdb::{Database, Family, Query};
 use fontdue::{Font, FontSettings};
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 use super::{CapturedCell, CapturedFrame, PngOptions, PngTextRenderer};
 use crate::style::Color;
@@ -76,7 +75,7 @@ pub(super) fn encode_frame(
                 .saturating_mul(columns)
                 .saturating_add(usize::from(x));
             if let Some(cell) = frame.cells.get(idx) {
-                let cell_span = cell_span(cell, x, frame.width);
+                let cell_span = cell.span_at(x, frame.width);
                 let cell_rect = CellPixels {
                     x0: u32::from(x).saturating_mul(final_cell_width),
                     y0: u32::from(y).saturating_mul(final_cell_height),
@@ -124,14 +123,6 @@ fn draw_cell(
     fill_background(image, cell_rect, style.bg);
     draw_glyph(image, cell_rect, cell, style.fg, text_renderer);
     draw_decorations(image, cell_rect, cell, style);
-}
-
-fn cell_span(cell: &CapturedCell, x: u16, frame_width: u16) -> u16 {
-    if UnicodeWidthStr::width(cell.symbol.as_str()) >= 2 && x + 1 < frame_width {
-        2
-    } else {
-        1
-    }
 }
 
 fn glyph_for(ch: char) -> Option<[u8; 8]> {
