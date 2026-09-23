@@ -41,7 +41,8 @@ use super::scrollback_ledger::{
     HostModes, LedgerTerm, SGR_PIXELS_MOUSE, ledger_capacity, settle_history,
 };
 use super::selection::{ScrollbackLineage, TerminalSelection};
-use crate::style::{CaretShape, Color as UiColor, HostTerminalColors, Span, Style, Theme};
+use crate::capture::{CapturedCell, CapturedFrame, CellModifiers, CursorState};
+use crate::style::{CaretShape, Color as UiColor, HostTerminalColors, Rect, Span, Style, Theme};
 use crate::utils::{GridPos, GridSelection, SelectionEnd};
 
 /// Kind of semantic mark anchored to an absolute text line.
@@ -1993,6 +1994,89 @@ impl TerminalScreen {
         self.cache.clone()
     }
 
+    /// Capture the visible viewport as a cell grid.
+    ///
+    /// The frame holds the emulator's own cells, before any widget presentation such as
+    /// selection, focus, or decorations. Colors keep their terminal meaning and ignore
+    /// [`Self::set_palette`]: default foreground and background stay [`Color::Reset`], the 16 named
+    /// ANSI colors stay named, and indexed and truecolor values pass through as written, so
+    /// `SGR 38;5;1` captures as `Indexed(1)`, not red. A serializer that needs concrete colors,
+    /// such as `CapturedFrame::to_png`, resolves them itself.
+    ///
+    /// A wide glyph occupies its own cell, and the column it covers holds an empty symbol, so
+    /// joining a row's symbols yields text at its true display width. Hidden text and image
+    /// placeholders capture as spaces. The cursor is reported while it lies inside the viewport.
+    ///
+    /// [`Color::Reset`]: UiColor::Reset
+    pub fn capture_frame(&self) -> CapturedFrame {
+        let content = self.term.renderable_content();
+        let display_offset = content.display_offset;
+        let width = self.cols;
+        let height = self.rows;
+        let blank = CapturedCell {
+            symbol: " ".to_string(),
+            fg: UiColor::Reset,
+            bg: UiColor::Reset,
+            underline_color: UiColor::Reset,
+            modifiers: CellModifiers::default(),
+        };
+        let mut cells = vec![blank; usize::from(width) * usize::from(height)];
+
+        for indexed in content.display_iter {
+            let Some(point) = term::point_to_viewport(display_offset, indexed.point) else {
+                continue;
+            };
+            if point.line >= usize::from(height) || point.column.0 >= usize::from(width) {
+                continue;
+            }
+            let cell = indexed.cell;
+            let symbol = if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER) {
+                String::new()
+            } else if cell.flags.contains(CellFlags::LEADING_WIDE_CHAR_SPACER) {
+                " ".to_string()
+            } else {
+                let mut symbol = String::new();
+                push_cell_text_str(&mut symbol, cell);
+                symbol
+            };
+            cells[point.line * usize::from(width) + point.column.0] = CapturedCell {
+                symbol,
+                fg: capture_color(cell.fg),
+                bg: capture_color(cell.bg),
+                underline_color: cell.underline_color().map_or(UiColor::Reset, capture_color),
+                modifiers: CellModifiers {
+                    bold: cell.flags.contains(CellFlags::BOLD),
+                    dim: cell.flags.contains(CellFlags::DIM),
+                    italic: cell.flags.contains(CellFlags::ITALIC),
+                    underline: cell.flags.intersects(CellFlags::ALL_UNDERLINES),
+                    reverse: cell.flags.contains(CellFlags::INVERSE),
+                    strikethrough: cell.flags.contains(CellFlags::STRIKEOUT),
+                },
+            };
+        }
+
+        let cursor = term::point_to_viewport(display_offset, content.cursor.point)
+            .filter(|point| point.line < usize::from(height) && point.column.0 < usize::from(width))
+            .map(|point| CursorState {
+                x: point.column.0 as u16,
+                y: point.line as u16,
+                visible: content.mode.contains(TermMode::SHOW_CURSOR) && display_offset == 0,
+            });
+
+        CapturedFrame {
+            viewport: Rect {
+                x: 0,
+                y: 0,
+                w: width,
+                h: height,
+            },
+            width,
+            height,
+            cells,
+            cursor,
+        }
+    }
+
     /// Return the current terminal color palette.
     pub fn palette(&self) -> TerminalColorPalette {
         self.palette
@@ -3285,6 +3369,41 @@ fn map_term_color(color: TermColor, palette: &TerminalColorPalette) -> Option<Ui
     }
 }
 
+/// A terminal color as the program set it, with no palette applied.
+///
+/// Unlike [`map_term_color`], `SGR 38;5;1` stays `Indexed(1)` rather than becoming the palette's
+/// red. The difference is visible: `SGR 58` can only express indexed and RGB colors, so an
+/// underline color turned into a named one would be lost when the frame is written back out.
+fn capture_color(color: TermColor) -> UiColor {
+    match color {
+        TermColor::Spec(TermRgb { r, g, b }) => UiColor::Rgb(r, g, b),
+        TermColor::Indexed(index) => UiColor::Indexed(index),
+        TermColor::Named(named) => match named {
+            NamedColor::Black | NamedColor::DimBlack => UiColor::Black,
+            NamedColor::Red | NamedColor::DimRed => UiColor::Red,
+            NamedColor::Green | NamedColor::DimGreen => UiColor::Green,
+            NamedColor::Yellow | NamedColor::DimYellow => UiColor::Yellow,
+            NamedColor::Blue | NamedColor::DimBlue => UiColor::Blue,
+            NamedColor::Magenta | NamedColor::DimMagenta => UiColor::Magenta,
+            NamedColor::Cyan | NamedColor::DimCyan => UiColor::Cyan,
+            NamedColor::White | NamedColor::DimWhite => UiColor::Gray,
+            NamedColor::BrightBlack => UiColor::DarkGray,
+            NamedColor::BrightRed => UiColor::LightRed,
+            NamedColor::BrightGreen => UiColor::LightGreen,
+            NamedColor::BrightYellow => UiColor::LightYellow,
+            NamedColor::BrightBlue => UiColor::LightBlue,
+            NamedColor::BrightMagenta => UiColor::LightMagenta,
+            NamedColor::BrightCyan => UiColor::LightCyan,
+            NamedColor::BrightWhite => UiColor::White,
+            NamedColor::Foreground
+            | NamedColor::BrightForeground
+            | NamedColor::DimForeground
+            | NamedColor::Background
+            | NamedColor::Cursor => UiColor::Reset,
+        },
+    }
+}
+
 fn map_named_color(color: NamedColor, palette: &TerminalColorPalette) -> Option<UiColor> {
     match color {
         NamedColor::Black => Some(palette.ansi[0]),
@@ -3592,6 +3711,160 @@ mod tests {
             snapshot.wrapped_rows.as_ref(),
             &[true, false, false, false][..]
         );
+    }
+
+    #[test]
+    fn capture_frame_keeps_terminal_color_semantics() {
+        let mut screen = TerminalScreen::new(2, 6, 10);
+        // A themed palette must not leak into the capture.
+        screen.set_palette(TerminalColorPalette::new(
+            UiColor::Rgb(1, 1, 1),
+            UiColor::Rgb(2, 2, 2),
+            [UiColor::Rgb(3, 3, 3); 16],
+        ));
+        screen.process_bytes(b"d\x1b[31mr\x1b[91mR\x1b[38;5;200mi\x1b[38;2;1;2;3mt\x1b[0;44mb");
+        let frame = screen.capture_frame();
+        let row = frame.row(0);
+
+        assert_eq!((row[0].fg, row[0].bg), (UiColor::Reset, UiColor::Reset));
+        assert_eq!(row[1].fg, UiColor::Red);
+        assert_eq!(row[2].fg, UiColor::LightRed);
+        assert_eq!(row[3].fg, UiColor::Indexed(200));
+        assert_eq!(row[4].fg, UiColor::Rgb(1, 2, 3));
+        assert_eq!((row[5].fg, row[5].bg), (UiColor::Reset, UiColor::Blue));
+    }
+
+    #[test]
+    fn capture_frame_keeps_low_indexed_colors_indexed() {
+        let mut screen = TerminalScreen::new(1, 4, 10);
+        screen.process_bytes(b"\x1b[38;5;1mf\x1b[0;48;5;1mb\x1b[0;4;58;5;1mu\x1b[0m");
+        let frame = screen.capture_frame();
+        let row = frame.row(0);
+
+        assert_eq!(row[0].fg, UiColor::Indexed(1));
+        assert_eq!(row[1].bg, UiColor::Indexed(1));
+        assert_eq!(row[2].underline_color, UiColor::Indexed(1));
+        // A named underline color has no SGR 58 form, so this is what keeps it in the output.
+        let underlined = frame.to_ansi_text();
+        assert!(underlined.contains("\x1b[58;5;1mu"), "{underlined:?}");
+    }
+
+    #[test]
+    fn capture_frame_reports_modifiers_and_underline_color() {
+        let mut screen = TerminalScreen::new(1, 8, 10);
+        screen.process_bytes(
+            b"\x1b[1mb\x1b[0;2md\x1b[0;3mi\x1b[0;4:3;58:2::9:8:7mu\x1b[0;7mr\x1b[0;9ms",
+        );
+        let frame = screen.capture_frame();
+        let row = frame.row(0);
+        let modifiers = |cell: &CapturedCell| {
+            let m = &cell.modifiers;
+            [
+                m.bold,
+                m.dim,
+                m.italic,
+                m.underline,
+                m.reverse,
+                m.strikethrough,
+            ]
+        };
+
+        for (index, cell) in row[..6].iter().enumerate() {
+            let mut expected = [false; 6];
+            expected[index] = true;
+            assert_eq!(
+                modifiers(cell),
+                expected,
+                "cell {index} ({:?})",
+                cell.symbol
+            );
+        }
+        // A curly underline still reads as underlined, and keeps its own color.
+        assert_eq!(row[3].underline_color, UiColor::Rgb(9, 8, 7));
+        assert_eq!(row[0].underline_color, UiColor::Reset);
+        assert_eq!(modifiers(&row[6]), [false; 6]);
+    }
+
+    #[test]
+    fn capture_frame_keeps_styled_blank_cells() {
+        let mut screen = TerminalScreen::new(2, 4, 10);
+        // Erase-in-line paints the rest of the row with the current background.
+        screen.process_bytes(b"\x1b[42mx\x1b[K\x1b[0m\r\n");
+        let frame = screen.capture_frame();
+
+        assert!(frame.row(0).iter().all(|cell| cell.bg == UiColor::Green));
+        assert_eq!(frame.row(0)[3].symbol, " ");
+        assert!(frame.row(1).iter().all(|cell| cell.bg == UiColor::Reset));
+    }
+
+    #[test]
+    fn capture_frame_gives_wide_glyphs_their_display_width() {
+        let mut screen = TerminalScreen::new(2, 5, 10);
+        // The second glyph cannot fit in the last column, so it wraps and leaves a blank.
+        screen.process_bytes("a中b中".as_bytes());
+        let frame = screen.capture_frame();
+        let symbols: Vec<&str> = frame.row(0).iter().map(|c| c.symbol.as_str()).collect();
+
+        assert_eq!(symbols, ["a", "中", "", "b", " "]);
+        assert_eq!(frame.row(1)[0].symbol, "中");
+        assert_eq!(frame.row(1)[1].symbol, "");
+        // Each row keeps all five columns, including the blank the wrapped glyph left behind.
+        assert_eq!(frame.to_fixed_grid(), "a中b \n中   ");
+    }
+
+    #[test]
+    fn capture_frame_hides_concealed_text_and_keeps_combining_marks() {
+        let mut screen = TerminalScreen::new(1, 4, 10);
+        screen.process_bytes("e\u{301}\x1b[8mpw\x1b[0m".as_bytes());
+        let frame = screen.capture_frame();
+
+        assert_eq!(frame.row(0)[0].symbol, "e\u{301}");
+        assert_eq!(frame.row(0)[1].symbol, " ");
+        assert_eq!(frame.row(0)[2].symbol, " ");
+    }
+
+    #[test]
+    fn capture_frame_reports_the_cursor() {
+        let mut screen = TerminalScreen::new(3, 6, 10);
+        screen.process_bytes(b"ab\r\nc");
+        let frame = screen.capture_frame();
+        assert_eq!(
+            frame.cursor,
+            Some(CursorState {
+                x: 1,
+                y: 1,
+                visible: true
+            })
+        );
+
+        screen.process_bytes(b"\x1b[?25l");
+        let cursor = screen.capture_frame().cursor.expect("cursor in viewport");
+        assert!(!cursor.visible);
+    }
+
+    #[test]
+    fn capture_frame_follows_the_scrolled_viewport() {
+        let mut screen = TerminalScreen::new(2, 4, 10);
+        screen.process_bytes(b"one\r\ntwo\r\nsix");
+        screen.set_scrollback(1);
+        let frame = screen.capture_frame();
+
+        assert_eq!(frame.plain_text(), "one\ntwo");
+        // The live cursor row is below the viewport while scrolled back.
+        assert_eq!(frame.cursor, None);
+    }
+
+    #[test]
+    fn capture_frame_tracks_resize() {
+        let mut screen = TerminalScreen::new(2, 4, 10);
+        screen.process_bytes(b"hi");
+        screen.resize(3, 7);
+        let frame = screen.capture_frame();
+
+        assert_eq!((frame.width, frame.height), (7, 3));
+        assert_eq!(frame.cells.len(), 21);
+        assert_eq!((frame.viewport.w, frame.viewport.h), (7, 3));
+        assert_eq!(frame.plain_text(), "hi\n\n");
     }
 
     #[test]
