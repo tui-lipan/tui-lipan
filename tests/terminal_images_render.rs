@@ -460,18 +460,28 @@ fn transparent_image_pixels_show_what_is_behind_the_image_not_its_stand_in() {
 }
 
 #[test]
-fn nerd_font_icons_survive_a_capture_that_holds_images() {
-    // Material Design icons live in plane 15 private use (U+F05B2, U+F06E4). A capture that marked
-    // its images there blanked every such icon in any frame that also held an image.
-    let frame = labelled_pane(&red_image(6, 2), "\u{F05B2} \u{F06E4} \u{F0000}").capture_frame();
-
-    assert_eq!(frame.cell(0, 0).symbol, "\u{F05B2}");
-    assert_eq!(frame.cell(2, 0).symbol, "\u{F06E4}");
-    assert_eq!(frame.cell(4, 0).symbol, "\u{F0000}");
+fn private_use_icons_survive_a_capture_that_holds_images() {
+    // Nerd Font icons are private-use code points (U+F05B2, U+F06E4), and so were earlier forms of
+    // the capture's image marks (U+F0000, U+F0001, U+10F000). None of them may be taken for a mark:
+    // one drawn over the image covers it, and one drawn beside it stays text.
+    // Over the image: the earlier marks for image 0 (U+10F000, U+F0000) and a Nerd Font icon.
+    let label = "\u{10F000} \u{F05B2} \u{F0000} \u{F06E4} \u{F0001}";
+    let frame = labelled_pane(&red_image(6, 2), label).capture_frame();
     let image = &frame.images[0];
-    assert!(!image.shows(0, 0) && !image.shows(2, 0) && !image.shows(4, 0));
+
+    for (x, symbol) in [(0, "\u{10F000}"), (2, "\u{F05B2}"), (4, "\u{F0000}")] {
+        assert_eq!(
+            frame.cell(x, 0).symbol,
+            symbol,
+            "cell ({x},0) over the image"
+        );
+        assert!(!image.shows(x, 0), "the icon at ({x},0) covers the image");
+    }
+    // Outside the six-column image, while an image is in the frame.
+    assert_eq!(frame.cell(6, 0).symbol, "\u{F06E4}");
+    assert_eq!(frame.cell(8, 0).symbol, "\u{F0001}");
     assert!(
-        image.shows(5, 0),
-        "the image still shows where no icon covers it"
+        (0..6).all(|x| image.shows(x, 1)),
+        "the image still shows where no text covers it"
     );
 }

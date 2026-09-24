@@ -48,24 +48,70 @@ thread_local! {
     static CAPTURE_IMAGES: RefCell<Option<Vec<CaptureImageDraw>>> = const { RefCell::new(None) };
 }
 
-/// The first of the symbols stamped over the cells a captured image covers: image `n` is marked
-/// with the code point `n` places after it, so one mark is one character and one cell wide.
+/// The mark stamped over the cells a captured image covers: `U+FFFF`, then the image's index as two
+/// zero-width variation selectors.
 ///
 /// A frame capture cannot hand pixels to a host terminal, so [`draw_encoded_image`] records them and
 /// marks their cells instead. Whatever is drawn later replaces the mark - an overlay, a border, a
 /// pane above - which is how the capture learns which cells still show the image, exactly as the
 /// host's placeholder cells would.
 ///
-/// The marks sit at the top of plane 16's private-use area. Plane 15 is where Nerd Font keeps its
-/// Material Design icons (`󰖲` is U+F05B2), and Kitty's own placeholder is U+10EEEE, so a mark in
-/// either would be mistaken for text a widget drew. A cell only counts as marked when it also lies
-/// inside the area of the image its mark names.
+/// A mark must never be something a widget can draw, or text drawn over an image would read as the
+/// image still showing. Private-use code points are icons (Nerd Font keeps its Material Design set in
+/// plane 15, and Kitty's placeholder is U+10EEEE), so the mark leads with a Unicode noncharacter,
+/// which no text may contain. The variation selectors after it are zero width, so the whole mark is
+/// one grapheme one cell wide, and a buffer diff treats it like any narrow symbol.
 #[cfg(feature = "terminal-images")]
-pub(crate) const CAPTURE_IMAGE_MARKER: u32 = 0x10F000;
+const CAPTURE_MARK_LEAD: char = '\u{FFFF}';
 
-/// How many images one capture can mark: the rest of plane 16's private-use code points.
+/// The first of the 240 variation selectors (U+E0100-U+E01EF) a mark's index is written in.
 #[cfg(feature = "terminal-images")]
-pub(crate) const CAPTURE_IMAGE_LIMIT: usize = 0xFFE;
+const CAPTURE_MARK_DIGIT: u32 = 0xE0100;
+
+/// How many values one index digit holds.
+#[cfg(feature = "terminal-images")]
+const CAPTURE_MARK_BASE: usize = 240;
+
+/// How many images one capture can mark.
+#[cfg(feature = "terminal-images")]
+pub(crate) const CAPTURE_IMAGE_LIMIT: usize = CAPTURE_MARK_BASE * CAPTURE_MARK_BASE;
+
+/// The mark for the image at `index`, which must be below [`CAPTURE_IMAGE_LIMIT`].
+#[cfg(feature = "terminal-images")]
+pub(crate) fn capture_image_mark(index: usize) -> String {
+    debug_assert!(index < CAPTURE_IMAGE_LIMIT);
+    let digit = |value: usize| {
+        char::from_u32(CAPTURE_MARK_DIGIT + value as u32).expect("a variation selector")
+    };
+    [
+        CAPTURE_MARK_LEAD,
+        digit(index / CAPTURE_MARK_BASE),
+        digit(index % CAPTURE_MARK_BASE),
+    ]
+    .into_iter()
+    .collect()
+}
+
+/// The image index `symbol` marks, if it is a mark.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn capture_image_mark_index(symbol: &str) -> Option<usize> {
+    let mut chars = symbol.chars();
+    let digit = |ch: char| {
+        u32::from(ch)
+            .checked_sub(CAPTURE_MARK_DIGIT)
+            .map(|value| value as usize)
+            .filter(|&value| value < CAPTURE_MARK_BASE)
+    };
+    if chars.next()? != CAPTURE_MARK_LEAD {
+        return None;
+    }
+    let high = digit(chars.next()?)?;
+    let low = digit(chars.next()?)?;
+    chars
+        .next()
+        .is_none()
+        .then_some(high * CAPTURE_MARK_BASE + low)
+}
 
 /// One image [`draw_encoded_image`] drew during a frame capture: the cells it covers, and the
 /// pixels scaled into them.
@@ -119,11 +165,9 @@ fn record_capture_image(
             drawn.len() - 1
         })
     });
-    let Some(marker) = index.and_then(|index| char::from_u32(CAPTURE_IMAGE_MARKER + index as u32))
-    else {
+    let Some(marker) = index.map(capture_image_mark) else {
         return;
     };
-    let marker = marker.to_string();
     let buffer = f.buffer_mut();
     let area = area.intersection(buffer.area);
     for y in area.top()..area.bottom() {
@@ -1899,6 +1943,35 @@ pub(crate) fn render_image_inline_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A mark must survive a buffer diff as one narrow cell, round-trip its index, and never match
+    /// anything a widget draws, private-use icons included.
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn capture_image_marks_are_one_cell_and_never_text() {
+        use unicode_width::UnicodeWidthStr as _;
+
+        for index in [0, 1, 239, 240, CAPTURE_IMAGE_LIMIT - 1] {
+            let mark = capture_image_mark(index);
+            assert_eq!(mark.width(), 1, "mark {index} must be one cell wide");
+            assert_eq!(capture_image_mark_index(&mark), Some(index));
+        }
+        for text in [
+            " ",
+            "a",
+            "\u{F0000}",
+            "\u{F05B2}",
+            "\u{10F000}",
+            "\u{10EEEE}",
+            "\u{FFFF}",
+            "",
+        ] {
+            assert_eq!(capture_image_mark_index(text), None, "{text:?}");
+        }
+        let mut longer = capture_image_mark(3);
+        longer.push('x');
+        assert_eq!(capture_image_mark_index(&longer), None);
+    }
 
     /// A hole in the middle of a row must split it, and stacked holes must merge, so a placeholder
     /// walk never writes into a cell an overlay is about to own.

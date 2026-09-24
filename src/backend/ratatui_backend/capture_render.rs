@@ -262,7 +262,7 @@ fn captured_images(
     width: u16,
     drawn: Vec<super::renderers::image::CaptureImageDraw>,
 ) -> Vec<crate::capture::CapturedImage> {
-    use super::renderers::image::{CAPTURE_IMAGE_LIMIT, CAPTURE_IMAGE_MARKER};
+    use super::renderers::image::capture_image_mark_index;
 
     if drawn.is_empty() || width == 0 {
         return Vec::new();
@@ -290,20 +290,12 @@ fn captured_images(
         .collect();
 
     for (offset, cell) in cells.iter_mut().enumerate() {
-        let mut chars = cell.symbol.chars();
-        let (Some(mark), None) = (chars.next(), chars.next()) else {
-            continue;
-        };
-        let Some(index) = (u32::from(mark))
-            .checked_sub(CAPTURE_IMAGE_MARKER)
-            .map(|index| index as usize)
-            .filter(|&index| index < CAPTURE_IMAGE_LIMIT)
-        else {
+        let Some(index) = capture_image_mark_index(&cell.symbol) else {
             continue;
         };
         let x = (offset % usize::from(width)) as u16;
         let y = (offset / usize::from(width)) as u16;
-        // A mark outside its image's area is text that happens to share the code point.
+        // Marks are stamped only inside their image's area; anything else is not one.
         let Some((image, visible)) = images
             .get_mut(index)
             .and_then(|image| image.area_offset(x, y).map(|visible| (image, visible)))
