@@ -5852,4 +5852,84 @@ mod local_layers_over_images {
             "no junctions join the modal to the pane: {rows:#?}"
         );
     }
+
+    struct LocalModalOverStyledText;
+
+    impl Component for LocalModalOverStyledText {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: (), _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let row = |style| Text::new("x".repeat(12)).style(style);
+            ZStack::new()
+                .child(
+                    VStack::new()
+                        .child(row(Style::new().fg(Color::Cyan)))
+                        .child(Text::new(""))
+                        .child(row(Style::new().bg(Color::Rgb(0, 80, 60))))
+                        .child(row(Style::new().bold().underline()))
+                        .child(Text::new("")),
+                )
+                .child(
+                    Modal::new()
+                        .scope(OverlayScope::Local)
+                        .width(Length::Px(6))
+                        .height(Length::Px(5))
+                        .backdrop_style(Style::new().dim_by(0.6))
+                        .child(Text::new("")),
+                )
+                .into()
+        }
+    }
+
+    /// The backdrop pass marks what it dims with `DIM` (blank cells, palette colors). A dialog
+    /// border drawn over those cells must not keep it, or the border shows in two shades.
+    #[test]
+    fn a_local_modal_border_does_not_inherit_modifiers_from_beneath() {
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 5,
+        };
+        let mut runtime = RuntimeCore::new_test(
+            LocalModalOverStyledText,
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        );
+        runtime.init();
+        runtime.render_element(viewport, None, None, None);
+        let buffer = render_with_images(&runtime, viewport);
+
+        let dialog = runtime
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::Frame(_)))
+            .expect("the dialog is a frame")
+            .rect;
+        let (left, top) = (dialog.x as u16, dialog.y as u16);
+        let (right, bottom) = (left + dialog.w - 1, top + dialog.h - 1);
+        let ring = (left..=right)
+            .flat_map(|x| [(x, top), (x, bottom)])
+            .chain((top..=bottom).flat_map(|y| [(left, y), (right, y)]));
+        for (x, y) in ring {
+            let cell = &buffer[(x, y)];
+            assert!(
+                cell.modifier.is_empty(),
+                "border cell ({x},{y}) {:?} carries {:?}",
+                cell.symbol(),
+                cell.modifier
+            );
+        }
+    }
 }

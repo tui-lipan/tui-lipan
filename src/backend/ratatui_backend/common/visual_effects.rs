@@ -28,6 +28,33 @@ pub(crate) fn dim_ratatui_color(color: RColor, amount: f32) -> RColor {
     }
 }
 
+/// [`dim_ratatui_color`] that keeps palette colors on-palette.
+///
+/// Returns the resolved color and whether the cell should gain the `DIM` modifier; see
+/// [`preserve_palette_blend`].
+fn dim_ratatui_color_on_palette(color: RColor, amount: f32) -> (RColor, bool) {
+    keep_palette_color(color, dim_ratatui_color(color, amount))
+}
+
+/// [`tint_ratatui_color`] that keeps palette colors on-palette.
+///
+/// Returns the resolved color and whether the cell should gain the `DIM` modifier; see
+/// [`preserve_palette_blend`].
+pub(crate) fn tint_ratatui_color_on_palette(
+    color: RColor,
+    tint: Color,
+    alpha: f32,
+) -> (RColor, bool) {
+    keep_palette_color(color, tint_ratatui_color(color, tint, alpha))
+}
+
+fn keep_palette_color(source: RColor, result: RColor) -> (RColor, bool) {
+    match preserve_palette_blend(from_ratatui_color(source), from_ratatui_color(result)) {
+        Some(darkened) => (source, darkened),
+        None => (result, false),
+    }
+}
+
 /// Apply `transform` to a ratatui color while preserving terminal-palette fidelity.
 ///
 /// Named/indexed ("palette") colors carry no fixed RGB: the terminal resolves them against
@@ -113,12 +140,12 @@ fn dedupe_effect_transform(
 
 fn apply_dim_amount_to_cell(cell: &mut Cell, amount: f32, terminal_bg: Option<RColor>) {
     let skip_fg_dim = terminal_bg.is_some_and(|tbg| cell.bg == RColor::Reset && cell.fg == tbg);
-    let new_fg = if skip_fg_dim {
-        cell.fg
+    let (new_fg, fg_dim) = if skip_fg_dim {
+        (cell.fg, false)
     } else {
-        dim_ratatui_color(cell.fg, amount)
+        dim_ratatui_color_on_palette(cell.fg, amount)
     };
-    let new_bg = dim_ratatui_color(cell.bg, amount);
+    let (new_bg, bg_dim) = dim_ratatui_color_on_palette(cell.bg, amount);
 
     if new_fg != RColor::Reset {
         cell.fg = new_fg;
@@ -127,7 +154,7 @@ fn apply_dim_amount_to_cell(cell: &mut Cell, amount: f32, terminal_bg: Option<RC
         cell.bg = new_bg;
     }
 
-    if amount > 0.0 && new_fg == RColor::Reset && new_bg == RColor::Reset {
+    if fg_dim || bg_dim || (amount > 0.0 && new_fg == RColor::Reset && new_bg == RColor::Reset) {
         cell.set_style(cell.style().add_modifier(RMod::DIM));
     }
 }
@@ -240,11 +267,19 @@ pub(crate) fn apply_effect_style_clipped(
                     } else {
                         Some(cell.bg)
                     };
+                    let mut dim_cell = false;
                     if let Some(bg) = bg_source {
-                        cell.bg = cache.tint(bg, tint, alpha);
+                        let (tinted, dim) = cache.tint(bg, tint, alpha);
+                        cell.bg = tinted;
+                        dim_cell |= dim;
                     }
                     if cell.fg != RColor::Reset {
-                        cell.fg = cache.tint(cell.fg, tint, alpha);
+                        let (tinted, dim) = cache.tint(cell.fg, tint, alpha);
+                        cell.fg = tinted;
+                        dim_cell |= dim;
+                    }
+                    if dim_cell {
+                        cell.set_style(cell.style().add_modifier(RMod::DIM));
                     }
                 }
                 if let Some(policy) = style.contrast_policy {
@@ -313,7 +348,7 @@ impl BackdropBackgroundEffect {
             None => RColor::Rgb(rgb.0, rgb.1, rgb.2),
         };
         if let Some(amount) = self.dim_amount {
-            let dimmed = dim_ratatui_color(color, f32::from_bits(amount));
+            let (dimmed, _) = dim_ratatui_color_on_palette(color, f32::from_bits(amount));
             if dimmed != RColor::Reset {
                 color = dimmed;
             }
@@ -322,7 +357,7 @@ impl BackdropBackgroundEffect {
             color = transform_ratatui_color(color, transform, self.terminal_bg, true).0;
         }
         if let Some((tint, alpha)) = self.tint {
-            color = tint_ratatui_color(color, tint, f32::from_bits(alpha));
+            color = tint_ratatui_color_on_palette(color, tint, f32::from_bits(alpha)).0;
         }
         from_ratatui_color(color).to_rgb().unwrap_or(rgb)
     }
@@ -331,7 +366,7 @@ impl BackdropBackgroundEffect {
 const RATATUI_TINT_CACHE_CAP: usize = 32;
 
 pub(crate) struct RatatuiTintCache {
-    entries: [Option<(RColor, RColor)>; RATATUI_TINT_CACHE_CAP],
+    entries: [Option<(RColor, (RColor, bool))>; RATATUI_TINT_CACHE_CAP],
     len: usize,
 }
 
@@ -343,7 +378,8 @@ impl RatatuiTintCache {
         }
     }
 
-    pub(crate) fn tint(&mut self, color: RColor, tint: Color, alpha: f32) -> RColor {
+    /// Tint `color`, keeping palette colors on-palette; see [`tint_ratatui_color_on_palette`].
+    pub(crate) fn tint(&mut self, color: RColor, tint: Color, alpha: f32) -> (RColor, bool) {
         for entry in &self.entries[..self.len] {
             if let Some((source, tinted)) = entry
                 && *source == color
@@ -352,7 +388,7 @@ impl RatatuiTintCache {
             }
         }
 
-        let tinted = tint_ratatui_color(color, tint, alpha);
+        let tinted = tint_ratatui_color_on_palette(color, tint, alpha);
         if self.len < RATATUI_TINT_CACHE_CAP {
             self.entries[self.len] = Some((color, tinted));
             self.len += 1;
@@ -1555,5 +1591,82 @@ mod palette_fidelity_tests {
         );
         assert_eq!(color, RColor::Indexed(14));
         assert!(dim);
+    }
+
+    fn apply_style_to_cell(cell: Cell, style: Style) -> Cell {
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(1, 1)).unwrap();
+        let mut out = None;
+        term.draw(|f| {
+            *f.buffer_mut().cell_mut((0, 0)).unwrap() = cell.clone();
+            let rect = Rect {
+                x: 0,
+                y: 0,
+                w: 1,
+                h: 1,
+            };
+            apply_effect_style_clipped(f, rect, style, None, Some(RColor::Rgb(0x13, 0x14, 0x1a)));
+            out = f.buffer_mut().cell((0, 0)).cloned();
+        })
+        .unwrap();
+        out.unwrap()
+    }
+
+    #[test]
+    fn dim_by_keeps_chromatic_palette_colors_and_dims_instead() {
+        let mut cell = Cell::default();
+        cell.set_fg(RColor::Cyan);
+        let cell = apply_style_to_cell(cell, Style::new().dim_by(0.6));
+        assert_eq!(cell.fg, RColor::Cyan, "palette fg must stay on-palette");
+        assert!(cell.modifier.contains(RMod::DIM));
+    }
+
+    #[test]
+    fn dim_by_still_darkens_grayscale_palette_and_truecolor() {
+        let mut cell = Cell::default();
+        cell.set_fg(RColor::DarkGray);
+        cell.set_bg(RColor::Rgb(0, 200, 200));
+        let cell = apply_style_to_cell(cell, Style::new().dim_by(0.6));
+        assert!(matches!(cell.fg, RColor::Rgb(..)), "got {:?}", cell.fg);
+        assert!(matches!(cell.bg, RColor::Rgb(..)), "got {:?}", cell.bg);
+        assert!(!cell.modifier.contains(RMod::DIM));
+    }
+
+    #[test]
+    fn tint_by_keeps_palette_colors_and_dims_instead() {
+        let mut cell = Cell::default();
+        cell.set_fg(RColor::Yellow);
+        let cell = apply_style_to_cell(cell, Style::new().tint_by(Color::Rgb(0, 0, 40), 0.5));
+        assert_eq!(cell.fg, RColor::Yellow, "palette fg must stay on-palette");
+        assert!(
+            matches!(cell.bg, RColor::Rgb(..)),
+            "Reset bg tints the terminal bg"
+        );
+        assert!(cell.modifier.contains(RMod::DIM));
+    }
+
+    #[cfg(feature = "image")]
+    #[test]
+    fn backdrop_image_effect_keeps_a_palette_fill_like_the_cells() {
+        let terminal_bg = Some(RColor::Rgb(0x13, 0x14, 0x1a));
+        for style in [
+            Style::new().bg(Color::Blue).dim_by(0.5),
+            Style::new()
+                .bg(Color::Blue)
+                .tint_by(Color::Rgb(40, 0, 0), 0.5),
+        ] {
+            let effect = BackdropBackgroundEffect::from_style(style, terminal_bg).unwrap();
+            let mut cell = Cell::default();
+            cell.set_bg(RColor::Blue);
+            assert_eq!(
+                apply_style_to_cell(cell, style).bg,
+                RColor::Blue,
+                "{style:?}"
+            );
+            assert_eq!(
+                effect.apply_rgb((200, 100, 50)),
+                Color::Blue.to_rgb().unwrap(),
+                "{style:?}"
+            );
+        }
     }
 }

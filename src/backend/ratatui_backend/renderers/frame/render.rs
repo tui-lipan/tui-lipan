@@ -522,7 +522,7 @@ fn draw_border_cell(buf: &mut Buffer, x: i32, y: i32, symbol: &str, draw: &Borde
             return;
         };
         cell.merge_symbol(symbol, to_merge_strategy(draw.border_merge_mode));
-        cell.set_style(draw.style);
+        set_border_style(cell, draw.style);
         return;
     }
 
@@ -542,7 +542,18 @@ fn draw_border_cell(buf: &mut Buffer, x: i32, y: i32, symbol: &str, draw: &Borde
         return;
     };
     cell.set_symbol(symbol);
-    cell.set_style(draw.style);
+    set_border_style(cell, draw.style);
+}
+
+/// Style a border cell with exactly the border's modifiers.
+///
+/// A border glyph replaces what the cell held, so the modifiers of that content must not leak
+/// onto it. `set_style` only adds and removes the modifiers `style` names, so a `DIM` left by a
+/// backdrop pass (or a `BOLD` from underlay text) would otherwise stay on the border of a dialog
+/// drawn over it, and only on those cells.
+fn set_border_style(cell: &mut ratatui::buffer::Cell, style: ratatui::style::Style) {
+    cell.modifier = ratatui::style::Modifier::empty();
+    cell.set_style(style);
 }
 
 fn should_preserve_border_content(buf: &Buffer, x: i32, y: i32, existing: &str) -> bool {
