@@ -1049,10 +1049,36 @@ body {
    pushes the column wide and puts the whole table behind a horizontal scroll.
    A split chip in a cell costs less than that - and this file is full of
    signature columns (`(&self, &Props, &Context<Self>) -> Option<u64>`) that no
-   cell could hold on one line anyway. */
+   cell could hold on one line anyway. There a chip wraps between words only
+   (see `.cw`, from config.ts) and reads as a highlighted run: a solid fill
+   with no border, repeated with the same padding and corners on every line,
+   so the lines of one signature share a left edge and stack closely enough
+   to read as one. */
 .vp-doc :is(td, th) > code,
 .vp-doc :is(td, th) :not(pre) > code {
     white-space: normal;
+    line-height: 1.95;
+    padding: 1px 6px 1px 2px;
+    color: #a5f3fc;
+    background: #0c252b;
+    border-color: transparent;
+    border-radius: 4px;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+}
+.vp-doc code .cw {
+    white-space: nowrap;
+}
+/* Every line of the highlight starts at the same edge, but only the first
+   line gets the full inset: continuation lines sit a little further left, so
+   a wrapped line is visibly not the start of another signature. The spacer is
+   generated content, so copying the chip still gives the original text. It
+   stays a plain inline box: an inline-block is a break point of its own and
+   would sit alone on the first line when a one-word chip overflows its cell. */
+.vp-doc :is(td, th) > code::before,
+.vp-doc :is(td, th) :not(pre) > code::before {
+    content: "";
+    padding-left: 4px;
 }
 
 /* A link whose text is inline code - [`Component`](…) - is still a link.

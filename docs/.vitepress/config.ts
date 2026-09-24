@@ -69,7 +69,38 @@ export default defineConfig({
     ],
   ],
 
-  markdown: { theme: { light: "night-owl", dark: "night-owl" } },
+  markdown: {
+    theme: { light: "night-owl", dark: "night-owl" },
+    // A long signature in a table cell has to wrap, but only between words: a
+    // break after the `-` of `->` or inside `&Context<Self>` reads as two
+    // tokens. Each word becomes an unbreakable span; the spaces between them
+    // stay plain text, so copying the chip still gives the original string. A
+    // word too long for a narrow column, such as a path, keeps its break points.
+    // `&mut`, `->`, `dyn`, and `impl` belong to the word after them, so they
+    // never end a line.
+    config(md) {
+      md.renderer.rules.code_inline = (tokens, idx, _options, _env, self) => {
+        const token = tokens[idx];
+        const groups: string[][] = [];
+        for (const word of token.content.split(" ")) {
+          const last = groups.at(-1);
+          if (last !== undefined && /(&mut|^->|\bdyn|\bimpl)$/.test(last.at(-1)!)) {
+            last.push(word);
+          } else {
+            groups.push([word]);
+          }
+        }
+        const body = groups
+          .map((group) => {
+            const html = md.utils.escapeHtml(group.join(" "));
+            const fits = group.every((word) => word.length > 0 && word.length <= 24);
+            return fits ? `<span class="cw">${html}</span>` : html;
+          })
+          .join(" ");
+        return `<code${self.renderAttrs(token)}>${body}</code>`;
+      };
+    },
+  },
 
   // The index page takes its title from the <h1>, which reads
   // "tui-lipan Documentation | tui-lipan". Name it for what the page is instead.
