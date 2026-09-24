@@ -247,6 +247,12 @@ transforms do not apply, because a picture reads as surface, not as text.
   screen. When the only previous frame is dimmed the other way, because the dialog just opened or
   closed, the renderer encodes the new frame during that paint instead, for every protocol. That
   costs one synchronous encode per image at each open or close, and none on later frames.
+- **Live pictures pay per frame.** A picture that keeps changing under a dialog, such as a
+  browser or a video, is recolored on every new frame. Dims, tints, and fills cost a few
+  milliseconds for a full 1080p frame. `transform_bg(ColorTransform::Elevate(_))` weighs each
+  color's luminance, so a photographic frame under it costs more; past the first 16,384
+  colors, each is computed from the nearest color at 64 levels per channel, at most two levels
+  away. `cargo bench --bench image_backdrop --features terminal-images` measures both.
 - **Full strength at once.** Images take the backdrop at its full strength from its first frame.
   Following a fade would re-encode every image under it on every frame of the fade.
 - **Half blocks are left to the backdrop.** They are cells, which the backdrop already recolors.

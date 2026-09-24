@@ -331,3 +331,8 @@ harness = false
 name = "terminal_snapshot"
 harness = false
 required-features = ["terminal"]
+
+[[bench]]
+name = "image_backdrop"
+harness = false
+required-features = ["terminal-images"]
