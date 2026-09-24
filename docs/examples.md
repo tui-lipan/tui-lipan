@@ -299,9 +299,11 @@ cargo run --example terminal_hints --features terminal
 | Example | Description |
 |---------|-------------|
 | `terminal_images` | Kitty graphics escapes drawn inside a terminal pane child's output |
+| `image_backdrop` | Terminal-pane and `Image` widget pictures dimming with the cells beside them under a modal backdrop |
 
 ```bash
 cargo run --example terminal_images --features terminal-images
+cargo run --example image_backdrop --features terminal-images
 ```
 
 ### `theme-reload`
