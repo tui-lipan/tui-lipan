@@ -1374,7 +1374,25 @@ impl TerminalScreen {
             },
         );
         self.processor.advance(&mut ledger, bytes);
-        ledger.evicted()
+        let (evicted, reset) = (ledger.evicted(), ledger.reset());
+        if reset {
+            self.forget_line_anchors();
+        }
+        evicted
+    }
+
+    /// The child hard-reset the terminal (`RIS`), replacing both grids: drop everything anchored
+    /// to their lines, as [`Self::reset`] does. Accumulated semantic state - the working directory,
+    /// the command phase - is kept, for the same reason `reset` keeps it.
+    fn forget_line_anchors(&mut self) {
+        self.semantic_marks.clear();
+        self.active_prompt_mark = None;
+        self.history_epoch = self.history_epoch.saturating_add(1);
+        #[cfg(feature = "terminal-images")]
+        {
+            self.graphics.reset();
+            self.graphics_alt_screen = false;
+        }
     }
 
     /// Run one graphics command against the store, then apply what it implies to the grid.
@@ -1410,7 +1428,11 @@ impl TerminalScreen {
             },
         );
         self.processor.stop_sync(&mut ledger);
-        ledger.evicted()
+        let (evicted, reset) = (ledger.evicted(), ledger.reset());
+        if reset {
+            self.forget_line_anchors();
+        }
+        evicted
     }
 
     #[cfg(feature = "terminal-images")]
@@ -3576,6 +3598,38 @@ fn default_ansi_palette() -> [UiColor; 16] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `RIS` replaces the grid the marks were recorded on, including the live screen, so marks
+    /// still on screen have to go too; the shell's accumulated state stays.
+    #[test]
+    fn a_hard_reset_drops_shell_marks_still_on_screen() {
+        let mut screen = TerminalScreen::new(8, 30, 100);
+        for chunk in [
+            "\x1b]7;file://host/tmp/work\x1b\\",
+            "\x1b]133;A\x1b\\$ ",
+            "\x1b]133;B\x1b\\run\r\n",
+            "\x1b]133;C\x1b\\",
+            "output\r\n",
+        ] {
+            screen.process_bytes(chunk.as_bytes());
+        }
+        assert!(!screen.semantic_marks().is_empty());
+        let before = screen.semantic_state();
+
+        screen.process_bytes(b"\x1bc");
+
+        assert!(
+            screen.semantic_marks().is_empty(),
+            "{:?}",
+            screen.semantic_marks()
+        );
+        assert!(screen.last_command_output_range().is_none());
+        assert_eq!(
+            screen.semantic_state(),
+            before,
+            "semantic state is kept, as reset() keeps it"
+        );
+    }
 
     /// `clear` erases the screen and then the scrollback. The shell marks recorded before it must
     /// go with the lines they named, not slide onto whatever the screen shows next.
