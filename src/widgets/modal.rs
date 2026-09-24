@@ -209,8 +209,10 @@ fn root_dismiss_policy(has_on_close: bool, dismiss_on_escape: bool) -> DismissPo
 impl From<Modal> for Element {
     fn from(modal: Modal) -> Self {
         let semantic_name = modal.title.clone();
+        // Default to the terminal background in both scopes: `Backdrop` would keep the colors
+        // beneath the dialog and put its text on them.
         let frame_style = if modal.frame_style.bg.is_none() {
-            modal.frame_style.bg(Color::Backdrop)
+            modal.frame_style.bg(Color::Reset)
         } else {
             modal.frame_style
         };
@@ -359,7 +361,7 @@ mod tests {
         };
         assert_eq!(frame.props.width, Length::Flex(1));
         assert_eq!(frame.props.height, Length::Flex(1));
-        assert_eq!(frame.props.style.bg, Some(Color::Backdrop.into()));
+        assert_eq!(frame.props.style.bg, Some(Color::Reset.into()));
     }
 
     #[test]
