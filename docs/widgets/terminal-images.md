@@ -73,6 +73,8 @@ semantic marks. That is what makes it behave like the text it was drawn against:
 | Output scrolls | The image scrolls with it, cropped row by row as it leaves the viewport |
 | Scrolling back | It reappears at the line it was drawn on |
 | A line falls out of scrollback | The image's remaining rows stay; it goes once its last row is evicted |
+| Screen erased (`ED 2`) | The image scrolls into history with the text above it, as the screen does |
+| Scrollback erased (`ED 3`, as `clear` sends) | Images in the erased history go with it |
 | Alternate screen | Placements made there are dropped when the child leaves it |
 | Column resize | Kept, unless the change actually rewraps text — then the anchor stops naming what it named, and placements are dropped |
 | `RIS` / `TerminalScreen::reset` | Everything is cleared |

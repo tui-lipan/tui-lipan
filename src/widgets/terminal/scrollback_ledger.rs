@@ -69,6 +69,8 @@ pub(super) struct LedgerTerm<'a, T: EventListener> {
     /// Grid capacity, always `limit + rows`.
     capacity: usize,
     evicted: usize,
+    /// The child sent `RIS` while this wrapper was driving the term.
+    reset: bool,
 }
 
 impl<'a, T: EventListener> LedgerTerm<'a, T> {
@@ -84,7 +86,16 @@ impl<'a, T: EventListener> LedgerTerm<'a, T> {
             limit,
             capacity,
             evicted: 0,
+            reset: false,
         }
+    }
+
+    /// Whether the child hard-reset the terminal (`RIS`) while this wrapper was driving it.
+    ///
+    /// A reset replaces both grids, not only their history, so it is reported on its own rather
+    /// than as evicted lines: anything anchored to a line, on screen or above it, is gone.
+    pub(super) fn reset(&self) -> bool {
+        self.reset
     }
 
     /// Lines that fell out of scrollback while this wrapper was driving the term.
@@ -96,6 +107,20 @@ impl<'a, T: EventListener> LedgerTerm<'a, T> {
     #[inline]
     fn settle(&mut self) {
         self.evicted += settle_history(self.inner, self.limit, self.capacity);
+    }
+
+    /// Run `apply`, counting any history it discards as evicted.
+    ///
+    /// `ED 3` drops the whole scrollback at once. To everything anchored to an absolute line -
+    /// image placements, semantic marks - that is the same as those lines falling off the top, and
+    /// has to be told as such: otherwise the anchors land on the live screen, which now starts
+    /// where the history used to, and a cleared image reappears there.
+    #[inline]
+    fn counting_discarded(&mut self, apply: impl FnOnce(&mut Term<T>)) {
+        let history = self.inner.history_size();
+        apply(self.inner);
+        self.evicted += history.saturating_sub(self.inner.history_size());
+        self.settle();
     }
 }
 
@@ -261,8 +286,7 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
         self.settle();
     }
     fn clear_screen(&mut self, mode: ClearMode) {
-        self.inner.clear_screen(mode);
-        self.settle();
+        self.counting_discarded(|term| term.clear_screen(mode));
     }
     fn clear_tabs(&mut self, mode: TabulationClearMode) {
         self.inner.clear_tabs(mode);
@@ -270,6 +294,7 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
     }
     fn reset_state(&mut self) {
         self.inner.reset_state();
+        self.reset = true;
         self.settle();
     }
     fn reverse_index(&mut self) {

@@ -485,3 +485,88 @@ fn private_use_icons_survive_a_capture_that_holds_images() {
         "the image still shows where no text covers it"
     );
 }
+
+/// What `clear` sends: home, erase the screen, erase the scrollback.
+const CLEAR: &[u8] = b"\x1b[H\x1b[2J\x1b[3J";
+
+#[test]
+fn clearing_the_screen_and_scrollback_removes_the_images_on_it() {
+    let mut screen = TerminalScreen::new(6, 20, 100);
+    screen.set_cell_size(CELL);
+    screen.process_bytes(&red_image(4, 2));
+    screen.process_bytes(b"\r\n$ ");
+    assert_eq!(screen.render_snapshot().images.len(), 1);
+
+    screen.process_bytes(CLEAR);
+
+    assert!(
+        screen.render_snapshot().images.is_empty(),
+        "the image went with the screen and scrollback it was on"
+    );
+    assert!(screen.capture_frame().images.is_empty());
+
+    // A later image still lands where it is drawn.
+    screen.process_bytes(&red_image(2, 1));
+    let images = screen.render_snapshot().images.to_vec();
+    assert_eq!(images.len(), 1);
+    assert_eq!((images[0].row, images[0].col), (0, 0));
+}
+
+#[test]
+fn erasing_the_screen_alone_scrolls_an_image_away_with_its_text() {
+    let mut screen = TerminalScreen::new(6, 20, 100);
+    screen.set_cell_size(CELL);
+    screen.process_bytes(b"above\r\n");
+    screen.process_bytes(&red_image(4, 2));
+    screen.process_bytes(b"\r\n$ ");
+
+    screen.process_bytes(b"\x1b[H\x1b[2J");
+
+    assert!(
+        screen.render_snapshot().images.is_empty(),
+        "no longer on screen"
+    );
+}
+
+/// `RIS` replaces both grids, so it has to take the images on screen too, not only those in
+/// scrollback: with no history at all, nothing would be counted as gone.
+#[test]
+fn a_hard_reset_removes_images_from_a_screen_with_no_history() {
+    let mut screen = TerminalScreen::new(6, 20, 100);
+    screen.set_cell_size(CELL);
+    screen.process_bytes(&red_image(4, 2));
+    assert_eq!(screen.render_snapshot().images.len(), 1);
+
+    screen.process_bytes(b"\x1bc");
+
+    assert!(screen.render_snapshot().images.is_empty());
+    assert!(screen.capture_frame().images.is_empty());
+    screen.process_bytes(&red_image(2, 1));
+    assert_eq!(
+        screen.render_snapshot().images.len(),
+        1,
+        "later images still show"
+    );
+}
+
+#[test]
+fn a_hard_reset_on_the_alternate_screen_removes_the_images_of_both() {
+    let mut screen = TerminalScreen::new(6, 20, 100);
+    screen.set_cell_size(CELL);
+    screen.process_bytes(&solid_image(1, 4, 2, [255, 0, 0]));
+    screen.process_bytes(b"\x1b[?1049h");
+    screen.process_bytes(&solid_image(2, 4, 2, [0, 255, 0]));
+    assert_eq!(screen.render_snapshot().images.len(), 1);
+
+    screen.process_bytes(b"\x1bc");
+
+    assert!(
+        screen.render_snapshot().images.is_empty(),
+        "primary screen after the reset"
+    );
+    screen.process_bytes(b"\x1b[?1049h");
+    assert!(
+        screen.render_snapshot().images.is_empty(),
+        "alternate screen after the reset"
+    );
+}
