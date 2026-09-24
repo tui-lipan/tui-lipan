@@ -1,7 +1,8 @@
 //! Rendering a terminal pane whose child drew a full-pane picture, with and without a modal
-//! backdrop over it. Each iteration captures a whole frame, as a live stream draws one. Under a
-//! backdrop each frame recolors the picture's pixels, so the difference between `closed` and the
-//! backdrop cases is what that costs. The capture's own half-block painting is common to all.
+//! backdrop over it or an `EffectScope` around it. Each iteration captures a whole frame, as a live
+//! stream draws one. Under a backdrop or effect each frame recolors the picture's pixels, so the
+//! difference between `closed` and the other cases is what that costs. The capture's own half-block
+//! painting is common to all.
 
 use std::cell::RefCell;
 use std::hint::black_box;
@@ -21,9 +22,17 @@ const CELL: TerminalCellSize = TerminalCellSize {
 const COLS: u16 = 192;
 const ROWS: u16 = 54;
 
+/// What recolors the pane.
+#[derive(Clone)]
+enum Layer {
+    Closed,
+    Backdrop(Style),
+    Scope(VisualEffect),
+}
+
 struct Pane {
     screen: Rc<RefCell<TerminalScreen>>,
-    backdrop: Option<Style>,
+    layer: Layer,
 }
 
 impl Component for Pane {
@@ -38,21 +47,26 @@ impl Component for Pane {
     }
 
     fn view(&self, _ctx: &Context<Self>) -> Element {
-        let mut root = ZStack::new().child(
-            Terminal::new()
-                .screen(TerminalScreenHandle::new(Rc::clone(&self.screen)))
-                .scrollbar(false),
-        );
-        if let Some(backdrop) = self.backdrop {
-            root = root.child(
-                Modal::new()
-                    .width(Length::Px(30))
-                    .height(Length::Px(5))
-                    .backdrop_style(backdrop)
-                    .child(Text::new("dialog")),
-            );
+        let terminal = Terminal::new()
+            .screen(TerminalScreenHandle::new(Rc::clone(&self.screen)))
+            .scrollbar(false);
+        match &self.layer {
+            Layer::Closed => terminal.into(),
+            Layer::Backdrop(backdrop) => ZStack::new()
+                .child(terminal)
+                .child(
+                    Modal::new()
+                        .width(Length::Px(30))
+                        .height(Length::Px(5))
+                        .backdrop_style(*backdrop)
+                        .child(Text::new("dialog")),
+                )
+                .into(),
+            Layer::Scope(effect) => EffectScope::new()
+                .effect(effect.clone())
+                .child(terminal)
+                .into(),
         }
-        root.into()
     }
 }
 
@@ -80,7 +94,7 @@ fn photo(x: u32, y: u32) -> [u8; 3] {
     ]
 }
 
-fn pane(pixel: fn(u32, u32) -> [u8; 3], backdrop: Option<Style>) -> TestBackend<Pane> {
+fn pane(pixel: fn(u32, u32) -> [u8; 3], layer: Layer) -> TestBackend<Pane> {
     let (width, height) = (
         u32::from(COLS) * u32::from(CELL.width),
         u32::from(ROWS) * u32::from(CELL.height),
@@ -103,7 +117,7 @@ fn pane(pixel: fn(u32, u32) -> [u8; 3], backdrop: Option<Style>) -> TestBackend<
 
     let mut backend = TestBackend::new(Pane {
         screen: Rc::new(RefCell::new(screen)),
-        backdrop,
+        layer,
     });
     backend.set_viewport(Rect {
         x: 0,
@@ -120,20 +134,25 @@ fn backdrops(c: &mut Criterion) {
     group
         .sample_size(20)
         .measurement_time(Duration::from_secs(5));
-    let styles = [
-        ("closed", None),
+    let layers = [
+        ("closed", Layer::Closed),
         (
             "tint",
-            Some(Style::new().tint_by(Color::Rgb(0, 0, 40), 0.5)),
+            Layer::Backdrop(Style::new().tint_by(Color::Rgb(0, 0, 40), 0.5)),
         ),
         (
             "elevate",
-            Some(Style::new().transform_bg(ColorTransform::Elevate(0.5))),
+            Layer::Backdrop(Style::new().transform_bg(ColorTransform::Elevate(0.5))),
+        ),
+        ("scope_dim", Layer::Scope(VisualEffect::dim(0.5))),
+        (
+            "scope_monochrome",
+            Layer::Scope(VisualEffect::Monochrome { strength: 1.0 }),
         ),
     ];
     for (content, pixel) in [("page", page as fn(u32, u32) -> [u8; 3]), ("photo", photo)] {
-        for (name, backdrop) in styles {
-            let backend = pane(pixel, backdrop);
+        for (name, layer) in &layers {
+            let backend = pane(pixel, layer.clone());
             group.bench_function(BenchmarkId::new(content, name), |b| {
                 b.iter(|| black_box(backend.capture_frame()));
             });
