@@ -78,7 +78,7 @@ mod overlay;
 mod render_service;
 mod scroll_optimize;
 mod surface_driver;
-pub(crate) mod terminal;
+mod terminal;
 mod terminal_service;
 
 pub(crate) use crate::app::interaction_state::{

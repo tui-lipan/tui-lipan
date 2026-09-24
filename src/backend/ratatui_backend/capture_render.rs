@@ -6,7 +6,7 @@ use ratatui::layout::Position;
 use ratatui::style::Modifier;
 
 use crate::app::ContrastPolicy;
-use crate::app::runner::terminal::focused_caret;
+use crate::app::caret::focused_caret;
 use crate::capture::{
     CapturedCell, CapturedFrame, CellModifiers, CursorShape, CursorState, UnderlineStyle,
 };
