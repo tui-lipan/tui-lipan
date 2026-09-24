@@ -63,7 +63,61 @@ pub(crate) fn render_overlay_backdrop(
     if style.is_empty() || overlay_opacity <= 0.0 {
         return;
     }
+    #[cfg(feature = "image")]
+    let placeholders = kitty_placeholder_foregrounds(state.f, content_rect);
+    paint_overlay_backdrop(state, content_rect, style, overlay_opacity);
+    #[cfg(feature = "image")]
+    restore_kitty_placeholder_foregrounds(state.f, placeholders);
+}
 
+/// The Unicode placeholder a Kitty virtual placement is drawn with.
+#[cfg(feature = "image")]
+const KITTY_PLACEHOLDER: char = '\u{10EEEE}';
+
+/// Foregrounds of the Kitty placeholder cells in `rect`.
+///
+/// A placeholder cell's foreground is not a color: the host reads the image id out of it. A
+/// backdrop that tints foregrounds would point the cell at another image, or at none. The image's
+/// own pixels are dimmed before they are encoded instead.
+#[cfg(feature = "image")]
+fn kitty_placeholder_foregrounds(
+    f: &mut ratatui::Frame<'_>,
+    rect: Rect,
+) -> Vec<(ratatui::layout::Position, RColor)> {
+    let area = f.area().intersection(to_ratatui_rect(rect));
+    let buf = f.buffer_mut();
+    let mut placeholders = Vec::new();
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            if let Some(cell) = buf.cell((x, y))
+                && cell.symbol().contains(KITTY_PLACEHOLDER)
+            {
+                placeholders.push((ratatui::layout::Position::new(x, y), cell.fg));
+            }
+        }
+    }
+    placeholders
+}
+
+#[cfg(feature = "image")]
+fn restore_kitty_placeholder_foregrounds(
+    f: &mut ratatui::Frame<'_>,
+    placeholders: Vec<(ratatui::layout::Position, RColor)>,
+) {
+    let buf = f.buffer_mut();
+    for (position, fg) in placeholders {
+        if let Some(cell) = buf.cell_mut(position) {
+            cell.fg = fg;
+        }
+    }
+}
+
+fn paint_overlay_backdrop(
+    state: &mut RenderState<'_, '_, '_>,
+    content_rect: Rect,
+    style: Style,
+    overlay_opacity: f32,
+) {
     if overlay_opacity >= 1.0 {
         if let Some(bg) = style.bg
             && let Some(bg) = paint_to_ratatui_bg(bg, state.ctx.terminal_bg.map(from_ratatui_color))
@@ -328,5 +382,49 @@ pub(crate) fn overlay_clear_restore_mode(
         OverlayClearRestoreMode::PreserveForeground
     } else {
         OverlayClearRestoreMode::PreserveBackgroundOnly
+    }
+}
+
+#[cfg(all(test, feature = "image"))]
+mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    use super::*;
+
+    /// A backdrop tint must not reach the foreground a Kitty placeholder names its image with,
+    /// while the cells beside it still dim.
+    #[test]
+    fn a_backdrop_keeps_the_image_id_in_kitty_placeholder_cells() {
+        let id = RColor::Rgb(0, 0, 8);
+        let text = RColor::Rgb(200, 200, 200);
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 2,
+            h: 1,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(2, 1)).expect("terminal");
+        terminal
+            .draw(|f| {
+                let buf = f.buffer_mut();
+                buf[(0, 0)].set_symbol("\u{10EEEE}\u{305}").set_fg(id);
+                buf[(1, 0)].set_symbol("x").set_fg(text);
+
+                let placeholders = kitty_placeholder_foregrounds(f, rect);
+                apply_effect_style_clipped(
+                    f,
+                    rect,
+                    Style::new().tint_by(crate::style::Color::rgb(0, 0, 0), 0.5),
+                    None,
+                    None,
+                );
+                restore_kitty_placeholder_foregrounds(f, placeholders);
+
+                let buf = f.buffer_mut();
+                assert_eq!(buf[(0, 0)].fg, id, "the placeholder still names its image");
+                assert_ne!(buf[(1, 0)].fg, text, "ordinary text still dims");
+            })
+            .expect("draw");
     }
 }

@@ -570,3 +570,180 @@ fn a_hard_reset_on_the_alternate_screen_removes_the_images_of_both() {
         "alternate screen after the reset"
     );
 }
+
+/// A pane with a modal that can be opened over it, dimming the pane through its backdrop.
+struct ModalPane {
+    screen: Rc<RefCell<TerminalScreen>>,
+    backdrop: Style,
+}
+
+impl Component for ModalPane {
+    type Message = bool;
+    type Properties = ();
+    type State = bool;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        false
+    }
+
+    fn update(&mut self, open: bool, ctx: &mut Context<Self>) -> Update {
+        ctx.state = open;
+        Update::full()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let mut root = ZStack::new().child(
+            Terminal::new()
+                .screen(TerminalScreenHandle::new(Rc::clone(&self.screen)))
+                .scrollbar(false),
+        );
+        if ctx.state {
+            root = root.child(
+                Modal::new()
+                    .width(Length::Px(6))
+                    .height(Length::Px(2))
+                    .border(false)
+                    .padding(0)
+                    .backdrop_style(self.backdrop)
+                    .child(Text::new("modal")),
+            );
+        }
+        root.into()
+    }
+}
+
+/// The backdrop Rozi's dialogs use: recede toward a dark surface.
+fn recede() -> Style {
+    Style::new().tint_by(Color::Rgb(0, 0, 40), 0.5)
+}
+
+/// A red image in the top-left corner and, on the bottom row, text on a red background: the
+/// cells an image under a backdrop has to match.
+fn modal_pane(backdrop: Style) -> TestBackend<ModalPane> {
+    let mut output = red_image(4, 2);
+    output.extend_from_slice(b"\x1b[6;11H\x1b[48;2;255;0;0mtext\x1b[0m");
+    let mut screen = TerminalScreen::new(6, 20, 100);
+    screen.set_cell_size(CELL);
+    screen.process_bytes(&output);
+    let mut backend = TestBackend::new(ModalPane {
+        screen: Rc::new(RefCell::new(screen)),
+        backdrop,
+    });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 6,
+    });
+    backend.render();
+    backend
+}
+
+fn set_modal(backend: &mut TestBackend<ModalPane>, open: bool) -> CapturedFrame {
+    backend.dispatch(open).expect("dispatch");
+    backend.advance(Duration::from_secs(1));
+    backend.render();
+    backend.capture_frame()
+}
+
+/// Every pixel of the frame's one image.
+fn image_pixels(frame: &CapturedFrame) -> Vec<[u8; 4]> {
+    assert_eq!(frame.images.len(), 1, "the image is in the frame");
+    frame.images[0].rgba.as_chunks::<4>().0.to_vec()
+}
+
+fn rgb(color: Color) -> [u8; 4] {
+    let Color::Rgb(r, g, b) = color else {
+        panic!("expected a truecolor cell, got {color:?}");
+    };
+    [r, g, b, 255]
+}
+
+#[test]
+fn a_backdrop_dims_image_pixels_like_the_cells_beside_them() {
+    let mut backend = modal_pane(recede());
+    let frame = set_modal(&mut backend, true);
+
+    let text_bg = frame.cell(10, 5).bg;
+    assert_ne!(text_bg, RED, "the backdrop dims the cells");
+    let dimmed = rgb(text_bg);
+    assert!(
+        image_pixels(&frame).iter().all(|&pixel| pixel == dimmed),
+        "every image pixel dims to the color of the red cells beside it, {dimmed:?}"
+    );
+    assert_eq!(
+        frame.cell(0, 0).fg,
+        text_bg,
+        "the half-block stand-in is painted from the dimmed pixels"
+    );
+}
+
+#[test]
+fn image_pixels_are_untouched_without_a_backdrop() {
+    let mut backend = modal_pane(Style::default());
+    assert!(
+        image_pixels(&backend.capture_frame())
+            .iter()
+            .all(|&pixel| pixel == [255, 0, 0, 255]),
+        "no overlay, nothing dims"
+    );
+
+    let frame = set_modal(&mut backend, true);
+    assert_eq!(
+        frame.cell(10, 5).bg,
+        RED,
+        "a modal without a backdrop dims no cells"
+    );
+    assert!(
+        image_pixels(&frame)
+            .iter()
+            .all(|&pixel| pixel == [255, 0, 0, 255]),
+        "and no pixels"
+    );
+}
+
+#[test]
+fn closing_the_overlay_restores_the_original_pixels() {
+    let mut backend = modal_pane(recede());
+    let open = set_modal(&mut backend, true);
+    assert!(
+        image_pixels(&open)
+            .iter()
+            .all(|&pixel| pixel != [255, 0, 0, 255])
+    );
+
+    let closed = set_modal(&mut backend, false);
+    assert_eq!(closed.cell(10, 5).bg, RED);
+    assert!(
+        image_pixels(&closed)
+            .iter()
+            .all(|&pixel| pixel == [255, 0, 0, 255]),
+        "the image returns to full brightness with the cells"
+    );
+    assert_eq!(closed.cell(0, 0).fg, RED);
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+#[test]
+fn a_png_of_an_open_backdrop_draws_the_dimmed_pixels() {
+    let mut backend = modal_pane(recede());
+    let frame = set_modal(&mut backend, true);
+    let dimmed = rgb(frame.cell(10, 5).bg);
+    let options = tui_lipan::PngOptions {
+        cell_width: 8,
+        cell_height: 16,
+        scale: 1,
+        text_renderer: tui_lipan::PngTextRenderer::Bitmap,
+        default_bg: Color::Rgb(0, 0, 0),
+        ..tui_lipan::PngOptions::default()
+    };
+    let png = frame.to_png(&options).expect("encode");
+    let decoded = image::load_from_memory(&png).expect("decode").to_rgb8();
+    for (x, y) in [(0, 0), (16, 8), (31, 31)] {
+        assert_eq!(
+            decoded.get_pixel(x, y).0,
+            [dimmed[0], dimmed[1], dimmed[2]],
+            "pixel ({x},{y})"
+        );
+    }
+}
