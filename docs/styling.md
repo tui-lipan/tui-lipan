@@ -272,7 +272,7 @@ their normal rendering behavior.
 
 `Color::Transparent` is not a pigment: it tells the renderer **not** to set that style channel on ratatui cells, so lower layers stay visible. It differs from `Color::Reset`, which selects the terminal’s default palette for that attribute. In `Style::patch`, a transparent overlay leaves the resolved base color for that channel unchanged.
 
-`Color::Backdrop` is intended for surface/background fills. It preserves the background color already in the buffer while still allowing the surface to clear text/foreground content above it. This matches the old modal behavior where the dialog body blanked underlying text without painting a new solid background.
+`Color::Backdrop` is intended for surface/background fills. It preserves the background color already in the buffer while still allowing the surface to clear text/foreground content above it.
 
 Use the sentinel helpers when code needs a concrete fallback without duplicating
 the sentinel match:
