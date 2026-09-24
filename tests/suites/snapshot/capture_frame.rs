@@ -436,6 +436,79 @@ fn root_portal_modal_content_appears_in_captured_frame() {
     assert!(plain.contains("modal body"));
 }
 
+struct ModalOverColoredContent(OverlayScope);
+
+const MODAL_UNDERLAY_BG: Color = Color::Rgb(200, 40, 40);
+
+impl Component for ModalOverColoredContent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        ZStack::new()
+            .child(
+                Frame::new()
+                    .border(false)
+                    .style(Style::new().bg(MODAL_UNDERLAY_BG))
+                    .child(Text::new(
+                        "underlay text underlay text underlay text\n".repeat(9),
+                    )),
+            )
+            .child(
+                Modal::new()
+                    .scope(self.0)
+                    .width(Length::Px(20))
+                    .title("Dialog")
+                    .child(Text::new("body")),
+            )
+            .into()
+    }
+}
+
+fn modal_body_cells(scope: OverlayScope) -> Vec<tui_lipan::CapturedCell> {
+    let mut backend = TestBackend::new(ModalOverColoredContent(scope));
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 9,
+    });
+    backend.render();
+    let captured = backend.capture_frame();
+    let plain = captured.plain_text();
+    let (row, line) = plain
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("body"))
+        .expect("modal body must render");
+    let col = line[..line.find("body").unwrap()].chars().count();
+    // The padding cell before the text and blank cells after it.
+    [col - 1, col + 4, col + 6]
+        .into_iter()
+        .map(|x| captured.cell(x as u16, row as u16).clone())
+        .collect()
+}
+
+#[test]
+fn local_and_root_modals_draw_the_same_solid_dialog_over_colored_content() {
+    let local = modal_body_cells(OverlayScope::Local);
+    let root = modal_body_cells(OverlayScope::RootPortal);
+
+    for (local, root) in local.iter().zip(&root) {
+        assert_ne!(local.bg, MODAL_UNDERLAY_BG);
+        assert_eq!(local.bg, root.bg);
+        assert_eq!(local.symbol, " ");
+        assert_eq!(root.symbol, " ");
+    }
+}
+
 struct PaddedBorderText;
 
 impl Component for PaddedBorderText {

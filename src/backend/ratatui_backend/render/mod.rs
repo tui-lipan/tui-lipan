@@ -331,7 +331,10 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
 
         // Restore any cell left untouched after the clear so transparent
         // overlays inherit the content already rendered beneath them.
-        if clear_rect.width > 0 && clear_rect.height > 0 {
+        if restore_mode != OverlayClearRestoreMode::Opaque
+            && clear_rect.width > 0
+            && clear_rect.height > 0
+        {
             {
                 let bg_snapshot = state.ctx.overlay_bg_snapshot.borrow();
                 let buf = state.f.buffer_mut();
@@ -350,6 +353,7 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
                                     OverlayClearRestoreMode::PreserveBackgroundOnly => {
                                         cell.bg = saved_bg.bg;
                                     }
+                                    OverlayClearRestoreMode::Opaque => {}
                                 }
                                 continue;
                             }

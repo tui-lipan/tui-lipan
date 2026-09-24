@@ -70,7 +70,7 @@ struct ToastTransitionDefaultUnderlayComponent;
 
 struct TransparentModalBorderOverColoredBackgroundComponent;
 
-struct DefaultModalBackdropClearsForegroundComponent;
+struct DefaultModalClearsToTerminalBackgroundComponent;
 
 struct TransparentModalBorderPreservesUnderlyingForegroundComponent;
 
@@ -1287,7 +1287,7 @@ impl Component for TransparentModalBorderOverColoredBackgroundComponent {
     }
 }
 
-impl Component for DefaultModalBackdropClearsForegroundComponent {
+impl Component for DefaultModalClearsToTerminalBackgroundComponent {
     type Message = ();
     type Properties = ();
     type State = ();
@@ -2617,7 +2617,7 @@ fn transparent_modal_border_preserves_underlying_background() {
 }
 
 #[test]
-fn default_modal_backdrop_clears_fg_but_keeps_underlying_bg() {
+fn default_modal_clears_underlying_text_and_background() {
     let viewport = Rect {
         x: 0,
         y: 0,
@@ -2625,7 +2625,7 @@ fn default_modal_backdrop_clears_fg_but_keeps_underlying_bg() {
         h: 5,
     };
     let mut runtime = RuntimeCore::new_test(
-        DefaultModalBackdropClearsForegroundComponent,
+        DefaultModalClearsToTerminalBackgroundComponent,
         (),
         viewport,
         Theme::default(),
@@ -2673,8 +2673,7 @@ fn default_modal_backdrop_clears_fg_but_keeps_underlying_bg() {
     let buffer = terminal.backend().buffer();
     let cleared_cell = &buffer[(4, 2)];
     assert_eq!(cleared_cell.symbol(), " ");
-    assert_eq!(cleared_cell.fg, ratatui::style::Color::Reset);
-    assert_eq!(cleared_cell.bg, ratatui::style::Color::Blue);
+    assert_eq!(cleared_cell.bg, ratatui::style::Color::Reset);
 }
 
 #[test]

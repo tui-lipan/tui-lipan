@@ -7,7 +7,7 @@ use crate::backend::ratatui_backend::common::{
     paint_to_ratatui_bg, preserve_palette_blend, to_ratatui_color, to_ratatui_rect,
 };
 use crate::core::node::NodeKind;
-use crate::style::{ColorTransform, Paint, Rect, Style};
+use crate::style::{Color, ColorTransform, Paint, Rect, Style};
 
 use super::RenderState;
 
@@ -15,6 +15,8 @@ use super::RenderState;
 pub(crate) enum OverlayClearRestoreMode {
     PreserveForeground,
     PreserveBackgroundOnly,
+    /// The root paints the terminal background itself, so nothing beneath shows through.
+    Opaque,
 }
 
 pub(super) fn scale_transform_for_opacity(
@@ -382,10 +384,12 @@ pub(crate) fn composite_overlay_surface_alpha(
 pub(crate) fn overlay_clear_restore_mode(
     node: &crate::core::node::Node,
 ) -> OverlayClearRestoreMode {
-    if matches!(overlay_root_bg(node), Some(paint) if paint.is_transparent_sentinel()) {
-        OverlayClearRestoreMode::PreserveForeground
-    } else {
-        OverlayClearRestoreMode::PreserveBackgroundOnly
+    match overlay_root_bg(node) {
+        Some(paint) if paint.is_transparent_sentinel() => {
+            OverlayClearRestoreMode::PreserveForeground
+        }
+        Some(Paint::Solid(Color::Reset)) => OverlayClearRestoreMode::Opaque,
+        _ => OverlayClearRestoreMode::PreserveBackgroundOnly,
     }
 }
 
