@@ -28,7 +28,7 @@
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::term::Term;
+use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::vte::ansi::{
     Attr, CharsetIndex, ClearMode, CursorShape, CursorStyle, Handler, Hyperlink, KeyboardModes,
     KeyboardModesApplyBehavior, LineClearMode, Mode, PrivateMode, Rgb, StandardCharset,
@@ -71,6 +71,8 @@ pub(super) struct LedgerTerm<'a, T: EventListener> {
     evicted: usize,
     /// The child sent `RIS` while this wrapper was driving the term.
     reset: bool,
+    /// The term left the alternate screen while this wrapper was driving it.
+    left_alt_screen: bool,
 }
 
 impl<'a, T: EventListener> LedgerTerm<'a, T> {
@@ -87,7 +89,17 @@ impl<'a, T: EventListener> LedgerTerm<'a, T> {
             capacity,
             evicted: 0,
             reset: false,
+            left_alt_screen: false,
         }
+    }
+
+    /// Whether the term left the alternate screen while this wrapper was driving it.
+    ///
+    /// Reported as an event rather than read off the mode afterwards: a child can leave the
+    /// alternate screen and open a fresh one within the same write, and the mode alone would
+    /// then look as though the old screen, and whatever was drawn on it, had never gone.
+    pub(super) fn left_alt_screen(&self) -> bool {
+        self.left_alt_screen
     }
 
     /// Whether the child hard-reset the terminal (`RIS`) while this wrapper was driving it.
@@ -330,7 +342,9 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
             *self.modes.pixel_mouse = false;
             return;
         }
+        let alt_screen = self.inner.mode().contains(TermMode::ALT_SCREEN);
         self.inner.unset_private_mode(mode);
+        self.left_alt_screen |= alt_screen && !self.inner.mode().contains(TermMode::ALT_SCREEN);
         self.settle();
     }
     fn report_private_mode(&mut self, mode: PrivateMode) {

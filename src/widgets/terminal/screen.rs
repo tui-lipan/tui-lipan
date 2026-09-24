@@ -569,10 +569,6 @@ pub struct TerminalScreen {
     /// Decoded images and their placements, anchored to the same absolute lines as the marks.
     #[cfg(feature = "terminal-images")]
     graphics: TerminalGraphics,
-    /// Whether the alternate screen was active after the last chunk, so leaving it can drop the
-    /// placements that belonged to it.
-    #[cfg(feature = "terminal-images")]
-    graphics_alt_screen: bool,
     /// Cumulative scrollback lines evicted since creation.
     evicted_lines: u64,
     /// Bumped when absolute line indices are invalidated.
@@ -1194,8 +1190,6 @@ impl TerminalScreen {
             graphics_scanner: GraphicsScanner::default(),
             #[cfg(feature = "terminal-images")]
             graphics: TerminalGraphics::default(),
-            #[cfg(feature = "terminal-images")]
-            graphics_alt_screen: false,
             evicted_lines: 0,
             history_epoch: 0,
             alt_screen: false,
@@ -1388,11 +1382,27 @@ impl TerminalScreen {
             },
         );
         self.processor.advance(&mut ledger, bytes);
-        let (evicted, reset) = (ledger.evicted(), ledger.reset());
+        let (evicted, reset, left_alt_screen) =
+            (ledger.evicted(), ledger.reset(), ledger.left_alt_screen());
+        self.apply_ledger_events(reset, left_alt_screen);
+        evicted
+    }
+
+    /// Apply what the ledger saw happen to the grids, as opposed to lines it counted.
+    ///
+    /// Graphics commands never run inside a ledger's drive, so an alternate screen it saw left
+    /// can only have had placements made before it: they all go with that screen, even when the
+    /// same drive opened a fresh one.
+    fn apply_ledger_events(&mut self, reset: bool, left_alt_screen: bool) {
         if reset {
             self.forget_line_anchors();
         }
-        evicted
+        #[cfg(feature = "terminal-images")]
+        if left_alt_screen {
+            self.graphics.clear_alt_screen();
+        }
+        #[cfg(not(feature = "terminal-images"))]
+        let _ = left_alt_screen;
     }
 
     /// The child hard-reset the terminal (`RIS`), replacing both grids: drop everything anchored
@@ -1403,10 +1413,7 @@ impl TerminalScreen {
         self.active_prompt_mark = None;
         self.history_epoch = self.history_epoch.saturating_add(1);
         #[cfg(feature = "terminal-images")]
-        {
-            self.graphics.reset();
-            self.graphics_alt_screen = false;
-        }
+        self.graphics.reset();
     }
 
     /// Run one graphics command against the store, then apply what it implies to the grid.
@@ -1446,10 +1453,9 @@ impl TerminalScreen {
             },
         );
         self.processor.stop_sync(&mut ledger);
-        let (evicted, reset) = (ledger.evicted(), ledger.reset());
-        if reset {
-            self.forget_line_anchors();
-        }
+        let (evicted, reset, left_alt_screen) =
+            (ledger.evicted(), ledger.reset(), ledger.left_alt_screen());
+        self.apply_ledger_events(reset, left_alt_screen);
         evicted
     }
 
@@ -1544,17 +1550,13 @@ impl TerminalScreen {
         cells
     }
 
-    /// Bring image placements back in line with the grid: shift them past `evicted` lines, and
-    /// drop the alternate screen's once it is gone.
+    /// Shift image placements past the `evicted` lines that fell out of scrollback.
+    ///
+    /// An alternate screen that was left needs no settling: [`Self::apply_ledger_events`] drops
+    /// its placements as the exit happens.
     #[cfg(feature = "terminal-images")]
     fn settle_graphics(&mut self, evicted: usize) {
         self.graphics.drop_evicted(evicted);
-        let alt_screen = self.term.mode().contains(TermMode::ALT_SCREEN);
-        if self.graphics_alt_screen && !alt_screen {
-            // The alternate screen is gone, and so is everything drawn on it.
-            self.graphics.clear_alt_screen();
-        }
-        self.graphics_alt_screen = alt_screen;
     }
 
     #[cfg(not(feature = "terminal-images"))]
@@ -2624,7 +2626,6 @@ impl TerminalScreen {
         {
             self.graphics_scanner.reset();
             self.graphics.reset();
-            self.graphics_alt_screen = false;
         }
         self.dirty = true;
     }
@@ -5881,6 +5882,21 @@ mod tests {
                 fed_whole_and_in_parts(6, 10, b"", &[b"\x1b[?1049h", &image, b"\x1b[?1049l"]);
             whole.process_bytes(b"\x1b[?1049h");
             split.process_bytes(b"\x1b[?1049h");
+
+            assert!(placements(&mut split).is_empty());
+            assert!(
+                placements(&mut whole).is_empty(),
+                "a fresh alternate screen shows the previous one's image"
+            );
+        }
+
+        #[test]
+        fn an_alternate_screen_left_and_reopened_in_one_write_starts_without_images() {
+            // No graphics command between the exit and the re-entry, so nothing but the exit
+            // itself can say the old alternate screen and its image are gone.
+            let setup = [b"\x1b[?1049h".as_slice(), &place(20, 40, "i=1,C=1")].concat();
+            let (mut whole, mut split) =
+                fed_whole_and_in_parts(6, 10, &setup, &[b"\x1b[?1049l", b"\x1b[?1049h"]);
 
             assert!(placements(&mut split).is_empty());
             assert!(
