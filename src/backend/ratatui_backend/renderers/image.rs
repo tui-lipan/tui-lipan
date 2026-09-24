@@ -1265,12 +1265,7 @@ impl AsyncEncoder {
                 .as_ref()
                 .is_some_and(|stand_in| !stand_in.same_backdrop)
         {
-            if let Some(protocol) = self.encode_synchronously(request) {
-                return ProtocolResolve::Ready(protocol);
-            }
-            return stand_in.map_or(ProtocolResolve::Unavailable, |stand_in| {
-                ProtocolResolve::Stale(stand_in.protocol)
-            });
+            return synchronous_resolve(self.encode_synchronously(request), stand_in);
         }
 
         self.enqueue(request);
@@ -1381,6 +1376,21 @@ impl AsyncEncoder {
             request.retention,
         );
         protocol_ready_epoch_counter().fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// What to draw after a synchronous encode. A failed one falls back to the stand-in only when it is
+/// dimmed like the request; the wrong dimming is never drawn, even as a fallback.
+fn synchronous_resolve(
+    encoded: Option<Arc<EncodedProtocol>>,
+    stand_in: Option<StandIn>,
+) -> ProtocolResolve {
+    match (encoded, stand_in) {
+        (Some(protocol), _) => ProtocolResolve::Ready(protocol),
+        (None, Some(stand_in)) if stand_in.same_backdrop => {
+            ProtocolResolve::Stale(stand_in.protocol)
+        }
+        (None, _) => ProtocolResolve::Unavailable,
     }
 }
 
@@ -3191,6 +3201,33 @@ mod tests {
             "later frames queue behind the undimmed stand-in as usual"
         );
         assert_eq!(encoder.inner.lock().unwrap().queue.len(), 1);
+    }
+
+    #[test]
+    fn a_failed_encode_never_falls_back_to_the_wrong_dimming() {
+        let stand_in = |same_backdrop| {
+            Some(StandIn {
+                protocol: protocol(),
+                same_backdrop,
+            })
+        };
+
+        assert!(matches!(
+            synchronous_resolve(None, stand_in(false)),
+            ProtocolResolve::Unavailable
+        ));
+        assert!(matches!(
+            synchronous_resolve(None, stand_in(true)),
+            ProtocolResolve::Stale(_)
+        ));
+        assert!(matches!(
+            synchronous_resolve(None, None),
+            ProtocolResolve::Unavailable
+        ));
+        assert!(matches!(
+            synchronous_resolve(Some(protocol()), stand_in(false)),
+            ProtocolResolve::Ready(_)
+        ));
     }
 
     fn request_for_key(key: RenderCacheKey) -> EncodeRequest {
