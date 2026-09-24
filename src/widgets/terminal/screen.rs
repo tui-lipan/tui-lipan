@@ -2506,13 +2506,20 @@ impl TerminalScreen {
 
     /// Consume pending semantic events without recording marks for them.
     fn discard_pending_semantic_marks(&mut self) {
+        self.semantic.take_reset_at();
         self.semantic_events_seen = self.semantic.event_count();
     }
 
     fn record_semantic_marks_from_pending(&mut self) {
         let absolute_line = self.cursor_absolute_line();
+        // Events from before a reset in this chunk describe lines the reset erased; only those
+        // after it are marks on the fresh screen. The grid has already dropped the old marks.
+        let reset_at = self.semantic.take_reset_at();
         let events = self.semantic.peek_events();
-        let from = self.semantic_events_seen.min(events.len());
+        let from = self
+            .semantic_events_seen
+            .max(reset_at.unwrap_or(0))
+            .min(events.len());
         let pending: Vec<_> = events[from..].to_vec();
         self.semantic_events_seen = self.semantic.event_count();
         for event in pending {
@@ -3628,6 +3635,52 @@ mod tests {
             screen.semantic_state(),
             before,
             "semantic state is kept, as reset() keeps it"
+        );
+    }
+
+    /// The semantic parser reads a whole chunk before the grid resets, so a reset inside one chunk
+    /// must still split its events: those before it named erased lines, those after it are new.
+    /// PTY reads coalesce writes arbitrarily, so one chunk and several must end up the same.
+    #[test]
+    fn a_hard_reset_splits_the_shell_marks_of_a_chunk_that_contains_it() {
+        let kinds = |screen: &TerminalScreen| {
+            screen
+                .semantic_marks()
+                .iter()
+                .map(|mark| mark.kind)
+                .collect::<Vec<_>>()
+        };
+
+        let mut before = TerminalScreen::new(6, 30, 100);
+        before.process_bytes(b"\x1b]133;C\x1b\\output\r\n\x1bc");
+        assert!(
+            before.semantic_marks().is_empty(),
+            "{:?}",
+            before.semantic_marks()
+        );
+
+        let mut after = TerminalScreen::new(6, 30, 100);
+        after.process_bytes(b"\x1bc\x1b]133;A\x1b\\$ ");
+        assert_eq!(kinds(&after), [SemanticMarkKind::Prompt]);
+
+        let pieces: [&[u8]; 5] = [
+            b"\x1b]133;A\x1b\\$ ",
+            b"\x1b]133;C\x1b\\",
+            b"output\r\n",
+            b"\x1bc",
+            b"\x1b]133;A\x1b\\$ ",
+        ];
+        let mut split = TerminalScreen::new(6, 30, 100);
+        for piece in pieces {
+            split.process_bytes(piece);
+        }
+        let mut whole = TerminalScreen::new(6, 30, 100);
+        whole.process_bytes(&pieces.concat());
+        assert_eq!(kinds(&split), [SemanticMarkKind::Prompt]);
+        assert_eq!(kinds(&whole), kinds(&split));
+        assert_eq!(
+            whole.semantic_marks()[0].absolute_line,
+            split.semantic_marks()[0].absolute_line
         );
     }
 

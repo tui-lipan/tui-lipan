@@ -121,13 +121,19 @@ pub struct TerminalSemanticState {
 
 /// Parallel `vte::Perform` implementation for metadata and unsupported query detection.
 ///
-/// Every callback besides OSC and CSI dispatch keeps the trait's no-op default: this observer never
-/// touches grid/cursor state and cannot affect rendering.
+/// Every callback besides OSC, CSI, and ESC dispatch keeps the trait's no-op default: this
+/// observer never touches grid/cursor state and cannot affect rendering.
 #[derive(Debug, Default)]
 pub(super) struct SemanticObserver {
     state: TerminalSemanticState,
     events: Vec<TerminalSemanticEvent>,
     xtversion_query: bool,
+    /// Where in `events` the child last sent `RIS`, until the screen takes it.
+    ///
+    /// This parser reads a whole chunk before the grid does, so by the time the grid resets, the
+    /// events on both sides of the reset are already queued. The screen records line marks from
+    /// them afterwards, and needs to know which ones belong to the lines the reset erased.
+    reset_at: Option<usize>,
 }
 
 impl SemanticObserver {
@@ -140,7 +146,17 @@ impl SemanticObserver {
     }
 
     pub(super) fn drain_events(&mut self) -> Vec<TerminalSemanticEvent> {
+        // Whatever preceded a reset left with the drained events.
+        if self.reset_at.is_some() {
+            self.reset_at = Some(0);
+        }
         std::mem::take(&mut self.events)
+    }
+
+    /// The index into [`Self::peek_events`] at which the child last sent `RIS`, if it has since
+    /// the previous call. Events before it describe lines the reset erased.
+    pub(super) fn take_reset_at(&mut self) -> Option<usize> {
+        self.reset_at.take()
     }
 
     pub(super) fn peek_events(&self) -> &[TerminalSemanticEvent] {
@@ -282,6 +298,12 @@ impl Perform for SemanticObserver {
         };
         if supported_parameter {
             self.xtversion_query = true;
+        }
+    }
+
+    fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
+        if !ignore && byte == b'c' && intermediates.is_empty() {
+            self.reset_at = Some(self.events.len());
         }
     }
 
