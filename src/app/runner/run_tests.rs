@@ -7064,8 +7064,8 @@ impl Component for TerminalDispatchSmoke {
 }
 
 #[cfg(feature = "terminal")]
-fn set_terminal_selection(
-    backend: &mut crate::TestBackend<TerminalDispatchSmoke>,
+fn set_terminal_selection<C: Component>(
+    backend: &mut crate::TestBackend<C>,
     terminal_id: NodeId,
     line: &str,
     end_col: usize,
@@ -7121,6 +7121,187 @@ fn terminal_ctrl_c_with_selection_copies_before_app_command() {
         keys.borrow().is_empty(),
         "terminal on_key must not receive ctrl-c"
     );
+}
+
+/// Keys each pane's `on_key` received, tagged with the pane's key.
+#[cfg(feature = "terminal")]
+type PaneKeyLog = Rc<RefCell<Vec<(&'static str, KeyEvent)>>>;
+
+/// Two terminals side by side, as multiplexer panes, plus an input that is not a terminal.
+#[cfg(feature = "terminal")]
+struct PanesWithInputSmoke {
+    keys: PaneKeyLog,
+}
+
+#[cfg(feature = "terminal")]
+impl Component for PanesWithInputSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let pane = |key: &'static str| {
+            let keys = self.keys.clone();
+            Terminal::new()
+                .focusable(true)
+                .width(Length::Px(10))
+                .on_key(crate::callback::KeyHandler::new(move |event| {
+                    keys.borrow_mut().push((key, event));
+                    true
+                }))
+                .key(key)
+        };
+        crate::widgets::VStack::new()
+            .child(
+                crate::widgets::HStack::new()
+                    .height(Length::Px(2))
+                    .child(pane("left"))
+                    .child(pane("right")),
+            )
+            .child(crate::widgets::Input::new("").key("input"))
+            .into()
+    }
+}
+
+#[cfg(feature = "terminal")]
+fn panes_with_input_backend(
+    policy: Option<crate::TerminalKeyPolicy>,
+) -> (
+    crate::TestBackend<PanesWithInputSmoke>,
+    PaneKeyLog,
+    Rc<RefCell<Vec<String>>>,
+) {
+    let keys = Rc::new(RefCell::new(Vec::new()));
+    let writes = Rc::new(RefCell::new(Vec::new()));
+    let mut app = App::new()
+        .mouse(false)
+        .clipboard_config(ClipboardConfig {
+            enable_osc52: false,
+            ..Default::default()
+        })
+        .clipboard_provider(RecordingClipboardProvider {
+            writes: writes.clone(),
+        });
+    if let Some(policy) = policy {
+        app = app.terminal_key_policy(policy);
+    }
+    let mut backend =
+        crate::TestBackend::new_with_app(app, PanesWithInputSmoke { keys: keys.clone() }, ());
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 3,
+    });
+    backend.render();
+    (backend, keys, writes)
+}
+
+/// A selection left in one pane must not swallow `Ctrl+C` meant for the program in another.
+#[cfg(feature = "terminal")]
+#[test]
+fn ctrl_c_in_focused_terminal_ignores_selection_in_another_terminal() {
+    let (mut backend, keys, writes) = panes_with_input_backend(None);
+    let left = node_id_by_key(&backend.core.tree, "left");
+    let right = node_id_by_key(&backend.core.tree, "right");
+    set_terminal_selection(&mut backend, left, "hello", 5);
+    backend.set_focused(right);
+
+    assert!(backend.send_key(ctrl_char('c')).expect("send_key succeeds"));
+
+    assert!(writes.borrow().is_empty(), "nothing is copied");
+    assert_eq!(
+        keys.borrow().as_slice(),
+        &[("right", ctrl_char('c'))],
+        "the focused pane's program receives ctrl-c"
+    );
+    let NodeKind::Terminal(term) = &backend.core.tree.node(left).kind else {
+        unreachable!();
+    };
+    assert!(
+        term.selection.is_some(),
+        "the other pane keeps its selection"
+    );
+}
+
+#[cfg(feature = "terminal")]
+#[test]
+fn ctrl_c_copies_the_focused_terminal_selection_before_another() {
+    let (mut backend, keys, writes) = panes_with_input_backend(None);
+    let left = node_id_by_key(&backend.core.tree, "left");
+    let right = node_id_by_key(&backend.core.tree, "right");
+    set_terminal_selection(&mut backend, left, "left", 4);
+    set_terminal_selection(&mut backend, right, "right", 5);
+    backend.set_focused(left);
+
+    assert!(backend.send_key(ctrl_char('c')).expect("send_key succeeds"));
+
+    assert_eq!(writes.borrow().as_slice(), &["left"]);
+    assert!(
+        keys.borrow().is_empty(),
+        "a copy does not reach the program"
+    );
+}
+
+/// Declining another pane's selection only hands the key back to the terminal key policy. Under
+/// `AppCommandsThenTerminal` an app command on the same key still runs before the terminal does.
+#[cfg(feature = "terminal")]
+#[test]
+fn app_command_on_ctrl_c_still_runs_when_another_terminal_has_a_selection() {
+    let (mut backend, keys, writes) =
+        panes_with_input_backend(Some(crate::TerminalKeyPolicy::AppCommandsThenTerminal));
+    let command_hit = Rc::new(Cell::new(false));
+    backend.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("mux.interrupt")
+            .shortcut(crate::KeyBinding::from_str("ctrl-c").expect("binding"))
+            .handler(Callback::new({
+                let command_hit = command_hit.clone();
+                move |_| command_hit.set(true)
+            }))
+            .build(),
+    );
+    let left = node_id_by_key(&backend.core.tree, "left");
+    let right = node_id_by_key(&backend.core.tree, "right");
+    set_terminal_selection(&mut backend, left, "hello", 5);
+    backend.set_focused(right);
+
+    assert!(backend.send_key(ctrl_char('c')).expect("send_key succeeds"));
+
+    assert!(
+        writes.borrow().is_empty(),
+        "the other pane's selection is not copied"
+    );
+    assert!(
+        command_hit.get(),
+        "the app command bound to ctrl-c still runs"
+    );
+    assert!(
+        keys.borrow().is_empty(),
+        "the command consumes the key before the terminal"
+    );
+}
+
+/// Outside a terminal, focus does not own the shortcut: an app can keep focus in an input while
+/// the user copies a selection made elsewhere.
+#[cfg(feature = "terminal")]
+#[test]
+fn ctrl_c_in_focused_input_still_copies_a_selection_elsewhere() {
+    let (mut backend, keys, writes) = panes_with_input_backend(None);
+    let left = node_id_by_key(&backend.core.tree, "left");
+    let input = node_id_by_key(&backend.core.tree, "input");
+    set_terminal_selection(&mut backend, left, "hello", 5);
+    backend.set_focused(input);
+
+    assert!(backend.send_key(ctrl_char('c')).expect("send_key succeeds"));
+
+    assert_eq!(writes.borrow().as_slice(), &["hello"]);
+    assert!(keys.borrow().is_empty());
 }
 
 #[cfg(feature = "terminal")]

@@ -1033,8 +1033,12 @@ impl<C: Component> AppRunner<C> {
             copy_feedback: &mut self.copy_feedback,
             dirty_override: None,
         };
-        let handled =
-            keyboard::dispatch_selection_clipboard_shortcut(&mut self.core.tree, key, &mut key_ctx);
+        let handled = keyboard::dispatch_selection_clipboard_shortcut(
+            &mut self.core.tree,
+            self.focus.focused,
+            key,
+            &mut key_ctx,
+        );
         KeyDispatchResult {
             handled,
             dirty_override: key_ctx.dirty_override,
