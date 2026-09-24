@@ -919,7 +919,10 @@ fn each_clipped_effect_of_a_scope_recolors_only_the_pixels_it_covers() {
 
     let left = rgb(frame.cell(0, 5).bg);
     let right = rgb(frame.cell(10, 5).bg);
-    assert_ne!(left, right, "the two clips recolor the red cells differently");
+    assert_ne!(
+        left, right,
+        "the two clips recolor the red cells differently"
+    );
     let width = (4 * CELL.width) as usize;
     for (index, &pixel) in image_pixels(&frame).iter().enumerate() {
         let expected = if index % width < 2 * CELL.width as usize {
