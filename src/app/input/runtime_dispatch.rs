@@ -533,10 +533,11 @@ pub(crate) fn make_key_ctx<'a>(
 
 pub(crate) fn selection_clipboard_shortcut(
     tree: &mut NodeTree,
+    focused: Option<NodeId>,
     key_ctx: &mut KeyCtx<'_>,
     key: KeyEvent,
 ) -> bool {
-    keyboard::dispatch_selection_clipboard_shortcut(tree, key, key_ctx)
+    keyboard::dispatch_selection_clipboard_shortcut(tree, focused, key, key_ctx)
 }
 
 pub(crate) fn devtools_toggle_cell() -> Rc<Cell<bool>> {

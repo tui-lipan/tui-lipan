@@ -51,7 +51,7 @@ and emits the normal text edit/change callbacks.
 
 `toggle_devtools` is available when the `devtools` feature is enabled. `F12` is the default binding, but you can remap or unbind it in `keymap.conf`. App code can also control the panel directly with `ctx.show_devtools()`, `ctx.hide_devtools()`, and `ctx.toggle_devtools()`.
 
-Clipboard actions are performable: copy/cut only consume when the action can run on a selection, and paste only consumes when the focused widget can accept it. Copy shortcuts such as `Ctrl+C` and `Ctrl+Insert` also copy active mouse selections from Input, TextArea, DocumentView, and Terminal even when those widgets are not focusable. Cut shortcuts such as `Ctrl+X` cut editable Input/TextArea selections.
+Clipboard actions are performable: copy/cut only consume when the action can run on a selection, and paste only consumes when the focused widget can accept it. Copy shortcuts such as `Ctrl+C` and `Ctrl+Insert` also copy active mouse selections from Input, TextArea, DocumentView, and Terminal even when those widgets are not focusable. The focused widget's own selection comes first, and a focused Terminal without a selection passes the key to its child instead of copying a selection elsewhere; see [Clipboard](clipboard.md). Cut shortcuts such as `Ctrl+X` cut editable Input/TextArea selections.
 
 For `TextArea`, a matching widget-level single-key clear binding takes
 precedence over keymap clipboard bindings for the same key. `key_interceptor`

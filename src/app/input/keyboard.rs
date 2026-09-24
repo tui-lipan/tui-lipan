@@ -171,6 +171,7 @@ fn dispatch_selection_context(
 
 pub(crate) fn dispatch_selection_clipboard_shortcut(
     tree: &mut NodeTree,
+    focused: Option<NodeId>,
     key: KeyEvent,
     ctx: &mut KeyCtx<'_>,
 ) -> bool {
@@ -181,9 +182,26 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
     dispatch_selection_clipboard_request(
         tree,
         SelectionClipboardRequest::Shortcut { key, cut_requested },
-        SelectionScope::Anywhere { preferred: None },
+        shortcut_scope(tree, focused),
         ctx,
     )
+}
+
+/// Which selections a copy or cut shortcut may take, given what holds focus.
+///
+/// The focused widget's own selection always comes first. A focused `Terminal` owns the shortcut
+/// outright: it forwards every key to its child, so a selection left in some other widget must
+/// not turn the child's `Ctrl+C` into a copy. Anywhere else, a selection outside focus is still
+/// copyable, so an app can keep focus in an input while the user copies from a log.
+fn shortcut_scope(tree: &NodeTree, focused: Option<NodeId>) -> SelectionScope {
+    let focused = focused.filter(|id| tree.is_valid(*id));
+    #[cfg(feature = "terminal")]
+    if let Some(id) = focused
+        && matches!(tree.node(id).kind, NodeKind::Terminal(_))
+    {
+        return SelectionScope::Node(id);
+    }
+    SelectionScope::Anywhere { preferred: focused }
 }
 
 pub(crate) fn copy_active_selection(
@@ -792,7 +810,7 @@ mod tests {
             dirty_override: None,
         };
 
-        dispatch_selection_clipboard_shortcut(tree, key, &mut ctx)
+        dispatch_selection_clipboard_shortcut(tree, None, key, &mut ctx)
     }
 
     /// Explicitly copy whatever `scope` admits, as a right-click copy does.

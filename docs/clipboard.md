@@ -133,6 +133,15 @@ shortcuts such as `Ctrl+C` and `Ctrl+Insert` also copy any active mouse selectio
 `Input` and `TextArea` selections can also be cut with cut shortcuts such as `Ctrl+X`.
 Otherwise the key falls through to app-level handlers.
 
+Focus decides which selection a copy or cut shortcut takes:
+
+- The focused widget's own selection always comes first.
+- A focused `Terminal` owns the shortcut. With no selection of its own, `Ctrl+C` goes to its child
+  program even if another widget, such as another terminal pane, still shows a selection. A
+  leftover selection elsewhere never swallows the child's interrupt.
+- Any other focus, or no focus at all, can still copy a selection made elsewhere. An app can keep
+  focus in an input while the user selects and copies text from a log.
+
 This behavior is independent of app focus policy. Under the default unfocused
 `FocusPolicy::OnDemand` state, an existing mouse selection can still be copied. `Manual` prevents
 click-to-focus but does not disable mouse selection or performable copy. Setting

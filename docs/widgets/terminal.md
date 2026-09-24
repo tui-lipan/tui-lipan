@@ -235,7 +235,7 @@ App::new()
 
 **Performable preflight** runs before app commands under mux-style policies so terminal copy/paste is never stolen:
 
-- `Ctrl+C` with a non-empty terminal selection copies to the clipboard instead of running an app shortcut on the same key.
+- `Ctrl+C` with a non-empty selection in the focused terminal copies to the clipboard instead of running an app shortcut on the same key. A selection in some other widget or terminal does not: the focused terminal's child still receives `Ctrl+C`.
 - `Ctrl+Shift+C` / `Ctrl+Shift+V` paste paths run when the terminal can accept input.
 - A terminal using `TerminalPasteShortcutBehavior::Performable` consumes direct `Ctrl+V` when the
   clipboard contains plain text, but forwards the key to the child for files, images, and unknown

@@ -526,7 +526,7 @@ where
                 &clipboard_config,
                 &mut self.copy_feedback,
             );
-            selection_clipboard_shortcut(&mut self.core.tree, &mut key_ctx, key)
+            selection_clipboard_shortcut(&mut self.core.tree, self.focused, &mut key_ctx, key)
         };
         if selection_handled {
             let pump_dirty = self.pump()?;
