@@ -631,7 +631,8 @@ pub(crate) fn image_area_fully_occluded(area: ratatui::layout::Rect) -> bool {
         return false;
     }
     IMAGE_OCCLUSIONS.with(|slot| {
-        let holes = slot.borrow();
+        let mut holes = slot.borrow().clone();
+        holes.extend(super::image_effects::pending_image_occlusions());
         if holes.is_empty() {
             return false;
         }
@@ -854,7 +855,8 @@ impl CompressedKitty {
         let height = self.size.height.min(297);
         let mut transmit = self.take_transmission();
         let mut symbol = String::new();
-        let holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
+        let mut holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
+        holes.extend(super::image_effects::pending_image_occlusions());
         let mut painted_placeholders = false;
         let area = ratatui::layout::Rect::new(
             row_start,
@@ -2570,6 +2572,31 @@ mod tests {
             "adjacent overlays leave no gap to draw into"
         );
         clear_image_occlusions();
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn a_local_dialog_still_to_draw_is_a_hole_until_it_draws() {
+        use crate::backend::ratatui_backend::renderers::image_effects::{
+            PendingImageLayer, clear_pending_image_effects, image_effects_applied,
+            set_pending_image_effects,
+        };
+
+        let area = ratatui::layout::Rect::new(2, 2, 6, 3);
+        let dialog = crate::core::node::NodeId::new(7, 0);
+        clear_image_occlusions();
+        set_pending_image_effects(PendingImageLayer {
+            occlusions: vec![(dialog, ratatui::layout::Rect::new(0, 0, 20, 20))],
+            draws_images: true,
+            ..PendingImageLayer::default()
+        });
+        assert!(image_area_fully_occluded(area), "the dialog will cover it");
+        image_effects_applied(dialog);
+        assert!(
+            !image_area_fully_occluded(area),
+            "an image drawn after the dialog is drawn over it"
+        );
+        clear_pending_image_effects();
     }
 
     #[cfg(feature = "terminal-images")]

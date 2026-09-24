@@ -23,6 +23,10 @@ use crate::style::{ColorTransform, Rect, Style, VisualEffect};
 thread_local! {
     /// Whether the layer drawing now holds anything that draws an image.
     static LAYER_DRAWS_IMAGES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Cells of the layer drawing now that a `Local` modal will cover once its turn comes, by the
+    /// node that draws the modal.
+    static PENDING_IMAGE_OCCLUSIONS: RefCell<Vec<(NodeId, ratatui::layout::Rect)>> =
+        const { RefCell::new(Vec::new()) };
     /// Passes of the layer drawing now that have yet to apply, in the order they will.
     static PENDING_IMAGE_EFFECTS: RefCell<Vec<PendingImageEffect>> = const { RefCell::new(Vec::new()) };
     /// One cell that passes are replayed on to recolor a pixel.
@@ -37,16 +41,36 @@ pub(crate) struct PendingImageEffect {
     pub(crate) backdrop: ImageBackdrop,
 }
 
-/// Install the passes of the layer about to draw, and whether it draws images at all.
-pub(crate) fn set_pending_image_effects(effects: Vec<PendingImageEffect>, draws_images: bool) {
-    PENDING_IMAGE_EFFECTS.with(|slot| *slot.borrow_mut() = effects);
-    LAYER_DRAWS_IMAGES.with(|slot| slot.set(draws_images));
+/// What the renderer found in a layer before drawing it. See [`set_pending_image_effects`].
+#[derive(Default)]
+pub(crate) struct PendingImageLayer {
+    pub(crate) effects: Vec<PendingImageEffect>,
+    pub(crate) occlusions: Vec<(NodeId, ratatui::layout::Rect)>,
+    pub(crate) draws_images: bool,
+}
+
+/// Install what the layer about to draw does over the images in it.
+pub(crate) fn set_pending_image_effects(layer: PendingImageLayer) {
+    PENDING_IMAGE_EFFECTS.with(|slot| *slot.borrow_mut() = layer.effects);
+    PENDING_IMAGE_OCCLUSIONS.with(|slot| *slot.borrow_mut() = layer.occlusions);
+    LAYER_DRAWS_IMAGES.with(|slot| slot.set(layer.draws_images));
 }
 
 /// Drop whatever passes are left, at the end of a layer.
 pub(crate) fn clear_pending_image_effects() {
     PENDING_IMAGE_EFFECTS.with(|slot| slot.borrow_mut().clear());
+    PENDING_IMAGE_OCCLUSIONS.with(|slot| slot.borrow_mut().clear());
     LAYER_DRAWS_IMAGES.with(|slot| slot.set(false));
+}
+
+/// Rects that `Local` modals still to draw in this layer will cover.
+///
+/// A Kitty placeholder row is one escape in its first cell that walks the whole row, so a modal
+/// painted over the row later does not cut it on the host: the row has to leave the modal out, as
+/// it leaves out a root overlay.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn pending_image_occlusions() -> Vec<ratatui::layout::Rect> {
+    PENDING_IMAGE_OCCLUSIONS.with(|slot| slot.borrow().iter().map(|&(_, rect)| rect).collect())
 }
 
 /// Whether the layer drawing now draws images, so its passes may run over Kitty placeholders.
@@ -61,6 +85,12 @@ pub(crate) fn image_effects_applied(node: NodeId) {
         let mut pending = slot.borrow_mut();
         if !pending.is_empty() {
             pending.retain(|effect| effect.node != node);
+        }
+    });
+    PENDING_IMAGE_OCCLUSIONS.with(|slot| {
+        let mut pending = slot.borrow_mut();
+        if !pending.is_empty() {
+            pending.retain(|&(owner, _)| owner != node);
         }
     });
 }

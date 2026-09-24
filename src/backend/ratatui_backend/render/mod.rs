@@ -1889,13 +1889,10 @@ fn pending_image_effects(
     clip: Rect,
     content: ratatui::layout::Rect,
     terminal_bg: Option<RColor>,
-) -> (
-    Vec<crate::backend::ratatui_backend::renderers::image_effects::PendingImageEffect>,
-    bool,
-) {
+) -> crate::backend::ratatui_backend::renderers::image_effects::PendingImageLayer {
     use crate::backend::ratatui_backend::renderers::image::{ImageBackdrop, PixelEffect};
     use crate::backend::ratatui_backend::renderers::image_effects::{
-        CellPass, PendingImageEffect, ReplayedEffect, pixel_visual_effect,
+        CellPass, PendingImageEffect, PendingImageLayer, ReplayedEffect, pixel_visual_effect,
     };
 
     enum Visit {
@@ -1904,6 +1901,7 @@ fn pending_image_effects(
     }
 
     let mut passes: Vec<(NodeId, Rect, CellPass)> = Vec::new();
+    let mut occlusions = Vec::new();
     let mut draws_image = false;
     let mut stack = Vec::new();
     if tree.is_valid(root) {
@@ -1933,6 +1931,9 @@ fn pending_image_effects(
                     continue;
                 }
                 let mut child_clip = clip;
+                if let Some(occlusion) = local_modal_occlusion(tree, node, offset, content, clip) {
+                    occlusions.push(occlusion);
+                }
                 match &node.kind {
                     NodeKind::Image(_) => draws_image = true,
                     #[cfg(feature = "terminal-images")]
@@ -2003,7 +2004,7 @@ fn pending_image_effects(
         }
     }
     if !draws_image {
-        return (Vec::new(), false);
+        return PendingImageLayer::default();
     }
     let effects = passes
         .into_iter()
@@ -2019,20 +2020,49 @@ fn pending_image_effects(
             })
         })
         .collect();
-    (effects, true)
+    PendingImageLayer {
+        effects,
+        occlusions,
+        draws_images: true,
+    }
 }
 
 #[cfg(feature = "image")]
 fn install_pending_image_effects(
-    (effects, draws_images): (
-        Vec<crate::backend::ratatui_backend::renderers::image_effects::PendingImageEffect>,
-        bool,
-    ),
+    layer: crate::backend::ratatui_backend::renderers::image_effects::PendingImageLayer,
 ) {
-    crate::backend::ratatui_backend::renderers::image_effects::set_pending_image_effects(
-        effects,
-        draws_images,
-    );
+    crate::backend::ratatui_backend::renderers::image_effects::set_pending_image_effects(layer);
+}
+
+/// The dialog of a `Local` modal rooted at `node`, as the node that draws it and the cells it
+/// covers. A `Local` modal is a `ZStack` of its backdrop and then the dialog; only the dialog hides
+/// what is under it.
+#[cfg(feature = "image")]
+fn local_modal_occlusion(
+    tree: &NodeTree,
+    node: &crate::core::node::Node,
+    offset: RenderOffset,
+    content: ratatui::layout::Rect,
+    clip: Rect,
+) -> Option<(NodeId, ratatui::layout::Rect)> {
+    if node.semantic_role != Some(crate::automation::SemanticRole::Dialog)
+        || !matches!(node.kind, NodeKind::ZStack(_))
+    {
+        return None;
+    }
+    let dialog = *node.children.last().filter(|&&id| tree.is_valid(id))?;
+    let surface = tree
+        .node(dialog)
+        .children
+        .first()
+        .copied()
+        .filter(|&id| tree.is_valid(id))
+        .unwrap_or(dialog);
+    let mut rect = offset.apply_to_rect(tree.node(surface).rect);
+    rect.x = rect.x.saturating_add(content.x as i16);
+    rect.y = rect.y.saturating_add(content.y as i16);
+    let rect = rect.intersection(&clip);
+    (!rect.is_empty()).then(|| (dialog, to_ratatui_rect(rect)))
 }
 
 /// Run a pass over `rect` that recolors what is drawn, keeping the foregrounds of the Kitty

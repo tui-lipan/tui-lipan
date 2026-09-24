@@ -244,7 +244,8 @@ them. Each runs the renderer's own cell code on the pixel's color, so the match 
   including under `Channels` and a rectangular `Clipped`.
 - **An `Animated` opacity toward a color**, `opacity_target`, unless it is `opacity_fg_only`.
 - **A `Canvas` or `Center` stacked over the image** whose style dims, tints, or transforms without
-  painting a background. That is how a `Local`-scope modal's backdrop draws.
+  painting a background. That is how a `Local`-scope modal's backdrop draws. Its dialog hides
+  the image under it, as a root dialog does.
 
 A layer reaches an image only if it applies after the image draws: an `EffectScope` or `Animated`
 around it, or a surface stacked above it. A layer inside an overlay reaches only the images in that

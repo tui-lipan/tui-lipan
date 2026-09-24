@@ -5734,6 +5734,64 @@ mod local_layers_over_images {
         );
     }
 
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn images_drawn_before_a_local_dialog_walk_around_it() {
+        use crate::backend::ratatui_backend::renderers::image_effects::{
+            image_effects_applied, pending_image_occlusions, set_pending_image_effects,
+        };
+
+        let image = image::RgbImage::from_pixel(8, 8, image::Rgb([255, 0, 0]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 4,
+        };
+        let mut runtime = RuntimeCore::new_test(
+            KittyImageUnderLocalModal {
+                png: png.into_inner().into(),
+            },
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        );
+        runtime.init();
+        runtime.render_element(viewport, None, None, None);
+        let tree = &runtime.tree;
+        let dialog_frame = tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::Frame(_)))
+            .expect("the dialog is a frame");
+
+        let layer = super::super::pending_image_effects(
+            tree,
+            tree.root,
+            viewport,
+            ratatui::layout::Rect::new(0, 0, viewport.w, viewport.h),
+            None,
+        );
+        assert_eq!(layer.occlusions.len(), 1, "the dialog, not its backdrop");
+        let (owner, hole) = layer.occlusions[0];
+        assert_eq!(
+            hole,
+            super::super::to_ratatui_rect(dialog_frame.rect),
+            "the hole is the dialog"
+        );
+
+        set_pending_image_effects(layer);
+        assert_eq!(pending_image_occlusions(), vec![hole]);
+        image_effects_applied(owner);
+        assert!(
+            pending_image_occlusions().is_empty(),
+            "images inside the dialog, drawn after it, are not cut"
+        );
+    }
+
     struct LocalModalOverFrames;
 
     impl Component for LocalModalOverFrames {
