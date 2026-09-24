@@ -731,37 +731,10 @@ fn resolve_bg(color: Color, options: &PngOptions) -> Rgb8 {
 /// The RGB value of `color`, taking the 16 ANSI slots from the palette. `None` for a sentinel
 /// such as [`Color::Reset`], which the caller resolves to a default.
 fn resolve_color(color: Color, options: &PngOptions) -> Option<Rgb8> {
-    ansi_slot(color)
+    color
+        .ansi_slot()
         .map_or(color, |slot| options.ansi_palette[slot])
         .to_rgb()
-}
-
-/// The ANSI palette slot `color` names, as a named color or as `Indexed(0..16)`.
-fn ansi_slot(color: Color) -> Option<usize> {
-    Some(match color {
-        Color::Black => 0,
-        Color::Red => 1,
-        Color::Green => 2,
-        Color::Yellow => 3,
-        Color::Blue => 4,
-        Color::Magenta => 5,
-        Color::Cyan => 6,
-        Color::Gray => 7,
-        Color::DarkGray => 8,
-        Color::LightRed => 9,
-        Color::LightGreen => 10,
-        Color::LightYellow => 11,
-        Color::LightBlue => 12,
-        Color::LightMagenta => 13,
-        Color::LightCyan => 14,
-        Color::White => 15,
-        Color::Indexed(index) if index < 16 => usize::from(index),
-        Color::Reset
-        | Color::Backdrop
-        | Color::Transparent
-        | Color::Rgb(..)
-        | Color::Indexed(_) => return None,
-    })
 }
 
 #[cfg(test)]

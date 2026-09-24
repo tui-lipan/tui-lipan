@@ -41,6 +41,50 @@ pub(crate) fn current_render_terminal_bg() -> Option<RColor> {
 }
 
 thread_local! {
+    static RENDER_HOST_PALETTE: StdCell<Option<[Color; 16]>> = const { StdCell::new(None) };
+}
+
+/// RAII guard restoring the previous host palette on drop.
+pub(crate) struct HostPaletteScope(Option<[Color; 16]>);
+
+impl Drop for HostPaletteScope {
+    fn drop(&mut self) {
+        RENDER_HOST_PALETTE.with(|slot| slot.set(self.0));
+    }
+}
+
+/// Install the 16 ANSI colors the host terminal reported, for the current draw.
+///
+/// Blending effects resolve palette colors against it, so a dimmed or tinted theme color keeps
+/// the hue the user sees. `None` (the palette was not queried) keeps them on-palette instead;
+/// see `preserve_palette_blend`.
+pub(crate) fn push_render_host_palette(palette: Option<[Color; 16]>) -> HostPaletteScope {
+    let prev = RENDER_HOST_PALETTE.with(|slot| slot.replace(palette));
+    HostPaletteScope(prev)
+}
+
+/// `color` as the RGB the host terminal reported for its ANSI slot, when the palette is known.
+/// Any other color, or any color while the palette is unknown, comes back unchanged.
+pub(crate) fn resolve_host_palette_color(color: Color) -> Color {
+    let Some(slot) = color.ansi_slot() else {
+        return color;
+    };
+    RENDER_HOST_PALETTE
+        .with(|palette| palette.get())
+        .map_or(color, |palette| palette[slot])
+}
+
+/// [`resolve_host_palette_color`] for a ratatui color.
+pub(crate) fn resolve_host_palette_ratatui(color: RColor) -> RColor {
+    let resolved = resolve_host_palette_color(from_ratatui_color(color));
+    if matches!(resolved, Color::Rgb(..)) {
+        super::colors::to_ratatui_color(resolved)
+    } else {
+        color
+    }
+}
+
+thread_local! {
     static RENDER_SCREEN_BG: StdCell<Option<ratatui::style::Style>> = const { StdCell::new(None) };
 }
 

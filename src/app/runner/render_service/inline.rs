@@ -227,6 +227,12 @@ impl<C: Component> AppRunner<C> {
             copy_feedback_style: self.clipboard_config.copy_feedback_style,
         };
 
+        let _host_palette_scope = crate::backend::ratatui_backend::common::push_render_host_palette(
+            self.core
+                .ctx
+                .host_terminal_colors()
+                .map(|colors| colors.ansi),
+        );
         let scratch = self
             .inline_commit_scratch
             .get_or_insert_with(|| new_inline_commit_scratch(width, height));

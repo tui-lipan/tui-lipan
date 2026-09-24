@@ -290,10 +290,17 @@ Named colors: `Black`, `Red`, `Green`, `Yellow`, `Blue`, `Magenta`, `Cyan`, `Whi
 > **Tip**: Prefer `Color::rgb(...)` for interactive/selection styles when exact contrast matters. Named ANSI colors vary by terminal palette.
 
 Because named and indexed colors resolve against the terminal's palette, blending effects
-(`dim_by`, `tint_by`, `transform_fg`/`transform_bg`, backdrop and fade opacity) never turn a
-colored palette entry into truecolor, which would show the standard ANSI hue instead of the
-user's theme. The cell keeps its palette color and gains the terminal's `DIM` attribute. Grey
-palette entries and `Color::rgb(...)` colors are blended exactly.
+(`dim_by`, `tint_by`, `transform_fg`/`transform_bg`, backdrop and fade opacity) need that
+palette's RGB to blend them exactly:
+
+- **Palette queried** (`App::live_host_terminal_colors(true)` or `App::system_theme()`):
+  the 16 ANSI colors (named colors and `Color::indexed(0..16)`) blend from the RGB the terminal
+  reported, so a dimmed or tinted theme color keeps its hue at the requested strength.
+- **Palette unknown:** blending would fall back to the standard ANSI RGB and show the wrong
+  hue, so a colored palette entry keeps its palette color and gains the terminal's `DIM`
+  attribute instead. Grey palette entries are blended from the standard values.
+
+`Color::rgb(...)` colors always blend exactly.
 
 ## Span line editing
 
