@@ -290,10 +290,20 @@ Named colors: `Black`, `Red`, `Green`, `Yellow`, `Blue`, `Magenta`, `Cyan`, `Whi
 > **Tip**: Prefer `Color::rgb(...)` for interactive/selection styles when exact contrast matters. Named ANSI colors vary by terminal palette.
 
 Because named and indexed colors resolve against the terminal's palette, blending effects
-(`dim_by`, `tint_by`, `transform_fg`/`transform_bg`, backdrop and fade opacity) never turn a
-colored palette entry into truecolor, which would show the standard ANSI hue instead of the
-user's theme. The cell keeps its palette color and gains the terminal's `DIM` attribute. Grey
-palette entries and `Color::rgb(...)` colors are blended exactly.
+(`dim_by`, `tint_by`, `transform_fg`/`transform_bg`, backdrop and fade opacity) need that
+palette's RGB to blend them exactly:
+
+- **Palette queried** (`App::live_host_terminal_colors(true)` or `App::system_theme()`):
+  each of the 16 ANSI colors (named colors and `Color::indexed(0..16)`) that the terminal
+  reported blends from that RGB, so a dimmed or tinted theme color keeps its hue at the
+  requested strength. This includes colors a transform names, such as the target of
+  `ColorTransform::Tint(Color::Blue, _)`.
+- **Palette unknown** (not queried, or a slot the terminal left out of its OSC 4 reply):
+  blending would fall back to the standard ANSI RGB and show the wrong hue, so a colored palette
+  entry keeps its palette color and gains the terminal's `DIM` attribute instead. Grey palette
+  entries are blended from the standard values.
+
+`Color::rgb(...)` colors always blend exactly.
 
 ## Span line editing
 
@@ -632,6 +642,13 @@ rings.
 `App::system_theme()` opts the whole app into a theme derived from the host
 terminal palette. For app-owned variants, build one explicitly with
 `Theme::from_host_colors(HostTerminalColors)` after reading live host colors.
+
+`HostTerminalColors::ansi` always holds 16 usable RGB values. A slot the terminal did not report
+holds the value from an earlier query, or the standard ANSI color. `ansi_reported` is a bitmask
+of the slots that really came from the terminal (bit `i` for slot `i`), and
+`reported_ansi(slot)` returns a slot only when it was reported. Code that builds
+`HostTerminalColors` itself sets `ansi_reported`, usually to
+`HostTerminalColors::ALL_ANSI_REPORTED` when every slot is meant to be authoritative.
 
 `preset_by_name("system")` is intentionally unsupported: preset lookup stays
 pure and non-blocking, while host color probing remains an opt-in app/runner

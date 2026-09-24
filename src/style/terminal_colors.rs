@@ -12,12 +12,34 @@ use crate::style::Color;
 /// Colors reported by the host terminal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HostTerminalColors {
-    /// ANSI slots 0..15 resolved to their reported RGB values.
+    /// ANSI slots 0..15 as RGB values.
+    ///
+    /// A slot the terminal did not report (it ignores OSC 4, or answered only some slots) holds
+    /// the value from an earlier query, else the standard ANSI color, so every slot is usable as
+    /// an RGB value. [`Self::ansi_reported`] tells the two apart.
     pub ansi: [Color; 16],
+    /// Which [`Self::ansi`] slots the terminal reported: bit `i` is set when slot `i` came from an
+    /// OSC 4 reply, in this query or an earlier one.
+    ///
+    /// Only a reported slot says what the terminal shows for that color. Anything that must match
+    /// the terminal - rather than merely needing some RGB value - should use
+    /// [`Self::reported_ansi`].
+    pub ansi_reported: u16,
     /// Default foreground from OSC 10.
     pub fg: Color,
     /// Default background from OSC 11.
     pub bg: Color,
+}
+
+impl HostTerminalColors {
+    /// Every ANSI slot marked as reported by the terminal.
+    pub const ALL_ANSI_REPORTED: u16 = u16::MAX;
+
+    /// ANSI slot `slot` (0..15) as the terminal reported it, or `None` when it did not report
+    /// that slot and [`Self::ansi`] holds a fallback.
+    pub fn reported_ansi(&self, slot: usize) -> Option<Color> {
+        (slot < 16 && self.ansi_reported & (1 << slot) != 0).then(|| self.ansi[slot])
+    }
 }
 
 /// Query the host terminal for its color palette via OSC 4/10/11.
@@ -633,12 +655,24 @@ fn resolve_host_colors(
 ) -> Option<HostTerminalColors> {
     let fg = parsed.fg.or_else(|| previous.map(|colors| colors.fg))?;
     let bg = parsed.bg.or_else(|| previous.map(|colors| colors.bg))?;
+    let mut ansi_reported = 0u16;
     let ansi = std::array::from_fn(|index| {
-        parsed.ansi[index]
-            .or_else(|| previous.map(|colors| colors.ansi[index]))
-            .unwrap_or_else(|| default_ansi(index as u8))
+        if let Some(color) = parsed.ansi[index] {
+            ansi_reported |= 1 << index;
+            return color;
+        }
+        if let Some(previous) = previous {
+            ansi_reported |= previous.ansi_reported & (1 << index);
+            return previous.ansi[index];
+        }
+        default_ansi(index as u8)
     });
-    Some(HostTerminalColors { ansi, fg, bg })
+    Some(HostTerminalColors {
+        ansi,
+        ansi_reported,
+        fg,
+        bg,
+    })
 }
 
 #[cfg(unix)]
@@ -1142,6 +1176,7 @@ mod tests {
             ansi: std::array::from_fn(|index| Color::Rgb(index as u8, 10, 20)),
             fg: Color::Rgb(230, 230, 230),
             bg: Color::Rgb(20, 20, 20),
+            ansi_reported: HostTerminalColors::ALL_ANSI_REPORTED,
         };
         let mut parsed = Parsed::default();
         parsed.ansi[4] = Some(Color::Rgb(80, 120, 240));
@@ -1152,6 +1187,50 @@ mod tests {
         assert_eq!(colors.ansi[3], previous.ansi[3]);
         assert_eq!(colors.fg, previous.fg);
         assert_eq!(colors.bg, previous.bg);
+    }
+
+    /// A terminal that answers OSC 10/11 but only some OSC 4 slots still yields colors, and the
+    /// slots it skipped are marked as stand-ins rather than passed off as its palette.
+    #[test]
+    fn slots_missing_from_the_reply_are_not_marked_reported() {
+        let mut parser = HostColorResponseParser::default();
+        parser.start_query();
+        parser.push(
+            b"\x1b]4;6;rgb:7b7b/a6a6/a3a3\x1b\\\
+              \x1b]10;rgb:ffff/ffff/ffff\x1b\\\
+              \x1b]11;rgb:2222/2222/2222\x1b\\",
+        );
+        let colors = parser.finish_query(None).unwrap();
+
+        assert_eq!(colors.ansi_reported, 1 << 6);
+        assert_eq!(colors.reported_ansi(6), Some(Color::Rgb(0x7b, 0xa6, 0xa3)));
+        assert_eq!(colors.reported_ansi(1), None);
+        assert_eq!(
+            colors.ansi[1],
+            super::default_ansi(1),
+            "the stand-in is still there for anything that only needs an RGB value"
+        );
+        assert_eq!(colors.reported_ansi(16), None);
+    }
+
+    /// A slot reported by an earlier query stays reported when a later reply skips it; a slot
+    /// never reported stays a stand-in however often it is carried over.
+    #[test]
+    fn carried_slots_keep_whether_they_were_reported() {
+        let previous = HostTerminalColors {
+            ansi: std::array::from_fn(|index| Color::Rgb(index as u8, 10, 20)),
+            ansi_reported: 1 << 3,
+            fg: Color::Rgb(230, 230, 230),
+            bg: Color::Rgb(20, 20, 20),
+        };
+        let mut parsed = Parsed::default();
+        parsed.ansi[4] = Some(Color::Rgb(80, 120, 240));
+
+        let colors = resolve_host_colors(&parsed, Some(&previous)).unwrap();
+
+        assert_eq!(colors.ansi_reported, (1 << 3) | (1 << 4));
+        assert_eq!(colors.reported_ansi(3), Some(previous.ansi[3]));
+        assert_eq!(colors.reported_ansi(5), None);
     }
 
     #[test]
@@ -1238,6 +1317,7 @@ mod tests {
             ansi: std::array::from_fn(|index| super::default_ansi(index as u8)),
             fg: Color::Rgb(230, 230, 230),
             bg: Color::Rgb(20, 20, 20),
+            ansi_reported: HostTerminalColors::ALL_ANSI_REPORTED,
         };
         let mut parser = HostColorResponseParser::default();
         parser.start_query();

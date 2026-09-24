@@ -15,6 +15,7 @@ use crate::utils::color_contrast::{
 use super::cells::BufferSnapshot;
 use super::colors::{from_ratatui_color, to_ratatui_color};
 use super::convert::to_ratatui_rect;
+use super::style_resolve::{resolve_host_palette_color, resolve_host_palette_ratatui};
 
 pub(crate) fn dim_ratatui_color(color: RColor, amount: f32) -> RColor {
     if color == RColor::Reset {
@@ -28,15 +29,19 @@ pub(crate) fn dim_ratatui_color(color: RColor, amount: f32) -> RColor {
     }
 }
 
-/// [`dim_ratatui_color`] that keeps palette colors on-palette.
+/// [`dim_ratatui_color`] that respects the terminal palette: a palette color dims from the RGB
+/// the host reported for it when that is known, and otherwise stays on-palette.
 ///
 /// Returns the resolved color and whether the cell should gain the `DIM` modifier; see
 /// [`preserve_palette_blend`].
 fn dim_ratatui_color_on_palette(color: RColor, amount: f32) -> (RColor, bool) {
-    keep_palette_color(color, dim_ratatui_color(color, amount))
+    let source = resolve_host_palette_ratatui(color);
+    keep_palette_color(source, dim_ratatui_color(source, amount))
 }
 
-/// [`tint_ratatui_color`] that keeps palette colors on-palette.
+/// [`tint_ratatui_color`] that respects the terminal palette: palette colors, the tint included,
+/// blend from the RGB the host reported for them when that is known, and otherwise the source
+/// stays on-palette.
 ///
 /// Returns the resolved color and whether the cell should gain the `DIM` modifier; see
 /// [`preserve_palette_blend`].
@@ -45,7 +50,9 @@ pub(crate) fn tint_ratatui_color_on_palette(
     tint: Color,
     alpha: f32,
 ) -> (RColor, bool) {
-    keep_palette_color(color, tint_ratatui_color(color, tint, alpha))
+    let source = resolve_host_palette_ratatui(color);
+    let tint = resolve_host_palette_color(tint);
+    keep_palette_color(source, tint_ratatui_color(source, tint, alpha))
 }
 
 fn keep_palette_color(source: RColor, result: RColor) -> (RColor, bool) {
@@ -64,7 +71,8 @@ fn keep_palette_color(source: RColor, result: RColor) -> (RColor, bool) {
 /// pink would suddenly render literal cyan as a pane fades behind a modal backdrop. When a
 /// transform would push a palette color into truecolor, keep the palette color and report
 /// whether it darkened, so the caller can express the de-emphasis with the terminal's own
-/// `DIM` attribute instead. Truecolor inputs blend exactly as before.
+/// `DIM` attribute instead. Truecolor inputs blend exactly as before. When the host palette
+/// is known, palette colors resolve to the RGB the host reported and blend exactly too.
 ///
 /// Returns the resolved color and whether the cell should gain the `DIM` modifier.
 fn transform_ratatui_color(
@@ -77,8 +85,11 @@ fn transform_ratatui_color(
         return (color, false);
     }
 
-    let source = from_ratatui_color(color);
-    let result = transform.apply_with_backdrop(source, backdrop.map(from_ratatui_color));
+    let source = resolve_host_palette_color(from_ratatui_color(color));
+    let backdrop =
+        backdrop.map(|backdrop| resolve_host_palette_color(from_ratatui_color(backdrop)));
+    let transform = transform.map_colors(resolve_host_palette_color);
+    let result = transform.apply_with_backdrop(source, backdrop);
     if let Some(darkened) = preserve_palette_blend(source, result) {
         return (color, darkened);
     }
@@ -313,10 +324,18 @@ pub(crate) struct BackdropBackgroundEffect {
 impl BackdropBackgroundEffect {
     /// The effect of a backdrop `style`, or `None` when it leaves cell backgrounds alone.
     pub(crate) fn from_style(style: Style, terminal_bg: Option<RColor>) -> Option<Self> {
-        let fill = style.bg.and_then(|bg| {
-            super::convert::paint_to_ratatui_bg(bg, terminal_bg.map(from_ratatui_color))
-        });
-        let transform = dedupe_effect_transform(style.bg_transform, style.dim_amount, style.tint);
+        // Resolved here, not in `apply_rgb`, so the host palette is part of the effect's identity
+        // and a recolored image is redone when the palette changes.
+        let fill = style
+            .bg
+            .and_then(|bg| {
+                super::convert::paint_to_ratatui_bg(bg, terminal_bg.map(from_ratatui_color))
+            })
+            .map(resolve_host_palette_ratatui);
+        // Resolved here for the same reason as the fill: a transform's own colors are part of what
+        // the effect does to pixels.
+        let transform = dedupe_effect_transform(style.bg_transform, style.dim_amount, style.tint)
+            .map(|transform| transform.map_colors(resolve_host_palette_color));
         if fill.is_none()
             && style.dim_amount.is_none()
             && transform.is_none()
@@ -328,7 +347,9 @@ impl BackdropBackgroundEffect {
             fill,
             dim_amount: style.dim_amount.map(f32::to_bits),
             transform,
-            tint: style.tint.map(|(color, alpha)| (color, alpha.to_bits())),
+            tint: style
+                .tint
+                .map(|(color, alpha)| (resolve_host_palette_color(color), alpha.to_bits())),
             terminal_bg,
         })
     }
@@ -1536,6 +1557,7 @@ pub(crate) fn tint_ratatui_color(color: RColor, tint: Color, alpha: f32) -> RCol
 
 #[cfg(test)]
 mod palette_fidelity_tests {
+    use super::super::style_resolve::push_render_host_palette;
     use super::*;
 
     #[test]
@@ -1642,6 +1664,192 @@ mod palette_fidelity_tests {
             "Reset bg tints the terminal bg"
         );
         assert!(cell.modifier.contains(RMod::DIM));
+    }
+
+    /// A theme whose ANSI colors are nowhere near the standard values, like the pale cyan and
+    /// teal-tinted gray of a real terminal theme.
+    fn themed_palette() -> [Color; 16] {
+        let mut palette = [Color::Rgb(0, 0, 0); 16];
+        palette[3] = Color::Rgb(0xc9, 0xa8, 0x78);
+        palette[4] = Color::Rgb(0x60, 0x80, 0xc0);
+        palette[6] = Color::Rgb(0x7b, 0xa6, 0xa3);
+        palette[8] = Color::Rgb(0x61, 0x78, 0x77);
+        palette
+    }
+
+    /// Host colors from a terminal that answered OSC 4 for the themed slots only. The rest hold the
+    /// standard ANSI stand-ins, as they do after a partial reply.
+    fn themed_host() -> crate::style::HostTerminalColors {
+        let palette = themed_palette();
+        let reported = [3, 4, 6, 8];
+        crate::style::HostTerminalColors {
+            ansi: std::array::from_fn(|slot| {
+                if reported.contains(&slot) {
+                    palette[slot]
+                } else {
+                    let (r, g, b) = Color::Indexed(slot as u8).to_rgb().unwrap();
+                    Color::Rgb(r, g, b)
+                }
+            }),
+            ansi_reported: reported.iter().fold(0, |mask, slot| mask | (1 << slot)),
+            fg: Color::Rgb(230, 230, 230),
+            bg: Color::Rgb(0x13, 0x14, 0x1a),
+        }
+    }
+
+    fn rgb(color: Color) -> RColor {
+        to_ratatui_color(color)
+    }
+
+    /// A transform's own colors are palette colors too: tinting toward `Blue` means the terminal's
+    /// blue, and the image path has to recolor toward the same one.
+    #[test]
+    fn transform_targets_resolve_from_the_host_palette() {
+        let palette = themed_palette();
+        let _scope = push_render_host_palette(Some(themed_host()));
+        let source = Color::Rgb(200, 200, 200);
+        for transform in [
+            ColorTransform::Tint(Color::Blue, 0.5),
+            ColorTransform::OpacityToward {
+                factor: 0.5,
+                target: Color::Blue,
+            },
+        ] {
+            let (color, dim) =
+                transform_ratatui_color(rgb(source), transform, Some(RColor::Black), true);
+            assert_eq!(
+                color,
+                rgb(source.blend_toward(palette[4], 0.5)),
+                "{transform:?}"
+            );
+            assert!(!dim);
+        }
+    }
+
+    #[cfg(feature = "image")]
+    #[test]
+    fn a_backdrop_transform_target_is_part_of_the_image_effect() {
+        let terminal_bg = Some(RColor::Rgb(0x13, 0x14, 0x1a));
+        let style = Style::new().transform_bg(ColorTransform::Tint(Color::Blue, 0.5));
+        let (resolved, effect) = {
+            let _scope = push_render_host_palette(Some(themed_host()));
+            (
+                BackdropBackgroundEffect::from_style(style, terminal_bg).unwrap(),
+                transform_ratatui_color(
+                    RColor::Rgb(200, 100, 50),
+                    ColorTransform::Tint(Color::Blue, 0.5),
+                    terminal_bg,
+                    true,
+                )
+                .0,
+            )
+        };
+        let RColor::Rgb(r, g, b) = effect else {
+            panic!("a truecolor source blends to truecolor");
+        };
+        assert_eq!(
+            resolved.apply_rgb((200, 100, 50)),
+            (r, g, b),
+            "the image recolors toward the terminal's blue even outside the draw's scope"
+        );
+        assert_ne!(
+            Some(resolved),
+            BackdropBackgroundEffect::from_style(style, terminal_bg),
+            "a palette change gives the effect a new identity, so a cached recolor is redone"
+        );
+    }
+
+    /// A slot the terminal did not report holds a standard-ANSI stand-in, not what the terminal
+    /// shows. Blending from it would bypass the theme, so the color stays on-palette.
+    #[test]
+    fn an_unreported_slot_stays_on_palette() {
+        let _scope = push_render_host_palette(Some(themed_host()));
+        let mut cell = Cell::default();
+        cell.set_fg(RColor::Red);
+        let cell = apply_style_to_cell(cell, Style::new().dim_by(0.6));
+        assert_eq!(cell.fg, RColor::Red, "slot 1 was never reported");
+        assert!(cell.modifier.contains(RMod::DIM));
+        assert_eq!(resolve_host_palette_color(Color::Red), Color::Red);
+    }
+
+    #[test]
+    fn dim_by_blends_palette_colors_exactly_from_the_host_palette() {
+        let palette = themed_palette();
+        let _scope = push_render_host_palette(Some(themed_host()));
+        for (named, slot) in [
+            (RColor::Cyan, 6),
+            (RColor::DarkGray, 8),
+            (RColor::Indexed(3), 3),
+        ] {
+            let mut cell = Cell::default();
+            cell.set_fg(named);
+            let cell = apply_style_to_cell(cell, Style::new().dim_by(0.6));
+            assert_eq!(cell.fg, rgb(palette[slot].dim_by(0.6)), "{named:?}");
+            assert!(!cell.modifier.contains(RMod::DIM), "{named:?}");
+        }
+    }
+
+    #[test]
+    fn tint_by_resolves_the_source_and_the_tint_from_the_host_palette() {
+        let palette = themed_palette();
+        let _scope = push_render_host_palette(Some(themed_host()));
+        let mut cell = Cell::default();
+        cell.set_fg(RColor::Yellow);
+        let cell = apply_style_to_cell(cell, Style::new().tint_by(Color::Blue, 0.5));
+        assert_eq!(cell.fg, rgb(palette[3].blend_toward(palette[4], 0.5)));
+        assert!(!cell.modifier.contains(RMod::DIM));
+    }
+
+    #[test]
+    fn opacity_blends_palette_colors_exactly_from_the_host_palette() {
+        let _scope = push_render_host_palette(Some(themed_host()));
+        let mut cell = Cell::default();
+        cell.set_fg(RColor::Cyan);
+        cell.set_bg(RColor::Rgb(0, 0, 0));
+        apply_color_transforms_to_cell(&mut cell, Some(ColorTransform::Opacity(0.4)), None, None);
+        assert!(matches!(cell.fg, RColor::Rgb(..)), "got {:?}", cell.fg);
+        assert!(!cell.modifier.contains(RMod::DIM));
+    }
+
+    #[test]
+    fn the_host_palette_scope_ends_with_the_draw() {
+        {
+            let _scope = push_render_host_palette(Some(themed_host()));
+            assert_eq!(
+                resolve_host_palette_color(Color::Cyan),
+                Color::Rgb(0x7b, 0xa6, 0xa3)
+            );
+        }
+        assert_eq!(resolve_host_palette_color(Color::Cyan), Color::Cyan);
+        assert_eq!(
+            resolve_host_palette_color(Color::Indexed(200)),
+            Color::Indexed(200),
+            "only the 16 ANSI slots are queried"
+        );
+    }
+
+    #[cfg(feature = "image")]
+    #[test]
+    fn backdrop_image_effect_uses_the_host_palette_like_the_cells() {
+        let _scope = push_render_host_palette(Some(themed_host()));
+        let terminal_bg = Some(RColor::Rgb(0x13, 0x14, 0x1a));
+        let style = Style::new().bg(Color::Blue).dim_by(0.5);
+        let effect = BackdropBackgroundEffect::from_style(style, terminal_bg).unwrap();
+        let mut cell = Cell::default();
+        cell.set_bg(RColor::Blue);
+        let RColor::Rgb(r, g, b) = apply_style_to_cell(cell, style).bg else {
+            panic!("a palette fill dims to truecolor once the palette is known");
+        };
+        assert_eq!(effect.apply_rgb((200, 100, 50)), (r, g, b));
+        let without_palette = {
+            let _unknown = push_render_host_palette(None);
+            BackdropBackgroundEffect::from_style(style, terminal_bg)
+        };
+        assert_ne!(
+            Some(effect),
+            without_palette,
+            "the palette is part of the effect's identity, so a cached recolor is redone"
+        );
     }
 
     #[cfg(feature = "image")]

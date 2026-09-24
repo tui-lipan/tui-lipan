@@ -168,6 +168,37 @@ impl Color {
         Self::Indexed(index)
     }
 
+    /// The ANSI palette slot this color names, as a named color or as `Indexed(0..16)`.
+    ///
+    /// These are the colors a terminal theme can remap, so their RGB is only known once the
+    /// host palette has been queried.
+    pub(crate) fn ansi_slot(self) -> Option<usize> {
+        Some(match self {
+            Color::Black => 0,
+            Color::Red => 1,
+            Color::Green => 2,
+            Color::Yellow => 3,
+            Color::Blue => 4,
+            Color::Magenta => 5,
+            Color::Cyan => 6,
+            Color::Gray => 7,
+            Color::DarkGray => 8,
+            Color::LightRed => 9,
+            Color::LightGreen => 10,
+            Color::LightYellow => 11,
+            Color::LightBlue => 12,
+            Color::LightMagenta => 13,
+            Color::LightCyan => 14,
+            Color::White => 15,
+            Color::Indexed(index) if index < 16 => usize::from(index),
+            Color::Reset
+            | Color::Backdrop
+            | Color::Transparent
+            | Color::Rgb(..)
+            | Color::Indexed(_) => return None,
+        })
+    }
+
     /// Convert to RGB if possible.
     pub fn to_rgb(self) -> Option<(u8, u8, u8)> {
         match self {

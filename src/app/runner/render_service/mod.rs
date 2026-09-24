@@ -1301,6 +1301,10 @@ impl<C: Component> AppRunner<C> {
             crate::backend::ratatui_backend::common::push_render_screen_background(
                 self.resolved_screen_background(),
             );
+        // The ANSI slots the host reported, so blends resolve theme colors exactly.
+        let _host_palette_scope = crate::backend::ratatui_backend::common::push_render_host_palette(
+            self.core.ctx.host_terminal_colors(),
+        );
         // Inspector outline, so what a client highlights is what the operator sees.
         let _highlight_scope =
             crate::backend::ratatui_backend::common::push_render_highlight(self.highlight());

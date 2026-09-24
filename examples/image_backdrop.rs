@@ -14,6 +14,9 @@
 //! Try it in a host that draws real pixels (Kitty, WezTerm, Ghostty, iTerm2, a sixel terminal).
 //! In a plain xterm images fall back to half blocks, which are cells and always dimmed.
 //!
+//! The app queries the host's color palette, so named colors such as the hint row's `Cyan` dim
+//! from the RGB your terminal theme gives them rather than the standard ANSI values.
+//!
 //! Keys: `m` opens and closes the layer, `l` cycles the layer, `s` cycles the backdrop style,
 //! `q` quits.
 
@@ -332,6 +335,7 @@ fn transmit_and_display(id: u32, (width, height, data): &(u32, u32, Vec<u8>)) ->
 fn main() -> Result<()> {
     App::new()
         .title("Image backdrop")
+        .live_host_terminal_colors(true)
         .mount(ImageBackdrop)
         .run()
 }

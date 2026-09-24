@@ -41,6 +41,55 @@ pub(crate) fn current_render_terminal_bg() -> Option<RColor> {
 }
 
 thread_local! {
+    static RENDER_HOST_PALETTE: StdCell<[Option<Color>; 16]> = const { StdCell::new([None; 16]) };
+}
+
+/// RAII guard restoring the previous host palette on drop.
+pub(crate) struct HostPaletteScope([Option<Color>; 16]);
+
+impl Drop for HostPaletteScope {
+    fn drop(&mut self) {
+        RENDER_HOST_PALETTE.with(|slot| slot.set(self.0));
+    }
+}
+
+/// Install the ANSI colors the host terminal reported, for the current draw.
+///
+/// Blending effects resolve palette colors against it, so a dimmed or tinted theme color keeps
+/// the hue the user sees. Only slots the terminal actually reported take part: a slot it did not
+/// report (or colors never queried at all) stays on-palette instead; see
+/// `preserve_palette_blend`. A standard-ANSI stand-in would bypass the user's theme.
+pub(crate) fn push_render_host_palette(
+    colors: Option<crate::style::HostTerminalColors>,
+) -> HostPaletteScope {
+    let palette = colors.map_or([None; 16], |colors| {
+        std::array::from_fn(|slot| colors.reported_ansi(slot))
+    });
+    HostPaletteScope(RENDER_HOST_PALETTE.with(|slot| slot.replace(palette)))
+}
+
+/// `color` as the RGB the host terminal reported for its ANSI slot, when the palette is known.
+/// Any other color, or any color while the palette is unknown, comes back unchanged.
+pub(crate) fn resolve_host_palette_color(color: Color) -> Color {
+    let Some(slot) = color.ansi_slot() else {
+        return color;
+    };
+    RENDER_HOST_PALETTE
+        .with(|palette| palette.get()[slot])
+        .unwrap_or(color)
+}
+
+/// [`resolve_host_palette_color`] for a ratatui color.
+pub(crate) fn resolve_host_palette_ratatui(color: RColor) -> RColor {
+    let resolved = resolve_host_palette_color(from_ratatui_color(color));
+    if matches!(resolved, Color::Rgb(..)) {
+        super::colors::to_ratatui_color(resolved)
+    } else {
+        color
+    }
+}
+
+thread_local! {
     static RENDER_SCREEN_BG: StdCell<Option<ratatui::style::Style>> = const { StdCell::new(None) };
 }
 

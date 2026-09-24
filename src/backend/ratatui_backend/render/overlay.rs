@@ -4,7 +4,8 @@ use ratatui::widgets::Block;
 
 use crate::backend::ratatui_backend::common::{
     BufferSnapshot, apply_effect_style_clipped, blend_paint_over_ratatui, from_ratatui_color,
-    paint_to_ratatui_bg, preserve_palette_blend, to_ratatui_color, to_ratatui_rect,
+    paint_to_ratatui_bg, preserve_palette_blend, resolve_host_palette_color, to_ratatui_color,
+    to_ratatui_rect,
 };
 use crate::core::node::NodeKind;
 use crate::style::{Color, ColorTransform, Paint, Rect, Style};
@@ -275,8 +276,9 @@ pub(crate) fn blend_ratatui_toward(
         return (source, false);
     }
 
-    let src = from_ratatui_color(source);
-    let result = src.blend_toward(from_ratatui_color(target), 1.0 - opacity);
+    let src = resolve_host_palette_color(from_ratatui_color(source));
+    let target = resolve_host_palette_color(from_ratatui_color(target));
+    let result = src.blend_toward(target, 1.0 - opacity);
     if let Some(darkened) = preserve_palette_blend(src, result) {
         return (source, darkened);
     }

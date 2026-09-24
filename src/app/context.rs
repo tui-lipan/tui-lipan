@@ -751,7 +751,10 @@ impl App {
     /// `Context::request_host_terminal_color_refresh()` on the UI thread while
     /// coordinating with tui-lipan's input reader. Refreshed colors are exposed
     /// through `Context::host_terminal_colors()` and the resolved terminal
-    /// background is kept in sync for opacity blending.
+    /// background is kept in sync for opacity blending. Blending effects
+    /// (`dim_by`, `tint_by`, color transforms, fades) also resolve the 16 ANSI
+    /// colors against the reported palette, so themed named colors dim and tint
+    /// with the hue the terminal shows.
     ///
     /// On Unix fullscreen surfaces, compatible terminals that implement DEC
     /// private mode 2031 also trigger an immediate refresh when their palette
