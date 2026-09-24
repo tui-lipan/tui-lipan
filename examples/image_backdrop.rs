@@ -94,21 +94,24 @@ impl Component for ImageBackdrop {
     type State = State;
 
     fn create_state(&self, _props: &Self::Properties) -> Self::State {
-        let cell = host_cell_size();
-        let mut screen = TerminalScreen::new(ROWS, COLS, 100);
-        screen.set_cell_size(cell);
-        screen.process_bytes(b"\x1b[2mtruecolor cells in the image's colors:\x1b[0m\r\n");
-        screen.process_bytes(&swatch_row());
-        screen.process_bytes(b"\r\n\x1b[1;36m$ icat gradient.png\x1b[0m\r\n");
-        screen.process_bytes(&transmit_and_display(1, &gradient(cell)));
-
+        let (snapshot, picture) = panes(host_cell_size());
         Self::State {
-            snapshot: screen.render_snapshot(),
-            picture: png_bytes(cell),
+            snapshot,
+            picture,
             open: false,
             style: 0,
             layer: 0,
         }
+    }
+
+    /// Draw the pictures again at the host's real cell size.
+    ///
+    /// The root's state is created before the app enters the terminal, where `host_cell_size` can
+    /// only guess. Pictures drawn at a guessed cell cover a box of a different shape than the cells
+    /// the panes lay out, and the host has to fit them into it.
+    fn init(&mut self, ctx: &mut Context<Self>) -> Option<Command> {
+        (ctx.state.snapshot, ctx.state.picture) = panes(host_cell_size());
+        None
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
@@ -240,6 +243,17 @@ impl Component for ImageBackdrop {
         }
         root.into()
     }
+}
+
+/// The terminal pane's screen and the `Image` widget's picture, drawn for `cell`.
+fn panes(cell: TerminalCellSize) -> (TerminalRenderSnapshot, Arc<[u8]>) {
+    let mut screen = TerminalScreen::new(ROWS, COLS, 100);
+    screen.set_cell_size(cell);
+    screen.process_bytes(b"\x1b[2mtruecolor cells in the image's colors:\x1b[0m\r\n");
+    screen.process_bytes(&swatch_row());
+    screen.process_bytes(b"\r\n\x1b[1;36m$ icat gradient.png\x1b[0m\r\n");
+    screen.process_bytes(&transmit_and_display(1, &gradient(cell)));
+    (screen.render_snapshot(), png_bytes(cell))
 }
 
 /// The gradient's color at a fraction of its width.

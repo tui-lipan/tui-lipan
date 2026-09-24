@@ -1140,6 +1140,9 @@ struct EncodeRequest {
     /// Backdrops to recolor `image` under before it is encoded. Applied by the encoder, so a
     /// cache hit never pays for it.
     backdrop: Option<Arc<BackdropMask>>,
+    /// Whether the key's cell box is the placement itself rather than room to fit the image into.
+    /// See [`EncodeRequest::filling_its_box`].
+    fills_box: bool,
 }
 
 impl EncodeRequest {
@@ -1157,6 +1160,35 @@ impl EncodeRequest {
             estimated_bytes,
             retention,
             backdrop: None,
+            fills_box: false,
+        }
+    }
+
+    /// Encode onto exactly the key's cell box, not the box the image's pixels would round to.
+    ///
+    /// A terminal placement's cells are what the child program laid out, at its own cell size.
+    /// Recomputing them from the pixels at the host's cell size gives a different answer whenever
+    /// the two cell shapes differ, and one row more or fewer moves the picture on the host, which
+    /// fits it into whatever box it is given. Keeping the box also keeps it the same for every
+    /// variant of the stream, dimmed or not.
+    fn filling_its_box(mut self) -> Self {
+        self.fills_box = true;
+        self
+    }
+
+    /// The cells to encode onto: the key's box when it is the placement, else what `resize` makes
+    /// of the image in it.
+    fn encoded_size(
+        &self,
+        resize: &Resize,
+        source: &image::DynamicImage,
+        font_size: ratatui_image::FontSize,
+        size: ratatui::layout::Size,
+    ) -> ratatui::layout::Size {
+        if self.fills_box {
+            size
+        } else {
+            resize.size_for(source, font_size, size)
         }
     }
 
@@ -2043,7 +2075,7 @@ fn encode_request(request: &EncodeRequest) -> Option<EncodedProtocol> {
     let source = dimmed.as_ref().unwrap_or(request.image.as_ref());
     #[cfg(feature = "terminal-images")]
     if matches!(request.key.resolved_protocol, ImageProtocol::Kitty) {
-        let encoded_size = resize.size_for(source, picker.font_size(), size);
+        let encoded_size = request.encoded_size(&resize, source, picker.font_size(), size);
         let pixel_width = u32::from(encoded_size.width) * u32::from(picker.font_size().width);
         let pixel_height = u32::from(encoded_size.height) * u32::from(picker.font_size().height);
         let background = request
@@ -2060,7 +2092,7 @@ fn encode_request(request: &EncodeRequest) -> Option<EncodedProtocol> {
     }
 
     if matches!(request.key.fit, ImageFit::Scale) {
-        let encoded_size = resize.size_for(source, picker.font_size(), size);
+        let encoded_size = request.encoded_size(&resize, source, picker.font_size(), size);
         let background = request
             .key
             .background_rgb
@@ -2225,7 +2257,8 @@ pub(crate) fn draw_encoded_image(
     }
 
     let request = EncodeRequest::new(stream_key, key, pixels(), CacheRetention::LatestOnly)
-        .with_backdrop(backdrop);
+        .with_backdrop(backdrop)
+        .filling_its_box();
 
     // A terminal application has already paced and decoded this frame. Native Kitty encoding is
     // fast enough to finish inside that paint, which avoids coupling visible frame cadence to the
@@ -3397,6 +3430,48 @@ mod tests {
 
         assert!(transmission.contains("a=T,U=1"));
         assert!(transmission.contains(",z=-1500000000"));
+    }
+
+    /// A terminal placement is encoded onto the cells the pane laid it out on. The picture here
+    /// was drawn for a cell shorter than the host's, so its pixels alone would round to six rows,
+    /// and the host would fit it into a box two rows short of the placement.
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn a_terminal_placement_is_encoded_onto_its_own_cells() {
+        let font = image_support::picker_snapshot().font_size();
+        let (width, height) = (32 * u32::from(font.width), 6 * u32::from(font.height));
+        let placement = |fills_box: bool, backdrop: u64| {
+            let mut request = EncodeRequest::new(
+                7,
+                key(10),
+                Arc::new(image::DynamicImage::new_rgb8(width, height)),
+                CacheRetention::LatestOnly,
+            );
+            request.key.width = 32;
+            request.key.height = 8;
+            request.key.resolved_protocol = ImageProtocol::Kitty;
+            request.key.backdrop = backdrop;
+            if fills_box {
+                request = request.filling_its_box();
+            }
+            let EncodedProtocol::CompressedKitty(encoded) =
+                encode_request(&request).expect("Kitty encoding")
+            else {
+                panic!("terminal Kitty pixels should use the compressed encoder");
+            };
+            encoded.size
+        };
+
+        let rounded = placement(false, 0);
+        assert_eq!((rounded.width, rounded.height), (32, 6), "the pixels alone");
+        for backdrop in [0, 1] {
+            let size = placement(true, backdrop);
+            assert_eq!(
+                (size.width, size.height),
+                (32, 8),
+                "dimmed or not, the placement keeps its box (backdrop {backdrop})"
+            );
+        }
     }
 
     #[cfg(feature = "terminal-images")]
