@@ -1,17 +1,21 @@
-//! Images dim with the cells around them under a modal backdrop.
+//! Images dim with the cells around them under a modal backdrop, an `EffectScope`, or an `Animated`
+//! fade.
 //!
 //! Run with:
 //!   cargo run --example image_backdrop --features terminal-images
 //!
 //! The left pane is a terminal whose child drew a gradient through Kitty graphics escapes, under a
 //! row of truecolor cells painted in the same colors. The right pane is an `Image` widget with the
-//! same gradient and the same row. Open the modal and every picture should dim to exactly the color of the cells beside
-//! it; close it and they return to full brightness at once, from the cached undimmed encode.
+//! same gradient and the same row. Open the modal and every picture should dim to exactly the color
+//! of the cells beside it; close it and they return to full brightness at once, from the cached
+//! undimmed encode. The layer key swaps the root modal for a `Local`-scope one, for an
+//! `EffectScope` around both panes, or for an `Animated` fade of both panes toward a dark color.
 //!
 //! Try it in a host that draws real pixels (Kitty, WezTerm, Ghostty, iTerm2, a sixel terminal).
 //! In a plain xterm images fall back to half blocks, which are cells and always dimmed.
 //!
-//! Keys: `m` opens and closes the modal, `s` cycles the backdrop style, `q` quits.
+//! Keys: `m` opens and closes the layer, `l` cycles the layer, `s` cycles the backdrop style,
+//! `q` quits.
 
 use std::sync::Arc;
 
@@ -40,6 +44,31 @@ fn backdrops() -> [(&'static str, Style); 4] {
     ]
 }
 
+/// What dims the panes when open.
+#[derive(Clone, Copy)]
+enum Layer {
+    RootModal,
+    LocalModal,
+    Scope,
+    Fade,
+}
+
+impl Layer {
+    const ALL: [Self; 4] = [Self::RootModal, Self::LocalModal, Self::Scope, Self::Fade];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::RootModal => "root modal",
+            Self::LocalModal => "local modal",
+            Self::Scope => "EffectScope",
+            Self::Fade => "Animated fade to 0.4",
+        }
+    }
+}
+
+/// The fade's target, the dark surface a dialog recedes toward.
+const FADE_TARGET: Color = Color::Rgb(0, 0, 40);
+
 struct ImageBackdrop;
 
 struct State {
@@ -47,6 +76,7 @@ struct State {
     picture: Arc<[u8]>,
     open: bool,
     style: usize,
+    layer: usize,
 }
 
 #[derive(Clone)]
@@ -54,6 +84,7 @@ enum Msg {
     Toggle,
     Close,
     NextStyle,
+    NextLayer,
     Quit,
 }
 
@@ -76,6 +107,7 @@ impl Component for ImageBackdrop {
             picture: png_bytes(cell),
             open: false,
             style: 0,
+            layer: 0,
         }
     }
 
@@ -83,6 +115,7 @@ impl Component for ImageBackdrop {
         let msg = match key.code {
             KeyCode::Char('m') => Msg::Toggle,
             KeyCode::Char('s') => Msg::NextStyle,
+            KeyCode::Char('l') => Msg::NextLayer,
             KeyCode::Char('q') => Msg::Quit,
             _ => return KeyUpdate::unhandled(Update::none()),
         };
@@ -95,6 +128,7 @@ impl Component for ImageBackdrop {
             Msg::Toggle => ctx.state.open = !ctx.state.open,
             Msg::Close => ctx.state.open = false,
             Msg::NextStyle => ctx.state.style = (ctx.state.style + 1) % backdrops().len(),
+            Msg::NextLayer => ctx.state.layer = (ctx.state.layer + 1) % Layer::ALL.len(),
             Msg::Quit => {
                 ctx.quit();
                 return Update::none();
@@ -105,11 +139,16 @@ impl Component for ImageBackdrop {
 
     fn view(&self, ctx: &Context<Self>) -> Element {
         let (label, backdrop) = backdrops()[ctx.state.style];
+        let layer = Layer::ALL[ctx.state.layer];
+        let open = ctx.state.open;
         let footer = Text::from_spans([
             Span::new("m").fg(Color::Yellow).bold(),
-            Span::new(" modal   ").fg(Color::DarkGray),
-            Span::new("s").fg(Color::Yellow).bold(),
-            Span::new(" backdrop: ").fg(Color::DarkGray),
+            Span::new(if open { " close   " } else { " open   " }).fg(Color::DarkGray),
+            Span::new("l").fg(Color::Yellow).bold(),
+            Span::new(" layer: ").fg(Color::DarkGray),
+            Span::new(layer.label()).fg(Color::Cyan),
+            Span::new("   s").fg(Color::Yellow).bold(),
+            Span::new(" style: ").fg(Color::DarkGray),
             Span::new(label).fg(Color::Cyan),
             Span::new("   q").fg(Color::Yellow).bold(),
             Span::new(" quit").fg(Color::DarkGray),
@@ -147,14 +186,33 @@ impl Component for ImageBackdrop {
             .width(Length::Flex(1))
             .height(Length::Flex(1));
 
-        let mut root = ZStack::new().child(
-            VStack::new()
-                .child(HStack::new().child(terminal).child(widget))
-                .child(footer),
-        );
-        if ctx.state.open {
+        let mut scope = EffectScope::new();
+        if open && matches!(layer, Layer::Scope) {
+            if let Some((color, alpha)) = backdrop.tint {
+                scope = scope.tint_by(color, alpha);
+            }
+            if let Some(amount) = backdrop.dim_amount {
+                scope = scope.dim_by(amount);
+            }
+            if let Some(transform) = backdrop.bg_transform {
+                scope = scope.transform_bg(transform);
+            }
+        }
+        let fading = open && matches!(layer, Layer::Fade);
+        let panes = Animated::new(scope.child(HStack::new().child(terminal).child(widget)))
+            .opacity(if fading { 0.4 } else { 1.0 })
+            .opacity_target(FADE_TARGET);
+
+        let mut root = ZStack::new().child(VStack::new().child(panes).child(footer));
+        let scope = match layer {
+            Layer::RootModal => Some(OverlayScope::RootPortal),
+            Layer::LocalModal => Some(OverlayScope::Local),
+            Layer::Scope | Layer::Fade => None,
+        };
+        if let Some(scope) = scope.filter(|_| open) {
             root = root.child(
                 Modal::new()
+                    .scope(scope)
                     .title("Backdrop")
                     .width(Length::Px(34))
                     .height(Length::Auto)

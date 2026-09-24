@@ -236,8 +236,24 @@ the renderer recolors the image's pixels instead, before encoding them: the back
 background, so a picture dims to the same color as the cells beside it. Alpha is kept. Foreground
 transforms do not apply, because a picture reads as surface, not as text.
 
+Layers inside the tree that recolor cells reach the pixels too, in the order the renderer applies
+them. Each runs the renderer's own cell code on the pixel's color, so the match is exact:
+
+- **An `EffectScope`** whose effects depend only on a cell's own color: `dim_by`, `lighten_by`,
+  `tint_by`, `transform_bg`, `VisualEffect::Monochrome`, and `VisualEffect::PaletteQuantize`,
+  including under `Channels` and a rectangular `Clipped`.
+- **An `Animated` opacity toward a color**, `opacity_target`, unless it is `opacity_fg_only`.
+- **A `Canvas` or `Center` stacked over the image** whose style dims, tints, or transforms without
+  painting a background. That is how a `Local`-scope modal's backdrop draws. Its dialog hides
+  the image under it, as a root dialog does.
+
+A layer reaches an image only if it applies after the image draws: an `EffectScope` or `Animated`
+around it, or a surface stacked above it. A layer inside an overlay reaches only the images in that
+overlay.
+
 - **Only covered cells dim.** Root backdrops span the whole viewport, so in practice that is the
-  whole visible image; the part under the dialog itself is hidden as before.
+  whole visible image; the part under the dialog itself is hidden as before. A layer in the tree
+  dims the cells it covers after its clip.
 - **One encode per image on open.** The dimmed pixels are cached as their own variant beside the
   undimmed ones, and a Kitty stream transmits them under a separate image id. Closing the dialog
   over pixels that have not changed switches back to the undimmed image the host already holds.
@@ -249,21 +265,29 @@ transforms do not apply, because a picture reads as surface, not as text.
   costs one synchronous encode per image at each open or close, and none on later frames.
 - **Live pictures pay per frame.** A picture that keeps changing under a dialog, such as a
   browser or a video, is recolored on every new frame. Dims, tints, and fills cost a few
-  milliseconds for a full 1080p frame. `transform_bg(ColorTransform::Elevate(_))` weighs each
-  color's luminance, so a photographic frame under it costs more; past the first 16,384
-  colors, each is computed from the nearest color at 64 levels per channel, at most two levels
-  away. `cargo bench --bench image_backdrop --features terminal-images` measures both.
-- **Full strength at once.** Images take the backdrop at its full strength from its first frame.
-  Following a fade would re-encode every image under it on every frame of the fade.
+  milliseconds for a full 1080p frame. `transform_bg(ColorTransform::Elevate(_))`,
+  `Monochrome`, and `PaletteQuantize` mix a color's channels, so a photographic frame under them
+  costs more; past the first 16,384 colors, each is computed from the nearest color at 64 levels
+  per channel, at most two levels away.
+  `cargo bench --bench image_backdrop --features terminal-images` measures both.
+- **Full strength at once.** Images take the backdrop at its full strength from its first frame,
+  and an `Animated` fade at the opacity it ends at, from the frame it starts. Following a fade would
+  re-encode every image under it on every frame of the fade.
 - **Half blocks are left to the backdrop.** They are cells, which the backdrop already recolors.
 - **Kitty image ids survive.** A placeholder cell that carries its image id in its foreground keeps
-  that foreground under a backdrop tint; only the pixels dim.
+  that foreground under a backdrop, an `EffectScope`, an `Animated` fade, or a surface in a layer
+  that draws images; only the pixels dim.
 
 ## Known limits
 
-- **Only root-portal backdrops dim images.** A `Local`-scope modal's backdrop, an `EffectScope`,
-  and an `Animated` layer's opacity recolor cells without reaching the pixels under them.
-
+- **Some layers leave the pixels alone.** Effects that depend on where a cell is or on time
+  (`Scanlines`, `Gradient`, `RainbowWave`, `RetroCrt`, `Ripple`), `ContrastPolicy`, custom
+  effects, mask clips, and an `Animated` opacity without `opacity_target` recolor cells without
+  reaching the pixels under them. So does an `EffectScope` that wraps an overlay's portal rather
+  than sitting inside the overlay.
+- **A painted surface covers an image.** A `Canvas` or `Center` whose style paints a background,
+  even a translucent one, replaces the cells it covers, so the image stops showing there instead of
+  dimming.
 - **Reattaching to a session loses images drawn before the attach.** `export_replay_bytes` is a
   text replay stream and does not re-emit image payloads.
 - **A partly visible image is cropped, not scaled.** That is what makes scrolling look right, but
@@ -296,8 +320,8 @@ cells still show it.
   already cropped an image that runs past the viewport, so these are the pixels inside it.
 - **A backdrop dims the pixels.** Under an open [modal backdrop](#under-a-modal-backdrop) a
   capture records the recolored pixels, so `rgba`, the half-block stand-ins, and `to_png()` all
-  show the image dimmed like the cells around it. Other layers that recolor cells without drawing
-  into them leave the image at full brightness where it still shows.
+  show the image dimmed like the cells around it. So do the layers in the tree that reach pixels;
+  [the rest](#known-limits) leave the image at full brightness where it still shows.
 - **A capture does not wait for an encode.** It never encodes for a host, so the first capture
   after an image arrives already has it.
 - `TerminalScreen::capture_frame()` crops each placement to the viewport the way the renderer

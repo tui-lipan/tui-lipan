@@ -18,6 +18,8 @@ pub(crate) mod heatmap;
 pub(crate) mod hex_area;
 #[cfg(feature = "image")]
 pub(crate) mod image;
+#[cfg(feature = "image")]
+pub(crate) mod image_effects;
 pub(crate) mod input;
 pub(crate) mod list;
 pub(crate) mod mouse_region;

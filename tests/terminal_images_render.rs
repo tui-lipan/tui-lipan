@@ -747,3 +747,189 @@ fn a_png_of_an_open_backdrop_draws_the_dimmed_pixels() {
         );
     }
 }
+
+/// What sits around or over the pane in [`LayeredPane`].
+#[derive(Clone)]
+enum Layer {
+    /// An `EffectScope` wrapping the pane.
+    Scope(VisualEffect),
+    /// An `EffectScope` with several effects wrapping the pane.
+    Scopes(Vec<VisualEffect>),
+    /// An `Animated` wrapping the pane, faded toward a color.
+    Fade(f32, Color),
+    /// A `Local`-scope modal over the pane.
+    LocalModal(Style),
+    /// A `Center` the pane draws inside, painting its style first.
+    Surface(Style),
+    /// An `EffectScope` stacked beneath the pane, so it has run by the time the pane draws.
+    Beneath(VisualEffect),
+}
+
+struct LayeredPane {
+    screen: Rc<RefCell<TerminalScreen>>,
+    layer: Layer,
+}
+
+impl Component for LayeredPane {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let pane = Terminal::new()
+            .screen(TerminalScreenHandle::new(Rc::clone(&self.screen)))
+            .scrollbar(false);
+        match &self.layer {
+            Layer::Scope(effect) => EffectScope::new().effect(effect.clone()).child(pane).into(),
+            Layer::Scopes(effects) => EffectScope::new()
+                .effects(effects.iter().cloned())
+                .child(pane)
+                .into(),
+            Layer::Fade(opacity, target) => Animated::new(pane)
+                .opacity(*opacity)
+                .opacity_target(*target)
+                .into(),
+            Layer::LocalModal(backdrop) => ZStack::new()
+                .child(pane)
+                .child(
+                    Modal::new()
+                        .scope(OverlayScope::Local)
+                        .width(Length::Px(6))
+                        .height(Length::Px(2))
+                        .border(false)
+                        .padding(0)
+                        .backdrop_style(*backdrop)
+                        .child(Text::new("modal")),
+                )
+                .into(),
+            Layer::Surface(style) => Center::new()
+                .width(Size::Percent(100))
+                .height(Size::Percent(100))
+                .style(*style)
+                .child(pane)
+                .into(),
+            Layer::Beneath(effect) => ZStack::new()
+                .child(
+                    EffectScope::new().effect(effect.clone()).child(
+                        Center::new()
+                            .width(Size::Percent(100))
+                            .height(Size::Percent(100)),
+                    ),
+                )
+                .child(pane)
+                .into(),
+        }
+    }
+}
+
+/// [`modal_pane`]'s screen, a red image and red text cells, under `layer`.
+fn layered_pane(layer: Layer) -> CapturedFrame {
+    let mut output = red_image(4, 2);
+    output.extend_from_slice(b"\x1b[6;11H\x1b[48;2;255;0;0mtext\x1b[0m");
+    output.extend_from_slice(b"\x1b[6;1H\x1b[48;2;255;0;0m \x1b[0m");
+    let mut screen = TerminalScreen::new(6, 20, 100);
+    screen.set_cell_size(CELL);
+    screen.process_bytes(&output);
+    let mut backend = TestBackend::new(LayeredPane {
+        screen: Rc::new(RefCell::new(screen)),
+        layer,
+    });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 6,
+    });
+    backend.render();
+    backend.advance(Duration::from_secs(1));
+    backend.render();
+    backend.capture_frame()
+}
+
+/// Every image pixel took the color the red text cells did, and that color is not red.
+fn assert_pixels_match_the_cells(frame: &CapturedFrame, what: &str) {
+    let text_bg = frame.cell(10, 5).bg;
+    assert_ne!(text_bg, RED, "{what} recolors the cells");
+    let recolored = rgb(text_bg);
+    assert!(
+        image_pixels(frame).iter().all(|&pixel| pixel == recolored),
+        "{what}: every image pixel is {recolored:?}, like the red cells beside it"
+    );
+}
+
+#[test]
+fn an_effect_scope_dims_image_pixels_like_the_cells_it_dims() {
+    let frame = layered_pane(Layer::Scope(VisualEffect::dim(0.5)));
+    assert_pixels_match_the_cells(&frame, "a dimming scope");
+}
+
+#[test]
+fn an_effect_that_mixes_channels_recolors_image_pixels_exactly() {
+    let frame = layered_pane(Layer::Scope(VisualEffect::Monochrome { strength: 1.0 }));
+    assert_pixels_match_the_cells(&frame, "a monochrome scope");
+}
+
+#[test]
+fn an_animated_fade_toward_a_color_reaches_image_pixels() {
+    let frame = layered_pane(Layer::Fade(0.4, Color::Rgb(0, 0, 40)));
+    assert_pixels_match_the_cells(&frame, "a fade");
+}
+
+#[test]
+fn a_local_modal_backdrop_dims_the_image_it_covers() {
+    let frame = layered_pane(Layer::LocalModal(recede()));
+    assert_pixels_match_the_cells(&frame, "a local backdrop");
+}
+
+#[test]
+fn passes_that_leave_cell_backgrounds_alone_leave_the_pixels_alone() {
+    for layer in [
+        Layer::Scope(VisualEffect::dim(0.5).foreground_only()),
+        Layer::Surface(Style::new().dim_by(0.5)),
+        Layer::Beneath(VisualEffect::dim(0.5)),
+    ] {
+        let frame = layered_pane(layer);
+        assert_eq!(frame.cell(10, 5).bg, RED, "the cells keep their color");
+        assert!(
+            image_pixels(&frame)
+                .iter()
+                .all(|&pixel| pixel == [255, 0, 0, 255]),
+            "and so do the pixels"
+        );
+    }
+}
+
+#[test]
+fn each_clipped_effect_of_a_scope_recolors_only_the_pixels_it_covers() {
+    let clipped = |x: i16, w: u16, inner: VisualEffect| VisualEffect::Clipped {
+        bounds: Some(Rect { x, y: 0, w, h: 6 }),
+        mask: None,
+        inner: Box::new(inner),
+    };
+    let frame = layered_pane(Layer::Scopes(vec![
+        clipped(0, 2, VisualEffect::dim(0.5)),
+        clipped(2, 18, VisualEffect::Monochrome { strength: 1.0 }),
+    ]));
+
+    let left = rgb(frame.cell(0, 5).bg);
+    let right = rgb(frame.cell(10, 5).bg);
+    assert_ne!(
+        left, right,
+        "the two clips recolor the red cells differently"
+    );
+    let width = (4 * CELL.width) as usize;
+    for (index, &pixel) in image_pixels(&frame).iter().enumerate() {
+        let expected = if index % width < 2 * CELL.width as usize {
+            left
+        } else {
+            right
+        };
+        assert_eq!(pixel, expected, "pixel {index}");
+    }
+}

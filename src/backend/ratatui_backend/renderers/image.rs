@@ -35,6 +35,9 @@ use crate::backend::ratatui_backend::common::{
     BackdropBackgroundEffect, to_ratatui_rect, to_ratatui_style,
 };
 use crate::backend::ratatui_backend::image_support;
+use crate::backend::ratatui_backend::renderers::image_effects::{
+    ReplayedEffect, for_each_pending_image_effect,
+};
 #[cfg(feature = "terminal-images")]
 use crate::backend::ratatui_backend::shared_frame::{self, SharedFrame};
 use crate::style::resolve::resolve_base_style;
@@ -57,11 +60,42 @@ thread_local! {
     static IMAGE_BACKDROPS: RefCell<Vec<ImageBackdrop>> = const { RefCell::new(Vec::new()) };
 }
 
-/// An overlay backdrop the renderer will apply over `rect` after the images under it have drawn.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// A recolor the renderer will apply over `rect` after the images under it have drawn.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ImageBackdrop {
     pub(crate) rect: ratatui::layout::Rect,
-    pub(crate) effect: BackdropBackgroundEffect,
+    pub(crate) effect: PixelEffect,
+}
+
+/// How a layer over an image recolors the cells, and so the pixels, it covers.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum PixelEffect {
+    /// A root overlay's backdrop.
+    Backdrop(BackdropBackgroundEffect),
+    /// A pass inside the layer the image draws in. See [`super::image_effects`].
+    Replayed(ReplayedEffect),
+}
+
+impl From<BackdropBackgroundEffect> for PixelEffect {
+    fn from(effect: BackdropBackgroundEffect) -> Self {
+        Self::Backdrop(effect)
+    }
+}
+
+impl PixelEffect {
+    fn is_per_channel(&self) -> bool {
+        match self {
+            Self::Backdrop(effect) => effect.is_per_channel(),
+            Self::Replayed(effect) => effect.is_per_channel(),
+        }
+    }
+
+    fn apply_rgb(&self, rgb: (u8, u8, u8)) -> (u8, u8, u8) {
+        match self {
+            Self::Backdrop(effect) => effect.apply_rgb(rgb),
+            Self::Replayed(effect) => effect.apply_rgb(rgb),
+        }
+    }
 }
 
 /// Tell image draws which backdrops will recolor the cells they cover.
@@ -85,46 +119,46 @@ pub(crate) fn clear_image_backdrops() {
 struct BackdropMask {
     columns: u16,
     rows: u16,
-    layers: Vec<(ratatui::layout::Rect, BackdropBackgroundEffect)>,
+    layers: Vec<(ratatui::layout::Rect, PixelEffect)>,
 }
 
 /// Backdrops beyond this many over one image are ignored; each one is a bit in a per-cell mask.
 const MAX_BACKDROP_LAYERS: usize = 64;
 
-/// The backdrops that will cover part of an image laid out over `area`, if any.
+/// The layers that will cover part of an image laid out over `area`, if any: passes still to come
+/// in the layer the image draws in, then the backdrops of overlays above it.
 fn backdrop_mask_for(area: Rect) -> Option<Arc<BackdropMask>> {
     if area.is_empty() {
         return None;
     }
-    IMAGE_BACKDROPS.with(|slot| {
-        let backdrops = slot.borrow();
-        let (x0, y0) = (i32::from(area.x), i32::from(area.y));
-        let (x1, y1) = (x0 + i32::from(area.w), y0 + i32::from(area.h));
-        let layers: Vec<_> = backdrops
-            .iter()
-            .filter_map(|backdrop| {
-                let left = x0.max(i32::from(backdrop.rect.x));
-                let top = y0.max(i32::from(backdrop.rect.y));
-                let right = x1.min(i32::from(backdrop.rect.right()));
-                let bottom = y1.min(i32::from(backdrop.rect.bottom()));
-                (left < right && top < bottom).then(|| {
-                    let covered = ratatui::layout::Rect::new(
-                        (left - x0) as u16,
-                        (top - y0) as u16,
-                        (right - left) as u16,
-                        (bottom - top) as u16,
-                    );
-                    (covered, backdrop.effect)
-                })
-            })
-            .take(MAX_BACKDROP_LAYERS)
-            .collect();
-        (!layers.is_empty()).then(|| {
-            Arc::new(BackdropMask {
-                columns: area.w,
-                rows: area.h,
-                layers,
-            })
+    let (x0, y0) = (i32::from(area.x), i32::from(area.y));
+    let (x1, y1) = (x0 + i32::from(area.w), y0 + i32::from(area.h));
+    let mut layers = Vec::new();
+    let mut add = |backdrop: &ImageBackdrop| {
+        if layers.len() == MAX_BACKDROP_LAYERS {
+            return;
+        }
+        let left = x0.max(i32::from(backdrop.rect.x));
+        let top = y0.max(i32::from(backdrop.rect.y));
+        let right = x1.min(i32::from(backdrop.rect.right()));
+        let bottom = y1.min(i32::from(backdrop.rect.bottom()));
+        if left < right && top < bottom {
+            let covered = ratatui::layout::Rect::new(
+                (left - x0) as u16,
+                (top - y0) as u16,
+                (right - left) as u16,
+                (bottom - top) as u16,
+            );
+            layers.push((covered, backdrop.effect.clone()));
+        }
+    };
+    for_each_pending_image_effect(&mut add);
+    IMAGE_BACKDROPS.with(|slot| slot.borrow().iter().for_each(&mut add));
+    (!layers.is_empty()).then(|| {
+        Arc::new(BackdropMask {
+            columns: area.w,
+            rows: area.h,
+            layers,
         })
     })
 }
@@ -597,7 +631,8 @@ pub(crate) fn image_area_fully_occluded(area: ratatui::layout::Rect) -> bool {
         return false;
     }
     IMAGE_OCCLUSIONS.with(|slot| {
-        let holes = slot.borrow();
+        let mut holes = slot.borrow().clone();
+        holes.extend(super::image_effects::pending_image_occlusions());
         if holes.is_empty() {
             return false;
         }
@@ -820,7 +855,8 @@ impl CompressedKitty {
         let height = self.size.height.min(297);
         let mut transmit = self.take_transmission();
         let mut symbol = String::new();
-        let holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
+        let mut holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
+        holes.extend(super::image_effects::pending_image_occlusions());
         let mut painted_placeholders = false;
         let area = ratatui::layout::Rect::new(
             row_start,
@@ -2540,6 +2576,31 @@ mod tests {
 
     #[cfg(feature = "terminal-images")]
     #[test]
+    fn a_local_dialog_still_to_draw_is_a_hole_until_it_draws() {
+        use crate::backend::ratatui_backend::renderers::image_effects::{
+            PendingImageLayer, clear_pending_image_effects, image_effects_applied,
+            set_pending_image_effects,
+        };
+
+        let area = ratatui::layout::Rect::new(2, 2, 6, 3);
+        let dialog = crate::core::node::NodeId::new(7, 0);
+        clear_image_occlusions();
+        set_pending_image_effects(PendingImageLayer {
+            occlusions: vec![(dialog, ratatui::layout::Rect::new(0, 0, 20, 20))],
+            draws_images: true,
+            ..PendingImageLayer::default()
+        });
+        assert!(image_area_fully_occluded(area), "the dialog will cover it");
+        image_effects_applied(dialog);
+        assert!(
+            !image_area_fully_occluded(area),
+            "an image drawn after the dialog is drawn over it"
+        );
+        clear_pending_image_effects();
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
     fn scoped_terminal_layer_holes_restore_the_frame_wide_occlusions() {
         let area = ratatui::layout::Rect::new(0, 0, 2, 1);
         set_image_occlusions(vec![ratatui::layout::Rect::new(0, 0, 1, 1)]);
@@ -2802,9 +2863,10 @@ mod tests {
         assert_eq!(rect_for(100, 100, ImageFit::Crop), (2, 1, 10, 5));
     }
 
-    fn dim_half() -> BackdropBackgroundEffect {
+    fn dim_half() -> PixelEffect {
         BackdropBackgroundEffect::from_style(crate::style::Style::new().dim_by(0.5), None)
             .expect("a dim changes backgrounds")
+            .into()
     }
 
     /// The fast paths in [`Recolorer`] give exactly the colors of the effects they stand in for,
@@ -2854,7 +2916,10 @@ mod tests {
             let mask = BackdropMask {
                 columns: 1,
                 rows: 1,
-                layers: stack.iter().map(|effect| (full, *effect)).collect(),
+                layers: stack
+                    .iter()
+                    .map(|effect| (full, (*effect).into()))
+                    .collect(),
             };
             let layers = (1u64 << stack.len()) - 1;
             let mut recolorer = Recolorer::new(&mask);
@@ -2889,7 +2954,7 @@ mod tests {
         let mask = BackdropMask {
             columns: 1,
             rows: 1,
-            layers: vec![(ratatui::layout::Rect::new(0, 0, 1, 1), elevate)],
+            layers: vec![(ratatui::layout::Rect::new(0, 0, 1, 1), elevate.into())],
         };
         let exact = |rgb: [u8; 3]| {
             let (r, g, b) = elevate.apply_rgb((rgb[0], rgb[1], rgb[2]));
@@ -2937,7 +3002,7 @@ mod tests {
         let mask = BackdropMask {
             columns: 1,
             rows: 1,
-            layers: vec![(ratatui::layout::Rect::new(0, 0, 1, 1), elevate)],
+            layers: vec![(ratatui::layout::Rect::new(0, 0, 1, 1), elevate.into())],
         };
         let exact = |rgb: [u8; 3]| {
             let (r, g, b) = elevate.apply_rgb((rgb[0], rgb[1], rgb[2]));

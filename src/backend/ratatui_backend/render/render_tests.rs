@@ -5594,3 +5594,263 @@ fn auto_frame_around_a_capped_image_has_no_empty_rows() {
     assert_eq!((image.w, image.h), (38, 10));
     assert_eq!((frame.w, frame.h), (40, 12));
 }
+
+#[cfg(feature = "image")]
+mod local_layers_over_images {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::core::element::Element;
+    use crate::overlay::OverlayScope;
+    use crate::style::{Color, ColorTransform, Length};
+    use crate::widgets::{Frame, Image, ImageFit, ImageProtocol, Modal, Text, VStack, ZStack};
+
+    /// A foreground no placeholder of the test image carries.
+    const SENTINEL: Color = Color::Rgb(1, 2, 3);
+
+    struct KittyImageUnderLocalModal {
+        png: Arc<[u8]>,
+    }
+
+    impl Component for KittyImageUnderLocalModal {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: (), _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            ZStack::new()
+                .child(
+                    Image::from_bytes(Arc::clone(&self.png))
+                        .protocol(ImageProtocol::Kitty)
+                        .fit(ImageFit::Contain)
+                        .height(Length::Px(4)),
+                )
+                .child(
+                    Modal::new()
+                        .scope(OverlayScope::Local)
+                        .width(Length::Px(4))
+                        .height(Length::Px(3))
+                        .backdrop_style(Style::new().transform_fg(ColorTransform::OpacityToward {
+                            factor: 0.0,
+                            target: SENTINEL,
+                        }))
+                        .child(Text::new("")),
+                )
+                .into()
+        }
+    }
+
+    fn render_with_images(
+        runtime: &RuntimeCore<impl Component<Properties = ()>>,
+        viewport: Rect,
+    ) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(viewport.w, viewport.h)).unwrap();
+        let ctx = RenderContext {
+            tree: &runtime.tree,
+            focused: None,
+            hovered: None,
+            mouse_pos: None,
+            suppress_pointer_item_hover_nodes: None,
+            blink_visible: true,
+            effect_phase: 0,
+            images_enabled: true,
+            contrast_policy: ContrastPolicy::Off,
+            read_only_selection: None,
+            scrollbar_metrics_cache: &RefCell::new(Default::default()),
+            overlay_bg_snapshot: &RefCell::new(Vec::new()),
+            join_index: &build_join_index(&runtime.tree),
+            cursor_position: &Cell::new(None),
+            terminal_bg: None,
+            drag_preview_label: None,
+            drag_preview_at_mouse: false,
+            drag_preview_snapshot_rect: None,
+            dnd_snapshot_cells: &RefCell::new(None),
+            drag_preview_max_width: None,
+            drag_preview_max_height: None,
+            drag_preview_grab_offset: None,
+            drop_slot_source_preview_rect: None,
+            paint_glyph_caches: None,
+            copy_feedback: None,
+            copy_feedback_style: Style::default(),
+        };
+        terminal.draw(|f| render(f, &ctx)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn a_local_backdrop_keeps_the_image_ids_of_kitty_placeholders() {
+        let image = image::RgbImage::from_pixel(80, 80, image::Rgb([255, 0, 0]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 4,
+        };
+        let mut runtime = RuntimeCore::new_test(
+            KittyImageUnderLocalModal {
+                png: png.into_inner().into(),
+            },
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        );
+        runtime.init();
+        runtime.render_element(viewport, None, None, None);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let placeholders = loop {
+            let buffer = render_with_images(&runtime, viewport);
+            let placeholders: Vec<_> = buffer
+                .content()
+                .iter()
+                .filter(|cell| cell.symbol().contains('\u{10EEEE}'))
+                .map(|cell| cell.fg)
+                .collect();
+            if !placeholders.is_empty() || std::time::Instant::now() >= deadline {
+                break placeholders;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+
+        assert!(
+            !placeholders.is_empty(),
+            "the image draws as Kitty placeholders"
+        );
+        assert!(
+            placeholders
+                .iter()
+                .all(|&fg| fg != ratatui::style::Color::Rgb(1, 2, 3)),
+            "the backdrop recolors foregrounds, but a placeholder's is its image id"
+        );
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn images_drawn_before_a_local_dialog_walk_around_it() {
+        use crate::backend::ratatui_backend::renderers::image_effects::{
+            image_effects_applied, pending_image_occlusions, set_pending_image_effects,
+        };
+
+        let image = image::RgbImage::from_pixel(8, 8, image::Rgb([255, 0, 0]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 4,
+        };
+        let mut runtime = RuntimeCore::new_test(
+            KittyImageUnderLocalModal {
+                png: png.into_inner().into(),
+            },
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        );
+        runtime.init();
+        runtime.render_element(viewport, None, None, None);
+        let tree = &runtime.tree;
+        let dialog_frame = tree
+            .iter()
+            .find(|node| matches!(node.kind, NodeKind::Frame(_)))
+            .expect("the dialog is a frame");
+
+        let layer = super::super::pending_image_effects(
+            tree,
+            tree.root,
+            viewport,
+            ratatui::layout::Rect::new(0, 0, viewport.w, viewport.h),
+            None,
+        );
+        assert_eq!(layer.occlusions.len(), 1, "the dialog, not its backdrop");
+        let (owner, hole) = layer.occlusions[0];
+        assert_eq!(
+            hole,
+            super::super::to_ratatui_rect(dialog_frame.rect),
+            "the hole is the dialog"
+        );
+
+        set_pending_image_effects(layer);
+        assert_eq!(pending_image_occlusions(), vec![hole]);
+        image_effects_applied(owner);
+        assert!(
+            pending_image_occlusions().is_empty(),
+            "images inside the dialog, drawn after it, are not cut"
+        );
+    }
+
+    struct LocalModalOverFrames;
+
+    impl Component for LocalModalOverFrames {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: (), _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            ZStack::new()
+                .child(VStack::new().child(Frame::new().child(Text::new("")).height(Length::Px(3))))
+                .child(
+                    Modal::new()
+                        .scope(OverlayScope::Local)
+                        .width(Length::Px(6))
+                        .height(Length::Px(5))
+                        .backdrop_style(Style::new().dim_by(0.5))
+                        .child(Text::new("")),
+                )
+                .into()
+        }
+    }
+
+    #[test]
+    fn a_local_modal_border_replaces_the_borders_beneath_it() {
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 12,
+            h: 5,
+        };
+        let mut runtime = RuntimeCore::new_test(
+            LocalModalOverFrames,
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        );
+        runtime.init();
+        runtime.render_element(viewport, None, None, None);
+        let buffer = render_with_images(&runtime, viewport);
+
+        let row = |y: u16| -> String { (0..viewport.w).map(|x| buffer[(x, y)].symbol()).collect() };
+        let rows: Vec<String> = (0..viewport.h).map(row).collect();
+        assert_eq!(
+            buffer[(3, 2)].symbol(),
+            "│",
+            "the modal's side stays a side where the pane's bottom border runs under it: {rows:#?}"
+        );
+        assert!(
+            rows.iter()
+                .all(|row| !row.contains('┼') && !row.contains('┴') && !row.contains('┬')),
+            "no junctions join the modal to the pane: {rows:#?}"
+        );
+    }
+}
