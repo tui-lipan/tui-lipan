@@ -255,6 +255,72 @@ pub(crate) fn apply_effect_style_clipped(
     }
 }
 
+/// What an overlay backdrop does to the background of a cell it covers, at full opacity.
+///
+/// A terminal image is not cells, so the backdrop's pass over the buffer cannot reach it. This is
+/// the same background transform as [`apply_effect_style_clipped`] after the backdrop's fill, in
+/// the same order, lifted out so image pixels can be put through it and come out matching the
+/// cells beside them.
+///
+/// Foreground-only parts of the style are left out: a picture reads as surface, not as text, and
+/// the backdrop's `fg` does not apply at full opacity in the first place.
+#[cfg(feature = "image")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct BackdropBackgroundEffect {
+    fill: Option<RColor>,
+    dim_amount: Option<u32>,
+    transform: Option<ColorTransform>,
+    tint: Option<(Color, u32)>,
+    terminal_bg: Option<RColor>,
+}
+
+#[cfg(feature = "image")]
+impl BackdropBackgroundEffect {
+    /// The effect of a backdrop `style`, or `None` when it leaves cell backgrounds alone.
+    pub(crate) fn from_style(style: Style, terminal_bg: Option<RColor>) -> Option<Self> {
+        let fill = style.bg.and_then(|bg| {
+            super::convert::paint_to_ratatui_bg(bg, terminal_bg.map(from_ratatui_color))
+        });
+        let transform = dedupe_effect_transform(style.bg_transform, style.dim_amount, style.tint);
+        if fill.is_none()
+            && style.dim_amount.is_none()
+            && transform.is_none()
+            && style.tint.is_none()
+        {
+            return None;
+        }
+        Some(Self {
+            fill,
+            dim_amount: style.dim_amount.map(f32::to_bits),
+            transform,
+            tint: style.tint.map(|(color, alpha)| (color, alpha.to_bits())),
+            terminal_bg,
+        })
+    }
+
+    /// The color a cell background of `rgb` ends up after the backdrop.
+    pub(crate) fn apply_rgb(&self, rgb: (u8, u8, u8)) -> (u8, u8, u8) {
+        let mut color = match self.fill {
+            Some(RColor::Reset) => self.terminal_bg.unwrap_or(RColor::Rgb(rgb.0, rgb.1, rgb.2)),
+            Some(fill) => fill,
+            None => RColor::Rgb(rgb.0, rgb.1, rgb.2),
+        };
+        if let Some(amount) = self.dim_amount {
+            let dimmed = dim_ratatui_color(color, f32::from_bits(amount));
+            if dimmed != RColor::Reset {
+                color = dimmed;
+            }
+        }
+        if let Some(transform) = self.transform {
+            color = transform_ratatui_color(color, transform, self.terminal_bg, true).0;
+        }
+        if let Some((tint, alpha)) = self.tint {
+            color = tint_ratatui_color(color, tint, f32::from_bits(alpha));
+        }
+        from_ratatui_color(color).to_rgb().unwrap_or(rgb)
+    }
+}
+
 const RATATUI_TINT_CACHE_CAP: usize = 32;
 
 pub(crate) struct RatatuiTintCache {

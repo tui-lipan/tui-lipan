@@ -479,6 +479,10 @@ Image::from_bytes(bytes)
   in the same paint, so first-loop playback starts immediately without flashing through empty
   frames.
 
+**Under a modal backdrop** the image's pixels dim with the cells around it, encoded once as a
+separate cached variant. See
+[Terminal image passthrough](terminal-images.md#under-a-modal-backdrop) for what applies.
+
 **Environment knobs:**
 
 | Variable | Default | Description |

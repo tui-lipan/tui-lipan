@@ -1,5 +1,6 @@
 #[cfg(feature = "terminal-images")]
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 #[cfg(feature = "terminal-images")]
 use std::fmt::Write as _;
@@ -30,7 +31,9 @@ use ratatui_image::Resize;
 use ratatui_image::picker::ProtocolType;
 use ratatui_image::protocol::Protocol;
 
-use crate::backend::ratatui_backend::common::{to_ratatui_rect, to_ratatui_style};
+use crate::backend::ratatui_backend::common::{
+    BackdropBackgroundEffect, to_ratatui_rect, to_ratatui_style,
+};
 use crate::backend::ratatui_backend::image_support;
 #[cfg(feature = "terminal-images")]
 use crate::backend::ratatui_backend::shared_frame::{self, SharedFrame};
@@ -46,6 +49,203 @@ thread_local! {
     static IMAGE_PLACEHOLDERS_PAINTED: Cell<bool> = const { Cell::new(false) };
     /// Images a frame capture drew, in draw order. `Some` only inside [`record_capture_images`].
     static CAPTURE_IMAGES: RefCell<Option<Vec<CaptureImageDraw>>> = const { RefCell::new(None) };
+}
+
+thread_local! {
+    /// Backdrops that recolor the cells of images drawn from here on this frame, in the order they
+    /// apply. See [`set_image_backdrops`].
+    static IMAGE_BACKDROPS: RefCell<Vec<ImageBackdrop>> = const { RefCell::new(Vec::new()) };
+}
+
+/// An overlay backdrop the renderer will apply over `rect` after the images under it have drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ImageBackdrop {
+    pub(crate) rect: ratatui::layout::Rect,
+    pub(crate) effect: BackdropBackgroundEffect,
+}
+
+/// Tell image draws which backdrops will recolor the cells they cover.
+///
+/// A backdrop recolors cells after they are drawn, and an image is not cells, so its pixels have
+/// to be put through the same transform before they are encoded. The renderer knows every overlay
+/// before any pane draws, which is when this is set; it narrows the list before each overlay
+/// draws, since a backdrop only reaches what is beneath it.
+pub(crate) fn set_image_backdrops(backdrops: Vec<ImageBackdrop>) {
+    IMAGE_BACKDROPS.with(|slot| *slot.borrow_mut() = backdrops);
+}
+
+/// Drop the frame's backdrop list. [`set_image_backdrops`] installs the next one.
+pub(crate) fn clear_image_backdrops() {
+    IMAGE_BACKDROPS.with(|slot| slot.borrow_mut().clear());
+}
+
+/// The backdrops over an image laid out on a `columns` x `rows` cell box, as cell rects relative to
+/// its top-left cell. Only the pixels in covered cells change.
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct BackdropMask {
+    columns: u16,
+    rows: u16,
+    layers: Vec<(ratatui::layout::Rect, BackdropBackgroundEffect)>,
+}
+
+/// Backdrops beyond this many over one image are ignored; each one is a bit in a per-cell mask.
+const MAX_BACKDROP_LAYERS: usize = 64;
+
+/// The backdrops that will cover part of an image laid out over `area`, if any.
+fn backdrop_mask_for(area: Rect) -> Option<Arc<BackdropMask>> {
+    if area.is_empty() {
+        return None;
+    }
+    IMAGE_BACKDROPS.with(|slot| {
+        let backdrops = slot.borrow();
+        let (x0, y0) = (i32::from(area.x), i32::from(area.y));
+        let (x1, y1) = (x0 + i32::from(area.w), y0 + i32::from(area.h));
+        let layers: Vec<_> = backdrops
+            .iter()
+            .filter_map(|backdrop| {
+                let left = x0.max(i32::from(backdrop.rect.x));
+                let top = y0.max(i32::from(backdrop.rect.y));
+                let right = x1.min(i32::from(backdrop.rect.right()));
+                let bottom = y1.min(i32::from(backdrop.rect.bottom()));
+                (left < right && top < bottom).then(|| {
+                    let covered = ratatui::layout::Rect::new(
+                        (left - x0) as u16,
+                        (top - y0) as u16,
+                        (right - left) as u16,
+                        (bottom - top) as u16,
+                    );
+                    (covered, backdrop.effect)
+                })
+            })
+            .take(MAX_BACKDROP_LAYERS)
+            .collect();
+        (!layers.is_empty()).then(|| {
+            Arc::new(BackdropMask {
+                columns: area.w,
+                rows: area.h,
+                layers,
+            })
+        })
+    })
+}
+
+impl BackdropMask {
+    /// A non-zero identity for cache and stream keys.
+    fn key(&self) -> u64 {
+        use std::hash::{Hash as _, Hasher as _};
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish().max(1)
+    }
+
+    /// `image` with the pixels under each covered cell recolored as the backdrop recolors that
+    /// cell's background. Alpha is kept, unless `flatten` names the background a protocol without
+    /// alpha composites onto: that composite is what the cell shows, so it is what has to dim.
+    ///
+    /// Pixels map to cells the way a terminal lays the image out: scaled to fit the box without
+    /// changing shape, from the top-left corner, at `cell` pixels per cell.
+    fn apply(
+        &self,
+        image: &image::DynamicImage,
+        cell: (u32, u32),
+        flatten: Option<(u8, u8, u8)>,
+    ) -> image::DynamicImage {
+        let (width, height) = (image.width(), image.height());
+        let (columns, rows) = (u32::from(self.columns), u32::from(self.rows));
+        if width == 0 || height == 0 || columns == 0 || rows == 0 {
+            return image.clone();
+        }
+        let (cell_w, cell_h) = (cell.0.max(1), cell.1.max(1));
+        let (fitted_w, fitted_h) =
+            crate::capture::fitted_pixel_size((width, height), (columns * cell_w, rows * cell_h));
+        let cell_of = |pixel: u32, source: u32, fitted: u32, cell: u32, cells: u32| {
+            ((u64::from(pixel) * u64::from(fitted) / u64::from(source) / u64::from(cell)) as u32)
+                .min(cells - 1)
+        };
+        let column_of: Vec<u32> = (0..width)
+            .map(|x| cell_of(x, width, fitted_w.max(1), cell_w, columns))
+            .collect();
+        let row_of: Vec<u32> = (0..height)
+            .map(|y| cell_of(y, height, fitted_h.max(1), cell_h, rows))
+            .collect();
+
+        let mut cell_layers = vec![0u64; (columns * rows) as usize];
+        for (bit, (rect, _)) in self.layers.iter().enumerate() {
+            for y in rect.top()..rect.bottom().min(self.rows) {
+                for x in rect.left()..rect.right().min(self.columns) {
+                    cell_layers[usize::from(y) * usize::from(self.columns) + usize::from(x)] |=
+                        1 << bit;
+                }
+            }
+        }
+
+        // Screens and plots repeat a handful of colors, so most pixels are a lookup.
+        const MEMO_CAP: usize = 1 << 16;
+        let mut memo: HashMap<(u64, [u8; 3]), [u8; 3]> = HashMap::new();
+        let mut recolor = |layers: u64, rgb: [u8; 3]| -> [u8; 3] {
+            if let Some(&out) = memo.get(&(layers, rgb)) {
+                return out;
+            }
+            let mut color = (rgb[0], rgb[1], rgb[2]);
+            for (bit, (_, effect)) in self.layers.iter().enumerate() {
+                if layers & (1 << bit) != 0 {
+                    color = effect.apply_rgb(color);
+                }
+            }
+            let out = [color.0, color.1, color.2];
+            if memo.len() >= MEMO_CAP {
+                memo.clear();
+            }
+            memo.insert((layers, rgb), out);
+            out
+        };
+        let layers_at = |x: u32, y: u32| {
+            cell_layers[(row_of[y as usize] * columns + column_of[x as usize]) as usize]
+        };
+
+        if let (image::DynamicImage::ImageRgb8(rgb), None) = (image, flatten) {
+            let mut out = rgb.clone();
+            for (x, y, pixel) in out.enumerate_pixels_mut() {
+                let layers = layers_at(x, y);
+                if layers != 0 {
+                    pixel.0 = recolor(layers, pixel.0);
+                }
+            }
+            return image::DynamicImage::ImageRgb8(out);
+        }
+
+        let mut out = image.to_rgba8();
+        for (x, y, pixel) in out.enumerate_pixels_mut() {
+            let layers = layers_at(x, y);
+            if layers == 0 {
+                continue;
+            }
+            let [r, g, b, a] = pixel.0;
+            let (rgb, alpha) = match flatten {
+                Some(background) if a < 255 => {
+                    let over = |channel: u8, under: u8| {
+                        ((u16::from(channel) * u16::from(a)
+                            + u16::from(under) * (255 - u16::from(a))
+                            + 127)
+                            / 255) as u8
+                    };
+                    (
+                        [
+                            over(r, background.0),
+                            over(g, background.1),
+                            over(b, background.2),
+                        ],
+                        255,
+                    )
+                }
+                _ => ([r, g, b], a),
+            };
+            let [r, g, b] = recolor(layers, rgb);
+            pixel.0 = [r, g, b, alpha];
+        }
+        image::DynamicImage::ImageRgba8(out)
+    }
 }
 
 /// The mark stamped over the cells a captured image covers: `U+FFFF`, then the image's index as two
@@ -717,6 +917,8 @@ struct RenderCacheKey {
     resolved_protocol: ImageProtocol,
     /// Kitty placement depth. It is part of the encoding because the host owns compositing.
     z_index: i32,
+    /// [`BackdropMask::key`] of the backdrops dimming the pixels, or `0` for the pixels as they are.
+    backdrop: u64,
 }
 
 /// Which cells of an image laid out at `full_width` x `full_height` are visible: `width` x
@@ -755,6 +957,9 @@ struct EncodeRequest {
     image: Arc<image::DynamicImage>,
     estimated_bytes: usize,
     retention: CacheRetention,
+    /// Backdrops to recolor `image` under before it is encoded. Applied by the encoder, so a
+    /// cache hit never pays for it.
+    backdrop: Option<Arc<BackdropMask>>,
 }
 
 impl EncodeRequest {
@@ -771,8 +976,56 @@ impl EncodeRequest {
             image,
             estimated_bytes,
             retention,
+            backdrop: None,
         }
     }
+
+    /// Dim the pixels under `backdrop`, as a separate cache entry from the undimmed ones.
+    fn with_backdrop(mut self, backdrop: Option<Arc<BackdropMask>>) -> Self {
+        self.key.backdrop = backdrop.as_ref().map_or(0, |mask| mask.key());
+        self.backdrop = backdrop;
+        self
+    }
+
+    /// The queue slot a newer request replaces this one in.
+    ///
+    /// A terminal stream draws one placement, so its newest request always wins. Image widgets
+    /// share a stream per source, and two widgets showing it at once - one under a backdrop and one
+    /// above it, or at different sizes - must not keep replacing each other's queued work. Their
+    /// frames still collapse within one variant.
+    fn queue_slot(&self) -> u64 {
+        use std::hash::{Hash as _, Hasher as _};
+
+        match self.retention {
+            CacheRetention::LatestOnly => self.stream_key,
+            CacheRetention::Variants => {
+                let key = &self.key;
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                self.stream_key.hash(&mut hasher);
+                (
+                    key.width,
+                    key.height,
+                    key.crop,
+                    key.background_rgb,
+                    key.fit,
+                    key.protocol,
+                    key.resolved_protocol,
+                    key.z_index,
+                    key.backdrop,
+                )
+                    .hash(&mut hasher);
+                hasher.finish()
+            }
+        }
+    }
+}
+
+/// An earlier encode of the same placement, drawn while the requested one encodes.
+struct StandIn {
+    protocol: Arc<EncodedProtocol>,
+    /// Whether it is dimmed like the request. When it is not, drawing it would leave the picture
+    /// dimmed after its backdrop has gone, or undimmed under one.
+    same_backdrop: bool,
 }
 
 #[derive(Default)]
@@ -799,17 +1052,21 @@ impl ImageRenderCache {
         Some(protocol)
     }
 
-    fn get_latest_compatible(
-        &mut self,
-        stream_key: u64,
-        key: &RenderCacheKey,
-    ) -> Option<Arc<EncodedProtocol>> {
-        let idx = self.entries.iter().rposition(|entry| {
+    /// The newest entry that can stand in for `key` while it encodes, preferring one dimmed the same
+    /// way.
+    fn get_latest_compatible(&mut self, stream_key: u64, key: &RenderCacheKey) -> Option<StandIn> {
+        let compatible = |entry: &CacheEntry| {
             entry.key != *key
                 && stream_encoding_compatible(entry.stream_key, &entry.key, stream_key, key)
-        })?;
+        };
+        let idx = self
+            .entries
+            .iter()
+            .rposition(|entry| compatible(entry) && entry.key.backdrop == key.backdrop)
+            .or_else(|| self.entries.iter().rposition(compatible))?;
 
         let mut entry = self.entries.remove(idx);
+        let same_backdrop = entry.key.backdrop == key.backdrop;
         let retained_bytes = entry
             .protocol
             .retained_estimated_bytes(entry.estimated_bytes);
@@ -821,7 +1078,10 @@ impl ImageRenderCache {
         entry.last_used = Instant::now();
         let protocol = Arc::clone(&entry.protocol);
         self.entries.push(entry);
-        Some(protocol)
+        Some(StandIn {
+            protocol,
+            same_backdrop,
+        })
     }
 
     fn remove_at(&mut self, idx: usize) {
@@ -921,6 +1181,8 @@ fn stream_encoding_compatible(
     requested_stream: u64,
     requested: &RenderCacheKey,
 ) -> bool {
+    // `backdrop` is left out on purpose: [`AsyncEncoder::resolve_miss`] decides whether a stand-in
+    // dimmed the other way may be drawn.
     cached_stream == requested_stream
         && cached.width == requested.width
         && cached.height == requested.height
@@ -935,6 +1197,7 @@ fn stream_encoding_compatible(
 #[derive(Default)]
 struct AsyncEncoderInner {
     cache: ImageRenderCache,
+    /// [`EncodeRequest::queue_slot`]s waiting for a worker, oldest first.
     queue: VecDeque<u64>,
     queued: HashMap<u64, EncodeRequest>,
     in_flight: HashSet<u64>,
@@ -982,11 +1245,33 @@ impl AsyncEncoder {
         &self,
         stream_key: u64,
         key: &RenderCacheKey,
-    ) -> Option<Arc<EncodedProtocol>> {
+    ) -> Option<StandIn> {
         let Ok(mut inner) = self.inner.lock() else {
             return None;
         };
         inner.cache.get_latest_compatible(stream_key, key)
+    }
+
+    /// Resolve a request the cache missed: encode it now when `synchronous`, otherwise queue it and
+    /// return a stand-in.
+    ///
+    /// A stand-in dimmed the other way is not drawn. An overlay that opens or closes would otherwise
+    /// leave the picture wrongly dimmed until the worker finishes, so the request encodes now; this
+    /// happens once per backdrop change, not per frame.
+    fn resolve_miss(&self, request: EncodeRequest, synchronous: bool) -> ProtocolResolve {
+        let stand_in = self.cache_get_latest_compatible(request.stream_key, &request.key);
+        if synchronous
+            || stand_in
+                .as_ref()
+                .is_some_and(|stand_in| !stand_in.same_backdrop)
+        {
+            return synchronous_resolve(self.encode_synchronously(request), stand_in);
+        }
+
+        self.enqueue(request);
+        stand_in.map_or(ProtocolResolve::Pending, |stand_in| {
+            ProtocolResolve::Stale(stand_in.protocol)
+        })
     }
 
     fn enqueue(&self, request: EncodeRequest) {
@@ -996,11 +1281,11 @@ impl AsyncEncoder {
             return;
         };
 
-        let stream_key = request.stream_key;
+        let slot = request.queue_slot();
 
         if inner
             .in_flight_keys
-            .get(&stream_key)
+            .get(&slot)
             .is_some_and(|key| *key == request.key)
         {
             return;
@@ -1008,27 +1293,27 @@ impl AsyncEncoder {
 
         if inner
             .queued
-            .get(&stream_key)
+            .get(&slot)
             .is_some_and(|existing| existing.key == request.key)
         {
             return;
         }
 
-        let inserted_new = inner.queued.insert(stream_key, request).is_none();
+        let inserted_new = inner.queued.insert(slot, request).is_none();
         if !inserted_new {
-            // The queue already contains this stream. Its map entry now holds the newest frame,
+            // The queue already contains this slot. Its map entry now holds the newest frame,
             // while its one position in `queue` is intentionally retained.
             return;
         }
 
         while inner.queue.len() >= MAX_QUEUED_SOURCES {
-            let Some(evicted_stream) = inner.queue.pop_front() else {
+            let Some(evicted_slot) = inner.queue.pop_front() else {
                 break;
             };
-            inner.queued.remove(&evicted_stream);
+            inner.queued.remove(&evicted_slot);
         }
 
-        inner.queue.push_back(stream_key);
+        inner.queue.push_back(slot);
         self.wake.notify_one();
     }
 
@@ -1044,19 +1329,19 @@ impl AsyncEncoder {
             inner.cache.evict_expired(Instant::now());
             let queued_count = inner.queue.len();
             for _ in 0..queued_count {
-                let Some(stream_key) = inner.queue.pop_front() else {
+                let Some(slot) = inner.queue.pop_front() else {
                     break;
                 };
-                if inner.in_flight.contains(&stream_key) {
-                    inner.queue.push_back(stream_key);
+                if inner.in_flight.contains(&slot) {
+                    inner.queue.push_back(slot);
                     continue;
                 }
-                let Some(request) = inner.queued.remove(&stream_key) else {
+                let Some(request) = inner.queued.remove(&slot) else {
                     continue;
                 };
 
-                inner.in_flight.insert(stream_key);
-                inner.in_flight_keys.insert(stream_key, request.key);
+                inner.in_flight.insert(slot);
+                inner.in_flight_keys.insert(slot, request.key);
                 return request;
             }
 
@@ -1074,8 +1359,9 @@ impl AsyncEncoder {
             return;
         };
 
-        inner.in_flight.remove(&request.stream_key);
-        inner.in_flight_keys.remove(&request.stream_key);
+        let slot = request.queue_slot();
+        inner.in_flight.remove(&slot);
+        inner.in_flight_keys.remove(&slot);
         self.wake.notify_all();
 
         let Some(protocol) = protocol else {
@@ -1090,6 +1376,21 @@ impl AsyncEncoder {
             request.retention,
         );
         protocol_ready_epoch_counter().fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// What to draw after a synchronous encode. A failed one falls back to the stand-in only when it is
+/// dimmed like the request; the wrong dimming is never drawn, even as a fallback.
+fn synchronous_resolve(
+    encoded: Option<Arc<EncodedProtocol>>,
+    stand_in: Option<StandIn>,
+) -> ProtocolResolve {
+    match (encoded, stand_in) {
+        (Some(protocol), _) => ProtocolResolve::Ready(protocol),
+        (None, Some(stand_in)) if stand_in.same_backdrop => {
+            ProtocolResolve::Stale(stand_in.protocol)
+        }
+        (None, _) => ProtocolResolve::Unavailable,
     }
 }
 
@@ -1456,14 +1757,24 @@ fn build_encode_request(
         protocol: node.protocol,
         resolved_protocol: resolved,
         z_index: 0,
+        backdrop: 0,
     };
 
-    Some(EncodeRequest::new(
-        node.source_hash,
-        key,
-        decoded,
-        CacheRetention::Variants,
-    ))
+    Some(
+        EncodeRequest::new(node.source_hash, key, decoded, CacheRetention::Variants)
+            .with_backdrop(live_backdrop_mask(draw_rect, resolved)),
+    )
+}
+
+/// The backdrops to dim an image's pixels under before encoding it for `protocol`.
+///
+/// Half blocks are cells, which the backdrop dims itself; dimming their pixels too would dim them
+/// twice.
+fn live_backdrop_mask(area: Rect, protocol: ImageProtocol) -> Option<Arc<BackdropMask>> {
+    if matches!(protocol, ImageProtocol::Halfblocks) {
+        return None;
+    }
+    backdrop_mask_for(area)
 }
 
 #[cfg(feature = "terminal-images")]
@@ -1478,6 +1789,12 @@ fn kitty_image_id(request: &EncodeRequest) -> u32 {
             // repainting differently-colored Unicode placeholders for every producer frame.
             b"tui-lipan-terminal-image-stream".hash(&mut hasher);
             request.stream_key.hash(&mut hasher);
+            // The dimmed variant needs its own host image. Sharing the id would overwrite the
+            // undimmed pixels on the host, and closing the overlay would switch back to a cached
+            // encode that no longer transmits them.
+            if request.key.backdrop != 0 {
+                request.key.backdrop.hash(&mut hasher);
+            }
         }
         CacheRetention::Variants => {
             // Image widgets may render the same source independently at the same size. Preserve
@@ -1499,8 +1816,17 @@ fn encode_request(request: &EncodeRequest) -> Option<EncodedProtocol> {
 
     let size = ratatui::layout::Size::new(request.key.width, request.key.height);
     let resize = fit_to_resize(request.key.fit);
+    let cell = (
+        u32::from(picker.font_size().width),
+        u32::from(picker.font_size().height),
+    );
+    // A crop or a cover is dimmed after it is cut to its box, where pixels land exactly on cells.
+    let dim = |image: image::DynamicImage| match &request.backdrop {
+        Some(mask) => mask.apply(&image, cell, request.key.background_rgb),
+        None => image,
+    };
     if let Some(crop) = request.key.crop {
-        let cropped = crop_to_visible_cells(request, picker.font_size(), crop);
+        let cropped = dim(crop_to_visible_cells(request, picker.font_size(), crop));
         #[cfg(feature = "terminal-images")]
         if matches!(request.key.resolved_protocol, ImageProtocol::Kitty) {
             let id = kitty_image_id(request);
@@ -1514,11 +1840,11 @@ fn encode_request(request: &EncodeRequest) -> Option<EncodedProtocol> {
     }
     if matches!(request.key.fit, ImageFit::Cover) {
         let font_size = picker.font_size();
-        let covered = cover_image(
+        let covered = dim(cover_image(
             request.image.as_ref(),
             u32::from(size.width) * u32::from(font_size.width.max(1)),
             u32::from(size.height) * u32::from(font_size.height.max(1)),
-        );
+        ));
         #[cfg(feature = "terminal-images")]
         if matches!(request.key.resolved_protocol, ImageProtocol::Kitty) {
             let id = kitty_image_id(request);
@@ -1530,55 +1856,43 @@ fn encode_request(request: &EncodeRequest) -> Option<EncodedProtocol> {
             .map(|protocol| EncodedProtocol::ratatui(protocol, request.key.resolved_protocol))
             .ok();
     }
+    let dimmed = request
+        .backdrop
+        .as_ref()
+        .map(|mask| mask.apply(&request.image, cell, request.key.background_rgb));
+    let source = dimmed.as_ref().unwrap_or(request.image.as_ref());
     #[cfg(feature = "terminal-images")]
     if matches!(request.key.resolved_protocol, ImageProtocol::Kitty) {
-        let encoded_size = resize.size_for(request.image.as_ref(), picker.font_size(), size);
+        let encoded_size = resize.size_for(source, picker.font_size(), size);
         let pixel_width = u32::from(encoded_size.width) * u32::from(picker.font_size().width);
         let pixel_height = u32::from(encoded_size.height) * u32::from(picker.font_size().height);
         let background = request
             .key
             .background_rgb
             .map(|(r, g, b)| image::Rgba([r, g, b, 255]));
-        let resized = (!host_scales_into_cells(
-            request.key.fit,
-            request.image.as_ref(),
-            pixel_width,
-            pixel_height,
-        ) && (request.image.width() != pixel_width
-            || request.image.height() != pixel_height))
-            .then(|| {
-                resize.resize(
-                    request.image.as_ref(),
-                    picker.font_size(),
-                    encoded_size,
-                    background,
-                )
-            });
-        let image = resized.as_ref().unwrap_or(request.image.as_ref());
+        let resized = (!host_scales_into_cells(request.key.fit, source, pixel_width, pixel_height)
+            && (source.width() != pixel_width || source.height() != pixel_height))
+            .then(|| resize.resize(source, picker.font_size(), encoded_size, background));
+        let image = resized.as_ref().unwrap_or(source);
         let id = kitty_image_id(request);
         return CompressedKitty::new(image, encoded_size, id, request.key.z_index)
             .map(EncodedProtocol::CompressedKitty);
     }
 
     if matches!(request.key.fit, ImageFit::Scale) {
-        let encoded_size = resize.size_for(request.image.as_ref(), picker.font_size(), size);
+        let encoded_size = resize.size_for(source, picker.font_size(), size);
         let background = request
             .key
             .background_rgb
             .map(|(r, g, b)| image::Rgba([r, g, b, 255]));
-        let resized = resize.resize(
-            request.image.as_ref(),
-            picker.font_size(),
-            encoded_size,
-            background,
-        );
+        let resized = resize.resize(source, picker.font_size(), encoded_size, background);
         picker
             .new_protocol(resized, encoded_size, Resize::Fit(None))
             .map(|protocol| EncodedProtocol::ratatui(protocol, request.key.resolved_protocol))
             .ok()
     } else {
         picker
-            .new_protocol((*request.image).clone(), size, resize)
+            .new_protocol(source.clone(), size, resize)
             .map(|protocol| EncodedProtocol::ratatui(protocol, request.key.resolved_protocol))
             .ok()
     }
@@ -1649,15 +1963,7 @@ fn resolve_protocol_async(
     if let Some(protocol) = encoder.cache_get(&request.key) {
         return ProtocolResolve::Ready(protocol);
     }
-
-    let stale = encoder.cache_get_latest_compatible(request.stream_key, &request.key);
-
-    encoder.enqueue(request);
-    if let Some(protocol) = stale {
-        ProtocolResolve::Stale(protocol)
-    } else {
-        ProtocolResolve::Pending
-    }
+    encoder.resolve_miss(request, false)
 }
 
 /// Resolve an encoded protocol for pixels the caller already holds.
@@ -1687,15 +1993,37 @@ pub(crate) fn draw_encoded_image(
     if area.width == 0 || area.height == 0 {
         return false;
     }
+    let cells = Rect {
+        x: area.x as i16,
+        y: area.y as i16,
+        w: area.width,
+        h: area.height,
+    };
     #[cfg(feature = "terminal-images")]
     if capturing_images() {
-        record_capture_image(f, area, pixels());
+        // The capture paints its half-block stand-ins from these pixels after the backdrop has
+        // run, so they are dimmed here whatever the host protocol would be.
+        let pixels = match backdrop_mask_for(cells) {
+            Some(mask) => {
+                let font = image_support::picker_snapshot().font_size();
+                Arc::new(mask.apply(
+                    &pixels(),
+                    (u32::from(font.width), u32::from(font.height)),
+                    None,
+                ))
+            }
+            None => pixels(),
+        };
+        record_capture_image(f, area, pixels);
         return true;
     }
     if image_support::image_rendering_suspended() {
         return false;
     }
 
+    let resolved_protocol =
+        protocol_type_to_public(image_support::picker_snapshot().protocol_type());
+    let backdrop = live_backdrop_mask(cells, resolved_protocol);
     let key = RenderCacheKey {
         source_hash,
         frame_index: 0,
@@ -1705,10 +2033,9 @@ pub(crate) fn draw_encoded_image(
         background_rgb: None,
         fit: ImageFit::Scale,
         protocol: ImageProtocol::Auto,
-        resolved_protocol: protocol_type_to_public(
-            image_support::picker_snapshot().protocol_type(),
-        ),
+        resolved_protocol,
         z_index,
+        backdrop: backdrop.as_ref().map_or(0, |mask| mask.key()),
     };
 
     let encoder = async_encoder();
@@ -1717,32 +2044,21 @@ pub(crate) fn draw_encoded_image(
         return true;
     }
 
-    let stale = encoder.cache_get_latest_compatible(stream_key, &key);
-    let request = EncodeRequest::new(stream_key, key, pixels(), CacheRetention::LatestOnly);
+    let request = EncodeRequest::new(stream_key, key, pixels(), CacheRetention::LatestOnly)
+        .with_backdrop(backdrop);
 
     // A terminal application has already paced and decoded this frame. Native Kitty encoding is
     // fast enough to finish inside that paint, which avoids coupling visible frame cadence to the
     // worker-completion poll. Other protocols stay asynchronous because their encoders can be much
     // more expensive and do not have Kitty's one-transmission-per-frame replacement semantics.
-    if matches!(key.resolved_protocol, ImageProtocol::Kitty) {
-        if let Some(protocol) = encoder.encode_synchronously(request) {
+    let synchronous = matches!(key.resolved_protocol, ImageProtocol::Kitty);
+    match encoder.resolve_miss(request, synchronous) {
+        ProtocolResolve::Ready(protocol) | ProtocolResolve::Stale(protocol) => {
             protocol.render(f, area);
-            return true;
+            true
         }
-        if let Some(protocol) = stale {
-            protocol.render(f, area);
-            return true;
-        }
-        return false;
+        ProtocolResolve::Pending | ProtocolResolve::Unavailable => false,
     }
-
-    encoder.enqueue(request);
-
-    let Some(protocol) = stale else {
-        return false;
-    };
-    protocol.render(f, area);
-    true
 }
 
 pub(crate) fn render_image(
@@ -2342,6 +2658,251 @@ mod tests {
         assert_eq!(rect_for(100, 100, ImageFit::Crop), (2, 1, 10, 5));
     }
 
+    fn dim_half() -> BackdropBackgroundEffect {
+        BackdropBackgroundEffect::from_style(crate::style::Style::new().dim_by(0.5), None)
+            .expect("a dim changes backgrounds")
+    }
+
+    fn cells(x: i16, y: i16, w: u16, h: u16) -> Rect {
+        Rect { x, y, w, h }
+    }
+
+    /// Runs `body` with `backdrops` installed, and clears them even if it panics.
+    fn with_backdrops<R>(backdrops: Vec<ImageBackdrop>, body: impl FnOnce() -> R) -> R {
+        struct Clear;
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                clear_image_backdrops();
+            }
+        }
+        let _clear = Clear;
+        set_image_backdrops(backdrops);
+        body()
+    }
+
+    /// A backdrop over the right half of an image dims the pixels of the cells it covers and
+    /// leaves the rest, down to the cell edge, as they were.
+    #[test]
+    fn only_the_cells_a_backdrop_covers_dim() {
+        let image = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            40,
+            20,
+            image::Rgb([200, 100, 50]),
+        ));
+        let mask = with_backdrops(
+            vec![ImageBackdrop {
+                rect: ratatui::layout::Rect::new(12, 0, 10, 10),
+                effect: dim_half(),
+            }],
+            || backdrop_mask_for(cells(10, 3, 4, 1)).expect("half the image is covered"),
+        );
+        assert_eq!(mask.layers[0].0, ratatui::layout::Rect::new(2, 0, 2, 1));
+
+        let dimmed = mask.apply(&image, (10, 20), None).to_rgb8();
+        let lit = image::Rgb([200, 100, 50]);
+        let dark = image::Rgb([100, 50, 25]);
+        for x in 0..40 {
+            let expected = if x < 20 { lit } else { dark };
+            assert_eq!(*dimmed.get_pixel(x, 10), expected, "pixel column {x}");
+        }
+    }
+
+    /// Pixels map to cells the way the host lays the image out: fitted from the top-left, so a
+    /// half-height picture ends inside the first row and a backdrop over the second row misses it.
+    #[test]
+    fn a_mask_follows_the_fitted_layout_not_a_stretch() {
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            20,
+            10,
+            image::Rgba([200, 100, 50, 255]),
+        ));
+        let mask = BackdropMask {
+            columns: 2,
+            rows: 2,
+            layers: vec![(ratatui::layout::Rect::new(0, 1, 2, 1), dim_half())],
+        };
+        let dimmed = mask.apply(&image, (10, 20), None).to_rgba8();
+        assert!(
+            dimmed.pixels().all(|pixel| pixel.0 == [200, 100, 50, 255]),
+            "a 20x10 picture in a 20x40 box is drawn in the top 10 pixel rows only"
+        );
+    }
+
+    /// Alpha is the picture's shape, not its color, so it is kept; a protocol without alpha
+    /// composites onto its background first, and that composite is what dims.
+    #[test]
+    fn dimming_keeps_alpha_unless_the_protocol_flattens() {
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            10,
+            20,
+            image::Rgba([200, 100, 50, 0]),
+        ));
+        let mask = BackdropMask {
+            columns: 1,
+            rows: 1,
+            layers: vec![(ratatui::layout::Rect::new(0, 0, 1, 1), dim_half())],
+        };
+        let kept = mask.apply(&image, (10, 20), None).to_rgba8();
+        assert_eq!(kept.get_pixel(0, 0).0[3], 0);
+        let flattened = mask.apply(&image, (10, 20), Some((80, 40, 20))).to_rgba8();
+        assert_eq!(flattened.get_pixel(0, 0).0, [40, 20, 10, 255]);
+    }
+
+    #[test]
+    fn nothing_is_masked_outside_a_backdrop_or_without_one() {
+        assert!(backdrop_mask_for(cells(0, 0, 4, 2)).is_none());
+        let mask = with_backdrops(
+            vec![ImageBackdrop {
+                rect: ratatui::layout::Rect::new(10, 10, 5, 5),
+                effect: dim_half(),
+            }],
+            || backdrop_mask_for(cells(0, 0, 4, 2)),
+        );
+        assert!(
+            mask.is_none(),
+            "a backdrop elsewhere does not touch the image"
+        );
+    }
+
+    /// Half blocks are cells the backdrop dims itself, so their pixels must not be dimmed as well.
+    #[test]
+    fn half_blocks_are_left_for_the_backdrop_to_dim() {
+        let backdrops = vec![ImageBackdrop {
+            rect: ratatui::layout::Rect::new(0, 0, 20, 10),
+            effect: dim_half(),
+        }];
+        with_backdrops(backdrops, || {
+            let area = cells(0, 0, 4, 2);
+            assert!(live_backdrop_mask(area, ImageProtocol::Halfblocks).is_none());
+            for protocol in [
+                ImageProtocol::Kitty,
+                ImageProtocol::Sixel,
+                ImageProtocol::Iterm2,
+            ] {
+                assert!(
+                    live_backdrop_mask(area, protocol).is_some(),
+                    "{protocol:?} pixels must be dimmed before encoding"
+                );
+            }
+        });
+    }
+
+    /// The dimmed encode is its own cache entry beside the undimmed one, so closing an overlay over
+    /// unchanged pixels is a cache hit.
+    #[test]
+    fn dimmed_and_undimmed_encodes_are_cached_side_by_side() {
+        let mask = Arc::new(BackdropMask {
+            columns: 80,
+            rows: 24,
+            layers: vec![(ratatui::layout::Rect::new(0, 0, 80, 24), dim_half())],
+        });
+        let plain = request(7, 10);
+        let dimmed = request(7, 10).with_backdrop(Some(Arc::clone(&mask)));
+        assert_ne!(plain.key, dimmed.key);
+        assert_ne!(dimmed.key.backdrop, 0);
+        assert_eq!(
+            request(7, 10).with_backdrop(None).key,
+            plain.key,
+            "no backdrop is the plain key"
+        );
+
+        let mut cache = ImageRenderCache::default();
+        cache.insert(7, plain.key, protocol(), 10, CacheRetention::LatestOnly);
+        cache.insert(7, dimmed.key, protocol(), 10, CacheRetention::LatestOnly);
+        assert!(cache.get(&dimmed.key).is_some(), "the overlay is open");
+        assert!(
+            cache.get(&plain.key).is_some(),
+            "closing the overlay finds the undimmed encode still cached"
+        );
+        assert!(
+            stream_encoding_compatible(7, &plain.key, 7, &dimmed.key),
+            "the other variant bridges while one encodes"
+        );
+    }
+
+    /// A terminal stream keeps one host image id across frames, so the dimmed variant needs its
+    /// own: transmitting it under the shared id would overwrite the undimmed pixels on the host.
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn a_dimmed_terminal_stream_gets_its_own_kitty_image() {
+        let mask = Arc::new(BackdropMask {
+            columns: 80,
+            rows: 24,
+            layers: vec![(ratatui::layout::Rect::new(0, 0, 80, 24), dim_half())],
+        });
+        let plain = request(7, 10);
+        let dimmed = request(7, 10).with_backdrop(Some(mask));
+        assert_ne!(kitty_image_id(&plain), kitty_image_id(&dimmed));
+        assert_eq!(
+            kitty_image_id(&dimmed),
+            kitty_image_id(&request(7, 11).with_backdrop(dimmed.backdrop.clone())),
+            "a dimmed stream is still one image across frames"
+        );
+    }
+
+    /// The `Image` widget draws through the same host protocols as a terminal pane, so its pixels
+    /// dim under a backdrop too, except as half blocks.
+    #[test]
+    fn an_image_widget_under_a_backdrop_encodes_a_dimmed_variant() {
+        let request_for = |protocol: ImageProtocol| {
+            let mut node = ImageNode::from(
+                crate::widgets::Image::from_bytes(Vec::new())
+                    .fit(ImageFit::Scale)
+                    .protocol(protocol),
+            );
+            node.decoded = Some(Arc::new(image::DynamicImage::new_rgba8(40, 40)));
+            build_encode_request(&node, cells(2, 1, 4, 2), None).expect("a decoded image")
+        };
+        let plain = request_for(ImageProtocol::Kitty);
+        assert_eq!(plain.key.backdrop, 0);
+
+        with_backdrops(
+            vec![ImageBackdrop {
+                rect: ratatui::layout::Rect::new(0, 0, 20, 10),
+                effect: dim_half(),
+            }],
+            || {
+                let dimmed = request_for(ImageProtocol::Kitty);
+                assert!(dimmed.backdrop.is_some());
+                assert_ne!(dimmed.key, plain.key, "the dimmed encode caches apart");
+                let half_blocks = request_for(ImageProtocol::Halfblocks);
+                assert!(half_blocks.backdrop.is_none());
+                assert_eq!(half_blocks.key.backdrop, 0);
+            },
+        );
+    }
+
+    /// The encoder puts the pixels through the mask before encoding, whatever the protocol.
+    #[test]
+    fn the_encoder_dims_before_it_encodes() {
+        let red = Arc::new(image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            10,
+            20,
+            image::Rgb([200, 0, 0]),
+        )));
+        let mask = Arc::new(BackdropMask {
+            columns: 1,
+            rows: 1,
+            layers: vec![(ratatui::layout::Rect::new(0, 0, 1, 1), dim_half())],
+        });
+        let mut key = key(1);
+        (key.width, key.height) = (1, 1);
+        let request =
+            EncodeRequest::new(1, key, red, CacheRetention::LatestOnly).with_backdrop(Some(mask));
+        let encoded = encode_request(&request).expect("half blocks encode");
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(1, 1)).expect("terminal");
+        terminal
+            .draw(|f| encoded.render(f, f.area()))
+            .expect("draw");
+        let cell = terminal.backend().buffer()[(0, 0)].clone();
+        assert!(
+            [cell.fg, cell.bg].contains(&ratatui::style::Color::Rgb(100, 0, 0)),
+            "the encoded cell carries the dimmed red, got {cell:?}"
+        );
+    }
+
     fn key(source_hash: u64) -> RenderCacheKey {
         RenderCacheKey {
             source_hash,
@@ -2354,6 +2915,7 @@ mod tests {
             protocol: ImageProtocol::Auto,
             resolved_protocol: ImageProtocol::Halfblocks,
             z_index: 0,
+            backdrop: 0,
         }
     }
 
@@ -2526,7 +3088,155 @@ mod tests {
 
         let bootstrap = cache.get_latest_compatible(7, &key(11)).unwrap();
 
-        assert!(bootstrap.transmission_pending());
+        assert!(bootstrap.protocol.transmission_pending());
+    }
+
+    fn dimmed(mut key: RenderCacheKey) -> RenderCacheKey {
+        key.backdrop = 5;
+        key
+    }
+
+    fn widget_request(key: RenderCacheKey) -> EncodeRequest {
+        EncodeRequest::new(
+            7,
+            key,
+            Arc::new(image::DynamicImage::new_rgba8(1, 1)),
+            CacheRetention::Variants,
+        )
+    }
+
+    /// One animated source shown twice, under a modal and above it: both copies keep advancing
+    /// frames, and neither may keep replacing the other's queued work.
+    #[test]
+    fn backdrop_variants_of_one_image_queue_independently() {
+        let frame = |index: usize, backdrop: bool| {
+            let mut key = key(10);
+            key.frame_index = index;
+            widget_request(if backdrop { dimmed(key) } else { key })
+        };
+        let encoder = AsyncEncoder::default();
+        for index in 17..20 {
+            encoder.enqueue(frame(index, true));
+            encoder.enqueue(frame(index, false));
+        }
+        assert_eq!(encoder.inner.lock().unwrap().queue.len(), 2);
+
+        let first = encoder.next_request_blocking();
+        encoder.enqueue(frame(20, true));
+        encoder.enqueue(frame(20, false));
+        let second = encoder.next_request_blocking();
+
+        assert_eq!(first.key, frame(19, true).key);
+        assert_eq!(
+            second.key,
+            frame(20, false).key,
+            "the undimmed copy encodes while the dimmed one is in flight"
+        );
+        encoder.complete_request(&first, None);
+        assert_eq!(
+            encoder.next_request_blocking().key,
+            frame(20, true).key,
+            "the dimmed copy's newest frame waited for its own worker"
+        );
+    }
+
+    #[test]
+    fn a_terminal_stream_keeps_one_queue_slot_across_backdrops() {
+        let encoder = AsyncEncoder::default();
+        encoder.enqueue(request(7, 10));
+        let mut under_modal = request(7, 11);
+        under_modal.key = dimmed(under_modal.key);
+        encoder.enqueue(under_modal);
+
+        let inner = encoder.inner.lock().unwrap();
+        assert_eq!(inner.queue.len(), 1);
+        assert_eq!(inner.queued.get(&7).unwrap().key.backdrop, 5);
+    }
+
+    #[test]
+    fn a_stand_in_dimmed_the_same_way_is_preferred() {
+        let mut cache = ImageRenderCache::default();
+        cache.insert(7, key(10), protocol(), 10, CacheRetention::Variants);
+        cache.insert(7, dimmed(key(11)), protocol(), 10, CacheRetention::Variants);
+
+        let stand_in = cache.get_latest_compatible(7, &key(12)).unwrap();
+        assert!(stand_in.same_backdrop);
+        assert_eq!(cache.entries.last().unwrap().key, key(10));
+
+        let stand_in = cache.get_latest_compatible(7, &dimmed(key(12))).unwrap();
+        assert!(stand_in.same_backdrop);
+        assert_eq!(cache.entries.last().unwrap().key, dimmed(key(11)));
+    }
+
+    /// Pixels that changed while a modal was open have only dimmed encodes. Closing it encodes the
+    /// undimmed frame at once instead of queuing it behind a dimmed stand-in.
+    #[test]
+    fn a_stand_in_dimmed_the_other_way_is_replaced_by_an_encode() {
+        let small = |source_hash| {
+            let mut key = key(source_hash);
+            key.width = 1;
+            key.height = 1;
+            key
+        };
+        let encoder = AsyncEncoder::default();
+        encoder.inner.lock().unwrap().cache.insert(
+            7,
+            dimmed(small(11)),
+            protocol(),
+            10,
+            CacheRetention::LatestOnly,
+        );
+
+        let closed = request_for_key(small(12));
+        assert!(matches!(
+            encoder.resolve_miss(closed, false),
+            ProtocolResolve::Ready(_)
+        ));
+        assert!(encoder.cache_get(&small(12)).is_some());
+        assert!(encoder.inner.lock().unwrap().queue.is_empty());
+
+        let next = request_for_key(small(13));
+        assert!(
+            matches!(encoder.resolve_miss(next, false), ProtocolResolve::Stale(_)),
+            "later frames queue behind the undimmed stand-in as usual"
+        );
+        assert_eq!(encoder.inner.lock().unwrap().queue.len(), 1);
+    }
+
+    #[test]
+    fn a_failed_encode_never_falls_back_to_the_wrong_dimming() {
+        let stand_in = |same_backdrop| {
+            Some(StandIn {
+                protocol: protocol(),
+                same_backdrop,
+            })
+        };
+
+        assert!(matches!(
+            synchronous_resolve(None, stand_in(false)),
+            ProtocolResolve::Unavailable
+        ));
+        assert!(matches!(
+            synchronous_resolve(None, stand_in(true)),
+            ProtocolResolve::Stale(_)
+        ));
+        assert!(matches!(
+            synchronous_resolve(None, None),
+            ProtocolResolve::Unavailable
+        ));
+        assert!(matches!(
+            synchronous_resolve(Some(protocol()), stand_in(false)),
+            ProtocolResolve::Ready(_)
+        ));
+    }
+
+    fn request_for_key(key: RenderCacheKey) -> EncodeRequest {
+        EncodeRequest::new(
+            7,
+            key,
+            Arc::new(image::DynamicImage::new_rgba8(1, 1)),
+            CacheRetention::LatestOnly,
+        )
     }
 
     #[test]

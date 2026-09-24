@@ -212,6 +212,18 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
         );
         ImageOcclusionGuard
     };
+    #[cfg(feature = "image")]
+    let image_backdrops = overlay_image_backdrops(tree, content_rect, ctx.terminal_bg);
+    #[cfg(feature = "image")]
+    let _image_backdrop_guard = {
+        crate::backend::ratatui_backend::renderers::image::set_image_backdrops(
+            image_backdrops
+                .iter()
+                .map(|&(_, backdrop)| backdrop)
+                .collect(),
+        );
+        ImageBackdropGuard
+    };
 
     if tree.is_valid(initial_root) && !overlay_nodes.contains(&initial_root) {
         render_subtree(
@@ -222,10 +234,20 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
         );
     }
 
-    for overlay in tree.overlay_roots() {
+    for (overlay_index, overlay) in tree.overlay_roots().iter().enumerate() {
         if !tree.is_valid(overlay.id) {
             continue;
         }
+        #[cfg(feature = "image")]
+        crate::backend::ratatui_backend::renderers::image::set_image_backdrops(
+            image_backdrops
+                .iter()
+                .filter(|&&(index, _)| index > overlay_index)
+                .map(|&(_, backdrop)| backdrop)
+                .collect(),
+        );
+        #[cfg(not(feature = "image"))]
+        let _ = overlay_index;
         let overlay_opacity = overlay.opacity.clamp(0.0, 1.0);
         let restore_mode = overlay_clear_restore_mode(tree.node(overlay.id));
         let surface_alpha = overlay_surface_alpha(tree.node(overlay.id));
@@ -1800,6 +1822,55 @@ impl Drop for ImageOcclusionGuard {
     fn drop(&mut self) {
         crate::backend::ratatui_backend::renderers::image::clear_image_occlusions();
     }
+}
+
+/// Drops the frame's image backdrops even if paint panics, so a later frame cannot dim images under
+/// an overlay that has closed.
+#[cfg(feature = "image")]
+struct ImageBackdropGuard;
+
+#[cfg(feature = "image")]
+impl Drop for ImageBackdropGuard {
+    fn drop(&mut self) {
+        crate::backend::ratatui_backend::renderers::image::clear_image_backdrops();
+    }
+}
+
+/// The backdrop each overlay will paint, tagged with the overlay's index in draw order.
+///
+/// Recorded at the backdrop's full strength even while the overlay fades in or out. Following the
+/// fade would re-encode every image under it on every frame of it, where the full strength costs
+/// one encode on open and a cache hit on close.
+#[cfg(feature = "image")]
+fn overlay_image_backdrops(
+    tree: &NodeTree,
+    content_rect: Rect,
+    terminal_bg: Option<RColor>,
+) -> Vec<(
+    usize,
+    crate::backend::ratatui_backend::renderers::image::ImageBackdrop,
+)> {
+    let rect = to_ratatui_rect(content_rect);
+    if rect.width == 0 || rect.height == 0 {
+        return Vec::new();
+    }
+    tree.overlay_roots()
+        .iter()
+        .enumerate()
+        .filter(|(_, overlay)| tree.is_valid(overlay.id) && overlay.opacity > 0.0)
+        .filter_map(|(index, overlay)| {
+            let style = overlay.backdrop.filter(|style| !style.is_empty())?;
+            let effect =
+                crate::backend::ratatui_backend::common::BackdropBackgroundEffect::from_style(
+                    style,
+                    terminal_bg,
+                )?;
+            Some((
+                index,
+                crate::backend::ratatui_backend::renderers::image::ImageBackdrop { rect, effect },
+            ))
+        })
+        .collect()
 }
 
 /// Opaque overlay and DevTools rects a Kitty placeholder row must walk around.

@@ -12,6 +12,26 @@ use crate::style::{Color, Rect};
 )]
 pub(super) const UPPER_HALF: &str = "\u{2580}";
 
+/// The size an image of `source` pixels is drawn at in a `max` pixel box: as large as fits without
+/// changing its aspect ratio.
+#[cfg_attr(
+    not(any(feature = "image", feature = "ui-snapshot-png")),
+    allow(dead_code)
+)]
+pub(crate) fn fitted_pixel_size(
+    (width, height): (u32, u32),
+    (max_w, max_h): (u32, u32),
+) -> (u32, u32) {
+    if width == 0 || height == 0 || max_w == 0 || max_h == 0 {
+        return (0, 0);
+    }
+    let ratio = (f64::from(max_w) / f64::from(width)).min(f64::from(max_h) / f64::from(height));
+    (
+        ((f64::from(width) * ratio).round() as u32).clamp(1, max_w),
+        ((f64::from(height) * ratio).round() as u32).clamp(1, max_h),
+    )
+}
+
 /// An image drawn over part of a [`CapturedFrame`](super::CapturedFrame), such as one a program in a
 /// terminal pane displayed through the Kitty graphics protocol.
 ///
@@ -82,16 +102,12 @@ impl CapturedImage {
         allow(dead_code)
     )]
     pub(crate) fn fitted_size(&self, cell_w: u32, cell_h: u32) -> (u32, u32) {
-        let max_w = u32::from(self.area.w) * cell_w;
-        let max_h = u32::from(self.area.h) * cell_h;
-        if self.width == 0 || self.height == 0 || max_w == 0 || max_h == 0 {
-            return (0, 0);
-        }
-        let ratio = (f64::from(max_w) / f64::from(self.width))
-            .min(f64::from(max_h) / f64::from(self.height));
-        (
-            ((f64::from(self.width) * ratio).round() as u32).clamp(1, max_w),
-            ((f64::from(self.height) * ratio).round() as u32).clamp(1, max_h),
+        fitted_pixel_size(
+            (self.width, self.height),
+            (
+                u32::from(self.area.w) * cell_w,
+                u32::from(self.area.h) * cell_h,
+            ),
         )
     }
 

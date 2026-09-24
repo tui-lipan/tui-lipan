@@ -34,7 +34,7 @@ Dismissal restores the prior entry, including an unfocused `OnDemand` state.
 | `height` | `Length` | Dialog height |
 | `max_height` | `Length` | Cap the modal height; pair with `height(Length::Auto)` so the modal hugs its content but never exceeds the cap (inner content scrolls past it) |
 | `reserve_height` | `Length` | For `RootPortal` modals: center as if the modal were this tall, then top-align it in that band, so the top edge stays fixed as content grows and shrinks. Positions only — content taller than the band extends past its bottom |
-| `backdrop_style` | `Style` | Backdrop overlay style |
+| `backdrop_style` | `Style` | Backdrop overlay style. A `RootPortal` backdrop also dims images behind it ([details](terminal-images.md#under-a-modal-backdrop)) |
 | `frame_style` | `Style` | Dialog container style |
 | `focus_style` | `Style` | Dialog frame style while the modal or a descendant holds focus |
 | `extend_focus_style` | `Style` | Extend the themed dialog frame focus style |

@@ -18,6 +18,8 @@ mod png;
 
 pub use cast::CastRecording;
 pub use image_layer::CapturedImage;
+#[cfg(feature = "image")]
+pub(crate) use image_layer::fitted_pixel_size;
 
 /// Captured terminal cell data converted to crate-owned style primitives.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -219,6 +219,10 @@ name = "terminal_images"
 required-features = ["terminal-images"]
 
 [[example]]
+name = "image_backdrop"
+required-features = ["terminal-images"]
+
+[[example]]
 name = "terminal_search_highlight"
 required-features = ["terminal"]
 

@@ -227,7 +227,36 @@ gets a clean answer rather than silence:
 
 Sixel input from the child is a separate protocol and is not read.
 
+## Under a modal backdrop
+
+A root-portal overlay's backdrop (`Modal::backdrop_style`, `CommandPalette::backdrop_style`)
+recolors the cells behind it. An image is not cells, and the host has no per-image opacity, so
+the renderer recolors the image's pixels instead, before encoding them: the backdrop's fill,
+`dim_by`, `tint_by`, and background transform, applied exactly as they apply to a cell
+background, so a picture dims to the same color as the cells beside it. Alpha is kept. Foreground
+transforms do not apply, because a picture reads as surface, not as text.
+
+- **Only covered cells dim.** Root backdrops span the whole viewport, so in practice that is the
+  whole visible image; the part under the dialog itself is hidden as before.
+- **One encode per image on open.** The dimmed pixels are cached as their own variant beside the
+  undimmed ones, and a Kitty stream transmits them under a separate image id. Closing the dialog
+  over pixels that have not changed switches back to the undimmed image the host already holds.
+  Pixels that changed while it was open, such as a live plot, have only dimmed encodes, so
+  closing encodes the current frame undimmed.
+- **Never the wrong dimming.** While an image re-encodes, its previous frame normally stays on
+  screen. When the only previous frame is dimmed the other way, because the dialog just opened or
+  closed, the renderer encodes the new frame during that paint instead, for every protocol. That
+  costs one synchronous encode per image at each open or close, and none on later frames.
+- **Full strength at once.** Images take the backdrop at its full strength from its first frame.
+  Following a fade would re-encode every image under it on every frame of the fade.
+- **Half blocks are left to the backdrop.** They are cells, which the backdrop already recolors.
+- **Kitty image ids survive.** A placeholder cell that carries its image id in its foreground keeps
+  that foreground under a backdrop tint; only the pixels dim.
+
 ## Known limits
+
+- **Only root-portal backdrops dim images.** A `Local`-scope modal's backdrop, an `EffectScope`,
+  and an `Animated` layer's opacity recolor cells without reaching the pixels under them.
 
 - **Reattaching to a session loses images drawn before the attach.** `export_replay_bytes` is a
   text replay stream and does not re-emit image payloads.
@@ -256,8 +285,10 @@ cells still show it.
 - **A PNG draws the pixels.** `to_png()` scales each image into its cells at the PNG's own cell
   size, keeping its aspect ratio from the top-left corner as a terminal does, and draws only the
   cells it still shows in. Transparent pixels show the recorded background, not the stand-in.
-- **Only covering hides an image.** A layer that recolors cells without drawing into them, such
-  as a dimmed backdrop behind a modal, leaves the image at full brightness where it still shows.
+- **A backdrop dims the pixels.** Under an open [modal backdrop](#under-a-modal-backdrop) a
+  capture records the recolored pixels, so `rgba`, the half-block stand-ins, and `to_png()` all
+  show the image dimmed like the cells around it. Other layers that recolor cells without drawing
+  into them leave the image at full brightness where it still shows.
 - **A capture does not wait for an encode.** It never encodes for a host, so the first capture
   after an image arrives already has it.
 - `TerminalScreen::capture_frame()` crops each placement to the viewport the way the renderer

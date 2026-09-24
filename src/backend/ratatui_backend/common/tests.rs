@@ -927,3 +927,65 @@ fn clipped_bounds_only_tints_inside_rect() {
     assert_ne!(buf[(1, 0)].fg, buf[(0, 0)].fg);
     assert_eq!(buf[(1, 0)].fg, buf[(2, 0)].fg);
 }
+
+/// An image pixel under a backdrop must come out the color a cell background of the same color
+/// does, or a dimmed picture sits visibly brighter or darker than the cells beside it.
+#[cfg(feature = "image")]
+#[test]
+fn backdrop_background_effect_matches_the_cell_pass() {
+    use super::BackdropBackgroundEffect;
+
+    let terminal_bg = Some(RColor::Rgb(0x13, 0x14, 0x1a));
+    let styles = [
+        Style::new().dim_by(0.5),
+        Style::new().tint_by(Color::rgb(0, 0, 40), 0.5),
+        Style::new().transform_bg(ColorTransform::Opacity(0.3)),
+        Style::new().transform_bg(ColorTransform::Elevate(0.4)),
+        Style::new()
+            .dim_by(0.25)
+            .tint_by(Color::rgb(30, 0, 60), 0.4)
+            .transform_bg(ColorTransform::Lighten(0.2)),
+        Style::new().bg(Color::rgb(10, 20, 30)).dim_by(0.5),
+    ];
+    let sources = [(255, 0, 0), (12, 200, 90), (0, 0, 0), (255, 255, 255)];
+    for style in styles {
+        let effect = BackdropBackgroundEffect::from_style(style, terminal_bg)
+            .expect("each style changes backgrounds");
+        for (r, g, b) in sources {
+            let mut term = Terminal::new(TestBackend::new(1, 1)).unwrap();
+            term.draw(|f| {
+                f.buffer_mut().cell_mut((0, 0)).unwrap().bg = RColor::Rgb(r, g, b);
+                if let Some(bg) = style.bg {
+                    f.buffer_mut().cell_mut((0, 0)).unwrap().bg =
+                        super::paint_to_ratatui_bg(bg, None).unwrap();
+                }
+                apply_effect_style_clipped(
+                    f,
+                    Rect {
+                        x: 0,
+                        y: 0,
+                        w: 1,
+                        h: 1,
+                    },
+                    style,
+                    None,
+                    terminal_bg,
+                );
+                let RColor::Rgb(cr, cg, cb) = f.buffer_mut().cell((0, 0)).unwrap().bg else {
+                    panic!("a truecolor background stays truecolor");
+                };
+                assert_eq!(
+                    effect.apply_rgb((r, g, b)),
+                    (cr, cg, cb),
+                    "{style:?} over ({r},{g},{b})"
+                );
+            })
+            .unwrap();
+        }
+    }
+    assert_eq!(
+        BackdropBackgroundEffect::from_style(Style::new().fg(Color::Red), terminal_bg),
+        None,
+        "a foreground-only backdrop leaves pictures alone"
+    );
+}
