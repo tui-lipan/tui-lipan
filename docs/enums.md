@@ -167,7 +167,13 @@ anti-aliased arcs, diagonals are anti-aliased, and eighths, quadrants and shades
 fill exact fractions of the cell. The few characters mixing single and double
 lines are left to the font.
 
-A private-use icon, such as a Nerd Font symbol, is never cut at its cell edge.
+Powerline separators (U+E0B0-U+E0BF) are drawn from geometry the same way, so
+no Nerd Font is needed for them. Arrows, half circles, and corner triangles span
+the full cell and meet the edge they close, so a `CapStyle::Arrow` or
+`CapStyle::Round` cap joins its segment without a background seam. The thin
+variants follow the light line thickness.
+
+Any other private-use icon, such as a Nerd Font symbol, is never cut at its cell edge.
 Followed by a blank of the same background, it may run into that blank, as
 terminals allow; an icon wider than the room it has is scaled down to fit.
 
