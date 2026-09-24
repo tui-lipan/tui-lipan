@@ -569,10 +569,6 @@ pub struct TerminalScreen {
     /// Decoded images and their placements, anchored to the same absolute lines as the marks.
     #[cfg(feature = "terminal-images")]
     graphics: TerminalGraphics,
-    /// Whether the alternate screen was active after the last chunk, so leaving it can drop the
-    /// placements that belonged to it.
-    #[cfg(feature = "terminal-images")]
-    graphics_alt_screen: bool,
     /// Cumulative scrollback lines evicted since creation.
     evicted_lines: u64,
     /// Bumped when absolute line indices are invalidated.
@@ -1194,8 +1190,6 @@ impl TerminalScreen {
             graphics_scanner: GraphicsScanner::default(),
             #[cfg(feature = "terminal-images")]
             graphics: TerminalGraphics::default(),
-            #[cfg(feature = "terminal-images")]
-            graphics_alt_screen: false,
             evicted_lines: 0,
             history_epoch: 0,
             alt_screen: false,
@@ -1217,7 +1211,6 @@ impl TerminalScreen {
         if evicted > 0 {
             self.evicted_lines = self.evicted_lines.saturating_add(evicted as u64);
         }
-        self.settle_graphics(evicted);
         let alt_screen = self.term.mode().contains(TermMode::ALT_SCREEN);
         if self.alt_screen != alt_screen {
             self.history_epoch = self.history_epoch.saturating_add(1);
@@ -1340,21 +1333,34 @@ impl TerminalScreen {
     /// VT parser discards `APC` bodies anyway, so removing them changes nothing it would have
     /// done - what it buys is the cursor position *at* each command, which a parser running
     /// alongside this one could not observe.
+    ///
+    /// Existing placements are brought in line with the grid before each command, not once per
+    /// chunk. A placement anchors to the grid as it stands when the command runs, so lines the
+    /// chunk evicted earlier - `clear` erasing history ahead of an image, in one relayed write -
+    /// are already behind it, and applying them afterwards would push the new image off the top.
     #[cfg(feature = "terminal-images")]
     fn feed_grid(&mut self, bytes: &[u8]) -> usize {
         if self.graphics_scanner.is_plain(bytes) {
-            return self.advance_vte(bytes);
+            let evicted = self.advance_vte(bytes);
+            self.settle_graphics(evicted);
+            return evicted;
         }
 
         let mut evicted = 0;
+        let mut unsettled = 0;
         for segment in self.graphics_scanner.scan(bytes) {
-            evicted += match segment {
-                GraphicsSegment::Text(range) => self.advance_vte(&bytes[range]),
-                GraphicsSegment::HeldEscape => self.advance_vte(&[0x1b]),
-                GraphicsSegment::Command(command) => self.apply_graphics(*command),
-            };
+            match segment {
+                GraphicsSegment::Text(range) => unsettled += self.advance_vte(&bytes[range]),
+                GraphicsSegment::HeldEscape => unsettled += self.advance_vte(&[0x1b]),
+                GraphicsSegment::Command(command) => {
+                    let (before, after) = self.apply_graphics(*command, unsettled);
+                    evicted += before;
+                    unsettled = after;
+                }
+            }
         }
-        evicted
+        self.settle_graphics(unsettled);
+        evicted + unsettled
     }
 
     #[cfg(not(feature = "terminal-images"))]
@@ -1376,11 +1382,27 @@ impl TerminalScreen {
             },
         );
         self.processor.advance(&mut ledger, bytes);
-        let (evicted, reset) = (ledger.evicted(), ledger.reset());
+        let (evicted, reset, left_alt_screen) =
+            (ledger.evicted(), ledger.reset(), ledger.left_alt_screen());
+        self.apply_ledger_events(reset, left_alt_screen);
+        evicted
+    }
+
+    /// Apply what the ledger saw happen to the grids, as opposed to lines it counted.
+    ///
+    /// Graphics commands never run inside a ledger's drive, so an alternate screen it saw left
+    /// can only have had placements made before it: they all go with that screen, even when the
+    /// same drive opened a fresh one.
+    fn apply_ledger_events(&mut self, reset: bool, left_alt_screen: bool) {
         if reset {
             self.forget_line_anchors();
         }
-        evicted
+        #[cfg(feature = "terminal-images")]
+        if left_alt_screen {
+            self.graphics.clear_alt_screen();
+        }
+        #[cfg(not(feature = "terminal-images"))]
+        let _ = left_alt_screen;
     }
 
     /// The child hard-reset the terminal (`RIS`), replacing both grids: drop everything anchored
@@ -1391,31 +1413,32 @@ impl TerminalScreen {
         self.active_prompt_mark = None;
         self.history_epoch = self.history_epoch.saturating_add(1);
         #[cfg(feature = "terminal-images")]
-        {
-            self.graphics.reset();
-            self.graphics_alt_screen = false;
-        }
+        self.graphics.reset();
     }
 
     /// Run one graphics command against the store, then apply what it implies to the grid.
+    ///
+    /// `unsettled` is what the chunk evicted since placements were last shifted. Returns the lines
+    /// evicted before the command, now settled, and those evicted after it, which the caller still
+    /// owes the placements - this one included.
     #[cfg(feature = "terminal-images")]
-    fn apply_graphics(&mut self, command: GraphicsCommand) -> usize {
+    fn apply_graphics(&mut self, command: GraphicsCommand, unsettled: usize) -> (usize, usize) {
         // VTE buffers all grid and cursor changes between BSU/ESU synchronized-update markers.
         // A graphics command is intercepted before VTE sees it, so reading the committed grid here
         // would otherwise anchor the placement at the previous frame's cursor. Commit the prefix,
         // apply the command at that cursor, then resume synchronization for the rest of the frame.
         let synchronized = self.processor.sync_timeout().pending_timeout()
             || self.processor.sync_bytes_count() != 0;
-        let mut evicted = if synchronized {
-            self.stop_vte_sync()
-        } else {
-            0
-        };
-        evicted += self.apply_graphics_at_cursor(command);
+        let mut before = unsettled;
         if synchronized {
-            evicted += self.advance_vte(b"\x1b[?2026h");
+            before += self.stop_vte_sync();
         }
-        evicted
+        self.settle_graphics(before);
+        let mut after = self.apply_graphics_at_cursor(command);
+        if synchronized {
+            after += self.advance_vte(b"\x1b[?2026h");
+        }
+        (before, after)
     }
 
     #[cfg(feature = "terminal-images")]
@@ -1430,10 +1453,9 @@ impl TerminalScreen {
             },
         );
         self.processor.stop_sync(&mut ledger);
-        let (evicted, reset) = (ledger.evicted(), ledger.reset());
-        if reset {
-            self.forget_line_anchors();
-        }
+        let (evicted, reset, left_alt_screen) =
+            (ledger.evicted(), ledger.reset(), ledger.left_alt_screen());
+        self.apply_ledger_events(reset, left_alt_screen);
         evicted
     }
 
@@ -1528,16 +1550,13 @@ impl TerminalScreen {
         cells
     }
 
-    /// Bring image placements back in line with the grid after a chunk.
+    /// Shift image placements past the `evicted` lines that fell out of scrollback.
+    ///
+    /// An alternate screen that was left needs no settling: [`Self::apply_ledger_events`] drops
+    /// its placements as the exit happens.
     #[cfg(feature = "terminal-images")]
     fn settle_graphics(&mut self, evicted: usize) {
         self.graphics.drop_evicted(evicted);
-        let alt_screen = self.term.mode().contains(TermMode::ALT_SCREEN);
-        if self.graphics_alt_screen && !alt_screen {
-            // The alternate screen is gone, and so is everything drawn on it.
-            self.graphics.clear_alt_screen();
-        }
-        self.graphics_alt_screen = alt_screen;
     }
 
     #[cfg(not(feature = "terminal-images"))]
@@ -2607,7 +2626,6 @@ impl TerminalScreen {
         {
             self.graphics_scanner.reset();
             self.graphics.reset();
-            self.graphics_alt_screen = false;
         }
         self.dirty = true;
     }
@@ -5783,6 +5801,108 @@ mod tests {
 
             screen.process_bytes(b"\x1b[?1049l");
             assert!(screen.render_snapshot().images.is_empty());
+        }
+
+        /// Feed `setup` to two fresh screens, then `parts` to one in a single write and to the
+        /// other one part per write, and return both.
+        fn fed_whole_and_in_parts(
+            rows: u16,
+            scrollback: usize,
+            setup: &[u8],
+            parts: &[&[u8]],
+        ) -> (TerminalScreen, TerminalScreen) {
+            let mut whole = screen(rows, 20, scrollback);
+            let mut split = screen(rows, 20, scrollback);
+            whole.process_bytes(setup);
+            split.process_bytes(setup);
+            whole.process_bytes(&parts.concat());
+            for part in parts {
+                split.process_bytes(part);
+            }
+            (whole, split)
+        }
+
+        fn placements(screen: &mut TerminalScreen) -> Vec<(i32, i32)> {
+            screen
+                .render_snapshot()
+                .images
+                .iter()
+                .map(|placement| (placement.row, placement.col))
+                .collect()
+        }
+
+        #[test]
+        fn clearing_scrollback_in_the_same_write_as_an_image_keeps_the_image() {
+            // `clear; icat`, as a multiplexer relays it: the history `clear` erases and the image
+            // drawn after it can arrive in one write. The erased lines were gone before the image
+            // was placed, so they must not move it.
+            let history = b"line\r\n".repeat(12);
+            let image = place(20, 40, "i=1");
+            let (mut whole, mut split) =
+                fed_whole_and_in_parts(4, 50, &history, &[b"\x1b[H\x1b[2J\x1b[3J", &image]);
+
+            assert_eq!(placements(&mut split), vec![(0, 0)]);
+            assert_eq!(placements(&mut whole), placements(&mut split));
+        }
+
+        #[test]
+        fn clearing_scrollback_inside_a_synchronized_update_keeps_the_image_drawn_after_it() {
+            // The same frame with the clear buffered by a synchronized update, which commits only
+            // when the image command arrives.
+            let history = b"line\r\n".repeat(12);
+            let image = place(20, 40, "i=1");
+            let (mut whole, mut split) = fed_whole_and_in_parts(
+                4,
+                50,
+                &history,
+                &[b"\x1b[?2026h\x1b[H\x1b[2J\x1b[3J", &image, b"\x1b[?2026l"],
+            );
+
+            assert_eq!(placements(&mut split), vec![(0, 0)]);
+            assert_eq!(placements(&mut whole), placements(&mut split));
+        }
+
+        #[test]
+        fn lines_evicted_after_an_image_in_the_same_write_still_move_it() {
+            // The opposite order: a four-row image is placed first, then output pushes its top
+            // rows out of a one-line history. Those evictions happened to the image and must
+            // shift it.
+            let image = place(20, 80, "i=1");
+            let lines = b"x\r\n".repeat(3);
+            let (mut whole, mut split) = fed_whole_and_in_parts(4, 1, b"", &[&image, &lines]);
+
+            assert_eq!(placements(&mut split).len(), 1);
+            assert_eq!(placements(&mut whole), placements(&mut split));
+        }
+
+        #[test]
+        fn an_alternate_screen_left_in_the_same_write_takes_its_images_with_it() {
+            let image = place(20, 40, "i=1,C=1");
+            let (mut whole, mut split) =
+                fed_whole_and_in_parts(6, 10, b"", &[b"\x1b[?1049h", &image, b"\x1b[?1049l"]);
+            whole.process_bytes(b"\x1b[?1049h");
+            split.process_bytes(b"\x1b[?1049h");
+
+            assert!(placements(&mut split).is_empty());
+            assert!(
+                placements(&mut whole).is_empty(),
+                "a fresh alternate screen shows the previous one's image"
+            );
+        }
+
+        #[test]
+        fn an_alternate_screen_left_and_reopened_in_one_write_starts_without_images() {
+            // No graphics command between the exit and the re-entry, so nothing but the exit
+            // itself can say the old alternate screen and its image are gone.
+            let setup = [b"\x1b[?1049h".as_slice(), &place(20, 40, "i=1,C=1")].concat();
+            let (mut whole, mut split) =
+                fed_whole_and_in_parts(6, 10, &setup, &[b"\x1b[?1049l", b"\x1b[?1049h"]);
+
+            assert!(placements(&mut split).is_empty());
+            assert!(
+                placements(&mut whole).is_empty(),
+                "a fresh alternate screen shows the previous one's image"
+            );
         }
 
         #[test]
