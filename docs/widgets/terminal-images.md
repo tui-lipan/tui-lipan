@@ -238,9 +238,15 @@ transforms do not apply, because a picture reads as surface, not as text.
 
 - **Only covered cells dim.** Root backdrops span the whole viewport, so in practice that is the
   whole visible image; the part under the dialog itself is hidden as before.
-- **One encode per image on open, none on close.** The dimmed pixels are cached as their own
-  variant beside the undimmed ones, and a Kitty stream transmits them under a separate image id,
-  so closing the dialog switches back to the undimmed image the host already holds.
+- **One encode per image on open.** The dimmed pixels are cached as their own variant beside the
+  undimmed ones, and a Kitty stream transmits them under a separate image id. Closing the dialog
+  over pixels that have not changed switches back to the undimmed image the host already holds.
+  Pixels that changed while it was open, such as a live plot, have only dimmed encodes, so
+  closing encodes the current frame undimmed.
+- **Never the wrong dimming.** While an image re-encodes, its previous frame normally stays on
+  screen. When the only previous frame is dimmed the other way, because the dialog just opened or
+  closed, the renderer encodes the new frame during that paint instead, for every protocol. That
+  costs one synchronous encode per image at each open or close, and none on later frames.
 - **Full strength at once.** Images take the backdrop at its full strength from its first frame.
   Following a fade would re-encode every image under it on every frame of the fade.
 - **Half blocks are left to the backdrop.** They are cells, which the backdrop already recolors.

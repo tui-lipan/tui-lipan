@@ -986,6 +986,46 @@ impl EncodeRequest {
         self.backdrop = backdrop;
         self
     }
+
+    /// The queue slot a newer request replaces this one in.
+    ///
+    /// A terminal stream draws one placement, so its newest request always wins. Image widgets
+    /// share a stream per source, and two widgets showing it at once - one under a backdrop and one
+    /// above it, or at different sizes - must not keep replacing each other's queued work. Their
+    /// frames still collapse within one variant.
+    fn queue_slot(&self) -> u64 {
+        use std::hash::{Hash as _, Hasher as _};
+
+        match self.retention {
+            CacheRetention::LatestOnly => self.stream_key,
+            CacheRetention::Variants => {
+                let key = &self.key;
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                self.stream_key.hash(&mut hasher);
+                (
+                    key.width,
+                    key.height,
+                    key.crop,
+                    key.background_rgb,
+                    key.fit,
+                    key.protocol,
+                    key.resolved_protocol,
+                    key.z_index,
+                    key.backdrop,
+                )
+                    .hash(&mut hasher);
+                hasher.finish()
+            }
+        }
+    }
+}
+
+/// An earlier encode of the same placement, drawn while the requested one encodes.
+struct StandIn {
+    protocol: Arc<EncodedProtocol>,
+    /// Whether it is dimmed like the request. When it is not, drawing it would leave the picture
+    /// dimmed after its backdrop has gone, or undimmed under one.
+    same_backdrop: bool,
 }
 
 #[derive(Default)]
@@ -1012,17 +1052,21 @@ impl ImageRenderCache {
         Some(protocol)
     }
 
-    fn get_latest_compatible(
-        &mut self,
-        stream_key: u64,
-        key: &RenderCacheKey,
-    ) -> Option<Arc<EncodedProtocol>> {
-        let idx = self.entries.iter().rposition(|entry| {
+    /// The newest entry that can stand in for `key` while it encodes, preferring one dimmed the same
+    /// way.
+    fn get_latest_compatible(&mut self, stream_key: u64, key: &RenderCacheKey) -> Option<StandIn> {
+        let compatible = |entry: &CacheEntry| {
             entry.key != *key
                 && stream_encoding_compatible(entry.stream_key, &entry.key, stream_key, key)
-        })?;
+        };
+        let idx = self
+            .entries
+            .iter()
+            .rposition(|entry| compatible(entry) && entry.key.backdrop == key.backdrop)
+            .or_else(|| self.entries.iter().rposition(compatible))?;
 
         let mut entry = self.entries.remove(idx);
+        let same_backdrop = entry.key.backdrop == key.backdrop;
         let retained_bytes = entry
             .protocol
             .retained_estimated_bytes(entry.estimated_bytes);
@@ -1034,7 +1078,10 @@ impl ImageRenderCache {
         entry.last_used = Instant::now();
         let protocol = Arc::clone(&entry.protocol);
         self.entries.push(entry);
-        Some(protocol)
+        Some(StandIn {
+            protocol,
+            same_backdrop,
+        })
     }
 
     fn remove_at(&mut self, idx: usize) {
@@ -1134,8 +1181,8 @@ fn stream_encoding_compatible(
     requested_stream: u64,
     requested: &RenderCacheKey,
 ) -> bool {
-    // `backdrop` is left out on purpose: while the dimmed or undimmed variant encodes, the other
-    // one is a better stand-in than a blank.
+    // `backdrop` is left out on purpose: [`AsyncEncoder::resolve_miss`] decides whether a stand-in
+    // dimmed the other way may be drawn.
     cached_stream == requested_stream
         && cached.width == requested.width
         && cached.height == requested.height
@@ -1150,6 +1197,7 @@ fn stream_encoding_compatible(
 #[derive(Default)]
 struct AsyncEncoderInner {
     cache: ImageRenderCache,
+    /// [`EncodeRequest::queue_slot`]s waiting for a worker, oldest first.
     queue: VecDeque<u64>,
     queued: HashMap<u64, EncodeRequest>,
     in_flight: HashSet<u64>,
@@ -1197,11 +1245,38 @@ impl AsyncEncoder {
         &self,
         stream_key: u64,
         key: &RenderCacheKey,
-    ) -> Option<Arc<EncodedProtocol>> {
+    ) -> Option<StandIn> {
         let Ok(mut inner) = self.inner.lock() else {
             return None;
         };
         inner.cache.get_latest_compatible(stream_key, key)
+    }
+
+    /// Resolve a request the cache missed: encode it now when `synchronous`, otherwise queue it and
+    /// return a stand-in.
+    ///
+    /// A stand-in dimmed the other way is not drawn. An overlay that opens or closes would otherwise
+    /// leave the picture wrongly dimmed until the worker finishes, so the request encodes now; this
+    /// happens once per backdrop change, not per frame.
+    fn resolve_miss(&self, request: EncodeRequest, synchronous: bool) -> ProtocolResolve {
+        let stand_in = self.cache_get_latest_compatible(request.stream_key, &request.key);
+        if synchronous
+            || stand_in
+                .as_ref()
+                .is_some_and(|stand_in| !stand_in.same_backdrop)
+        {
+            if let Some(protocol) = self.encode_synchronously(request) {
+                return ProtocolResolve::Ready(protocol);
+            }
+            return stand_in.map_or(ProtocolResolve::Unavailable, |stand_in| {
+                ProtocolResolve::Stale(stand_in.protocol)
+            });
+        }
+
+        self.enqueue(request);
+        stand_in.map_or(ProtocolResolve::Pending, |stand_in| {
+            ProtocolResolve::Stale(stand_in.protocol)
+        })
     }
 
     fn enqueue(&self, request: EncodeRequest) {
@@ -1211,11 +1286,11 @@ impl AsyncEncoder {
             return;
         };
 
-        let stream_key = request.stream_key;
+        let slot = request.queue_slot();
 
         if inner
             .in_flight_keys
-            .get(&stream_key)
+            .get(&slot)
             .is_some_and(|key| *key == request.key)
         {
             return;
@@ -1223,27 +1298,27 @@ impl AsyncEncoder {
 
         if inner
             .queued
-            .get(&stream_key)
+            .get(&slot)
             .is_some_and(|existing| existing.key == request.key)
         {
             return;
         }
 
-        let inserted_new = inner.queued.insert(stream_key, request).is_none();
+        let inserted_new = inner.queued.insert(slot, request).is_none();
         if !inserted_new {
-            // The queue already contains this stream. Its map entry now holds the newest frame,
+            // The queue already contains this slot. Its map entry now holds the newest frame,
             // while its one position in `queue` is intentionally retained.
             return;
         }
 
         while inner.queue.len() >= MAX_QUEUED_SOURCES {
-            let Some(evicted_stream) = inner.queue.pop_front() else {
+            let Some(evicted_slot) = inner.queue.pop_front() else {
                 break;
             };
-            inner.queued.remove(&evicted_stream);
+            inner.queued.remove(&evicted_slot);
         }
 
-        inner.queue.push_back(stream_key);
+        inner.queue.push_back(slot);
         self.wake.notify_one();
     }
 
@@ -1259,19 +1334,19 @@ impl AsyncEncoder {
             inner.cache.evict_expired(Instant::now());
             let queued_count = inner.queue.len();
             for _ in 0..queued_count {
-                let Some(stream_key) = inner.queue.pop_front() else {
+                let Some(slot) = inner.queue.pop_front() else {
                     break;
                 };
-                if inner.in_flight.contains(&stream_key) {
-                    inner.queue.push_back(stream_key);
+                if inner.in_flight.contains(&slot) {
+                    inner.queue.push_back(slot);
                     continue;
                 }
-                let Some(request) = inner.queued.remove(&stream_key) else {
+                let Some(request) = inner.queued.remove(&slot) else {
                     continue;
                 };
 
-                inner.in_flight.insert(stream_key);
-                inner.in_flight_keys.insert(stream_key, request.key);
+                inner.in_flight.insert(slot);
+                inner.in_flight_keys.insert(slot, request.key);
                 return request;
             }
 
@@ -1289,8 +1364,9 @@ impl AsyncEncoder {
             return;
         };
 
-        inner.in_flight.remove(&request.stream_key);
-        inner.in_flight_keys.remove(&request.stream_key);
+        let slot = request.queue_slot();
+        inner.in_flight.remove(&slot);
+        inner.in_flight_keys.remove(&slot);
         self.wake.notify_all();
 
         let Some(protocol) = protocol else {
@@ -1877,15 +1953,7 @@ fn resolve_protocol_async(
     if let Some(protocol) = encoder.cache_get(&request.key) {
         return ProtocolResolve::Ready(protocol);
     }
-
-    let stale = encoder.cache_get_latest_compatible(request.stream_key, &request.key);
-
-    encoder.enqueue(request);
-    if let Some(protocol) = stale {
-        ProtocolResolve::Stale(protocol)
-    } else {
-        ProtocolResolve::Pending
-    }
+    encoder.resolve_miss(request, false)
 }
 
 /// Resolve an encoded protocol for pixels the caller already holds.
@@ -1966,7 +2034,6 @@ pub(crate) fn draw_encoded_image(
         return true;
     }
 
-    let stale = encoder.cache_get_latest_compatible(stream_key, &key);
     let request = EncodeRequest::new(stream_key, key, pixels(), CacheRetention::LatestOnly)
         .with_backdrop(backdrop);
 
@@ -1974,25 +2041,14 @@ pub(crate) fn draw_encoded_image(
     // fast enough to finish inside that paint, which avoids coupling visible frame cadence to the
     // worker-completion poll. Other protocols stay asynchronous because their encoders can be much
     // more expensive and do not have Kitty's one-transmission-per-frame replacement semantics.
-    if matches!(key.resolved_protocol, ImageProtocol::Kitty) {
-        if let Some(protocol) = encoder.encode_synchronously(request) {
+    let synchronous = matches!(key.resolved_protocol, ImageProtocol::Kitty);
+    match encoder.resolve_miss(request, synchronous) {
+        ProtocolResolve::Ready(protocol) | ProtocolResolve::Stale(protocol) => {
             protocol.render(f, area);
-            return true;
+            true
         }
-        if let Some(protocol) = stale {
-            protocol.render(f, area);
-            return true;
-        }
-        return false;
+        ProtocolResolve::Pending | ProtocolResolve::Unavailable => false,
     }
-
-    encoder.enqueue(request);
-
-    let Some(protocol) = stale else {
-        return false;
-    };
-    protocol.render(f, area);
-    true
 }
 
 pub(crate) fn render_image(
@@ -2721,8 +2777,8 @@ mod tests {
         });
     }
 
-    /// The dimmed encode is its own cache entry beside the undimmed one, so opening an overlay
-    /// costs one encode and closing it is a cache hit.
+    /// The dimmed encode is its own cache entry beside the undimmed one, so closing an overlay over
+    /// unchanged pixels is a cache hit.
     #[test]
     fn dimmed_and_undimmed_encodes_are_cached_side_by_side() {
         let mask = Arc::new(BackdropMask {
@@ -3022,7 +3078,128 @@ mod tests {
 
         let bootstrap = cache.get_latest_compatible(7, &key(11)).unwrap();
 
-        assert!(bootstrap.transmission_pending());
+        assert!(bootstrap.protocol.transmission_pending());
+    }
+
+    fn dimmed(mut key: RenderCacheKey) -> RenderCacheKey {
+        key.backdrop = 5;
+        key
+    }
+
+    fn widget_request(key: RenderCacheKey) -> EncodeRequest {
+        EncodeRequest::new(
+            7,
+            key,
+            Arc::new(image::DynamicImage::new_rgba8(1, 1)),
+            CacheRetention::Variants,
+        )
+    }
+
+    /// One animated source shown twice, under a modal and above it: both copies keep advancing
+    /// frames, and neither may keep replacing the other's queued work.
+    #[test]
+    fn backdrop_variants_of_one_image_queue_independently() {
+        let frame = |index: usize, backdrop: bool| {
+            let mut key = key(10);
+            key.frame_index = index;
+            widget_request(if backdrop { dimmed(key) } else { key })
+        };
+        let encoder = AsyncEncoder::default();
+        for index in 17..20 {
+            encoder.enqueue(frame(index, true));
+            encoder.enqueue(frame(index, false));
+        }
+        assert_eq!(encoder.inner.lock().unwrap().queue.len(), 2);
+
+        let first = encoder.next_request_blocking();
+        encoder.enqueue(frame(20, true));
+        encoder.enqueue(frame(20, false));
+        let second = encoder.next_request_blocking();
+
+        assert_eq!(first.key, frame(19, true).key);
+        assert_eq!(
+            second.key,
+            frame(20, false).key,
+            "the undimmed copy encodes while the dimmed one is in flight"
+        );
+        encoder.complete_request(&first, None);
+        assert_eq!(
+            encoder.next_request_blocking().key,
+            frame(20, true).key,
+            "the dimmed copy's newest frame waited for its own worker"
+        );
+    }
+
+    #[test]
+    fn a_terminal_stream_keeps_one_queue_slot_across_backdrops() {
+        let encoder = AsyncEncoder::default();
+        encoder.enqueue(request(7, 10));
+        let mut under_modal = request(7, 11);
+        under_modal.key = dimmed(under_modal.key);
+        encoder.enqueue(under_modal);
+
+        let inner = encoder.inner.lock().unwrap();
+        assert_eq!(inner.queue.len(), 1);
+        assert_eq!(inner.queued.get(&7).unwrap().key.backdrop, 5);
+    }
+
+    #[test]
+    fn a_stand_in_dimmed_the_same_way_is_preferred() {
+        let mut cache = ImageRenderCache::default();
+        cache.insert(7, key(10), protocol(), 10, CacheRetention::Variants);
+        cache.insert(7, dimmed(key(11)), protocol(), 10, CacheRetention::Variants);
+
+        let stand_in = cache.get_latest_compatible(7, &key(12)).unwrap();
+        assert!(stand_in.same_backdrop);
+        assert_eq!(cache.entries.last().unwrap().key, key(10));
+
+        let stand_in = cache.get_latest_compatible(7, &dimmed(key(12))).unwrap();
+        assert!(stand_in.same_backdrop);
+        assert_eq!(cache.entries.last().unwrap().key, dimmed(key(11)));
+    }
+
+    /// Pixels that changed while a modal was open have only dimmed encodes. Closing it encodes the
+    /// undimmed frame at once instead of queuing it behind a dimmed stand-in.
+    #[test]
+    fn a_stand_in_dimmed_the_other_way_is_replaced_by_an_encode() {
+        let small = |source_hash| {
+            let mut key = key(source_hash);
+            key.width = 1;
+            key.height = 1;
+            key
+        };
+        let encoder = AsyncEncoder::default();
+        encoder.inner.lock().unwrap().cache.insert(
+            7,
+            dimmed(small(11)),
+            protocol(),
+            10,
+            CacheRetention::LatestOnly,
+        );
+
+        let closed = request_for_key(small(12));
+        assert!(matches!(
+            encoder.resolve_miss(closed, false),
+            ProtocolResolve::Ready(_)
+        ));
+        assert!(encoder.cache_get(&small(12)).is_some());
+        assert!(encoder.inner.lock().unwrap().queue.is_empty());
+
+        let next = request_for_key(small(13));
+        assert!(
+            matches!(encoder.resolve_miss(next, false), ProtocolResolve::Stale(_)),
+            "later frames queue behind the undimmed stand-in as usual"
+        );
+        assert_eq!(encoder.inner.lock().unwrap().queue.len(), 1);
+    }
+
+    fn request_for_key(key: RenderCacheKey) -> EncodeRequest {
+        EncodeRequest::new(
+            7,
+            key,
+            Arc::new(image::DynamicImage::new_rgba8(1, 1)),
+            CacheRetention::LatestOnly,
+        )
     }
 
     #[test]
