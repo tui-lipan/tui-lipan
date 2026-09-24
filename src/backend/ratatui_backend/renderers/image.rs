@@ -54,14 +54,18 @@ thread_local! {
 /// A frame capture cannot hand pixels to a host terminal, so [`draw_encoded_image`] records them and
 /// marks their cells instead. Whatever is drawn later replaces the mark - an overlay, a border, a
 /// pane above - which is how the capture learns which cells still show the image, exactly as the
-/// host's placeholder cells would. Plane 15 is private use from end to end, so no text is mistaken
-/// for a mark.
+/// host's placeholder cells would.
+///
+/// The marks sit at the top of plane 16's private-use area. Plane 15 is where Nerd Font keeps its
+/// Material Design icons (`󰖲` is U+F05B2), and Kitty's own placeholder is U+10EEEE, so a mark in
+/// either would be mistaken for text a widget drew. A cell only counts as marked when it also lies
+/// inside the area of the image its mark names.
 #[cfg(feature = "terminal-images")]
-pub(crate) const CAPTURE_IMAGE_MARKER: u32 = 0xF0000;
+pub(crate) const CAPTURE_IMAGE_MARKER: u32 = 0x10F000;
 
-/// How many images one capture can mark: the rest of plane 15's private-use code points.
+/// How many images one capture can mark: the rest of plane 16's private-use code points.
 #[cfg(feature = "terminal-images")]
-pub(crate) const CAPTURE_IMAGE_LIMIT: usize = 0xFFFE;
+pub(crate) const CAPTURE_IMAGE_LIMIT: usize = 0xFFE;
 
 /// One image [`draw_encoded_image`] drew during a frame capture: the cells it covers, and the
 /// pixels scaled into them.

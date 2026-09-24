@@ -301,14 +301,17 @@ fn captured_images(
         else {
             continue;
         };
-        cell.symbol = " ".to_string();
         let x = (offset % usize::from(width)) as u16;
         let y = (offset / usize::from(width)) as u16;
-        if let Some(image) = images.get_mut(index)
-            && let Some(visible) = image.area_offset(x, y)
-        {
-            image.visible[visible] = true;
-        }
+        // A mark outside its image's area is text that happens to share the code point.
+        let Some((image, visible)) = images
+            .get_mut(index)
+            .and_then(|image| image.area_offset(x, y).map(|visible| (image, visible)))
+        else {
+            continue;
+        };
+        cell.symbol = " ".to_string();
+        image.visible[visible] = true;
     }
 
     images.retain(|image| image.visible.contains(&true));

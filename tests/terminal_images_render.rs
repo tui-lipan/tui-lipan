@@ -245,6 +245,7 @@ fn a_pane_with_no_graphics_paints_no_images() {
 /// A pane with a line of text drawn over its top row, as an overlay or a floating pane would be.
 struct CoveredPane {
     screen: Rc<RefCell<TerminalScreen>>,
+    label: &'static str,
 }
 
 impl Component for CoveredPane {
@@ -265,17 +266,22 @@ impl Component for CoveredPane {
                     .screen(TerminalScreenHandle::new(Rc::clone(&self.screen)))
                     .scrollbar(false),
             )
-            .child(Text::new("OVER"))
+            .child(Text::new(self.label))
             .into()
     }
 }
 
 fn covered_pane(output: &[u8]) -> TestBackend<CoveredPane> {
+    labelled_pane(output, "OVER")
+}
+
+fn labelled_pane(output: &[u8], label: &'static str) -> TestBackend<CoveredPane> {
     let mut screen = TerminalScreen::new(6, 20, 100);
     screen.set_cell_size(CELL);
     screen.process_bytes(output);
     let mut backend = TestBackend::new(CoveredPane {
         screen: Rc::new(RefCell::new(screen)),
+        label,
     });
     backend.set_viewport(Rect {
         x: 0,
@@ -450,5 +456,22 @@ fn transparent_image_pixels_show_what_is_behind_the_image_not_its_stand_in() {
         decoded.get_pixel(4, 15).0,
         [0, 0, 0],
         "the transparent bottom shows the pane background"
+    );
+}
+
+#[test]
+fn nerd_font_icons_survive_a_capture_that_holds_images() {
+    // Material Design icons live in plane 15 private use (U+F05B2, U+F06E4). A capture that marked
+    // its images there blanked every such icon in any frame that also held an image.
+    let frame = labelled_pane(&red_image(6, 2), "\u{F05B2} \u{F06E4} \u{F0000}").capture_frame();
+
+    assert_eq!(frame.cell(0, 0).symbol, "\u{F05B2}");
+    assert_eq!(frame.cell(2, 0).symbol, "\u{F06E4}");
+    assert_eq!(frame.cell(4, 0).symbol, "\u{F0000}");
+    let image = &frame.images[0];
+    assert!(!image.shows(0, 0) && !image.shows(2, 0) && !image.shows(4, 0));
+    assert!(
+        image.shows(5, 0),
+        "the image still shows where no icon covers it"
     );
 }
