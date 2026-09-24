@@ -769,6 +769,7 @@ fn png_encoding_returns_bytes_and_cursor_uses_cell_foreground() {
             y: 0,
             visible: true,
         }),
+        images: Vec::new(),
     };
     let options = tui_lipan::PngOptions {
         cell_width: 4,
@@ -836,6 +837,7 @@ fn single_cell_frame(symbol: &str, fg: Color, bg: Color) -> tui_lipan::CapturedF
             modifiers: tui_lipan::CellModifiers::default(),
         }],
         cursor: None,
+        images: Vec::new(),
     }
 }
 
@@ -863,6 +865,7 @@ fn symbol_frame(rows: &[&[&str]]) -> tui_lipan::CapturedFrame {
             })
             .collect(),
         cursor: None,
+        images: Vec::new(),
     }
 }
 

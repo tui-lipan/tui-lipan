@@ -553,9 +553,12 @@ emits SGR only, keeps every row at the frame's width, and does not draw the curs
 
 A wide glyph sits in its first cell and the column it covers holds an empty symbol, so a row's
 symbols join to text at its true display width. A row that wrapped a wide glyph early keeps the
-blank column it left. Hidden text and image placeholders capture as spaces. `cursor` is set while
-the cursor lies in the viewport, and is visible only when the program shows it and the view is not
-scrolled back.
+blank column it left. Hidden text captures as spaces. `cursor` is set while the cursor lies in
+the viewport, and is visible only when the program shows it and the view is not scrolled back.
+
+With `terminal-images`, the images the program displayed are in `frame.images`, cropped to the
+viewport, and the cells under them hold a half-block stand-in; `to_png()` draws the pixels. See
+[Captures](terminal-images.md#captures).
 
 ### Selection, decoration, and copy mode
 

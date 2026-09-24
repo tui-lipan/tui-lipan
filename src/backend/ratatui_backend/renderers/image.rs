@@ -44,6 +44,137 @@ thread_local! {
     static IMAGE_OCCLUSIONS: RefCell<Vec<ratatui::layout::Rect>> = const { RefCell::new(Vec::new()) };
     static PAINTED_IMAGE_OCCLUSIONS: RefCell<Vec<ratatui::layout::Rect>> = const { RefCell::new(Vec::new()) };
     static IMAGE_PLACEHOLDERS_PAINTED: Cell<bool> = const { Cell::new(false) };
+    /// Images a frame capture drew, in draw order. `Some` only inside [`record_capture_images`].
+    static CAPTURE_IMAGES: RefCell<Option<Vec<CaptureImageDraw>>> = const { RefCell::new(None) };
+}
+
+/// The mark stamped over the cells a captured image covers: `U+FFFF`, then the image's index as two
+/// zero-width variation selectors.
+///
+/// A frame capture cannot hand pixels to a host terminal, so [`draw_encoded_image`] records them and
+/// marks their cells instead. Whatever is drawn later replaces the mark - an overlay, a border, a
+/// pane above - which is how the capture learns which cells still show the image, exactly as the
+/// host's placeholder cells would.
+///
+/// A mark must never be something a widget can draw, or text drawn over an image would read as the
+/// image still showing. Private-use code points are icons (Nerd Font keeps its Material Design set in
+/// plane 15, and Kitty's placeholder is U+10EEEE), so the mark leads with a Unicode noncharacter,
+/// which no text may contain. The variation selectors after it are zero width, so the whole mark is
+/// one grapheme one cell wide, and a buffer diff treats it like any narrow symbol.
+#[cfg(feature = "terminal-images")]
+const CAPTURE_MARK_LEAD: char = '\u{FFFF}';
+
+/// The first of the 240 variation selectors (U+E0100-U+E01EF) a mark's index is written in.
+#[cfg(feature = "terminal-images")]
+const CAPTURE_MARK_DIGIT: u32 = 0xE0100;
+
+/// How many values one index digit holds.
+#[cfg(feature = "terminal-images")]
+const CAPTURE_MARK_BASE: usize = 240;
+
+/// How many images one capture can mark.
+#[cfg(feature = "terminal-images")]
+pub(crate) const CAPTURE_IMAGE_LIMIT: usize = CAPTURE_MARK_BASE * CAPTURE_MARK_BASE;
+
+/// The mark for the image at `index`, which must be below [`CAPTURE_IMAGE_LIMIT`].
+#[cfg(feature = "terminal-images")]
+pub(crate) fn capture_image_mark(index: usize) -> String {
+    debug_assert!(index < CAPTURE_IMAGE_LIMIT);
+    let digit = |value: usize| {
+        char::from_u32(CAPTURE_MARK_DIGIT + value as u32).expect("a variation selector")
+    };
+    [
+        CAPTURE_MARK_LEAD,
+        digit(index / CAPTURE_MARK_BASE),
+        digit(index % CAPTURE_MARK_BASE),
+    ]
+    .into_iter()
+    .collect()
+}
+
+/// The image index `symbol` marks, if it is a mark.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn capture_image_mark_index(symbol: &str) -> Option<usize> {
+    let mut chars = symbol.chars();
+    let digit = |ch: char| {
+        u32::from(ch)
+            .checked_sub(CAPTURE_MARK_DIGIT)
+            .map(|value| value as usize)
+            .filter(|&value| value < CAPTURE_MARK_BASE)
+    };
+    if chars.next()? != CAPTURE_MARK_LEAD {
+        return None;
+    }
+    let high = digit(chars.next()?)?;
+    let low = digit(chars.next()?)?;
+    chars
+        .next()
+        .is_none()
+        .then_some(high * CAPTURE_MARK_BASE + low)
+}
+
+/// One image [`draw_encoded_image`] drew during a frame capture: the cells it covers, and the
+/// pixels scaled into them.
+#[cfg(feature = "terminal-images")]
+pub(crate) struct CaptureImageDraw {
+    pub(crate) area: ratatui::layout::Rect,
+    pub(crate) pixels: Arc<image::DynamicImage>,
+}
+
+/// Run `render` with image draws recorded for a frame capture instead of encoded for the host.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn record_capture_images<R>(render: impl FnOnce() -> R) -> (R, Vec<CaptureImageDraw>) {
+    struct Restore(Option<Option<Vec<CaptureImageDraw>>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Some(previous) = self.0.take() {
+                CAPTURE_IMAGES.with(|slot| *slot.borrow_mut() = previous);
+            }
+        }
+    }
+
+    let mut restore = Restore(Some(
+        CAPTURE_IMAGES.with(|slot| slot.replace(Some(Vec::new()))),
+    ));
+    let result = render();
+    let previous = restore.0.take().unwrap_or_default();
+    let drawn = CAPTURE_IMAGES
+        .with(|slot| slot.replace(previous))
+        .unwrap_or_default();
+    (result, drawn)
+}
+
+/// Whether a frame capture is recording image draws on this thread.
+#[cfg(feature = "terminal-images")]
+fn capturing_images() -> bool {
+    CAPTURE_IMAGES.with(|slot| slot.borrow().is_some())
+}
+
+/// Record an image for the frame capture in progress and mark the cells it covers.
+#[cfg(feature = "terminal-images")]
+fn record_capture_image(
+    f: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    pixels: Arc<image::DynamicImage>,
+) {
+    let index = CAPTURE_IMAGES.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let drawn = slot.as_mut().expect("checked above");
+        (drawn.len() < CAPTURE_IMAGE_LIMIT).then(|| {
+            drawn.push(CaptureImageDraw { area, pixels });
+            drawn.len() - 1
+        })
+    });
+    let Some(marker) = index.map(capture_image_mark) else {
+        return;
+    };
+    let buffer = f.buffer_mut();
+    let area = area.intersection(buffer.area);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            buffer[(x, y)].set_symbol(&marker);
+        }
+    }
 }
 
 /// Remember which cells a Kitty placeholder row must not cover this frame.
@@ -1553,7 +1684,15 @@ pub(crate) fn draw_encoded_image(
     z_index: i32,
     pixels: impl FnOnce() -> Arc<image::DynamicImage>,
 ) -> bool {
-    if area.width == 0 || area.height == 0 || image_support::image_rendering_suspended() {
+    if area.width == 0 || area.height == 0 {
+        return false;
+    }
+    #[cfg(feature = "terminal-images")]
+    if capturing_images() {
+        record_capture_image(f, area, pixels());
+        return true;
+    }
+    if image_support::image_rendering_suspended() {
         return false;
     }
 
@@ -1804,6 +1943,35 @@ pub(crate) fn render_image_inline_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A mark must survive a buffer diff as one narrow cell, round-trip its index, and never match
+    /// anything a widget draws, private-use icons included.
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn capture_image_marks_are_one_cell_and_never_text() {
+        use unicode_width::UnicodeWidthStr as _;
+
+        for index in [0, 1, 239, 240, CAPTURE_IMAGE_LIMIT - 1] {
+            let mark = capture_image_mark(index);
+            assert_eq!(mark.width(), 1, "mark {index} must be one cell wide");
+            assert_eq!(capture_image_mark_index(&mark), Some(index));
+        }
+        for text in [
+            " ",
+            "a",
+            "\u{F0000}",
+            "\u{F05B2}",
+            "\u{10F000}",
+            "\u{10EEEE}",
+            "\u{FFFF}",
+            "",
+        ] {
+            assert_eq!(capture_image_mark_index(text), None, "{text:?}");
+        }
+        let mut longer = capture_image_mark(3);
+        longer.push('x');
+        assert_eq!(capture_image_mark_index(&longer), None);
+    }
 
     /// A hole in the middle of a row must split it, and stacked holes must merge, so a placeholder
     /// walk never writes into a cell an overlay is about to own.

@@ -1,8 +1,8 @@
-//! A Kitty graphics command from a child program ends up as pixels in the rendered frame.
+//! A Kitty graphics command from a child program ends up as pixels in the captured frame.
 //!
-//! The host in a test is the halfblock encoder, which is the point: the same path serves a host
-//! that speaks no graphics protocol at all, and it is the only encoder whose output can be read
-//! back out of a cell buffer and asserted on.
+//! A capture does not encode images for a host. It records their pixels in `CapturedFrame::images`,
+//! marks which cells still show them after everything above has drawn, and paints those cells as
+//! half blocks, which is what most of these tests read back out of the cell grid.
 
 #![cfg(feature = "terminal-images")]
 
@@ -66,8 +66,8 @@ impl Component for Pane {
 
 /// Render until `ready` accepts a frame, or give up and return the last one.
 ///
-/// Encoding runs off the UI thread, so the first frame after a new image is expected to have no
-/// pixels in it yet. Real apps repaint when the encode lands; a test just draws again.
+/// A capture records images synchronously, so the first frame normally has them; the retry only
+/// keeps a test from depending on that.
 fn render_until(
     backend: &mut TestBackend<Pane>,
     ready: impl Fn(&CapturedFrame) -> bool,
@@ -240,4 +240,248 @@ fn a_pane_with_no_graphics_paints_no_images() {
     });
     assert_eq!(frame.cell(0, 0).symbol, "p");
     assert_ne!(frame.cell(0, 0).fg, RED);
+}
+
+/// A pane with a line of text drawn over its top row, as an overlay or a floating pane would be.
+struct CoveredPane {
+    screen: Rc<RefCell<TerminalScreen>>,
+    label: &'static str,
+}
+
+impl Component for CoveredPane {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        ZStack::new()
+            .child(
+                Terminal::new()
+                    .screen(TerminalScreenHandle::new(Rc::clone(&self.screen)))
+                    .scrollbar(false),
+            )
+            .child(Text::new(self.label))
+            .into()
+    }
+}
+
+fn covered_pane(output: &[u8]) -> TestBackend<CoveredPane> {
+    labelled_pane(output, "OVER")
+}
+
+fn labelled_pane(output: &[u8], label: &'static str) -> TestBackend<CoveredPane> {
+    let mut screen = TerminalScreen::new(6, 20, 100);
+    screen.set_cell_size(CELL);
+    screen.process_bytes(output);
+    let mut backend = TestBackend::new(CoveredPane {
+        screen: Rc::new(RefCell::new(screen)),
+        label,
+    });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 6,
+    });
+    backend.render();
+    backend
+}
+
+#[test]
+fn a_capture_carries_the_image_pixels_beside_the_cells() {
+    let frame = pane(&red_image(4, 2), 6, 20).capture_frame();
+
+    assert_eq!(frame.images.len(), 1);
+    let image = &frame.images[0];
+    assert_eq!(
+        image.area,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 4,
+            h: 2
+        }
+    );
+    assert_eq!((image.width, image.height), (40, 40));
+    assert!(
+        image
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|px| *px == [255, 0, 0, 255])
+    );
+    assert!(image.visible.iter().all(|&visible| visible));
+    assert_eq!(frame.cell(0, 0).symbol, "\u{2580}");
+}
+
+#[test]
+fn whatever_is_drawn_over_an_image_hides_it_in_those_cells() {
+    let frame = covered_pane(&red_image(6, 2)).capture_frame();
+
+    let image = &frame.images[0];
+    let text: String = (0..4).map(|x| frame.cell(x, 0).symbol.clone()).collect();
+    assert_eq!(text, "OVER", "the text above the image survives");
+    for x in 0..4 {
+        assert!(!image.shows(x, 0), "cell ({x},0) is under the text");
+    }
+    assert!(image.shows(4, 0) && image.shows(5, 0));
+    assert!((0..6).all(|x| image.shows(x, 1)));
+    assert_eq!(frame.cell(4, 0).fg, RED);
+}
+
+#[test]
+fn a_screen_capture_includes_the_images_the_program_displayed() {
+    let mut screen = TerminalScreen::new(4, 20, 100);
+    screen.set_cell_size(CELL);
+    // Ten rows of image in a four-row screen: cropped to what is visible, not squashed.
+    screen.process_bytes(&red_image(3, 10));
+    let frame = screen.capture_frame();
+
+    assert_eq!(frame.images.len(), 1);
+    let image = &frame.images[0];
+    assert_eq!(
+        image.area,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 3,
+            h: 4
+        }
+    );
+    assert_eq!(
+        (image.width, image.height),
+        (30, 80),
+        "the source rows below the screen are cropped away"
+    );
+    for y in 0..4u16 {
+        for x in 0..3u16 {
+            assert_eq!(frame.cell(x, y).fg, RED, "cell ({x},{y})");
+        }
+    }
+    assert_ne!(frame.cell(3, 0).fg, RED);
+}
+
+/// A `cols` x `rows` cell image whose every cell-high band is green in its top quarter and blue
+/// below: detail no single cell color can stand in for.
+#[cfg(feature = "ui-snapshot-png")]
+fn banded_image(cols: u32, rows: u32) -> Vec<u8> {
+    let (width, height) = (cols * u32::from(CELL.width), rows * u32::from(CELL.height));
+    let mut pixels = Vec::with_capacity((width * height * 3) as usize);
+    for y in 0..height {
+        let colour = if y % u32::from(CELL.height) < u32::from(CELL.height) / 4 {
+            [0, 255, 0]
+        } else {
+            [0, 0, 255]
+        };
+        for _ in 0..width {
+            pixels.extend_from_slice(&colour);
+        }
+    }
+    format!(
+        "\x1b_Ga=T,f=24,s={width},v={height},t=d,i=1;{}\x1b\\",
+        BASE64.encode(pixels)
+    )
+    .into_bytes()
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+#[test]
+fn a_png_draws_the_image_pixels_only_where_the_image_shows() {
+    let frame = covered_pane(&banded_image(6, 2)).capture_frame();
+    let options = tui_lipan::PngOptions {
+        cell_width: 8,
+        cell_height: 16,
+        scale: 1,
+        text_renderer: tui_lipan::PngTextRenderer::Bitmap,
+        default_bg: Color::Rgb(0, 0, 0),
+        ..tui_lipan::PngOptions::default()
+    };
+    let png = frame.to_png(&options).expect("encode");
+    let decoded = image::load_from_memory(&png).expect("decode").to_rgb8();
+    let pixel = |x: u32, y: u32| decoded.get_pixel(x, y).0;
+
+    // Row 1 shows the image's own pixels, scaled to 16-pixel cells: green at the top of the band,
+    // blue below. A cell color alone could only show one of the two.
+    for x in 0..6 * 8 {
+        assert_eq!(pixel(x, 17), [0, 255, 0], "pixel ({x},17)");
+        assert_eq!(pixel(x, 28), [0, 0, 255], "pixel ({x},28)");
+    }
+    // The text over row 0 covers the image there; a cell it left alone still shows it.
+    assert_ne!(pixel(4, 1), [0, 255, 0]);
+    assert_eq!(pixel(4 * 8 + 4, 1), [0, 255, 0]);
+    // Past the image, the background.
+    assert_eq!(pixel(7 * 8, 20), [0, 0, 0]);
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+#[test]
+fn transparent_image_pixels_show_what_is_behind_the_image_not_its_stand_in() {
+    // Red, except the bottom eighth of each cell-high band, which is fully transparent. The lower
+    // half of every cell is mostly red, so its half-block stand-in has a red background; the PNG
+    // must still show the pane's own background through the transparent pixels.
+    let (width, height) = (4 * u32::from(CELL.width), u32::from(CELL.height));
+    let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        let alpha = if y >= height * 7 / 8 { 0 } else { 255 };
+        for _ in 0..width {
+            pixels.extend_from_slice(&[255, 0, 0, alpha]);
+        }
+    }
+    let command = format!(
+        "\x1b_Ga=T,f=32,s={width},v={height},t=d,i=1;{}\x1b\\",
+        BASE64.encode(pixels)
+    );
+    let frame = pane(command.as_bytes(), 4, 20).capture_frame();
+    assert_eq!(frame.cell(0, 0).bg, RED, "the stand-in's lower half is red");
+
+    let options = tui_lipan::PngOptions {
+        cell_width: 8,
+        cell_height: 16,
+        scale: 1,
+        text_renderer: tui_lipan::PngTextRenderer::Bitmap,
+        default_bg: Color::Rgb(0, 0, 0),
+        ..tui_lipan::PngOptions::default()
+    };
+    let png = frame.to_png(&options).expect("encode");
+    let decoded = image::load_from_memory(&png).expect("decode").to_rgb8();
+    assert_eq!(decoded.get_pixel(4, 2).0, [255, 0, 0]);
+    assert_eq!(
+        decoded.get_pixel(4, 15).0,
+        [0, 0, 0],
+        "the transparent bottom shows the pane background"
+    );
+}
+
+#[test]
+fn private_use_icons_survive_a_capture_that_holds_images() {
+    // Nerd Font icons are private-use code points (U+F05B2, U+F06E4), and so were earlier forms of
+    // the capture's image marks (U+F0000, U+F0001, U+10F000). None of them may be taken for a mark:
+    // one drawn over the image covers it, and one drawn beside it stays text.
+    // Over the image: the earlier marks for image 0 (U+10F000, U+F0000) and a Nerd Font icon.
+    let label = "\u{10F000} \u{F05B2} \u{F0000} \u{F06E4} \u{F0001}";
+    let frame = labelled_pane(&red_image(6, 2), label).capture_frame();
+    let image = &frame.images[0];
+
+    for (x, symbol) in [(0, "\u{10F000}"), (2, "\u{F05B2}"), (4, "\u{F0000}")] {
+        assert_eq!(
+            frame.cell(x, 0).symbol,
+            symbol,
+            "cell ({x},0) over the image"
+        );
+        assert!(!image.shows(x, 0), "the icon at ({x},0) covers the image");
+    }
+    // Outside the six-column image, while an image is in the frame.
+    assert_eq!(frame.cell(6, 0).symbol, "\u{F06E4}");
+    assert_eq!(frame.cell(8, 0).symbol, "\u{F0001}");
+    assert!(
+        (0..6).all(|x| image.shows(x, 1)),
+        "the image still shows where no text covers it"
+    );
 }

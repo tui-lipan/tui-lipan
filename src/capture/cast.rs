@@ -219,6 +219,7 @@ mod tests {
             height,
             cells,
             cursor: None,
+            images: Vec::new(),
         }
     }
 

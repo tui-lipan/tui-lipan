@@ -12,10 +12,12 @@ use crate::style::ansi::write_cell_style_sgr;
 use crate::style::{Color, Rect, Style};
 
 mod cast;
+mod image_layer;
 #[cfg(feature = "ui-snapshot-png")]
 mod png;
 
 pub use cast::CastRecording;
+pub use image_layer::CapturedImage;
 
 /// Captured terminal cell data converted to crate-owned style primitives.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,6 +105,10 @@ pub struct CapturedFrame {
     pub cells: Vec<CapturedCell>,
     /// Cursor state, when a widget requested cursor placement.
     pub cursor: Option<CursorState>,
+    /// Images drawn over the cells, back to front, such as those a program in a terminal pane
+    /// displayed. The cells under a visible image hold a half-block approximation of it; only
+    /// [`Self::to_png`] draws the pixels.
+    pub images: Vec<CapturedImage>,
 }
 
 /// Options for rendering a [`CapturedFrame`] as PNG bytes.

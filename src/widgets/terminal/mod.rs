@@ -30,7 +30,9 @@ pub use events::{
     mouse_event_to_bytes, paste_sequences, terminal_selection_text,
 };
 #[cfg(feature = "terminal-images")]
-pub(crate) use graphics::{PLACEHOLDER as KITTY_PLACEHOLDER, diacritic as kitty_diacritic};
+pub(crate) use graphics::{
+    PLACEHOLDER as KITTY_PLACEHOLDER, crop_for_visible_cells, diacritic as kitty_diacritic,
+};
 #[cfg(feature = "terminal-images")]
 pub use graphics::{TerminalImage, TerminalImageCrop, TerminalImagePlacement};
 #[cfg(feature = "terminal-images")]

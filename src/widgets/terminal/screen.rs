@@ -2004,8 +2004,12 @@ impl TerminalScreen {
     /// such as `CapturedFrame::to_png`, resolves them itself.
     ///
     /// A wide glyph occupies its own cell, and the column it covers holds an empty symbol, so
-    /// joining a row's symbols yields text at its true display width. Hidden text and image
-    /// placeholders capture as spaces. The cursor is reported while it lies inside the viewport.
+    /// joining a row's symbols yields text at its true display width. Hidden text captures as
+    /// spaces. The cursor is reported while it lies inside the viewport.
+    ///
+    /// With `terminal-images`, the images the program displayed land in
+    /// [`CapturedFrame::images`], cropped to the viewport, and the cells under them hold a
+    /// half-block approximation sized with [`Self::cell_size`].
     ///
     /// [`Color::Reset`]: UiColor::Reset
     pub fn capture_frame(&self) -> CapturedFrame {
@@ -2063,6 +2067,15 @@ impl TerminalScreen {
                 visible: content.mode.contains(TermMode::SHOW_CURSOR) && display_offset == 0,
             });
 
+        #[cfg(feature = "terminal-images")]
+        let images = self.capture_images(
+            display_offset,
+            content.mode.contains(TermMode::ALT_SCREEN),
+            &mut cells,
+        );
+        #[cfg(not(feature = "terminal-images"))]
+        let images = Vec::new();
+
         CapturedFrame {
             viewport: Rect {
                 x: 0,
@@ -2074,7 +2087,95 @@ impl TerminalScreen {
             height,
             cells,
             cursor,
+            images,
         }
+    }
+
+    /// The viewport's images for [`Self::capture_frame`], back to front, with the cells under them
+    /// painted as half blocks.
+    ///
+    /// Each placement is cropped to the viewport the way the renderer crops it, so an image scrolled
+    /// half out of view keeps its scale. Where a later image overlaps an earlier one, the earlier one
+    /// is marked hidden in those cells.
+    #[cfg(feature = "terminal-images")]
+    fn capture_images(
+        &self,
+        display_offset: usize,
+        alt_screen: bool,
+        cells: &mut [CapturedCell],
+    ) -> Vec<crate::capture::CapturedImage> {
+        let cols = i32::from(self.cols);
+        let rows = i32::from(self.rows);
+        let mut images: Vec<crate::capture::CapturedImage> = Vec::new();
+        for placement in self.visible_images(display_offset, alt_screen) {
+            let (left, top) = (placement.col, placement.row);
+            let (placed_cols, placed_rows) = (i32::from(placement.cols), i32::from(placement.rows));
+            if placed_cols <= 0 || placed_rows <= 0 {
+                continue;
+            }
+            let (vis_left, vis_top) = (left.max(0), top.max(0));
+            let vis_right = (left + placed_cols).min(cols);
+            let vis_bottom = (top + placed_rows).min(rows);
+            if vis_right <= vis_left || vis_bottom <= vis_top {
+                continue;
+            }
+            let Some(pixels) = placement.image.pixels() else {
+                continue;
+            };
+            let source = placement.source_crop.unwrap_or(super::TerminalImageCrop {
+                x: 0,
+                y: 0,
+                width: pixels.width(),
+                height: pixels.height(),
+            });
+            let Some(crop) = super::crop_for_visible_cells(
+                source,
+                (placed_cols as u32, placed_rows as u32),
+                (
+                    (vis_left - left) as u32,
+                    (vis_top - top) as u32,
+                    (vis_right - vis_left) as u32,
+                    (vis_bottom - vis_top) as u32,
+                ),
+            ) else {
+                continue;
+            };
+            let rgba = pixels
+                .crop_imm(crop.x, crop.y, crop.width, crop.height)
+                .to_rgba8();
+            let (pixel_width, pixel_height) = rgba.dimensions();
+            let image = crate::capture::CapturedImage::new(
+                Rect {
+                    x: vis_left as i16,
+                    y: vis_top as i16,
+                    w: (vis_right - vis_left) as u16,
+                    h: (vis_bottom - vis_top) as u16,
+                },
+                pixel_width,
+                pixel_height,
+                rgba.into_raw().into(),
+            );
+            for earlier in &mut images {
+                for y in image.area.y..image.area.y + image.area.h as i16 {
+                    for x in image.area.x..image.area.x + image.area.w as i16 {
+                        if let Some(offset) = earlier.area_offset(x as u16, y as u16) {
+                            earlier.visible[offset] = false;
+                        }
+                    }
+                }
+            }
+            images.push(image);
+        }
+        images.retain(|image| image.visible.contains(&true));
+        for image in &mut images {
+            image.paint_half_blocks(
+                cells,
+                self.cols,
+                u32::from(self.cell_size.width),
+                u32::from(self.cell_size.height),
+            );
+        }
+        images
     }
 
     /// Return the current terminal color palette.

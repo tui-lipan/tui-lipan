@@ -240,6 +240,36 @@ pub struct TerminalImageCrop {
     pub height: u32,
 }
 
+/// Map the visible cells of a placement back onto the source pixels they show.
+pub(crate) fn crop_for_visible_cells(
+    source: TerminalImageCrop,
+    placement_cells: (u32, u32),
+    visible_cells: (u32, u32, u32, u32),
+) -> Option<TerminalImageCrop> {
+    let (cols, rows) = placement_cells;
+    let (skip_x, skip_y, keep_w, keep_h) = visible_cells;
+    if source.width == 0 || source.height == 0 || cols == 0 || rows == 0 {
+        return None;
+    }
+
+    let x = source.x + skip_x * source.width / cols;
+    let y = source.y + skip_y * source.height / rows;
+    // Round up, so a partly covered cell still gets pixels rather than a seam.
+    let width = (keep_w * source.width)
+        .div_ceil(cols)
+        .min(source.x + source.width - x);
+    let height = (keep_h * source.height)
+        .div_ceil(rows)
+        .min(source.y + source.height - y);
+
+    (width > 0 && height > 0).then_some(TerminalImageCrop {
+        x,
+        y,
+        width,
+        height,
+    })
+}
+
 // ─── Wire scanning ───────────────────────────────────────────────────────────
 
 /// A piece of a byte stream, split around the graphics commands in it.

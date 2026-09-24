@@ -223,6 +223,7 @@ fn diagnostic_options_include_hidden_nodes_and_mark_zero_area() {
             height: 0,
             cells: Vec::new(),
             cursor: None,
+            images: Vec::new(),
         },
         widgets: vec![UiWidgetDesc {
             kind: UiWidgetKind::Text,
