@@ -3577,6 +3577,46 @@ fn default_ansi_palette() -> [UiColor; 16] {
 mod tests {
     use super::*;
 
+    /// `clear` erases the screen and then the scrollback. The shell marks recorded before it must
+    /// go with the lines they named, not slide onto whatever the screen shows next.
+    #[test]
+    fn clearing_scrollback_keeps_shell_marks_on_their_own_lines() {
+        let mut screen = TerminalScreen::new(4, 30, 100);
+        // One write per step, as a shell sends them: marks take the line a chunk ends on.
+        let command = |screen: &mut TerminalScreen, output: &str| {
+            for chunk in [
+                "\x1b]133;A\x1b\\$ ".to_string(),
+                "\x1b]133;B\x1b\\run\r\n".to_string(),
+                "\x1b]133;C\x1b\\".to_string(),
+                format!("{output}\r\n"),
+                "\x1b]133;D;0\x1b\\".to_string(),
+            ] {
+                screen.process_bytes(chunk.as_bytes());
+            }
+        };
+        for n in 0..6 {
+            command(&mut screen, &format!("old output {n}"));
+        }
+        screen.process_bytes(b"\x1b[H\x1b[2J\x1b[3J");
+        command(&mut screen, "fresh output");
+
+        assert_eq!(
+            screen
+                .export_last_command_output()
+                .as_deref()
+                .map(str::trim_end),
+            Some("fresh output")
+        );
+        // Only the command run after the clear is left to jump between; the cleared ones went
+        // with their lines instead of landing on the new screen.
+        let marks = screen.semantic_marks();
+        assert_eq!(marks.len(), 4, "{marks:?}");
+        assert!(
+            marks.iter().all(|mark| mark.absolute_line <= 2),
+            "{marks:?}"
+        );
+    }
+
     fn assert_replay_round_trips(source: &mut TerminalScreen) -> TerminalScreen {
         let replay = source.export_replay_bytes();
         let mut target = TerminalScreen::new(source.rows, source.cols, source.scrollback_len);

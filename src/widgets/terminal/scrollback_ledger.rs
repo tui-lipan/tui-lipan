@@ -97,6 +97,20 @@ impl<'a, T: EventListener> LedgerTerm<'a, T> {
     fn settle(&mut self) {
         self.evicted += settle_history(self.inner, self.limit, self.capacity);
     }
+
+    /// Run `apply`, counting any history it discards as evicted.
+    ///
+    /// `ED 3` and `RIS` drop the whole scrollback at once. To everything anchored to an absolute
+    /// line - image placements, semantic marks - that is the same as those lines falling off the
+    /// top, and has to be told as such: otherwise the anchors land on the live screen, which now
+    /// starts where the history used to, and a cleared image reappears there.
+    #[inline]
+    fn counting_discarded(&mut self, apply: impl FnOnce(&mut Term<T>)) {
+        let history = self.inner.history_size();
+        apply(self.inner);
+        self.evicted += history.saturating_sub(self.inner.history_size());
+        self.settle();
+    }
 }
 
 /// Trim `term`'s history back to `limit`, returning how many lines were dropped.
@@ -261,16 +275,14 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
         self.settle();
     }
     fn clear_screen(&mut self, mode: ClearMode) {
-        self.inner.clear_screen(mode);
-        self.settle();
+        self.counting_discarded(|term| term.clear_screen(mode));
     }
     fn clear_tabs(&mut self, mode: TabulationClearMode) {
         self.inner.clear_tabs(mode);
         self.settle();
     }
     fn reset_state(&mut self) {
-        self.inner.reset_state();
-        self.settle();
+        self.counting_discarded(|term| term.reset_state());
     }
     fn reverse_index(&mut self) {
         self.inner.reverse_index();
