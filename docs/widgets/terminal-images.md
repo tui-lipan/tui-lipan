@@ -79,6 +79,11 @@ semantic marks. That is what makes it behave like the text it was drawn against:
 | Column resize | Kept, unless the change actually rewraps text — then the anchor stops naming what it named, and placements are dropped |
 | `RIS` / `TerminalScreen::reset` | Everything is cleared |
 
+Each event applies to the placements that exist when it happens, so the outcome does not depend on
+how the stream was split into `process_bytes` calls. `clear` followed by an image leaves the image on
+screen whether the two arrive in one write or two, which matters to a multiplexer that relays a
+pane's output in larger chunks than the program wrote it.
+
 A placeholder placement needs none of that bookkeeping: it *is* the text, so it does whatever the
 cells do, and it is gone the moment they are.
 
