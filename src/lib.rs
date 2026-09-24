@@ -83,6 +83,10 @@ mod widgets;
 ///
 /// Detected once at startup. Hosts that answer no size query get the image encoder's fallback
 /// guess rather than a refusal, so this always names a usable cell.
+///
+/// "Startup" is when the app enters the terminal, which is after the root component's
+/// `create_state` has run: called there, this returns the fallback guess. Ask from
+/// [`Component::init`] or later.
 #[cfg(all(feature = "terminal-images", not(target_arch = "wasm32")))]
 pub fn host_cell_size() -> crate::widgets::TerminalCellSize {
     crate::backend::ratatui_backend::image_support::host_cell_size()
