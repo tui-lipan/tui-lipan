@@ -5,10 +5,10 @@ use crossterm::execute;
 use crossterm::style::Print;
 
 use crate::Result;
+use crate::app::caret::focused_caret;
 use crate::app::input::text_area_vim::TextAreaVimState;
-use crate::core::node::{NodeId, NodeKind, NodeTree};
+use crate::core::node::{NodeId, NodeTree};
 use crate::style::{CaretShape, Color};
-use crate::widgets::TextAreaVimMode;
 
 pub(crate) struct TerminalManager {
     pub last_cursor_color: Option<(u8, u8, u8)>,
@@ -35,76 +35,17 @@ impl TerminalManager {
         let mut target_style = SetCursorStyle::DefaultUserShape;
         let mut desired_cursor_color: Option<(u8, u8, u8)> = None;
 
-        if let Some(id) = focused
-            && tree.is_valid(id)
-        {
-            let node = tree.node(id);
-            let theme = node.active_theme();
-            let caret = match &node.kind {
-                NodeKind::TextArea(node) => {
-                    if node.read_only {
-                        None
-                    } else {
-                        let caret_shape = node.caret_shape.unwrap_or(theme.caret.shape);
-                        let blinking = node.caret_blinking.unwrap_or(theme.caret.blinking);
-                        if self.osc12_supported {
-                            desired_cursor_color = node
-                                .caret_color
-                                .or(theme.caret.color)
-                                .and_then(Color::to_rgb);
-                        }
-                        let caret_shape = if node.vim_motions && caret_shape == CaretShape::Block {
-                            match text_area_vim_state
-                                .get(&id)
-                                .map(|state| state.mode)
-                                .unwrap_or_default()
-                            {
-                                TextAreaVimMode::Insert => CaretShape::Bar,
-                                TextAreaVimMode::Normal
-                                | TextAreaVimMode::Visual
-                                | TextAreaVimMode::VisualLine => CaretShape::Block,
-                            }
-                        } else {
-                            caret_shape
-                        };
-                        Some((caret_shape, blinking))
-                    }
-                }
-                NodeKind::Input(node) => {
-                    if node.read_only {
-                        None
-                    } else {
-                        if self.osc12_supported {
-                            desired_cursor_color = node
-                                .caret_color
-                                .or(theme.caret.color)
-                                .and_then(Color::to_rgb);
-                        }
-                        Some((
-                            node.caret_shape.unwrap_or(theme.caret.shape),
-                            node.caret_blinking.unwrap_or(theme.caret.blinking),
-                        ))
-                    }
-                }
-                #[cfg(feature = "terminal")]
-                NodeKind::Terminal(node) => {
-                    if self.osc12_supported {
-                        desired_cursor_color = node.caret_color.and_then(Color::to_rgb);
-                    }
-                    // Honor the child program's DECSCUSR shape. Blinking is driven
-                    // by the framework blink timer in the terminal renderer, so the
-                    // hardware cursor stays a steady shape here to avoid double blink.
-                    if node.cursor_visible {
-                        Some((node.cursor_shape, false))
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-            if let Some((caret_shape, blinking)) = caret
-                && let Some(style) = cursor_style_for(caret_shape, blinking)
-            {
+        let vim_mode = focused
+            .and_then(|id| text_area_vim_state.get(&id))
+            .map(|state| state.mode);
+        if let Some(caret) = focused_caret(tree, focused, vim_mode) {
+            if self.osc12_supported {
+                desired_cursor_color = caret.color.and_then(Color::to_rgb);
+            }
+            // A terminal's blinking is driven by the framework blink timer in the terminal
+            // renderer, so its hardware cursor stays a steady shape to avoid a double blink.
+            let blinking = caret.blinking && !caret.framework_blinks;
+            if let Some(style) = cursor_style_for(caret.shape, blinking) {
                 target_style = style;
             }
         }

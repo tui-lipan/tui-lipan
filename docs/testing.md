@@ -72,6 +72,18 @@ assert_eq!(runs[0].0, "error:");
 assert_eq!(runs[0].1.fg, Some(Color::Red));
 ```
 
+`row_runs(y)` and `runs()` give the same grouping as `CellRun` values, for a serializer that has
+to map runs back to columns. Each run carries its first column `x`, the `width` in columns it
+covers, its `text`, and the cells' `fg`, `bg`, `underline_color`, and `modifiers`, underline shape
+included. The runs of a row tile it exactly: a wide glyph counts two columns in its own run, and
+the column it covers adds nothing, whatever that placeholder cell holds.
+
+```rust
+let runs = frame.row_runs(0);
+assert_eq!(runs[0].x, 0);
+assert_eq!(runs.iter().map(|run| run.width).sum::<u16>(), frame.width);
+```
+
 ### Cursor capture
 
 When a focused input widget requests cursor placement, `frame.cursor` is populated:
@@ -85,6 +97,19 @@ let cursor = frame.cursor.expect("input should place cursor");
 assert!(cursor.visible);
 assert_eq!(cursor.y, 0);
 ```
+
+`CursorState` also carries the cursor's `shape` (`CursorShape::Block`, `HollowBlock`,
+`Underline`, or `Bar`), its own `color` if it has one, and whether it is `blinking`. A UI capture
+takes them from the focused widget's caret settings and its theme, the same way the runtime sets
+the hardware cursor; a `CaretShape::TerminalDefault` caret, which defers to a terminal the capture
+does not have, captures as a steady block. A terminal capture takes them from the program (see
+[Capturing the visible screen](widgets/terminal.md#capturing-the-visible-screen)). `to_png()`
+draws the shape in the cursor's color, or in the text color under it when it has none; a block
+redraws that text in the cell's background color. The ANSI serializers ignore shape, color, and
+blink.
+
+`CursorState` is `#[non_exhaustive]`: build one with `CursorState::new(x, y)`, which gives a
+visible, steady block with no color, and the `visible`, `shape`, `color`, and `blinking` setters.
 
 ### Animations
 
@@ -167,6 +192,7 @@ assert_eq!(frame.height, 10);
 | `row(y)` | `&[CapturedCell]` | All cells for row `y` |
 | `cell(x, y)` | `&CapturedCell` | Single cell at `(x, y)` |
 | `styled_lines()` | `Vec<Vec<(String, Style)>>` | Rows grouped into style runs |
+| `row_runs(y)` / `runs()` | `Vec<CellRun>` / `Vec<Vec<CellRun>>` | Style runs with their columns, tiling each row |
 | `to_fixed_grid()` | `String` | Full-width rows without trailing trim (layout-faithful) |
 | `to_ansi()` | `String` | ANSI styled frame (full terminal repaint prelude) |
 | `to_ansi_text()` | `String` | Static ANSI document: SGR only, full-width rows, each ending in a reset and a newline |

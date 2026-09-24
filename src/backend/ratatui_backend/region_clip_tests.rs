@@ -58,6 +58,7 @@ fn interaction() -> CaptureInteraction {
         focused: None,
         hovered: None,
         mouse_pos: None,
+        vim_mode: None,
     }
 }
 

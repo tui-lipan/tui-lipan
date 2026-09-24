@@ -555,6 +555,9 @@ A wide glyph sits in its first cell and the column it covers holds an empty symb
 symbols join to text at its true display width. A row that wrapped a wide glyph early keeps the
 blank column it left. Hidden text captures as spaces. `cursor` is set while the cursor lies in
 the viewport, and is visible only when the program shows it and the view is not scrolled back.
+Its `shape` and `blinking` follow the program's `DECSCUSR` request (`CSI Ps SP q`), and until it
+makes one they are the screen's default blinking block. Its `color` is the one the program set
+with `OSC 12`, or `None` after `OSC 112` or when it never set one.
 
 With `terminal-images`, the images the program displayed are in `frame.images`, cropped to the
 viewport, and the cells under them hold a half-block stand-in; `to_png()` draws the pixels. See

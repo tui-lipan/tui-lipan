@@ -104,6 +104,18 @@ Combined `CapturedFrame` + `widgets` + `focus_key` / `hover_key`. Methods: `to_m
 
 Headless: `TestBackend::capture_ui_snapshot()` after `render()`. Live: `Context::request_ui_snapshot_to(path)`, `request_ui_snapshot_to_slot(&UiSnapshotSlot)`, and `request_ui_snapshot(Callback<UiSnapshot>)` — delivered **after the next paint**; `TestBackend` serves them on `render()`/`pump()`. `TestBackend::baseline(dir)` and `UiSnapshot::baseline(dir)` compare a capture against a stored PNG (`name`, `tolerance`, `check`, `assert_baseline`); `TUI_LIPAN_UPDATE_BASELINES=1` accepts the current render. `TestBackend::advance(dt)` / `Sketch::advance(dt)` / `TUI_LIPAN_SNAPSHOT_ADVANCE_MS` settle time-gated UI before capture. `TestBackend::advance_frame(dt)` is the one-frame clamp. Virtual advancement affects tui-lipan-managed time only; application `Instant::now()` is not advanced.
 
+### `CursorShape`
+
+Shape of a captured cursor, in `CursorState::shape`. Unlike `CaretShape`, which says what a widget
+asks for, this is what a capture found.
+
+| Variant | Notes |
+|---------|-------|
+| `Block` (default) | Filled cell; also the shape when the capture cannot know it |
+| `HollowBlock` | Outlined cell |
+| `Underline` | Line under the cell |
+| `Bar` | Vertical line at the cell's left edge |
+
 ### `PngOptions` (`ui-snapshot-png`)
 
 Options for `CapturedFrame::to_png(&PngOptions)` and `UiSnapshot::to_png(&PngOptions)`.
@@ -125,7 +137,7 @@ use tui_lipan::{PngOptions, PngTextRenderer};
 | `default_fg` | `Color` | `Color::White` | Fallback when a cell foreground resolves to reset/transparent |
 | `default_bg` | `Color` | `Color::Black` | Fallback when a cell background resolves to reset/transparent/backdrop |
 | `ansi_palette` | `[Color; 16]` | xterm values | Colors for the 16 ANSI slots; a named color and its `Indexed(0..16)` form both paint with their slot |
-| `render_cursor` | `bool` | `true` | Draw the captured cursor outline when visible |
+| `render_cursor` | `bool` | `true` | Draw the captured cursor, in its shape and color, when visible |
 | `text_renderer` | `PngTextRenderer` | `Auto` | `Auto` uses fonts when found and falls back to bitmap; `Font` tries font rendering first with the same fallback; `Bitmap` forces coarse cell glyphs |
 | `font_family` | `Option<Arc<str>>` | `None` | Preferred system font family, e.g. a Nerd Font |
 | `font_path` | `Option<PathBuf>` | `None` | Explicit font file path; takes precedence over family lookup |

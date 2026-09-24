@@ -1295,11 +1295,7 @@ impl<C: Component> AppRunner<C> {
         }
         let ran_callbacks = !pending.callbacks.is_empty();
         let screen_background = self.resolved_screen_background();
-        let interaction = crate::backend::ratatui_backend::capture_render::CaptureInteraction {
-            focused: self.focus.focused,
-            hovered: self.mouse.hovered,
-            mouse_pos: self.mouse.last_mouse.get(),
-        };
+        let interaction = self.headless_interaction();
         let snapshot = crate::ui_snapshot::build_ui_snapshot(
             &self.core.tree,
             self.core.ctx.viewport(),
@@ -1693,6 +1689,11 @@ impl<C: Component> AppRunner<C> {
             focused: self.focus.focused,
             hovered: self.mouse.hovered,
             mouse_pos: self.mouse.last_mouse.get(),
+            vim_mode: self
+                .focus
+                .focused
+                .and_then(|id| self.widgets.text_area_vim_state.get(&id))
+                .map(|state| state.mode),
         }
     }
 

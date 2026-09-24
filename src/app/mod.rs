@@ -1,6 +1,7 @@
 //! Application runtime and event loop.
 
 pub(crate) mod animation;
+pub(crate) mod caret;
 pub mod context;
 pub(crate) mod copy_feedback;
 pub(crate) mod focus_service;
