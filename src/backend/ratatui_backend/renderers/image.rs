@@ -44,6 +44,89 @@ thread_local! {
     static IMAGE_OCCLUSIONS: RefCell<Vec<ratatui::layout::Rect>> = const { RefCell::new(Vec::new()) };
     static PAINTED_IMAGE_OCCLUSIONS: RefCell<Vec<ratatui::layout::Rect>> = const { RefCell::new(Vec::new()) };
     static IMAGE_PLACEHOLDERS_PAINTED: Cell<bool> = const { Cell::new(false) };
+    /// Images a frame capture drew, in draw order. `Some` only inside [`record_capture_images`].
+    static CAPTURE_IMAGES: RefCell<Option<Vec<CaptureImageDraw>>> = const { RefCell::new(None) };
+}
+
+/// The first of the symbols stamped over the cells a captured image covers: image `n` is marked
+/// with the code point `n` places after it, so one mark is one character and one cell wide.
+///
+/// A frame capture cannot hand pixels to a host terminal, so [`draw_encoded_image`] records them and
+/// marks their cells instead. Whatever is drawn later replaces the mark - an overlay, a border, a
+/// pane above - which is how the capture learns which cells still show the image, exactly as the
+/// host's placeholder cells would. Plane 15 is private use from end to end, so no text is mistaken
+/// for a mark.
+#[cfg(feature = "terminal-images")]
+pub(crate) const CAPTURE_IMAGE_MARKER: u32 = 0xF0000;
+
+/// How many images one capture can mark: the rest of plane 15's private-use code points.
+#[cfg(feature = "terminal-images")]
+pub(crate) const CAPTURE_IMAGE_LIMIT: usize = 0xFFFE;
+
+/// One image [`draw_encoded_image`] drew during a frame capture: the cells it covers, and the
+/// pixels scaled into them.
+#[cfg(feature = "terminal-images")]
+pub(crate) struct CaptureImageDraw {
+    pub(crate) area: ratatui::layout::Rect,
+    pub(crate) pixels: Arc<image::DynamicImage>,
+}
+
+/// Run `render` with image draws recorded for a frame capture instead of encoded for the host.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn record_capture_images<R>(render: impl FnOnce() -> R) -> (R, Vec<CaptureImageDraw>) {
+    struct Restore(Option<Option<Vec<CaptureImageDraw>>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            if let Some(previous) = self.0.take() {
+                CAPTURE_IMAGES.with(|slot| *slot.borrow_mut() = previous);
+            }
+        }
+    }
+
+    let mut restore = Restore(Some(
+        CAPTURE_IMAGES.with(|slot| slot.replace(Some(Vec::new()))),
+    ));
+    let result = render();
+    let previous = restore.0.take().unwrap_or_default();
+    let drawn = CAPTURE_IMAGES
+        .with(|slot| slot.replace(previous))
+        .unwrap_or_default();
+    (result, drawn)
+}
+
+/// Whether a frame capture is recording image draws on this thread.
+#[cfg(feature = "terminal-images")]
+fn capturing_images() -> bool {
+    CAPTURE_IMAGES.with(|slot| slot.borrow().is_some())
+}
+
+/// Record an image for the frame capture in progress and mark the cells it covers.
+#[cfg(feature = "terminal-images")]
+fn record_capture_image(
+    f: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    pixels: Arc<image::DynamicImage>,
+) {
+    let index = CAPTURE_IMAGES.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let drawn = slot.as_mut().expect("checked above");
+        (drawn.len() < CAPTURE_IMAGE_LIMIT).then(|| {
+            drawn.push(CaptureImageDraw { area, pixels });
+            drawn.len() - 1
+        })
+    });
+    let Some(marker) = index.and_then(|index| char::from_u32(CAPTURE_IMAGE_MARKER + index as u32))
+    else {
+        return;
+    };
+    let marker = marker.to_string();
+    let buffer = f.buffer_mut();
+    let area = area.intersection(buffer.area);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            buffer[(x, y)].set_symbol(&marker);
+        }
+    }
 }
 
 /// Remember which cells a Kitty placeholder row must not cover this frame.
@@ -1553,7 +1636,15 @@ pub(crate) fn draw_encoded_image(
     z_index: i32,
     pixels: impl FnOnce() -> Arc<image::DynamicImage>,
 ) -> bool {
-    if area.width == 0 || area.height == 0 || image_support::image_rendering_suspended() {
+    if area.width == 0 || area.height == 0 {
+        return false;
+    }
+    #[cfg(feature = "terminal-images")]
+    if capturing_images() {
+        record_capture_image(f, area, pixels());
+        return true;
+    }
+    if image_support::image_rendering_suspended() {
         return false;
     }
 

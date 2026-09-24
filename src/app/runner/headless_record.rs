@@ -232,6 +232,7 @@ mod tests {
                 modifiers: crate::capture::CellModifiers::default(),
             }],
             cursor: None,
+            images: Vec::new(),
         };
         sink.capture(&frame).expect("inert capture succeeds");
         sink.report(30);

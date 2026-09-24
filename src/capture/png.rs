@@ -4,7 +4,9 @@ use font8x8::{BASIC_FONTS, BLOCK_FONTS, BOX_FONTS, GREEK_FONTS, LATIN_FONTS, Uni
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use unicode_segmentation::UnicodeSegmentation;
 
-use super::{CapturedCell, CapturedFrame, PngOptions, PngTextRenderer, UnderlineStyle};
+use super::{
+    CapturedCell, CapturedFrame, CapturedImage, PngOptions, PngTextRenderer, UnderlineStyle,
+};
 use crate::style::Color;
 
 mod font;
@@ -71,6 +73,7 @@ fn encode_with(
 
     let mut image = RgbImage::new(width, height);
     let columns = usize::from(frame.width);
+    let image_backgrounds = image_cell_backgrounds(frame);
 
     for y in 0..frame.height {
         let mut x = 0;
@@ -86,12 +89,22 @@ fn encode_with(
                     width: final_cell_width.saturating_mul(u32::from(cell_span)),
                     height: final_cell_height,
                 };
-                draw_cell(&mut image, cell_rect, cell, options, fonts.as_deref_mut());
+                if let Some(background) = image_backgrounds.get(idx).copied().flatten()
+                    && cell.symbol == super::image_layer::UPPER_HALF
+                {
+                    fill_background(&mut image, cell_rect, resolve_bg(background, options));
+                } else {
+                    draw_cell(&mut image, cell_rect, cell, options, fonts.as_deref_mut());
+                }
                 x = x.saturating_add(cell_span);
             } else {
                 x = x.saturating_add(1);
             }
         }
+    }
+
+    for captured in &frame.images {
+        draw_image(&mut image, captured, final_cell_width, final_cell_height);
     }
 
     if options.render_cursor
@@ -113,6 +126,67 @@ fn encode_with(
     let mut out = Cursor::new(Vec::new());
     DynamicImage::ImageRgb8(image).write_to(&mut out, ImageFormat::Png)?;
     Ok(out.into_inner())
+}
+
+/// For each cell showing an image, row-major, the background it had under the image. A cell holding
+/// the half-block stand-in draws only that background for the image to cover; one the image left
+/// clear kept its own text, which draws as usual under the image's transparent pixels.
+fn image_cell_backgrounds(frame: &CapturedFrame) -> Vec<Option<Color>> {
+    let mut backgrounds = vec![None; frame.cells.len()];
+    // The first image to show a cell is the one drawn under the others, so its record of the
+    // background is the one from before any image.
+    for image in frame.images.iter().rev() {
+        for row in 0..image.area.h {
+            for col in 0..image.area.w {
+                let offset = usize::from(row) * usize::from(image.area.w) + usize::from(col);
+                let (Ok(x), Ok(y)) = (
+                    u16::try_from(i32::from(image.area.x) + i32::from(col)),
+                    u16::try_from(i32::from(image.area.y) + i32::from(row)),
+                ) else {
+                    continue;
+                };
+                if !image.visible[offset] || x >= frame.width || y >= frame.height {
+                    continue;
+                }
+                backgrounds[usize::from(y) * usize::from(frame.width) + usize::from(x)] =
+                    Some(image.backgrounds[offset]);
+            }
+        }
+    }
+    backgrounds
+}
+
+/// Scale `captured` into its area, from the top-left corner and keeping its aspect ratio, over the
+/// cells it still shows in.
+fn draw_image(canvas: &mut RgbImage, captured: &CapturedImage, cell_w: u32, cell_h: u32) {
+    let fitted = captured.fitted_size(cell_w, cell_h);
+    let (Ok(area_x), Ok(area_y)) = (
+        u32::try_from(captured.area.x),
+        u32::try_from(captured.area.y),
+    ) else {
+        return;
+    };
+    let (origin_x, origin_y) = (area_x * cell_w, area_y * cell_h);
+    let area_w = usize::from(captured.area.w);
+    for dy in 0..fitted.1 {
+        let row = (dy / cell_h) as usize;
+        for dx in 0..fitted.0 {
+            let col = (dx / cell_w) as usize;
+            if !captured
+                .visible
+                .get(row * area_w + col)
+                .copied()
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            if let Some([r, g, b, alpha]) = captured.sample(fitted, (dx, dy), (dx + 1, dy + 1))
+                && alpha > 0
+            {
+                blend_rgb(canvas, origin_x + dx, origin_y + dy, (r, g, b), alpha);
+            }
+        }
+    }
 }
 
 fn draw_cell(

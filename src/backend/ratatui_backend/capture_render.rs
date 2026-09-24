@@ -201,13 +201,19 @@ pub(crate) fn render_to_captured_frame_with_interaction(
     effect_phase: u64,
     screen_background: Option<ratatui::style::Style>,
 ) -> CapturedFrame {
-    let rendered = render_to_buffer_with_interaction(
-        tree,
-        viewport,
-        interaction,
-        effect_phase,
-        screen_background,
-    );
+    let render = || {
+        render_to_buffer_with_interaction(
+            tree,
+            viewport,
+            interaction,
+            effect_phase,
+            screen_background,
+        )
+    };
+    #[cfg(feature = "terminal-images")]
+    let (rendered, drawn_images) = super::renderers::image::record_capture_images(render);
+    #[cfg(not(feature = "terminal-images"))]
+    let rendered = render();
     let area = *rendered.buffer.area();
     let mut cells = Vec::with_capacity(usize::from(area.width) * usize::from(area.height));
 
@@ -224,6 +230,11 @@ pub(crate) fn render_to_captured_frame_with_interaction(
         }
     }
 
+    #[cfg(feature = "terminal-images")]
+    let images = captured_images(&mut cells, area.width, drawn_images);
+    #[cfg(not(feature = "terminal-images"))]
+    let images = Vec::new();
+
     let cursor = rendered.cursor.map(|pos| CursorState {
         x: pos.x,
         y: pos.y,
@@ -236,7 +247,76 @@ pub(crate) fn render_to_captured_frame_with_interaction(
         height: area.height,
         cells,
         cursor,
+        images,
     }
+}
+
+/// Turn the images drawn during a capture into the frame's image layer.
+///
+/// A cell still holding an image's marker shows that image; anything drawn over it later replaced
+/// the marker. Those cells get a half-block approximation, sized with the host's cell pixels as the
+/// live renderer would draw them, and an image nothing left visible is dropped.
+#[cfg(feature = "terminal-images")]
+fn captured_images(
+    cells: &mut [CapturedCell],
+    width: u16,
+    drawn: Vec<super::renderers::image::CaptureImageDraw>,
+) -> Vec<crate::capture::CapturedImage> {
+    use super::renderers::image::{CAPTURE_IMAGE_LIMIT, CAPTURE_IMAGE_MARKER};
+
+    if drawn.is_empty() || width == 0 {
+        return Vec::new();
+    }
+    let mut images: Vec<_> = drawn
+        .into_iter()
+        .map(|draw| {
+            let rgba = draw.pixels.to_rgba8();
+            let (pixel_width, pixel_height) = rgba.dimensions();
+            let area = Rect {
+                x: draw.area.x as i16,
+                y: draw.area.y as i16,
+                w: draw.area.width,
+                h: draw.area.height,
+            };
+            let mut image = crate::capture::CapturedImage::new(
+                area,
+                pixel_width,
+                pixel_height,
+                rgba.into_raw().into(),
+            );
+            image.visible.fill(false);
+            image
+        })
+        .collect();
+
+    for (offset, cell) in cells.iter_mut().enumerate() {
+        let mut chars = cell.symbol.chars();
+        let (Some(mark), None) = (chars.next(), chars.next()) else {
+            continue;
+        };
+        let Some(index) = (u32::from(mark))
+            .checked_sub(CAPTURE_IMAGE_MARKER)
+            .map(|index| index as usize)
+            .filter(|&index| index < CAPTURE_IMAGE_LIMIT)
+        else {
+            continue;
+        };
+        cell.symbol = " ".to_string();
+        let x = (offset % usize::from(width)) as u16;
+        let y = (offset / usize::from(width)) as u16;
+        if let Some(image) = images.get_mut(index)
+            && let Some(visible) = image.area_offset(x, y)
+        {
+            image.visible[visible] = true;
+        }
+    }
+
+    images.retain(|image| image.visible.contains(&true));
+    let font = super::image_support::picker_snapshot().font_size();
+    for image in &mut images {
+        image.paint_half_blocks(cells, width, u32::from(font.width), u32::from(font.height));
+    }
+    images
 }
 
 #[cfg(test)]

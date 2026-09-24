@@ -108,6 +108,8 @@ Headless: `TestBackend::capture_ui_snapshot()` after `render()`. Live: `Context:
 
 Options for `CapturedFrame::to_png(&PngOptions)` and `UiSnapshot::to_png(&PngOptions)`.
 
+The PNG also draws `CapturedFrame::images`, such as a terminal pane's Kitty graphics, scaled into the cells that still show them; text and ANSI output carry a `▀` half-block stand-in instead. See [terminal-images.md](widgets/terminal-images.md#captures).
+
 `PngOptions` and `PngTextRenderer` are exported from the crate root, not the prelude:
 
 ```rust

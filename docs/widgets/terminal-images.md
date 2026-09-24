@@ -235,8 +235,33 @@ Sixel input from the child is a separate protocol and is not read.
   keep the displayed frame in place while the replacement is encoded. Its transmission is emitted
   before its native placeholders in one paint, so the host switches only after it has the pixels.
 
+## Captures
+
+A capture holds images beside its cells rather than in them. `TestBackend::capture_frame()`, a
+`UiSnapshot`, and `TerminalScreen::capture_frame()` all fill `CapturedFrame::images`: one
+`CapturedImage` per image, with its RGBA pixels, the cells it is laid out over, and which of those
+cells still show it.
+
+- **What covers an image hides it.** A UI capture records each image as the renderer draws it,
+  then checks each of its cells after everything else has drawn. An overlay, a border, a toast, or
+  a pane above takes the cells it covers, exactly as on the host. `CapturedImage::shows(x, y)`
+  answers per cell.
+- **The cells get a half-block stand-in.** Each visible cell holds `▀` in the colors of its top
+  and bottom halves, so `plain_text()` marks where an image is, `to_ansi_text()` shows a coarse
+  version in any terminal, and cell assertions read colors straight out of the grid. A cell the
+  image leaves fully transparent keeps what it held. `CapturedImage::backgrounds` records each
+  cell's background from before the stand-in.
+- **A PNG draws the pixels.** `to_png()` scales each image into its cells at the PNG's own cell
+  size, keeping its aspect ratio from the top-left corner as a terminal does, and draws only the
+  cells it still shows in. Transparent pixels show the recorded background, not the stand-in.
+- **Only covering hides an image.** A layer that recolors cells without drawing into them, such
+  as a dimmed backdrop behind a modal, leaves the image at full brightness where it still shows.
+- **A capture does not wait for an encode.** It never encodes for a host, so the first capture
+  after an image arrives already has it.
+- `TerminalScreen::capture_frame()` crops each placement to the viewport the way the renderer
+  does, and sizes its half blocks with `cell_size()`.
+
 ## Testing
 
-The half-block encoder is the fallback path, which makes images assertable without a real terminal:
-render through `TestBackend` and read the colors back out of `capture_frame()`. See
-`tests/terminal_images_render.rs`.
+Render through `TestBackend` and read `capture_frame()`: its `images` for pixels and visibility,
+its cells for the half-block colors. See `tests/terminal_images_render.rs`.
