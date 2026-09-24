@@ -289,6 +289,12 @@ Named colors: `Black`, `Red`, `Green`, `Yellow`, `Blue`, `Magenta`, `Cyan`, `Whi
 
 > **Tip**: Prefer `Color::rgb(...)` for interactive/selection styles when exact contrast matters. Named ANSI colors vary by terminal palette.
 
+Because named and indexed colors resolve against the terminal's palette, blending effects
+(`dim_by`, `tint_by`, `transform_fg`/`transform_bg`, backdrop and fade opacity) never turn a
+colored palette entry into truecolor, which would show the standard ANSI hue instead of the
+user's theme. The cell keeps its palette color and gains the terminal's `DIM` attribute. Grey
+palette entries and `Color::rgb(...)` colors are blended exactly.
+
 ## Span line editing
 
 `tui_lipan::utils::spans` is the public facade for editing styled lines without

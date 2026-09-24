@@ -8,7 +8,7 @@ use super::{
     push_render_terminal_bg, render_integrated_hscrollbar, render_integrated_vscrollbar_half_block,
     render_vscrollbar_half_block, render_vscrollbar_with_metrics, resolve_interactive_style,
     resolve_interactive_style_raw, retro_crt_params, style_backdrop, tint_ratatui_color,
-    to_ratatui_style_with_terminal_bg, truncate_end_with_ellipsis,
+    tint_ratatui_color_on_palette, to_ratatui_style_with_terminal_bg, truncate_end_with_ellipsis,
 };
 use crate::app::ContrastPolicy;
 use crate::core::mask::CellMask;
@@ -80,13 +80,13 @@ fn ratatui_tint_cache_matches_direct_tint() {
     for color in colors {
         assert_eq!(
             cache.tint(color, Color::Black, 0.6),
-            tint_ratatui_color(color, Color::Black, 0.6)
+            tint_ratatui_color_on_palette(color, Color::Black, 0.6)
         );
     }
     for color in colors {
         assert_eq!(
             cache.tint(color, Color::Black, 0.6),
-            tint_ratatui_color(color, Color::Black, 0.6)
+            tint_ratatui_color_on_palette(color, Color::Black, 0.6)
         );
     }
 }
