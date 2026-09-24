@@ -21,6 +21,8 @@ use crate::core::node::NodeId;
 use crate::style::{ColorTransform, Rect, Style, VisualEffect};
 
 thread_local! {
+    /// Whether the layer drawing now holds anything that draws an image.
+    static LAYER_DRAWS_IMAGES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Passes of the layer drawing now that have yet to apply, in the order they will.
     static PENDING_IMAGE_EFFECTS: RefCell<Vec<PendingImageEffect>> = const { RefCell::new(Vec::new()) };
     /// One cell that passes are replayed on to recolor a pixel.
@@ -35,14 +37,21 @@ pub(crate) struct PendingImageEffect {
     pub(crate) backdrop: ImageBackdrop,
 }
 
-/// Install the passes of the layer about to draw.
-pub(crate) fn set_pending_image_effects(effects: Vec<PendingImageEffect>) {
+/// Install the passes of the layer about to draw, and whether it draws images at all.
+pub(crate) fn set_pending_image_effects(effects: Vec<PendingImageEffect>, draws_images: bool) {
     PENDING_IMAGE_EFFECTS.with(|slot| *slot.borrow_mut() = effects);
+    LAYER_DRAWS_IMAGES.with(|slot| slot.set(draws_images));
 }
 
 /// Drop whatever passes are left, at the end of a layer.
 pub(crate) fn clear_pending_image_effects() {
     PENDING_IMAGE_EFFECTS.with(|slot| slot.borrow_mut().clear());
+    LAYER_DRAWS_IMAGES.with(|slot| slot.set(false));
+}
+
+/// Whether the layer drawing now draws images, so its passes may run over Kitty placeholders.
+pub(crate) fn layer_draws_images() -> bool {
+    LAYER_DRAWS_IMAGES.with(std::cell::Cell::get)
 }
 
 /// `node` has run its passes, or will not run them this frame; images drawn from here on are not

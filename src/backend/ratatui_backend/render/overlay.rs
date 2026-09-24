@@ -80,7 +80,7 @@ const KITTY_PLACEHOLDER: char = '\u{10EEEE}';
 /// backdrop that tints foregrounds would point the cell at another image, or at none. The image's
 /// own pixels are dimmed before they are encoded instead.
 #[cfg(feature = "image")]
-fn kitty_placeholder_foregrounds(
+pub(crate) fn kitty_placeholder_foregrounds(
     f: &mut ratatui::Frame<'_>,
     rect: Rect,
 ) -> Vec<(ratatui::layout::Position, RColor)> {
@@ -99,14 +99,18 @@ fn kitty_placeholder_foregrounds(
     placeholders
 }
 
+/// Put back the foregrounds [`kitty_placeholder_foregrounds`] recorded, on the cells that are
+/// still placeholders.
 #[cfg(feature = "image")]
-fn restore_kitty_placeholder_foregrounds(
+pub(crate) fn restore_kitty_placeholder_foregrounds(
     f: &mut ratatui::Frame<'_>,
     placeholders: Vec<(ratatui::layout::Position, RColor)>,
 ) {
     let buf = f.buffer_mut();
     for (position, fg) in placeholders {
-        if let Some(cell) = buf.cell_mut(position) {
+        if let Some(cell) = buf.cell_mut(position)
+            && cell.symbol().contains(KITTY_PLACEHOLDER)
+        {
             cell.fg = fg;
         }
     }

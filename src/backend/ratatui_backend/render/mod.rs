@@ -227,15 +227,13 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
 
     if tree.is_valid(initial_root) && !overlay_nodes.contains(&initial_root) {
         #[cfg(feature = "image")]
-        crate::backend::ratatui_backend::renderers::image_effects::set_pending_image_effects(
-            pending_image_effects(
-                tree,
-                initial_root,
-                content_rect,
-                state.content,
-                ctx.terminal_bg,
-            ),
-        );
+        install_pending_image_effects(pending_image_effects(
+            tree,
+            initial_root,
+            content_rect,
+            state.content,
+            ctx.terminal_bg,
+        ));
         render_subtree(
             &mut state,
             initial_root,
@@ -257,15 +255,13 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
                 .collect(),
         );
         #[cfg(feature = "image")]
-        crate::backend::ratatui_backend::renderers::image_effects::set_pending_image_effects(
-            pending_image_effects(
-                tree,
-                overlay.id,
-                content_rect,
-                state.content,
-                ctx.terminal_bg,
-            ),
-        );
+        install_pending_image_effects(pending_image_effects(
+            tree,
+            overlay.id,
+            content_rect,
+            state.content,
+            ctx.terminal_bg,
+        ));
         #[cfg(not(feature = "image"))]
         let _ = overlay_index;
         let overlay_opacity = overlay.opacity.clamp(0.0, 1.0);
@@ -535,9 +531,13 @@ pub(crate) fn render_regions(
             continue;
         }
         #[cfg(feature = "image")]
-        crate::backend::ratatui_backend::renderers::image_effects::set_pending_image_effects(
-            pending_image_effects(tree, tree.root, region, state.content, ctx.terminal_bg),
-        );
+        install_pending_image_effects(pending_image_effects(
+            tree,
+            tree.root,
+            region,
+            state.content,
+            ctx.terminal_bg,
+        ));
         render_subtree(&mut state, tree.root, Some(region), RenderOffset::ZERO);
     }
 
@@ -777,15 +777,18 @@ fn render_subtree(
                 let mut rect = node_offset.apply_to_rect(node.rect);
                 rect.x = rect.x.saturating_add(state.content.x as i16);
                 rect.y = rect.y.saturating_add(state.content.y as i16);
-                apply_visual_effects_over_backdrop(
-                    state.f,
-                    rect,
-                    &scope.effects,
-                    effect_phase,
-                    current_clip,
-                    state.ctx.terminal_bg,
-                    backdrop.as_ref(),
-                );
+                let terminal_bg = state.ctx.terminal_bg;
+                keeping_kitty_placeholders(state.f, rect, current_clip, |f| {
+                    apply_visual_effects_over_backdrop(
+                        f,
+                        rect,
+                        &scope.effects,
+                        effect_phase,
+                        current_clip,
+                        terminal_bg,
+                        backdrop.as_ref(),
+                    );
+                });
             }
             RenderStackItem::AnimatedPost(id, current_clip, node_offset, restore_snapshot) => {
                 #[cfg(feature = "image")]
@@ -810,14 +813,17 @@ fn render_subtree(
                 }
                 rect.x = rect.x.saturating_add(state.content.x as i16);
                 rect.y = rect.y.saturating_add(state.content.y as i16);
-                render_animated(
-                    state.f,
-                    animated,
-                    rect,
-                    current_clip,
-                    restore_snapshot.as_ref(),
-                    state.ctx.terminal_bg,
-                );
+                let terminal_bg = state.ctx.terminal_bg;
+                keeping_kitty_placeholders(state.f, rect, current_clip, |f| {
+                    render_animated(
+                        f,
+                        animated,
+                        rect,
+                        current_clip,
+                        restore_snapshot.as_ref(),
+                        terminal_bg,
+                    );
+                });
                 if animated.opacity <= f32::EPSILON
                     && let Some(snapshot) = restore_snapshot
                 {
@@ -1119,25 +1125,19 @@ fn render_node(
             child_clip = Some(intersect_clip(inner));
         }
         NodeKind::Canvas(node) => {
-            render_zstack_center(
-                state.f,
-                &resolve_base_style(active_theme, node.style),
-                rect,
-                rrect,
-                clip_bounds,
-                state.ctx.terminal_bg,
-            );
+            let style = resolve_base_style(active_theme, node.style);
+            let terminal_bg = state.ctx.terminal_bg;
+            keeping_kitty_placeholders(state.f, rect, clip_bounds, |f| {
+                render_zstack_center(f, &style, rect, rrect, clip_bounds, terminal_bg);
+            });
             child_clip = Some(intersect_clip(rect));
         }
         NodeKind::Center(node) => {
-            render_zstack_center(
-                state.f,
-                &resolve_base_style(active_theme, node.style),
-                rect,
-                rrect,
-                clip_bounds,
-                state.ctx.terminal_bg,
-            );
+            let style = resolve_base_style(active_theme, node.style);
+            let terminal_bg = state.ctx.terminal_bg;
+            keeping_kitty_placeholders(state.f, rect, clip_bounds, |f| {
+                render_zstack_center(f, &style, rect, rrect, clip_bounds, terminal_bg);
+            });
             child_clip = Some(intersect_clip(rect));
         }
         NodeKind::EffectScope(scope) => {
@@ -1155,14 +1155,11 @@ fn render_node(
             defer_animated_render = animated.opacity < 1.0 || color_animated;
         }
         NodeKind::CenterPin(node) => {
-            render_zstack_center(
-                state.f,
-                &resolve_base_style(active_theme, node.style),
-                rect,
-                rrect,
-                clip_bounds,
-                state.ctx.terminal_bg,
-            );
+            let style = resolve_base_style(active_theme, node.style);
+            let terminal_bg = state.ctx.terminal_bg;
+            keeping_kitty_placeholders(state.f, rect, clip_bounds, |f| {
+                render_zstack_center(f, &style, rect, rrect, clip_bounds, terminal_bg);
+            });
             child_clip = Some(intersect_clip(rect));
         }
         NodeKind::StatusBarLayout(node) => {
@@ -1892,7 +1889,10 @@ fn pending_image_effects(
     clip: Rect,
     content: ratatui::layout::Rect,
     terminal_bg: Option<RColor>,
-) -> Vec<crate::backend::ratatui_backend::renderers::image_effects::PendingImageEffect> {
+) -> (
+    Vec<crate::backend::ratatui_backend::renderers::image_effects::PendingImageEffect>,
+    bool,
+) {
     use crate::backend::ratatui_backend::renderers::image::{ImageBackdrop, PixelEffect};
     use crate::backend::ratatui_backend::renderers::image_effects::{
         CellPass, PendingImageEffect, ReplayedEffect, pixel_visual_effect,
@@ -2003,9 +2003,9 @@ fn pending_image_effects(
         }
     }
     if !draws_image {
-        return Vec::new();
+        return (Vec::new(), false);
     }
-    passes
+    let effects = passes
         .into_iter()
         .filter(|(_, area, _)| !area.is_empty())
         .filter_map(|(node, area, pass)| {
@@ -2018,7 +2018,41 @@ fn pending_image_effects(
                 },
             })
         })
-        .collect()
+        .collect();
+    (effects, true)
+}
+
+#[cfg(feature = "image")]
+fn install_pending_image_effects(
+    (effects, draws_images): (
+        Vec<crate::backend::ratatui_backend::renderers::image_effects::PendingImageEffect>,
+        bool,
+    ),
+) {
+    crate::backend::ratatui_backend::renderers::image_effects::set_pending_image_effects(
+        effects,
+        draws_images,
+    );
+}
+
+/// Run a pass over `rect` that recolors what is drawn, keeping the foregrounds of the Kitty
+/// placeholders under it: a placeholder's foreground is the image id the host reads, not a color.
+fn keeping_kitty_placeholders(
+    f: &mut ratatui::Frame<'_>,
+    rect: Rect,
+    clip: Option<Rect>,
+    pass: impl FnOnce(&mut ratatui::Frame<'_>),
+) {
+    #[cfg(feature = "image")]
+    if crate::backend::ratatui_backend::renderers::image_effects::layer_draws_images() {
+        let area = clip.map_or(rect, |clip| rect.intersection(&clip));
+        let placeholders = kitty_placeholder_foregrounds(f, area);
+        pass(f);
+        restore_kitty_placeholder_foregrounds(f, placeholders);
+        return;
+    }
+    let _ = (rect, clip);
+    pass(f);
 }
 
 /// A `Canvas` or `Center` surface as a pass over what it covers, when its style recolors cell

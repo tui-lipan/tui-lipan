@@ -274,7 +274,8 @@ overlay.
   re-encode every image under it on every frame of the fade.
 - **Half blocks are left to the backdrop.** They are cells, which the backdrop already recolors.
 - **Kitty image ids survive.** A placeholder cell that carries its image id in its foreground keeps
-  that foreground under a backdrop tint; only the pixels dim.
+  that foreground under a backdrop, an `EffectScope`, an `Animated` fade, or a surface in a layer
+  that draws images; only the pixels dim.
 
 ## Known limits
 

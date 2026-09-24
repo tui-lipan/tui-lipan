@@ -7,7 +7,9 @@ use crate::overlay::{
     DismissPolicy, OverlayLayer, OverlayPlacement, OverlayScope, PointerCapture, Portal,
 };
 use crate::style::{Align, BorderStyle, Color, Length, Padding, RichText, Size, Style, StyleSlot};
-use crate::widgets::{BorderLabels, Center, Frame, FrameLabel, MouseRegion, Spacer, ZStack};
+use crate::widgets::{
+    BorderLabels, BorderMergeMode, Center, Frame, FrameLabel, MouseRegion, Spacer, ZStack,
+};
 
 /// A modal dialog with optional title and child content.
 #[derive(Clone)]
@@ -216,6 +218,7 @@ impl From<Modal> for Element {
         let mut base_frame = Frame::new()
             .border(modal.border)
             .border_style(modal.border_style)
+            .border_merge_mode(BorderMergeMode::Replace)
             .padding(modal.padding)
             .child(modal.child)
             .style(frame_style)
