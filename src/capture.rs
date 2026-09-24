@@ -34,6 +34,36 @@ pub struct CapturedCell {
     pub modifiers: CellModifiers,
 }
 
+/// Adjacent cells in one row of a [`CapturedFrame`] that share a style, from
+/// [`CapturedFrame::row_runs`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CellRun {
+    /// First column the run covers.
+    pub x: u16,
+    /// Columns the run covers, a wide glyph counting two.
+    pub width: u16,
+    /// The cells' symbols, joined.
+    pub text: String,
+    /// Foreground color.
+    pub fg: Color,
+    /// Background color.
+    pub bg: Color,
+    /// Underline color.
+    pub underline_color: Color,
+    /// Text modifiers.
+    pub modifiers: CellModifiers,
+}
+
+impl CellRun {
+    fn style_matches(&self, cell: &CapturedCell) -> bool {
+        self.fg == cell.fg
+            && self.bg == cell.bg
+            && self.underline_color == cell.underline_color
+            && self.modifiers == cell.modifiers
+    }
+}
+
 /// Boolean modifier flags extracted from a rendered terminal cell.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CellModifiers {
@@ -81,8 +111,31 @@ impl UnderlineStyle {
     }
 }
 
+/// Shape of a captured cursor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CursorShape {
+    /// A filled cell (`DECSCUSR` 1 and 2). The default when the shape is unknown.
+    #[default]
+    Block,
+    /// An outlined cell, as terminals draw the cursor of an unfocused window.
+    HollowBlock,
+    /// A line under the cell (`DECSCUSR` 3 and 4).
+    Underline,
+    /// A vertical line at the cell's left edge (`DECSCUSR` 5 and 6).
+    Bar,
+}
+
 /// Cursor metadata captured from a rendered frame.
+///
+/// Build one with [`Self::new`] and the setters; the struct is `#[non_exhaustive]` so later
+/// fields are not breaking changes.
+///
+/// A terminal capture takes the shape and blink from the program's `DECSCUSR` request, falling
+/// back to the screen's default blinking block, and the color from `OSC 12`. A UI capture takes
+/// them from the focused widget's caret settings and its theme. What neither source knows stays
+/// at the default: a steady [`CursorShape::Block`] with no color of its own.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CursorState {
     /// Cursor column.
     pub x: u16,
@@ -90,6 +143,52 @@ pub struct CursorState {
     pub y: u16,
     /// Whether the cursor should be shown.
     pub visible: bool,
+    /// Cursor shape.
+    pub shape: CursorShape,
+    /// The cursor's own color, or `None` to draw it in the color of the text under it, as
+    /// terminals do by default.
+    pub color: Option<Color>,
+    /// Whether the cursor blinks. A capture is a single moment, so a blinking cursor is still
+    /// reported, and drawn, as lit.
+    pub blinking: bool,
+}
+
+impl CursorState {
+    /// A visible, steady block cursor at column `x`, row `y`, with no color of its own.
+    pub fn new(x: u16, y: u16) -> Self {
+        Self {
+            x,
+            y,
+            visible: true,
+            shape: CursorShape::Block,
+            color: None,
+            blinking: false,
+        }
+    }
+
+    /// Set whether the cursor is shown.
+    pub fn visible(mut self, visible: bool) -> Self {
+        self.visible = visible;
+        self
+    }
+
+    /// Set the cursor shape.
+    pub fn shape(mut self, shape: CursorShape) -> Self {
+        self.shape = shape;
+        self
+    }
+
+    /// Set the cursor's own color.
+    pub fn color(mut self, color: impl Into<Option<Color>>) -> Self {
+        self.color = color.into();
+        self
+    }
+
+    /// Set whether the cursor blinks.
+    pub fn blinking(mut self, blinking: bool) -> Self {
+        self.blinking = blinking;
+        self
+    }
 }
 
 /// Complete frame snapshot produced by [`crate::TestBackend::capture_frame`].
@@ -139,7 +238,11 @@ pub struct PngOptions {
     /// terminal capture keeps these colors symbolic, so this is where a screenshot takes its
     /// theme.
     pub ansi_palette: [Color; 16],
-    /// Whether to draw a cursor outline when the captured frame contains a visible cursor.
+    /// Whether to draw the cursor when the captured frame contains a visible one.
+    ///
+    /// The cursor takes its [`CursorState::shape`] and, when set, its [`CursorState::color`];
+    /// otherwise it is drawn in the foreground color of the cell under it. A block cursor redraws
+    /// that cell's text in the cell's background color, as terminals do.
     ///
     /// Defaults to `true`.
     pub render_cursor: bool,
@@ -424,6 +527,58 @@ impl CapturedFrame {
     pub fn cell(&self, x: u16, y: u16) -> &CapturedCell {
         assert!(x < self.width, "cell x out of bounds");
         &self.row(y)[usize::from(x)]
+    }
+
+    /// Returns row `y` as runs of adjacent cells with identical style, left to right.
+    ///
+    /// The runs tile the row: each starts where the previous one ended, and together they cover
+    /// all [`Self::width`] columns. A wide glyph belongs to the run of its own cell and counts
+    /// two columns there; the column it covers contributes nothing, whatever placeholder or style
+    /// that cell holds. As in [`Self::to_ansi_text`], a cell that would change the row's width -
+    /// an empty symbol nothing covers, or a wide glyph in the last column - becomes a space, so a
+    /// run's text normally has a display width equal to [`CellRun::width`].
+    ///
+    /// Unlike [`Self::styled_lines`], runs keep the underline shape and underline color, and
+    /// compare cells the way [`CapturedCell::ansi_style_matches`] does.
+    ///
+    /// Panics if `y >= self.height`.
+    pub fn row_runs(&self, y: u16) -> Vec<CellRun> {
+        let row = self.row(y);
+        let mut runs: Vec<CellRun> = Vec::new();
+        let mut x = 0;
+        while x < self.width {
+            let cell = &row[usize::from(x)];
+            let span = cell.span_at(x, self.width);
+            let text = if cell.symbol.is_empty()
+                || (span == 1 && UnicodeWidthStr::width(cell.symbol.as_str()) > 1)
+            {
+                " "
+            } else {
+                cell.symbol.as_str()
+            };
+            match runs.last_mut() {
+                Some(run) if run.style_matches(cell) => {
+                    run.text.push_str(text);
+                    run.width += span;
+                }
+                _ => runs.push(CellRun {
+                    x,
+                    width: span,
+                    text: text.to_owned(),
+                    fg: cell.fg,
+                    bg: cell.bg,
+                    underline_color: cell.underline_color,
+                    modifiers: cell.modifiers.clone(),
+                }),
+            }
+            x += span;
+        }
+        runs
+    }
+
+    /// Returns every row as [`Self::row_runs`] gives it, top to bottom.
+    pub fn runs(&self) -> Vec<Vec<CellRun>> {
+        (0..self.height).map(|y| self.row_runs(y)).collect()
     }
 
     /// Returns each row grouped into contiguous `(text, style)` runs.

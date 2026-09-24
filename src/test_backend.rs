@@ -1291,6 +1291,10 @@ where
             focused: self.focused,
             hovered: self.mouse.hovered,
             mouse_pos: self.mouse.last_mouse.get(),
+            vim_mode: self
+                .focused
+                .and_then(|id| self.widgets.text_area_vim_state.get(&id))
+                .map(|state| state.mode),
         }
     }
 

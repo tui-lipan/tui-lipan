@@ -196,8 +196,8 @@ pub use crate::automation::{
 };
 pub use crate::callback::{Callback, CancellationToken, CommandLink, KeyHandler, Link};
 pub use crate::capture::{
-    CapturedCell, CapturedFrame, CapturedImage, CastRecording, CellModifiers, CursorState,
-    UnderlineStyle,
+    CapturedCell, CapturedFrame, CapturedImage, CastRecording, CellModifiers, CellRun, CursorShape,
+    CursorState, UnderlineStyle,
 };
 #[cfg(feature = "ui-snapshot-png")]
 pub use crate::capture::{PngOptions, PngTextRenderer};

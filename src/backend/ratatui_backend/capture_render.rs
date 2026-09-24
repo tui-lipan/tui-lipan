@@ -6,10 +6,13 @@ use ratatui::layout::Position;
 use ratatui::style::Modifier;
 
 use crate::app::ContrastPolicy;
-use crate::capture::{CapturedCell, CapturedFrame, CellModifiers, CursorState, UnderlineStyle};
+use crate::app::runner::terminal::focused_caret;
+use crate::capture::{
+    CapturedCell, CapturedFrame, CellModifiers, CursorShape, CursorState, UnderlineStyle,
+};
 use crate::core::node::{NodeId, NodeTree};
-use crate::style::Rect;
-use crate::style::Style;
+use crate::style::{CaretShape, Rect, Style};
+use crate::widgets::TextAreaVimMode;
 
 use super::common::from_ratatui_color;
 use super::render::{RenderContext, build_join_index, render};
@@ -33,6 +36,8 @@ pub(crate) struct CaptureInteraction {
     pub focused: Option<NodeId>,
     pub hovered: Option<NodeId>,
     pub mouse_pos: Option<(u16, u16)>,
+    /// The focused text area's Vim mode, which decides its caret shape.
+    pub vim_mode: Option<TextAreaVimMode>,
 }
 
 /// A headless render, kept as the renderer left it.
@@ -81,6 +86,7 @@ fn render_headless(
         focused,
         hovered,
         mouse_pos,
+        ..
     } = interaction;
     let join_index = build_join_index(tree);
     let width = viewport.w.max(1);
@@ -235,10 +241,23 @@ pub(crate) fn render_to_captured_frame_with_interaction(
     #[cfg(not(feature = "terminal-images"))]
     let images = Vec::new();
 
-    let cursor = rendered.cursor.map(|pos| CursorState {
-        x: pos.x,
-        y: pos.y,
-        visible: true,
+    let caret = focused_caret(tree, interaction.focused, interaction.vim_mode);
+    let cursor = rendered.cursor.map(|pos| {
+        let cursor = CursorState::new(pos.x, pos.y);
+        match caret {
+            // `TerminalDefault` defers to a terminal the capture does not have, so it keeps the
+            // default steady block.
+            Some(caret) if !caret.shape.is_terminal_default() => cursor
+                .shape(match caret.shape {
+                    CaretShape::Bar => CursorShape::Bar,
+                    CaretShape::Underline => CursorShape::Underline,
+                    CaretShape::Block | CaretShape::TerminalDefault => CursorShape::Block,
+                })
+                .blinking(caret.blinking)
+                .color(caret.color),
+            Some(caret) => cursor.color(caret.color),
+            None => cursor,
+        }
     });
 
     CapturedFrame {

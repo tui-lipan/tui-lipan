@@ -41,7 +41,9 @@ use super::scrollback_ledger::{
     HostModes, LedgerTerm, SGR_PIXELS_MOUSE, ledger_capacity, settle_history,
 };
 use super::selection::{ScrollbackLineage, TerminalSelection};
-use crate::capture::{CapturedCell, CapturedFrame, CellModifiers, CursorState, UnderlineStyle};
+use crate::capture::{
+    CapturedCell, CapturedFrame, CellModifiers, CursorShape, CursorState, UnderlineStyle,
+};
 use crate::style::{CaretShape, Color as UiColor, HostTerminalColors, Rect, Span, Style, Theme};
 use crate::utils::{GridPos, GridSelection, SelectionEnd};
 
@@ -2027,7 +2029,9 @@ impl TerminalScreen {
     ///
     /// A wide glyph occupies its own cell, and the column it covers holds an empty symbol, so
     /// joining a row's symbols yields text at its true display width. Hidden text captures as
-    /// spaces. The cursor is reported while it lies inside the viewport.
+    /// spaces. The cursor is reported while it lies inside the viewport, with the shape and blink
+    /// the program asked for through `DECSCUSR` (the screen's default is a blinking block) and
+    /// the color it set through `OSC 12`, if any.
     ///
     /// With `terminal-images`, the images the program displayed land in
     /// [`CapturedFrame::images`], cropped to the viewport, and the cells under them hold a
@@ -2081,12 +2085,27 @@ impl TerminalScreen {
             };
         }
 
+        let style = self.term.cursor_style();
+        let shape = match style.shape {
+            TermCursorShape::Block | TermCursorShape::Hidden => CursorShape::Block,
+            TermCursorShape::HollowBlock => CursorShape::HollowBlock,
+            TermCursorShape::Underline => CursorShape::Underline,
+            TermCursorShape::Beam => CursorShape::Bar,
+        };
+        let color =
+            self.term.colors()[NamedColor::Cursor].map(|rgb| UiColor::Rgb(rgb.r, rgb.g, rgb.b));
         let cursor = term::point_to_viewport(display_offset, content.cursor.point)
             .filter(|point| point.line < usize::from(height) && point.column.0 < usize::from(width))
-            .map(|point| CursorState {
-                x: point.column.0 as u16,
-                y: point.line as u16,
-                visible: content.mode.contains(TermMode::SHOW_CURSOR) && display_offset == 0,
+            .map(|point| {
+                CursorState::new(point.column.0 as u16, point.line as u16)
+                    .visible(
+                        content.mode.contains(TermMode::SHOW_CURSOR)
+                            && style.shape != TermCursorShape::Hidden
+                            && display_offset == 0,
+                    )
+                    .shape(shape)
+                    .color(color)
+                    .blinking(style.blinking)
             });
 
         #[cfg(feature = "terminal-images")]
@@ -4124,18 +4143,42 @@ mod tests {
         let mut screen = TerminalScreen::new(3, 6, 10);
         screen.process_bytes(b"ab\r\nc");
         let frame = screen.capture_frame();
-        assert_eq!(
-            frame.cursor,
-            Some(CursorState {
-                x: 1,
-                y: 1,
-                visible: true
-            })
-        );
+        // The screen's default cursor is a blinking block with no color of its own.
+        assert_eq!(frame.cursor, Some(CursorState::new(1, 1).blinking(true)));
 
         screen.process_bytes(b"\x1b[?25l");
         let cursor = screen.capture_frame().cursor.expect("cursor in viewport");
         assert!(!cursor.visible);
+    }
+
+    #[test]
+    fn capture_frame_reports_the_programs_cursor_shape_blink_and_color() {
+        let mut screen = TerminalScreen::new(2, 6, 10);
+        let cursor = |screen: &TerminalScreen| screen.capture_frame().cursor.expect("cursor");
+
+        // CSI 6 SP q: steady bar.
+        screen.process_bytes(b"\x1b[6 q");
+        let steady_bar = cursor(&screen);
+        assert_eq!(steady_bar.shape, CursorShape::Bar);
+        assert!(!steady_bar.blinking);
+
+        // CSI 3 SP q: blinking underline.
+        screen.process_bytes(b"\x1b[3 q");
+        let underline = cursor(&screen);
+        assert_eq!(underline.shape, CursorShape::Underline);
+        assert!(underline.blinking);
+
+        // CSI 2 SP q: steady block.
+        screen.process_bytes(b"\x1b[2 q");
+        assert_eq!(cursor(&screen).shape, CursorShape::Block);
+        assert!(!cursor(&screen).blinking);
+        assert_eq!(cursor(&screen).color, None);
+
+        // OSC 12 sets the cursor color; OSC 112 resets it.
+        screen.process_bytes(b"\x1b]12;#12ab34\x07");
+        assert_eq!(cursor(&screen).color, Some(UiColor::Rgb(0x12, 0xab, 0x34)));
+        screen.process_bytes(b"\x1b]112\x07");
+        assert_eq!(cursor(&screen).color, None);
     }
 
     #[test]

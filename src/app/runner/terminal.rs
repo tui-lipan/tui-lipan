@@ -35,76 +35,17 @@ impl TerminalManager {
         let mut target_style = SetCursorStyle::DefaultUserShape;
         let mut desired_cursor_color: Option<(u8, u8, u8)> = None;
 
-        if let Some(id) = focused
-            && tree.is_valid(id)
-        {
-            let node = tree.node(id);
-            let theme = node.active_theme();
-            let caret = match &node.kind {
-                NodeKind::TextArea(node) => {
-                    if node.read_only {
-                        None
-                    } else {
-                        let caret_shape = node.caret_shape.unwrap_or(theme.caret.shape);
-                        let blinking = node.caret_blinking.unwrap_or(theme.caret.blinking);
-                        if self.osc12_supported {
-                            desired_cursor_color = node
-                                .caret_color
-                                .or(theme.caret.color)
-                                .and_then(Color::to_rgb);
-                        }
-                        let caret_shape = if node.vim_motions && caret_shape == CaretShape::Block {
-                            match text_area_vim_state
-                                .get(&id)
-                                .map(|state| state.mode)
-                                .unwrap_or_default()
-                            {
-                                TextAreaVimMode::Insert => CaretShape::Bar,
-                                TextAreaVimMode::Normal
-                                | TextAreaVimMode::Visual
-                                | TextAreaVimMode::VisualLine => CaretShape::Block,
-                            }
-                        } else {
-                            caret_shape
-                        };
-                        Some((caret_shape, blinking))
-                    }
-                }
-                NodeKind::Input(node) => {
-                    if node.read_only {
-                        None
-                    } else {
-                        if self.osc12_supported {
-                            desired_cursor_color = node
-                                .caret_color
-                                .or(theme.caret.color)
-                                .and_then(Color::to_rgb);
-                        }
-                        Some((
-                            node.caret_shape.unwrap_or(theme.caret.shape),
-                            node.caret_blinking.unwrap_or(theme.caret.blinking),
-                        ))
-                    }
-                }
-                #[cfg(feature = "terminal")]
-                NodeKind::Terminal(node) => {
-                    if self.osc12_supported {
-                        desired_cursor_color = node.caret_color.and_then(Color::to_rgb);
-                    }
-                    // Honor the child program's DECSCUSR shape. Blinking is driven
-                    // by the framework blink timer in the terminal renderer, so the
-                    // hardware cursor stays a steady shape here to avoid double blink.
-                    if node.cursor_visible {
-                        Some((node.cursor_shape, false))
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-            if let Some((caret_shape, blinking)) = caret
-                && let Some(style) = cursor_style_for(caret_shape, blinking)
-            {
+        let vim_mode = focused
+            .and_then(|id| text_area_vim_state.get(&id))
+            .map(|state| state.mode);
+        if let Some(caret) = focused_caret(tree, focused, vim_mode) {
+            if self.osc12_supported {
+                desired_cursor_color = caret.color.and_then(Color::to_rgb);
+            }
+            // A terminal's blinking is driven by the framework blink timer in the terminal
+            // renderer, so its hardware cursor stays a steady shape to avoid a double blink.
+            let blinking = caret.blinking && !caret.framework_blinks;
+            if let Some(style) = cursor_style_for(caret.shape, blinking) {
                 target_style = style;
             }
         }
@@ -131,6 +72,66 @@ impl TerminalManager {
             self.last_cursor_color = None;
         }
         Ok(())
+    }
+}
+
+/// The caret the focused widget asks for, before the terminal's capabilities are considered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FocusedCaret {
+    pub shape: CaretShape,
+    pub blinking: bool,
+    pub color: Option<Color>,
+    /// The widget blinks the caret itself, by placing it only on lit frames.
+    pub framework_blinks: bool,
+}
+
+/// Resolve the caret of the focused widget, or `None` when it shows none.
+///
+/// `vim_mode` is the focused text area's Vim mode, which turns a block caret into a bar in
+/// insert mode.
+pub(crate) fn focused_caret(
+    tree: &NodeTree,
+    focused: Option<NodeId>,
+    vim_mode: Option<TextAreaVimMode>,
+) -> Option<FocusedCaret> {
+    let id = focused.filter(|&id| tree.is_valid(id))?;
+    let node = tree.node(id);
+    let theme = node.active_theme();
+    match &node.kind {
+        NodeKind::TextArea(node) if !node.read_only => {
+            let shape = node.caret_shape.unwrap_or(theme.caret.shape);
+            let shape = if node.vim_motions && shape == CaretShape::Block {
+                match vim_mode.unwrap_or_default() {
+                    TextAreaVimMode::Insert => CaretShape::Bar,
+                    TextAreaVimMode::Normal
+                    | TextAreaVimMode::Visual
+                    | TextAreaVimMode::VisualLine => CaretShape::Block,
+                }
+            } else {
+                shape
+            };
+            Some(FocusedCaret {
+                shape,
+                blinking: node.caret_blinking.unwrap_or(theme.caret.blinking),
+                color: node.caret_color.or(theme.caret.color),
+                framework_blinks: false,
+            })
+        }
+        NodeKind::Input(node) if !node.read_only => Some(FocusedCaret {
+            shape: node.caret_shape.unwrap_or(theme.caret.shape),
+            blinking: node.caret_blinking.unwrap_or(theme.caret.blinking),
+            color: node.caret_color.or(theme.caret.color),
+            framework_blinks: false,
+        }),
+        // Honor the child program's DECSCUSR shape.
+        #[cfg(feature = "terminal")]
+        NodeKind::Terminal(node) if node.cursor_visible => Some(FocusedCaret {
+            shape: node.cursor_shape,
+            blinking: node.cursor_blinking,
+            color: node.caret_color,
+            framework_blinks: true,
+        }),
+        _ => None,
     }
 }
 

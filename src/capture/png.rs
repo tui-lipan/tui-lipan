@@ -5,7 +5,8 @@ use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::{
-    CapturedCell, CapturedFrame, CapturedImage, PngOptions, PngTextRenderer, UnderlineStyle,
+    CapturedCell, CapturedFrame, CapturedImage, CursorShape, PngOptions, PngTextRenderer,
+    UnderlineStyle,
 };
 use crate::style::Color;
 
@@ -146,15 +147,41 @@ fn encode_with(
         && cursor.x < frame.width
         && cursor.y < frame.height
     {
-        let color = cursor_color(frame, cursor.x, cursor.y, columns, options);
-        draw_cursor(
-            &mut image,
-            cursor.x,
-            cursor.y,
-            color,
-            final_cell_width,
-            final_cell_height,
-        );
+        let idx = usize::from(cursor.y)
+            .saturating_mul(columns)
+            .saturating_add(usize::from(cursor.x));
+        // The cursor covers the whole glyph it sits on, both columns of a wide one.
+        let cell_rect = layout
+            .iter()
+            .find(|&&(cell_idx, ..)| cell_idx == idx)
+            .map_or(
+                CellPixels {
+                    x0: u32::from(cursor.x).saturating_mul(final_cell_width),
+                    y0: u32::from(cursor.y).saturating_mul(final_cell_height),
+                    width: final_cell_width,
+                    height: final_cell_height,
+                },
+                |&(_, _, rect)| rect,
+            );
+        let cell = frame.cells.get(idx);
+        let cell_style = cell.map(|cell| effective_colors(cell, options));
+        let color = cursor
+            .color
+            .and_then(|color| resolve_color(color, options))
+            .or(cell_style.map(|style| style.fg))
+            .unwrap_or_else(|| resolve_fg(options.default_fg, options));
+        draw_cursor(&mut image, cell_rect, cursor.shape, color);
+        if cursor.shape == CursorShape::Block
+            && let Some(cell) = cell
+            && let Some(style) = cell_style
+        {
+            let text = if style.bg == color {
+                style.fg
+            } else {
+                style.bg
+            };
+            draw_glyph(&mut image, cell_rect, cell_rect, cell, text, fonts);
+        }
     }
 
     let mut out = Cursor::new(Vec::new());
@@ -609,53 +636,31 @@ fn draw_missing_box(image: &mut RgbImage, cell_rect: CellPixels, color: Rgb8) {
     );
 }
 
-fn draw_cursor(
-    image: &mut RgbImage,
-    cell_x: u16,
-    cell_y: u16,
-    color: Rgb8,
-    cell_width: u32,
-    cell_height: u32,
-) {
-    let x0 = u32::from(cell_x).saturating_mul(cell_width);
-    let y0 = u32::from(cell_y).saturating_mul(cell_height);
-    let x1 = x0 + cell_width.saturating_sub(1);
-    let y1 = y0 + cell_height.saturating_sub(1);
-    let thickness = (cell_height / 16).max(1).min(cell_width).min(cell_height);
-
-    fill_rect(image, x0, y0, cell_width, thickness, color);
-    fill_rect(
-        image,
+/// Draw a cursor of `shape` over `cell_rect`. A block fills the cell; the caller redraws the
+/// glyph on top of it.
+fn draw_cursor(image: &mut RgbImage, cell_rect: CellPixels, shape: CursorShape, color: Rgb8) {
+    let CellPixels {
         x0,
-        y1.saturating_add(1).saturating_sub(thickness),
-        cell_width,
-        thickness,
-        color,
-    );
-    fill_rect(image, x0, y0, thickness, cell_height, color);
-    fill_rect(
-        image,
-        x1.saturating_add(1).saturating_sub(thickness),
         y0,
-        thickness,
-        cell_height,
-        color,
-    );
-}
-
-fn cursor_color(
-    frame: &CapturedFrame,
-    x: u16,
-    y: u16,
-    columns: usize,
-    options: &PngOptions,
-) -> Rgb8 {
-    let idx = usize::from(y)
-        .saturating_mul(columns)
-        .saturating_add(usize::from(x));
-    match frame.cells.get(idx) {
-        Some(cell) => effective_colors(cell, options).fg,
-        None => resolve_fg(options.default_fg, options),
+        width,
+        height,
+    } = cell_rect;
+    let outline = (height / 16).max(1).min(width).min(height);
+    // A bar or underline cursor is drawn heavier than the outline, as terminals draw it.
+    let line = (height / 8).max(1);
+    match shape {
+        CursorShape::Block => fill_rect(image, x0, y0, width, height, color),
+        CursorShape::HollowBlock => {
+            fill_rect(image, x0, y0, width, outline, color);
+            fill_rect(image, x0, y0 + height - outline, width, outline, color);
+            fill_rect(image, x0, y0, outline, height, color);
+            fill_rect(image, x0 + width - outline, y0, outline, height, color);
+        }
+        CursorShape::Underline => {
+            let line = line.min(height);
+            fill_rect(image, x0, y0 + height - line, width, line, color);
+        }
+        CursorShape::Bar => fill_rect(image, x0, y0, line.min(width), height, color),
     }
 }
 
@@ -866,5 +871,75 @@ mod tests {
                 BitmapGlyphFallback::MissingBox
             ))
         );
+    }
+
+    /// Encode a one-cell frame holding `symbol` in white on black, with `cursor` over it, and
+    /// return its 8x16 pixels.
+    fn cursor_pixels(symbol: &str, cursor: super::super::CursorState) -> image::RgbImage {
+        let mut frame = row_of(&[symbol], Color::Black);
+        frame.cells[0].fg = Color::White;
+        frame.cursor = Some(cursor);
+        let options = PngOptions {
+            scale: 1,
+            text_renderer: PngTextRenderer::Bitmap,
+            ..PngOptions::default()
+        };
+        let png = encode_frame(&frame, &options).expect("encode");
+        image::load_from_memory(&png).expect("decode").to_rgb8()
+    }
+
+    fn lit(image: &image::RgbImage, x: u32, y: u32, color: Rgb8) -> bool {
+        image.get_pixel(x, y).0 == [color.0, color.1, color.2]
+    }
+
+    #[test]
+    fn each_cursor_shape_draws_its_own_outline() {
+        use super::super::CursorState;
+        let white = (255, 255, 255);
+        let at = || CursorState::new(0, 0);
+
+        let block = cursor_pixels(" ", at());
+        assert!(lit(&block, 4, 8, white), "a block fills the cell");
+
+        let hollow = cursor_pixels(" ", at().shape(CursorShape::HollowBlock));
+        assert!(lit(&hollow, 0, 8, white) && lit(&hollow, 4, 0, white));
+        assert!(
+            !lit(&hollow, 4, 8, white),
+            "a hollow block leaves its middle"
+        );
+
+        let underline = cursor_pixels(" ", at().shape(CursorShape::Underline));
+        assert!(lit(&underline, 4, 15, white));
+        assert!(!lit(&underline, 4, 8, white) && !lit(&underline, 0, 0, white));
+
+        let bar = cursor_pixels(" ", at().shape(CursorShape::Bar));
+        assert!(lit(&bar, 0, 8, white) && lit(&bar, 1, 8, white));
+        assert!(!lit(&bar, 4, 8, white) && !lit(&bar, 7, 15, white));
+    }
+
+    #[test]
+    fn a_cursor_takes_its_own_color_and_a_block_inverts_the_glyph() {
+        use super::super::CursorState;
+        let red = (255, 0, 0);
+        let bar = cursor_pixels(
+            " ",
+            CursorState::new(0, 0)
+                .shape(CursorShape::Bar)
+                .color(Color::Rgb(255, 0, 0)),
+        );
+        assert!(lit(&bar, 0, 8, red));
+
+        // With no cursor color the block is the text color, and the text turns the background's.
+        let block = cursor_pixels("#", CursorState::new(0, 0));
+        let black = (0, 0, 0);
+        let glyph_pixels = (0..8)
+            .flat_map(|x| (0..16).map(move |y| (x, y)))
+            .filter(|&(x, y)| lit(&block, x, y, black))
+            .count();
+        assert!(
+            glyph_pixels > 0,
+            "the glyph is drawn in the background color"
+        );
+        assert!(lit(&block, 0, 0, (255, 255, 255)));
     }
 }

@@ -270,6 +270,100 @@ fn focused_input_captures_cursor_position() {
     assert!(cursor.y < captured.height);
 }
 
+struct CaretInput(CaretShape);
+
+impl Component for CaretInput {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        Input::new("abc")
+            .caret_shape(self.0)
+            .caret_blinking(true)
+            .caret_color(Color::Rgb(9, 8, 7))
+            .width(Length::Px(12))
+            .into()
+    }
+}
+
+fn focused_caret_cursor(shape: CaretShape) -> tui_lipan::CursorState {
+    let mut backend = TestBackend::new(CaretInput(shape));
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 3,
+    });
+    backend.focus_next();
+    backend.render();
+    backend
+        .capture_frame()
+        .cursor
+        .expect("focused input places a cursor")
+}
+
+#[test]
+fn a_ui_capture_reports_the_focused_widgets_caret_style() {
+    let cursor = focused_caret_cursor(CaretShape::Underline);
+    assert_eq!(cursor.shape, tui_lipan::CursorShape::Underline);
+    assert!(cursor.blinking);
+    assert_eq!(cursor.color, Some(Color::Rgb(9, 8, 7)));
+
+    assert_eq!(
+        focused_caret_cursor(CaretShape::Bar).shape,
+        tui_lipan::CursorShape::Bar
+    );
+
+    // The terminal's own style is unknown to a capture, so it stays a steady block.
+    let deferred = focused_caret_cursor(CaretShape::TerminalDefault);
+    assert_eq!(deferred.shape, tui_lipan::CursorShape::Block);
+    assert!(!deferred.blinking);
+    assert_eq!(deferred.color, Some(Color::Rgb(9, 8, 7)));
+}
+
+#[test]
+fn row_runs_tile_the_row_and_keep_wide_glyphs_whole() {
+    // A terminal capture's wide glyph is followed by an empty placeholder; a UI's, by a space.
+    let mut frame = symbol_frame(&[
+        &["a", "b", "中", "", "c", "d"],
+        &["中", " ", "x", " ", " ", "中"],
+    ]);
+    frame.cells[1].fg = Color::Red;
+    frame.cells[2].fg = Color::Red;
+    // The covered column's own style must not split the run.
+    frame.cells[3].bg = Color::Blue;
+    frame.cells[4].modifiers.underline = Some(tui_lipan::UnderlineStyle::Curly);
+
+    let runs = frame.row_runs(0);
+    let shape: Vec<(u16, u16, &str)> = runs
+        .iter()
+        .map(|run| (run.x, run.width, run.text.as_str()))
+        .collect();
+    assert_eq!(
+        shape,
+        [(0, 1, "a"), (1, 3, "b中"), (4, 1, "c"), (5, 1, "d")]
+    );
+    assert_eq!(runs[1].fg, Color::Red);
+    assert_eq!(
+        runs[2].modifiers.underline,
+        Some(tui_lipan::UnderlineStyle::Curly)
+    );
+
+    // A wide glyph in the last column has no room, so it becomes a space.
+    let second = frame.row_runs(1);
+    assert_eq!(second.len(), 1);
+    assert_eq!((second[0].x, second[0].width), (0, 6));
+    assert_eq!(second[0].text, "中x   ");
+    assert_eq!(frame.runs().len(), 2);
+}
+
 #[cfg(feature = "diff-view")]
 #[test]
 fn split_document_diff_themed_empty_and_wrap_padding_rows_paint_background() {
@@ -764,11 +858,7 @@ fn png_encoding_returns_bytes_and_cursor_uses_cell_foreground() {
             underline_color: Color::Reset,
             modifiers: tui_lipan::CellModifiers::default(),
         }],
-        cursor: Some(tui_lipan::CursorState {
-            x: 0,
-            y: 0,
-            visible: true,
-        }),
+        cursor: Some(tui_lipan::CursorState::new(0, 0)),
         images: Vec::new(),
     };
     let options = tui_lipan::PngOptions {
@@ -897,11 +987,7 @@ fn to_ansi_text_is_a_fixed_width_sgr_only_document() {
     frame.cells[1].modifiers.bold = true;
     // A styled blank at the end of a row must survive.
     frame.cells[3].bg = Color::Blue;
-    frame.cursor = Some(tui_lipan::CursorState {
-        x: 1,
-        y: 1,
-        visible: true,
-    });
+    frame.cursor = Some(tui_lipan::CursorState::new(1, 1));
 
     let ansi = frame.to_ansi_text();
 
