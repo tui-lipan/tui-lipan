@@ -753,6 +753,8 @@ fn a_png_of_an_open_backdrop_draws_the_dimmed_pixels() {
 enum Layer {
     /// An `EffectScope` wrapping the pane.
     Scope(VisualEffect),
+    /// An `EffectScope` with several effects wrapping the pane.
+    Scopes(Vec<VisualEffect>),
     /// An `Animated` wrapping the pane, faded toward a color.
     Fade(f32, Color),
     /// A `Local`-scope modal over the pane.
@@ -785,6 +787,10 @@ impl Component for LayeredPane {
             .scrollbar(false);
         match &self.layer {
             Layer::Scope(effect) => EffectScope::new().effect(effect.clone()).child(pane).into(),
+            Layer::Scopes(effects) => EffectScope::new()
+                .effects(effects.iter().cloned())
+                .child(pane)
+                .into(),
             Layer::Fade(opacity, target) => Animated::new(pane)
                 .opacity(*opacity)
                 .opacity_target(*target)
@@ -826,6 +832,7 @@ impl Component for LayeredPane {
 fn layered_pane(layer: Layer) -> CapturedFrame {
     let mut output = red_image(4, 2);
     output.extend_from_slice(b"\x1b[6;11H\x1b[48;2;255;0;0mtext\x1b[0m");
+    output.extend_from_slice(b"\x1b[6;1H\x1b[48;2;255;0;0m \x1b[0m");
     let mut screen = TerminalScreen::new(6, 20, 100);
     screen.set_cell_size(CELL);
     screen.process_bytes(&output);
@@ -895,5 +902,31 @@ fn passes_that_leave_cell_backgrounds_alone_leave_the_pixels_alone() {
                 .all(|&pixel| pixel == [255, 0, 0, 255]),
             "and so do the pixels"
         );
+    }
+}
+
+#[test]
+fn each_clipped_effect_of_a_scope_recolors_only_the_pixels_it_covers() {
+    let clipped = |x: i16, w: u16, inner: VisualEffect| VisualEffect::Clipped {
+        bounds: Some(Rect { x, y: 0, w, h: 6 }),
+        mask: None,
+        inner: Box::new(inner),
+    };
+    let frame = layered_pane(Layer::Scopes(vec![
+        clipped(0, 2, VisualEffect::dim(0.5)),
+        clipped(2, 18, VisualEffect::Monochrome { strength: 1.0 }),
+    ]));
+
+    let left = rgb(frame.cell(0, 5).bg);
+    let right = rgb(frame.cell(10, 5).bg);
+    assert_ne!(left, right, "the two clips recolor the red cells differently");
+    let width = (4 * CELL.width) as usize;
+    for (index, &pixel) in image_pixels(&frame).iter().enumerate() {
+        let expected = if index % width < 2 * CELL.width as usize {
+            left
+        } else {
+            right
+        };
+        assert_eq!(pixel, expected, "pixel {index}");
     }
 }

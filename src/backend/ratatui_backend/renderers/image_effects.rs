@@ -80,6 +80,9 @@ pub(crate) fn layer_draws_images() -> bool {
 
 /// `node` has run its passes, or will not run them this frame; images drawn from here on are not
 /// under them.
+///
+/// All of a node's passes go at once: an `EffectScope` runs every effect in one post-pass, and a
+/// surface or `Animated` runs one pass. No image can draw between two passes of the same node.
 pub(crate) fn image_effects_applied(node: NodeId) {
     PENDING_IMAGE_EFFECTS.with(|slot| {
         let mut pending = slot.borrow_mut();
