@@ -228,10 +228,7 @@ impl<C: Component> AppRunner<C> {
         };
 
         let _host_palette_scope = crate::backend::ratatui_backend::common::push_render_host_palette(
-            self.core
-                .ctx
-                .host_terminal_colors()
-                .map(|colors| colors.ansi),
+            self.core.ctx.host_terminal_colors(),
         );
         let scratch = self
             .inline_commit_scratch

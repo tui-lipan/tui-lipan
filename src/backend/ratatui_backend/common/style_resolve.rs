@@ -41,11 +41,11 @@ pub(crate) fn current_render_terminal_bg() -> Option<RColor> {
 }
 
 thread_local! {
-    static RENDER_HOST_PALETTE: StdCell<Option<[Color; 16]>> = const { StdCell::new(None) };
+    static RENDER_HOST_PALETTE: StdCell<[Option<Color>; 16]> = const { StdCell::new([None; 16]) };
 }
 
 /// RAII guard restoring the previous host palette on drop.
-pub(crate) struct HostPaletteScope(Option<[Color; 16]>);
+pub(crate) struct HostPaletteScope([Option<Color>; 16]);
 
 impl Drop for HostPaletteScope {
     fn drop(&mut self) {
@@ -53,14 +53,19 @@ impl Drop for HostPaletteScope {
     }
 }
 
-/// Install the 16 ANSI colors the host terminal reported, for the current draw.
+/// Install the ANSI colors the host terminal reported, for the current draw.
 ///
 /// Blending effects resolve palette colors against it, so a dimmed or tinted theme color keeps
-/// the hue the user sees. `None` (the palette was not queried) keeps them on-palette instead;
-/// see `preserve_palette_blend`.
-pub(crate) fn push_render_host_palette(palette: Option<[Color; 16]>) -> HostPaletteScope {
-    let prev = RENDER_HOST_PALETTE.with(|slot| slot.replace(palette));
-    HostPaletteScope(prev)
+/// the hue the user sees. Only slots the terminal actually reported take part: a slot it did not
+/// report (or colors never queried at all) stays on-palette instead; see
+/// `preserve_palette_blend`. A standard-ANSI stand-in would bypass the user's theme.
+pub(crate) fn push_render_host_palette(
+    colors: Option<crate::style::HostTerminalColors>,
+) -> HostPaletteScope {
+    let palette = colors.map_or([None; 16], |colors| {
+        std::array::from_fn(|slot| colors.reported_ansi(slot))
+    });
+    HostPaletteScope(RENDER_HOST_PALETTE.with(|slot| slot.replace(palette)))
 }
 
 /// `color` as the RGB the host terminal reported for its ANSI slot, when the palette is known.
@@ -70,8 +75,8 @@ pub(crate) fn resolve_host_palette_color(color: Color) -> Color {
         return color;
     };
     RENDER_HOST_PALETTE
-        .with(|palette| palette.get())
-        .map_or(color, |palette| palette[slot])
+        .with(|palette| palette.get()[slot])
+        .unwrap_or(color)
 }
 
 /// [`resolve_host_palette_color`] for a ratatui color.

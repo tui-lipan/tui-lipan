@@ -140,6 +140,7 @@ fn host_colors(bg: Color) -> HostTerminalColors {
         ansi: std::array::from_fn(|i| Color::indexed(i as u8)),
         fg: Color::White,
         bg,
+        ansi_reported: HostTerminalColors::ALL_ANSI_REPORTED,
     }
 }
 

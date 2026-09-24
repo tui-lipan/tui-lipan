@@ -106,6 +106,19 @@ impl Hash for ColorTransform {
 }
 
 impl ColorTransform {
+    /// This transform with the colors it names (a tint color, an opacity target) passed through
+    /// `map`.
+    pub(crate) fn map_colors(self, map: impl Fn(Color) -> Color) -> Self {
+        match self {
+            Self::OpacityToward { factor, target } => Self::OpacityToward {
+                factor,
+                target: map(target),
+            },
+            Self::Tint(color, alpha) => Self::Tint(map(color), alpha),
+            Self::Dim(_) | Self::Lighten(_) | Self::Elevate(_) | Self::Opacity(_) => self,
+        }
+    }
+
     /// Apply this transform to `color`.
     pub fn apply(self, color: Color) -> Color {
         self.apply_with_backdrop(color, None)
@@ -1055,6 +1068,7 @@ mod tests {
             fg: Color::rgb(230, 231, 232),
             bg: Color::rgb(10, 11, 12),
             ansi,
+            ansi_reported: HostTerminalColors::ALL_ANSI_REPORTED,
         };
 
         let theme = Theme::from_host_colors(colors);
