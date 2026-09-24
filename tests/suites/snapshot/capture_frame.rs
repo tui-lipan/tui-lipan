@@ -574,6 +574,33 @@ fn png_bytes_signature_and_dimensions_match_options() {
 
 #[cfg(feature = "ui-snapshot-png")]
 #[test]
+fn a_captured_image_encodes_its_own_pixels_at_its_own_size() {
+    let rgba: Vec<u8> = [[255, 0, 0, 255], [0, 0, 255, 128], [0, 0, 0, 0]]
+        .into_iter()
+        .cycle()
+        .take(3 * 2)
+        .flatten()
+        .collect();
+    let area = Rect {
+        x: 1,
+        y: 1,
+        w: 8,
+        h: 4,
+    };
+    let image = tui_lipan::CapturedImage::new(area, 3, 2, rgba.into());
+
+    let png = image.to_png().expect("png should encode");
+    let decoded = image::load_from_memory(&png)
+        .expect("png should decode")
+        .into_rgba8();
+    assert_eq!(decoded.dimensions(), (3, 2));
+    assert_eq!(decoded.get_pixel(0, 0).0, [255, 0, 0, 255]);
+    assert_eq!(decoded.get_pixel(1, 0).0, [0, 0, 255, 128]);
+    assert_eq!(decoded.get_pixel(2, 1).0, [0, 0, 0, 0]);
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+#[test]
 fn png_bitmap_renderer_forces_legacy_bitmap_output() {
     let frame = single_cell_frame("A", Color::White, Color::Black);
     let bitmap = frame

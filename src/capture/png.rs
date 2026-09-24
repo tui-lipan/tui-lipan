@@ -189,6 +189,19 @@ fn encode_with(
     Ok(out.into_inner())
 }
 
+pub(super) fn encode_image(image: &CapturedImage) -> image::ImageResult<Vec<u8>> {
+    let mut out = Cursor::new(Vec::new());
+    image::write_buffer_with_format(
+        &mut out,
+        &image.rgba,
+        image.width,
+        image.height,
+        image::ExtendedColorType::Rgba8,
+        ImageFormat::Png,
+    )?;
+    Ok(out.into_inner())
+}
+
 /// For each cell showing an image, row-major, the background it had under the image. A cell holding
 /// the half-block stand-in draws only that background for the image to cover; one the image left
 /// clear kept its own text, which draws as usual under the image's transparent pixels.

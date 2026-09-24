@@ -80,6 +80,13 @@ impl CapturedImage {
         }
     }
 
+    /// Encode [`Self::rgba`] as a PNG at its own size, alpha included: the image as the program
+    /// sent it, not as it is drawn over its cells.
+    #[cfg(feature = "ui-snapshot-png")]
+    pub fn to_png(&self) -> crate::Result<Vec<u8>> {
+        super::png::encode_image(self).map_err(|err| std::io::Error::other(err.to_string()).into())
+    }
+
     /// Whether the cell at frame position (`x`, `y`) shows this image.
     pub fn shows(&self, x: u16, y: u16) -> bool {
         self.area_offset(x, y)

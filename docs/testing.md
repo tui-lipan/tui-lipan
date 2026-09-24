@@ -202,7 +202,9 @@ assert_eq!(frame.height, 10);
 `CapturedFrame::images` holds the pixel images drawn over the cells, such as a terminal pane's Kitty
 graphics: each `CapturedImage` has its RGBA pixels, the `area` it covers, and per-cell `visible`
 flags (`shows(x, y)`), since whatever is drawn over an image hides it. The cells under a visible
-image hold a `▀` half-block stand-in, and `to_png()` draws the pixels. See
+image hold a `▀` half-block stand-in, and `to_png()` draws the pixels. `CapturedImage::to_png()`
+encodes one image's own pixels, at their own size and with alpha, for a serializer that carries
+images beside the cells (`ui-snapshot-png`). See
 [terminal-images.md](widgets/terminal-images.md#captures).
 
 `CapturedCell` fields: `symbol`, `fg`, `bg`, `underline_color`, `modifiers` (`CellModifiers` with bool fields `bold`, `dim`, `italic`, `reverse`, `strikethrough`, and `underline: Option<UnderlineStyle>`: `Single`, `Double`, `Curly`, `Dotted`, or `Dashed`). UI renders only produce `Single`; terminal captures keep the shape the program asked for.

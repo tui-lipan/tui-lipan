@@ -291,6 +291,8 @@ cells still show it.
 - **A PNG draws the pixels.** `to_png()` scales each image into its cells at the PNG's own cell
   size, keeping its aspect ratio from the top-left corner as a terminal does, and draws only the
   cells it still shows in. Transparent pixels show the recorded background, not the stand-in.
+- **One image on its own.** `CapturedImage::to_png()` encodes just `rgba`, at the image's own
+  pixel size with its alpha, for a serializer that reports images beside the cells.
 - **A backdrop dims the pixels.** Under an open [modal backdrop](#under-a-modal-backdrop) a
   capture records the recolored pixels, so `rgba`, the half-block stand-ins, and `to_png()` all
   show the image dimmed like the cells around it. Other layers that recolor cells without drawing
