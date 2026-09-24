@@ -807,6 +807,30 @@ mod tests {
         assert_eq!(glyph_room(&split, 0, 0, rect(0)).width, 8);
     }
 
+    #[test]
+    fn powerline_caps_meet_the_segment_they_close() {
+        let pink = (253, 74, 128);
+        let mut frame = row_of(&["\u{E0B2}", " ", "\u{E0B0}"], Color::Black);
+        frame.cells[0].fg = Color::Rgb(pink.0, pink.1, pink.2);
+        frame.cells[1].bg = Color::Rgb(pink.0, pink.1, pink.2);
+        frame.cells[2].fg = Color::Rgb(pink.0, pink.1, pink.2);
+        let options = PngOptions {
+            scale: 1,
+            text_renderer: PngTextRenderer::Bitmap,
+            ..PngOptions::default()
+        };
+        let png = encode_frame(&frame, &options).expect("encode");
+        let image = image::load_from_memory(&png).expect("decode").to_rgb8();
+
+        let (cell_w, h) = (image.width() / 3, image.height());
+        // Every row but the two corner ones, which are anti-aliased, is solid where cap and
+        // segment meet: no background shows between them.
+        for y in 1..h - 1 {
+            assert!(lit(&image, cell_w - 1, y, pink), "left cap edge, row {y}");
+            assert!(lit(&image, cell_w * 2, y, pink), "right cap edge, row {y}");
+        }
+    }
+
     fn resolve_glyph(symbol: &str) -> Option<ResolvedBitmapGlyph> {
         primary_char_for_bitmap(symbol).map(resolve_bitmap_glyph)
     }
