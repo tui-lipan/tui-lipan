@@ -7170,14 +7170,16 @@ impl Component for PanesWithInputSmoke {
 }
 
 #[cfg(feature = "terminal")]
-fn panes_with_input_backend() -> (
+fn panes_with_input_backend(
+    policy: Option<crate::TerminalKeyPolicy>,
+) -> (
     crate::TestBackend<PanesWithInputSmoke>,
     PaneKeyLog,
     Rc<RefCell<Vec<String>>>,
 ) {
     let keys = Rc::new(RefCell::new(Vec::new()));
     let writes = Rc::new(RefCell::new(Vec::new()));
-    let app = App::new()
+    let mut app = App::new()
         .mouse(false)
         .clipboard_config(ClipboardConfig {
             enable_osc52: false,
@@ -7186,6 +7188,9 @@ fn panes_with_input_backend() -> (
         .clipboard_provider(RecordingClipboardProvider {
             writes: writes.clone(),
         });
+    if let Some(policy) = policy {
+        app = app.terminal_key_policy(policy);
+    }
     let mut backend =
         crate::TestBackend::new_with_app(app, PanesWithInputSmoke { keys: keys.clone() }, ());
     backend.set_viewport(Rect {
@@ -7202,7 +7207,7 @@ fn panes_with_input_backend() -> (
 #[cfg(feature = "terminal")]
 #[test]
 fn ctrl_c_in_focused_terminal_ignores_selection_in_another_terminal() {
-    let (mut backend, keys, writes) = panes_with_input_backend();
+    let (mut backend, keys, writes) = panes_with_input_backend(None);
     let left = node_id_by_key(&backend.core.tree, "left");
     let right = node_id_by_key(&backend.core.tree, "right");
     set_terminal_selection(&mut backend, left, "hello", 5);
@@ -7228,7 +7233,7 @@ fn ctrl_c_in_focused_terminal_ignores_selection_in_another_terminal() {
 #[cfg(feature = "terminal")]
 #[test]
 fn ctrl_c_copies_the_focused_terminal_selection_before_another() {
-    let (mut backend, keys, writes) = panes_with_input_backend();
+    let (mut backend, keys, writes) = panes_with_input_backend(None);
     let left = node_id_by_key(&backend.core.tree, "left");
     let right = node_id_by_key(&backend.core.tree, "right");
     set_terminal_selection(&mut backend, left, "left", 4);
@@ -7244,12 +7249,50 @@ fn ctrl_c_copies_the_focused_terminal_selection_before_another() {
     );
 }
 
+/// Declining another pane's selection only hands the key back to the terminal key policy. Under
+/// `AppCommandsThenTerminal` an app command on the same key still runs before the terminal does.
+#[cfg(feature = "terminal")]
+#[test]
+fn app_command_on_ctrl_c_still_runs_when_another_terminal_has_a_selection() {
+    let (mut backend, keys, writes) =
+        panes_with_input_backend(Some(crate::TerminalKeyPolicy::AppCommandsThenTerminal));
+    let command_hit = Rc::new(Cell::new(false));
+    backend.core.ctx.command_registry().register(
+        crate::CommandEntry::builder("mux.interrupt")
+            .shortcut(crate::KeyBinding::from_str("ctrl-c").expect("binding"))
+            .handler(Callback::new({
+                let command_hit = command_hit.clone();
+                move |_| command_hit.set(true)
+            }))
+            .build(),
+    );
+    let left = node_id_by_key(&backend.core.tree, "left");
+    let right = node_id_by_key(&backend.core.tree, "right");
+    set_terminal_selection(&mut backend, left, "hello", 5);
+    backend.set_focused(right);
+
+    assert!(backend.send_key(ctrl_char('c')).expect("send_key succeeds"));
+
+    assert!(
+        writes.borrow().is_empty(),
+        "the other pane's selection is not copied"
+    );
+    assert!(
+        command_hit.get(),
+        "the app command bound to ctrl-c still runs"
+    );
+    assert!(
+        keys.borrow().is_empty(),
+        "the command consumes the key before the terminal"
+    );
+}
+
 /// Outside a terminal, focus does not own the shortcut: an app can keep focus in an input while
 /// the user copies a selection made elsewhere.
 #[cfg(feature = "terminal")]
 #[test]
 fn ctrl_c_in_focused_input_still_copies_a_selection_elsewhere() {
-    let (mut backend, keys, writes) = panes_with_input_backend();
+    let (mut backend, keys, writes) = panes_with_input_backend(None);
     let left = node_id_by_key(&backend.core.tree, "left");
     let input = node_id_by_key(&backend.core.tree, "input");
     set_terminal_selection(&mut backend, left, "hello", 5);

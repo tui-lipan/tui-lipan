@@ -189,10 +189,12 @@ pub(crate) fn dispatch_selection_clipboard_shortcut(
 
 /// Which selections a copy or cut shortcut may take, given what holds focus.
 ///
-/// The focused widget's own selection always comes first. A focused `Terminal` owns the shortcut
-/// outright: it forwards every key to its child, so a selection left in some other widget must
-/// not turn the child's `Ctrl+C` into a copy. Anywhere else, a selection outside focus is still
-/// copyable, so an app can keep focus in an input while the user copies from a log.
+/// The focused widget's own selection always comes first. A focused `Terminal` owns selection
+/// lookup: a selection left in some other widget must not turn a keystroke meant for the terminal
+/// into a copy. When its own selection does not handle the shortcut, the key continues through the
+/// configured `TerminalKeyPolicy`, which may still run an app command before forwarding it.
+/// Anywhere else, a selection outside focus is still copyable, so an app can keep focus in an
+/// input while the user copies from a log.
 fn shortcut_scope(tree: &NodeTree, focused: Option<NodeId>) -> SelectionScope {
     let focused = focused.filter(|id| tree.is_valid(*id));
     #[cfg(feature = "terminal")]

@@ -136,9 +136,11 @@ Otherwise the key falls through to app-level handlers.
 Focus decides which selection a copy or cut shortcut takes:
 
 - The focused widget's own selection always comes first.
-- A focused `Terminal` owns the shortcut. With no selection of its own, `Ctrl+C` goes to its child
-  program even if another widget, such as another terminal pane, still shows a selection. A
-  leftover selection elsewhere never swallows the child's interrupt.
+- A focused `Terminal` owns selection lookup. Selections in other widgets, such as another
+  terminal pane, are ignored, so a leftover selection elsewhere never turns `Ctrl+C` into a copy.
+  If the terminal's own selection does not handle the shortcut, the key continues through the
+  configured [`TerminalKeyPolicy`](widgets/terminal.md): under `AppCommandsThenTerminal` an app
+  command bound to the key runs first, and otherwise the terminal forwards it to its child.
 - Any other focus, or no focus at all, can still copy a selection made elsewhere. An app can keep
   focus in an input while the user selects and copies text from a log.
 
