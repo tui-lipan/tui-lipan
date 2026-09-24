@@ -9,6 +9,7 @@ use super::{
 };
 use crate::style::Color;
 
+mod boxdraw;
 mod font;
 
 use font::FontRenderer;
@@ -75,32 +76,65 @@ fn encode_with(
     let columns = usize::from(frame.width);
     let image_backgrounds = image_cell_backgrounds(frame);
 
+    // Every cell to draw, left to right: its index, and its pixels across its full span.
+    let mut layout = Vec::with_capacity(frame.cells.len());
     for y in 0..frame.height {
         let mut x = 0;
         while x < frame.width {
             let idx = usize::from(y)
                 .saturating_mul(columns)
                 .saturating_add(usize::from(x));
-            if let Some(cell) = frame.cells.get(idx) {
-                let cell_span = cell.span_at(x, frame.width);
-                let cell_rect = CellPixels {
+            let Some(cell) = frame.cells.get(idx) else {
+                x = x.saturating_add(1);
+                continue;
+            };
+            let cell_span = cell.span_at(x, frame.width);
+            layout.push((
+                idx,
+                x,
+                CellPixels {
                     x0: u32::from(x).saturating_mul(final_cell_width),
                     y0: u32::from(y).saturating_mul(final_cell_height),
                     width: final_cell_width.saturating_mul(u32::from(cell_span)),
                     height: final_cell_height,
-                };
-                if let Some(background) = image_backgrounds.get(idx).copied().flatten()
-                    && cell.symbol == super::image_layer::UPPER_HALF
-                {
-                    fill_background(&mut image, cell_rect, resolve_bg(background, options));
-                } else {
-                    draw_cell(&mut image, cell_rect, cell, options, fonts.as_deref_mut());
-                }
-                x = x.saturating_add(cell_span);
-            } else {
-                x = x.saturating_add(1);
-            }
+                },
+            ));
+            x = x.saturating_add(cell_span);
         }
+    }
+
+    // Backgrounds first, then everything drawn on them, so a glyph allowed past its own cell - an
+    // icon spreading into the blank beside it - is not painted over by that cell's background.
+    let stand_in = |idx: usize| {
+        image_backgrounds
+            .get(idx)
+            .copied()
+            .flatten()
+            .filter(|_| frame.cells[idx].symbol == super::image_layer::UPPER_HALF)
+    };
+    for &(idx, _, cell_rect) in &layout {
+        let background = match stand_in(idx) {
+            Some(background) => resolve_bg(background, options),
+            None => effective_colors(&frame.cells[idx], options).bg,
+        };
+        fill_background(&mut image, cell_rect, background);
+    }
+    for &(idx, x, cell_rect) in &layout {
+        if stand_in(idx).is_some() {
+            continue;
+        }
+        let cell = &frame.cells[idx];
+        let room = glyph_room(frame, idx, x, cell_rect);
+        let style = effective_colors(cell, options);
+        draw_glyph(
+            &mut image,
+            cell_rect,
+            room,
+            cell,
+            style.fg,
+            fonts.as_deref_mut(),
+        );
+        draw_decorations(&mut image, cell_rect, cell, style);
     }
 
     for captured in &frame.images {
@@ -189,18 +223,35 @@ fn draw_image(canvas: &mut RgbImage, captured: &CapturedImage, cell_w: u32, cell
     }
 }
 
-fn draw_cell(
-    image: &mut RgbImage,
-    cell_rect: CellPixels,
-    cell: &CapturedCell,
-    options: &PngOptions,
-    fonts: Option<&mut FontRenderer>,
-) {
-    let style = effective_colors(cell, options);
+/// The pixels the glyph at `idx` may draw into. A private-use icon followed by a plain blank gets
+/// both cells, as terminals give it: Nerd Font icons are often wider than one cell, and a program
+/// leaves the blank after one for exactly that. Everything else keeps its own cell.
+fn glyph_room(frame: &CapturedFrame, idx: usize, x: u16, cell_rect: CellPixels) -> CellPixels {
+    let cell = &frame.cells[idx];
+    let is_icon = primary_grapheme(&cell.symbol)
+        .and_then(base_char)
+        .is_some_and(is_private_use);
+    let next_is_blank = x + 1 < frame.width
+        && frame
+            .cells
+            .get(idx + 1)
+            .is_some_and(|next| next.symbol == " " && next.bg == cell.bg);
+    if is_icon && next_is_blank && cell_rect.width > 0 {
+        CellPixels {
+            width: cell_rect.width * 2,
+            ..cell_rect
+        }
+    } else {
+        cell_rect
+    }
+}
 
-    fill_background(image, cell_rect, style.bg);
-    draw_glyph(image, cell_rect, cell, style.fg, fonts);
-    draw_decorations(image, cell_rect, cell, style);
+/// Private-use code points: where icon fonts such as Nerd Font keep their symbols.
+pub(super) fn is_private_use(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{E000}'..='\u{F8FF}' | '\u{F0000}'..='\u{FFFFD}' | '\u{100000}'..='\u{10FFFD}'
+    )
 }
 
 fn glyph_for(ch: char) -> Option<[u8; 8]> {
@@ -297,6 +348,7 @@ fn classify_fallback(ch: char) -> BitmapGlyphFallback {
 fn draw_glyph(
     image: &mut RgbImage,
     cell_rect: CellPixels,
+    room: CellPixels,
     cell: &CapturedCell,
     color: Rgb8,
     fonts: Option<&mut FontRenderer>,
@@ -307,10 +359,13 @@ fn draw_glyph(
     let Some(base) = base_char(grapheme) else {
         return;
     };
-    // Box and block characters stay on the built-in glyphs, which fill the cell edge to edge.
+    // Box-drawing and block characters are drawn from geometry, as terminals draw them, so they
+    // meet the cell edges exactly and curves stay smooth at any size.
+    if boxdraw::draw(image, cell_rect, base, color) {
+        return;
+    }
     if let Some(fonts) = fonts
-        && !is_box_or_block(base)
-        && fonts.draw(image, cell_rect, grapheme, color, cell.modifiers.bold)
+        && fonts.draw(image, cell_rect, room, grapheme, color, cell.modifiers.bold)
     {
         return;
     }
@@ -697,6 +752,68 @@ mod tests {
 
     fn primary_char_for_bitmap(symbol: &str) -> Option<char> {
         base_char(primary_grapheme(symbol)?)
+    }
+
+    fn row_of(symbols: &[&str], bg: Color) -> CapturedFrame {
+        let cells: Vec<CapturedCell> = symbols
+            .iter()
+            .map(|symbol| CapturedCell {
+                symbol: symbol.to_string(),
+                fg: Color::Reset,
+                bg,
+                underline_color: Color::Reset,
+                modifiers: super::super::CellModifiers::default(),
+            })
+            .collect();
+        CapturedFrame {
+            viewport: crate::style::Rect {
+                x: 0,
+                y: 0,
+                w: cells.len() as u16,
+                h: 1,
+            },
+            width: cells.len() as u16,
+            height: 1,
+            cells,
+            cursor: None,
+            images: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn an_icon_followed_by_a_blank_may_spread_into_it() {
+        let rect = |x: u32| CellPixels {
+            x0: x * 8,
+            y0: 0,
+            width: 8,
+            height: 16,
+        };
+        let frame = row_of(
+            &["\u{F06E4}", " ", "\u{F05B2}", "x", "a", " ", "\u{F05B2}"],
+            Color::Reset,
+        );
+
+        assert_eq!(
+            glyph_room(&frame, 0, 0, rect(0)).width,
+            16,
+            "icon, then a blank"
+        );
+        assert_eq!(
+            glyph_room(&frame, 2, 2, rect(2)).width,
+            8,
+            "icon, then text"
+        );
+        assert_eq!(glyph_room(&frame, 4, 4, rect(4)).width, 8, "not an icon");
+        assert_eq!(
+            glyph_room(&frame, 6, 6, rect(6)).width,
+            8,
+            "icon at the row's end"
+        );
+
+        // A blank of another color is a different surface, not room to spread into.
+        let mut split = row_of(&["\u{F06E4}", " "], Color::Reset);
+        split.cells[1].bg = Color::Red;
+        assert_eq!(glyph_room(&split, 0, 0, rect(0)).width, 8);
     }
 
     fn resolve_glyph(symbol: &str) -> Option<ResolvedBitmapGlyph> {

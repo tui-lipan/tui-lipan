@@ -161,10 +161,15 @@ impl FontRenderer {
     }
 
     /// Draw `grapheme` into `cell_rect`, returning whether a font could draw it.
+    ///
+    /// `room` is where the glyph may draw: the cell, or for an icon with a blank after it, both
+    /// cells. A private-use icon is shrunk only if it is larger than its room, so an icon wider than
+    /// a cell shows whole instead of cut at the cell edge.
     pub(super) fn draw(
         &mut self,
         image: &mut RgbImage,
         cell_rect: CellPixels,
+        room: CellPixels,
         grapheme: &str,
         color: Rgb8,
         bold: bool,
@@ -189,6 +194,9 @@ impl FontRenderer {
             }
             GlyphSource::Outline(face, glyph) => (face, glyph),
         };
+        if super::is_private_use(base) {
+            return self.draw_icon(image, cell_rect, room, face, glyph, size, color);
+        }
         let Some(coverage) = self.outline(face, glyph, size) else {
             return false;
         };
@@ -238,6 +246,42 @@ impl FontRenderer {
                 );
             }
         }
+        true
+    }
+
+    /// Draw an icon outline in `room`, at the text size or smaller if that would not fit.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_icon(
+        &mut self,
+        image: &mut RgbImage,
+        cell_rect: CellPixels,
+        room: CellPixels,
+        face: ID,
+        glyph: GlyphId,
+        size: u32,
+        color: Rgb8,
+    ) -> bool {
+        let Some(mut coverage) = self.outline(face, glyph, size) else {
+            return false;
+        };
+        let (fit_w, fit_h) = (room.width, cell_rect.height);
+        if coverage.width > fit_w || coverage.height > fit_h {
+            let shrink = (fit_w as f32 / coverage.width.max(1) as f32)
+                .min(fit_h as f32 / coverage.height.max(1) as f32);
+            let smaller = ((size as f32 * shrink).floor() as u32).max(1);
+            match self.outline(face, glyph, smaller) {
+                Some(fitted) => coverage = fitted,
+                None => return false,
+            }
+        }
+        // Centered in its own cell when it fits there, as text is. A wider icon starts at the cell's
+        // left edge and runs into the blank after it, leaving what is left of the blank as the gap
+        // before the next word, which is how terminals lay it out.
+        let slack = cell_rect.width as i32 - coverage.width as i32;
+        let origin = cell_rect.x0 as i32 + (slack / 2).max(0) - coverage.left;
+        let baseline = cell_rect.y0 as i32 + (cell_rect.height as i32 - coverage.height as i32) / 2
+            - coverage.top;
+        blit(image, room, &coverage, origin, baseline, color, None);
         true
     }
 

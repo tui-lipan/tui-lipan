@@ -144,9 +144,20 @@ monospace families. A character none of those has is looked up across every
 installed face, so CJK text, symbols, and emoji draw whenever some font on the
 system covers them. Emoji and text followed by `U+FE0F` prefer a color bitmap
 font such as Noto Color Emoji, drawn in its own colors. Combining marks are drawn
-over their base character. Box-drawing and block characters always use the
-built-in glyphs so they meet their neighbors edge to edge. There is no text
-shaping: a joined emoji sequence such as a family draws its first member only.
+over their base character. There is no text shaping: a joined emoji sequence
+such as a family draws its first member only.
+
+Box-drawing and block characters (U+2500-U+259F) are drawn from geometry in every
+renderer, as terminals draw them: lines meet the cell edges exactly and join
+their neighbors, light lines follow the underline thickness and heavy ones are
+twice that, double lines keep their outer strokes around corners, `╭╮╯╰` are
+anti-aliased arcs, diagonals are anti-aliased, and eighths, quadrants and shades
+fill exact fractions of the cell. The few characters mixing single and double
+lines are left to the font.
+
+A private-use icon, such as a Nerd Font symbol, is never cut at its cell edge.
+Followed by a blank of the same background, it may run into that blank, as
+terminals allow; an icon wider than the room it has is scaled down to fit.
 
 The bitmap renderer covers ASCII, Latin-1, Greek, box drawing, and blocks. It
 has no combining marks and draws the base character of such a sequence alone;
