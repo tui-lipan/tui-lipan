@@ -466,6 +466,7 @@ cargo bench --bench text_area_reconcile
 cargo bench --bench document_view_wrap --features markdown
 cargo bench --bench scroll_view_rich_children --features markdown
 cargo bench --bench scroll_reorder_reconcile
+cargo bench --bench image_backdrop --features terminal-images
 ```
 
 Save and compare a baseline with Criterion's standard flags:

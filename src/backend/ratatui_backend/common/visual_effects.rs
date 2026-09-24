@@ -298,6 +298,13 @@ impl BackdropBackgroundEffect {
         })
     }
 
+    /// Whether each channel of [`Self::apply_rgb`] depends only on the same input channel, so three
+    /// 256-entry tables can stand in for it. Fills, dims, tints, and blends work channel by
+    /// channel; `Elevate` weighs a color's luminance and keeps its hue, which mixes them.
+    pub(crate) fn is_per_channel(&self) -> bool {
+        !matches!(self.transform, Some(ColorTransform::Elevate(_)))
+    }
+
     /// The color a cell background of `rgb` ends up after the backdrop.
     pub(crate) fn apply_rgb(&self, rgb: (u8, u8, u8)) -> (u8, u8, u8) {
         let mut color = match self.fill {

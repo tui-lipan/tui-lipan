@@ -180,26 +180,8 @@ impl BackdropMask {
             }
         }
 
-        // Screens and plots repeat a handful of colors, so most pixels are a lookup.
-        const MEMO_CAP: usize = 1 << 16;
-        let mut memo: HashMap<(u64, [u8; 3]), [u8; 3]> = HashMap::new();
-        let mut recolor = |layers: u64, rgb: [u8; 3]| -> [u8; 3] {
-            if let Some(&out) = memo.get(&(layers, rgb)) {
-                return out;
-            }
-            let mut color = (rgb[0], rgb[1], rgb[2]);
-            for (bit, (_, effect)) in self.layers.iter().enumerate() {
-                if layers & (1 << bit) != 0 {
-                    color = effect.apply_rgb(color);
-                }
-            }
-            let out = [color.0, color.1, color.2];
-            if memo.len() >= MEMO_CAP {
-                memo.clear();
-            }
-            memo.insert((layers, rgb), out);
-            out
-        };
+        let mut recolorer = Recolorer::new(self);
+        let mut recolor = |layers: u64, rgb: [u8; 3]| recolorer.recolor(layers, rgb);
         let layers_at = |x: u32, y: u32| {
             cell_layers[(row_of[y as usize] * columns + column_of[x as usize]) as usize]
         };
@@ -245,6 +227,168 @@ impl BackdropMask {
             pixel.0 = [r, g, b, alpha];
         }
         image::DynamicImage::ImageRgba8(out)
+    }
+}
+
+/// Recolors pixels through the backdrop layers a cell is under, a combination at a time.
+///
+/// A full-screen frame is millions of pixels and [`BackdropBackgroundEffect::apply_rgb`] is color
+/// arithmetic, so it runs a bounded number of times per combination. When every layer works channel
+/// by channel, 256 runs fill exact per-channel tables. Otherwise the first [`Self::EXACT_BUDGET`]
+/// distinct colors are computed exactly and kept, which covers screens, pages, and plots, whose
+/// pictures must match the cells beside them. Past that, which only photographic pixels reach, a
+/// new color is computed as its nearest one at [`Self::LEVELS`] levels per channel, at most two
+/// levels away. `Elevate` jumps from lightening to dimming at a luminance threshold, so nothing that
+/// interpolates between exact colors would do.
+struct Recolorer<'a> {
+    mask: &'a BackdropMask,
+    mappings: Vec<(u64, Mapping)>,
+    /// The index in `mappings` of the combination the previous pixel used.
+    current: usize,
+    /// Distinct colors computed exactly so far, across every combination.
+    exact_len: usize,
+}
+
+enum Mapping {
+    Tables(Box<[[u8; 256]; 3]>),
+    Mixed {
+        /// Open-addressed table of exactly computed colors, each `1 << 48 | rgb << 24 | out` and
+        /// `0` when empty. It is never more than half full, so a color it holds stays for the frame.
+        exact: Box<[u64]>,
+        /// Once the exact budget is spent: exact colors of inputs rounded to
+        /// [`Recolorer::LEVELS`] per channel, each `1 << 24 | out` and `0` until met.
+        quantized: Option<Box<[u32]>>,
+    },
+}
+
+fn pack_rgb(rgb: [u8; 3]) -> u64 {
+    u64::from(rgb[0]) << 16 | u64::from(rgb[1]) << 8 | u64::from(rgb[2])
+}
+
+fn unpack_rgb(packed: u64) -> [u8; 3] {
+    [(packed >> 16) as u8, (packed >> 8) as u8, packed as u8]
+}
+
+impl<'a> Recolorer<'a> {
+    const EXACT_BUDGET: usize = 1 << 14;
+    const EXACT_SLOTS: usize = Self::EXACT_BUDGET * 2;
+    const LEVELS: usize = 64;
+
+    fn new(mask: &'a BackdropMask) -> Self {
+        Self {
+            mask,
+            mappings: Vec::new(),
+            current: 0,
+            exact_len: 0,
+        }
+    }
+
+    fn apply_layers(&self, layers: u64, rgb: [u8; 3]) -> [u8; 3] {
+        let mut color = (rgb[0], rgb[1], rgb[2]);
+        for (bit, (_, effect)) in self.mask.layers.iter().enumerate() {
+            if layers & (1 << bit) != 0 {
+                color = effect.apply_rgb(color);
+            }
+        }
+        [color.0, color.1, color.2]
+    }
+
+    fn mapping_index(&mut self, layers: u64) -> usize {
+        if self
+            .mappings
+            .get(self.current)
+            .is_some_and(|(seen, _)| *seen == layers)
+        {
+            return self.current;
+        }
+        self.current = match self.mappings.iter().position(|(seen, _)| *seen == layers) {
+            Some(index) => index,
+            None => {
+                let per_channel = self
+                    .mask
+                    .layers
+                    .iter()
+                    .enumerate()
+                    .all(|(bit, (_, effect))| layers & (1 << bit) == 0 || effect.is_per_channel());
+                let mapping = if per_channel {
+                    let mut tables = Box::new([[0u8; 256]; 3]);
+                    for value in 0..=255u8 {
+                        let out = self.apply_layers(layers, [value; 3]);
+                        for (channel, table) in tables.iter_mut().enumerate() {
+                            table[usize::from(value)] = out[channel];
+                        }
+                    }
+                    Mapping::Tables(tables)
+                } else {
+                    Mapping::Mixed {
+                        exact: vec![0; Self::EXACT_SLOTS].into_boxed_slice(),
+                        quantized: None,
+                    }
+                };
+                self.mappings.push((layers, mapping));
+                self.mappings.len() - 1
+            }
+        };
+        self.current
+    }
+
+    fn recolor(&mut self, layers: u64, rgb: [u8; 3]) -> [u8; 3] {
+        let index = self.mapping_index(layers);
+        if let Mapping::Tables(tables) = &self.mappings[index].1 {
+            return [
+                tables[0][usize::from(rgb[0])],
+                tables[1][usize::from(rgb[1])],
+                tables[2][usize::from(rgb[2])],
+            ];
+        }
+
+        let packed = pack_rgb(rgb);
+        let Mapping::Mixed { exact, .. } = &self.mappings[index].1 else {
+            unreachable!("handled above");
+        };
+        let mut slot =
+            (packed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 49) as usize & (Self::EXACT_SLOTS - 1);
+        while exact[slot] != 0 {
+            if (exact[slot] >> 24) & 0xFF_FFFF == packed {
+                return unpack_rgb(exact[slot]);
+            }
+            slot = (slot + 1) & (Self::EXACT_SLOTS - 1);
+        }
+
+        let exact_slot = (self.exact_len < Self::EXACT_BUDGET).then_some(slot);
+        let step = 256 / Self::LEVELS;
+        let center = |value: u8| (usize::from(value) / step * step + step / 2) as u8;
+        let level = |value: u8| usize::from(value) / step;
+        let cell = (level(rgb[0]) * Self::LEVELS + level(rgb[1])) * Self::LEVELS + level(rgb[2]);
+        if exact_slot.is_none()
+            && let Mapping::Mixed {
+                quantized: Some(quantized),
+                ..
+            } = &self.mappings[index].1
+            && quantized[cell] != 0
+        {
+            return unpack_rgb(u64::from(quantized[cell]));
+        }
+
+        let input = match exact_slot {
+            Some(_) => rgb,
+            None => [center(rgb[0]), center(rgb[1]), center(rgb[2])],
+        };
+        let out = self.apply_layers(layers, input);
+        let Mapping::Mixed { exact, quantized } = &mut self.mappings[index].1 else {
+            unreachable!("handled above");
+        };
+        match exact_slot {
+            Some(slot) => {
+                exact[slot] = 1 << 48 | packed << 24 | pack_rgb(out);
+                self.exact_len += 1;
+            }
+            None => {
+                quantized.get_or_insert_with(|| vec![0; Self::LEVELS.pow(3)].into_boxed_slice())
+                    [cell] = 1 << 24 | pack_rgb(out) as u32;
+            }
+        }
+        out
     }
 }
 
@@ -2661,6 +2805,164 @@ mod tests {
     fn dim_half() -> BackdropBackgroundEffect {
         BackdropBackgroundEffect::from_style(crate::style::Style::new().dim_by(0.5), None)
             .expect("a dim changes backgrounds")
+    }
+
+    /// The fast paths in [`Recolorer`] give exactly the colors of the effects they stand in for,
+    /// alone and stacked, whether they use per-channel tables or not.
+    #[test]
+    fn the_recolorer_matches_the_effects_it_stands_in_for() {
+        use crate::style::{Color, ColorTransform, Style};
+
+        let terminal_bg = Some(ratatui::style::Color::Rgb(18, 20, 28));
+        let styles = [
+            Style::new().dim_by(0.6),
+            Style::new().tint_by(Color::Rgb(0, 0, 40), 0.5),
+            Style::new().lighten_by(0.3),
+            Style::new().transform_bg(ColorTransform::Elevate(0.5)),
+            Style::new().transform_bg(ColorTransform::Opacity(0.4)),
+            Style::new().transform_bg(ColorTransform::OpacityToward {
+                factor: 0.3,
+                target: Color::Rgb(200, 10, 90),
+            }),
+            Style::new().bg(Color::Rgb(40, 40, 40)).dim_by(0.2),
+            Style::new()
+                .bg(Color::Reset)
+                .tint_by(Color::Rgb(90, 0, 0), 0.3),
+            Style::new().bg(Color::Blue).dim_by(0.4),
+        ];
+        let effects: Vec<_> = styles
+            .iter()
+            .map(|style| BackdropBackgroundEffect::from_style(*style, terminal_bg).unwrap())
+            .collect();
+        let mut seed = 0x2545_f491_u32;
+        let colors: Vec<[u8; 3]> = (0..2000)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                [seed as u8, (seed >> 8) as u8, (seed >> 16) as u8]
+            })
+            .chain([[0; 3], [255; 3], [255, 0, 0], [0, 255, 0], [0, 0, 255]])
+            .collect();
+
+        let full = ratatui::layout::Rect::new(0, 0, 1, 1);
+        let mut stacks: Vec<Vec<BackdropBackgroundEffect>> =
+            effects.iter().map(|effect| vec![*effect]).collect();
+        stacks.push(vec![effects[0], effects[1]]);
+        stacks.push(vec![effects[1], effects[3], effects[0]]);
+        for stack in stacks {
+            let mask = BackdropMask {
+                columns: 1,
+                rows: 1,
+                layers: stack.iter().map(|effect| (full, *effect)).collect(),
+            };
+            let layers = (1u64 << stack.len()) - 1;
+            let mut recolorer = Recolorer::new(&mask);
+            for &rgb in &colors {
+                let expected = stack
+                    .iter()
+                    .fold((rgb[0], rgb[1], rgb[2]), |color, effect| {
+                        effect.apply_rgb(color)
+                    });
+                assert_eq!(
+                    recolorer.recolor(layers, rgb),
+                    [expected.0, expected.1, expected.2],
+                    "{rgb:?} under {stack:?}"
+                );
+            }
+        }
+    }
+
+    /// A photo under an effect that mixes channels has more colors than are worth computing one by
+    /// one: the first ones stay exact, and each later one is the exact color of an input at most two
+    /// levels away per channel.
+    #[test]
+    fn photographic_pixels_past_the_budget_are_computed_at_fewer_levels() {
+        use crate::style::{ColorTransform, Style};
+
+        let elevate = BackdropBackgroundEffect::from_style(
+            Style::new().transform_bg(ColorTransform::Elevate(0.5)),
+            None,
+        )
+        .unwrap();
+        assert!(!elevate.is_per_channel());
+        let mask = BackdropMask {
+            columns: 1,
+            rows: 1,
+            layers: vec![(ratatui::layout::Rect::new(0, 0, 1, 1), elevate)],
+        };
+        let exact = |rgb: [u8; 3]| {
+            let (r, g, b) = elevate.apply_rgb((rgb[0], rgb[1], rgb[2]));
+            [r, g, b]
+        };
+        let mut recolorer = Recolorer::new(&mask);
+        let color = |index: usize| {
+            let packed = (index as u32).wrapping_mul(2_654_435_761) >> 8;
+            [packed as u8, (packed >> 8) as u8, (packed >> 16) as u8]
+        };
+
+        for index in 0..Recolorer::EXACT_BUDGET {
+            assert_eq!(recolorer.recolor(1, color(index)), exact(color(index)));
+        }
+        let nearest = |rgb: [u8; 3]| rgb.map(|value| value / 4 * 4 + 2);
+        for index in Recolorer::EXACT_BUDGET..Recolorer::EXACT_BUDGET + 20_000 {
+            let rgb = color(index);
+            assert!(
+                rgb.iter()
+                    .zip(nearest(rgb))
+                    .all(|(value, near)| value.abs_diff(near) <= 2)
+            );
+            assert_eq!(recolorer.recolor(1, rgb), exact(nearest(rgb)), "{rgb:?}");
+        }
+        assert!(matches!(
+            recolorer.mappings[0].1,
+            Mapping::Mixed {
+                quantized: Some(_),
+                ..
+            }
+        ));
+    }
+
+    /// The exact budget counts distinct colors, so a small palette whose colors share a hash slot
+    /// stays exact however many pixels repeat them.
+    #[test]
+    fn a_small_palette_stays_exact_however_often_its_colors_collide() {
+        use crate::style::{ColorTransform, Style};
+
+        let elevate = BackdropBackgroundEffect::from_style(
+            Style::new().transform_bg(ColorTransform::Elevate(0.5)),
+            None,
+        )
+        .unwrap();
+        let mask = BackdropMask {
+            columns: 1,
+            rows: 1,
+            layers: vec![(ratatui::layout::Rect::new(0, 0, 1, 1), elevate)],
+        };
+        let exact = |rgb: [u8; 3]| {
+            let (r, g, b) = elevate.apply_rgb((rgb[0], rgb[1], rgb[2]));
+            [r, g, b]
+        };
+        let mut recolorer = Recolorer::new(&mask);
+        // `[0, 0, 4]` and `[0, 69, 51]` hash to the same slot; `[0, 42, 198]` shared one with the
+        // first in an earlier direct-mapped cache.
+        let palette = [[0, 0, 4], [0, 69, 51], [0, 42, 198]];
+        for i in 0..=Recolorer::EXACT_BUDGET * 2 {
+            let rgb = palette[i % palette.len()];
+            assert_eq!(
+                recolorer.recolor(1, rgb),
+                exact(rgb),
+                "{rgb:?} at pixel {i}"
+            );
+        }
+        assert_eq!(recolorer.exact_len, palette.len());
+        assert!(matches!(
+            recolorer.mappings[0].1,
+            Mapping::Mixed {
+                quantized: None,
+                ..
+            }
+        ));
     }
 
     fn cells(x: i16, y: i16, w: u16, h: u16) -> Rect {
