@@ -5878,6 +5878,41 @@ fn ui_snapshot_callbacks_share_the_delivered_snapshot() {
     assert_eq!(*widths.borrow(), vec![24, 24]);
 }
 
+#[test]
+fn painted_frame_delivered_only_to_subscribers() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 24,
+        h: 5,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), UiSnapshotRoot, ());
+    runner.core.render_element(viewport, None, None, None);
+    assert!(
+        !runner.deliver_painted_frame(),
+        "no subscriber, no delivery"
+    );
+
+    let rows = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&rows);
+    let subscription = runner
+        .core
+        .ctx
+        .observe_painted_frames(crate::callback::Callback::new(
+            move |painted: crate::capture::PaintedFrame| {
+                sink.borrow_mut()
+                    .push(painted.frame.to_fixed_grid_lines().remove(0));
+            },
+        ));
+    assert!(runner.deliver_painted_frame());
+    assert_eq!(rows.borrow().len(), 1);
+    assert!(rows.borrow()[0].starts_with("snapshot probe"));
+
+    drop(subscription);
+    assert!(!runner.deliver_painted_frame());
+    assert_eq!(rows.borrow().len(), 1);
+}
+
 struct HScrollOffsetSmoke;
 
 impl Component for HScrollOffsetSmoke {

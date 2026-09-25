@@ -67,6 +67,7 @@ fn new_registry() -> ComponentRegistry {
             #[cfg(feature = "devtools")]
             devtools_metrics: Rc::new(crate::core::runtime_env::DevToolsMetrics::default()),
             pending_ui_snapshot: Rc::default(),
+            paint_observers: Rc::default(),
             copy_feedback_request: Rc::new(RefCell::new(Vec::new())),
             command_chord_pending_since: Rc::new(Cell::new(None)),
             command_chord_reveal_delay: Rc::new(Cell::new(std::time::Duration::ZERO)),
@@ -361,6 +362,133 @@ fn a_chain_of_snapshot_callbacks_runs_on_a_constant_stack() {
         .expect("spawn the small-stack thread")
         .join()
         .expect("the chain should not overflow the stack");
+}
+
+struct PaintObserverProbe;
+
+enum PaintObserverMsg {
+    Subscribe,
+    Unsubscribe,
+    Bump,
+    Painted(crate::capture::PaintedFrame),
+}
+
+#[derive(Default)]
+struct PaintObserverState {
+    subscription: Option<crate::capture::PaintSubscription>,
+    count: u32,
+    /// Each delivered frame's sequence number and first row.
+    frames: Vec<(u64, String)>,
+}
+
+impl Component for PaintObserverProbe {
+    type Message = PaintObserverMsg;
+    type Properties = ();
+    type State = PaintObserverState;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        PaintObserverState::default()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        Text::new(format!("count {}", ctx.state.count)).into()
+    }
+
+    fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        match msg {
+            PaintObserverMsg::Subscribe => {
+                let callback = ctx.link().callback(PaintObserverMsg::Painted);
+                ctx.state.subscription = Some(ctx.observe_painted_frames(callback));
+                Update::none()
+            }
+            PaintObserverMsg::Unsubscribe => {
+                ctx.state.subscription = None;
+                Update::none()
+            }
+            PaintObserverMsg::Bump => {
+                ctx.state.count += 1;
+                Update::full()
+            }
+            PaintObserverMsg::Painted(painted) => {
+                let row = painted.frame.to_fixed_grid_lines().remove(0);
+                ctx.state
+                    .frames
+                    .push((painted.sequence, row.trim_end().to_string()));
+                Update::none()
+            }
+        }
+    }
+}
+
+#[test]
+fn observe_painted_frames_is_passive_and_sees_every_paint() {
+    let mut backend = TestBackend::new(PaintObserverProbe);
+    backend.render();
+
+    backend
+        .dispatch(PaintObserverMsg::Subscribe)
+        .expect("dispatch should succeed");
+    assert!(
+        backend.state().frames.is_empty(),
+        "subscribing must not paint on its own",
+    );
+    assert!(
+        !backend.core.ctx.take_full_repaint_request(),
+        "subscribing must not ask the runner for a repaint",
+    );
+
+    backend
+        .dispatch(PaintObserverMsg::Bump)
+        .expect("dispatch should succeed");
+    backend
+        .dispatch(PaintObserverMsg::Bump)
+        .expect("dispatch should succeed");
+    assert_eq!(
+        backend.state().frames,
+        vec![(1, "count 1".to_string()), (2, "count 2".to_string())],
+        "each paint should reach the observer, handled by the pump that painted it",
+    );
+
+    backend.pump().expect("pump should succeed");
+    assert_eq!(
+        backend.state().frames.len(),
+        2,
+        "handling a frame without a view change must not paint again",
+    );
+
+    backend
+        .dispatch(PaintObserverMsg::Unsubscribe)
+        .expect("dispatch should succeed");
+    backend
+        .dispatch(PaintObserverMsg::Bump)
+        .expect("dispatch should succeed");
+    assert_eq!(
+        backend.state().frames.len(),
+        2,
+        "no frames after unsubscribing"
+    );
+    assert!(backend.core.ctx.env().paint_observers.is_empty());
+}
+
+#[test]
+fn painted_frame_matches_capture_frame() {
+    let mut backend = TestBackend::new(PaintObserverProbe);
+    let seen: Rc<RefCell<Option<crate::capture::PaintedFrame>>> = Rc::default();
+    let sink = Rc::clone(&seen);
+    let _subscription = backend
+        .core
+        .ctx
+        .observe_painted_frames(crate::callback::Callback::new(move |painted| {
+            *sink.borrow_mut() = Some(painted);
+        }));
+    backend.render();
+
+    let painted = seen
+        .borrow_mut()
+        .take()
+        .expect("render should deliver a frame");
+    assert_eq!(*painted.frame, backend.capture_frame());
+    assert_eq!(painted.painted_at, backend.core.ctx.env().now());
 }
 
 #[cfg(feature = "ui-snapshot-png")]

@@ -444,6 +444,20 @@ pub struct TerminalLinkEvent {
 The callback is opt-in and defaults to Ctrl+left-click through
 `link_activation_mods(KeyMods::CTRL)`. The application owns URI policy and opening.
 
+### `PaintedFrame`
+
+Emitted by: `Context::observe_painted_frames`, after every paint while the returned
+`PaintSubscription` is alive. See
+[Observing every painted frame](testing.md#observing-every-painted-frame).
+
+```rust
+pub struct PaintedFrame {
+    pub frame: Arc<CapturedFrame>, // Shared by every subscriber of the paint; Send
+    pub painted_at: Instant,       // Runtime clock time of the paint
+    pub sequence: u64,             // Delivered paints so far, starting at 1
+}
+```
+
 ### `MouseMoveEvent`
 
 Emitted by: `MouseRegion::on_mouse_move`

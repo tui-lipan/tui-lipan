@@ -283,6 +283,51 @@ ctx.request_ui_snapshot(ctx.link().callback(Msg::Captured));
 
 See `examples/ui_snapshot.rs`.
 
+### Observing every painted frame
+
+A snapshot request forces a paint, which is wrong for a screen recorder: the recorder would
+cause the frames it records. `ctx.observe_painted_frames(callback)` is the passive
+counterpart. It calls `callback` with a `PaintedFrame` after every paint the app makes anyway,
+until the returned `PaintSubscription` is dropped (or `unsubscribe()` is called):
+
+```rust
+use tui_lipan::{PaintSubscription, PaintedFrame};
+
+struct State {
+    recorder: Option<PaintSubscription>,
+}
+
+// In update(), to start:
+ctx.state.recorder = Some(ctx.observe_painted_frames(ctx.link().callback(Msg::Painted)));
+
+// Handling Msg::Painted(painted): hand `painted.frame` to a writer, and change no view state.
+Msg::Painted(painted) => {
+    let _ = writer_tx.send((painted.painted_at, painted.frame));
+    Update::none()
+}
+
+// To stop:
+ctx.state.recorder = None;
+```
+
+- **Passive.** Subscribing requests no render, and an idle app delivers nothing. Consecutive
+  frames can be identical, because a paint does not always change what is visible; compare
+  frames (`CapturedFrame` implements `PartialEq`) if you only want changes.
+- **One capture per paint.** Every subscriber of a paint shares one `Arc<CapturedFrame>`,
+  rendered the same way `request_ui_snapshot` renders its frame. The frame is `Send`, so it can
+  move to a writer thread without a copy. With no subscriber the runtime captures and allocates
+  nothing.
+- **Throttle on your side.** Each delivered paint costs one headless render. A recorder that
+  keeps at most N frames per second still receives every paint and drops the rest.
+- **No feedback loop.** The callback's message is handled without waiting for input. Return
+  `Update::none()` from that handler unless the view really changed, or every frame will paint
+  the next one.
+- **Frames only.** `PaintedFrame` has the frame, the runtime-clock `painted_at` (which follows
+  `TestBackend::advance` and automation's controlled clock), and a `sequence` number counting
+  delivered paints. For the semantic widget tree, ask for it with `request_ui_snapshot`.
+
+Served by the native runner and `TestBackend`, where every `render()` counts as a paint.
+
 ### Headless snapshots from the environment
 
 Set `TUI_LIPAN_SNAPSHOT` and `AppRunner::run()` renders one frame off-screen,
