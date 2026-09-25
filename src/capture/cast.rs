@@ -1,7 +1,8 @@
 //! asciinema cast v2 writer.
 //!
 //! A terminal recording is text, not video: a small JSON header followed by one
-//! `[time, "o", data]` line per output chunk. Because [`CapturedFrame::to_ansi_diff`]
+//! `[time, "o", data]` line per output chunk, plus `[time, "r", "COLSxROWS"]` when the
+//! terminal changes size and `[time, "m", label]` for a marker a player can jump to. Because [`CapturedFrame::to_ansi_diff`]
 //! already emits exactly that `data` - the ANSI needed to turn one frame into the
 //! next - recording a tui-lipan app is mostly bookkeeping.
 //!
@@ -30,23 +31,52 @@ const CAST_TERM: &str = "xterm-256color";
 ///
 /// let mut recording = CastRecording::new(80, 24).title("Demo");
 /// recording.push_output(0.0, "\x1b[2Jhello".to_owned());
+/// recording.push_marker(0.5, "greeting shown");
+/// recording.push_resize(1.0, 100, 30);
 /// let cast = recording.to_cast();
 /// assert!(cast.starts_with("{\"version\":2"));
+/// assert!(cast.contains("[0.500000, \"m\", \"greeting shown\"]"));
+/// assert!(cast.contains("[1.000000, \"r\", \"100x30\"]"));
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct CastRecording {
     width: u16,
     height: u16,
+    /// The terminal size as of the last event: the header's size until a resize.
+    current_width: u16,
+    current_height: u16,
     title: Option<String>,
     events: Vec<CastEvent>,
     last_frame: Option<CapturedFrame>,
 }
 
-/// One output event: seconds since recording start, plus the bytes emitted.
+/// One event: seconds since recording start, its asciicast code, and its data.
 #[derive(Clone, Debug, PartialEq)]
 struct CastEvent {
     time: f64,
+    kind: CastEventKind,
     data: String,
+}
+
+/// The asciicast v2 event types this writer emits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CastEventKind {
+    /// Terminal output (`"o"`).
+    Output,
+    /// A new terminal size, as `COLSxROWS` (`"r"`).
+    Resize,
+    /// A labelled marker (`"m"`).
+    Marker,
+}
+
+impl CastEventKind {
+    fn code(self) -> &'static str {
+        match self {
+            Self::Output => "o",
+            Self::Resize => "r",
+            Self::Marker => "m",
+        }
+    }
 }
 
 impl CastRecording {
@@ -55,6 +85,8 @@ impl CastRecording {
         Self {
             width: width.max(1),
             height: height.max(1),
+            current_width: width.max(1),
+            current_height: height.max(1),
             title: None,
             events: Vec::new(),
             last_frame: None,
@@ -74,24 +106,72 @@ impl CastRecording {
     /// empty events: a player derives timing from event timestamps, so a still
     /// stretch costs nothing but the gap before the next change.
     ///
+    /// A frame whose size differs from the terminal's is preceded by a resize
+    /// event (see [`Self::push_resize`]) and drawn as a full repaint, so a
+    /// recording of a window that grows or shrinks plays back at each size.
+    ///
     /// Returns whether an event was recorded.
     pub fn push_frame(&mut self, time_secs: f64, frame: &CapturedFrame) -> bool {
+        // Compared against the last frame only while it still describes the
+        // screen: a resize or raw output since then clears it.
         if self.last_frame.as_ref() == Some(frame) {
             return false;
         }
+        self.push_resize(time_secs, frame.width, frame.height);
         let data = frame.to_ansi_diff(self.last_frame.as_ref());
+        self.push_event(time_secs, CastEventKind::Output, data);
         self.last_frame = Some(frame.clone());
-        self.push_output(time_secs, data);
         true
     }
 
     /// Append raw terminal output at `time_secs`.
     ///
     /// Prefer [`Self::push_frame`]; this exists for output a captured frame cannot
-    /// express, such as a closing message.
+    /// express, such as a closing message. Output that is not empty changes the
+    /// screen in ways a frame diff cannot know, so the next frame is drawn as a
+    /// full repaint.
     pub fn push_output(&mut self, time_secs: f64, data: String) {
+        if !data.is_empty() {
+            self.last_frame = None;
+        }
+        self.push_event(time_secs, CastEventKind::Output, data);
+    }
+
+    /// Record that the terminal became `width` x `height` cells at `time_secs`.
+    ///
+    /// [`Self::push_frame`] calls this itself when a frame's size changes; call
+    /// it directly only alongside [`Self::push_output`]. The header keeps the
+    /// size the recording started at. Does nothing, and returns `false`, when
+    /// the size is unchanged; otherwise the next frame is drawn as a full
+    /// repaint.
+    pub fn push_resize(&mut self, time_secs: f64, width: u16, height: u16) -> bool {
+        let (width, height) = (width.max(1), height.max(1));
+        if (width, height) == (self.current_width, self.current_height) {
+            return false;
+        }
+        self.current_width = width;
+        self.current_height = height;
+        // The last frame no longer describes the screen, so the next one repaints it whole,
+        // and resizes back first if it is the old size.
+        self.last_frame = None;
+        self.push_event(
+            time_secs,
+            CastEventKind::Resize,
+            format!("{width}x{height}"),
+        );
+        true
+    }
+
+    /// Add a marker labelled `label` at `time_secs`, which players list as a
+    /// chapter or a point to jump to. It does not change the screen.
+    pub fn push_marker(&mut self, time_secs: f64, label: impl Into<String>) {
+        self.push_event(time_secs, CastEventKind::Marker, label.into());
+    }
+
+    fn push_event(&mut self, time_secs: f64, kind: CastEventKind, data: String) {
         self.events.push(CastEvent {
             time: time_secs.max(0.0),
+            kind,
             data,
         });
     }
@@ -148,7 +228,9 @@ impl CastRecording {
         for event in &self.events {
             out.push('[');
             write_time(&mut out, event.time);
-            out.push_str(", \"o\", \"");
+            out.push_str(", \"");
+            out.push_str(event.kind.code());
+            out.push_str("\", \"");
             escape_json_into(&mut out, &event.data);
             out.push_str("\"]\n");
         }
@@ -235,11 +317,23 @@ mod tests {
         let width: usize = extract_number(header, "\"width\":");
         let height: usize = extract_number(header, "\"height\":");
 
+        let (mut width, mut height) = (width, height);
         let mut grid = vec![vec![' '; width]; height];
         let (mut cy, mut cx) = (0usize, 0usize);
 
         for line in lines {
-            let data = decode_event_data(line);
+            let (code, data) = decode_event(line);
+            match code.as_str() {
+                "o" => {}
+                "r" => {
+                    let (cols, rows) = data.split_once('x').expect("COLSxROWS");
+                    width = cols.parse().expect("columns");
+                    height = rows.parse().expect("rows");
+                    grid = vec![vec![' '; width]; height];
+                    continue;
+                }
+                _ => continue,
+            }
             let mut chars = data.chars().peekable();
             while let Some(ch) = chars.next() {
                 if ch != '\u{1b}' {
@@ -299,9 +393,12 @@ mod tests {
             .expect("number")
     }
 
-    /// Extract and unescape the data payload from one `[t, "o", "..."]` line.
-    fn decode_event_data(line: &str) -> String {
-        let start = line.find(", \"o\", \"").expect("event marker") + 8;
+    /// Extract the code and unescaped data from one `[t, "code", "..."]` line.
+    fn decode_event(line: &str) -> (String, String) {
+        let code_start = line.find(", \"").expect("event code") + 3;
+        let code_end = code_start + line[code_start..].find('"').expect("code ends");
+        let code = line[code_start..code_end].to_owned();
+        let start = code_end + 4;
         let body = &line[start..line.len() - 2];
 
         let mut out = String::new();
@@ -326,7 +423,7 @@ mod tests {
                 None => break,
             }
         }
-        out
+        (code, out)
     }
 
     #[test]
@@ -414,6 +511,123 @@ mod tests {
             "second event should be a diff: {}",
             lines[2]
         );
+    }
+
+    #[test]
+    fn a_frame_at_a_new_size_resizes_the_terminal_before_drawing() {
+        let mut recording = CastRecording::new(4, 1);
+        recording.push_frame(0.0, &frame(4, 1, "a"));
+        recording.push_frame(1.0, &frame(6, 2, "b"));
+
+        let cast = recording.to_cast();
+        let lines: Vec<&str> = cast.lines().collect();
+        assert!(
+            lines[0].contains("\"width\":4"),
+            "the header keeps the starting size"
+        );
+        assert_eq!(lines[2], "[1.000000, \"r\", \"6x2\"]", "{cast}");
+        assert!(
+            lines[3].contains("[2J"),
+            "a new size repaints: {}",
+            lines[3]
+        );
+        assert_eq!(
+            replay(&cast),
+            vec!["bbbbbb".to_owned(), "bbbbbb".to_owned()]
+        );
+
+        // Shrinking back leaves nothing of the larger size behind.
+        recording.push_frame(2.0, &frame(3, 1, "c"));
+        let cast = recording.to_cast();
+        assert!(cast.contains("[2.000000, \"r\", \"3x1\"]"), "{cast}");
+        assert_eq!(replay(&cast), vec!["ccc".to_owned()]);
+    }
+
+    #[test]
+    fn a_first_frame_unlike_the_header_size_resizes_at_once() {
+        let mut recording = CastRecording::new(80, 24);
+        recording.push_frame(0.0, &frame(4, 1, "a"));
+        let cast = recording.to_cast();
+        assert_eq!(cast.lines().nth(1), Some("[0.000000, \"r\", \"4x1\"]"));
+        assert_eq!(replay(&cast), vec!["aaaa".to_owned()]);
+    }
+
+    #[test]
+    fn a_resize_to_the_current_size_records_nothing() {
+        let mut recording = CastRecording::new(4, 1);
+        assert!(!recording.push_resize(0.0, 4, 1));
+        assert!(recording.push_resize(0.5, 5, 2));
+        assert!(!recording.push_resize(1.0, 5, 2));
+        assert_eq!(recording.len(), 1);
+        // Frames of the same size as a resize the caller already recorded add none.
+        recording.push_frame(1.0, &frame(5, 2, "x"));
+        assert_eq!(recording.len(), 2);
+        assert!(recording.to_cast().contains("[0.500000, \"r\", \"5x2\"]"));
+    }
+
+    #[test]
+    fn a_marker_is_a_labelled_event_that_leaves_the_screen_alone() {
+        let mut recording = CastRecording::new(4, 1);
+        recording.push_frame(0.0, &frame(4, 1, "a"));
+        recording.push_marker(1.5, "tests \"started\"");
+        let cast = recording.to_cast();
+        assert_eq!(
+            cast.lines().nth(2),
+            Some(r#"[1.500000, "m", "tests \"started\""]"#),
+            "{cast}"
+        );
+        assert!((recording.duration_secs() - 1.5).abs() < f64::EPSILON);
+        assert_eq!(replay(&cast), vec!["aaaa".to_owned()]);
+    }
+
+    #[test]
+    fn a_frame_after_a_raw_resize_redraws_even_when_it_matches_the_last_one() {
+        let small = frame(4, 1, "a");
+        let mut recording = CastRecording::new(4, 1);
+        recording.push_frame(0.0, &small);
+        assert!(recording.push_resize(1.0, 6, 2));
+        recording.push_output(1.0, "\x1b[2J\x1b[Hzzzzzz".to_owned());
+
+        assert!(
+            recording.push_frame(2.0, &small),
+            "the screen no longer shows this frame"
+        );
+        let cast = recording.to_cast();
+        let lines: Vec<&str> = cast.lines().collect();
+        assert_eq!(lines[4], "[2.000000, \"r\", \"4x1\"]", "{cast}");
+        assert!(lines[5].contains("[2J"), "a full repaint: {}", lines[5]);
+        assert_eq!(replay(&cast), vec!["aaaa".to_owned()]);
+    }
+
+    #[test]
+    fn a_frame_after_a_raw_resize_alone_resizes_back_and_redraws() {
+        let small = frame(4, 1, "a");
+        let mut recording = CastRecording::new(4, 1);
+        recording.push_frame(0.0, &small);
+        assert!(recording.push_resize(1.0, 6, 2));
+        assert!(recording.push_frame(2.0, &small));
+
+        let cast = recording.to_cast();
+        assert!(cast.contains("[2.000000, \"r\", \"4x1\"]"), "{cast}");
+        assert_eq!(replay(&cast), vec!["aaaa".to_owned()]);
+    }
+
+    #[test]
+    fn a_frame_after_raw_output_repaints_rather_than_diffing_a_stale_screen() {
+        let first = frame(4, 1, "a");
+        let mut second = first.clone();
+        second.cells[0].symbol = "b".to_owned();
+        let mut recording = CastRecording::new(4, 1);
+        recording.push_frame(0.0, &first);
+        recording.push_output(1.0, "\x1b[Hzzzz".to_owned());
+        recording.push_frame(2.0, &second);
+
+        let cast = recording.to_cast();
+        assert!(cast.lines().nth(3).unwrap().contains("[2J"), "{cast}");
+        assert_eq!(replay(&cast), vec!["baaa".to_owned()]);
+        // An empty hold, as `mark_time` writes, leaves the diff baseline alone.
+        recording.mark_time(3.0);
+        assert!(!recording.push_frame(4.0, &second));
     }
 
     #[test]
