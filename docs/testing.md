@@ -459,7 +459,8 @@ one directly, such as to export frames it recorded some other way:
 A frame whose size differs from the terminal's resizes it first: `push_frame` writes the resize
 event and a full repaint, so a recording of a window that grows or shrinks plays back at each size.
 The header keeps the size the cast started at. Call `push_resize` yourself only alongside
-`push_output`.
+`push_output`. Either one leaves the screen in a state the last frame no longer describes, so the
+next `push_frame` resizes back if needed and repaints the whole screen.
 
 ### Choosing an output format
 

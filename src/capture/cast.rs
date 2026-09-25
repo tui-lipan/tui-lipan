@@ -112,21 +112,28 @@ impl CastRecording {
     ///
     /// Returns whether an event was recorded.
     pub fn push_frame(&mut self, time_secs: f64, frame: &CapturedFrame) -> bool {
+        // Compared against the last frame only while it still describes the
+        // screen: a resize or raw output since then clears it.
         if self.last_frame.as_ref() == Some(frame) {
             return false;
         }
         self.push_resize(time_secs, frame.width, frame.height);
         let data = frame.to_ansi_diff(self.last_frame.as_ref());
+        self.push_event(time_secs, CastEventKind::Output, data);
         self.last_frame = Some(frame.clone());
-        self.push_output(time_secs, data);
         true
     }
 
     /// Append raw terminal output at `time_secs`.
     ///
     /// Prefer [`Self::push_frame`]; this exists for output a captured frame cannot
-    /// express, such as a closing message.
+    /// express, such as a closing message. Output that is not empty changes the
+    /// screen in ways a frame diff cannot know, so the next frame is drawn as a
+    /// full repaint.
     pub fn push_output(&mut self, time_secs: f64, data: String) {
+        if !data.is_empty() {
+            self.last_frame = None;
+        }
         self.push_event(time_secs, CastEventKind::Output, data);
     }
 
@@ -135,7 +142,8 @@ impl CastRecording {
     /// [`Self::push_frame`] calls this itself when a frame's size changes; call
     /// it directly only alongside [`Self::push_output`]. The header keeps the
     /// size the recording started at. Does nothing, and returns `false`, when
-    /// the size is unchanged.
+    /// the size is unchanged; otherwise the next frame is drawn as a full
+    /// repaint.
     pub fn push_resize(&mut self, time_secs: f64, width: u16, height: u16) -> bool {
         let (width, height) = (width.max(1), height.max(1));
         if (width, height) == (self.current_width, self.current_height) {
@@ -143,6 +151,9 @@ impl CastRecording {
         }
         self.current_width = width;
         self.current_height = height;
+        // The last frame no longer describes the screen, so the next one repaints it whole,
+        // and resizes back first if it is the old size.
+        self.last_frame = None;
         self.push_event(
             time_secs,
             CastEventKind::Resize,
@@ -567,6 +578,56 @@ mod tests {
         );
         assert!((recording.duration_secs() - 1.5).abs() < f64::EPSILON);
         assert_eq!(replay(&cast), vec!["aaaa".to_owned()]);
+    }
+
+    #[test]
+    fn a_frame_after_a_raw_resize_redraws_even_when_it_matches_the_last_one() {
+        let small = frame(4, 1, "a");
+        let mut recording = CastRecording::new(4, 1);
+        recording.push_frame(0.0, &small);
+        assert!(recording.push_resize(1.0, 6, 2));
+        recording.push_output(1.0, "\x1b[2J\x1b[Hzzzzzz".to_owned());
+
+        assert!(
+            recording.push_frame(2.0, &small),
+            "the screen no longer shows this frame"
+        );
+        let cast = recording.to_cast();
+        let lines: Vec<&str> = cast.lines().collect();
+        assert_eq!(lines[4], "[2.000000, \"r\", \"4x1\"]", "{cast}");
+        assert!(lines[5].contains("[2J"), "a full repaint: {}", lines[5]);
+        assert_eq!(replay(&cast), vec!["aaaa".to_owned()]);
+    }
+
+    #[test]
+    fn a_frame_after_a_raw_resize_alone_resizes_back_and_redraws() {
+        let small = frame(4, 1, "a");
+        let mut recording = CastRecording::new(4, 1);
+        recording.push_frame(0.0, &small);
+        assert!(recording.push_resize(1.0, 6, 2));
+        assert!(recording.push_frame(2.0, &small));
+
+        let cast = recording.to_cast();
+        assert!(cast.contains("[2.000000, \"r\", \"4x1\"]"), "{cast}");
+        assert_eq!(replay(&cast), vec!["aaaa".to_owned()]);
+    }
+
+    #[test]
+    fn a_frame_after_raw_output_repaints_rather_than_diffing_a_stale_screen() {
+        let first = frame(4, 1, "a");
+        let mut second = first.clone();
+        second.cells[0].symbol = "b".to_owned();
+        let mut recording = CastRecording::new(4, 1);
+        recording.push_frame(0.0, &first);
+        recording.push_output(1.0, "\x1b[Hzzzz".to_owned());
+        recording.push_frame(2.0, &second);
+
+        let cast = recording.to_cast();
+        assert!(cast.lines().nth(3).unwrap().contains("[2J"), "{cast}");
+        assert_eq!(replay(&cast), vec!["baaa".to_owned()]);
+        // An empty hold, as `mark_time` writes, leaves the diff baseline alone.
+        recording.mark_time(3.0);
+        assert!(!recording.push_frame(4.0, &second));
     }
 
     #[test]
