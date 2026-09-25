@@ -440,6 +440,27 @@ would otherwise end the file at the last visible change, the recorder writes a
 final zero-length event to hold the closing frame for the intended duration
 (`CastRecording::mark_time`).
 
+#### Building a cast yourself
+
+`Recording` writes a `CastRecording`, and an application that captures its own frames can build
+one directly, such as to export frames it recorded some other way:
+
+| Method | Effect |
+|--------|--------|
+| `CastRecording::new(w, h)` | Start a cast whose terminal is `w` x `h` cells |
+| `title(t)` | Title in the header |
+| `push_frame(t, &frame)` | Draw a `CapturedFrame` at `t` seconds, as a diff against the previous one |
+| `push_output(t, data)` | Write raw terminal output |
+| `push_resize(t, w, h)` | Change the terminal size (`"r"` event) |
+| `push_marker(t, label)` | Add a marker players list as a point to jump to (`"m"` event) |
+| `mark_time(t)` | Hold the last frame until `t` |
+| `to_cast()`, `write(path)` | The cast as text, or written to a file |
+
+A frame whose size differs from the terminal's resizes it first: `push_frame` writes the resize
+event and a full repaint, so a recording of a window that grows or shrinks plays back at each size.
+The header keeps the size the cast started at. Call `push_resize` yourself only alongside
+`push_output`.
+
 ### Choosing an output format
 
 | Format | Size (7s demo) | Best for | Cost |
