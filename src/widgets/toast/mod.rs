@@ -1,5 +1,6 @@
 //! Toast widget.
 
+use crate::callback::Callback;
 use std::sync::Arc;
 
 use unicode_width::UnicodeWidthStr;
@@ -40,6 +41,8 @@ pub struct Toast {
     pub duration: f64,
     /// Dismiss when clicked on.
     pub dismiss_on_click: bool,
+    /// Action to run when the toast is clicked with the left mouse button.
+    pub on_click: Option<Callback<()>>,
     /// Show a copy affordance that copies the whole toast message when clicked.
     pub copyable: bool,
     /// Optional visual affordance for copyable toasts.
@@ -79,6 +82,7 @@ impl Toast {
             message: message.into(),
             duration: 3.0,
             dismiss_on_click: true,
+            on_click: None,
             copyable: false,
             copy_affordance: ToastCopyAffordance::BorderGlyph,
             title: None,
@@ -212,6 +216,12 @@ impl Toast {
     /// Set whether clicking on the toast dismisses it.
     pub fn dismiss_on_click(mut self, dismiss: bool) -> Self {
         self.dismiss_on_click = dismiss;
+        self
+    }
+
+    /// Set the action invoked by a left click on the toast.
+    pub fn on_click(mut self, callback: Callback<()>) -> Self {
+        self.on_click = Some(callback);
         self
     }
 

@@ -36,6 +36,21 @@ impl<C: Component> AppRunner<C> {
                     return true;
                 }
 
+                if button == MouseButton::Right && overlay.on_click.is_some() {
+                    return true;
+                }
+
+                if button == MouseButton::Left
+                    && let Some(callback) = &overlay.on_click
+                {
+                    if overlay.dismiss_policy.dismiss_on_click_inside()
+                        && !self.dismiss_overlay(overlay)
+                    {
+                        return true;
+                    }
+                    callback.emit(());
+                    return true;
+                }
                 if button == MouseButton::Left && overlay.dismiss_policy.dismiss_on_click_inside() {
                     return self.dismiss_overlay(overlay);
                 }

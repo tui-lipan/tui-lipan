@@ -1677,6 +1677,7 @@ mod tests {
             order,
             dismiss_policy: DismissPolicy::None,
             on_dismiss: None,
+            on_click: None,
             backdrop: None,
             opacity: 1.0,
             captures_focus: false,
