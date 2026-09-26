@@ -294,7 +294,7 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
     let x = mouse.x;
     let y = mouse.y;
     let adjusted_mouse = mouse;
-    if ctx.update_toast_hover(x, y) {
+    if ctx.update_toast_hover(x, y) && matches!(mouse.kind, MouseKind::Moved) {
         return true;
     }
     let is_down = matches!(mouse.kind, MouseKind::Down(MouseButton::Left));
@@ -868,6 +868,89 @@ impl<C: Component> MouseDispatchCtx<C> for AppRunner<C> {
 }
 
 impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
+    fn handle_overlay_click(
+        &mut self,
+        button: crate::core::event::MouseButton,
+        x: u16,
+        y: u16,
+    ) -> bool {
+        let overlays = self.core.tree.overlay_roots().to_vec();
+        for overlay in overlays.iter().rev() {
+            if !self.core.tree.is_valid(overlay.id) {
+                continue;
+            }
+            let inside = self
+                .core
+                .tree
+                .node(overlay.id)
+                .rect
+                .contains(x as i16, y as i16);
+            if inside {
+                let copy_text = match button {
+                    crate::core::event::MouseButton::Right => overlay.copy_text.as_deref(),
+                    crate::core::event::MouseButton::Left
+                        if overlay
+                            .copy_zone
+                            .is_some_and(|zone| zone.contains(x as i16, y as i16)) =>
+                    {
+                        overlay.copy_text.as_deref()
+                    }
+                    _ => None,
+                };
+                if let Some(text) = copy_text {
+                    let clipboard = crate::clipboard::ClipboardHandle::new(
+                        std::rc::Rc::clone(&self.core.ctx.env().clipboard),
+                        std::rc::Rc::clone(&self.core.ctx.env().clipboard_config),
+                    );
+                    if clipboard.copy(text).is_ok()
+                        && let Some(id) = overlay.overlay_id
+                    {
+                        let duration = std::time::Duration::from_millis(
+                            self.core
+                                .ctx
+                                .env()
+                                .clipboard_config
+                                .borrow()
+                                .copy_feedback_duration_ms as u64,
+                        );
+                        self.core
+                            .overlay_manager
+                            .borrow_mut()
+                            .trigger_copy_feedback(id, duration);
+                    }
+                    return true;
+                }
+                if button == crate::core::event::MouseButton::Right && overlay.on_click.is_some() {
+                    return true;
+                }
+                if button == crate::core::event::MouseButton::Left {
+                    if let Some(callback) = &overlay.on_click {
+                        if overlay.dismiss_policy.dismiss_on_click_inside()
+                            && !self.dismiss_overlay(overlay)
+                        {
+                            return true;
+                        }
+                        callback.emit(());
+                        return true;
+                    }
+                    if overlay.dismiss_policy.dismiss_on_click_inside() {
+                        return self.dismiss_overlay(overlay);
+                    }
+                }
+                return false;
+            }
+            if button == crate::core::event::MouseButton::Left
+                && overlay.dismiss_policy.dismiss_on_click_outside()
+            {
+                return self.dismiss_overlay(overlay);
+            }
+            if overlay.captures_focus {
+                return true;
+            }
+        }
+        false
+    }
+
     fn adjust_mouse(&mut self, mouse: MouseEvent) -> MouseEvent {
         mouse
     }

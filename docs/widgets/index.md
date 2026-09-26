@@ -105,7 +105,7 @@ For layout reorders, wrap the moving subtree in `Animated::new(...)`, enable `.p
 | Widget | Description |
 |--------|-------------|
 | `Modal` | Centered dialog (portals to root level) |
-| `Toast` | Transient notifications via `ctx.toast()` |
+| `Toast` | Transient notifications with optional click actions via `ctx.toast()` |
 | `Popover` | Floating content panel |
 | `Tooltip` | Help text on hover/focus |
 | `Accordion` | Collapsible sections |

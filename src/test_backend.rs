@@ -1255,7 +1255,7 @@ where
         false
     }
 
-    fn dismiss_overlay(&mut self, overlay: &OverlayRoot) -> bool {
+    pub(crate) fn dismiss_overlay(&mut self, overlay: &OverlayRoot) -> bool {
         let dismissed = if let Some(id) = overlay.overlay_id {
             self.core.overlay_manager.borrow_mut().dismiss(id)
         } else if let Some(cb) = &overlay.on_dismiss {

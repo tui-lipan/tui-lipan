@@ -242,6 +242,7 @@ pub(crate) fn reconcile_portal(
             order,
             dismiss_policy: portal.dismiss_policy,
             on_dismiss: portal.on_close.clone(),
+            on_click: None,
             backdrop: portal.backdrop,
             opacity: 1.0,
             captures_focus: portal.captures_focus,
@@ -346,6 +347,11 @@ pub(crate) fn reconcile_overlay_entries(ctx: &mut ReconcileCtx<'_>, overlays: &[
                 entry.dismiss_policy
             },
             on_dismiss: entry.on_dismiss.clone(),
+            on_click: if entry.pending_dismiss {
+                None
+            } else {
+                entry.on_click.clone()
+            },
             backdrop: entry.backdrop,
             opacity: entry.opacity(),
             captures_focus: if entry.pending_dismiss {
@@ -396,6 +402,7 @@ pub(crate) fn collect_popover_overlay_roots(tree: &NodeTree, overlay_state: &mut
                 DismissPolicy::None
             },
             on_dismiss: popover_node.on_close.clone(),
+            on_click: None,
             backdrop: None,
             opacity: 1.0,
             captures_focus: popover_node.capture_focus,

@@ -164,7 +164,9 @@ its exit transition.
 |------|------|-------------|
 | `message` | `impl Into<String>` | **Constructor** - toast text |
 | `duration` | `f32` | Auto-dismiss seconds (0 = permanent) |
-| `copyable` | `bool` | Allow copying `message` by right-clicking the toast; bordered toasts also show a copy glyph by default |
+| `copyable` | `bool` | Allow copying text by right-clicking the toast; bordered toasts also show a copy glyph by default |
+| `copy_text` | `impl Into<Arc<str>>` | Copy this text instead of the displayed message; enables copying |
+| `on_click` | `Callback<()>` | Run an action on a left click |
 | `copy_affordance` | `ToastCopyAffordance` | Optional visual copy control (`BorderGlyph` or `None`) |
 | `title` | `String` | Optional title |
 | `title_prefix` | `String` | Title prefix symbol |
@@ -183,9 +185,12 @@ its exit transition.
 | `decoration` / `decorations` | `FrameDecoration` | Edge decorations |
 
 Use `Toast::new("...").copyable(true)` for error strings, paths, command output, or IDs that
-users may need to paste elsewhere. The copied text is the toast message only. Right-click anywhere
-inside a copyable toast to copy it; left-click keeps the existing dismiss behavior. Bordered toasts
-also render a copy glyph by default. Use `.copy_affordance(ToastCopyAffordance::None)` to keep the
+users may need to paste elsewhere. The copied text is the toast message by default. Use
+`.copy_text(full_path)` when the displayed text abbreviates a value. Right-click anywhere
+inside a copyable toast to copy it; a left click dismisses the toast by default. Set `.on_click(...)`
+to run an action on left click. The toast still dismisses unless `.dismiss_on_click(false)` is set.
+Bordered toasts also render a copy glyph by default. Use
+`.copy_affordance(ToastCopyAffordance::None)` to keep the
 right-click copy behavior without showing the glyph. Successful toast copies briefly apply
 `ClipboardConfig::copy_feedback_style` for `copy_feedback_duration_ms`, matching selection-copy
 feedback.

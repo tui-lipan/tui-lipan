@@ -162,6 +162,7 @@ pub(crate) struct OverlayEntry {
     pub(crate) placement: OverlayPlacement,
     pub(crate) dismiss_policy: DismissPolicy,
     pub(crate) on_dismiss: Option<Callback<()>>,
+    pub(crate) on_click: Option<Callback<()>>,
     pub(crate) created_at: Instant,
     pub(crate) timeout: Option<Duration>,
     pub(crate) captures_focus: bool,
@@ -529,7 +530,12 @@ impl OverlayManager {
 
         let (placement, gap, margin) = self.toast_config();
         let duration = toast.duration;
-        let copy_text = toast.copyable.then(|| toast.message.clone());
+        let copy_text = toast.copyable.then(|| {
+            toast
+                .copy_text
+                .clone()
+                .unwrap_or_else(|| toast.message.clone())
+        });
         let copy_zone_right_padding = if toast.copyable
             && toast.border
             && matches!(toast.copy_affordance, ToastCopyAffordance::BorderGlyph)
@@ -543,6 +549,7 @@ impl OverlayManager {
         } else {
             DismissPolicy::None
         };
+        let on_click = toast.on_click.clone();
         let content = toast.into_element();
         let entry = OverlayEntry {
             id: OverlayId(0),
@@ -556,6 +563,7 @@ impl OverlayManager {
             },
             dismiss_policy,
             on_dismiss: None,
+            on_click,
             created_at: self.now(),
             timeout: Some(Duration::from_secs_f64(duration)),
             captures_focus: false,
@@ -637,9 +645,137 @@ impl ToastHandle {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use std::thread;
 
     use super::*;
+
+    struct ToastClickRoot;
+
+    enum ToastClickMsg {
+        Show,
+        ShowCopy,
+        Clicked,
+    }
+
+    struct RecordingClipboard(Rc<RefCell<Vec<String>>>);
+
+    impl crate::ClipboardProvider for RecordingClipboard {
+        fn read_clipboard_text(&mut self) -> Result<String, crate::ClipboardError> {
+            Ok(String::new())
+        }
+
+        fn write_clipboard_text(&mut self, text: &str) -> Result<(), crate::ClipboardError> {
+            self.0.borrow_mut().push(text.to_string());
+            Ok(())
+        }
+    }
+
+    impl crate::core::component::Component for ToastClickRoot {
+        type Message = ToastClickMsg;
+        type Properties = ();
+        type State = usize;
+
+        fn create_state(&self, _: &()) -> usize {
+            0
+        }
+
+        fn view(&self, _: &crate::core::component::Context<Self>) -> crate::core::element::Element {
+            crate::widgets::Text::new("background").into()
+        }
+
+        fn update(
+            &mut self,
+            msg: ToastClickMsg,
+            ctx: &mut crate::core::component::Context<Self>,
+        ) -> crate::core::component::Update {
+            match msg {
+                ToastClickMsg::Show => {
+                    ctx.toast().push(
+                        Toast::new("saved")
+                            .on_click(ctx.link().callback(|_| ToastClickMsg::Clicked)),
+                    );
+                }
+                ToastClickMsg::ShowCopy => {
+                    ctx.toast().push(
+                        Toast::new("~/short.png")
+                            .copy_text("/home/user/short.png")
+                            .copy_affordance(ToastCopyAffordance::None)
+                            .on_click(ctx.link().callback(|_| ToastClickMsg::Clicked)),
+                    );
+                }
+                ToastClickMsg::Clicked => ctx.state += 1,
+            }
+            crate::core::component::Update::full()
+        }
+    }
+
+    #[test]
+    fn left_click_runs_toast_action_once_and_dismisses_it() {
+        use crate::core::event::{KeyMods, MouseButton, MouseEvent, MouseKind};
+
+        let mut backend = crate::test_backend::TestBackend::new(ToastClickRoot);
+        backend.dispatch(ToastClickMsg::Show).unwrap();
+        let root = backend.core.tree.overlay_roots()[0].clone();
+        let rect = backend.core.tree.node(root.id).rect;
+        let click = MouseEvent {
+            x: rect.x as u16 + 1,
+            y: rect.y as u16 + 1,
+            kind: MouseKind::Down(MouseButton::Left),
+            mods: KeyMods::NONE,
+        };
+        assert!(backend.send_mouse(click).unwrap());
+        assert_eq!(*backend.state(), 1);
+        assert!(backend.send_mouse(click).is_ok());
+        assert_eq!(*backend.state(), 1);
+    }
+
+    #[test]
+    fn right_click_on_action_toast_does_not_activate_it() {
+        use crate::core::event::{KeyMods, MouseButton, MouseEvent, MouseKind};
+
+        let mut backend = crate::test_backend::TestBackend::new(ToastClickRoot);
+        backend.dispatch(ToastClickMsg::Show).unwrap();
+        let root = backend.core.tree.overlay_roots()[0].clone();
+        let rect = backend.core.tree.node(root.id).rect;
+        assert!(
+            backend
+                .send_mouse(MouseEvent {
+                    x: rect.x as u16 + 1,
+                    y: rect.y as u16 + 1,
+                    kind: MouseKind::Down(MouseButton::Right),
+                    mods: KeyMods::NONE,
+                })
+                .unwrap()
+        );
+        assert_eq!(*backend.state(), 0);
+    }
+
+    #[test]
+    fn right_click_copies_override_instead_of_displayed_message() {
+        use crate::core::event::{KeyMods, MouseButton, MouseEvent, MouseKind};
+
+        let written = Rc::new(RefCell::new(Vec::new()));
+        let app = crate::app::context::App::new()
+            .clipboard_provider(RecordingClipboard(Rc::clone(&written)));
+        let mut backend = crate::test_backend::TestBackend::new_with_app(app, ToastClickRoot, ());
+        backend.dispatch(ToastClickMsg::ShowCopy).unwrap();
+        let root = backend.core.tree.overlay_roots()[0].clone();
+        let rect = backend.core.tree.node(root.id).rect;
+        assert!(
+            backend
+                .send_mouse(MouseEvent {
+                    x: rect.x as u16 + 1,
+                    y: rect.y as u16 + 1,
+                    kind: MouseKind::Down(MouseButton::Right),
+                    mods: KeyMods::NONE,
+                })
+                .unwrap()
+        );
+        assert_eq!(written.borrow().as_slice(), ["/home/user/short.png"]);
+        assert_eq!(*backend.state(), 0);
+    }
 
     #[test]
     fn toast_copy_feedback_marks_entry_active() {

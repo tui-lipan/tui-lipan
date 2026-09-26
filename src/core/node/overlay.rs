@@ -13,6 +13,7 @@ pub(crate) struct OverlayRoot {
     pub(crate) order: u64,
     pub(crate) dismiss_policy: DismissPolicy,
     pub(crate) on_dismiss: Option<Callback<()>>,
+    pub(crate) on_click: Option<Callback<()>>,
     pub(crate) backdrop: Option<Style>,
     pub(crate) opacity: f32,
     pub(crate) captures_focus: bool,
