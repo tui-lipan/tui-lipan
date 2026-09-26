@@ -1924,8 +1924,10 @@ impl<C: Component> Context<C> {
     /// Passive, unlike [`Self::request_ui_snapshot`]: subscribing does not request a render, and
     /// the callback runs only after a paint the app caused anyway. An idle app therefore delivers
     /// nothing, and consecutive frames may be identical, since a paint can change nothing visible.
-    /// Every subscriber of one paint receives the same shared [`crate::CapturedFrame`]; with no
-    /// subscriber the runtime captures and allocates nothing.
+    /// The frame is drawn again off-screen from the paint's own render state (cursor blink,
+    /// effect phase, contrast, selections, copy feedback, drag previews), so it matches what the
+    /// terminal received. Every subscriber of one paint receives the same shared
+    /// [`crate::CapturedFrame`]; with no subscriber the runtime captures and allocates nothing.
     ///
     /// Each delivered paint costs one headless render of the tree, so throttle on the receiving
     /// side if you keep only some frames. The frame carries no semantic widget tree; ask for one

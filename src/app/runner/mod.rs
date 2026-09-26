@@ -1312,15 +1312,8 @@ impl<C: Component> AppRunner<C> {
     /// whether any callback ran.
     fn deliver_painted_frame(&self) -> bool {
         let env = self.core.ctx.env();
-        env.paint_observers.deliver(env.now(), || {
-            let _animations = crate::animation::registry::set_render_registry(std::rc::Rc::clone(
-                &env.animations,
-            ));
-            let _host_palette = crate::backend::ratatui_backend::common::push_render_host_palette(
-                self.core.ctx.host_terminal_colors(),
-            );
-            self.headless_frame(self.core.ctx.viewport())
-        })
+        env.paint_observers
+            .deliver(env.now(), || self.capture_painted_frame())
     }
 
     /// Rect of the widget carrying `key`, if it is in the current tree.

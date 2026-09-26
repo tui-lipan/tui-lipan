@@ -1,7 +1,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
-use std::time::Instant;
+
+use web_time::Instant;
 
 use super::CapturedFrame;
 use crate::callback::Callback;
@@ -13,8 +14,10 @@ use crate::callback::Callback;
 /// frame is `Send`, so it can move to a writer thread without a copy.
 #[derive(Clone, Debug)]
 pub struct PaintedFrame {
-    /// The painted frame, rendered headlessly exactly as
-    /// [`Context::request_ui_snapshot`](crate::Context::request_ui_snapshot) renders it.
+    /// The painted frame, drawn again off-screen with the same render state as the paint (cursor
+    /// blink, effect phase, contrast, selections, copy feedback, drag previews). Images appear as
+    /// in every [`CapturedFrame`]: as pixels in [`CapturedFrame::images`], with half-block
+    /// stand-ins in the cells.
     pub frame: Arc<CapturedFrame>,
     /// Runtime clock time of the paint. Follows the controlled clock under automation and
     /// [`TestBackend::advance`](crate::TestBackend::advance).
@@ -26,6 +29,9 @@ pub struct PaintedFrame {
 
 /// Keeps a [`Context::observe_painted_frames`](crate::Context::observe_painted_frames) callback
 /// subscribed. Dropping it unsubscribes.
+///
+/// Unsubscribing takes effect at once, even in the middle of a delivery: a subscriber that
+/// another subscriber's callback unsubscribes does not receive the frame being delivered.
 #[must_use = "dropping the subscription unsubscribes immediately"]
 pub struct PaintSubscription {
     registry: Weak<PaintObservers>,
@@ -79,6 +85,10 @@ impl PaintObservers {
         self.entries.borrow_mut().retain(|(entry, _)| *entry != id);
     }
 
+    fn contains(&self, id: u64) -> bool {
+        self.entries.borrow().iter().any(|(entry, _)| *entry == id)
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.borrow().is_empty()
     }
@@ -94,12 +104,7 @@ impl PaintObservers {
             return false;
         }
         // A callback may subscribe or unsubscribe, so the list is not borrowed while they run.
-        let callbacks: Vec<_> = self
-            .entries
-            .borrow()
-            .iter()
-            .map(|(_, callback)| callback.clone())
-            .collect();
+        let callbacks: Vec<_> = self.entries.borrow().clone();
         let sequence = self.sequence.get() + 1;
         self.sequence.set(sequence);
         let painted = PaintedFrame {
@@ -107,8 +112,10 @@ impl PaintObservers {
             painted_at,
             sequence,
         };
-        for callback in callbacks {
-            callback.emit(painted.clone());
+        for (id, callback) in callbacks {
+            if self.contains(id) {
+                callback.emit(painted.clone());
+            }
         }
         true
     }
@@ -189,5 +196,28 @@ mod tests {
         })));
         assert!(observers.deliver(Instant::now(), frame));
         assert!(observers.is_empty());
+    }
+
+    #[test]
+    fn unsubscribing_another_subscriber_mid_delivery_skips_it() {
+        let observers = Rc::new(PaintObservers::default());
+        let second_slot: Rc<RefCell<Option<PaintSubscription>>> = Rc::default();
+        let second_calls = Rc::new(Cell::new(0));
+
+        let slot = Rc::clone(&second_slot);
+        let _first = observers.subscribe(Callback::new(move |_| {
+            slot.borrow_mut().take();
+        }));
+        let calls = Rc::clone(&second_calls);
+        *second_slot.borrow_mut() = Some(observers.subscribe(Callback::new(move |_| {
+            calls.set(calls.get() + 1);
+        })));
+
+        assert!(observers.deliver(Instant::now(), frame));
+        assert_eq!(
+            second_calls.get(),
+            0,
+            "an unsubscribed callback must not run"
+        );
     }
 }

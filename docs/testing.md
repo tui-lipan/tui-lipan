@@ -313,10 +313,16 @@ ctx.state.recorder = None;
 - **Passive.** Subscribing requests no render, and an idle app delivers nothing. Consecutive
   frames can be identical, because a paint does not always change what is visible; compare
   frames (`CapturedFrame` implements `PartialEq`) if you only want changes.
-- **One capture per paint.** Every subscriber of a paint shares one `Arc<CapturedFrame>`,
-  rendered the same way `request_ui_snapshot` renders its frame. The frame is `Send`, so it can
-  move to a writer thread without a copy. With no subscriber the runtime captures and allocates
-  nothing.
+- **What was on screen.** The frame is drawn again off-screen from the render state of the
+  paint itself: cursor blink phase, effect phase, contrast policy, read-only selections, copy
+  feedback, hover suppression, and drag previews all match. Images follow the usual capture
+  rule: pixels in `CapturedFrame::images`, with half-block stand-ins in the cells, since a
+  terminal image protocol has no cell form.
+- **One capture per paint.** Every subscriber of a paint shares one `Arc<CapturedFrame>`. The
+  frame is `Send`, so it can move to a writer thread without a copy. With no subscriber the
+  runtime captures and allocates nothing.
+- **Unsubscribing is immediate.** A subscription dropped by another subscriber's callback
+  during a delivery does not receive that frame.
 - **Throttle on your side.** Each delivered paint costs one headless render. A recorder that
   keeps at most N frames per second still receives every paint and drops the rest.
 - **No feedback loop.** The callback's message is handled without waiting for input. Return
