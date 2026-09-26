@@ -263,10 +263,10 @@ pub(crate) fn set_mouse_all_motion_enabled(
         execute!(writer, EnableMouseMotionTracking)?;
     } else {
         execute!(writer, DisableMouseMotionTracking)?;
-        execute!(
-            writer,
-            Print("\x1b[?1000h\x1b[?1002h\x1b[?1015h\x1b[?1006h")
-        )?;
+        // Keep button and drag reports enabled without changing their coordinate encoding.
+        // Re-enabling 1006 here can replace an active SGR-pixels (1016) mode while the input
+        // decoder still expects pixel coordinates.
+        execute!(writer, Print("\x1b[?1000h\x1b[?1002h"))?;
     }
     Ok(())
 }
@@ -533,4 +533,24 @@ pub(crate) fn assert_inline_surface_internal_wrap_policy_is_opaque() {
     });
     assert!(!transcript.uses_alternate_screen);
     assert!(!transcript.disable_auto_wrap);
+}
+
+#[cfg(test)]
+mod mouse_motion_tests {
+    use super::set_mouse_all_motion_enabled;
+
+    #[test]
+    fn changing_motion_tracking_preserves_mouse_coordinate_encoding() {
+        let mut transcript = Vec::new();
+        transcript.extend_from_slice(b"\x1b[?1016h");
+
+        set_mouse_all_motion_enabled(&mut transcript, true).unwrap();
+        set_mouse_all_motion_enabled(&mut transcript, false).unwrap();
+        set_mouse_all_motion_enabled(&mut transcript, true).unwrap();
+
+        assert_eq!(
+            transcript,
+            b"\x1b[?1016h\x1b[?1003h\x1b[?1003l\x1b[?1000h\x1b[?1002h\x1b[?1003h"
+        );
+    }
 }
