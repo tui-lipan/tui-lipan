@@ -43,8 +43,10 @@ pub struct Toast {
     pub dismiss_on_click: bool,
     /// Action to run when the toast is clicked with the left mouse button.
     pub on_click: Option<Callback<()>>,
-    /// Show a copy affordance that copies the whole toast message when clicked.
+    /// Allow copying the message, or the text supplied by [`Self::copy_text`].
     pub copyable: bool,
+    /// Text copied instead of the displayed message, when copying is enabled.
+    pub(crate) copy_text: Option<Arc<str>>,
     /// Optional visual affordance for copyable toasts.
     pub copy_affordance: ToastCopyAffordance,
     pub(crate) title: Option<Arc<str>>,
@@ -84,6 +86,7 @@ impl Toast {
             dismiss_on_click: true,
             on_click: None,
             copyable: false,
+            copy_text: None,
             copy_affordance: ToastCopyAffordance::BorderGlyph,
             title: None,
             title_prefix: None,
@@ -225,13 +228,24 @@ impl Toast {
         self
     }
 
-    /// Set whether the toast can copy its message.
+    /// Set whether the toast can copy text.
     ///
-    /// Copyable toasts copy their message when right-clicked. When the toast has a border and
+    /// Copyable toasts copy their message, or the text set by [`Self::copy_text`], when
+    /// right-clicked. When the toast has a border and
     /// [`ToastCopyAffordance::BorderGlyph`] is enabled, they also show a copy glyph that can be
     /// clicked with the left mouse button.
     pub fn copyable(mut self, copyable: bool) -> Self {
         self.copyable = copyable;
+        self
+    }
+
+    /// Copy `text` instead of the displayed message, and enable copying.
+    ///
+    /// Use this when the display abbreviates a path or another value. Right-clicking copies the
+    /// supplied text; the optional copy glyph does the same.
+    pub fn copy_text(mut self, text: impl Into<Arc<str>>) -> Self {
+        self.copy_text = Some(text.into());
+        self.copyable = true;
         self
     }
 

@@ -886,6 +886,40 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
                 .rect
                 .contains(x as i16, y as i16);
             if inside {
+                let copy_text = match button {
+                    crate::core::event::MouseButton::Right => overlay.copy_text.as_deref(),
+                    crate::core::event::MouseButton::Left
+                        if overlay
+                            .copy_zone
+                            .is_some_and(|zone| zone.contains(x as i16, y as i16)) =>
+                    {
+                        overlay.copy_text.as_deref()
+                    }
+                    _ => None,
+                };
+                if let Some(text) = copy_text {
+                    let clipboard = crate::clipboard::ClipboardHandle::new(
+                        std::rc::Rc::clone(&self.core.ctx.env().clipboard),
+                        std::rc::Rc::clone(&self.core.ctx.env().clipboard_config),
+                    );
+                    if clipboard.copy(text).is_ok()
+                        && let Some(id) = overlay.overlay_id
+                    {
+                        let duration = std::time::Duration::from_millis(
+                            self.core
+                                .ctx
+                                .env()
+                                .clipboard_config
+                                .borrow()
+                                .copy_feedback_duration_ms as u64,
+                        );
+                        self.core
+                            .overlay_manager
+                            .borrow_mut()
+                            .trigger_copy_feedback(id, duration);
+                    }
+                    return true;
+                }
                 if button == crate::core::event::MouseButton::Right && overlay.on_click.is_some() {
                     return true;
                 }
