@@ -777,6 +777,12 @@ Quick lookup - which callbacks does each widget support?
 | `on_click` | `MouseEvent` | Mouse click, or plain `Enter` / `Space` on a focused button |
 | `on_key` | `KeyHandler` | Any key while focused; runs before default activation and can consume the key |
 
+### Toast
+
+| Callback | Payload | When |
+|----------|---------|------|
+| `on_click` | `()` | Left click on the toast; default dismissal still applies |
+
 ### Hyperlink
 
 | Callback | Payload | When |
