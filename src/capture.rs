@@ -13,6 +13,7 @@ use crate::style::{Color, Rect, Style};
 
 mod cast;
 mod image_layer;
+mod paint_observer;
 #[cfg(feature = "ui-snapshot-png")]
 mod png;
 
@@ -20,6 +21,8 @@ pub use cast::CastRecording;
 pub use image_layer::CapturedImage;
 #[cfg(feature = "image")]
 pub(crate) use image_layer::fitted_pixel_size;
+pub(crate) use paint_observer::PaintObservers;
+pub use paint_observer::{PaintSubscription, PaintedFrame};
 
 /// Captured terminal cell data converted to crate-owned style primitives.
 #[derive(Clone, Debug, PartialEq, Eq)]

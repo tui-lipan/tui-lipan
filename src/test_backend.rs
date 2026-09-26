@@ -1125,7 +1125,12 @@ where
         self.mouse.hovered = self.mouse.hovered.filter(|id| self.core.tree.is_valid(*id));
         self.refresh_hover_from_last_mouse();
         self.prune_widget_caches_if_needed();
-        self.deliver_pending_ui_snapshot()
+        let snapshot_callbacks_ran = self.deliver_pending_ui_snapshot();
+        let env = self.core.ctx.env();
+        let observers_ran = env
+            .paint_observers
+            .deliver(env.now(), || self.capture_frame());
+        snapshot_callbacks_ran || observers_ran
     }
 
     /// Serve the app's pending `Context::request_ui_snapshot*` calls from the frame just rendered,

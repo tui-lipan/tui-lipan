@@ -203,6 +203,7 @@ where
         #[cfg(feature = "devtools")]
         let devtools_metrics = Rc::new(crate::core::runtime_env::DevToolsMetrics::default());
         let pending_ui_snapshot = Rc::default();
+        let paint_observers = Rc::default();
         let copy_feedback_request = Rc::new(RefCell::new(Vec::new()));
         let clipboard_config = Rc::new(RefCell::new(clipboard_config));
         let clipboard_config_changed = Rc::new(Cell::new(false));
@@ -255,6 +256,7 @@ where
             #[cfg(feature = "devtools")]
             devtools_metrics,
             pending_ui_snapshot,
+            paint_observers,
             copy_feedback_request,
             command_chord_pending_since,
             command_chord_reveal_delay,

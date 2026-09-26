@@ -374,6 +374,8 @@ pub(crate) struct RuntimeEnv {
     pub devtools_metrics: Rc<DevToolsMetrics>,
     /// Pending UI snapshot export/delivery after the next render.
     pub pending_ui_snapshot: Rc<RefCell<crate::ui_snapshot::PendingUiSnapshot>>,
+    /// Subscribers to every normally painted frame.
+    pub paint_observers: Rc<crate::capture::PaintObservers>,
     /// Pending requests to flash copy feedback on specific nodes.
     pub copy_feedback_request: Rc<RefCell<Vec<CopyFeedbackRequest>>>,
     /// When the currently pending multi-step command chord started, or `None` when no chord is

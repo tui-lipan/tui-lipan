@@ -1308,6 +1308,14 @@ impl<C: Component> AppRunner<C> {
         Ok(ran_callbacks)
     }
 
+    /// Hand the frame just painted to `Context::observe_painted_frames` subscribers. Returns
+    /// whether any callback ran.
+    fn deliver_painted_frame(&self) -> bool {
+        let env = self.core.ctx.env();
+        env.paint_observers
+            .deliver(env.now(), || self.capture_painted_frame())
+    }
+
     /// Rect of the widget carrying `key`, if it is in the current tree.
     #[cfg(test)]
     fn rect_for_key(&self, key: &crate::core::element::Key) -> Option<crate::style::Rect> {
@@ -2977,6 +2985,7 @@ impl<C: Component> AppRunner<C> {
 
                 if !matches!(frame_level, DirtyLevel::None) {
                     snapshot_answered = self.apply_pending_ui_snapshot_request()?;
+                    snapshot_answered |= self.deliver_painted_frame();
                 }
 
                 #[cfg(feature = "profiling-tracing")]

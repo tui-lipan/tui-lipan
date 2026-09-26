@@ -1135,6 +1135,23 @@ impl<C: Component> AppRunner<C> {
         }
     }
 
+    /// The frame just painted, drawn again off-screen from the production render context so it
+    /// matches what the terminal received.
+    pub(super) fn capture_painted_frame(&self) -> crate::capture::CapturedFrame {
+        let _animations = crate::animation::registry::set_render_registry(std::rc::Rc::clone(
+            &self.core.ctx.env().animations,
+        ));
+        let vim_mode = self.headless_interaction().vim_mode;
+        let cursor_position = StdCell::new(None);
+        self.with_render_context(&cursor_position, |ctx| {
+            crate::backend::ratatui_backend::capture_render::capture_live_frame(
+                self.core.ctx.viewport(),
+                ctx,
+                vim_mode,
+            )
+        })
+    }
+
     /// Build the production [`RenderContext`] and run `f` inside it.
     ///
     /// The context borrows a dozen values that live only as long as one draw, so it is handed to
@@ -1735,6 +1752,85 @@ mod tests {
             .expect("cursor position should be known from widget state");
 
         assert_eq!(cursor, Position::new(1, 8));
+    }
+
+    /// Paint the tree the way `draw_current_tree` does, returning the cells and caret it drew.
+    fn production_paint(runner: &AppRunner<ScrollWithInput>) -> (Buffer, Option<Position>) {
+        let mut terminal = Terminal::new(TestBackend::new(40, 10)).expect("test terminal");
+        let cursor_position = Cell::new(None);
+        let buffer = runner.with_render_context(&cursor_position, |ctx| {
+            terminal
+                .draw(|f| crate::backend::ratatui_backend::render::render(f, ctx))
+                .expect("paint should succeed")
+                .buffer
+                .clone()
+        });
+        (buffer, cursor_position.get())
+    }
+
+    #[test]
+    fn painted_frame_matches_the_production_paint_through_a_cursor_blink() {
+        let mut runner = make_runner();
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 10,
+        };
+        runner.core = RuntimeCore::new_test(
+            ScrollWithInput,
+            (),
+            viewport,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        )
+        .into();
+        runner.core.init();
+        runner.core.render_element(viewport, None, None, None);
+        runner.focus.focused = runner
+            .core
+            .tree
+            .iter()
+            .find(|node| matches!(node.kind, crate::core::node::NodeKind::TextArea(_)))
+            .map(|node| node.id);
+
+        for blink_visible in [true, false] {
+            runner.animation.blink_visible = blink_visible;
+            let (painted, painted_cursor) = production_paint(&runner);
+            assert_eq!(
+                painted_cursor.is_some(),
+                blink_visible,
+                "the paint shows the caret only in the visible blink phase",
+            );
+
+            let frame = runner.capture_painted_frame();
+            assert_eq!(
+                frame
+                    .cursor
+                    .as_ref()
+                    .map(|cursor| Position::new(cursor.x, cursor.y)),
+                painted_cursor,
+                "blink_visible = {blink_visible}: the delivered caret must match the paint",
+            );
+            for y in 0..frame.height {
+                for x in 0..frame.width {
+                    let cell = frame.cell(x, y);
+                    let expected = &painted[(x, y)];
+                    assert_eq!(cell.symbol, expected.symbol(), "symbol at ({x}, {y})");
+                    assert_eq!(
+                        cell.fg,
+                        crate::backend::ratatui_backend::common::from_ratatui_color(expected.fg),
+                        "fg at ({x}, {y})",
+                    );
+                    assert_eq!(
+                        cell.bg,
+                        crate::backend::ratatui_backend::common::from_ratatui_color(expected.bg),
+                        "bg at ({x}, {y})",
+                    );
+                }
+            }
+        }
     }
 
     #[test]

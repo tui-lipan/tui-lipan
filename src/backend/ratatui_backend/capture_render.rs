@@ -89,12 +89,6 @@ fn render_headless(
         ..
     } = interaction;
     let join_index = build_join_index(tree);
-    let width = viewport.w.max(1);
-    let height = viewport.h.max(1);
-
-    let backend = TestBackend::new(width, height);
-    let mut terminal = Terminal::new(backend).expect("capture terminal should init");
-
     let cursor_position = Cell::new(None::<Position>);
     let scrollbar_metrics_cache = RefCell::new(Default::default());
     let overlay_bg_snapshot = RefCell::new(Vec::new());
@@ -132,22 +126,61 @@ fn render_headless(
     let _screen_bg_scope =
         crate::backend::ratatui_backend::common::push_render_screen_background(screen_background);
 
+    draw_offscreen(viewport, &ctx, regions, seed)
+}
+
+/// Draw `ctx` into an off-screen buffer of `viewport`'s size.
+///
+/// Ambient render scopes (screen background, host palette, highlight, animation registry) are the
+/// caller's: the live runner installs its own around a draw, and a capture of that draw has to
+/// see the same ones.
+fn draw_offscreen(
+    viewport: Rect,
+    ctx: &RenderContext<'_>,
+    regions: Option<&[Rect]>,
+    seed: Option<&dyn Fn(&mut ratatui::buffer::Buffer)>,
+) -> RenderedBuffer {
+    let backend = TestBackend::new(viewport.w.max(1), viewport.h.max(1));
+    let mut terminal = Terminal::new(backend).expect("capture terminal should init");
+
     terminal
         .draw(|frame| {
             if let Some(seed) = seed {
                 seed(frame.buffer_mut());
             }
             match regions {
-                Some(regions) => super::render::render_regions(frame, &ctx, regions),
-                None => render(frame, &ctx),
+                Some(regions) => super::render::render_regions(frame, ctx, regions),
+                None => render(frame, ctx),
             }
         })
         .expect("capture render should succeed");
 
     RenderedBuffer {
         buffer: terminal.backend().buffer().clone(),
-        cursor: cursor_position.get(),
+        cursor: ctx.cursor_position.get(),
     }
+}
+
+/// Capture what the live runner draws with `ctx`, as a [`CapturedFrame`].
+///
+/// `ctx` is the runner's own render context, so blink, effect phase, contrast, selection, copy
+/// feedback, hover suppression and drag previews match the frame it painted. Only the `Image`
+/// widget differs: its live path speaks a terminal image protocol, whose state a second draw must
+/// not touch, so the capture takes the half-block fallback every capture uses. Images a terminal
+/// program displayed are captured as pixels, as in any capture.
+pub(crate) fn capture_live_frame(
+    viewport: Rect,
+    ctx: &RenderContext<'_>,
+    vim_mode: Option<TextAreaVimMode>,
+) -> CapturedFrame {
+    let ctx = RenderContext {
+        images_enabled: false,
+        paint_glyph_caches: ctx.paint_glyph_caches.clone(),
+        ..*ctx
+    };
+    captured_frame(ctx.tree, viewport, ctx.focused, vim_mode, || {
+        draw_offscreen(viewport, &ctx, None, None)
+    })
 }
 
 /// As [`render_to_buffer_with_interaction`], but painting only `regions`.
@@ -207,15 +240,31 @@ pub(crate) fn render_to_captured_frame_with_interaction(
     effect_phase: u64,
     screen_background: Option<ratatui::style::Style>,
 ) -> CapturedFrame {
-    let render = || {
-        render_to_buffer_with_interaction(
-            tree,
-            viewport,
-            interaction,
-            effect_phase,
-            screen_background,
-        )
-    };
+    captured_frame(
+        tree,
+        viewport,
+        interaction.focused,
+        interaction.vim_mode,
+        || {
+            render_to_buffer_with_interaction(
+                tree,
+                viewport,
+                interaction,
+                effect_phase,
+                screen_background,
+            )
+        },
+    )
+}
+
+/// Run `render` and convert what it drew, images included, into a [`CapturedFrame`].
+fn captured_frame(
+    tree: &NodeTree,
+    viewport: Rect,
+    focused: Option<NodeId>,
+    vim_mode: Option<TextAreaVimMode>,
+    render: impl FnOnce() -> RenderedBuffer,
+) -> CapturedFrame {
     #[cfg(feature = "terminal-images")]
     let (rendered, drawn_images) = super::renderers::image::record_capture_images(render);
     #[cfg(not(feature = "terminal-images"))]
@@ -241,7 +290,7 @@ pub(crate) fn render_to_captured_frame_with_interaction(
     #[cfg(not(feature = "terminal-images"))]
     let images = Vec::new();
 
-    let caret = focused_caret(tree, interaction.focused, interaction.vim_mode);
+    let caret = focused_caret(tree, focused, vim_mode);
     let cursor = rendered.cursor.map(|pos| {
         let cursor = CursorState::new(pos.x, pos.y);
         match caret {

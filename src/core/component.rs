@@ -1918,6 +1918,37 @@ impl<C: Component> Context<C> {
         self.request_full_repaint();
     }
 
+    /// Call `callback` with every frame the runtime paints until the returned subscription is
+    /// dropped.
+    ///
+    /// Passive, unlike [`Self::request_ui_snapshot`]: subscribing does not request a render, and
+    /// the callback runs only after a paint the app caused anyway. An idle app therefore delivers
+    /// nothing, and consecutive frames may be identical, since a paint can change nothing visible.
+    /// The frame is drawn again off-screen from the paint's own render state (cursor blink,
+    /// effect phase, contrast, selections, copy feedback, drag previews), so it matches what the
+    /// terminal received. Every subscriber of one paint receives the same shared
+    /// [`crate::CapturedFrame`]; with no subscriber the runtime captures and allocates nothing.
+    ///
+    /// Each delivered paint costs one headless render of the tree, so throttle on the receiving
+    /// side if you keep only some frames. The frame carries no semantic widget tree; ask for one
+    /// with [`Self::request_ui_snapshot`] when needed.
+    ///
+    /// The callback runs after the frame is drawn, outside `update()`. A [`Link`] callback's
+    /// message is processed without waiting for further input. Return [`Update::none`] from the
+    /// handler unless the view really changed, or every frame will paint the next one:
+    ///
+    /// ```ignore
+    /// state.painted = Some(ctx.observe_painted_frames(ctx.link().callback(Msg::Painted)));
+    /// ```
+    ///
+    /// Served by the native runner and [`crate::TestBackend`].
+    pub fn observe_painted_frames(
+        &self,
+        callback: Callback<crate::capture::PaintedFrame>,
+    ) -> crate::capture::PaintSubscription {
+        self.env.paint_observers.subscribe(callback)
+    }
+
     pub(crate) fn take_pending_ui_snapshot(&self) -> crate::ui_snapshot::PendingUiSnapshot {
         std::mem::take(&mut *self.env.pending_ui_snapshot.borrow_mut())
     }
