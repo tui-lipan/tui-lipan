@@ -2372,6 +2372,45 @@ fn explicit_overlay_background_paint_is_not_restored() {
 }
 
 #[test]
+fn toast_occludes_the_caret_of_the_layer_beneath_it() {
+    use crate::backend::ratatui_backend::common::caret_occluded;
+    use ratatui::layout::Position;
+
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 9,
+        h: 5,
+    };
+    let mut runtime = RuntimeCore::new_test(
+        ToastTransitionUnderlayComponent,
+        (),
+        viewport,
+        Theme::default(),
+        SurfaceMode::Fullscreen,
+        Rc::new(Cell::new(false)),
+    );
+    runtime.init();
+    // A plain toast is not a pointer target, so `hit_test` alone never saw it over the caret.
+    runtime.overlay_manager.borrow_mut().push_toast(
+        Toast::new("T")
+            .border(false)
+            .width(Length::Px(3))
+            .height(Length::Px(1)),
+    );
+    runtime.render_element(viewport, None, None, None);
+
+    let tree = &runtime.tree;
+    let toast = tree.overlay_roots()[0].id;
+    let toast_rect = tree.node(toast).rect;
+    let under_toast = Position::new(toast_rect.x as u16, toast_rect.y as u16);
+    assert!(caret_occluded(tree, tree.root, under_toast));
+    assert!(!caret_occluded(tree, tree.root, Position::new(0, 0)));
+    // The toast's own content is not covered by itself.
+    assert!(!caret_occluded(tree, toast, under_toast));
+}
+
+#[test]
 fn toast_transition_blends_against_the_rendered_underlay() {
     let viewport = Rect {
         x: 0,
