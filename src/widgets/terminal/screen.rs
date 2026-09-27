@@ -4833,6 +4833,23 @@ mod tests {
         assert!(joined.contains("]11;rgb:4444/5555/6666"), "{joined:?}");
     }
 
+    /// Kitty's `icat` waits for the DA1 reply after its graphics probes and only accepts one with
+    /// more than `?6c` inside, so the emulator's VT102 answer left it hanging until its timeout.
+    #[test]
+    fn answers_primary_device_attributes_as_a_vt220_in_stream_order() {
+        let mut screen = TerminalScreen::new(4, 20, 10);
+        screen.process_bytes(b"\x1b]10;?\x1b\\\x1b[c\x1b[0c");
+        let responses = screen.drain_responses();
+        assert_eq!(responses.len(), 3, "{responses:?}");
+        assert!(responses[0].starts_with(b"\x1b]10;"), "{responses:?}");
+        assert_eq!(responses[1], b"\x1b[?62;22c");
+        assert_eq!(responses[2], b"\x1b[?62;22c");
+
+        screen.process_bytes(b"\x1b[>c");
+        let answered = String::from_utf8(screen.drain_responses().concat()).unwrap();
+        assert!(answered.starts_with("\x1b[>0;"), "{answered:?}");
+    }
+
     /// Mode 1016 belongs to the pointer, not the grid, so the emulator underneath never sees it.
     /// A program that asks for it probes whether it took, and answering "not recognized" is what
     /// makes it settle for whole cells - so the screen has to hold the mode and report it itself.

@@ -46,6 +46,9 @@ pub(super) fn ledger_capacity(scrollback_len: usize, rows: u16) -> usize {
 /// DEC private mode for SGR-pixel mouse reporting, which the grid emulator does not implement.
 pub(super) const SGR_PIXELS_MOUSE: u16 = 1016;
 
+/// Primary device attributes (DA1) reply: a VT220 (`62`) with ANSI color (`22`), as Ghostty sends.
+pub(super) const PRIMARY_DEVICE_ATTRIBUTES: &[u8] = b"\x1b[?62;22c";
+
 /// A mode the emulator underneath does not know about, kept beside it.
 ///
 /// Left to itself the emulator logs mode 1016 as unknown and answers its `DECRQM` probe with
@@ -198,6 +201,16 @@ impl<T: EventListener> Handler for LedgerTerm<'_, T> {
         self.settle();
     }
     fn identify_terminal(&mut self, intermediate: Option<char>) {
+        if intermediate.is_none() {
+            // The emulator underneath answers DA1 as a VT102 (`CSI ? 6 c`). Kitty's `icat` and
+            // other image tools only accept a reply with at least one more byte, so they wait for
+            // it until they time out. Report what this screen is: a VT220 with ANSI color.
+            self.modes
+                .responses
+                .borrow_mut()
+                .push(PRIMARY_DEVICE_ATTRIBUTES.to_vec());
+            return;
+        }
         self.inner.identify_terminal(intermediate);
         self.settle();
     }
