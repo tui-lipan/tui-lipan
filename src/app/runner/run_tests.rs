@@ -2586,8 +2586,6 @@ fn a_slow_color_cadence_advances_by_its_whole_frame() {
 enum AlertTint {
     /// `ctx.animated_amount` toward 0.6 while alerting, 0.0 otherwise.
     Transition,
-    /// A renderer-owned pulse, independent of `alerting`.
-    Pulse,
 }
 
 #[derive(Clone)]
@@ -2619,11 +2617,6 @@ impl Component for AlertTintSmoke {
                     easing: Easing::Linear,
                 },
             ),
-            AlertTint::Pulse => crate::style::EffectAmount::pulse(0.0, 0.6)
-                .period(Duration::from_millis(1000))
-                .easing(Easing::Linear)
-                .frame_rate(10)
-                .into(),
         };
         crate::widgets::EffectScope::new()
             .tint_by(Color::Rgb(255, 0, 0), amount)
@@ -2738,88 +2731,241 @@ fn an_animated_tint_amount_ticks_as_paint_only() {
     assert_eq!(views.get(), views_at_start, "and never re-ran view()");
 }
 
-/// A pulse is renderer-owned: nothing in the app retargets it, the effect scope asks for paints at
-/// the pulse's own rate, and the painted tint follows the runtime clock.
+/// Where [`PulseSmoke`] puts its pulsing tint.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PulsePlacement {
+    /// `EffectScope::tint_by`.
+    Scope,
+    /// `Style::transform_fg` on the text itself.
+    StyleFg,
+    /// A `MouseRegion` hover effect.
+    Hover,
+}
+
+#[derive(Clone)]
+struct PulseSmoke {
+    shown: Rc<Cell<bool>>,
+    views: Rc<Cell<usize>>,
+    placement: PulsePlacement,
+}
+
+impl PulseSmoke {
+    fn new(placement: PulsePlacement) -> Self {
+        Self {
+            shown: Rc::new(Cell::new(true)),
+            views: Rc::new(Cell::new(0)),
+            placement,
+        }
+    }
+
+    /// The painted channel the pulse tints.
+    fn painted(&self, backend: &crate::TestBackend<Self>) -> Color {
+        let cell = backend.capture_frame().cell(0, 0).clone();
+        match self.placement {
+            PulsePlacement::StyleFg => cell.fg,
+            PulsePlacement::Scope | PulsePlacement::Hover => cell.bg,
+        }
+    }
+}
+
+const RED: Color = Color::Rgb(255, 0, 0);
+
+impl Component for PulseSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        self.views.set(self.views.get() + 1);
+        let base = Style::new().fg(Color::Rgb(0, 0, 0)).bg(Color::Rgb(0, 0, 0));
+        if !self.shown.get() {
+            return Text::new("pane").style(base).into();
+        }
+        let alpha = ctx.pulsing_amount(
+            "alert",
+            crate::style::EffectPulse::new(0.0, 0.6)
+                .period(Duration::from_millis(1000))
+                .easing(Easing::Linear)
+                .frame_rate(10),
+        );
+        match self.placement {
+            PulsePlacement::Scope => crate::widgets::EffectScope::new()
+                .tint_by(RED, alpha)
+                .child(Text::new("pane").style(base))
+                .into(),
+            PulsePlacement::StyleFg => Text::new("pane")
+                .style(base.transform_fg(crate::style::ColorTransform::tint(RED, alpha)))
+                .into(),
+            PulsePlacement::Hover => MouseRegion::new()
+                .hover_effect(crate::style::VisualEffect::tint(RED, alpha).background_only())
+                .child(Text::new("pane").style(base))
+                .into(),
+        }
+    }
+}
+
+/// Step `backend` through `duration` of clock in ticker-sized frames. `advance_frame` runs
+/// `view()` only when something asks for it, unlike `advance`.
+fn step_frames(backend: &mut crate::TestBackend<PulseSmoke>, duration: Duration) {
+    let frame = Duration::from_millis(25);
+    let mut left = duration;
+    while !left.is_zero() {
+        let step = left.min(frame);
+        backend.advance_frame(step);
+        left -= step;
+    }
+}
+
+/// A pulse is registry-owned wherever its amount lands: it schedules its own paint-only frames and
+/// breathes on the painted cells without the app re-running `view()`.
 #[test]
-fn a_pulsing_tint_breathes_on_paints_alone() {
-    let views = Rc::new(Cell::new(0));
-    let component = || AlertTintSmoke {
-        alerting: Rc::new(Cell::new(false)),
-        views: views.clone(),
-        tint: AlertTint::Pulse,
-    };
-    let mut runner = AppRunner::new(App::new().mouse(false), component(), ());
-    let viewport = Rect {
+fn a_pulsing_amount_breathes_on_paints_alone_wherever_it_is_used() {
+    for placement in [
+        PulsePlacement::Scope,
+        PulsePlacement::StyleFg,
+        PulsePlacement::Hover,
+    ] {
+        let component = PulseSmoke::new(placement);
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 1,
+        };
+
+        // The runtime schedules it: 10 fps paint-only frames, no effect-scope clock involved.
+        let mut runner = AppRunner::new(App::new().mouse(false), component.clone(), ());
+        init_runner(&mut runner, component.clone(), viewport);
+        assert_eq!(
+            runner.core.tree.animated_effect_scope_interval(),
+            None,
+            "the element it lands in does not schedule it"
+        );
+        assert_eq!(
+            runner.active_animation_interval(),
+            Some(Duration::from_millis(100)),
+            "the registry asks for the pulse's own 10 fps"
+        );
+        runner.core.ctx.env().advance_clock(Duration::from_secs(10));
+        runner.animation.last_animated_tick = runner.core.ctx.env().now();
+        let views_at_start = component.views.get();
+        let mut paints = 0;
+        for _ in 0..10 {
+            runner
+                .core
+                .ctx
+                .env()
+                .advance_clock(Duration::from_millis(100));
+            let mut dirty = DirtyTracker::default();
+            runner.update_animation_cycle(&mut dirty);
+            match dirty.level() {
+                DirtyLevel::None => {}
+                DirtyLevel::PaintOnly => paints += 1,
+                level => panic!("a pulse tick asked for {level:?}, not a paint"),
+            }
+        }
+        assert_eq!(paints, 10, "one paint per pulse sample");
+        assert_eq!(component.views.get(), views_at_start, "and no view passes");
+
+        // And the painted colour follows the pulse's own timeline.
+        let mut backend = crate::TestBackend::new(component.clone());
+        backend.set_viewport(viewport);
+        backend.render();
+        if placement == PulsePlacement::Hover {
+            backend
+                .send_mouse(crate::core::event::MouseEvent {
+                    x: 1,
+                    y: 0,
+                    kind: MouseKind::Moved,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+        }
+        let views_at_start = component.views.get();
+        let trough = component.painted(&backend);
+        step_frames(&mut backend, Duration::from_millis(500));
+        let peak = component.painted(&backend);
+        step_frames(&mut backend, Duration::from_millis(500));
+        let trough_again = component.painted(&backend);
+        assert_eq!(
+            trough,
+            Color::Rgb(0, 0, 0),
+            "a pulse from 0.0 starts untinted"
+        );
+        assert_eq!(
+            peak,
+            Color::Rgb(153, 0, 0),
+            "and peaks at 0.6 of red halfway round"
+        );
+        assert_eq!(trough_again, trough, "then breathes back out");
+        assert_eq!(
+            component.views.get(),
+            views_at_start,
+            "without the app lifting a finger"
+        );
+    }
+}
+
+/// Between two samples every paint agrees on the pulse's value. A terminal-damage repaint of a
+/// few rows 25 ms after a full paint must not tint those rows a step further along than the rest.
+#[test]
+fn every_paint_between_pulse_samples_sees_the_same_value() {
+    let component = PulseSmoke::new(PulsePlacement::Scope);
+    let mut backend = crate::TestBackend::new(component.clone());
+    backend.set_viewport(Rect {
         x: 0,
         y: 0,
         w: 10,
         h: 1,
-    };
-    init_runner(&mut runner, component(), viewport);
-    assert_eq!(
-        runner.core.tree.animated_effect_scope_interval(),
-        Some(Duration::from_millis(100)),
-        "the scope repaints at the pulse's 10 fps"
-    );
-    assert_eq!(
-        runner.active_animation_interval(),
-        None,
-        "a pulse needs no registry or view-level animation clock"
-    );
+    });
+    backend.render();
+    step_frames(&mut backend, Duration::from_millis(200));
+    let sampled = component.painted(&backend);
+    assert_ne!(sampled, Color::Rgb(0, 0, 0), "the pulse is under way");
 
-    // Put the virtual clock well ahead of wall time, so every step below is exactly one frame.
-    runner.core.ctx.env().advance_clock(Duration::from_secs(10));
-    runner.animation.last_effect_tick = runner.core.ctx.env().now();
-    let views_at_start = views.get();
-    let mut paints = 0;
-    for _ in 0..10 {
-        runner
+    // The clock moves on, but no sample is taken: any paint now is a partial repaint's view.
+    for _ in 0..3 {
+        backend
             .core
             .ctx
             .env()
-            .advance_clock(Duration::from_millis(100));
-        let mut dirty = DirtyTracker::default();
-        runner.update_animation_cycle(&mut dirty);
-        match dirty.level() {
-            DirtyLevel::None => {}
-            DirtyLevel::PaintOnly => paints += 1,
-            level => panic!("a pulse tick asked for {level:?}, not a paint"),
-        }
+            .advance_clock(Duration::from_millis(25));
+        assert_eq!(
+            component.painted(&backend),
+            sampled,
+            "a paint between samples must not advance the pulse"
+        );
     }
-    assert_eq!(paints, 10, "one paint per pulse frame");
-    assert_eq!(views.get(), views_at_start, "and no view passes");
+}
 
-    // The painted tint follows the clock: the trough of the cycle, then its peak.
-    let mut backend = crate::TestBackend::new(component());
-    backend.set_viewport(viewport);
+/// A pulse starts at `from` when it first appears, whatever the runtime clock says.
+#[test]
+fn a_newly_shown_pulse_starts_at_its_from_value() {
+    let component = PulseSmoke::new(PulsePlacement::Scope);
+    component.shown.set(false);
+    let mut backend = crate::TestBackend::new(component.clone());
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 10,
+        h: 1,
+    });
     backend.render();
-    let views_at_start = views.get();
-    let trough = backend.capture_frame().cell(0, 0).bg;
-    // `advance_frame` runs view() only when something asks for it, unlike `advance`.
-    let half_cycle = |backend: &mut crate::TestBackend<AlertTintSmoke>| {
-        for _ in 0..10 {
-            backend.advance_frame(Duration::from_millis(50));
-        }
-    };
-    half_cycle(&mut backend);
-    let peak = backend.capture_frame().cell(0, 0).bg;
-    half_cycle(&mut backend);
-    let trough_again = backend.capture_frame().cell(0, 0).bg;
+    // 734 ms into a 1000 ms cycle: a runtime-clock pulse would appear well into its breath.
+    step_frames(&mut backend, Duration::from_millis(734));
+
+    component.shown.set(true);
+    backend.render();
     assert_eq!(
-        trough,
+        component.painted(&backend),
         Color::Rgb(0, 0, 0),
-        "a pulse from 0.0 starts untinted"
-    );
-    assert_eq!(
-        peak,
-        Color::Rgb(153, 0, 0),
-        "and peaks at 0.6 of red halfway round"
-    );
-    assert_eq!(trough_again, trough, "then breathes back out");
-    assert_eq!(
-        views.get(),
-        views_at_start,
-        "without the app lifting a finger"
+        "the alert starts breathing from its trough"
     );
 }
 

@@ -5983,7 +5983,7 @@ mod late_bound_amounts_over_images {
     use crate::animation::{Easing, TransitionConfig};
     use crate::backend::ratatui_backend::renderers::image::ImageBackdrop;
     use crate::core::element::Element;
-    use crate::style::{Color, EffectAmount, Length};
+    use crate::style::{Color, EffectAmount, EffectPulse, Length};
     use crate::widgets::{EffectScope, Image, ImageFit, ImageProtocol};
 
     #[derive(Clone, Copy)]
@@ -6021,7 +6021,7 @@ mod late_bound_amounts_over_images {
                         easing: Easing::Linear,
                     },
                 ),
-                Strength::Pulse => EffectAmount::pulse(0.1, 0.5).into(),
+                Strength::Pulse => ctx.pulsing_amount("image-tint", EffectPulse::new(0.1, 0.5)),
             };
             EffectScope::new()
                 .tint_by(Color::Rgb(255, 0, 0), alpha)
@@ -6117,11 +6117,17 @@ mod late_bound_amounts_over_images {
     #[test]
     fn a_pulsing_tint_leaves_image_pixels_alone() {
         let runtime = mount(Strength::Pulse, Rc::new(Cell::new(false)));
-        for elapsed in [0, 250, 750, 1100] {
+        for _ in 0..4 {
             assert!(
-                image_backdrops(&runtime, Duration::from_millis(elapsed)).is_empty(),
-                "no recolor for the image at {elapsed} ms"
+                image_backdrops(&runtime, Duration::ZERO).is_empty(),
+                "no recolor for the image at any sample"
             );
+            let tick = runtime
+                .ctx
+                .env()
+                .animations
+                .tick(Duration::from_millis(250));
+            assert!(tick.render_changed, "while the cells around it breathe");
         }
     }
 }

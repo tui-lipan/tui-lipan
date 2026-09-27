@@ -1642,7 +1642,7 @@ impl<C: Component> Context<C> {
     /// As with `animated_color`, the caller never sees the interpolated number, which is what makes
     /// skipping `view()` sound. Use [`transition`](Self::transition) when the value has to inform
     /// layout, text, or a decision. For an amount that should oscillate indefinitely - a breathing
-    /// alert - use [`EffectAmount::pulse`] instead of retargeting this on a timer.
+    /// alert - use [`pulsing_amount`](Self::pulsing_amount) instead of retargeting this on a timer.
     ///
     /// Images under the scope are recolored at the transition's target rather than following it,
     /// so a fade costs one image re-encode instead of one per frame.
@@ -1664,7 +1664,6 @@ impl<C: Component> Context<C> {
     /// ```
     ///
     /// [`EffectAmount`]: crate::style::EffectAmount
-    /// [`EffectAmount::pulse`]: crate::style::EffectAmount::pulse
     /// [`ColorTransform`]: crate::style::ColorTransform
     ///
     /// # Panics
@@ -1679,6 +1678,56 @@ impl<C: Component> Context<C> {
         self.env
             .animations
             .animated_amount(key.into(), target, config, None)
+    }
+
+    /// A render-time effect amount that pulses for as long as the view keeps asking for it.
+    ///
+    /// The pulse starts at [`EffectPulse`]'s `from` the first time `key` appears and is then owned
+    /// by the runtime's animation registry, like the transition behind
+    /// [`animated_amount`](Self::animated_amount): the element tree holds the same amount, the
+    /// registry samples the pulse at its [`frame_rate`](crate::style::EffectPulse::frame_rate), and
+    /// each sample costs a paint and no `view()` pass. Between samples every paint - including a
+    /// partial repaint of a few damaged terminal rows - sees the same value.
+    ///
+    /// The amount works wherever an [`EffectAmount`] does - an
+    /// [`EffectScope`](crate::widgets::EffectScope), a [`ColorTransform`] on a `Style`, a hover
+    /// effect - because the registry, not the element it lands in, schedules the repaints. Stop
+    /// asking for the key and the pulse stops; ask for it with
+    /// [`animated_amount`](Self::animated_amount) instead and it settles from where it is.
+    ///
+    /// ```no_run
+    /// # use std::time::Duration;
+    /// # use tui_lipan::prelude::*;
+    /// # fn example(ctx: &Context<impl Component>, pane: Element) -> Element {
+    /// let alpha = ctx.pulsing_amount(
+    ///     "pane-alert-tint",
+    ///     EffectPulse::new(0.08, 0.20)
+    ///         .period(Duration::from_millis(1400))
+    ///         .frame_rate(10),
+    /// );
+    /// EffectScope::new()
+    ///     .tint_by(Color::Rgb(220, 60, 60), alpha)
+    ///     .child(pane)
+    ///     .into()
+    /// # }
+    /// ```
+    ///
+    /// Image pixels are not recolored by a pulse; re-encoding a picture on every sample is the cost
+    /// the pulse exists to avoid.
+    ///
+    /// [`EffectPulse`]: crate::style::EffectPulse
+    /// [`EffectAmount`]: crate::style::EffectAmount
+    /// [`ColorTransform`]: crate::style::ColorTransform
+    ///
+    /// # Panics
+    /// Panics if the same `key` is used with two different value types.
+    pub fn pulsing_amount(
+        &self,
+        key: impl Into<Key>,
+        pulse: crate::style::EffectPulse,
+    ) -> crate::style::EffectAmount {
+        // Deliberately no `MemoDependency::Transition`, for the reason given on `animated_color`.
+        self.env.animations.pulsing_amount(key.into(), pulse)
     }
 
     /// Transition a render-time effect amount at a caller-selected repaint cadence.

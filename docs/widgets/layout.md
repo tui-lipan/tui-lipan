@@ -741,7 +741,7 @@ EffectScope::new()
 
 ### Animating the strength
 
-The strength of `dim_by`, `lighten_by`, `tint_by`, and any `ColorTransform` is an
+The strength of `EffectScope::dim_by`, `lighten_by`, `tint_by`, and of any `ColorTransform` is an
 [`EffectAmount`](../enums.md#effectamount). Besides a plain `f32`, it can be late-bound — resolved
 by the renderer while it paints — so the element tree stays identical while the amount moves and
 the runtime advances it with repaints, never `view()` passes:
@@ -755,20 +755,20 @@ let alpha = ctx.animated_amount(
 );
 EffectScope::new().tint_by(theme.error, alpha).child(pane)
 
-// Breathes forever on the renderer's clock; the app never retargets it.
-EffectScope::new()
-    .tint_by(
-        theme.error,
-        EffectAmount::pulse(0.08, 0.20)
-            .period(Duration::from_millis(1400))
-            .easing(Easing::EaseInOutSine)
-            .frame_rate(10),
-    )
-    .child(pane)
+// Breathes for as long as the view asks for it; the app never retargets it.
+let alpha = ctx.pulsing_amount(
+    "pane-alert",
+    EffectPulse::new(0.08, 0.20)
+        .period(Duration::from_millis(1400))
+        .easing(Easing::EaseInOutSine)
+        .frame_rate(10),
+);
+EffectScope::new().tint_by(theme.error, alpha).child(pane)
 ```
 
-A pulse is evaluated from the runtime's monotonic clock, so delayed frames do not slow it, and
-the scope requests paints at the pulse's own `frame_rate` (default 30 fps).
+A pulse starts at `from` when its key first appears, and the animation registry samples it at the
+pulse's own `frame_rate` (default 30 fps). Every paint between two samples sees the same value, so
+a partial repaint of a live terminal pane never tints some rows a step ahead of the rest.
 
 Images under the scope follow a deliberate policy rather than every frame: a transition recolors
 the image once, at its target, and a pulse leaves image pixels untouched. Either way an image is

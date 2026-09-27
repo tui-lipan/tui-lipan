@@ -12,8 +12,9 @@ use super::{Color, EffectAmount, HostTerminalColors, Paint};
 ///
 /// Every variant's strength is an [`EffectAmount`]: a plain `f32` via `.into()` or the lowercase
 /// constructors ([`ColorTransform::dim`], [`ColorTransform::tint`], ...), or a late-bound amount
-/// from [`Context::animated_amount`](crate::Context::animated_amount) or [`EffectAmount::pulse`]
-/// that the renderer resolves while painting.
+/// from [`Context::animated_amount`](crate::Context::animated_amount) or
+/// [`Context::pulsing_amount`](crate::Context::pulsing_amount) that the renderer resolves while
+/// painting.
 #[cfg_attr(
     feature = "terminal-serde",
     derive(serde::Serialize, serde::Deserialize)
@@ -134,11 +135,6 @@ impl ColorTransform {
         } else {
             Some(self)
         }
-    }
-
-    /// Repaint cadence this transform needs by itself: only a pulsing strength asks for one.
-    pub(crate) fn animation_interval(self) -> Option<std::time::Duration> {
-        self.amount().animation_interval()
     }
 
     /// This transform with the colors it names (a tint color, an opacity target) passed through
@@ -653,6 +649,12 @@ impl Style {
     /// - Additionally, `dim_amount` is stored so the renderer can scale the
     ///   existing rendered colors of every cell in the area (e.g. a backdrop)
     ///   even when no explicit colors are set on this style.
+    ///
+    /// The amount is a fixed `f32`. For a late-bound amount from
+    /// [`Context::animated_amount`](crate::Context::animated_amount) or
+    /// [`Context::pulsing_amount`](crate::Context::pulsing_amount), use
+    /// `transform_fg(ColorTransform::dim(amount))` / [`Self::transform_bg`], or
+    /// [`EffectScope::dim_by`](crate::widgets::EffectScope::dim_by) for a whole subtree.
     pub fn dim_by(mut self, amount: f32) -> Self {
         let amount = amount.clamp(0.0, 1.0);
         self.fg_transform = Some(ColorTransform::dim(amount));
@@ -683,6 +685,8 @@ impl Style {
     /// Only the backdrop paths re-color cells beneath a widget. Setting this on a plain widget
     /// style tints that widget's own colors and nothing else - to wash out a whole subtree,
     /// wrap it in [`crate::widgets::EffectScope`].
+    ///
+    /// The alpha is a fixed `f32`; for a late-bound one, see [`Self::dim_by`].
     pub fn tint_by(mut self, color: Color, alpha: f32) -> Self {
         let alpha = alpha.clamp(0.0, 1.0);
         self.fg_transform = Some(ColorTransform::tint(color, alpha));

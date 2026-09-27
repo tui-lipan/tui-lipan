@@ -6,22 +6,22 @@
 //! repaint instead of a `view()` pass, exactly as [`Paint::Animated`](crate::style::Paint::Animated)
 //! does for colors.
 
-use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::animation::Easing;
 
 /// Default length of one [`EffectPulse`] cycle.
 const DEFAULT_PULSE_PERIOD: Duration = Duration::from_millis(1500);
-/// Default repaint rate of an [`EffectPulse`]. A breathing tint is subtle; it does not need the
+/// Default sampling rate of an [`EffectPulse`]. A breathing tint is subtle; it does not need the
 /// app's full geometry frame rate.
 const DEFAULT_PULSE_FRAME_RATE: u16 = 30;
 
 /// The strength of a render-time color transform: a fixed number, or one the renderer resolves.
 ///
-/// Builders that take an amount accept `impl Into<EffectAmount>`, so a plain `f32` keeps working:
+/// Every [`ColorTransform`](crate::style::ColorTransform) carries one, and the
+/// [`EffectScope`](crate::widgets::EffectScope) builders `dim_by`, `lighten_by`, and `tint_by`
+/// accept `impl Into<EffectAmount>`, so a plain `f32` keeps working:
 ///
 /// ```
 /// use tui_lipan::prelude::*;
@@ -29,46 +29,37 @@ const DEFAULT_PULSE_FRAME_RATE: u16 = 30;
 /// let dimmed = EffectScope::new().dim_by(0.4).child(Text::new("inactive pane"));
 /// ```
 ///
-/// The two late-bound forms keep the element tree unchanged while the amount moves, which is what
-/// makes advancing them a repaint instead of a rebuild:
+/// (The [`Style`](crate::style::Style) shorthands `dim_by`, `tint_by`, `lighten_by`, and
+/// `elevate_by` stay fixed `f32`s; pass a late-bound amount to a style through
+/// [`Style::transform_fg`](crate::style::Style::transform_fg) /
+/// [`transform_bg`](crate::style::Style::transform_bg) instead.)
+///
+/// The two late-bound forms come from the component [`Context`](crate::Context) and name an entry
+/// in its animation registry. The element tree holds the same amount while the registry moves the
+/// value, so advancing it is a repaint instead of a rebuild:
 ///
 /// - [`Context::animated_amount`](crate::Context::animated_amount) transitions toward a target the
 ///   app picks, like [`Context::animated_color`](crate::Context::animated_color) does for colors.
-/// - [`EffectAmount::pulse`] oscillates forever on a clock the renderer owns - a breathing alert
-///   tint needs no app-side timer or target toggling.
-///
-/// ```
-/// use std::time::Duration;
-/// use tui_lipan::prelude::*;
-///
-/// let breathing = EffectScope::new()
-///     .tint_by(
-///         Color::Rgb(220, 60, 60),
-///         EffectAmount::pulse(0.08, 0.20)
-///             .period(Duration::from_millis(1400))
-///             .frame_rate(10),
-///     )
-///     .child(Text::new("needs attention"));
-/// ```
+/// - [`Context::pulsing_amount`](crate::Context::pulsing_amount) oscillates for as long as the
+///   view keeps asking for it - a breathing alert tint needs no app-side timer or target toggling.
 ///
 /// Late-bound amounts only resolve while the renderer paints. Read outside a paint, they answer
 /// with their [`resting_value`](Self::resting_value): the transition's target, or the pulse's
 /// starting value.
 ///
-/// An `EffectAmount` is eight bytes and `Copy`, like the `f32` it replaces. A pulse's parameters
-/// are interned process-wide and the amount holds their id; see [`EffectPulse`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+/// An `EffectAmount` is eight bytes and `Copy`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct EffectAmount(Repr);
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Repr {
     /// A plain amount, baked into the element tree.
     Fixed(f32),
-    /// A transition the app owns, named by its registry slot. Compares equal for the whole
-    /// transition, because it does not embed where the transition currently is.
+    /// A registry transition, named by its slot. Compares equal for the whole transition, because
+    /// it does not embed where the transition currently is.
     Animated { slot: u16, target: f32 },
-    /// An interned [`EffectPulse`].
-    Pulse(u16),
+    /// A registry pulse, named by its slot, resting at `from`.
+    Pulse { slot: u16, from: f32 },
 }
 
 // `f32` fields compare and hash by bit pattern, like every other effect parameter.
@@ -79,14 +70,23 @@ impl PartialEq for Repr {
             (
                 Self::Animated {
                     slot: slot_a,
-                    target: target_a,
+                    target: a,
                 },
                 Self::Animated {
                     slot: slot_b,
-                    target: target_b,
+                    target: b,
                 },
-            ) => slot_a == slot_b && target_a.to_bits() == target_b.to_bits(),
-            (Self::Pulse(a), Self::Pulse(b)) => a == b,
+            )
+            | (
+                Self::Pulse {
+                    slot: slot_a,
+                    from: a,
+                },
+                Self::Pulse {
+                    slot: slot_b,
+                    from: b,
+                },
+            ) => slot_a == slot_b && a.to_bits() == b.to_bits(),
             _ => false,
         }
     }
@@ -106,27 +106,11 @@ impl Hash for Repr {
                 slot.hash(state);
                 target.to_bits().hash(state);
             }
-            Self::Pulse(id) => {
+            Self::Pulse { slot, from } => {
                 2u8.hash(state);
-                id.hash(state);
+                slot.hash(state);
+                from.to_bits().hash(state);
             }
-        }
-    }
-}
-
-impl fmt::Debug for EffectAmount {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            Repr::Fixed(value) => f.debug_tuple("Fixed").field(&value).finish(),
-            Repr::Animated { slot, target } => f
-                .debug_struct("Animated")
-                .field("slot", &slot)
-                .field("target", &target)
-                .finish(),
-            Repr::Pulse(_) => match self.as_pulse() {
-                Some(pulse) => f.debug_tuple("Pulse").field(&pulse).finish(),
-                None => f.write_str("Pulse(?)"),
-            },
         }
     }
 }
@@ -137,38 +121,32 @@ impl EffectAmount {
         Self(Repr::Fixed(value))
     }
 
-    /// An amount that oscillates between `from` and `to` on the renderer's clock.
-    ///
-    /// Returns an [`EffectPulse`] to configure; it converts into an `EffectAmount` wherever one is
-    /// accepted.
-    pub fn pulse(from: f32, to: f32) -> EffectPulse {
-        EffectPulse::new(from, to)
-    }
-
-    /// A late-bound amount naming registry `slot`, settling on `target`.
+    /// A late-bound transition naming registry `slot`, settling on `target`.
     pub(crate) fn animated(slot: u16, target: f32) -> Self {
         Self(Repr::Animated { slot, target })
+    }
+
+    /// A late-bound pulse naming registry `slot`, resting at `from`.
+    pub(crate) fn pulsing(slot: u16, from: f32) -> Self {
+        Self(Repr::Pulse { slot, from })
     }
 
     /// The amount when it is fixed, or `None` when the renderer resolves it.
     pub fn as_fixed(self) -> Option<f32> {
         match self.0 {
             Repr::Fixed(value) => Some(value),
-            Repr::Animated { .. } | Repr::Pulse(_) => None,
-        }
-    }
-
-    /// The pulse this amount follows, if it is one.
-    pub fn as_pulse(self) -> Option<EffectPulse> {
-        match self.0 {
-            Repr::Pulse(id) => pulse_by_id(id),
-            Repr::Fixed(_) | Repr::Animated { .. } => None,
+            Repr::Animated { .. } | Repr::Pulse { .. } => None,
         }
     }
 
     /// Whether this amount comes from [`Context::animated_amount`](crate::Context::animated_amount).
     pub fn is_transition(self) -> bool {
         matches!(self.0, Repr::Animated { .. })
+    }
+
+    /// Whether this amount comes from [`Context::pulsing_amount`](crate::Context::pulsing_amount).
+    pub fn is_pulse(self) -> bool {
+        matches!(self.0, Repr::Pulse { .. })
     }
 
     /// Whether the renderer, rather than the element tree, decides this amount.
@@ -180,24 +158,23 @@ impl EffectAmount {
     /// value, the transition's target, or the pulse's starting value.
     pub fn resting_value(self) -> f32 {
         match self.0 {
-            Repr::Fixed(value) | Repr::Animated { target: value, .. } => value,
-            Repr::Pulse(_) => self.as_pulse().map_or(0.0, |pulse| pulse.from),
+            Repr::Fixed(value)
+            | Repr::Animated { target: value, .. }
+            | Repr::Pulse { from: value, .. } => value,
         }
     }
 
     /// The amount as the renderer sees it right now.
     ///
-    /// A transition slot resolves against the registry installed for the current draw, and a
-    /// pulse against the draw's clock. Outside a draw, both answer with their resting value.
+    /// A late-bound amount reads its registry slot, which holds one sampled value between
+    /// animation ticks - so every paint in between, including a partial one, agrees on it.
+    /// Outside a draw it answers with its resting value.
     pub(crate) fn resolved(self) -> f32 {
         match self.0 {
             Repr::Fixed(value) => value,
-            Repr::Animated { slot, target } => {
-                crate::animation::registry::resolve_render_scalar_slot(slot).unwrap_or(target)
+            Repr::Animated { slot, target: rest } | Repr::Pulse { slot, from: rest } => {
+                crate::animation::registry::resolve_render_scalar_slot(slot).unwrap_or(rest)
             }
-            Repr::Pulse(_) => self.as_pulse().map_or(0.0, |pulse| {
-                pulse.value_at(crate::animation::registry::render_elapsed())
-            }),
         }
     }
 
@@ -209,32 +186,20 @@ impl EffectAmount {
     pub(crate) fn settled(self) -> Option<f32> {
         match self.0 {
             Repr::Fixed(value) | Repr::Animated { target: value, .. } => Some(value),
-            Repr::Pulse(_) => None,
+            Repr::Pulse { .. } => None,
         }
     }
 
-    /// Repaint cadence this amount needs by itself, if it changes without the tree changing.
-    ///
-    /// Only a pulse reports one: a transition is advanced by the animation registry's own ticker.
-    pub(crate) fn animation_interval(self) -> Option<Duration> {
-        self.as_pulse().map(EffectPulse::interval)
-    }
-
     /// This amount limited to `[0.0, 1.0]`.
+    ///
+    /// A late-bound amount only has its resting value clamped: the live value belongs to the
+    /// registry, and every transform consumer clamps what it reads.
     pub(crate) fn clamped_unit(self) -> Self {
         let unit = |value: f32| value.clamp(0.0, 1.0);
         match self.0 {
             Repr::Fixed(value) => Self::fixed(unit(value)),
             Repr::Animated { slot, target } => Self::animated(slot, unit(target)),
-            Repr::Pulse(_) => match self.as_pulse() {
-                Some(pulse) => EffectPulse {
-                    from: unit(pulse.from),
-                    to: unit(pulse.to),
-                    ..pulse
-                }
-                .into(),
-                None => self,
-            },
+            Repr::Pulse { slot, from } => Self::pulsing(slot, unit(from)),
         }
     }
 }
@@ -251,46 +216,9 @@ impl From<f32> for EffectAmount {
     }
 }
 
-impl From<EffectPulse> for EffectAmount {
-    /// Interns `pulse`. Should the table ever fill, the amount degrades to the pulse's starting
-    /// value rather than naming the wrong pulse.
-    fn from(pulse: EffectPulse) -> Self {
-        match intern_pulse(pulse) {
-            Some(id) => Self(Repr::Pulse(id)),
-            None => Self::fixed(pulse.from),
-        }
-    }
-}
-
-/// Pulse parameters by id. Interning keeps [`EffectAmount`] - and so every `ColorTransform` and
-/// `Style` - as small as the `f32` it replaced. Equal pulses share an id, so an amount built from
-/// the same parameters every `view()` compares equal. Process-wide rather than per runtime because
-/// styles are `Send` and outlive any one runtime.
-static PULSES: Mutex<Vec<EffectPulse>> = Mutex::new(Vec::new());
-
-fn intern_pulse(pulse: EffectPulse) -> Option<u16> {
-    let mut pulses = PULSES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(id) = pulses.iter().position(|known| *known == pulse) {
-        return u16::try_from(id).ok();
-    }
-    let id = u16::try_from(pulses.len()).ok()?;
-    pulses.push(pulse);
-    Some(id)
-}
-
-fn pulse_by_id(id: u16) -> Option<EffectPulse> {
-    PULSES
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .get(usize::from(id))
-        .copied()
-}
-
-// Serialized as its resting value. A late-bound amount names state that lives in one running
-// app - a registry slot, that app's clock - so another process could not resolve it anyway, and a
-// plain number keeps the wire format what it was when transforms carried an `f32`.
+// Serialized as its resting value. A late-bound amount names a registry slot that lives in one
+// running app, so another process could not resolve it anyway, and a plain number keeps the wire
+// format what it was when transforms carried an `f32`.
 #[cfg(feature = "terminal-serde")]
 impl serde::Serialize for EffectAmount {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -305,35 +233,31 @@ impl<'de> serde::Deserialize<'de> for EffectAmount {
     }
 }
 
-/// An [`EffectAmount`] that oscillates between two values for as long as it is in the tree.
+/// How a pulse from [`Context::pulsing_amount`](crate::Context::pulsing_amount) oscillates.
 ///
 /// One cycle runs `from -> to -> from` over [`period`](Self::period), shaped by
 /// [`easing`](Self::easing) on each half. The default `EaseInOutSine` makes that a smooth breath
 /// with no visible turnaround.
 ///
-/// The pulse is evaluated from the renderer's monotonic clock, not counted in frames, so a delayed
-/// frame does not slow it down, and every pulse with the same period breathes in step. An effect
-/// scope holding one asks for repaints at [`frame_rate`](Self::frame_rate) and never re-runs
-/// `view()`.
+/// A pulse starts at `from` when its key first appears and is owned by the runtime's animation
+/// registry from then on. The registry samples it [`frame_rate`](Self::frame_rate) times a
+/// second on the pulse's own timeline, and every paint between two samples - including a partial
+/// repaint of a few damaged terminal rows - sees the same value. Each sample costs a paint and no
+/// `view()` pass.
 ///
 /// Image pixels do not follow a pulse: recoloring and re-encoding a picture on every breath is
-/// the cost the pulse exists to avoid. Text and cell colors breathe; images under the same scope
-/// are left untouched by the pulsing transform.
-///
-/// Converting a pulse into an [`EffectAmount`] interns its parameters for the life of the process,
-/// so build pulses from a fixed set of parameters - not from a value that changes every frame.
-/// To move an amount toward a changing value, use
-/// [`Context::animated_amount`](crate::Context::animated_amount).
+/// the cost the pulse exists to avoid. Text and cell colors breathe; images under the same
+/// transform are left untouched by it.
 #[derive(Clone, Copy, Debug)]
 pub struct EffectPulse {
-    from: f32,
-    to: f32,
-    period: Duration,
-    easing: Easing,
+    pub(crate) from: f32,
+    pub(crate) to: f32,
+    pub(crate) period: Duration,
+    pub(crate) easing: Easing,
     frame_rate: u16,
 }
 
-// `f32` fields compare and hash by bit pattern, like every other effect parameter.
+// `f32` fields compare by bit pattern, like every other effect parameter.
 impl PartialEq for EffectPulse {
     fn eq(&self, other: &Self) -> bool {
         self.from.to_bits() == other.from.to_bits()
@@ -380,9 +304,12 @@ impl EffectPulse {
         self
     }
 
-    /// Repaint rate while the pulse is on screen, clamped to 1-480 fps. Defaults to 30.
+    /// How many times a second the pulse is sampled - and so repainted - clamped to 1-480.
+    /// Defaults to 30.
     ///
-    /// Several animated effects on screen share the fastest cadence among them.
+    /// Several late-bound animations on screen share the fastest cadence among them for their
+    /// repaints, but each pulse still only changes value at its own rate. The rate never exceeds
+    /// [`App::frame_rate`](crate::App::frame_rate).
     pub fn frame_rate(mut self, frame_rate: u16) -> Self {
         self.frame_rate = frame_rate.clamp(1, 480);
         self
@@ -398,7 +325,7 @@ impl EffectPulse {
         self.to
     }
 
-    /// The pulse's value `elapsed` into the renderer's clock.
+    /// The pulse's value `elapsed` into its own timeline.
     pub fn value_at(self, elapsed: Duration) -> f32 {
         let period = self.period.as_nanos().max(1);
         let t = (elapsed.as_nanos() % period) as f64 / period as f64;
@@ -408,7 +335,7 @@ impl EffectPulse {
         self.from + (self.to - self.from) * eased
     }
 
-    /// Time between repaints while the pulse is on screen.
+    /// Time between samples.
     pub fn interval(self) -> Duration {
         crate::app::context::frame_interval(self.frame_rate)
     }
@@ -429,7 +356,7 @@ mod tests {
 
     #[test]
     fn a_pulse_runs_from_to_and_back_over_its_period() {
-        let pulse = EffectAmount::pulse(0.1, 0.5)
+        let pulse = EffectPulse::new(0.1, 0.5)
             .period(Duration::from_millis(1000))
             .easing(Easing::Linear);
         let at = |ms| pulse.value_at(Duration::from_millis(ms));
@@ -459,13 +386,10 @@ mod tests {
 
     #[test]
     fn a_pulse_reports_its_frame_rate_as_an_interval() {
-        let pulse = EffectPulse::new(0.0, 1.0).frame_rate(10);
-        assert_eq!(pulse.interval(), Duration::from_millis(100));
         assert_eq!(
-            EffectAmount::from(pulse).animation_interval(),
-            Some(Duration::from_millis(100))
+            EffectPulse::new(0.0, 1.0).frame_rate(10).interval(),
+            Duration::from_millis(100)
         );
-        assert_eq!(EffectAmount::fixed(0.3).animation_interval(), None);
         assert_eq!(
             EffectPulse::new(0.0, 1.0).frame_rate(0).interval(),
             Duration::from_secs(1),
@@ -475,66 +399,53 @@ mod tests {
 
     #[test]
     fn only_settling_amounts_reach_image_pixels() {
-        let transition = EffectAmount::animated(3, 0.4);
         assert_eq!(EffectAmount::fixed(0.2).settled(), Some(0.2));
-        assert_eq!(transition.settled(), Some(0.4));
-        assert_eq!(
-            EffectAmount::from(EffectPulse::new(0.1, 0.3)).settled(),
-            None
-        );
+        assert_eq!(EffectAmount::animated(3, 0.4).settled(), Some(0.4));
+        assert_eq!(EffectAmount::pulsing(4, 0.1).settled(), None);
     }
 
     #[test]
-    fn late_bound_amounts_fall_back_outside_a_draw() {
-        let transition = EffectAmount::animated(u16::MAX, 0.4);
+    fn late_bound_amounts_rest_outside_a_draw() {
+        assert_eq!(EffectAmount::animated(u16::MAX, 0.4).resolved(), 0.4);
         assert_eq!(
-            transition.resolved(),
-            0.4,
-            "a transition rests at its target"
-        );
-        let pulse = EffectAmount::from(EffectPulse::new(0.2, 0.6));
-        assert_eq!(
-            pulse.resolved(),
+            EffectAmount::pulsing(u16::MAX, 0.2).resolved(),
             0.2,
-            "no draw clock: the start of the cycle"
+            "a pulse rests at the start of its cycle"
         );
     }
 
     #[test]
-    fn clamping_keeps_every_form_in_the_unit_range() {
+    fn clamping_keeps_resting_values_in_the_unit_range() {
         assert_eq!(
             EffectAmount::fixed(1.5).clamped_unit(),
             EffectAmount::fixed(1.0)
         );
-        let pulse = EffectAmount::from(EffectPulse::new(-0.5, 2.0))
-            .clamped_unit()
-            .as_pulse()
-            .expect("a pulse stays a pulse");
-        assert_eq!((pulse.from_value(), pulse.to_value()), (0.0, 1.0));
-    }
-
-    #[test]
-    fn equal_pulses_share_one_interned_id() {
-        let a = EffectAmount::from(EffectPulse::new(0.11, 0.33).frame_rate(12));
-        let b = EffectAmount::from(EffectPulse::new(0.11, 0.33).frame_rate(12));
-        let c = EffectAmount::from(EffectPulse::new(0.11, 0.34).frame_rate(12));
-        assert_eq!(a, b, "a pulse rebuilt every view() compares equal");
-        assert_ne!(a, c);
         assert_eq!(
-            a.as_pulse(),
-            Some(EffectPulse::new(0.11, 0.33).frame_rate(12))
+            EffectAmount::pulsing(2, -0.5).clamped_unit(),
+            EffectAmount::pulsing(2, 0.0)
         );
     }
 
     #[test]
-    fn an_amount_stays_as_small_as_the_number_it_replaced() {
+    fn effect_amount_stays_compact() {
         assert_eq!(std::mem::size_of::<EffectAmount>(), 8);
+    }
+
+    /// Every `Style` carries two transforms; an amount that grew would grow every style with it.
+    /// A pulse once stored inline took `Style` from 68 to 160 bytes and overflowed a debug stack.
+    #[test]
+    fn style_stays_within_its_size_budget() {
+        assert!(
+            std::mem::size_of::<crate::style::Style>() <= 80,
+            "Style is {} bytes",
+            std::mem::size_of::<crate::style::Style>()
+        );
     }
 
     #[cfg(feature = "terminal-serde")]
     #[test]
     fn amounts_serialize_as_their_resting_number() {
-        let pulse = EffectAmount::from(EffectPulse::new(0.2, 0.6));
+        let pulse = EffectAmount::pulsing(0, 0.2);
         assert_eq!(serde_json::to_string(&pulse).unwrap(), "0.2");
         assert_eq!(
             serde_json::from_str::<EffectAmount>("0.2").unwrap(),

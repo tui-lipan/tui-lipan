@@ -639,17 +639,18 @@ repaints instead of `view()` passes.
 |------|-----------|----------|
 | Fixed | `f32.into()`, `EffectAmount::fixed(f32)` | A plain number |
 | Transition | `ctx.animated_amount(key, target, config)`, `ctx.animated_amount_with_frame_rate(...)` | Moves toward `target`; the animation registry ticks it and asks for paint-only frames |
-| Pulse | `EffectAmount::pulse(from, to)` → `EffectPulse` | Oscillates `from → to → from` forever on the runtime clock |
+| Pulse | `ctx.pulsing_amount(key, EffectPulse::new(from, to))` | Oscillates `from → to → from` while the view keeps reading `key`; starts at `from`, sampled at the pulse's frame rate by the animation registry |
 
-Accessors: `as_fixed()`, `as_pulse()`, `is_transition()`, `is_late_bound()`, and
+Accessors: `as_fixed()`, `is_transition()`, `is_pulse()`, `is_late_bound()`, and
 `resting_value()` (the fixed value, the transition's target, or the pulse's `from`). Outside a
 paint, a late-bound amount resolves to its resting value; with `terminal-serde` it serializes as
 that number.
 
 `EffectPulse` builder: `period(Duration)` (default 1.5 s), `easing(Easing)` (default
 `EaseInOutSine`, applied to each half of the cycle), and `frame_rate(u16)` (default 30, clamped to
-`1..=480`). `value_at(Duration)` evaluates it at a clock reading. Pulse parameters are interned
-for the life of the process, so build pulses from a fixed set of parameters.
+`1..=480`). `value_at(Duration)` evaluates it at a point on its own timeline. A pulse's value
+only changes on a sample, so all paints between two samples agree on it. Asking for the same key
+with `animated_amount` instead settles the pulse from wherever it is.
 
 Image pixels never follow a late-bound amount frame by frame: a transition is baked at its target
 (one re-encode for the whole fade), and a pulse is left out of image pixels.

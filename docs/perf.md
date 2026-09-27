@@ -90,8 +90,9 @@ The strength of a render-time effect has the same two shapes. Feeding
 `ctx.transition()` into `EffectScope::tint_by` rebuilds the window on every frame
 of the fade, because the runtime cannot know the number only reached a tint.
 `Context::animated_amount` returns an `EffectAmount` naming the transition
-instead, and `dim_by`, `lighten_by`, `tint_by`, and every `ColorTransform` accept
-it:
+instead. `EffectScope::dim_by`, `lighten_by`, and `tint_by` accept it, as does
+every `ColorTransform` (so a `Style` takes one through `transform_fg` /
+`transform_bg`; the `Style::dim_by` / `tint_by` shorthands stay fixed `f32`s):
 
 ```rust
 // Repaint-only: the scope is identical for the whole fade.
@@ -100,15 +101,20 @@ EffectScope::new().tint_by(alert_color, alpha).child(pane)
 ```
 
 For an effect that animates indefinitely — a breathing alert — do not retarget a
-transition on a timer. `EffectAmount::pulse(from, to)` oscillates on the
-renderer's own clock at its own `frame_rate`, costs one paint per frame and no
-`view()` passes, and needs no app state at all:
+transition on a timer. `Context::pulsing_amount` hands the whole pulse to the
+animation registry: it starts at `from` when the key first appears, is sampled
+at the pulse's own `frame_rate`, costs one paint per sample and no `view()`
+passes, and needs no app state at all:
 
 ```rust
-EffectScope::new()
-    .tint_by(alert_color, EffectAmount::pulse(0.08, 0.20).frame_rate(10))
-    .child(pane)
+let alpha = ctx.pulsing_amount("pane-alert", EffectPulse::new(0.08, 0.20).frame_rate(10));
+EffectScope::new().tint_by(alert_color, alpha).child(pane)
 ```
+
+The value only changes on a sample, so every paint in between — including a
+terminal-damage repaint of a few rows — sees the same value, and an unrelated
+paint never advances the pulse. Because the registry schedules it, the amount
+works the same in a `Style` transform or a hover effect.
 
 Neither makes images under the scope re-encode per frame: a transition recolors
 image pixels once at its target, and a pulse leaves them untouched.

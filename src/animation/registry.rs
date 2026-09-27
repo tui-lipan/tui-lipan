@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use crate::animation::transition::{Lerp, Transition, TransitionConfig};
 use crate::core::element::Key;
-use crate::style::{Color, EffectAmount, Paint};
+use crate::style::{Color, EffectAmount, EffectPulse, Paint};
 
 trait DynEntry: Any {
     fn entry_type_id(&self) -> TypeId;
@@ -38,7 +38,7 @@ trait DynEntry: Any {
 struct TypedEntry<T: Lerp + PartialEq + 'static> {
     current: T,
     target: T,
-    transition: Option<Transition<T>>,
+    animation: Option<RenderAnimation<T>>,
     touched: Cell<bool>,
     /// Set when the value is handed out late-bound - as a slot the renderer resolves - rather than
     /// as a concrete value. The view then cannot have baked the value into anything but a render
@@ -47,28 +47,70 @@ struct TypedEntry<T: Lerp + PartialEq + 'static> {
     render_interval: Cell<Option<Duration>>,
 }
 
+/// What moves an entry's value between frames.
+enum RenderAnimation<T: Lerp> {
+    /// Toward the entry's target, then done.
+    Transition(Transition<T>),
+    /// Back and forth forever, sampled on the pulse's own timeline.
+    Pulse(PulseState<T>),
+}
+
+/// A running pulse: its shape, and how far along its own timeline it is.
+struct PulseState<T> {
+    from: T,
+    to: T,
+    period: Duration,
+    easing: crate::animation::Easing,
+    /// Time between samples. The value only changes on a sample, so every paint between two of
+    /// them - a partial terminal-damage repaint included - sees the same value.
+    interval: Duration,
+    /// Time since the pulse started.
+    elapsed: Duration,
+}
+
+impl<T: Lerp> PulseState<T> {
+    /// The value at the latest sample point at or before `elapsed`.
+    fn sample(&self) -> T {
+        let interval = self.interval.as_nanos().max(1);
+        let sampled = self.elapsed.as_nanos() / interval * interval;
+        let period = self.period.as_nanos().max(1);
+        let t = (sampled % period) as f64 / period as f64;
+        // Triangle wave: 0 at the start of the cycle, 1 halfway, back to 0 at the end.
+        let rise = (1.0 - (2.0 * t - 1.0).abs()) as f32;
+        T::lerp(&self.from, &self.to, self.easing.apply(rise))
+    }
+}
+
 impl<T: Lerp + PartialEq + 'static> DynEntry for TypedEntry<T> {
     fn entry_type_id(&self) -> TypeId {
         TypeId::of::<T>()
     }
 
     fn tick(&mut self, dt: Duration) -> bool {
-        let Some(transition) = self.transition.as_mut() else {
-            return false;
+        let new_current = match self.animation.as_mut() {
+            None => return false,
+            Some(RenderAnimation::Transition(transition)) => {
+                transition.tick(dt);
+                if transition.is_complete() {
+                    let settled = self.target.clone();
+                    self.animation = None;
+                    settled
+                } else {
+                    transition.current()
+                }
+            }
+            Some(RenderAnimation::Pulse(pulse)) => {
+                pulse.elapsed = pulse.elapsed.saturating_add(dt);
+                pulse.sample()
+            }
         };
-        transition.tick(dt);
-        let new_current = transition.current();
         let changed = new_current != self.current;
         self.current = new_current;
-        if transition.is_complete() {
-            self.current = self.target.clone();
-            self.transition = None;
-        }
         changed
     }
 
     fn is_animating(&self) -> bool {
-        self.transition.is_some()
+        self.animation.is_some()
     }
 
     fn touched(&self) -> bool {
@@ -261,6 +303,16 @@ impl AnimationRegistry {
         }
     }
 
+    /// Like [`animated_amount`](Self::animated_amount), for an amount that pulses instead of
+    /// settling. The registry owns the pulse's timeline and samples it at the pulse's frame rate.
+    pub(crate) fn pulsing_amount(&self, key: Key, pulse: EffectPulse) -> EffectAmount {
+        let current = self.advance_pulse(key.clone(), pulse);
+        match self.slot_for(key) {
+            Some(slot) => EffectAmount::pulsing(slot, pulse.from),
+            None => EffectAmount::fixed(current),
+        }
+    }
+
     /// Advance `key` as a render-resolved transition and name it by slot.
     fn render_value<T: Lerp + PartialEq + 'static>(
         &self,
@@ -329,7 +381,7 @@ impl AnimationRegistry {
             Box::new(TypedEntry::<T> {
                 current: target.clone(),
                 target: target.clone(),
-                transition: None,
+                animation: None,
                 touched: Cell::new(true),
                 render_resolved: Cell::new(render_resolved),
                 render_interval: Cell::new(render_interval),
@@ -355,23 +407,75 @@ impl AnimationRegistry {
         }
         typed.render_interval.set(render_interval);
 
-        if typed.target != target {
+        // A pulsing key asked for a target instead settles from wherever the pulse is.
+        let was_pulsing = matches!(typed.animation, Some(RenderAnimation::Pulse(_)));
+        if typed.target != target || was_pulsing {
             let from = typed.current.clone();
             typed.target = target.clone();
             if config.duration.is_zero() {
                 typed.current = target.clone();
-                typed.transition = None;
+                typed.animation = None;
             } else {
-                typed.transition = Some(Transition::new(
+                typed.animation = Some(RenderAnimation::Transition(Transition::new(
                     from,
                     target.clone(),
                     config.duration,
                     config.easing,
-                ));
+                )));
             }
         }
 
         typed.current.clone()
+    }
+
+    /// Read or start the pulse keyed by `key`, returning its current sample.
+    ///
+    /// A new key starts at `pulse.from`. A key that keeps the same shape keeps its timeline; a new
+    /// shape keeps the timeline too and resamples, so changing a pulse's amplitude does not restart
+    /// its phase. A key that was transitioning starts pulsing from the beginning of the cycle.
+    fn advance_pulse(&self, key: Key, pulse: EffectPulse) -> f32 {
+        let interval = pulse.interval();
+        let mut entries = self.entries.borrow_mut();
+        let entry = entries.entry(key).or_insert_with(|| {
+            Box::new(TypedEntry::<f32> {
+                current: pulse.from,
+                target: pulse.from,
+                animation: None,
+                touched: Cell::new(true),
+                render_resolved: Cell::new(true),
+                render_interval: Cell::new(Some(interval)),
+            })
+        });
+
+        if entry.entry_type_id() != TypeId::of::<f32>() {
+            panic!(
+                "Ctx::transition called with a different value type for the same key (existing type id mismatch)"
+            );
+        }
+
+        let typed: &mut TypedEntry<f32> = entry
+            .as_any_mut()
+            .downcast_mut()
+            .expect("type id checked above");
+        typed.touched.set(true);
+        typed.render_interval.set(Some(interval));
+
+        let elapsed = match &typed.animation {
+            Some(RenderAnimation::Pulse(running)) => running.elapsed,
+            _ => Duration::ZERO,
+        };
+        let state = PulseState {
+            from: pulse.from,
+            to: pulse.to,
+            period: pulse.period,
+            easing: pulse.easing,
+            interval,
+            elapsed,
+        };
+        typed.current = state.sample();
+        typed.target = pulse.from;
+        typed.animation = Some(RenderAnimation::Pulse(state));
+        typed.current
     }
 
     /// Advance all in-flight transitions by `dt`, reporting what the change requires.
@@ -420,7 +524,7 @@ impl AnimationRegistry {
         }
     }
 
-    /// Whether any transition currently has a non-zero remaining duration.
+    /// Whether any transition or pulse is still moving.
     #[cfg(test)]
     pub(crate) fn has_active(&self) -> bool {
         self.entries.borrow().values().any(|e| e.is_animating())
@@ -475,7 +579,11 @@ mod tests {
     /// The registry slot a late-bound amount names, read back through the registry itself.
     fn amount_slot(amount: EffectAmount) -> u16 {
         (0..=u16::MAX)
-            .find(|&slot| EffectAmount::animated(slot, amount.resting_value()) == amount)
+            .find(|&slot| {
+                let rest = amount.resting_value();
+                EffectAmount::animated(slot, rest) == amount
+                    || EffectAmount::pulsing(slot, rest) == amount
+            })
             .expect("a late-bound amount names a slot")
     }
 
@@ -659,6 +767,111 @@ mod tests {
             assert_eq!(render_elapsed(), Duration::from_secs(3));
         }
         assert_eq!(render_elapsed(), Duration::ZERO);
+    }
+
+    fn pulse(frame_rate: u16) -> EffectPulse {
+        EffectPulse::new(0.0, 1.0)
+            .period(Duration::from_millis(1000))
+            .easing(crate::animation::Easing::Linear)
+            .frame_rate(frame_rate)
+    }
+
+    #[test]
+    fn a_pulse_starts_at_from_and_moves_only_when_ticked() {
+        let reg = AnimationRegistry::default();
+        let amount = reg.pulsing_amount("breath".into(), pulse(10));
+        assert!(amount.is_pulse());
+        let slot = amount_slot(amount);
+        assert_eq!(
+            reg.resolve_scalar_slot(slot),
+            Some(0.0),
+            "it starts at from"
+        );
+        assert!(reg.has_active_render_transition());
+        assert!(!reg.has_active_view_transition());
+        assert_eq!(
+            reg.active_render_transition_interval(Duration::from_millis(33)),
+            Some(Duration::from_millis(100)),
+            "it asks for its own cadence"
+        );
+
+        let tick = reg.tick(Duration::from_millis(100));
+        assert!(tick.render_changed && !tick.view_changed);
+        assert!((reg.resolve_scalar_slot(slot).unwrap() - 0.2).abs() < 1e-6);
+        assert_eq!(
+            reg.pulsing_amount("breath".into(), pulse(10)),
+            amount,
+            "the tree holds one amount for the whole pulse"
+        );
+        assert!(
+            (reg.resolve_scalar_slot(slot).unwrap() - 0.2).abs() < 1e-6,
+            "re-reading the key keeps the pulse's timeline"
+        );
+    }
+
+    /// Two pulses ticked on the fastest shared cadence each change value only at their own rate.
+    #[test]
+    fn each_pulse_keeps_its_own_sampling_cadence() {
+        let reg = AnimationRegistry::default();
+        let slow = amount_slot(reg.pulsing_amount("slow".into(), pulse(10)));
+        let fast = amount_slot(reg.pulsing_amount("fast".into(), pulse(30)));
+        let shared = reg
+            .active_render_transition_interval(Duration::from_millis(33))
+            .expect("pulses are active");
+        assert_eq!(shared, crate::app::context::frame_interval(30));
+
+        let (mut slow_changes, mut fast_changes) = (0, 0);
+        let (mut slow_prev, mut fast_prev) = (0.0, 0.0);
+        // Half a period, so the linear rise never turns around onto an equal value.
+        for _ in 0..15 {
+            let _ = reg.tick(shared);
+            let (s, f) = (
+                reg.resolve_scalar_slot(slow).unwrap(),
+                reg.resolve_scalar_slot(fast).unwrap(),
+            );
+            slow_changes += usize::from(s != slow_prev);
+            fast_changes += usize::from(f != fast_prev);
+            (slow_prev, fast_prev) = (s, f);
+        }
+        assert_eq!(
+            fast_changes, 15,
+            "the 30 fps pulse moves on every shared frame"
+        );
+        assert!(
+            (4..=5).contains(&slow_changes),
+            "the 10 fps pulse moves about every third frame: {slow_changes}"
+        );
+    }
+
+    #[test]
+    fn a_pulse_handed_a_target_settles_from_where_it_is() {
+        let reg = AnimationRegistry::default();
+        let _ = reg.pulsing_amount("alert".into(), pulse(30));
+        let _ = reg.tick(Duration::from_millis(300));
+        let settling = reg.animated_amount("alert".into(), 0.0, cfg(100), None);
+        let slot = amount_slot(settling);
+        let from = reg.resolve_scalar_slot(slot).unwrap();
+        assert!(from > 0.5, "the fade starts mid-breath: {from}");
+        let _ = reg.tick(Duration::from_millis(50));
+        let midway = reg.resolve_scalar_slot(slot).unwrap();
+        assert!(midway < from && midway > 0.0, "{midway}");
+        let _ = reg.tick(Duration::from_millis(60));
+        assert_eq!(reg.resolve_scalar_slot(slot), Some(0.0));
+        assert!(!reg.has_active(), "and then the key is at rest");
+    }
+
+    #[test]
+    fn a_pulse_nobody_reads_is_collected() {
+        let reg = AnimationRegistry::default();
+        let _ = reg.pulsing_amount("alert".into(), pulse(10));
+        reg.end_frame_gc();
+        reg.end_frame_gc();
+        assert_eq!(reg.entry_count(), 0);
+        assert!(
+            reg.active_render_transition_interval(Duration::from_millis(33))
+                .is_none(),
+            "so it stops asking for paints"
+        );
     }
 
     #[test]

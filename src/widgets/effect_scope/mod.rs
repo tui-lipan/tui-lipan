@@ -41,8 +41,9 @@ impl EffectScope {
     /// Dim the rendered subtree by an explicit amount.
     ///
     /// `amount` is an `f32` or a late-bound [`EffectAmount`]: an
-    /// [`animated_amount`](crate::Context::animated_amount) transition or an
-    /// [`EffectAmount::pulse`], both of which animate with repaints alone.
+    /// [`animated_amount`](crate::Context::animated_amount) transition or a
+    /// [`pulsing_amount`](crate::Context::pulsing_amount), both of which animate with repaints
+    /// alone.
     pub fn dim_by(self, amount: impl Into<EffectAmount>) -> Self {
         self.effect(VisualEffect::dim(amount))
     }
@@ -56,19 +57,22 @@ impl EffectScope {
 
     /// Tint the rendered subtree toward a color.
     ///
-    /// `alpha` may be late-bound, as for [`Self::dim_by`]. A breathing alert tint needs nothing
-    /// from the app beyond the scope itself:
+    /// `alpha` may be late-bound, as for [`Self::dim_by`]. A breathing alert tint needs no app-side
+    /// timer:
     ///
-    /// ```
-    /// use std::time::Duration;
-    /// use tui_lipan::prelude::*;
-    ///
-    /// let alert = EffectScope::new()
-    ///     .tint_by(
-    ///         Color::Rgb(220, 60, 60),
-    ///         EffectAmount::pulse(0.08, 0.20).period(Duration::from_millis(1400)),
-    ///     )
-    ///     .child(Text::new("build failed"));
+    /// ```no_run
+    /// # use std::time::Duration;
+    /// # use tui_lipan::prelude::*;
+    /// # fn example(ctx: &Context<impl Component>) -> Element {
+    /// let alpha = ctx.pulsing_amount(
+    ///     "build-alert",
+    ///     EffectPulse::new(0.08, 0.20).period(Duration::from_millis(1400)),
+    /// );
+    /// EffectScope::new()
+    ///     .tint_by(Color::Rgb(220, 60, 60), alpha)
+    ///     .child(Text::new("build failed"))
+    ///     .into()
+    /// # }
     /// ```
     pub fn tint_by(self, color: Color, alpha: impl Into<EffectAmount>) -> Self {
         self.effect(VisualEffect::tint(color, alpha))
