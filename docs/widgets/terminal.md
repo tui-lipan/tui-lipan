@@ -480,6 +480,9 @@ that remains stable when outer terminals detach or change. The supplied text is 
 printable ASCII and 256 bytes so it cannot terminate or inject into the DCS response. Reporting is
 enabled by default; call `set_xtversion_enabled(false)` to leave the query unanswered.
 
+Primary device attributes (`CSI c`) are answered as a VT220 with ANSI color, `CSI ? 62 ; 22 c`.
+Tools such as Kitty's `icat` send this query after their graphics probes and reject a shorter reply.
+
 `drain_clipboard_events()` returns `TerminalClipboardEvent` values for valid UTF-8 OSC 52 store
 requests. Each event identifies the requested `TerminalClipboardTarget` (`Clipboard` or
 `Selection`) and contains the decoded text. The parser deliberately leaves applying or relaying
