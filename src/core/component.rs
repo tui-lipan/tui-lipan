@@ -1629,6 +1629,76 @@ impl<C: Component> Context<C> {
             .animated_paint(key.into(), target, config, Some(interval))
     }
 
+    /// Transition the strength of a render-time color transform, as an [`EffectAmount`] the
+    /// renderer resolves.
+    ///
+    /// The scalar counterpart of [`animated_color`](Self::animated_color). Pass the returned amount
+    /// to [`EffectScope::tint_by`](crate::widgets::EffectScope::tint_by),
+    /// [`dim_by`](crate::widgets::EffectScope::dim_by),
+    /// [`lighten_by`](crate::widgets::EffectScope::lighten_by), or any [`ColorTransform`]: the
+    /// element tree holds the same amount for the whole transition, and the runtime advances it
+    /// with repaints instead of re-running `view()` on every frame.
+    ///
+    /// As with `animated_color`, the caller never sees the interpolated number, which is what makes
+    /// skipping `view()` sound. Use [`transition`](Self::transition) when the value has to inform
+    /// layout, text, or a decision. For an amount that should oscillate indefinitely - a breathing
+    /// alert - use [`EffectAmount::pulse`] instead of retargeting this on a timer.
+    ///
+    /// Images under the scope are recolored at the transition's target rather than following it,
+    /// so a fade costs one image re-encode instead of one per frame.
+    ///
+    /// ```no_run
+    /// # use tui_lipan::prelude::*;
+    /// # use tui_lipan::animation::TransitionConfig;
+    /// # fn example(ctx: &Context<impl Component>, alerting: bool, pane: Element) -> Element {
+    /// let alpha = ctx.animated_amount(
+    ///     "pane-alert-tint",
+    ///     if alerting { 0.2 } else { 0.0 },
+    ///     TransitionConfig::default(),
+    /// );
+    /// EffectScope::new()
+    ///     .tint_by(Color::Rgb(220, 60, 60), alpha)
+    ///     .child(pane)
+    ///     .into()
+    /// # }
+    /// ```
+    ///
+    /// [`EffectAmount`]: crate::style::EffectAmount
+    /// [`EffectAmount::pulse`]: crate::style::EffectAmount::pulse
+    /// [`ColorTransform`]: crate::style::ColorTransform
+    ///
+    /// # Panics
+    /// Panics if the same `key` is used with two different value types.
+    pub fn animated_amount(
+        &self,
+        key: impl Into<Key>,
+        target: f32,
+        config: crate::animation::TransitionConfig,
+    ) -> crate::style::EffectAmount {
+        // Deliberately no `MemoDependency::Transition`, for the reason given on `animated_color`.
+        self.env
+            .animations
+            .animated_amount(key.into(), target, config, None)
+    }
+
+    /// Transition a render-time effect amount at a caller-selected repaint cadence.
+    ///
+    /// The scalar counterpart of
+    /// [`animated_color_with_frame_rate`](Self::animated_color_with_frame_rate), with the same
+    /// clamping and cadence sharing.
+    pub fn animated_amount_with_frame_rate(
+        &self,
+        key: impl Into<Key>,
+        target: f32,
+        config: crate::animation::TransitionConfig,
+        frame_rate: u16,
+    ) -> crate::style::EffectAmount {
+        let interval = crate::app::context::frame_interval(frame_rate.clamp(1, 480));
+        self.env
+            .animations
+            .animated_amount(key.into(), target, config, Some(interval))
+    }
+
     /// Convenience helper for responsive layouts based on viewport width.
     ///
     /// Returns:

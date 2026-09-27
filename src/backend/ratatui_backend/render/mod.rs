@@ -2125,7 +2125,7 @@ fn animated_image_style(animated: &crate::widgets::internal::AnimatedNode) -> Op
         && opacity < 1.0)
         .then(|| {
             Style::new().transform_bg(crate::style::ColorTransform::OpacityToward {
-                factor: opacity,
+                factor: opacity.into(),
                 target,
             })
         })

@@ -90,11 +90,11 @@ pub(crate) fn render_animated(
 
     let opacity_tf = if let Some(target) = node.opacity_target {
         ColorTransform::OpacityToward {
-            factor: opacity,
+            factor: opacity.into(),
             target,
         }
     } else {
-        ColorTransform::Opacity(opacity)
+        ColorTransform::opacity(opacity)
     };
 
     let mut style = Style::new().transform_fg(opacity_tf);

@@ -5,6 +5,12 @@
 //! registry stores per-key transition state across frames, ticks active
 //! transitions every animation frame, and drops entries that were not read
 //! during a frame.
+//!
+//! A transition is either *view-resolved* or *render-resolved*. `transition()` hands the current
+//! value to `view()`, which may have used it for anything, so advancing it needs a `view()` pass.
+//! `animated_color()` and `animated_amount()` hand out a late-bound value instead - a
+//! [`Paint::Animated`] or an [`EffectAmount`] naming a registry slot - which the renderer
+//! resolves while painting. The value never escapes into `view()`, so advancing it is a repaint.
 
 use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
@@ -13,7 +19,7 @@ use std::time::Duration;
 
 use crate::animation::transition::{Lerp, Transition, TransitionConfig};
 use crate::core::element::Key;
-use crate::style::{Color, Paint};
+use crate::style::{Color, EffectAmount, Paint};
 
 trait DynEntry: Any {
     fn entry_type_id(&self) -> TypeId;
@@ -21,10 +27,10 @@ trait DynEntry: Any {
     fn is_animating(&self) -> bool;
     fn touched(&self) -> bool;
     fn reset_touched(&self);
-    /// Whether this entry is only ever read while painting, so advancing it needs no `view()` pass.
-    fn paint_resolved(&self) -> bool;
-    /// Optional caller-selected cadence for a paint-resolved transition.
-    fn paint_interval(&self) -> Option<Duration>;
+    /// Whether this entry is only ever read by the renderer, so advancing it needs no `view()` pass.
+    fn render_resolved(&self) -> bool;
+    /// Optional caller-selected cadence for a render-resolved transition.
+    fn render_interval(&self) -> Option<Duration>;
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn as_any(&self) -> &dyn Any;
 }
@@ -34,11 +40,11 @@ struct TypedEntry<T: Lerp + PartialEq + 'static> {
     target: T,
     transition: Option<Transition<T>>,
     touched: Cell<bool>,
-    /// Set when the value is handed out as a late-bound [`Paint`](crate::style::Paint) rather than a
-    /// concrete value. The view then cannot have baked the value into anything but a style, which is
-    /// what makes advancing it a repaint instead of a rebuild.
-    paint_resolved: Cell<bool>,
-    paint_interval: Cell<Option<Duration>>,
+    /// Set when the value is handed out late-bound - as a slot the renderer resolves - rather than
+    /// as a concrete value. The view then cannot have baked the value into anything but a render
+    /// input, which is what makes advancing it a repaint instead of a rebuild.
+    render_resolved: Cell<bool>,
+    render_interval: Cell<Option<Duration>>,
 }
 
 impl<T: Lerp + PartialEq + 'static> DynEntry for TypedEntry<T> {
@@ -73,12 +79,12 @@ impl<T: Lerp + PartialEq + 'static> DynEntry for TypedEntry<T> {
         self.touched.set(false);
     }
 
-    fn paint_resolved(&self) -> bool {
-        self.paint_resolved.get()
+    fn render_resolved(&self) -> bool {
+        self.render_resolved.get()
     }
 
-    fn paint_interval(&self) -> Option<Duration> {
-        self.paint_interval.get()
+    fn render_interval(&self) -> Option<Duration> {
+        self.render_interval.get()
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
@@ -90,38 +96,70 @@ impl<T: Lerp + PartialEq + 'static> DynEntry for TypedEntry<T> {
     }
 }
 
-thread_local! {
-    /// The registry the current draw resolves late-bound paints against.
-    ///
-    /// Ambient rather than threaded through every renderer for the same reason the render-time
-    /// terminal background is: a `Paint` can surface anywhere in any widget, and the alternative is
-    /// a parameter on every style conversion in the backend.
-    static RENDER_REGISTRY: RefCell<Option<std::rc::Rc<AnimationRegistry>>> =
-        const { RefCell::new(None) };
+/// What the current draw resolves late-bound values against.
+struct RenderScope {
+    registry: std::rc::Rc<AnimationRegistry>,
+    /// The runtime clock when the draw began. Renderer-owned animations such as
+    /// [`EffectPulse`](crate::style::EffectPulse) are evaluated from it.
+    elapsed: Duration,
 }
 
-/// RAII guard restoring the previously installed registry on drop.
-pub(crate) struct RenderRegistryScope(Option<std::rc::Rc<AnimationRegistry>>);
+thread_local! {
+    /// The registry and clock the current draw resolves late-bound values against.
+    ///
+    /// Ambient rather than threaded through every renderer for the same reason the render-time
+    /// terminal background is: a late-bound paint or amount can surface anywhere in any widget,
+    /// and the alternative is a parameter on every style conversion in the backend.
+    static RENDER_SCOPE: RefCell<Option<RenderScope>> = const { RefCell::new(None) };
+}
+
+/// RAII guard restoring the previously installed render scope on drop.
+pub(crate) struct RenderRegistryScope(Option<RenderScope>);
 
 impl Drop for RenderRegistryScope {
     fn drop(&mut self) {
-        RENDER_REGISTRY.with(|slot| *slot.borrow_mut() = self.0.take());
+        RENDER_SCOPE.with(|slot| *slot.borrow_mut() = self.0.take());
     }
 }
 
-/// Make `registry` the one this draw resolves [`Paint::Animated`] against, until the guard drops.
-pub(crate) fn set_render_registry(registry: std::rc::Rc<AnimationRegistry>) -> RenderRegistryScope {
-    let prev = RENDER_REGISTRY.with(|slot| slot.borrow_mut().replace(registry));
+/// Make `registry` the one this draw resolves late-bound values against, and `elapsed` the
+/// runtime clock reading it paints at, until the guard drops.
+pub(crate) fn set_render_registry(
+    registry: std::rc::Rc<AnimationRegistry>,
+    elapsed: Duration,
+) -> RenderRegistryScope {
+    let prev =
+        RENDER_SCOPE.with(|slot| slot.borrow_mut().replace(RenderScope { registry, elapsed }));
     RenderRegistryScope(prev)
 }
 
 /// The colour a late-bound paint slot currently holds, if a registry is installed and still has it.
 pub(crate) fn resolve_render_paint_slot(slot: u16) -> Option<Color> {
-    RENDER_REGISTRY.with(|installed| {
+    resolve_render_slot(slot)
+}
+
+/// The amount a late-bound scalar slot currently holds, if a registry is installed and still has
+/// it.
+pub(crate) fn resolve_render_scalar_slot(slot: u16) -> Option<f32> {
+    resolve_render_slot(slot)
+}
+
+fn resolve_render_slot<T: Lerp + PartialEq + Copy + 'static>(slot: u16) -> Option<T> {
+    RENDER_SCOPE.with(|installed| {
         installed
             .borrow()
             .as_ref()
-            .and_then(|registry| registry.resolve_paint_slot(slot))
+            .and_then(|scope| scope.registry.resolve_slot::<T>(slot))
+    })
+}
+
+/// The runtime clock reading the current draw paints at, or zero outside a draw.
+pub(crate) fn render_elapsed() -> Duration {
+    RENDER_SCOPE.with(|installed| {
+        installed
+            .borrow()
+            .as_ref()
+            .map_or(Duration::ZERO, |scope| scope.elapsed)
     })
 }
 
@@ -132,9 +170,11 @@ pub(crate) fn resolve_render_paint_slot(slot: u16) -> Option<Color> {
 #[derive(Default)]
 pub(crate) struct AnimationRegistry {
     entries: RefCell<HashMap<Key, Box<dyn DynEntry>>>,
-    /// Keys indexed by the slot id a late-bound [`Paint`](crate::style::Paint) carries. `Paint` must
-    /// stay `Copy`, so it names its entry by slot rather than holding the key.
-    color_slots: RefCell<Vec<Key>>,
+    /// Keys indexed by the slot id a late-bound value carries. [`Paint`] and [`EffectAmount`] must
+    /// stay `Copy`, so they name their entry by slot rather than holding the key. One id space
+    /// serves every value type: a key holds one type for its whole life, and resolving a slot as
+    /// the wrong type finds nothing.
+    render_slots: RefCell<Vec<Key>>,
     slot_by_key: RefCell<HashMap<Key, u16>>,
     generation: Cell<u64>,
 }
@@ -145,8 +185,16 @@ pub(crate) struct TransitionTick {
     /// A value some `view()` read as a concrete value changed, so the view must run again for it to
     /// reach the screen.
     pub(crate) view_changed: bool,
-    /// A late-bound paint changed. The renderer resolves those itself, so a repaint is enough.
-    pub(crate) paint_changed: bool,
+    /// A late-bound value changed. The renderer resolves those itself, so a repaint is enough.
+    pub(crate) render_changed: bool,
+}
+
+/// A render-resolved transition as handed out: the slot naming it, where it is now, and where it
+/// is going. A late-bound paint falls back to the former, a late-bound amount to the latter.
+struct RenderValue<T> {
+    slot: Option<u16>,
+    current: T,
+    target: T,
 }
 
 impl AnimationRegistry {
@@ -187,39 +235,85 @@ impl AnimationRegistry {
         config: TransitionConfig,
         frame_interval: Option<Duration>,
     ) -> Paint {
-        let current = self.advance(key.clone(), target, config, true, frame_interval);
-        match self.slot_for(key) {
+        let value = self.render_value(key, target, config, frame_interval);
+        match value.slot {
             Some(slot) => Paint::Animated {
                 slot,
-                fallback: current,
+                fallback: value.current,
             },
-            None => Paint::Solid(current),
+            None => Paint::Solid(value.current),
+        }
+    }
+
+    /// Like [`animated_paint`](Self::animated_paint), for the strength of a render-time color
+    /// transform: an [`EffectAmount`] naming the entry instead of its current value.
+    pub(crate) fn animated_amount(
+        &self,
+        key: Key,
+        target: f32,
+        config: TransitionConfig,
+        frame_interval: Option<Duration>,
+    ) -> EffectAmount {
+        let value = self.render_value(key, target, config, frame_interval);
+        match value.slot {
+            Some(slot) => EffectAmount::animated(slot, value.target),
+            None => EffectAmount::fixed(value.current),
+        }
+    }
+
+    /// Advance `key` as a render-resolved transition and name it by slot.
+    fn render_value<T: Lerp + PartialEq + 'static>(
+        &self,
+        key: Key,
+        target: T,
+        config: TransitionConfig,
+        frame_interval: Option<Duration>,
+    ) -> RenderValue<T> {
+        let current = self.advance(key.clone(), target.clone(), config, true, frame_interval);
+        RenderValue {
+            slot: self.slot_for(key),
+            current,
+            target,
         }
     }
 
     /// The slot id naming `key`, minting one on first use.
     ///
-    /// Slots are never reused for a different key, so a `Paint` handed out earlier can never resolve
+    /// Slots are never reused for a different key, so a value handed out earlier can never resolve
     /// to an unrelated transition. Returns [`None`] once the id space is exhausted, which asks the
-    /// caller to hand out a plain colour instead — the fade degrades to a snap rather than misbinding.
+    /// caller to hand out a plain value instead — the animation degrades to a snap rather than
+    /// misbinding.
     fn slot_for(&self, key: Key) -> Option<u16> {
         if let Some(slot) = self.slot_by_key.borrow().get(&key) {
             return Some(*slot);
         }
-        let mut slots = self.color_slots.borrow_mut();
+        let mut slots = self.render_slots.borrow_mut();
         let slot = u16::try_from(slots.len()).ok()?;
         slots.push(key.clone());
         self.slot_by_key.borrow_mut().insert(key, slot);
         Some(slot)
     }
 
-    /// The current colour behind a late-bound paint, or [`None`] if the slot no longer resolves.
-    pub(crate) fn resolve_paint_slot(&self, slot: u16) -> Option<Color> {
-        let key = self.color_slots.borrow().get(slot as usize)?.clone();
+    /// The current value behind a late-bound slot, or [`None`] if the slot no longer resolves or
+    /// holds another type.
+    fn resolve_slot<T: Lerp + PartialEq + Copy + 'static>(&self, slot: u16) -> Option<T> {
+        let key = self.render_slots.borrow().get(slot as usize)?.clone();
         let entries = self.entries.borrow();
         let entry = entries.get(&key)?;
-        let typed = entry.as_any().downcast_ref::<TypedEntry<Color>>()?;
+        let typed = entry.as_any().downcast_ref::<TypedEntry<T>>()?;
         Some(typed.current)
+    }
+
+    /// The current colour behind a late-bound paint, or [`None`] if the slot no longer resolves.
+    #[cfg(test)]
+    pub(crate) fn resolve_paint_slot(&self, slot: u16) -> Option<Color> {
+        self.resolve_slot(slot)
+    }
+
+    /// The current amount behind a late-bound scalar, or [`None`] if the slot no longer resolves.
+    #[cfg(test)]
+    pub(crate) fn resolve_scalar_slot(&self, slot: u16) -> Option<f32> {
+        self.resolve_slot(slot)
     }
 
     fn advance<T: Lerp + PartialEq + 'static>(
@@ -227,8 +321,8 @@ impl AnimationRegistry {
         key: Key,
         target: T,
         config: TransitionConfig,
-        paint_resolved: bool,
-        paint_interval: Option<Duration>,
+        render_resolved: bool,
+        render_interval: Option<Duration>,
     ) -> T {
         let mut entries = self.entries.borrow_mut();
         let entry = entries.entry(key).or_insert_with(|| {
@@ -237,8 +331,8 @@ impl AnimationRegistry {
                 target: target.clone(),
                 transition: None,
                 touched: Cell::new(true),
-                paint_resolved: Cell::new(paint_resolved),
-                paint_interval: Cell::new(paint_interval),
+                render_resolved: Cell::new(render_resolved),
+                render_interval: Cell::new(render_interval),
             })
         });
 
@@ -256,10 +350,10 @@ impl AnimationRegistry {
         typed.touched.set(true);
         // A key read as a concrete value even once must keep asking for view passes: some view has
         // baked that value into something the renderer cannot re-derive.
-        if !paint_resolved {
-            typed.paint_resolved.set(false);
+        if !render_resolved {
+            typed.render_resolved.set(false);
         }
-        typed.paint_interval.set(paint_interval);
+        typed.render_interval.set(render_interval);
 
         if typed.target != target {
             let from = typed.current.clone();
@@ -282,16 +376,16 @@ impl AnimationRegistry {
 
     /// Advance all in-flight transitions by `dt`, reporting what the change requires.
     ///
-    /// Values a view read concretely need that view to run again; late-bound paints only need the
-    /// screen redrawn. The memo generation is bumped only for the former, so a colour fade does not
+    /// Values a view read concretely need that view to run again; late-bound values only need the
+    /// screen redrawn. The memo generation is bumped only for the former, so a fade does not
     /// invalidate memoized subtrees that never depended on it.
     pub(crate) fn tick(&self, dt: Duration) -> TransitionTick {
         let mut entries = self.entries.borrow_mut();
         let mut result = TransitionTick::default();
         for entry in entries.values_mut() {
             if entry.tick(dt) {
-                if entry.paint_resolved() {
-                    result.paint_changed = true;
+                if entry.render_resolved() {
+                    result.render_changed = true;
                 } else {
                     result.view_changed = true;
                 }
@@ -310,11 +404,11 @@ impl AnimationRegistry {
         let mut entries = self.entries.borrow_mut();
         let before = entries.len();
         entries.retain(|_, e| e.touched());
-        // Slot ids stay assigned for the life of the runtime: `Paint` values already handed out
+        // Slot ids stay assigned for the life of the runtime: late-bound values already handed out
         // carry them, and a key that comes back must resolve to the same slot. Dropped entries make
-        // `resolve_paint_slot` fall through to the paint's own fallback until they are read again.
+        // `resolve_slot` fall through to the value's own fallback until they are read again.
         debug_assert!(
-            self.color_slots.borrow().len() >= self.slot_by_key.borrow().len(),
+            self.render_slots.borrow().len() >= self.slot_by_key.borrow().len(),
             "slot table and reverse map must stay consistent"
         );
         if entries.len() != before {
@@ -337,25 +431,26 @@ impl AnimationRegistry {
         self.entries
             .borrow()
             .values()
-            .any(|entry| entry.is_animating() && !entry.paint_resolved())
+            .any(|entry| entry.is_animating() && !entry.render_resolved())
     }
 
-    /// Whether an active transition is resolved by the renderer from a late-bound paint.
+    /// Whether an active transition is resolved by the renderer from a late-bound value.
     #[cfg(test)]
-    pub(crate) fn has_active_paint_transition(&self) -> bool {
+    pub(crate) fn has_active_render_transition(&self) -> bool {
         self.entries
             .borrow()
             .values()
-            .any(|entry| entry.is_animating() && entry.paint_resolved())
+            .any(|entry| entry.is_animating() && entry.render_resolved())
     }
 
-    /// Fastest cadence requested by an active paint transition, falling back to the app default.
-    pub(crate) fn active_paint_transition_interval(&self, default: Duration) -> Option<Duration> {
+    /// Fastest cadence requested by an active render-resolved transition, falling back to the app
+    /// default.
+    pub(crate) fn active_render_transition_interval(&self, default: Duration) -> Option<Duration> {
         self.entries
             .borrow()
             .values()
-            .filter(|entry| entry.is_animating() && entry.paint_resolved())
-            .map(|entry| entry.paint_interval().unwrap_or(default))
+            .filter(|entry| entry.is_animating() && entry.render_resolved())
+            .map(|entry| entry.render_interval().unwrap_or(default))
             .min()
     }
 
@@ -376,6 +471,13 @@ mod tests {
     use super::*;
     use crate::animation::easing::Easing;
     use crate::style::Color;
+
+    /// The registry slot a late-bound amount names, read back through the registry itself.
+    fn amount_slot(amount: EffectAmount) -> u16 {
+        (0..=u16::MAX)
+            .find(|&slot| EffectAmount::animated(slot, amount.resting_value()) == amount)
+            .expect("a late-bound amount names a slot")
+    }
 
     fn cfg(ms: u64) -> TransitionConfig {
         TransitionConfig {
@@ -475,12 +577,88 @@ mod tests {
         let _ = reg.transition::<f32>("layout".into(), 0.0, cfg(100));
         let _ = reg.animated_paint("chrome".into(), Color::Red, cfg(100), None);
         assert!(!reg.has_active_view_transition());
-        assert!(!reg.has_active_paint_transition());
+        assert!(!reg.has_active_render_transition());
 
         let _ = reg.transition::<f32>("layout".into(), 1.0, cfg(100));
         let _ = reg.animated_paint("chrome".into(), Color::Blue, cfg(100), None);
         assert!(reg.has_active_view_transition());
-        assert!(reg.has_active_paint_transition());
+        assert!(reg.has_active_render_transition());
+    }
+
+    #[test]
+    fn animated_amounts_advance_as_render_changes_and_resolve_by_slot() {
+        let reg = AnimationRegistry::default();
+        let _ = reg.animated_amount("tint".into(), 0.0, cfg(100), None);
+        let amount = reg.animated_amount("tint".into(), 0.2, cfg(100), None);
+        assert!(
+            amount.is_transition(),
+            "expected a late-bound amount, got {amount:?}"
+        );
+        assert_eq!(amount.resting_value(), 0.2, "it rests at its target");
+        let slot = amount_slot(amount);
+        assert!(reg.has_active_render_transition());
+        assert!(!reg.has_active_view_transition());
+
+        let tick = reg.tick(Duration::from_millis(50));
+        assert!(tick.render_changed);
+        assert!(
+            !tick.view_changed,
+            "a late-bound amount never needs a view pass"
+        );
+        let midway = reg.resolve_scalar_slot(slot).expect("slot resolves");
+        assert!((0.09..=0.11).contains(&midway), "{midway}");
+
+        // The same key read again hands out an identical value for the whole transition.
+        let again = reg.animated_amount("tint".into(), 0.2, cfg(100), None);
+        assert_eq!(again, amount);
+    }
+
+    #[test]
+    fn colour_and_scalar_slots_share_one_id_space_without_crosstalk() {
+        let reg = AnimationRegistry::default();
+        let paint = reg.animated_paint("chrome".into(), Color::Red, cfg(100), None);
+        let amount = reg.animated_amount("tint".into(), 0.5, cfg(100), None);
+        let Paint::Animated {
+            slot: paint_slot, ..
+        } = paint
+        else {
+            panic!("expected an animated paint");
+        };
+        let amount_slot = amount_slot(amount);
+        assert_ne!(paint_slot, amount_slot);
+        assert_eq!(reg.resolve_paint_slot(paint_slot), Some(Color::Red));
+        assert_eq!(reg.resolve_scalar_slot(amount_slot), Some(0.5));
+        assert_eq!(reg.resolve_scalar_slot(paint_slot), None);
+        assert_eq!(reg.resolve_paint_slot(amount_slot), None);
+    }
+
+    #[test]
+    fn a_scalar_read_concretely_keeps_asking_for_view_passes() {
+        let reg = AnimationRegistry::default();
+        let _ = reg.animated_amount("shared".into(), 0.0, cfg(100), None);
+        let _ = reg.transition::<f32>("shared".into(), 0.0, cfg(100));
+        let _ = reg.animated_amount("shared".into(), 1.0, cfg(100), None);
+        let tick = reg.tick(Duration::from_millis(50));
+        assert!(
+            tick.view_changed,
+            "some view baked the concrete value in, so it must run again"
+        );
+    }
+
+    #[test]
+    fn render_scope_resolves_slots_and_the_draw_clock() {
+        let reg = std::rc::Rc::new(AnimationRegistry::default());
+        let _ = reg.animated_amount("tint".into(), 0.0, cfg(100), None);
+        let amount = reg.animated_amount("tint".into(), 1.0, cfg(100), None);
+        let _ = reg.tick(Duration::from_millis(25));
+        assert_eq!(amount.resolved(), 1.0, "outside a draw the target answers");
+        assert_eq!(render_elapsed(), Duration::ZERO);
+        {
+            let _scope = set_render_registry(std::rc::Rc::clone(&reg), Duration::from_secs(3));
+            assert!((amount.resolved() - 0.25).abs() < 1e-4);
+            assert_eq!(render_elapsed(), Duration::from_secs(3));
+        }
+        assert_eq!(render_elapsed(), Duration::ZERO);
     }
 
     #[test]

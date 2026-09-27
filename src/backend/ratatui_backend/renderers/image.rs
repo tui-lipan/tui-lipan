@@ -2913,10 +2913,10 @@ mod tests {
             Style::new().dim_by(0.6),
             Style::new().tint_by(Color::Rgb(0, 0, 40), 0.5),
             Style::new().lighten_by(0.3),
-            Style::new().transform_bg(ColorTransform::Elevate(0.5)),
-            Style::new().transform_bg(ColorTransform::Opacity(0.4)),
+            Style::new().transform_bg(ColorTransform::elevate(0.5)),
+            Style::new().transform_bg(ColorTransform::opacity(0.4)),
             Style::new().transform_bg(ColorTransform::OpacityToward {
-                factor: 0.3,
+                factor: 0.3.into(),
                 target: Color::Rgb(200, 10, 90),
             }),
             Style::new().bg(Color::Rgb(40, 40, 40)).dim_by(0.2),
@@ -2979,7 +2979,7 @@ mod tests {
         use crate::style::{ColorTransform, Style};
 
         let elevate = BackdropBackgroundEffect::from_style(
-            Style::new().transform_bg(ColorTransform::Elevate(0.5)),
+            Style::new().transform_bg(ColorTransform::elevate(0.5)),
             None,
         )
         .unwrap();
@@ -3028,7 +3028,7 @@ mod tests {
         use crate::style::{ColorTransform, Style};
 
         let elevate = BackdropBackgroundEffect::from_style(
-            Style::new().transform_bg(ColorTransform::Elevate(0.5)),
+            Style::new().transform_bg(ColorTransform::elevate(0.5)),
             None,
         )
         .unwrap();

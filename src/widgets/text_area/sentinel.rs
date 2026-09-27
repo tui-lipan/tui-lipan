@@ -157,6 +157,9 @@ pub enum SentinelEvent {
 }
 
 /// A clicked inline sentinel inside a [`TextArea`](crate::widgets::TextArea).
+// One of these is built per click, so the size gap between variants costs nothing worth boxing
+// a public field for.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TextAreaSentinelClickKind {
     /// An inline image sentinel (`IMAGE_SENTINEL_BASE + index`) was clicked.

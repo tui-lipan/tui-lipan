@@ -992,9 +992,10 @@ impl<C: Component> AppRunner<C> {
 
         // Same reasoning for late-bound paints: the styles in the tree name their transitions, and
         // this is where those names are resolved. Dropped at the end of the draw.
-        let _animations = crate::animation::registry::set_render_registry(std::rc::Rc::clone(
-            &self.core.ctx.env().animations,
-        ));
+        let _animations = crate::animation::registry::set_render_registry(
+            std::rc::Rc::clone(&self.core.ctx.env().animations),
+            self.core.ctx.env().clock.elapsed(),
+        );
 
         self.flush_inline_inserts(terminal)?;
         if !(draw_mode == DrawMode::PaintOnly && self.surface.is_inline()) {
@@ -1138,9 +1139,10 @@ impl<C: Component> AppRunner<C> {
     /// The frame just painted, drawn again off-screen from the production render context so it
     /// matches what the terminal received.
     pub(super) fn capture_painted_frame(&self) -> crate::capture::CapturedFrame {
-        let _animations = crate::animation::registry::set_render_registry(std::rc::Rc::clone(
-            &self.core.ctx.env().animations,
-        ));
+        let _animations = crate::animation::registry::set_render_registry(
+            std::rc::Rc::clone(&self.core.ctx.env().animations),
+            self.core.ctx.env().clock.elapsed(),
+        );
         let vim_mode = self.headless_interaction().vim_mode;
         let cursor_position = StdCell::new(None);
         self.with_render_context(&cursor_position, |ctx| {

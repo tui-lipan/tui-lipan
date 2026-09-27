@@ -2531,7 +2531,7 @@ fn the_color_cadence_shortens_the_paint_count_not_the_fade() {
         .ctx
         .env()
         .animations
-        .has_active_paint_transition()
+        .has_active_render_transition()
     {
         runner.core.ctx.env().advance_clock(step);
         elapsed += step;
@@ -2578,6 +2578,248 @@ fn a_slow_color_cadence_advances_by_its_whole_frame() {
         ),
         Duration::from_millis(50),
         "a fast cadence keeps the original catch-up cap"
+    );
+}
+
+/// How [`AlertTintSmoke`] drives its tint strength.
+#[derive(Clone, Copy)]
+enum AlertTint {
+    /// `ctx.animated_amount` toward 0.6 while alerting, 0.0 otherwise.
+    Transition,
+    /// A renderer-owned pulse, independent of `alerting`.
+    Pulse,
+}
+
+#[derive(Clone)]
+struct AlertTintSmoke {
+    alerting: Rc<Cell<bool>>,
+    views: Rc<Cell<usize>>,
+    tint: AlertTint,
+}
+
+impl Component for AlertTintSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        self.views.set(self.views.get() + 1);
+        let amount = match self.tint {
+            AlertTint::Transition => ctx.animated_amount(
+                "alert-tint",
+                if self.alerting.get() { 0.6 } else { 0.0 },
+                TransitionConfig {
+                    duration: Duration::from_millis(100),
+                    easing: Easing::Linear,
+                },
+            ),
+            AlertTint::Pulse => crate::style::EffectAmount::pulse(0.0, 0.6)
+                .period(Duration::from_millis(1000))
+                .easing(Easing::Linear)
+                .frame_rate(10)
+                .into(),
+        };
+        crate::widgets::EffectScope::new()
+            .tint_by(Color::Rgb(255, 0, 0), amount)
+            .child(
+                Text::new("pane").style(
+                    Style::new()
+                        .fg(Color::Rgb(0, 0, 255))
+                        .bg(Color::Rgb(0, 0, 0)),
+                ),
+            )
+            .into()
+    }
+}
+
+/// A tint strength that only feeds an effect must advance without re-running `view()`: the
+/// element names the transition, and the renderer resolves it while painting. This is what lets an
+/// app fade an alert tint in without a custom `CellEffect`.
+#[test]
+fn an_animated_tint_amount_fades_without_a_view_pass() {
+    let alerting = Rc::new(Cell::new(false));
+    let views = Rc::new(Cell::new(0));
+    let mut backend = crate::TestBackend::new(AlertTintSmoke {
+        alerting: alerting.clone(),
+        views: views.clone(),
+        tint: AlertTint::Transition,
+    });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 10,
+        h: 1,
+    });
+    backend.render();
+    let untinted = backend.capture_frame().cell(0, 0).bg;
+
+    alerting.set(true);
+    backend.render();
+    let views_at_start = views.get();
+    assert_eq!(
+        backend.capture_frame().cell(0, 0).bg,
+        untinted,
+        "the fade starts where it was"
+    );
+
+    backend.advance_frame(Duration::from_millis(50));
+    assert_eq!(
+        views.get(),
+        views_at_start,
+        "advancing an effect-only amount must not run view()"
+    );
+    let midway = backend.capture_frame().cell(0, 0).bg;
+    assert_ne!(midway, untinted, "the painted tint moved anyway");
+
+    backend.advance_frame(Duration::from_millis(60));
+    let settled = backend.capture_frame().cell(0, 0).bg;
+    assert_ne!(settled, midway, "and keeps moving to the target");
+    assert_eq!(
+        views.get(),
+        views_at_start,
+        "the whole fade cost no view passes"
+    );
+}
+
+/// Every frame of an animated tint strength is a paint-only frame: the ticker must never ask for
+/// the full rebuild a concrete `ctx.transition()` needs.
+#[test]
+fn an_animated_tint_amount_ticks_as_paint_only() {
+    let alerting = Rc::new(Cell::new(false));
+    let views = Rc::new(Cell::new(0));
+    let component = || AlertTintSmoke {
+        alerting: alerting.clone(),
+        views: views.clone(),
+        tint: AlertTint::Transition,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component(), ());
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 10,
+        h: 1,
+    };
+    init_runner(&mut runner, component(), viewport);
+
+    alerting.set(true);
+    runner.core.render_element(viewport, None, None, None);
+    runner.animation.last_animated_tick = runner.core.ctx.env().now();
+    let views_at_start = views.get();
+
+    let step = Duration::from_millis(5);
+    let mut elapsed = Duration::ZERO;
+    let mut paints = 0;
+    while runner
+        .core
+        .ctx
+        .env()
+        .animations
+        .has_active_render_transition()
+    {
+        runner.core.ctx.env().advance_clock(step);
+        elapsed += step;
+        assert!(elapsed < Duration::from_millis(500), "the fade never ended");
+        let mut dirty = DirtyTracker::default();
+        runner.update_animation_cycle(&mut dirty);
+        match dirty.level() {
+            DirtyLevel::None => {}
+            DirtyLevel::PaintOnly => paints += 1,
+            level => panic!("a tint tick asked for {level:?}, not a paint"),
+        }
+    }
+
+    assert!(paints > 0, "the fade was painted");
+    assert_eq!(views.get(), views_at_start, "and never re-ran view()");
+}
+
+/// A pulse is renderer-owned: nothing in the app retargets it, the effect scope asks for paints at
+/// the pulse's own rate, and the painted tint follows the runtime clock.
+#[test]
+fn a_pulsing_tint_breathes_on_paints_alone() {
+    let views = Rc::new(Cell::new(0));
+    let component = || AlertTintSmoke {
+        alerting: Rc::new(Cell::new(false)),
+        views: views.clone(),
+        tint: AlertTint::Pulse,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component(), ());
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 10,
+        h: 1,
+    };
+    init_runner(&mut runner, component(), viewport);
+    assert_eq!(
+        runner.core.tree.animated_effect_scope_interval(),
+        Some(Duration::from_millis(100)),
+        "the scope repaints at the pulse's 10 fps"
+    );
+    assert_eq!(
+        runner.active_animation_interval(),
+        None,
+        "a pulse needs no registry or view-level animation clock"
+    );
+
+    // Put the virtual clock well ahead of wall time, so every step below is exactly one frame.
+    runner.core.ctx.env().advance_clock(Duration::from_secs(10));
+    runner.animation.last_effect_tick = runner.core.ctx.env().now();
+    let views_at_start = views.get();
+    let mut paints = 0;
+    for _ in 0..10 {
+        runner
+            .core
+            .ctx
+            .env()
+            .advance_clock(Duration::from_millis(100));
+        let mut dirty = DirtyTracker::default();
+        runner.update_animation_cycle(&mut dirty);
+        match dirty.level() {
+            DirtyLevel::None => {}
+            DirtyLevel::PaintOnly => paints += 1,
+            level => panic!("a pulse tick asked for {level:?}, not a paint"),
+        }
+    }
+    assert_eq!(paints, 10, "one paint per pulse frame");
+    assert_eq!(views.get(), views_at_start, "and no view passes");
+
+    // The painted tint follows the clock: the trough of the cycle, then its peak.
+    let mut backend = crate::TestBackend::new(component());
+    backend.set_viewport(viewport);
+    backend.render();
+    let views_at_start = views.get();
+    let trough = backend.capture_frame().cell(0, 0).bg;
+    // `advance_frame` runs view() only when something asks for it, unlike `advance`.
+    let half_cycle = |backend: &mut crate::TestBackend<AlertTintSmoke>| {
+        for _ in 0..10 {
+            backend.advance_frame(Duration::from_millis(50));
+        }
+    };
+    half_cycle(&mut backend);
+    let peak = backend.capture_frame().cell(0, 0).bg;
+    half_cycle(&mut backend);
+    let trough_again = backend.capture_frame().cell(0, 0).bg;
+    assert_eq!(
+        trough,
+        Color::Rgb(0, 0, 0),
+        "a pulse from 0.0 starts untinted"
+    );
+    assert_eq!(
+        peak,
+        Color::Rgb(153, 0, 0),
+        "and peaks at 0.6 of red halfway round"
+    );
+    assert_eq!(trough_again, trough, "then breathes back out");
+    assert_eq!(
+        views.get(),
+        views_at_start,
+        "without the app lifting a finger"
     );
 }
 

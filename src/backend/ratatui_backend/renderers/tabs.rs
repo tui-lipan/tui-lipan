@@ -379,7 +379,7 @@ mod tests {
         let tab = Style::new();
         let hover = Style::new()
             .bg(Color::Blue)
-            .transform_bg(ColorTransform::Dim(0.5));
+            .transform_bg(ColorTransform::dim(0.5));
         let active = Style::new().bg(Color::rgb(200, 180, 160));
 
         let resolved = resolve_tabs_tab_style(
@@ -405,7 +405,7 @@ mod tests {
     #[test]
     fn disabled_tab_state_remains_terminal() {
         let base = Style::new().bg(Color::Black);
-        let hover = Style::new().transform_bg(ColorTransform::Dim(0.5));
+        let hover = Style::new().transform_bg(ColorTransform::dim(0.5));
         let active = Style::new().bg(Color::Green);
         let disabled = Style::new().bg(Color::Gray);
 

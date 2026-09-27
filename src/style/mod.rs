@@ -8,6 +8,8 @@ pub mod ansi;
 /// Color definitions.
 pub mod color;
 mod document_baking;
+/// Scalar amounts for render-time color transforms, fixed or late-bound.
+pub mod effect_amount;
 /// Visual post-processing effect model types.
 pub mod effects;
 /// Geometric primitives (Rect, Padding, Edge).
@@ -36,6 +38,7 @@ pub use ansi::{
 };
 pub use color::*;
 pub(crate) use document_baking::apply_document_theme_carve_out;
+pub use effect_amount::{EffectAmount, EffectPulse};
 pub use effects::*;
 pub use geometry::*;
 pub use layout::*;

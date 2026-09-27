@@ -613,16 +613,46 @@ velocity, all in content rows/second terms.
 
 ### `ColorTransform`
 
-Used with `Style::transform_fg(...)` and `Style::transform_bg(...)`.
+Used with `Style::transform_fg(...)`, `Style::transform_bg(...)`, `EffectScope`, and
+`VisualEffect::ColorTransform`. Every variant carries one strength, an
+[`EffectAmount`](#effectamount); the lowercase constructors accept anything `Into<EffectAmount>`,
+so `ColorTransform::dim(0.5)` works with a plain `f32`.
 
-| Variant | Description |
-|---------|-------------|
-| `ColorTransform::Dim(f32)` | Dim the resolved color toward black by `0.0..=1.0` |
-| `ColorTransform::Lighten(f32)` | Lighten the resolved color toward white by `0.0..=1.0` |
-| `ColorTransform::Elevate(f32)` | Raise the resolved color off its own background by `0.0..=1.0`, the relative form of `Color::elevate_by`, and available on `Style` as `.elevate_by(f32)`: lightens a dark color, dims a light one, and preserves hue and chroma |
-| `ColorTransform::Opacity(f32)` | Compose the resolved paint alpha with the factor; `1.0` keeps the paint, `0.0` resolves to the backdrop for that channel |
-| `ColorTransform::OpacityToward { factor, target }` | Same factor semantics as `Opacity`, but blend toward `target` instead of the backdrop |
-| `ColorTransform::Tint(Color, f32)` | Blend the resolved color toward a target color by alpha |
+| Variant | Constructor | Description |
+|---------|-------------|-------------|
+| `Dim(EffectAmount)` | `ColorTransform::dim(amount)` | Dim the resolved color toward black by `0.0..=1.0` |
+| `Lighten(EffectAmount)` | `ColorTransform::lighten(amount)` | Lighten the resolved color toward white by `0.0..=1.0` |
+| `Elevate(EffectAmount)` | `ColorTransform::elevate(amount)` | Raise the resolved color off its own background by `0.0..=1.0`, the relative form of `Color::elevate_by`, and available on `Style` as `.elevate_by(f32)`: lightens a dark color, dims a light one, and preserves hue and chroma |
+| `Opacity(EffectAmount)` | `ColorTransform::opacity(factor)` | Compose the resolved paint alpha with the factor; `1.0` keeps the paint, `0.0` resolves to the backdrop for that channel |
+| `OpacityToward { factor, target }` | `ColorTransform::opacity_toward(factor, target)` | Same factor semantics as `Opacity`, but blend toward `target` instead of the backdrop |
+| `Tint(Color, EffectAmount)` | `ColorTransform::tint(color, alpha)` | Blend the resolved color toward a target color by alpha |
+
+`amount()` reads a transform's strength and `with_amount(...)` replaces it.
+
+### `EffectAmount`
+
+The strength of a `ColorTransform`: an 8-byte `Copy` value that is either fixed or late-bound.
+Late-bound amounts keep the element tree unchanged while they move, so they animate with
+repaints instead of `view()` passes.
+
+| Form | Built with | Behavior |
+|------|-----------|----------|
+| Fixed | `f32.into()`, `EffectAmount::fixed(f32)` | A plain number |
+| Transition | `ctx.animated_amount(key, target, config)`, `ctx.animated_amount_with_frame_rate(...)` | Moves toward `target`; the animation registry ticks it and asks for paint-only frames |
+| Pulse | `EffectAmount::pulse(from, to)` → `EffectPulse` | Oscillates `from → to → from` forever on the runtime clock |
+
+Accessors: `as_fixed()`, `as_pulse()`, `is_transition()`, `is_late_bound()`, and
+`resting_value()` (the fixed value, the transition's target, or the pulse's `from`). Outside a
+paint, a late-bound amount resolves to its resting value; with `terminal-serde` it serializes as
+that number.
+
+`EffectPulse` builder: `period(Duration)` (default 1.5 s), `easing(Easing)` (default
+`EaseInOutSine`, applied to each half of the cycle), and `frame_rate(u16)` (default 30, clamped to
+`1..=480`). `value_at(Duration)` evaluates it at a clock reading. Pulse parameters are interned
+for the life of the process, so build pulses from a fixed set of parameters.
+
+Image pixels never follow a late-bound amount frame by frame: a transition is baked at its target
+(one re-encode for the whole fade), and a pulse is left out of image pixels.
 
 ### `Paint`
 

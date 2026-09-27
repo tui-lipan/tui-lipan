@@ -6,19 +6,24 @@ use std::sync::Arc;
 
 use crate::app::ContrastPolicy;
 
-use super::{Color, HostTerminalColors, Paint};
+use super::{Color, EffectAmount, HostTerminalColors, Paint};
 
 /// A relative transform applied to an already-resolved color.
+///
+/// Every variant's strength is an [`EffectAmount`]: a plain `f32` via `.into()` or the lowercase
+/// constructors ([`ColorTransform::dim`], [`ColorTransform::tint`], ...), or a late-bound amount
+/// from [`Context::animated_amount`](crate::Context::animated_amount) or [`EffectAmount::pulse`]
+/// that the renderer resolves while painting.
 #[cfg_attr(
     feature = "terminal-serde",
     derive(serde::Serialize, serde::Deserialize)
 )]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ColorTransform {
     /// Dim toward black by an amount in `[0.0, 1.0]`.
-    Dim(f32),
+    Dim(EffectAmount),
     /// Lighten toward white by an amount in `[0.0, 1.0]`.
-    Lighten(f32),
+    Lighten(EffectAmount),
     /// Raise a surface off its own background by an amount in `[0.0, 1.0]`.
     ///
     /// The relative form of [`Color::elevate`]: luminance-aware, so it lightens a
@@ -27,85 +32,115 @@ pub enum ColorTransform {
     /// whenever the transform has to match an absolute `Color::elevate` step
     /// elsewhere in the same UI - a hover lift over a row whose keyboard-cursor
     /// counterpart is an elevated background, for instance.
-    Elevate(f32),
+    Elevate(EffectAmount),
     /// Blend toward the resolved background by alpha `(1.0 - opacity)`.
     ///
     /// `1.0` keeps the original color unchanged, while `0.0` fully washes it
     /// into the current background. This is most useful for foreground colors
     /// on both dark and light themes.
-    Opacity(f32),
+    Opacity(EffectAmount),
     /// Like [`Self::Opacity`], but blend toward a fixed `target` instead of the cell backdrop.
     OpacityToward {
         /// Same semantics as [`Self::Opacity`]: `1.0` is unchanged, `0.0` is fully `target`.
-        factor: f32,
+        factor: EffectAmount,
         /// Destination color when `factor` approaches `0.0`.
         target: Color,
     },
     /// Blend toward `color` by `alpha` in `[0.0, 1.0]`.
-    Tint(Color, f32),
-}
-
-impl PartialEq for ColorTransform {
-    fn eq(&self, other: &Self) -> bool {
-        match (*self, *other) {
-            (Self::Dim(a), Self::Dim(b))
-            | (Self::Lighten(a), Self::Lighten(b))
-            | (Self::Elevate(a), Self::Elevate(b))
-            | (Self::Opacity(a), Self::Opacity(b)) => a.to_bits() == b.to_bits(),
-            (
-                Self::OpacityToward {
-                    factor: fa,
-                    target: ta,
-                },
-                Self::OpacityToward {
-                    factor: fb,
-                    target: tb,
-                },
-            ) => fa.to_bits() == fb.to_bits() && ta == tb,
-            (Self::Tint(color_a, alpha_a), Self::Tint(color_b, alpha_b)) => {
-                color_a == color_b && alpha_a.to_bits() == alpha_b.to_bits()
-            }
-            _ => false,
-        }
-    }
-}
-
-impl Eq for ColorTransform {}
-
-impl Hash for ColorTransform {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        match *self {
-            Self::Dim(amount) => {
-                0u8.hash(state);
-                amount.to_bits().hash(state);
-            }
-            Self::Lighten(amount) => {
-                1u8.hash(state);
-                amount.to_bits().hash(state);
-            }
-            Self::Opacity(amount) => {
-                2u8.hash(state);
-                amount.to_bits().hash(state);
-            }
-            Self::OpacityToward { factor, target } => {
-                4u8.hash(state);
-                factor.to_bits().hash(state);
-                target.hash(state);
-            }
-            Self::Tint(color, alpha) => {
-                3u8.hash(state);
-                color.hash(state);
-                alpha.to_bits().hash(state);
-            }
-            Self::Elevate(amount) => {
-                5u8.hash(state);
-                amount.to_bits().hash(state);
-            }
-        }
-    }
+    Tint(Color, EffectAmount),
 }
 
 impl ColorTransform {
+    /// [`Self::Dim`] by `amount`.
+    pub fn dim(amount: impl Into<EffectAmount>) -> Self {
+        Self::Dim(amount.into())
+    }
+
+    /// [`Self::Lighten`] by `amount`.
+    pub fn lighten(amount: impl Into<EffectAmount>) -> Self {
+        Self::Lighten(amount.into())
+    }
+
+    /// [`Self::Elevate`] by `amount`.
+    pub fn elevate(amount: impl Into<EffectAmount>) -> Self {
+        Self::Elevate(amount.into())
+    }
+
+    /// [`Self::Opacity`] at `opacity`.
+    pub fn opacity(opacity: impl Into<EffectAmount>) -> Self {
+        Self::Opacity(opacity.into())
+    }
+
+    /// [`Self::OpacityToward`] `target` at `factor`.
+    pub fn opacity_toward(factor: impl Into<EffectAmount>, target: Color) -> Self {
+        Self::OpacityToward {
+            factor: factor.into(),
+            target,
+        }
+    }
+
+    /// [`Self::Tint`] toward `color` by `alpha`.
+    pub fn tint(color: Color, alpha: impl Into<EffectAmount>) -> Self {
+        Self::Tint(color, alpha.into())
+    }
+
+    /// The strength of this transform. Every variant carries exactly one.
+    pub fn amount(self) -> EffectAmount {
+        match self {
+            Self::Dim(amount)
+            | Self::Lighten(amount)
+            | Self::Elevate(amount)
+            | Self::Opacity(amount)
+            | Self::OpacityToward { factor: amount, .. }
+            | Self::Tint(_, amount) => amount,
+        }
+    }
+
+    /// This transform with its strength replaced by `amount`.
+    pub fn with_amount(self, amount: impl Into<EffectAmount>) -> Self {
+        let amount = amount.into();
+        match self {
+            Self::Dim(_) => Self::Dim(amount),
+            Self::Lighten(_) => Self::Lighten(amount),
+            Self::Elevate(_) => Self::Elevate(amount),
+            Self::Opacity(_) => Self::Opacity(amount),
+            Self::OpacityToward { target, .. } => Self::OpacityToward {
+                factor: amount,
+                target,
+            },
+            Self::Tint(color, _) => Self::Tint(color, amount),
+        }
+    }
+
+    /// This transform with its strength bound to the value the renderer sees now.
+    ///
+    /// Renderers call this once per pass rather than letting every cell resolve a late-bound
+    /// amount on its own.
+    pub(crate) fn resolved(self) -> Self {
+        let amount = self.amount();
+        if amount.is_late_bound() {
+            self.with_amount(amount.resolved())
+        } else {
+            self
+        }
+    }
+
+    /// This transform as an image recolor may bake it in, or `None` when its strength never
+    /// settles. See [`EffectAmount::settled`].
+    pub(crate) fn settled(self) -> Option<Self> {
+        let amount = self.amount();
+        if amount.is_late_bound() {
+            amount.settled().map(|value| self.with_amount(value))
+        } else {
+            Some(self)
+        }
+    }
+
+    /// Repaint cadence this transform needs by itself: only a pulsing strength asks for one.
+    pub(crate) fn animation_interval(self) -> Option<std::time::Duration> {
+        self.amount().animation_interval()
+    }
+
     /// This transform with the colors it names (a tint color, an opacity target) passed through
     /// `map`.
     pub(crate) fn map_colors(self, map: impl Fn(Color) -> Color) -> Self {
@@ -125,21 +160,25 @@ impl ColorTransform {
     }
 
     /// Apply this transform to `color`, optionally using a resolved backdrop.
+    ///
+    /// A late-bound strength resolves to its current value when called during a draw, and to its
+    /// stand-in value otherwise; see [`EffectAmount`].
     pub fn apply_with_backdrop(self, color: Color, backdrop: Option<Color>) -> Color {
         if matches!(color, Color::Transparent | Color::Backdrop) {
             return color;
         }
+        let amount = self.amount().resolved();
         match self {
-            Self::Dim(amount) => color.dim_by(amount),
-            Self::Lighten(amount) => color.lighten_by(amount),
-            Self::Elevate(amount) => color.elevate_by(amount),
-            Self::Opacity(opacity) => backdrop.map_or(color, |bg| {
-                color.blend_toward(bg, (1.0 - opacity).clamp(0.0, 1.0))
+            Self::Dim(_) => color.dim_by(amount),
+            Self::Lighten(_) => color.lighten_by(amount),
+            Self::Elevate(_) => color.elevate_by(amount),
+            Self::Opacity(_) => backdrop.map_or(color, |bg| {
+                color.blend_toward(bg, (1.0 - amount).clamp(0.0, 1.0))
             }),
-            Self::OpacityToward { factor, target } => {
-                color.blend_toward(target, (1.0 - factor).clamp(0.0, 1.0))
+            Self::OpacityToward { target, .. } => {
+                color.blend_toward(target, (1.0 - amount).clamp(0.0, 1.0))
             }
-            Self::Tint(target, alpha) => color.blend_toward(target, alpha),
+            Self::Tint(target, _) => color.blend_toward(target, amount),
         }
     }
 
@@ -157,7 +196,7 @@ impl ColorTransform {
             return paint;
         }
         if let Self::Opacity(opacity) = self {
-            let alpha = (paint.alpha_u8() as f32 * opacity.clamp(0.0, 1.0))
+            let alpha = (paint.alpha_u8() as f32 * opacity.resolved().clamp(0.0, 1.0))
                 .round()
                 .clamp(0.0, 255.0) as u8;
             return Paint::from_color_alpha_u8(paint.color(), alpha);
@@ -180,17 +219,7 @@ impl ColorTransform {
     }
 
     fn normalized(self) -> Self {
-        match self {
-            Self::Dim(amount) => Self::Dim(amount.clamp(0.0, 1.0)),
-            Self::Lighten(amount) => Self::Lighten(amount.clamp(0.0, 1.0)),
-            Self::Elevate(amount) => Self::Elevate(amount.clamp(0.0, 1.0)),
-            Self::Opacity(opacity) => Self::Opacity(opacity.clamp(0.0, 1.0)),
-            Self::OpacityToward { factor, target } => Self::OpacityToward {
-                factor: factor.clamp(0.0, 1.0),
-                target,
-            },
-            Self::Tint(color, alpha) => Self::Tint(color, alpha.clamp(0.0, 1.0)),
-        }
+        self.with_amount(self.amount().clamped_unit())
     }
 }
 
@@ -348,7 +377,7 @@ mod terminal_serde_tests {
     #[test]
     fn color_transform_round_trips() {
         let transform = ColorTransform::OpacityToward {
-            factor: 0.42,
+            factor: 0.42.into(),
             target: Color::rgb(1, 2, 3),
         };
         let json = serde_json::to_string(&transform).unwrap();
@@ -626,8 +655,8 @@ impl Style {
     ///   even when no explicit colors are set on this style.
     pub fn dim_by(mut self, amount: f32) -> Self {
         let amount = amount.clamp(0.0, 1.0);
-        self.fg_transform = Some(ColorTransform::Dim(amount));
-        self.bg_transform = Some(ColorTransform::Dim(amount));
+        self.fg_transform = Some(ColorTransform::dim(amount));
+        self.bg_transform = Some(ColorTransform::dim(amount));
         self.dim_amount = Some(amount);
         self
     }
@@ -656,8 +685,8 @@ impl Style {
     /// wrap it in [`crate::widgets::EffectScope`].
     pub fn tint_by(mut self, color: Color, alpha: f32) -> Self {
         let alpha = alpha.clamp(0.0, 1.0);
-        self.fg_transform = Some(ColorTransform::Tint(color, alpha));
-        self.bg_transform = Some(ColorTransform::Tint(color, alpha));
+        self.fg_transform = Some(ColorTransform::tint(color, alpha));
+        self.bg_transform = Some(ColorTransform::tint(color, alpha));
         self.tint = Some((color, alpha));
         self
     }
@@ -670,8 +699,8 @@ impl Style {
     /// Unlike `dim_by`, this only affects colors explicitly set on this style.
     pub fn lighten_by(mut self, amount: f32) -> Self {
         let amount = amount.clamp(0.0, 1.0);
-        self.fg_transform = Some(ColorTransform::Lighten(amount));
-        self.bg_transform = Some(ColorTransform::Lighten(amount));
+        self.fg_transform = Some(ColorTransform::lighten(amount));
+        self.bg_transform = Some(ColorTransform::lighten(amount));
         self
     }
 
@@ -695,8 +724,8 @@ impl Style {
     /// ```
     pub fn elevate_by(mut self, amount: f32) -> Self {
         let amount = amount.clamp(0.0, 1.0);
-        self.fg_transform = Some(ColorTransform::Elevate(amount));
-        self.bg_transform = Some(ColorTransform::Elevate(amount));
+        self.fg_transform = Some(ColorTransform::elevate(amount));
+        self.bg_transform = Some(ColorTransform::elevate(amount));
         self
     }
 
@@ -900,11 +929,11 @@ mod tests {
 
         assert_eq!(
             tinted.fg_transform,
-            Some(ColorTransform::Tint(Color::Rgb(0, 0, 0), 0.5)),
+            Some(ColorTransform::tint(Color::Rgb(0, 0, 0), 0.5)),
         );
         assert_eq!(
             tinted.bg_transform,
-            Some(ColorTransform::Tint(Color::Rgb(0, 0, 0), 0.5)),
+            Some(ColorTransform::tint(Color::Rgb(0, 0, 0), 0.5)),
         );
         assert_eq!(tinted.tint, Some((Color::Rgb(0, 0, 0), 0.5)));
 
@@ -921,19 +950,19 @@ mod tests {
         let surface = Color::Rgb(6, 14, 19);
 
         assert_eq!(
-            ColorTransform::Elevate(0.08).apply(surface),
+            ColorTransform::elevate(0.08).apply(surface),
             surface.elevate_by(0.08),
         );
         assert_ne!(
-            ColorTransform::Elevate(0.08).apply(surface),
-            ColorTransform::Lighten(0.08).apply(surface),
+            ColorTransform::elevate(0.08).apply(surface),
+            ColorTransform::lighten(0.08).apply(surface),
         );
     }
 
     #[test]
     fn elevate_transform_reverses_direction_on_a_light_surface() {
         let light = Color::Rgb(245, 245, 245);
-        let lifted = ColorTransform::Elevate(0.08).apply(light);
+        let lifted = ColorTransform::elevate(0.08).apply(light);
 
         assert!(
             lifted.luminance() < light.luminance(),
@@ -1085,7 +1114,7 @@ mod tests {
     #[test]
     fn transform_fg_dims_inherited_color() {
         let base = Style::new().fg(Color::rgb(100, 120, 140));
-        let overlay = Style::new().transform_fg(ColorTransform::Dim(0.5));
+        let overlay = Style::new().transform_fg(ColorTransform::dim(0.5));
 
         assert_eq!(
             base.patch(overlay).resolve_color_transforms().fg,
@@ -1097,7 +1126,7 @@ mod tests {
     fn lower_fg_transform_does_not_affect_overlay_color() {
         let base = Style::new()
             .fg(Color::rgb(100, 120, 140))
-            .transform_fg(ColorTransform::Dim(0.5));
+            .transform_fg(ColorTransform::dim(0.5));
         let overlay = Style::new().fg(Color::rgb(10, 20, 30));
 
         assert_eq!(
@@ -1147,7 +1176,7 @@ mod tests {
         };
 
         assert_eq!(
-            ColorTransform::Dim(0.5).apply_paint(paint),
+            ColorTransform::dim(0.5).apply_paint(paint),
             Paint::Alpha {
                 color: Color::rgb(50, 60, 70),
                 alpha: 128,
@@ -1182,8 +1211,8 @@ mod tests {
             .resolve_color_transforms()
             .bg;
 
-        assert_eq!(dark_lifted, p(ColorTransform::Elevate(0.08).apply(dark)));
-        assert_eq!(light_lifted, p(ColorTransform::Elevate(0.08).apply(light)));
+        assert_eq!(dark_lifted, p(ColorTransform::elevate(0.08).apply(dark)));
+        assert_eq!(light_lifted, p(ColorTransform::elevate(0.08).apply(light)));
 
         let lighter = |paint: Option<Paint>, base: Color| match paint {
             Some(Paint::Solid(color)) => color.luminance() > base.luminance(),
@@ -1226,11 +1255,11 @@ mod tests {
     #[test]
     fn builder_order_does_not_change_transform_result() {
         let a = Style::new()
-            .transform_fg(ColorTransform::Dim(0.5))
+            .transform_fg(ColorTransform::dim(0.5))
             .fg(Color::rgb(100, 120, 140));
         let b = Style::new()
             .fg(Color::rgb(100, 120, 140))
-            .transform_fg(ColorTransform::Dim(0.5));
+            .transform_fg(ColorTransform::dim(0.5));
 
         assert_eq!(a.resolve_color_transforms(), b.resolve_color_transforms());
         assert_eq!(a.resolve_color_transforms().fg, p(Color::rgb(50, 60, 70)));
@@ -1240,8 +1269,8 @@ mod tests {
     fn transform_chain_applies_in_patch_order() {
         let style = Style::new()
             .fg(Color::rgb(100, 120, 140))
-            .patch(Style::new().transform_fg(ColorTransform::Dim(0.5)))
-            .patch(Style::new().transform_fg(ColorTransform::Lighten(0.5)))
+            .patch(Style::new().transform_fg(ColorTransform::dim(0.5)))
+            .patch(Style::new().transform_fg(ColorTransform::lighten(0.5)))
             .resolve_color_transforms();
 
         assert_eq!(style.fg, p(Color::rgb(153, 158, 163)));
@@ -1254,8 +1283,8 @@ mod tests {
         // not independently against the original base.
         let style = Style::new()
             .bg(Color::rgb(100, 100, 100))
-            .patch(Style::new().transform_bg(ColorTransform::Dim(0.5)))
-            .patch(Style::new().transform_bg(ColorTransform::Dim(0.5)))
+            .patch(Style::new().transform_bg(ColorTransform::dim(0.5)))
+            .patch(Style::new().transform_bg(ColorTransform::dim(0.5)))
             .resolve_color_transforms();
 
         assert_eq!(style.bg, p(Color::rgb(25, 25, 25)));
@@ -1266,7 +1295,7 @@ mod tests {
         let style = Style::new()
             .fg(Color::rgb(245, 167, 66))
             .bg(Color::rgb(255, 255, 255))
-            .transform_fg(ColorTransform::Opacity(0.6))
+            .transform_fg(ColorTransform::opacity(0.6))
             .resolve_color_transforms();
 
         assert_eq!(
@@ -1281,13 +1310,13 @@ mod tests {
     #[test]
     fn opacity_builder_order_is_independent_when_background_arrives_later() {
         let a = Style::new()
-            .transform_fg(ColorTransform::Opacity(0.6))
+            .transform_fg(ColorTransform::opacity(0.6))
             .fg(Color::rgb(245, 167, 66))
             .bg(Color::rgb(255, 255, 255));
         let b = Style::new()
             .fg(Color::rgb(245, 167, 66))
             .bg(Color::rgb(255, 255, 255))
-            .transform_fg(ColorTransform::Opacity(0.6));
+            .transform_fg(ColorTransform::opacity(0.6));
 
         assert_eq!(a.resolve_color_transforms(), b.resolve_color_transforms());
     }
@@ -1298,7 +1327,7 @@ mod tests {
         let target = Color::rgb(200, 10, 30);
         assert_eq!(
             ColorTransform::OpacityToward {
-                factor: 1.0,
+                factor: 1.0.into(),
                 target,
             }
             .apply_with_backdrop(c, Some(Color::White)),
@@ -1306,7 +1335,7 @@ mod tests {
         );
         assert_eq!(
             ColorTransform::OpacityToward {
-                factor: 0.0,
+                factor: 0.0.into(),
                 target,
             }
             .apply_with_backdrop(c, Some(Color::White)),

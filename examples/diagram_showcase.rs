@@ -65,7 +65,7 @@ fn sequence_tab(ctx: &Context<DiagramShowcase>) -> Element {
     let click = ctx.link().callback(AppMsg::ItemClicked);
     let hover = ctx.link().callback(AppMsg::ItemHovered);
     let hover_style =
-        Style::new().transform_fg(ColorTransform::Tint(Color::Rgb(167, 243, 208), 0.75));
+        Style::new().transform_fg(ColorTransform::tint(Color::Rgb(167, 243, 208), 0.75));
 
     let request_reply = SequenceDiagram::new()
         .participant("Browser")

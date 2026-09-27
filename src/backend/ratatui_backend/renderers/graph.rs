@@ -390,8 +390,8 @@ mod tests {
 
         assert_eq!(style.fg, None);
         assert_eq!(style.bg, None);
-        assert_eq!(style.fg_transform, Some(ColorTransform::Lighten(0.0)));
-        assert_eq!(style.bg_transform, Some(ColorTransform::Lighten(0.0)));
+        assert_eq!(style.fg_transform, Some(ColorTransform::lighten(0.0)));
+        assert_eq!(style.bg_transform, Some(ColorTransform::lighten(0.0)));
     }
 
     #[test]
@@ -407,7 +407,7 @@ mod tests {
     fn hover_transform_composes_over_focused_node_style() {
         let style = graph_node_interactive_style(
             Style::new().bg(Color::Blue),
-            Style::new().transform_bg(ColorTransform::Lighten(0.4)),
+            Style::new().transform_bg(ColorTransform::lighten(0.4)),
             Style::new().bg(Color::Yellow),
             true,
             true,

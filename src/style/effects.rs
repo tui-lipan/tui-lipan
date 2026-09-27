@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::app::ContrastPolicy;
 use crate::core::mask::CellMask;
-use crate::style::{Align, Color, ColorTransform, Rect};
+use crate::style::{Align, Color, ColorTransform, EffectAmount, Rect};
 use crate::utils::gradient::ColorGradient;
 
 /// Terminal cell type passed to [`CellEffect::apply`].
@@ -22,7 +22,16 @@ pub struct EffectContext {
     /// Absolute effect-scope rect in terminal cells.
     pub bounds: Rect,
     /// Renderer animation phase counter.
+    ///
+    /// Counts effect ticks, so it slows down when frames are delayed. Use [`Self::elapsed`] for
+    /// animation that has to keep time.
     pub phase: u64,
+    /// Monotonic runtime clock at the start of this draw.
+    ///
+    /// Time since the runtime started, following its virtual clock under headless capture and
+    /// [`TestBackend::advance`](crate::TestBackend::advance). A time-based animation evaluated
+    /// from this keeps its pace however irregular the frames are.
+    pub elapsed: Duration,
     /// Resolved terminal background color, when known.
     pub terminal_bg: Option<TerminalColor>,
 }
@@ -33,7 +42,16 @@ pub struct EffectPrepareContext {
     /// Absolute effect-scope rect in terminal cells.
     pub bounds: Rect,
     /// Renderer animation phase counter.
+    ///
+    /// Counts effect ticks, so it slows down when frames are delayed. Use [`Self::elapsed`] for
+    /// animation that has to keep time.
     pub phase: u64,
+    /// Monotonic runtime clock at the start of this draw.
+    ///
+    /// Time since the runtime started, following its virtual clock under headless capture and
+    /// [`TestBackend::advance`](crate::TestBackend::advance). A time-based animation evaluated
+    /// from this keeps its pace however irregular the frames are.
+    pub elapsed: Duration,
     /// Resolved terminal background color, when known.
     pub terminal_bg: Option<TerminalColor>,
 }
@@ -509,7 +527,10 @@ pub enum VisualEffect {
 
 impl VisualEffect {
     /// Dim both fg and bg by `amount` in `[0.0, 1.0]`.
-    pub fn dim(amount: f32) -> Self {
+    ///
+    /// `amount` may be late-bound; see [`EffectAmount`].
+    pub fn dim(amount: impl Into<EffectAmount>) -> Self {
+        let amount = amount.into();
         Self::ColorTransform {
             fg: Some(ColorTransform::Dim(amount)),
             bg: Some(ColorTransform::Dim(amount)),
@@ -517,7 +538,10 @@ impl VisualEffect {
     }
 
     /// Lighten both fg and bg by `amount` in `[0.0, 1.0]`.
-    pub fn lighten(amount: f32) -> Self {
+    ///
+    /// `amount` may be late-bound; see [`EffectAmount`].
+    pub fn lighten(amount: impl Into<EffectAmount>) -> Self {
+        let amount = amount.into();
         Self::ColorTransform {
             fg: Some(ColorTransform::Lighten(amount)),
             bg: Some(ColorTransform::Lighten(amount)),
@@ -525,7 +549,10 @@ impl VisualEffect {
     }
 
     /// Blend both fg and bg toward `color` by `alpha` in `[0.0, 1.0]`.
-    pub fn tint(color: Color, alpha: f32) -> Self {
+    ///
+    /// `alpha` may be late-bound; see [`EffectAmount`].
+    pub fn tint(color: Color, alpha: impl Into<EffectAmount>) -> Self {
+        let alpha = alpha.into();
         Self::ColorTransform {
             fg: Some(ColorTransform::Tint(color, alpha)),
             bg: Some(ColorTransform::Tint(color, alpha)),
@@ -641,9 +668,14 @@ impl VisualEffect {
     }
 
     /// Returns whether this effect requires frame-to-frame animation.
+    ///
+    /// A color transform is animated when its strength is an [`EffectAmount::pulse`]. A strength
+    /// from [`Context::animated_amount`](crate::Context::animated_amount) is not: its transition is
+    /// advanced by the animation registry, which asks for its own repaints.
     pub fn is_animated(&self) -> bool {
         match self {
             Self::RainbowWave { .. } => true,
+            Self::ColorTransform { .. } => self.color_transform_interval().is_some(),
             Self::Gradient { speed, .. } => speed.abs() > f32::EPSILON,
             Self::RetroCrt { flicker, .. } => *flicker > 0.0,
             Self::Ripple { radius, .. } => !matches!(radius, RippleRadius::Fixed(_)),
@@ -677,10 +709,59 @@ impl VisualEffect {
             Self::Clipped { inner, .. } | Self::Channels { inner, .. } => inner
                 .animation_interval()
                 .unwrap_or_else(|| Duration::from_millis(16)),
+            Self::ColorTransform { .. } => self
+                .color_transform_interval()
+                .unwrap_or_else(|| Duration::from_millis(16)),
             Self::Custom(effect) => effect.animation_interval(),
             _ => Duration::from_millis(16),
         };
         Some(interval.max(Duration::from_millis(1)))
+    }
+
+    /// Fastest cadence a pulsing color-transform strength asks for, if this is a transform with one.
+    fn color_transform_interval(&self) -> Option<Duration> {
+        match self {
+            Self::ColorTransform { fg, bg } => fg
+                .and_then(ColorTransform::animation_interval)
+                .into_iter()
+                .chain(bg.and_then(ColorTransform::animation_interval))
+                .min(),
+            _ => None,
+        }
+    }
+
+    /// This effect with every late-bound color-transform strength bound to the value the renderer
+    /// sees now, or `None` when it has none to bind.
+    ///
+    /// The renderer calls this once per pass so cells do not each resolve the amount.
+    pub(crate) fn with_resolved_amounts(&self) -> Option<Self> {
+        match self {
+            Self::ColorTransform { fg, bg } => {
+                let late = |transform: &Option<ColorTransform>| {
+                    transform.is_some_and(|transform| transform.amount().is_late_bound())
+                };
+                (late(fg) || late(bg)).then(|| Self::ColorTransform {
+                    fg: fg.map(ColorTransform::resolved),
+                    bg: bg.map(ColorTransform::resolved),
+                })
+            }
+            Self::Clipped {
+                bounds,
+                mask,
+                inner,
+            } => inner.with_resolved_amounts().map(|inner| Self::Clipped {
+                bounds: *bounds,
+                mask: mask.clone(),
+                inner: Box::new(inner),
+            }),
+            Self::Channels { channels, inner } => {
+                inner.with_resolved_amounts().map(|inner| Self::Channels {
+                    channels: *channels,
+                    inner: Box::new(inner),
+                })
+            }
+            _ => None,
+        }
     }
 }
 
@@ -921,6 +1002,54 @@ mod tests {
     use std::collections::hash_map::DefaultHasher;
 
     use super::*;
+    use crate::style::EffectPulse;
+
+    #[test]
+    fn a_pulsing_transform_strength_animates_its_effect_at_the_pulse_rate() {
+        let pulse = EffectPulse::new(0.1, 0.3).frame_rate(10);
+        let breathing = VisualEffect::tint(Color::Red, pulse);
+        assert!(breathing.is_animated());
+        assert_eq!(
+            breathing.animation_interval(),
+            Some(Duration::from_millis(100))
+        );
+        assert!(
+            breathing.clone().background_only().is_animated(),
+            "wrappers see through to the pulse"
+        );
+
+        assert!(!VisualEffect::tint(Color::Red, 0.2).is_animated());
+        let transition = EffectAmount::animated(0, 0.2);
+        assert!(
+            !VisualEffect::tint(Color::Red, transition).is_animated(),
+            "a transition is ticked by the registry, not the effect-scope clock"
+        );
+    }
+
+    #[test]
+    fn a_late_bound_effect_compares_equal_for_its_whole_animation() {
+        let pulse = VisualEffect::dim(EffectPulse::new(0.0, 0.5));
+        assert_eq!(pulse, VisualEffect::dim(EffectPulse::new(0.0, 0.5)));
+        let mut a = DefaultHasher::new();
+        let mut b = DefaultHasher::new();
+        pulse.hash(&mut a);
+        VisualEffect::dim(EffectPulse::new(0.0, 0.5)).hash(&mut b);
+        assert_eq!(a.finish(), b.finish(), "so layout hashes hold still too");
+    }
+
+    #[test]
+    fn resolving_amounts_binds_only_late_bound_transforms() {
+        assert!(VisualEffect::dim(0.4).with_resolved_amounts().is_none());
+        let resolved = VisualEffect::dim(EffectPulse::new(0.25, 0.75))
+            .background_only()
+            .with_resolved_amounts()
+            .expect("a pulse resolves");
+        assert_eq!(
+            resolved,
+            VisualEffect::dim(0.25).background_only(),
+            "outside a draw a pulse binds at the start of its cycle"
+        );
+    }
 
     #[derive(Debug)]
     struct NoopEffect;

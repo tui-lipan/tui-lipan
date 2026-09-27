@@ -70,9 +70,11 @@ Nested `Clipped` layers compose; each layer’s `bounds` / `mask` uses the same 
 
 ## Custom Effects
 
-`VisualEffect::Custom(Arc<dyn CellEffect>)` lets applications add their own per-cell post-processing pass without forking the renderer. The effect receives an `EffectCell` plus an `EffectContext` containing the absolute cell position, the absolute effect-scope bounds, the animation `phase`, and the host terminal background when known.
+`VisualEffect::Custom(Arc<dyn CellEffect>)` lets applications add their own per-cell post-processing pass without forking the renderer. The effect receives an `EffectCell` plus an `EffectContext` containing the absolute cell position, the absolute effect-scope bounds, the animation `phase`, the monotonic runtime clock `elapsed`, and the host terminal background when known.
 
-For expensive effects, override `prepare(&EffectPrepareContext)` and return a `PreparedCellEffect`. Preparation runs once per effect scope, bounds, and render phase before the per-cell pass, so you can cache light positions, palettes, masks, or other frame-constant state instead of recomputing it for every cell.
+`phase` counts effect ticks, so it slows down when frames are delayed. Evaluate time-based animation from `elapsed` (time since the runtime started, following the virtual clock in headless capture and `TestBackend::advance`) to keep its pace regardless of frame timing. For a transform whose strength simply breathes, you do not need a custom effect at all: pass `EffectAmount::pulse(from, to)` to `dim_by`, `lighten_by`, `tint_by`, or any `ColorTransform`.
+
+For expensive effects, override `prepare(&EffectPrepareContext)` and return a `PreparedCellEffect`. Preparation runs once per effect scope, bounds, and render phase before the per-cell pass (`EffectPrepareContext` carries the same `phase` and `elapsed`), so you can cache light positions, palettes, masks, or other frame-constant state instead of recomputing it for every cell.
 
 ```rust
 use std::fmt;

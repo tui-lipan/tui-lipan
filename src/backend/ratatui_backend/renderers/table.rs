@@ -1054,7 +1054,7 @@ mod tests {
     #[test]
     fn hovered_table_state_transform_applies_over_selected_bg() {
         let base = Style::new().bg(Color::Black);
-        let hover = Style::new().transform_bg(ColorTransform::Dim(0.5));
+        let hover = Style::new().transform_bg(ColorTransform::dim(0.5));
         let selection = Style::new().bg(Color::rgb(200, 180, 160));
         let disabled = Style::new().bg(Color::Red);
 
@@ -1082,7 +1082,7 @@ mod tests {
         let base = Style::new().bg(Color::Black);
         let hover = Style::new()
             .bg(Color::Blue)
-            .transform_bg(ColorTransform::Dim(0.5));
+            .transform_bg(ColorTransform::dim(0.5));
         let selection = Style::new().bg(Color::Green);
         let disabled = Style::new().bg(Color::Red);
 

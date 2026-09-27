@@ -876,7 +876,7 @@ mod tests {
         let base = Style::new().bg(Color::rgb(10, 10, 10));
         let hover = Style::new()
             .bg(Color::Blue)
-            .transform_bg(ColorTransform::Dim(0.5));
+            .transform_bg(ColorTransform::dim(0.5));
         let active = Style::new().bg(Color::rgb(200, 180, 160));
 
         let resolved = resolve_draggable_tab_style(
@@ -904,7 +904,7 @@ mod tests {
     #[test]
     fn hover_only_draggable_tab_uses_transient_hover_effect() {
         let base = Style::new().bg(Color::rgb(10, 10, 10));
-        let hover = Style::new().transform_bg(ColorTransform::Dim(0.5));
+        let hover = Style::new().transform_bg(ColorTransform::dim(0.5));
 
         let resolved = resolve_draggable_tab_style(
             base,

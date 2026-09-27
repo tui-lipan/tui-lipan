@@ -161,7 +161,7 @@ pub(crate) fn scrollbar_styles(
 fn scrollbar_palette_style(color: Color, lighten: f32) -> Style {
     let mut style = Style::new().fg(color);
     if matches!(color, Color::Transparent) {
-        style = style.transform_fg(ColorTransform::Lighten(lighten));
+        style = style.transform_fg(ColorTransform::lighten(lighten));
     }
     style
 }

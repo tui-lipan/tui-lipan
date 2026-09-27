@@ -1307,9 +1307,10 @@ where
     pub fn capture_frame(&self) -> CapturedFrame {
         // Matches the runner's draw: late-bound paints name their transitions, and a capture has to
         // resolve them or an animated colour would show as its fallback.
-        let _animations = crate::animation::registry::set_render_registry(std::rc::Rc::clone(
-            &self.core.ctx.env().animations,
-        ));
+        let _animations = crate::animation::registry::set_render_registry(
+            std::rc::Rc::clone(&self.core.ctx.env().animations),
+            self.core.ctx.env().clock.elapsed(),
+        );
         crate::backend::ratatui_backend::capture_render::render_to_captured_frame_with_interaction(
             &self.core.tree,
             self.core.viewport(),

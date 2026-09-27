@@ -37,7 +37,7 @@ impl<C: Component> AppRunner<C> {
     /// Cadence required by the animations currently in flight.
     ///
     /// A concrete property or tree animation feeds view/layout and keeps the app-wide frame rate.
-    /// A late-bound color only changes cells while painting, so by itself it uses the cheaper color
+    /// A late-bound color or effect amount only changes cells while painting, so by itself it uses the cheaper color
     /// cadence. When both are active they share the higher-rate frame instead of running two clocks.
     pub(super) fn active_animation_interval(&self) -> Option<Duration> {
         let animations = &self.core.ctx.env().animations;
@@ -48,7 +48,7 @@ impl<C: Component> AppRunner<C> {
             Some(self.frame_interval)
         } else {
             animations
-                .active_paint_transition_interval(self.color_animation_interval)
+                .active_render_transition_interval(self.color_animation_interval)
                 .map(|interval| self.frame_interval.max(interval))
         }
     }
@@ -301,17 +301,17 @@ impl<C: Component> AppRunner<C> {
             // any interpolated value changed (the new value must flow through
             // the next view() into the rendered styles).
             let transitions = self.core.ctx.env().animations.tick(dt);
-            if changed || transitions.view_changed || transitions.paint_changed {
+            if changed || transitions.view_changed || transitions.render_changed {
                 crate::debug::internal_log!("[tui-lipan] dirty: animated widget tick");
             }
             // A value a view read concretely has to flow through the next `view()` to reach the
-            // rendered styles. A late-bound paint does not: the renderer resolves it while drawing,
-            // so the whole fade costs repaints.
+            // rendered styles. A late-bound paint or effect amount does not: the renderer resolves
+            // it while drawing, so the whole transition costs repaints.
             if transitions.view_changed {
                 dirty.mark_full();
             } else if needs_layout {
                 dirty.mark_layout();
-            } else if needs_paint || transitions.paint_changed {
+            } else if needs_paint || transitions.render_changed {
                 dirty.mark_paint();
             }
         }

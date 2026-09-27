@@ -212,9 +212,10 @@ where
     ) -> crate::Result<()> {
         // Late-bound paints name their transitions by key and resolve them here, exactly as the
         // ordinary draw does. Dropped at the end of this draw.
-        let _animations = crate::animation::registry::set_render_registry(std::rc::Rc::clone(
-            &self.core.ctx.env().animations,
-        ));
+        let _animations = crate::animation::registry::set_render_registry(
+            std::rc::Rc::clone(&self.core.ctx.env().animations),
+            self.core.ctx.env().clock.elapsed(),
+        );
 
         let frame_area = terminal.get_frame().area();
         let cursor_position = StdCell::new(None);

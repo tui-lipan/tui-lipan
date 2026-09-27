@@ -148,7 +148,7 @@ pub(crate) fn resolve_scrollbar_theme(
     let thumb_style = thumb_style.or_else(|| {
         let mut style = Style::new().fg(theme.scrollbar.thumb);
         if matches!(theme.scrollbar.thumb, Color::Transparent) {
-            style = style.transform_fg(ColorTransform::Lighten(0.16));
+            style = style.transform_fg(ColorTransform::lighten(0.16));
         }
         Some(style)
     });
@@ -159,7 +159,7 @@ pub(crate) fn resolve_scrollbar_theme(
         theme.scrollbar.thumb_focus.map(|focus_color| {
             let mut style = Style::new().fg(focus_color);
             if matches!(focus_color, Color::Transparent) {
-                style = style.transform_fg(ColorTransform::Lighten(0.24));
+                style = style.transform_fg(ColorTransform::lighten(0.24));
             }
             style
         })
@@ -168,7 +168,7 @@ pub(crate) fn resolve_scrollbar_theme(
         theme.scrollbar.track.map(|track_color| {
             let mut style = Style::new().fg(track_color);
             if matches!(track_color, Color::Transparent) {
-                style = style.transform_fg(ColorTransform::Lighten(0.04));
+                style = style.transform_fg(ColorTransform::lighten(0.04));
             }
             style
         })
@@ -486,7 +486,7 @@ mod tests {
     #[test]
     fn state_cascade_transient_hover_transform_applies_over_focus_bg() {
         let base = Style::new().bg(Color::rgb(10, 10, 10));
-        let hover = Style::new().transform_bg(ColorTransform::Dim(0.5));
+        let hover = Style::new().transform_bg(ColorTransform::dim(0.5));
         let focus = Style::new().bg(Color::rgb(200, 180, 160));
 
         let resolved = resolve_state_cascade(
