@@ -654,6 +654,12 @@ runtime clock, so a stalled loop does not slow it. A pulse no full paint reads i
 one does. Asking for the same key with `animated_amount` instead settles the pulse from wherever it
 is. Keys are local to the component instance that uses them.
 
+A late-bound amount or paint names its animation by an `AnimationHandle`: a registry slot plus a
+generation. A slot is freed when its animation is dropped and reused under the next generation,
+so a long session with many mounted instances never runs out of slots, and a handle left in an old
+tree falls back to its resting value instead of naming the slot's next occupant. A pulse hidden
+while its timeline ran on shows its latest sample on the paint that reveals it.
+
 Image pixels never follow a late-bound amount frame by frame: a transition is baked at its target
 (one re-encode for the whole fade), and a pulse is left out of image pixels.
 
@@ -667,6 +673,7 @@ Alpha-aware style-channel color. `Style::fg`, `Style::bg`, and
 |---------|---------|
 | `Paint::Solid(Color)` | Opaque terminal color or semantic sentinel |
 | `Paint::Alpha { color, alpha }` | Source pigment with `0..=255` alpha, composited before terminal output |
+| `Paint::Animated { handle, fallback }` | A colour the renderer resolves while painting, from `ctx.animated_color(...)`; `fallback` is used once the animation is gone |
 
 Construct with `Paint::solid(Color)`, `Paint::rgb(r,g,b)`,
 `Paint::rgba(r,g,b,a)`, or `Paint::hex("#RRGGBBAA")`. `Color::Transparent` and

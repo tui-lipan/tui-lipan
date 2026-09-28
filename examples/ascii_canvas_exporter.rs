@@ -191,8 +191,8 @@ fn map_paint_color(paint: Paint, f: impl FnOnce(Color) -> Color) -> Paint {
         },
         // An animated paint names a transition rather than carrying a pigment; this exporter has no
         // runtime to resolve it against, so map its fallback.
-        Paint::Animated { slot, fallback } => Paint::Animated {
-            slot,
+        Paint::Animated { handle, fallback } => Paint::Animated {
+            handle,
             fallback: f(fallback),
         },
     }

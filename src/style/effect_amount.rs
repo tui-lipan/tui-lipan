@@ -6,10 +6,11 @@
 //! repaint instead of a `view()` pass, exactly as [`Paint::Animated`](crate::style::Paint::Animated)
 //! does for colors.
 
+use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
-use crate::animation::Easing;
+use crate::animation::{AnimationHandle, Easing};
 
 /// Default length of one [`EffectPulse`] cycle.
 const DEFAULT_PULSE_PERIOD: Duration = Duration::from_millis(1500);
@@ -47,70 +48,37 @@ const DEFAULT_PULSE_FRAME_RATE: u16 = 30;
 /// with their [`resting_value`](Self::resting_value): the transition's target, or the pulse's
 /// starting value.
 ///
-/// An `EffectAmount` is eight bytes and `Copy`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct EffectAmount(Repr);
-
-#[derive(Clone, Copy, Debug)]
-enum Repr {
-    /// A plain amount, baked into the element tree.
-    Fixed(f32),
-    /// A registry transition, named by its slot. Compares equal for the whole transition, because
-    /// it does not embed where the transition currently is.
-    Animated { slot: u16, target: f32 },
-    /// A registry pulse, named by its slot, resting at `from`.
-    Pulse { slot: u16, from: f32 },
+/// An `EffectAmount` is eight bytes and `Copy`: a tag and an
+/// [`AnimationHandle`] packed into one word, beside the value.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EffectAmount {
+    /// Kind in the top two bits; for a late-bound amount, its packed handle below them.
+    meta: u32,
+    /// The fixed value, the transition's target, or the pulse's `from`, as `f32` bits. Compared
+    /// and hashed by bit pattern, like every other effect parameter.
+    value: u32,
 }
 
-// `f32` fields compare and hash by bit pattern, like every other effect parameter.
-impl PartialEq for Repr {
-    fn eq(&self, other: &Self) -> bool {
-        match (*self, *other) {
-            (Self::Fixed(a), Self::Fixed(b)) => a.to_bits() == b.to_bits(),
-            (
-                Self::Animated {
-                    slot: slot_a,
-                    target: a,
-                },
-                Self::Animated {
-                    slot: slot_b,
-                    target: b,
-                },
-            )
-            | (
-                Self::Pulse {
-                    slot: slot_a,
-                    from: a,
-                },
-                Self::Pulse {
-                    slot: slot_b,
-                    from: b,
-                },
-            ) => slot_a == slot_b && a.to_bits() == b.to_bits(),
-            _ => false,
-        }
-    }
-}
+const KIND_SHIFT: u32 = 30;
+const KIND_FIXED: u32 = 0;
+const KIND_TRANSITION: u32 = 1;
+const KIND_PULSE: u32 = 2;
 
-impl Eq for Repr {}
-
-impl Hash for Repr {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        match *self {
-            Self::Fixed(value) => {
-                0u8.hash(state);
-                value.to_bits().hash(state);
-            }
-            Self::Animated { slot, target } => {
-                1u8.hash(state);
-                slot.hash(state);
-                target.to_bits().hash(state);
-            }
-            Self::Pulse { slot, from } => {
-                2u8.hash(state);
-                slot.hash(state);
-                from.to_bits().hash(state);
-            }
+impl fmt::Debug for EffectAmount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = self.resting_value();
+        match (self.kind(), self.handle()) {
+            (KIND_TRANSITION, Some(handle)) => f
+                .debug_struct("Animated")
+                .field("handle", &handle)
+                .field("target", &value)
+                .finish(),
+            (KIND_PULSE, Some(handle)) => f
+                .debug_struct("Pulse")
+                .field("handle", &handle)
+                .field("from", &value)
+                .finish(),
+            _ => f.debug_tuple("Fixed").field(&value).finish(),
         }
     }
 }
@@ -118,63 +86,74 @@ impl Hash for Repr {
 impl EffectAmount {
     /// A fixed amount. The `const` form of `EffectAmount::from(value)`.
     pub const fn fixed(value: f32) -> Self {
-        Self(Repr::Fixed(value))
+        Self {
+            meta: KIND_FIXED << KIND_SHIFT,
+            value: value.to_bits(),
+        }
     }
 
-    /// A late-bound transition naming registry `slot`, settling on `target`.
-    pub(crate) fn animated(slot: u16, target: f32) -> Self {
-        Self(Repr::Animated { slot, target })
+    fn late_bound(kind: u32, handle: AnimationHandle, value: f32) -> Self {
+        Self {
+            meta: (kind << KIND_SHIFT) | handle.pack(),
+            value: value.to_bits(),
+        }
     }
 
-    /// A late-bound pulse naming registry `slot`, resting at `from`.
-    pub(crate) fn pulsing(slot: u16, from: f32) -> Self {
-        Self(Repr::Pulse { slot, from })
+    /// A late-bound transition named by `handle`, settling on `target`.
+    pub(crate) fn animated(handle: AnimationHandle, target: f32) -> Self {
+        Self::late_bound(KIND_TRANSITION, handle, target)
+    }
+
+    /// A late-bound pulse named by `handle`, resting at `from`.
+    pub(crate) fn pulsing(handle: AnimationHandle, from: f32) -> Self {
+        Self::late_bound(KIND_PULSE, handle, from)
+    }
+
+    fn kind(self) -> u32 {
+        self.meta >> KIND_SHIFT
+    }
+
+    /// The registry handle of a late-bound amount.
+    pub(crate) fn handle(self) -> Option<AnimationHandle> {
+        (self.kind() != KIND_FIXED).then(|| AnimationHandle::unpack(self.meta))
     }
 
     /// The amount when it is fixed, or `None` when the renderer resolves it.
     pub fn as_fixed(self) -> Option<f32> {
-        match self.0 {
-            Repr::Fixed(value) => Some(value),
-            Repr::Animated { .. } | Repr::Pulse { .. } => None,
-        }
+        (self.kind() == KIND_FIXED).then(|| self.resting_value())
     }
 
     /// Whether this amount comes from [`Context::animated_amount`](crate::Context::animated_amount).
     pub fn is_transition(self) -> bool {
-        matches!(self.0, Repr::Animated { .. })
+        self.kind() == KIND_TRANSITION
     }
 
     /// Whether this amount comes from [`Context::pulsing_amount`](crate::Context::pulsing_amount).
     pub fn is_pulse(self) -> bool {
-        matches!(self.0, Repr::Pulse { .. })
+        self.kind() == KIND_PULSE
     }
 
     /// Whether the renderer, rather than the element tree, decides this amount.
     pub fn is_late_bound(self) -> bool {
-        !matches!(self.0, Repr::Fixed(_))
+        self.kind() != KIND_FIXED
     }
 
     /// A single number standing in for this amount where no live value can be had: the fixed
     /// value, the transition's target, or the pulse's starting value.
     pub fn resting_value(self) -> f32 {
-        match self.0 {
-            Repr::Fixed(value)
-            | Repr::Animated { target: value, .. }
-            | Repr::Pulse { from: value, .. } => value,
-        }
+        f32::from_bits(self.value)
     }
 
     /// The amount as the renderer sees it right now.
     ///
-    /// A late-bound amount reads its registry slot, which holds one sampled value between
+    /// A late-bound amount reads its registry entry, which holds one sampled value between
     /// animation ticks - so every paint in between, including a partial one, agrees on it.
-    /// Outside a draw it answers with its resting value.
+    /// Outside a draw, or once its animation is gone, it answers with its resting value.
     pub(crate) fn resolved(self) -> f32 {
-        match self.0 {
-            Repr::Fixed(value) => value,
-            Repr::Animated { slot, target: rest } | Repr::Pulse { slot, from: rest } => {
-                crate::animation::registry::resolve_render_scalar_slot(slot).unwrap_or(rest)
-            }
+        match self.handle() {
+            None => self.resting_value(),
+            Some(handle) => crate::animation::registry::resolve_render_scalar(handle)
+                .unwrap_or_else(|| self.resting_value()),
         }
     }
 
@@ -184,10 +163,7 @@ impl EffectAmount {
     /// frame. A transition is recorded at its target instead - one encode for the whole fade - and
     /// a pulse is left out of image pixels entirely.
     pub(crate) fn settled(self) -> Option<f32> {
-        match self.0 {
-            Repr::Fixed(value) | Repr::Animated { target: value, .. } => Some(value),
-            Repr::Pulse { .. } => None,
-        }
+        (!self.is_pulse()).then(|| self.resting_value())
     }
 
     /// This amount limited to `[0.0, 1.0]`.
@@ -195,11 +171,9 @@ impl EffectAmount {
     /// A late-bound amount only has its resting value clamped: the live value belongs to the
     /// registry, and every transform consumer clamps what it reads.
     pub(crate) fn clamped_unit(self) -> Self {
-        let unit = |value: f32| value.clamp(0.0, 1.0);
-        match self.0 {
-            Repr::Fixed(value) => Self::fixed(unit(value)),
-            Repr::Animated { slot, target } => Self::animated(slot, unit(target)),
-            Repr::Pulse { slot, from } => Self::pulsing(slot, unit(from)),
+        Self {
+            value: self.resting_value().clamp(0.0, 1.0).to_bits(),
+            ..self
         }
     }
 }
@@ -397,18 +371,25 @@ mod tests {
         );
     }
 
+    fn handle(slot: u16) -> AnimationHandle {
+        AnimationHandle::new(slot, 0)
+    }
+
     #[test]
     fn only_settling_amounts_reach_image_pixels() {
         assert_eq!(EffectAmount::fixed(0.2).settled(), Some(0.2));
-        assert_eq!(EffectAmount::animated(3, 0.4).settled(), Some(0.4));
-        assert_eq!(EffectAmount::pulsing(4, 0.1).settled(), None);
+        assert_eq!(EffectAmount::animated(handle(3), 0.4).settled(), Some(0.4));
+        assert_eq!(EffectAmount::pulsing(handle(4), 0.1).settled(), None);
     }
 
     #[test]
     fn late_bound_amounts_rest_outside_a_draw() {
-        assert_eq!(EffectAmount::animated(u16::MAX, 0.4).resolved(), 0.4);
         assert_eq!(
-            EffectAmount::pulsing(u16::MAX, 0.2).resolved(),
+            EffectAmount::animated(handle(u16::MAX), 0.4).resolved(),
+            0.4
+        );
+        assert_eq!(
+            EffectAmount::pulsing(handle(u16::MAX), 0.2).resolved(),
             0.2,
             "a pulse rests at the start of its cycle"
         );
@@ -421,9 +402,31 @@ mod tests {
             EffectAmount::fixed(1.0)
         );
         assert_eq!(
-            EffectAmount::pulsing(2, -0.5).clamped_unit(),
-            EffectAmount::pulsing(2, 0.0)
+            EffectAmount::pulsing(handle(2), -0.5).clamped_unit(),
+            EffectAmount::pulsing(handle(2), 0.0)
         );
+    }
+
+    #[test]
+    fn late_bound_amounts_keep_their_kind_handle_and_value() {
+        let handle = AnimationHandle::new(0xBEEF, 0x3ABC);
+        let transition = EffectAmount::animated(handle, 0.4);
+        let pulse = EffectAmount::pulsing(handle, 0.1);
+        assert!(transition.is_transition() && !transition.is_pulse());
+        assert!(pulse.is_pulse() && !pulse.is_transition());
+        assert_eq!(transition.handle(), Some(handle));
+        assert_eq!(pulse.handle(), Some(handle));
+        assert_eq!(
+            (transition.resting_value(), pulse.resting_value()),
+            (0.4, 0.1)
+        );
+        assert_ne!(transition, pulse);
+        assert_ne!(
+            transition,
+            EffectAmount::animated(AnimationHandle::new(0xBEEF, 0x3ABD), 0.4),
+            "a new generation is a different amount"
+        );
+        assert_eq!(EffectAmount::fixed(0.4).handle(), None);
     }
 
     #[test]
@@ -431,12 +434,13 @@ mod tests {
         assert_eq!(std::mem::size_of::<EffectAmount>(), 8);
     }
 
-    /// Every `Style` carries two transforms; an amount that grew would grow every style with it.
-    /// A pulse once stored inline took `Style` from 68 to 160 bytes and overflowed a debug stack.
+    /// Every `Style` carries two transforms and three paints; a token that grew would grow every
+    /// style with it. A pulse once stored inline took `Style` from 68 to 160 bytes and overflowed a
+    /// debug stack. Generation-tagged handles cost 6 bytes of that budget (76 -> 82).
     #[test]
     fn style_stays_within_its_size_budget() {
         assert!(
-            std::mem::size_of::<crate::style::Style>() <= 80,
+            std::mem::size_of::<crate::style::Style>() <= 84,
             "Style is {} bytes",
             std::mem::size_of::<crate::style::Style>()
         );
@@ -445,7 +449,7 @@ mod tests {
     #[cfg(feature = "terminal-serde")]
     #[test]
     fn amounts_serialize_as_their_resting_number() {
-        let pulse = EffectAmount::pulsing(0, 0.2);
+        let pulse = EffectAmount::pulsing(handle(0), 0.2);
         assert_eq!(serde_json::to_string(&pulse).unwrap(), "0.2");
         assert_eq!(
             serde_json::from_str::<EffectAmount>("0.2").unwrap(),

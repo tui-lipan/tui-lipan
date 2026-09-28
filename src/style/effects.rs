@@ -1069,8 +1069,8 @@ mod tests {
     fn late_bound_transform_strengths_never_schedule_the_effect_clock() {
         for amount in [
             EffectAmount::fixed(0.2),
-            EffectAmount::animated(0, 0.2),
-            EffectAmount::pulsing(1, 0.1),
+            EffectAmount::animated(crate::animation::AnimationHandle::new(0, 0), 0.2),
+            EffectAmount::pulsing(crate::animation::AnimationHandle::new(1, 0), 0.1),
         ] {
             let effect = VisualEffect::tint(Color::Red, amount);
             assert!(
@@ -1083,22 +1083,38 @@ mod tests {
 
     #[test]
     fn a_late_bound_effect_compares_equal_for_its_whole_animation() {
-        let pulse = VisualEffect::dim(EffectAmount::pulsing(3, 0.0));
-        assert_eq!(pulse, VisualEffect::dim(EffectAmount::pulsing(3, 0.0)));
+        let pulse = VisualEffect::dim(EffectAmount::pulsing(
+            crate::animation::AnimationHandle::new(3, 0),
+            0.0,
+        ));
+        assert_eq!(
+            pulse,
+            VisualEffect::dim(EffectAmount::pulsing(
+                crate::animation::AnimationHandle::new(3, 0),
+                0.0
+            ))
+        );
         let mut a = DefaultHasher::new();
         let mut b = DefaultHasher::new();
         pulse.hash(&mut a);
-        VisualEffect::dim(EffectAmount::pulsing(3, 0.0)).hash(&mut b);
+        VisualEffect::dim(EffectAmount::pulsing(
+            crate::animation::AnimationHandle::new(3, 0),
+            0.0,
+        ))
+        .hash(&mut b);
         assert_eq!(a.finish(), b.finish(), "so layout hashes hold still too");
     }
 
     #[test]
     fn resolving_amounts_binds_only_late_bound_transforms() {
         assert!(VisualEffect::dim(0.4).with_resolved_amounts().is_none());
-        let resolved = VisualEffect::dim(EffectAmount::pulsing(u16::MAX, 0.25))
-            .background_only()
-            .with_resolved_amounts()
-            .expect("a pulse resolves");
+        let resolved = VisualEffect::dim(EffectAmount::pulsing(
+            crate::animation::AnimationHandle::new(u16::MAX, 0),
+            0.25,
+        ))
+        .background_only()
+        .with_resolved_amounts()
+        .expect("a pulse resolves");
         assert_eq!(
             resolved,
             VisualEffect::dim(0.25).background_only(),

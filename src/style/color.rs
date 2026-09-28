@@ -88,10 +88,10 @@ pub enum Paint {
     /// fade — which is what lets the runtime advance the fade with a repaint instead of re-running
     /// `view()` for every frame of it.
     Animated {
-        /// Registry slot naming the transition.
-        slot: u16,
-        /// Colour to use when the slot no longer resolves — a paint outliving its transition, or a
-        /// consumer that never reaches the renderer's resolution step.
+        /// Names the transition in the runtime's animation registry.
+        handle: crate::animation::AnimationHandle,
+        /// Colour to use when the handle no longer resolves — a paint outliving its transition, or
+        /// a consumer that never reaches the renderer's resolution step.
         fallback: Color,
     },
 }
@@ -592,8 +592,8 @@ impl Paint {
     /// paint pipeline only ever sees concrete colours.
     pub(crate) fn resolved(self) -> Self {
         match self {
-            Self::Animated { slot, fallback } => Self::Solid(
-                crate::animation::registry::resolve_render_paint_slot(slot).unwrap_or(fallback),
+            Self::Animated { handle, fallback } => Self::Solid(
+                crate::animation::registry::resolve_render_paint(handle).unwrap_or(fallback),
             ),
             other => other,
         }

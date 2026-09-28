@@ -2802,9 +2802,16 @@ impl Component for PulseSmoke {
             PulsePlacement::StyleFg => Text::new("pane")
                 .style(base.transform_fg(crate::style::ColorTransform::tint(RED, alpha)))
                 .into(),
-            PulsePlacement::Hover => MouseRegion::new()
-                .hover_effect(crate::style::VisualEffect::tint(RED, alpha).background_only())
-                .child(Text::new("pane").style(base))
+            // Sharing the row with a spacer, so the pointer can leave it inside the viewport.
+            PulsePlacement::Hover => HStack::new()
+                .child(
+                    MouseRegion::new()
+                        .hover_effect(
+                            crate::style::VisualEffect::tint(RED, alpha).background_only(),
+                        )
+                        .child(Text::new("pane").style(base)),
+                )
+                .child(Spacer::new())
                 .into(),
         }
     }
@@ -3141,6 +3148,71 @@ fn an_unhovered_pulse_stops_asking_for_paints_until_hovered() {
         active(&backend),
         Some(Duration::from_millis(100)),
         "hovering paints the effect, which reads the pulse and wakes it"
+    );
+}
+
+/// A pulse that was hidden while its timeline ran on shows its latest sample on the very paint
+/// that reveals it - not the sample it was hidden at, and without a view pass.
+#[test]
+fn a_revealed_pulse_paints_its_latest_sample_at_once() {
+    let component = PulseSmoke::new(PulsePlacement::Hover);
+    let mut backend = crate::TestBackend::new(component.clone());
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 10,
+        h: 1,
+    });
+    backend.render();
+    let point = |backend: &mut crate::TestBackend<PulseSmoke>, x| {
+        backend
+            .send_mouse(crate::core::event::MouseEvent {
+                x,
+                y: 0,
+                kind: MouseKind::Moved,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    };
+
+    point(&mut backend, 1);
+    step_frames(&mut backend, Duration::from_millis(200));
+    assert_eq!(
+        component.painted(&backend),
+        Color::Rgb(61, 0, 0),
+        "hovered: the 200 ms sample (0.24 of red)"
+    );
+
+    point(&mut backend, 8);
+    let _ = backend.capture_frame();
+    assert_eq!(
+        backend
+            .core
+            .ctx
+            .env()
+            .animations
+            .active_render_transition_interval(Duration::from_millis(33)),
+        None,
+        "unhovered: suspended"
+    );
+
+    // The clock runs on to 750 ms with no pulse tick in between.
+    backend
+        .core
+        .ctx
+        .env()
+        .advance_clock(Duration::from_millis(550));
+    point(&mut backend, 1);
+    let views_before_reveal = component.views.get();
+    assert_eq!(
+        component.painted(&backend),
+        Color::Rgb(92, 0, 0),
+        "the revealing paint shows the 700 ms sample (0.36 of red), not the stale 200 ms one"
+    );
+    assert_eq!(
+        component.views.get(),
+        views_before_reveal,
+        "catching up is the paint's own work, not a view pass"
     );
 }
 
