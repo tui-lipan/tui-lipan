@@ -749,6 +749,10 @@ style/mouse types that external transports commonly need to name: `Style`, `Pain
 `ColorTransform`, `ContrastPolicy`, `MouseModeState`, `MouseMode`, and `MouseEncoding`. It includes
 the `terminal` feature.
 
+Runtime-local animation state never crosses the wire: a `Paint::Animated` serializes as the solid
+colour it resolves to, and a late-bound `EffectAmount` inside a `ColorTransform` as its resting
+value. An older payload carrying an `Animated` paint still deserializes, as its fallback colour.
+
 `terminal-serde` intentionally does **not** serialize `TerminalScreen`, `TerminalPty`, `Span`, or
 `TerminalRenderSnapshot`. Types containing `Arc` should be mirrored by the application in an owned,
 versioned wire format and converted back with `Span::new(...).style(...)` plus

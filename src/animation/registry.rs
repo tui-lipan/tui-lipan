@@ -308,6 +308,8 @@ pub(crate) struct AnimationRegistry {
     paint_epoch: Cell<u64>,
     /// Whether a full paint has begun and not yet finished.
     painting: Cell<bool>,
+    /// Scopes whose `view()` ran since the last [`end_frame_gc`](Self::end_frame_gc).
+    viewed_scopes: RefCell<std::collections::HashSet<ScopeId>>,
 }
 
 /// What advancing the registry by one frame requires of the runtime.
@@ -444,6 +446,9 @@ impl AnimationRegistry {
     }
 
     /// Give `key`'s slot back, bumping its generation so no handle minted for `key` resolves again.
+    ///
+    /// A slot whose generations are spent is retired rather than wrapped, so a stale handle can
+    /// never come to name a later occupant.
     fn release_handle(&self, key: &AnimationKey) {
         let Some(handle) = self.handle_by_key.borrow_mut().remove(key) else {
             return;
@@ -451,8 +456,10 @@ impl AnimationRegistry {
         let mut slots = self.render_slots.borrow_mut();
         let slot = &mut slots[usize::from(handle.slot())];
         slot.key = None;
-        slot.generation = AnimationHandle::next_generation(slot.generation);
-        self.free_slots.borrow_mut().push(handle.slot());
+        if let Some(next) = AnimationHandle::next_generation(slot.generation) {
+            slot.generation = next;
+            self.free_slots.borrow_mut().push(handle.slot());
+        }
     }
 
     /// The current value behind a late-bound handle, or [`None`] if it no longer resolves or names
@@ -643,18 +650,34 @@ impl AnimationRegistry {
         result
     }
 
-    /// Drop entries that were not read during the most recent view. Called once
-    /// per frame after `Component::view` returns.
+    /// Record that `scope`'s `view()` ran, so the next [`end_frame_gc`](Self::end_frame_gc) can
+    /// tell the keys it stopped asking for from the keys of a scope that was not asked at all.
+    pub(crate) fn note_view(&self, scope: ScopeId) {
+        self.viewed_scopes.borrow_mut().insert(scope);
+    }
+
+    /// Drop the entries no mounted view still owns. Called after the component tree is expanded
+    /// and swept.
+    ///
+    /// Ownership is per scope, because not every scope's `view()` runs every frame:
+    ///
+    /// - a scope that is no longer mounted (`is_mounted` says no) loses all its entries;
+    /// - a scope whose `view()` ran since the last collection keeps exactly the keys it read;
+    /// - a scope that is mounted but did not run - a memoized component whose cached subtree was
+    ///   reused, or one a scoped refresh skipped - keeps everything. Its cached elements still hold
+    ///   the handles, so its animations must keep running behind them.
     ///
     /// A dropped entry's handle slot is released for reuse under a new generation. Handles still
-    /// held by an old element tree - a memoized subtree, say - then fail to resolve and fall back
-    /// to their own resting value, rather than naming whatever animation takes the slot next.
-    pub(crate) fn end_frame_gc(&self) {
+    /// held by an old element tree then fail to resolve and fall back to their own resting value,
+    /// rather than naming whatever animation takes the slot next.
+    pub(crate) fn end_frame_gc(&self, is_mounted: impl Fn(ScopeId) -> bool) {
+        let viewed = std::mem::take(&mut *self.viewed_scopes.borrow_mut());
         let mut dropped = Vec::new();
         {
             let mut entries = self.entries.borrow_mut();
             entries.retain(|key, entry| {
-                let keep = entry.state().touched.get();
+                let keep = is_mounted(key.scope)
+                    && (entry.state().touched.get() || !viewed.contains(&key.scope));
                 if !keep {
                     dropped.push(key.clone());
                 }
@@ -768,6 +791,12 @@ mod tests {
         }
     }
 
+    /// One frame of GC for the single-scope unit tests: scope 0's view ran and read what it read.
+    fn gc(reg: &AnimationRegistry) {
+        reg.note_view(ScopeId(0));
+        reg.end_frame_gc(|_| true);
+    }
+
     fn cfg(ms: u64) -> TransitionConfig {
         TransitionConfig {
             duration: Duration::from_millis(ms),
@@ -829,14 +858,14 @@ mod tests {
         let _ = reg.transition::<Color>("a".into(), Color::Red, cfg(100));
         let _ = reg.transition::<Color>("b".into(), Color::Red, cfg(100));
         assert_eq!(reg.entry_count(), 2);
-        reg.end_frame_gc();
+        gc(&reg);
         // After GC, since end_frame_gc resets touched flags, the next gc would
         // drop everything. But within a frame both were touched, so both remain.
         assert_eq!(reg.entry_count(), 2);
 
         // Simulate a frame where only "a" was read.
         let _ = reg.transition::<Color>("a".into(), Color::Red, cfg(100));
-        reg.end_frame_gc();
+        gc(&reg);
         assert_eq!(reg.entry_count(), 1);
     }
 
@@ -1064,8 +1093,8 @@ mod tests {
     fn a_pulse_nobody_reads_is_collected() {
         let reg = AnimationRegistry::default();
         let _ = reg.pulsing_amount("alert".into(), pulse(10), ms(0));
-        reg.end_frame_gc();
-        reg.end_frame_gc();
+        gc(&reg);
+        gc(&reg);
         assert_eq!(reg.entry_count(), 0);
         assert!(
             reg.active_render_transition_interval(ms(33)).is_none(),
@@ -1172,13 +1201,13 @@ mod tests {
                 amount.is_pulse(),
                 "instance {scope} still gets a live pulse"
             );
-            reg.end_frame_gc();
-            reg.end_frame_gc();
+            // The instance unmounts.
+            reg.end_frame_gc(|_| false);
         }
         assert_eq!(
             reg.slot_count(),
-            1,
-            "one slot, reused by every instance in turn"
+            5,
+            "each slot serves 2^14 instances in turn before it retires"
         );
         assert_eq!(reg.entry_count(), 0);
     }
@@ -1188,8 +1217,8 @@ mod tests {
     fn a_stale_handle_never_resolves_to_the_slots_next_occupant() {
         let reg = AnimationRegistry::default();
         let old = amount_slot(reg.animated_amount("old".into(), 0.25, cfg(100), None));
-        reg.end_frame_gc();
-        reg.end_frame_gc();
+        gc(&reg);
+        gc(&reg);
         let new = amount_slot(reg.animated_amount("new".into(), 0.75, cfg(100), None));
         assert_eq!(new.slot(), old.slot(), "the slot was reused");
         assert_ne!(new, old, "under a new generation");
@@ -1254,6 +1283,71 @@ mod tests {
             (shown_value - 0.4).abs() < 1e-6,
             "a running pulse only moves on ticks, so paints between them agree"
         );
+    }
+
+    /// A slot retires when its generations are spent, so a handle kept from its first use never
+    /// comes to name a later occupant - however many times the slot turned over.
+    #[test]
+    fn a_first_generation_handle_never_aliases_a_later_occupant() {
+        let reg = AnimationRegistry::default();
+        let first = amount_slot(reg.animated_amount(
+            AnimationKey::new(ScopeId(0), "first"),
+            0.5,
+            cfg(100),
+            None,
+        ));
+        reg.end_frame_gc(|_| false);
+        for scope in 1..=(1u32 << AnimationHandle::GENERATION_BITS) + 1 {
+            let key = AnimationKey::new(ScopeId(scope), "churn");
+            let handle = amount_slot(reg.animated_amount(key, 0.25, cfg(100), None));
+            assert_ne!(handle, first, "instance {scope} got the first handle back");
+            assert_eq!(
+                reg.resolve_scalar(first),
+                None,
+                "the first handle resolved to instance {scope}"
+            );
+            reg.end_frame_gc(|_| false);
+        }
+        assert_eq!(reg.slot_count(), 2, "slot 0 retired; slot 1 took over");
+    }
+
+    /// GC is per scope: a scope whose view ran keeps what it read, a mounted scope whose view did
+    /// not run (a memo hit) keeps everything, and an unmounted scope keeps nothing.
+    #[test]
+    fn gc_drops_only_what_a_mounted_view_stopped_asking_for() {
+        let reg = AnimationRegistry::default();
+        let viewed = ScopeId(2);
+        let retained = ScopeId(3);
+        let gone = ScopeId(4);
+        for scope in [viewed, retained, gone] {
+            let _ = reg.pulsing_amount(AnimationKey::new(scope, "kept"), pulse(10), ms(0));
+            let _ = reg.pulsing_amount(AnimationKey::new(scope, "dropped"), pulse(10), ms(0));
+        }
+        gc_scopes(&reg, &[viewed, retained, gone], &[viewed, retained, gone]);
+        assert_eq!(reg.entry_count(), 6);
+
+        // Next frame: `viewed` re-runs and only asks for "kept"; `retained` is a memo hit;
+        // `gone` unmounted.
+        let _ = reg.pulsing_amount(AnimationKey::new(viewed, "kept"), pulse(10), ms(0));
+        gc_scopes(&reg, &[viewed], &[viewed, retained]);
+        let keys: std::collections::HashSet<_> = reg.entries.borrow().keys().cloned().collect();
+        assert_eq!(
+            keys,
+            [
+                AnimationKey::new(viewed, "kept"),
+                AnimationKey::new(retained, "kept"),
+                AnimationKey::new(retained, "dropped"),
+            ]
+            .into_iter()
+            .collect()
+        );
+    }
+
+    fn gc_scopes(reg: &AnimationRegistry, viewed: &[ScopeId], mounted: &[ScopeId]) {
+        for &scope in viewed {
+            reg.note_view(scope);
+        }
+        reg.end_frame_gc(|scope| mounted.contains(&scope));
     }
 
     #[test]

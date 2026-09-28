@@ -728,6 +728,7 @@ where
         let view_start_devtools =
             crate::core::nested::frame_diagnostics_enabled().then(web_time::Instant::now);
         self.scroll.begin_view(ScopeId(1));
+        self.ctx.env().animations.note_view(ScopeId(1));
         self.ctx.begin_memo_dependency_capture();
         let element = {
             crate::probe_bucket!(crate::alloc_probe::VIEW);
@@ -821,7 +822,11 @@ where
             );
         }
         self.scroll.update_from_tree(&self.tree);
-        self.ctx.env().animations.end_frame_gc();
+        let components = &self.components;
+        self.ctx
+            .env()
+            .animations
+            .end_frame_gc(|scope| components.is_mounted_scope(scope));
         #[cfg(feature = "profiling-tracing")]
         tracing::trace!(
             target: "tui_lipan::perf",
@@ -917,6 +922,7 @@ where
             self.ctx.set_active_theme(self.theme.clone());
 
             self.scroll.begin_view(ScopeId(1));
+            self.ctx.env().animations.note_view(ScopeId(1));
             #[cfg(feature = "devtools")]
             let view_start_devtools =
                 crate::core::nested::frame_diagnostics_enabled().then(web_time::Instant::now);
@@ -963,7 +969,11 @@ where
             self.components.sweep(epoch);
             self.cached_expanded_element = Some(element);
             self.cached_extra_expanded_element = extra;
-            self.ctx.env().animations.end_frame_gc();
+            let components = &self.components;
+            self.ctx
+                .env()
+                .animations
+                .end_frame_gc(|scope| components.is_mounted_scope(scope));
 
             if scopes.len() == 1 {
                 return true;

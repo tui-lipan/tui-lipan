@@ -126,6 +126,8 @@ impl<C: Component> ErasedComponent for Mounted<C> {
     }
 
     fn view(&self) -> Element {
+        // Animation GC keeps a scope's entries unless its view ran and stopped asking for them.
+        self.ctx.note_view_for_animations();
         self.component.view(&self.ctx)
     }
 

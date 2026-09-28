@@ -655,10 +655,20 @@ one does. Asking for the same key with `animated_amount` instead settles the pul
 is. Keys are local to the component instance that uses them.
 
 A late-bound amount or paint names its animation by an `AnimationHandle`: a registry slot plus a
-generation. A slot is freed when its animation is dropped and reused under the next generation,
-so a long session with many mounted instances never runs out of slots, and a handle left in an old
-tree falls back to its resting value instead of naming the slot's next occupant. A pulse hidden
-while its timeline ran on shows its latest sample on the paint that reveals it.
+generation. A slot is freed when its animation is dropped and reused under the next generation;
+once a slot's generations are spent it retires instead of wrapping, so no two handles in a runtime
+are ever equal and a handle left in an old tree falls back to its resting value instead of naming a
+later occupant. A pulse hidden while its timeline ran on shows its latest sample on the paint that
+reveals it.
+
+An animation belongs to the component instance that requested it for as long as that instance is
+mounted and keeps asking for it. A memoized component whose cached subtree is reused without
+running `view()` keeps its animations running; they are dropped when its `view()` runs without
+requesting them, or when it unmounts.
+
+Handles never cross `terminal-serde`: an `EffectAmount` serializes as its resting value and a
+`Paint::Animated` as the solid colour it resolves to, so another runtime cannot resolve a handle
+against its own registry.
 
 Image pixels never follow a late-bound amount frame by frame: a transition is baked at its target
 (one re-encode for the whole fade), and a pulse is left out of image pixels.

@@ -12,11 +12,11 @@
 /// A handle is a registry slot plus the generation the slot had when the handle was minted. Slots
 /// are recycled once their animation is dropped, and each reuse bumps the generation, so a handle
 /// left behind in an old element tree stops resolving instead of naming whatever animation took
-/// its slot next.
-#[cfg_attr(
-    feature = "terminal-serde",
-    derive(serde::Serialize, serde::Deserialize)
-)]
+/// its slot next. Generations never wrap: a slot whose generation is spent is retired for good,
+/// so no two handles minted in one runtime are ever equal.
+///
+/// Deliberately not serializable: a handle names state in one running app's registry. Values that
+/// carry one serialize as a plain value instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct AnimationHandle {
     slot: u16,
@@ -44,9 +44,13 @@ impl AnimationHandle {
         self.generation
     }
 
-    /// The generation a slot gets on its next reuse.
-    pub(crate) fn next_generation(generation: u16) -> u16 {
-        generation.wrapping_add(1) & Self::GENERATION_MASK
+    /// The generation a slot gets on its next reuse, or `None` once it has used every one.
+    ///
+    /// Wrapping would let a handle minted at generation 0 alias the slot's occupant 2^14 reuses
+    /// later; the caller retires the slot instead. Retiring costs one slot per 2^14 reuses, so the
+    /// 2^16 slots last for about a billion animations.
+    pub(crate) fn next_generation(generation: u16) -> Option<u16> {
+        (generation < Self::GENERATION_MASK).then(|| generation + 1)
     }
 
     /// This handle in the low 30 bits of a `u32`.
@@ -72,8 +76,9 @@ mod tests {
     }
 
     #[test]
-    fn generations_wrap_within_their_width() {
+    fn a_spent_generation_does_not_wrap() {
         let last = (1 << AnimationHandle::GENERATION_BITS) - 1;
-        assert_eq!(AnimationHandle::next_generation(last), 0);
+        assert_eq!(AnimationHandle::next_generation(last - 1), Some(last));
+        assert_eq!(AnimationHandle::next_generation(last), None);
     }
 }

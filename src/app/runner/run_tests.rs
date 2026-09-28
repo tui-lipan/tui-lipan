@@ -3216,6 +3216,123 @@ fn a_revealed_pulse_paints_its_latest_sample_at_once() {
     );
 }
 
+/// A memoized child that pulses. Its `view()` only runs when its memo key changes.
+#[derive(Clone)]
+struct MemoPulseChild {
+    views: Rc<Cell<usize>>,
+}
+
+impl Component for MemoPulseChild {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn memo_key(&self, _props: &Self::Properties, _ctx: &Context<Self>) -> Option<u64> {
+        Some(0)
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        self.views.set(self.views.get() + 1);
+        let alpha = ctx.pulsing_amount(
+            "alert",
+            crate::style::EffectPulse::new(0.0, 0.6)
+                .period(Duration::from_millis(1000))
+                .easing(Easing::Linear)
+                .frame_rate(10),
+        );
+        crate::widgets::EffectScope::new()
+            .tint_by(RED, alpha)
+            .child(Text::new("x").style(Style::new().bg(Color::Rgb(0, 0, 0))))
+            .into()
+    }
+}
+
+/// A parent that re-renders for reasons of its own around a memoized pulsing child.
+#[derive(Clone)]
+struct MemoPulseParent {
+    child_views: Rc<Cell<usize>>,
+    counter: Rc<Cell<u32>>,
+}
+
+impl Component for MemoPulseParent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let child_views = self.child_views.clone();
+        HStack::new()
+            .child(crate::child(
+                move || MemoPulseChild {
+                    views: child_views.clone(),
+                },
+                (),
+            ))
+            .child(Text::new(self.counter.get().to_string()))
+            .into()
+    }
+}
+
+/// Memoization is transparent to animations: a memo-retained child still owns the pulse its
+/// cached subtree names, so an unrelated full render must not collect it.
+#[test]
+fn a_memoized_childs_pulse_survives_an_unrelated_full_render() {
+    let parent = MemoPulseParent {
+        child_views: Rc::new(Cell::new(0)),
+        counter: Rc::new(Cell::new(0)),
+    };
+    let mut backend = crate::TestBackend::new(parent.clone());
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 6,
+        h: 1,
+    });
+    backend.render();
+    let bg = |backend: &crate::TestBackend<MemoPulseParent>| backend.capture_frame().cell(0, 0).bg;
+    for _ in 0..8 {
+        backend.advance_frame(Duration::from_millis(25));
+    }
+    assert_eq!(bg(&backend), Color::Rgb(61, 0, 0), "200 ms in: 0.24 of red");
+    let child_views = parent.child_views.get();
+
+    // The parent re-renders for its own reasons; the child is a memo hit.
+    parent.counter.set(1);
+    backend.render();
+    assert_eq!(
+        parent.child_views.get(),
+        child_views,
+        "the child's view() did not run"
+    );
+    assert_eq!(
+        bg(&backend),
+        Color::Rgb(61, 0, 0),
+        "and its pulse is still there"
+    );
+
+    for _ in 0..8 {
+        backend.advance_frame(Duration::from_millis(25));
+    }
+    assert_eq!(
+        bg(&backend),
+        Color::Rgb(122, 0, 0),
+        "and still moving: 400 ms in, 0.48 of red"
+    );
+    assert_eq!(parent.child_views.get(), child_views);
+}
+
 /// A pulse starts at `from` when it first appears, whatever the runtime clock says.
 #[test]
 fn a_newly_shown_pulse_starts_at_its_from_value() {

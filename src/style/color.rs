@@ -66,9 +66,14 @@ pub enum Color {
 }
 
 /// A color paint that may carry an alpha channel.
+///
+/// With `terminal-serde`, an [`Animated`](Self::Animated) paint serializes as the solid colour it
+/// resolves to: its handle names state in one running app's animation registry, which a receiving
+/// app must never resolve against its own.
 #[cfg_attr(
     feature = "terminal-serde",
-    derive(serde::Serialize, serde::Deserialize)
+    derive(serde::Serialize, serde::Deserialize),
+    serde(into = "PaintWire", from = "PaintWire")
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Paint {
@@ -656,6 +661,45 @@ impl From<Color> for Paint {
     }
 }
 
+/// [`Paint`] on the wire: never an animation handle.
+///
+/// `Animated` is accepted when reading so an older payload that carried one still loads; any
+/// handle it holds is ignored and the paint becomes its fallback.
+#[cfg(feature = "terminal-serde")]
+#[derive(serde::Serialize, serde::Deserialize)]
+enum PaintWire {
+    Solid(Color),
+    Alpha {
+        color: Color,
+        alpha: u8,
+    },
+    #[serde(skip_serializing)]
+    Animated {
+        fallback: Color,
+    },
+}
+
+#[cfg(feature = "terminal-serde")]
+impl From<Paint> for PaintWire {
+    fn from(paint: Paint) -> Self {
+        match paint.resolved() {
+            Paint::Solid(color) => Self::Solid(color),
+            Paint::Alpha { color, alpha } => Self::Alpha { color, alpha },
+            Paint::Animated { fallback, .. } => Self::Solid(fallback),
+        }
+    }
+}
+
+#[cfg(feature = "terminal-serde")]
+impl From<PaintWire> for Paint {
+    fn from(wire: PaintWire) -> Self {
+        match wire {
+            PaintWire::Solid(color) | PaintWire::Animated { fallback: color } => Self::Solid(color),
+            PaintWire::Alpha { color, alpha } => Self::Alpha { color, alpha },
+        }
+    }
+}
+
 #[cfg(all(test, feature = "terminal-serde"))]
 mod terminal_serde_tests {
     use super::*;
@@ -675,6 +719,35 @@ mod terminal_serde_tests {
         };
         let json = serde_json::to_string(&paint).unwrap();
         assert_eq!(serde_json::from_str::<Paint>(&json).unwrap(), paint);
+    }
+
+    /// A handle names one runtime's registry; another runtime must never resolve it.
+    #[test]
+    fn an_animated_paint_crosses_the_wire_as_a_plain_colour() {
+        let paint = Paint::Animated {
+            handle: crate::animation::AnimationHandle::new(0, 0),
+            fallback: Color::Red,
+        };
+        let json = serde_json::to_string(&paint).unwrap();
+        assert!(!json.contains("handle"), "{json}");
+        assert_eq!(
+            serde_json::from_str::<Paint>(&json).unwrap(),
+            Paint::Solid(Color::Red)
+        );
+    }
+
+    #[test]
+    fn an_older_animated_payload_loads_without_its_handle() {
+        for json in [
+            r#"{"Animated":{"slot":0,"fallback":"Red"}}"#,
+            r#"{"Animated":{"handle":{"slot":0,"generation":0},"fallback":"Red"}}"#,
+        ] {
+            assert_eq!(
+                serde_json::from_str::<Paint>(json).unwrap(),
+                Paint::Solid(Color::Red),
+                "{json}"
+            );
+        }
     }
 }
 

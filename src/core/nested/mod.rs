@@ -633,6 +633,16 @@ impl ComponentRegistry {
         update
     }
 
+    /// Whether `scope` names a mounted component: the root, or a nested instance that survived the
+    /// latest sweep.
+    pub(crate) fn is_mounted_scope(&self, scope: ScopeId) -> bool {
+        scope == ScopeId(1)
+            || self
+                .scope_to_id
+                .get(&scope)
+                .is_some_and(|&id| self.is_valid(id))
+    }
+
     pub(crate) fn parent_scope(&self, scope: ScopeId) -> Option<ScopeId> {
         let id = self.scope_to_id.get(&scope).copied()?;
         if !self.is_valid(id) {

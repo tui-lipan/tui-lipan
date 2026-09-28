@@ -1528,6 +1528,12 @@ impl<C: Component> Context<C> {
         self.env.hover.hovered_node_id(self.scope)
     }
 
+    /// Tell the animation registry this instance's `view()` is running, so animation GC can tell
+    /// the keys it stops asking for from those of an instance whose view did not run.
+    pub(crate) fn note_view_for_animations(&self) {
+        self.env.animations.note_view(self.scope);
+    }
+
     /// The registry identity of this component instance's animation `key`.
     ///
     /// Animation keys are component-local, like the rest of a component's keyed state: two
@@ -1551,6 +1557,8 @@ impl<C: Component> Context<C> {
     ///
     /// Keys are local to this component instance, like the rest of its keyed state: two
     /// instances of the same component can both use `"prompt-edge"` and animate independently.
+    /// A memoized instance whose cached subtree is reused without running `view()` keeps its
+    /// animations; they are dropped once its `view()` runs without asking for them, or it unmounts.
     /// The same holds for [`animated_color`](Self::animated_color),
     /// [`animated_amount`](Self::animated_amount), and [`pulsing_amount`](Self::pulsing_amount).
     ///
