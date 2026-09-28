@@ -232,7 +232,9 @@ gets a clean answer rather than silence:
 - **Relative placements** (parent references).
 
 A payload that is not base64 is answered with `EINVAL`, under the command's id and `q=` like any
-other report, and nothing in it is acted on. A bad chunk abandons the whole `m=1` run it belongs to.
+other report, and nothing in it is acted on. A bad chunk, or one that takes a run past the size cap
+(`EFBIG`), abandons the whole `m=1` run it belongs to: the error goes out once, under the run's id,
+and the run's remaining chunks up to its `m=0` are consumed without a reply.
 
 Sixel input from the child is a separate protocol and is not read.
 

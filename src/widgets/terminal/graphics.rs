@@ -507,6 +507,13 @@ enum GraphicsAction {
     Animate,
 }
 
+impl GraphicsAction {
+    /// Whether this carries image data, and so can be one chunk of an `m=1` run.
+    fn transmits(self) -> bool {
+        matches!(self, Self::Transmit | Self::TransmitAndDisplay)
+    }
+}
+
 /// A parsed `APC _G` command.
 #[derive(Clone, Debug)]
 pub(super) struct GraphicsCommand {
@@ -701,17 +708,35 @@ fn base64_decoded_len(payload: &[u8]) -> Option<usize> {
     }
     // A trailing group of two symbols holds one byte and three hold two; one symbol is only six
     // bits, which is no byte at all. Padding may fill that group out, fully or in part, but never
-    // runs past it.
-    let (tail, most_padding) = match symbols.len() % 4 {
-        0 => (0, 0),
-        2 => (1, 2),
-        3 => (2, 1),
+    // runs past it. The bits of the last symbol that fall past the final byte must be zero: the
+    // decoder refuses anything else, and a screen that only counts has to refuse it too.
+    let (tail, most_padding, unused_bits) = match symbols.len() % 4 {
+        0 => (0, 0, 0u8),
+        2 => (1, 2, 0b1111),
+        3 => (2, 1, 0b11),
         _ => return None,
     };
     if padding > most_padding {
         return None;
     }
+    if let Some(&last) = symbols.last()
+        && base64_symbol_value(last) & unused_bits != 0
+    {
+        return None;
+    }
     Some(symbols.len() / 4 * 3 + tail)
+}
+
+/// The six bits a symbol of the standard alphabet stands for; the caller has already checked it is
+/// one.
+fn base64_symbol_value(symbol: u8) -> u8 {
+    match symbol {
+        b'A'..=b'Z' => symbol - b'A',
+        b'a'..=b'z' => symbol - b'a' + 26,
+        b'0'..=b'9' => symbol - b'0' + 52,
+        b'+' => 62,
+        _ => 63,
+    }
 }
 
 // ─── Unicode placeholders ────────────────────────────────────────────────────
@@ -1304,6 +1329,10 @@ pub(super) struct TerminalGraphics {
     numbers: HashMap<u32, u32>,
     placements: Vec<Placement>,
     pending: Option<PendingTransmit>,
+    /// A chunked run failed part-way. Its remaining chunks carry only `m=`, so they cannot be told
+    /// from a new transmission by their keys: everything up to and including the `m=0` that ends
+    /// the run is consumed without a word.
+    discarding_run: bool,
     next_auto_id: u32,
     budget: usize,
     used_bytes: usize,
@@ -1324,6 +1353,7 @@ impl Default for TerminalGraphics {
             numbers: HashMap::new(),
             placements: Vec::new(),
             pending: None,
+            discarding_run: false,
             next_auto_id: FIRST_AUTO_ID,
             budget: DEFAULT_IMAGE_BUDGET_BYTES,
             used_bytes: 0,
@@ -1368,6 +1398,7 @@ impl TerminalGraphics {
         self.numbers.clear();
         self.placements.clear();
         self.pending = None;
+        self.discarding_run = false;
         self.used_bytes = 0;
         self.source_serial = 0;
     }
@@ -1507,6 +1538,10 @@ impl TerminalGraphics {
         ctx: GraphicsContext,
     ) -> GraphicsOutcome {
         self.clock = self.clock.wrapping_add(1);
+        if self.discarding_run && command.action.transmits() {
+            self.discarding_run = command.more;
+            return GraphicsOutcome::default();
+        }
         if command.malformed {
             return self.reject_malformed(&command);
         }
@@ -1529,21 +1564,21 @@ impl TerminalGraphics {
 
     /// Answer a command whose payload is not base64, and act on none of it.
     ///
-    /// A malformed chunk poisons the transmission it belongs to, so the pending run is dropped and
-    /// the error goes out under that run's id and quietness: a later chunk carries only `m=`.
+    /// A malformed chunk poisons the transmission it belongs to: the run is abandoned, and the
+    /// error goes out under that run's id and quietness, since a later chunk carries only `m=`.
     fn reject_malformed(&mut self, command: &GraphicsCommand) -> GraphicsOutcome {
         const ERROR: &str = "EINVAL:payload is not base64";
-        let continues_run = matches!(
-            command.action,
-            GraphicsAction::Transmit | GraphicsAction::TransmitAndDisplay
-        );
+        if !command.action.transmits() {
+            return GraphicsOutcome {
+                response: report(command, command.id, Err(ERROR)),
+                advance: None,
+            };
+        }
         let response = match self.pending.take() {
-            Some(pending) if continues_run => report(&pending.header, pending.id, Err(ERROR)),
-            pending => {
-                self.pending = pending;
-                report(command, command.id, Err(ERROR))
-            }
+            Some(pending) => report(&pending.header, pending.id, Err(ERROR)),
+            None => report(command, command.id, Err(ERROR)),
         };
+        self.discarding_run = command.more;
         GraphicsOutcome {
             response,
             advance: None,
@@ -1623,8 +1658,9 @@ impl TerminalGraphics {
             .saturating_add(command.payload_len)
             > MAX_TRANSMIT_BYTES
         {
+            self.discarding_run = command.more;
             return GraphicsOutcome {
-                response: report(&command, pending.id, Err("EFBIG:payload too large")),
+                response: report(&pending.header, pending.id, Err("EFBIG:payload too large")),
                 advance: None,
             };
         }
@@ -3253,13 +3289,65 @@ mod tests {
         assert!(!graphics.has_images());
     }
 
+    /// The chunks after a bad one carry only `m=`, so they look like the start of a new
+    /// transmission. They belong to the abandoned run, up to and including its `m=0`, and must be
+    /// swallowed rather than stored or answered.
+    #[test]
+    fn a_bad_chunk_swallows_the_rest_of_its_run() {
+        let error = &b"\x1b_Gi=5;EINVAL:payload is not base64\x1b\\"[..];
+        let piece = BASE64.encode(vec![0x40u8; 30 * 20 * 3]);
+        for bad_at in [0, 1] {
+            let mut chunks = vec![
+                format!("\x1b_Ga=T,f=24,s=30,v=40,i=5,m=1;{piece}\x1b\\"),
+                format!("\x1b_Gm=1;{piece}\x1b\\"),
+                format!("\x1b_Gm=0;{piece}\x1b\\"),
+            ];
+            chunks[bad_at] = if bad_at == 0 {
+                "\x1b_Ga=T,f=24,s=30,v=40,i=5,m=1;A\x1b\\".to_owned()
+            } else {
+                "\x1b_Gm=1;A\x1b\\".to_owned()
+            };
+            chunks.push(String::from_utf8(rgb_command("a=T,i=6", 30, 40)).unwrap());
+            let (_, commands) =
+                scan_all(&mut GraphicsScanner::default(), chunks.concat().as_bytes());
+            assert_eq!(commands.len(), 4);
+
+            let mut graphics = TerminalGraphics::default();
+            let outcomes: Vec<_> = commands
+                .into_iter()
+                .map(|command| graphics.apply(command, context()))
+                .collect();
+            let replies: Vec<_> = outcomes[..3]
+                .iter()
+                .filter_map(|outcome| outcome.response.as_deref())
+                .collect();
+            assert_eq!(replies, [error], "exactly one error, bad_at={bad_at}");
+            assert!(
+                outcomes[..3]
+                    .iter()
+                    .all(|outcome| outcome.advance.is_none()),
+                "nothing from the abandoned run is placed, bad_at={bad_at}"
+            );
+            assert!(!graphics.images.contains_key(&5), "bad_at={bad_at}");
+            assert!(graphics.pending.is_none() && !graphics.discarding_run);
+
+            assert_eq!(
+                outcomes[3].response.as_deref(),
+                Some(&b"\x1b_Gi=6;OK\x1b\\"[..]),
+                "the next transmission is its own, bad_at={bad_at}"
+            );
+            assert_eq!(outcomes[3].advance, Some((2, 3)));
+        }
+    }
+
     /// The size a screen that skips payloads works out must match what decoding would produce,
     /// and it must refuse exactly what the decoder refuses.
     #[test]
     fn the_counted_payload_length_agrees_with_the_decoder() {
         for payload in [
             "", "QQ", "QQ=", "QQ==", "QUI", "QUI=", "QUJD", "QUJDRA", "QUJDRA==", "Q", "Q===",
-            "QQ===", "QUI==", "QU=I", "QUJD=", "QU!D",
+            "QQ===", "QUI==", "QU=I", "QUJD=", "QU!D", "AB", "AB==", "AAAAAB", "QR", "QUJ", "QUJ=",
+            "QUJDR", "//", "/w", "//8", "+/8",
         ] {
             assert_eq!(
                 base64_decoded_len(payload.as_bytes()),
