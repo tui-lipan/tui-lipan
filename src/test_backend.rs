@@ -6648,6 +6648,75 @@ mod tests {
         );
     }
 
+    /// Records `Context::elapsed` whenever it is asked to, and can schedule a message for an
+    /// absolute deadline on that clock.
+    struct ElapsedProbe {
+        seen: Rc<RefCell<Vec<Duration>>>,
+    }
+
+    enum ElapsedProbeMessage {
+        Read,
+        ScheduleAt(Duration),
+    }
+
+    impl Component for ElapsedProbe {
+        type Message = ElapsedProbeMessage;
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                ElapsedProbeMessage::Read => {
+                    self.seen.borrow_mut().push(ctx.elapsed());
+                    Update::none()
+                }
+                ElapsedProbeMessage::ScheduleAt(deadline) => {
+                    let delay = deadline.saturating_sub(ctx.elapsed());
+                    Update::with_command(crate::Command::after(delay, |link| {
+                        link.send(ElapsedProbeMessage::Read);
+                    }))
+                }
+            }
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            crate::widgets::Text::new("probe").into()
+        }
+    }
+
+    /// `Context::elapsed` reads the runtime clock: virtual under a test backend, moved only by
+    /// `advance`, and the clock `Command::after` measures its delays against, so a deadline taken from
+    /// it fires exactly when that much time has passed.
+    #[test]
+    fn elapsed_follows_the_virtual_clock_that_timers_fire_on() {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let mut backend = TestBackend::new(ElapsedProbe {
+            seen: Rc::clone(&seen),
+        });
+        backend.dispatch(ElapsedProbeMessage::Read).unwrap();
+        backend.advance(Duration::from_millis(300));
+        backend.dispatch(ElapsedProbeMessage::Read).unwrap();
+        let start = seen.borrow()[0];
+        assert_eq!(seen.borrow()[1] - start, Duration::from_millis(300));
+
+        let deadline = start + Duration::from_millis(500);
+        backend
+            .dispatch(ElapsedProbeMessage::ScheduleAt(deadline))
+            .unwrap();
+        backend.advance(Duration::from_millis(150));
+        backend.pump().unwrap();
+        assert_eq!(seen.borrow().len(), 2, "not due yet");
+        backend.advance(Duration::from_millis(50));
+        backend.pump().unwrap();
+        assert_eq!(
+            seen.borrow().last().copied(),
+            Some(deadline),
+            "delivered at the deadline, on the clock it was measured on"
+        );
+    }
+
     #[test]
     fn advance_ticks_animated_and_property_transitions() {
         let mut backend = TestBackend::new(AdvanceTransitionsHarness);

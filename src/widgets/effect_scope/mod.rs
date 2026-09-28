@@ -24,6 +24,7 @@ use crate::style::{
 pub struct EffectScope {
     pub(crate) child: Option<Box<Element>>,
     pub(crate) effects: Vec<VisualEffect>,
+    pub(crate) cells_only: bool,
 }
 
 impl EffectScope {
@@ -110,6 +111,32 @@ impl EffectScope {
         I: IntoIterator<Item = VisualEffect>,
     {
         self.effects.extend(effects);
+        self
+    }
+
+    /// Keep this scope's effects off image pixels.
+    ///
+    /// By default an effect that recolors cells also recolors the terminal images drawn under the
+    /// scope, so a dimmed pane dims its pictures too. With `cells_only`, the effects apply to text
+    /// cells alone and images keep their own pixels, whatever the effect and whether its amount is
+    /// fixed, fading, or pulsing. Use it for a signal that belongs to the text around a picture
+    /// rather than to the picture, such as a pane's alert tint.
+    ///
+    /// It also saves the image re-encode a fixed effect costs when it appears and again when it
+    /// goes.
+    ///
+    /// ```no_run
+    /// # use tui_lipan::prelude::*;
+    /// # fn example(pane: Element) -> Element {
+    /// EffectScope::new()
+    ///     .cells_only()
+    ///     .tint_by(Color::Rgb(220, 60, 60), 0.08)
+    ///     .child(pane)
+    ///     .into()
+    /// # }
+    /// ```
+    pub fn cells_only(mut self) -> Self {
+        self.cells_only = true;
         self
     }
 

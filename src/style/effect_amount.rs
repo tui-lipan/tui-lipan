@@ -213,8 +213,9 @@ impl<'de> serde::Deserialize<'de> for EffectAmount {
 /// [`easing`](Self::easing) on each half. The default `EaseInOutSine` makes that a smooth breath
 /// with no visible turnaround.
 ///
-/// A pulse starts at `from` when its key first appears and is owned by the runtime's animation
-/// registry from then on. The registry samples it [`frame_rate`](Self::frame_rate) times a
+/// A pulse starts at `from` when its key first appears - or at the instant given to
+/// [`starting_at`](Self::starting_at) - and is owned by the runtime's animation registry from then
+/// on. The registry samples it [`frame_rate`](Self::frame_rate) times a
 /// second on the pulse's own timeline, and every paint between two samples - including a partial
 /// repaint of a few damaged terminal rows - sees the same value. Each sample costs a paint and no
 /// `view()` pass.
@@ -229,6 +230,7 @@ pub struct EffectPulse {
     pub(crate) period: Duration,
     pub(crate) easing: Easing,
     frame_rate: u16,
+    pub(crate) start: Option<Duration>,
 }
 
 // `f32` fields compare by bit pattern, like every other effect parameter.
@@ -239,6 +241,7 @@ impl PartialEq for EffectPulse {
             && self.period == other.period
             && self.easing == other.easing
             && self.frame_rate == other.frame_rate
+            && self.start == other.start
     }
 }
 
@@ -251,6 +254,7 @@ impl Hash for EffectPulse {
         self.period.hash(state);
         self.easing.hash(state);
         self.frame_rate.hash(state);
+        self.start.hash(state);
     }
 }
 
@@ -263,6 +267,7 @@ impl EffectPulse {
             period: DEFAULT_PULSE_PERIOD,
             easing: Easing::EaseInOutSine,
             frame_rate: DEFAULT_PULSE_FRAME_RATE,
+            start: None,
         }
     }
 
@@ -286,6 +291,22 @@ impl EffectPulse {
     /// [`App::frame_rate`](crate::App::frame_rate).
     pub fn frame_rate(mut self, frame_rate: u16) -> Self {
         self.frame_rate = frame_rate.clamp(1, 480);
+        self
+    }
+
+    /// Start the pulse's timeline at `elapsed` on the runtime clock ([`Context::elapsed`]) rather
+    /// than when its key is first asked for.
+    ///
+    /// The pulse's value is then a function of the clock alone: asked for late, it joins its
+    /// timeline where the clock says rather than starting over, and asked for before `elapsed`, it
+    /// holds at `from` until then. Use it to keep a pulse in step with something else anchored to
+    /// the same instant, such as an app-side timer scheduled on fixed deadlines from it.
+    ///
+    /// Moving the start of a running pulse moves its timeline with it.
+    ///
+    /// [`Context::elapsed`]: crate::Context::elapsed
+    pub fn starting_at(mut self, elapsed: Duration) -> Self {
+        self.start = Some(elapsed);
         self
     }
 

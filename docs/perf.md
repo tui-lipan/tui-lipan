@@ -120,6 +120,15 @@ hover effect; a pulse that a full paint did not read (an unhovered hover effect,
 a scrolled-away pane) is suspended until one does, so it cannot keep an idle app
 repainting. Still, request a pulse only while it is meant to show.
 
+A pulse that has to keep step with something else - an app-side timer, another
+pulse asked for later - can be anchored instead of starting when its key first
+appears. `EffectPulse::starting_at(elapsed)` fixes its timeline to an instant on
+the runtime clock, which `Context::elapsed()` reads: it holds at `from` until
+then, and asked for late it joins the timeline where the clock says. Schedule the
+timer's ticks on fixed deadlines from the same anchor (`anchor + beat * n`, less
+`ctx.elapsed()`) rather than one beat after the previous tick was handled, so
+handling latency never accumulates into drift between the two.
+
 Animation keys are component-local: two instances of a pane component can both
 use `"pane-alert-tint"` and each gets its own transition or pulse.
 

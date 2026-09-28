@@ -246,7 +246,8 @@ them. Each runs the renderer's own cell code on the pixel's color, so the match 
 
 - **An `EffectScope`** whose effects depend only on a cell's own color: `dim_by`, `lighten_by`,
   `tint_by`, `transform_bg`, `VisualEffect::Monochrome`, and `VisualEffect::PaletteQuantize`,
-  including under `Channels` and a rectangular `Clipped`.
+  including under `Channels` and a rectangular `Clipped`. `EffectScope::cells_only()` opts a
+  scope out: its effects recolor the cells and leave every image under it at its own pixels.
 - **An `Animated` opacity toward a color**, `opacity_target`, unless it is `opacity_fg_only`.
 - **A `Canvas` or `Center` stacked over the image** whose style dims, tints, or transforms without
   painting a background. That is how a `Local`-scope modal's backdrop draws. Its dialog hides

@@ -9,6 +9,8 @@ use super::EffectScope;
 #[derive(Clone, Debug, Default)]
 pub struct EffectScopeNode {
     pub effects: Vec<VisualEffect>,
+    /// Whether the effects stay off image pixels; see [`EffectScope::cells_only`].
+    pub cells_only: bool,
 }
 
 impl EffectScopeNode {
@@ -30,6 +32,7 @@ impl From<EffectScope> for EffectScopeNode {
     fn from(value: EffectScope) -> Self {
         Self {
             effects: value.effects,
+            cells_only: value.cells_only,
         }
     }
 }

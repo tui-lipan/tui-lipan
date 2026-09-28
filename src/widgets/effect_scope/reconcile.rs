@@ -28,7 +28,10 @@ pub(crate) fn reconcile_effect_scope(
     let old_children = {
         let node = tree.node_mut(id);
         node.rect = rect;
-        node.kind = NodeKind::EffectScope(EffectScopeNode { effects });
+        node.kind = NodeKind::EffectScope(EffectScopeNode {
+            effects,
+            cells_only: scope.cells_only,
+        });
         std::mem::take(&mut node.children)
     };
 
@@ -70,6 +73,7 @@ fn effect_scoped_portal_element(element: &Element, scope: &EffectScope) -> Optio
                 EffectScope {
                     child: Some(portal.content.clone()),
                     effects: scope.effects.clone(),
+                    cells_only: scope.cells_only,
                 }
                 .into(),
             );
