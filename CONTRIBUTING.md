@@ -150,8 +150,8 @@ After implementation:
 
 ## Releasing (maintainers)
 
-1. Keep `GOOGLE_GENERATIVE_AI_API_KEY` configured in the protected `release`
-   environment. Rosie uses `google/gemini-3.5-flash-lite`; OpenCode receives no
+1. Keep `OPENAI_API_KEY` configured in the protected `release`
+   environment. Rosie uses `openai/gpt-6-luna`; OpenCode receives no
    GitHub or crates.io publication token.
 2. From a clean, up-to-date `main`, run
    `python3 scripts/bump_version.py X.Y.Z --commit`. It bumps `version` in both
