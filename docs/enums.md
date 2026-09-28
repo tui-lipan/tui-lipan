@@ -639,7 +639,7 @@ repaints instead of `view()` passes.
 |------|-----------|----------|
 | Fixed | `f32.into()`, `EffectAmount::fixed(f32)` | A plain number |
 | Transition | `ctx.animated_amount(key, target, config)`, `ctx.animated_amount_with_frame_rate(...)` | Moves toward `target`; the animation registry ticks it and asks for paint-only frames |
-| Pulse | `ctx.pulsing_amount(key, EffectPulse::new(from, to))` | Oscillates `from → to → from` while the view keeps reading `key`; starts at `from`, sampled at the pulse's frame rate by the animation registry |
+| Pulse | `ctx.pulsing_amount(key, EffectPulse::new(from, to))` | Oscillates `from → to → from` while the view keeps reading `key`; starts at `from` when `key` first appears, or at `EffectPulse::starting_at(elapsed)` on the runtime clock, sampled at the pulse's frame rate by the animation registry |
 
 Accessors: `as_fixed()`, `is_transition()`, `is_pulse()`, `is_late_bound()`, and
 `resting_value()` (the fixed value, the transition's target, or the pulse's `from`). Outside a
@@ -671,7 +671,9 @@ Handles never cross `terminal-serde`: an `EffectAmount` serializes as its restin
 against its own registry.
 
 Image pixels never follow a late-bound amount frame by frame: a transition is baked at its target
-(one re-encode for the whole fade), and a pulse is left out of image pixels.
+(one re-encode for the whole fade), and a pulse is left out of image pixels. A fixed amount does
+reach them, so a signal that must never recolor a picture - whether it holds still or breathes -
+belongs in an `EffectScope::cells_only()` scope.
 
 ### `Paint`
 

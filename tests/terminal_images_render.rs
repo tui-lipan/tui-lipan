@@ -755,6 +755,8 @@ enum Layer {
     Scope(VisualEffect),
     /// An `EffectScope` with several effects wrapping the pane.
     Scopes(Vec<VisualEffect>),
+    /// A `cells_only` `EffectScope` wrapping the pane.
+    CellsOnly(VisualEffect),
     /// An `Animated` wrapping the pane, faded toward a color.
     Fade(f32, Color),
     /// A `Local`-scope modal over the pane.
@@ -789,6 +791,11 @@ impl Component for LayeredPane {
             Layer::Scope(effect) => EffectScope::new().effect(effect.clone()).child(pane).into(),
             Layer::Scopes(effects) => EffectScope::new()
                 .effects(effects.iter().cloned())
+                .child(pane)
+                .into(),
+            Layer::CellsOnly(effect) => EffectScope::new()
+                .cells_only()
+                .effect(effect.clone())
                 .child(pane)
                 .into(),
             Layer::Fade(opacity, target) => Animated::new(pane)
@@ -867,6 +874,32 @@ fn assert_pixels_match_the_cells(frame: &CapturedFrame, what: &str) {
 fn an_effect_scope_dims_image_pixels_like_the_cells_it_dims() {
     let frame = layered_pane(Layer::Scope(VisualEffect::dim(0.5)));
     assert_pixels_match_the_cells(&frame, "a dimming scope");
+}
+
+#[test]
+fn a_cells_only_scope_recolors_the_cells_and_leaves_the_pixels_alone() {
+    for effect in [
+        VisualEffect::tint(Color::Rgb(0, 0, 255), 0.5),
+        VisualEffect::dim(0.5),
+        VisualEffect::Monochrome { strength: 1.0 },
+    ] {
+        // The same effect without the flag reaches the pixels, so the flag is what keeps them.
+        let scoped = layered_pane(Layer::Scope(effect.clone()));
+        assert_pixels_match_the_cells(&scoped, "the same effect on a plain scope");
+
+        let frame = layered_pane(Layer::CellsOnly(effect.clone()));
+        assert_eq!(
+            frame.cell(10, 5).bg,
+            scoped.cell(10, 5).bg,
+            "{effect:?}: the cells recolor exactly as they would without the flag"
+        );
+        assert!(
+            image_pixels(&frame)
+                .iter()
+                .all(|&pixel| pixel == [255, 0, 0, 255]),
+            "{effect:?}: every image pixel keeps its own color"
+        );
+    }
 }
 
 #[test]

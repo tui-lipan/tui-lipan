@@ -1763,6 +1763,31 @@ impl<C: Component> Context<C> {
             .pulsing_amount(self.animation_key(key), pulse, self.env.clock.elapsed())
     }
 
+    /// Time elapsed on this runtime's clock since it started.
+    ///
+    /// This is the clock that [`pulsing_amount`](Self::pulsing_amount) pulses run on and
+    /// [`Command::after`] and [`CommandLink::send_after`](crate::CommandLink::send_after) delays are
+    /// measured against. It is monotonic, and virtual under a
+    /// [`TestBackend`](crate::TestBackend) or a controlled automation session: it moves only when
+    /// the test advances it.
+    ///
+    /// Read it to keep an app-side timer in step with a registry pulse. Schedule each tick at a fixed
+    /// deadline measured from one anchor rather than one delay after the previous tick was handled,
+    /// and handling latency cannot accumulate into drift:
+    ///
+    /// ```no_run
+    /// # use std::time::Duration;
+    /// # use tui_lipan::prelude::*;
+    /// # fn example(ctx: &Context<impl Component>, anchor: Duration, beat: Duration, turn: u32) {
+    /// let deadline = anchor + beat * (turn + 1);
+    /// let delay = deadline.saturating_sub(ctx.elapsed());
+    /// # let _ = delay;
+    /// # }
+    /// ```
+    pub fn elapsed(&self) -> std::time::Duration {
+        self.env.clock.elapsed()
+    }
+
     /// Transition a render-time effect amount at a caller-selected repaint cadence.
     ///
     /// The scalar counterpart of

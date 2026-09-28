@@ -1955,7 +1955,7 @@ fn pending_image_effects(
                         child_clip = visible;
                     }
                     NodeKind::EffectScope(scope) => {
-                        if !scope.effects.is_empty() {
+                        if !scope.effects.is_empty() && !scope.cells_only {
                             stack.push(Visit::Post(id, rect, clip));
                         }
                         child_clip = visible;

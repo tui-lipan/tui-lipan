@@ -618,12 +618,24 @@ impl AnimationRegistry {
         typed.state.render_interval.set(Some(interval));
 
         let (started, elapsed) = match &typed.animation {
-            Some(RenderAnimation::Pulse(running)) => (running.started, running.elapsed),
+            // A running pulse keeps its last sample until the next one, unless it was given a new
+            // start: then its timeline moves there at once.
+            Some(RenderAnimation::Pulse(running))
+                if pulse.start.is_none_or(|start| start == running.started) =>
+            {
+                (running.started, running.elapsed)
+            }
+            Some(RenderAnimation::Pulse(_)) => {
+                let started = pulse.start.unwrap_or(now);
+                (started, now.saturating_sub(started))
+            }
             // A pulse that is (re)starting has a consumer in mind: count it as live until a full
-            // paint says otherwise.
+            // paint says otherwise. An explicit start before now joins the timeline part way; one
+            // after it holds at `from` until then.
             _ => {
                 typed.state.suspended.set(false);
-                (now, Duration::ZERO)
+                let started = pulse.start.unwrap_or(now);
+                (started, now.saturating_sub(started))
             }
         };
         let state = PulseState {
@@ -1082,6 +1094,46 @@ mod tests {
         assert!(
             (reg.resolve_scalar(slot).unwrap() - 0.6).abs() < 1e-6,
             "sampled at 300 ms, the latest sample point the real clock has passed"
+        );
+    }
+
+    /// A pulse given a start is a function of the clock alone: it holds at `from` until its start,
+    /// and one first asked for late joins its timeline where the clock says instead of starting
+    /// over.
+    #[test]
+    fn a_pulse_with_a_start_follows_the_clock_from_there() {
+        let reg = AnimationRegistry::default();
+        let anchored = pulse(10).starting_at(ms(1_000));
+
+        let early = amount_slot(reg.pulsing_amount("early".into(), anchored, ms(400)));
+        assert_eq!(
+            reg.resolve_scalar(early),
+            Some(0.0),
+            "held at from before its start"
+        );
+        let _ = reg.tick(ms(100), ms(900));
+        assert_eq!(reg.resolve_scalar(early), Some(0.0), "still holding");
+        let _ = reg.tick(ms(100), ms(1_300));
+        assert!(
+            (reg.resolve_scalar(early).unwrap() - 0.6).abs() < 1e-6,
+            "300 ms into its timeline"
+        );
+
+        let late = amount_slot(reg.pulsing_amount("late".into(), anchored, ms(1_300)));
+        assert!(
+            (reg.resolve_scalar(late).unwrap() - 0.6).abs() < 1e-6,
+            "asked for late, it joins the same point of the same timeline"
+        );
+
+        let moved = amount_slot(reg.pulsing_amount(
+            "early".into(),
+            pulse(10).starting_at(ms(1_200)),
+            ms(1_300),
+        ));
+        assert_eq!(moved, early);
+        assert!(
+            (reg.resolve_scalar(early).unwrap() - 0.2).abs() < 1e-6,
+            "a moved start moves the running timeline with it"
         );
     }
 
