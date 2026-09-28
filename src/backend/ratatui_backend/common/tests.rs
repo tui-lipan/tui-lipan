@@ -116,7 +116,7 @@ fn interactive_style_focus_concrete_bg_allows_hover_transform() {
         Style::new().bg(Color::rgb(80, 80, 80)),
         Style::new()
             .bg(Color::Red)
-            .transform_bg(ColorTransform::Dim(0.5)),
+            .transform_bg(ColorTransform::dim(0.5)),
         Style::new().bg(Color::Green),
         true,
         true,
@@ -133,7 +133,7 @@ fn interactive_style_disabled_remains_terminal() {
         Style::new().bg(Color::rgb(80, 80, 80)),
         Style::new()
             .bg(Color::Red)
-            .transform_bg(ColorTransform::Dim(0.5)),
+            .transform_bg(ColorTransform::dim(0.5)),
         Style::new().bg(Color::Green),
         true,
         true,
@@ -148,7 +148,7 @@ fn interactive_style_hover_transform_re_adjusts_fg_after_bg_change() {
     let base = Style::new()
         .fg(Color::rgb(120, 120, 120))
         .bg(Color::rgb(20, 20, 20));
-    let hover = Style::new().transform_bg(ColorTransform::Lighten(0.9));
+    let hover = Style::new().transform_bg(ColorTransform::lighten(0.9));
 
     let unfocused = resolve_interactive_style(
         base,
@@ -184,8 +184,8 @@ fn interactive_state_transforms_stack_on_previous_resolved_color() {
     // hover and focus carry only transforms; both should compose on the
     // previously resolved bg so that two stacked Dim(0.5) halves twice.
     let base = Style::new().bg(Color::rgb(100, 100, 100));
-    let hover = Style::new().transform_bg(ColorTransform::Dim(0.5));
-    let focus = Style::new().transform_bg(ColorTransform::Dim(0.5));
+    let hover = Style::new().transform_bg(ColorTransform::dim(0.5));
+    let focus = Style::new().transform_bg(ColorTransform::dim(0.5));
 
     let style = resolve_interactive_style(
         base,
@@ -207,7 +207,7 @@ fn interactive_state_transforms_stack_on_previous_resolved_color() {
 fn finalize_style_resolves_opacity_with_backdrop_before_contrast() {
     let raw = Style::new()
         .fg(Color::Transparent)
-        .transform_fg(ColorTransform::Opacity(0.5));
+        .transform_fg(ColorTransform::opacity(0.5));
 
     let finalized = finalize_style(raw, Some(Color::rgb(10, 20, 30)), ContrastPolicy::Off);
 
@@ -360,7 +360,7 @@ fn lighten_transform_resolves_reset_bg_via_terminal_bg() {
                 w: 1,
                 h: 1,
             },
-            Style::new().transform_bg(ColorTransform::Lighten(0.35)),
+            Style::new().transform_bg(ColorTransform::lighten(0.35)),
             None,
             terminal_bg,
         );
@@ -939,12 +939,12 @@ fn backdrop_background_effect_matches_the_cell_pass() {
     let styles = [
         Style::new().dim_by(0.5),
         Style::new().tint_by(Color::rgb(0, 0, 40), 0.5),
-        Style::new().transform_bg(ColorTransform::Opacity(0.3)),
-        Style::new().transform_bg(ColorTransform::Elevate(0.4)),
+        Style::new().transform_bg(ColorTransform::opacity(0.3)),
+        Style::new().transform_bg(ColorTransform::elevate(0.4)),
         Style::new()
             .dim_by(0.25)
             .tint_by(Color::rgb(30, 0, 60), 0.4)
-            .transform_bg(ColorTransform::Lighten(0.2)),
+            .transform_bg(ColorTransform::lighten(0.2)),
         Style::new().bg(Color::rgb(10, 20, 30)).dim_by(0.5),
     ];
     let sources = [(255, 0, 0), (12, 200, 90), (0, 0, 0), (255, 255, 255)];

@@ -775,7 +775,8 @@ impl App {
     /// wakes this often while such content is live, and no oftener, so the number is both the
     /// smoothness a video rate producer can reach and the CPU it is allowed to cost.
     ///
-    /// Style-only colors produced by [`Context::animated_color`](crate::Context::animated_color)
+    /// Style-only colors produced by [`Context::animated_color`](crate::Context::animated_color),
+    /// and effect strengths from [`Context::animated_amount`](crate::Context::animated_amount),
     /// use [`color_animation_frame_rate`](Self::color_animation_frame_rate) when no geometry or
     /// concrete-value transition is active. That avoids repainting a terminal-sized tree at video
     /// rate for a border or text-color fade.
@@ -788,7 +789,8 @@ impl App {
     }
 
     /// Set the cadence for style-only colors from
-    /// [`Context::animated_color`](crate::Context::animated_color).
+    /// [`Context::animated_color`](crate::Context::animated_color) and effect strengths from
+    /// [`Context::animated_amount`](crate::Context::animated_amount).
     ///
     /// These transitions need a repaint but no `view()` or layout pass. They are paced separately
     /// because repainting a large tree at the video/geometry rate is wasteful for a short color

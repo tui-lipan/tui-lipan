@@ -1748,7 +1748,12 @@ impl<C: Component> AppRunner<C> {
                 self.core.ctx.env().advance_clock(tick);
                 let (_, _, needs_layout) =
                     crate::app::animation::tick_tree_animations(&mut self.core.tree, tick);
-                let transitions = self.core.ctx.env().animations.tick(tick);
+                let transitions = self
+                    .core
+                    .ctx
+                    .env()
+                    .animations
+                    .tick(tick, self.core.ctx.env().clock.elapsed());
                 dirty_view |= needs_layout || transitions.view_changed;
                 let revealed = self.core.ctx.command_chord_revealed();
                 if revealed != self.animation.command_chord_revealed {

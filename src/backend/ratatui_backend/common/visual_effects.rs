@@ -132,15 +132,18 @@ fn dedupe_effect_transform(
 ) -> Option<ColorTransform> {
     let transform = transform?;
 
+    // Only a fixed amount can duplicate the style's own fixed `dim_amount` / `tint` hooks.
     match transform {
         ColorTransform::Dim(amount)
-            if dim_amount.is_some_and(|dim| dim.to_bits() == amount.to_bits()) =>
+            if dim_amount
+                .is_some_and(|dim| Some(dim.to_bits()) == amount.as_fixed().map(f32::to_bits)) =>
         {
             None
         }
         ColorTransform::Tint(color, alpha)
             if tint.is_some_and(|(tint_color, tint_alpha)| {
-                tint_color == color && tint_alpha.to_bits() == alpha.to_bits()
+                tint_color == color
+                    && Some(tint_alpha.to_bits()) == alpha.as_fixed().map(f32::to_bits)
             }) =>
         {
             None
@@ -240,8 +243,11 @@ pub(crate) fn apply_effect_style_clipped(
         return;
     }
 
-    let fg_transform = dedupe_effect_transform(style.fg_transform, style.dim_amount, style.tint);
-    let bg_transform = dedupe_effect_transform(style.bg_transform, style.dim_amount, style.tint);
+    // Late-bound transform strengths resolve once for the pass, not once per cell.
+    let fg_transform = dedupe_effect_transform(style.fg_transform, style.dim_amount, style.tint)
+        .map(ColorTransform::resolved);
+    let bg_transform = dedupe_effect_transform(style.bg_transform, style.dim_amount, style.tint)
+        .map(ColorTransform::resolved);
 
     if style.dim_amount.is_none()
         && style.tint.is_none()
@@ -333,8 +339,11 @@ impl BackdropBackgroundEffect {
             })
             .map(resolve_host_palette_ratatui);
         // Resolved here for the same reason as the fill: a transform's own colors are part of what
-        // the effect does to pixels.
+        // the effect does to pixels. A late-bound strength is recorded at the value it settles on,
+        // or left out when it never settles, so the effect's identity - and the image cache keyed
+        // by it - holds still while the cells around the image animate.
         let transform = dedupe_effect_transform(style.bg_transform, style.dim_amount, style.tint)
+            .and_then(ColorTransform::settled)
             .map(|transform| transform.map_colors(resolve_host_palette_color));
         if fill.is_none()
             && style.dim_amount.is_none()
@@ -1209,6 +1218,7 @@ fn apply_visual_effect_to_cell(
                     h: effect_bounds.height,
                 },
                 phase,
+                elapsed: crate::animation::registry::render_elapsed(),
                 terminal_bg: params.terminal_bg,
             };
             if effect.uses_backdrop() {
@@ -1332,8 +1342,12 @@ pub(crate) fn apply_visual_effects_over_backdrop(
     }
 
     let buf = f.buffer_mut();
+    let elapsed = crate::animation::registry::render_elapsed();
     let mut composited_backdrop = false;
     for effect in effects {
+        // Late-bound transform strengths resolve once for the pass, not once per cell.
+        let resolved = effect.with_resolved_amounts();
+        let effect = resolved.as_ref().unwrap_or(effect);
         let gate = |x: u16, y: u16| cell_passes_visual_clip(effect, draw_rect, x as i16, y as i16);
 
         let peeled = strip_effect_wrappers(effect);
@@ -1393,6 +1407,7 @@ pub(crate) fn apply_visual_effects_over_backdrop(
             VisualEffect::Custom(effect) => effect.prepare(&EffectPrepareContext {
                 bounds: effect_bounds,
                 phase,
+                elapsed,
                 terminal_bg,
             }),
             _ => None,
@@ -1418,6 +1433,7 @@ pub(crate) fn apply_visual_effects_over_backdrop(
                                 y: y as i16,
                                 bounds: effect_bounds,
                                 phase,
+                                elapsed,
                                 terminal_bg,
                             };
                             if reads_backdrop {
@@ -1568,7 +1584,7 @@ mod palette_fidelity_tests {
         cell.set_fg(RColor::LightCyan);
         apply_color_transforms_to_cell(
             &mut cell,
-            Some(ColorTransform::Opacity(0.4)),
+            Some(ColorTransform::opacity(0.4)),
             None,
             Some(RColor::Black),
         );
@@ -1591,7 +1607,7 @@ mod palette_fidelity_tests {
         cell.set_bg(RColor::Black);
         apply_color_transforms_to_cell(
             &mut cell,
-            Some(ColorTransform::Opacity(0.4)),
+            Some(ColorTransform::opacity(0.4)),
             None,
             Some(RColor::Black),
         );
@@ -1607,7 +1623,7 @@ mod palette_fidelity_tests {
     fn transform_preserves_indexed_palette_colors() {
         let (color, dim) = transform_ratatui_color(
             RColor::Indexed(14),
-            ColorTransform::Opacity(0.3),
+            ColorTransform::opacity(0.3),
             Some(RColor::Black),
             true,
         );
@@ -1709,9 +1725,9 @@ mod palette_fidelity_tests {
         let _scope = push_render_host_palette(Some(themed_host()));
         let source = Color::Rgb(200, 200, 200);
         for transform in [
-            ColorTransform::Tint(Color::Blue, 0.5),
+            ColorTransform::tint(Color::Blue, 0.5),
             ColorTransform::OpacityToward {
-                factor: 0.5,
+                factor: 0.5.into(),
                 target: Color::Blue,
             },
         ] {
@@ -1730,14 +1746,14 @@ mod palette_fidelity_tests {
     #[test]
     fn a_backdrop_transform_target_is_part_of_the_image_effect() {
         let terminal_bg = Some(RColor::Rgb(0x13, 0x14, 0x1a));
-        let style = Style::new().transform_bg(ColorTransform::Tint(Color::Blue, 0.5));
+        let style = Style::new().transform_bg(ColorTransform::tint(Color::Blue, 0.5));
         let (resolved, effect) = {
             let _scope = push_render_host_palette(Some(themed_host()));
             (
                 BackdropBackgroundEffect::from_style(style, terminal_bg).unwrap(),
                 transform_ratatui_color(
                     RColor::Rgb(200, 100, 50),
-                    ColorTransform::Tint(Color::Blue, 0.5),
+                    ColorTransform::tint(Color::Blue, 0.5),
                     terminal_bg,
                     true,
                 )
@@ -1806,7 +1822,7 @@ mod palette_fidelity_tests {
         let mut cell = Cell::default();
         cell.set_fg(RColor::Cyan);
         cell.set_bg(RColor::Rgb(0, 0, 0));
-        apply_color_transforms_to_cell(&mut cell, Some(ColorTransform::Opacity(0.4)), None, None);
+        apply_color_transforms_to_cell(&mut cell, Some(ColorTransform::opacity(0.4)), None, None);
         assert!(matches!(cell.fg, RColor::Rgb(..)), "got {:?}", cell.fg);
         assert!(!cell.modifier.contains(RMod::DIM));
     }

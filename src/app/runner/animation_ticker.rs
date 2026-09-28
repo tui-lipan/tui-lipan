@@ -37,7 +37,7 @@ impl<C: Component> AppRunner<C> {
     /// Cadence required by the animations currently in flight.
     ///
     /// A concrete property or tree animation feeds view/layout and keeps the app-wide frame rate.
-    /// A late-bound color only changes cells while painting, so by itself it uses the cheaper color
+    /// A late-bound color or effect amount only changes cells while painting, so by itself it uses the cheaper color
     /// cadence. When both are active they share the higher-rate frame instead of running two clocks.
     pub(super) fn active_animation_interval(&self) -> Option<Duration> {
         let animations = &self.core.ctx.env().animations;
@@ -48,7 +48,7 @@ impl<C: Component> AppRunner<C> {
             Some(self.frame_interval)
         } else {
             animations
-                .active_paint_transition_interval(self.color_animation_interval)
+                .active_render_transition_interval(self.color_animation_interval)
                 .map(|interval| self.frame_interval.max(interval))
         }
     }
@@ -295,23 +295,25 @@ impl<C: Component> AppRunner<C> {
             let dt = self.clock_elapsed(self.animation.last_animated_tick);
             self.animation.last_animated_tick = self.clock_now();
             let dt = Self::animation_step(dt, interval);
+            // Pulses keep wall-clock time rather than the capped step: a stall must not slow them.
+            let now = self.core.ctx.env().clock.elapsed();
             let (changed, needs_paint, needs_layout) =
                 crate::app::animation::tick_tree_animations(&mut self.core.tree, dt);
             // Property-scoped transitions: advance and mark full re-render when
             // any interpolated value changed (the new value must flow through
             // the next view() into the rendered styles).
-            let transitions = self.core.ctx.env().animations.tick(dt);
-            if changed || transitions.view_changed || transitions.paint_changed {
+            let transitions = self.core.ctx.env().animations.tick(dt, now);
+            if changed || transitions.view_changed || transitions.render_changed {
                 crate::debug::internal_log!("[tui-lipan] dirty: animated widget tick");
             }
             // A value a view read concretely has to flow through the next `view()` to reach the
-            // rendered styles. A late-bound paint does not: the renderer resolves it while drawing,
-            // so the whole fade costs repaints.
+            // rendered styles. A late-bound paint or effect amount does not: the renderer resolves
+            // it while drawing, so the whole transition costs repaints.
             if transitions.view_changed {
                 dirty.mark_full();
             } else if needs_layout {
                 dirty.mark_layout();
-            } else if needs_paint || transitions.paint_changed {
+            } else if needs_paint || transitions.render_changed {
                 dirty.mark_paint();
             }
         }

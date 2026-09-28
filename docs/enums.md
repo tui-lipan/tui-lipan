@@ -613,16 +613,65 @@ velocity, all in content rows/second terms.
 
 ### `ColorTransform`
 
-Used with `Style::transform_fg(...)` and `Style::transform_bg(...)`.
+Used with `Style::transform_fg(...)`, `Style::transform_bg(...)`, `EffectScope`, and
+`VisualEffect::ColorTransform`. Every variant carries one strength, an
+[`EffectAmount`](#effectamount); the lowercase constructors accept anything `Into<EffectAmount>`,
+so `ColorTransform::dim(0.5)` works with a plain `f32`.
 
-| Variant | Description |
-|---------|-------------|
-| `ColorTransform::Dim(f32)` | Dim the resolved color toward black by `0.0..=1.0` |
-| `ColorTransform::Lighten(f32)` | Lighten the resolved color toward white by `0.0..=1.0` |
-| `ColorTransform::Elevate(f32)` | Raise the resolved color off its own background by `0.0..=1.0`, the relative form of `Color::elevate_by`, and available on `Style` as `.elevate_by(f32)`: lightens a dark color, dims a light one, and preserves hue and chroma |
-| `ColorTransform::Opacity(f32)` | Compose the resolved paint alpha with the factor; `1.0` keeps the paint, `0.0` resolves to the backdrop for that channel |
-| `ColorTransform::OpacityToward { factor, target }` | Same factor semantics as `Opacity`, but blend toward `target` instead of the backdrop |
-| `ColorTransform::Tint(Color, f32)` | Blend the resolved color toward a target color by alpha |
+| Variant | Constructor | Description |
+|---------|-------------|-------------|
+| `Dim(EffectAmount)` | `ColorTransform::dim(amount)` | Dim the resolved color toward black by `0.0..=1.0` |
+| `Lighten(EffectAmount)` | `ColorTransform::lighten(amount)` | Lighten the resolved color toward white by `0.0..=1.0` |
+| `Elevate(EffectAmount)` | `ColorTransform::elevate(amount)` | Raise the resolved color off its own background by `0.0..=1.0`, the relative form of `Color::elevate_by`, and available on `Style` as `.elevate_by(f32)`: lightens a dark color, dims a light one, and preserves hue and chroma |
+| `Opacity(EffectAmount)` | `ColorTransform::opacity(factor)` | Compose the resolved paint alpha with the factor; `1.0` keeps the paint, `0.0` resolves to the backdrop for that channel |
+| `OpacityToward { factor, target }` | `ColorTransform::opacity_toward(factor, target)` | Same factor semantics as `Opacity`, but blend toward `target` instead of the backdrop |
+| `Tint(Color, EffectAmount)` | `ColorTransform::tint(color, alpha)` | Blend the resolved color toward a target color by alpha |
+
+`amount()` reads a transform's strength and `with_amount(...)` replaces it.
+
+### `EffectAmount`
+
+The strength of a `ColorTransform`: an 8-byte `Copy` value that is either fixed or late-bound.
+Late-bound amounts keep the element tree unchanged while they move, so they animate with
+repaints instead of `view()` passes.
+
+| Form | Built with | Behavior |
+|------|-----------|----------|
+| Fixed | `f32.into()`, `EffectAmount::fixed(f32)` | A plain number |
+| Transition | `ctx.animated_amount(key, target, config)`, `ctx.animated_amount_with_frame_rate(...)` | Moves toward `target`; the animation registry ticks it and asks for paint-only frames |
+| Pulse | `ctx.pulsing_amount(key, EffectPulse::new(from, to))` | Oscillates `from → to → from` while the view keeps reading `key`; starts at `from`, sampled at the pulse's frame rate by the animation registry |
+
+Accessors: `as_fixed()`, `is_transition()`, `is_pulse()`, `is_late_bound()`, and
+`resting_value()` (the fixed value, the transition's target, or the pulse's `from`). Outside a
+paint, a late-bound amount resolves to its resting value; with `terminal-serde` it serializes as
+that number.
+
+`EffectPulse` builder: `period(Duration)` (default 1.5 s), `easing(Easing)` (default
+`EaseInOutSine`, applied to each half of the cycle), and `frame_rate(u16)` (default 30, clamped to
+`1..=480`). `value_at(Duration)` evaluates it at a point on its own timeline. A pulse's value
+only changes on a sample, so all paints between two samples agree on it, and samples follow the
+runtime clock, so a stalled loop does not slow it. A pulse no full paint reads is suspended until
+one does. Asking for the same key with `animated_amount` instead settles the pulse from wherever it
+is. Keys are local to the component instance that uses them.
+
+A late-bound amount or paint names its animation by an `AnimationHandle`: a registry slot plus a
+generation. A slot is freed when its animation is dropped and reused under the next generation;
+once a slot's generations are spent it retires instead of wrapping, so no two handles in a runtime
+are ever equal and a handle left in an old tree falls back to its resting value instead of naming a
+later occupant. A pulse hidden while its timeline ran on shows its latest sample on the paint that
+reveals it.
+
+An animation belongs to the component instance that requested it for as long as that instance is
+mounted and keeps asking for it. A memoized component whose cached subtree is reused without
+running `view()` keeps its animations running; they are dropped when its `view()` runs without
+requesting them, or when it unmounts.
+
+Handles never cross `terminal-serde`: an `EffectAmount` serializes as its resting value and a
+`Paint::Animated` as the solid colour it resolves to, so another runtime cannot resolve a handle
+against its own registry.
+
+Image pixels never follow a late-bound amount frame by frame: a transition is baked at its target
+(one re-encode for the whole fade), and a pulse is left out of image pixels.
 
 ### `Paint`
 
@@ -634,6 +683,7 @@ Alpha-aware style-channel color. `Style::fg`, `Style::bg`, and
 |---------|---------|
 | `Paint::Solid(Color)` | Opaque terminal color or semantic sentinel |
 | `Paint::Alpha { color, alpha }` | Source pigment with `0..=255` alpha, composited before terminal output |
+| `Paint::Animated { handle, fallback }` | A colour the renderer resolves while painting, from `ctx.animated_color(...)`; `fallback` is used once the animation is gone |
 
 Construct with `Paint::solid(Color)`, `Paint::rgb(r,g,b)`,
 `Paint::rgba(r,g,b,a)`, or `Paint::hex("#RRGGBBAA")`. `Color::Transparent` and

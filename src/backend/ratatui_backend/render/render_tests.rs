@@ -534,7 +534,7 @@ impl Component for EffectScopeRenderComponent {
         VStack::new()
             .child(
                 EffectScope::new()
-                    .transform_fg(ColorTransform::Dim(0.5))
+                    .transform_fg(ColorTransform::dim(0.5))
                     .child(Text::new("A").style(Style::new().fg(Color::rgb(100, 120, 140)))),
             )
             .child(
@@ -566,7 +566,7 @@ impl Component for EffectScopeColorTransformFgOnlyComponent {
     fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
         EffectScope::new()
             .effect(VisualEffect::ColorTransform {
-                fg: Some(ColorTransform::Dim(0.5)),
+                fg: Some(ColorTransform::dim(0.5)),
                 bg: None,
             })
             .child(
@@ -725,7 +725,7 @@ impl Component for EffectScopeNestedRootPortalComponent {
 
     fn view(&self, _ctx: &Context<Self>) -> crate::core::element::Element {
         EffectScope::new()
-            .transform_fg(ColorTransform::Dim(0.5))
+            .transform_fg(ColorTransform::dim(0.5))
             .child(
                 VStack::new()
                     .child(Text::new("base").style(Style::new().fg(Color::rgb(100, 120, 140))))
@@ -761,7 +761,7 @@ impl Component for EffectScopeWrappedComponentRootPortalComponent {
             .child(Text::new("BBBBBBBBB").style(Style::new().fg(Color::rgb(100, 120, 140))))
             .child(
                 EffectScope::new()
-                    .transform_fg(ColorTransform::Dim(0.5))
+                    .transform_fg(ColorTransform::dim(0.5))
                     .child(crate::child::<RootPortalModalOnlyComponent, _>(
                         || RootPortalModalOnlyComponent,
                         (),
@@ -5675,7 +5675,7 @@ mod local_layers_over_images {
                         .width(Length::Px(4))
                         .height(Length::Px(3))
                         .backdrop_style(Style::new().transform_fg(ColorTransform::OpacityToward {
-                            factor: 0.0,
+                            factor: 0.0.into(),
                             target: SENTINEL,
                         }))
                         .child(Text::new("")),
@@ -5968,6 +5968,168 @@ mod local_layers_over_images {
                 "border cell ({x},{y}) {:?} carries {:?}",
                 cell.symbol(),
                 cell.modifier
+            );
+        }
+    }
+}
+
+/// Late-bound tint strengths over an image: the cells animate, the image pixels must not force a
+/// new encode per frame.
+#[cfg(feature = "image")]
+mod late_bound_amounts_over_images {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::animation::{Easing, TransitionConfig};
+    use crate::backend::ratatui_backend::renderers::image::ImageBackdrop;
+    use crate::core::element::Element;
+    use crate::style::{Color, EffectAmount, EffectPulse, Length};
+    use crate::widgets::{EffectScope, Image, ImageFit, ImageProtocol};
+
+    #[derive(Clone, Copy)]
+    enum Strength {
+        Fixed(f32),
+        Transition,
+        Pulse,
+    }
+
+    struct TintedImage {
+        png: Arc<[u8]>,
+        alerting: Rc<Cell<bool>>,
+        strength: Strength,
+    }
+
+    impl Component for TintedImage {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: (), _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let alpha = match self.strength {
+                Strength::Fixed(alpha) => EffectAmount::fixed(alpha),
+                Strength::Transition => ctx.animated_amount(
+                    "image-tint",
+                    if self.alerting.get() { 0.5 } else { 0.0 },
+                    TransitionConfig {
+                        duration: Duration::from_millis(100),
+                        easing: Easing::Linear,
+                    },
+                ),
+                Strength::Pulse => ctx.pulsing_amount("image-tint", EffectPulse::new(0.1, 0.5)),
+            };
+            EffectScope::new()
+                .tint_by(Color::Rgb(255, 0, 0), alpha)
+                .child(
+                    Image::from_bytes(Arc::clone(&self.png))
+                        .protocol(ImageProtocol::Kitty)
+                        .fit(ImageFit::Contain)
+                        .height(Length::Px(4)),
+                )
+                .into()
+        }
+    }
+
+    const VIEWPORT: Rect = Rect {
+        x: 0,
+        y: 0,
+        w: 12,
+        h: 4,
+    };
+
+    fn mount(strength: Strength, alerting: Rc<Cell<bool>>) -> RuntimeCore<TintedImage> {
+        let image = image::RgbImage::from_pixel(8, 8, image::Rgb([40, 80, 120]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let mut runtime = RuntimeCore::new_test(
+            TintedImage {
+                png: png.into_inner().into(),
+                alerting,
+                strength,
+            },
+            (),
+            VIEWPORT,
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(false)),
+        );
+        runtime.init();
+        runtime.render_element(VIEWPORT, None, None, None);
+        runtime
+    }
+
+    /// The recolors the layer would put the image through, as the draw at `elapsed` sees them.
+    /// An image's encode is keyed by exactly these.
+    fn image_backdrops(
+        runtime: &RuntimeCore<TintedImage>,
+        elapsed: Duration,
+    ) -> Vec<ImageBackdrop> {
+        let _scope = crate::animation::registry::set_render_registry(
+            Rc::clone(&runtime.ctx.env().animations),
+            elapsed,
+            crate::animation::registry::PaintExtent::Full,
+        );
+        super::super::pending_image_effects(
+            &runtime.tree,
+            runtime.tree.root,
+            VIEWPORT,
+            ratatui::layout::Rect::new(0, 0, VIEWPORT.w, VIEWPORT.h),
+            None,
+        )
+        .effects
+        .into_iter()
+        .map(|effect| effect.backdrop)
+        .collect()
+    }
+
+    /// A transition is baked into the image at its target, so the whole fade is one encode.
+    #[test]
+    fn a_tint_transition_recolors_an_image_once_at_its_target() {
+        let alerting = Rc::new(Cell::new(false));
+        let mut runtime = mount(Strength::Transition, alerting.clone());
+        alerting.set(true);
+        runtime.render_element(VIEWPORT, None, None, None);
+
+        let at_start = image_backdrops(&runtime, Duration::ZERO);
+        assert_eq!(at_start.len(), 1, "the tint recolors the image");
+        assert_eq!(
+            at_start,
+            image_backdrops(&mount(Strength::Fixed(0.5), alerting), Duration::ZERO),
+            "at the value the fade settles on"
+        );
+
+        for _ in 0..3 {
+            let _ = runtime
+                .ctx
+                .env()
+                .animations
+                .tick(Duration::from_millis(30), Duration::ZERO);
+            assert_eq!(
+                image_backdrops(&runtime, Duration::from_millis(30)),
+                at_start,
+                "no frame of the fade asks for another encode"
+            );
+        }
+    }
+
+    /// A pulse never settles, so it stays out of image pixels altogether: breathing text must not
+    /// re-encode the picture beside it on every frame.
+    #[test]
+    fn a_pulsing_tint_leaves_image_pixels_alone() {
+        let runtime = mount(Strength::Pulse, Rc::new(Cell::new(false)));
+        for step in 1..=4 {
+            assert!(
+                image_backdrops(&runtime, Duration::ZERO).is_empty(),
+                "no recolor for the image at any sample"
+            );
+            let _ = runtime.ctx.env().animations.tick(
+                Duration::from_millis(250),
+                Duration::from_millis(250 * step),
             );
         }
     }

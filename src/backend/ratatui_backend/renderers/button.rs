@@ -479,7 +479,7 @@ mod tests {
         let base = Style::new()
             .fg(Color::rgb(120, 120, 120))
             .bg(Color::rgb(20, 20, 20));
-        let hover = Style::new().transform_bg(crate::style::ColorTransform::Lighten(0.9));
+        let hover = Style::new().transform_bg(crate::style::ColorTransform::lighten(0.9));
 
         let draw = |is_hovered| {
             let backend = TestBackend::new(8, 1);

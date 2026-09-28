@@ -824,7 +824,7 @@ mod tests {
         // and readable_style should preserve that behavior.
         let overlay = Style::new()
             .fg(Color::White)
-            .transform_bg(ColorTransform::Lighten(0.3));
+            .transform_bg(ColorTransform::lighten(0.3));
         let result = readable_style(overlay);
         assert_eq!(result.bg_transform, None);
 

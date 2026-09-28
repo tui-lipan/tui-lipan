@@ -1528,6 +1528,20 @@ impl<C: Component> Context<C> {
         self.env.hover.hovered_node_id(self.scope)
     }
 
+    /// Tell the animation registry this instance's `view()` is running, so animation GC can tell
+    /// the keys it stops asking for from those of an instance whose view did not run.
+    pub(crate) fn note_view_for_animations(&self) {
+        self.env.animations.note_view(self.scope);
+    }
+
+    /// The registry identity of this component instance's animation `key`.
+    ///
+    /// Animation keys are component-local, like the rest of a component's keyed state: two
+    /// instances of the same component using the same literal key animate independently.
+    fn animation_key(&self, key: impl Into<Key>) -> crate::animation::registry::AnimationKey {
+        crate::animation::registry::AnimationKey::new(self.scope, key)
+    }
+
     /// Property-scoped transition for a single style value.
     ///
     /// Pass the desired *final* `target` each frame. The first call for a given
@@ -1540,6 +1554,13 @@ impl<C: Component> Context<C> {
     /// the component re-renders each animation tick (~16 ms) so the new value
     /// flows into the style. Keys not read during a frame are dropped, so
     /// transitions for hidden elements are automatically cleaned up.
+    ///
+    /// Keys are local to this component instance, like the rest of its keyed state: two
+    /// instances of the same component can both use `"prompt-edge"` and animate independently.
+    /// A memoized instance whose cached subtree is reused without running `view()` keeps its
+    /// animations; they are dropped once its `view()` runs without asking for them, or it unmounts.
+    /// The same holds for [`animated_color`](Self::animated_color),
+    /// [`animated_amount`](Self::animated_amount), and [`pulsing_amount`](Self::pulsing_amount).
     ///
     /// ```ignore
     /// let edge_fg = ctx.transition(
@@ -1561,7 +1582,7 @@ impl<C: Component> Context<C> {
     where
         T: crate::animation::Lerp + PartialEq + 'static,
     {
-        let key = key.into();
+        let key = self.animation_key(key);
         self.env.note_memo_dependency(MemoDependency::Transition);
         self.env.animations.transition(key, target, config)
     }
@@ -1602,7 +1623,7 @@ impl<C: Component> Context<C> {
         // fade currently is, so a memoized subtree must not be invalidated as it advances.
         self.env
             .animations
-            .animated_paint(key.into(), target, config, None)
+            .animated_paint(self.animation_key(key), target, config, None)
     }
 
     /// Transition a style-only colour at a caller-selected repaint cadence.
@@ -1626,7 +1647,138 @@ impl<C: Component> Context<C> {
         let interval = crate::app::context::frame_interval(frame_rate.clamp(1, 480));
         self.env
             .animations
-            .animated_paint(key.into(), target, config, Some(interval))
+            .animated_paint(self.animation_key(key), target, config, Some(interval))
+    }
+
+    /// Transition the strength of a render-time color transform, as an [`EffectAmount`] the
+    /// renderer resolves.
+    ///
+    /// The scalar counterpart of [`animated_color`](Self::animated_color). Pass the returned amount
+    /// to [`EffectScope::tint_by`](crate::widgets::EffectScope::tint_by),
+    /// [`dim_by`](crate::widgets::EffectScope::dim_by),
+    /// [`lighten_by`](crate::widgets::EffectScope::lighten_by), or any [`ColorTransform`]: the
+    /// element tree holds the same amount for the whole transition, and the runtime advances it
+    /// with repaints instead of re-running `view()` on every frame.
+    ///
+    /// As with `animated_color`, the caller never sees the interpolated number, which is what makes
+    /// skipping `view()` sound. Use [`transition`](Self::transition) when the value has to inform
+    /// layout, text, or a decision. For an amount that should oscillate indefinitely - a breathing
+    /// alert - use [`pulsing_amount`](Self::pulsing_amount) instead of retargeting this on a timer.
+    ///
+    /// Images under the scope are recolored at the transition's target rather than following it,
+    /// so a fade costs one image re-encode instead of one per frame.
+    ///
+    /// ```no_run
+    /// # use tui_lipan::prelude::*;
+    /// # use tui_lipan::animation::TransitionConfig;
+    /// # fn example(ctx: &Context<impl Component>, alerting: bool, pane: Element) -> Element {
+    /// let alpha = ctx.animated_amount(
+    ///     "pane-alert-tint",
+    ///     if alerting { 0.2 } else { 0.0 },
+    ///     TransitionConfig::default(),
+    /// );
+    /// EffectScope::new()
+    ///     .tint_by(Color::Rgb(220, 60, 60), alpha)
+    ///     .child(pane)
+    ///     .into()
+    /// # }
+    /// ```
+    ///
+    /// [`EffectAmount`]: crate::style::EffectAmount
+    /// [`ColorTransform`]: crate::style::ColorTransform
+    ///
+    /// # Panics
+    /// Panics if the same `key` is used with two different value types.
+    pub fn animated_amount(
+        &self,
+        key: impl Into<Key>,
+        target: f32,
+        config: crate::animation::TransitionConfig,
+    ) -> crate::style::EffectAmount {
+        // Deliberately no `MemoDependency::Transition`, for the reason given on `animated_color`.
+        self.env
+            .animations
+            .animated_amount(self.animation_key(key), target, config, None)
+    }
+
+    /// A render-time effect amount that pulses for as long as the view keeps asking for it.
+    ///
+    /// The pulse starts at [`EffectPulse`]'s `from` the first time `key` appears and is then owned
+    /// by the runtime's animation registry, like the transition behind
+    /// [`animated_amount`](Self::animated_amount): the element tree holds the same amount, the
+    /// registry samples the pulse at its [`frame_rate`](crate::style::EffectPulse::frame_rate), and
+    /// each sample costs a paint and no `view()` pass. Between samples every paint - including a
+    /// partial repaint of a few damaged terminal rows - sees the same value.
+    ///
+    /// The pulse's timeline is the runtime clock, so a stalled loop never slows it: the first sample
+    /// after a stall lands where the real elapsed time says. The key is local to this component
+    /// instance, so every instance of a pane can use the same literal key and breathe on its own.
+    ///
+    /// The amount works wherever an [`EffectAmount`] does - an
+    /// [`EffectScope`](crate::widgets::EffectScope), a [`ColorTransform`] on a `Style`, a hover
+    /// effect - because the registry, not the element it lands in, schedules the repaints. Stop
+    /// asking for the key and the pulse stops; ask for it with
+    /// [`animated_amount`](Self::animated_amount) instead and it settles from where it is.
+    ///
+    /// A pulse only asks for paints while something on screen reads it. After a full paint in
+    /// which nothing did - a hover effect nobody hovers, content scrolled or clipped away - it is
+    /// suspended until a paint reads it again, so an idle app does not keep repainting at the
+    /// pulse's rate. Its timeline keeps running meanwhile. Even so, request a pulse only while it
+    /// is meant to show: a suspended one still costs a registry entry and each full paint.
+    ///
+    /// ```no_run
+    /// # use std::time::Duration;
+    /// # use tui_lipan::prelude::*;
+    /// # fn example(ctx: &Context<impl Component>, pane: Element) -> Element {
+    /// let alpha = ctx.pulsing_amount(
+    ///     "pane-alert-tint",
+    ///     EffectPulse::new(0.08, 0.20)
+    ///         .period(Duration::from_millis(1400))
+    ///         .frame_rate(10),
+    /// );
+    /// EffectScope::new()
+    ///     .tint_by(Color::Rgb(220, 60, 60), alpha)
+    ///     .child(pane)
+    ///     .into()
+    /// # }
+    /// ```
+    ///
+    /// Image pixels are not recolored by a pulse; re-encoding a picture on every sample is the cost
+    /// the pulse exists to avoid.
+    ///
+    /// [`EffectPulse`]: crate::style::EffectPulse
+    /// [`EffectAmount`]: crate::style::EffectAmount
+    /// [`ColorTransform`]: crate::style::ColorTransform
+    ///
+    /// # Panics
+    /// Panics if the same `key` is used with two different value types.
+    pub fn pulsing_amount(
+        &self,
+        key: impl Into<Key>,
+        pulse: crate::style::EffectPulse,
+    ) -> crate::style::EffectAmount {
+        // Deliberately no `MemoDependency::Transition`, for the reason given on `animated_color`.
+        self.env
+            .animations
+            .pulsing_amount(self.animation_key(key), pulse, self.env.clock.elapsed())
+    }
+
+    /// Transition a render-time effect amount at a caller-selected repaint cadence.
+    ///
+    /// The scalar counterpart of
+    /// [`animated_color_with_frame_rate`](Self::animated_color_with_frame_rate), with the same
+    /// clamping and cadence sharing.
+    pub fn animated_amount_with_frame_rate(
+        &self,
+        key: impl Into<Key>,
+        target: f32,
+        config: crate::animation::TransitionConfig,
+        frame_rate: u16,
+    ) -> crate::style::EffectAmount {
+        let interval = crate::app::context::frame_interval(frame_rate.clamp(1, 480));
+        self.env
+            .animations
+            .animated_amount(self.animation_key(key), target, config, Some(interval))
     }
 
     /// Convenience helper for responsive layouts based on viewport width.

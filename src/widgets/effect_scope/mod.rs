@@ -10,7 +10,9 @@ pub(crate) use self::reconcile::reconcile_effect_scope;
 
 use crate::app::ContrastPolicy;
 use crate::core::element::{Element, ElementKind};
-use crate::style::{CellEffect, Color, ColorTransform, LayoutConstraints, Length, VisualEffect};
+use crate::style::{
+    CellEffect, Color, ColorTransform, EffectAmount, LayoutConstraints, Length, VisualEffect,
+};
 
 /// Apply render-time color effects to an entire child subtree.
 ///
@@ -37,27 +39,43 @@ impl EffectScope {
     }
 
     /// Dim the rendered subtree by an explicit amount.
-    pub fn dim_by(self, amount: f32) -> Self {
-        self.effect(VisualEffect::ColorTransform {
-            fg: Some(ColorTransform::Dim(amount)),
-            bg: Some(ColorTransform::Dim(amount)),
-        })
+    ///
+    /// `amount` is an `f32` or a late-bound [`EffectAmount`]: an
+    /// [`animated_amount`](crate::Context::animated_amount) transition or a
+    /// [`pulsing_amount`](crate::Context::pulsing_amount), both of which animate with repaints
+    /// alone.
+    pub fn dim_by(self, amount: impl Into<EffectAmount>) -> Self {
+        self.effect(VisualEffect::dim(amount))
     }
 
     /// Lighten the rendered subtree by an explicit amount.
-    pub fn lighten_by(self, amount: f32) -> Self {
-        self.effect(VisualEffect::ColorTransform {
-            fg: Some(ColorTransform::Lighten(amount)),
-            bg: Some(ColorTransform::Lighten(amount)),
-        })
+    ///
+    /// `amount` may be late-bound, as for [`Self::dim_by`].
+    pub fn lighten_by(self, amount: impl Into<EffectAmount>) -> Self {
+        self.effect(VisualEffect::lighten(amount))
     }
 
     /// Tint the rendered subtree toward a color.
-    pub fn tint_by(self, color: Color, alpha: f32) -> Self {
-        self.effect(VisualEffect::ColorTransform {
-            fg: Some(ColorTransform::Tint(color, alpha)),
-            bg: Some(ColorTransform::Tint(color, alpha)),
-        })
+    ///
+    /// `alpha` may be late-bound, as for [`Self::dim_by`]. A breathing alert tint needs no app-side
+    /// timer:
+    ///
+    /// ```no_run
+    /// # use std::time::Duration;
+    /// # use tui_lipan::prelude::*;
+    /// # fn example(ctx: &Context<impl Component>) -> Element {
+    /// let alpha = ctx.pulsing_amount(
+    ///     "build-alert",
+    ///     EffectPulse::new(0.08, 0.20).period(Duration::from_millis(1400)),
+    /// );
+    /// EffectScope::new()
+    ///     .tint_by(Color::Rgb(220, 60, 60), alpha)
+    ///     .child(Text::new("build failed"))
+    ///     .into()
+    /// # }
+    /// ```
+    pub fn tint_by(self, color: Color, alpha: impl Into<EffectAmount>) -> Self {
+        self.effect(VisualEffect::tint(color, alpha))
     }
 
     /// Apply a relative transform to the resolved foreground color of the subtree.

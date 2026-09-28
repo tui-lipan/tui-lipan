@@ -105,9 +105,9 @@ readable; use the translucent form when the effect is worth the variance.
 Relative transforms are resolved after style patching, so they work well with theme-provided or inherited style values:
 
 ```rust
-let disabled = Style::new().transform_fg(ColorTransform::Dim(0.5));
-let warning_surface = Style::new().transform_bg(ColorTransform::Tint(Color::Yellow, 0.25));
-let washed_out = Style::new().transform_fg(ColorTransform::Opacity(0.6));
+let disabled = Style::new().transform_fg(ColorTransform::dim(0.5));
+let warning_surface = Style::new().transform_bg(ColorTransform::tint(Color::Yellow, 0.25));
+let washed_out = Style::new().transform_fg(ColorTransform::opacity(0.6));
 let forced_readable = Style::new().contrast_policy(ContrastPolicy::Apca);
 ```
 
@@ -297,7 +297,7 @@ palette's RGB to blend them exactly:
   each of the 16 ANSI colors (named colors and `Color::indexed(0..16)`) that the terminal
   reported blends from that RGB, so a dimmed or tinted theme color keeps its hue at the
   requested strength. This includes colors a transform names, such as the target of
-  `ColorTransform::Tint(Color::Blue, _)`.
+  `ColorTransform::tint(Color::Blue, _)`.
 - **Palette unknown** (not queried, or a slot the terminal left out of its OSC 4 reply):
   blending would fall back to the standard ANSI RGB and show the wrong hue, so a colored palette
   entry keeps its palette color and gains the terminal's `DIM` attribute instead. Grey palette
@@ -385,8 +385,8 @@ Use these for direct color manipulation:
 let dialog_backdrop = Style::new().tint_by(Color::rgb(10, 20, 60), 0.55);
 let boosted_text = Style::new().fg(Color::Blue.lighten());
 let softer_text = Style::new().fg(Color::Blue.lighten_by(0.20));
-let inherited_dim = Style::new().transform_fg(ColorTransform::Dim(0.5));
-let inherited_opacity = Style::new().transform_fg(ColorTransform::Opacity(0.6));
+let inherited_dim = Style::new().transform_fg(ColorTransform::dim(0.5));
+let inherited_opacity = Style::new().transform_fg(ColorTransform::opacity(0.6));
 ```
 
 > **Note**: `ColorTransform::Opacity` composes with paint alpha. For opaque colors it behaves like an alpha paint over the resolved cell background. To make opacity work predictably through terminal-default/reset backgrounds, supply the terminal's default background color with `App::terminal_bg(...)` for static apps, or enable `App::system_theme()` / `App::live_host_terminal_colors(true)` so the runner updates the resolved background after startup, focus-gained, or manual host color refreshes.
@@ -436,7 +436,7 @@ Use `Style` when you need inherited colors, focus/hover patches, or per-widget p
 For widgets like `MouseRegion`, these form two distinct layers:
 - `hover_style(...)` paints the hovered region before child content is rendered. It is best for hover backgrounds and modifiers; child text commonly paints its own foreground afterward, so `hover_style(Style::new().fg(...))` may not recolor that text.
 - `hover_effect(...)` applies a visual post-processing transformation to the rendered child content. Use it when you need to change colors that children already painted, such as text foreground.
-- `hover_tint(color, alpha)` is a symmetric tint shorthand: it blends both foreground and background toward `color`. At `alpha = 1.0`, both channels become `color`; use `hover_effect(VisualEffect::transform_fg(ColorTransform::Tint(color, 1.0)))` when you only want to recolor text.
+- `hover_tint(color, alpha)` is a symmetric tint shorthand: it blends both foreground and background toward `color`. At `alpha = 1.0`, both channels become `color`; use `hover_effect(VisualEffect::transform_fg(ColorTransform::tint(color, 1.0)))` when you only want to recolor text.
 
 ## Layout Primitives
 
@@ -949,7 +949,7 @@ You can also force contrast on a specific style after patching/theme resolution:
 
 ```rust
 let label_style = Style::new()
-    .transform_fg(ColorTransform::Dim(0.35))
+    .transform_fg(ColorTransform::dim(0.35))
     .contrast_policy(ContrastPolicy::BlackOrWhite);
 ```
 

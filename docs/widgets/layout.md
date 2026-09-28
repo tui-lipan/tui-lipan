@@ -685,7 +685,7 @@ terminal or text widget, so Alt-click/Alt-drag is fully consumed by the wrapper.
 
 ```rust
 MouseRegion::new()
-    .hover_effect(VisualEffect::transform_fg(ColorTransform::Tint(theme.text, 1.0)))
+    .hover_effect(VisualEffect::transform_fg(ColorTransform::tint(theme.text, 1.0)))
     .child(my_widget)
 ```
 
@@ -711,7 +711,11 @@ Use it when you want to dim an inactive pane, tint a whole section, quantize a s
 
 | Prop | Type | Description |
 |------|------|-------------|
-| `style` | `Style` | Effect style; use render-time effects like `dim_by`, `lighten_by`, `tint_by`, `transform_fg`, `transform_bg`, or `contrast_policy` |
+| `dim_by` | `impl Into<EffectAmount>` | Dim the rendered subtree; an `f32` or a late-bound amount (see below) |
+| `lighten_by` | `impl Into<EffectAmount>` | Lighten the rendered subtree |
+| `tint_by` | `Color, impl Into<EffectAmount>` | Blend the rendered subtree toward a color |
+| `transform_fg` / `transform_bg` | `ColorTransform` | Relative transform of one channel |
+| `contrast_policy` | `ContrastPolicy` | Contrast adjustment after compositing |
 | `effect` | `VisualEffect` | Append one declarative post-processing effect |
 | `effects` | `IntoIterator<Item = VisualEffect>` | Append multiple effects in declaration order |
 
@@ -735,6 +739,41 @@ EffectScope::new()
     .child(content)
 ```
 
+### Animating the strength
+
+The strength of `EffectScope::dim_by`, `lighten_by`, `tint_by`, and of any `ColorTransform` is an
+[`EffectAmount`](../enums.md#effectamount). Besides a plain `f32`, it can be late-bound — resolved
+by the renderer while it paints — so the element tree stays identical while the amount moves and
+the runtime advances it with repaints, never `view()` passes:
+
+```rust
+// Fades toward a target the app picks, like `ctx.animated_color` does for colours.
+let alpha = ctx.animated_amount(
+    "pane-alert-tint",
+    if alerting { 0.2 } else { 0.0 },
+    TransitionConfig::default(),
+);
+EffectScope::new().tint_by(theme.error, alpha).child(pane)
+
+// Breathes for as long as the view asks for it; the app never retargets it.
+let alpha = ctx.pulsing_amount(
+    "pane-alert",
+    EffectPulse::new(0.08, 0.20)
+        .period(Duration::from_millis(1400))
+        .easing(Easing::EaseInOutSine)
+        .frame_rate(10),
+);
+EffectScope::new().tint_by(theme.error, alpha).child(pane)
+```
+
+A pulse starts at `from` when its key first appears, and the animation registry samples it at the
+pulse's own `frame_rate` (default 30 fps). Every paint between two samples sees the same value, so
+a partial repaint of a live terminal pane never tints some rows a step ahead of the rest.
+
+Images under the scope follow a deliberate policy rather than every frame: a transition recolors
+the image once, at its target, and a pulse leaves image pixels untouched. Either way an image is
+never re-encoded per animation frame.
+
 Effects are applied in insertion order. Nested `EffectScope`s compose naturally: the inner scope post-processes first, then the outer scope applies its own pass over the already-composed result.
 
 Root-portal descendants, including default `Modal` overlays, inherit ancestor `EffectScope`s.
@@ -748,8 +787,7 @@ Built-in `VisualEffect` variants:
 
 | Effect | Description |
 |--------|-------------|
-| `Dim { amount }` | Dim fg/bg colors after render |
-| `Tint { color, alpha }` | Blend subtree colors toward a tint |
+| `ColorTransform { fg, bg }` | Relative `ColorTransform` per channel; `VisualEffect::dim`, `lighten`, and `tint` build it for both channels |
 | `Monochrome { strength }` | Desaturate toward grayscale |
 | `PaletteQuantize { palette }` | Snap colors to a small palette |
 | `Scanlines { strength, spacing }` | Dim every Nth row |

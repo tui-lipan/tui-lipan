@@ -220,7 +220,7 @@ impl MouseRegion {
     /// changes (e.g. `BOLD`, `UNDERLINE`). Setting only `fg` has no visible
     /// effect because child content overwrites foreground colors on top. To
     /// change text color on hover use
-    /// `hover_effect(VisualEffect::transform_fg(ColorTransform::Tint(color, 1.0)))`.
+    /// `hover_effect(VisualEffect::transform_fg(ColorTransform::tint(color, 1.0)))`.
     pub fn hover_style(mut self, style: Style) -> Self {
         self.hover_style = StyleSlot::Replace(style);
         self
@@ -241,7 +241,7 @@ impl MouseRegion {
     /// Add a visual effect applied while hovered (post-processing, affects text fg/bg).
     ///
     /// Use [`VisualEffect`] constructors for common cases:
-    /// `VisualEffect::transform_fg(ColorTransform::Tint(color, 1.0))`,
+    /// `VisualEffect::transform_fg(ColorTransform::tint(color, 1.0))`,
     /// `VisualEffect::dim(0.3)`, etc.
     pub fn hover_effect(mut self, effect: VisualEffect) -> Self {
         self.hover_effects.push(effect);

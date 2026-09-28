@@ -86,6 +86,46 @@ let marker = ctx.animated_color_with_frame_rate("status", target, config, 10);
 The app-wide colour rate remains the default for ordinary fades. Overlapping
 transitions share the fastest active cadence and never exceed `App::frame_rate`.
 
+The strength of a render-time effect has the same two shapes. Feeding
+`ctx.transition()` into `EffectScope::tint_by` rebuilds the window on every frame
+of the fade, because the runtime cannot know the number only reached a tint.
+`Context::animated_amount` returns an `EffectAmount` naming the transition
+instead. `EffectScope::dim_by`, `lighten_by`, and `tint_by` accept it, as does
+every `ColorTransform` (so a `Style` takes one through `transform_fg` /
+`transform_bg`; the `Style::dim_by` / `tint_by` shorthands stay fixed `f32`s):
+
+```rust
+// Repaint-only: the scope is identical for the whole fade.
+let alpha = ctx.animated_amount("pane-alert-tint", target_alpha, config);
+EffectScope::new().tint_by(alert_color, alpha).child(pane)
+```
+
+For an effect that animates indefinitely — a breathing alert — do not retarget a
+transition on a timer. `Context::pulsing_amount` hands the whole pulse to the
+animation registry: it starts at `from` when the key first appears, is sampled
+at the pulse's own `frame_rate`, costs one paint per sample and no `view()`
+passes, and needs no app state at all:
+
+```rust
+let alpha = ctx.pulsing_amount("pane-alert", EffectPulse::new(0.08, 0.20).frame_rate(10));
+EffectScope::new().tint_by(alert_color, alpha).child(pane)
+```
+
+The value only changes on a sample, so every paint in between — including a
+terminal-damage repaint of a few rows — sees the same value, and an unrelated
+paint never advances the pulse. Samples follow the runtime clock rather than the
+capped step transitions use, so a stalled loop never slows the pulse. Because the
+registry schedules it, the amount works the same in a `Style` transform or a
+hover effect; a pulse that a full paint did not read (an unhovered hover effect,
+a scrolled-away pane) is suspended until one does, so it cannot keep an idle app
+repainting. Still, request a pulse only while it is meant to show.
+
+Animation keys are component-local: two instances of a pane component can both
+use `"pane-alert-tint"` and each gets its own transition or pulse.
+
+Neither makes images under the scope re-encode per frame: a transition recolors
+image pixels once at its target, and a pulse leaves them untouched.
+
 Verify the level you actually get with `TestBackend::update_level`, which reports
 what a message's `update()` asked for:
 
@@ -298,7 +338,8 @@ to *look* rather than be told:
 `DEFAULT_FRAME_RATE` (120). An idle app is unaffected: with nothing animating
 and no live terminal the loop waits on events and wakes on a 50 ms idle timeout.
 
-Late-bound colors from `Context::animated_color` are different: advancing one
+Late-bound colors from `Context::animated_color` (and late-bound effect amounts
+from `Context::animated_amount`) are different: advancing one
 needs a repaint, but no `view()` or layout pass. By themselves they use
 `App::color_animation_frame_rate(fps)`, clamped to the same 15..480 range and
 defaulting to `DEFAULT_COLOR_ANIMATION_FRAME_RATE` (30). This gives a 160 ms

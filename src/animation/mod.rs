@@ -3,6 +3,7 @@
 pub mod easing;
 pub mod exit_animation;
 pub mod exit_queue;
+mod handle;
 pub(crate) mod registry;
 pub mod transition;
 
@@ -13,6 +14,7 @@ pub use easing::{
 };
 pub use exit_animation::ExitAnimation;
 pub use exit_queue::{ExitQueue, ExitTransfer};
+pub use handle::AnimationHandle;
 pub(crate) use registry::AnimationRegistry;
 pub use transition::{Lerp, Transition, TransitionConfig};
 

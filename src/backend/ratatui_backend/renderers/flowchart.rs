@@ -664,8 +664,8 @@ mod tests {
 
         assert_eq!(style.fg, None);
         assert_eq!(style.bg, None);
-        assert_eq!(style.fg_transform, Some(ColorTransform::Lighten(0.0)));
-        assert_eq!(style.bg_transform, Some(ColorTransform::Lighten(0.0)));
+        assert_eq!(style.fg_transform, Some(ColorTransform::lighten(0.0)));
+        assert_eq!(style.bg_transform, Some(ColorTransform::lighten(0.0)));
     }
 
     #[test]

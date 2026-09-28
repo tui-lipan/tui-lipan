@@ -829,7 +829,7 @@ fn mole_cell(
 
     MouseRegion::new()
         .on_mouse_down(ctx.link().callback(move |_| Msg::Hit(cell_idx)))
-        .hover_effect(VisualEffect::transform_fg(ColorTransform::Lighten(0.3)))
+        .hover_effect(VisualEffect::transform_fg(ColorTransform::lighten(0.3)))
         .child(frame)
         .into()
 }

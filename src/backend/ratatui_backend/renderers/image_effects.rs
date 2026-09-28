@@ -134,6 +134,10 @@ impl ReplayedEffect {
     /// The pass as a pixel recolor, or `None` when it leaves backgrounds alone, or covers them
     /// with one color and so hides the image rather than recoloring it.
     pub(crate) fn new(pass: CellPass, terminal_bg: Option<RColor>) -> Option<Self> {
+        let pass = match pass {
+            CellPass::Effect(style) => CellPass::Effect(pixel_style(style)),
+            CellPass::Visual(effect) => CellPass::Visual(effect),
+        };
         let per_channel = match &pass {
             CellPass::Effect(style) => {
                 !matches!(style.bg_transform, Some(ColorTransform::Elevate(_)))
@@ -257,11 +261,27 @@ pub(crate) fn pixel_visual_effect(effect: &VisualEffect) -> Option<(VisualEffect
                 bounds,
             ))
         }
-        VisualEffect::ColorTransform { .. }
-        | VisualEffect::Monochrome { .. }
-        | VisualEffect::PaletteQuantize { .. } => Some((effect.clone(), None)),
+        VisualEffect::ColorTransform { fg, bg } => {
+            // A late-bound strength is baked at the value it settles on, or left out when it never
+            // settles; see `EffectAmount::settled`. Following it per frame would re-encode every
+            // image under the scope on every frame.
+            let fg = fg.and_then(ColorTransform::settled);
+            let bg = bg.and_then(ColorTransform::settled);
+            (fg.is_some() || bg.is_some()).then(|| (VisualEffect::ColorTransform { fg, bg }, None))
+        }
+        VisualEffect::Monochrome { .. } | VisualEffect::PaletteQuantize { .. } => {
+            Some((effect.clone(), None))
+        }
         _ => None,
     }
+}
+
+/// `style` as image pixels see it: late-bound transform strengths baked at the value they settle
+/// on, and ones that never settle left out. See [`pixel_visual_effect`].
+pub(crate) fn pixel_style(mut style: Style) -> Style {
+    style.fg_transform = style.fg_transform.and_then(ColorTransform::settled);
+    style.bg_transform = style.bg_transform.and_then(ColorTransform::settled);
+    style
 }
 
 #[cfg(test)]
@@ -276,7 +296,7 @@ mod tests {
         for style in [
             Style::new().dim_by(0.5),
             Style::new().tint_by(Color::Rgb(0, 0, 40), 0.5),
-            Style::new().transform_bg(ColorTransform::Elevate(0.5)),
+            Style::new().transform_bg(ColorTransform::elevate(0.5)),
         ] {
             let replayed = ReplayedEffect::new(CellPass::Effect(style), terminal_bg)
                 .expect("the style recolors backgrounds");
@@ -298,7 +318,7 @@ mod tests {
         assert!(ReplayedEffect::new(CellPass::Visual(foreground), None).is_none());
         assert!(ReplayedEffect::new(CellPass::Effect(Style::new().bold()), None).is_none());
         let cover = Style::new().transform_bg(ColorTransform::OpacityToward {
-            factor: 0.0,
+            factor: 0.0.into(),
             target: Color::Rgb(1, 2, 3),
         });
         assert!(ReplayedEffect::new(CellPass::Effect(cover), None).is_none());

@@ -142,7 +142,7 @@ fn backdrops(c: &mut Criterion) {
         ),
         (
             "elevate",
-            Layer::Backdrop(Style::new().transform_bg(ColorTransform::Elevate(0.5))),
+            Layer::Backdrop(Style::new().transform_bg(ColorTransform::elevate(0.5))),
         ),
         ("scope_dim", Layer::Scope(VisualEffect::dim(0.5))),
         (

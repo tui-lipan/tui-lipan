@@ -41,7 +41,7 @@ fn backdrops() -> [(&'static str, Style); 4] {
         ("dim_by(0.6)", Style::new().dim_by(0.6)),
         (
             "transform_bg(Elevate(0.5))",
-            Style::new().transform_bg(ColorTransform::Elevate(0.5)),
+            Style::new().transform_bg(ColorTransform::elevate(0.5)),
         ),
         ("no backdrop", Style::default()),
     ]

@@ -25,22 +25,17 @@ pub(super) fn scale_transform_for_opacity(
     overlay_opacity: f32,
 ) -> ColorTransform {
     let overlay_opacity = overlay_opacity.clamp(0.0, 1.0);
+    // Scaled from the value painting now: a late-bound strength is resolved here, in the draw.
+    let amount = transform.amount().resolved();
     match transform {
-        ColorTransform::Dim(amount) => ColorTransform::Dim(amount * overlay_opacity),
-        ColorTransform::Lighten(amount) => ColorTransform::Lighten(amount * overlay_opacity),
-        ColorTransform::Elevate(amount) => ColorTransform::Elevate(amount * overlay_opacity),
-        ColorTransform::Opacity(opacity) => {
-            let washout = (1.0 - opacity).clamp(0.0, 1.0) * overlay_opacity;
-            ColorTransform::Opacity(1.0 - washout)
+        ColorTransform::Dim(_)
+        | ColorTransform::Lighten(_)
+        | ColorTransform::Elevate(_)
+        | ColorTransform::Tint(..) => transform.with_amount(amount * overlay_opacity),
+        ColorTransform::Opacity(_) | ColorTransform::OpacityToward { .. } => {
+            let washout = (1.0 - amount).clamp(0.0, 1.0) * overlay_opacity;
+            transform.with_amount(1.0 - washout)
         }
-        ColorTransform::OpacityToward { factor, target } => {
-            let washout = (1.0 - factor).clamp(0.0, 1.0) * overlay_opacity;
-            ColorTransform::OpacityToward {
-                factor: 1.0 - washout,
-                target,
-            }
-        }
-        ColorTransform::Tint(color, alpha) => ColorTransform::Tint(color, alpha * overlay_opacity),
     }
 }
 
@@ -143,7 +138,7 @@ fn paint_overlay_backdrop(
         apply_effect_style_clipped(
             state.f,
             content_rect,
-            Style::new().transform_bg(ColorTransform::Tint(bg.color(), overlay_opacity)),
+            Style::new().transform_bg(ColorTransform::tint(bg.color(), overlay_opacity)),
             None,
             state.ctx.terminal_bg,
         );
@@ -155,7 +150,7 @@ fn paint_overlay_backdrop(
         apply_effect_style_clipped(
             state.f,
             content_rect,
-            Style::new().transform_fg(ColorTransform::Tint(fg.color(), overlay_opacity)),
+            Style::new().transform_fg(ColorTransform::tint(fg.color(), overlay_opacity)),
             None,
             state.ctx.terminal_bg,
         );

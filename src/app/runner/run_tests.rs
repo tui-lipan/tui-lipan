@@ -2531,7 +2531,7 @@ fn the_color_cadence_shortens_the_paint_count_not_the_fade() {
         .ctx
         .env()
         .animations
-        .has_active_paint_transition()
+        .has_active_render_transition()
     {
         runner.core.ctx.env().advance_clock(step);
         elapsed += step;
@@ -2578,6 +2578,783 @@ fn a_slow_color_cadence_advances_by_its_whole_frame() {
         ),
         Duration::from_millis(50),
         "a fast cadence keeps the original catch-up cap"
+    );
+}
+
+/// How [`AlertTintSmoke`] drives its tint strength.
+#[derive(Clone, Copy)]
+enum AlertTint {
+    /// `ctx.animated_amount` toward 0.6 while alerting, 0.0 otherwise.
+    Transition,
+}
+
+#[derive(Clone)]
+struct AlertTintSmoke {
+    alerting: Rc<Cell<bool>>,
+    views: Rc<Cell<usize>>,
+    tint: AlertTint,
+}
+
+impl Component for AlertTintSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        self.views.set(self.views.get() + 1);
+        let amount = match self.tint {
+            AlertTint::Transition => ctx.animated_amount(
+                "alert-tint",
+                if self.alerting.get() { 0.6 } else { 0.0 },
+                TransitionConfig {
+                    duration: Duration::from_millis(100),
+                    easing: Easing::Linear,
+                },
+            ),
+        };
+        crate::widgets::EffectScope::new()
+            .tint_by(Color::Rgb(255, 0, 0), amount)
+            .child(
+                Text::new("pane").style(
+                    Style::new()
+                        .fg(Color::Rgb(0, 0, 255))
+                        .bg(Color::Rgb(0, 0, 0)),
+                ),
+            )
+            .into()
+    }
+}
+
+/// A tint strength that only feeds an effect must advance without re-running `view()`: the
+/// element names the transition, and the renderer resolves it while painting. This is what lets an
+/// app fade an alert tint in without a custom `CellEffect`.
+#[test]
+fn an_animated_tint_amount_fades_without_a_view_pass() {
+    let alerting = Rc::new(Cell::new(false));
+    let views = Rc::new(Cell::new(0));
+    let mut backend = crate::TestBackend::new(AlertTintSmoke {
+        alerting: alerting.clone(),
+        views: views.clone(),
+        tint: AlertTint::Transition,
+    });
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 10,
+        h: 1,
+    });
+    backend.render();
+    let untinted = backend.capture_frame().cell(0, 0).bg;
+
+    alerting.set(true);
+    backend.render();
+    let views_at_start = views.get();
+    assert_eq!(
+        backend.capture_frame().cell(0, 0).bg,
+        untinted,
+        "the fade starts where it was"
+    );
+
+    backend.advance_frame(Duration::from_millis(50));
+    assert_eq!(
+        views.get(),
+        views_at_start,
+        "advancing an effect-only amount must not run view()"
+    );
+    let midway = backend.capture_frame().cell(0, 0).bg;
+    assert_ne!(midway, untinted, "the painted tint moved anyway");
+
+    backend.advance_frame(Duration::from_millis(60));
+    let settled = backend.capture_frame().cell(0, 0).bg;
+    assert_ne!(settled, midway, "and keeps moving to the target");
+    assert_eq!(
+        views.get(),
+        views_at_start,
+        "the whole fade cost no view passes"
+    );
+}
+
+/// Every frame of an animated tint strength is a paint-only frame: the ticker must never ask for
+/// the full rebuild a concrete `ctx.transition()` needs.
+#[test]
+fn an_animated_tint_amount_ticks_as_paint_only() {
+    let alerting = Rc::new(Cell::new(false));
+    let views = Rc::new(Cell::new(0));
+    let component = || AlertTintSmoke {
+        alerting: alerting.clone(),
+        views: views.clone(),
+        tint: AlertTint::Transition,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component(), ());
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 10,
+        h: 1,
+    };
+    init_runner(&mut runner, component(), viewport);
+
+    alerting.set(true);
+    runner.core.render_element(viewport, None, None, None);
+    runner.animation.last_animated_tick = runner.core.ctx.env().now();
+    let views_at_start = views.get();
+
+    let step = Duration::from_millis(5);
+    let mut elapsed = Duration::ZERO;
+    let mut paints = 0;
+    while runner
+        .core
+        .ctx
+        .env()
+        .animations
+        .has_active_render_transition()
+    {
+        runner.core.ctx.env().advance_clock(step);
+        elapsed += step;
+        assert!(elapsed < Duration::from_millis(500), "the fade never ended");
+        let mut dirty = DirtyTracker::default();
+        runner.update_animation_cycle(&mut dirty);
+        match dirty.level() {
+            DirtyLevel::None => {}
+            DirtyLevel::PaintOnly => paints += 1,
+            level => panic!("a tint tick asked for {level:?}, not a paint"),
+        }
+    }
+
+    assert!(paints > 0, "the fade was painted");
+    assert_eq!(views.get(), views_at_start, "and never re-ran view()");
+}
+
+/// Where [`PulseSmoke`] puts its pulsing tint.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PulsePlacement {
+    /// `EffectScope::tint_by`.
+    Scope,
+    /// `Style::transform_fg` on the text itself.
+    StyleFg,
+    /// A `MouseRegion` hover effect.
+    Hover,
+}
+
+#[derive(Clone)]
+struct PulseSmoke {
+    shown: Rc<Cell<bool>>,
+    views: Rc<Cell<usize>>,
+    placement: PulsePlacement,
+}
+
+impl PulseSmoke {
+    fn new(placement: PulsePlacement) -> Self {
+        Self {
+            shown: Rc::new(Cell::new(true)),
+            views: Rc::new(Cell::new(0)),
+            placement,
+        }
+    }
+
+    /// The painted channel the pulse tints.
+    fn painted(&self, backend: &crate::TestBackend<Self>) -> Color {
+        let cell = backend.capture_frame().cell(0, 0).clone();
+        match self.placement {
+            PulsePlacement::StyleFg => cell.fg,
+            PulsePlacement::Scope | PulsePlacement::Hover => cell.bg,
+        }
+    }
+}
+
+const RED: Color = Color::Rgb(255, 0, 0);
+
+impl Component for PulseSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        self.views.set(self.views.get() + 1);
+        let base = Style::new().fg(Color::Rgb(0, 0, 0)).bg(Color::Rgb(0, 0, 0));
+        if !self.shown.get() {
+            return Text::new("pane").style(base).into();
+        }
+        let alpha = ctx.pulsing_amount(
+            "alert",
+            crate::style::EffectPulse::new(0.0, 0.6)
+                .period(Duration::from_millis(1000))
+                .easing(Easing::Linear)
+                .frame_rate(10),
+        );
+        match self.placement {
+            PulsePlacement::Scope => crate::widgets::EffectScope::new()
+                .tint_by(RED, alpha)
+                .child(Text::new("pane").style(base))
+                .into(),
+            PulsePlacement::StyleFg => Text::new("pane")
+                .style(base.transform_fg(crate::style::ColorTransform::tint(RED, alpha)))
+                .into(),
+            // Sharing the row with a spacer, so the pointer can leave it inside the viewport.
+            PulsePlacement::Hover => HStack::new()
+                .child(
+                    MouseRegion::new()
+                        .hover_effect(
+                            crate::style::VisualEffect::tint(RED, alpha).background_only(),
+                        )
+                        .child(Text::new("pane").style(base)),
+                )
+                .child(Spacer::new())
+                .into(),
+        }
+    }
+}
+
+/// Step `backend` through `duration` of clock in ticker-sized frames. `advance_frame` runs
+/// `view()` only when something asks for it, unlike `advance`.
+fn step_frames(backend: &mut crate::TestBackend<PulseSmoke>, duration: Duration) {
+    let frame = Duration::from_millis(25);
+    let mut left = duration;
+    while !left.is_zero() {
+        let step = left.min(frame);
+        backend.advance_frame(step);
+        left -= step;
+    }
+}
+
+/// A pulse is registry-owned wherever its amount lands: it schedules its own paint-only frames and
+/// breathes on the painted cells without the app re-running `view()`.
+#[test]
+fn a_pulsing_amount_breathes_on_paints_alone_wherever_it_is_used() {
+    for placement in [
+        PulsePlacement::Scope,
+        PulsePlacement::StyleFg,
+        PulsePlacement::Hover,
+    ] {
+        let component = PulseSmoke::new(placement);
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 1,
+        };
+
+        // The runtime schedules it: 10 fps paint-only frames, no effect-scope clock involved.
+        let mut runner = AppRunner::new(App::new().mouse(false), component.clone(), ());
+        init_runner(&mut runner, component.clone(), viewport);
+        assert_eq!(
+            runner.core.tree.animated_effect_scope_interval(),
+            None,
+            "the element it lands in does not schedule it"
+        );
+        assert_eq!(
+            runner.active_animation_interval(),
+            Some(Duration::from_millis(100)),
+            "the registry asks for the pulse's own 10 fps"
+        );
+        // Put the virtual clock well ahead of wall time, off the pulse's cycle boundaries, so each
+        // step below is exactly one sample that moves the value.
+        runner
+            .core
+            .ctx
+            .env()
+            .advance_clock(Duration::from_millis(10_050));
+        runner.animation.last_animated_tick = runner.core.ctx.env().now();
+        let views_at_start = component.views.get();
+        let mut paints = 0;
+        for _ in 0..10 {
+            runner
+                .core
+                .ctx
+                .env()
+                .advance_clock(Duration::from_millis(100));
+            let mut dirty = DirtyTracker::default();
+            runner.update_animation_cycle(&mut dirty);
+            match dirty.level() {
+                DirtyLevel::None => {}
+                DirtyLevel::PaintOnly => paints += 1,
+                level => panic!("a pulse tick asked for {level:?}, not a paint"),
+            }
+        }
+        assert_eq!(paints, 10, "one paint per pulse sample");
+        assert_eq!(component.views.get(), views_at_start, "and no view passes");
+
+        // And the painted colour follows the pulse's own timeline.
+        let mut backend = crate::TestBackend::new(component.clone());
+        backend.set_viewport(viewport);
+        backend.render();
+        if placement == PulsePlacement::Hover {
+            backend
+                .send_mouse(crate::core::event::MouseEvent {
+                    x: 1,
+                    y: 0,
+                    kind: MouseKind::Moved,
+                    mods: KeyMods::NONE,
+                })
+                .unwrap();
+        }
+        let views_at_start = component.views.get();
+        let trough = component.painted(&backend);
+        step_frames(&mut backend, Duration::from_millis(500));
+        let peak = component.painted(&backend);
+        step_frames(&mut backend, Duration::from_millis(500));
+        let trough_again = component.painted(&backend);
+        assert_eq!(
+            trough,
+            Color::Rgb(0, 0, 0),
+            "a pulse from 0.0 starts untinted"
+        );
+        assert_eq!(
+            peak,
+            Color::Rgb(153, 0, 0),
+            "and peaks at 0.6 of red halfway round"
+        );
+        assert_eq!(trough_again, trough, "then breathes back out");
+        assert_eq!(
+            component.views.get(),
+            views_at_start,
+            "without the app lifting a finger"
+        );
+    }
+}
+
+/// Between two samples every paint agrees on the pulse's value. A terminal-damage repaint of a
+/// few rows 25 ms after a full paint must not tint those rows a step further along than the rest.
+#[test]
+fn every_paint_between_pulse_samples_sees_the_same_value() {
+    let component = PulseSmoke::new(PulsePlacement::Scope);
+    let mut backend = crate::TestBackend::new(component.clone());
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 10,
+        h: 1,
+    });
+    backend.render();
+    step_frames(&mut backend, Duration::from_millis(200));
+    let sampled = component.painted(&backend);
+    assert_ne!(sampled, Color::Rgb(0, 0, 0), "the pulse is under way");
+
+    // The clock moves on, but no sample is taken: any paint now is a partial repaint's view.
+    for _ in 0..3 {
+        backend
+            .core
+            .ctx
+            .env()
+            .advance_clock(Duration::from_millis(25));
+        assert_eq!(
+            component.painted(&backend),
+            sampled,
+            "a paint between samples must not advance the pulse"
+        );
+    }
+}
+
+/// A tinted cell that pulses on the literal key `"alert"`, or settles it when `settle` is set.
+#[derive(Clone)]
+struct AlertCell;
+
+impl Component for AlertCell {
+    type Message = ();
+    type Properties = bool;
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let alpha = if ctx.props {
+            ctx.animated_amount(
+                "alert",
+                0.0,
+                TransitionConfig {
+                    duration: Duration::from_millis(100),
+                    easing: Easing::Linear,
+                },
+            )
+        } else {
+            ctx.pulsing_amount(
+                "alert",
+                crate::style::EffectPulse::new(0.0, 0.6)
+                    .period(Duration::from_millis(1000))
+                    .easing(Easing::Linear)
+                    .frame_rate(10),
+            )
+        };
+        crate::widgets::EffectScope::new()
+            .tint_by(RED, alpha)
+            .child(Text::new("x").style(Style::new().bg(Color::Rgb(0, 0, 0))))
+            .into()
+    }
+}
+
+/// Two `AlertCell`s side by side: A always, B once `show_b` is set.
+#[derive(Clone)]
+struct TwoAlerts {
+    show_b: Rc<Cell<bool>>,
+    settle_a: Rc<Cell<bool>>,
+}
+
+impl Component for TwoAlerts {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let mut row = HStack::new().child(crate::child(|| AlertCell, self.settle_a.get()).key("a"));
+        if self.show_b.get() {
+            row = row.child(crate::child(|| AlertCell, false).key("b"));
+        }
+        row.into()
+    }
+}
+
+/// Animation keys are component-local: two instances using the literal `"alert"` must not share a
+/// pulse, a phase, or a settle.
+#[test]
+fn two_instances_with_the_same_animation_key_animate_independently() {
+    let parent = TwoAlerts {
+        show_b: Rc::new(Cell::new(false)),
+        settle_a: Rc::new(Cell::new(false)),
+    };
+    let mut backend = crate::TestBackend::new(parent.clone());
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 4,
+        h: 1,
+    });
+    backend.render();
+    let bg = |backend: &crate::TestBackend<TwoAlerts>, x| backend.capture_frame().cell(x, 0).bg;
+    let black = Color::Rgb(0, 0, 0);
+    for _ in 0..28 {
+        backend.advance_frame(Duration::from_millis(25));
+    }
+    let a_before_b = bg(&backend, 0);
+    assert_ne!(a_before_b, black, "A is 700 ms into its breath");
+
+    parent.show_b.set(true);
+    backend.render();
+    assert_eq!(bg(&backend, 1), black, "B starts at from, not at A's phase");
+    assert_eq!(bg(&backend, 0), a_before_b, "and A keeps its own");
+
+    parent.settle_a.set(true);
+    backend.render();
+    for _ in 0..8 {
+        backend.advance_frame(Duration::from_millis(25));
+    }
+    assert_eq!(bg(&backend, 0), black, "A settled");
+    let b_mid = bg(&backend, 1);
+    assert_ne!(b_mid, black, "while B keeps pulsing");
+    for _ in 0..4 {
+        backend.advance_frame(Duration::from_millis(25));
+    }
+    assert_ne!(bg(&backend, 1), b_mid, "on its own timeline");
+}
+
+/// The ticker caps the step it hands transitions, so a stall cannot skip a fade to its end. A
+/// pulse must not inherit that cap: after a stall its next sample is at the real elapsed time.
+#[test]
+fn a_stalled_runner_samples_the_pulse_at_the_real_elapsed_time() {
+    let component = PulseSmoke::new(PulsePlacement::Scope);
+    component.shown.set(false);
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 10,
+        h: 1,
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component.clone(), ());
+    init_runner(&mut runner, component.clone(), viewport);
+
+    // Start the pulse at an exact virtual-clock reading, well ahead of wall time.
+    runner.core.ctx.env().advance_clock(Duration::from_secs(10));
+    component.shown.set(true);
+    runner.core.render_element(viewport, None, None, None);
+    runner.animation.last_animated_tick = runner.core.ctx.env().now();
+
+    // The loop stalls for 350 ms; the capped step would only be 100 ms.
+    runner
+        .core
+        .ctx
+        .env()
+        .advance_clock(Duration::from_millis(350));
+    let mut dirty = DirtyTracker::default();
+    runner.update_animation_cycle(&mut dirty);
+    assert_eq!(dirty.level(), DirtyLevel::PaintOnly);
+    assert_eq!(
+        runner.capture_painted_frame().cell(0, 0).bg,
+        Color::Rgb(92, 0, 0),
+        "sampled at 300 ms (0.36 of red), not at the capped 100 ms (0.12)"
+    );
+}
+
+/// A pulse behind a hover effect nobody hovers has nothing on screen reading it. It must not keep
+/// an idle app repainting: after a full paint that never read it, it stops asking for paints, and
+/// hovering wakes it.
+#[test]
+fn an_unhovered_pulse_stops_asking_for_paints_until_hovered() {
+    let component = PulseSmoke::new(PulsePlacement::Hover);
+    let mut backend = crate::TestBackend::new(component.clone());
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 10,
+        h: 1,
+    });
+    backend.render();
+    let active = |backend: &crate::TestBackend<PulseSmoke>| {
+        backend
+            .core
+            .ctx
+            .env()
+            .animations
+            .active_render_transition_interval(Duration::from_millis(33))
+    };
+    assert!(
+        active(&backend).is_some(),
+        "live until a paint says otherwise"
+    );
+
+    let _ = backend.capture_frame();
+    assert_eq!(active(&backend), None, "a full paint never read it");
+
+    backend
+        .send_mouse(crate::core::event::MouseEvent {
+            x: 1,
+            y: 0,
+            kind: MouseKind::Moved,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    let _ = backend.capture_frame();
+    assert_eq!(
+        active(&backend),
+        Some(Duration::from_millis(100)),
+        "hovering paints the effect, which reads the pulse and wakes it"
+    );
+}
+
+/// A pulse that was hidden while its timeline ran on shows its latest sample on the very paint
+/// that reveals it - not the sample it was hidden at, and without a view pass.
+#[test]
+fn a_revealed_pulse_paints_its_latest_sample_at_once() {
+    let component = PulseSmoke::new(PulsePlacement::Hover);
+    let mut backend = crate::TestBackend::new(component.clone());
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 10,
+        h: 1,
+    });
+    backend.render();
+    let point = |backend: &mut crate::TestBackend<PulseSmoke>, x| {
+        backend
+            .send_mouse(crate::core::event::MouseEvent {
+                x,
+                y: 0,
+                kind: MouseKind::Moved,
+                mods: KeyMods::NONE,
+            })
+            .unwrap();
+    };
+
+    point(&mut backend, 1);
+    step_frames(&mut backend, Duration::from_millis(200));
+    assert_eq!(
+        component.painted(&backend),
+        Color::Rgb(61, 0, 0),
+        "hovered: the 200 ms sample (0.24 of red)"
+    );
+
+    point(&mut backend, 8);
+    let _ = backend.capture_frame();
+    assert_eq!(
+        backend
+            .core
+            .ctx
+            .env()
+            .animations
+            .active_render_transition_interval(Duration::from_millis(33)),
+        None,
+        "unhovered: suspended"
+    );
+
+    // The clock runs on to 750 ms with no pulse tick in between.
+    backend
+        .core
+        .ctx
+        .env()
+        .advance_clock(Duration::from_millis(550));
+    point(&mut backend, 1);
+    let views_before_reveal = component.views.get();
+    assert_eq!(
+        component.painted(&backend),
+        Color::Rgb(92, 0, 0),
+        "the revealing paint shows the 700 ms sample (0.36 of red), not the stale 200 ms one"
+    );
+    assert_eq!(
+        component.views.get(),
+        views_before_reveal,
+        "catching up is the paint's own work, not a view pass"
+    );
+}
+
+/// A memoized child that pulses. Its `view()` only runs when its memo key changes.
+#[derive(Clone)]
+struct MemoPulseChild {
+    views: Rc<Cell<usize>>,
+}
+
+impl Component for MemoPulseChild {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn memo_key(&self, _props: &Self::Properties, _ctx: &Context<Self>) -> Option<u64> {
+        Some(0)
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        self.views.set(self.views.get() + 1);
+        let alpha = ctx.pulsing_amount(
+            "alert",
+            crate::style::EffectPulse::new(0.0, 0.6)
+                .period(Duration::from_millis(1000))
+                .easing(Easing::Linear)
+                .frame_rate(10),
+        );
+        crate::widgets::EffectScope::new()
+            .tint_by(RED, alpha)
+            .child(Text::new("x").style(Style::new().bg(Color::Rgb(0, 0, 0))))
+            .into()
+    }
+}
+
+/// A parent that re-renders for reasons of its own around a memoized pulsing child.
+#[derive(Clone)]
+struct MemoPulseParent {
+    child_views: Rc<Cell<usize>>,
+    counter: Rc<Cell<u32>>,
+}
+
+impl Component for MemoPulseParent {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        let child_views = self.child_views.clone();
+        HStack::new()
+            .child(crate::child(
+                move || MemoPulseChild {
+                    views: child_views.clone(),
+                },
+                (),
+            ))
+            .child(Text::new(self.counter.get().to_string()))
+            .into()
+    }
+}
+
+/// Memoization is transparent to animations: a memo-retained child still owns the pulse its
+/// cached subtree names, so an unrelated full render must not collect it.
+#[test]
+fn a_memoized_childs_pulse_survives_an_unrelated_full_render() {
+    let parent = MemoPulseParent {
+        child_views: Rc::new(Cell::new(0)),
+        counter: Rc::new(Cell::new(0)),
+    };
+    let mut backend = crate::TestBackend::new(parent.clone());
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 6,
+        h: 1,
+    });
+    backend.render();
+    let bg = |backend: &crate::TestBackend<MemoPulseParent>| backend.capture_frame().cell(0, 0).bg;
+    for _ in 0..8 {
+        backend.advance_frame(Duration::from_millis(25));
+    }
+    assert_eq!(bg(&backend), Color::Rgb(61, 0, 0), "200 ms in: 0.24 of red");
+    let child_views = parent.child_views.get();
+
+    // The parent re-renders for its own reasons; the child is a memo hit.
+    parent.counter.set(1);
+    backend.render();
+    assert_eq!(
+        parent.child_views.get(),
+        child_views,
+        "the child's view() did not run"
+    );
+    assert_eq!(
+        bg(&backend),
+        Color::Rgb(61, 0, 0),
+        "and its pulse is still there"
+    );
+
+    for _ in 0..8 {
+        backend.advance_frame(Duration::from_millis(25));
+    }
+    assert_eq!(
+        bg(&backend),
+        Color::Rgb(122, 0, 0),
+        "and still moving: 400 ms in, 0.48 of red"
+    );
+    assert_eq!(parent.child_views.get(), child_views);
+}
+
+/// A pulse starts at `from` when it first appears, whatever the runtime clock says.
+#[test]
+fn a_newly_shown_pulse_starts_at_its_from_value() {
+    let component = PulseSmoke::new(PulsePlacement::Scope);
+    component.shown.set(false);
+    let mut backend = crate::TestBackend::new(component.clone());
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 10,
+        h: 1,
+    });
+    backend.render();
+    // 734 ms into a 1000 ms cycle: a runtime-clock pulse would appear well into its breath.
+    step_frames(&mut backend, Duration::from_millis(734));
+
+    component.shown.set(true);
+    backend.render();
+    assert_eq!(
+        component.painted(&backend),
+        Color::Rgb(0, 0, 0),
+        "the alert starts breathing from its trough"
     );
 }
 
