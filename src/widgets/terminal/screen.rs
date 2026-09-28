@@ -225,7 +225,6 @@ enum PromptScanState {
     Ground,
     Escape,
     Osc,
-    OscEscape,
 }
 
 /// Finds prompt lifecycle boundaries without delaying the grid parser.
@@ -234,6 +233,12 @@ enum PromptScanState {
 /// a prompt mark: one chunk commonly contains `OSC 133;A` followed by the prompt and part of the
 /// input. This scanner reports the byte offset of `A`/`C` terminators so the grid can be advanced
 /// only that far before the cursor position is captured.
+///
+/// It must agree with the grid's `vte` parser on where an OSC starts and ends, or a marker the
+/// grid acts on goes unseen here. The stream is UTF-8, so raw `0x9D`/`0x9C` bytes are continuation
+/// bytes of printable text (`❯` is `E2 9D AF`), never C1 OSC/ST controls: only `ESC ]` opens an
+/// OSC. Like `vte`, any `ESC`, `BEL`, `CAN`, or `SUB` ends it; the `\` of `ESC \` then lands in
+/// the escape state.
 #[derive(Debug, Default)]
 struct PromptBoundaryScanner {
     state: PromptScanState,
@@ -243,48 +248,35 @@ struct PromptBoundaryScanner {
 
 impl PromptBoundaryScanner {
     fn scan(&mut self, bytes: &[u8]) -> Vec<(usize, PromptBoundary)> {
-        if self.state == PromptScanState::Ground && !bytes.contains(&0x1b) && !bytes.contains(&0x9d)
-        {
+        if self.state == PromptScanState::Ground && !bytes.contains(&0x1b) {
             return Vec::new();
         }
 
         let mut boundaries = Vec::new();
         for (index, &byte) in bytes.iter().enumerate() {
             match self.state {
-                PromptScanState::Ground => match byte {
-                    0x1b => self.state = PromptScanState::Escape,
-                    0x9d => self.start_osc(),
-                    _ => {}
-                },
-                PromptScanState::Escape => {
-                    if byte == b']' {
-                        self.start_osc();
-                    } else if byte != 0x1b {
-                        self.state = PromptScanState::Ground;
+                PromptScanState::Ground => {
+                    if byte == 0x1b {
+                        self.state = PromptScanState::Escape;
                     }
                 }
-                PromptScanState::Osc => match byte {
-                    0x07 | 0x9c => {
-                        if let Some(boundary) = self.finish_osc() {
-                            boundaries.push((index + 1, boundary));
-                        }
-                    }
-                    0x18 | 0x1a => self.cancel_osc(),
-                    0x1b => self.state = PromptScanState::OscEscape,
-                    _ => self.consume_osc_byte(byte),
+                PromptScanState::Escape => match byte {
+                    b']' => self.start_osc(),
+                    0x1b => {}
+                    _ => self.state = PromptScanState::Ground,
                 },
-                PromptScanState::OscEscape => match byte {
-                    b'\\' => {
+                PromptScanState::Osc => match byte {
+                    0x07 | 0x18 | 0x1a | 0x1b => {
                         if let Some(boundary) = self.finish_osc() {
                             boundaries.push((index + 1, boundary));
                         }
+                        if byte == 0x1b {
+                            self.state = PromptScanState::Escape;
+                        }
                     }
-                    0x18 | 0x1a => self.cancel_osc(),
-                    0x1b => self.boundary = None,
-                    _ => {
-                        self.boundary = None;
-                        self.state = PromptScanState::Osc;
-                    }
+                    // `vte` drops the remaining C0 controls inside an OSC.
+                    0x00..=0x06 | 0x08..=0x17 | 0x19 | 0x1c..=0x1f => {}
+                    _ => self.consume_osc_byte(byte),
                 },
             }
         }
@@ -320,12 +312,6 @@ impl PromptBoundaryScanner {
         self.state = PromptScanState::Ground;
         self.prefix_len = 0;
         boundary
-    }
-
-    fn cancel_osc(&mut self) {
-        self.state = PromptScanState::Ground;
-        self.prefix_len = 0;
-        self.boundary = None;
     }
 }
 
@@ -4506,6 +4492,37 @@ mod tests {
             screen.render_snapshot().text.contains("command output"),
             "OSC 133;C must retire the prompt mark before command output starts"
         );
+    }
+
+    #[test]
+    fn a_utf8_prompt_glyph_does_not_hide_the_command_start() {
+        // `❯` is `E2 9D AF`: its `0x9D` continuation byte is not a C1 OSC introducer, so the
+        // `OSC 133;C` in the next chunk must still retire the prompt mark.
+        let mut screen = TerminalScreen::new(4, 24, 20);
+        screen.process_bytes(b"\x1b]133;A\x1b\\");
+        screen.process_bytes("dir ❯ command\r\n".as_bytes());
+        screen.process_bytes(b"\x1b]133;C;vendor_exe=command\x1b\\");
+        screen.process_bytes(b"command output");
+
+        screen.resize(4, 18);
+
+        let text = screen.render_snapshot().text;
+        assert!(text.contains("dir ❯ command"), "{text}");
+        assert!(text.contains("command output"), "{text}");
+    }
+
+    #[test]
+    fn prompt_boundary_scanner_matches_vte_osc_framing() {
+        let scan = |bytes: &[u8]| PromptBoundaryScanner::default().scan(bytes);
+
+        // Raw C1 bytes are UTF-8 continuation bytes, not OSC/ST.
+        assert!(scan(b"\x9d133;A\x9c").is_empty());
+        // An ESC ends the open OSC, so a following `ESC ]` starts a fresh one.
+        assert_eq!(
+            scan(b"\x1b]0;title\x1b]133;C\x07"),
+            vec![(17, PromptBoundary::CommandStart)]
+        );
+        assert_eq!(scan(b"\x1b]133;A\x1b\\"), vec![(8, PromptBoundary::Start)]);
     }
 
     #[test]
