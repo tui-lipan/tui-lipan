@@ -1320,6 +1320,17 @@ struct PendingTransmit {
     data: Vec<u8>,
 }
 
+impl PendingTransmit {
+    /// A later chunk may carry `q=` besides `m=`, and a non-zero one governs the run's reports
+    /// from then on, as it does in the reference terminal. `q=0` is what an absent key parses to,
+    /// so it leaves the run as it was.
+    fn adopt_quiet(&mut self, chunk: &GraphicsCommand) {
+        if chunk.quiet != 0 {
+            self.header.quiet = chunk.quiet;
+        }
+    }
+}
+
 /// Decoded images and their placements for one [`TerminalScreen`](super::TerminalScreen).
 pub(super) struct TerminalGraphics {
     stream_namespace: u64,
@@ -1575,7 +1586,10 @@ impl TerminalGraphics {
             };
         }
         let response = match self.pending.take() {
-            Some(pending) => report(&pending.header, pending.id, Err(ERROR)),
+            Some(mut pending) => {
+                pending.adopt_quiet(command);
+                report(&pending.header, pending.id, Err(ERROR))
+            }
             None => report(command, command.id, Err(ERROR)),
         };
         self.discarding_run = command.more;
@@ -1651,6 +1665,7 @@ impl TerminalGraphics {
         if pending.id == 0 {
             pending.id = self.resolve_id(pending.header.id, pending.header.number);
         }
+        pending.adopt_quiet(&command);
 
         if pending
             .header
@@ -3338,6 +3353,39 @@ mod tests {
             );
             assert_eq!(outcomes[3].advance, Some((2, 3)));
         }
+    }
+
+    /// A later chunk may set `q=` for the rest of its run, so the chunk that fails - or the one that
+    /// completes the run - decides whether the child hears about it.
+    #[test]
+    fn a_later_chunk_quietness_governs_the_run_report() {
+        let piece = BASE64.encode(vec![0x40u8; 30 * 20 * 3]);
+        let run = |first_quiet: u32, last: String| {
+            let stream =
+                format!("\x1b_Ga=T,f=24,s=30,v=40,i=5,q={first_quiet},m=1;{piece}\x1b\\{last}");
+            let (_, commands) = scan_all(&mut GraphicsScanner::default(), stream.as_bytes());
+            let mut graphics = TerminalGraphics::default();
+            let first = graphics.apply(commands[0].clone(), context());
+            assert_eq!(first.response, None, "a run is answered once, at its end");
+            graphics.apply(commands[1].clone(), context()).response
+        };
+
+        assert_eq!(run(0, "\x1b_Gm=1,q=2;A\x1b\\".to_owned()), None);
+        assert_eq!(
+            run(2, "\x1b_Gm=1,q=1;A\x1b\\".to_owned()).as_deref(),
+            Some(&b"\x1b_Gi=5;EINVAL:payload is not base64\x1b\\"[..]),
+            "q=1 still hears failures, under the run's id"
+        );
+        assert_eq!(
+            run(0, format!("\x1b_Gm=0,q=1;{piece}\x1b\\")),
+            None,
+            "q=1 on the completing chunk silences the success report"
+        );
+        assert_eq!(
+            run(1, format!("\x1b_Gm=0;{piece}\x1b\\")),
+            None,
+            "a chunk without q= leaves the run's quietness alone"
+        );
     }
 
     /// The size a screen that skips payloads works out must match what decoding would produce,

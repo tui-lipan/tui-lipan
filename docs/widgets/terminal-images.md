@@ -219,7 +219,7 @@ Windows has no POSIX shared-memory namespace, so frames there are always inline.
 | `c`, `r` | Explicit placement size in cells |
 | `z` | Stacking order against the text layer |
 | `C=1` | Leave the cursor where it is |
-| `q=1`, `q=2` | Suppress success reports / all reports |
+| `q=1`, `q=2` | Suppress success reports / all reports; a later chunk's `q=` applies to the rest of its run |
 | `d=` | `a`/`A`, `i`/`I`, `n`/`N`, `c`/`C`, `z`/`Z`, `p`/`P`, `x`/`X`, `y`/`Y` |
 | `U=1` | Virtual placements shown through Unicode placeholder cells |
 
