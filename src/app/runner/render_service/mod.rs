@@ -995,6 +995,8 @@ impl<C: Component> AppRunner<C> {
         let _animations = crate::animation::registry::set_render_registry(
             std::rc::Rc::clone(&self.core.ctx.env().animations),
             self.core.ctx.env().clock.elapsed(),
+            // Full or not is only known below: an incremental scroll repaints exposed rows alone.
+            crate::animation::registry::PaintExtent::Partial,
         );
 
         self.flush_inline_inserts(terminal)?;
@@ -1080,6 +1082,8 @@ impl<C: Component> AppRunner<C> {
                 )
             } else {
                 {
+                    // The whole tree paints: every slot with a reader on screen is read now.
+                    self.core.ctx.env().animations.begin_paint();
                     let completed = terminal.draw(|f| {
                         render(f, ctx);
                     })?;
@@ -1142,6 +1146,7 @@ impl<C: Component> AppRunner<C> {
         let _animations = crate::animation::registry::set_render_registry(
             std::rc::Rc::clone(&self.core.ctx.env().animations),
             self.core.ctx.env().clock.elapsed(),
+            crate::animation::registry::PaintExtent::Full,
         );
         let vim_mode = self.headless_interaction().vim_mode;
         let cursor_position = StdCell::new(None);

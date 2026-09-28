@@ -295,12 +295,14 @@ impl<C: Component> AppRunner<C> {
             let dt = self.clock_elapsed(self.animation.last_animated_tick);
             self.animation.last_animated_tick = self.clock_now();
             let dt = Self::animation_step(dt, interval);
+            // Pulses keep wall-clock time rather than the capped step: a stall must not slow them.
+            let now = self.core.ctx.env().clock.elapsed();
             let (changed, needs_paint, needs_layout) =
                 crate::app::animation::tick_tree_animations(&mut self.core.tree, dt);
             // Property-scoped transitions: advance and mark full re-render when
             // any interpolated value changed (the new value must flow through
             // the next view() into the rendered styles).
-            let transitions = self.core.ctx.env().animations.tick(dt);
+            let transitions = self.core.ctx.env().animations.tick(dt, now);
             if changed || transitions.view_changed || transitions.render_changed {
                 crate::debug::internal_log!("[tui-lipan] dirty: animated widget tick");
             }

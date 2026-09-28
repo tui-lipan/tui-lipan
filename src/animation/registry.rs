@@ -18,13 +18,47 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::animation::transition::{Lerp, Transition, TransitionConfig};
+use crate::callback::ScopeId;
 use crate::core::element::Key;
 use crate::style::{Color, EffectAmount, EffectPulse, Paint};
 
+/// The identity of a registry entry: the component instance that asked for it, and its key.
+///
+/// Scoped like every other piece of component-local keyed state, so two instances of one component
+/// using the same literal key animate independently.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct AnimationKey {
+    pub(crate) scope: ScopeId,
+    pub(crate) key: Key,
+}
+
+impl AnimationKey {
+    pub(crate) fn new(scope: ScopeId, key: impl Into<Key>) -> Self {
+        Self {
+            scope,
+            key: key.into(),
+        }
+    }
+}
+
+/// How much of the screen a draw paints, which decides what it proves about who reads a slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PaintExtent {
+    /// The whole tree is painted, so a slot nothing resolved has no consumer on screen.
+    Full,
+    /// Only part of it - a few damaged terminal rows - so an unresolved slot proves nothing.
+    Partial,
+}
+
 trait DynEntry: Any {
     fn entry_type_id(&self) -> TypeId;
-    fn tick(&mut self, dt: Duration) -> bool;
+    /// Advance by `dt` of capped animation time, with `now` the uncapped runtime clock.
+    fn tick(&mut self, dt: Duration, now: Duration) -> bool;
     fn is_animating(&self) -> bool;
+    /// Whether this entry animates until it is dropped, rather than settling.
+    fn is_perpetual(&self) -> bool;
+    /// The paint epoch in which the renderer last resolved this entry's slot.
+    fn resolved_epoch(&self) -> u64;
     fn touched(&self) -> bool;
     fn reset_touched(&self);
     /// Whether this entry is only ever read by the renderer, so advancing it needs no `view()` pass.
@@ -45,6 +79,9 @@ struct TypedEntry<T: Lerp + PartialEq + 'static> {
     /// input, which is what makes advancing it a repaint instead of a rebuild.
     render_resolved: Cell<bool>,
     render_interval: Cell<Option<Duration>>,
+    /// Paint epoch in which a renderer last read this entry's slot. See
+    /// [`AnimationRegistry::begin_paint`].
+    resolved_epoch: Cell<u64>,
 }
 
 /// What moves an entry's value between frames.
@@ -64,7 +101,10 @@ struct PulseState<T> {
     /// Time between samples. The value only changes on a sample, so every paint between two of
     /// them - a partial terminal-damage repaint included - sees the same value.
     interval: Duration,
-    /// Time since the pulse started.
+    /// Runtime clock reading the pulse started at. The timeline is measured against the real
+    /// clock, not summed from capped animation steps, so a stalled loop never slows the pulse.
+    started: Duration,
+    /// Time since the pulse started, as of its latest sample.
     elapsed: Duration,
 }
 
@@ -86,7 +126,7 @@ impl<T: Lerp + PartialEq + 'static> DynEntry for TypedEntry<T> {
         TypeId::of::<T>()
     }
 
-    fn tick(&mut self, dt: Duration) -> bool {
+    fn tick(&mut self, dt: Duration, now: Duration) -> bool {
         let new_current = match self.animation.as_mut() {
             None => return false,
             Some(RenderAnimation::Transition(transition)) => {
@@ -100,7 +140,7 @@ impl<T: Lerp + PartialEq + 'static> DynEntry for TypedEntry<T> {
                 }
             }
             Some(RenderAnimation::Pulse(pulse)) => {
-                pulse.elapsed = pulse.elapsed.saturating_add(dt);
+                pulse.elapsed = now.saturating_sub(pulse.started);
                 pulse.sample()
             }
         };
@@ -111,6 +151,14 @@ impl<T: Lerp + PartialEq + 'static> DynEntry for TypedEntry<T> {
 
     fn is_animating(&self) -> bool {
         self.animation.is_some()
+    }
+
+    fn is_perpetual(&self) -> bool {
+        matches!(self.animation, Some(RenderAnimation::Pulse(_)))
+    }
+
+    fn resolved_epoch(&self) -> u64 {
+        self.resolved_epoch.get()
     }
 
     fn touched(&self) -> bool {
@@ -141,8 +189,9 @@ impl<T: Lerp + PartialEq + 'static> DynEntry for TypedEntry<T> {
 /// What the current draw resolves late-bound values against.
 struct RenderScope {
     registry: std::rc::Rc<AnimationRegistry>,
-    /// The runtime clock when the draw began. Renderer-owned animations such as
-    /// [`EffectPulse`](crate::style::EffectPulse) are evaluated from it.
+    /// The runtime clock when the draw began, handed to custom effects as
+    /// [`EffectContext::elapsed`](crate::style::EffectContext::elapsed). Registry animations,
+    /// pulses included, do not read it: they only change when the registry ticks.
     elapsed: Duration,
 }
 
@@ -166,10 +215,16 @@ impl Drop for RenderRegistryScope {
 
 /// Make `registry` the one this draw resolves late-bound values against, and `elapsed` the
 /// runtime clock reading it paints at, until the guard drops.
+///
+/// A [`PaintExtent::Full`] draw starts a new paint epoch: see [`AnimationRegistry::begin_paint`].
 pub(crate) fn set_render_registry(
     registry: std::rc::Rc<AnimationRegistry>,
     elapsed: Duration,
+    extent: PaintExtent,
 ) -> RenderRegistryScope {
+    if extent == PaintExtent::Full {
+        registry.begin_paint();
+    }
     let prev =
         RENDER_SCOPE.with(|slot| slot.borrow_mut().replace(RenderScope { registry, elapsed }));
     RenderRegistryScope(prev)
@@ -211,14 +266,18 @@ pub(crate) fn render_elapsed() -> Duration {
 /// component contexts in a runtime.
 #[derive(Default)]
 pub(crate) struct AnimationRegistry {
-    entries: RefCell<HashMap<Key, Box<dyn DynEntry>>>,
+    entries: RefCell<HashMap<AnimationKey, Box<dyn DynEntry>>>,
     /// Keys indexed by the slot id a late-bound value carries. [`Paint`] and [`EffectAmount`] must
     /// stay `Copy`, so they name their entry by slot rather than holding the key. One id space
     /// serves every value type: a key holds one type for its whole life, and resolving a slot as
     /// the wrong type finds nothing.
-    render_slots: RefCell<Vec<Key>>,
-    slot_by_key: RefCell<HashMap<Key, u16>>,
+    render_slots: RefCell<Vec<AnimationKey>>,
+    slot_by_key: RefCell<HashMap<AnimationKey, u16>>,
     generation: Cell<u64>,
+    /// Counts full paints. A perpetual animation whose slot no full paint resolved has nothing on
+    /// screen reading it - a hover effect nobody hovers, a scope scrolled away - and is suspended
+    /// until one does, rather than repainting an idle app forever.
+    paint_epoch: Cell<u64>,
 }
 
 /// What advancing the registry by one frame requires of the runtime.
@@ -239,6 +298,19 @@ struct RenderValue<T> {
     target: T,
 }
 
+/// Whether `entry` is a render-resolved pulse that the latest full paint did not read.
+///
+/// Only perpetual, render-resolved entries are ever suspended: a finite transition runs to its end
+/// regardless, and a value a view read concretely needs its view passes.
+fn is_suspended(entry: &dyn DynEntry, epoch: u64) -> bool {
+    entry.is_perpetual() && entry.render_resolved() && entry.resolved_epoch() != epoch
+}
+
+/// Whether `entry` is a render-resolved animation that should keep asking for paints.
+fn is_live_render_animation(entry: &dyn DynEntry, epoch: u64) -> bool {
+    entry.is_animating() && entry.render_resolved() && !is_suspended(entry, epoch)
+}
+
 impl AnimationRegistry {
     /// Read or update the transition entry keyed by `key`, returning the current
     /// interpolated value.
@@ -256,7 +328,7 @@ impl AnimationRegistry {
     /// registry stores a fixed type per key.
     pub(crate) fn transition<T: Lerp + PartialEq + 'static>(
         &self,
-        key: Key,
+        key: AnimationKey,
         target: T,
         config: TransitionConfig,
     ) -> T {
@@ -272,7 +344,7 @@ impl AnimationRegistry {
     /// property that makes skipping `view()` sound.
     pub(crate) fn animated_paint(
         &self,
-        key: Key,
+        key: AnimationKey,
         target: Color,
         config: TransitionConfig,
         frame_interval: Option<Duration>,
@@ -291,7 +363,7 @@ impl AnimationRegistry {
     /// transform: an [`EffectAmount`] naming the entry instead of its current value.
     pub(crate) fn animated_amount(
         &self,
-        key: Key,
+        key: AnimationKey,
         target: f32,
         config: TransitionConfig,
         frame_interval: Option<Duration>,
@@ -305,8 +377,13 @@ impl AnimationRegistry {
 
     /// Like [`animated_amount`](Self::animated_amount), for an amount that pulses instead of
     /// settling. The registry owns the pulse's timeline and samples it at the pulse's frame rate.
-    pub(crate) fn pulsing_amount(&self, key: Key, pulse: EffectPulse) -> EffectAmount {
-        let current = self.advance_pulse(key.clone(), pulse);
+    pub(crate) fn pulsing_amount(
+        &self,
+        key: AnimationKey,
+        pulse: EffectPulse,
+        now: Duration,
+    ) -> EffectAmount {
+        let current = self.advance_pulse(key.clone(), pulse, now);
         match self.slot_for(key) {
             Some(slot) => EffectAmount::pulsing(slot, pulse.from),
             None => EffectAmount::fixed(current),
@@ -316,7 +393,7 @@ impl AnimationRegistry {
     /// Advance `key` as a render-resolved transition and name it by slot.
     fn render_value<T: Lerp + PartialEq + 'static>(
         &self,
-        key: Key,
+        key: AnimationKey,
         target: T,
         config: TransitionConfig,
         frame_interval: Option<Duration>,
@@ -335,7 +412,7 @@ impl AnimationRegistry {
     /// to an unrelated transition. Returns [`None`] once the id space is exhausted, which asks the
     /// caller to hand out a plain value instead — the animation degrades to a snap rather than
     /// misbinding.
-    fn slot_for(&self, key: Key) -> Option<u16> {
+    fn slot_for(&self, key: AnimationKey) -> Option<u16> {
         if let Some(slot) = self.slot_by_key.borrow().get(&key) {
             return Some(*slot);
         }
@@ -353,6 +430,7 @@ impl AnimationRegistry {
         let entries = self.entries.borrow();
         let entry = entries.get(&key)?;
         let typed = entry.as_any().downcast_ref::<TypedEntry<T>>()?;
+        typed.resolved_epoch.set(self.paint_epoch.get());
         Some(typed.current)
     }
 
@@ -370,7 +448,7 @@ impl AnimationRegistry {
 
     fn advance<T: Lerp + PartialEq + 'static>(
         &self,
-        key: Key,
+        key: AnimationKey,
         target: T,
         config: TransitionConfig,
         render_resolved: bool,
@@ -385,6 +463,7 @@ impl AnimationRegistry {
                 touched: Cell::new(true),
                 render_resolved: Cell::new(render_resolved),
                 render_interval: Cell::new(render_interval),
+                resolved_epoch: Cell::new(self.paint_epoch.get()),
             })
         });
 
@@ -433,7 +512,7 @@ impl AnimationRegistry {
     /// A new key starts at `pulse.from`. A key that keeps the same shape keeps its timeline; a new
     /// shape keeps the timeline too and resamples, so changing a pulse's amplitude does not restart
     /// its phase. A key that was transitioning starts pulsing from the beginning of the cycle.
-    fn advance_pulse(&self, key: Key, pulse: EffectPulse) -> f32 {
+    fn advance_pulse(&self, key: AnimationKey, pulse: EffectPulse, now: Duration) -> f32 {
         let interval = pulse.interval();
         let mut entries = self.entries.borrow_mut();
         let entry = entries.entry(key).or_insert_with(|| {
@@ -444,6 +523,7 @@ impl AnimationRegistry {
                 touched: Cell::new(true),
                 render_resolved: Cell::new(true),
                 render_interval: Cell::new(Some(interval)),
+                resolved_epoch: Cell::new(self.paint_epoch.get()),
             })
         });
 
@@ -460,9 +540,14 @@ impl AnimationRegistry {
         typed.touched.set(true);
         typed.render_interval.set(Some(interval));
 
-        let elapsed = match &typed.animation {
-            Some(RenderAnimation::Pulse(running)) => running.elapsed,
-            _ => Duration::ZERO,
+        let (started, elapsed) = match &typed.animation {
+            Some(RenderAnimation::Pulse(running)) => (running.started, running.elapsed),
+            _ => {
+                // A pulse that is (re)starting has a consumer in mind: count it as read until a
+                // full paint says otherwise.
+                typed.resolved_epoch.set(self.paint_epoch.get());
+                (now, Duration::ZERO)
+            }
         };
         let state = PulseState {
             from: pulse.from,
@@ -470,6 +555,7 @@ impl AnimationRegistry {
             period: pulse.period,
             easing: pulse.easing,
             interval,
+            started,
             elapsed,
         };
         typed.current = state.sample();
@@ -483,11 +569,19 @@ impl AnimationRegistry {
     /// Values a view read concretely need that view to run again; late-bound values only need the
     /// screen redrawn. The memo generation is bumped only for the former, so a fade does not
     /// invalidate memoized subtrees that never depended on it.
-    pub(crate) fn tick(&self, dt: Duration) -> TransitionTick {
+    ///
+    /// `dt` is the capped animation step, which keeps a finite transition from skipping to its end
+    /// after a stall. `now` is the uncapped runtime clock: a pulse samples its timeline against it,
+    /// so a stalled loop never slows a pulse down. A suspended pulse is not advanced at all.
+    pub(crate) fn tick(&self, dt: Duration, now: Duration) -> TransitionTick {
+        let epoch = self.paint_epoch.get();
         let mut entries = self.entries.borrow_mut();
         let mut result = TransitionTick::default();
         for entry in entries.values_mut() {
-            if entry.tick(dt) {
+            if is_suspended(entry.as_ref(), epoch) {
+                continue;
+            }
+            if entry.tick(dt, now) {
                 if entry.render_resolved() {
                     result.render_changed = true;
                 } else {
@@ -530,6 +624,12 @@ impl AnimationRegistry {
         self.entries.borrow().values().any(|e| e.is_animating())
     }
 
+    /// Start a new paint epoch. Called as a full paint begins; every slot it resolves is stamped
+    /// with the new epoch, so after the paint an entry stamped with an older one had no reader.
+    pub(crate) fn begin_paint(&self) {
+        self.paint_epoch.set(self.paint_epoch.get().wrapping_add(1));
+    }
+
     /// Whether an active transition has a concrete value baked into view output.
     pub(crate) fn has_active_view_transition(&self) -> bool {
         self.entries
@@ -544,7 +644,7 @@ impl AnimationRegistry {
         self.entries
             .borrow()
             .values()
-            .any(|entry| entry.is_animating() && entry.render_resolved())
+            .any(|entry| is_live_render_animation(entry.as_ref(), self.paint_epoch.get()))
     }
 
     /// Fastest cadence requested by an active render-resolved transition, falling back to the app
@@ -553,7 +653,7 @@ impl AnimationRegistry {
         self.entries
             .borrow()
             .values()
-            .filter(|entry| entry.is_animating() && entry.render_resolved())
+            .filter(|entry| is_live_render_animation(entry.as_ref(), self.paint_epoch.get()))
             .map(|entry| entry.render_interval().unwrap_or(default))
             .min()
     }
@@ -587,6 +687,12 @@ mod tests {
             .expect("a late-bound amount names a slot")
     }
 
+    impl From<&'static str> for AnimationKey {
+        fn from(key: &'static str) -> Self {
+            AnimationKey::new(ScopeId(0), key)
+        }
+    }
+
     fn cfg(ms: u64) -> TransitionConfig {
         TransitionConfig {
             duration: Duration::from_millis(ms),
@@ -615,7 +721,7 @@ mod tests {
         assert!(reg.has_active());
 
         // Tick halfway. Value should change.
-        let changed = reg.tick(Duration::from_millis(50));
+        let changed = reg.tick(Duration::from_millis(50), Duration::ZERO);
         assert!(changed.view_changed);
 
         // Read again with same target — should return the interpolated current,
@@ -624,7 +730,7 @@ mod tests {
         assert!(v2 != Color::Red && v2 != Color::Blue);
 
         // Tick to completion.
-        let _ = reg.tick(Duration::from_millis(60));
+        let _ = reg.tick(Duration::from_millis(60), Duration::ZERO);
         assert!(!reg.has_active());
         let v3 = reg.transition::<Color>("k".into(), Color::Blue, cfg(100));
         assert_eq!(v3, Color::Blue);
@@ -664,7 +770,7 @@ mod tests {
         let reg = AnimationRegistry::default();
         let _ = reg.transition::<Color>("k".into(), Color::Red, cfg(100));
         assert_eq!(
-            reg.tick(Duration::from_millis(16)),
+            reg.tick(Duration::from_millis(16), Duration::ZERO),
             TransitionTick::default()
         );
     }
@@ -674,7 +780,7 @@ mod tests {
         let reg = AnimationRegistry::default();
         let _ = reg.transition::<f32>("scalar".into(), 0.0, cfg(100));
         let _ = reg.transition::<f32>("scalar".into(), 1.0, cfg(100));
-        let _ = reg.tick(Duration::from_millis(50));
+        let _ = reg.tick(Duration::from_millis(50), Duration::ZERO);
         let v = reg.transition::<f32>("scalar".into(), 1.0, cfg(100));
         assert!((0.4..=0.6).contains(&v));
     }
@@ -707,7 +813,7 @@ mod tests {
         assert!(reg.has_active_render_transition());
         assert!(!reg.has_active_view_transition());
 
-        let tick = reg.tick(Duration::from_millis(50));
+        let tick = reg.tick(Duration::from_millis(50), Duration::ZERO);
         assert!(tick.render_changed);
         assert!(
             !tick.view_changed,
@@ -746,7 +852,7 @@ mod tests {
         let _ = reg.animated_amount("shared".into(), 0.0, cfg(100), None);
         let _ = reg.transition::<f32>("shared".into(), 0.0, cfg(100));
         let _ = reg.animated_amount("shared".into(), 1.0, cfg(100), None);
-        let tick = reg.tick(Duration::from_millis(50));
+        let tick = reg.tick(Duration::from_millis(50), Duration::ZERO);
         assert!(
             tick.view_changed,
             "some view baked the concrete value in, so it must run again"
@@ -758,11 +864,15 @@ mod tests {
         let reg = std::rc::Rc::new(AnimationRegistry::default());
         let _ = reg.animated_amount("tint".into(), 0.0, cfg(100), None);
         let amount = reg.animated_amount("tint".into(), 1.0, cfg(100), None);
-        let _ = reg.tick(Duration::from_millis(25));
+        let _ = reg.tick(Duration::from_millis(25), Duration::ZERO);
         assert_eq!(amount.resolved(), 1.0, "outside a draw the target answers");
         assert_eq!(render_elapsed(), Duration::ZERO);
         {
-            let _scope = set_render_registry(std::rc::Rc::clone(&reg), Duration::from_secs(3));
+            let _scope = set_render_registry(
+                std::rc::Rc::clone(&reg),
+                Duration::from_secs(3),
+                PaintExtent::Full,
+            );
             assert!((amount.resolved() - 0.25).abs() < 1e-4);
             assert_eq!(render_elapsed(), Duration::from_secs(3));
         }
@@ -776,10 +886,14 @@ mod tests {
             .frame_rate(frame_rate)
     }
 
+    fn ms(ms: u64) -> Duration {
+        Duration::from_millis(ms)
+    }
+
     #[test]
     fn a_pulse_starts_at_from_and_moves_only_when_ticked() {
         let reg = AnimationRegistry::default();
-        let amount = reg.pulsing_amount("breath".into(), pulse(10));
+        let amount = reg.pulsing_amount("breath".into(), pulse(10), ms(5_000));
         assert!(amount.is_pulse());
         let slot = amount_slot(amount);
         assert_eq!(
@@ -790,16 +904,16 @@ mod tests {
         assert!(reg.has_active_render_transition());
         assert!(!reg.has_active_view_transition());
         assert_eq!(
-            reg.active_render_transition_interval(Duration::from_millis(33)),
-            Some(Duration::from_millis(100)),
+            reg.active_render_transition_interval(ms(33)),
+            Some(ms(100)),
             "it asks for its own cadence"
         );
 
-        let tick = reg.tick(Duration::from_millis(100));
+        let tick = reg.tick(ms(100), ms(5_100));
         assert!(tick.render_changed && !tick.view_changed);
         assert!((reg.resolve_scalar_slot(slot).unwrap() - 0.2).abs() < 1e-6);
         assert_eq!(
-            reg.pulsing_amount("breath".into(), pulse(10)),
+            reg.pulsing_amount("breath".into(), pulse(10), ms(5_100)),
             amount,
             "the tree holds one amount for the whole pulse"
         );
@@ -809,22 +923,37 @@ mod tests {
         );
     }
 
+    /// A pulse's timeline is the runtime clock, not the capped step the ticker hands transitions.
+    #[test]
+    fn a_stalled_tick_samples_the_pulse_at_the_real_elapsed_time() {
+        let reg = AnimationRegistry::default();
+        let slot = amount_slot(reg.pulsing_amount("breath".into(), pulse(10), ms(0)));
+        // A 350 ms stall arrives as one capped 100 ms step.
+        let _ = reg.tick(ms(100), ms(350));
+        assert!(
+            (reg.resolve_scalar_slot(slot).unwrap() - 0.6).abs() < 1e-6,
+            "sampled at 300 ms, the latest sample point the real clock has passed"
+        );
+    }
+
     /// Two pulses ticked on the fastest shared cadence each change value only at their own rate.
     #[test]
     fn each_pulse_keeps_its_own_sampling_cadence() {
         let reg = AnimationRegistry::default();
-        let slow = amount_slot(reg.pulsing_amount("slow".into(), pulse(10)));
-        let fast = amount_slot(reg.pulsing_amount("fast".into(), pulse(30)));
+        let slow = amount_slot(reg.pulsing_amount("slow".into(), pulse(10), ms(0)));
+        let fast = amount_slot(reg.pulsing_amount("fast".into(), pulse(30), ms(0)));
         let shared = reg
-            .active_render_transition_interval(Duration::from_millis(33))
+            .active_render_transition_interval(ms(33))
             .expect("pulses are active");
         assert_eq!(shared, crate::app::context::frame_interval(30));
 
         let (mut slow_changes, mut fast_changes) = (0, 0);
         let (mut slow_prev, mut fast_prev) = (0.0, 0.0);
+        let mut now = Duration::ZERO;
         // Half a period, so the linear rise never turns around onto an equal value.
         for _ in 0..15 {
-            let _ = reg.tick(shared);
+            now += shared;
+            let _ = reg.tick(shared, now);
             let (s, f) = (
                 reg.resolve_scalar_slot(slow).unwrap(),
                 reg.resolve_scalar_slot(fast).unwrap(),
@@ -846,16 +975,16 @@ mod tests {
     #[test]
     fn a_pulse_handed_a_target_settles_from_where_it_is() {
         let reg = AnimationRegistry::default();
-        let _ = reg.pulsing_amount("alert".into(), pulse(30));
-        let _ = reg.tick(Duration::from_millis(300));
+        let _ = reg.pulsing_amount("alert".into(), pulse(30), ms(0));
+        let _ = reg.tick(ms(50), ms(300));
         let settling = reg.animated_amount("alert".into(), 0.0, cfg(100), None);
         let slot = amount_slot(settling);
         let from = reg.resolve_scalar_slot(slot).unwrap();
         assert!(from > 0.5, "the fade starts mid-breath: {from}");
-        let _ = reg.tick(Duration::from_millis(50));
+        let _ = reg.tick(ms(50), ms(350));
         let midway = reg.resolve_scalar_slot(slot).unwrap();
         assert!(midway < from && midway > 0.0, "{midway}");
-        let _ = reg.tick(Duration::from_millis(60));
+        let _ = reg.tick(ms(60), ms(410));
         assert_eq!(reg.resolve_scalar_slot(slot), Some(0.0));
         assert!(!reg.has_active(), "and then the key is at rest");
     }
@@ -863,14 +992,99 @@ mod tests {
     #[test]
     fn a_pulse_nobody_reads_is_collected() {
         let reg = AnimationRegistry::default();
-        let _ = reg.pulsing_amount("alert".into(), pulse(10));
+        let _ = reg.pulsing_amount("alert".into(), pulse(10), ms(0));
         reg.end_frame_gc();
         reg.end_frame_gc();
         assert_eq!(reg.entry_count(), 0);
         assert!(
-            reg.active_render_transition_interval(Duration::from_millis(33))
-                .is_none(),
+            reg.active_render_transition_interval(ms(33)).is_none(),
             "so it stops asking for paints"
+        );
+    }
+
+    /// A pulse that a full paint did not read has no consumer on screen, so it stops asking for
+    /// paints until a paint reads it again. A partial paint proves nothing either way.
+    #[test]
+    fn a_pulse_no_full_paint_reads_is_suspended_until_one_does() {
+        let reg = std::rc::Rc::new(AnimationRegistry::default());
+        let slot = amount_slot(reg.pulsing_amount("hover".into(), pulse(10), ms(0)));
+        assert!(
+            reg.has_active_render_transition(),
+            "live until proven unread"
+        );
+
+        {
+            let _paint = set_render_registry(std::rc::Rc::clone(&reg), ms(0), PaintExtent::Full);
+        }
+        assert!(
+            !reg.has_active_render_transition(),
+            "the full paint never read it"
+        );
+        assert_eq!(reg.active_render_transition_interval(ms(33)), None);
+        assert_eq!(
+            reg.tick(ms(100), ms(100)),
+            TransitionTick::default(),
+            "a suspended pulse does not advance or ask for a paint"
+        );
+
+        {
+            let _paint = set_render_registry(std::rc::Rc::clone(&reg), ms(150), PaintExtent::Full);
+            let _ = EffectAmount::pulsing(slot, 0.0).resolved();
+        }
+        assert!(
+            reg.has_active_render_transition(),
+            "a paint that reads it wakes it"
+        );
+        let _ = reg.tick(ms(100), ms(250));
+        assert!(
+            (reg.resolve_scalar_slot(slot).unwrap() - 0.4).abs() < 1e-6,
+            "on its unbroken timeline"
+        );
+
+        {
+            let _damage =
+                set_render_registry(std::rc::Rc::clone(&reg), ms(260), PaintExtent::Partial);
+        }
+        assert!(
+            reg.has_active_render_transition(),
+            "a partial repaint that skipped its rows does not suspend it"
+        );
+    }
+
+    #[test]
+    fn a_finite_transition_runs_to_its_end_without_a_reader() {
+        let reg = std::rc::Rc::new(AnimationRegistry::default());
+        let _ = reg.animated_amount("fade".into(), 0.0, cfg(100), None);
+        let _ = reg.animated_amount("fade".into(), 1.0, cfg(100), None);
+        {
+            let _paint = set_render_registry(std::rc::Rc::clone(&reg), ms(0), PaintExtent::Full);
+        }
+        assert!(reg.has_active_render_transition());
+        assert!(reg.tick(ms(50), ms(50)).render_changed);
+    }
+
+    /// Two instances of one component using the same literal key must not share an entry.
+    #[test]
+    fn the_same_key_in_two_scopes_names_two_animations() {
+        let reg = AnimationRegistry::default();
+        let a = AnimationKey::new(ScopeId(1), "alert");
+        let b = AnimationKey::new(ScopeId(2), "alert");
+        let a_amount = reg.pulsing_amount(a.clone(), pulse(10), ms(0));
+        let _ = reg.tick(ms(100), ms(700));
+        let b_amount = reg.pulsing_amount(b.clone(), pulse(10), ms(700));
+        assert_ne!(amount_slot(a_amount), amount_slot(b_amount));
+        assert_eq!(
+            reg.resolve_scalar_slot(amount_slot(b_amount)),
+            Some(0.0),
+            "B starts at from"
+        );
+        assert!(reg.resolve_scalar_slot(amount_slot(a_amount)).unwrap() > 0.5);
+
+        let _ = reg.animated_amount(a, 0.0, cfg(100), None);
+        let _ = reg.tick(ms(100), ms(800));
+        assert!(
+            (reg.resolve_scalar_slot(amount_slot(b_amount)).unwrap() - 0.2).abs() < 1e-6,
+            "settling A leaves B pulsing on its own timeline"
         );
     }
 

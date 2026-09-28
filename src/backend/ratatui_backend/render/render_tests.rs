@@ -6072,6 +6072,7 @@ mod late_bound_amounts_over_images {
         let _scope = crate::animation::registry::set_render_registry(
             Rc::clone(&runtime.ctx.env().animations),
             elapsed,
+            crate::animation::registry::PaintExtent::Full,
         );
         super::super::pending_image_effects(
             &runtime.tree,
@@ -6103,7 +6104,11 @@ mod late_bound_amounts_over_images {
         );
 
         for _ in 0..3 {
-            let _ = runtime.ctx.env().animations.tick(Duration::from_millis(30));
+            let _ = runtime
+                .ctx
+                .env()
+                .animations
+                .tick(Duration::from_millis(30), Duration::ZERO);
             assert_eq!(
                 image_backdrops(&runtime, Duration::from_millis(30)),
                 at_start,
@@ -6117,17 +6122,15 @@ mod late_bound_amounts_over_images {
     #[test]
     fn a_pulsing_tint_leaves_image_pixels_alone() {
         let runtime = mount(Strength::Pulse, Rc::new(Cell::new(false)));
-        for _ in 0..4 {
+        for step in 1..=4 {
             assert!(
                 image_backdrops(&runtime, Duration::ZERO).is_empty(),
                 "no recolor for the image at any sample"
             );
-            let tick = runtime
-                .ctx
-                .env()
-                .animations
-                .tick(Duration::from_millis(250));
-            assert!(tick.render_changed, "while the cells around it breathe");
+            let _ = runtime.ctx.env().animations.tick(
+                Duration::from_millis(250),
+                Duration::from_millis(250 * step),
+            );
         }
     }
 }

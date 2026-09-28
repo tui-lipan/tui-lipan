@@ -649,8 +649,10 @@ that number.
 `EffectPulse` builder: `period(Duration)` (default 1.5 s), `easing(Easing)` (default
 `EaseInOutSine`, applied to each half of the cycle), and `frame_rate(u16)` (default 30, clamped to
 `1..=480`). `value_at(Duration)` evaluates it at a point on its own timeline. A pulse's value
-only changes on a sample, so all paints between two samples agree on it. Asking for the same key
-with `animated_amount` instead settles the pulse from wherever it is.
+only changes on a sample, so all paints between two samples agree on it, and samples follow the
+runtime clock, so a stalled loop does not slow it. A pulse no full paint reads is suspended until
+one does. Asking for the same key with `animated_amount` instead settles the pulse from wherever it
+is. Keys are local to the component instance that uses them.
 
 Image pixels never follow a late-bound amount frame by frame: a transition is baked at its target
 (one re-encode for the whole fade), and a pulse is left out of image pixels.

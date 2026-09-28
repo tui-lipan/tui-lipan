@@ -1528,6 +1528,14 @@ impl<C: Component> Context<C> {
         self.env.hover.hovered_node_id(self.scope)
     }
 
+    /// The registry identity of this component instance's animation `key`.
+    ///
+    /// Animation keys are component-local, like the rest of a component's keyed state: two
+    /// instances of the same component using the same literal key animate independently.
+    fn animation_key(&self, key: impl Into<Key>) -> crate::animation::registry::AnimationKey {
+        crate::animation::registry::AnimationKey::new(self.scope, key)
+    }
+
     /// Property-scoped transition for a single style value.
     ///
     /// Pass the desired *final* `target` each frame. The first call for a given
@@ -1540,6 +1548,11 @@ impl<C: Component> Context<C> {
     /// the component re-renders each animation tick (~16 ms) so the new value
     /// flows into the style. Keys not read during a frame are dropped, so
     /// transitions for hidden elements are automatically cleaned up.
+    ///
+    /// Keys are local to this component instance, like the rest of its keyed state: two
+    /// instances of the same component can both use `"prompt-edge"` and animate independently.
+    /// The same holds for [`animated_color`](Self::animated_color),
+    /// [`animated_amount`](Self::animated_amount), and [`pulsing_amount`](Self::pulsing_amount).
     ///
     /// ```ignore
     /// let edge_fg = ctx.transition(
@@ -1561,7 +1574,7 @@ impl<C: Component> Context<C> {
     where
         T: crate::animation::Lerp + PartialEq + 'static,
     {
-        let key = key.into();
+        let key = self.animation_key(key);
         self.env.note_memo_dependency(MemoDependency::Transition);
         self.env.animations.transition(key, target, config)
     }
@@ -1602,7 +1615,7 @@ impl<C: Component> Context<C> {
         // fade currently is, so a memoized subtree must not be invalidated as it advances.
         self.env
             .animations
-            .animated_paint(key.into(), target, config, None)
+            .animated_paint(self.animation_key(key), target, config, None)
     }
 
     /// Transition a style-only colour at a caller-selected repaint cadence.
@@ -1626,7 +1639,7 @@ impl<C: Component> Context<C> {
         let interval = crate::app::context::frame_interval(frame_rate.clamp(1, 480));
         self.env
             .animations
-            .animated_paint(key.into(), target, config, Some(interval))
+            .animated_paint(self.animation_key(key), target, config, Some(interval))
     }
 
     /// Transition the strength of a render-time color transform, as an [`EffectAmount`] the
@@ -1677,7 +1690,7 @@ impl<C: Component> Context<C> {
         // Deliberately no `MemoDependency::Transition`, for the reason given on `animated_color`.
         self.env
             .animations
-            .animated_amount(key.into(), target, config, None)
+            .animated_amount(self.animation_key(key), target, config, None)
     }
 
     /// A render-time effect amount that pulses for as long as the view keeps asking for it.
@@ -1689,11 +1702,21 @@ impl<C: Component> Context<C> {
     /// each sample costs a paint and no `view()` pass. Between samples every paint - including a
     /// partial repaint of a few damaged terminal rows - sees the same value.
     ///
+    /// The pulse's timeline is the runtime clock, so a stalled loop never slows it: the first sample
+    /// after a stall lands where the real elapsed time says. The key is local to this component
+    /// instance, so every instance of a pane can use the same literal key and breathe on its own.
+    ///
     /// The amount works wherever an [`EffectAmount`] does - an
     /// [`EffectScope`](crate::widgets::EffectScope), a [`ColorTransform`] on a `Style`, a hover
     /// effect - because the registry, not the element it lands in, schedules the repaints. Stop
     /// asking for the key and the pulse stops; ask for it with
     /// [`animated_amount`](Self::animated_amount) instead and it settles from where it is.
+    ///
+    /// A pulse only asks for paints while something on screen reads it. After a full paint in
+    /// which nothing did - a hover effect nobody hovers, content scrolled or clipped away - it is
+    /// suspended until a paint reads it again, so an idle app does not keep repainting at the
+    /// pulse's rate. Its timeline keeps running meanwhile. Even so, request a pulse only while it
+    /// is meant to show: a suspended one still costs a registry entry and each full paint.
     ///
     /// ```no_run
     /// # use std::time::Duration;
@@ -1727,7 +1750,9 @@ impl<C: Component> Context<C> {
         pulse: crate::style::EffectPulse,
     ) -> crate::style::EffectAmount {
         // Deliberately no `MemoDependency::Transition`, for the reason given on `animated_color`.
-        self.env.animations.pulsing_amount(key.into(), pulse)
+        self.env
+            .animations
+            .pulsing_amount(self.animation_key(key), pulse, self.env.clock.elapsed())
     }
 
     /// Transition a render-time effect amount at a caller-selected repaint cadence.
@@ -1745,7 +1770,7 @@ impl<C: Component> Context<C> {
         let interval = crate::app::context::frame_interval(frame_rate.clamp(1, 480));
         self.env
             .animations
-            .animated_amount(key.into(), target, config, Some(interval))
+            .animated_amount(self.animation_key(key), target, config, Some(interval))
     }
 
     /// Convenience helper for responsive layouts based on viewport width.

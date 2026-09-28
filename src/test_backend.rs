@@ -1066,7 +1066,12 @@ where
 
         let (_, _, needs_layout) =
             crate::app::animation::tick_tree_animations(&mut self.core.tree, dt);
-        let transitions = self.core.ctx.env().animations.tick(dt);
+        let transitions = self
+            .core
+            .ctx
+            .env()
+            .animations
+            .tick(dt, self.core.ctx.env().clock.elapsed());
         let now = self.core.ctx.env().now();
         let overlay_dirty = self.core.overlay_manager.borrow_mut().tick_at(now).dirty;
         self.copy_feedback.tick_at(now);
@@ -1310,6 +1315,7 @@ where
         let _animations = crate::animation::registry::set_render_registry(
             std::rc::Rc::clone(&self.core.ctx.env().animations),
             self.core.ctx.env().clock.elapsed(),
+            crate::animation::registry::PaintExtent::Full,
         );
         crate::backend::ratatui_backend::capture_render::render_to_captured_frame_with_interaction(
             &self.core.tree,

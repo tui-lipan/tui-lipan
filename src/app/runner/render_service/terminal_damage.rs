@@ -215,6 +215,7 @@ where
         let _animations = crate::animation::registry::set_render_registry(
             std::rc::Rc::clone(&self.core.ctx.env().animations),
             self.core.ctx.env().clock.elapsed(),
+            crate::animation::registry::PaintExtent::Partial,
         );
 
         let frame_area = terminal.get_frame().area();
