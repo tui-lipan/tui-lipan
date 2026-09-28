@@ -687,8 +687,10 @@ impl AnimationRegistry {
         self.scope_epochs.borrow().get(&scope).copied().unwrap_or(0)
     }
 
-    /// Drop the entries no mounted view still owns. Called after the component tree is expanded
-    /// and swept.
+    /// Drop the entries no mounted view still owns. Called after a successful component render or
+    /// scoped refresh; full renders call it after sweeping the component tree, while a scoped
+    /// refresh does not sweep, so a descendant it stopped rendering still counts as mounted until
+    /// the next full render.
     ///
     /// Ownership is per scope, because not every scope's `view()` runs every frame:
     ///
