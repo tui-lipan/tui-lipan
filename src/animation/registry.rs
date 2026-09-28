@@ -68,7 +68,9 @@ trait DynEntry: Any {
 
 /// Bookkeeping every entry carries, whatever its value type.
 struct EntryState {
-    touched: Cell<bool>,
+    /// The view epoch of the entry's scope when the entry was last requested. See
+    /// [`AnimationRegistry::note_view`].
+    requested_epoch: Cell<u64>,
     /// Set when the value is handed out late-bound - as a handle the renderer resolves - rather
     /// than as a concrete value. The view then cannot have baked the value into anything but a
     /// render input, which is what makes advancing it a repaint instead of a rebuild.
@@ -83,12 +85,17 @@ struct EntryState {
 }
 
 impl EntryState {
-    fn new(render_resolved: bool, render_interval: Option<Duration>, epoch: u64) -> Self {
+    fn new(
+        render_resolved: bool,
+        render_interval: Option<Duration>,
+        paint_epoch: u64,
+        requested_epoch: u64,
+    ) -> Self {
         Self {
-            touched: Cell::new(true),
+            requested_epoch: Cell::new(requested_epoch),
             render_resolved: Cell::new(render_resolved),
             render_interval: Cell::new(render_interval),
-            resolved_epoch: Cell::new(epoch),
+            resolved_epoch: Cell::new(paint_epoch),
             suspended: Cell::new(false),
         }
     }
@@ -310,6 +317,9 @@ pub(crate) struct AnimationRegistry {
     painting: Cell<bool>,
     /// Scopes whose `view()` ran since the last [`end_frame_gc`](Self::end_frame_gc).
     viewed_scopes: RefCell<std::collections::HashSet<ScopeId>>,
+    /// Per-scope view epoch, bumped each time a scope's `view()` begins. An entry owned by a
+    /// viewed scope survives collection only if the scope's latest view requested it.
+    scope_epochs: RefCell<HashMap<ScopeId, u64>>,
 }
 
 /// What advancing the registry by one frame requires of the runtime.
@@ -513,13 +523,19 @@ impl AnimationRegistry {
         render_resolved: bool,
         render_interval: Option<Duration>,
     ) -> T {
+        let requested_epoch = self.view_epoch(key.scope);
         let mut entries = self.entries.borrow_mut();
         let entry = entries.entry(key).or_insert_with(|| {
             Box::new(TypedEntry::<T> {
                 current: target.clone(),
                 target: target.clone(),
                 animation: None,
-                state: EntryState::new(render_resolved, render_interval, self.paint_epoch.get()),
+                state: EntryState::new(
+                    render_resolved,
+                    render_interval,
+                    self.paint_epoch.get(),
+                    requested_epoch,
+                ),
             })
         });
 
@@ -534,7 +550,7 @@ impl AnimationRegistry {
             .downcast_mut()
             .expect("type id checked above");
 
-        typed.state.touched.set(true);
+        typed.state.requested_epoch.set(requested_epoch);
         // A key read as a concrete value even once must keep asking for view passes: some view has
         // baked that value into something the renderer cannot re-derive.
         if !render_resolved {
@@ -572,13 +588,19 @@ impl AnimationRegistry {
     /// its phase. A key that was transitioning starts pulsing from the beginning of the cycle.
     fn advance_pulse(&self, key: AnimationKey, pulse: EffectPulse, now: Duration) -> f32 {
         let interval = pulse.interval();
+        let requested_epoch = self.view_epoch(key.scope);
         let mut entries = self.entries.borrow_mut();
         let entry = entries.entry(key).or_insert_with(|| {
             Box::new(TypedEntry::<f32> {
                 current: pulse.from,
                 target: pulse.from,
                 animation: None,
-                state: EntryState::new(true, Some(interval), self.paint_epoch.get()),
+                state: EntryState::new(
+                    true,
+                    Some(interval),
+                    self.paint_epoch.get(),
+                    requested_epoch,
+                ),
             })
         });
 
@@ -592,7 +614,7 @@ impl AnimationRegistry {
             .as_any_mut()
             .downcast_mut()
             .expect("type id checked above");
-        typed.state.touched.set(true);
+        typed.state.requested_epoch.set(requested_epoch);
         typed.state.render_interval.set(Some(interval));
 
         let (started, elapsed) = match &typed.animation {
@@ -650,10 +672,19 @@ impl AnimationRegistry {
         result
     }
 
-    /// Record that `scope`'s `view()` ran, so the next [`end_frame_gc`](Self::end_frame_gc) can
-    /// tell the keys it stopped asking for from the keys of a scope that was not asked at all.
+    /// Begin a new ownership snapshot for `scope`: its `view()` is about to run.
+    ///
+    /// Bumps the scope's view epoch, so only keys requested from here on count as owned by the
+    /// latest view - a view that runs twice before a collection (two scoped refreshes, a retry)
+    /// owns what its last run asked for, not the union of both runs.
     pub(crate) fn note_view(&self, scope: ScopeId) {
+        *self.scope_epochs.borrow_mut().entry(scope).or_insert(0) += 1;
         self.viewed_scopes.borrow_mut().insert(scope);
+    }
+
+    /// The current view epoch of `scope`: how many times its `view()` has begun.
+    fn view_epoch(&self, scope: ScopeId) -> u64 {
+        self.scope_epochs.borrow().get(&scope).copied().unwrap_or(0)
     }
 
     /// Drop the entries no mounted view still owns. Called after the component tree is expanded
@@ -662,7 +693,8 @@ impl AnimationRegistry {
     /// Ownership is per scope, because not every scope's `view()` runs every frame:
     ///
     /// - a scope that is no longer mounted (`is_mounted` says no) loses all its entries;
-    /// - a scope whose `view()` ran since the last collection keeps exactly the keys it read;
+    /// - a scope whose `view()` ran since the last collection keeps exactly the keys its latest
+    ///   run requested;
     /// - a scope that is mounted but did not run - a memoized component whose cached subtree was
     ///   reused, or one a scoped refresh skipped - keeps everything. Its cached elements still hold
     ///   the handles, so its animations must keep running behind them.
@@ -674,19 +706,22 @@ impl AnimationRegistry {
         let viewed = std::mem::take(&mut *self.viewed_scopes.borrow_mut());
         let mut dropped = Vec::new();
         {
+            let epochs = self.scope_epochs.borrow();
             let mut entries = self.entries.borrow_mut();
             entries.retain(|key, entry| {
+                let requested_by_latest_view =
+                    || Some(entry.state().requested_epoch.get()) == epochs.get(&key.scope).copied();
                 let keep = is_mounted(key.scope)
-                    && (entry.state().touched.get() || !viewed.contains(&key.scope));
+                    && (!viewed.contains(&key.scope) || requested_by_latest_view());
                 if !keep {
                     dropped.push(key.clone());
                 }
                 keep
             });
-            for entry in entries.values() {
-                entry.state().touched.set(false);
-            }
         }
+        self.scope_epochs
+            .borrow_mut()
+            .retain(|&scope, _| is_mounted(scope));
         for key in &dropped {
             self.release_handle(key);
         }
@@ -762,6 +797,17 @@ impl AnimationRegistry {
         self.generation.get()
     }
 
+    /// The current value of the scalar entry `key`, if it exists.
+    #[cfg(test)]
+    pub(crate) fn current_scalar(&self, key: &AnimationKey) -> Option<f32> {
+        let entries = self.entries.borrow();
+        let typed = entries
+            .get(key)?
+            .as_any()
+            .downcast_ref::<TypedEntry<f32>>()?;
+        Some(typed.current)
+    }
+
     #[cfg(test)]
     pub(crate) fn entry_count(&self) -> usize {
         self.entries.borrow().len()
@@ -791,10 +837,11 @@ mod tests {
         }
     }
 
-    /// One frame of GC for the single-scope unit tests: scope 0's view ran and read what it read.
+    /// End a frame for the single-scope unit tests, and begin scope 0's next view: whatever the
+    /// test requests after this is what that view owns at the next `gc`.
     fn gc(reg: &AnimationRegistry) {
-        reg.note_view(ScopeId(0));
         reg.end_frame_gc(|_| true);
+        reg.note_view(ScopeId(0));
     }
 
     fn cfg(ms: u64) -> TransitionConfig {
@@ -1319,17 +1366,22 @@ mod tests {
         let viewed = ScopeId(2);
         let retained = ScopeId(3);
         let gone = ScopeId(4);
+        let request = |scope, key| {
+            let _ = reg.pulsing_amount(AnimationKey::new(scope, key), pulse(10), ms(0));
+        };
         for scope in [viewed, retained, gone] {
-            let _ = reg.pulsing_amount(AnimationKey::new(scope, "kept"), pulse(10), ms(0));
-            let _ = reg.pulsing_amount(AnimationKey::new(scope, "dropped"), pulse(10), ms(0));
+            reg.note_view(scope);
+            request(scope, "kept");
+            request(scope, "dropped");
         }
-        gc_scopes(&reg, &[viewed, retained, gone], &[viewed, retained, gone]);
+        reg.end_frame_gc(|_| true);
         assert_eq!(reg.entry_count(), 6);
 
         // Next frame: `viewed` re-runs and only asks for "kept"; `retained` is a memo hit;
         // `gone` unmounted.
-        let _ = reg.pulsing_amount(AnimationKey::new(viewed, "kept"), pulse(10), ms(0));
-        gc_scopes(&reg, &[viewed], &[viewed, retained]);
+        reg.note_view(viewed);
+        request(viewed, "kept");
+        reg.end_frame_gc(|scope| scope != gone);
         let keys: std::collections::HashSet<_> = reg.entries.borrow().keys().cloned().collect();
         assert_eq!(
             keys,
@@ -1343,11 +1395,23 @@ mod tests {
         );
     }
 
-    fn gc_scopes(reg: &AnimationRegistry, viewed: &[ScopeId], mounted: &[ScopeId]) {
-        for &scope in viewed {
-            reg.note_view(scope);
-        }
-        reg.end_frame_gc(|scope| mounted.contains(&scope));
+    /// A view that runs twice before a collection owns what its latest run asked for, not the
+    /// union of both runs.
+    #[test]
+    fn the_latest_view_of_a_scope_decides_what_it_owns() {
+        let reg = AnimationRegistry::default();
+        let scope = ScopeId(2);
+        let alert = AnimationKey::new(scope, "alert");
+        reg.note_view(scope);
+        let _ = reg.pulsing_amount(alert.clone(), pulse(10), ms(0));
+        reg.end_frame_gc(|_| true);
+
+        // Two refreshes before the next collection: the first still asks, the second does not.
+        reg.note_view(scope);
+        let _ = reg.pulsing_amount(alert.clone(), pulse(10), ms(0));
+        reg.note_view(scope);
+        reg.end_frame_gc(|_| true);
+        assert_eq!(reg.entry_count(), 0, "the latest view stopped asking");
     }
 
     #[test]

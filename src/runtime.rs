@@ -822,11 +822,7 @@ where
             );
         }
         self.scroll.update_from_tree(&self.tree);
-        let components = &self.components;
-        self.ctx
-            .env()
-            .animations
-            .end_frame_gc(|scope| components.is_mounted_scope(scope));
+        self.collect_animations();
         #[cfg(feature = "profiling-tracing")]
         tracing::trace!(
             target: "tui_lipan::perf",
@@ -969,13 +965,9 @@ where
             self.components.sweep(epoch);
             self.cached_expanded_element = Some(element);
             self.cached_extra_expanded_element = extra;
-            let components = &self.components;
-            self.ctx
-                .env()
-                .animations
-                .end_frame_gc(|scope| components.is_mounted_scope(scope));
 
             if scopes.len() == 1 {
+                self.collect_animations();
                 return true;
             }
         }
@@ -999,7 +991,20 @@ where
             }
         }
 
+        // Once, after every requested scope has run: a nested-only refresh closes the cycle too,
+        // and a root refresh does not collect before the nested scopes after it have run. A
+        // refresh that bails out above falls back to a full render, which collects on its own.
+        self.collect_animations();
         true
+    }
+
+    /// Collect the animations no mounted view still owns: see `AnimationRegistry::end_frame_gc`.
+    fn collect_animations(&self) {
+        let components = &self.components;
+        self.ctx
+            .env()
+            .animations
+            .end_frame_gc(|scope| components.is_mounted_scope(scope));
     }
 
     fn replace_scope_in_cached_trees(&mut self, scope: ScopeId, replacement: Element) -> bool {
@@ -1945,6 +1950,154 @@ mod tests {
             &mut texts,
         );
         assert_eq!(texts, vec!["child:1"]);
+    }
+
+    #[derive(Clone)]
+    enum AlertMsg {
+        Ask(bool),
+    }
+
+    /// A nested pane that pulses on `"alert"` while it is asked to, refreshed by layout updates.
+    #[derive(Clone)]
+    struct AlertPane {
+        link_slot: Rc<RefCell<Option<Link<AlertMsg>>>>,
+    }
+
+    impl Component for AlertPane {
+        type Message = AlertMsg;
+        type Properties = ();
+        type State = bool;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            true
+        }
+
+        fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::core::component::Command> {
+            *self.link_slot.borrow_mut() = Some(ctx.link().clone());
+            None
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            if !ctx.state {
+                return Text::new("pane").into();
+            }
+            let alpha = ctx.pulsing_amount(
+                "alert",
+                crate::style::EffectPulse::new(0.0, 0.6)
+                    .period(std::time::Duration::from_millis(1000))
+                    .easing(crate::animation::Easing::Linear)
+                    .frame_rate(10),
+            );
+            crate::widgets::EffectScope::new()
+                .tint_by(Color::Red, alpha)
+                .child(Text::new("pane"))
+                .into()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                AlertMsg::Ask(ask) => ctx.state = ask,
+            }
+            Update::layout()
+        }
+    }
+
+    struct AlertRoot {
+        link_slot: Rc<RefCell<Option<Link<AlertMsg>>>>,
+    }
+
+    impl Component for AlertRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let link_slot = Rc::clone(&self.link_slot);
+            crate::child(
+                move || AlertPane {
+                    link_slot: Rc::clone(&link_slot),
+                },
+                (),
+            )
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    /// A nested-only layout refresh closes the animation-GC cycle, and the pane's latest view
+    /// decides what it owns: stop asking and the pulse is gone; ask again and it is a new pulse.
+    #[test]
+    fn a_nested_layout_refresh_collects_the_animations_its_view_stopped_asking_for() {
+        let link_slot = Rc::new(RefCell::new(None));
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 1,
+        };
+        let mut runtime = RuntimeCore::new_test(
+            AlertRoot {
+                link_slot: Rc::clone(&link_slot),
+            },
+            (),
+            Rect::default(),
+            Theme::default(),
+            SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(true)),
+        );
+        runtime.init();
+        runtime.render_element(bounds, None, None, None);
+        let link = link_slot
+            .borrow()
+            .clone()
+            .expect("the pane published its link");
+        let refresh = |runtime: &mut RuntimeCore<AlertRoot>, ask| {
+            link.send(AlertMsg::Ask(ask));
+            let (scope, msg) = runtime
+                .queue
+                .borrow_mut()
+                .pop_front()
+                .expect("the pane's message is queued");
+            assert_eq!(
+                runtime.update_from_boxed(scope, msg).unwrap(),
+                UpdateLevel::Layout
+            );
+            assert!(runtime.refresh_cached_scopes(&[scope], bounds, None));
+            scope
+        };
+        let alert = |runtime: &RuntimeCore<AlertRoot>, scope| {
+            runtime.ctx.env().animations.current_scalar(
+                &crate::animation::registry::AnimationKey::new(scope, "alert"),
+            )
+        };
+
+        let scope = refresh(&mut runtime, true);
+        let _ = runtime.ctx.env().animations.tick(
+            std::time::Duration::from_millis(100),
+            runtime.ctx.env().clock.elapsed() + std::time::Duration::from_millis(300),
+        );
+        assert!(
+            alert(&runtime, scope).is_some_and(|value| value > 0.0),
+            "the pulse is under way"
+        );
+
+        refresh(&mut runtime, false);
+        assert_eq!(
+            alert(&runtime, scope),
+            None,
+            "the latest view stopped asking, so the pulse is gone"
+        );
+
+        refresh(&mut runtime, true);
+        assert_eq!(
+            alert(&runtime, scope),
+            Some(0.0),
+            "asking again starts a new pulse at from, not the old one's phase"
+        );
     }
 
     #[test]
