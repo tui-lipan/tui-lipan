@@ -209,6 +209,7 @@ Windows has no POSIX shared-memory namespace, so frames there are always inline.
 | --- | --- |
 | `a=t`, `a=T`, `a=p`, `a=d`, `a=q` | Transmit, transmit-and-display, display, delete, query |
 | `t=d` | Direct transmission, chunked with `m=1` |
+| Payload | Base64, with or without `=` padding (Kitty's `icat` sends it unpadded) |
 | `t=f`, `t=t`, `t=s` | Out-of-band transmission: a file left in place, a temporary file, a POSIX shared-memory object |
 | `f=24`, `f=32`, `f=100` | RGB, RGBA, PNG |
 | `o=z` | zlib-compressed payloads |
@@ -229,6 +230,9 @@ gets a clean answer rather than silence:
   re-transmitting under the same image id — which is what `ratatui-image` does for GIFs — works
   regardless: the new pixels replace the old and the placeholders keep pointing at them.
 - **Relative placements** (parent references).
+
+A payload that is not base64 is answered with `EINVAL`, under the command's id and `q=` like any
+other report, and nothing in it is acted on. A bad chunk abandons the whole `m=1` run it belongs to.
 
 Sixel input from the child is a separate protocol and is not read.
 

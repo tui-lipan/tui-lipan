@@ -48,11 +48,23 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use base64::Engine as _;
+use base64::alphabet;
+use base64::engine::DecodePaddingMode;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
 use image::DynamicImage;
 
 use super::graphics_media::{self, GraphicsMediaPolicy, GraphicsMedium};
 use super::screen::TerminalCellSize;
+
+/// Decoder for the payloads a child sends.
+///
+/// The protocol only says "base64", and the reference terminal takes it with or without the `=`
+/// padding. Kitty's own `icat` sends it unpadded, so insisting on padding drops its pictures.
+const PAYLOAD_BASE64: GeneralPurpose = GeneralPurpose::new(
+    &alphabet::STANDARD,
+    GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent),
+);
 
 /// Largest payload accumulated across `m=1` chunks, before decoding.
 const MAX_TRANSMIT_BYTES: usize = 32 * 1024 * 1024;
@@ -542,6 +554,9 @@ pub(super) struct GraphicsCommand {
     /// what the source held.
     payload: Vec<u8>,
     payload_len: usize,
+    /// The payload is not base64. The keys still parsed, so the command can be answered with an
+    /// error instead of vanishing, but it must not be acted on.
+    malformed: bool,
 }
 
 impl Default for GraphicsCommand {
@@ -572,6 +587,7 @@ impl Default for GraphicsCommand {
             source_size: 0,
             payload: Vec::new(),
             payload_len: 0,
+            malformed: false,
         }
     }
 }
@@ -599,13 +615,21 @@ impl GraphicsCommand {
             || matches!(command.action, GraphicsAction::Query)
             || command.medium.is_out_of_band()
             || command.format == 100;
+        // A payload that does not decode makes the whole command malformed rather than empty:
+        // acting on half an image would draw garbage.
         if must_decode {
-            // A payload that does not decode makes the whole command malformed rather than empty:
-            // acting on half an image would draw garbage.
-            command.payload = BASE64.decode(payload).ok()?;
-            command.payload_len = command.payload.len();
+            match PAYLOAD_BASE64.decode(payload) {
+                Ok(decoded) => {
+                    command.payload_len = decoded.len();
+                    command.payload = decoded;
+                }
+                Err(_) => command.malformed = true,
+            }
         } else {
-            command.payload_len = base64_decoded_len(payload)?;
+            match base64_decoded_len(payload) {
+                Some(len) => command.payload_len = len,
+                None => command.malformed = true,
+            }
         }
         Some(command)
     }
@@ -660,30 +684,34 @@ impl GraphicsCommand {
     }
 }
 
+/// What `payload` decodes to, in bytes, without decoding it. Padding is optional, as it is for
+/// [`PAYLOAD_BASE64`].
 fn base64_decoded_len(payload: &[u8]) -> Option<usize> {
-    if !payload.len().is_multiple_of(4) {
-        return None;
-    }
     let padding = payload
         .iter()
         .rev()
         .take_while(|byte| **byte == b'=')
         .count();
-    if padding > 2
-        || payload[..payload.len().saturating_sub(padding)]
-            .iter()
-            .any(|byte| !byte.is_ascii_alphanumeric() && !matches!(*byte, b'+' | b'/'))
-        || payload[payload.len().saturating_sub(padding)..]
-            .iter()
-            .any(|byte| *byte != b'=')
+    let symbols = &payload[..payload.len() - padding];
+    if symbols
+        .iter()
+        .any(|byte| !byte.is_ascii_alphanumeric() && !matches!(*byte, b'+' | b'/'))
     {
         return None;
     }
-    payload
-        .len()
-        .checked_div(4)?
-        .checked_mul(3)?
-        .checked_sub(padding)
+    // A trailing group of two symbols holds one byte and three hold two; one symbol is only six
+    // bits, which is no byte at all. Padding may fill that group out, fully or in part, but never
+    // runs past it.
+    let (tail, most_padding) = match symbols.len() % 4 {
+        0 => (0, 0),
+        2 => (1, 2),
+        3 => (2, 1),
+        _ => return None,
+    };
+    if padding > most_padding {
+        return None;
+    }
+    Some(symbols.len() / 4 * 3 + tail)
 }
 
 // ─── Unicode placeholders ────────────────────────────────────────────────────
@@ -1479,6 +1507,9 @@ impl TerminalGraphics {
         ctx: GraphicsContext,
     ) -> GraphicsOutcome {
         self.clock = self.clock.wrapping_add(1);
+        if command.malformed {
+            return self.reject_malformed(&command);
+        }
         match command.action {
             GraphicsAction::Query => self.query(&command),
             GraphicsAction::Delete => {
@@ -1493,6 +1524,29 @@ impl TerminalGraphics {
                 response: report(&command, command.id, Err("ENOTSUPP:animation")),
                 advance: None,
             },
+        }
+    }
+
+    /// Answer a command whose payload is not base64, and act on none of it.
+    ///
+    /// A malformed chunk poisons the transmission it belongs to, so the pending run is dropped and
+    /// the error goes out under that run's id and quietness: a later chunk carries only `m=`.
+    fn reject_malformed(&mut self, command: &GraphicsCommand) -> GraphicsOutcome {
+        const ERROR: &str = "EINVAL:payload is not base64";
+        let continues_run = matches!(
+            command.action,
+            GraphicsAction::Transmit | GraphicsAction::TransmitAndDisplay
+        );
+        let response = match self.pending.take() {
+            Some(pending) if continues_run => report(&pending.header, pending.id, Err(ERROR)),
+            pending => {
+                self.pending = pending;
+                report(command, command.id, Err(ERROR))
+            }
+        };
+        GraphicsOutcome {
+            response,
+            advance: None,
         }
     }
 
@@ -3060,6 +3114,159 @@ mod tests {
             graphics.apply(display[0].clone(), context()).advance,
             Some((2, 3))
         );
+    }
+
+    /// `payload` in base64 without the `=` padding, the way Kitty's `icat` writes it.
+    fn unpadded(payload: &[u8]) -> String {
+        let encoded = BASE64.encode(payload);
+        encoded.trim_end_matches('=').to_owned()
+    }
+
+    /// A PNG whose base64 needs padding, so sending it unpadded is a real difference.
+    fn png_needing_padding() -> Vec<u8> {
+        (1..16)
+            .map(|width| {
+                let mut png = Vec::new();
+                image::DynamicImage::new_rgb8(width, 40)
+                    .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                    .unwrap();
+                png
+            })
+            .find(|png| !png.len().is_multiple_of(3))
+            .unwrap()
+    }
+
+    /// Kitty's `icat` sends its PNG unpadded and quiet, as one `a=T` command. Dropping it drew
+    /// nothing and moved the cursor nowhere, which left only icat's trailing newline behind.
+    #[test]
+    fn an_unpadded_png_is_shown_on_every_kind_of_screen() {
+        let png = png_needing_padding();
+        let stream = format!("\x1b_Ga=T,q=2,f=100,X=4;{}\x1b\\", unpadded(&png)).into_bytes();
+        for storage in [true, false] {
+            let mut graphics = TerminalGraphics::default();
+            graphics.set_storage_enabled(storage);
+            let mut scanner = GraphicsScanner::default();
+            scanner.set_decode_payload(storage);
+            let (_, commands) = scan_all(&mut scanner, &stream);
+            assert_eq!(commands.len(), 1, "storage={storage}");
+
+            let outcome = graphics.apply(commands[0].clone(), context());
+            assert_eq!(
+                outcome.response, None,
+                "q=2 hears nothing, storage={storage}"
+            );
+            assert_eq!(outcome.advance, Some((2, 1)), "storage={storage}");
+        }
+    }
+
+    /// Only the last chunk of a run can end short of a whole group, and a screen that only counts
+    /// the bytes has to arrive at the same size as one that decodes them.
+    #[test]
+    fn an_unpadded_final_chunk_completes_a_raw_transmission() {
+        // RGBA, since three-byte pixels always fill whole groups.
+        let pixels = vec![0x40u8; 50 * 70 * 4];
+        assert!(!pixels.len().is_multiple_of(3));
+        let encoded = unpadded(&pixels);
+        let (head, tail) = encoded.split_at(encoded.len() / 8 * 4);
+        let mut stream = format!("\x1b_Ga=T,f=32,s=50,v=70,i=9,m=1;{head}\x1b\\").into_bytes();
+        stream.extend_from_slice(format!("\x1b_Gm=0;{tail}\x1b\\").as_bytes());
+
+        for storage in [true, false] {
+            let mut graphics = TerminalGraphics::default();
+            graphics.set_storage_enabled(storage);
+            let mut scanner = GraphicsScanner::default();
+            scanner.set_decode_payload(storage);
+            let (_, commands) = scan_all(&mut scanner, &stream);
+            assert_eq!(
+                commands.iter().map(|c| c.payload_len).sum::<usize>(),
+                pixels.len(),
+                "storage={storage}"
+            );
+            graphics.apply(commands[0].clone(), context());
+            let outcome = graphics.apply(commands[1].clone(), context());
+            assert_eq!(
+                outcome.response.as_deref(),
+                Some(&b"\x1b_Gi=9;OK\x1b\\"[..]),
+                "storage={storage}"
+            );
+            assert_eq!(outcome.advance, Some((4, 5)), "storage={storage}");
+        }
+    }
+
+    /// icat's `t=t` probe names its file in unpadded base64. It used to vanish without an answer;
+    /// it has to be refused out loud, so the child knows to pick another medium.
+    #[test]
+    fn an_unpadded_probe_is_answered() {
+        let mut graphics = TerminalGraphics::default();
+        graphics.set_media_policy(GraphicsMediaPolicy::SHARED);
+        let name = unpadded(b"/dev/shm/kitty-tty-graphics-protocol-2368549092");
+        assert!(!name.len().is_multiple_of(4));
+        let stream = format!("\x1b_Ga=q,f=24,t=t,s=1,v=1,S=47,i=2;{name}\x1b\\");
+        let (_, commands) = scan_all(&mut GraphicsScanner::default(), stream.as_bytes());
+
+        let outcome = graphics.apply(commands[0].clone(), context());
+        assert_eq!(
+            outcome.response.as_deref(),
+            Some(&b"\x1b_Gi=2;ENOTSUPP:file transmission\x1b\\"[..])
+        );
+    }
+
+    /// A payload that is not base64 used to drop the whole command, reply and all. It is answered
+    /// under the id it names, and a bad chunk takes the rest of its run down with it.
+    #[test]
+    fn a_payload_that_is_not_base64_is_refused_out_loud() {
+        let error = &b"\x1b_Gi=5;EINVAL:payload is not base64\x1b\\"[..];
+        for decode in [true, false] {
+            let mut scanner = GraphicsScanner::default();
+            scanner.set_decode_payload(decode);
+            let (_, commands) = scan_all(&mut scanner, b"\x1b_Ga=T,f=24,s=1,v=1,i=5;A\x1b\\");
+            let mut graphics = TerminalGraphics::default();
+            let outcome = graphics.apply(commands[0].clone(), context());
+            assert_eq!(outcome.response.as_deref(), Some(error), "decode={decode}");
+            assert_eq!(outcome.advance, None, "decode={decode}");
+            assert!(!graphics.has_images(), "decode={decode}");
+        }
+
+        let (_, quiet) = scan_all(
+            &mut GraphicsScanner::default(),
+            b"\x1b_Ga=T,q=2,f=24,s=1,v=1,i=5;!!!!\x1b\\",
+        );
+        let outcome = TerminalGraphics::default().apply(quiet[0].clone(), context());
+        assert_eq!(outcome.response, None, "q=2 still hears nothing");
+
+        let mut graphics = TerminalGraphics::default();
+        let head = BASE64.encode(vec![0x40u8; 30 * 40 * 3]);
+        let mut stream = format!("\x1b_Ga=T,f=24,s=30,v=40,i=5,m=1;{head}\x1b\\").into_bytes();
+        stream.extend_from_slice(b"\x1b_Gm=0;A\x1b\\");
+        let (_, commands) = scan_all(&mut GraphicsScanner::default(), &stream);
+        assert_eq!(
+            graphics.apply(commands[0].clone(), context()).response,
+            None
+        );
+        let outcome = graphics.apply(commands[1].clone(), context());
+        assert_eq!(
+            outcome.response.as_deref(),
+            Some(error),
+            "under the run's id"
+        );
+        assert!(graphics.pending.is_none(), "the run is abandoned");
+        assert!(!graphics.has_images());
+    }
+
+    /// The size a screen that skips payloads works out must match what decoding would produce,
+    /// and it must refuse exactly what the decoder refuses.
+    #[test]
+    fn the_counted_payload_length_agrees_with_the_decoder() {
+        for payload in [
+            "", "QQ", "QQ=", "QQ==", "QUI", "QUI=", "QUJD", "QUJDRA", "QUJDRA==", "Q", "Q===",
+            "QQ===", "QUI==", "QU=I", "QUJD=", "QU!D",
+        ] {
+            assert_eq!(
+                base64_decoded_len(payload.as_bytes()),
+                PAYLOAD_BASE64.decode(payload).ok().map(|bytes| bytes.len()),
+                "{payload:?}"
+            );
+        }
     }
 
     #[test]
