@@ -11,7 +11,7 @@ use crate::backend::ratatui_backend::common::{
     render_vscrollbar_with_metrics, resolve_interactive_style_raw, resolve_scrollbar_thumb_style,
     scroll_indicator_line, single_line_scroll_indicator, spaces, style_backdrop, style_paints_bg,
     style_uses_backdrop_bg, to_ratatui_border_set, to_ratatui_border_type, to_ratatui_rect,
-    to_ratatui_style, truncate_end_with_ellipsis, truncate_spans,
+    to_ratatui_style, truncate_end_with_ellipsis, truncate_spans, truncate_spans_start,
 };
 use crate::backend::ratatui_backend::render::{
     FrameIntegratedVTrack, RenderState, ancestor_frame_integrated_vtrack,
@@ -33,7 +33,7 @@ use crate::widgets::list::{
     item_symbol_width_for_reserved, item_uses_gutter, max_numbered_prefix_width_for_items,
     reserved_gutter_width_for_items, reserved_symbol_width_for_items,
 };
-use crate::widgets::{ListItem, ListSymbolPosition, SpinnerStyle};
+use crate::widgets::{ListItem, ListSymbolPosition, ListTruncation, SpinnerStyle};
 
 /// Merge a list item rich-text span over its row/content base style.
 ///
@@ -982,6 +982,8 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                 truncate_description_first,
                 max_label_width,
                 max_description_width,
+                description_truncation,
+                description_gap,
                 description_spinner,
                 label_spinner,
             ) = if sub_line == 0 {
@@ -996,6 +998,8 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                     item.primary_truncate_description_first,
                     item.primary_max_label_width,
                     item.primary_max_description_width,
+                    item.primary_description_truncation,
+                    item.primary_description_gap,
                     item.description_spinner
                         .as_ref()
                         .map(|spinner| (spinner, item.description_spinner_position)),
@@ -1016,6 +1020,8 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                     line.truncate_description_first,
                     line.max_label_width,
                     line.max_description_width,
+                    line.description_truncation,
+                    line.description_gap,
                     line.description_spinner
                         .as_ref()
                         .map(|spinner| (spinner, line.description_spinner_position)),
@@ -1269,6 +1275,19 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                 spinner.anchored_width(!line_spans_src.is_empty()) as usize
             });
 
+            // The gap only separates two things that are both there; a line with no label (a
+            // wrapped continuation) or no description keeps its full width.
+            let has_label = left_content_width > 0 || label_spinner_reserved > 0;
+            let description_gap = if has_label {
+                usize::from(description_gap)
+            } else {
+                0
+            };
+            let fit = DescriptionFit {
+                truncation: description_truncation,
+                drop_bare_ellipsis: description_gap > 0,
+            };
+
             if truncate_description_first {
                 let left_budget = max_text_w
                     .saturating_sub(item_symbol_width as u16)
@@ -1277,35 +1296,23 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                     .saturating_sub(trailing_symbol_width as u16)
                     .saturating_sub(label_spinner_reserved as u16)
                     .saturating_sub(row_padding.horizontal());
-                let max_right_width = if (left_content_width as u16) >= left_budget {
-                    0
-                } else {
-                    left_budget.saturating_sub(left_content_width as u16)
-                };
-                let max_right_width = max_right_width.saturating_sub(spinner_reserved as u16);
-                right_spans = truncate_spans(right_spans, max_right_width);
-                right_width = right_spans
-                    .iter()
-                    .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
-                    .sum();
+                let max_right_width = usize::from(left_budget)
+                    .saturating_sub(left_content_width)
+                    .saturating_sub(description_gap)
+                    .saturating_sub(spinner_reserved);
+                right_spans = fit.apply(right_spans, max_right_width);
+                right_width = spans_width(&right_spans);
             }
 
             // Apply max_description_width cap: limit how much space description can take
             if let Some(max_desc_w) = max_description_width {
                 let text_budget = (max_desc_w as usize).saturating_sub(spinner_reserved);
-                let capped = right_spans
-                    .iter()
-                    .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
-                    .sum::<usize>()
-                    .min(text_budget);
-                right_spans = truncate_spans(right_spans, capped as u16);
-                right_width = right_spans
-                    .iter()
-                    .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
-                    .sum();
+                right_spans = fit.apply(right_spans, text_budget);
+                right_width = spans_width(&right_spans);
             }
 
             right_width = right_width.saturating_add(spinner_reserved);
+            let description_gap = if right_width > 0 { description_gap } else { 0 };
 
             // Truncate content to fit available width.
             let reserved_width = (item_symbol_width as u16)
@@ -1313,6 +1320,7 @@ pub(crate) fn render_list(params: ListRenderParams<'_, '_, '_>) {
                 .saturating_add(prefix_or_indent_w)
                 .saturating_add(trailing_symbol_width as u16)
                 .saturating_add(right_width as u16)
+                .saturating_add(description_gap as u16)
                 .saturating_add(label_spinner_reserved as u16)
                 .saturating_add(row_padding.horizontal());
             let available_left_width = max_text_w.saturating_sub(reserved_width);
@@ -1719,6 +1727,60 @@ pub(crate) fn render_list_node(
         clip_rect: clip_bounds,
         contrast_policy,
     });
+}
+
+/// How a list description is cut down to the width it is given.
+#[derive(Clone, Copy)]
+struct DescriptionFit {
+    truncation: ListTruncation,
+    /// Hide a description that would keep nothing but its ellipsis. Set together with a gap:
+    /// a lone `…` held off the label says nothing, and read against the label it looks like the
+    /// label was cut.
+    drop_bare_ellipsis: bool,
+}
+
+impl DescriptionFit {
+    fn apply<'a>(self, spans: Vec<Span<'a>>, max_width: usize) -> Vec<Span<'a>> {
+        let natural = spans_width(&spans);
+        if natural <= max_width {
+            return spans;
+        }
+        let fitted = match self.truncation {
+            ListTruncation::End => {
+                truncate_spans(spans, u16::try_from(max_width).unwrap_or(u16::MAX))
+            }
+            ListTruncation::Start => ellipsize_start(spans, max_width),
+        };
+        if self.drop_bare_ellipsis && spans_width(&fitted) <= UnicodeWidthStr::width("…") {
+            return Vec::new();
+        }
+        fitted
+    }
+}
+
+/// The mirror of `truncate_spans`: keep the tail that fits beside a leading `…`, styled like the
+/// first span it stands in front of.
+fn ellipsize_start(spans: Vec<Span<'_>>, max_width: usize) -> Vec<Span<'_>> {
+    const ELLIPSIS: &str = "…";
+    if max_width == 0 {
+        return Vec::new();
+    }
+    let ellipsis_width = UnicodeWidthStr::width(ELLIPSIS);
+    let tail_width = u16::try_from(max_width.saturating_sub(ellipsis_width)).unwrap_or(u16::MAX);
+    let fallback_style = spans.first().map(|span| span.style).unwrap_or_default();
+    let tail = truncate_spans_start(spans, tail_width);
+    let style = tail.first().map_or(fallback_style, |span| span.style);
+    let mut out = Vec::with_capacity(tail.len() + 1);
+    out.push(Span::styled(ELLIPSIS, style));
+    out.extend(tail);
+    out
+}
+
+fn spans_width(spans: &[Span<'_>]) -> usize {
+    spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum()
 }
 
 #[cfg(test)]

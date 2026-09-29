@@ -32,6 +32,8 @@ mod flow_in_hstack_wraps;
 mod flow_wrap_height_floor;
 #[path = "suites/widget_behavior/gantt_diagram_render.rs"]
 mod gantt_diagram_render;
+#[path = "suites/widget_behavior/list_description_fit_render.rs"]
+mod list_description_fit_render;
 #[path = "suites/widget_behavior/list_description_spinner_render.rs"]
 mod list_description_spinner_render;
 #[path = "suites/widget_behavior/list_empty_text_padding_render.rs"]

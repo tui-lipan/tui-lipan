@@ -511,6 +511,17 @@ impl From<Spinner> for ListItemStatus {
     }
 }
 
+/// Which end of a list description loses characters when it does not fit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ListTruncation {
+    /// Keep the start and end with `…` (default).
+    #[default]
+    End,
+    /// Keep the end and start with `…`. Suits paths and branch names, whose tail is the part
+    /// that tells neighbours apart.
+    Start,
+}
+
 /// A list item.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ListItem {
@@ -540,6 +551,8 @@ pub struct ListItem {
     pub(crate) primary_wrap_description: bool,
     pub(crate) primary_max_label_width: Option<u16>,
     pub(crate) primary_max_description_width: Option<u16>,
+    pub(crate) primary_description_truncation: ListTruncation,
+    pub(crate) primary_description_gap: u16,
     pub(crate) symbol_line: usize,
     /// When set, the row is drawn as a horizontal rule in this style with the label centered on
     /// it. See [`ListItem::divider`].
@@ -565,6 +578,8 @@ pub struct ListItemLine {
     pub(crate) wrap_description: bool,
     pub(crate) max_label_width: Option<u16>,
     pub(crate) max_description_width: Option<u16>,
+    pub(crate) description_truncation: ListTruncation,
+    pub(crate) description_gap: u16,
 }
 
 impl ListItemLine {
@@ -587,6 +602,8 @@ impl ListItemLine {
             wrap_description: false,
             max_label_width: None,
             max_description_width: None,
+            description_truncation: ListTruncation::End,
+            description_gap: 0,
         }
     }
 
@@ -609,6 +626,8 @@ impl ListItemLine {
             wrap_description: false,
             max_label_width: None,
             max_description_width: None,
+            description_truncation: ListTruncation::End,
+            description_gap: 0,
         }
     }
 
@@ -725,6 +744,21 @@ impl ListItemLine {
         self.max_description_width = Some(width);
         self
     }
+
+    /// Choose which end of the description is cut when it does not fit.
+    pub fn description_truncation(mut self, truncation: ListTruncation) -> Self {
+        self.description_truncation = truncation;
+        self
+    }
+
+    /// Keep at least `gap` blank columns between the label and the description.
+    ///
+    /// The gap applies only when both sides have content. With a gap set, a description that
+    /// would be cut down to a bare `…` is hidden instead, together with its gap.
+    pub fn description_gap(mut self, gap: u16) -> Self {
+        self.description_gap = gap;
+        self
+    }
 }
 
 impl ListItem {
@@ -757,6 +791,8 @@ impl ListItem {
             primary_wrap_description: false,
             primary_max_label_width: None,
             primary_max_description_width: None,
+            primary_description_truncation: ListTruncation::End,
+            primary_description_gap: 0,
             symbol_line: 0,
             rule: None,
         }
@@ -815,6 +851,8 @@ impl ListItem {
             primary_wrap_description: false,
             primary_max_label_width: None,
             primary_max_description_width: None,
+            primary_description_truncation: ListTruncation::End,
+            primary_description_gap: 0,
             symbol_line: 0,
             rule: None,
         }
@@ -849,6 +887,8 @@ impl ListItem {
             primary_wrap_description: false,
             primary_max_label_width: None,
             primary_max_description_width: None,
+            primary_description_truncation: ListTruncation::End,
+            primary_description_gap: 0,
             symbol_line: 0,
             rule: None,
         }
@@ -1062,6 +1102,21 @@ impl ListItem {
     /// Limit the primary description to at most this many columns.
     pub fn primary_max_description_width(mut self, width: u16) -> Self {
         self.primary_max_description_width = Some(width);
+        self
+    }
+
+    /// Choose which end of the primary description is cut when it does not fit.
+    pub fn primary_description_truncation(mut self, truncation: ListTruncation) -> Self {
+        self.primary_description_truncation = truncation;
+        self
+    }
+
+    /// Keep at least `gap` blank columns between the primary label and description.
+    ///
+    /// The gap applies only when both sides have content. With a gap set, a description that
+    /// would be cut down to a bare `…` is hidden instead, together with its gap.
+    pub fn primary_description_gap(mut self, gap: u16) -> Self {
+        self.primary_description_gap = gap;
         self
     }
 
@@ -2260,6 +2315,8 @@ fn hash_list_item_layout(item: &ListItem, hasher: &mut impl std::hash::Hasher) {
     item.primary_wrap_description.hash(hasher);
     item.primary_max_label_width.hash(hasher);
     item.primary_max_description_width.hash(hasher);
+    item.primary_description_truncation.hash(hasher);
+    item.primary_description_gap.hash(hasher);
     item.symbol_line.hash(hasher);
     // Slot widths only: they are constant per spinner style, so an animating frame
     // never invalidates the layout hash.
@@ -2296,6 +2353,8 @@ fn hash_list_item_line_layout(line: &ListItemLine, hasher: &mut impl std::hash::
     line.wrap_description.hash(hasher);
     line.max_label_width.hash(hasher);
     line.max_description_width.hash(hasher);
+    line.description_truncation.hash(hasher);
+    line.description_gap.hash(hasher);
     hash_spinner_slot(
         line.label_spinner.as_ref(),
         line.label_spinner_position,

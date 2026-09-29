@@ -454,9 +454,15 @@ fn wrap_item_right_lines(
             .saturating_add(item.label_spinner.as_ref().map_or(0, |spinner| {
                 spinner.anchored_width(!primary_spans.is_empty())
             }));
+        let gap = description_gap_width(
+            item.primary_description_gap,
+            &primary_spans,
+            item.label_spinner.is_some(),
+        );
         let first_budget = primary_first_budget
             .saturating_sub(left_w)
-            .saturating_sub(spinner_w);
+            .saturating_sub(spinner_w)
+            .saturating_sub(gap);
         let cont_budget = primary_cont_budget;
         let (first, rest) = split_for_wrap(&primary_description_spans, first_budget, cont_budget);
         let rest_count = rest.len();
@@ -493,6 +499,8 @@ fn wrap_item_right_lines(
         .primary_hover_label(item.primary_hover_label)
         .primary_hover_description(item.primary_hover_description)
         .primary_truncate_description_first(item.primary_truncate_description_first)
+        .primary_description_truncation(item.primary_description_truncation)
+        .primary_description_gap(item.primary_description_gap)
         .primary_wrap_label(false)
         .primary_wrap_description(false)
         .symbol_line(symbol_line);
@@ -566,9 +574,15 @@ fn wrap_item_right_lines(
                         .as_ref()
                         .map_or(0, |spinner| spinner.anchored_width(!line.spans.is_empty())),
                 );
+            let gap = description_gap_width(
+                line.description_gap,
+                &line.spans,
+                line.label_spinner.is_some(),
+            );
             let first_budget = extra_first_budget
                 .saturating_sub(left_w)
-                .saturating_sub(spinner_w);
+                .saturating_sub(spinner_w)
+                .saturating_sub(gap);
             let cont_budget = extra_cont_budget;
             let (first, rest) = split_for_wrap(&line.description_spans, first_budget, cont_budget);
             let rest_count = rest.len();
@@ -623,7 +637,19 @@ fn carry_line_spinners(mut wrapped: ListItemLine, source: &ListItemLine) -> List
     wrapped.description_spinner_position = source.description_spinner_position;
     wrapped.label_spinner = source.label_spinner.clone();
     wrapped.label_spinner_position = source.label_spinner_position;
+    wrapped.description_truncation = source.description_truncation;
+    wrapped.description_gap = source.description_gap;
     wrapped
+}
+
+/// Columns the label-to-description gap takes on a line whose label is `spans`. A line without a
+/// label (a wrapped continuation) has nothing to keep the description away from.
+fn description_gap_width(gap: u16, spans: &[Span], has_label_spinner: bool) -> u16 {
+    if has_label_spinner || spans_width(spans) > 0 {
+        gap
+    } else {
+        0
+    }
 }
 
 fn split_for_wrap(
