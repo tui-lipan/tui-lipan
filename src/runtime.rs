@@ -607,6 +607,10 @@ where
         focused_key: Option<&Key>,
         key: KeyEvent,
     ) -> BubbleKeyResult {
+        // Focus can move between frames (Tab, a click, a scripted focus) before the next
+        // render; key handlers must see where it is now, not where the last frame left it.
+        self.focus
+            .update_from_tree(&self.tree, focused, focused_key);
         let scope = self.resolve_bubble_key_scope(focused, focused_key);
 
         let mut dirty = false;

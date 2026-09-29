@@ -4735,6 +4735,50 @@ mod tests {
         assert!(backend.core.ctx.has_focus_within_key("region"));
     }
 
+    struct FocusAwareKeys;
+
+    impl Component for FocusAwareKeys {
+        type Message = ();
+        type Properties = ();
+        type State = Vec<bool>;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            Vec::new()
+        }
+
+        fn on_key(&mut self, _key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
+            let in_second = ctx.has_focus_within_key("second");
+            ctx.state.push(in_second);
+            KeyUpdate::handled(Update::none())
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            VStack::new()
+                .child(Button::new("first").key("first"))
+                .child(Button::new("second").key("second"))
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    #[test]
+    fn key_handlers_see_focus_moved_since_the_last_render() {
+        let mut backend = TestBackend::new(FocusAwareKeys);
+        backend.render();
+        let key = KeyEvent {
+            code: KeyCode::Char('x'),
+            mods: KeyMods::NONE,
+        };
+        assert!(backend.focus_key(&Key::from("second")));
+        backend.send_key(key).expect("key should dispatch");
+        assert!(backend.focus_key(&Key::from("first")));
+        backend.send_key(key).expect("key should dispatch");
+        assert_eq!(*backend.state(), vec![true, false]);
+    }
+
     struct ScrollViewTabStopRoot;
 
     impl Component for ScrollViewTabStopRoot {

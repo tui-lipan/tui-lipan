@@ -1445,15 +1445,18 @@ impl<C: Component> Context<C> {
             .push_back(TranscriptEntry::Element(Box::new(element)));
     }
 
-    /// Returns `true` if the currently focused node (from the previous frame) is inside this
-    /// component's subtree.
+    /// Returns `true` if the currently focused node is inside this component's subtree.
+    ///
+    /// In `view` this is the previous frame's focus; in `on_key` it is the current focus.
     pub fn has_focus_within(&self) -> bool {
         self.env.note_memo_dependency(MemoDependency::Focus);
         self.env.focus.has_focus_within_scope(self.scope)
     }
 
-    /// Returns `true` if the currently focused node (from the previous frame) is inside the
-    /// subtree of the element identified by `key`.
+    /// Returns `true` if the currently focused node is inside the subtree of the element
+    /// identified by `key`.
+    ///
+    /// In `view` this is the previous frame's focus; in `on_key` it is the current focus.
     pub fn has_focus_within_key(&self, key: impl Into<Key>) -> bool {
         let key = key.into();
         self.env.note_memo_dependency(MemoDependency::Focus);
