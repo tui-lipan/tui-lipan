@@ -1244,3 +1244,73 @@ mod tests {
         assert!(!directory.exists());
     }
 }
+
+#[cfg(test)]
+mod wrapper_click_tests {
+    use super::*;
+    use crate::core::component::{Context, Update};
+    use crate::core::element::{Element, IntoElement};
+    use crate::widgets::{DragSource, DropTarget, Frame, MouseRegion, Text, VStack};
+
+    struct Wrapped;
+
+    impl Component for Wrapped {
+        type Message = &'static str;
+        type Properties = ();
+        type State = Vec<&'static str>;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            Vec::new()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state.push(msg);
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let region = |label: &'static str| {
+                MouseRegion::new()
+                    .on_click(ctx.link().callback(move |_| label))
+                    .child(Text::new(label))
+            };
+            VStack::new()
+                .child(
+                    Frame::new()
+                        .child(DropTarget::new().child(DragSource::new().child(region("row"))))
+                        .automation_id("panel"),
+                )
+                .child(
+                    VStack::new()
+                        .child(region("left"))
+                        .child(region("right"))
+                        .automation_id("pair"),
+                )
+                .child(Text::new(format!("clicked={}", ctx.state.join(","))))
+                .into()
+        }
+    }
+
+    #[test]
+    fn click_passes_through_single_child_wrappers() {
+        let mut session = AutomationSession::new(Wrapped, AutomationOptions::default()).unwrap();
+        session
+            .execute(AutomationStep::click(Selector::id("panel")))
+            .unwrap();
+        assert_eq!(
+            session
+                .discover(&Selector::text_contains("clicked=row"))
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn containers_with_several_children_are_not_clickable() {
+        let mut session = AutomationSession::new(Wrapped, AutomationOptions::default()).unwrap();
+        let error = session
+            .execute(AutomationStep::click(Selector::id("pair")))
+            .unwrap_err();
+        assert!(matches!(error, AutomationError::NotActionable));
+    }
+}

@@ -412,6 +412,9 @@ fn project_node(
     let selected = node.semantic_selected.or(derived_selected);
     let expanded = node.semantic_expanded.or(derived_expanded);
     let runtime_node = resolve_semantic_actions(node, id, expanded, &children, &mut actions);
+    if click_reaches_only_child(&actions, clipped_bounds, &children) {
+        actions.push(SemanticAction::Click);
+    }
     actions.sort_by_key(|action| *action as u8);
     actions.dedup();
     let in_view = clipped_bounds.w > 0 && clipped_bounds.h > 0;
@@ -489,6 +492,38 @@ fn resolve_semantic_actions(
         return target.runtime_node;
     }
     Some(id)
+}
+
+/// Whether a pointer click on this node lands on its only child, which accepts it.
+///
+/// Pointer wrappers such as `DragSource`, `DropTarget`, `PanView`, or a single-child `Frame`
+/// have no click behavior of their own, but a click at their center reaches the child. A
+/// selector naming the wrapper should be clickable exactly when that click does something.
+fn click_reaches_only_child(
+    actions: &[SemanticAction],
+    clipped_bounds: Rect,
+    children: &[SemanticNode],
+) -> bool {
+    if actions.contains(&SemanticAction::Click) {
+        return false;
+    }
+    let [child] = children else {
+        return false;
+    };
+    let (x, y) = click_point(clipped_bounds);
+    child.enabled
+        && child.actions.contains(&SemanticAction::Click)
+        && child.clipped_bounds.contains(x, y)
+}
+
+/// The cell a pointer operation on `bounds` targets: its center.
+pub(crate) fn click_point(bounds: Rect) -> (i16, i16) {
+    let x = i32::from(bounds.x) + i32::from(bounds.w / 2);
+    let y = i32::from(bounds.y) + i32::from(bounds.h / 2);
+    (
+        i16::try_from(x).unwrap_or(i16::MAX),
+        i16::try_from(y).unwrap_or(i16::MAX),
+    )
 }
 
 fn synthetic_semantic_children(
