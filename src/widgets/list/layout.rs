@@ -16,6 +16,23 @@ fn slot_width(
     })
 }
 
+/// The label-to-description gap, counted only when both sides of the line have content.
+fn gap_width(
+    gap: u16,
+    label: &[crate::style::Span],
+    label_spinner: Option<&crate::widgets::list::ListItemSpinnerSlot>,
+    description: &[crate::style::Span],
+    description_spinner: Option<&crate::widgets::list::ListItemSpinnerSlot>,
+) -> usize {
+    let has_label = label_spinner.is_some() || spans_width(label) > 0;
+    let has_description = description_spinner.is_some() || spans_width(description) > 0;
+    if has_label && has_description {
+        usize::from(gap)
+    } else {
+        0
+    }
+}
+
 fn spans_width(spans: &[crate::style::Span]) -> usize {
     spans
         .iter()
@@ -76,6 +93,13 @@ pub fn measure_list(list: &List) -> (u16, u16) {
                 item.description_spinner.as_ref(),
                 &item.description_spans,
             ))
+            .saturating_add(gap_width(
+                item.primary_description_gap,
+                &item.spans,
+                item.label_spinner.as_ref(),
+                &item.description_spans,
+                item.description_spinner.as_ref(),
+            ))
             .saturating_add(if item.symbol_line == 0 {
                 trailing_symbol_w
             } else {
@@ -93,6 +117,13 @@ pub fn measure_list(list: &List) -> (u16, u16) {
                     .saturating_add(slot_width(
                         line.description_spinner.as_ref(),
                         &line.description_spans,
+                    ))
+                    .saturating_add(gap_width(
+                        line.description_gap,
+                        &line.spans,
+                        line.label_spinner.as_ref(),
+                        &line.description_spans,
+                        line.description_spinner.as_ref(),
                     ))
                     .saturating_add(if item.symbol_line == line_idx + 1 {
                         trailing_symbol_w
@@ -152,6 +183,30 @@ pub fn measure_list(list: &List) -> (u16, u16) {
 mod tests {
     use super::measure_list;
     use crate::widgets::{List, ListItem, ListItemGutter, ListItemLine, Spinner};
+
+    #[test]
+    fn measure_counts_the_description_gap_only_between_two_sides() {
+        let list = List::new().symbol_column(false).items([ListItem::new("ab")
+            .description("cd")
+            .primary_description_gap(3)
+            .line(
+                ListItemLine::new("")
+                    .description("efghijk")
+                    .description_gap(3),
+            )]);
+        let (w, _h) = measure_list(&list);
+        // `ab   cd` is 7 wide; the labelless extra line is 7 wide with no gap.
+        assert_eq!(w, 7);
+
+        let list = List::new().symbol_column(false).items([ListItem::new("ab")
+            .description("cd")
+            .primary_description_gap(3)]);
+        assert_eq!(measure_list(&list).0, 7);
+        let list = List::new()
+            .symbol_column(false)
+            .items([ListItem::new("ab").primary_description_gap(3)]);
+        assert_eq!(measure_list(&list).0, 2);
+    }
 
     #[test]
     fn measure_accounts_for_active_symbol_width() {

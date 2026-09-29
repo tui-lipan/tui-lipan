@@ -101,6 +101,16 @@ ListItem::new("Index")
     .description_spinner_position(ListSymbolPosition::Right)
 ListItem::new("Sync").label_spinner(Spinner::new())
 
+// Fitting a right-aligned description beside its label
+ListItem::new("my-project")
+    .description("feat/pricing-v2")
+    .primary_truncate_description_first(true)            // label wins; description gets the rest
+    .primary_description_truncation(ListTruncation::Start) // `…pricing-v2`: keep the tail
+    .primary_description_gap(3)                          // at least 3 blank columns between them
+ListItem::new("feat/a-long-branch-name")
+    .description("new session")                          // default: description wins, label truncates
+    .primary_description_gap(3)
+
 // Symbol/gutter can be rendered on a non-primary line (useful for "description above")
 ListItem::new("description")
     .line(ListItemLine::new("label"))
@@ -118,6 +128,13 @@ as needed to fill the enlarged viewport instead of leaving blank rows below the 
 
 `ListItem::line(...)` adds extra visual lines under the primary line. Selection,
 activation, and callbacks still use the item index (not visual line index).
+
+A description is cut from the end unless `description_truncation(ListTruncation::Start)` asks to
+keep its tail, which suits paths and branch names. `description_gap(n)` keeps at least `n` blank
+columns between a label and its description whenever both have content, whichever side
+`truncate_description_first` lets win. With a gap set, a description that would be cut down to a
+bare `…` is hidden instead, together with its gap. `ListItemLine` takes the same two options
+without the `primary_` prefix.
 
 `ListItem::prefix(...)` renders a prefix before the primary label and automatically
 indents extra lines to match the label start. Use `.extra_line_indent(...)` to override

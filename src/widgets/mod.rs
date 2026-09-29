@@ -229,7 +229,7 @@ pub use input::{Input, InputEvent};
 pub use key_capture::KeyCapture;
 pub use list::{
     List, ListConfig, ListEvent, ListItem, ListItemGutter, ListItemLine, ListItemRole,
-    ListItemStatus, ListSymbolPosition,
+    ListItemStatus, ListSymbolPosition, ListTruncation,
 };
 pub use log_view::{LogBuffer, LogEntry, LogFilterMode, LogLevel, LogView, LogViewEvent};
 #[cfg(feature = "terminal")]

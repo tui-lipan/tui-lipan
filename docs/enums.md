@@ -1011,6 +1011,13 @@ style directly.
 | `ListSymbolPosition::Left` | Render the symbol in the left symbol column **(default)** |
 | `ListSymbolPosition::Right` | Render the symbol immediately after the label content |
 
+### `ListTruncation`
+
+| Variant | Description |
+|---------|-------------|
+| `ListTruncation::End` | Keep the start of a list description and end it with `…` **(default)** |
+| `ListTruncation::Start` | Keep the end of a list description and start it with `…` |
+
 ### `DescriptionPlacement` *(SearchPalette)*
 
 | Variant | Description |
