@@ -180,6 +180,10 @@ pub(crate) enum FocusDirection {
 /// *not* in the ring (`.tab_stop(false)`, or an `Exclude`/`Contain` escape
 /// hatch). Stepping from where it would sit keeps Tab moving to the true
 /// neighbour instead of jumping back to the start of the ring.
+///
+/// A stale `focused` counts as no focus. Pending focus requests apply after
+/// reconciliation but before [`restore_focus`], so a widget removed in the same
+/// update that called `focus_next` still holds focus here with a dead id.
 pub(crate) fn ring_step(
     tree: &NodeTree,
     focusables: &[NodeId],
@@ -187,6 +191,7 @@ pub(crate) fn ring_step(
     direction: FocusDirection,
 ) -> Option<NodeId> {
     use std::cmp::Ordering;
+    let focused = focused.filter(|id| tree.is_valid(*id));
     let (&first, &last) = (focusables.first()?, focusables.last()?);
     let order = |id: &NodeId, curr: NodeId| tree.cmp_tree_order(*id, curr);
     Some(match (focused, direction) {
