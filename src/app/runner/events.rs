@@ -744,31 +744,15 @@ impl<C: Component> AppRunner<C> {
         if focus::in_excluded_scope(&self.core.tree, id) {
             return false;
         }
-        let focusable = self.core.tree.node(id).is_focusable();
-
-        if focusable {
-            let focused_changed = self.focus.focused != Some(id);
-            let mut dirty = false;
-            if focused_changed {
-                self.set_focus(id);
-                dirty = true;
-            }
-            if focused_changed && self.ensure_draggable_tab_bar_active_visible(id) {
-                dirty = true;
-            }
-            return dirty;
+        let Some(target) = focus::pointer_focus_target(&self.core.tree, id) else {
+            return false;
+        };
+        if self.focus.focused == Some(target) {
+            return false;
         }
-
-        if let Some(descendant_id) = focus::find_first_focusable_descendant(&self.core.tree, id) {
-            let focused_changed = self.focus.focused != Some(descendant_id);
-            if focused_changed {
-                self.set_focus(descendant_id);
-                self.ensure_draggable_tab_bar_active_visible(descendant_id);
-                return true;
-            }
-        }
-
-        false
+        self.set_focus(target);
+        self.ensure_draggable_tab_bar_active_visible(target);
+        true
     }
 
     #[allow(dead_code)]

@@ -48,6 +48,11 @@ These properties answer independent questions:
 | `tab_stop` | The widget participates in next/previous traversal. Default: `true`. |
 | `pointer_focus` | Pointer presses may acquire focus from the element or its descendants. Default: `true`. |
 
+A left-button press focuses the pressed widget when it is focusable. Otherwise it focuses the
+pressed widget's first focusable descendant, and failing that its nearest focusable ancestor. For
+example, clicking a `MouseRegion` row inside a `.focusable(true)` `ScrollView` focuses the
+`ScrollView`.
+
 A widget with `.focusable(true).tab_stop(false)` is omitted from Tab traversal but remains
 reachable by pointer focus and `ctx.request_focus(key)`. A non-focusable widget cannot become a
 focus target. An element subtree with `.pointer_focus(false)` keeps hit testing and pointer

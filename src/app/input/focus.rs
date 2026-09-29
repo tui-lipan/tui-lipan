@@ -270,6 +270,33 @@ pub(crate) fn step_for_policy(
     true
 }
 
+/// The node a pointer press on `id` focuses: `id` itself, else its first focusable
+/// descendant, else its nearest focusable ancestor.
+///
+/// The ancestor fallback covers clickable but non-focusable content, such as a
+/// `MouseRegion` row inside a focusable `ScrollView`: pressing it should focus the
+/// container that owns keyboard input for that content.
+pub(crate) fn pointer_focus_target(tree: &NodeTree, id: NodeId) -> Option<NodeId> {
+    if tree.node(id).is_focusable() {
+        return Some(id);
+    }
+    if let Some(descendant) = find_first_focusable_descendant(tree, id) {
+        return Some(descendant);
+    }
+    let mut current = tree.node(id).parent;
+    while let Some(ancestor) = current {
+        if !tree.is_valid(ancestor) {
+            return None;
+        }
+        let node = tree.node(ancestor);
+        if node.is_focusable() {
+            return Some(ancestor);
+        }
+        current = node.parent;
+    }
+    None
+}
+
 pub(crate) fn find_first_focusable_descendant(tree: &NodeTree, root: NodeId) -> Option<NodeId> {
     find_first_focusable_descendant_impl(tree, root, true)
 }
