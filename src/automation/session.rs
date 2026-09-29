@@ -1250,7 +1250,8 @@ mod wrapper_click_tests {
     use super::*;
     use crate::core::component::{Context, Update};
     use crate::core::element::{Element, IntoElement};
-    use crate::widgets::{DragSource, DropTarget, Frame, MouseRegion, Text, VStack};
+    use crate::style::Length;
+    use crate::widgets::{DragSource, DropTarget, Frame, MouseRegion, PanView, Text, VStack};
 
     struct Wrapped;
 
@@ -1286,6 +1287,24 @@ mod wrapper_click_tests {
                         .child(region("right"))
                         .automation_id("pair"),
                 )
+                .child(
+                    PanView::new()
+                        .width(Length::Px(3))
+                        .height(Length::Px(1))
+                        .child(region("pan"))
+                        .automation_id("pan-view"),
+                )
+                .child(
+                    Frame::new()
+                        .height(Length::Px(3))
+                        .child(
+                            MouseRegion::new()
+                                .on_click(ctx.link().callback(|_| "edge"))
+                                .hit_test(|x, _| x == 0)
+                                .child(Text::new("edge")),
+                        )
+                        .automation_id("edge-panel"),
+                )
                 .child(Text::new(format!("clicked={}", ctx.state.join(","))))
                 .into()
         }
@@ -1310,6 +1329,29 @@ mod wrapper_click_tests {
         let mut session = AutomationSession::new(Wrapped, AutomationOptions::default()).unwrap();
         let error = session
             .execute(AutomationStep::click(Selector::id("pair")))
+            .unwrap_err();
+        assert!(matches!(error, AutomationError::NotActionable));
+    }
+
+    #[test]
+    fn click_passes_through_pan_view() {
+        let mut session = AutomationSession::new(Wrapped, AutomationOptions::default()).unwrap();
+        session
+            .execute(AutomationStep::click(Selector::id("pan-view")))
+            .unwrap();
+        assert_eq!(
+            session
+                .discover(&Selector::text_contains("clicked=pan"))
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn wrapper_is_not_clickable_where_child_hit_test_rejects_the_point() {
+        let mut session = AutomationSession::new(Wrapped, AutomationOptions::default()).unwrap();
+        let error = session
+            .execute(AutomationStep::click(Selector::id("edge-panel")))
             .unwrap_err();
         assert!(matches!(error, AutomationError::NotActionable));
     }

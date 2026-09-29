@@ -412,7 +412,7 @@ fn project_node(
     let selected = node.semantic_selected.or(derived_selected);
     let expanded = node.semantic_expanded.or(derived_expanded);
     let runtime_node = resolve_semantic_actions(node, id, expanded, &children, &mut actions);
-    if click_reaches_only_child(&actions, clipped_bounds, &children) {
+    if click_reaches_only_child(tree, id, &actions, clipped_bounds, &children) {
         actions.push(SemanticAction::Click);
     }
     actions.sort_by_key(|action| *action as u8);
@@ -499,7 +499,13 @@ fn resolve_semantic_actions(
 /// Pointer wrappers such as `DragSource`, `DropTarget`, `PanView`, or a single-child `Frame`
 /// have no click behavior of their own, but a click at their center reaches the child. A
 /// selector naming the wrapper should be clickable exactly when that click does something.
+///
+/// The point is routed through [`NodeTree::hit_test`], the same test the pointer dispatcher
+/// uses, so overlays, clipping, and per-cell hit-test refinements (a `MouseRegion::hit_test`,
+/// a `Frame` border, a `Graph` node shape) all decide whether the click really lands there.
 fn click_reaches_only_child(
+    tree: &NodeTree,
+    id: NodeId,
     actions: &[SemanticAction],
     clipped_bounds: Rect,
     children: &[SemanticNode],
@@ -510,10 +516,15 @@ fn click_reaches_only_child(
     let [child] = children else {
         return false;
     };
+    if !child.enabled || !child.actions.contains(&SemanticAction::Click) {
+        return false;
+    }
     let (x, y) = click_point(clipped_bounds);
-    child.enabled
-        && child.actions.contains(&SemanticAction::Click)
-        && child.clipped_bounds.contains(x, y)
+    if !child.clipped_bounds.contains(x, y) {
+        return false;
+    }
+    tree.hit_test(x, y)
+        .is_some_and(|hit| hit != id && tree.is_descendant(id, hit))
 }
 
 /// The cell a pointer operation on `bounds` targets: its center.
