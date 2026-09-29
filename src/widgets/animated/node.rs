@@ -50,6 +50,10 @@ pub struct AnimatedNode {
     /// still settling from a hover, a movement the element was part of when it was removed. Those
     /// keep ticking and keep painting, but they do not gate release.
     pub(crate) exit_owned: ExitOwned,
+    /// The time left on an exit that animates nothing, which keeps the element painted as it was
+    /// for the exit's duration: an outgoing layer held beneath its successor while that one fades
+    /// in over it.
+    pub(crate) exit_hold: Option<Duration>,
     /// Render-only visual offset from `node.rect`. Do not consult from event,
     /// hit-test, layout, focus, or scroll code — those must use `node.rect` so
     /// FLIP movement stays paint-only.
@@ -68,7 +72,7 @@ pub struct AnimatedNode {
 /// Release waits on these and only these. Anything else still in flight when the element was
 /// removed keeps ticking and keeps painting, but an exit that declares nothing about a property
 /// must not be held open by it.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ExitOwned {
     pub opacity: bool,
     pub width: bool,
@@ -220,6 +224,9 @@ impl AnimatedNode {
             }
         }
 
+        // Nothing to animate: the exit is a hold, released once its duration has passed rather
+        // than on the next frame.
+        self.exit_hold = (owned == ExitOwned::default() && !instant).then_some(duration);
         self.exit_owned = owned;
         true
     }
@@ -261,6 +268,7 @@ impl AnimatedNode {
             || (owned.fg && (self.fg_anim.is_some() || self.inherited_fg_exit.is_some()))
             || (owned.bg && (self.bg_anim.is_some() || self.inherited_bg_exit.is_some()))
             || (owned.position && self.position_is_animating())
+            || self.exit_hold.is_some()
     }
 
     /// Clear the exit so the node can be reconciled normally again, for a key the application
@@ -271,6 +279,7 @@ impl AnimatedNode {
         self.inherited_fg_exit = None;
         self.inherited_bg_exit = None;
         self.exit_owned = ExitOwned::default();
+        self.exit_hold = None;
     }
 
     pub fn is_animating(&self) -> bool {
@@ -281,6 +290,7 @@ impl AnimatedNode {
             || self.inherited_bg_exit.is_some()
             || self.width_anim.is_some()
             || self.height_anim.is_some()
+            || self.exit_hold.is_some()
             || self.position_is_animating()
     }
 
@@ -388,6 +398,13 @@ impl AnimatedNode {
                 self.current_bg = self.target_bg;
                 self.bg_anim = None;
             }
+        }
+
+        if let Some(remaining) = self.exit_hold {
+            let remaining = remaining.saturating_sub(dt);
+            self.exit_hold = (!remaining.is_zero()).then_some(remaining);
+            // Nothing moves while held; release is the change.
+            result.changed |= self.exit_hold.is_none();
         }
 
         if let Some(exit) = &mut self.inherited_fg_exit {
@@ -520,6 +537,7 @@ impl From<Animated> for AnimatedNode {
             auto_exit_active: false,
             callbacks_suppressed: false,
             exit_owned: ExitOwned::default(),
+            exit_hold: None,
             target_opacity: value.opacity,
             opacity_anim: None,
             current_fg: value.fg,

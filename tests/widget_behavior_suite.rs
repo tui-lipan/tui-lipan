@@ -1,3 +1,5 @@
+#[path = "suites/widget_behavior/animated_crossfade_render.rs"]
+mod animated_crossfade_render;
 #[path = "suites/widget_behavior/chart_axis_tick_labels.rs"]
 mod chart_axis_tick_labels;
 #[path = "suites/widget_behavior/cursor_occlusion.rs"]

@@ -920,7 +920,9 @@ Wrapper for opacity, fg/bg color, height, and opt-in x/y position transitions. `
 | `on_exit_complete` | `Callback<()>` | Alias for `on_height_transition_end`; the safe point to drop the item from state |
 | `auto_exit` | `impl Into<ExitAnimation>` | Animates out and drops the element automatically when a keyed child is removed from its container. A bare `u64` means "fade over this many ms" |
 
-`opacity` applies a post-pass alpha transform that blends rendered fg/bg toward the terminal background by default (unless `opacity_fg_only` or `opacity_target` is set). At `opacity(0.0)`, the wrapper restores the cells that were already rendered underneath it, so fully faded content does not leave invisible glyphs or blank cells blocking lower `ZStack`/overlay layers. With `opacity_target`, fades go to a chosen color (fade-to-black, flash-to-accent) instead of the host backdrop. `fg` and `bg` are explicit color targets that lerp with the same transition timing. You can combine them (for example, fade + tint) in one `Animated` wrapper.
+`opacity` applies a post-pass alpha transform. Without `opacity_target` it composites over whatever was rendered beneath the wrapper: backgrounds blend, and glyphs crossfade. Each side keeps its share of ink, so text beneath shows through the wrapper's blank cells and fades as the wrapper fades in. Where both sides draw a glyph, the stronger one is shown, so they trade places at half opacity. With `opacity_fg_only` the wrapper's backgrounds stay opaque and hide the glyphs beneath. At `opacity(0.0)`, the wrapper restores the cells that were already rendered underneath it, so fully faded content does not leave invisible glyphs or blank cells blocking lower `ZStack`/overlay layers. With `opacity_target`, fades go to a chosen color (fade-to-black, flash-to-accent) instead of the host backdrop. `fg` and `bg` are explicit color targets that lerp with the same transition timing. You can combine them (for example, fade + tint) in one `Animated` wrapper.
+
+To crossfade between two screens, put the incoming one in a `ZStack` over the outgoing one. Hold the outgoing one whole with `auto_exit(ExitAnimation::new(ms).keep_opacity())`, and fade the incoming one in from `0.0`. `animated_sequential_swap` (lane 5) shows the recipe.
 
 For correct opacity blending when backgrounds use `Color::Reset`, set `App::terminal_bg(query_host_colors().map(|c| c.bg))` before `run()` - see **quick-start.md** (`terminal_bg` / `query_host_colors`).
 
@@ -976,7 +978,7 @@ Animated::new(chip)
 | `ExitAnimation::new(ms)` | Fade to transparent |
 | `ExitAnimation::slide(ms, dx, dy)` | Fade while translating `dx` columns, `dy` rows |
 | `ExitAnimation::collapse(ms)` | Fade while collapsing to zero height |
-| `.opacity(v)` / `.keep_opacity()` | Fade to `v`, or leave opacity alone |
+| `.opacity(v)` / `.keep_opacity()` | Fade to `v`, or leave opacity alone. An exit with nothing to animate holds the element as it was for its duration |
 | `.fg(c)` / `.bg(c)` | Animate colors on the way out |
 | `.offset(dx, dy)` | Translate while leaving |
 | `.easing(e)` | Override the widget's own transition easing |

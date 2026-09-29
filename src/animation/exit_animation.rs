@@ -104,6 +104,9 @@ impl ExitAnimation {
     }
 
     /// Leave opacity untouched, for an exit carried entirely by movement or color.
+    ///
+    /// With nothing else set, the exit animates nothing and holds the element, painted as it was,
+    /// for its duration: an outgoing screen kept beneath the one fading in over it.
     pub const fn keep_opacity(mut self) -> Self {
         self.opacity = None;
         self

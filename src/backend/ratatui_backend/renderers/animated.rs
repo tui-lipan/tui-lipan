@@ -1,5 +1,7 @@
 use ratatui::buffer::Cell as BufferCell;
 use ratatui::style::Color as RColor;
+use ratatui::style::Modifier;
+use unicode_width::UnicodeWidthStr;
 
 use crate::backend::ratatui_backend::common::BufferSnapshot;
 use crate::backend::ratatui_backend::common::{
@@ -130,6 +132,13 @@ fn composite_opacity_over_underlay(
 
     let buf = f.buffer_mut();
     for y in intersection.y..intersection.y + intersection.height {
+        // Whether the cell to the left ends up holding a wide glyph: the blank cell after one is
+        // its hidden trailing half, not empty space.
+        let mut after_wide = intersection
+            .x
+            .checked_sub(1)
+            .and_then(|left| buf.cell((left, y)))
+            .is_some_and(|left| left.symbol().width() > 1);
         for x in intersection.x..intersection.x + intersection.width {
             let Some(saved) = underlay.cell_at(x, y) else {
                 continue;
@@ -137,6 +146,8 @@ fn composite_opacity_over_underlay(
             let Some(cell) = buf.cell_mut((x, y)) else {
                 continue;
             };
+            let continues_wide = after_wide;
+            after_wide = cell.symbol().width() > 1;
             if cells_match(cell, saved) {
                 continue;
             }
@@ -150,15 +161,32 @@ fn composite_opacity_over_underlay(
                 dim_cell |= dim;
             }
 
+            // Each side's glyph keeps the share of its ink that its side of the blend has, and a
+            // cell holds one glyph, so the stronger one is drawn: the underlay's fades out as the
+            // layer's fades in, and they trade places at half opacity, where both are equally
+            // faint. An opaque background (`fg_only`) hides the underlay's glyphs entirely.
+            let shows_underlay = !fg_only
+                && !continues_wide
+                && shows_through(saved)
+                && (opacity < 0.5 || is_blank(cell));
+            let (ink, strength) = if shows_underlay {
+                after_wide = false;
+                cell.set_symbol(saved.symbol());
+                cell.modifier = saved.modifier;
+                cell.underline_color = saved.underline_color;
+                (saved.fg, 1.0 - opacity)
+            } else {
+                (cell.fg, opacity)
+            };
             let fg_target = non_reset(cell.bg)
                 .or_else(|| non_reset(saved.bg))
                 .or(terminal_bg);
             let (fg, dim) = blend_ratatui_toward(
-                cell.fg,
+                ink,
                 fg_target.unwrap_or(RColor::Reset),
                 None,
                 terminal_bg,
-                opacity,
+                strength,
             );
             cell.fg = fg;
             dim_cell |= dim;
@@ -167,6 +195,21 @@ fn composite_opacity_over_underlay(
             }
         }
     }
+}
+
+/// Whether nothing is drawn in `cell` but its background.
+fn is_blank(cell: &BufferCell) -> bool {
+    cell.symbol() == " "
+        && !cell
+            .modifier
+            .intersects(Modifier::UNDERLINED | Modifier::CROSSED_OUT | Modifier::REVERSED)
+}
+
+/// Whether an underlay cell's glyph can be drawn through a translucent layer on its own. A wide
+/// glyph spans a neighbour the layer may be drawing, and a reversed one takes its background from
+/// its foreground, which the blend would not follow.
+fn shows_through(saved: &BufferCell) -> bool {
+    !is_blank(saved) && saved.symbol().width() == 1 && !saved.modifier.contains(Modifier::REVERSED)
 }
 
 fn cells_match(cell: &BufferCell, saved: &BufferCell) -> bool {

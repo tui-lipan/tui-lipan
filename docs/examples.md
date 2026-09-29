@@ -115,7 +115,7 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 | `ascii_canvas_ghost` | ASCII ghost animation using `AsciiCanvas` with frame sequences |
 | `ascii_canvas_scroll` | `AsciiCanvas` inside `ScrollView`: row-skip clipping and gradient rendering |
 | `animated_showcase` | `Animated` opacity, height, and keyed position transitions with easing/duration controls |
-| `animated_sequential_swap` | Sequential fade between subtrees via `on_opacity_transition_end` (fg+bg, fg-only, framed) |
+| `animated_sequential_swap` | Sequential fade between subtrees via `on_opacity_transition_end` (fg+bg, fg-only, framed), and a crossfade over a held `auto_exit` layer |
 | `chart_showcase` | `Chart` with multiple series, thresholds, axes, legend, grid |
 | `diagram_showcase` | Tabbed diagram hub covering `SequenceDiagram`, `ClassDiagram`, `ErDiagram`, `StateDiagram`, and `GanttDiagram` examples |
 | `flowchart_showcase` | `Flowchart` with branching, cycles, dashed/thick edges, nested subgraphs, class styles, and item callbacks |
