@@ -598,6 +598,8 @@ fn build_item(entry: &TreeEntry<'_>, props: &TreeProps, max_depth: usize) -> Lis
         .primary_hover_description(entry.node.item.primary_hover_description)
         .primary_truncate_description_first(entry.node.item.primary_truncate_description_first)
         .primary_wrap_description(entry.node.item.primary_wrap_description)
+        .primary_description_truncation(entry.node.item.primary_description_truncation)
+        .primary_description_gap(entry.node.item.primary_description_gap)
         .symbol_line(entry.node.item.symbol_line);
 
     for line in &entry.node.item.extra_lines {
@@ -751,6 +753,35 @@ mod tests {
         assert_eq!(out.extra_lines.len(), 1);
         assert!(out.extra_lines[0].wrap_label);
         assert_eq!(out.extra_lines[0].max_label_width, Some(2));
+    }
+
+    #[test]
+    fn build_item_keeps_primary_description_fitting() {
+        let root = TreeNode::new(
+            ListItem::new("branch")
+                .description("feat/some-long-name")
+                .primary_description_truncation(crate::widgets::ListTruncation::Start)
+                .primary_description_gap(3),
+        );
+        let props = crate::widgets::Tree::new(root.clone())
+            .show_icons(false)
+            .props;
+        let entry = TreeEntry {
+            path: TreePath::from(Vec::new()),
+            depth: 0,
+            node: &root,
+            expanded: false,
+            continued_depths: Vec::new(),
+            is_last_child: true,
+        };
+
+        let out = build_item(&entry, &props, 0);
+
+        assert_eq!(
+            out.primary_description_truncation,
+            crate::widgets::ListTruncation::Start
+        );
+        assert_eq!(out.primary_description_gap, 3);
     }
 
     #[test]

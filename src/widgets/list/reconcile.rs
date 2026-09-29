@@ -5,6 +5,7 @@ use crate::widgets::list::layout::measure_list;
 use crate::widgets::list::{effective_extra_line_indent, effective_prefix, leading_metrics};
 use crate::widgets::{List, ListItem, ListItemLine};
 use std::sync::Arc;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 pub fn reconcile_list(tree: &mut NodeTree, id: NodeId, list: &List, rect: Rect) -> NodeId {
@@ -464,7 +465,8 @@ fn wrap_item_right_lines(
             .saturating_sub(spinner_w)
             .saturating_sub(gap);
         let cont_budget = primary_cont_budget;
-        let (first, rest) = split_for_wrap(&primary_description_spans, first_budget, cont_budget);
+        let (first, rest) =
+            split_description_for_wrap(&primary_description_spans, first_budget, cont_budget);
         let rest_count = rest.len();
         primary_description_spans = first;
         if original_symbol_line > 0 {
@@ -584,7 +586,8 @@ fn wrap_item_right_lines(
                 .saturating_sub(spinner_w)
                 .saturating_sub(gap);
             let cont_budget = extra_cont_budget;
-            let (first, rest) = split_for_wrap(&line.description_spans, first_budget, cont_budget);
+            let (first, rest) =
+                split_description_for_wrap(&line.description_spans, first_budget, cont_budget);
             let rest_count = rest.len();
             if original_line_no < original_symbol_line {
                 symbol_line = symbol_line.saturating_add(rest_count);
@@ -650,6 +653,29 @@ fn description_gap_width(gap: u16, spans: &[Span], has_label_spinner: bool) -> u
     } else {
         0
     }
+}
+
+/// [`split_for_wrap`] for a description sharing its first line with the label.
+///
+/// The shared wrapper always makes progress, so a first budget narrower than the next grapheme
+/// still takes it. Beside a label that grapheme would then be cut to `…`, or hidden outright under
+/// a description gap. Starting the description on the continuation keeps it whole.
+fn split_description_for_wrap(
+    spans: &[Span],
+    first_budget: u16,
+    cont_budget: u16,
+) -> (Vec<Span>, Vec<Vec<Span>>) {
+    let first_fits =
+        first_grapheme_width(spans).is_none_or(|width| width <= usize::from(first_budget));
+    let first_budget = if first_fits { first_budget } else { 0 };
+    split_for_wrap(spans, first_budget, cont_budget)
+}
+
+fn first_grapheme_width(spans: &[Span]) -> Option<usize> {
+    spans
+        .iter()
+        .find_map(|span| span.content.graphemes(true).next())
+        .map(UnicodeWidthStr::width)
 }
 
 fn split_for_wrap(

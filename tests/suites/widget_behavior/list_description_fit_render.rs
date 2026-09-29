@@ -151,3 +151,53 @@ fn a_wrapped_description_keeps_the_gap_on_its_first_line_only() {
         "rows = {rows:#?}"
     );
 }
+
+#[test]
+fn a_wide_grapheme_that_misses_the_first_line_wraps_whole() {
+    // Three columns: `L`, a one-column gap, and one column left - too narrow for `你`, which
+    // must move to the continuation rather than be cut to an ellipsis and hidden.
+    let mut backend = TestBackend::new(Narrow);
+    backend.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 3,
+        h: 2,
+    });
+    backend.render();
+    let captured = backend.capture_frame();
+    let rows: Vec<String> = (0..2)
+        .map(|y| (0..3).map(|x| captured.cell(x, y).symbol.clone()).collect())
+        .collect();
+
+    assert_eq!(rows[0].trim_end(), "L", "rows = {rows:#?}");
+    assert!(rows[1].contains('你'), "rows = {rows:#?}");
+}
+
+#[derive(Clone, Copy)]
+struct Narrow;
+
+impl Component for Narrow {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        List::new()
+            .items([ListItem::new("L")
+                .description("你")
+                .primary_wrap_description(true)
+                .primary_truncate_description_first(true)
+                .primary_description_gap(1)])
+            .symbol_column(false)
+            .width(Length::Px(3))
+            .height(Length::Px(2))
+            .focusable(false)
+            .into()
+    }
+}
