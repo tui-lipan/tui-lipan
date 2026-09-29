@@ -884,7 +884,7 @@ fn mouse_region_wrapping_frame_receives_border_clicks() {
             MouseRegion::new()
                 .on_click({
                     let clicked = Rc::clone(&self.clicked);
-                    Callback::new(move |_ev: MouseEvent| {
+                    Callback::new(move |_ev: crate::core::event::MouseRegionEvent| {
                         *clicked.borrow_mut() = true;
                     })
                 })
@@ -981,7 +981,7 @@ fn mouse_region_wrapping_frame_receives_border_mouse_down() {
             MouseRegion::new()
                 .on_mouse_down({
                     let pressed = Rc::clone(&self.pressed);
-                    Callback::new(move |_ev: MouseEvent| {
+                    Callback::new(move |_ev: crate::core::event::MouseRegionEvent| {
                         *pressed.borrow_mut() = true;
                     })
                 })
@@ -1051,7 +1051,7 @@ fn mouse_region_with_only_mouse_down_receives_inner_content_press() {
             MouseRegion::new()
                 .on_mouse_down({
                     let pressed = Rc::clone(&self.pressed);
-                    Callback::new(move |_ev: MouseEvent| {
+                    Callback::new(move |_ev: crate::core::event::MouseRegionEvent| {
                         *pressed.borrow_mut() = true;
                     })
                 })
@@ -1123,13 +1123,13 @@ fn mouse_region_mouse_up_fires_after_drag_threshold() {
                 .capture_click(true)
                 .on_mouse_up({
                     let released = Rc::clone(&self.released);
-                    Callback::new(move |_ev: MouseEvent| {
+                    Callback::new(move |_ev: crate::core::event::MouseRegionEvent| {
                         *released.borrow_mut() = true;
                     })
                 })
                 .on_click({
                     let clicked = Rc::clone(&self.clicked);
-                    Callback::new(move |_ev: MouseEvent| {
+                    Callback::new(move |_ev: crate::core::event::MouseRegionEvent| {
                         *clicked.borrow_mut() = true;
                     })
                 })
@@ -1254,8 +1254,14 @@ fn center_pin_slots_preserve_nested_component_state_across_mouse_rerender() {
                 .capture_click(true)
                 .cell_mask(Arc::new(mask))
                 .on_mouse_move(ctx.link().callback(|_: MouseMoveEvent| LogoProbeMsg::Move))
-                .on_mouse_down(ctx.link().callback(|_: MouseEvent| LogoProbeMsg::Down))
-                .on_click(ctx.link().callback(|_: MouseEvent| LogoProbeMsg::Click))
+                .on_mouse_down(
+                    ctx.link()
+                        .callback(|_: crate::core::event::MouseRegionEvent| LogoProbeMsg::Down),
+                )
+                .on_click(
+                    ctx.link()
+                        .callback(|_: crate::core::event::MouseRegionEvent| LogoProbeMsg::Click),
+                )
                 .child(content)
                 .into();
             region.key("logo-probe-region")
@@ -2314,7 +2320,10 @@ fn document_view_passthrough_with_on_click_keeps_links_and_bubbles_plain_clicks(
 
         fn view(&self, ctx: &Context<Self>) -> Element {
             MouseRegion::new()
-                .on_click(ctx.link().callback(|_: MouseEvent| Msg::Region))
+                .on_click(
+                    ctx.link()
+                        .callback(|_: crate::core::event::MouseRegionEvent| Msg::Region),
+                )
                 .child(
                     DocumentView::new("plain link")
                         .formatter(LinkFormatter)

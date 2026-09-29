@@ -308,7 +308,7 @@ pub struct DiffContextRange {
 
 ### `MouseEvent`
 
-Emitted by: `Button::on_click`, `List::on_click`, `MouseRegion::on_click`
+Emitted by: `Button::on_click`, `List::on_click`
 
 ```rust
 pub struct MouseEvent {
@@ -470,6 +470,23 @@ pub struct MouseMoveEvent {
     pub local_y: u16,    // Relative to MouseRegion rect
     pub target_w: u16,   // MouseRegion width
     pub target_h: u16,   // MouseRegion height
+    pub mods: KeyMods,   // Modifier keys held
+}
+```
+
+### `MouseRegionEvent`
+
+Emitted by: `MouseRegion::on_click`, `MouseRegion::on_mouse_down`, `MouseRegion::on_mouse_up`
+
+```rust
+pub struct MouseRegionEvent {
+    pub x: u16,          // Terminal-space X
+    pub y: u16,          // Terminal-space Y
+    pub local_x: u16,    // Relative to MouseRegion rect
+    pub local_y: u16,    // Relative to MouseRegion rect
+    pub target_w: u16,   // MouseRegion width
+    pub target_h: u16,   // MouseRegion height
+    pub kind: MouseKind, // Button and press/release
     pub mods: KeyMods,   // Modifier keys held
 }
 ```
@@ -947,7 +964,9 @@ Quick lookup - which callbacks does each widget support?
 
 | Callback | Payload | When |
 |----------|---------|------|
-| `on_click` | `MouseEvent` | Left-button click |
+| `on_click` | `MouseRegionEvent` | Left-button click |
+| `on_mouse_down` | `MouseRegionEvent` | Left-button press |
+| `on_mouse_up` | `MouseRegionEvent` | Left-button release over the region |
 | `on_mouse_move` | `MouseMoveEvent` | Pointer movement |
 | `on_drag_start` | `MouseDragEvent` | First left-button drag tick after threshold |
 | `on_drag` | `MouseDragEvent` | Each left-button drag tick after drag start |

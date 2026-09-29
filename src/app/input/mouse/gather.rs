@@ -353,6 +353,17 @@ fn mods_contain(required: KeyMods, actual: KeyMods) -> bool {
         && (!required.super_key || actual.super_key)
 }
 
+/// Adapt a `MouseRegion` handler to raw mouse events hitting a region laid out at `rect`.
+pub(crate) fn region_mouse_callback(
+    cb: &crate::callback::Callback<crate::core::event::MouseRegionEvent>,
+    rect: Rect,
+) -> crate::callback::Callback<crate::core::event::MouseEvent> {
+    let cb = cb.clone();
+    crate::callback::Callback::new(move |mouse| {
+        cb.emit(crate::core::event::MouseRegionEvent::at(mouse, rect));
+    })
+}
+
 /// Walk up from `start` and return the first enabled `MouseRegion` ancestor
 /// that has an `on_click` handler.
 pub(crate) fn find_ancestor_on_click(
@@ -369,7 +380,7 @@ pub(crate) fn find_ancestor_on_click(
             && region.enabled
             && let Some(cb) = &region.on_click
         {
-            return Some(cb.clone());
+            return Some(region_mouse_callback(cb, node.rect));
         }
         cur = node.parent;
     }
@@ -398,17 +409,26 @@ pub(crate) fn gather_hit_actions(
         NodeKind::DraggableTabBar(node) => node.on_click.clone(),
         NodeKind::Checkbox(checkbox) => checkbox.on_click.clone(),
         NodeKind::ProgressBar(progress) => progress.on_click.clone(),
-        NodeKind::MouseRegion(region) => region.on_click.clone(),
+        NodeKind::MouseRegion(region) => region
+            .on_click
+            .as_ref()
+            .map(|cb| region_mouse_callback(cb, node.rect)),
         _ => None,
     };
 
     let on_mouse_down = match &node.kind {
-        NodeKind::MouseRegion(region) => region.on_mouse_down.clone(),
+        NodeKind::MouseRegion(region) => region
+            .on_mouse_down
+            .as_ref()
+            .map(|cb| region_mouse_callback(cb, node.rect)),
         _ => None,
     };
 
     let on_mouse_up = match &node.kind {
-        NodeKind::MouseRegion(region) => region.on_mouse_up.clone(),
+        NodeKind::MouseRegion(region) => region
+            .on_mouse_up
+            .as_ref()
+            .map(|cb| region_mouse_callback(cb, node.rect)),
         _ => None,
     };
 
@@ -1193,7 +1213,7 @@ mod tests {
         find_ancestor_on_click, frame_tab_hit_region, gather_hit_actions, resolve_left_click_target,
     };
     use crate::callback::Callback;
-    use crate::core::event::{KeyMods, MouseEvent};
+    use crate::core::event::KeyMods;
     use crate::core::node::{NodeKind, NodeTree};
     use crate::layout::LayoutEngine;
     use crate::style::Rect;
@@ -1308,7 +1328,7 @@ mod tests {
         );
     }
 
-    fn noop_mouse_cb() -> Callback<MouseEvent> {
+    fn noop_mouse_cb<E: 'static>() -> Callback<E> {
         Callback::new(|_| {})
     }
 

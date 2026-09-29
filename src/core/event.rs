@@ -61,6 +61,44 @@ pub struct MouseMoveEvent {
     pub mods: KeyMods,
 }
 
+/// A button press, release, or click on a `MouseRegion`, with global and region-local
+/// coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct MouseRegionEvent {
+    /// Global X coordinate (column) in content-space.
+    pub x: u16,
+    /// Global Y coordinate (row) in content-space.
+    pub y: u16,
+    /// X coordinate relative to the region rect.
+    pub local_x: u16,
+    /// Y coordinate relative to the region rect.
+    pub local_y: u16,
+    /// Region width in cells.
+    pub target_w: u16,
+    /// Region height in cells.
+    pub target_h: u16,
+    /// The underlying mouse event kind (button and press/release).
+    pub kind: MouseKind,
+    /// Modifiers held.
+    pub mods: KeyMods,
+}
+
+impl MouseRegionEvent {
+    /// `mouse` as seen by a region laid out at `rect`.
+    pub(crate) fn at(mouse: MouseEvent, rect: crate::style::Rect) -> Self {
+        Self {
+            x: mouse.x,
+            y: mouse.y,
+            local_x: ((mouse.x as i32) - (rect.x as i32)).max(0) as u16,
+            local_y: ((mouse.y as i32) - (rect.y as i32)).max(0) as u16,
+            target_w: rect.w,
+            target_h: rect.h,
+            kind: mouse.kind,
+            mods: mouse.mods,
+        }
+    }
+}
+
 /// A mouse drag event with global and region-local coordinates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct MouseDragEvent {

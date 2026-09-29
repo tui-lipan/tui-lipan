@@ -1,5 +1,5 @@
 use crate::callback::Callback;
-use crate::core::event::{KeyMods, MouseDragEvent, MouseEvent, MouseMoveEvent};
+use crate::core::event::{KeyMods, MouseDragEvent, MouseMoveEvent, MouseRegionEvent};
 use crate::core::node::{NodeKind, WidgetNode};
 use crate::style::{Rect, StyleSlot, Theme, ThemeRole, VisualEffect};
 use std::sync::Arc;
@@ -9,10 +9,10 @@ use super::MouseRegion;
 /// Runtime node for pointer event routing.
 #[derive(Clone, Default)]
 pub struct MouseRegionNode {
-    pub on_click: Option<Callback<MouseEvent>>,
-    pub on_mouse_down: Option<Callback<MouseEvent>>,
+    pub on_click: Option<Callback<MouseRegionEvent>>,
+    pub on_mouse_down: Option<Callback<MouseRegionEvent>>,
     pub bubble_mouse_down: bool,
-    pub on_mouse_up: Option<Callback<MouseEvent>>,
+    pub on_mouse_up: Option<Callback<MouseRegionEvent>>,
     pub on_mouse_move: Option<Callback<MouseMoveEvent>>,
     pub on_drag_start: Option<Callback<MouseDragEvent>>,
     pub on_drag: Option<Callback<MouseDragEvent>>,

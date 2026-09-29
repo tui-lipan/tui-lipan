@@ -212,8 +212,11 @@ impl Component for OpencodeHome {
         let logo: Element = MouseRegion::new()
             .cell_mask(Arc::clone(&self.logo_mask))
             .capture_click(true)
-            .on_mouse_down(ctx.link().callback(|_: MouseEvent| Msg::LogoMouseDown))
-            .on_click(ctx.link().callback(|_: MouseEvent| Msg::LogoClick))
+            .on_mouse_down(
+                ctx.link()
+                    .callback(|_: MouseRegionEvent| Msg::LogoMouseDown),
+            )
+            .on_click(ctx.link().callback(|_: MouseRegionEvent| Msg::LogoClick))
             .on_hover_change(ctx.link().callback(Msg::LogoHover))
             .child(logo_content)
             .into();

@@ -89,7 +89,7 @@ impl MouseRegionClickDemo {
         MouseRegion::new()
             .on_click(
                 ctx.link()
-                    .callback(|e: MouseEvent| Msg::PassRegion(e.x, e.y)),
+                    .callback(|e: MouseRegionEvent| Msg::PassRegion(e.x, e.y)),
             )
             .capture_click(false)
             .hover_style(Style::new().bg(Color::indexed(236)))
@@ -128,7 +128,7 @@ impl MouseRegionClickDemo {
         MouseRegion::new()
             .on_click(
                 ctx.link()
-                    .callback(|e: MouseEvent| Msg::CaptureRegion(e.x, e.y)),
+                    .callback(|e: MouseRegionEvent| Msg::CaptureRegion(e.x, e.y)),
             )
             .capture_click(true)
             .hover_style(Style::new().bg(Color::indexed(236)))

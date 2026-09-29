@@ -2,7 +2,7 @@
 
 use crate::callback::Callback;
 use crate::core::element::{Element, ElementKind};
-use crate::core::event::MouseEvent;
+use crate::core::event::MouseRegionEvent;
 use crate::overlay::{
     DismissPolicy, OverlayLayer, OverlayPlacement, OverlayScope, PointerCapture, Portal,
 };
@@ -250,7 +250,8 @@ impl From<Modal> for Element {
 
                 if let Some(on_close) = modal.on_close {
                     let cb = on_close.clone();
-                    backdrop = backdrop.on_click(Callback::new(move |_: MouseEvent| cb.emit(())));
+                    backdrop =
+                        backdrop.on_click(Callback::new(move |_: MouseRegionEvent| cb.emit(())));
                 } else {
                     backdrop = backdrop.enabled(false);
                 }
