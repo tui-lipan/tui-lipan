@@ -10,6 +10,7 @@ use super::EffectScope;
 pub struct EffectScopeNode {
     pub effects: Vec<VisualEffect>,
     /// Whether the effects stay off image pixels; see [`EffectScope::cells_only`].
+    #[cfg_attr(not(feature = "image"), allow(dead_code))]
     pub cells_only: bool,
 }
 

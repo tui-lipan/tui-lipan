@@ -128,6 +128,7 @@ impl ColorTransform {
 
     /// This transform as an image recolor may bake it in, or `None` when its strength never
     /// settles. See [`EffectAmount::settled`].
+    #[cfg_attr(not(feature = "image"), allow(dead_code))]
     pub(crate) fn settled(self) -> Option<Self> {
         let amount = self.amount();
         if amount.is_late_bound() {

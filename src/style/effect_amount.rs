@@ -162,6 +162,7 @@ impl EffectAmount {
     /// Following a late-bound amount per frame would re-encode every image under it on every
     /// frame. A transition is recorded at its target instead - one encode for the whole fade - and
     /// a pulse is left out of image pixels entirely.
+    #[cfg_attr(not(feature = "image"), allow(dead_code))]
     pub(crate) fn settled(self) -> Option<f32> {
         (!self.is_pulse()).then(|| self.resting_value())
     }
