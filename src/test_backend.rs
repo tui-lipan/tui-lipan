@@ -4735,27 +4735,64 @@ mod tests {
         assert!(backend.core.ctx.has_focus_within_key("region"));
     }
 
-    struct FocusAwareKeys;
+    struct FocusAwareChild {
+        seen: Rc<RefCell<Vec<bool>>>,
+    }
+
+    impl Component for FocusAwareChild {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn on_key(&mut self, _key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
+            self.seen.borrow_mut().push(ctx.has_focus_within());
+            KeyUpdate::unhandled(Update::none())
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            Button::new("second").key("second")
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    struct FocusAwareKeys {
+        child_seen: Rc<RefCell<Vec<bool>>>,
+    }
 
     impl Component for FocusAwareKeys {
         type Message = ();
         type Properties = ();
-        type State = Vec<bool>;
+        type State = Vec<(bool, Option<NodeId>)>;
 
         fn create_state(&self, _props: &Self::Properties) -> Self::State {
             Vec::new()
         }
 
         fn on_key(&mut self, _key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
-            let in_second = ctx.has_focus_within_key("second");
-            ctx.state.push(in_second);
+            let in_second = ctx.has_focus_within_key("second-child");
+            let focused = ctx.focused_node_id();
+            ctx.state.push((in_second, focused));
             KeyUpdate::handled(Update::none())
         }
 
         fn view(&self, _ctx: &Context<Self>) -> Element {
+            let seen = Rc::clone(&self.child_seen);
             VStack::new()
                 .child(Button::new("first").key("first"))
-                .child(Button::new("second").key("second"))
+                .child(
+                    crate::child(
+                        move || FocusAwareChild {
+                            seen: Rc::clone(&seen),
+                        },
+                        (),
+                    )
+                    .key("second-child"),
+                )
                 .into()
         }
 
@@ -4766,17 +4803,31 @@ mod tests {
 
     #[test]
     fn key_handlers_see_focus_moved_since_the_last_render() {
-        let mut backend = TestBackend::new(FocusAwareKeys);
+        let child_seen = Rc::new(RefCell::new(Vec::new()));
+        let mut backend = TestBackend::new(FocusAwareKeys {
+            child_seen: Rc::clone(&child_seen),
+        });
         backend.render();
         let key = KeyEvent {
             code: KeyCode::Char('x'),
             mods: KeyMods::NONE,
         };
+        assert!(backend.focus_key(&Key::from("first")));
+        backend.render();
+
         assert!(backend.focus_key(&Key::from("second")));
+        let second = backend.focused();
         backend.send_key(key).expect("key should dispatch");
         assert!(backend.focus_key(&Key::from("first")));
+        let first = backend.focused();
         backend.send_key(key).expect("key should dispatch");
-        assert_eq!(*backend.state(), vec![true, false]);
+
+        assert!(first.is_some() && second.is_some() && first != second);
+        assert_eq!(*backend.state(), vec![(true, second), (false, first)]);
+        // The child may also be reached while `first` is focused; it must then see focus as gone.
+        let child_seen = child_seen.borrow();
+        assert_eq!(child_seen.first(), Some(&true));
+        assert!(child_seen[1..].iter().all(|seen| !seen));
     }
 
     struct ScrollViewTabStopRoot;

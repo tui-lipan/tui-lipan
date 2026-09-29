@@ -744,7 +744,10 @@ impl NodeChainState {
     }
 }
 
-/// Shared render-time focus information from the previous frame.
+/// Shared focus information for component queries.
+///
+/// Rebuilt after each render and refreshed before key bubbling, so `view` observes the
+/// previous frame's focus while `on_key` observes the current focus.
 #[derive(Default)]
 pub(crate) struct FocusContext {
     inner: NodeChainState,
@@ -1519,7 +1522,9 @@ impl<C: Component> Context<C> {
         self.env.hover.has_hover_within_key(self.scope, &key)
     }
 
-    /// Returns the focused node id from the previous frame, if any.
+    /// Returns the focused node id, if any.
+    ///
+    /// In `view` this is the previous frame's focus; in `on_key` it is the current focus.
     pub fn focused_node_id(&self) -> Option<NodeId> {
         self.env.note_memo_dependency(MemoDependency::Focus);
         self.env.focus.focused_node_id()
