@@ -13,7 +13,7 @@ State-style setters use [StyleSlot semantics](../styling.md#state-style-slots):
 |------|------|-------------|
 | `items` | `impl Iterator<Item = ListItem>` | List items |
 | `selected` | `Option<usize>` | Selected index; pass `None` for no current row (no selection highlight). Bare integers still work (`list.selected(0)`) |
-| `scroll_keys` | `bool` | Enable keyboard scroll keys |
+| `scroll_keys` | `bool` | Enable keyboard scroll keys; Ctrl, Alt, and Super chords are left to the app |
 | `navigation_wrap` | `bool` | Wrap Up/Down at the first and last selectable rows (default: `false`). Page/Home/End still stop at the ends. |
 | `scroll_wheel` | `bool` | Enable mouse wheel |
 | `scrollbar` | `bool` | Show scrollbar |
