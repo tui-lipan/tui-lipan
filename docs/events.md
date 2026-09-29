@@ -478,6 +478,9 @@ pub struct MouseMoveEvent {
 
 Emitted by: `MouseRegion::on_click`, `MouseRegion::on_mouse_down`, `MouseRegion::on_mouse_up`
 
+`kind` is the raw event that triggered the callback: `Down(Left)` for `on_mouse_down`,
+`Up(Left)` for `on_mouse_up` and `on_click` (a click completes on release).
+
 ```rust
 pub struct MouseRegionEvent {
     pub x: u16,          // Terminal-space X
@@ -964,7 +967,7 @@ Quick lookup - which callbacks does each widget support?
 
 | Callback | Payload | When |
 |----------|---------|------|
-| `on_click` | `MouseRegionEvent` | Left-button click |
+| `on_click` | `MouseRegionEvent` | Left-button click; `kind` is the release (`Up(Left)`) |
 | `on_mouse_down` | `MouseRegionEvent` | Left-button press |
 | `on_mouse_up` | `MouseRegionEvent` | Left-button release over the region |
 | `on_mouse_move` | `MouseMoveEvent` | Pointer movement |

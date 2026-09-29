@@ -16,15 +16,21 @@ enum Phase {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Hit {
     phase: Phase,
+    global: (u16, u16),
     local: (u16, u16),
     size: (u16, u16),
+    kind: MouseKind,
+    mods: KeyMods,
 }
 
 fn hit(phase: Phase) -> impl Fn(MouseRegionEvent) -> Hit {
     move |event| Hit {
         phase,
+        global: (event.x, event.y),
         local: (event.local_x, event.local_y),
         size: (event.target_w, event.target_h),
+        kind: event.kind,
+        mods: event.mods,
     }
 }
 
@@ -74,6 +80,8 @@ impl Component for LocalApp {
     }
 }
 
+const MODS: KeyMods = KeyMods::SHIFT;
+
 fn press_and_release(bubbled: bool, x: u16, y: u16) -> Vec<Hit> {
     let mut backend = TestBackend::new(LocalApp { bubbled });
     backend.set_viewport(Rect {
@@ -92,7 +100,7 @@ fn press_and_release(bubbled: bool, x: u16, y: u16) -> Vec<Hit> {
                 x,
                 y,
                 kind,
-                mods: KeyMods::NONE,
+                mods: MODS,
             })
             .unwrap();
     }
@@ -101,14 +109,24 @@ fn press_and_release(bubbled: bool, x: u16, y: u16) -> Vec<Hit> {
 
 #[test]
 fn press_release_and_click_report_region_local_coordinates() {
-    let at = |phase| Hit {
+    let at = |phase, kind| Hit {
         phase,
+        global: (7, 3),
         local: (3, 1),
         size: (6, 2),
+        kind,
+        mods: MODS,
     };
+    let down = MouseKind::Down(MouseButton::Left);
+    let up = MouseKind::Up(MouseButton::Left);
     assert_eq!(
         press_and_release(false, 7, 3),
-        vec![at(Phase::Down), at(Phase::Up), at(Phase::Click)]
+        vec![
+            at(Phase::Down, down),
+            at(Phase::Up, up),
+            // A click completes on release, so it carries the release event.
+            at(Phase::Click, up),
+        ]
     );
 }
 
@@ -119,8 +137,11 @@ fn bubbled_press_reports_coordinates_relative_to_the_region() {
         hits.first(),
         Some(&Hit {
             phase: Phase::Down,
+            global: (6, 2),
             local: (2, 0),
             size: (6, 1),
+            kind: MouseKind::Down(MouseButton::Left),
+            mods: MODS,
         })
     );
 }

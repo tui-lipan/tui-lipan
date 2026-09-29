@@ -630,7 +630,7 @@ Wraps any subtree to handle pointer movement, clicks, and hover visuals.
 
 | Prop | Type | Description |
 |------|------|-------------|
-| `on_click` | `Callback<MouseRegionEvent>` | Emits on left-button click (`MouseKind::Down(Left)`) |
+| `on_click` | `Callback<MouseRegionEvent>` | Left-button release after a press on the same region; `kind` is `MouseKind::Up(Left)` |
 | `on_mouse_down` / `on_mouse_up` | `Callback<MouseRegionEvent>` | Left-button press / release over the region |
 | `on_mouse_move` | `Callback<MouseMoveEvent>` | Emits on pointer movement |
 | `on_drag_start` / `on_drag` / `on_drag_end` | `Callback<MouseDragEvent>` | Left-button drag lifecycle after threshold |
