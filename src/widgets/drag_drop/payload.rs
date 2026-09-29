@@ -49,9 +49,11 @@ pub struct DragStartEvent {
     pub from_x: u16,
     /// Pointer y coordinate of the button press that began the drag.
     pub from_y: u16,
-    /// Press x relative to the drag source's left edge.
+    /// Press x relative to the drag source's left edge, captured when the button went down.
+    ///
+    /// Stays correct if the source moves (scroll, reflow) before the drag activates.
     pub from_local_x: u16,
-    /// Press y relative to the drag source's top edge.
+    /// Press y relative to the drag source's top edge, captured when the button went down.
     pub from_local_y: u16,
 }
 

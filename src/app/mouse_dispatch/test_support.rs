@@ -1099,9 +1099,7 @@ fn handle_drag_drop_move_test_backend<C: Component>(
         && let Some(cb) = &target.on_drag_over
     {
         let rect = backend.core.tree.node(id).rect;
-        let top = rect.y.max(0) as u16;
-        let local_y = y.saturating_sub(top);
-        let local_x = x.saturating_sub(rect.x.max(0) as u16);
+        let (local_x, local_y) = rect.local_point(x, y);
         cb.emit(crate::widgets::DragOverEvent {
             x,
             y,

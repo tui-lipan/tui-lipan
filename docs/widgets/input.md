@@ -92,7 +92,7 @@ Wrapper that turns a single child into a generic drag source.
 | Prop | Type | Description |
 |------|------|-------------|
 | `child` | `impl Into<Element>` | Wrapped draggable content |
-| `on_drag_start` | `Fn(DragStartEvent) -> Option<Box<dyn DragPayload>>` | Drag-start handler that returns payload; `None` aborts drag. `x`/`y` is where the threshold was exceeded, `from_x`/`from_y` where the button went down, and `from_local_x`/`from_local_y` the same point relative to the source (use it to pick what was grabbed) |
+| `on_drag_start` | `Fn(DragStartEvent) -> Option<Box<dyn DragPayload>>` | Drag-start handler that returns payload; `None` aborts drag. `x`/`y` is where the threshold was exceeded, `from_x`/`from_y` where the button went down, and `from_local_x`/`from_local_y` the same point relative to the source as it was laid out at press time (use it to pick what was grabbed) |
 | `on_drag_cancel` | `Callback<DragCancelEvent>` | Fired when drag is canceled or dropped on invalid target |
 | `on_drag_started` | `Callback<DragStartedEvent>` | Fired once when the drag activates (after the movement threshold); includes `payload` |
 | `drag_group` | `impl Into<Arc<str>>` | Optional compatibility group |
@@ -151,7 +151,7 @@ Wrapper that marks a single child as a generic drop zone.
 | `drop_slot_source_preview` | `()` | Shorthand for `drop_slot(DropSlot::SourcePreview)` |
 | `enabled` | `bool` | Enable/disable drop behavior |
 
-`on_drag_over` is emitted on **every** pointer move while a compatible drag hovers this target (not only on enter). Use `DragOverEvent::local_y` (offset from the drop target’s top edge) with a row-height estimate to place a single insertion line; `local_x`/`local_width` give the horizontal position, e.g. for nesting depth in a tree. `DropEvent` uses the same conventions.
+`on_drag_over` is emitted on **every** pointer move while a compatible drag hovers this target (not only on enter). Use `DragOverEvent::local_y` (offset from the drop target’s top edge) with a row-height estimate to place a single insertion line; `local_x`/`local_width` give the horizontal position, e.g. for nesting depth in a tree. `DropEvent` uses the same conventions. Local coordinates are measured from the target's true origin, so they stay correct when the target is scrolled partially out of a `ScrollView`.
 
 ```rust
 DropTarget::new()

@@ -202,9 +202,7 @@ impl<C: Component> AppRunner<C> {
             && let Some(cb) = &target.on_drag_over
         {
             let rect = self.core.tree.node(id).rect;
-            let top = rect.y.max(0) as u16;
-            let local_y = y.saturating_sub(top);
-            let local_x = x.saturating_sub(rect.x.max(0) as u16);
+            let (local_x, local_y) = rect.local_point(x, y);
             cb.emit(DragOverEvent {
                 x,
                 y,
