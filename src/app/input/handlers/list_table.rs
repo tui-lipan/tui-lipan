@@ -4,7 +4,9 @@ use crate::callback::KeyHandler;
 use crate::core::event::{KeyCode, KeyEvent};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
 use crate::style::Rect;
-use crate::widgets::internal::{ScrollAction, apply_scroll_action, scroll_action_from_key};
+use crate::widgets::internal::{
+    ScrollAction, apply_scroll_action, has_command_modifier, scroll_action_from_key,
+};
 use crate::widgets::list::utils::{
     calc_list_window, calc_list_window_for_items_with_indicators, visible_items_for_height,
 };
@@ -24,11 +26,14 @@ enum SeedDirection {
 ///
 /// `PageUp`/`PageDown` are handled outside [`ScrollKeymap`], so they are matched
 /// explicitly here; without that, `Down` would establish a cursor while
-/// `PageDown` stayed inert on the same list.
+/// `PageDown` stayed inert on the same list. Command-modifier chords never seed.
 fn selection_seed_direction(
     key: &KeyEvent,
     scroll_keys: crate::widgets::ScrollKeymap,
 ) -> Option<SeedDirection> {
+    if has_command_modifier(key) {
+        return None;
+    }
     match key.code {
         KeyCode::PageDown => return Some(SeedDirection::Forward),
         KeyCode::PageUp => return Some(SeedDirection::Backward),
@@ -72,8 +77,11 @@ pub(crate) fn handle_list_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) ->
 
         if let Some(cb) = on_select.as_ref() {
             if let Some(selected) = selected {
-                // Handle PageUp/PageDown (hardcoded, not in ScrollKeymap)
-                if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
+                // Handle PageUp/PageDown (hardcoded, not in ScrollKeymap). Command-modifier
+                // chords fall through to `on_key` and app shortcuts.
+                if !has_command_modifier(&key)
+                    && matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
+                {
                     let node_ref = tree.node(id);
                     let inner = node_ref.rect.inner(border_val, padding_val);
                     let visible_items =
@@ -198,8 +206,11 @@ pub(crate) fn handle_table_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent, r
 
         if let Some(cb) = on_select.as_ref() {
             if let Some(selected) = selected {
-                // Handle PageUp/PageDown (hardcoded, not in ScrollKeymap)
-                if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
+                // Handle PageUp/PageDown (hardcoded, not in ScrollKeymap). Command-modifier
+                // chords fall through to `on_key` and app shortcuts.
+                if !has_command_modifier(&key)
+                    && matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
+                {
                     let inner = rect.inner(border_val, padding_val);
                     let available_h = inner.h.saturating_sub(header_height);
                     let visible =
@@ -407,19 +418,23 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use super::handle_list_key;
-    use crate::callback::Callback;
+    use super::{handle_list_key, handle_table_key};
+    use crate::callback::{Callback, KeyHandler};
     use crate::core::event::{KeyCode, KeyEvent, KeyMods};
     use crate::core::node::{NodeKind, NodeTree};
     use crate::layout::LayoutEngine;
     use crate::style::Rect;
-    use crate::widgets::{List, ListEvent, ListItem};
+    use crate::widgets::{List, ListEvent, ListItem, Table, TableEvent, TableRow};
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent {
             code,
             mods: KeyMods::default(),
         }
+    }
+
+    fn chord(code: KeyCode, mods: KeyMods) -> KeyEvent {
+        KeyEvent { code, mods }
     }
 
     fn reconcile_list(list: List) -> (NodeTree, crate::core::node::NodeId) {
@@ -513,5 +528,210 @@ mod tests {
     fn page_keys_seed_an_empty_selection_like_arrows() {
         assert_eq!(seeded_index_for(KeyCode::PageDown), Some(1));
         assert_eq!(seeded_index_for(KeyCode::PageUp), Some(2));
+    }
+
+    fn reconcile_table(table: Table) -> (NodeTree, crate::core::node::NodeId) {
+        let root: crate::Element = table.into();
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 10,
+            },
+            None,
+        );
+        let id = tree.root;
+        (tree, id)
+    }
+
+    fn long_list(selected: Option<usize>, emitted: Rc<RefCell<Vec<usize>>>) -> List {
+        List::new()
+            .items((0..30).map(|i| ListItem::new(format!("item {i}"))))
+            .selected(selected)
+            .on_select(Callback::new(move |event: ListEvent| {
+                emitted.borrow_mut().push(event.index);
+            }))
+    }
+
+    /// Page keys bypass `ScrollKeymap`, so they need their own command-modifier guard.
+    #[test]
+    fn modified_page_keys_leave_list_selection_alone() {
+        for mods in [KeyMods::CTRL, KeyMods::ALT, KeyMods::SUPER] {
+            for code in [KeyCode::PageDown, KeyCode::PageUp] {
+                let emitted = Rc::new(RefCell::new(Vec::new()));
+                let (mut tree, id) = reconcile_list(long_list(Some(10), emitted.clone()));
+                assert!(
+                    !handle_list_key(&mut tree, id, chord(code, mods)),
+                    "{mods:?}+{code:?} should not be consumed by a selected List"
+                );
+                assert!(
+                    emitted.borrow().is_empty(),
+                    "{mods:?}+{code:?} moved the selection"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn modified_page_keys_do_not_seed_an_empty_list_selection() {
+        for mods in [KeyMods::CTRL, KeyMods::ALT, KeyMods::SUPER] {
+            let emitted = Rc::new(RefCell::new(Vec::new()));
+            let (mut tree, id) = reconcile_list(long_list(None, emitted.clone()));
+            assert!(!handle_list_key(
+                &mut tree,
+                id,
+                chord(KeyCode::PageDown, mods)
+            ));
+            assert!(
+                emitted.borrow().is_empty(),
+                "{mods:?}+PageDown seeded a selection"
+            );
+        }
+    }
+
+    #[test]
+    fn modified_page_keys_still_reach_list_on_key() {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen_cb = seen.clone();
+        let emitted = Rc::new(RefCell::new(Vec::new()));
+        let list = long_list(Some(10), emitted.clone()).on_key(KeyHandler::new(move |key| {
+            seen_cb.borrow_mut().push(key);
+            true
+        }));
+        let (mut tree, id) = reconcile_list(list);
+
+        let ctrl_page_down = chord(KeyCode::PageDown, KeyMods::CTRL);
+        assert!(handle_list_key(&mut tree, id, ctrl_page_down));
+        assert_eq!(*seen.borrow(), vec![ctrl_page_down]);
+        assert!(emitted.borrow().is_empty());
+    }
+
+    #[test]
+    fn shift_page_down_still_pages_the_list() {
+        let emitted = Rc::new(RefCell::new(Vec::new()));
+        let (mut tree, id) = reconcile_list(long_list(Some(10), emitted.clone()));
+        assert!(handle_list_key(
+            &mut tree,
+            id,
+            chord(KeyCode::PageDown, KeyMods::SHIFT)
+        ));
+        assert!(matches!(emitted.borrow().as_slice(), [next] if *next > 10));
+    }
+
+    fn table_selection_after(selected: Option<usize>, key: KeyEvent) -> (bool, Vec<usize>) {
+        let emitted = Rc::new(RefCell::new(Vec::new()));
+        let emitted_cb = emitted.clone();
+        let table = Table::new()
+            .rows((0..30).map(|i| TableRow::new([format!("row {i}")])))
+            .selected(selected)
+            .on_select(Callback::new(move |event: TableEvent| {
+                emitted_cb.borrow_mut().push(event.index);
+            }));
+        let (mut tree, id) = reconcile_table(table);
+        let rect = tree.node(id).rect;
+        let handled = handle_table_key(&mut tree, id, key, rect);
+        let emitted = emitted.borrow().clone();
+        (handled, emitted)
+    }
+
+    #[test]
+    fn modified_page_keys_leave_table_selection_alone() {
+        for mods in [KeyMods::CTRL, KeyMods::ALT, KeyMods::SUPER] {
+            for code in [KeyCode::PageUp, KeyCode::PageDown] {
+                for selected in [Some(10), None] {
+                    let (handled, emitted) = table_selection_after(selected, chord(code, mods));
+                    assert!(
+                        !handled,
+                        "{mods:?}+{code:?} consumed by Table ({selected:?})"
+                    );
+                    assert!(
+                        emitted.is_empty(),
+                        "{mods:?}+{code:?} moved Table ({selected:?})"
+                    );
+                }
+            }
+        }
+        let (handled, emitted) = table_selection_after(Some(10), key(KeyCode::PageUp));
+        assert!(handled);
+        assert!(matches!(emitted.as_slice(), [next] if *next < 10));
+    }
+
+    struct FocusedListApp {
+        emitted: Rc<RefCell<Vec<usize>>>,
+    }
+
+    impl crate::core::component::Component for FocusedListApp {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(
+            &mut self,
+            _msg: Self::Message,
+            _ctx: &mut crate::core::component::Context<Self>,
+        ) -> crate::core::component::Update {
+            crate::core::component::Update::none()
+        }
+
+        fn view(&self, _ctx: &crate::core::component::Context<Self>) -> crate::Element {
+            crate::Element::from(long_list(Some(10), self.emitted.clone())).key("list")
+        }
+    }
+
+    /// The contract end to end: under `WidgetFirst`, a focused List must not swallow an
+    /// app shortcut bound to a modified page key.
+    #[test]
+    fn app_command_on_ctrl_page_down_fires_over_focused_list() {
+        use std::cell::Cell;
+        use std::str::FromStr;
+
+        use crate::{App, CommandEntry, KeyBinding, KeyDispatchPolicy, TestBackend};
+
+        let emitted = Rc::new(RefCell::new(Vec::new()));
+        let command_hit = Rc::new(Cell::new(false));
+        let app = App::new()
+            .mouse(false)
+            .key_dispatch_policy(KeyDispatchPolicy::WidgetFirst);
+        let mut backend = TestBackend::new_with_app(
+            app,
+            FocusedListApp {
+                emitted: emitted.clone(),
+            },
+            (),
+        );
+        backend.core.ctx.command_registry().register(
+            CommandEntry::builder("app.next_tab")
+                .shortcut(KeyBinding::from_str("ctrl-pagedown").expect("binding"))
+                .handler(Callback::new({
+                    let command_hit = command_hit.clone();
+                    move |_| command_hit.set(true)
+                }))
+                .build(),
+        );
+        let list_id = backend
+            .core
+            .tree
+            .iter()
+            .find(|node| node.key.as_ref().is_some_and(|key| key.as_ref() == "list"))
+            .map(|node| node.id)
+            .expect("list node");
+        backend.set_focused(list_id);
+
+        assert!(
+            backend
+                .send_key(chord(KeyCode::PageDown, KeyMods::CTRL))
+                .expect("send_key succeeds")
+        );
+        assert!(
+            command_hit.get(),
+            "Ctrl+PageDown should reach the app command"
+        );
+        assert!(emitted.borrow().is_empty(), "the List should not page");
     }
 }

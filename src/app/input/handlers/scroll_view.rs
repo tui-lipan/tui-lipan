@@ -2,7 +2,9 @@
 
 use crate::core::event::{KeyCode, KeyEvent};
 use crate::core::node::{NodeId, NodeKind, NodeTree};
-use crate::widgets::internal::{ScrollAction, apply_scroll_action, scroll_action_from_key};
+use crate::widgets::internal::{
+    ScrollAction, apply_scroll_action, has_command_modifier, scroll_action_from_key,
+};
 use crate::widgets::{
     ScrollEvent, ScrollMetrics, ScrollWheelBehavior, calc_scroll_view_window,
     normalize_input_offset,
@@ -89,6 +91,10 @@ fn scroll_action_delta(action: crate::widgets::internal::ScrollAction) -> isize 
 /// `handle_scroll` does for mouse wheel) so that a layout-only re-reconcile
 /// picks up the change without a full view() rebuild.
 pub(crate) fn handle_key(tree: &mut NodeTree, node_id: NodeId, key: &KeyEvent) -> bool {
+    // Every key this handler consumes scrolls; command-modifier chords belong to the app.
+    if has_command_modifier(key) {
+        return false;
+    }
     let horizontal_action = {
         let node = tree.node(node_id);
         let NodeKind::ScrollView(sv) = &node.kind else {
@@ -455,6 +461,38 @@ mod tests {
             panic!("expected scroll view");
         };
         scroll.offset
+    }
+
+    #[test]
+    fn command_modifier_chords_never_scroll() {
+        let root = make_scroll_view();
+        let mut tree = reconcile_scroll_view(&root);
+        let root_id = tree.root;
+        assert!(handle_key(&mut tree, root_id, &key(KeyCode::PageDown)));
+        let offset = scroll_offset(&tree);
+        assert!(offset > 0);
+
+        for mods in [KeyMods::CTRL, KeyMods::ALT, KeyMods::SUPER] {
+            for code in [
+                KeyCode::PageDown,
+                KeyCode::PageUp,
+                KeyCode::Down,
+                KeyCode::Home,
+            ] {
+                assert!(
+                    !handle_key(&mut tree, root_id, &KeyEvent { code, mods }),
+                    "{mods:?}+{code:?} should be left to the app"
+                );
+                assert_eq!(scroll_offset(&tree), offset, "{mods:?}+{code:?} scrolled");
+            }
+        }
+
+        let shift_page_down = KeyEvent {
+            code: KeyCode::PageDown,
+            mods: KeyMods::SHIFT,
+        };
+        assert!(handle_key(&mut tree, root_id, &shift_page_down));
+        assert!(scroll_offset(&tree) > offset);
     }
 
     #[test]

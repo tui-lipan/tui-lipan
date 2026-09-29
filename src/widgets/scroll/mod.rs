@@ -5,8 +5,8 @@ mod offset;
 mod smooth;
 
 pub(crate) use action::{
-    ScrollAction, apply_scroll_action, apply_scroll_request, scroll_action_from_key,
-    scroll_action_from_mouse_n, scroll_metrics,
+    ScrollAction, apply_scroll_action, apply_scroll_request, has_command_modifier,
+    scroll_action_from_key, scroll_action_from_mouse_n, scroll_metrics,
 };
 pub use action::{ScrollClip, ScrollKeymap, ScrollMetrics, ScrollRequest};
 pub use axis::ScrollAxis;

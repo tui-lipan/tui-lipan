@@ -255,12 +255,19 @@ pub(crate) fn scroll_metrics(len: usize, visible: usize, _offset: usize) -> Scro
     }
 }
 
+/// Whether `key` carries a Ctrl, Alt, or Super modifier.
+///
+/// Such chords are never built-in scroll or navigation keys, so they reach app
+/// shortcuts instead of moving the viewport. Shift alone is not a command modifier.
+pub(crate) fn has_command_modifier(key: &KeyEvent) -> bool {
+    key.mods.ctrl || key.mods.alt || key.mods.super_key
+}
+
 /// The scroll action bound to `key`, if any.
 ///
-/// Chords with Ctrl, Alt, or Super are never scroll keys, so they reach app shortcuts
-/// instead of moving the viewport.
+/// Chords with a [command modifier](has_command_modifier) are never scroll keys.
 pub(crate) fn scroll_action_from_key(key: &KeyEvent, keymap: ScrollKeymap) -> Option<ScrollAction> {
-    if key.mods.ctrl || key.mods.alt || key.mods.super_key {
+    if has_command_modifier(key) {
         return None;
     }
     match key.code {

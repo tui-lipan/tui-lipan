@@ -75,8 +75,8 @@ pub(crate) use super::pan_view::{
 };
 pub(crate) use super::progress::{ProgressNode, measure_progress_bar, reconcile_progress_bar};
 pub(crate) use super::scroll::{
-    ScrollAction, apply_scroll_action, scroll_action_from_key, scroll_action_from_mouse_n,
-    scroll_metrics,
+    ScrollAction, apply_scroll_action, has_command_modifier, scroll_action_from_key,
+    scroll_action_from_mouse_n, scroll_metrics,
 };
 pub(crate) use super::scroll_view::{
     RememberedScrollAnchor, ScrollViewNode, ScrollViewReconcile, measure_scroll_view,
