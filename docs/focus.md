@@ -82,8 +82,9 @@ The default framework bindings are:
 | `Shift+Tab` | Move to the previous tab stop |
 | Pointer press | Focus the eligible target before dispatching its interaction |
 
-With no current focus, next traversal selects the first tab stop and previous traversal selects
-the last. `Manual` leaves global Tab/Shift+Tab unhandled so widget, command, or component layers
+Tab stops are visited in tree order: a depth-first walk of the element tree as rendered, so
+reordering keyed children reorders traversal with them. With no current focus, next traversal
+selects the first tab stop and previous traversal selects the last. `Manual` leaves global Tab/Shift+Tab unhandled so widget, command, or component layers
 can use those keys. A `TextArea` may consume Tab for insertion before framework traversal. Its
 literal-tab display width is configured with `.tab_display_width(...)`, not `.tab_stop(...)`.
 

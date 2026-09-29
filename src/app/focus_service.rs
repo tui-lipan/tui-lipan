@@ -291,7 +291,7 @@ pub(crate) fn overlay_step(
     }
 
     let focusables = overlay_ring(tree, overlay.id);
-    let Some(target) = focus::ring_step(&focusables, *refs.focused, direction) else {
+    let Some(target) = focus::ring_step(tree, &focusables, *refs.focused, direction) else {
         return true;
     };
     refs.set_focus(tree, target);

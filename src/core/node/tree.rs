@@ -285,7 +285,7 @@ pub(crate) struct NodeTree {
     animated_image_ids: Vec<NodeId>,
     epoch: u32,
     session_now: Instant,
-    /// Cached sorted focusable node list, lazily populated on first
+    /// Cached tree-ordered focusable node list, lazily populated on first
     /// `focusables()` call per epoch and cleared in `begin_epoch()`.
     cached_focusables: RefCell<Option<Vec<NodeId>>>,
     /// Last frame's "scrolled to bottom" for keyed `ScrollView`s. Survives node-id
@@ -973,6 +973,45 @@ impl NodeTree {
         false
     }
 
+    /// Pre-order (document) order of two nodes: ancestors precede descendants, and siblings
+    /// follow their parent's child order.
+    ///
+    /// Node ids are arena slots and get recycled across reconciliations, so their numeric
+    /// order says nothing about where nodes sit in the tree.
+    pub(crate) fn cmp_tree_order(&self, a: NodeId, b: NodeId) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        if a == b {
+            return Ordering::Equal;
+        }
+        let path = |id: NodeId| {
+            let mut path = vec![id];
+            let mut current = self.node(id).parent;
+            while let Some(parent) = current {
+                path.push(parent);
+                current = self.node(parent).parent;
+            }
+            path.reverse();
+            path
+        };
+        let (path_a, path_b) = (path(a), path(b));
+        let shared = path_a
+            .iter()
+            .zip(&path_b)
+            .take_while(|(x, y)| x == y)
+            .count();
+        match (path_a.get(shared), path_b.get(shared)) {
+            (None, _) => Ordering::Less,
+            (_, None) => Ordering::Greater,
+            (Some(&branch_a), Some(&branch_b)) if shared > 0 => {
+                let siblings = &self.node(path_a[shared - 1]).children;
+                let position = |id| siblings.iter().position(|&child| child == id);
+                position(branch_a).cmp(&position(branch_b))
+            }
+            // Disjoint roots (detached subtrees): no tree position to compare.
+            (Some(&branch_a), Some(&branch_b)) => branch_a.index().cmp(&branch_b.index()),
+        }
+    }
+
     /// Whether pointer focus acquisition is enabled on `id` and all of its ancestors.
     pub(crate) fn allows_pointer_focus(&self, id: NodeId) -> bool {
         if !self.is_valid(id) {
@@ -1002,7 +1041,6 @@ impl NodeTree {
         }
         let mut out = Vec::new();
         self.collect_focusables(root, &mut out, CollectRoot::Yes, ScopeMode::Opaque);
-        out.sort_by_key(|id| id.index());
         out
     }
 
@@ -1018,11 +1056,10 @@ impl NodeTree {
         }
         let mut out = Vec::new();
         self.collect_focusables(root, &mut out, CollectRoot::Yes, ScopeMode::Transparent);
-        out.sort_by_key(|id| id.index());
         out
     }
 
-    /// Collect focusable nodes in traversal order, sorted by definition order.
+    /// Collect focusable nodes in tree (pre-order) order.
     ///
     /// Nested `FocusScope::Contain` panes are opaque: their contents are *not*
     /// included, so Tab can never tunnel into a pane it cannot Tab back out of.
@@ -1040,7 +1077,6 @@ impl NodeTree {
         }
         let mut out = Vec::new();
         self.collect_focusables(self.root, &mut out, CollectRoot::Yes, ScopeMode::Opaque);
-        out.sort_by_key(|id| id.index());
         *self.cached_focusables.borrow_mut() = Some(out.clone());
         out
     }
@@ -1061,7 +1097,6 @@ impl NodeTree {
             CollectRoot::Yes,
             ScopeMode::Transparent,
         );
-        out.sort_by_key(|id| id.index());
         out
     }
 

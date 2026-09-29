@@ -171,28 +171,31 @@ pub(crate) enum FocusDirection {
     Prev,
 }
 
-/// The stop one step in `direction` from `focused`, in a ring sorted by node id.
+/// The stop one step in `direction` from `focused`, in a ring listed in tree order.
 ///
 /// `None` only when the ring is empty. `focused` need not be a member: its
-/// position is found by insertion point rather than by membership. That matters
+/// position is found by tree-order insertion point rather than by membership. That matters
 /// because focus is granted on `is_focusable()` while rings are built from
 /// `is_tab_stop()`: a widget focused by click or `request_focus` is routinely
 /// *not* in the ring (`.tab_stop(false)`, or an `Exclude`/`Contain` escape
 /// hatch). Stepping from where it would sit keeps Tab moving to the true
 /// neighbour instead of jumping back to the start of the ring.
 pub(crate) fn ring_step(
+    tree: &NodeTree,
     focusables: &[NodeId],
     focused: Option<NodeId>,
     direction: FocusDirection,
 ) -> Option<NodeId> {
+    use std::cmp::Ordering;
     let (&first, &last) = (focusables.first()?, focusables.last()?);
+    let order = |id: &NodeId, curr: NodeId| tree.cmp_tree_order(*id, curr);
     Some(match (focused, direction) {
         (Some(curr), FocusDirection::Next) => {
-            let at = focusables.partition_point(|id| id.index() <= curr.index());
+            let at = focusables.partition_point(|id| order(id, curr) != Ordering::Greater);
             focusables.get(at).copied().unwrap_or(first)
         }
         (Some(curr), FocusDirection::Prev) => {
-            let at = focusables.partition_point(|id| id.index() < curr.index());
+            let at = focusables.partition_point(|id| order(id, curr) == Ordering::Less);
             at.checked_sub(1).map_or(last, |i| focusables[i])
         }
         (None, FocusDirection::Next) => first,
@@ -209,7 +212,7 @@ pub(crate) fn step(
     direction: FocusDirection,
 ) {
     let focusables = traversal_focusables(tree, *focused);
-    let Some(target) = ring_step(&focusables, *focused, direction) else {
+    let Some(target) = ring_step(tree, &focusables, *focused, direction) else {
         return;
     };
 
@@ -312,10 +315,8 @@ fn find_first_focusable_descendant_impl(
 
 /// The default focus target for [`FocusPolicy::Auto`].
 ///
-/// Prefers the first tab stop in node order so that startup focus and the first
-/// Tab target agree - the ring is sorted by node id, so a child-order walk here
-/// would pick a different node whenever children were reordered relative to
-/// allocation. `Contain` panes are transparent to this search: picking a default
+/// Prefers the first tab stop in the ring so that startup focus and the first
+/// Tab target agree. `Contain` panes are transparent to this search: picking a default
 /// is not traversal, and an app that is entirely one pane must still get focus.
 fn first_focusable(tree: &NodeTree) -> Option<NodeId> {
     if !tree.is_valid(tree.root) {
@@ -344,7 +345,9 @@ fn first_focusable(tree: &NodeTree) -> Option<NodeId> {
                 .filter(|child| tree.is_valid(*child)),
         );
     }
-    candidates.into_iter().min_by_key(|id| id.index())
+    candidates
+        .into_iter()
+        .min_by(|a, b| tree.cmp_tree_order(*a, *b))
 }
 
 #[cfg(test)]
@@ -562,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn containing_scope_uses_global_node_order_after_child_reorder() {
+    fn containing_scope_follows_tree_order_after_child_reorder() {
         let (mut tree, root, _) = build_tree_with_focusable_children(0);
         let scope = alloc_scope(&mut tree, Some(root), FocusScope::Contain);
         let first_allocated = alloc_node(&mut tree, Some(scope), true);
@@ -576,7 +579,7 @@ mod tests {
         let mut tag = None;
         focus_next(&tree, &mut focused, &mut key, &mut tag);
 
-        assert_eq!(focused, Some(first_allocated));
+        assert_eq!(focused, Some(second_allocated));
     }
 
     // ---------------------------------------------------------------
@@ -840,6 +843,47 @@ mod tests {
     }
 
     #[test]
+    fn tab_follows_tree_order_when_node_ids_do_not() {
+        // Regression: the ring was searched by node id, but ids are recycled arena
+        // slots. After reconciliation reuses freed slots, a later sibling can hold a
+        // lower id, and Tab walked the ring backwards.
+        let (mut tree, root, _) = build_tree_with_focusable_children(0);
+        let high = alloc_node(&mut tree, Some(root), true);
+        let mid = alloc_node(&mut tree, Some(root), true);
+        let low = alloc_node(&mut tree, Some(root), true);
+        assert!(
+            low.index() > high.index(),
+            "ids allocate in ascending order"
+        );
+        tree.node_mut(root).children = vec![low, mid, high];
+        assert_eq!(tree.focusables(), vec![low, mid, high]);
+
+        let mut focused = Some(low);
+        let (mut key, mut tag) = (None, None);
+        let mut visited = Vec::new();
+        for _ in 0..3 {
+            step(
+                &tree,
+                &mut focused,
+                &mut key,
+                &mut tag,
+                FocusDirection::Next,
+            );
+            visited.push(focused.unwrap());
+        }
+        assert_eq!(visited, vec![mid, high, low]);
+
+        step(
+            &tree,
+            &mut focused,
+            &mut key,
+            &mut tag,
+            FocusDirection::Prev,
+        );
+        assert_eq!(focused, Some(high));
+    }
+
+    #[test]
     fn tab_steps_past_a_focused_node_that_is_not_a_tab_stop() {
         // Regression: focus is granted on `is_focusable()` but the ring is built
         // from `is_tab_stop()`, so a clicked `.tab_stop(false)` widget is not in the
@@ -940,20 +984,20 @@ mod tests {
 
     #[test]
     fn auto_fallback_agrees_with_the_first_tab_target() {
-        // Regression: the fallback walked children while the ring sorts by node id,
-        // so after a child reorder startup focus and the first Tab target diverged.
+        // Regression: startup focus and the first Tab target must agree, and both
+        // follow tree order even when children were reordered relative to allocation.
         let (mut tree, root, _) = build_tree_with_focusable_children(0);
         let first_allocated = alloc_node(&mut tree, Some(root), true);
         let second_allocated = alloc_node(&mut tree, Some(root), true);
         tree.node_mut(root).children = vec![second_allocated, first_allocated];
 
-        assert_eq!(first_focusable(&tree), Some(first_allocated));
+        assert_eq!(first_focusable(&tree), Some(second_allocated));
         assert_eq!(first_focusable(&tree), tree.focusables().first().copied());
 
         let mut focused = Some(NodeId::INVALID);
         let (mut key, mut tag) = (None, None);
         restore_focus(&tree, &mut focused, &mut key, &mut tag, FocusPolicy::Auto);
-        assert_eq!(focused, Some(first_allocated));
+        assert_eq!(focused, Some(second_allocated));
     }
 
     #[test]
