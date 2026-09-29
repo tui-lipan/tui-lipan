@@ -71,6 +71,10 @@ impl Animated {
     }
 
     /// Set target opacity (`0.0` transparent, `1.0` fully visible).
+    ///
+    /// Without [`Animated::opacity_target`], a translucent wrapper composites over what is
+    /// rendered beneath it. Backgrounds blend, and glyphs crossfade: text beneath shows through
+    /// the wrapper's blank cells, and where both draw a glyph the stronger one is shown.
     pub fn opacity(mut self, opacity: f32) -> Self {
         self.opacity = opacity.clamp(0.0, 1.0);
         self

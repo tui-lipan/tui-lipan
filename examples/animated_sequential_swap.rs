@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::time::Duration;
 
 use tui_lipan::prelude::*;
@@ -17,6 +18,9 @@ struct State {
     frame_phase: SwapPhase,
     target_slot: usize,
     target_phase: SwapPhase,
+    crossfade_slot: usize,
+    /// The slot the crossfade last started for, so a change restarts it from the old page.
+    crossfade_seen: Cell<Option<usize>>,
 }
 
 #[derive(Clone, Debug)]
@@ -25,6 +29,7 @@ enum Msg {
     NextFgOnly,
     NextFrame,
     NextOpacityTarget,
+    NextCrossfade,
     OpacityEndFgBg,
     OpacityEndFgOnly,
     OpacityEndFrame,
@@ -38,6 +43,37 @@ const TRANSITION: TransitionConfig = TransitionConfig {
     duration: Duration::from_millis(240),
     easing: Easing::EaseInOutCubic,
 };
+
+const INSTANT: TransitionConfig = TransitionConfig {
+    duration: Duration::ZERO,
+    easing: Easing::Linear,
+};
+
+const CROSSFADE: TransitionConfig = TransitionConfig {
+    duration: Duration::from_millis(480),
+    easing: Easing::EaseInOutCubic,
+};
+
+const CROSSFADE_PAGES: &[(Color, Color, &str, &str)] = &[
+    (
+        Color::Rgb(255, 214, 165),
+        Color::Rgb(70, 36, 36),
+        "Launcher",
+        "Pick a session, or press n to start a new one.",
+    ),
+    (
+        Color::Rgb(165, 243, 252),
+        Color::Rgb(18, 52, 64),
+        "Session",
+        "~/src $ cargo run",
+    ),
+    (
+        Color::Rgb(210, 200, 255),
+        Color::Rgb(40, 30, 70),
+        "Another session with a longer title",
+        "Glyphs dissolve cell by cell while colors blend.",
+    ),
+];
 
 const FG_BG_PAGES: &[(Color, Color, &str, &str)] = &[
     (
@@ -126,6 +162,8 @@ impl Component for Demo {
             frame_phase: SwapPhase::Idle,
             target_slot: 0,
             target_phase: SwapPhase::Idle,
+            crossfade_slot: 0,
+            crossfade_seen: Cell::new(None),
         }
     }
 
@@ -150,6 +188,9 @@ impl Component for Demo {
                 if ctx.state.target_phase == SwapPhase::Idle {
                     ctx.state.target_phase = SwapPhase::FadingOut;
                 }
+            }
+            Msg::NextCrossfade => {
+                ctx.state.crossfade_slot = (ctx.state.crossfade_slot + 1) % CROSSFADE_PAGES.len();
             }
             Msg::OpacityEndFgBg => {
                 if ctx.state.fg_bg_phase == SwapPhase::FadingOut {
@@ -187,6 +228,7 @@ impl Component for Demo {
             KeyCode::Char('2') => Some(Msg::NextFgOnly),
             KeyCode::Char('3') => Some(Msg::NextFrame),
             KeyCode::Char('4') => Some(Msg::NextOpacityTarget),
+            KeyCode::Char('5') => Some(Msg::NextCrossfade),
             KeyCode::Char('q') | KeyCode::Esc => Some(Msg::Quit),
             _ => None,
         };
@@ -294,9 +336,13 @@ impl Component for Demo {
                 .on_opacity_transition_end(ctx.link().callback(|_| Msg::OpacityEndTarget)),
             );
 
+        let crossfade_block = crossfade(ctx);
+
         Frame::new()
             .header_left("Sequential Animated swap")
-            .footer_left("[1] fg+bg  [2] fg only  [3] frame+fg  [4] opacity target  [q] quit")
+            .footer_left(
+                "[1] fg+bg  [2] fg only  [3] frame+fg  [4] opacity target  [5] crossfade  [q] quit",
+            )
             .border(true)
             .padding(1)
             .child(
@@ -304,17 +350,60 @@ impl Component for Demo {
                     .gap(1)
                     .child(
                         Text::new(
-                            "Fade out, swap child in on_opacity_transition_end, then fade in - one Animated each lane.",
+                            "[1]-[4]: fade out, swap in on_opacity_transition_end, fade in. [5]: crossfade both at once.",
                         )
                         .style(Style::new().dim()),
                     )
                     .child(fg_bg_block)
                     .child(fg_only_block)
                     .child(frame_block)
-                    .child(target_block),
+                    .child(target_block)
+                    .child(crossfade_block),
             )
             .into()
     }
+}
+
+/// Both pages on screen at once, rather than one after the other: the outgoing page stays whole
+/// beneath while the incoming one fades in over it.
+///
+/// An `Animated` with an opacity below 1 and no `opacity_target` composites over whatever is
+/// painted beneath it. Colors blend, and where the two pages draw different glyphs the stronger
+/// one is shown, so the old text fades out as the new text fades in. `auto_exit` keeps the removed
+/// page painted, and `keep_opacity` keeps it whole until the new one has covered it.
+fn crossfade(ctx: &Context<Demo>) -> Element {
+    const KEY: &str = "crossfade-reveal";
+    let slot = ctx.state.crossfade_slot;
+    // A new page starts transparent: a newly mounted `Animated` takes the opacity it is given at
+    // once, so the fade is driven here and handed to it every frame. The first page just appears.
+    if ctx
+        .state
+        .crossfade_seen
+        .replace(Some(slot))
+        .is_some_and(|seen| seen != slot)
+    {
+        ctx.transition(KEY, 0.0, INSTANT);
+    }
+    let opacity = ctx.transition(KEY, 1.0, CROSSFADE);
+    let (fg, bg, title, body) = CROSSFADE_PAGES[slot];
+    let page = Frame::new()
+        .header_left(title)
+        .border(true)
+        // Each page covers the last: replace its title rather than keep it as a neighbour's.
+        .border_merge_mode(BorderMergeMode::Replace)
+        .style(Style::new().bg(bg))
+        .child(Text::new(body).style(Style::new().fg(fg)));
+    // Alone in its stack, so the retained outgoing page is drawn beneath the live one.
+    ZStack::new()
+        .child(
+            Animated::new(page)
+                .opacity(opacity)
+                .transition(INSTANT)
+                .auto_exit(ExitAnimation::new(CROSSFADE.duration.as_millis() as u64).keep_opacity())
+                .key(format!("crossfade-{slot}")),
+        )
+        .min_height(Length::Px(3))
+        .max_height(Length::Px(3))
 }
 
 fn main() -> Result<()> {
