@@ -1101,10 +1101,13 @@ fn handle_drag_drop_move_test_backend<C: Component>(
         let rect = backend.core.tree.node(id).rect;
         let top = rect.y.max(0) as u16;
         let local_y = y.saturating_sub(top);
+        let local_x = x.saturating_sub(rect.x.max(0) as u16);
         cb.emit(crate::widgets::DragOverEvent {
             x,
             y,
+            local_x,
             local_y,
+            local_width: rect.w,
             local_height: rect.h,
             payload: drag_state.payload.clone(),
         });

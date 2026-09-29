@@ -195,3 +195,125 @@ fn leaving_target_emits_leave() {
     mouse(&mut b, MouseKind::Up(MouseButton::Left), 2, 5);
     assert_eq!(b.state().events.last(), Some(&Ev::Cancel { id: 7 }));
 }
+
+/// A drop target offset from the left edge, fed by a source whose drag
+/// activates away from the press.
+struct OffsetApp {
+    starts: std::sync::Arc<std::sync::Mutex<Vec<DragStartEvent>>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Local {
+    local_x: u16,
+    local_y: u16,
+    local_width: u16,
+    local_height: u16,
+}
+
+impl Component for OffsetApp {
+    type Message = Local;
+    type Properties = ();
+    type State = Vec<Local>;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        Vec::new()
+    }
+
+    fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+        ctx.state.push(msg);
+        Update::full()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let starts = self.starts.clone();
+        let source = DragSource::new()
+            .child(Text::new("item"))
+            .threshold(3)
+            .on_drag_start(move |ev| {
+                starts.lock().unwrap().push(ev);
+                Some(Box::new(ItemPayload { id: 1 }) as Box<dyn DragPayload>)
+            });
+        let target = DropTarget::new()
+            .child(Text::new("t").width(Length::Px(10)).height(Length::Px(2)))
+            .on_drag_over(ctx.link().callback(|ev: DragOverEvent| Local {
+                local_x: ev.local_x,
+                local_y: ev.local_y,
+                local_width: ev.local_width,
+                local_height: ev.local_height,
+            }))
+            .on_drop(ctx.link().callback(|ev: DropEvent| Local {
+                local_x: ev.local_x,
+                local_y: ev.local_y,
+                local_width: ev.local_width,
+                local_height: ev.local_height,
+            }));
+        VStack::new()
+            .child(
+                HStack::new()
+                    .height(Length::Px(1))
+                    .child(Text::new("").width(Length::Px(2)))
+                    .child(source),
+            )
+            .child(
+                HStack::new()
+                    .align(Align::Start)
+                    .child(Text::new("pad").width(Length::Px(5)))
+                    .child(target),
+            )
+            .into()
+    }
+}
+
+#[test]
+fn drag_events_report_press_origin_and_target_local_x() {
+    let starts = std::sync::Arc::default();
+    let mut b = TestBackend::new(OffsetApp {
+        starts: std::sync::Arc::clone(&starts),
+    });
+    b.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 10,
+    });
+    b.render();
+
+    // The source starts at column 2; the target spans columns 5..15 and rows 1..3.
+    let down = MouseKind::Down(MouseButton::Left);
+    let drag = MouseKind::Drag(MouseButton::Left);
+    mouse_offset(&mut b, down, 3, 0);
+    mouse_offset(&mut b, drag, 8, 2);
+    mouse_offset(&mut b, drag, 9, 2);
+    mouse_offset(&mut b, MouseKind::Up(MouseButton::Left), 14, 1);
+
+    assert_eq!(
+        *starts.lock().unwrap(),
+        vec![DragStartEvent {
+            x: 8,
+            y: 2,
+            from_x: 3,
+            from_y: 0,
+            from_local_x: 1,
+            from_local_y: 0,
+        }]
+    );
+    let over = |local_x, local_y| Local {
+        local_x,
+        local_y,
+        local_width: 10,
+        local_height: 2,
+    };
+    assert_eq!(b.state().last(), Some(&over(9, 0)), "drop");
+    assert!(b.state().contains(&over(4, 1)), "drag over");
+}
+
+fn mouse_offset(backend: &mut TestBackend<OffsetApp>, kind: MouseKind, x: u16, y: u16) {
+    backend
+        .send_mouse(MouseEvent {
+            x,
+            y,
+            kind,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+}

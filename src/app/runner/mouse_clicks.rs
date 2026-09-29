@@ -1397,6 +1397,7 @@ impl<C: Component> AppRunner<C> {
                         let rect = self.core.tree.node(target_id).rect;
                         let top = rect.y.max(0) as u16;
                         let local_y = y.saturating_sub(top);
+                        let local_x = x.saturating_sub(rect.x.max(0) as u16);
                         if let NodeKind::DropTarget(target) =
                             &mut self.core.tree.node_mut(target_id).kind
                         {
@@ -1405,7 +1406,9 @@ impl<C: Component> AppRunner<C> {
                                 cb.emit(crate::widgets::DropEvent {
                                     x,
                                     y,
+                                    local_x,
                                     local_y,
+                                    local_width: rect.w,
                                     local_height: rect.h,
                                     payload: payload.clone(),
                                 });

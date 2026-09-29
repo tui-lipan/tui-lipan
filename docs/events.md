@@ -401,10 +401,21 @@ pub enum FlowchartItemPath {
 Emitted by: `DragSource`, `DropTarget`
 
 ```rust
+pub struct DragStartEvent {
+    pub x: u16,            // Terminal-space X where the drag activated (threshold exceeded)
+    pub y: u16,            // Terminal-space Y where the drag activated
+    pub from_x: u16,       // Terminal-space X of the press that began the drag
+    pub from_y: u16,       // Terminal-space Y of the press that began the drag
+    pub from_local_x: u16, // Press X relative to the drag source
+    pub from_local_y: u16, // Press Y relative to the drag source
+}
+
 pub struct DragOverEvent {
     pub x: u16,            // Terminal-space X
     pub y: u16,            // Terminal-space Y
+    pub local_x: u16,      // X relative to the drop target left edge
     pub local_y: u16,      // Y relative to the drop target top edge
+    pub local_width: u16,  // Drop target width in cells
     pub local_height: u16, // Drop target height in cells
     pub payload: Arc<dyn DragPayload>,
 }
@@ -412,7 +423,9 @@ pub struct DragOverEvent {
 pub struct DropEvent {
     pub x: u16,            // Terminal-space X
     pub y: u16,            // Terminal-space Y
+    pub local_x: u16,      // X relative to the drop target left edge
     pub local_y: u16,      // Y relative to the drop target top edge
+    pub local_width: u16,  // Drop target width in cells
     pub local_height: u16, // Drop target height in cells
     pub payload: Arc<dyn DragPayload>,
 }

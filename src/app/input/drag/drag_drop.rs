@@ -145,7 +145,15 @@ pub(crate) fn try_activate_drag_drop(
         return false;
     }
 
-    let start_event = DragStartEvent { x, y };
+    let source_rect = tree.node(source_id).rect;
+    let start_event = DragStartEvent {
+        x,
+        y,
+        from_x: start_x,
+        from_y: start_y,
+        from_local_x: start_x.saturating_sub(source_rect.x.max(0) as u16),
+        from_local_y: start_y.saturating_sub(source_rect.y.max(0) as u16),
+    };
     let Some(payload) = on_drag_start
         .as_ref()
         .and_then(|callback| callback(start_event))
