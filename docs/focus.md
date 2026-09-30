@@ -237,7 +237,9 @@ Root `Modal` and `Popover` overlays capture and trap focus. Their default `.auto
 focuses the first eligible descendant under every policy, including `Manual`. Dismissal restores
 the prior focus entry; opening over an unfocused `OnDemand` app and dismissing returns to no focus.
 Closing a controlled overlay by rendering it closed (`Popover::open(false)`, a `Select` picking an
-option) counts as dismissal and restores the same entry.
+option) counts as dismissal and restores the same entry. Explicit focus operations from that
+same update run after restoration: `blur()` clears focus, `focus_next()` and `focus_prev()`
+traverse from the restored target, and `request_focus(key)` selects the requested destination.
 Programmatic focus requests cannot escape the trap: one latest outside destination is deferred
 until dismissal. Nested overlays reclassify it against the remaining parent capture, so a target in
 that parent can receive focus as soon as the child closes.

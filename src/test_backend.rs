@@ -952,10 +952,7 @@ where
 
         dirty |= self.drain_copy_feedback_requests();
 
-        if let Some(request) = self.core.ctx.take_focus_request() {
-            self.apply_focus_request(request);
-            dirty = true;
-        }
+        dirty |= self.core.ctx.env().focus_request.borrow().is_some();
 
         // A requested snapshot forces a paint, as it does in the runner.
         dirty |= !self.core.ctx.env().pending_ui_snapshot.borrow().is_empty();
@@ -1103,10 +1100,10 @@ where
             self.mouse.hovered,
         );
         self.sync_clipboard_config();
+        focus_service::restore_focus_after_closed_overlays(&self.core.tree, &mut focus_refs!(self));
         if let Some(request) = self.core.ctx.take_focus_request() {
             self.apply_focus_request(request);
         }
-        focus_service::restore_focus_after_closed_overlays(&self.core.tree, &mut focus_refs!(self));
         focus::restore_focus(
             &self.core.tree,
             &mut self.focused,

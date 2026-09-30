@@ -5,8 +5,17 @@
 use tui_lipan::TestBackend;
 use tui_lipan::prelude::*;
 
+#[derive(Clone, Copy)]
+enum FocusAfterPick {
+    Restore,
+    Key,
+    Blur,
+    Next,
+    Prev,
+}
+
 struct Picker {
-    focus_after_pick: bool,
+    focus_after_pick: FocusAfterPick,
 }
 
 #[derive(Clone, Copy)]
@@ -41,8 +50,12 @@ impl Component for Picker {
             Msg::Highlight(index) => ctx.state.highlighted = index,
             Msg::Pick(index) => {
                 ctx.state.selected = index;
-                if self.focus_after_pick {
-                    ctx.request_focus("after");
+                match self.focus_after_pick {
+                    FocusAfterPick::Restore => {}
+                    FocusAfterPick::Key => ctx.request_focus("after"),
+                    FocusAfterPick::Blur => ctx.blur(),
+                    FocusAfterPick::Next => ctx.focus_next(),
+                    FocusAfterPick::Prev => ctx.focus_prev(),
                 }
             }
         }
@@ -74,7 +87,7 @@ impl Component for Picker {
 }
 
 /// The picker, focused on the select's (unkeyed) trigger, and the trigger's node.
-fn picker(focus_after_pick: bool) -> (TestBackend<Picker>, Option<tui_lipan::NodeId>) {
+fn picker(focus_after_pick: FocusAfterPick) -> (TestBackend<Picker>, Option<tui_lipan::NodeId>) {
     let mut backend = TestBackend::new(Picker { focus_after_pick });
     backend.set_viewport(Rect {
         x: 0,
@@ -104,7 +117,7 @@ fn press(backend: &mut TestBackend<Picker>, code: KeyCode) {
 
 #[test]
 fn picking_an_option_returns_focus_to_the_trigger() {
-    let (mut backend, trigger) = picker(false);
+    let (mut backend, trigger) = picker(FocusAfterPick::Restore);
 
     press(&mut backend, KeyCode::Enter);
     assert!(backend.state().expanded);
@@ -127,10 +140,40 @@ fn picking_an_option_returns_focus_to_the_trigger() {
 
 #[test]
 fn a_focus_request_made_while_closing_wins_over_the_restore() {
-    let (mut backend, _) = picker(true);
+    let (mut backend, _) = picker(FocusAfterPick::Key);
 
     press(&mut backend, KeyCode::Enter);
     press(&mut backend, KeyCode::Enter);
     assert!(!backend.state().expanded);
     assert_eq!(backend.focused_key(), Some(&Key::from("after")));
+}
+
+#[test]
+fn controlled_close_plus_blur_does_not_restore_trigger() {
+    let (mut backend, _) = picker(FocusAfterPick::Blur);
+    press(&mut backend, KeyCode::Enter);
+    press(&mut backend, KeyCode::Enter);
+    assert!(!backend.state().expanded);
+    assert_eq!(backend.focused(), None);
+    assert_eq!(backend.focused_key(), None);
+    backend.render();
+    assert_eq!(backend.focused(), None);
+}
+
+#[test]
+fn controlled_close_plus_focus_next_moves_past_trigger() {
+    let (mut backend, _) = picker(FocusAfterPick::Next);
+    press(&mut backend, KeyCode::Enter);
+    press(&mut backend, KeyCode::Enter);
+    assert!(!backend.state().expanded);
+    assert_eq!(backend.focused_key(), Some(&Key::from("after")));
+}
+
+#[test]
+fn controlled_close_plus_focus_prev_moves_before_trigger() {
+    let (mut backend, _) = picker(FocusAfterPick::Prev);
+    press(&mut backend, KeyCode::Enter);
+    press(&mut backend, KeyCode::Enter);
+    assert!(!backend.state().expanded);
+    assert_eq!(backend.focused_key(), Some(&Key::from("before")));
 }

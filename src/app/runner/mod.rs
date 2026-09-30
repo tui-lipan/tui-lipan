@@ -1649,8 +1649,8 @@ impl<C: Component> AppRunner<C> {
         );
         self.pop_drag_layout_collapse_hint();
         self.sync_clipboard_config();
-        self.apply_pending_focus_request();
         self.restore_focus_after_closed_overlays();
+        self.apply_pending_focus_request();
         focus::restore_focus(
             &self.core.tree,
             &mut self.focus.focused,
@@ -2152,8 +2152,8 @@ impl<C: Component> AppRunner<C> {
                 // Honor a focus request issued during the initial expand
                 // (root `init()` or any child component's `init()`) before
                 // falling back to the first focusable node.
-                self.apply_pending_focus_request();
                 self.restore_focus_after_closed_overlays();
+                self.apply_pending_focus_request();
                 focus::restore_focus(
                     &self.core.tree,
                     &mut self.focus.focused,
@@ -2912,7 +2912,7 @@ impl<C: Component> AppRunner<C> {
                     dirty.mark_full();
                 }
 
-                if self.apply_pending_focus_request() {
+                if self.core.ctx.env().focus_request.borrow().is_some() {
                     dirty.mark_full();
                 }
 

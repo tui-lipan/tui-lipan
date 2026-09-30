@@ -70,8 +70,7 @@ impl<C: Component> AppRunner<C> {
     /// Drain a pending focus request from the runtime env and apply it to
     /// `self.focus`. Returns `true` if a request was consumed.
     ///
-    /// Called both from the event-loop drain site (where it also triggers a Full
-    /// re-render) and immediately before each `restore_focus` call so that a
+    /// Called after closed overlays restore focus and before ordinary focus restoration so that a
     /// request issued from a freshly-mounted component's `init()` lands on the
     /// same frame — without it, `restore_focus` would fall back to "first
     /// focusable" for one frame before the request is honored on the next tick.
@@ -799,8 +798,8 @@ impl<C: Component> AppRunner<C> {
         // Honor a focus request issued during this frame's expand/reconcile
         // (e.g. from a newly-mounted component's `init()`) before
         // `restore_focus` falls back to the first focusable node.
-        self.apply_pending_focus_request();
         self.restore_focus_after_closed_overlays();
+        self.apply_pending_focus_request();
         focus::restore_focus(
             &self.core.tree,
             &mut self.focus.focused,
