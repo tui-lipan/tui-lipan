@@ -1408,4 +1408,48 @@ mod wrapper_click_tests {
             .unwrap_err();
         assert!(matches!(error, AutomationError::NotActionable));
     }
+
+    struct Captured;
+
+    impl Component for Captured {
+        type Message = &'static str;
+        type Properties = ();
+        type State = Vec<&'static str>;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            Vec::new()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state.push(msg);
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            MouseRegion::new()
+                .on_click(ctx.link().callback(|_| "outer"))
+                .capture_click(true)
+                .child(
+                    Frame::new()
+                        .child(
+                            MouseRegion::new()
+                                .on_click(ctx.link().callback(|_| "inner"))
+                                .child(Text::new("inner")),
+                        )
+                        .automation_id("panel"),
+                )
+                .into()
+        }
+    }
+
+    #[test]
+    fn wrapper_is_not_clickable_when_a_capturing_ancestor_takes_the_click() {
+        let mut session = AutomationSession::new(Captured, AutomationOptions::default()).unwrap();
+        // The deepest hit is the inner region, but dispatch hands the click to the outer
+        // capturing region, so a click on the panel never reaches its child.
+        let error = session
+            .execute(AutomationStep::click(Selector::id("panel")))
+            .unwrap_err();
+        assert!(matches!(error, AutomationError::NotActionable));
+    }
 }

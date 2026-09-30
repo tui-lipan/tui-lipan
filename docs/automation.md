@@ -118,8 +118,9 @@ A click targets the centre of the node's clipped bounds. A node with no click
 behavior of its own, such as a `DragSource`, `DropTarget`, `PanView`, or
 single-child `Frame`, still supports `Click` when its only child accepts clicks
 and pointer hit-testing routes that exact point into the child, because a real
-click there reaches the child. Overlays and per-cell hit areas such as
-`MouseRegion::hit_test` are respected: if the centre falls outside the child's
+click there reaches the child. Overlays, per-cell hit areas such as
+`MouseRegion::hit_test`, and ancestors that take the click with
+`MouseRegion::capture_click` are respected: if the centre falls outside the child's
 accepted area, the wrapper is not clickable, and automation does not search
 for another point. Containers with several children never inherit `Click`.
 

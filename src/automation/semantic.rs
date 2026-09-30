@@ -500,9 +500,10 @@ fn resolve_semantic_actions(
 /// have no click behavior of their own, but a click at their center reaches the child. A
 /// selector naming the wrapper should be clickable exactly when that click does something.
 ///
-/// The point is routed through [`NodeTree::hit_test`], the same test the pointer dispatcher
-/// uses, so overlays, clipping, and per-cell hit-test refinements (a `MouseRegion::hit_test`,
-/// a `Frame` border, a `Graph` node shape) all decide whether the click really lands there.
+/// The point is routed the way the pointer dispatcher routes a left click: through
+/// [`NodeTree::hit_test`], so overlays, clipping, and per-cell hit-test refinements (a
+/// `MouseRegion::hit_test`, a `Frame` border, a `Graph` node shape) decide where it lands, and
+/// then through the final left-click target resolution, so a capturing ancestor wins.
 fn click_reaches_only_child(
     tree: &NodeTree,
     id: NodeId,
@@ -530,8 +531,21 @@ fn click_reaches_only_child(
     let Some(child_runtime) = child.runtime_node.filter(|runtime| *runtime != id) else {
         return false;
     };
-    tree.hit_test(x, y)
-        .is_some_and(|hit| tree.is_descendant(child_runtime, hit))
+    let (Some(hit), Ok(px), Ok(py)) = (tree.hit_test(x, y), u16::try_from(x), u16::try_from(y))
+    else {
+        return false;
+    };
+    // Dispatch then lets an ancestor `MouseRegion::capture_click` take the click from the
+    // deepest hit, so check the final target a real left click resolves to. Automation
+    // clicks carry no modifiers.
+    let target = crate::app::input::mouse::resolve_left_click_target(
+        tree,
+        hit,
+        px,
+        py,
+        crate::core::event::KeyMods::NONE,
+    );
+    tree.is_descendant(child_runtime, target)
 }
 
 /// The cell a pointer operation on `bounds` targets: its center.
