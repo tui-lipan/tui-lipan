@@ -54,6 +54,8 @@ mod progress_empty_track_surface;
 mod roving_focus;
 #[path = "suites/widget_behavior/select_button_padding_render.rs"]
 mod select_button_padding_render;
+#[path = "suites/widget_behavior/select_keeps_focus.rs"]
+mod select_keeps_focus;
 #[path = "suites/widget_behavior/sequence_diagram_theme_render.rs"]
 mod sequence_diagram_theme_render;
 #[path = "suites/widget_behavior/splitter_drag_test_backend.rs"]

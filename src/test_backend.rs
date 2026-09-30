@@ -952,10 +952,7 @@ where
 
         dirty |= self.drain_copy_feedback_requests();
 
-        if let Some(request) = self.core.ctx.take_focus_request() {
-            self.apply_focus_request(request);
-            dirty = true;
-        }
+        dirty |= self.core.ctx.env().focus_request.borrow().is_some();
 
         // A requested snapshot forces a paint, as it does in the runner.
         dirty |= !self.core.ctx.env().pending_ui_snapshot.borrow().is_empty();
@@ -1103,6 +1100,7 @@ where
             self.mouse.hovered,
         );
         self.sync_clipboard_config();
+        focus_service::restore_focus_after_closed_overlays(&self.core.tree, &mut focus_refs!(self));
         if let Some(request) = self.core.ctx.take_focus_request() {
             self.apply_focus_request(request);
         }
@@ -1406,6 +1404,23 @@ where
     /// Returns the reconciliation key of the currently focused node, if any.
     pub fn focused_key(&self) -> Option<&crate::core::element::Key> {
         self.focused_key.as_ref()
+    }
+
+    /// Whether focus is on the widget carrying `key` or inside its subtree, like
+    /// [`Context::has_focus_within_key`](crate::Context::has_focus_within_key) but for the
+    /// current focus rather than the last frame's.
+    pub fn has_focus_within_key(&self, key: impl Into<crate::core::element::Key>) -> bool {
+        let key = key.into();
+        let tree = &self.core.tree;
+        let mut cur = self.focused;
+        while let Some(id) = cur.filter(|id| tree.is_valid(*id)) {
+            let node = tree.node(id);
+            if node.key.as_ref() == Some(&key) {
+                return true;
+            }
+            cur = node.parent;
+        }
+        false
     }
 
     /// Returns the node id currently under the mouse, if any.
@@ -1867,21 +1882,17 @@ impl<C: Component> TestBackend<C> {
 
     /// Focus the widget carrying `key`. Returns whether focus moved.
     ///
-    /// Resolves keys the way framework focus does: a subtree retained for its exit animation is
-    /// inert and may share keys with its successor, so only live widgets are candidates.
+    /// Resolves keys the way [`Context::request_focus`](crate::Context::request_focus) does: a
+    /// subtree retained for its exit animation is inert and may share keys with its successor, so
+    /// only live widgets are candidates, and a keyed container that is not focusable itself (a
+    /// `Select`, a wrapper) focuses its first focusable descendant.
     pub fn focus_key(&mut self, key: &Key) -> bool {
-        let Some(id) = self
-            .core
-            .tree
-            .iter()
-            .find(|node| !node.inert && node.key.as_ref() == Some(key))
-            .map(|node| node.id)
+        let tree = &self.core.tree;
+        let Some(id) = focus_service::keyed_node(tree, key, None)
+            .and_then(|keyed| focus_service::focus_target_for_keyed_node(tree, keyed))
         else {
             return false;
         };
-        if !self.core.tree.node(id).is_focusable() {
-            return false;
-        }
         if self.focused == Some(id) {
             // Already focused counts as success: a script asking for focus wants
             // the end state, not a transition.
@@ -4820,6 +4831,58 @@ mod tests {
         let child_seen = child_seen.borrow();
         assert_eq!(child_seen.first(), Some(&true));
         assert!(child_seen[1..].iter().all(|seen| !seen));
+    }
+
+    struct KeyedContainers;
+
+    impl Component for KeyedContainers {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            VStack::new()
+                .child(Button::new("plain").key("plain"))
+                .child(
+                    crate::widgets::Select::new()
+                        .options(["one", "two"])
+                        .selected(Some(0))
+                        .key("select"),
+                )
+                .child(
+                    VStack::new()
+                        .child(Text::new("label"))
+                        .child(Button::new("inner").key("inner"))
+                        .key("wrapper"),
+                )
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    #[test]
+    fn focus_key_on_a_container_focuses_its_first_focusable_descendant() {
+        let mut backend = TestBackend::new(KeyedContainers);
+        backend.render();
+
+        assert!(backend.focus_key(&Key::from("wrapper")));
+        assert_eq!(backend.focused_key(), Some(&Key::from("inner")));
+        assert!(backend.has_focus_within_key("wrapper"));
+        assert!(!backend.has_focus_within_key("select"));
+
+        assert!(backend.focus_key(&Key::from("select")));
+        assert!(backend.has_focus_within_key("select"));
+        assert!(!backend.has_focus_within_key("wrapper"));
+
+        assert!(backend.focus_key(&Key::from("plain")));
+        assert!(backend.has_focus_within_key("plain"));
+        assert!(!backend.has_focus_within_key("select"));
+        assert!(!backend.focus_key(&Key::from("missing")));
     }
 
     struct ClickableRowInFocusableScroll;
