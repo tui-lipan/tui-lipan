@@ -744,7 +744,10 @@ impl NodeChainState {
     }
 }
 
-/// Shared render-time focus information from the previous frame.
+/// Shared focus information for component queries.
+///
+/// Rebuilt after each render and refreshed before key bubbling, so `view` observes the
+/// previous frame's focus while `on_key` observes the current focus.
 #[derive(Default)]
 pub(crate) struct FocusContext {
     inner: NodeChainState,
@@ -1445,15 +1448,18 @@ impl<C: Component> Context<C> {
             .push_back(TranscriptEntry::Element(Box::new(element)));
     }
 
-    /// Returns `true` if the currently focused node (from the previous frame) is inside this
-    /// component's subtree.
+    /// Returns `true` if the currently focused node is inside this component's subtree.
+    ///
+    /// In `view` this is the previous frame's focus; in `on_key` it is the current focus.
     pub fn has_focus_within(&self) -> bool {
         self.env.note_memo_dependency(MemoDependency::Focus);
         self.env.focus.has_focus_within_scope(self.scope)
     }
 
-    /// Returns `true` if the currently focused node (from the previous frame) is inside the
-    /// subtree of the element identified by `key`.
+    /// Returns `true` if the currently focused node is inside the subtree of the element
+    /// identified by `key`.
+    ///
+    /// In `view` this is the previous frame's focus; in `on_key` it is the current focus.
     pub fn has_focus_within_key(&self, key: impl Into<Key>) -> bool {
         let key = key.into();
         self.env.note_memo_dependency(MemoDependency::Focus);
@@ -1516,7 +1522,9 @@ impl<C: Component> Context<C> {
         self.env.hover.has_hover_within_key(self.scope, &key)
     }
 
-    /// Returns the focused node id from the previous frame, if any.
+    /// Returns the focused node id, if any.
+    ///
+    /// In `view` this is the previous frame's focus; in `on_key` it is the current focus.
     pub fn focused_node_id(&self) -> Option<NodeId> {
         self.env.note_memo_dependency(MemoDependency::Focus);
         self.env.focus.focused_node_id()

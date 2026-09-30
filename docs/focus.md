@@ -352,6 +352,10 @@ Frame::new()
     .child(sidebar)
 ```
 
+In `view`, these report focus as of the previous frame. In `on_key`, they report the current
+focus, so a key that arrives right after Tab or a click, before the next render, is routed by
+where focus is now.
+
 ## Keyboard Bubbling
 
 Keyboard input normally starts at the focused widget, then bubbles through parent component
