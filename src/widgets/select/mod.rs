@@ -213,7 +213,7 @@ impl Select {
         self
     }
 
-    /// Set the trigger button's padding, replacing the variant's default.
+    /// Set the trigger button's padding, replacing the button's default.
     pub fn button_padding(mut self, padding: impl Into<Padding>) -> Self {
         self.button_padding = Some(padding.into());
         self

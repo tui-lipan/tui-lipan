@@ -1078,7 +1078,7 @@ Dropdown select widget.
 | `on_change` | `Callback<usize>` | Selection changed |
 | `on_toggle` | `Callback<bool>` | Dropdown opened/closed |
 | `button_variant` | `ButtonVariant` | Trigger button variant |
-| `button_padding` | `impl Into<Padding>` | Trigger button padding (default: the variant's) |
+| `button_padding` | `impl Into<Padding>` | Trigger button padding (default: 1 cell horizontally) |
 | `button_align` | `Align` | Trigger label alignment in a wider trigger (default: centered) |
 | `button_style` | `Style` | Button idle style |
 | `button_hover_style` | `Style` | Button hover style |
