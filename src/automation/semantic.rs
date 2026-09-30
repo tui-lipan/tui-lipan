@@ -523,8 +523,15 @@ fn click_reaches_only_child(
     if !child.clipped_bounds.contains(x, y) {
         return false;
     }
+    // Root the check at the child itself, not the wrapper: a hoisted portal stays a runtime
+    // descendant of the wrapper while being left out of its semantic children, so a hit on its
+    // overlay content is not a click on the child. A synthetic child (a list row) points back
+    // at its producer, which is not a separate subtree to land in.
+    let Some(child_runtime) = child.runtime_node.filter(|runtime| *runtime != id) else {
+        return false;
+    };
     tree.hit_test(x, y)
-        .is_some_and(|hit| hit != id && tree.is_descendant(id, hit))
+        .is_some_and(|hit| tree.is_descendant(child_runtime, hit))
 }
 
 /// The cell a pointer operation on `bounds` targets: its center.

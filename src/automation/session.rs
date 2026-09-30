@@ -1355,4 +1355,57 @@ mod wrapper_click_tests {
             .unwrap_err();
         assert!(matches!(error, AutomationError::NotActionable));
     }
+
+    struct Covered;
+
+    impl Component for Covered {
+        type Message = &'static str;
+        type Properties = ();
+        type State = Vec<&'static str>;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            Vec::new()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state.push(msg);
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            VStack::new()
+                .child(
+                    MouseRegion::new()
+                        .on_click(ctx.link().callback(|_| "under"))
+                        .child(
+                            VStack::new()
+                                .height(Length::Flex(1))
+                                .child(Text::new("under")),
+                        ),
+                )
+                .child(
+                    crate::widgets::Modal::new().child(
+                        MouseRegion::new()
+                            .on_click(ctx.link().callback(|_| "overlay"))
+                            .child(
+                                VStack::new()
+                                    .height(Length::Px(5))
+                                    .child(Text::new("overlay")),
+                            ),
+                    ),
+                )
+                .automation_id("panel")
+        }
+    }
+
+    #[test]
+    fn wrapper_is_not_clickable_where_a_hoisted_portal_covers_the_point() {
+        let mut session = AutomationSession::new(Covered, AutomationOptions::default()).unwrap();
+        // The modal's content covers the panel's centre. It is a runtime descendant of the
+        // panel but not a semantic child, so the one semantic child left is the region beneath.
+        let error = session
+            .execute(AutomationStep::click(Selector::id("panel")))
+            .unwrap_err();
+        assert!(matches!(error, AutomationError::NotActionable));
+    }
 }
