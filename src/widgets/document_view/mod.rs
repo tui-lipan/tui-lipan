@@ -47,6 +47,7 @@ use crate::widgets::scroll::{ScrollBehavior, ScrollEvent};
 
 /// Event emitted when the user clicks within the document.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct DocumentClickEvent {
     /// Source line (0-indexed) that was clicked.
     pub source_line: usize,
@@ -56,6 +57,7 @@ pub struct DocumentClickEvent {
 
 /// Event emitted when text is selected.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct DocumentSelectEvent {
     /// Plain text of the selection.
     pub selected_text: Arc<str>,

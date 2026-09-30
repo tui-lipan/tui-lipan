@@ -489,6 +489,7 @@ impl From<Input> for Element {
 
 /// An input change event.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct InputEvent {
     /// Updated value.
     pub value: Arc<str>,

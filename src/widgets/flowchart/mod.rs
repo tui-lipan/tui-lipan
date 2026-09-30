@@ -240,6 +240,7 @@ impl Edge {
 
 /// Event payload for node pointer interactions.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct FlowchartNodeEvent {
     /// Target node id.
     pub id: NodeId,
@@ -249,6 +250,7 @@ pub struct FlowchartNodeEvent {
 
 /// Event payload for edge pointer interactions.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct FlowchartEdgeEvent {
     /// Source node id.
     pub from: NodeId,
@@ -260,6 +262,7 @@ pub struct FlowchartEdgeEvent {
 
 /// Event payload for subgraph pointer interactions.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct FlowchartSubgraphEvent {
     /// Target subgraph id.
     pub id: NodeId,

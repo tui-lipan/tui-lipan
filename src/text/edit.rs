@@ -68,6 +68,7 @@ pub(crate) struct TextEdit<T> {
 
 /// A text edit description for external consumers (e.g. LSP clients).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct TextEditEvent {
     /// Start byte index of the edit.
     pub start: usize,

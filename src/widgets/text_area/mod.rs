@@ -190,6 +190,7 @@ impl TextAreaGutter {
 /// Reason-tagged editor state transition emitted by [`TextArea::on_editor_state_change`].
 #[allow(missing_docs)]
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TextAreaStateChangeEvent {
     pub reason: TextAreaStateChangeReason,
     pub value: Arc<str>,
@@ -1396,6 +1397,7 @@ impl From<TextArea> for Element {
 
 /// A text area change event.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct TextAreaEvent {
     /// Updated value.
     pub value: Arc<str>,
@@ -1407,6 +1409,7 @@ pub struct TextAreaEvent {
 
 /// A text paste event emitted before default text insertion.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct TextAreaPasteEvent {
     /// Pasted text after clipboard/router normalization and truncation.
     pub text: Arc<str>,

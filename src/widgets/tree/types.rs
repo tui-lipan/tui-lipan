@@ -33,6 +33,7 @@ impl AsRef<[usize]> for TreePath {
 
 /// Tree selection event.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TreeEvent {
     /// Visible row index.
     pub index: usize,
@@ -42,6 +43,7 @@ pub struct TreeEvent {
 
 /// Tree expand/collapse event.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TreeToggleEvent {
     /// Visible row index.
     pub index: usize,

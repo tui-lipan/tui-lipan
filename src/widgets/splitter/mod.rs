@@ -86,6 +86,7 @@ impl SplitterPaneLimits {
 
 /// Emitted by splitter resize callbacks with normalized pane weights.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct SplitterResizeEvent {
     /// Matches [`Splitter::split_id`] when set.
     pub split_id: Option<Arc<str>>,

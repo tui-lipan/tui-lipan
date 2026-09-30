@@ -20,6 +20,7 @@ pub enum TerminalInputKind {
 
 /// Terminal input event emitted by the framework.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TerminalInputEvent {
     /// Event source.
     pub kind: TerminalInputKind,
@@ -31,6 +32,7 @@ pub struct TerminalInputEvent {
 
 /// Event emitted when the terminal activates a link under a modified click.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TerminalLinkEvent {
     /// Explicit OSC 8 destination or detected plain-text URL.
     pub uri: Arc<str>,

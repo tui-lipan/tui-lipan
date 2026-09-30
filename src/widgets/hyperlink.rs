@@ -10,6 +10,7 @@ use crate::widgets::Button;
 
 /// Event emitted when a [`Hyperlink`] is activated.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct HyperlinkEvent {
     /// Link label text.
     pub label: Arc<str>,

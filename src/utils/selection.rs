@@ -148,6 +148,7 @@ impl GridSelection {
 
 /// Selection-related event.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct GridSelectionEvent {
     /// Selection range in grid coordinates.
     pub selection: Option<GridSelection>,

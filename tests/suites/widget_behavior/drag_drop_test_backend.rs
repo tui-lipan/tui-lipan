@@ -286,17 +286,22 @@ fn drag_events_report_press_origin_and_target_local_x() {
     mouse_offset(&mut b, drag, 9, 2);
     mouse_offset(&mut b, MouseKind::Up(MouseButton::Left), 14, 1);
 
-    assert_eq!(
-        *starts.lock().unwrap(),
-        vec![DragStartEvent {
-            x: 8,
-            y: 2,
-            from_x: 3,
-            from_y: 0,
-            from_local_x: 1,
-            from_local_y: 0,
-        }]
-    );
+    let starts: Vec<_> = starts
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|ev| {
+            (
+                ev.x,
+                ev.y,
+                ev.from_x,
+                ev.from_y,
+                ev.from_local_x,
+                ev.from_local_y,
+            )
+        })
+        .collect();
+    assert_eq!(starts, vec![(8, 2, 3, 0, 1, 0)]);
     let over = |local_x, local_y| Local {
         local_x,
         local_y,

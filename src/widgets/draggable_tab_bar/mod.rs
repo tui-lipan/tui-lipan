@@ -67,6 +67,7 @@ pub enum DraggableTabKind {
 
 /// Event emitted when an action tab is clicked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct DraggableTabActionEvent {
     /// Action tab index in the rendered tab list.
     pub index: usize,
@@ -74,6 +75,7 @@ pub struct DraggableTabActionEvent {
 
 /// Event emitted when a tab close button is clicked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct DraggableTabCloseEvent {
     /// Closed tab index.
     pub index: usize,
@@ -81,6 +83,7 @@ pub struct DraggableTabCloseEvent {
 
 /// Event emitted when a tab is reordered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct DraggableTabReorderEvent {
     /// Source tab index in the current order.
     pub from: usize,
@@ -90,6 +93,7 @@ pub struct DraggableTabReorderEvent {
 
 /// Event emitted when a tab is transferred to another connected bar.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct DraggableTabTransferEvent {
     /// Source bar identifier.
     pub from_bar: Arc<str>,

@@ -210,6 +210,21 @@ There is no `Widget` trait. Conversion to `Element` is the only integration poin
 - **Use `Callback<T>`** for event callbacks and `KeyHandler` for `on_key` props.
 - **Leaf widgets default to `Length::Auto`**; containers default to `Length::Flex(1)`.
 
+### Event struct construction
+
+Decide by who constructs the struct, not by its name or where it appears:
+
+- **Framework-produced structs passed to app callbacks are `#[non_exhaustive]`.** Apps only read
+  their fields, so tui-lipan can add fields later without a breaking release. Examples:
+  `ListEvent`, `DropEvent`, `TextAreaEvent`. Do not add constructors just to compensate; add a
+  deliberate `new` + `with_*` API only when an event proves useful as an app-built test fixture
+  (see `EffectContext`).
+- **App-produced input structs stay constructible.** `KeyEvent` and `MouseEvent` are built by
+  apps to drive `TestBackend`, web adapters, and keybinding tooling, so they keep public fields and
+  no `#[non_exhaustive]`.
+- **Do not apply `#[non_exhaustive]` to callback enums by default.** Adding an enum variant should
+  normally produce an exhaustive-match compiler error for consumers so they handle the new case.
+
 ---
 
 ## 4. Node, Reconcile, and Runtime State

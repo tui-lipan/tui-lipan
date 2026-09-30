@@ -28,6 +28,7 @@ pub enum TabsOverflow {
 
 /// A tab change event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct TabsEvent {
     /// Active tab index.
     pub index: usize,

@@ -69,6 +69,7 @@ pub enum TerminalClipboardTarget {
 
 /// A decoded request from a child to store text in a clipboard through OSC 52.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TerminalClipboardEvent {
     /// Clipboard destination requested by the child.
     pub target: TerminalClipboardTarget,

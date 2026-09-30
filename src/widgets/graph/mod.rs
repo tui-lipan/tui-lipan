@@ -69,6 +69,7 @@ impl AsRef<[usize]> for GraphNodePath {
 
 /// Event payload for pointer and keyboard interactions on graph nodes.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct GraphNodeEvent {
     /// Path of the target node in the graph tree.
     pub path: GraphNodePath,

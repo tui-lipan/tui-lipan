@@ -26,6 +26,7 @@ pub struct TextAreaSnapshot {
     pub image_mode: TextAreaImageMode,
 }
 
+#[non_exhaustive]
 pub struct TextAreaClipboardTransformEvent<'a> {
     /// Selection text after TextArea's default sentinel-to-label rendering.
     pub text: &'a str,

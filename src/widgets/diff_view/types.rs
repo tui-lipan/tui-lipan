@@ -178,6 +178,7 @@ impl DiffLineRange {
 
 /// Event emitted when a source row in a [`DiffView`](super::DiffView) is clicked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct DiffLineClickEvent {
     /// Pane that received the click.
     pub pane: DiffPane,
@@ -191,6 +192,7 @@ pub struct DiffLineClickEvent {
 
 /// Event emitted after dragging through a diff pane's line-number gutter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct DiffLineRangeEvent {
     /// Pane where the drag started and ended.
     pub pane: DiffPane,
@@ -239,6 +241,7 @@ impl DiffInlineBlock {
 
 /// Scroll event emitted by [`DiffView`](super::DiffView) with pane metadata.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct DiffScrollEvent {
     /// Pane that emitted the event.
     pub pane: DiffPane,
@@ -302,6 +305,7 @@ impl From<DiffContextRange> for DiffContextExpansion {
 
 /// Event emitted when a collapsed context separator is clicked.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DiffContextSeparatorEvent {
     /// Pane that received the click.
     pub pane: DiffPane,

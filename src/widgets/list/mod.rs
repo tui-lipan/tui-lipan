@@ -274,6 +274,7 @@ impl ListConfig {
 
 /// A list selection event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ListEvent {
     /// Selected item index.
     pub index: usize,

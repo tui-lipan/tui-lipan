@@ -141,6 +141,10 @@ The full primitive checklist (which files to touch, in which order) lives in
 cause a non-obvious panic or render glitch - every match arm in the dispatch
 chain is exhaustive.
 
+New public event structs follow the construction rule in
+[`docs/widget-authoring.md`](docs/widget-authoring.md#event-struct-construction): framework-produced
+callback payloads are `#[non_exhaustive]`; app-built inputs such as `KeyEvent` stay constructible.
+
 After implementation:
 
 1. Add a runnable example in `examples/<widget_name>.rs`.

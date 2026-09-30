@@ -33,6 +33,7 @@ pub struct PanMetrics {
 
 /// Event emitted after a `PanView` offset changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct PanEvent {
     /// New horizontal offset. May be negative when clamping is disabled.
     pub x: i32,

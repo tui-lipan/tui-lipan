@@ -21,6 +21,7 @@ pub struct TerminalSelection {
 
 /// Terminal selection change payload.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TerminalSelectionEvent {
     /// The new selection, if any.
     pub selection: Option<TerminalSelection>,
