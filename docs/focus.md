@@ -153,7 +153,9 @@ Under `Auto`, the next reconciliation restores the default eligible target, so b
 to automatic focus.
 
 `TestBackend::focus_next()`, `focus_prev()`, `blur()`, and `focused_key()` expose the same behavior
-for headless tests.
+for headless tests. `TestBackend::focus_key(&key)` resolves a key like `ctx.request_focus(key)`,
+including a keyed container's first focusable descendant, and `has_focus_within_key(key)` checks
+focus inside composite widgets such as `Select`, whose focused trigger carries no key of its own.
 
 ## OnDemand Retention And Remounts
 
