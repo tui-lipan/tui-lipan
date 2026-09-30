@@ -662,25 +662,22 @@ where
         focused: Option<NodeId>,
         focused_key: Option<&Key>,
     ) -> ScopeId {
-        if let Some(scope) = focused
-            .filter(|id| self.tree.is_valid(*id))
-            .and_then(|id| focus::scope_for_node(&self.tree, id))
-        {
-            return scope;
+        // A resolved focus target with no `Group` ancestor is owned by the root component, so
+        // bubbling must start at the root rather than at an unrelated nested component.
+        if let Some(id) = focused.filter(|id| self.tree.is_valid(*id)) {
+            return focus::scope_for_node(&self.tree, id).unwrap_or(ScopeId(1));
         }
 
-        if let Some(scope) = focused_key
-            .and_then(|key| {
-                self.tree
-                    .iter()
-                    .find(|n| !n.inert && n.key.as_ref() == Some(key))
-                    .map(|n| n.id)
-            })
-            .and_then(|id| focus::scope_for_node(&self.tree, id))
-        {
-            return scope;
+        if let Some(id) = focused_key.and_then(|key| {
+            self.tree
+                .iter()
+                .find(|n| !n.inert && n.key.as_ref() == Some(key))
+                .map(|n| n.id)
+        }) {
+            return focus::scope_for_node(&self.tree, id).unwrap_or(ScopeId(1));
         }
 
+        // Only genuinely unresolved focus starts at the deepest mounted component.
         self.deepest_mounted_group_scope().unwrap_or(ScopeId(1))
     }
 

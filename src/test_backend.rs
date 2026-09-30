@@ -5206,6 +5206,126 @@ mod tests {
         assert_eq!(calls.borrow().as_slice(), ["leaf"]);
     }
 
+    struct FocusableBubbleLeaf {
+        calls: Rc<RefCell<Vec<&'static str>>>,
+        handles: bool,
+    }
+
+    impl Component for FocusableBubbleLeaf {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn on_key(&mut self, _key: KeyEvent, _ctx: &mut Context<Self>) -> KeyUpdate {
+            self.calls.borrow_mut().push("leaf");
+            if self.handles {
+                KeyUpdate::handled(Update::none())
+            } else {
+                KeyUpdate::unhandled(Update::none())
+            }
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            Button::new("leaf").key("leaf-button")
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    struct RootOwnedFocusBubbleRoot {
+        calls: Rc<RefCell<Vec<&'static str>>>,
+        leaf_handles: bool,
+    }
+
+    impl Component for RootOwnedFocusBubbleRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn on_key(&mut self, _key: KeyEvent, _ctx: &mut Context<Self>) -> KeyUpdate {
+            self.calls.borrow_mut().push("root");
+            KeyUpdate::handled(Update::none())
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            let calls = Rc::clone(&self.calls);
+            let handles = self.leaf_handles;
+            VStack::new()
+                .child(Button::new("root").key("root-button"))
+                .child(crate::child(
+                    move || FocusableBubbleLeaf {
+                        calls: Rc::clone(&calls),
+                        handles,
+                    },
+                    (),
+                ))
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    fn root_owned_focus_backend(
+        leaf_handles: bool,
+    ) -> (
+        TestBackend<RootOwnedFocusBubbleRoot>,
+        Rc<RefCell<Vec<&'static str>>>,
+    ) {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let mut backend = TestBackend::new(RootOwnedFocusBubbleRoot {
+            calls: Rc::clone(&calls),
+            leaf_handles,
+        });
+        backend.render();
+        (backend, calls)
+    }
+
+    #[test]
+    fn root_owned_focused_widget_bubbles_from_the_root_not_a_nested_component() {
+        let (mut backend, calls) = root_owned_focus_backend(true);
+        assert!(backend.focus_key(&Key::from("root-button")));
+
+        let handled = backend
+            .send_key(plain_code(KeyCode::Char('x')))
+            .expect("send_key should succeed");
+
+        assert!(handled);
+        assert_eq!(calls.borrow().as_slice(), ["root"]);
+    }
+
+    #[test]
+    fn nested_focused_widget_bubbles_from_its_component_to_the_root() {
+        let (mut backend, calls) = root_owned_focus_backend(false);
+        assert!(backend.focus_key(&Key::from("leaf-button")));
+
+        backend
+            .send_key(plain_code(KeyCode::Char('x')))
+            .expect("send_key should succeed");
+
+        assert_eq!(calls.borrow().as_slice(), ["leaf", "root"]);
+    }
+
+    #[test]
+    fn unresolved_focus_bubbles_from_the_deepest_mounted_component() {
+        let (mut backend, calls) = root_owned_focus_backend(false);
+        backend.focused = None;
+        backend.focused_key = None;
+
+        backend
+            .send_key(plain_code(KeyCode::Char('x')))
+            .expect("send_key should succeed");
+
+        assert_eq!(calls.borrow().as_slice(), ["leaf", "root"]);
+    }
+
     struct VimTextAreaRoot;
 
     struct VimSearchRenderRoot;
