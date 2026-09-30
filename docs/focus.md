@@ -353,9 +353,11 @@ Frame::new()
 
 ## Keyboard Bubbling
 
-Keyboard input normally starts at the focused widget, then bubbles through parent component
-scopes to the root `Component::on_key`. With no focused widget, bubbling starts at the deepest
-mounted component scope and continues toward the root. Unhandled keys then continue through app
+Keyboard input normally starts at the focused widget, then bubbles through the component that
+owns it and its parent component scopes to the root `Component::on_key`. A focused widget that the
+root component renders directly bubbles straight to the root; nested components are not asked
+first. Only when focus cannot be resolved to a mounted widget does bubbling start at the deepest
+mounted component scope and continue toward the root. Unhandled keys then continue through app
 commands, framework actions, and ambient page-scroll fallback according to `KeyDispatchPolicy`.
 
 Under the default `KeyDispatchPolicy::WidgetFirst`, non-terminal dispatch is:
