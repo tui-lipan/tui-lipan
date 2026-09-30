@@ -188,8 +188,14 @@ pub(crate) struct SplitterGrab {
     pub handle: usize,
 }
 
+/// `DragSource` under a left press, with the press point relative to it.
+///
+/// The local origin is captured at press time so the eventual `DragStartEvent` still describes
+/// where inside the source the grab happened, even if the source moves before the drag activates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DragSourceGrab {
     pub node_id: NodeId,
+    pub origin_local: (u16, u16),
 }
 
 pub(crate) struct TextAreaChange {

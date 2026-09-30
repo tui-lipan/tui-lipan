@@ -106,9 +106,10 @@ pub(crate) fn try_activate_drag_drop(
         return false;
     }
 
-    let Some(source_id) = mouse.pending_drag_source else {
+    let Some(grab) = mouse.pending_drag_source else {
         return false;
     };
+    let source_id = grab.node_id;
     if !tree.is_valid(source_id) {
         mouse.pending_drag_source = None;
         return false;
@@ -145,7 +146,14 @@ pub(crate) fn try_activate_drag_drop(
         return false;
     }
 
-    let start_event = DragStartEvent { x, y };
+    let start_event = DragStartEvent {
+        x,
+        y,
+        from_x: start_x,
+        from_y: start_y,
+        from_local_x: grab.origin_local.0,
+        from_local_y: grab.origin_local.1,
+    };
     let Some(payload) = on_drag_start
         .as_ref()
         .and_then(|callback| callback(start_event))

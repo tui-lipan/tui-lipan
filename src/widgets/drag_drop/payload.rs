@@ -41,10 +41,20 @@ impl dyn DragPayload {
 #[derive(Clone, Debug, PartialEq, Eq)]
 /// Event emitted when drag activation threshold is exceeded.
 pub struct DragStartEvent {
-    /// Pointer x coordinate when drag starts.
+    /// Pointer x coordinate when the drag activated (threshold exceeded).
     pub x: u16,
-    /// Pointer y coordinate when drag starts.
+    /// Pointer y coordinate when the drag activated (threshold exceeded).
     pub y: u16,
+    /// Pointer x coordinate of the button press that began the drag.
+    pub from_x: u16,
+    /// Pointer y coordinate of the button press that began the drag.
+    pub from_y: u16,
+    /// Press x relative to the drag source's left edge, captured when the button went down.
+    ///
+    /// Stays correct if the source moves (scroll, reflow) before the drag activates.
+    pub from_local_x: u16,
+    /// Press y relative to the drag source's top edge, captured when the button went down.
+    pub from_local_y: u16,
 }
 
 #[derive(Clone)]
@@ -54,8 +64,12 @@ pub struct DragOverEvent {
     pub x: u16,
     /// Current pointer y coordinate.
     pub y: u16,
+    /// Pointer `x` minus the hovered drop target's left edge (content coordinates).
+    pub local_x: u16,
     /// Pointer `y` minus the hovered drop target's top edge (content coordinates).
     pub local_y: u16,
+    /// Width of the hovered drop target in cells.
+    pub local_width: u16,
     /// Height of the hovered drop target in cells.
     pub local_height: u16,
     /// Active drag payload.
@@ -76,8 +90,12 @@ pub struct DropEvent {
     pub x: u16,
     /// Pointer y coordinate at drop time.
     pub y: u16,
+    /// Pointer `x` minus the drop target's left edge (content coordinates).
+    pub local_x: u16,
     /// Pointer `y` minus the drop target's top edge (content coordinates).
     pub local_y: u16,
+    /// Width of the drop target in cells.
+    pub local_width: u16,
     /// Height of the drop target in cells.
     pub local_height: u16,
     /// Active drag payload.

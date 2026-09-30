@@ -22,6 +22,18 @@ impl Rect {
             && (y as i32) < y2
     }
 
+    /// Converts a terminal-space point into coordinates relative to this rectangle's origin.
+    ///
+    /// Uses signed arithmetic so rects that start off-screen (negative `x`/`y`, e.g. children
+    /// scrolled partially out of a `ScrollView`) still report the true offset. Points left of or
+    /// above the origin clamp to `0`.
+    pub(crate) fn local_point(&self, x: u16, y: u16) -> (u16, u16) {
+        let local = |global: u16, origin: i16| {
+            (i32::from(global) - i32::from(origin)).clamp(0, i32::from(u16::MAX)) as u16
+        };
+        (local(x, self.x), local(y, self.y))
+    }
+
     /// Returns the rectangle after applying padding.
     pub fn inset(&self, padding: Padding) -> Self {
         let x = self.x.saturating_add(padding.left as i16);

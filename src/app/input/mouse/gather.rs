@@ -630,7 +630,10 @@ pub(crate) fn gather_hit_actions(
             && source.enabled
             && source.on_drag_start.is_some()
         {
-            drag_source_grab = Some(DragSourceGrab { node_id: id });
+            drag_source_grab = Some(DragSourceGrab {
+                node_id: id,
+                origin_local: n.rect.local_point(x, y),
+            });
             break;
         }
         cur = n.parent;

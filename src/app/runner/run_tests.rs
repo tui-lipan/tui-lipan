@@ -1641,7 +1641,11 @@ fn node_center<C: Component>(runner: &AppRunner<C>, key: &str) -> (u16, u16) {
 fn arm_drag_from_source(runner: &mut AppRunner<DragDropSmoke>) -> (u16, u16) {
     let source_id = node_id_by_key(&runner.core.tree, "source");
     let (sx, sy) = node_center(runner, "source");
-    runner.mouse.pending_drag_source = Some(source_id);
+    let origin_local = runner.core.tree.node(source_id).rect.local_point(sx, sy);
+    runner.mouse.pending_drag_source = Some(crate::app::input::mouse::DragSourceGrab {
+        node_id: source_id,
+        origin_local,
+    });
     runner.mouse.left_down_pos = Some((sx, sy));
     (sx, sy)
 }

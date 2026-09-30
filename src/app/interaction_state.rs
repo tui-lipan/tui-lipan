@@ -407,7 +407,7 @@ pub(crate) struct MouseTrackingState {
     #[cfg(feature = "terminal")]
     pub terminal_link_hover_node: Option<NodeId>,
     /// Pending drag source candidate captured on left button down.
-    pub pending_drag_source: Option<NodeId>,
+    pub pending_drag_source: Option<crate::app::input::mouse::DragSourceGrab>,
     /// Pending or active `MouseRegion` drag callback target.
     pub mouse_region_drag: Option<MouseRegionDragState>,
     /// Pending or active `PanView` drag-to-pan target.

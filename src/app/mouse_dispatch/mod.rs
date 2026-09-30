@@ -507,8 +507,7 @@ fn dispatch_mouse_inner<C: Component, T: MouseDispatchCtx<C>>(
                     started: false,
                 });
         }
-        ctx.mouse_state().pending_drag_source =
-            actions.drag_source_grab.as_ref().map(|g| g.node_id);
+        ctx.mouse_state().pending_drag_source = actions.drag_source_grab;
         if let Some(result) = transition_widget_down(
             ctx,
             WidgetDownParams {
@@ -1056,15 +1055,16 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
                 && matches!(self.core.tree.node(target_id).kind, NodeKind::DropTarget(_))
             {
                 let rect = self.core.tree.node(target_id).rect;
-                let top = rect.y.max(0) as u16;
-                let local_y = y.saturating_sub(top);
+                let (local_x, local_y) = rect.local_point(x, y);
                 if let NodeKind::DropTarget(target) = &mut self.core.tree.node_mut(target_id).kind {
                     target.dnd_highlighted = false;
                     if let Some(cb) = &target.on_drop {
                         cb.emit(crate::widgets::DropEvent {
                             x,
                             y,
+                            local_x,
                             local_y,
+                            local_width: rect.w,
                             local_height: rect.h,
                             payload: payload.clone(),
                         });
