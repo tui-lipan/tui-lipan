@@ -131,6 +131,16 @@ impl<C: Component> AppRunner<C> {
         }
     }
 
+    pub(crate) fn restore_focus_after_closed_overlays(&mut self) {
+        let moved = focus_service::restore_focus_after_closed_overlays(
+            &self.core.tree,
+            &mut self.focus.refs(),
+        );
+        if moved {
+            self.animation.reset_blink();
+        }
+    }
+
     pub(crate) fn ensure_overlay_focus(&mut self) {
         let moved = focus_service::ensure_overlay_focus(&self.core.tree, &mut self.focus.refs());
         if moved {
