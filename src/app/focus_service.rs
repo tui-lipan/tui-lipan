@@ -334,7 +334,7 @@ pub(crate) fn apply_focus_request(
 
 /// The live node carrying `key`. A subtree retained for its exit animation is inert and may share
 /// keys with the subtree replacing it, so it is never a focus target.
-fn keyed_node(tree: &NodeTree, key: &Key, capture: Option<NodeId>) -> Option<NodeId> {
+pub(crate) fn keyed_node(tree: &NodeTree, key: &Key, capture: Option<NodeId>) -> Option<NodeId> {
     capture
         .and_then(|capture| {
             tree.iter_with_overlays()
@@ -352,7 +352,9 @@ fn keyed_node(tree: &NodeTree, key: &Key, capture: Option<NodeId>) -> Option<Nod
         })
 }
 
-fn focus_target_for_keyed_node(tree: &NodeTree, id: NodeId) -> Option<NodeId> {
+/// The node a keyed focus request lands on: the keyed node itself when focusable, otherwise its
+/// first focusable descendant.
+pub(crate) fn focus_target_for_keyed_node(tree: &NodeTree, id: NodeId) -> Option<NodeId> {
     if tree.node(id).is_focusable() {
         return Some(id);
     }
