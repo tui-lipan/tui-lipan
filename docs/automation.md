@@ -119,8 +119,9 @@ behavior of its own, such as a `DragSource`, `DropTarget`, `PanView`, or
 single-child `Frame`, still supports `Click` when its only child accepts clicks
 and pointer hit-testing routes that exact point into the child, because a real
 click there reaches the child. Overlays, per-cell hit areas such as
-`MouseRegion::hit_test`, and ancestors that take the click with
-`MouseRegion::capture_click` are respected: if the centre falls outside the child's
+`MouseRegion::hit_test`, ancestors that take the click with
+`MouseRegion::capture_click`, and scrollable scrollbars that take the press
+are respected: if the centre falls outside the child's
 accepted area, the wrapper is not clickable, and automation does not search
 for another point. Containers with several children never inherit `Click`.
 

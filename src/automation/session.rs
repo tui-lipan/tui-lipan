@@ -1251,7 +1251,9 @@ mod wrapper_click_tests {
     use crate::core::component::{Context, Update};
     use crate::core::element::{Element, IntoElement};
     use crate::style::Length;
-    use crate::widgets::{DragSource, DropTarget, Frame, MouseRegion, PanView, Text, VStack};
+    use crate::widgets::{
+        DragSource, DropTarget, Frame, List, ListItem, MouseRegion, PanView, Text, VStack,
+    };
 
     struct Wrapped;
 
@@ -1451,5 +1453,60 @@ mod wrapper_click_tests {
             .execute(AutomationStep::click(Selector::id("panel")))
             .unwrap_err();
         assert!(matches!(error, AutomationError::NotActionable));
+    }
+
+    struct Scrolled {
+        items: usize,
+    }
+
+    impl Component for Scrolled {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            // A two-cell interior puts the panel's centre on the list's scrollbar column.
+            VStack::new()
+                .child(
+                    Frame::new()
+                        .width(Length::Px(4))
+                        .height(Length::Px(6))
+                        .child(
+                            List::new()
+                                .items((0..self.items).map(|i| ListItem::new(i.to_string())))
+                                .scrollbar(true)
+                                .on_select(ctx.link().callback(|_| ())),
+                        )
+                        .automation_id("panel"),
+                )
+                .into()
+        }
+    }
+
+    #[test]
+    fn wrapper_is_not_clickable_where_a_usable_scrollbar_takes_the_press() {
+        let mut session =
+            AutomationSession::new(Scrolled { items: 50 }, AutomationOptions::default()).unwrap();
+        let error = session
+            .execute(AutomationStep::click(Selector::id("panel")))
+            .unwrap_err();
+        assert!(matches!(error, AutomationError::NotActionable));
+    }
+
+    #[test]
+    fn the_same_centre_is_clickable_when_the_list_does_not_overflow() {
+        // Positive control for the test above: without overflow the list has no usable
+        // scrollbar there, so the centre cell is an ordinary list click.
+        let mut session =
+            AutomationSession::new(Scrolled { items: 1 }, AutomationOptions::default()).unwrap();
+        session
+            .execute(AutomationStep::click(Selector::id("panel")))
+            .unwrap();
     }
 }

@@ -503,7 +503,8 @@ fn resolve_semantic_actions(
 /// The point is routed the way the pointer dispatcher routes a left click: through
 /// [`NodeTree::hit_test`], so overlays, clipping, and per-cell hit-test refinements (a
 /// `MouseRegion::hit_test`, a `Frame` border, a `Graph` node shape) decide where it lands, and
-/// then through the final left-click target resolution, so a capturing ancestor wins.
+/// then through the final left-click target resolution, so a capturing ancestor wins. A
+/// usable scrollbar under the point takes the press first, as it does in dispatch.
 fn click_reaches_only_child(
     tree: &NodeTree,
     id: NodeId,
@@ -535,6 +536,14 @@ fn click_reaches_only_child(
     else {
         return false;
     };
+    // A scrollbar that can start a drag consumes the press before any widget click. One with
+    // nothing to scroll lets the click fall through, so only a usable scrollbar blocks it.
+    if let Some(scrollbar) = tree.scrollbar_target_at(x, y)
+        && crate::app::input::scrollbar::start_drag(tree.node(scrollbar.id), scrollbar.axis, px, py)
+            .is_some()
+    {
+        return false;
+    }
     // Dispatch then lets an ancestor `MouseRegion::capture_click` take the click from the
     // deepest hit, so check the final target a real left click resolves to. Automation
     // clicks carry no modifiers.
