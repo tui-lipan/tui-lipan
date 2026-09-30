@@ -1106,6 +1106,7 @@ where
         if let Some(request) = self.core.ctx.take_focus_request() {
             self.apply_focus_request(request);
         }
+        focus_service::restore_focus_after_closed_overlays(&self.core.tree, &mut focus_refs!(self));
         focus::restore_focus(
             &self.core.tree,
             &mut self.focused,

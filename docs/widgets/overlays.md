@@ -20,7 +20,8 @@ modal focus/backdrop semantics.
 
 Root capture is independent of `FocusPolicy`: `auto_focus: true` also focuses and traps under
 `Manual`. With `auto_focus: false`, capture and trapping remain active while focus is suspended.
-Dismissal restores the prior entry, including an unfocused `OnDemand` state.
+Dismissal restores the prior entry, including an unfocused `OnDemand` state; so does rendering a
+controlled overlay closed.
 
 | Prop | Type | Description |
 |------|------|-------------|

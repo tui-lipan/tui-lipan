@@ -236,6 +236,8 @@ pane, the overlay ring descends through panes so the overlay is never a keyboard
 Root `Modal` and `Popover` overlays capture and trap focus. Their default `.auto_focus(true)`
 focuses the first eligible descendant under every policy, including `Manual`. Dismissal restores
 the prior focus entry; opening over an unfocused `OnDemand` app and dismissing returns to no focus.
+Closing a controlled overlay by rendering it closed (`Popover::open(false)`, a `Select` picking an
+option) counts as dismissal and restores the same entry.
 Programmatic focus requests cannot escape the trap: one latest outside destination is deferred
 until dismissal. Nested overlays reclassify it against the remaining parent capture, so a target in
 that parent can receive focus as soon as the child closes.

@@ -486,6 +486,37 @@ pub(crate) fn dismiss_capturing_overlay(
     restored || before != *refs.focused
 }
 
+/// Treat capturing overlays the app stopped rendering (a controlled `open(false)`) as dismissed:
+/// restore the focus saved before each one, as a runtime dismissal would, then apply any focus
+/// request from the same update.
+///
+/// Run after reconcile and before ordinary focus restoration, which would otherwise fall back
+/// away from the saved focus once the focused overlay content is gone. Returns whether focus
+/// changed.
+pub(crate) fn restore_focus_after_closed_overlays(
+    tree: &NodeTree,
+    refs: &mut FocusRefs<'_>,
+) -> bool {
+    // A live capturing overlay without a save is a closed one remounted under a new identity;
+    // `push_focus_stack` rebinds its dead entry instead.
+    if tree.top_capturing_overlay().is_some_and(|overlay| {
+        let key = OverlayKey::of(overlay);
+        !refs.focus_stack.iter().any(|entry| entry.overlay == key)
+    }) {
+        return false;
+    }
+    let mut changed = false;
+    while let Some(closed) = refs
+        .focus_stack
+        .last()
+        .map(|entry| entry.overlay)
+        .filter(|&overlay| !overlay_is_live(tree, overlay))
+    {
+        changed |= dismiss_capturing_overlay(tree, refs, closed);
+    }
+    changed
+}
+
 fn keyed_path(tree: &NodeTree, id: NodeId) -> SmallVec<[Key; 8]> {
     let mut keys = SmallVec::new();
     let mut current = Some(id);

@@ -800,6 +800,7 @@ impl<C: Component> AppRunner<C> {
         // (e.g. from a newly-mounted component's `init()`) before
         // `restore_focus` falls back to the first focusable node.
         self.apply_pending_focus_request();
+        self.restore_focus_after_closed_overlays();
         focus::restore_focus(
             &self.core.tree,
             &mut self.focus.focused,
