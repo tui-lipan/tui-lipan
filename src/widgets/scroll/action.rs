@@ -255,7 +255,21 @@ pub(crate) fn scroll_metrics(len: usize, visible: usize, _offset: usize) -> Scro
     }
 }
 
+/// Whether `key` carries a Ctrl, Alt, or Super modifier.
+///
+/// Such chords are never built-in scroll or navigation keys, so they reach app
+/// shortcuts instead of moving the viewport. Shift alone is not a command modifier.
+pub(crate) fn has_command_modifier(key: &KeyEvent) -> bool {
+    key.mods.ctrl || key.mods.alt || key.mods.super_key
+}
+
+/// The scroll action bound to `key`, if any.
+///
+/// Chords with a [command modifier](has_command_modifier) are never scroll keys.
 pub(crate) fn scroll_action_from_key(key: &KeyEvent, keymap: ScrollKeymap) -> Option<ScrollAction> {
+    if has_command_modifier(key) {
+        return None;
+    }
     match key.code {
         KeyCode::Up if keymap.contains(ScrollKeymap::ARROWS) => Some(ScrollAction::LineUp(1)),
         KeyCode::Down if keymap.contains(ScrollKeymap::ARROWS) => Some(ScrollAction::LineDown(1)),
@@ -319,5 +333,33 @@ pub(crate) fn apply_scroll_action(
         }
         ScrollAction::Home => 0,
         ScrollAction::End => max_offset,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::event::KeyMods;
+
+    fn key(code: KeyCode, mods: KeyMods) -> KeyEvent {
+        KeyEvent { code, mods }
+    }
+
+    #[test]
+    fn modified_chords_are_not_scroll_keys() {
+        let keymap = ScrollKeymap::default();
+        assert_eq!(
+            scroll_action_from_key(&key(KeyCode::Down, KeyMods::NONE), keymap),
+            Some(ScrollAction::LineDown(1))
+        );
+        for mods in [KeyMods::CTRL, KeyMods::ALT, KeyMods::SUPER] {
+            for code in [KeyCode::Down, KeyCode::Char('j'), KeyCode::Home] {
+                assert_eq!(scroll_action_from_key(&key(code, mods), keymap), None);
+            }
+        }
+        assert_eq!(
+            scroll_action_from_key(&key(KeyCode::Up, KeyMods::SHIFT), keymap),
+            Some(ScrollAction::LineUp(1))
+        );
     }
 }

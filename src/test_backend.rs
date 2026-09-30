@@ -838,7 +838,7 @@ where
             .is_some()
     }
 
-    /// Focus the node at `id` or the first focusable descendant beneath it.
+    /// Focus the node a pointer press on `id` targets (see `focus::pointer_focus_target`).
     ///
     /// Returns `true` if the focused node changed.
     pub(crate) fn focus_for_node(&mut self, id: NodeId) -> bool {
@@ -854,22 +854,14 @@ where
         if focus::in_excluded_scope(&self.core.tree, id) {
             return false;
         }
-        let focusable = self.core.tree.node(id).is_focusable();
-        if focusable {
-            let changed = self.focused != Some(id);
-            if changed {
-                self.set_focused_silent(id);
-            }
-            return changed;
+        let Some(target) = focus::pointer_focus_target(&self.core.tree, id) else {
+            return false;
+        };
+        if self.focused == Some(target) {
+            return false;
         }
-        if let Some(desc) = focus::find_first_focusable_descendant(&self.core.tree, id) {
-            let changed = self.focused != Some(desc);
-            if changed {
-                self.set_focused_silent(desc);
-                return true;
-            }
-        }
-        false
+        self.set_focused_silent(target);
+        true
     }
 
     /// Move focus to the next focusable node (Tab behavior).
@@ -4828,6 +4820,61 @@ mod tests {
         let child_seen = child_seen.borrow();
         assert_eq!(child_seen.first(), Some(&true));
         assert!(child_seen[1..].iter().all(|seen| !seen));
+    }
+
+    struct ClickableRowInFocusableScroll;
+
+    impl Component for ClickableRowInFocusableScroll {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            VStack::new()
+                .child(Input::new("").key("input"))
+                .child(
+                    ScrollView::new()
+                        .focusable(true)
+                        .child(
+                            MouseRegion::new()
+                                .on_click(ctx.link().callback(|_| ()))
+                                .child(Text::new("row"))
+                                .key("row"),
+                        )
+                        .key("scroll"),
+                )
+                .into()
+        }
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+    }
+
+    #[test]
+    fn pressing_a_non_focusable_target_focuses_its_nearest_focusable_ancestor() {
+        let mut backend = TestBackend::new(ClickableRowInFocusableScroll);
+        backend.focus_next();
+        assert_eq!(backend.focused_key(), Some(&Key::from("input")));
+        let row_rect = backend
+            .core
+            .tree
+            .iter()
+            .find(|node| node.key.as_ref() == Some(&Key::from("row")))
+            .map(|node| node.rect)
+            .expect("row should be mounted");
+
+        backend
+            .send_mouse(MouseEvent {
+                x: row_rect.x.max(0) as u16,
+                y: row_rect.y.max(0) as u16,
+                kind: MouseKind::Down(MouseButton::Left),
+                mods: KeyMods::NONE,
+            })
+            .expect("row press should dispatch");
+        assert_eq!(backend.focused_key(), Some(&Key::from("scroll")));
     }
 
     struct ScrollViewTabStopRoot;
