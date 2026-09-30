@@ -461,8 +461,7 @@ fn point_for(
     {
         return Err(crate::automation::AutomationError::NotActionable);
     }
-    let x = i32::from(node.clipped_bounds.x) + i32::from(node.clipped_bounds.w / 2);
-    let y = i32::from(node.clipped_bounds.y) + i32::from(node.clipped_bounds.h / 2);
+    let (x, y) = crate::automation::click_point(node.clipped_bounds);
     match (u16::try_from(x), u16::try_from(y)) {
         (Ok(x), Ok(y)) => Ok((x, y)),
         _ => Err(crate::automation::AutomationError::NotInView),

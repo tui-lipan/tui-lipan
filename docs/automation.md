@@ -114,6 +114,16 @@ AutomationStep::checkpoint("editor")
 One UI thread performs every operation. A sequence stops at the first error and
 does not roll back successful earlier steps. Composite input preserves terminal
 event order. A click sends move, button down, and button up in that order.
+A click targets the centre of the node's clipped bounds. A node with no click
+behavior of its own, such as a `DragSource`, `DropTarget`, `PanView`, or
+single-child `Frame`, still supports `Click` when its only child accepts clicks
+and pointer hit-testing routes that exact point into the child, because a real
+click there reaches the child. Overlays, per-cell hit areas such as
+`MouseRegion::hit_test`, ancestors that take the click with
+`MouseRegion::capture_click`, and scrollable scrollbars that take the press
+are respected: if the centre falls outside the child's
+accepted area, the wrapper is not clickable, and automation does not search
+for another point. Containers with several children never inherit `Click`.
 
 After each operation, the engine drains ready framework effects, command
 messages, component messages, and timers due at the current logical time to a

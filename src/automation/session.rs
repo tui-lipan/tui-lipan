@@ -1244,3 +1244,269 @@ mod tests {
         assert!(!directory.exists());
     }
 }
+
+#[cfg(test)]
+mod wrapper_click_tests {
+    use super::*;
+    use crate::core::component::{Context, Update};
+    use crate::core::element::{Element, IntoElement};
+    use crate::style::Length;
+    use crate::widgets::{
+        DragSource, DropTarget, Frame, List, ListItem, MouseRegion, PanView, Text, VStack,
+    };
+
+    struct Wrapped;
+
+    impl Component for Wrapped {
+        type Message = &'static str;
+        type Properties = ();
+        type State = Vec<&'static str>;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            Vec::new()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state.push(msg);
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let region = |label: &'static str| {
+                MouseRegion::new()
+                    .on_click(ctx.link().callback(move |_| label))
+                    .child(Text::new(label))
+            };
+            VStack::new()
+                .child(
+                    Frame::new()
+                        .child(DropTarget::new().child(DragSource::new().child(region("row"))))
+                        .automation_id("panel"),
+                )
+                .child(
+                    VStack::new()
+                        .child(region("left"))
+                        .child(region("right"))
+                        .automation_id("pair"),
+                )
+                .child(
+                    PanView::new()
+                        .width(Length::Px(3))
+                        .height(Length::Px(1))
+                        .child(region("pan"))
+                        .automation_id("pan-view"),
+                )
+                .child(
+                    Frame::new()
+                        .height(Length::Px(3))
+                        .child(
+                            MouseRegion::new()
+                                .on_click(ctx.link().callback(|_| "edge"))
+                                .hit_test(|x, _| x == 0)
+                                .child(Text::new("edge")),
+                        )
+                        .automation_id("edge-panel"),
+                )
+                .child(Text::new(format!("clicked={}", ctx.state.join(","))))
+                .into()
+        }
+    }
+
+    #[test]
+    fn click_passes_through_single_child_wrappers() {
+        let mut session = AutomationSession::new(Wrapped, AutomationOptions::default()).unwrap();
+        session
+            .execute(AutomationStep::click(Selector::id("panel")))
+            .unwrap();
+        assert_eq!(
+            session
+                .discover(&Selector::text_contains("clicked=row"))
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn containers_with_several_children_are_not_clickable() {
+        let mut session = AutomationSession::new(Wrapped, AutomationOptions::default()).unwrap();
+        let error = session
+            .execute(AutomationStep::click(Selector::id("pair")))
+            .unwrap_err();
+        assert!(matches!(error, AutomationError::NotActionable));
+    }
+
+    #[test]
+    fn click_passes_through_pan_view() {
+        let mut session = AutomationSession::new(Wrapped, AutomationOptions::default()).unwrap();
+        session
+            .execute(AutomationStep::click(Selector::id("pan-view")))
+            .unwrap();
+        assert_eq!(
+            session
+                .discover(&Selector::text_contains("clicked=pan"))
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn wrapper_is_not_clickable_where_child_hit_test_rejects_the_point() {
+        let mut session = AutomationSession::new(Wrapped, AutomationOptions::default()).unwrap();
+        let error = session
+            .execute(AutomationStep::click(Selector::id("edge-panel")))
+            .unwrap_err();
+        assert!(matches!(error, AutomationError::NotActionable));
+    }
+
+    struct Covered;
+
+    impl Component for Covered {
+        type Message = &'static str;
+        type Properties = ();
+        type State = Vec<&'static str>;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            Vec::new()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state.push(msg);
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            VStack::new()
+                .child(
+                    MouseRegion::new()
+                        .on_click(ctx.link().callback(|_| "under"))
+                        .child(
+                            VStack::new()
+                                .height(Length::Flex(1))
+                                .child(Text::new("under")),
+                        ),
+                )
+                .child(
+                    crate::widgets::Modal::new().child(
+                        MouseRegion::new()
+                            .on_click(ctx.link().callback(|_| "overlay"))
+                            .child(
+                                VStack::new()
+                                    .height(Length::Px(5))
+                                    .child(Text::new("overlay")),
+                            ),
+                    ),
+                )
+                .automation_id("panel")
+        }
+    }
+
+    #[test]
+    fn wrapper_is_not_clickable_where_a_hoisted_portal_covers_the_point() {
+        let mut session = AutomationSession::new(Covered, AutomationOptions::default()).unwrap();
+        // The modal's content covers the panel's centre. It is a runtime descendant of the
+        // panel but not a semantic child, so the one semantic child left is the region beneath.
+        let error = session
+            .execute(AutomationStep::click(Selector::id("panel")))
+            .unwrap_err();
+        assert!(matches!(error, AutomationError::NotActionable));
+    }
+
+    struct Captured;
+
+    impl Component for Captured {
+        type Message = &'static str;
+        type Properties = ();
+        type State = Vec<&'static str>;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            Vec::new()
+        }
+
+        fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state.push(msg);
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            MouseRegion::new()
+                .on_click(ctx.link().callback(|_| "outer"))
+                .capture_click(true)
+                .child(
+                    Frame::new()
+                        .child(
+                            MouseRegion::new()
+                                .on_click(ctx.link().callback(|_| "inner"))
+                                .child(Text::new("inner")),
+                        )
+                        .automation_id("panel"),
+                )
+                .into()
+        }
+    }
+
+    #[test]
+    fn wrapper_is_not_clickable_when_a_capturing_ancestor_takes_the_click() {
+        let mut session = AutomationSession::new(Captured, AutomationOptions::default()).unwrap();
+        // The deepest hit is the inner region, but dispatch hands the click to the outer
+        // capturing region, so a click on the panel never reaches its child.
+        let error = session
+            .execute(AutomationStep::click(Selector::id("panel")))
+            .unwrap_err();
+        assert!(matches!(error, AutomationError::NotActionable));
+    }
+
+    struct Scrolled {
+        items: usize,
+    }
+
+    impl Component for Scrolled {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            // A two-cell interior puts the panel's centre on the list's scrollbar column.
+            VStack::new()
+                .child(
+                    Frame::new()
+                        .width(Length::Px(4))
+                        .height(Length::Px(6))
+                        .child(
+                            List::new()
+                                .items((0..self.items).map(|i| ListItem::new(i.to_string())))
+                                .scrollbar(true)
+                                .on_select(ctx.link().callback(|_| ())),
+                        )
+                        .automation_id("panel"),
+                )
+                .into()
+        }
+    }
+
+    #[test]
+    fn wrapper_is_not_clickable_where_a_usable_scrollbar_takes_the_press() {
+        let mut session =
+            AutomationSession::new(Scrolled { items: 50 }, AutomationOptions::default()).unwrap();
+        let error = session
+            .execute(AutomationStep::click(Selector::id("panel")))
+            .unwrap_err();
+        assert!(matches!(error, AutomationError::NotActionable));
+    }
+
+    #[test]
+    fn the_same_centre_is_clickable_when_the_list_does_not_overflow() {
+        // Positive control for the test above: without overflow the list has no usable
+        // scrollbar there, so the centre cell is an ordinary list click.
+        let mut session =
+            AutomationSession::new(Scrolled { items: 1 }, AutomationOptions::default()).unwrap();
+        session
+            .execute(AutomationStep::click(Selector::id("panel")))
+            .unwrap();
+    }
+}

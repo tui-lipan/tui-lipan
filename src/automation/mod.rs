@@ -27,5 +27,5 @@ pub(crate) use checkpoint::semantic_json;
 pub(crate) use checkpoint::{semantic_markdown, validate_checkpoint_name};
 pub(crate) use operation::AutomationStepKind;
 pub(crate) use selector::resolve as resolve_selector;
-pub(crate) use semantic::project_semantic_tree;
+pub(crate) use semantic::{click_point, project_semantic_tree};
 pub(crate) use session::evaluate_wait_condition;
