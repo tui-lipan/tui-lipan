@@ -490,7 +490,7 @@ Source: `src/widgets/spinner/mod.rs:184` (`Spinner`).
 
 ## Select
 
-Source: `src/widgets/select/mod.rs:56` (`Select`).
+Source: `src/widgets/select/mod.rs:58` (`Select`).
 
 | Field | Default initializer |
 |---|---|
@@ -504,6 +504,8 @@ Source: `src/widgets/select/mod.rs:56` (`Select`).
 | `width` | `Length::Auto` |
 | `disabled` | `false` |
 | `button_variant` | `ButtonVariant::Outlined` |
+| `button_padding` | `None` |
+| `button_align` | `None` |
 | `button_style` | `Style::default()` |
 | `button_hover_style` | `StyleSlot::Inherit` |
 | `button_focus_style` | `StyleSlot::Inherit` |

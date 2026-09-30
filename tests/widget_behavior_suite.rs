@@ -52,6 +52,8 @@ mod mouse_region_local_click;
 mod progress_empty_track_surface;
 #[path = "suites/widget_behavior/roving_focus.rs"]
 mod roving_focus;
+#[path = "suites/widget_behavior/select_button_padding_render.rs"]
+mod select_button_padding_render;
 #[path = "suites/widget_behavior/select_keeps_focus.rs"]
 mod select_keeps_focus;
 #[path = "suites/widget_behavior/sequence_diagram_theme_render.rs"]

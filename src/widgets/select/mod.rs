@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::callback::{Callback, KeyHandler};
 use crate::core::element::Element;
 use crate::core::event::{KeyCode, KeyEvent, MouseEvent};
-use crate::style::{BorderStyle, Length, Padding, ScrollbarConfig, Style, StyleSlot};
+use crate::style::{Align, BorderStyle, Length, Padding, ScrollbarConfig, Style, StyleSlot};
 use crate::widgets::button::ButtonVariant;
 use crate::widgets::internal::scroll_action_from_key;
 use crate::widgets::{
@@ -25,6 +25,8 @@ pub struct Select {
     pub(crate) width: Length,
     pub(crate) disabled: bool,
     pub(crate) button_variant: ButtonVariant,
+    pub(crate) button_padding: Option<Padding>,
+    pub(crate) button_align: Option<Align>,
     pub(crate) button_style: Style,
     pub(crate) button_hover_style: StyleSlot,
     pub(crate) button_focus_style: StyleSlot,
@@ -64,6 +66,8 @@ impl Default for Select {
             width: Length::Auto,
             disabled: false,
             button_variant: ButtonVariant::Outlined,
+            button_padding: None,
+            button_align: None,
             button_style: Style::default(),
             button_hover_style: StyleSlot::Inherit,
             button_focus_style: StyleSlot::Inherit,
@@ -206,6 +210,19 @@ impl Select {
     /// Set button variant.
     pub fn button_variant(mut self, variant: ButtonVariant) -> Self {
         self.button_variant = variant;
+        self
+    }
+
+    /// Set the trigger button's padding, replacing the button's default.
+    pub fn button_padding(mut self, padding: impl Into<Padding>) -> Self {
+        self.button_padding = Some(padding.into());
+        self
+    }
+
+    /// Set the trigger label's horizontal alignment within a wider trigger (the button's default:
+    /// centered).
+    pub fn button_align(mut self, align: Align) -> Self {
+        self.button_align = Some(align);
         self
     }
 
@@ -525,6 +542,12 @@ impl From<Select> for Element {
             .focusable(select.focusable)
             .tab_stop(select.tab_stop);
 
+        if let Some(padding) = select.button_padding {
+            button = button.padding(padding);
+        }
+        if let Some(align) = select.button_align {
+            button = button.align(align);
+        }
         if let Some(cb) = select.on_focus.clone() {
             button = button.on_focus(cb);
         }
