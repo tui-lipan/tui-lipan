@@ -182,6 +182,7 @@ pub enum TextAreaSentinelClickKind {
 
 /// Event emitted when the user clicks an inline sentinel placeholder.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TextAreaSentinelClickEvent {
     /// The clicked sentinel payload.
     pub kind: TextAreaSentinelClickKind,

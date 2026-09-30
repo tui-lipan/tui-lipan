@@ -13,6 +13,7 @@ use crate::widgets::{
 
 /// Commit event emitted by [`ComboBox`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ComboBoxCommitEvent {
     /// Index in the source `items` list when an existing item is committed.
     pub index: Option<usize>,

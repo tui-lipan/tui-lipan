@@ -40,6 +40,7 @@ impl dyn DragPayload {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 /// Event emitted when drag activation threshold is exceeded.
+#[non_exhaustive]
 pub struct DragStartEvent {
     /// Pointer x coordinate when the drag activated (threshold exceeded).
     pub x: u16,
@@ -59,6 +60,7 @@ pub struct DragStartEvent {
 
 #[derive(Clone)]
 /// Event emitted while a compatible payload hovers a drop target.
+#[non_exhaustive]
 pub struct DragOverEvent {
     /// Current pointer x coordinate.
     pub x: u16,
@@ -78,6 +80,7 @@ pub struct DragOverEvent {
 
 #[derive(Clone)]
 /// Event emitted when payload leaves a drop target.
+#[non_exhaustive]
 pub struct DragLeaveEvent {
     /// Active drag payload.
     pub payload: Arc<dyn DragPayload>,
@@ -85,6 +88,7 @@ pub struct DragLeaveEvent {
 
 #[derive(Clone)]
 /// Event emitted when payload is dropped on a compatible target.
+#[non_exhaustive]
 pub struct DropEvent {
     /// Pointer x coordinate at drop time.
     pub x: u16,
@@ -104,6 +108,7 @@ pub struct DropEvent {
 
 #[derive(Clone)]
 /// Fired once when a generic drag becomes active (after the movement threshold).
+#[non_exhaustive]
 pub struct DragStartedEvent {
     /// Pointer x coordinate when the drag activated.
     pub x: u16,
@@ -115,6 +120,7 @@ pub struct DragStartedEvent {
 
 #[derive(Clone)]
 /// Event emitted when active drag is canceled.
+#[non_exhaustive]
 pub struct DragCancelEvent {
     /// Active drag payload.
     pub payload: Arc<dyn DragPayload>,

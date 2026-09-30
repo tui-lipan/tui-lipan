@@ -264,6 +264,7 @@ impl ScrollBehavior {
 
 /// A scroll event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ScrollEvent {
     /// New scroll offset (row index).
     pub offset: usize,
@@ -325,6 +326,7 @@ pub struct ScrollExitedChild {
 
 /// Viewport-change event for visible immediate [`ScrollView`](crate::widgets::ScrollView) children.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ScrollViewportEvent {
     /// Current row offset.
     pub offset: usize,

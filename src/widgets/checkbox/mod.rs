@@ -122,6 +122,7 @@ impl CheckboxState {
 
 /// A checkbox toggle event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct CheckboxEvent {
     /// New checkbox state after toggle.
     pub state: CheckboxState,

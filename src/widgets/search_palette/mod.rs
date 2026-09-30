@@ -393,6 +393,7 @@ mod tests {
 
 /// A search event emitted when an item is selected/activated.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct SearchEvent<T> {
     /// Index in the matched list.
     pub match_index: usize,

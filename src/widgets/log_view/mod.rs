@@ -14,6 +14,7 @@ use crate::style::{BorderStyle, Length, Padding, ScrollbarConfig, Style, StyleSl
 
 /// Log row event emitted from `LogView`.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LogViewEvent {
     /// Row index within currently visible (filtered) rows.
     pub visible_index: usize,

@@ -2,6 +2,7 @@
 
 /// Date selection event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct DateEvent {
     /// Selected year.
     pub year: i32,

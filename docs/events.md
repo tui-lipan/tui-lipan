@@ -59,6 +59,11 @@ terminal passthrough (`examples/terminal_copy_mode.rs`).
 
 ## Event Structs
 
+Event structs the framework passes to your callbacks are `#[non_exhaustive]`: read their fields,
+and add `..` to struct patterns (`|DropEvent { local_y, .. }|`). New fields can then arrive in a
+patch release. `KeyEvent` and `MouseEvent` are the exception: apps build them to drive
+`TestBackend` and custom backends, so they stay constructible.
+
 ### `ListEvent`
 
 Emitted by: `List::on_select`, `List::on_activate`, `List::on_item_click`

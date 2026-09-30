@@ -30,6 +30,7 @@ pub(crate) struct HexAreaPointerHit {
 
 /// Cursor movement event emitted by [`HexArea`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct HexAreaCursorEvent {
     /// New cursor byte index.
     pub cursor: usize,
@@ -39,6 +40,7 @@ pub struct HexAreaCursorEvent {
 
 /// Change event emitted by [`HexArea`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct HexAreaChangeEvent {
     /// Updated bytes.
     pub bytes: Arc<[u8]>,
@@ -61,6 +63,7 @@ pub enum HexAreaEditKind {
 
 /// Edit event emitted by [`HexArea`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct HexAreaEditEvent {
     /// Byte index affected by this edit.
     pub index: usize,

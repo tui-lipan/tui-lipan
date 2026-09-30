@@ -180,6 +180,7 @@ pub enum SequenceItemPath {
 
 /// Event payload for sequence diagram item interactions.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct SequenceItemEvent {
     /// Path identifying the interacted item.
     pub path: SequenceItemPath,

@@ -19,6 +19,7 @@ pub struct FileTreeEntryRequest {
 
 /// File selection event emitted by `FileTree`.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FileTreeEvent {
     /// Full path of selected entry.
     pub path: Arc<str>,
@@ -28,6 +29,7 @@ pub struct FileTreeEvent {
 
 /// File expand/collapse event emitted by `FileTree`.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FileTreeToggleEvent {
     /// Full path of toggled entry.
     pub path: Arc<str>,

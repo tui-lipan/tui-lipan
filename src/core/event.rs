@@ -44,6 +44,7 @@ pub struct MouseEvent {
 
 /// A mouse-move event with both global and local coordinates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct MouseMoveEvent {
     /// Global X coordinate (column) in content-space.
     pub x: u16,
@@ -63,6 +64,7 @@ pub struct MouseMoveEvent {
 
 /// A mouse drag event with global and region-local coordinates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct MouseDragEvent {
     /// Global X coordinate where the drag started.
     pub from_x: u16,

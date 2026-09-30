@@ -11,6 +11,7 @@ use crate::widgets::scroll::{ScrollKeymap, scroll_action_from_key};
 
 /// A table selection event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct TableEvent {
     /// Selected row index.
     pub index: usize,

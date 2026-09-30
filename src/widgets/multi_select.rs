@@ -77,6 +77,7 @@ pub enum MultiSelectDescriptionOverflow {
 
 /// Toggle event emitted by [`MultiSelect`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct MultiSelectToggleEvent {
     /// Source index that changed.
     pub index: usize,
@@ -86,6 +87,7 @@ pub struct MultiSelectToggleEvent {
 
 /// Selection change event emitted by [`MultiSelect`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MultiSelectChangeEvent {
     /// Sorted set of selected source indices.
     pub selected_indices: Vec<usize>,
@@ -93,6 +95,7 @@ pub struct MultiSelectChangeEvent {
 
 /// Commit event emitted by [`MultiSelect`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MultiSelectCommitEvent {
     /// Sorted set of selected source indices.
     pub selected_indices: Vec<usize>,

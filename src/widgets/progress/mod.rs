@@ -16,6 +16,7 @@ use crate::utils::gradient::ColorGradient;
 
 /// Event emitted when progress bar value changes (via drag).
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ProgressEvent {
     /// New progress value (0.0 to 1.0).
     pub progress: f64,
