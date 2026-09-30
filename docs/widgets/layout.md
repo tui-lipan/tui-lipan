@@ -359,7 +359,7 @@ Scrollable container with optional scrollbar.
 | `scroll_to_top` / `scroll_to_bottom` | - | Convenience wrappers for edge targets that do not need sentinel children |
 | `scroll_behavior` | `ScrollBehavior` | `Instant` by default; opt into smooth target movement |
 | `scroll_transition` | `TransitionConfig` | Shortcut for smooth target movement with a transition config |
-| `scroll_keys` | `ScrollKeymap` | Configure keyboard scroll keys |
+| `scroll_keys` | `ScrollKeymap` | Configure keyboard scroll keys; Ctrl, Alt, and Super chords never scroll |
 | `scroll_wheel` | `bool` | Enable mouse wheel scrolling |
 | `scroll_wheel_multiplier` | `u16` | Override the app-wide wheel line multiplier for this ScrollView |
 | `scroll_wheel_behavior` | `ScrollWheelBehavior` | `Immediate` by default; opt into inertial wheel movement |
