@@ -630,7 +630,8 @@ Wraps any subtree to handle pointer movement, clicks, and hover visuals.
 
 | Prop | Type | Description |
 |------|------|-------------|
-| `on_click` | `Callback<MouseEvent>` | Emits on left-button click (`MouseKind::Down(Left)`) |
+| `on_click` | `Callback<MouseRegionEvent>` | Left-button release after a press on the same region; `kind` is `MouseKind::Up(Left)` |
+| `on_mouse_down` / `on_mouse_up` | `Callback<MouseRegionEvent>` | Left-button press / release over the region |
 | `on_mouse_move` | `Callback<MouseMoveEvent>` | Emits on pointer movement |
 | `on_drag_start` / `on_drag` / `on_drag_end` | `Callback<MouseDragEvent>` | Left-button drag lifecycle after threshold |
 | `drag_requires_mods` | `KeyMods` | Require modifiers before left-button drag callbacks can start |
@@ -647,7 +648,7 @@ Wraps any subtree to handle pointer movement, clicks, and hover visuals.
 
 ```rust
 MouseRegion::new()
-    .on_click(ctx.link().callback(|e: MouseEvent| Msg::Click(e.x, e.y)))
+    .on_click(ctx.link().callback(|e: MouseRegionEvent| Msg::Click(e.local_x, e.local_y)))
     .capture_click(true)
     .on_mouse_move(ctx.link().callback(|e: MouseMoveEvent| {
         Msg::Hover { x: e.local_x, y: e.local_y }
@@ -692,6 +693,7 @@ MouseRegion::new()
 `hover_tint(color, alpha)` is a symmetric tint shortcut and blends both foreground and background toward `color`. At `alpha = 1.0`, both channels become that color.
 
 `MouseMoveEvent` fields: `x`, `y` (terminal-space), `local_x`, `local_y` (relative to MouseRegion rect), `target_w`, `target_h`, `mods`.
+`MouseRegionEvent` carries the same fields plus `kind` (the button and press/release).
 
 > Mouse motion processing is only active when at least one move listener is present in the tree.
 

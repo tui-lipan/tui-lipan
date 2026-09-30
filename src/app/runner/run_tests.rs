@@ -4491,15 +4491,24 @@ impl Component for HoverPaintSmoke {
             .children([
                 // Click-only: hoverable, but nothing about it paints differently.
                 MouseRegion::new()
-                    .on_click(ctx.link().callback(|_: MouseEvent| ()))
+                    .on_click(
+                        ctx.link()
+                            .callback(|_: crate::core::event::MouseRegionEvent| ()),
+                    )
                     .child(Text::new("aaaaa"))
                     .key("click-only-a"),
                 MouseRegion::new()
-                    .on_click(ctx.link().callback(|_: MouseEvent| ()))
+                    .on_click(
+                        ctx.link()
+                            .callback(|_: crate::core::event::MouseRegionEvent| ()),
+                    )
                     .child(Text::new("bbbbb"))
                     .key("click-only-b"),
                 MouseRegion::new()
-                    .on_click(ctx.link().callback(|_: MouseEvent| ()))
+                    .on_click(
+                        ctx.link()
+                            .callback(|_: crate::core::event::MouseRegionEvent| ()),
+                    )
                     .hover_style(Style::new().bg(Color::Blue))
                     .child(Text::new("ccccc"))
                     .key("hover-styled"),
@@ -4778,7 +4787,10 @@ impl Component for KeyedHoverDependencySmoke {
                     .width(Length::Px(11))
                     .into(),
                 MouseRegion::new()
-                    .on_click(ctx.link().callback(|_: MouseEvent| ()))
+                    .on_click(
+                        ctx.link()
+                            .callback(|_: crate::core::event::MouseRegionEvent| ()),
+                    )
                     .child(Text::new(if row_hovered { "row x" } else { "row  " }))
                     .key("row"),
             ])

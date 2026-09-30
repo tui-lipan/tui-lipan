@@ -448,9 +448,9 @@ pub(crate) fn emit_bubbling_mouse_down(
         if let NodeKind::MouseRegion(region) = &node.kind
             && region.enabled
             && region.bubble_mouse_down
-            && let Some(cb) = region.on_mouse_down.clone()
+            && let Some(cb) = &region.on_mouse_down
         {
-            cb.emit(mouse);
+            cb.emit(crate::core::event::MouseRegionEvent::at(mouse, node.rect));
         }
         current = node.parent;
     }

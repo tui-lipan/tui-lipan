@@ -217,7 +217,7 @@ pub use crate::core::component::{
 pub use crate::core::context_value::ContextValue;
 pub use crate::core::element::{Element, IntoElement, Key};
 pub use crate::core::event::{
-    KeyCode, KeyEvent, KeyMods, MouseDragEvent, MouseEvent, MouseMoveEvent,
+    KeyCode, KeyEvent, KeyMods, MouseDragEvent, MouseEvent, MouseMoveEvent, MouseRegionEvent,
 };
 pub use crate::core::mask::CellMask;
 pub use crate::core::memo::Memo;

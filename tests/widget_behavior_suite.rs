@@ -46,6 +46,8 @@ mod list_selection_highlight_lines;
 mod modal_reserve_height;
 #[path = "suites/widget_behavior/mouse_region_drag_threshold.rs"]
 mod mouse_region_drag_threshold;
+#[path = "suites/widget_behavior/mouse_region_local_click.rs"]
+mod mouse_region_local_click;
 #[path = "suites/widget_behavior/progress_empty_track_surface.rs"]
 mod progress_empty_track_surface;
 #[path = "suites/widget_behavior/roving_focus.rs"]

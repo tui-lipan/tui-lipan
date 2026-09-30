@@ -2162,8 +2162,14 @@ impl Component for BurstEffectsDemo {
                         .callback(|e: MouseMoveEvent| Msg::LetterMove(e.local_x, e.local_y)),
                 )
                 .on_hover_change(ctx.link().callback(Msg::LetterHover))
-                .on_mouse_down(ctx.link().callback(|_: MouseEvent| Msg::LetterMouseDown))
-                .on_click(ctx.link().callback(|_: MouseEvent| Msg::LetterMouseUp))
+                .on_mouse_down(
+                    ctx.link()
+                        .callback(|_: MouseRegionEvent| Msg::LetterMouseDown),
+                )
+                .on_click(
+                    ctx.link()
+                        .callback(|_: MouseRegionEvent| Msg::LetterMouseUp),
+                )
                 .child(
                     EffectScope::new().effects(effects).child(
                         BigText::new()
@@ -2269,8 +2275,14 @@ impl Component for BurstEffectsDemo {
                         .callback(|e: MouseMoveEvent| Msg::OpenCodeMove(e.local_x, e.local_y)),
                 )
                 .on_hover_change(ctx.link().callback(Msg::OpenCodeHover))
-                .on_mouse_down(ctx.link().callback(|_: MouseEvent| Msg::OpenCodeMouseDown))
-                .on_click(ctx.link().callback(|_: MouseEvent| Msg::OpenCodeMouseUp))
+                .on_mouse_down(
+                    ctx.link()
+                        .callback(|_: MouseRegionEvent| Msg::OpenCodeMouseDown),
+                )
+                .on_click(
+                    ctx.link()
+                        .callback(|_: MouseRegionEvent| Msg::OpenCodeMouseUp),
+                )
                 .child(
                     EffectScope::new().effect(effect).child(
                         AsciiCanvas::from_sequence(Arc::clone(&self.opencode_sequence))
@@ -2288,8 +2300,8 @@ impl Component for BurstEffectsDemo {
                             Msg::CursorMoved(e.local_x as f32, e.local_y as f32)
                         }))
                         .on_hover_change(ctx.link().callback(Msg::HoverChanged))
-                        .on_mouse_down(ctx.link().callback(|_: MouseEvent| Msg::MouseDown))
-                        .on_click(ctx.link().callback(|_: MouseEvent| Msg::MouseUp))
+                        .on_mouse_down(ctx.link().callback(|_: MouseRegionEvent| Msg::MouseDown))
+                        .on_click(ctx.link().callback(|_: MouseRegionEvent| Msg::MouseUp))
                         .child(
                             BigText::new()
                                 .text(LOGO_BIG_TEXT)

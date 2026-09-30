@@ -1172,8 +1172,8 @@ impl Component for TuiLipanShowcase {
                     Msg::CursorMoved(e.local_x as f32, e.local_y as f32)
                 }))
                 .on_hover_change(ctx.link().callback(Msg::HoverChanged))
-                .on_mouse_down(ctx.link().callback(|_: MouseEvent| Msg::MouseDown))
-                .on_click(ctx.link().callback(|_: MouseEvent| Msg::MouseUp))
+                .on_mouse_down(ctx.link().callback(|_: MouseRegionEvent| Msg::MouseDown))
+                .on_click(ctx.link().callback(|_: MouseRegionEvent| Msg::MouseUp))
                 .child(gradient_wrapped);
 
         let foreground_effects = effects.into_iter().map(VisualEffect::foreground_only);

@@ -10,7 +10,7 @@ pub(crate) use self::reconcile::reconcile_mouse_region;
 
 use crate::callback::Callback;
 use crate::core::element::{Element, ElementKind};
-use crate::core::event::{KeyMods, MouseDragEvent, MouseEvent, MouseMoveEvent};
+use crate::core::event::{KeyMods, MouseDragEvent, MouseMoveEvent, MouseRegionEvent};
 use crate::core::mask::CellMask;
 use crate::style::{LayoutConstraints, Length, Style, StyleSlot, VisualEffect};
 use std::sync::Arc;
@@ -26,10 +26,10 @@ pub const DEFAULT_DRAG_THRESHOLD: (u16, u16) = (3, 1);
 #[derive(Clone, Default)]
 pub struct MouseRegion {
     pub(crate) child: Option<Box<Element>>,
-    pub(crate) on_click: Option<Callback<MouseEvent>>,
-    pub(crate) on_mouse_down: Option<Callback<MouseEvent>>,
+    pub(crate) on_click: Option<Callback<MouseRegionEvent>>,
+    pub(crate) on_mouse_down: Option<Callback<MouseRegionEvent>>,
     pub(crate) bubble_mouse_down: bool,
-    pub(crate) on_mouse_up: Option<Callback<MouseEvent>>,
+    pub(crate) on_mouse_up: Option<Callback<MouseRegionEvent>>,
     pub(crate) on_mouse_move: Option<Callback<MouseMoveEvent>>,
     pub(crate) on_drag_start: Option<Callback<MouseDragEvent>>,
     pub(crate) on_drag: Option<Callback<MouseDragEvent>>,
@@ -157,7 +157,7 @@ impl MouseRegion {
     }
 
     /// Set click callback (fires on mouse-up after a press on the same node).
-    pub fn on_click(mut self, cb: Callback<MouseEvent>) -> Self {
+    pub fn on_click(mut self, cb: Callback<MouseRegionEvent>) -> Self {
         self.on_click = Some(cb);
         self
     }
@@ -176,7 +176,7 @@ impl MouseRegion {
     }
 
     /// Set mouse-down callback (fires immediately on left button press).
-    pub fn on_mouse_down(mut self, cb: Callback<MouseEvent>) -> Self {
+    pub fn on_mouse_down(mut self, cb: Callback<MouseRegionEvent>) -> Self {
         self.on_mouse_down = Some(cb);
         self
     }
@@ -192,7 +192,7 @@ impl MouseRegion {
     }
 
     /// Set mouse-up callback (fires immediately on left button release over the region).
-    pub fn on_mouse_up(mut self, cb: Callback<MouseEvent>) -> Self {
+    pub fn on_mouse_up(mut self, cb: Callback<MouseRegionEvent>) -> Self {
         self.on_mouse_up = Some(cb);
         self
     }
