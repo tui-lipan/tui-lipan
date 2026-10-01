@@ -9744,6 +9744,7 @@ fn a_virtual_advance_fires_a_deferred_command_so_its_state_is_captured() {
         revealed.contains("revealed"),
         "expected the advance to fire the deferred command:\n{revealed}"
     );
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -9777,6 +9778,7 @@ fn a_real_settle_lets_asynchronous_work_land_before_capture() {
         arrived.contains("arrived"),
         "expected the settle to let the background task land:\n{arrived}"
     );
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -9806,6 +9808,7 @@ fn a_script_sleep_waits_in_real_time_where_the_author_put_it() {
         waited.contains("waiting"),
         "a virtual wait must not stand in for real time:\n{waited}"
     );
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 struct KeyCaptureRecorder {

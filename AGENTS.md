@@ -89,6 +89,14 @@ builds, or sleeps:
 Rough budget: a new integration test should add well under a second of wall time. If yours adds
 more, time its suite and module filter and say why in the PR.
 
+#### Optional local tools
+
+- `cargo llvm-cov --workspace --all-features --html` writes a coverage report to
+  `target/llvm-cov/html/`. Add `--summary-only` for a per-file table in the terminal.
+- `cargo nextest` is not worth it here. Measured locally, it ran the suite slightly slower than
+  `cargo test` (about 2.4 s against 2.1 s), because starting a process per test costs more than
+  this suite's tests take. It also skips doctests, which `cargo test` runs.
+
 ### Linting & Formatting
 - `cargo fmt` - Format code
 - `cargo fmt --all -- --check` - Check formatting
