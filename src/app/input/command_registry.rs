@@ -650,14 +650,14 @@ mod tests {
         );
         let mut runtime =
             CommandShortcutRuntime::new(&registry, CommandConflictPolicy::FirstRegistered);
-        assert!(matches!(
+        std::assert_matches!(
             runtime.feed(ctrl_key_for_test('a'), &registry),
             CommandShortcutResult::Pending
-        ));
+        );
         registry.unregister("mux.detach");
-        assert!(matches!(
+        std::assert_matches!(
             runtime.feed(key_event_for_test('d'), &registry),
             CommandShortcutResult::None
-        ));
+        );
     }
 }

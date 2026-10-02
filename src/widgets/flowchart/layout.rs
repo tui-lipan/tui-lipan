@@ -1768,7 +1768,7 @@ mod tests {
             .hit_test(first.rect.x as u16, first.rect.y as u16)
             .unwrap()
             .1;
-        assert!(matches!(hit, FlowchartItemPath::Node(_)));
+        std::assert_matches!(hit, FlowchartItemPath::Node(_));
         assert!(
             node.hit_test_refinement(
                 first.rect.x,

@@ -288,12 +288,7 @@ impl TextAreaNode {
         let mut visible = false;
         for (idx, line) in lines.iter().enumerate() {
             let line_start = crate::utils::text::clamp_cursor(&self.value, line.start);
-            let raw_line_end = line.end.min(self.value.len());
-            let line_end = if self.value.is_char_boundary(raw_line_end) {
-                raw_line_end
-            } else {
-                crate::utils::text::next_char_boundary(&self.value, raw_line_end)
-            };
+            let line_end = self.value.ceil_char_boundary(line.end);
             let (line_start, line_end) = if line_start <= line_end {
                 (line_start, line_end)
             } else {

@@ -437,10 +437,5 @@ fn truncate_paste(text: &str, max_bytes: usize) -> String {
         return text.to_string();
     }
 
-    let mut end = max_bytes.min(text.len());
-    while end > 0 && !text.is_char_boundary(end) {
-        end = end.saturating_sub(1);
-    }
-
-    text[..end].to_string()
+    text[..text.floor_char_boundary(max_bytes)].to_string()
 }

@@ -336,10 +336,10 @@ mod tests {
     fn reports_missing_dependency() {
         let spec = GanttSpec::new()
             .section(GanttSection::new("Build").task(GanttTask::new("Implement").after("missing")));
-        assert!(matches!(
+        std::assert_matches!(
             resolve_gantt_spec(&spec),
             Err(GanttError::MissingDependency { .. })
-        ));
+        );
     }
 
     #[test]
@@ -349,9 +349,9 @@ mod tests {
                 .task(GanttTask::new("A").id("a").after("b"))
                 .task(GanttTask::new("B").id("b").after("a")),
         );
-        assert!(matches!(
+        std::assert_matches!(
             resolve_gantt_spec(&spec),
             Err(GanttError::CyclicDependency(_))
-        ));
+        );
     }
 }

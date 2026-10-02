@@ -213,7 +213,7 @@ mod tests {
         manager
             .update_cursor(&mut out, tree, Some(tree.root), &HashMap::new())
             .unwrap();
-        String::from_utf8_lossy(&out).into_owned()
+        String::from_utf8_lossy_owned(out)
     }
 
     #[test]

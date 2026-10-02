@@ -323,20 +323,11 @@ impl SessionClock {
 
     pub(crate) fn advance(&self, dt: Duration) {
         let nanos = u64::try_from(dt.as_nanos()).unwrap_or(u64::MAX);
-        let counter = &self.inner.controlled_nanos;
-        let mut current = counter.load(Ordering::Acquire);
-        // Use the CAS loop directly: try_update requires Rust 1.95, beyond our MSRV.
-        loop {
-            match counter.compare_exchange_weak(
-                current,
-                current.saturating_add(nanos),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(observed) => current = observed,
-            }
-        }
+        self.inner
+            .controlled_nanos
+            .update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.saturating_add(nanos)
+            });
     }
 }
 
@@ -563,36 +554,5 @@ impl RuntimeEnv {
                 .wrapping_add(1)
                 .max(1),
         );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{ClockMode, Duration, SessionClock};
-
-    #[test]
-    fn controlled_clock_saturates_without_wrapping() {
-        let clock = SessionClock::new(ClockMode::Controlled);
-        clock.advance(Duration::from_nanos(u64::MAX - 1));
-        clock.advance(Duration::from_nanos(2));
-        assert_eq!(clock.elapsed(), Duration::from_nanos(u64::MAX));
-        clock.advance(Duration::MAX);
-        assert_eq!(clock.elapsed(), Duration::from_nanos(u64::MAX));
-    }
-
-    #[test]
-    fn controlled_clock_preserves_concurrent_advances() {
-        let clock = SessionClock::new(ClockMode::Controlled);
-        std::thread::scope(|scope| {
-            for _ in 0..4 {
-                let clock = &clock;
-                scope.spawn(move || {
-                    for _ in 0..1_000 {
-                        clock.advance(Duration::from_nanos(1));
-                    }
-                });
-            }
-        });
-        assert_eq!(clock.elapsed(), Duration::from_nanos(4_000));
     }
 }

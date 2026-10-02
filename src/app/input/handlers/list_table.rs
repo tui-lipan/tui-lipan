@@ -473,8 +473,7 @@ mod tests {
         let (mut tree, id) = reconcile_list(list);
         assert!(matches!(
             &tree.node(id).kind,
-            NodeKind::List(node) if node.selected.is_none()
-        ));
+            NodeKind::List(node) if node.selected.is_none()));
 
         assert!(handle_list_key(&mut tree, id, key(KeyCode::Down)));
         assert_eq!(*selected.borrow(), Some(1));
@@ -619,7 +618,7 @@ mod tests {
             id,
             chord(KeyCode::PageDown, KeyMods::SHIFT)
         ));
-        assert!(matches!(emitted.borrow().as_slice(), [next] if *next > 10));
+        std::assert_matches!(emitted.borrow().as_slice(), [next] if *next > 10);
     }
 
     fn table_selection_after(selected: Option<usize>, key: KeyEvent) -> (bool, Vec<usize>) {
@@ -657,7 +656,7 @@ mod tests {
         }
         let (handled, emitted) = table_selection_after(Some(10), key(KeyCode::PageUp));
         assert!(handled);
-        assert!(matches!(emitted.as_slice(), [next] if *next < 10));
+        std::assert_matches!(emitted.as_slice(), [next] if *next < 10);
     }
 
     struct FocusedListApp {

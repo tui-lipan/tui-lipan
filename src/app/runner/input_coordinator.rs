@@ -1023,11 +1023,10 @@ mod tests {
         input.colors.start_query();
         assert!(input.push(&[0xa9], &events));
 
-        assert!(matches!(
+        std::assert_matches!(
             receiver.recv().unwrap(),
             RunnerEvent::Terminal(CrosstermEvent::Key(event))
-                if event.code == CrosstermKeyCode::Char('é')
-        ));
+                if event.code == CrosstermKeyCode::Char('é'));
     }
 
     #[test]
@@ -1047,11 +1046,10 @@ mod tests {
         assert!(query.as_ref().unwrap().deadline.is_none());
 
         assert!(input.push(b"P", &events));
-        assert!(matches!(
+        std::assert_matches!(
             receiver.recv().unwrap(),
             RunnerEvent::Terminal(CrosstermEvent::Key(event))
-                if event.code == CrosstermKeyCode::F(1)
-        ));
+                if event.code == CrosstermKeyCode::F(1));
         start_color_query_if_ready(&mut output, &mut input, &mut query, true).unwrap();
         assert_eq!(output, build_live_color_query_batch());
         assert!(query.as_ref().unwrap().deadline.is_some());
@@ -1138,7 +1136,7 @@ mod tests {
             row: 9,
             modifiers: TerminaModifiers::SHIFT,
         };
-        assert!(matches!(
+        std::assert_matches!(
             map_termina_event(TerminaEvent::Mouse(mouse)),
             TerminaEventAction::Input(CrosstermEvent::Mouse(CrosstermMouseEvent {
                 kind: CrosstermMouseEventKind::Drag(CrosstermMouseButton::Right),
@@ -1146,7 +1144,7 @@ mod tests {
                 row: 9,
                 modifiers: CrosstermKeyModifiers::SHIFT,
             }))
-        ));
+        );
         assert_eq!(
             map_termina_event(TerminaEvent::FocusIn),
             TerminaEventAction::Input(CrosstermEvent::FocusGained)
@@ -1293,11 +1291,10 @@ mod tests {
                 .terminal
         );
         assert!(read_terminal_bytes(&mut terminal_reader, &mut input, &events).unwrap());
-        assert!(matches!(
+        std::assert_matches!(
             receiver.recv().unwrap(),
             RunnerEvent::Terminal(CrosstermEvent::Key(event))
-                if event.code == CrosstermKeyCode::F(1)
-        ));
+                if event.code == CrosstermKeyCode::F(1));
         assert!(input.settle(&events));
         start_color_query_if_ready(&mut output, &mut input, &mut query, true).unwrap();
         assert_eq!(output, build_live_color_query_batch());
@@ -1310,10 +1307,9 @@ mod tests {
 
         contain_worker_panic(&events, || panic!("contained worker panic"));
 
-        assert!(matches!(
+        std::assert_matches!(
             receiver.recv().unwrap(),
-            RunnerEvent::InputError(message) if message.contains("contained worker panic")
-        ));
+            RunnerEvent::InputError(message) if message.contains("contained worker panic"));
     }
 
     #[test]

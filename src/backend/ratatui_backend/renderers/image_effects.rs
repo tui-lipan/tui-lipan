@@ -366,7 +366,7 @@ mod tests {
         };
         let (effect, found) = pixel_visual_effect(&clipped).expect("a rect clip is kept");
         assert_eq!(found, Some(bounds));
-        assert!(matches!(effect, VisualEffect::Channels { .. }));
+        std::assert_matches!(effect, VisualEffect::Channels { .. });
         let replayed = ReplayedEffect::new(CellPass::Visual(effect), None).unwrap();
         assert_eq!(replayed.apply_rgb((200, 100, 50)), (100, 50, 25));
     }

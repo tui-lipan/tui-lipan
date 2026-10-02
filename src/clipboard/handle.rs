@@ -315,13 +315,13 @@ mod tests {
 
         let err = handle.copy_files::<&str>(&[]).unwrap_err();
 
-        assert!(matches!(
+        std::assert_matches!(
             err,
             ClipboardError::InvalidInput {
                 operation: ClipboardOperation::WriteFileClipboard,
                 ..
             }
-        ));
+        );
         assert!(recorded.borrow().files_written.is_empty());
     }
 
@@ -405,17 +405,17 @@ mod tests {
         let mut provider = MinimalProvider;
 
         assert!(!provider.supports_file_clipboard());
-        assert!(matches!(
+        std::assert_matches!(
             provider.read_clipboard_files(),
             Err(ClipboardError::Unsupported {
                 operation: ClipboardOperation::ReadFileClipboard
             })
-        ));
-        assert!(matches!(
+        );
+        std::assert_matches!(
             provider.write_clipboard_files(&[]),
             Err(ClipboardError::Unsupported {
                 operation: ClipboardOperation::WriteFileClipboard
             })
-        ));
+        );
     }
 }

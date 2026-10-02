@@ -24,11 +24,7 @@ pub(crate) fn display_width(text: &str) -> usize {
 
 /// Return the display column at the UTF-8 byte offset `byte_offset`.
 pub(crate) fn display_column(text: &str, byte_offset: usize) -> usize {
-    let mut byte_offset = byte_offset.min(text.len());
-    while byte_offset > 0 && !text.is_char_boundary(byte_offset) {
-        byte_offset -= 1;
-    }
-    display_width(&text[..byte_offset])
+    display_width(&text[..text.floor_char_boundary(byte_offset)])
 }
 
 /// Return the UTF-8 byte offset at display column `column`.

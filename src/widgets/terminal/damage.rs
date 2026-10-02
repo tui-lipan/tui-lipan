@@ -144,7 +144,7 @@ mod tests {
         let mut screen = TerminalScreen::new(24, 80, 1000);
         screen.process_bytes(b"x");
         let _ = screen.take_damage();
-        assert!(matches!(screen.take_damage(), super::TerminalDamage::None));
+        std::assert_matches!(screen.take_damage(), super::TerminalDamage::None);
     }
 }
 

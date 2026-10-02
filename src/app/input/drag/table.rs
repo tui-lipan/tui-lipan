@@ -406,14 +406,8 @@ pub(crate) fn table_tsv_for_range(
                     {
                         cols.push(full_text.to_string());
                     } else {
-                        let mut start = anchor_cell_line_anchor_byte.min(full_text.len());
-                        while start > 0 && !full_text.is_char_boundary(start) {
-                            start = start.saturating_sub(1);
-                        }
-                        let mut end = cursor_cell_line_anchor_byte.min(full_text.len());
-                        while end > 0 && !full_text.is_char_boundary(end) {
-                            end = end.saturating_sub(1);
-                        }
+                        let start = full_text.floor_char_boundary(anchor_cell_line_anchor_byte);
+                        let end = full_text.floor_char_boundary(cursor_cell_line_anchor_byte);
                         let (start, end) = if start <= end {
                             (start, end)
                         } else {
@@ -425,10 +419,7 @@ pub(crate) fn table_tsv_for_range(
                     // Pointer left the table (clamped coords): full cell, including suffix-mode.
                     cols.push(full_text.to_string());
                 } else {
-                    let mut cursor = cursor_cell_line_anchor_byte.min(full_text.len());
-                    while cursor > 0 && !full_text.is_char_boundary(cursor) {
-                        cursor = cursor.saturating_sub(1);
-                    }
+                    let cursor = full_text.floor_char_boundary(cursor_cell_line_anchor_byte);
                     if cursor_cell_use_suffix {
                         cols.push(full_text[cursor..].to_string());
                     } else {

@@ -19,7 +19,7 @@ pub enum DropHighlight {
     /// No highlight layer (callbacks still run).
     #[default]
     None,
-    /// Solid fill using [`DropTarget`](DropTarget) `highlight_style`.
+    /// Solid fill using [`DropTarget`] `highlight_style`.
     Fill,
     /// Bordered placeholder frame (same helper as Image pending decode).
     Placeholder,

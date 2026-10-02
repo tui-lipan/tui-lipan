@@ -1611,8 +1611,9 @@ mod palette_fidelity_tests {
             None,
             Some(RColor::Black),
         );
-        assert!(
-            matches!(cell.fg, RColor::Rgb(..)),
+        std::assert_matches!(
+            cell.fg,
+            RColor::Rgb(..),
             "truecolor fg should remain blended truecolor, got {:?}",
             cell.fg
         );
@@ -1664,8 +1665,8 @@ mod palette_fidelity_tests {
         cell.set_fg(RColor::DarkGray);
         cell.set_bg(RColor::Rgb(0, 200, 200));
         let cell = apply_style_to_cell(cell, Style::new().dim_by(0.6));
-        assert!(matches!(cell.fg, RColor::Rgb(..)), "got {:?}", cell.fg);
-        assert!(matches!(cell.bg, RColor::Rgb(..)), "got {:?}", cell.bg);
+        std::assert_matches!(cell.fg, RColor::Rgb(..), "got {:?}", cell.fg);
+        std::assert_matches!(cell.bg, RColor::Rgb(..), "got {:?}", cell.bg);
         assert!(!cell.modifier.contains(RMod::DIM));
     }
 
@@ -1675,10 +1676,7 @@ mod palette_fidelity_tests {
         cell.set_fg(RColor::Yellow);
         let cell = apply_style_to_cell(cell, Style::new().tint_by(Color::Rgb(0, 0, 40), 0.5));
         assert_eq!(cell.fg, RColor::Yellow, "palette fg must stay on-palette");
-        assert!(
-            matches!(cell.bg, RColor::Rgb(..)),
-            "Reset bg tints the terminal bg"
-        );
+        std::assert_matches!(cell.bg, RColor::Rgb(..), "Reset bg tints the terminal bg");
         assert!(cell.modifier.contains(RMod::DIM));
     }
 
@@ -1823,7 +1821,7 @@ mod palette_fidelity_tests {
         cell.set_fg(RColor::Cyan);
         cell.set_bg(RColor::Rgb(0, 0, 0));
         apply_color_transforms_to_cell(&mut cell, Some(ColorTransform::opacity(0.4)), None, None);
-        assert!(matches!(cell.fg, RColor::Rgb(..)), "got {:?}", cell.fg);
+        std::assert_matches!(cell.fg, RColor::Rgb(..), "got {:?}", cell.fg);
         assert!(!cell.modifier.contains(RMod::DIM));
     }
 

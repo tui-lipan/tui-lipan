@@ -1139,7 +1139,7 @@ mod tests {
         assert_eq!(list.start, 2);
 
         let item = &list.items[0];
-        assert!(matches!(item.content[0], FormattedBlock::Lines(_)));
+        std::assert_matches!(item.content[0], FormattedBlock::Lines(_));
 
         let code = item
             .content
@@ -1319,10 +1319,7 @@ mod tests {
             document_styles: None,
         });
 
-        assert!(matches!(
-            doc.blocks.first(),
-            Some(FormattedBlock::Diagram(_))
-        ));
+        std::assert_matches!(doc.blocks.first(), Some(FormattedBlock::Diagram(_)));
     }
 
     #[test]
@@ -1334,10 +1331,7 @@ mod tests {
             document_styles: None,
         });
 
-        assert!(matches!(
-            doc.blocks.first(),
-            Some(FormattedBlock::CodeBlock(_))
-        ));
+        std::assert_matches!(doc.blocks.first(), Some(FormattedBlock::CodeBlock(_)));
     }
 
     #[test]
@@ -1349,10 +1343,7 @@ mod tests {
             document_styles: None,
         });
 
-        assert!(matches!(
-            doc.blocks.first(),
-            Some(FormattedBlock::Diagram(_))
-        ));
+        std::assert_matches!(doc.blocks.first(), Some(FormattedBlock::Diagram(_)));
     }
 
     #[test]
@@ -1364,10 +1355,7 @@ mod tests {
             document_styles: None,
         });
 
-        assert!(matches!(
-            doc.blocks.first(),
-            Some(FormattedBlock::Diagram(_))
-        ));
+        std::assert_matches!(doc.blocks.first(), Some(FormattedBlock::Diagram(_)));
     }
 
     #[test]
@@ -1379,10 +1367,7 @@ mod tests {
             document_styles: None,
         });
 
-        assert!(matches!(
-            doc.blocks.first(),
-            Some(FormattedBlock::Diagram(_))
-        ));
+        std::assert_matches!(doc.blocks.first(), Some(FormattedBlock::Diagram(_)));
     }
 
     #[test]
@@ -1448,10 +1433,7 @@ flowchart LR
             document_styles: None,
         });
 
-        assert!(matches!(
-            doc.blocks.first(),
-            Some(FormattedBlock::CodeBlock(_))
-        ));
+        std::assert_matches!(doc.blocks.first(), Some(FormattedBlock::CodeBlock(_)));
     }
 
     #[test]
@@ -1463,10 +1445,7 @@ flowchart LR
             document_styles: None,
         });
 
-        assert!(matches!(
-            doc.blocks.first(),
-            Some(FormattedBlock::CodeBlock(_))
-        ));
+        std::assert_matches!(doc.blocks.first(), Some(FormattedBlock::CodeBlock(_)));
     }
 
     #[test]
@@ -1478,10 +1457,7 @@ flowchart LR
             document_styles: None,
         });
 
-        assert!(matches!(
-            doc.blocks.first(),
-            Some(FormattedBlock::CodeBlock(_))
-        ));
+        std::assert_matches!(doc.blocks.first(), Some(FormattedBlock::CodeBlock(_)));
     }
 
     #[test]
@@ -1493,10 +1469,7 @@ flowchart LR
             document_styles: None,
         });
 
-        assert!(matches!(
-            doc.blocks.first(),
-            Some(FormattedBlock::CodeBlock(_))
-        ));
+        std::assert_matches!(doc.blocks.first(), Some(FormattedBlock::CodeBlock(_)));
     }
 
     #[test]

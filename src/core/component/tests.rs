@@ -940,11 +940,9 @@ fn keyed_command_latest_only_coalesces_pending_tasks() {
             .expect("C should run"),
         "C"
     );
-    assert!(
-        matches!(
-            ran_rx.recv_timeout(Duration::from_millis(200)),
-            Err(mpsc::RecvTimeoutError::Timeout)
-        ),
+    std::assert_matches!(
+        ran_rx.recv_timeout(Duration::from_millis(200)),
+        Err(mpsc::RecvTimeoutError::Timeout),
         "intermediate task B should be replaced"
     );
 }
@@ -965,10 +963,10 @@ fn command_link_send_if_not_cancelled_suppresses_messages() {
     token.cancel();
 
     assert!(!link.send_if_not_cancelled(()));
-    assert!(matches!(
+    std::assert_matches!(
         rx.recv_timeout(Duration::from_millis(50)),
         Err(mpsc::RecvTimeoutError::Timeout)
-    ));
+    );
 }
 
 /// `Command::after` must not occupy an executor worker while it waits. The executor runs 2-8

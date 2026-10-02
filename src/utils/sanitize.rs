@@ -127,10 +127,10 @@ mod tests {
 
     #[test]
     fn clean_text_uses_the_byte_fast_path_without_trimming() {
-        assert!(matches!(
+        std::assert_matches!(
             sanitize_display_text("  plain text  "),
             Cow::Borrowed("  plain text  ")
-        ));
+        );
     }
 
     #[test]

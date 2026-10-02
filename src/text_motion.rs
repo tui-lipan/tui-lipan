@@ -163,11 +163,7 @@ pub fn char_col_to_byte(row: &str, col: usize) -> usize {
 /// assert_eq!(byte_to_char_col("hél", 3), 2);
 /// ```
 pub fn byte_to_char_col(row: &str, byte: usize) -> usize {
-    let mut byte = byte.min(row.len());
-    while byte > 0 && !row.is_char_boundary(byte) {
-        byte -= 1;
-    }
-    row[..byte].chars().count()
+    row[..row.floor_char_boundary(byte)].chars().count()
 }
 
 /// Apply a byte-offset motion to a character-column cursor.

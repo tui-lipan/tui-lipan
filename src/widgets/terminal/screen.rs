@@ -380,7 +380,7 @@ impl Dimensions for TermDimensions {
 /// A terminal's own contents are cells, but programs that draw pictures need pixels: they read the
 /// PTY's `TIOCGWINSZ` pixel fields or ask with `CSI 14 t`, then size their output against the
 /// answer. Both are reported from the value installed with
-/// [`TerminalScreen::set_cell_size`](TerminalScreen::set_cell_size), so what a child computes and
+/// [`TerminalScreen::set_cell_size`], so what a child computes and
 /// what this screen lays out agree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TerminalCellSize {
@@ -4840,7 +4840,7 @@ mod tests {
         let responses: Vec<String> = screen
             .drain_responses()
             .into_iter()
-            .map(|r| String::from_utf8_lossy(&r).into_owned())
+            .map(String::from_utf8_lossy_owned)
             .collect();
 
         let joined = responses.join("");
@@ -5051,7 +5051,7 @@ mod tests {
         screen.term.selection = Some(selection.clone());
         let expected = screen.export_replay_bytes();
         assert_eq!(screen.term.selection, Some(selection.clone()));
-        assert!(matches!(screen.take_damage(), TerminalDamage::None));
+        std::assert_matches!(screen.take_damage(), TerminalDamage::None);
         let before = screen.render_snapshot();
 
         for remaining in [0, 1, expected.len() / 2, expected.len() - 1] {
@@ -5066,10 +5066,10 @@ mod tests {
             assert_eq!(after.cursor_row, before.cursor_row);
             assert_eq!(after.cursor_col, before.cursor_col);
             assert_eq!(screen.term.selection, Some(selection.clone()));
-            assert!(matches!(screen.take_damage(), TerminalDamage::None));
+            std::assert_matches!(screen.take_damage(), TerminalDamage::None);
             assert_eq!(screen.export_replay_bytes(), expected);
             assert_eq!(screen.term.selection, Some(selection.clone()));
-            assert!(matches!(screen.take_damage(), TerminalDamage::None));
+            std::assert_matches!(screen.take_damage(), TerminalDamage::None);
         }
     }
 

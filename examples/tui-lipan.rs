@@ -1257,13 +1257,13 @@ mod tests {
     fn every_tab_brand_gradient_is_foreground_only() {
         for tab in 0..TAB_LABELS.len() {
             let effects = brand_gradient_scope_effects(tab);
-            assert!(matches!(
+            std::assert_matches!(
                 effects.as_slice(),
                 [VisualEffect::Channels {
                     channels: EffectChannels::Foreground,
                     ..
                 }]
-            ));
+            );
         }
     }
 }

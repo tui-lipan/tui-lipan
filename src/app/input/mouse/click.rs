@@ -417,10 +417,10 @@ mod tests {
         let events = events.borrow();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].byte_range, (1, 4));
-        assert!(matches!(
+        std::assert_matches!(
             &events[0].kind,
             TextAreaSentinelClickKind::Custom { index: 0, .. }
-        ));
+        );
     }
 
     #[test]

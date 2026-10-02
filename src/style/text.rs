@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn plain_content_borrows_single_span() {
         let text = RichText::from("hello");
-        assert!(matches!(text.plain_content(), Cow::Borrowed("hello")));
+        std::assert_matches!(text.plain_content(), Cow::Borrowed("hello"));
     }
 
     #[test]
@@ -199,6 +199,6 @@ mod tests {
         let text = RichText::new()
             .span(Span::from("hel"))
             .span(Span::from("lo"));
-        assert!(matches!(text.plain_content(), Cow::Owned(ref s) if s == "hello"));
+        std::assert_matches!(text.plain_content(), Cow::Owned(ref s) if s == "hello");
     }
 }

@@ -238,15 +238,10 @@ pub(crate) fn is_word_char(c: char) -> bool {
 
 /// Find the byte position at the start of the previous character.
 pub(crate) fn prev_char_boundary(text: &str, cursor: usize) -> usize {
-    let mut pos = cursor.min(text.len());
-    if pos == 0 {
-        return 0;
+    match cursor.min(text.len()) {
+        0 => 0,
+        pos => text.floor_char_boundary(pos - 1),
     }
-    pos -= 1;
-    while pos > 0 && !text.is_char_boundary(pos) {
-        pos -= 1;
-    }
-    pos
 }
 
 /// Find the byte position at the start of the next character.
@@ -485,11 +480,7 @@ pub(crate) fn byte_at_col_sentinel_tabs_virtual(
 }
 
 pub(crate) fn clamp_cursor(line: &str, cursor: usize) -> usize {
-    let mut c = cursor.min(line.len());
-    while c > 0 && !line.is_char_boundary(c) {
-        c -= 1;
-    }
-    c
+    line.floor_char_boundary(cursor)
 }
 
 pub(crate) fn end_at_width(line: &str, start: usize, width: usize) -> usize {

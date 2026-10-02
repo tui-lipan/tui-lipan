@@ -407,7 +407,7 @@ mod tests {
 
         assert_eq!(stdout, b"out");
         assert_eq!(stderr, b"err");
-        assert!(matches!(events.last(), Some(ProcessEvent::Exited(status)) if status.success()));
+        std::assert_matches!(events.last(), Some(ProcessEvent::Exited(status)) if status.success());
     }
 
     #[cfg(unix)]
@@ -418,6 +418,6 @@ mod tests {
 
         stream_process_until(spec, || true, |event| events.push(event)).unwrap();
 
-        assert!(matches!(events.last(), Some(ProcessEvent::Exited(status)) if !status.success()));
+        std::assert_matches!(events.last(), Some(ProcessEvent::Exited(status)) if !status.success());
     }
 }

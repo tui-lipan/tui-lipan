@@ -421,7 +421,7 @@ mod tests {
         // 1/16 = 0.0625, just inside a 0.1 tolerance.
         let result = compare_or_create("shot", &path, &encode(&changed), 0.1).expect("compare");
 
-        assert!(matches!(result.outcome, BaselineOutcome::Match { .. }));
+        std::assert_matches!(result.outcome, BaselineOutcome::Match { .. });
         assert!(!result.outcome.is_regression());
         std::fs::remove_dir_all(&dir).ok();
     }

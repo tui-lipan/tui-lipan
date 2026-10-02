@@ -436,18 +436,18 @@ impl TerminalGuard {
     }
 
     pub(crate) fn enable_theme_notifications(&mut self) -> io::Result<bool> {
-        #[cfg(not(unix))]
-        return Ok(false);
-        #[cfg(unix)]
-        {
-            if self.theme_notifications {
-                return Ok(true);
+        cfg_select! {
+            unix => {
+                if self.theme_notifications {
+                    return Ok(true);
+                }
+                let plan = theme_notification_plan(true);
+                let mut executor = CrosstermTransitionExecutor::new(&mut self.stdout);
+                execute_plan_with_rollback(&mut executor, &plan)?;
+                self.theme_notifications = true;
+                Ok(true)
             }
-            let plan = theme_notification_plan(true);
-            let mut executor = CrosstermTransitionExecutor::new(&mut self.stdout);
-            execute_plan_with_rollback(&mut executor, &plan)?;
-            self.theme_notifications = true;
-            Ok(true)
+            _ => Ok(false),
         }
     }
 
