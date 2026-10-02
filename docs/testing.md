@@ -27,8 +27,9 @@ impl Component for MyWidget {
 
 #[test]
 fn snapshot_my_widget() {
-    let mut backend = TestBackend::new(MyWidget);
-    backend.set_viewport(Rect { x: 0, y: 0, w: 30, h: 5 });
+    let mut backend = TestBackend::new_with_viewport(
+        MyWidget, Rect { x: 0, y: 0, w: 30, h: 5 },
+    );
     backend.render();
 
     let frame = backend.capture_frame();
@@ -37,6 +38,14 @@ fn snapshot_my_widget() {
 ```
 
 `plain_text()` returns newline-joined rows with trailing spaces trimmed - the output is stable and deterministic across runs.
+
+`TestBackend::new` mounts and renders at 80×24. Use
+`TestBackend::new_with_viewport(component, rect)` when the first render must use
+another viewport. This preserves authored scroll offsets that a larger initial
+viewport would clamp and gives viewport callbacks the intended initial geometry.
+For explicit properties and app configuration, use
+`TestBackend::new_with_app_and_viewport(app, component, props, rect)`.
+`set_viewport` remains available for testing resize behavior after mounting.
 
 ### Host window focus
 

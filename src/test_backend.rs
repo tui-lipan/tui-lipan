@@ -109,6 +109,18 @@ where
         Self::new_with_props_inner(component, C::Properties::default(), false)
     }
 
+    /// Mount a root component at `viewport` with default properties.
+    ///
+    /// Unlike [`Self::new`] followed by [`Self::set_viewport`], the first render
+    /// uses this viewport. Use this when initial layout affects component state,
+    /// scroll offsets, or viewport callbacks.
+    pub fn new_with_viewport(component: C, viewport: Rect) -> Self
+    where
+        C::Properties: Default,
+    {
+        Self::new_with_app_and_viewport(App::new(), component, C::Properties::default(), viewport)
+    }
+
     #[allow(missing_docs)]
     pub fn new_transcript(component: C) -> Self
     where
@@ -124,13 +136,25 @@ where
 
     /// Mount a root component using the same app configuration as [`AppRunner`](crate::AppRunner).
     pub fn new_with_app(app: App, component: C, props: C::Properties) -> Self {
+        Self::new_with_app_and_viewport(app, component, props, DEFAULT_VIEWPORT)
+    }
+
+    /// Mount with app configuration and explicit properties at `viewport`.
+    ///
+    /// The viewport is in effect before initialization and the first render.
+    pub fn new_with_app_and_viewport(
+        app: App,
+        component: C,
+        props: C::Properties,
+        viewport: Rect,
+    ) -> Self {
         Self::new_with_app_inner(
             app,
             component,
             props,
             false,
             crate::automation::ClockMode::Controlled,
-            DEFAULT_VIEWPORT,
+            viewport,
         )
     }
 
@@ -7075,6 +7099,65 @@ mod tests {
             .expect("property text should have a foreground");
         assert_ne!(property_fg, Paint::Solid(Color::rgb(0, 0, 0)));
         assert_ne!(property_fg, Paint::Solid(Color::rgb(100, 100, 100)));
+    }
+
+    struct InitialViewportScroll;
+
+    impl Component for InitialViewportScroll {
+        type Message = ();
+        type Properties = usize;
+        type State = ();
+
+        fn create_state(&self, _: &usize) {}
+        fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+            Update::none()
+        }
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            ScrollView::new()
+                .offset(ctx.props)
+                .children((0..8).map(|i| Text::new(format!("row {i}")).into()))
+                .key("initial-scroll")
+        }
+    }
+
+    #[test]
+    fn initial_viewport_preserves_authored_scroll_offset() {
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 3,
+        };
+        let mut backend = TestBackend::new_with_app_and_viewport(
+            crate::App::new(),
+            InitialViewportScroll,
+            2,
+            viewport,
+        );
+        assert_eq!(backend.viewport(), viewport);
+        assert_eq!(scroll_offset_by_key(&backend, "initial-scroll"), 2);
+        assert_eq!(
+            backend.capture_frame().to_lines(),
+            vec!["row 2", "row 3", "row 4"]
+        );
+        backend.render();
+        assert_eq!(scroll_offset_by_key(&backend, "initial-scroll"), 2);
+    }
+
+    #[test]
+    fn initial_viewport_constructor_uses_default_properties() {
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 3,
+        };
+        let backend = TestBackend::new_with_viewport(InitialViewportScroll, viewport);
+        assert_eq!(backend.viewport(), viewport);
+        assert_eq!(
+            backend.capture_frame().to_lines(),
+            vec!["row 0", "row 1", "row 2"]
+        );
     }
 
     fn scroll_offset_by_key<C: Component>(backend: &TestBackend<C>, key: &str) -> usize {
