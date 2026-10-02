@@ -58,6 +58,7 @@ pub(crate) fn recompute_scroll_content_height_with_reconciled_roots(
 }
 
 pub(crate) struct ScrollVisibleCollectCtx {
+    pub virtualize: bool,
     pub inner: Rect,
     pub viewport_w: u16,
     pub top_indicator: bool,
@@ -72,6 +73,7 @@ pub(crate) fn collect_visible_scroll_children(
     ctx: ScrollVisibleCollectCtx,
 ) -> (Vec<usize>, Vec<Rect>) {
     let ScrollVisibleCollectCtx {
+        virtualize,
         inner,
         viewport_w,
         top_indicator,
@@ -102,7 +104,7 @@ pub(crate) fn collect_visible_scroll_children(
         }
 
         let child_bottom = r.y.saturating_add(r.h as i16);
-        if child_bottom > range_start as i16 && r.y < range_end as i16 {
+        if !virtualize || (child_bottom > range_start as i16 && r.y < range_end as i16) {
             visible_indices.push(i);
 
             let x = inner.x.saturating_add(r.x).saturating_sub(h_offset as i16);

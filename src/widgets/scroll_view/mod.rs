@@ -53,6 +53,7 @@ pub struct ScrollView {
     pub(crate) ambient_page_scroll: bool,
     /// Whether the scroll view can receive focus.
     pub(crate) focusable: bool,
+    pub(crate) virtualize: bool,
     /// Whether the scroll view participates in Tab traversal.
     pub(crate) tab_stop: bool,
     /// Callback fired when the scroll offset changes.
@@ -105,6 +106,7 @@ impl Default for ScrollView {
             scroll_wheel_behavior: ScrollWheelBehavior::default(),
             ambient_page_scroll: false,
             focusable: false,
+            virtualize: true,
             tab_stop: true,
             on_scroll: None,
             on_scroll_to: None,
@@ -416,6 +418,16 @@ impl ScrollView {
         self
     }
 
+    /// Keep offscreen children mounted and measure every child when `false`.
+    ///
+    /// Defaults to `true`, which measures and mounts visible children lazily.
+    /// Disable for small forms whose offscreen controls must retain state and
+    /// remain in the keyboard focus ring. Rendering is still clipped to the viewport.
+    pub fn virtualize(mut self, virtualize: bool) -> Self {
+        self.virtualize = virtualize;
+        self
+    }
+
     /// Hint for the initial estimated height of unmeasured off-screen children.
     ///
     /// Only used as the cold-start fallback before a running average of
@@ -465,6 +477,7 @@ impl crate::layout::hash::LayoutHash for ScrollView {
         use std::hash::Hash;
 
         crate::layout::hash::hash_stack_props(&self.props, hasher);
+        self.virtualize.hash(hasher);
         self.scrollbar.hash(hasher);
         self.scrollbar_config.variant.hash(hasher);
         self.scrollbar_config.gap.hash(hasher);

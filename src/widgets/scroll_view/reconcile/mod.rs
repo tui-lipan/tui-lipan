@@ -203,6 +203,7 @@ pub(crate) fn reconcile_scroll_view(
                 &mut layout_cache,
                 &mut probe_virtual,
                 ScrollLayoutCachedParams {
+                    virtualize: sv.virtualize,
                     viewport_w: narrow,
                     viewport_h: inner.h,
                     scroll_offset: scroll_offset_hint,
@@ -220,6 +221,7 @@ pub(crate) fn reconcile_scroll_view(
                     &mut layout_cache,
                     &mut virtual_cache,
                     ScrollLayoutCachedParams {
+                        virtualize: sv.virtualize,
                         viewport_w: narrow,
                         viewport_h: inner.h,
                         scroll_offset: scroll_offset_hint,
@@ -236,6 +238,7 @@ pub(crate) fn reconcile_scroll_view(
                     &mut layout_cache,
                     &mut full_probe,
                     ScrollLayoutCachedParams {
+                        virtualize: sv.virtualize,
                         viewport_w: inner.w,
                         viewport_h: inner.h,
                         scroll_offset: scroll_offset_hint,
@@ -253,6 +256,7 @@ pub(crate) fn reconcile_scroll_view(
                         &mut layout_cache,
                         &mut virtual_cache,
                         ScrollLayoutCachedParams {
+                            virtualize: sv.virtualize,
                             viewport_w: narrow,
                             viewport_h: inner.h,
                             scroll_offset: scroll_offset_hint,
@@ -275,6 +279,7 @@ pub(crate) fn reconcile_scroll_view(
                 &mut layout_cache,
                 &mut probe_virtual,
                 ScrollLayoutCachedParams {
+                    virtualize: sv.virtualize,
                     viewport_w: inner.w,
                     viewport_h: inner.h,
                     scroll_offset: scroll_offset_hint,
@@ -292,6 +297,7 @@ pub(crate) fn reconcile_scroll_view(
                     &mut layout_cache,
                     &mut virtual_cache,
                     ScrollLayoutCachedParams {
+                        virtualize: sv.virtualize,
                         viewport_w,
                         viewport_h: inner.h,
                         scroll_offset: scroll_offset_hint,
@@ -313,6 +319,7 @@ pub(crate) fn reconcile_scroll_view(
             &mut layout_cache,
             &mut virtual_cache,
             ScrollLayoutCachedParams {
+                virtualize: sv.virtualize,
                 viewport_w: inner.w,
                 viewport_h: inner.h,
                 scroll_offset: scroll_offset_hint,
@@ -626,6 +633,7 @@ pub(crate) fn reconcile_scroll_view(
             &mut layout_cache,
             &mut virtual_cache,
             ScrollLayoutCachedParams {
+                virtualize: sv.virtualize,
                 viewport_w,
                 viewport_h: inner.h,
                 scroll_offset: corrected_offset,
@@ -691,6 +699,7 @@ pub(crate) fn reconcile_scroll_view(
                 &mut layout_cache,
                 &mut virtual_cache,
                 ScrollLayoutCachedParams {
+                    virtualize: sv.virtualize,
                     viewport_w,
                     viewport_h: inner.h,
                     scroll_offset: measured_offset,
@@ -805,6 +814,7 @@ pub(crate) fn reconcile_scroll_view(
         &sv.children,
         &content_layout,
         ScrollVisibleCollectCtx {
+            virtualize: sv.virtualize,
             inner,
             viewport_w,
             top_indicator,
@@ -1018,6 +1028,7 @@ pub(crate) fn reconcile_scroll_view(
             &sv.children,
             &content_layout,
             ScrollVisibleCollectCtx {
+                virtualize: sv.virtualize,
                 inner,
                 viewport_w,
                 top_indicator,

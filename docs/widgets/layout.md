@@ -366,6 +366,7 @@ Scrollable container with optional scrollbar.
 | `smooth_wheel_scroll` | `bool` | Convenience toggle for default inertial wheel physics |
 | `scroll_acceleration` | `f32` | Convenience setter that enables smooth wheel scrolling and changes the wheel impulse |
 | `ambient_page_scroll` | `bool` | Opt this ScrollView into PageUp/PageDown fallback routing when no focused handler or `on_key` scope handles the key |
+| `virtualize` | `bool` | Lazily measure and mount visible children, default `true`. Use `false` for small forms that need offscreen controls in their focus ring. Painting remains clipped. |
 | `focusable` | `bool` | Whether ScrollView is focusable |
 | `tab_stop` | `bool` | Whether a focusable ScrollView participates in next/previous traversal (default `true`) |
 | `scrollbar` | `bool` | Show vertical scrollbar |

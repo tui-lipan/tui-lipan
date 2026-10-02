@@ -13,7 +13,7 @@ All widgets are available via `use tui_lipan::prelude::*;`
 | `Frame` | Container with border, header/footer labels, and tab affordances |
 | `Grid` | 2D grid layout |
 | `Flow` | Wrapping row container for chip/tag-like content |
-| `ScrollView` | Scrollable container |
+| `ScrollView` | Scrollable container with optional retained offscreen children for forms |
 | `PanView` | Single-child 2D panning viewport for diagrams and oversized content |
 | `Center` | Centers a single child |
 | `CenterPin` | Absolutely positions a child relative to a center point |

@@ -136,6 +136,7 @@ fn element_subtree_contains_key(element: &Element, target: &Key) -> bool {
 }
 
 pub(crate) struct ScrollLayoutCachedParams {
+    pub virtualize: bool,
     pub viewport_w: u16,
     pub viewport_h: u16,
     pub scroll_offset: usize,
@@ -151,6 +152,7 @@ pub(crate) fn layout_scroll_content_cached(
     params: ScrollLayoutCachedParams,
 ) -> ScrollContentLayout {
     let ScrollLayoutCachedParams {
+        virtualize,
         viewport_w,
         viewport_h,
         scroll_offset,
@@ -158,6 +160,9 @@ pub(crate) fn layout_scroll_content_cached(
         horizontal_overflow,
     } = params;
     SCROLL_LAYOUT_CACHE_CALLS.fetch_add(1, Ordering::Relaxed);
+    if !virtualize {
+        return layout_scroll_content(props, children, viewport_w, viewport_h, horizontal_overflow);
+    }
 
     let viewport_h_affects_layout = children
         .iter()
