@@ -757,6 +757,7 @@ pub(crate) fn handle_drag(
                 };
                 scroll_view.smooth_scroll.cancel_at(new_row);
                 scroll_view.cancelled_scroll_target = scroll_view.scroll_target.clone();
+                scroll_view.cancelled_reveal_target = scroll_view.reveal_target;
                 if new_row != scroll_view.offset {
                     scroll_view.offset = new_row;
                     scroll_view.scroll_override = Some(new_row);

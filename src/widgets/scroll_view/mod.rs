@@ -36,6 +36,8 @@ pub struct ScrollView {
     pub(crate) scroll_request: Option<ScrollRequest>,
     /// Framework-owned semantic scroll target.
     pub(crate) scroll_target: Option<ScrollTarget>,
+    /// Reveal a key target with minimal movement instead of top alignment.
+    pub(crate) reveal_target: bool,
     /// How semantic scroll targets are applied.
     pub(crate) scroll_behavior: ScrollBehavior,
     /// Key bindings to move the viewport.
@@ -98,6 +100,7 @@ impl Default for ScrollView {
             horizontal_reveal_range: None,
             scroll_request: None,
             scroll_target: None,
+            reveal_target: false,
             scroll_behavior: ScrollBehavior::default(),
             scroll_keys: ScrollKeymap::default(),
             scroll_wheel: true,
@@ -227,6 +230,7 @@ impl ScrollView {
     /// [`Self::scroll_behavior`].
     pub fn scroll_to(mut self, target: ScrollTarget) -> Self {
         self.scroll_target = Some(target);
+        self.reveal_target = false;
         self
     }
 
@@ -245,9 +249,8 @@ impl ScrollView {
     /// This is useful for jump-to-result flows, such as scrolling a message list
     /// to a matched entry after search. When set, it takes priority over
     /// `.offset(...)`.
-    pub fn scroll_to_key(mut self, key: impl Into<Key>) -> Self {
-        self.scroll_target = Some(ScrollTarget::Key(key.into()));
-        self
+    pub fn scroll_to_key(self, key: impl Into<Key>) -> Self {
+        self.scroll_to(ScrollTarget::Key(key.into()))
     }
 
     /// Reveal the first child subtree containing `key` with minimal scrolling.
@@ -255,7 +258,8 @@ impl ScrollView {
     /// Unlike `scroll_to_key`, this leaves the offset unchanged when the child is
     /// already fully visible. Oversized children align their top with the viewport.
     pub fn reveal_key(mut self, key: impl Into<Key>) -> Self {
-        self.scroll_target = Some(ScrollTarget::reveal_key(key));
+        self.scroll_target = Some(ScrollTarget::Key(key.into()));
+        self.reveal_target = true;
         self
     }
 
@@ -264,9 +268,8 @@ impl ScrollView {
     /// This is useful when a keyed row contains a large auto-height child and
     /// navigation needs to land inside that row, for example one auto-height
     /// `DiffView` per file with global hunk navigation.
-    pub fn scroll_to_key_offset(mut self, key: impl Into<Key>, offset: usize) -> Self {
-        self.scroll_target = Some(ScrollTarget::key_offset(key, offset));
-        self
+    pub fn scroll_to_key_offset(self, key: impl Into<Key>, offset: usize) -> Self {
+        self.scroll_to(ScrollTarget::key_offset(key, offset))
     }
 
     /// Configure how semantic target navigation is applied.

@@ -208,6 +208,12 @@ leaves, it stays active for up to one additional second before fading out again.
 
 Floating content panel triggered by an element.
 
+Root-portal popovers are suppressed while an ancestor ScrollView fully clips
+the trigger. Their content stays mounted and their controlled open state is
+preserved, but they do not paint, capture focus, or enter the Tab ring. They
+reappear when the trigger becomes visible. A partially visible trigger can
+still show its popover, whose content can extend beyond the scroll viewport.
+
 | Prop | Type | Description |
 |------|------|-------------|
 | `trigger` | `Element` | The trigger element |

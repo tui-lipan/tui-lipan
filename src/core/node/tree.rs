@@ -101,6 +101,8 @@ pub(crate) struct Node {
     /// no longer described by the application, so its callbacks may close over a component scope
     /// that has already been dropped; refusing input is what makes retention safe.
     pub inert: bool,
+    /// Retained portal content whose trigger is clipped out of view.
+    pub(crate) portal_suppressed: bool,
     /// Active theme at the point this node was reconciled.
     active_theme: Rc<Theme>,
 }
@@ -140,14 +142,20 @@ impl Node {
     /// widget's [`WidgetNode::is_focusable`] or at each focus-resolution site so that neither a
     /// new widget nor a new focus path can forget them.
     pub fn is_focusable(&self) -> bool {
-        !self.inert && !self.kind.is_disabled() && self.kind.is_focusable()
+        !self.inert
+            && !self.portal_suppressed
+            && !self.kind.is_disabled()
+            && self.kind.is_focusable()
     }
 
     /// Returns true if this node participates in Tab traversal.
     ///
     /// Disabled and inert widgets are excluded for the same reasons as [`Self::is_focusable`].
     pub fn is_tab_stop(&self) -> bool {
-        !self.inert && !self.kind.is_disabled() && self.kind.is_tab_stop()
+        !self.inert
+            && !self.portal_suppressed
+            && !self.kind.is_disabled()
+            && self.kind.is_tab_stop()
     }
 
     pub(crate) fn on_focus_callback(&self) -> Option<&crate::callback::Callback<()>> {
@@ -211,6 +219,7 @@ impl Node {
             kind: NodeKind::Text(crate::widgets::internal::TextNode::default()),
             epoch: 0,
             inert: false,
+            portal_suppressed: false,
             active_theme: default_active_theme(),
         }
     }
@@ -231,6 +240,7 @@ impl Node {
         self.kind = NodeKind::Text(crate::widgets::internal::TextNode::default());
         self.epoch = 0;
         self.inert = false;
+        self.portal_suppressed = false;
         self.active_theme = default_active_theme();
     }
 
@@ -241,6 +251,7 @@ impl Node {
         self.children.clear();
         self.epoch = 0;
         self.inert = false;
+        self.portal_suppressed = false;
         self.active_theme = default_active_theme();
     }
 }
@@ -1108,7 +1119,10 @@ impl NodeTree {
         mode: ScopeMode,
     ) {
         let node = self.node(id);
-        if node.inert || node.focus_scope() == crate::widgets::FocusScope::Exclude {
+        if node.inert
+            || node.portal_suppressed
+            || node.focus_scope() == crate::widgets::FocusScope::Exclude
+        {
             return;
         }
         let is_contain = node.focus_scope() == crate::widgets::FocusScope::Contain;
@@ -1339,7 +1353,7 @@ impl NodeTree {
                 }
 
                 let node = self.node(frame.id);
-                if node.inert || !node.rect.contains(x, y) {
+                if node.inert || node.portal_suppressed || !node.rect.contains(x, y) {
                     stack.pop();
                     continue;
                 }

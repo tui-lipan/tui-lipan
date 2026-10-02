@@ -114,6 +114,7 @@ pub(crate) struct ScrollTargetLayout {
     pub viewport_height: usize,
     pub content_height: usize,
     pub show_indicators: bool,
+    pub reveal_target: bool,
 }
 
 pub(crate) fn scroll_offset_for_target(
@@ -126,42 +127,48 @@ pub(crate) fn scroll_offset_for_target(
     match target {
         ScrollTarget::Top => Some(0),
         ScrollTarget::Bottom => Some(max_offset),
+        ScrollTarget::Key(key) if layout.reveal_target => {
+            children.iter().zip(rects).find_map(|(child, rect)| {
+                element_subtree_contains_key(child, key).then(|| reveal_offset(*rect, &layout))
+            })
+        }
         ScrollTarget::Key(key) => scroll_offset_for_key(children, rects, key),
-        ScrollTarget::RevealKey(key) => children.iter().zip(rects).find_map(|(child, rect)| {
-            element_subtree_contains_key(child, key).then(|| reveal_offset(*rect, &layout))
-        }),
         ScrollTarget::KeyOffset { key, offset } => scroll_offset_for_key(children, rects, key)
             .map(|base| base.saturating_add(*offset).min(max_offset)),
     }
 }
 
 fn reveal_offset(rect: Rect, layout: &ScrollTargetLayout) -> usize {
+    let current = layout.current_offset.min(layout.max_offset);
+    if layout.viewport_height == 0 {
+        return current;
+    }
     let start = rect.y.max(0) as usize;
     let end = start.saturating_add(usize::from(rect.h));
-    let mut offset = layout.current_offset.min(layout.max_offset);
-    // Indicator rows can change when navigation leaves an edge. Recheck their
-    // effective viewport after each adjustment, rather than hiding the target.
-    for _ in 0..3 {
-        let window = crate::widgets::scroll_view::utils::calc_scroll_view_window(
-            offset,
-            layout.content_height,
-            layout.viewport_height,
-            layout.show_indicators,
-        );
-        if window.visible_rows == 0 {
-            break;
-        }
-        if start < offset || usize::from(rect.h) > window.visible_rows {
-            offset = start.min(layout.max_offset);
-        } else if end > offset.saturating_add(window.visible_rows) {
-            offset = end
-                .saturating_sub(window.visible_rows)
-                .min(layout.max_offset);
-        } else {
-            break;
-        }
-    }
-    offset
+    // A window reserves zero, one, or two indicator rows. Its first offset
+    // that can contain the child's bottom is end - (height - reserved).
+    // Check each candidate's actual window, since its indicators may differ.
+    (0..=2)
+        .map(|reserved| {
+            end.saturating_sub(layout.viewport_height.saturating_sub(reserved))
+                .min(layout.max_offset)
+        })
+        .chain([current, start.min(layout.max_offset)])
+        .filter(|&offset| child_fits_window(start, end, offset, layout))
+        .min_by_key(|&offset| offset.abs_diff(current))
+        .unwrap_or_else(|| start.min(layout.max_offset))
+}
+
+fn child_fits_window(start: usize, end: usize, offset: usize, layout: &ScrollTargetLayout) -> bool {
+    let window = crate::widgets::scroll_view::utils::calc_scroll_view_window(
+        offset,
+        layout.content_height,
+        layout.viewport_height,
+        layout.show_indicators,
+    );
+    window.visible_rows > 0
+        && start >= window.offset
+        && end <= window.offset.saturating_add(window.visible_rows)
 }
 
 fn element_subtree_contains_key(element: &Element, target: &Key) -> bool {
@@ -694,5 +701,67 @@ pub(crate) fn scroll_child_height_depends_on_scroll_viewport_h(el: &Element) -> 
             .is_some_and(scroll_child_height_depends_on_scroll_viewport_h),
         ElementKind::Popover(_) => true,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod reveal_tests {
+    use super::{ScrollTargetLayout, reveal_offset};
+    use crate::style::Rect;
+    use crate::widgets::scroll_view::utils::calc_scroll_view_window;
+
+    #[test]
+    fn reveal_matches_nearest_visible_offset_for_small_windows() {
+        for show_indicators in [false, true] {
+            for content_height in 1..=12 {
+                for viewport_height in 1..=8 {
+                    let max_offset = calc_scroll_view_window(
+                        0,
+                        content_height,
+                        viewport_height,
+                        show_indicators,
+                    )
+                    .max_offset;
+                    for current_offset in 0..=max_offset {
+                        for start in 0..content_height {
+                            for height in 1..=content_height - start {
+                                let expected = (0..=max_offset)
+                                    .filter(|&offset| {
+                                        let window = calc_scroll_view_window(
+                                            offset,
+                                            content_height,
+                                            viewport_height,
+                                            show_indicators,
+                                        );
+                                        start >= window.offset
+                                            && start + height <= window.offset + window.visible_rows
+                                    })
+                                    .min_by_key(|&offset| offset.abs_diff(current_offset))
+                                    .unwrap_or(start.min(max_offset));
+                                let layout = ScrollTargetLayout {
+                                    max_offset,
+                                    current_offset,
+                                    viewport_height,
+                                    content_height,
+                                    show_indicators,
+                                    reveal_target: true,
+                                };
+                                let rect = Rect {
+                                    x: 0,
+                                    y: start as i16,
+                                    w: 1,
+                                    h: height as u16,
+                                };
+                                assert_eq!(
+                                    reveal_offset(rect, &layout),
+                                    expected,
+                                    "total={content_height} viewport={viewport_height} current={current_offset} start={start} height={height} indicators={show_indicators}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

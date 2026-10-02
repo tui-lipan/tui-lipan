@@ -50,6 +50,8 @@ mod mouse_region_drag_threshold;
 mod mouse_region_local_click;
 #[path = "suites/widget_behavior/progress_empty_track_surface.rs"]
 mod progress_empty_track_surface;
+#[path = "suites/widget_behavior/retained_scroll_popover.rs"]
+mod retained_scroll_popover;
 #[path = "suites/widget_behavior/roving_focus.rs"]
 mod roving_focus;
 #[path = "suites/widget_behavior/select_button_padding_render.rs"]

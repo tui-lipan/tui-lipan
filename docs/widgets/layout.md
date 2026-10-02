@@ -353,7 +353,7 @@ Scrollable container with optional scrollbar.
 | `offset` | `Option<usize>` | Controlled scroll offset |
 | `reveal_horizontal_range` | `(usize, usize)` | Minimally pan to reveal a half-open horizontal content range; reapplies when the range or viewport width changes |
 | `scroll_request` | `Option<ScrollRequest>` | One-shot relative scroll request (`lines`, page fractions, top, bottom) |
-| `scroll_to` | `Option<ScrollTarget>` | Semantic target (`Top`, `Bottom`, `Key`, `RevealKey`, or `KeyOffset`) resolved each layout |
+| `scroll_to` | `Option<ScrollTarget>` | Semantic target (`Top`, `Bottom`, `Key`, or `KeyOffset`) resolved each layout |
 | `reveal_key` | `Key` | Reveal a keyed child with minimal scrolling; already visible children stay in place |
 | `scroll_to_key` | `Option<Key>` | Convenience wrapper for `ScrollTarget::Key` |
 | `scroll_to_key_offset` | `(Key, usize)` | Convenience wrapper for `ScrollTarget::KeyOffset`, useful for landing inside large keyed rows |
@@ -367,7 +367,7 @@ Scrollable container with optional scrollbar.
 | `smooth_wheel_scroll` | `bool` | Convenience toggle for default inertial wheel physics |
 | `scroll_acceleration` | `f32` | Convenience setter that enables smooth wheel scrolling and changes the wheel impulse |
 | `ambient_page_scroll` | `bool` | Opt this ScrollView into PageUp/PageDown fallback routing when no focused handler or `on_key` scope handles the key |
-| `virtualize` | `bool` | Lazily measure and mount visible children, default `true`. Use `false` for small forms that need offscreen controls in their focus ring. Painting remains clipped. |
+| `virtualize` | `bool` | Lazily measure and mount visible children, default `true`. Use `false` for small forms that need offscreen controls in their focus ring. Painting remains clipped; root popovers are suppressed while their triggers are fully clipped, retaining their open state and nodes. |
 | `focusable` | `bool` | Whether ScrollView is focusable |
 | `tab_stop` | `bool` | Whether a focusable ScrollView participates in next/previous traversal (default `true`) |
 | `scrollbar` | `bool` | Show vertical scrollbar |

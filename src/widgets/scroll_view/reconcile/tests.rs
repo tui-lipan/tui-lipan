@@ -5842,3 +5842,66 @@ fn reveal_key_accounts_for_indicator_rows() {
     };
     assert!(scroll.top_indicator && scroll.bottom_indicator);
 }
+
+#[test]
+fn reveal_key_uses_space_freed_when_bottom_indicator_disappears() {
+    let mut tree = NodeTree::new();
+    let root = ScrollView::new()
+        .virtualize(false)
+        .show_scroll_indicators(true)
+        .reveal_key("row-10")
+        .children((0..11).map(|i| Text::new(format!("Row {i}")).key(format!("row-{i}"))));
+    LayoutEngine::reconcile_with_focus(
+        &mut tree,
+        &root.into(),
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 10,
+        },
+        None,
+    );
+    let NodeKind::ScrollView(scroll) = &tree.node(tree.root).kind else {
+        panic!("scroll view");
+    };
+    assert_eq!(scroll.offset, 1);
+    assert!(!scroll.top_indicator && !scroll.bottom_indicator);
+    assert_eq!(tree.node(find_by_key(&tree, "row-10").unwrap()).rect.y, 9);
+}
+
+#[test]
+fn key_navigation_uses_the_last_builder_and_resumes_when_its_mode_changes() {
+    let rows = || (0..8).map(|i| Text::new(format!("Row {i}")).key(format!("row-{i}")));
+    let bounds = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 3,
+    };
+    let mut tree = NodeTree::new();
+    let reveal = ScrollView::new()
+        .virtualize(false)
+        .children(rows())
+        .scroll_to_key("row-2")
+        .reveal_key("row-2");
+    LayoutEngine::reconcile_with_focus(&mut tree, &reveal.into(), bounds, None);
+    let NodeKind::ScrollView(scroll) = &mut tree.node_mut(tree.root).kind else {
+        panic!("scroll view");
+    };
+    assert_eq!(scroll.offset, 0);
+    // User input cancels the old reveal. Switching to top alignment is new navigation.
+    scroll.cancelled_scroll_target = scroll.scroll_target.clone();
+    scroll.cancelled_reveal_target = true;
+    let align = ScrollView::new()
+        .virtualize(false)
+        .children(rows())
+        .reveal_key("row-2")
+        .scroll_to_key("row-2");
+    LayoutEngine::reconcile_with_focus(&mut tree, &align.into(), bounds, None);
+    let NodeKind::ScrollView(scroll) = &tree.node(tree.root).kind else {
+        panic!("scroll view");
+    };
+    assert_eq!(scroll.offset, 2);
+    assert!(scroll.cancelled_scroll_target.is_none());
+}

@@ -176,8 +176,6 @@ pub enum ScrollTarget {
     Bottom,
     /// Scroll so the first child subtree containing this key is brought into view.
     Key(Key),
-    /// Reveal the first child subtree containing this key with minimal scrolling.
-    RevealKey(Key),
     /// Scroll so the first child subtree containing this key is brought into view,
     /// then add `offset` rows from that child's top.
     KeyOffset {
@@ -202,11 +200,6 @@ impl ScrollTarget {
     /// Scroll so the first child subtree containing `key` is brought into view.
     pub fn key(key: impl Into<Key>) -> Self {
         Self::Key(key.into())
-    }
-
-    /// Reveal a keyed child without moving it when it is already visible.
-    pub fn reveal_key(key: impl Into<Key>) -> Self {
-        Self::RevealKey(key.into())
     }
 
     /// Scroll to `offset` rows below the first child subtree containing `key`.

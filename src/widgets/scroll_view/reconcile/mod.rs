@@ -372,7 +372,10 @@ pub(crate) fn reconcile_scroll_view(
     let element_caught_up_to_live_offset =
         sv.offset.is_some_and(|offset| offset == live_scroll_offset);
 
+    let old_cancelled_reveal_target = matches!(&tree.node(id).kind,
+        NodeKind::ScrollView(node) if node.cancelled_reveal_target);
     let scroll_target_suppressed = sv.scroll_target.is_some()
+        && sv.reveal_target == old_cancelled_reveal_target
         && sv.scroll_target.as_ref() == old_cancelled_scroll_target.as_ref();
     let raw_target_offset = if scroll_target_suppressed {
         None
@@ -391,6 +394,7 @@ pub(crate) fn reconcile_scroll_view(
                     viewport_height: usize::from(viewport_height),
                     content_height: usize::from(content_height),
                     show_indicators: sv.show_scroll_indicators,
+                    reveal_target: sv.reveal_target,
                 },
             )
         })
@@ -885,6 +889,13 @@ pub(crate) fn reconcile_scroll_view(
                 sv.scroll_request
             },
             scroll_target: sv.scroll_target.clone(),
+            reveal_target: sv.reveal_target,
+            cancelled_reveal_target: if hidden_viewport_offset.is_some() || scroll_target_suppressed
+            {
+                old_cancelled_reveal_target
+            } else {
+                non_target_external_request.is_some() && sv.reveal_target
+            },
             cancelled_scroll_target: if hidden_viewport_offset.is_some() || scroll_target_suppressed
             {
                 old_cancelled_scroll_target.clone()
