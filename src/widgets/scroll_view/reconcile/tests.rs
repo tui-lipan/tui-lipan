@@ -2233,6 +2233,7 @@ fn theme_wrapped_document_view_resize_remeasures_wrapped_height() {
         &mut layout_cache,
         &mut virtual_cache,
         ScrollLayoutCachedParams {
+            virtualize: true,
             viewport_w: 22,
             viewport_h: 12,
             scroll_offset: 0,
@@ -2246,6 +2247,7 @@ fn theme_wrapped_document_view_resize_remeasures_wrapped_height() {
         &mut layout_cache,
         &mut virtual_cache,
         ScrollLayoutCachedParams {
+            virtualize: true,
             viewport_w: 80,
             viewport_h: 12,
             scroll_offset: 0,
@@ -2280,6 +2282,7 @@ fn partial_virtual_layout_does_not_seed_exact_cache_with_stale_heights() {
         &mut layout_cache,
         &mut virtual_cache,
         ScrollLayoutCachedParams {
+            virtualize: true,
             viewport_w: 20,
             viewport_h: 2,
             scroll_offset: 0,
@@ -2297,6 +2300,7 @@ fn partial_virtual_layout_does_not_seed_exact_cache_with_stale_heights() {
         &mut layout_cache,
         &mut virtual_cache,
         ScrollLayoutCachedParams {
+            virtualize: true,
             viewport_w: 20,
             viewport_h: 2,
             scroll_offset: 0,
@@ -2326,6 +2330,7 @@ fn partial_virtual_layout_does_not_seed_exact_cache_with_stale_heights() {
         &mut layout_cache,
         &mut virtual_cache,
         ScrollLayoutCachedParams {
+            virtualize: true,
             viewport_w: 20,
             viewport_h: 2,
             scroll_offset: 0,
@@ -2372,6 +2377,7 @@ fn flow_scroll_rows_use_exact_layout_cache() {
         &mut layout_cache,
         &mut virtual_cache,
         ScrollLayoutCachedParams {
+            virtualize: true,
             viewport_w,
             viewport_h,
             scroll_offset: 0,
@@ -2400,6 +2406,7 @@ fn flow_scroll_rows_use_exact_layout_cache() {
         &mut layout_cache,
         &mut virtual_cache,
         ScrollLayoutCachedParams {
+            virtualize: true,
             viewport_w,
             viewport_h,
             scroll_offset: 3,
@@ -2452,6 +2459,7 @@ fn split_wrap_scroll_layout_uses_exact_cache_for_same_width_and_content() {
         &mut layout_cache,
         &mut virtual_cache,
         ScrollLayoutCachedParams {
+            virtualize: true,
             viewport_w,
             viewport_h,
             scroll_offset: 0,
@@ -2490,6 +2498,7 @@ fn split_wrap_scroll_layout_uses_exact_cache_for_same_width_and_content() {
         &mut layout_cache,
         &mut virtual_cache,
         ScrollLayoutCachedParams {
+            virtualize: true,
             viewport_w,
             viewport_h,
             scroll_offset: 12,
@@ -5644,4 +5653,255 @@ fn virtual_cache_has_unresolved_in_zone_detects_none_and_stale() {
     };
     assert!(cache.has_unresolved_in_zone(10, 5, 0, 10, 3));
     assert!(cache.has_unresolved_in_zone(10, 5, 0, 10, 4));
+}
+
+#[test]
+fn nonvirtual_scroll_keeps_all_children_mounted_across_offset_changes() {
+    let view = |offset, virtualize| {
+        ScrollView::new()
+            .virtualize(virtualize)
+            .offset(offset)
+            .children((0..20).map(|i| Text::new(format!("Row {i}")).key(format!("retained-{i}"))))
+    };
+    let bounds = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 3,
+    };
+    let mut tree = NodeTree::new();
+    LayoutEngine::reconcile_with_focus(&mut tree, &view(0, false).into(), bounds, None);
+    let ids: Vec<_> = (0..20)
+        .map(|i| find_by_key(&tree, &format!("retained-{i}")).unwrap())
+        .collect();
+    let NodeKind::ScrollView(scroll) = &tree.node(tree.root).kind else {
+        panic!("scroll view");
+    };
+    assert_eq!(scroll.content_height, 20);
+    assert_eq!(scroll.max_offset, 17);
+    LayoutEngine::reconcile_with_focus(&mut tree, &view(17, false).into(), bounds, None);
+    for (i, id) in ids.iter().enumerate() {
+        assert_eq!(find_by_key(&tree, &format!("retained-{i}")), Some(*id));
+    }
+    // Turning lazy mounting back on prunes the offscreen children as usual.
+    LayoutEngine::reconcile_with_focus(&mut tree, &view(17, true).into(), bounds, None);
+    assert!(find_by_key(&tree, "retained-0").is_none());
+    assert!(find_by_key(&tree, "retained-19").is_some());
+}
+
+#[test]
+fn nonvirtual_scroll_viewport_events_still_report_only_visible_children() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let recorded = events.clone();
+    let root = ScrollView::new()
+        .virtualize(false)
+        .offset(4)
+        .children((0..20).map(|i| Text::new(format!("Row {i}")).key(format!("retained-{i}"))))
+        .on_viewport_change(Callback::new(move |event| {
+            recorded.borrow_mut().push(event)
+        }));
+    let mut tree = NodeTree::new();
+    LayoutEngine::reconcile_with_focus(
+        &mut tree,
+        &root.into(),
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 3,
+        },
+        None,
+    );
+    let events = events.borrow();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].visible.len(), 3);
+    assert_eq!(events[0].visible[0].index, 4);
+    assert_eq!(events[0].visible[2].index, 6);
+}
+
+#[test]
+fn nonvirtual_scroll_keeps_offscreen_controls_in_focus_ring_and_clips_paint() {
+    use crate::prelude::{Component, Context, Input, KeyCode, KeyEvent, KeyMods, Update};
+    struct Form;
+    impl Component for Form {
+        type Message = usize;
+        type Properties = ();
+        type State = usize;
+        fn create_state(&self, _: &()) -> usize {
+            0
+        }
+        fn update(&mut self, offset: usize, ctx: &mut Context<Self>) -> Update {
+            ctx.state = offset;
+            Update::full()
+        }
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            ScrollView::new()
+                .virtualize(false)
+                .offset(ctx.state)
+                .children((0..20).map(|i| {
+                    Input::new(format!("Row {i}"))
+                        .border(false)
+                        .padding(0)
+                        .height(Length::Px(1))
+                        .key(format!("field-{i}"))
+                }))
+                .into()
+        }
+    }
+    let mut backend = crate::TestBackend::new_with_viewport(
+        Form,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 3,
+        },
+    );
+    backend.render();
+    assert!(backend.focus_key(&Key::from("field-0")));
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::BackTab,
+            mods: KeyMods::NONE,
+        })
+        .unwrap();
+    assert_eq!(backend.focused_key(), Some(&Key::from("field-19")));
+    assert!(!backend.capture_frame().plain_text().contains("Row 19"));
+    backend.dispatch(17).unwrap();
+    assert_eq!(backend.focused_key(), Some(&Key::from("field-19")));
+    assert!(
+        backend.capture_frame().plain_text().contains("Row 19"),
+        "{}",
+        backend.capture_frame().plain_text()
+    );
+    backend.dispatch(0).unwrap();
+    backend.dispatch(17).unwrap();
+    assert_eq!(backend.focused_key(), Some(&Key::from("field-19")));
+    assert!(
+        backend.capture_frame().plain_text().contains("Row 19"),
+        "{}",
+        backend.capture_frame().plain_text()
+    );
+}
+
+#[test]
+fn reveal_key_moves_only_when_a_child_is_outside_the_viewport() {
+    let view = |offset, target: &str| {
+        ScrollView::new()
+            .virtualize(false)
+            .offset(offset)
+            .reveal_key(target.to_owned())
+            .children((0..20).map(|i| Text::new(format!("Row {i}")).key(format!("row-{i}"))))
+    };
+    let bounds = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 3,
+    };
+    for (offset, key, expected) in [
+        (0, "row-2", 0),
+        (0, "row-8", 6),
+        (6, "row-3", 3),
+        (5, "missing", 5),
+    ] {
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(&mut tree, &view(offset, key).into(), bounds, None);
+        let NodeKind::ScrollView(scroll) = &tree.node(tree.root).kind else {
+            panic!("scroll view");
+        };
+        assert_eq!(scroll.offset, expected, "{key}");
+    }
+}
+
+#[test]
+fn reveal_key_accounts_for_indicator_rows() {
+    let mut tree = NodeTree::new();
+    let root = ScrollView::new()
+        .virtualize(false)
+        .show_scroll_indicators(true)
+        .reveal_key("row-8")
+        .children((0..20).map(|i| Text::new(format!("Row {i}")).key(format!("row-{i}"))));
+    LayoutEngine::reconcile_with_focus(
+        &mut tree,
+        &root.into(),
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 3,
+        },
+        None,
+    );
+    let target = tree.node(find_by_key(&tree, "row-8").unwrap());
+    assert_eq!(target.rect.y, 1);
+    let NodeKind::ScrollView(scroll) = &tree.node(tree.root).kind else {
+        panic!("scroll view");
+    };
+    assert!(scroll.top_indicator && scroll.bottom_indicator);
+}
+
+#[test]
+fn reveal_key_uses_space_freed_when_bottom_indicator_disappears() {
+    let mut tree = NodeTree::new();
+    let root = ScrollView::new()
+        .virtualize(false)
+        .show_scroll_indicators(true)
+        .reveal_key("row-10")
+        .children((0..11).map(|i| Text::new(format!("Row {i}")).key(format!("row-{i}"))));
+    LayoutEngine::reconcile_with_focus(
+        &mut tree,
+        &root.into(),
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 10,
+        },
+        None,
+    );
+    let NodeKind::ScrollView(scroll) = &tree.node(tree.root).kind else {
+        panic!("scroll view");
+    };
+    assert_eq!(scroll.offset, 1);
+    assert!(!scroll.top_indicator && !scroll.bottom_indicator);
+    assert_eq!(tree.node(find_by_key(&tree, "row-10").unwrap()).rect.y, 9);
+}
+
+#[test]
+fn key_navigation_uses_the_last_builder_and_resumes_when_its_mode_changes() {
+    let rows = || (0..8).map(|i| Text::new(format!("Row {i}")).key(format!("row-{i}")));
+    let bounds = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 3,
+    };
+    let mut tree = NodeTree::new();
+    let reveal = ScrollView::new()
+        .virtualize(false)
+        .children(rows())
+        .scroll_to_key("row-2")
+        .reveal_key("row-2");
+    LayoutEngine::reconcile_with_focus(&mut tree, &reveal.into(), bounds, None);
+    let NodeKind::ScrollView(scroll) = &mut tree.node_mut(tree.root).kind else {
+        panic!("scroll view");
+    };
+    assert_eq!(scroll.offset, 0);
+    // User input cancels the old reveal. Switching to top alignment is new navigation.
+    scroll.cancelled_scroll_target = scroll.scroll_target.clone();
+    scroll.cancelled_reveal_target = true;
+    let align = ScrollView::new()
+        .virtualize(false)
+        .children(rows())
+        .reveal_key("row-2")
+        .scroll_to_key("row-2");
+    LayoutEngine::reconcile_with_focus(&mut tree, &align.into(), bounds, None);
+    let NodeKind::ScrollView(scroll) = &tree.node(tree.root).kind else {
+        panic!("scroll view");
+    };
+    assert_eq!(scroll.offset, 2);
+    assert!(scroll.cancelled_scroll_target.is_none());
 }

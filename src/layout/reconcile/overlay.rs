@@ -368,50 +368,113 @@ pub(crate) fn reconcile_overlay_entries(ctx: &mut ReconcileCtx<'_>, overlays: &[
     }
 }
 
-pub(crate) fn collect_popover_overlay_roots(tree: &NodeTree, overlay_state: &mut OverlayState) {
+pub(crate) fn collect_popover_overlay_roots(tree: &mut NodeTree, overlay_state: &mut OverlayState) {
     if !overlay_state.allow_root_overlays {
         return;
     }
-
+    let popovers: Vec<_> = tree
+        .iter()
+        .filter(|node| matches!(node.kind, NodeKind::Popover(_)))
+        .map(|node| node.id)
+        .collect();
     let mut seen = HashSet::new();
-    for node in tree.iter() {
-        let NodeKind::Popover(popover_node) = &node.kind else {
-            continue;
-        };
+    for id in popovers {
+        collect_popover_overlay_root(tree, overlay_state, id, &mut seen);
+    }
+}
 
-        if !popover_node.open
-            || !matches!(popover_node.scope, crate::overlay::OverlayScope::RootPortal)
-        {
-            continue;
+fn active_root_popover(
+    node: &crate::core::node::Node,
+) -> Option<crate::widgets::internal::PopoverNode> {
+    let NodeKind::Popover(popover) = &node.kind else {
+        return None;
+    };
+    if node.inert
+        || node.portal_suppressed
+        || !popover.open
+        || popover.scope != crate::overlay::OverlayScope::RootPortal
+    {
+        return None;
+    }
+    Some(popover.clone())
+}
+
+fn collect_popover_overlay_root(
+    tree: &mut NodeTree,
+    overlay_state: &mut OverlayState,
+    id: NodeId,
+    seen: &mut HashSet<NodeId>,
+) {
+    let Some(popover_node) = active_root_popover(tree.node(id)) else {
+        return;
+    };
+    let content_id = *popover_node.content;
+    if !tree.is_valid(content_id) || !seen.insert(content_id) {
+        return;
+    }
+    if !trigger_visible_in_scroll_views(tree, *popover_node.trigger) {
+        suppress_portal_subtree(tree, content_id);
+        return;
+    }
+    let order = overlay_state.next_order();
+    overlay_state.roots.push(OverlayRoot {
+        id: content_id,
+        overlay_id: None,
+        layer: OverlayLayer::Popover,
+        order,
+        dismiss_policy: if popover_node.on_close.is_some() {
+            DismissPolicy::ClickOutsideOrEscape
+        } else {
+            DismissPolicy::None
+        },
+        on_dismiss: popover_node.on_close.clone(),
+        on_click: None,
+        backdrop: None,
+        opacity: 1.0,
+        captures_focus: popover_node.capture_focus,
+        auto_focus: popover_node.auto_focus,
+        captures_pointer: crate::overlay::PointerCapture::RectOnly,
+        copy_text: None,
+        copy_zone: None,
+        copy_feedback_active: false,
+    });
+}
+
+fn trigger_visible_in_scroll_views(tree: &NodeTree, trigger: NodeId) -> bool {
+    let mut visible = tree.node(trigger).rect;
+    let mut child = trigger;
+    while let Some(parent) = tree.node(child).parent {
+        let node = tree.node(parent);
+        if crosses_root_portal_boundary(node, child) {
+            break;
         }
-
-        let content_id = *popover_node.content;
-        if !tree.is_valid(content_id) || !seen.insert(content_id) {
-            continue;
+        if let NodeKind::ScrollView(scroll) = &node.kind {
+            visible = visible.intersection(&scroll.content_viewport_rect(node.rect));
+            if visible.is_empty() {
+                return false;
+            }
         }
+        child = parent;
+    }
+    true
+}
 
-        let order = overlay_state.next_order();
-        overlay_state.roots.push(OverlayRoot {
-            id: content_id,
-            overlay_id: None,
-            layer: OverlayLayer::Popover,
-            order,
-            dismiss_policy: if popover_node.on_close.is_some() {
-                DismissPolicy::ClickOutsideOrEscape
-            } else {
-                DismissPolicy::None
-            },
-            on_dismiss: popover_node.on_close.clone(),
-            on_click: None,
-            backdrop: None,
-            opacity: 1.0,
-            captures_focus: popover_node.capture_focus,
-            auto_focus: popover_node.auto_focus,
-            captures_pointer: crate::overlay::PointerCapture::RectOnly,
-            copy_text: None,
-            copy_zone: None,
-            copy_feedback_active: false,
-        });
+fn crosses_root_portal_boundary(node: &crate::core::node::Node, child: NodeId) -> bool {
+    match &node.kind {
+        NodeKind::Popover(popover) => {
+            popover.scope == crate::overlay::OverlayScope::RootPortal && *popover.content == child
+        }
+        NodeKind::Portal(portal) => *portal.content == child,
+        _ => false,
+    }
+}
+
+fn suppress_portal_subtree(tree: &mut NodeTree, id: NodeId) {
+    let mut pending = vec![id];
+    while let Some(id) = pending.pop() {
+        let node = tree.node_mut(id);
+        node.portal_suppressed = true;
+        pending.extend(node.children.iter().copied());
     }
 }
 

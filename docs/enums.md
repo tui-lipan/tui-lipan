@@ -539,6 +539,10 @@ Semantic target for framework-owned `ScrollView` navigation.
 | `ScrollTarget::Key(Key)` | Resolve to the first child subtree containing the key |
 | `ScrollTarget::KeyOffset { key, offset }` | Resolve to the first child subtree containing the key, then add `offset` rows |
 
+Use `ScrollView::reveal_key(key)` to keep a form row visible without moving an
+already visible control. This builder uses private navigation state; the public
+`ScrollTarget` enum is unchanged.
+
 Use `ScrollView::scroll_to_bottom()` / `scroll_to_top()` for edge targets, or
 `ScrollView::scroll_to(ScrollTarget::Bottom)` when passing the target as data.
 

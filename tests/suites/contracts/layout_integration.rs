@@ -4,6 +4,27 @@
 
 use tui_lipan::prelude::*;
 
+// Deliberately exhaustive: patch releases must preserve these public variants.
+fn scroll_target_kind(target: ScrollTarget) -> &'static str {
+    match target {
+        ScrollTarget::Top => "top",
+        ScrollTarget::Bottom => "bottom",
+        ScrollTarget::Key(_) => "key",
+        ScrollTarget::KeyOffset { .. } => "key-offset",
+    }
+}
+
+#[test]
+fn scroll_target_exhaustive_matches_remain_compatible() {
+    assert_eq!(scroll_target_kind(ScrollTarget::top()), "top");
+    assert_eq!(scroll_target_kind(ScrollTarget::bottom()), "bottom");
+    assert_eq!(scroll_target_kind(ScrollTarget::key("row")), "key");
+    assert_eq!(
+        scroll_target_kind(ScrollTarget::key_offset("row", 1)),
+        "key-offset"
+    );
+}
+
 /// Simple test component that renders a Center with VStack.
 struct CenterTestComponent {
     content_width: usize,

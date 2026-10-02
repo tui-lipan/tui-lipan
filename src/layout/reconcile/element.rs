@@ -81,6 +81,7 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
         let active_theme = ctx.tree.current_active_theme();
         let node = ctx.tree.node_mut(id);
         node.epoch = epoch;
+        node.portal_suppressed = false;
         node.key = el.key.clone();
         node.automation_id = el.automation_id.clone();
         node.semantic_role = el.semantic_role;
@@ -109,6 +110,7 @@ pub(crate) fn reconcile_element(ctx: &mut ReconcileCtx<'_>, args: ElementReconci
         let active_theme = ctx.tree.current_active_theme();
         let node = ctx.tree.node_mut(id);
         node.epoch = epoch;
+        node.portal_suppressed = false;
         node.key = el.key.clone();
         node.automation_id = el.automation_id.clone();
         node.semantic_role = el.semantic_role;

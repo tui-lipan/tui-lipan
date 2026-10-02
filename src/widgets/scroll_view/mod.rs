@@ -36,6 +36,8 @@ pub struct ScrollView {
     pub(crate) scroll_request: Option<ScrollRequest>,
     /// Framework-owned semantic scroll target.
     pub(crate) scroll_target: Option<ScrollTarget>,
+    /// Reveal a key target with minimal movement instead of top alignment.
+    pub(crate) reveal_target: bool,
     /// How semantic scroll targets are applied.
     pub(crate) scroll_behavior: ScrollBehavior,
     /// Key bindings to move the viewport.
@@ -53,6 +55,7 @@ pub struct ScrollView {
     pub(crate) ambient_page_scroll: bool,
     /// Whether the scroll view can receive focus.
     pub(crate) focusable: bool,
+    pub(crate) virtualize: bool,
     /// Whether the scroll view participates in Tab traversal.
     pub(crate) tab_stop: bool,
     /// Callback fired when the scroll offset changes.
@@ -97,6 +100,7 @@ impl Default for ScrollView {
             horizontal_reveal_range: None,
             scroll_request: None,
             scroll_target: None,
+            reveal_target: false,
             scroll_behavior: ScrollBehavior::default(),
             scroll_keys: ScrollKeymap::default(),
             scroll_wheel: true,
@@ -105,6 +109,7 @@ impl Default for ScrollView {
             scroll_wheel_behavior: ScrollWheelBehavior::default(),
             ambient_page_scroll: false,
             focusable: false,
+            virtualize: true,
             tab_stop: true,
             on_scroll: None,
             on_scroll_to: None,
@@ -225,6 +230,7 @@ impl ScrollView {
     /// [`Self::scroll_behavior`].
     pub fn scroll_to(mut self, target: ScrollTarget) -> Self {
         self.scroll_target = Some(target);
+        self.reveal_target = false;
         self
     }
 
@@ -243,8 +249,17 @@ impl ScrollView {
     /// This is useful for jump-to-result flows, such as scrolling a message list
     /// to a matched entry after search. When set, it takes priority over
     /// `.offset(...)`.
-    pub fn scroll_to_key(mut self, key: impl Into<Key>) -> Self {
+    pub fn scroll_to_key(self, key: impl Into<Key>) -> Self {
+        self.scroll_to(ScrollTarget::Key(key.into()))
+    }
+
+    /// Reveal the first child subtree containing `key` with minimal scrolling.
+    ///
+    /// Unlike `scroll_to_key`, this leaves the offset unchanged when the child is
+    /// already fully visible. Oversized children align their top with the viewport.
+    pub fn reveal_key(mut self, key: impl Into<Key>) -> Self {
         self.scroll_target = Some(ScrollTarget::Key(key.into()));
+        self.reveal_target = true;
         self
     }
 
@@ -253,9 +268,8 @@ impl ScrollView {
     /// This is useful when a keyed row contains a large auto-height child and
     /// navigation needs to land inside that row, for example one auto-height
     /// `DiffView` per file with global hunk navigation.
-    pub fn scroll_to_key_offset(mut self, key: impl Into<Key>, offset: usize) -> Self {
-        self.scroll_target = Some(ScrollTarget::key_offset(key, offset));
-        self
+    pub fn scroll_to_key_offset(self, key: impl Into<Key>, offset: usize) -> Self {
+        self.scroll_to(ScrollTarget::key_offset(key, offset))
     }
 
     /// Configure how semantic target navigation is applied.
@@ -416,6 +430,16 @@ impl ScrollView {
         self
     }
 
+    /// Keep offscreen children mounted and measure every child when `false`.
+    ///
+    /// Defaults to `true`, which measures and mounts visible children lazily.
+    /// Disable for small forms whose offscreen controls must retain state and
+    /// remain in the keyboard focus ring. Rendering is still clipped to the viewport.
+    pub fn virtualize(mut self, virtualize: bool) -> Self {
+        self.virtualize = virtualize;
+        self
+    }
+
     /// Hint for the initial estimated height of unmeasured off-screen children.
     ///
     /// Only used as the cold-start fallback before a running average of
@@ -465,6 +489,7 @@ impl crate::layout::hash::LayoutHash for ScrollView {
         use std::hash::Hash;
 
         crate::layout::hash::hash_stack_props(&self.props, hasher);
+        self.virtualize.hash(hasher);
         self.scrollbar.hash(hasher);
         self.scrollbar_config.variant.hash(hasher);
         self.scrollbar_config.gap.hash(hasher);

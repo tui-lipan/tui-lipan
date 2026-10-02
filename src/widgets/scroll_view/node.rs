@@ -58,6 +58,8 @@ pub struct ScrollViewNode {
     pub scroll_target: Option<ScrollTarget>,
     /// Target suppressed by explicit offset/input until the element changes it.
     pub cancelled_scroll_target: Option<ScrollTarget>,
+    pub(crate) reveal_target: bool,
+    pub(crate) cancelled_reveal_target: bool,
     pub offset: usize,
     pub smooth_scroll: SmoothScrollState,
     pub(crate) wheel_scroll: KineticScrollState,
@@ -393,6 +395,28 @@ impl VirtualHeightCache {
         self.entries.clear();
         self.total_measured_height = 0;
         self.measured_count = 0;
+    }
+}
+
+impl ScrollViewNode {
+    /// The content clip, excluding borders, padding, indicators, and scrollbar gutters.
+    pub(crate) fn content_viewport_rect(&self, rect: Rect) -> Rect {
+        let mut inner = rect.inner(self.props.border, self.props.padding);
+        inner.w = inner.w.min(self.viewport_width);
+        inner.h = inner.h.min(self.viewport_height);
+        if self.h_scrollbar && self.h_max_offset > 0 && !self.horizontal_scrollbar_integrated() {
+            inner.h = inner
+                .h
+                .saturating_sub(1u16.saturating_add(self.h_scrollbar_gap));
+        }
+        inner.y = inner.y.saturating_add(i16::from(self.top_indicator));
+        inner.h = inner.h.saturating_sub(u16::from(self.top_indicator));
+        inner.h = inner.h.saturating_sub(u16::from(self.bottom_indicator));
+        inner
+    }
+
+    fn horizontal_scrollbar_integrated(&self) -> bool {
+        self.props.border && self.h_scrollbar_variant == ScrollbarVariant::Integrated
     }
 }
 

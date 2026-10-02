@@ -211,6 +211,7 @@ pub(crate) fn handle_key(tree: &mut NodeTree, node_id: NodeId, key: &KeyEvent) -
             };
             sv.smooth_scroll.cancel_at(next);
             sv.cancelled_scroll_target = sv.scroll_target.clone();
+            sv.cancelled_reveal_target = sv.reveal_target;
             sv.offset = next;
             sv.scroll_override = Some(next);
             sv.scroll_handler_dirty = true;
@@ -233,6 +234,7 @@ pub(crate) fn handle_key(tree: &mut NodeTree, node_id: NodeId, key: &KeyEvent) -
         };
         sv.smooth_scroll.cancel_at(offset);
         sv.cancelled_scroll_target = sv.scroll_target.clone();
+        sv.cancelled_reveal_target = sv.reveal_target;
     }
     true
 }
@@ -349,6 +351,7 @@ pub(crate) fn handle_scroll(
         if next != offset || kinetic_started {
             scroll.smooth_scroll.cancel_at(next);
             scroll.cancelled_scroll_target = scroll.scroll_target.clone();
+            scroll.cancelled_reveal_target = scroll.reveal_target;
             scroll.offset = next;
             scroll.scroll_override = Some(next);
             scroll.scroll_handler_dirty = true;
@@ -357,6 +360,7 @@ pub(crate) fn handle_scroll(
         } else if has_cancel_target {
             scroll.smooth_scroll.cancel_at(offset);
             scroll.cancelled_scroll_target = scroll.scroll_target.clone();
+            scroll.cancelled_reveal_target = scroll.reveal_target;
             handled = true;
         }
     }
