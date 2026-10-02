@@ -101,7 +101,7 @@ pub(crate) fn handle_key(
 
     // ── Phase 2: read-only / no on_change fast path ─────────────────────
     if read_only || !has_on_change {
-        return on_key.as_ref().map(&handle_on_key).unwrap_or(false);
+        return on_key.as_ref().map(handle_on_key).unwrap_or(false);
     }
 
     // ── Phase 2.5: pre-insertion key interceptor ────────────────────────

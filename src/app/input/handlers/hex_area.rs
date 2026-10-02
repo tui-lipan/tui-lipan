@@ -390,7 +390,7 @@ pub(crate) fn handle_key(
 
     // ── 7. Fallback to on_key ───────────────────────────────────────────
     if !handled {
-        handled = on_key.as_ref().map(&handle_key).unwrap_or(false);
+        handled = on_key.as_ref().map(handle_key).unwrap_or(false);
     }
 
     handled

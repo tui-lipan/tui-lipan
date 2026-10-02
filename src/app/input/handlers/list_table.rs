@@ -59,7 +59,7 @@ pub(crate) fn handle_list_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) ->
     let mut handled = false;
 
     if len == 0 {
-        handled = node.on_key.as_ref().map(&handle_key).unwrap_or(false);
+        handled = node.on_key.as_ref().map(handle_key).unwrap_or(false);
     } else {
         let selected_val = node.selected;
         let scroll_keys_val = node.scroll_keys;
@@ -190,7 +190,7 @@ pub(crate) fn handle_table_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent, r
     let mut handled = false;
 
     if len == 0 {
-        handled = node.on_key.as_ref().map(&handle_key).unwrap_or(false);
+        handled = node.on_key.as_ref().map(handle_key).unwrap_or(false);
     } else {
         let selected_val = node.selected;
         let scroll_keys_val = node.scroll_keys;

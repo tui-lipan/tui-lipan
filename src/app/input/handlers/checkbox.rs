@@ -24,7 +24,7 @@ pub(crate) fn handle_key(tree: &NodeTree, id: NodeId, key: KeyEvent) -> bool {
         handled = true;
     }
     if !handled {
-        handled = node.on_key.as_ref().map(&handle_key).unwrap_or(false);
+        handled = node.on_key.as_ref().map(handle_key).unwrap_or(false);
     }
     handled
 }
