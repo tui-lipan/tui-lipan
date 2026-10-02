@@ -353,7 +353,8 @@ Scrollable container with optional scrollbar.
 | `offset` | `Option<usize>` | Controlled scroll offset |
 | `reveal_horizontal_range` | `(usize, usize)` | Minimally pan to reveal a half-open horizontal content range; reapplies when the range or viewport width changes |
 | `scroll_request` | `Option<ScrollRequest>` | One-shot relative scroll request (`lines`, page fractions, top, bottom) |
-| `scroll_to` | `Option<ScrollTarget>` | Semantic target (`Top`, `Bottom`, `Key`, or `KeyOffset`) resolved each layout |
+| `scroll_to` | `Option<ScrollTarget>` | Semantic target (`Top`, `Bottom`, `Key`, `RevealKey`, or `KeyOffset`) resolved each layout |
+| `reveal_key` | `Key` | Reveal a keyed child with minimal scrolling; already visible children stay in place |
 | `scroll_to_key` | `Option<Key>` | Convenience wrapper for `ScrollTarget::Key` |
 | `scroll_to_key_offset` | `(Key, usize)` | Convenience wrapper for `ScrollTarget::KeyOffset`, useful for landing inside large keyed rows |
 | `scroll_to_top` / `scroll_to_bottom` | - | Convenience wrappers for edge targets that do not need sentinel children |

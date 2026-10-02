@@ -537,7 +537,12 @@ Semantic target for framework-owned `ScrollView` navigation.
 | `ScrollTarget::Top` | Resolve to the current top edge |
 | `ScrollTarget::Bottom` | Resolve to the current bottom extent |
 | `ScrollTarget::Key(Key)` | Resolve to the first child subtree containing the key |
+| `ScrollTarget::RevealKey(Key)` | Reveal the first matching child with minimal scrolling; already visible children stay in place |
 | `ScrollTarget::KeyOffset { key, offset }` | Resolve to the first child subtree containing the key, then add `offset` rows |
+
+Use `ScrollView::reveal_key(key)` to keep a form row visible without moving an
+already visible control. Exhaustive matches on `ScrollTarget` must include
+`RevealKey` when upgrading to this API.
 
 Use `ScrollView::scroll_to_bottom()` / `scroll_to_top()` for edge targets, or
 `ScrollView::scroll_to(ScrollTarget::Bottom)` when passing the target as data.

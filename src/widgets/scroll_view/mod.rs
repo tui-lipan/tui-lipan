@@ -250,6 +250,15 @@ impl ScrollView {
         self
     }
 
+    /// Reveal the first child subtree containing `key` with minimal scrolling.
+    ///
+    /// Unlike `scroll_to_key`, this leaves the offset unchanged when the child is
+    /// already fully visible. Oversized children align their top with the viewport.
+    pub fn reveal_key(mut self, key: impl Into<Key>) -> Self {
+        self.scroll_target = Some(ScrollTarget::reveal_key(key));
+        self
+    }
+
     /// Scroll to `offset` rows below the first child subtree containing `key`.
     ///
     /// This is useful when a keyed row contains a large auto-height child and

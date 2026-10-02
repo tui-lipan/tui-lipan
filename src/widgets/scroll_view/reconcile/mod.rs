@@ -382,7 +382,16 @@ pub(crate) fn reconcile_scroll_view(
                 &sv.children,
                 &content_layout.rects,
                 target,
-                layout_max_offset,
+                cache::ScrollTargetLayout {
+                    max_offset: layout_max_offset,
+                    current_offset: sv
+                        .offset
+                        .filter(|offset| Some(*offset) != old_element_offset)
+                        .unwrap_or(live_scroll_offset),
+                    viewport_height: usize::from(viewport_height),
+                    content_height: usize::from(content_height),
+                    show_indicators: sv.show_scroll_indicators,
+                },
             )
         })
     };

@@ -5785,3 +5785,60 @@ fn nonvirtual_scroll_keeps_offscreen_controls_in_focus_ring_and_clips_paint() {
         backend.capture_frame().plain_text()
     );
 }
+
+#[test]
+fn reveal_key_moves_only_when_a_child_is_outside_the_viewport() {
+    let view = |offset, target: &str| {
+        ScrollView::new()
+            .virtualize(false)
+            .offset(offset)
+            .reveal_key(target.to_owned())
+            .children((0..20).map(|i| Text::new(format!("Row {i}")).key(format!("row-{i}"))))
+    };
+    let bounds = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 3,
+    };
+    for (offset, key, expected) in [
+        (0, "row-2", 0),
+        (0, "row-8", 6),
+        (6, "row-3", 3),
+        (5, "missing", 5),
+    ] {
+        let mut tree = NodeTree::new();
+        LayoutEngine::reconcile_with_focus(&mut tree, &view(offset, key).into(), bounds, None);
+        let NodeKind::ScrollView(scroll) = &tree.node(tree.root).kind else {
+            panic!("scroll view");
+        };
+        assert_eq!(scroll.offset, expected, "{key}");
+    }
+}
+
+#[test]
+fn reveal_key_accounts_for_indicator_rows() {
+    let mut tree = NodeTree::new();
+    let root = ScrollView::new()
+        .virtualize(false)
+        .show_scroll_indicators(true)
+        .reveal_key("row-8")
+        .children((0..20).map(|i| Text::new(format!("Row {i}")).key(format!("row-{i}"))));
+    LayoutEngine::reconcile_with_focus(
+        &mut tree,
+        &root.into(),
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 3,
+        },
+        None,
+    );
+    let target = tree.node(find_by_key(&tree, "row-8").unwrap());
+    assert_eq!(target.rect.y, 1);
+    let NodeKind::ScrollView(scroll) = &tree.node(tree.root).kind else {
+        panic!("scroll view");
+    };
+    assert!(scroll.top_indicator && scroll.bottom_indicator);
+}
