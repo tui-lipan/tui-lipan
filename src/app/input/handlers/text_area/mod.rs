@@ -273,7 +273,7 @@ pub(crate) fn handle_key(
 
     // ── Phase 2: read-only / no on_change fast path ─────────────────────
     if read_only || !has_on_change {
-        return on_key.as_ref().map(&handle_on_key).unwrap_or(false);
+        return on_key.as_ref().map(handle_on_key).unwrap_or(false);
     }
 
     if handle_key_interceptor(key_interceptor.as_ref(), key) {
@@ -331,7 +331,7 @@ pub(crate) fn handle_key(
                 sync_text_area_vim_render_feedback(tree, id, state, editor);
             }
             return finish_text_area_edit_if_handled(tree, id, editor, &emission, handled)
-                || on_key.as_ref().map(&handle_on_key).unwrap_or(false);
+                || on_key.as_ref().map(handle_on_key).unwrap_or(false);
         }
 
         if vim_motions {
@@ -390,7 +390,7 @@ pub(crate) fn handle_key(
                 );
                 match outcome {
                     VimKeyOutcome::Unhandled => {
-                        return on_key.as_ref().map(&handle_on_key).unwrap_or(false);
+                        return on_key.as_ref().map(handle_on_key).unwrap_or(false);
                     }
                     VimKeyOutcome::ConsumedUnchanged => return true,
                     VimKeyOutcome::EditorChanged {
@@ -415,7 +415,7 @@ pub(crate) fn handle_key(
             sync_text_area_vim_render_feedback(tree, id, state, editor);
             match outcome {
                 VimKeyOutcome::Unhandled => {
-                    return on_key.as_ref().map(&handle_on_key).unwrap_or(false);
+                    return on_key.as_ref().map(handle_on_key).unwrap_or(false);
                 }
                 VimKeyOutcome::PassThrough => {}
                 VimKeyOutcome::ConsumedUnchanged => return true,

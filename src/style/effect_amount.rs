@@ -1,9 +1,9 @@
 //! Scalar amounts for render-time color transforms.
 //!
-//! A [`ColorTransform`](crate::style::ColorTransform) carries an [`EffectAmount`] rather than a
+//! A [`crate::style::ColorTransform`] carries an [`EffectAmount`] rather than a
 //! bare `f32` so the amount can be *late-bound*: named in the element tree and resolved by the
 //! renderer while it paints. That is what lets an animated dim, tint, or opacity advance with a
-//! repaint instead of a `view()` pass, exactly as [`Paint::Animated`](crate::style::Paint::Animated)
+//! repaint instead of a `view()` pass, exactly as [`crate::style::Paint::Animated`]
 //! does for colors.
 
 use std::fmt;

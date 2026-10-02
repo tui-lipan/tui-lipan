@@ -343,7 +343,7 @@ pub(crate) fn forward_key(tree: &mut NodeTree, id: NodeId, key: KeyEvent) -> Ter
     }
 
     TerminalKeyForward {
-        handled: on_key_cb.as_ref().map(&handle_key).unwrap_or(false),
+        handled: on_key_cb.as_ref().map(handle_key).unwrap_or(false),
         mutated,
     }
 }
