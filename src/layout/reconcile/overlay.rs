@@ -445,7 +445,7 @@ fn trigger_visible_in_scroll_views(tree: &NodeTree, trigger: NodeId) -> bool {
     let mut child = trigger;
     while let Some(parent) = tree.node(child).parent {
         let node = tree.node(parent);
-        if crosses_popover_portal(node, child) {
+        if crosses_root_portal_boundary(node, child) {
             break;
         }
         if let NodeKind::ScrollView(scroll) = &node.kind {
@@ -459,9 +459,14 @@ fn trigger_visible_in_scroll_views(tree: &NodeTree, trigger: NodeId) -> bool {
     true
 }
 
-fn crosses_popover_portal(node: &crate::core::node::Node, child: NodeId) -> bool {
-    matches!(&node.kind, NodeKind::Popover(popover)
-        if popover.scope == crate::overlay::OverlayScope::RootPortal && *popover.content == child)
+fn crosses_root_portal_boundary(node: &crate::core::node::Node, child: NodeId) -> bool {
+    match &node.kind {
+        NodeKind::Popover(popover) => {
+            popover.scope == crate::overlay::OverlayScope::RootPortal && *popover.content == child
+        }
+        NodeKind::Portal(portal) => *portal.content == child,
+        _ => false,
+    }
 }
 
 fn suppress_portal_subtree(tree: &mut NodeTree, id: NodeId) {

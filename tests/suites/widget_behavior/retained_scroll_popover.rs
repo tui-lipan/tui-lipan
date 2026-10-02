@@ -133,25 +133,30 @@ impl Component for NestedPopover {
     }
 
     fn view(&self, _: &Context<Self>) -> Element {
-        ScrollView::new()
-            .virtualize(false)
-            .height(Length::Px(3))
-            .child(Text::new("row 0"))
-            .child(Text::new("row 1"))
+        VStack::new()
             .child(
-                Popover::new()
-                    .open(true)
-                    .trigger(Text::new("outer trigger"))
-                    .content(
-                        VStack::new()
-                            .height(Length::Px(3))
-                            .child(Text::new("portal row"))
-                            .child(
-                                Popover::new()
-                                    .open(true)
-                                    .trigger(Text::new("nested trigger"))
-                                    .content(
-                                        Input::new("nested-only").border(false).key("nested-input"),
+                ScrollView::new()
+                    .virtualize(false)
+                    .height(Length::Px(3))
+                    .child(Text::new("row 0"))
+                    .child(Text::new("row 1"))
+                    .child(
+                        Popover::new()
+                            .open(true)
+                            .trigger(Text::new("outer trigger"))
+                            .content(
+                                VStack::new()
+                                    .height(Length::Px(3))
+                                    .child(Text::new("portal row"))
+                                    .child(
+                                        Popover::new()
+                                            .open(true)
+                                            .trigger(Text::new("nested trigger"))
+                                            .content(
+                                                Input::new("nested-only")
+                                                    .border(false)
+                                                    .key("nested-input"),
+                                            ),
                                     ),
                             ),
                     ),
@@ -173,4 +178,93 @@ fn nested_portal_content_does_not_inherit_the_triggers_scroll_clip() {
     );
     assert!(backend.capture_frame().plain_text().contains("nested-only"));
     assert!(backend.focus_key(&Key::from("nested-input")));
+}
+
+struct PopoverInsideModalPortal;
+
+impl Component for PopoverInsideModalPortal {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _: &()) {}
+
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _: &Context<Self>) -> Element {
+        // A root Modal creates a generic Portal, not a Popover boundary.
+        let modal = Modal::new()
+            .border(false)
+            .padding(0)
+            .width(Length::Px(30))
+            .height(Length::Px(3))
+            .child(
+                VStack::new().child(Text::new("modal row")).child(
+                    Popover::new()
+                        .open(true)
+                        .trigger(Text::new("modal popover trigger").key("modal-trigger"))
+                        .content(
+                            Input::new("modal-popup-only")
+                                .border(false)
+                                .key("modal-input"),
+                        ),
+                ),
+            );
+        VStack::new()
+            .child(
+                ScrollView::new()
+                    .virtualize(false)
+                    .height(Length::Px(3))
+                    .child(Text::new("row 0"))
+                    .child(Text::new("row 1"))
+                    .child(
+                        Frame::new()
+                            .height(Length::Px(1))
+                            .border(false)
+                            .padding(0)
+                            .child(modal),
+                    )
+                    .key("declaration-scroll"),
+            )
+            .into()
+    }
+}
+
+#[test]
+fn generic_portal_content_does_not_inherit_the_declaration_scroll_clip() {
+    let mut backend = TestBackend::new_with_viewport(
+        PopoverInsideModalPortal,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 30,
+            h: 10,
+        },
+    );
+    let snapshot = backend.capture_ui_snapshot();
+    let scroll = snapshot
+        .widgets
+        .iter()
+        .find(|widget| widget.key.as_ref() == Some(&Key::from("declaration-scroll")))
+        .expect("declaration ScrollView is mounted");
+    assert_eq!(scroll.rect.h, 3);
+    let trigger = snapshot
+        .widgets
+        .iter()
+        .find(|widget| widget.key.as_ref() == Some(&Key::from("modal-trigger")))
+        .expect("trigger is retained inside the modal portal");
+    assert!(
+        trigger.rect.y >= 3,
+        "trigger must be outside the ScrollView clip"
+    );
+    assert!(
+        backend
+            .capture_frame()
+            .plain_text()
+            .contains("modal-popup-only")
+    );
+    assert_eq!(backend.focused_key(), Some(&Key::from("modal-input")));
+    assert!(backend.focus_key(&Key::from("modal-input")));
 }
