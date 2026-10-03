@@ -307,9 +307,10 @@ Popover::new()
     .animation(VisibilityAnimation::new())
 ```
 
-Run `cargo run --example visibility_animation` to compare Popover, Toast, and Accordion using one
-portal effect. The same custom-effect factory used by Modal receives the popup's visibility and phase, and can
-restore live backdrop cells for portal, scan, or wipe reveals.
+Run `cargo run --example visibility_animation` for an interactive Animation Studio comparing
+Modal, Popover, Toast, and Accordion with Portal, Scan, and Fade recipes. Press `D` for a guided
+tour or `S` for slow mode. The same custom-effect factory receives each widget's visibility and
+phase, and can restore live backdrop cells for portal, scan, or wipe reveals.
 
 ---
 
