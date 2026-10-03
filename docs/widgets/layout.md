@@ -933,14 +933,16 @@ For correct opacity blending when backgrounds use `Color::Reset`, set `App::term
 ### Controlled visibility
 
 Keep an `Animated` wrapper mounted and use `.visibility(visible, VisibilityAnimation)` to let the
-framework own entry, retained exit, and interruption. Closing content becomes inert immediately;
-once hidden, it is unmounted. Reopening reverses at the current visibility. The recipe accepts
+framework own entry, retained exit, and interruption. Initially hidden nested components are not
+created or expanded. Closing disposes their component scopes immediately (including subscriptions
+and scope-owned tasks); only their inert NodeTree visuals survive until exit finishes. Reopening mounts fresh
+component scopes while reversing the visual transition at its current visibility. The recipe accepts
 independent entry/exit timing and a custom `VisualEffect` factory, just like Modal and Popover.
 
 Use `.collapse_visibility(true)` to reflow vertical stack space with visibility progress. The child
 keeps its natural height while the wrapper clips it, so text and borders do not relayout on every
 shrinking row. Accordion uses this mechanism internally. Without collapse, the wrapper reserves its
-normal layout space. Preserve the wrapper's key when toggling visibility.
+its last mounted layout space. Preserve the wrapper's key when toggling visibility.
 
 ```rust
 Animated::new(Text::new("Details"))

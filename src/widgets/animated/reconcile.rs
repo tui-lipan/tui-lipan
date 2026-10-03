@@ -39,6 +39,13 @@ pub(crate) fn reconcile_animated(
             state
         });
         next.collapse_visibility = animated.collapse_visibility;
+        next.visibility_layout = animated
+            .visibility_layout
+            .as_ref()
+            .map(super::VisibilityLayoutHandle::shared);
+        if let (Some(layout), Some(state)) = (&next.visibility_layout, &next.visibility) {
+            layout.progress.set(state.progress());
+        }
         retarget_opacity(&mut next, animated);
 
         retarget_foreground(&mut next, animated);
@@ -314,6 +321,9 @@ fn reconcile_visibility_content(
                 Some(viewport.h),
             )
             .1;
+        }
+        if let Some(layout) = &animated.visibility_layout {
+            layout.natural_size.set((child_rect.w, child_rect.h));
         }
     }
 

@@ -2006,9 +2006,22 @@ impl ComponentRegistry {
                     id: segment_id(&key, index_in_parent),
                 };
                 path.push(seg);
-                let child = *animated.child;
-                animated.child =
-                    Box::new(self.expand_single(host, parent, path, child, epoch, viewport));
+                animated.child = if animated
+                    .visibility
+                    .as_ref()
+                    .is_some_and(|(visible, _)| !visible)
+                {
+                    Box::new(crate::widgets::Spacer::new().into())
+                } else {
+                    Box::new(self.expand_single(
+                        host,
+                        parent,
+                        path,
+                        *animated.child,
+                        epoch,
+                        viewport,
+                    ))
+                };
                 path.pop();
                 metadata.rebuild(key, pointer_focus, ElementKind::Animated(animated), layout)
             }

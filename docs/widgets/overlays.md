@@ -396,7 +396,9 @@ Accordion::new()
 `Accordion::animation(VisibilityAnimation::new())` uses `Animated::visibility` to retain closing
 section content, disable its input immediately, and reflow its height with visibility progress.
 Headers remain active during closing. A rapid toggle reverses from the current height and effect
-progress. Fully closed content is unmounted. Custom effects are optional; an ordinary recipe fades
+progress. Initially collapsed nested components never mount. Closing disposes their component
+scopes immediately while their inert visuals finish the exit; reopening mounts fresh scopes.
+Custom effects are optional; an ordinary recipe fades
 and clips the content while neighboring sections move.
 
 ## SearchPalette

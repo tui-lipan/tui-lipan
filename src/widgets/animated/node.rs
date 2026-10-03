@@ -11,6 +11,7 @@ use crate::style::Color;
 pub struct AnimatedNode {
     pub(crate) visibility: Option<crate::animation::VisibilityAnimationState>,
     pub(crate) collapse_visibility: bool,
+    pub(crate) visibility_layout: Option<std::rc::Rc<super::VisibilityLayout>>,
     pub opacity: f32,
     pub opacity_fg_only: bool,
     pub opacity_target: Option<Color>,
@@ -334,6 +335,9 @@ impl AnimatedNode {
         let mut result = AnimatedTickResult::default();
         if let Some(state) = &mut self.visibility {
             let ticked = state.tick(dt);
+            if let Some(layout) = &self.visibility_layout {
+                layout.progress.set(state.progress());
+            }
             result.changed |= ticked;
             result.paint_dirty |= ticked;
             result.layout_dirty |= ticked && (self.collapse_visibility || state.exit_finished());
@@ -554,6 +558,10 @@ impl From<Animated> for AnimatedNode {
                 crate::animation::VisibilityAnimationState::for_visibility(recipe.clone(), *visible)
             }),
             collapse_visibility: value.collapse_visibility,
+            visibility_layout: value
+                .visibility_layout
+                .as_ref()
+                .map(super::VisibilityLayoutHandle::shared),
             opacity: value.opacity,
             opacity_fg_only: value.opacity_fg_only,
             opacity_target: value.opacity_target,

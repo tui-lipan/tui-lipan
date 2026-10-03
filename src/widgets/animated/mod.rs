@@ -3,6 +3,7 @@ mod node;
 mod reconcile;
 mod visibility;
 pub(crate) use visibility::prepare_visibility_reflow;
+pub(crate) use visibility::{VisibilityLayout, VisibilityLayoutHandle};
 
 pub(crate) use self::layout::measure_animated;
 pub use self::node::AnimatedNode;
@@ -23,7 +24,7 @@ pub struct Animated {
     pub(crate) child: Box<Element>,
     pub(crate) visibility: Option<(bool, VisibilityAnimation)>,
     pub(crate) collapse_visibility: bool,
-    pub(crate) visibility_progress: Option<f32>,
+    pub(crate) visibility_layout: Option<VisibilityLayoutHandle>,
     pub(crate) opacity: f32,
     pub(crate) opacity_fg_only: bool,
     pub(crate) opacity_target: Option<Color>,
@@ -45,7 +46,7 @@ impl Default for Animated {
             child: Box::new(Spacer::new().into()),
             visibility: None,
             collapse_visibility: false,
-            visibility_progress: None,
+            visibility_layout: None,
             opacity: 1.0,
             opacity_fg_only: false,
             opacity_target: None,
@@ -74,8 +75,10 @@ impl Animated {
 
     /// Control visibility with shared entry/exit timing and optional custom effects.
     /// Keep the wrapper mounted. Closing content is retained but inert until exit completes;
-    /// closed content is unmounted. Reopening reverses without snapping.
+    /// nested component scopes are disposed as closing starts. Initially hidden components never
+    /// mount. Reopening mounts fresh scopes while reversing the visual transition without snapping.
     pub fn visibility(mut self, visible: bool, animation: VisibilityAnimation) -> Self {
+        self.visibility_layout = Some(VisibilityLayoutHandle::default());
         self.visibility = Some((visible, animation));
         self
     }
@@ -338,7 +341,14 @@ impl LayoutHash for Animated {
             .map(|(visible, _)| *visible)
             .hash(hasher);
         self.collapse_visibility.hash(hasher);
-        self.visibility_progress.map(f32::to_bits).hash(hasher);
+        self.visibility_layout
+            .as_ref()
+            .map(|layout| layout.natural_size.get())
+            .hash(hasher);
+        self.visibility_layout
+            .as_ref()
+            .map(|layout| layout.progress.get().to_bits())
+            .hash(hasher);
         self.opacity.to_bits().hash(hasher);
         self.opacity_fg_only.hash(hasher);
         self.opacity_target.hash(hasher);

@@ -8,9 +8,23 @@ pub(crate) fn measure_animated(
     max_w: Option<u16>,
     max_h: Option<u16>,
 ) -> (u16, u16) {
-    let (w, natural_h) = min_size_constrained(animated.child.as_ref(), max_w, max_h);
-    if let Some(progress) = animated.visibility_progress {
-        return (w, (f32::from(natural_h) * progress).round() as u16);
+    let (w, natural_h) = if animated
+        .visibility
+        .as_ref()
+        .is_some_and(|(visible, _)| !visible)
+        && let Some(layout) = &animated.visibility_layout
+    {
+        layout.natural_size.get()
+    } else {
+        min_size_constrained(animated.child.as_ref(), max_w, max_h)
+    };
+    if animated.collapse_visibility
+        && let Some(layout) = &animated.visibility_layout
+    {
+        return (
+            w,
+            (f32::from(natural_h) * layout.progress.get()).round() as u16,
+        );
     }
     let available_h = max_h.unwrap_or(natural_h);
     let hidden_height = Length::Px(0);

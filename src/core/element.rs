@@ -288,7 +288,9 @@ impl Element {
                 .map(Element::layout_constraints)
                 .unwrap_or(self.layout),
             ElementKind::Animated(animated) => {
-                if animated.height.is_some() {
+                if animated.height.is_some()
+                    || (animated.collapse_visibility && animated.visibility.is_some())
+                {
                     let mut layout = animated.child.layout_constraints();
                     layout.min_h = self.layout.min_h;
                     layout.max_h = self.layout.max_h;

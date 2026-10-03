@@ -69,7 +69,11 @@ pub(crate) fn requested_main_axis(
         }
         ElementKind::Animated(animated) => {
             return match axis {
-                Axis::Vertical if animated.visibility_progress.is_some() => Length::Auto,
+                Axis::Vertical
+                    if animated.collapse_visibility && animated.visibility_layout.is_some() =>
+                {
+                    Length::Auto
+                }
                 Axis::Vertical => animated
                     .layout_height
                     .or(animated.height)

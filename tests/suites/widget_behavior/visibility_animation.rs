@@ -294,7 +294,12 @@ fn accordion_reflows_neighbors_and_reverses_without_snapping() {
     let closed = after_row(&mut backend);
     assert!(!backend.capture_frame().plain_text().contains("ACTION"));
     backend.dispatch(Msg::Open).unwrap();
-    assert_eq!(after_row(&mut backend), closed);
+    assert_eq!(
+        after_row(&mut backend),
+        closed,
+        "{}",
+        backend.capture_frame().plain_text()
+    );
     backend.advance(Duration::from_millis(100));
     let half = after_row(&mut backend);
     assert!(half > closed);
@@ -310,7 +315,12 @@ fn accordion_reflows_neighbors_and_reverses_without_snapping() {
     assert_eq!(after_row(&mut backend), full);
     backend.dispatch(Msg::Close).unwrap();
     backend.advance(Duration::from_millis(200));
-    assert_eq!(after_row(&mut backend), closed);
+    assert_eq!(
+        after_row(&mut backend),
+        closed,
+        "{}",
+        backend.capture_frame().plain_text()
+    );
     assert!(!backend.capture_frame().plain_text().contains("ACTION"));
 }
 #[test]
@@ -458,5 +468,111 @@ fn accordion_measures_wrapping_at_its_allocated_width() {
     backend.advance(Duration::from_millis(100));
     assert_eq!(after_row(&mut backend), 3);
     backend.advance(Duration::from_millis(100));
-    assert_eq!(after_row(&mut backend), closed);
+    assert_eq!(
+        after_row(&mut backend),
+        closed,
+        "{}",
+        backend.capture_frame().plain_text()
+    );
+}
+
+#[derive(Default)]
+struct LifecycleCounts {
+    creates: usize,
+    views: usize,
+    unmounts: usize,
+}
+struct LifecycleChild(Rc<RefCell<LifecycleCounts>>);
+impl Component for LifecycleChild {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+    fn create_state(&self, _: &()) {
+        self.0.borrow_mut().creates += 1;
+    }
+    fn view(&self, _: &Context<Self>) -> Element {
+        self.0.borrow_mut().views += 1;
+        Text::new("NESTED\none\ntwo\nthree").into()
+    }
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+    fn unmount(&mut self, _: &mut Context<Self>) {
+        self.0.borrow_mut().unmounts += 1;
+    }
+}
+struct LifecycleHost(Rc<RefCell<LifecycleCounts>>);
+impl Component for LifecycleHost {
+    type Message = bool;
+    type Properties = ();
+    type State = bool;
+    fn create_state(&self, _: &()) -> bool {
+        false
+    }
+    fn update(&mut self, open: bool, ctx: &mut Context<Self>) -> Update {
+        ctx.state = open;
+        Update::full()
+    }
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let counts = self.0.clone();
+        VStack::new()
+            .gap(0)
+            .child(
+                Accordion::new()
+                    .gap(0)
+                    .border(false)
+                    .content_border(false)
+                    .content_padding(0)
+                    .animation(
+                        VisibilityAnimation::new()
+                            .enter(timing(200))
+                            .exit(timing(200)),
+                    )
+                    .item(
+                        AccordionItem::new(
+                            "Section",
+                            tui_lipan::child(move || LifecycleChild(counts.clone()), ()),
+                        )
+                        .expanded(ctx.state),
+                    ),
+            )
+            .child(Text::new("AFTER"))
+            .into()
+    }
+}
+#[test]
+fn accordion_disposes_component_scope_at_close_but_retains_visual_exit() {
+    let counts = Rc::new(RefCell::new(LifecycleCounts::default()));
+    let mut backend = TestBackend::new(LifecycleHost(counts.clone()));
+    backend.render();
+    assert_eq!(counts.borrow().creates, 0);
+    assert_eq!(counts.borrow().views, 0);
+    backend.dispatch(false).unwrap();
+    assert_eq!(counts.borrow().creates, 0);
+    backend.dispatch(true).unwrap();
+    backend.advance(Duration::from_millis(200));
+    assert_eq!(counts.borrow().creates, 1);
+    assert!(backend.capture_frame().plain_text().contains("NESTED"));
+    let views = counts.borrow().views;
+    backend.dispatch(false).unwrap();
+    assert_eq!(counts.borrow().unmounts, 1);
+    assert_eq!(counts.borrow().views, views);
+    assert!(backend.capture_frame().plain_text().contains("NESTED"));
+    backend.advance(Duration::from_millis(100));
+    assert!(backend.capture_frame().plain_text().contains("NESTED"));
+    assert_eq!(
+        counts.borrow().views,
+        views,
+        "layout ticks do not rebuild component views"
+    );
+    backend.dispatch(true).unwrap();
+    assert_eq!(counts.borrow().creates, 2);
+    backend.advance(Duration::from_millis(200));
+    assert!(backend.capture_frame().plain_text().contains("NESTED"));
+    backend.dispatch(false).unwrap();
+    assert_eq!(counts.borrow().unmounts, 2);
+    backend.advance(Duration::from_millis(200));
+    assert!(!backend.capture_frame().plain_text().contains("NESTED"));
+    backend.dispatch(false).unwrap();
+    assert_eq!(counts.borrow().creates, 2);
 }
