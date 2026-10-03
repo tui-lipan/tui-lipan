@@ -1234,7 +1234,10 @@ mod tests {
                 directory: directory.clone(),
             }),
         );
-        std::assert_matches!(result, Err(AutomationError::UnsupportedFormat("PNG")));
+        assert!(matches!(
+            result,
+            Err(AutomationError::UnsupportedFormat("PNG"))
+        ));
         assert!(!directory.exists());
     }
 }
