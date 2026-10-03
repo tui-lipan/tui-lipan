@@ -16,6 +16,7 @@ pub(crate) struct OverlayRoot {
     pub(crate) on_click: Option<Callback<()>>,
     pub(crate) backdrop: Option<Style>,
     pub(crate) opacity: f32,
+    pub(crate) portal_animation: Option<NodeId>,
     pub(crate) captures_focus: bool,
     pub(crate) auto_focus: bool,
     pub(crate) captures_pointer: PointerCapture,

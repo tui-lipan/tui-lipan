@@ -21,11 +21,22 @@ pub(crate) fn tick_animated_widgets(tree: &mut NodeTree, dt: Duration) -> (bool,
     let mut needs_layout = false;
 
     for id in animated_ids {
-        if let NodeKind::Animated(node) = &mut tree.node_mut(id).kind {
-            let result = node.tick(dt);
-            changed |= result.changed;
-            needs_paint |= result.paint_dirty;
-            needs_layout |= result.layout_dirty;
+        match &mut tree.node_mut(id).kind {
+            NodeKind::Animated(node) => {
+                let result = node.tick(dt);
+                changed |= result.changed;
+                needs_paint |= result.paint_dirty;
+                needs_layout |= result.layout_dirty;
+            }
+            NodeKind::Portal(portal) => {
+                if let Some(animation) = &mut portal.animation {
+                    let ticked = animation.tick(dt);
+                    changed |= ticked;
+                    needs_paint |= ticked;
+                    needs_layout |= ticked && animation.exit_finished();
+                }
+            }
+            _ => {}
         }
     }
 

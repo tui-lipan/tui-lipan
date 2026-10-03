@@ -264,7 +264,16 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
         ));
         #[cfg(not(feature = "image"))]
         let _ = overlay_index;
-        let overlay_opacity = overlay.opacity.clamp(0.0, 1.0);
+        let animation = overlay_animation_state(tree, overlay);
+        let overlay_opacity = overlay_visibility(tree, overlay);
+        let custom_effect =
+            animation.and_then(|animation| animation.recipe.effect_at(animation.context()));
+        let content_opacity = if animation.is_some_and(|animation| animation.recipe.paints_effect())
+        {
+            1.0
+        } else {
+            overlay_opacity
+        };
         let restore_mode = overlay_clear_restore_mode(tree.node(overlay.id));
         let surface_alpha = overlay_surface_alpha(tree.node(overlay.id));
         if let Some(style) = overlay.backdrop {
@@ -278,6 +287,9 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
         };
         let overlay_rect = overlay_offset.apply_to_rect(overlay_node.rect);
         let clear_rect = clip_overlay_clear_rect(content_rect, overlay_rect);
+        let effect_backdrop = custom_effect
+            .as_ref()
+            .and_then(|_| snapshot_buffer_rect(state.f, overlay_rect, Some(content_rect)));
 
         // Snapshot all cells in the overlay area before clearing. After drawing
         // the overlay content, any untouched cells are restored so transparent
@@ -391,14 +403,25 @@ pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
             );
         }
 
-        if overlay_opacity < 1.0 {
+        if let Some(effect) = custom_effect {
+            apply_visual_effects_over_backdrop(
+                state.f,
+                overlay_rect,
+                std::slice::from_ref(&effect),
+                state.ctx.effect_phase,
+                Some(content_rect),
+                state.ctx.terminal_bg,
+                effect_backdrop.as_ref(),
+            );
+        }
+        if content_opacity < 1.0 {
             let bg_snapshot = state.ctx.overlay_bg_snapshot.borrow();
             composite_overlay_opacity(
                 state.f,
                 clear_rect,
                 &bg_snapshot,
                 state.ctx.terminal_bg,
-                overlay_opacity,
+                content_opacity,
             );
         }
     }
@@ -547,6 +570,23 @@ pub(crate) fn render_regions(
 
     #[cfg(feature = "terminal-images")]
     flush_occluded_image_cells(state.f);
+}
+
+fn overlay_animation_state<'a>(
+    tree: &'a NodeTree,
+    overlay: &crate::core::node::OverlayRoot,
+) -> Option<&'a crate::animation::OverlayAnimationState> {
+    let id = overlay.portal_animation.filter(|id| tree.is_valid(*id))?;
+    let NodeKind::Portal(portal) = &tree.node(id).kind else {
+        return None;
+    };
+    portal.animation.as_ref()
+}
+
+fn overlay_visibility(tree: &NodeTree, overlay: &crate::core::node::OverlayRoot) -> f32 {
+    overlay_animation_state(tree, overlay)
+        .map_or(overlay.opacity, |animation| animation.progress())
+        .clamp(0.0, 1.0)
 }
 
 fn collect_overlay_nodes(tree: &NodeTree) -> HashSet<NodeId> {
@@ -2152,7 +2192,7 @@ fn overlay_image_backdrops(
     tree.overlay_roots()
         .iter()
         .enumerate()
-        .filter(|(_, overlay)| tree.is_valid(overlay.id) && overlay.opacity > 0.0)
+        .filter(|(_, overlay)| tree.is_valid(overlay.id) && overlay_visibility(tree, overlay) > 0.0)
         .filter_map(|(index, overlay)| {
             let style = overlay.backdrop.filter(|style| !style.is_empty())?;
             let effect =
@@ -2197,7 +2237,7 @@ fn image_occlusion_rects(
             .backdrop
             .as_ref()
             .is_some_and(|style| style.bg.is_some())
-            && overlay.opacity >= 1.0
+            && overlay_visibility(tree, overlay) >= 1.0
         {
             let full = to_ratatui_rect(content_rect);
             if full.width > 0 && full.height > 0 {

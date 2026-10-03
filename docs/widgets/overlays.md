@@ -28,6 +28,7 @@ controlled overlay closed.
 | `title` | `impl Into<String>` | **Constructor** - dialog title |
 | `child` | `Element` | Dialog content |
 | `scope` | `OverlayScope` | `RootPortal` (default) or `Local` |
+| `animation` | `impl Into<Option<OverlayAnimation>>` | Opt-in enter/exit timing and custom paint effects for a complete root-portal frame; `None` disables it |
 | `auto_focus` | `bool` | Focus the first focusable descendant (`true` by default); `false` suspends focus while retaining the modal trap |
 | `on_close` | `Callback<()>` | Close callback (Esc/backdrop click) |
 | `dismiss_on_escape` | `bool` | Whether Esc fires `on_close` (`true` by default). Without `on_close`, the default traps Esc. `false` always lets Esc reach focused widgets; backdrop clicks still close when `on_close` is set |
@@ -92,6 +93,44 @@ may grow to 75% of it. Give a modal `reserve_height` without a `max_height` and
 it can run off the bottom of the screen.
 
 ---
+
+### Animate a modal or picker
+
+`Modal::animation` is opt-in. Give the resulting element a stable key and place it directly in a
+`ZStack`, `Canvas`, `VStack`, or `HStack`. Removing it from the view retains the frame through its
+exit, while releasing focus and disabling all retained input handlers. Reopening the same key
+reverses from the current visibility. Unkeyed elements or unsupported parents disappear immediately
+when removed. `OverlayScope::Local` does not use this root-overlay animation.
+
+```rust
+use tui_lipan::prelude::*;
+
+let picker: Element = Modal::new()
+    .title("Commands")
+    .animation(OverlayAnimation::new())
+    .child(Text::new("Choose a command"))
+    .into();
+let root: Element = ZStack::new().child(picker.key("commands")).into();
+```
+
+`OverlayAnimation` fades in over 150 ms and out over 100 ms. Use `.enter(TransitionConfig)` and
+`.exit(TransitionConfig)` for independent durations and easing. A zero duration snaps to its target.
+The active recipe is held for the current transition; view rebuilds do not restart it.
+
+Use `.effect(|context| VisualEffect::Custom(...))` to replace the content fade with an application
+pattern such as a portal, scan, or dissolve. `context.progress` is visibility from zero to one;
+enter runs toward one and exit toward zero. `context.phase` distinguishes entry and exit when an
+effect needs different behavior in each direction. The factory runs on the UI thread and can
+capture `Rc` configuration. The complete frame, including its title and border, receives the effect.
+At full visibility the factory is idle and the frame paints normally.
+
+A custom `CellEffect` can implement `uses_backdrop` and `apply_with_backdrop` to restore the live
+cells beneath erased areas. Its backdrop includes the dialog's current dim. The backdrop dim follows
+visibility separately, so a custom effect does not receive an additional automatic content fade.
+
+Run `cargo run --example modal_animation` for a complete application-defined portal with entry,
+retained exit, backdrop compositing, and focus handling. Animation controls presentation; removing
+and re-adding a component still follows its normal component lifecycle.
 
 ## Toast Notifications
 
@@ -222,6 +261,7 @@ inherit ScrollView clipping from the overlay's declaration site.
 | `content` | `Element` | Popover content |
 | `open` | `bool` | Controlled open state |
 | `scope` | `OverlayScope` | `RootPortal` (default) or `Local` |
+| `animation` | `impl Into<Option<OverlayAnimation>>` | Opt-in enter/exit timing and custom paint effects for a complete root-portal frame; `None` disables it |
 | `capture_focus` | `bool` | Capture and trap focus in a root-portal popover (`true` by default); disable for passive overlays whose trigger retains keyboard focus |
 | `auto_focus` | `bool` | Focus the first focusable descendant (`true` by default); `false` suspends focus while retaining capture/trapping |
 | `on_close` | `Callback<()>` | Close callback |
@@ -345,6 +385,7 @@ Use `ctx.register_command(...)` inside a component to register component-scoped 
 | `width` | `Length` | Modal width |
 | `height` | `Length` | Modal height |
 | `scope` | `OverlayScope` | `RootPortal` (default) or `Local` |
+| `animation` | `impl Into<Option<OverlayAnimation>>` | Opt-in enter/exit timing and custom paint effects for a complete root-portal frame; `None` disables it |
 | `backdrop_style` | `Style` | Backdrop overlay style |
 | `frame_style` | `Style` | Modal frame style |
 | `border` | `bool` | Show modal border |

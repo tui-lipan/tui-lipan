@@ -189,7 +189,10 @@ pub use crate::app::{
 };
 pub use crate::mockup::Mockup;
 
-pub use crate::animation::{AnimationHandle, ExitAnimation, ExitQueue, ExitTransfer};
+pub use crate::animation::{
+    AnimationHandle, ExitAnimation, ExitQueue, ExitTransfer, OverlayAnimation,
+    OverlayAnimationContext, OverlayAnimationPhase,
+};
 pub use crate::automation::{
     AutomationError, AutomationId, AutomationIdError, AutomationOptions, AutomationScrollDirection,
     AutomationSession, AutomationSnapshot, AutomationStep, AutomationStepResult, Checkpoint,

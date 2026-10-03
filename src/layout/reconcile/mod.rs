@@ -61,6 +61,7 @@ pub(crate) fn reconcile_with_overlays_mode(
         root_id
     };
 
+    overlay::collect_portal_overlay_roots(tree, &mut overlay_state);
     collect_popover_overlay_roots(tree, &mut overlay_state);
     overlay_state
         .roots

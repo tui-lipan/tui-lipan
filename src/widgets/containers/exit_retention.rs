@@ -411,6 +411,14 @@ pub(crate) fn positioned_exit_rect(tree: &NodeTree, id: NodeId) -> crate::style:
     rect
 }
 
+fn has_exit_animation(kind: &NodeKind) -> bool {
+    match kind {
+        NodeKind::Animated(animated) => animated.auto_exit.is_some(),
+        NodeKind::Portal(portal) => portal.animation.is_some(),
+        _ => false,
+    }
+}
+
 /// Keyed children with an `auto_exit` wrapper that the new element list no longer describes.
 fn departed_children(
     tree: &NodeTree,
@@ -426,7 +434,7 @@ fn departed_children(
                 && tree.node(**id).key.is_some()
                 && !reuse.iter().any(|reused| reused.as_ref() == Some(*id))
                 && !already_retained.iter().any(|entry| entry.id == **id)
-                && matches!(&tree.node(**id).kind, NodeKind::Animated(a) if a.auto_exit.is_some())
+                && has_exit_animation(&tree.node(**id).kind)
         })
         .map(|(index, id)| (index, *id))
         .collect()
@@ -437,16 +445,26 @@ fn begin_exit(
     id: NodeId,
     collapse_from: Option<(Axis, u16)>,
 ) -> Option<std::time::Duration> {
-    let NodeKind::Animated(animated) = &mut tree.node_mut(id).kind else {
-        return None;
-    };
-    let duration = animated.auto_exit?.duration();
-    animated.begin_auto_exit(collapse_from).then_some(duration)
+    match &mut tree.node_mut(id).kind {
+        NodeKind::Animated(animated) => {
+            let duration = animated.auto_exit?.duration();
+            animated.begin_auto_exit(collapse_from).then_some(duration)
+        }
+        NodeKind::Portal(portal) => {
+            let duration = portal.animation.as_mut()?.begin_exit();
+            (!duration.is_zero()).then_some(duration)
+        }
+        _ => None,
+    }
 }
 
 fn exit_finished(tree: &NodeTree, id: NodeId) -> bool {
     match &tree.node(id).kind {
         NodeKind::Animated(animated) => animated.auto_exit_finished(),
+        NodeKind::Portal(portal) => portal
+            .animation
+            .as_ref()
+            .is_none_or(|animation| animation.exit_finished()),
         _ => true,
     }
 }

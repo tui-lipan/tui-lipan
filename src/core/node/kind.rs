@@ -574,3 +574,16 @@ impl From<PanView> for NodeKind {
         NodeKind::PanView(PanViewNode::from(value))
     }
 }
+
+impl NodeKind {
+    pub(crate) fn is_animating(&self) -> bool {
+        match self {
+            Self::Animated(animated) => animated.is_animating(),
+            Self::Portal(portal) => portal
+                .animation
+                .as_ref()
+                .is_some_and(|animation| animation.is_animating()),
+            _ => false,
+        }
+    }
+}

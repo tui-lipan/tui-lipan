@@ -52,6 +52,7 @@ cargo run --example markdown_editor_sync --features markdown,syntax-syntect
 | `splitter` | `Splitter` classic vs frame-join modes with resizable panes |
 | `window_manager` | Hyprland-style tiling/floating window manager showcase with `Canvas`, `Transition<FloatRect>` geometry, workspaces, hover/framework focus integration, animated focus chrome, Alt-only keybindings, fullscreen, configurable title/focus/animation policy, smart local split-axis toggles, animated tiled drag/drop reflow, remembered floating geometry, position-aware float-to-tile toggles, persistent dwindle-tree target splitting for tiled windows, and corner-aware resize |
 | `modal_auto_height` | `Modal` + `List` with `Auto` vs `max_height` constraints |
+| `modal_animation` | Custom portal reveal driven by modal lifecycle progress, retained exit, and reversal |
 | `modal_percent_repro` | Modal height percent and `OverlayScope` behavior |
 | `mouse_region_click` | `MouseRegion`: passthrough vs capturing button/region clicks |
 | `exit_animation` | Keyed `ExitQueue` state retaining removed rows through `Animated` exits |

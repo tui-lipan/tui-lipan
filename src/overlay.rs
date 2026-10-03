@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use web_time::Instant;
 
-use crate::animation::{Easing, Transition};
+use crate::animation::{Easing, OverlayAnimation, OverlayAnimationState, Transition};
 use crate::callback::Callback;
 use crate::core::element::Element;
 use crate::core::node::{NodeId, WidgetNode};
@@ -128,11 +128,39 @@ pub(crate) struct Portal {
     pub(crate) captures_focus: bool,
     pub(crate) auto_focus: bool,
     pub(crate) captures_pointer: PointerCapture,
+    pub(crate) animation: Option<OverlayAnimation>,
 }
 
 #[derive(Clone)]
 pub(crate) struct PortalNode {
     pub(crate) content: Box<NodeId>,
+    pub(crate) presentation: PortalPresentation,
+    pub(crate) animation: Option<OverlayAnimationState>,
+}
+
+#[derive(Clone)]
+pub(crate) struct PortalPresentation {
+    pub layer: OverlayLayer,
+    pub dismiss_policy: DismissPolicy,
+    pub on_close: Option<Callback<()>>,
+    pub backdrop: Option<Style>,
+    pub captures_focus: bool,
+    pub auto_focus: bool,
+    pub captures_pointer: PointerCapture,
+}
+
+impl From<&Portal> for PortalPresentation {
+    fn from(portal: &Portal) -> Self {
+        Self {
+            layer: portal.layer,
+            dismiss_policy: portal.dismiss_policy,
+            on_close: portal.on_close.clone(),
+            backdrop: portal.backdrop,
+            captures_focus: portal.captures_focus,
+            auto_focus: portal.auto_focus,
+            captures_pointer: portal.captures_pointer,
+        }
+    }
 }
 
 impl WidgetNode for PortalNode {}

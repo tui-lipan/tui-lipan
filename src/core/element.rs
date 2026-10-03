@@ -931,6 +931,7 @@ mod tests {
             captures_focus: false,
             auto_focus: false,
             captures_pointer: PointerCapture::None,
+            animation: None,
         }));
 
         let cases: Vec<(&str, Element)> = vec![

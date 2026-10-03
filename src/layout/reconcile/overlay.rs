@@ -163,9 +163,22 @@ pub(crate) fn reconcile_portal(
 ) -> NodeId {
     let old_children = {
         let node = tree.node_mut(id);
+        let animation = match (&node.kind, &portal.animation) {
+            (NodeKind::Portal(existing), Some(recipe)) => {
+                let mut state = existing.animation.clone().unwrap_or_else(|| {
+                    crate::animation::OverlayAnimationState::new(recipe.clone())
+                });
+                state.reconcile(recipe);
+                Some(state)
+            }
+            (_, Some(recipe)) => Some(crate::animation::OverlayAnimationState::new(recipe.clone())),
+            (_, None) => None,
+        };
         node.rect = Rect::default();
         node.kind = NodeKind::Portal(crate::overlay::PortalNode {
             content: Box::new(NodeId::INVALID),
+            presentation: portal.into(),
+            animation,
         });
         std::mem::take(&mut node.children)
     };
@@ -233,26 +246,7 @@ pub(crate) fn reconcile_portal(
         *portal_node.content = content_id;
     }
 
-    if overlay_state.allow_root_overlays {
-        let order = overlay_state.next_order();
-        overlay_state.roots.push(OverlayRoot {
-            id: content_id,
-            overlay_id: None,
-            layer: portal.layer,
-            order,
-            dismiss_policy: portal.dismiss_policy,
-            on_dismiss: portal.on_close.clone(),
-            on_click: None,
-            backdrop: portal.backdrop,
-            opacity: 1.0,
-            captures_focus: portal.captures_focus,
-            auto_focus: portal.auto_focus,
-            captures_pointer: portal.captures_pointer,
-            copy_text: None,
-            copy_zone: None,
-            copy_feedback_active: false,
-        });
-    }
+    tree.note_kind_set(id);
 
     id
 }
@@ -354,6 +348,7 @@ pub(crate) fn reconcile_overlay_entries(ctx: &mut ReconcileCtx<'_>, overlays: &[
             },
             backdrop: entry.backdrop,
             opacity: entry.opacity(),
+            portal_animation: None,
             captures_focus: if entry.pending_dismiss {
                 false
             } else {
@@ -431,6 +426,7 @@ fn collect_popover_overlay_root(
         on_click: None,
         backdrop: None,
         opacity: 1.0,
+        portal_animation: None,
         captures_focus: popover_node.capture_focus,
         auto_focus: popover_node.auto_focus,
         captures_pointer: crate::overlay::PointerCapture::RectOnly,
@@ -475,6 +471,72 @@ fn suppress_portal_subtree(tree: &mut NodeTree, id: NodeId) {
         let node = tree.node_mut(id);
         node.portal_suppressed = true;
         pending.extend(node.children.iter().copied());
+    }
+}
+
+/// Publish live and retained portals in tree order, preserving their layering during exit.
+pub(crate) fn collect_portal_overlay_roots(tree: &NodeTree, overlay_state: &mut OverlayState) {
+    if !overlay_state.allow_root_overlays {
+        return;
+    }
+    // Managed overlay entries are independent roots. Include their descendants too, so a
+    // declarative modal nested in a managed overlay retains the same portal behavior.
+    let mut pending: Vec<_> = overlay_state
+        .roots
+        .iter()
+        .rev()
+        .map(|root| root.id)
+        .collect();
+    pending.push(tree.root);
+    let mut visited = HashSet::new();
+    while let Some(id) = pending.pop() {
+        if !tree.is_valid(id) || !visited.insert(id) {
+            continue;
+        }
+        let node = tree.node(id);
+        pending.extend(node.children.iter().rev().copied());
+        let NodeKind::Portal(portal) = &node.kind else {
+            continue;
+        };
+        let closing = portal
+            .animation
+            .as_ref()
+            .is_some_and(|animation| animation.is_closing());
+        if node.portal_suppressed || (node.inert && !closing) || !tree.is_valid(*portal.content) {
+            continue;
+        }
+        let presentation = &portal.presentation;
+        let order = overlay_state.next_order();
+        overlay_state.roots.push(OverlayRoot {
+            id: *portal.content,
+            overlay_id: None,
+            layer: presentation.layer,
+            order,
+            dismiss_policy: if closing {
+                DismissPolicy::None
+            } else {
+                presentation.dismiss_policy
+            },
+            on_dismiss: if closing {
+                None
+            } else {
+                presentation.on_close.clone()
+            },
+            on_click: None,
+            backdrop: presentation.backdrop,
+            opacity: 1.0,
+            portal_animation: portal.animation.as_ref().map(|_| node.id),
+            captures_focus: !closing && presentation.captures_focus,
+            auto_focus: !closing && presentation.auto_focus,
+            captures_pointer: if closing {
+                crate::overlay::PointerCapture::None
+            } else {
+                presentation.captures_pointer
+            },
+            copy_text: None,
+            copy_zone: None,
+            copy_feedback_active: false,
+        });
     }
 }
 

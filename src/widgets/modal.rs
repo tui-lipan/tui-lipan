@@ -1,5 +1,6 @@
 //! Modal widget.
 
+use crate::animation::OverlayAnimation;
 use crate::callback::Callback;
 use crate::core::element::{Element, ElementKind};
 use crate::core::event::MouseRegionEvent;
@@ -32,6 +33,7 @@ pub struct Modal {
     title_style: Style,
     title_alignment: Align,
     dismiss_on_escape: bool,
+    animation: Option<OverlayAnimation>,
 }
 
 impl Modal {
@@ -56,6 +58,7 @@ impl Modal {
             title_style: Style::default(),
             title_alignment: Align::Start,
             dismiss_on_escape: true,
+            animation: None,
         }
     }
 
@@ -68,6 +71,15 @@ impl Modal {
     /// Set modal child content.
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.child = child.into();
+        self
+    }
+
+    /// Animate the complete root-portal frame on entry and removal.
+    ///
+    /// Key the resulting element and place it directly in a retention-capable container.
+    /// Local modals do not use root-overlay lifecycle animation.
+    pub fn animation(mut self, animation: impl Into<Option<OverlayAnimation>>) -> Self {
+        self.animation = animation.into();
         self
     }
 
@@ -311,6 +323,7 @@ impl From<Modal> for Element {
                     captures_focus: true,
                     auto_focus: modal.auto_focus,
                     captures_pointer: PointerCapture::BackdropFullScreen,
+                    animation: modal.animation,
                 };
                 let element = Element::new(ElementKind::Portal(portal));
                 match modal.max_height {
