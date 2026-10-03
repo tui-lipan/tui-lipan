@@ -1868,9 +1868,9 @@ impl TerminalScreen {
         let cols = cols.max(1);
         let dimensions_changed = rows != self.rows || cols != self.cols;
         let reflowed = cols != self.cols;
-        if dimensions_changed {
-            self.clear_active_prompt();
-        }
+        let prompt_anchor = dimensions_changed
+            .then(|| self.clear_active_prompt(cols))
+            .flatten();
         self.rows = rows;
         self.cols = cols;
         let dimensions = TermDimensions {
@@ -1912,6 +1912,14 @@ impl TerminalScreen {
         }
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode(), self.pixel_mouse);
+        if let Some((cursor_line_offset, column)) = prompt_anchor {
+            self.active_prompt_mark = Some(ActivePromptMark {
+                absolute_line: self
+                    .cursor_absolute_line()
+                    .saturating_sub(cursor_line_offset),
+                column,
+            });
+        }
         self.dirty = true;
     }
 
@@ -1919,19 +1927,17 @@ impl TerminalScreen {
     ///
     /// Shells receive `SIGWINCH` after a PTY resize and redraw their current prompt. Leaving the
     /// old prompt in the reflow buffer makes that redraw additive, duplicating wrapped input.
-    fn clear_active_prompt(&mut self) {
-        let Some(mark) = self.active_prompt_mark.take() else {
-            return;
-        };
+    fn clear_active_prompt(&mut self, cols: u16) -> Option<(usize, usize)> {
+        let mark = self.active_prompt_mark.take()?;
         if self.term.mode().contains(TermMode::ALT_SCREEN) {
-            return;
+            return None;
         }
 
         let grid = self.term.grid_mut();
         let line = grid.topmost_line().0 + mark.absolute_line as i32;
         let screen_lines = grid.screen_lines() as i32;
         if !(0..screen_lines).contains(&line) {
-            return;
+            return None;
         }
 
         let columns = grid.columns();
@@ -1945,6 +1951,16 @@ impl TerminalScreen {
                 *cell = background.into();
             }
         }
+        // The shell redraws from its old physical cursor row. Do not let the erased cursor's
+        // column manufacture wrapped blank rows when the grid gets narrower.
+        grid.cursor.point.column.0 = grid.cursor.point.column.0.min(cols as usize - 1);
+        grid.cursor.input_needs_wrap = false;
+        // Readline's resize redraw does not rerun PROMPT_COMMAND, so OSC 133;A is not repeated.
+        // Keep the prompt anchored relative to the cursor as preceding output reflows.
+        Some((
+            (grid.cursor.point.line.0 - line).max(0) as usize,
+            mark.column,
+        ))
     }
 
     /// Return current visible screen contents.
@@ -4435,6 +4451,55 @@ mod tests {
             style_run_bits(underline.flags),
             style_run_bits(double.flags)
         );
+    }
+
+    #[test]
+    fn bash_prompt_cursor_survives_shrink_then_grow() {
+        let mut screen = TerminalScreen::new(8, 120, 20);
+        let prompt = b"project branch > \x1b]133;B\x1b\\";
+        let input = b"abcdefghijklmnopqrstuvwxyz1234567890";
+        screen.process_bytes(b"previous command\r\nprevious output\r\n");
+        screen.process_bytes(b"\x1b]133;A\x1b\\");
+        screen.process_bytes(prompt);
+        screen.process_bytes(input);
+
+        for _ in 0..3 {
+            // Bash/readline output after SIGWINCH at each width. PROMPT_COMMAND's
+            // OSC 133;A is absent from redraws, while PS1's OSC 133;B is repeated.
+            screen.resize(8, 32);
+            screen.process_bytes(b"\r\x1b[K\r");
+            screen.process_bytes(prompt);
+            screen.process_bytes(input);
+            let narrow = screen.render_snapshot();
+            assert_eq!((narrow.cursor_row, narrow.cursor_col), (3, 21));
+            assert_eq!(
+                narrow.text.lines().next().map(str::trim_end),
+                Some("previous command")
+            );
+
+            screen.resize(8, 120);
+            screen.process_bytes(b"\r\x1b[K\r\x1b[A\x1b[K\r");
+            screen.process_bytes(prompt);
+            screen.process_bytes(input);
+            let wide = screen.render_snapshot();
+            assert_eq!((wide.cursor_row, wide.cursor_col), (2, 53));
+        }
+        screen.process_bytes(b"x");
+
+        let snapshot = screen.render_snapshot();
+        assert_eq!(
+            snapshot.text.lines().next().map(str::trim_end),
+            Some("previous command")
+        );
+        assert_eq!(
+            snapshot.text.lines().nth(1).map(str::trim_end),
+            Some("previous output")
+        );
+        assert_eq!(
+            snapshot.text.lines().nth(2).map(str::trim_end),
+            Some("project branch > abcdefghijklmnopqrstuvwxyz1234567890x")
+        );
+        assert_eq!((snapshot.cursor_row, snapshot.cursor_col), (2, 54));
     }
 
     #[test]
