@@ -68,15 +68,18 @@ summary and relevant documentation.
 
 ## Toolchain
 
-- **MSRV:** Rust 1.99 (`edition = "2024"`)
-- Stable toolchain is expected for all CI jobs
+- **MSRV:** Rust 1.96 (`edition = "2024"`)
+- Stable toolchain is expected for all CI jobs; the `MSRV` job additionally runs
+  `cargo check --workspace --all-targets --all-features` on the pinned MSRV
 
 The MSRV is a deliberate floor, not an accident of the dependency graph: the
-crate uses language features and std APIs stabilized up to 1.99, such as
+crate uses language features and std APIs stabilized up to 1.96, such as
 `cfg_select!`, `std::assert_matches!`, `str::floor_char_boundary`/
-`ceil_char_boundary`, `String::from_utf8_lossy_owned`, and the infallible atomic
-`update`. When bumping it, change `rust-version` in both `Cargo.toml` and
-`tui-lipan-macro/Cargo.toml`, the README MSRV badge, and this section in the
+`ceil_char_boundary`, and the infallible atomic `update`. Raise it only when a
+newer API is worth the cost to downstream users, not for minor convenience.
+When bumping it, change `rust-version` in both `Cargo.toml` and
+`tui-lipan-macro/Cargo.toml`, the toolchain pinned by the `MSRV` job in
+`.github/workflows/ci.yml`, the README MSRV badge, and this section in the
 same PR, and run CI-strength clippy on the new toolchain so newly MSRV-gated
 lints surface.
 

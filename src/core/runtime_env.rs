@@ -556,3 +556,34 @@ impl RuntimeEnv {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ClockMode, Duration, SessionClock};
+
+    #[test]
+    fn controlled_clock_saturates_without_wrapping() {
+        let clock = SessionClock::new(ClockMode::Controlled);
+        clock.advance(Duration::from_nanos(u64::MAX - 1));
+        clock.advance(Duration::from_nanos(2));
+        assert_eq!(clock.elapsed(), Duration::from_nanos(u64::MAX));
+        clock.advance(Duration::MAX);
+        assert_eq!(clock.elapsed(), Duration::from_nanos(u64::MAX));
+    }
+
+    #[test]
+    fn controlled_clock_preserves_concurrent_advances() {
+        let clock = SessionClock::new(ClockMode::Controlled);
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let clock = &clock;
+                scope.spawn(move || {
+                    for _ in 0..1_000 {
+                        clock.advance(Duration::from_nanos(1));
+                    }
+                });
+            }
+        });
+        assert_eq!(clock.elapsed(), Duration::from_nanos(4_000));
+    }
+}

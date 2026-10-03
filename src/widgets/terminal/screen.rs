@@ -4840,7 +4840,7 @@ mod tests {
         let responses: Vec<String> = screen
             .drain_responses()
             .into_iter()
-            .map(String::from_utf8_lossy_owned)
+            .map(|r| String::from_utf8_lossy(&r).into_owned())
             .collect();
 
         let joined = responses.join("");

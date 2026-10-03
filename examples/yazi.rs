@@ -688,7 +688,7 @@ fn read_text_preview(path: &Path) -> io::Result<String> {
     if bytes.contains(&0) {
         return Ok("Binary file".to_string());
     }
-    let mut text = String::from_utf8_lossy_owned(bytes);
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
     if text.lines().count() > MAX_PREVIEW_LINES {
         text = text
             .lines()
