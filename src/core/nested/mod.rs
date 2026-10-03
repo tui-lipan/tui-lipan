@@ -485,6 +485,7 @@ impl ElementMetadata {
             layout_hash_cache: Cell::new(None),
             measure_cache: Cell::new([None::<MeasureCacheEntry>, None]),
             split_wrap_probe_cache: Cell::new(None),
+            visibility_layout_probe_cache: Cell::new(None),
         }
     }
 

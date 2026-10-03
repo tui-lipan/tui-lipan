@@ -343,11 +343,11 @@ impl LayoutHash for Animated {
         self.collapse_visibility.hash(hasher);
         self.visibility_layout
             .as_ref()
-            .map(|layout| layout.natural_size.get())
+            .map(|layout| layout.natural_size())
             .hash(hasher);
         self.visibility_layout
             .as_ref()
-            .map(|layout| layout.progress.get().to_bits())
+            .map(|layout| layout.progress().to_bits())
             .hash(hasher);
         self.opacity.to_bits().hash(hasher);
         self.opacity_fg_only.hash(hasher);

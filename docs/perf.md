@@ -100,6 +100,12 @@ let alpha = ctx.animated_amount("pane-alert-tint", target_alpha, config);
 EffectScope::new().tint_by(alert_color, alpha).child(pane)
 ```
 
+For entry and exit, use the shared `VisibilityAnimation` recipe on supported widgets or
+`Animated::visibility`. Collapsing height uses scalar measurements shared with the runtime node
+rather than copying the expanded UI tree. A cached subtree probe skips visibility-free branches;
+a warmed tree with no visibility state skips the synchronization walk entirely. Progress and natural
+size invalidate measurement caches only when they change, so settled hosts preserve ancestor caches.
+
 For an effect that animates indefinitely — a breathing alert — do not retarget a
 transition on a timer. `Context::pulsing_amount` hands the whole pulse to the
 animation registry: it starts at `from` when the key first appears, is sampled

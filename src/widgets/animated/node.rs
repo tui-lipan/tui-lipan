@@ -336,7 +336,7 @@ impl AnimatedNode {
         if let Some(state) = &mut self.visibility {
             let ticked = state.tick(dt);
             if let Some(layout) = &self.visibility_layout {
-                layout.progress.set(state.progress());
+                layout.set_progress(state.progress());
             }
             result.changed |= ticked;
             result.paint_dirty |= ticked;

@@ -44,7 +44,7 @@ pub(crate) fn reconcile_animated(
             .as_ref()
             .map(super::VisibilityLayoutHandle::shared);
         if let (Some(layout), Some(state)) = (&next.visibility_layout, &next.visibility) {
-            layout.progress.set(state.progress());
+            layout.set_progress(state.progress());
         }
         retarget_opacity(&mut next, animated);
 
@@ -323,7 +323,7 @@ fn reconcile_visibility_content(
             .1;
         }
         if let Some(layout) = &animated.visibility_layout {
-            layout.natural_size.set((child_rect.w, child_rect.h));
+            layout.set_natural_size((child_rect.w, child_rect.h));
         }
     }
 

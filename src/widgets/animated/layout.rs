@@ -14,17 +14,14 @@ pub(crate) fn measure_animated(
         .is_some_and(|(visible, _)| !visible)
         && let Some(layout) = &animated.visibility_layout
     {
-        layout.natural_size.get()
+        layout.natural_size()
     } else {
         min_size_constrained(animated.child.as_ref(), max_w, max_h)
     };
     if animated.collapse_visibility
         && let Some(layout) = &animated.visibility_layout
     {
-        return (
-            w,
-            (f32::from(natural_h) * layout.progress.get()).round() as u16,
-        );
+        return (w, (f32::from(natural_h) * layout.progress()).round() as u16);
     }
     let available_h = max_h.unwrap_or(natural_h);
     let hidden_height = Length::Px(0);
