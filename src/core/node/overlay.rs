@@ -6,6 +6,15 @@ use crate::overlay::{DismissPolicy, OverlayId, OverlayLayer, PointerCapture};
 use crate::style::{Rect, ScrollbarVariant, Style};
 
 #[derive(Clone)]
+pub(crate) enum OverlayAnimationSource {
+    Node(NodeId),
+    Snapshot(
+        crate::animation::VisibilityAnimation,
+        crate::animation::VisibilityAnimationContext,
+    ),
+}
+
+#[derive(Clone)]
 pub(crate) struct OverlayRoot {
     pub(crate) id: NodeId,
     pub(crate) overlay_id: Option<OverlayId>,
@@ -16,6 +25,7 @@ pub(crate) struct OverlayRoot {
     pub(crate) on_click: Option<Callback<()>>,
     pub(crate) backdrop: Option<Style>,
     pub(crate) opacity: f32,
+    pub(crate) animation: Option<OverlayAnimationSource>,
     pub(crate) captures_focus: bool,
     pub(crate) auto_focus: bool,
     pub(crate) captures_pointer: PointerCapture,

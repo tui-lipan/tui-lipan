@@ -39,6 +39,11 @@ pub(crate) fn reconcile_with_overlays_mode(
         false
     };
 
+    crate::widgets::internal::prepare_visibility_reflow(
+        tree,
+        root,
+        reuse_root.then_some(root_node),
+    );
     let mut overlay_state = OverlayState::new(bounds, allow_root_overlays);
     let _root_id = {
         let mut ctx = ReconcileCtx {
@@ -61,6 +66,7 @@ pub(crate) fn reconcile_with_overlays_mode(
         root_id
     };
 
+    overlay::collect_portal_overlay_roots(tree, &mut overlay_state);
     collect_popover_overlay_roots(tree, &mut overlay_state);
     overlay_state
         .roots

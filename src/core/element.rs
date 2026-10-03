@@ -106,6 +106,8 @@ pub struct Element {
     pub(crate) measure_cache: Cell<[Option<MeasureCacheEntry>; 2]>,
     /// Memoized [`crate::widgets::element_subtree_has_split_wrap_sync`] result for this subtree.
     pub(crate) split_wrap_probe_cache: Cell<Option<bool>>,
+    /// Memoized visibility-layout presence; retained across scalar-only layout invalidation.
+    pub(crate) visibility_layout_probe_cache: Cell<Option<bool>>,
 }
 
 impl Element {
@@ -125,13 +127,19 @@ impl Element {
             layout_hash_cache: Cell::new(None),
             measure_cache: Cell::new([None, None]),
             split_wrap_probe_cache: Cell::new(None),
+            visibility_layout_probe_cache: Cell::new(None),
         }
     }
 
-    pub(crate) fn clear_caches(&self) {
+    pub(crate) fn clear_layout_measure_caches(&self) {
         self.layout_hash_cache.set(None);
         self.measure_cache.set([None, None]);
+    }
+
+    pub(crate) fn clear_caches(&self) {
+        self.clear_layout_measure_caches();
         self.split_wrap_probe_cache.set(None);
+        self.visibility_layout_probe_cache.set(None);
     }
 
     /// Assign a stable sibling key used during reconciliation.
@@ -288,7 +296,9 @@ impl Element {
                 .map(Element::layout_constraints)
                 .unwrap_or(self.layout),
             ElementKind::Animated(animated) => {
-                if animated.height.is_some() {
+                if animated.height.is_some()
+                    || (animated.collapse_visibility && animated.visibility.is_some())
+                {
                     let mut layout = animated.child.layout_constraints();
                     layout.min_h = self.layout.min_h;
                     layout.max_h = self.layout.max_h;
@@ -867,6 +877,7 @@ mod tests {
             None,
         ]);
         element.split_wrap_probe_cache.set(Some(true));
+        element.visibility_layout_probe_cache.set(Some(false));
     }
 
     fn text_contents(element: &Element, out: &mut Vec<String>) {
@@ -910,11 +921,13 @@ mod tests {
         assert_eq!(root.layout_hash_cache.get(), None);
         assert_eq!(root.measure_cache.get(), [None, None]);
         assert_eq!(root.split_wrap_probe_cache.get(), None);
+        assert_eq!(root.visibility_layout_probe_cache.get(), None);
 
         let group = group_for_scope(&root, TARGET_SCOPE).expect("target group after replace");
         assert_eq!(group.layout_hash_cache.get(), None);
         assert_eq!(group.measure_cache.get(), [None, None]);
         assert_eq!(group.split_wrap_probe_cache.get(), None);
+        assert_eq!(group.visibility_layout_probe_cache.get(), None);
     }
 
     #[test]
@@ -931,6 +944,7 @@ mod tests {
             captures_focus: false,
             auto_focus: false,
             captures_pointer: PointerCapture::None,
+            animation: None,
         }));
 
         let cases: Vec<(&str, Element)> = vec![

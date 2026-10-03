@@ -1234,6 +1234,20 @@ Methods: `TextAreaSnapshot::capture(&TextArea)`, `apply(self, TextArea) -> TextA
 
 ---
 
+## Visibility animation
+
+`VisibilityAnimationPhase` describes visibility direction for overlay and inline custom effects:
+
+| Variant | Meaning |
+| --- | --- |
+| `Entering` | Becoming visible, including a reversal of an unfinished exit |
+| `Visible` | Fully visible with no lifecycle transition running |
+| `Exiting` | Closing content retained while becoming hidden |
+
+`VisibilityAnimationContext` provides `progress` in `[0, 1]` and `phase`. It and the phase enum are
+non-exhaustive so additional inputs and phases can be added without changing existing factories.
+See [modal animation](widgets/overlays.md#animate-a-modal-or-picker).
+
 ## Overlay & Toast
 
 ### `ToastPlacement`

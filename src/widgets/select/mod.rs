@@ -1,5 +1,6 @@
 //! Select widget.
 
+use crate::animation::VisibilityAnimation;
 use std::sync::Arc;
 
 use crate::callback::{Callback, KeyHandler};
@@ -19,6 +20,7 @@ pub struct Select {
     pub(crate) selected: Option<usize>,
     pub(crate) placeholder: Arc<str>,
     pub(crate) expanded: bool,
+    pub(crate) animation: Option<VisibilityAnimation>,
     pub(crate) on_toggle: Option<Callback<bool>>,
     pub(crate) on_select: Option<Callback<usize>>,
     pub(crate) on_change: Option<Callback<usize>>,
@@ -60,6 +62,7 @@ impl Default for Select {
             selected: None,
             placeholder: "Select...".into(),
             expanded: false,
+            animation: None,
             on_toggle: None,
             on_select: None,
             on_change: None,
@@ -118,6 +121,13 @@ impl Default for Select {
 }
 
 impl Select {
+    /// Animate popup content using shared visibility timing and effects.
+    /// Root-portal scope only; the trigger remains active while content closes.
+    pub fn animation(mut self, animation: impl Into<Option<VisibilityAnimation>>) -> Self {
+        self.animation = animation.into();
+        self
+    }
+
     /// Create a new select.
     pub fn new() -> Self {
         Self::default()
@@ -734,6 +744,7 @@ impl From<Select> for Element {
 
         let overlay = ZStack::new().child(list);
         let mut popover = Popover::new()
+            .animation(select.animation.clone())
             .trigger(button)
             .content(overlay)
             .open(select.expanded && !select.disabled)

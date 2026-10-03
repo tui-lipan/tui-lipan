@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use web_time::Instant;
 
-use crate::animation::{Easing, Transition};
+use crate::animation::{Transition, VisibilityAnimation, VisibilityAnimationState};
 use crate::callback::Callback;
 use crate::core::element::Element;
 use crate::core::node::{NodeId, WidgetNode};
@@ -128,11 +128,39 @@ pub(crate) struct Portal {
     pub(crate) captures_focus: bool,
     pub(crate) auto_focus: bool,
     pub(crate) captures_pointer: PointerCapture,
+    pub(crate) animation: Option<VisibilityAnimation>,
 }
 
 #[derive(Clone)]
 pub(crate) struct PortalNode {
     pub(crate) content: Box<NodeId>,
+    pub(crate) presentation: PortalPresentation,
+    pub(crate) animation: Option<VisibilityAnimationState>,
+}
+
+#[derive(Clone)]
+pub(crate) struct PortalPresentation {
+    pub layer: OverlayLayer,
+    pub dismiss_policy: DismissPolicy,
+    pub on_close: Option<Callback<()>>,
+    pub backdrop: Option<Style>,
+    pub captures_focus: bool,
+    pub auto_focus: bool,
+    pub captures_pointer: PointerCapture,
+}
+
+impl From<&Portal> for PortalPresentation {
+    fn from(portal: &Portal) -> Self {
+        Self {
+            layer: portal.layer,
+            dismiss_policy: portal.dismiss_policy,
+            on_close: portal.on_close.clone(),
+            backdrop: portal.backdrop,
+            captures_focus: portal.captures_focus,
+            auto_focus: portal.auto_focus,
+            captures_pointer: portal.captures_pointer,
+        }
+    }
 }
 
 impl WidgetNode for PortalNode {}
@@ -169,6 +197,7 @@ pub(crate) struct OverlayEntry {
     pub(crate) auto_focus: bool,
     pub(crate) backdrop: Option<Style>,
     pub(crate) captures_pointer: PointerCapture,
+    pub(crate) animation: VisibilityAnimation,
     pub(crate) opacity_transition: Option<Transition<f32>>,
     transition_tick_at: Option<Instant>,
     pub(crate) pending_dismiss: bool,
@@ -185,6 +214,18 @@ impl OverlayEntry {
             .map(Transition::current)
             .unwrap_or(if self.pending_dismiss { 0.0 } else { 1.0 })
             .clamp(0.0, 1.0)
+    }
+
+    pub(crate) fn animation_context(&self) -> crate::animation::VisibilityAnimationContext {
+        use crate::animation::{VisibilityAnimationContext, VisibilityAnimationPhase};
+        let phase = if self.pending_dismiss {
+            VisibilityAnimationPhase::Exiting
+        } else if self.opacity_transition.is_some() {
+            VisibilityAnimationPhase::Entering
+        } else {
+            VisibilityAnimationPhase::Visible
+        };
+        VisibilityAnimationContext::new(self.opacity(), phase)
     }
 
     pub(crate) fn copy_feedback_active(&self) -> bool {
@@ -234,35 +275,18 @@ impl OverlayManager {
         self.clock.now()
     }
 
-    fn enter_transition() -> Transition<f32> {
-        Transition::new(0.0, 1.0, Duration::from_millis(150), Easing::EaseOutQuad)
-    }
-
-    fn enter_transition_from(from: f32) -> Transition<f32> {
-        Transition::new(
-            from.clamp(0.0, 1.0),
-            1.0,
-            Duration::from_millis(150),
-            Easing::EaseOutQuad,
-        )
-    }
-
-    fn exit_transition(from: f32) -> Transition<f32> {
-        Transition::new(
-            from.clamp(0.0, 1.0),
-            0.0,
-            Duration::from_millis(100),
-            Easing::EaseInQuad,
-        )
-    }
-
     fn begin_dismiss(entry: &mut OverlayEntry, now: Instant) -> bool {
         if entry.pending_dismiss {
             return false;
         }
         let opacity = entry.opacity();
         entry.pending_dismiss = true;
-        entry.opacity_transition = Some(Self::exit_transition(opacity));
+        entry.opacity_transition = Some(Transition::new(
+            opacity,
+            0.0,
+            entry.animation.exit.duration,
+            entry.animation.exit.easing,
+        ));
         entry.transition_tick_at = Some(now);
         true
     }
@@ -312,7 +336,12 @@ impl OverlayManager {
         entry.order = id.value();
         entry.created_at = now;
         entry.pending_dismiss = false;
-        entry.opacity_transition = Some(Self::enter_transition());
+        entry.opacity_transition = Some(Transition::new(
+            0.0,
+            1.0,
+            entry.animation.enter.duration,
+            entry.animation.enter.easing,
+        ));
         entry.transition_tick_at = Some(entry.created_at);
         self.entries.push(entry);
         self.bump_generation();
@@ -394,7 +423,12 @@ impl OverlayManager {
                 if entry.pending_dismiss {
                     let opacity = entry.opacity();
                     entry.pending_dismiss = false;
-                    entry.opacity_transition = Some(Self::enter_transition_from(opacity));
+                    entry.opacity_transition = Some(Transition::new(
+                        opacity,
+                        1.0,
+                        entry.animation.enter.duration,
+                        entry.animation.enter.easing,
+                    ));
                     entry.transition_tick_at = Some(now);
                     dirty = true;
                 }
@@ -530,6 +564,7 @@ impl OverlayManager {
 
         let (placement, gap, margin) = self.toast_config();
         let duration = toast.duration;
+        let animation = toast.animation.clone();
         let copy_text = toast.copyable.then(|| {
             toast
                 .copy_text
@@ -570,6 +605,7 @@ impl OverlayManager {
             auto_focus: false,
             backdrop: None,
             captures_pointer: PointerCapture::None,
+            animation,
             opacity_transition: None,
             transition_tick_at: None,
             pending_dismiss: false,

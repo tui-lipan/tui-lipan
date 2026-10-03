@@ -6,6 +6,7 @@ pub mod exit_queue;
 mod handle;
 pub(crate) mod registry;
 pub mod transition;
+mod visibility_animation;
 
 pub use easing::{
     CubicBezier, CubicBezierCoordinate, CubicBezierError, Easing, EasingFn,
@@ -17,6 +18,10 @@ pub use exit_queue::{ExitQueue, ExitTransfer};
 pub use handle::AnimationHandle;
 pub(crate) use registry::AnimationRegistry;
 pub use transition::{Lerp, Transition, TransitionConfig};
+pub(crate) use visibility_animation::VisibilityAnimationState;
+pub use visibility_animation::{
+    VisibilityAnimation, VisibilityAnimationContext, VisibilityAnimationPhase,
+};
 
 #[cfg(test)]
 mod tests {

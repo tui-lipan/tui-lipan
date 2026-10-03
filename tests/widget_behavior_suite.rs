@@ -70,3 +70,9 @@ mod table_row_gap_render;
 mod table_styles_render;
 #[path = "suites/widget_behavior/tabs_caps_render.rs"]
 mod tabs_caps_render;
+
+#[path = "suites/widget_behavior/modal_animation.rs"]
+mod modal_animation;
+
+#[path = "suites/widget_behavior/visibility_animation.rs"]
+mod visibility_animation;

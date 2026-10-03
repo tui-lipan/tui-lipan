@@ -9,6 +9,9 @@ use crate::style::Color;
 
 #[derive(Clone)]
 pub struct AnimatedNode {
+    pub(crate) visibility: Option<crate::animation::VisibilityAnimationState>,
+    pub(crate) collapse_visibility: bool,
+    pub(crate) visibility_layout: Option<std::rc::Rc<super::VisibilityLayout>>,
     pub opacity: f32,
     pub opacity_fg_only: bool,
     pub opacity_target: Option<Color>,
@@ -283,7 +286,10 @@ impl AnimatedNode {
     }
 
     pub fn is_animating(&self) -> bool {
-        self.opacity_anim.is_some()
+        self.visibility
+            .as_ref()
+            .is_some_and(|state| state.is_animating())
+            || self.opacity_anim.is_some()
             || self.fg_anim.is_some()
             || self.bg_anim.is_some()
             || self.inherited_fg_exit.is_some()
@@ -314,8 +320,28 @@ impl AnimatedNode {
             .unwrap_or(fallback)
     }
 
+    pub(crate) fn effective_opacity(&self) -> f32 {
+        let visibility = self.visibility.as_ref().map_or(1.0, |state| {
+            if state.recipe.paints_effect() {
+                1.0
+            } else {
+                state.progress()
+            }
+        });
+        self.opacity * visibility
+    }
+
     pub fn tick(&mut self, dt: Duration) -> AnimatedTickResult {
         let mut result = AnimatedTickResult::default();
+        if let Some(state) = &mut self.visibility {
+            let ticked = state.tick(dt);
+            if let Some(layout) = &self.visibility_layout {
+                layout.set_progress(state.progress());
+            }
+            result.changed |= ticked;
+            result.paint_dirty |= ticked;
+            result.layout_dirty |= ticked && (self.collapse_visibility || state.exit_finished());
+        }
         // A retained subtree's component scope was disposed on the frame it stopped being
         // described, so no transition-end callback may fire: it would run into a dropped scope.
         let notify = !self.callbacks_suppressed;
@@ -528,6 +554,14 @@ impl WidgetNode for AnimatedNode {}
 impl From<Animated> for AnimatedNode {
     fn from(value: Animated) -> Self {
         Self {
+            visibility: value.visibility.as_ref().map(|(visible, recipe)| {
+                crate::animation::VisibilityAnimationState::for_visibility(recipe.clone(), *visible)
+            }),
+            collapse_visibility: value.collapse_visibility,
+            visibility_layout: value
+                .visibility_layout
+                .as_ref()
+                .map(super::VisibilityLayoutHandle::shared),
             opacity: value.opacity,
             opacity_fg_only: value.opacity_fg_only,
             opacity_target: value.opacity_target,

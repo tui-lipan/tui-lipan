@@ -1,3 +1,4 @@
+use crate::animation::VisibilityAnimation;
 use std::sync::Arc;
 
 use crate::app::input::command_registry::{CommandEntry, CommandId, CommandRegistry};
@@ -25,6 +26,7 @@ struct CommandPaletteProps {
     title_style: Style,
     title_alignment: Align,
     scope: OverlayScope,
+    animation: Option<VisibilityAnimation>,
 }
 
 #[derive(Clone, Default, PartialEq)]
@@ -146,6 +148,7 @@ impl Component for CommandPaletteComponent {
             .render_item(render_item);
 
         let mut modal = Modal::new()
+            .animation(ctx.props.animation.clone())
             .child(palette)
             .width(ctx.props.width)
             .height(ctx.props.height)
@@ -236,6 +239,12 @@ pub struct CommandPalette {
 }
 
 impl CommandPalette {
+    /// Animate the complete palette frame with shared visibility timing and effects.
+    pub fn animation(mut self, animation: impl Into<Option<VisibilityAnimation>>) -> Self {
+        self.props.animation = animation.into();
+        self
+    }
+
     /// Create a command palette with modal defaults.
     pub fn new() -> Self {
         Self::default()
@@ -337,6 +346,7 @@ impl Default for CommandPalette {
                 title_style: Style::default(),
                 title_alignment: Align::Start,
                 scope: OverlayScope::RootPortal,
+                animation: None,
             },
         }
     }

@@ -411,6 +411,22 @@ pub(crate) fn positioned_exit_rect(tree: &NodeTree, id: NodeId) -> crate::style:
     rect
 }
 
+fn exit_target(tree: &NodeTree, mut id: NodeId) -> NodeId {
+    while matches!(tree.node(id).kind, NodeKind::Group(_)) && tree.node(id).children.len() == 1 {
+        id = tree.node(id).children[0];
+    }
+    id
+}
+
+fn has_exit_animation(tree: &NodeTree, id: NodeId) -> bool {
+    let target = exit_target(tree, id);
+    match &tree.node(target).kind {
+        NodeKind::Animated(animated) => id == target && animated.auto_exit.is_some(),
+        NodeKind::Portal(portal) => portal.animation.is_some(),
+        _ => false,
+    }
+}
+
 /// Keyed children with an `auto_exit` wrapper that the new element list no longer describes.
 fn departed_children(
     tree: &NodeTree,
@@ -426,7 +442,7 @@ fn departed_children(
                 && tree.node(**id).key.is_some()
                 && !reuse.iter().any(|reused| reused.as_ref() == Some(*id))
                 && !already_retained.iter().any(|entry| entry.id == **id)
-                && matches!(&tree.node(**id).kind, NodeKind::Animated(a) if a.auto_exit.is_some())
+                && has_exit_animation(tree, **id)
         })
         .map(|(index, id)| (index, *id))
         .collect()
@@ -437,23 +453,35 @@ fn begin_exit(
     id: NodeId,
     collapse_from: Option<(Axis, u16)>,
 ) -> Option<std::time::Duration> {
-    let NodeKind::Animated(animated) = &mut tree.node_mut(id).kind else {
-        return None;
-    };
-    let duration = animated.auto_exit?.duration();
-    animated.begin_auto_exit(collapse_from).then_some(duration)
+    let id = exit_target(tree, id);
+    match &mut tree.node_mut(id).kind {
+        NodeKind::Animated(animated) => {
+            let duration = animated.auto_exit?.duration();
+            animated.begin_auto_exit(collapse_from).then_some(duration)
+        }
+        NodeKind::Portal(portal) => {
+            let duration = portal.animation.as_mut()?.begin_exit();
+            (!duration.is_zero()).then_some(duration)
+        }
+        _ => None,
+    }
 }
 
 fn exit_finished(tree: &NodeTree, id: NodeId) -> bool {
+    let id = exit_target(tree, id);
     match &tree.node(id).kind {
         NodeKind::Animated(animated) => animated.auto_exit_finished(),
+        NodeKind::Portal(portal) => portal
+            .animation
+            .as_ref()
+            .is_none_or(|animation| animation.exit_finished()),
         _ => true,
     }
 }
 
 /// Clear the inert mark when a key is described again mid-exit. The reconciler reuses the node
 /// normally from here, which restarts its height and opacity transitions toward the live values.
-fn revive(tree: &mut NodeTree, id: NodeId) {
+pub(crate) fn revive(tree: &mut NodeTree, id: NodeId) {
     if !tree.is_valid(id) {
         return;
     }

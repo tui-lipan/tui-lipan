@@ -574,3 +574,30 @@ impl From<PanView> for NodeKind {
         NodeKind::PanView(PanViewNode::from(value))
     }
 }
+
+impl NodeKind {
+    pub(crate) fn root_portal_content(&self) -> Option<crate::core::node::NodeId> {
+        match self {
+            Self::Portal(portal) => Some(*portal.content),
+            Self::Popover(popover) if popover.scope == crate::overlay::OverlayScope::RootPortal => {
+                Some(*popover.content)
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn is_animating(&self) -> bool {
+        match self {
+            Self::Animated(animated) => animated.is_animating(),
+            Self::Popover(popover) => popover
+                .animation
+                .as_ref()
+                .is_some_and(|state| state.is_animating()),
+            Self::Portal(portal) => portal
+                .animation
+                .as_ref()
+                .is_some_and(|animation| animation.is_animating()),
+            _ => false,
+        }
+    }
+}

@@ -1,5 +1,6 @@
 //! Tooltip widget.
 
+use crate::animation::VisibilityAnimation;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -16,6 +17,7 @@ pub struct Tooltip {
     child: Element,
     text: Arc<str>,
     open: Option<bool>,
+    pub(crate) animation: Option<VisibilityAnimation>,
     auto: bool,
     show_on_focus: bool,
     text_style: Style,
@@ -30,12 +32,20 @@ pub struct Tooltip {
 }
 
 impl Tooltip {
+    /// Animate popup content using shared visibility timing and effects.
+    /// Root-portal scope only; the trigger remains active while content closes.
+    pub fn animation(mut self, animation: impl Into<Option<VisibilityAnimation>>) -> Self {
+        self.animation = animation.into();
+        self
+    }
+
     /// Create a new tooltip wrapping a child element.
     pub fn new(text: impl Into<Arc<str>>) -> Self {
         Self {
             child: crate::widgets::Spacer::new().into(),
             text: text.into(),
             open: None,
+            animation: None,
             auto: true,
             show_on_focus: true,
             text_style: Style::default(),
@@ -134,6 +144,7 @@ struct TooltipProps {
     child: Element,
     text: Arc<str>,
     open: Option<bool>,
+    pub(crate) animation: Option<VisibilityAnimation>,
     auto: bool,
     show_on_focus: bool,
     text_style: Style,
@@ -150,6 +161,7 @@ struct TooltipProps {
 impl PartialEq for TooltipProps {
     fn eq(&self, other: &Self) -> bool {
         if self.text != other.text
+            || self.animation != other.animation
             || self.open != other.open
             || self.auto != other.auto
             || self.show_on_focus != other.show_on_focus
@@ -181,6 +193,7 @@ impl From<Tooltip> for TooltipProps {
             child: tooltip.child,
             text: tooltip.text,
             open: tooltip.open,
+            animation: tooltip.animation,
             auto: tooltip.auto,
             show_on_focus: tooltip.show_on_focus,
             text_style: tooltip.text_style,
@@ -242,6 +255,7 @@ impl Component for TooltipComponent {
             .child(Text::new(ctx.props.text.clone()).style(ctx.props.text_style));
 
         Popover::new()
+            .animation(ctx.props.animation.clone())
             .trigger(trigger)
             .content(content)
             .open(open)

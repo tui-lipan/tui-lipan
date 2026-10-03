@@ -11,6 +11,7 @@ pub struct PopoverNode {
     pub on_close: Option<Callback<()>>,
     /// Whether popover is open.
     pub open: bool,
+    pub(crate) animation: Option<crate::animation::VisibilityAnimationState>,
     /// Whether content is rendered inline or via root overlay pipeline.
     pub scope: OverlayScope,
     /// Whether the root overlay captures and traps focus.

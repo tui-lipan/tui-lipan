@@ -1,3 +1,4 @@
+use crate::animation::VisibilityAnimation;
 pub(crate) mod layout;
 pub(crate) mod node;
 pub(crate) mod reconcile;
@@ -70,6 +71,7 @@ pub struct Popover {
     pub(crate) content: Box<Element>,
     pub(crate) on_close: Option<Callback<()>>,
     pub(crate) open: bool,
+    pub(crate) animation: Option<VisibilityAnimation>,
     pub(crate) scope: OverlayScope,
     pub(crate) placement: PopoverPlacement,
     pub(crate) offset: PopoverOffset,
@@ -90,6 +92,13 @@ impl Default for Popover {
 }
 
 impl Popover {
+    /// Animate popup content using shared visibility timing and effects.
+    /// Root-portal scope only; the trigger remains active while content closes.
+    pub fn animation(mut self, animation: impl Into<Option<VisibilityAnimation>>) -> Self {
+        self.animation = animation.into();
+        self
+    }
+
     /// Create a new popover.
     pub fn new() -> Self {
         Self {
@@ -97,6 +106,7 @@ impl Popover {
             content: Box::new(crate::widgets::Spacer::new().into()),
             on_close: None,
             open: false,
+            animation: None,
             scope: OverlayScope::RootPortal,
             placement: PopoverPlacement::default(),
             offset: PopoverOffset::ZERO,

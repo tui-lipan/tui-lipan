@@ -564,8 +564,7 @@ impl NodeTree {
             if !self.is_valid(id) {
                 continue;
             }
-            if matches!(&self.node(id).kind, NodeKind::Animated(animated) if animated.is_animating())
-            {
+            if self.node(id).kind.is_animating() {
                 active_ids.push(id);
             }
         }
@@ -1187,7 +1186,7 @@ impl NodeTree {
         if has_spinner {
             self.spinner_ids.push(id);
         }
-        if matches!(&node.kind, NodeKind::Animated(animated) if animated.is_animating()) {
+        if node.kind.is_animating() {
             self.has_animated_widgets = true;
             if !self.animated_widget_ids.contains(&id) {
                 self.animated_widget_ids.push(id);
@@ -1579,7 +1578,7 @@ impl NodeTree {
                 full_spinners = true;
                 full_spinner_ids.push(node.id);
             }
-            if matches!(&node.kind, NodeKind::Animated(animated) if animated.is_animating()) {
+            if node.kind.is_animating() {
                 full_animated_widgets = true;
                 full_animated_widget_ids.push(node.id);
             }
@@ -1729,6 +1728,7 @@ mod tests {
             on_click: None,
             backdrop: None,
             opacity: 1.0,
+            animation: None,
             captures_focus: false,
             auto_focus: false,
             captures_pointer,

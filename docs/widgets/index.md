@@ -104,7 +104,7 @@ For layout reorders, wrap the moving subtree in `Animated::new(...)`, enable `.p
 
 | Widget | Description |
 |--------|-------------|
-| `Modal` | Centered dialog (portals to root level) |
+| `Modal` | Centered dialog with opt-in enter/exit animation and custom effects (portals to root level) |
 | `Toast` | Transient notifications with optional click actions via `ctx.toast()` |
 | `Popover` | Floating content panel |
 | `Tooltip` | Help text on hover/focus |
@@ -130,3 +130,7 @@ For layout reorders, wrap the moving subtree in `Animated::new(...)`, enable `.p
 | `TerminalScreen` | VT100/VT220 screen emulator |
 
 Images in a pane *(feature: `terminal-images`)*: [terminal-images.md](terminal-images.md) — Kitty graphics passthrough.
+
+Modal, CommandPalette, Popover, Select, ComboBox, ContextMenu, Tooltip, Toast, and Accordion
+share `VisibilityAnimation` timing and custom effects. `Animated::visibility` provides the same
+lifecycle for application-defined inline content. See [overlay animations](overlays.md#animate-a-modal-or-picker).

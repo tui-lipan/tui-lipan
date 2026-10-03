@@ -19,7 +19,7 @@ pub(crate) fn render_animated(
     underlay: Option<&BufferSnapshot>,
     terminal_bg: Option<ratatui::style::Color>,
 ) {
-    let opacity = node.opacity.clamp(0.0, 1.0);
+    let opacity = node.effective_opacity().clamp(0.0, 1.0);
     let has_fg_override = node.current_fg.is_some() || node.inherited_fg_exit.is_some();
     let has_bg_override = node.current_bg.is_some() || node.inherited_bg_exit.is_some();
     if opacity >= 1.0 && !has_fg_override && !has_bg_override {
