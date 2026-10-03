@@ -106,6 +106,37 @@ jobs:
       # Keep in sync with `rust-version` in Cargo.toml and tui-lipan-macro/Cargo.toml.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.96
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check all targets on MSRV
+        run: cargo check --workspace --all-targets --all-features
+
+      # Same feature sets as the web-examples job, so `cfg(target_arch = "wasm32")` code is held
+      # to the MSRV too.
+      - name: Check lib on wasm with syntect on MSRV
+        run: cargo check --lib --target wasm32-unknown-unknown --no-default-features --features "web,syntax-syntect"
+
+      - name: Check lib on wasm with extra syntaxes on MSRV
+        run: cargo check --lib --target wasm32-unknown-unknown --no-default-features --features "web,syntax-extra"
+
+  # `cfg(windows)` code is invisible to the Linux MSRV job. This answers only "does it compile on
+  # the MSRV"; it does not use `-D warnings`, since Windows-only dead-code warnings predate it and
+  # lint policy belongs to the Lint job.
+  msrv-windows:
+    name: MSRV (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      # Keep in sync with `rust-version` in Cargo.toml and tui-lipan-macro/Cargo.toml.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.96
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
