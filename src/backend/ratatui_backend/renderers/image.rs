@@ -2689,11 +2689,9 @@ mod tests {
                     },
                 );
                 let buffer = f.buffer_mut();
-                assert!(
-                    matches!(
-                        buffer.cell((0, 0)).map(|cell| cell.diff_option),
-                        Some(CellDiffOption::ForcedWidth(_))
-                    ),
+                std::assert_matches!(
+                    buffer.cell((0, 0)).map(|cell| cell.diff_option),
+                    Some(CellDiffOption::ForcedWidth(_)),
                     "the first uncovered cell carries the row walk"
                 );
                 for x in [1, 2, 3] {
@@ -2710,11 +2708,9 @@ mod tests {
                         "overlay cell {x} must remain writable for the modal"
                     );
                 }
-                assert!(
-                    matches!(
-                        buffer.cell((7, 0)).map(|cell| cell.diff_option),
-                        Some(CellDiffOption::ForcedWidth(_))
-                    ),
+                std::assert_matches!(
+                    buffer.cell((7, 0)).map(|cell| cell.diff_option),
+                    Some(CellDiffOption::ForcedWidth(_)),
                     "the run to the right of the overlay is a new walk, not a gap in the first one"
                 );
                 for x in [8, 9] {

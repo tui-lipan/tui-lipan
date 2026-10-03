@@ -125,10 +125,10 @@ impl DebugLogger {
             None
         };
 
-        #[cfg(not(target_arch = "wasm32"))]
-        return Self { enabled, file };
-        #[cfg(target_arch = "wasm32")]
-        return Self { enabled };
+        cfg_select! {
+            target_arch = "wasm32" => Self { enabled },
+            _ => Self { enabled, file },
+        }
     }
 
     fn log(&mut self, args: fmt::Arguments<'_>) {

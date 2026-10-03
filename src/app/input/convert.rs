@@ -151,14 +151,14 @@ mod tests {
     fn function_key_is_translated() {
         let key = CrosstermKeyEvent::new(CrosstermKeyCode::F(12), KeyModifiers::empty());
         let translated = to_key_event(key).expect("function keys translate");
-        assert!(matches!(translated.code, KeyCode::F(12)));
+        std::assert_matches!(translated.code, KeyCode::F(12));
     }
 
     #[test]
     fn supported_key_is_translated() {
         let key = CrosstermKeyEvent::new(CrosstermKeyCode::Enter, KeyModifiers::empty());
         let translated = to_key_event(key).expect("supported keys translate");
-        assert!(matches!(translated.code, KeyCode::Enter));
+        std::assert_matches!(translated.code, KeyCode::Enter);
     }
 
     #[test]

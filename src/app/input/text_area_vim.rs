@@ -620,11 +620,7 @@ pub fn vim_big_word_end(text: &str, cursor: usize) -> usize {
 }
 
 fn clamp_to_char_boundary(text: &str, cursor: usize) -> usize {
-    let mut cursor = cursor.min(text.len());
-    while !text.is_char_boundary(cursor) {
-        cursor -= 1;
-    }
-    cursor
+    text.floor_char_boundary(cursor)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

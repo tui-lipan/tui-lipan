@@ -2635,13 +2635,13 @@ mod tests {
             7,
         );
 
-        assert!(matches!(
+        std::assert_matches!(
             hit,
             Some(super::DraggableTabHitTarget::Tab(super::DraggableTabHit {
                 index: 1,
                 part: DraggableTabHitPart::Body,
             }))
-        ));
+        );
     }
 
     #[test]
@@ -2718,12 +2718,12 @@ mod tests {
         assert_eq!(right.end, 20);
         assert_eq!(layout.content_width, 15);
 
-        assert!(matches!(
+        std::assert_matches!(
             DraggableTabBar::hit_target_at_view_col(&tabs, &opts, &viewport, 15),
             Some(super::DraggableTabHitTarget::Overflow(
                 super::OverflowControlSide::Right
             ))
-        ));
+        );
         // The wider label pushes the hit target left; the default label would not reach here.
         assert!(!matches!(
             DraggableTabBar::hit_target_at_view_col(&tabs, &opts, &viewport, 14),

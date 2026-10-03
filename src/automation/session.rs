@@ -757,7 +757,7 @@ mod tests {
             .execute(AutomationStep::click(Selector::id("disabled")))
             .expect_err("disabled buttons must reject click operations");
 
-        assert!(matches!(error, AutomationError::NotActionable));
+        std::assert_matches!(error, AutomationError::NotActionable);
     }
 
     struct Timer;
@@ -942,10 +942,10 @@ mod tests {
         let mut session =
             AutomationSession::new(NonConvergingTimer, AutomationOptions::default()).unwrap();
         let error = session.drain_ready().unwrap_err();
-        assert!(matches!(
+        std::assert_matches!(
             error,
             AutomationError::DrainDidNotConverge { rounds: 1024, .. }
-        ));
+        );
     }
 
     struct External;
@@ -1022,10 +1022,7 @@ mod tests {
             Ok(_) => panic!("duplicate IDs must reject the session"),
             Err(error) => error,
         };
-        assert!(matches!(
-            error,
-            AutomationError::DuplicateAutomationId { .. }
-        ));
+        std::assert_matches!(error, AutomationError::DuplicateAutomationId { .. });
     }
 
     #[test]
@@ -1038,7 +1035,7 @@ mod tests {
                 super::super::SemanticRole::Button,
             )))
             .unwrap_err();
-        assert!(matches!(error, AutomationError::AmbiguousMatch { .. }));
+        std::assert_matches!(error, AutomationError::AmbiguousMatch { .. });
     }
 
     #[test]
@@ -1220,7 +1217,7 @@ mod tests {
                 Selector::role(SemanticRole::Cell).name("A"),
             ))
             .unwrap_err();
-        assert!(matches!(error, AutomationError::NotActionable));
+        std::assert_matches!(error, AutomationError::NotActionable);
     }
 
     #[cfg(not(feature = "ui-snapshot-png"))]
@@ -1332,7 +1329,7 @@ mod wrapper_click_tests {
         let error = session
             .execute(AutomationStep::click(Selector::id("pair")))
             .unwrap_err();
-        assert!(matches!(error, AutomationError::NotActionable));
+        std::assert_matches!(error, AutomationError::NotActionable);
     }
 
     #[test]
@@ -1355,7 +1352,7 @@ mod wrapper_click_tests {
         let error = session
             .execute(AutomationStep::click(Selector::id("edge-panel")))
             .unwrap_err();
-        assert!(matches!(error, AutomationError::NotActionable));
+        std::assert_matches!(error, AutomationError::NotActionable);
     }
 
     struct Covered;
@@ -1408,7 +1405,7 @@ mod wrapper_click_tests {
         let error = session
             .execute(AutomationStep::click(Selector::id("panel")))
             .unwrap_err();
-        assert!(matches!(error, AutomationError::NotActionable));
+        std::assert_matches!(error, AutomationError::NotActionable);
     }
 
     struct Captured;
@@ -1452,7 +1449,7 @@ mod wrapper_click_tests {
         let error = session
             .execute(AutomationStep::click(Selector::id("panel")))
             .unwrap_err();
-        assert!(matches!(error, AutomationError::NotActionable));
+        std::assert_matches!(error, AutomationError::NotActionable);
     }
 
     struct Scrolled {
@@ -1496,7 +1493,7 @@ mod wrapper_click_tests {
         let error = session
             .execute(AutomationStep::click(Selector::id("panel")))
             .unwrap_err();
-        assert!(matches!(error, AutomationError::NotActionable));
+        std::assert_matches!(error, AutomationError::NotActionable);
     }
 
     #[test]

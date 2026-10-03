@@ -1474,10 +1474,7 @@ fn vim_normal_supported_arrow_motion_still_handles() {
         },
     );
 
-    assert!(matches!(
-        outcome,
-        super::vim::VimKeyOutcome::EditorChanged { .. }
-    ));
+    std::assert_matches!(outcome, super::vim::VimKeyOutcome::EditorChanged { .. });
     assert_eq!(editor.cursor(), 0);
 }
 
@@ -1639,25 +1636,23 @@ fn vim_pending_operator_unhandled_ctrl_char_bubbles_and_preserves_pending() {
         key(KeyCode::Char('d')),
         &mut ctx
     ));
-    assert!(matches!(
+    std::assert_matches!(
         ctx.text_area_vim_state.get(&root).unwrap().pending.as_ref(),
         Some(TextAreaVimPending::Operator {
             op,
             count,
             g_pending,
-        }) if *op == VimOperator::Delete && *count == 1 && !*g_pending
-    ));
+        }) if *op == VimOperator::Delete && *count == 1 && !*g_pending);
 
     assert!(!handle_key(&mut tree, root, ctrl_char('l'), &mut ctx));
 
-    assert!(matches!(
+    std::assert_matches!(
         ctx.text_area_vim_state.get(&root).unwrap().pending.as_ref(),
         Some(TextAreaVimPending::Operator {
             op,
             count,
             g_pending,
-        }) if *op == VimOperator::Delete && *count == 1 && !*g_pending
-    ));
+        }) if *op == VimOperator::Delete && *count == 1 && !*g_pending);
     assert!(changes.borrow().is_empty());
 }
 
@@ -2036,10 +2031,9 @@ fn vim_pending_search_passes_through_global_quit_shortcut() {
     assert!(!handle_key(&mut tree, root, ctrl_char('q'), &mut ctx));
 
     let state = ctx.text_area_vim_state.get(&root).unwrap();
-    assert!(matches!(
+    std::assert_matches!(
         &state.pending,
-        Some(TextAreaVimPending::Search { forward: true, query, cursor: 1 }) if query == "a"
-    ));
+        Some(TextAreaVimPending::Search { forward: true, query, cursor: 1 }) if query == "a");
     assert!(changes.borrow().is_empty());
 }
 
@@ -2058,14 +2052,13 @@ fn vim_pending_search_edits_query_at_cursor_with_arrow_navigation() {
         "",
     );
 
-    assert!(matches!(
+    std::assert_matches!(
         state.pending,
         Some(TextAreaVimPending::Search {
             forward: true,
             query,
             cursor: 2,
-        }) if query == "abc"
-    ));
+        }) if query == "abc");
 }
 
 #[test]
@@ -2086,14 +2079,13 @@ fn vim_pending_search_home_end_move_query_cursor() {
         "",
     );
 
-    assert!(matches!(
+    std::assert_matches!(
         state.pending,
         Some(TextAreaVimPending::Search {
             forward: true,
             query,
             cursor: 0,
-        }) if query == "beta"
-    ));
+        }) if query == "beta");
 }
 
 #[test]
@@ -3901,8 +3893,7 @@ fn noop_vertical_scroll_cancels_active_smooth_line_target() {
     let root_id = tree.root;
     assert!(matches!(
         &tree.node(root_id).kind,
-        NodeKind::TextArea(node) if node.smooth_scroll.is_animating()
-    ));
+        NodeKind::TextArea(node) if node.smooth_scroll.is_animating()));
 
     assert!(handle_scroll(
         &mut tree,
@@ -3949,8 +3940,7 @@ fn noop_horizontal_scroll_cancels_active_smooth_line_target() {
     let root_id = tree.root;
     assert!(matches!(
         &tree.node(root_id).kind,
-        NodeKind::TextArea(node) if node.smooth_scroll.is_animating()
-    ));
+        NodeKind::TextArea(node) if node.smooth_scroll.is_animating()));
 
     assert!(handle_scroll(
         &mut tree,
@@ -4668,10 +4658,10 @@ fn vim_vertical_nav_accounts_for_inline_virtual_text() {
         },
     );
 
-    assert!(matches!(
+    std::assert_matches!(
         outcome,
         super::vim::VimKeyOutcome::EditorChanged { vertical: true, .. }
-    ));
+    );
     assert_eq!(editor.cursor(), value.len());
 }
 

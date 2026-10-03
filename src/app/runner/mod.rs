@@ -412,31 +412,25 @@ impl PlatformInputCoordinator {
     }
 
     fn owns_fullscreen_input(&self) -> bool {
-        #[cfg(unix)]
-        return self.termina.is_some();
-        #[cfg(not(unix))]
-        return false;
+        cfg_select! {
+            unix => self.termina.is_some(),
+            _ => false,
+        }
     }
 
     fn receiver(&self) -> Option<&mpsc::Receiver<RunnerEvent>> {
-        #[cfg(unix)]
-        return self
-            .termina
-            .as_ref()
-            .map(|coordinator| coordinator.receiver());
-        #[cfg(not(unix))]
-        return self.crossterm.as_ref().map(|reader| &reader.events);
+        cfg_select! {
+            unix => self.termina.as_ref().map(|coordinator| coordinator.receiver()),
+            _ => self.crossterm.as_ref().map(|reader| &reader.events),
+        }
     }
 
     /// A sender into the channel [`Self::receiver`] drains, so the control channel wakes the loop.
     fn sender(&self) -> Option<mpsc::Sender<RunnerEvent>> {
-        #[cfg(unix)]
-        return self
-            .termina
-            .as_ref()
-            .map(|coordinator| coordinator.sender());
-        #[cfg(not(unix))]
-        return self.crossterm.as_ref().map(|reader| reader.sender.clone());
+        cfg_select! {
+            unix => self.termina.as_ref().map(|coordinator| coordinator.sender()),
+            _ => self.crossterm.as_ref().map(|reader| reader.sender.clone()),
+        }
     }
 
     fn request_host_colors(&self, previous: Option<HostTerminalColors>) -> std::io::Result<bool> {

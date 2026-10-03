@@ -5167,10 +5167,10 @@ mod tests {
             })
             .expect("input click should dispatch");
         assert_eq!(input.focused(), None);
-        assert!(matches!(
+        std::assert_matches!(
             input.drag.active,
             crate::app::interaction_state::ActiveDrag::Input(_)
-        ));
+        );
     }
 
     struct CapturingOverlayFocusRoot;

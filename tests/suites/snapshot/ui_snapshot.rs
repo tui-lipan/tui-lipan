@@ -380,7 +380,7 @@ fn png_default_uses_default_cell_and_scale_dimensions() {
 #[test]
 fn png_file_format_is_selectable() {
     let format = tui_lipan::UiSnapshotFileFormat::Png;
-    assert!(matches!(format, tui_lipan::UiSnapshotFileFormat::Png));
+    std::assert_matches!(format, tui_lipan::UiSnapshotFileFormat::Png);
 }
 
 #[cfg(feature = "ui-snapshot-png")]

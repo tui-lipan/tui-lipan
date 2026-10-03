@@ -1383,10 +1383,10 @@ mod tests {
         let handler = search_input_key_interceptor(link, Some(user_interceptor), true);
 
         assert!(handler.handle(key(KeyCode::Down)));
-        assert!(matches!(
+        std::assert_matches!(
             messages.borrow().first(),
             Some(SearchPaletteMsg::NavigateDown)
-        ));
+        );
         assert!(!*user_seen.borrow());
 
         assert!(handler.handle(key(KeyCode::Char(' '))));

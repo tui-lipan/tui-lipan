@@ -646,15 +646,7 @@ pub fn reconcile_document_view(
 
 /// Snap a byte offset to the nearest valid char boundary, rounding down.
 fn snap_to_char_boundary(s: &str, idx: usize) -> usize {
-    if idx >= s.len() {
-        return s.len();
-    }
-
-    let mut i = idx;
-    while i > 0 && !s.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
+    s.floor_char_boundary(idx)
 }
 
 #[cfg(test)]

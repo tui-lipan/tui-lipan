@@ -1265,10 +1265,9 @@ fn controlled_offset_assertion_with_same_scroll_to_key_cancels_smooth_target() {
         panic!("root should be a scroll view");
     };
     assert_eq!(scroll.offset, 0);
-    assert!(matches!(
+    std::assert_matches!(
         scroll.cancelled_scroll_target.as_ref(),
-        Some(ScrollTarget::Key(key)) if key.as_ref() == "row-10"
-    ));
+        Some(ScrollTarget::Key(key)) if key.as_ref() == "row-10");
     assert!(!scroll.smooth_scroll.is_animating());
 }
 

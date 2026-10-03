@@ -428,10 +428,10 @@ fn resize_burst_followed_by_key_preserves_key_as_pending_event() {
         break;
     }
 
-    assert!(matches!(
+    std::assert_matches!(
         pending_event,
         Some(super::RunnerEvent::Terminal(CEvent::Key(_)))
-    ));
+    );
     assert!(super::try_recv_channel(Some(&rx)).unwrap().is_none());
 }
 
@@ -506,10 +506,10 @@ fn scroll_burst_followed_by_non_scroll_event_preserves_event() {
         }
     }
 
-    assert!(matches!(
+    std::assert_matches!(
         pending_event,
         Some(super::RunnerEvent::Terminal(CEvent::Key(_)))
-    ));
+    );
     assert!(super::try_recv_channel(Some(&rx)).unwrap().is_none());
 }
 
@@ -544,8 +544,7 @@ fn convert_coalesced_pointer_reports_outside_inline_viewport() {
         c_mouse(CMouseEventKind::Drag(CMouseButton::Left), 2, 5),
         None,
     );
-    assert!(
-        matches!(inside, super::CoalescedPointer::Inside(mouse) if mouse.kind == MouseKind::Drag(MouseButton::Left) && mouse.y == 1),
+    std::assert_matches!(inside, super::CoalescedPointer::Inside(mouse) if mouse.kind == MouseKind::Drag(MouseButton::Left) && mouse.y == 1,
         "{inside:?}"
     );
 
@@ -619,10 +618,10 @@ fn coalesced_drag_that_leaves_inline_viewport_is_not_skipped() {
     assert!(last_inside.is_some(), "kept the last in-bounds drag");
     assert!(left_viewport, "outside-viewport drag must not be skipped");
     assert!(pending_event.is_none());
-    assert!(matches!(
+    std::assert_matches!(
         super::try_recv_channel(Some(&rx)).unwrap(),
         Some(super::RunnerEvent::Terminal(CEvent::Key(_)))
-    ));
+    );
 }
 
 #[test]
@@ -679,10 +678,10 @@ fn frame_skip_preserve_does_not_overwrite_existing_pending_event() {
         super::RunnerEvent::Terminal(CEvent::Resize(120, 40)),
     );
 
-    assert!(matches!(
+    std::assert_matches!(
         pending_event,
         Some(super::RunnerEvent::Terminal(CEvent::Key(_)))
-    ));
+    );
 }
 
 #[test]
@@ -707,22 +706,22 @@ fn host_color_refresh_event_does_not_drop_queued_ordinary_input() {
         super::try_recv_channel(Some(&rx)).unwrap(),
         Some(super::RunnerEvent::HostTerminalColors(colors))
     );
-    assert!(matches!(
+    std::assert_matches!(
         super::try_recv_channel(Some(&rx)).unwrap(),
         Some(super::RunnerEvent::Terminal(CEvent::Resize(90, 30)))
-    ));
-    assert!(matches!(
+    );
+    std::assert_matches!(
         super::try_recv_channel(Some(&rx)).unwrap(),
         Some(super::RunnerEvent::Terminal(CEvent::Mouse(_)))
-    ));
-    assert!(matches!(
+    );
+    std::assert_matches!(
         super::try_recv_channel(Some(&rx)).unwrap(),
         Some(super::RunnerEvent::Terminal(CEvent::Paste(_)))
-    ));
-    assert!(matches!(
+    );
+    std::assert_matches!(
         super::try_recv_channel(Some(&rx)).unwrap(),
         Some(super::RunnerEvent::Terminal(CEvent::Key(_)))
-    ));
+    );
 }
 
 #[test]
@@ -732,19 +731,17 @@ fn fullscreen_input_channel_disconnect_is_an_error() {
 
     let recv_error = super::recv_channel(Some(&rx), Duration::ZERO)
         .expect_err("disconnected blocking receiver should fail");
-    assert!(matches!(
+    std::assert_matches!(
         recv_error,
-        crate::Error::Io(error) if error.kind() == std::io::ErrorKind::BrokenPipe
-    ));
+        crate::Error::Io(error) if error.kind() == std::io::ErrorKind::BrokenPipe);
 
     let (tx, rx) = std::sync::mpsc::channel();
     drop(tx);
     let try_error = super::try_recv_channel(Some(&rx))
         .expect_err("disconnected non-blocking receiver should fail");
-    assert!(matches!(
+    std::assert_matches!(
         try_error,
-        crate::Error::Io(error) if error.kind() == std::io::ErrorKind::BrokenPipe
-    ));
+        crate::Error::Io(error) if error.kind() == std::io::ErrorKind::BrokenPipe);
 }
 
 struct ScrollHoverSmoke;

@@ -414,7 +414,7 @@ mod tests {
     #[test]
     fn invalid_transport_ids_return_script_errors() {
         let error = parse_script("click:#two words").unwrap_err();
-        assert!(matches!(error, AutomationError::Script(_)));
+        std::assert_matches!(error, AutomationError::Script(_));
     }
 
     #[test]

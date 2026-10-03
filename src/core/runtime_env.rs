@@ -323,20 +323,11 @@ impl SessionClock {
 
     pub(crate) fn advance(&self, dt: Duration) {
         let nanos = u64::try_from(dt.as_nanos()).unwrap_or(u64::MAX);
-        let counter = &self.inner.controlled_nanos;
-        let mut current = counter.load(Ordering::Acquire);
-        // Use the CAS loop directly: try_update requires Rust 1.95, beyond our MSRV.
-        loop {
-            match counter.compare_exchange_weak(
-                current,
-                current.saturating_add(nanos),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(observed) => current = observed,
-            }
-        }
+        self.inner
+            .controlled_nanos
+            .update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.saturating_add(nanos)
+            });
     }
 }
 

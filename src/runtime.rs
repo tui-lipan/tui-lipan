@@ -1190,8 +1190,7 @@ pub(crate) fn assert_inline_surface_commit_render_path_is_unified() {
     assert!(matches!(pending.front(), Some(TranscriptEntry::Lines(lines)) if lines.len() == 2));
     assert!(matches!(
         pending.back(),
-        Some(TranscriptEntry::Element(element)) if matches!(element.kind, crate::core::element::ElementKind::Text(_))
-    ));
+        Some(TranscriptEntry::Element(element)) if matches!(element.kind, crate::core::element::ElementKind::Text(_))));
 
     // Task-8 guardrail: transcript element commits must not use a TestBackend
     // terminal scratch path.
@@ -2415,7 +2414,7 @@ mod tests {
             mouse_capture,
         );
 
-        assert!(matches!(
+        std::assert_matches!(
             runtime
                 .update_from_boxed(
                     crate::callback::ScopeId(1),
@@ -2423,13 +2422,13 @@ mod tests {
                 )
                 .expect("show request should succeed"),
             UpdateLevel::None
-        ));
-        assert!(matches!(
+        );
+        std::assert_matches!(
             runtime.ctx.take_devtools_request(),
             Some(crate::core::runtime_env::DevToolsRequest::Show)
-        ));
+        );
 
-        assert!(matches!(
+        std::assert_matches!(
             runtime
                 .update_from_boxed(
                     crate::callback::ScopeId(1),
@@ -2437,13 +2436,13 @@ mod tests {
                 )
                 .expect("hide request should succeed"),
             UpdateLevel::None
-        ));
-        assert!(matches!(
+        );
+        std::assert_matches!(
             runtime.ctx.take_devtools_request(),
             Some(crate::core::runtime_env::DevToolsRequest::Hide)
-        ));
+        );
 
-        assert!(matches!(
+        std::assert_matches!(
             runtime
                 .update_from_boxed(
                     crate::callback::ScopeId(1),
@@ -2451,11 +2450,11 @@ mod tests {
                 )
                 .expect("toggle request should succeed"),
             UpdateLevel::None
-        ));
-        assert!(matches!(
+        );
+        std::assert_matches!(
             runtime.ctx.take_devtools_request(),
             Some(crate::core::runtime_env::DevToolsRequest::Toggle)
-        ));
+        );
     }
 
     #[test]
@@ -2655,8 +2654,7 @@ mod tests {
                 if lines.len() == 1
                     && lines[0].spans.len() == 1
                     && lines[0].spans[0].content.as_ref() == "styled-line"
-                    && lines[0].spans[0].style.fg == Some(Color::Rgb(12, 200, 120).into())
-        ));
+                    && lines[0].spans[0].style.fg == Some(Color::Rgb(12, 200, 120).into())));
     }
 
     #[test]

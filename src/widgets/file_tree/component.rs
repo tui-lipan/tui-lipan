@@ -3673,7 +3673,7 @@ mod tests {
         let request = *message
             .downcast::<FileTreeMsg>()
             .expect("expected a FileTree message");
-        assert!(matches!(request, FileTreeMsg::RequestEntryRefresh(1)));
+        std::assert_matches!(request, FileTreeMsg::RequestEntryRefresh(1));
         let second = runtime.component.update(request, &mut runtime.ctx);
         assert!(second.command.is_some());
         assert_ne!(runtime.ctx.state.entry_refresh_generation, stale_generation);
