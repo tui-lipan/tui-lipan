@@ -930,6 +930,25 @@ To crossfade between two screens, put the incoming one in a `ZStack` over the ou
 
 For correct opacity blending when backgrounds use `Color::Reset`, set `App::terminal_bg(query_host_colors().map(|c| c.bg))` before `run()` - see **quick-start.md** (`terminal_bg` / `query_host_colors`).
 
+### Controlled visibility
+
+Keep an `Animated` wrapper mounted and use `.visibility(visible, VisibilityAnimation)` to let the
+framework own entry, retained exit, and interruption. Closing content becomes inert immediately;
+once hidden, it is unmounted. Reopening reverses at the current visibility. The recipe accepts
+independent entry/exit timing and a custom `VisualEffect` factory, just like Modal and Popover.
+
+Use `.collapse_visibility(true)` to reflow vertical stack space with visibility progress. The child
+keeps its natural height while the wrapper clips it, so text and borders do not relayout on every
+shrinking row. Accordion uses this mechanism internally. Without collapse, the wrapper reserves its
+normal layout space. Preserve the wrapper's key when toggling visibility.
+
+```rust
+Animated::new(Text::new("Details"))
+    .visibility(show_details, VisibilityAnimation::new())
+    .collapse_visibility(true)
+    .key("details")
+```
+
 ### Exit transitions
 
 There are two ways to animate an element out. Prefer `auto_exit` unless the

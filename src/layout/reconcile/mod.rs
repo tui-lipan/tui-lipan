@@ -39,6 +39,12 @@ pub(crate) fn reconcile_with_overlays_mode(
         false
     };
 
+    let visibility_root = crate::widgets::internal::prepare_visibility_reflow(
+        tree,
+        root,
+        reuse_root.then_some(root_node),
+    );
+    let root = visibility_root.as_ref();
     let mut overlay_state = OverlayState::new(bounds, allow_root_overlays);
     let _root_id = {
         let mut ctx = ReconcileCtx {

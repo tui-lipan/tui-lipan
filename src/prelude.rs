@@ -60,8 +60,8 @@ pub use crate::{CommandBuilder, CommandEntry, CommandId, CommandRegistry};
 
 pub use crate::animation::{
     CubicBezier, CubicBezierCoordinate, CubicBezierError, Easing, ExitAnimation, ExitQueue,
-    ExitTransfer, OverlayAnimation, OverlayAnimationContext, OverlayAnimationPhase, Transition,
-    TransitionConfig,
+    ExitTransfer, Transition, TransitionConfig, VisibilityAnimation, VisibilityAnimationContext,
+    VisibilityAnimationPhase,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

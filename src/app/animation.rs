@@ -28,6 +28,14 @@ pub(crate) fn tick_animated_widgets(tree: &mut NodeTree, dt: Duration) -> (bool,
                 needs_paint |= result.paint_dirty;
                 needs_layout |= result.layout_dirty;
             }
+            NodeKind::Popover(popover) => {
+                if let Some(animation) = &mut popover.animation {
+                    let ticked = animation.tick(dt);
+                    changed |= ticked;
+                    needs_paint |= ticked;
+                    needs_layout |= ticked && animation.exit_finished();
+                }
+            }
             NodeKind::Portal(portal) => {
                 if let Some(animation) = &mut portal.animation {
                     let ticked = animation.tick(dt);

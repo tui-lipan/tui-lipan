@@ -3,16 +3,19 @@
 mod types;
 pub use types::*;
 
+use crate::animation::VisibilityAnimation;
 use crate::callback::Callback;
 use crate::core::element::Element;
 use crate::core::event::MouseEvent;
 use crate::style::{Align, BorderStyle, Length, Padding, Style, StyleSlot};
+use crate::widgets::Animated;
 use crate::widgets::{Button, Frame, VStack};
 use std::sync::Arc;
 
 /// An accordion widget.
 #[derive(Clone)]
 pub struct Accordion {
+    pub(crate) animation: Option<VisibilityAnimation>,
     pub(crate) items: Vec<AccordionItem>,
     pub(crate) on_toggle: Option<Callback<usize>>,
     pub(crate) exclusive: bool,
@@ -60,6 +63,7 @@ impl Default for Accordion {
             content_border_style: BorderStyle::Plain,
             content_style: Style::default(),
             disabled_style: Style::default(),
+            animation: None,
             expanded_icon: "▼ ".into(),
             collapsed_icon: "▶ ".into(),
             focusable: false,
@@ -73,6 +77,12 @@ impl Default for Accordion {
 }
 
 impl Accordion {
+    /// Animate section visibility and vertical reflow with reversible timing and custom effects.
+    pub fn animation(mut self, animation: impl Into<Option<VisibilityAnimation>>) -> Self {
+        self.animation = animation.into();
+        self
+    }
+
     /// Create a new accordion.
     pub fn new() -> Self {
         Self::default()
@@ -311,9 +321,13 @@ impl From<Accordion> for Element {
             }
 
             let header: Element = header.into();
-            stack = stack.child(header.semantic_expanded(expanded));
+            stack = stack.child(
+                header
+                    .semantic_expanded(expanded)
+                    .key(format!("accordion-header-{i}")),
+            );
 
-            if item.expanded {
+            if item.expanded || accordion.animation.is_some() {
                 let content = Frame::new()
                     .border(accordion.content_border)
                     .border_style(accordion.content_border_style)
@@ -322,7 +336,14 @@ impl From<Accordion> for Element {
                     .width(Length::Flex(1))
                     .height(Length::Auto)
                     .child(item.content);
-                stack = stack.child(content);
+                let content: Element = match &accordion.animation {
+                    Some(animation) => Animated::new(content)
+                        .visibility(expanded, animation.clone())
+                        .collapse_visibility(true)
+                        .into(),
+                    None => content.into(),
+                };
+                stack = stack.child(content.key(format!("accordion-content-{i}")));
             }
         }
 

@@ -2,7 +2,7 @@ use super::element::{ElementReconcile, reconcile_element};
 use super::state::{OverlayState, ReconcileCtx};
 use crate::core::component::FocusContext;
 use crate::core::element::Element;
-use crate::core::node::{NodeId, NodeKind, NodeTree, OverlayRoot};
+use crate::core::node::{NodeId, NodeKind, NodeTree, OverlayAnimationSource, OverlayRoot};
 use crate::layout::axis::{Axis, requested_main_axis};
 use crate::layout::measure::min_size_constrained;
 use crate::overlay::{
@@ -166,12 +166,14 @@ pub(crate) fn reconcile_portal(
         let animation = match (&node.kind, &portal.animation) {
             (NodeKind::Portal(existing), Some(recipe)) => {
                 let mut state = existing.animation.clone().unwrap_or_else(|| {
-                    crate::animation::OverlayAnimationState::new(recipe.clone())
+                    crate::animation::VisibilityAnimationState::new(recipe.clone())
                 });
                 state.reconcile(recipe);
                 Some(state)
             }
-            (_, Some(recipe)) => Some(crate::animation::OverlayAnimationState::new(recipe.clone())),
+            (_, Some(recipe)) => Some(crate::animation::VisibilityAnimationState::new(
+                recipe.clone(),
+            )),
             (_, None) => None,
         };
         node.rect = Rect::default();
@@ -302,6 +304,13 @@ pub(crate) fn reconcile_overlay_entries(ctx: &mut ReconcileCtx<'_>, overlays: &[
             }
         };
 
+        let reuse = tree
+            .overlay_roots()
+            .iter()
+            .find(|root| root.overlay_id == Some(entry.id))
+            .map(|root| root.id);
+        let visibility_content =
+            crate::widgets::internal::prepare_visibility_reflow(tree, &entry.content, reuse);
         let id = reconcile_element(
             &mut ReconcileCtx {
                 tree,
@@ -310,9 +319,9 @@ pub(crate) fn reconcile_overlay_entries(ctx: &mut ReconcileCtx<'_>, overlays: &[
                 overlay_state,
             },
             ElementReconcile {
-                reuse: None,
+                reuse,
                 parent: None,
-                el: &entry.content,
+                el: visibility_content.as_ref(),
                 rect,
             },
         );
@@ -348,7 +357,10 @@ pub(crate) fn reconcile_overlay_entries(ctx: &mut ReconcileCtx<'_>, overlays: &[
             },
             backdrop: entry.backdrop,
             opacity: entry.opacity(),
-            portal_animation: None,
+            animation: Some(OverlayAnimationSource::Snapshot(
+                entry.animation.clone(),
+                entry.animation_context(),
+            )),
             captures_focus: if entry.pending_dismiss {
                 false
             } else {
@@ -386,7 +398,11 @@ fn active_root_popover(
     };
     if node.inert
         || node.portal_suppressed
-        || !popover.open
+        || (!popover.open
+            && popover
+                .animation
+                .as_ref()
+                .is_none_or(|state| state.exit_finished()))
         || popover.scope != crate::overlay::OverlayScope::RootPortal
     {
         return None;
@@ -417,19 +433,29 @@ fn collect_popover_overlay_root(
         overlay_id: None,
         layer: OverlayLayer::Popover,
         order,
-        dismiss_policy: if popover_node.on_close.is_some() {
+        dismiss_policy: if popover_node.open && popover_node.on_close.is_some() {
             DismissPolicy::ClickOutsideOrEscape
         } else {
             DismissPolicy::None
         },
-        on_dismiss: popover_node.on_close.clone(),
+        on_dismiss: popover_node
+            .open
+            .then(|| popover_node.on_close.clone())
+            .flatten(),
         on_click: None,
         backdrop: None,
         opacity: 1.0,
-        portal_animation: None,
-        captures_focus: popover_node.capture_focus,
-        auto_focus: popover_node.auto_focus,
-        captures_pointer: crate::overlay::PointerCapture::RectOnly,
+        animation: popover_node
+            .animation
+            .as_ref()
+            .map(|_| OverlayAnimationSource::Node(id)),
+        captures_focus: popover_node.open && popover_node.capture_focus,
+        auto_focus: popover_node.open && popover_node.auto_focus,
+        captures_pointer: if popover_node.open {
+            crate::overlay::PointerCapture::RectOnly
+        } else {
+            crate::overlay::PointerCapture::None
+        },
         copy_text: None,
         copy_zone: None,
         copy_feedback_active: false,
@@ -456,13 +482,7 @@ fn trigger_visible_in_scroll_views(tree: &NodeTree, trigger: NodeId) -> bool {
 }
 
 fn crosses_root_portal_boundary(node: &crate::core::node::Node, child: NodeId) -> bool {
-    match &node.kind {
-        NodeKind::Popover(popover) => {
-            popover.scope == crate::overlay::OverlayScope::RootPortal && *popover.content == child
-        }
-        NodeKind::Portal(portal) => *portal.content == child,
-        _ => false,
-    }
+    node.kind.root_portal_content() == Some(child)
 }
 
 fn suppress_portal_subtree(tree: &mut NodeTree, id: NodeId) {
@@ -525,7 +545,10 @@ pub(crate) fn collect_portal_overlay_roots(tree: &NodeTree, overlay_state: &mut 
             on_click: None,
             backdrop: presentation.backdrop,
             opacity: 1.0,
-            portal_animation: portal.animation.as_ref().map(|_| node.id),
+            animation: portal
+                .animation
+                .as_ref()
+                .map(|_| OverlayAnimationSource::Node(node.id)),
             captures_focus: !closing && presentation.captures_focus,
             auto_focus: !closing && presentation.auto_focus,
             captures_pointer: if closing {

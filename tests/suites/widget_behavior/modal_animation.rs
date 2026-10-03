@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tui_lipan::prelude::*;
-use tui_lipan::{OverlayAnimation, OverlayAnimationContext, OverlayAnimationPhase, TestBackend};
+use tui_lipan::{
+    TestBackend, VisibilityAnimation, VisibilityAnimationContext, VisibilityAnimationPhase,
+};
 
 #[derive(Debug)]
 struct Wipe(f32);
@@ -39,7 +41,7 @@ enum Msg {
     Click,
 }
 struct Host {
-    animation: OverlayAnimation,
+    animation: VisibilityAnimation,
 }
 impl Component for Host {
     type Message = Msg;
@@ -86,7 +88,7 @@ impl Component for Host {
         root.into()
     }
 }
-fn modal_backend(animation: OverlayAnimation) -> TestBackend<Host> {
+fn modal_backend(animation: VisibilityAnimation) -> TestBackend<Host> {
     let mut backend = TestBackend::new(Host { animation });
     backend.set_viewport(Rect {
         x: 0,
@@ -103,8 +105,8 @@ fn timing(ms: u64) -> TransitionConfig {
         easing: Easing::Linear,
     }
 }
-fn custom_animation(samples: Rc<RefCell<Vec<OverlayAnimationContext>>>) -> OverlayAnimation {
-    OverlayAnimation::new()
+fn custom_animation(samples: Rc<RefCell<Vec<VisibilityAnimationContext>>>) -> VisibilityAnimation {
+    VisibilityAnimation::new()
         .enter(timing(200))
         .exit(timing(200))
         .effect(move |ctx| {
@@ -156,7 +158,7 @@ fn custom_modal_effects_restore_the_live_backdrop_including_title_and_border() {
         samples
             .borrow()
             .iter()
-            .any(|ctx| ctx.phase == OverlayAnimationPhase::Exiting)
+            .any(|ctx| ctx.phase == VisibilityAnimationPhase::Exiting)
     );
     backend.advance(Duration::from_millis(100));
     let closed = backend.capture_frame();
@@ -177,7 +179,7 @@ fn reopening_a_modal_reverses_from_its_current_visibility() {
     backend.dispatch(Msg::Open).expect("reopen");
     backend.capture_frame();
     let reopening = *samples.borrow().last().expect("reopening sample");
-    assert_eq!(reopening.phase, OverlayAnimationPhase::Entering);
+    assert_eq!(reopening.phase, VisibilityAnimationPhase::Entering);
     assert!((reopening.progress - exiting.progress).abs() < 0.01);
     backend.advance(Duration::from_millis(200));
     assert!(backend.capture_frame().plain_text().contains("PICKER"));
@@ -185,7 +187,11 @@ fn reopening_a_modal_reverses_from_its_current_visibility() {
 
 #[test]
 fn closing_modal_content_is_inert_and_zero_duration_removal_is_immediate() {
-    let mut backend = modal_backend(OverlayAnimation::new().enter(timing(0)).exit(timing(200)));
+    let mut backend = modal_backend(
+        VisibilityAnimation::new()
+            .enter(timing(0))
+            .exit(timing(200)),
+    );
     assert!(backend.focus_key(&Key::from("action")));
     backend
         .send_key(KeyEvent {
@@ -210,14 +216,18 @@ fn closing_modal_content_is_inert_and_zero_duration_removal_is_immediate() {
     );
     backend.advance(Duration::from_millis(200));
     assert!(!backend.capture_frame().plain_text().contains("PICKER"));
-    let mut instant = modal_backend(OverlayAnimation::new().enter(timing(0)).exit(timing(0)));
+    let mut instant = modal_backend(VisibilityAnimation::new().enter(timing(0)).exit(timing(0)));
     instant.dispatch(Msg::Close).expect("close");
     assert!(!instant.capture_frame().plain_text().contains("PICKER"));
 }
 
 #[test]
 fn default_fade_composites_the_complete_frame_on_entry_and_exit() {
-    let mut backend = modal_backend(OverlayAnimation::new().enter(timing(200)).exit(timing(200)));
+    let mut backend = modal_backend(
+        VisibilityAnimation::new()
+            .enter(timing(200))
+            .exit(timing(200)),
+    );
     let hidden = backend.capture_frame();
     assert_eq!(hidden.cell(10, 3).symbol, "b");
     backend.advance(Duration::from_millis(100));

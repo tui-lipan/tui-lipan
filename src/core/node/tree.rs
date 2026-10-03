@@ -1728,7 +1728,7 @@ mod tests {
             on_click: None,
             backdrop: None,
             opacity: 1.0,
-            portal_animation: None,
+            animation: None,
             captures_focus: false,
             auto_focus: false,
             captures_pointer,

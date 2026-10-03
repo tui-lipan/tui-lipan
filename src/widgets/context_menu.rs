@@ -1,5 +1,6 @@
 //! Context menu widget.
 
+use crate::animation::VisibilityAnimation;
 use std::sync::Arc;
 
 use crate::callback::Callback;
@@ -13,6 +14,7 @@ pub struct ContextMenu {
     trigger: Element,
     items: Vec<ListItem>,
     open: bool,
+    pub(crate) animation: Option<VisibilityAnimation>,
     on_select: Option<Callback<usize>>,
     on_close: Option<Callback<()>>,
     placement: PopoverPlacement,
@@ -37,12 +39,20 @@ pub struct ContextMenu {
 }
 
 impl ContextMenu {
+    /// Animate popup content using shared visibility timing and effects.
+    /// Root-portal scope only; the trigger remains active while content closes.
+    pub fn animation(mut self, animation: impl Into<Option<VisibilityAnimation>>) -> Self {
+        self.animation = animation.into();
+        self
+    }
+
     /// Create a new context menu.
     pub fn new(trigger: impl IntoElement) -> Self {
         Self {
             trigger: trigger.into(),
             items: Vec::new(),
             open: false,
+            animation: None,
             on_select: None,
             on_close: None,
             placement: PopoverPlacement::BelowStart,
@@ -294,6 +304,7 @@ impl From<ContextMenu> for Element {
         }
 
         Popover::new()
+            .animation(menu.animation.clone())
             .trigger(menu.trigger)
             .content(list)
             .open(menu.open)

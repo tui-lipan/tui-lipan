@@ -1,6 +1,8 @@
 mod layout;
 mod node;
 mod reconcile;
+mod visibility;
+pub(crate) use visibility::prepare_visibility_reflow;
 
 pub(crate) use self::layout::measure_animated;
 pub use self::node::AnimatedNode;
@@ -8,7 +10,7 @@ pub(crate) use self::reconcile::reconcile_animated;
 
 use std::hash::Hash;
 
-use crate::animation::{ExitAnimation, TransitionConfig};
+use crate::animation::{ExitAnimation, TransitionConfig, VisibilityAnimation};
 use crate::callback::Callback;
 use crate::core::element::{Element, ElementKind};
 use crate::layout::hash::LayoutHash;
@@ -19,6 +21,9 @@ use crate::widgets::Spacer;
 #[derive(Clone)]
 pub struct Animated {
     pub(crate) child: Box<Element>,
+    pub(crate) visibility: Option<(bool, VisibilityAnimation)>,
+    pub(crate) collapse_visibility: bool,
+    pub(crate) visibility_progress: Option<f32>,
     pub(crate) opacity: f32,
     pub(crate) opacity_fg_only: bool,
     pub(crate) opacity_target: Option<Color>,
@@ -38,6 +43,9 @@ impl Default for Animated {
     fn default() -> Self {
         Self {
             child: Box::new(Spacer::new().into()),
+            visibility: None,
+            collapse_visibility: false,
+            visibility_progress: None,
             opacity: 1.0,
             opacity_fg_only: false,
             opacity_target: None,
@@ -62,6 +70,21 @@ impl Animated {
             child: Box::new(child.into()),
             ..Self::default()
         }
+    }
+
+    /// Control visibility with shared entry/exit timing and optional custom effects.
+    /// Keep the wrapper mounted. Closing content is retained but inert until exit completes;
+    /// closed content is unmounted. Reopening reverses without snapping.
+    pub fn visibility(mut self, visible: bool, animation: VisibilityAnimation) -> Self {
+        self.visibility = Some((visible, animation));
+        self
+    }
+
+    /// Reflow vertical stack space with visibility progress instead of retaining full height.
+    /// The child keeps its natural height and is clipped by the shrinking wrapper.
+    pub fn collapse_visibility(mut self, collapse: bool) -> Self {
+        self.collapse_visibility = collapse;
+        self
     }
 
     /// Set wrapped child content.
@@ -297,7 +320,7 @@ impl From<Animated> for Element {
     fn from(value: Animated) -> Self {
         let (min_w, min_h) = measure_animated(&value, None, None);
         let mut layout = LayoutConstraints::default().min_width(Length::Px(min_w));
-        if value.height.is_none() {
+        if value.height.is_none() && !value.collapse_visibility {
             layout = layout.min_height(Length::Px(min_h));
         }
         Element::new(ElementKind::Animated(value)).with_layout(layout)
@@ -310,6 +333,12 @@ impl LayoutHash for Animated {
         hasher: &mut impl std::hash::Hasher,
         recurse: &dyn Fn(&Element) -> Option<u64>,
     ) -> Option<()> {
+        self.visibility
+            .as_ref()
+            .map(|(visible, _)| *visible)
+            .hash(hasher);
+        self.collapse_visibility.hash(hasher);
+        self.visibility_progress.map(f32::to_bits).hash(hasher);
         self.opacity.to_bits().hash(hasher);
         self.opacity_fg_only.hash(hasher);
         self.opacity_target.hash(hasher);

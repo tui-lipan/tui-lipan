@@ -411,9 +411,17 @@ pub(crate) fn positioned_exit_rect(tree: &NodeTree, id: NodeId) -> crate::style:
     rect
 }
 
-fn has_exit_animation(kind: &NodeKind) -> bool {
-    match kind {
-        NodeKind::Animated(animated) => animated.auto_exit.is_some(),
+fn exit_target(tree: &NodeTree, mut id: NodeId) -> NodeId {
+    while matches!(tree.node(id).kind, NodeKind::Group(_)) && tree.node(id).children.len() == 1 {
+        id = tree.node(id).children[0];
+    }
+    id
+}
+
+fn has_exit_animation(tree: &NodeTree, id: NodeId) -> bool {
+    let target = exit_target(tree, id);
+    match &tree.node(target).kind {
+        NodeKind::Animated(animated) => id == target && animated.auto_exit.is_some(),
         NodeKind::Portal(portal) => portal.animation.is_some(),
         _ => false,
     }
@@ -434,7 +442,7 @@ fn departed_children(
                 && tree.node(**id).key.is_some()
                 && !reuse.iter().any(|reused| reused.as_ref() == Some(*id))
                 && !already_retained.iter().any(|entry| entry.id == **id)
-                && has_exit_animation(&tree.node(**id).kind)
+                && has_exit_animation(tree, **id)
         })
         .map(|(index, id)| (index, *id))
         .collect()
@@ -445,6 +453,7 @@ fn begin_exit(
     id: NodeId,
     collapse_from: Option<(Axis, u16)>,
 ) -> Option<std::time::Duration> {
+    let id = exit_target(tree, id);
     match &mut tree.node_mut(id).kind {
         NodeKind::Animated(animated) => {
             let duration = animated.auto_exit?.duration();
@@ -459,6 +468,7 @@ fn begin_exit(
 }
 
 fn exit_finished(tree: &NodeTree, id: NodeId) -> bool {
+    let id = exit_target(tree, id);
     match &tree.node(id).kind {
         NodeKind::Animated(animated) => animated.auto_exit_finished(),
         NodeKind::Portal(portal) => portal
@@ -471,7 +481,7 @@ fn exit_finished(tree: &NodeTree, id: NodeId) -> bool {
 
 /// Clear the inert mark when a key is described again mid-exit. The reconciler reuses the node
 /// normally from here, which restarts its height and opacity transitions toward the live values.
-fn revive(tree: &mut NodeTree, id: NodeId) {
+pub(crate) fn revive(tree: &mut NodeTree, id: NodeId) {
     if !tree.is_valid(id) {
         return;
     }

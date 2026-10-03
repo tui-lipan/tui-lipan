@@ -7,8 +7,8 @@ mod tree;
 pub use id::NodeId;
 pub(crate) use kind::{GroupNode, NodeKind, WidgetNode};
 pub(crate) use overlay::{
-    OverlayRoot, ScrollbarAxis, ScrollbarTarget, ScrollbarZone, ScrollbarZonesParams,
-    compute_scrollbar_zones,
+    OverlayAnimationSource, OverlayRoot, ScrollbarAxis, ScrollbarTarget, ScrollbarZone,
+    ScrollbarZonesParams, compute_scrollbar_zones,
 };
 #[cfg(feature = "terminal")]
 pub(crate) use tree::LiveTerminalRefresh;

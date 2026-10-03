@@ -4,9 +4,9 @@ pub mod easing;
 pub mod exit_animation;
 pub mod exit_queue;
 mod handle;
-mod overlay_animation;
 pub(crate) mod registry;
 pub mod transition;
+mod visibility_animation;
 
 pub use easing::{
     CubicBezier, CubicBezierCoordinate, CubicBezierError, Easing, EasingFn,
@@ -16,10 +16,12 @@ pub use easing::{
 pub use exit_animation::ExitAnimation;
 pub use exit_queue::{ExitQueue, ExitTransfer};
 pub use handle::AnimationHandle;
-pub(crate) use overlay_animation::OverlayAnimationState;
-pub use overlay_animation::{OverlayAnimation, OverlayAnimationContext, OverlayAnimationPhase};
 pub(crate) use registry::AnimationRegistry;
 pub use transition::{Lerp, Transition, TransitionConfig};
+pub(crate) use visibility_animation::VisibilityAnimationState;
+pub use visibility_animation::{
+    VisibilityAnimation, VisibilityAnimationContext, VisibilityAnimationPhase,
+};
 
 #[cfg(test)]
 mod tests {

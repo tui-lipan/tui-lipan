@@ -1,5 +1,6 @@
 //! Combo box widget.
 
+use crate::animation::VisibilityAnimation;
 use std::sync::Arc;
 
 use crate::callback::{Callback, KeyHandler};
@@ -30,6 +31,7 @@ pub struct ComboBox {
     query: Arc<str>,
     placeholder: Option<Arc<str>>,
     open: bool,
+    pub(crate) animation: Option<VisibilityAnimation>,
     active_index: Option<usize>,
     selected: Option<usize>,
     allow_custom_value: bool,
@@ -74,6 +76,7 @@ impl Default for ComboBox {
             query: Arc::from(""),
             placeholder: Some("Type to filter...".into()),
             open: false,
+            animation: None,
             active_index: None,
             selected: None,
             allow_custom_value: false,
@@ -136,6 +139,13 @@ impl Default for ComboBox {
 }
 
 impl ComboBox {
+    /// Animate popup content using shared visibility timing and effects.
+    /// Root-portal scope only; the trigger remains active while content closes.
+    pub fn animation(mut self, animation: impl Into<Option<VisibilityAnimation>>) -> Self {
+        self.animation = animation.into();
+        self
+    }
+
     /// Create a new combo box.
     pub fn new() -> Self {
         Self::default()
@@ -805,6 +815,7 @@ impl From<ComboBox> for Element {
             .unwrap_or_else(|| Callback::new(|_| {}));
 
         Popover::new()
+            .animation(combo.animation.clone())
             .trigger(input)
             .content(list)
             .open(combo.open && !combo.disabled)

@@ -1,5 +1,6 @@
 //! Toast widget.
 
+use crate::animation::VisibilityAnimation;
 use crate::callback::Callback;
 use std::sync::Arc;
 
@@ -35,6 +36,7 @@ pub(crate) fn copy_zone_with_right_padding(rect: Rect, right_padding: u16) -> Re
 /// A transient notification message.
 #[derive(Clone)]
 pub struct Toast {
+    pub(crate) animation: VisibilityAnimation,
     /// Message content.
     pub message: Arc<str>,
     /// Duration in seconds.
@@ -78,11 +80,18 @@ pub enum ToastCopyAffordance {
 }
 
 impl Toast {
+    /// Configure entry, dismissal, and hover reversal timing and custom frame effects.
+    pub fn animation(mut self, animation: VisibilityAnimation) -> Self {
+        self.animation = animation;
+        self
+    }
+
     /// Create a new toast with the given message.
     pub fn new(message: impl Into<Arc<str>>) -> Self {
         Self {
             message: message.into(),
             duration: 3.0,
+            animation: VisibilityAnimation::new(),
             dismiss_on_click: true,
             on_click: None,
             copyable: false,

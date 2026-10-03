@@ -1064,6 +1064,7 @@ Dropdown select widget.
 
 | Prop | Type | Description |
 |------|------|-------------|
+| `animation` | `impl Into<Option<VisibilityAnimation>>` | Opt-in popup entry/exit effects and timing, forwarded to Popover |
 | `options` | `Vec<String>` | Available options |
 | `selected` | `Option<usize>` | Selected index |
 | `placeholder` | `String` | Placeholder when nothing selected |
@@ -1129,6 +1130,7 @@ Controlled input + dropdown list for searchable selection.
 
 | Prop | Type | Description |
 |------|------|-------------|
+| `animation` | `impl Into<Option<VisibilityAnimation>>` | Opt-in popup entry/exit effects and timing, forwarded to Popover |
 | `items` | `Vec<Arc<str>>` | Source options |
 | `query` | `Arc<str>` | Controlled input value |
 | `placeholder` | `String` | Input placeholder |

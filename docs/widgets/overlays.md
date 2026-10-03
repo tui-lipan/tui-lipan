@@ -28,7 +28,7 @@ controlled overlay closed.
 | `title` | `impl Into<String>` | **Constructor** - dialog title |
 | `child` | `Element` | Dialog content |
 | `scope` | `OverlayScope` | `RootPortal` (default) or `Local` |
-| `animation` | `impl Into<Option<OverlayAnimation>>` | Opt-in enter/exit timing and custom paint effects for a complete root-portal frame; `None` disables it |
+| `animation` | `impl Into<Option<VisibilityAnimation>>` | Opt-in enter/exit timing and custom paint effects for a complete root-portal frame; `None` disables it |
 | `auto_focus` | `bool` | Focus the first focusable descendant (`true` by default); `false` suspends focus while retaining the modal trap |
 | `on_close` | `Callback<()>` | Close callback (Esc/backdrop click) |
 | `dismiss_on_escape` | `bool` | Whether Esc fires `on_close` (`true` by default). Without `on_close`, the default traps Esc. `false` always lets Esc reach focused widgets; backdrop clicks still close when `on_close` is set |
@@ -107,13 +107,13 @@ use tui_lipan::prelude::*;
 
 let picker: Element = Modal::new()
     .title("Commands")
-    .animation(OverlayAnimation::new())
+    .animation(VisibilityAnimation::new())
     .child(Text::new("Choose a command"))
     .into();
 let root: Element = ZStack::new().child(picker.key("commands")).into();
 ```
 
-`OverlayAnimation` fades in over 150 ms and out over 100 ms. Use `.enter(TransitionConfig)` and
+`VisibilityAnimation` fades in over 150 ms and out over 100 ms. Use `.enter(TransitionConfig)` and
 `.exit(TransitionConfig)` for independent durations and easing. A zero duration snaps to its target.
 The active recipe is held for the current transition; view rebuilds do not restart it.
 
@@ -131,6 +131,9 @@ visibility separately, so a custom effect does not receive an additional automat
 Run `cargo run --example modal_animation` for a complete application-defined portal with entry,
 retained exit, backdrop compositing, and focus handling. Animation controls presentation; removing
 and re-adding a component still follows its normal component lifecycle.
+
+`CommandPalette::animation(...)` forwards the recipe to its Modal. Give the palette element a stable
+key in a retention-capable container. Transparent component roots retain their portal frame during exit.
 
 ## Toast Notifications
 
@@ -186,6 +189,7 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 
 | Method | Description |
 |--------|-------------|
+| `animation` | `VisibilityAnimation` | Shared visibility recipe; defaults to the existing 150 ms entry / 100 ms exit fade |
 | `.push(Toast)` | Show toast, returns `OverlayId` |
 | `.renew(id)` | Restart an active toast's dismissal countdown without redrawing it |
 | `.dismiss(id)` | Dismiss a specific toast |
@@ -195,6 +199,11 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 Use `.dismiss_immediately(id)` before pushing a replacement when the old and new toast must never
 occupy the stack at the same time. Ordinary dismissal should use `.dismiss(id)` so the toast keeps
 its exit transition.
+
+`Toast::animation(VisibilityAnimation)` configures timing and custom effects using the existing
+managed-overlay clock. Timeout dismissal and hover reversal use the recipe's exit and entry timing.
+`dismiss_immediately` still removes the toast synchronously. Without customization, timing and fade
+behavior remain unchanged.
 
 **ToastPlacement:** `TopStart`, `TopCenter`, `TopEnd`, `BottomStart`, `BottomCenter`, `BottomEnd` (default).
 
@@ -261,7 +270,7 @@ inherit ScrollView clipping from the overlay's declaration site.
 | `content` | `Element` | Popover content |
 | `open` | `bool` | Controlled open state |
 | `scope` | `OverlayScope` | `RootPortal` (default) or `Local` |
-| `animation` | `impl Into<Option<OverlayAnimation>>` | Opt-in enter/exit timing and custom paint effects for a complete root-portal frame; `None` disables it |
+| `animation` | `impl Into<Option<VisibilityAnimation>>` | Opt-in popup lifecycle timing and custom effects; keep the widget mounted and change `open` |
 | `capture_focus` | `bool` | Capture and trap focus in a root-portal popover (`true` by default); disable for passive overlays whose trigger retains keyboard focus |
 | `auto_focus` | `bool` | Focus the first focusable descendant (`true` by default); `false` suspends focus while retaining capture/trapping |
 | `on_close` | `Callback<()>` | Close callback |
@@ -278,6 +287,30 @@ inherit ScrollView clipping from the overlay's declaration site.
 
 By default, `Popover` uses `.min_trigger_width(true)`: the overlay is at least as wide as its trigger but can grow wider for long content. Use `.fit_trigger_width(true)` for exact trigger width, or `.max_width(...)` to cap content-driven growth.
 
+
+### Animate popup content
+
+`Popover::animation(VisibilityAnimation::new())` animates root-portal content when `open` changes.
+Keep the Popover mounted while closing. Its trigger stays active; closing content releases focus,
+dismissal, pointer capture, and callbacks immediately, then unmounts when the exit finishes.
+Reopening reverses from the current visibility. Closed content does not mount or animate until opened.
+Local-scope popovers keep their existing immediate behavior.
+
+`Select`, `ComboBox`, `ContextMenu`, and `Tooltip` expose the same `.animation(...)` property and
+forward it to Popover. Tooltips stay passive and do not acquire focus because animation is enabled.
+
+```rust
+Popover::new()
+    .trigger(Button::new("Options"))
+    .content(Text::new("Popup content"))
+    .open(show_options)
+    .animation(VisibilityAnimation::new())
+```
+
+Run `cargo run --example visibility_animation` to compare Popover, Toast, and Accordion using one
+portal effect. The same custom-effect factory used by Modal receives the popup's visibility and phase, and can
+restore live backdrop cells for portal, scan, or wipe reveals.
+
 ---
 
 ## Tooltip
@@ -286,6 +319,7 @@ Help text on hover or focus.
 
 | Prop | Type | Description |
 |------|------|-------------|
+| `animation` | `impl Into<Option<VisibilityAnimation>>` | Opt-in popup animation, forwarded to Popover |
 | `text` | `impl Into<String>` | **Constructor** - tooltip text |
 | `child` | `Element` | The element to add tooltip to |
 | `open` | `bool` | Controlled open state; overrides automatic behavior |
@@ -320,6 +354,7 @@ Collapsible content sections.
 
 | Prop | Type | Description |
 |------|------|-------------|
+| `animation` | `impl Into<Option<VisibilityAnimation>>` | Opt-in reversible section reveal and height reflow |
 | `exclusive` | `bool` | Only one section open at a time |
 | `gap` | `u16` | Gap between sections |
 | `padding` | `impl Into<Padding>` | Outer padding |
@@ -358,6 +393,12 @@ Accordion::new()
 
 ---
 
+`Accordion::animation(VisibilityAnimation::new())` uses `Animated::visibility` to retain closing
+section content, disable its input immediately, and reflow its height with visibility progress.
+Headers remain active during closing. A rapid toggle reverses from the current height and effect
+progress. Fully closed content is unmounted. Custom effects are optional; an ordinary recipe fades
+and clips the content while neighboring sections move.
+
 ## SearchPalette
 
 Fuzzy search widget powered by `nucleo`. Composes an `Input` and `List` into a filterable, keyboard-navigable search panel. See [Matching config](#matching-config) for the `Fuzzy` (default) and `Hybrid` matching strategies.
@@ -385,7 +426,7 @@ Use `ctx.register_command(...)` inside a component to register component-scoped 
 | `width` | `Length` | Modal width |
 | `height` | `Length` | Modal height |
 | `scope` | `OverlayScope` | `RootPortal` (default) or `Local` |
-| `animation` | `impl Into<Option<OverlayAnimation>>` | Opt-in enter/exit timing and custom paint effects for a complete root-portal frame; `None` disables it |
+| `animation` | `impl Into<Option<VisibilityAnimation>>` | Opt-in enter/exit timing and custom paint effects for a complete root-portal frame; `None` disables it |
 | `backdrop_style` | `Style` | Backdrop overlay style |
 | `frame_style` | `Style` | Modal frame style |
 | `border` | `bool` | Show modal border |
@@ -726,6 +767,7 @@ A popup menu backed by `Popover` + `List`. Typically triggered by right-click or
 
 | Prop | Type | Default | Description |
 |------|------|---------|-------------|
+| `animation` | `impl Into<Option<VisibilityAnimation>>` | Opt-in popup animation, forwarded to Popover |
 | `trigger` | `impl IntoElement` | **Constructor** | The element that owns the menu |
 | `items` | `impl IntoIterator<Item = impl Into<ListItem>>` | `[]` | Menu items |
 | `open` | `bool` | `false` | Controlled open state |

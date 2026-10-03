@@ -1,6 +1,6 @@
 //! Modal widget.
 
-use crate::animation::OverlayAnimation;
+use crate::animation::VisibilityAnimation;
 use crate::callback::Callback;
 use crate::core::element::{Element, ElementKind};
 use crate::core::event::MouseRegionEvent;
@@ -33,7 +33,7 @@ pub struct Modal {
     title_style: Style,
     title_alignment: Align,
     dismiss_on_escape: bool,
-    animation: Option<OverlayAnimation>,
+    animation: Option<VisibilityAnimation>,
 }
 
 impl Modal {
@@ -78,7 +78,7 @@ impl Modal {
     ///
     /// Key the resulting element and place it directly in a retention-capable container.
     /// Local modals do not use root-overlay lifecycle animation.
-    pub fn animation(mut self, animation: impl Into<Option<OverlayAnimation>>) -> Self {
+    pub fn animation(mut self, animation: impl Into<Option<VisibilityAnimation>>) -> Self {
         self.animation = animation.into();
         self
     }
