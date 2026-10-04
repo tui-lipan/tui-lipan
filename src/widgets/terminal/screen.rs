@@ -322,6 +322,13 @@ struct ActivePromptMark {
     column: usize,
 }
 
+struct PromptResizeAnchor {
+    cursor_line_offset: usize,
+    cursor_column: usize,
+    column: usize,
+    reflow_rows: usize,
+}
+
 /// Cursor style applied when the child program never issues `DECSCUSR`.
 ///
 /// A blinking block matches the historical default and the common terminal
@@ -1868,18 +1875,23 @@ impl TerminalScreen {
         let cols = cols.max(1);
         let dimensions_changed = rows != self.rows || cols != self.cols;
         let reflowed = cols != self.cols;
-        if dimensions_changed {
-            self.clear_active_prompt();
-        }
+        let prompt_anchor = dimensions_changed
+            .then(|| self.prepare_prompt_resize(rows))
+            .flatten();
         self.rows = rows;
         self.cols = cols;
         let dimensions = TermDimensions {
-            rows: self.rows as usize,
+            rows: prompt_anchor
+                .as_ref()
+                .map_or(rows as usize, |anchor| anchor.reflow_rows),
             cols: self.cols as usize,
         };
         #[cfg(feature = "terminal-images")]
         let rewraps = self.width_change_rewraps(cols.max(1));
         self.term.resize(dimensions);
+        if let Some(anchor) = prompt_anchor {
+            self.finish_prompt_resize(anchor, rows, cols);
+        }
         self.sync_viewport();
         // `Term::resize` can push lines into history without going through a handler
         // call, so the ledger never sees it; trim and account for it here.
@@ -1888,6 +1900,7 @@ impl TerminalScreen {
         if evicted > 0 {
             self.evicted_lines = self.evicted_lines.saturating_add(evicted as u64);
         }
+        self.drop_evicted_semantic_marks(evicted);
         if reflowed {
             self.history_epoch = self.history_epoch.saturating_add(1);
             // A column change rewraps history, so line indices no longer refer to the
@@ -1902,7 +1915,6 @@ impl TerminalScreen {
                 self.graphics.clear_placements();
             }
         } else {
-            self.drop_evicted_semantic_marks(evicted);
             self.settle_graphics(evicted);
         }
         let alt_screen = self.term.mode().contains(TermMode::ALT_SCREEN);
@@ -1915,23 +1927,71 @@ impl TerminalScreen {
         self.dirty = true;
     }
 
+    fn prepare_prompt_resize(&mut self, rows: u16) -> Option<PromptResizeAnchor> {
+        let mut anchor = self.clear_active_prompt()?;
+        // Preserve height scrolling against the shell's actual cursor first.
+        self.term.resize(TermDimensions {
+            rows: rows as usize,
+            cols: self.cols as usize,
+        });
+        let grid = self.term.grid();
+        let line = grid.cursor.point.line.0 - anchor.cursor_line_offset as i32;
+        if line < grid.topmost_line().0 {
+            return None;
+        }
+        let mut logical_start = Line(line);
+        while logical_start > grid.topmost_line()
+            && grid[Line(logical_start.0 - 1)][grid.last_column()]
+                .flags
+                .contains(CellFlags::WRAPLINE)
+        {
+            logical_start -= 1;
+        }
+        // Alacritty clamps cursor movement at the top of the viewport. Pull a wrapped output
+        // prefix and the anchor itself out of history temporarily so reflow can track them.
+        anchor.reflow_rows = rows as usize + (-logical_start.0).max(0) as usize;
+        self.term.resize(TermDimensions {
+            rows: anchor.reflow_rows,
+            cols: self.cols as usize,
+        });
+        let grid = self.term.grid_mut();
+        grid.cursor.point.line.0 -= anchor.cursor_line_offset as i32;
+        grid.cursor.point.column = Column(anchor.column);
+        grid.cursor.input_needs_wrap = false;
+        Some(anchor)
+    }
+
+    fn finish_prompt_resize(&mut self, anchor: PromptResizeAnchor, rows: u16, cols: u16) {
+        self.active_prompt_mark = Some(ActivePromptMark {
+            absolute_line: self.cursor_absolute_line(),
+            column: self.term.grid().cursor.point.column.0,
+        });
+        let grid = self.term.grid_mut();
+        grid.cursor.point.line.0 = (grid.cursor.point.line.0 + anchor.cursor_line_offset as i32)
+            .min(anchor.reflow_rows as i32 - 1);
+        grid.cursor.point.column.0 = anchor.cursor_column.min(cols as usize - 1);
+        grid.cursor.input_needs_wrap = false;
+        self.term.resize(TermDimensions {
+            rows: rows as usize,
+            cols: cols as usize,
+        });
+    }
+
     /// Erase an active semantic prompt before grid reflow.
     ///
     /// Shells receive `SIGWINCH` after a PTY resize and redraw their current prompt. Leaving the
     /// old prompt in the reflow buffer makes that redraw additive, duplicating wrapped input.
-    fn clear_active_prompt(&mut self) {
-        let Some(mark) = self.active_prompt_mark.take() else {
-            return;
-        };
+    fn clear_active_prompt(&mut self) -> Option<PromptResizeAnchor> {
+        let mark = self.active_prompt_mark.take()?;
         if self.term.mode().contains(TermMode::ALT_SCREEN) {
-            return;
+            return None;
         }
 
         let grid = self.term.grid_mut();
         let line = grid.topmost_line().0 + mark.absolute_line as i32;
         let screen_lines = grid.screen_lines() as i32;
-        if !(0..screen_lines).contains(&line) {
-            return;
+        if !(grid.topmost_line().0..screen_lines).contains(&line) {
+            return None;
         }
 
         let columns = grid.columns();
@@ -1945,6 +2005,16 @@ impl TerminalScreen {
                 *cell = background.into();
             }
         }
+        // Let Alacritty reflow the prompt anchor as its cursor, including a nonzero column
+        // after unterminated output. Restore the shell's physical cursor offset afterward.
+        // Tracking the anchor also prevents erased cursor space from creating blank wraps.
+        // Readline's resize redraw does not rerun PROMPT_COMMAND, so OSC 133;A is not repeated.
+        Some(PromptResizeAnchor {
+            cursor_line_offset: (grid.cursor.point.line.0 - line).max(0) as usize,
+            cursor_column: grid.cursor.point.column.0,
+            column: start_column,
+            reflow_rows: self.rows as usize,
+        })
     }
 
     /// Return current visible screen contents.
@@ -4435,6 +4505,188 @@ mod tests {
             style_run_bits(underline.flags),
             style_run_bits(double.flags)
         );
+    }
+
+    #[test]
+    fn nonzero_prompt_anchor_reflows_with_unterminated_output() {
+        for input in ["hello", "abcdefghijklmnopqrstuvwxyz1234567890"] {
+            let mut screen = TerminalScreen::new(8, 120, 20);
+            let output = "x".repeat(40);
+            let prompt = format!("prompt > \x1b]133;B\x1b\\{input}");
+            let expected = format!("{output}prompt > {input}");
+            screen.process_bytes(output.as_bytes());
+            screen.process_bytes(b"\x1b]133;A\x1b\\");
+            screen.process_bytes(prompt.as_bytes());
+
+            for _ in 0..3 {
+                screen.resize(8, 32);
+                assert_eq!(
+                    screen.active_prompt_mark,
+                    Some(ActivePromptMark {
+                        absolute_line: 1,
+                        column: 8
+                    })
+                );
+                // A column-addressed redraw isolates reflow from a shell's CR overwriting
+                // unterminated output. It does not emit a fresh OSC 133;A.
+                screen.process_bytes(b"\x1b[1;9H\x1b[K");
+                screen.process_bytes(prompt.as_bytes());
+                let narrow = screen.render_snapshot();
+                let expected_lines: Vec<_> = expected
+                    .as_bytes()
+                    .chunks(32)
+                    .map(|chunk| {
+                        std::str::from_utf8(chunk)
+                            .expect("ASCII test input")
+                            .to_owned()
+                    })
+                    .collect();
+                assert_eq!(screen.text_lines(0, expected_lines.len()), expected_lines);
+                assert_eq!(
+                    (narrow.cursor_row, narrow.cursor_col),
+                    (
+                        ((8 + 9 + input.len()) / 32) as u16,
+                        ((8 + 9 + input.len()) % 32) as u16
+                    )
+                );
+
+                screen.resize(8, 120);
+                assert_eq!(
+                    screen.active_prompt_mark,
+                    Some(ActivePromptMark {
+                        absolute_line: 0,
+                        column: 40
+                    })
+                );
+                screen.process_bytes(b"\x1b[1;41H\x1b[K");
+                screen.process_bytes(prompt.as_bytes());
+                let wide = screen.render_snapshot();
+                assert_eq!(
+                    wide.text.lines().next().map(str::trim_end),
+                    Some(expected.as_str())
+                );
+                assert_eq!(
+                    (wide.cursor_row, wide.cursor_col),
+                    (0, expected.len() as u16)
+                );
+                assert!(wide.text.lines().skip(1).all(|line| line.trim().is_empty()));
+            }
+            screen.process_bytes(b"x");
+            let snapshot = screen.render_snapshot();
+            assert_eq!(
+                snapshot.text.lines().next().map(str::trim_end),
+                Some(format!("{expected}x").as_str())
+            );
+            assert_eq!(
+                (snapshot.cursor_row, snapshot.cursor_col),
+                (0, expected.len() as u16 + 1)
+            );
+        }
+    }
+
+    #[test]
+    fn tall_active_prompt_survives_repeated_height_shrinks() {
+        for short_rows in [2, 3] {
+            let mut screen = TerminalScreen::new(8, 120, 40);
+            let input = "abcdefghij".repeat(80);
+            let expected = format!("prompt > {input}");
+            let prompt = b"prompt > \x1b]133;B\x1b\\";
+            screen.process_bytes(b"\x1b]133;A\x1b\\");
+            screen.process_bytes(prompt);
+            screen.process_bytes(input.as_bytes());
+
+            for _ in 0..3 {
+                for rows in [short_rows, 8] {
+                    screen.resize(rows, 120);
+                    assert!(
+                        screen.active_prompt_mark.is_some(),
+                        "a retained history anchor is valid"
+                    );
+                    if rows == short_rows {
+                        let grid = screen.term.grid();
+                        let mark = screen.active_prompt_mark.expect("retained anchor");
+                        let line = grid.topmost_line().0 + mark.absolute_line as i32;
+                        assert!(line < 0 && line >= grid.topmost_line().0);
+                    }
+                    // Readline clears its seven-row input and redraws without OSC 133;A.
+                    screen.process_bytes(b"\r\x1b[K\r");
+                    for _ in 0..6 {
+                        screen.process_bytes(b"\x1b[A\x1b[K\r");
+                    }
+                    screen.process_bytes(prompt);
+                    screen.process_bytes(input.as_bytes());
+                }
+            }
+            screen.process_bytes(b"x");
+            let actual: String = screen.text_lines(0, screen.total_text_lines()).concat();
+            assert_eq!(actual, format!("{expected}x"));
+            assert_eq!(screen.render_snapshot().cursor_col, 90);
+        }
+    }
+
+    #[test]
+    fn shrinking_drops_a_prompt_anchor_only_after_history_eviction() {
+        let mut screen = TerminalScreen::new(8, 120, 2);
+        screen.process_bytes(b"\x1b]133;A\x1b\\prompt > \x1b]133;B\x1b\\");
+        screen.process_bytes("abcdefghij".repeat(80).as_bytes());
+        screen.resize(2, 120);
+        assert_eq!(screen.term.grid().topmost_line(), Line(-2));
+        assert!(screen.evicted_lines > 0);
+        assert!(
+            screen.active_prompt_mark.is_none(),
+            "the prompt start was actually evicted"
+        );
+    }
+
+    #[test]
+    fn bash_prompt_cursor_survives_shrink_then_grow() {
+        for narrow_rows in [8, 3] {
+            let mut screen = TerminalScreen::new(8, 120, 20);
+            let prompt = b"project branch > \x1b]133;B\x1b\\";
+            let input = b"abcdefghijklmnopqrstuvwxyz1234567890";
+            screen.process_bytes(b"previous command\r\nprevious output\r\n");
+            screen.process_bytes(b"\x1b]133;A\x1b\\");
+            screen.process_bytes(prompt);
+            screen.process_bytes(input);
+
+            for _ in 0..3 {
+                // Bash/readline output after SIGWINCH at each width. PROMPT_COMMAND's
+                // OSC 133;A is absent from redraws, while PS1's OSC 133;B is repeated.
+                screen.resize(narrow_rows, 32);
+                screen.process_bytes(b"\r\x1b[K\r");
+                screen.process_bytes(prompt);
+                screen.process_bytes(input);
+                let narrow = screen.render_snapshot();
+                assert_eq!(
+                    (narrow.cursor_row, narrow.cursor_col),
+                    (3.min(narrow_rows - 1), 21)
+                );
+                assert_eq!(screen.text_lines(0, 1), ["previous command"]);
+
+                screen.resize(8, 120);
+                screen.process_bytes(b"\r\x1b[K\r\x1b[A\x1b[K\r");
+                screen.process_bytes(prompt);
+                screen.process_bytes(input);
+                let wide = screen.render_snapshot();
+                assert_eq!((wide.cursor_row, wide.cursor_col), (2, 53));
+            }
+            screen.process_bytes(b"x");
+
+            let snapshot = screen.render_snapshot();
+            assert_eq!(
+                snapshot.text.lines().next().map(str::trim_end),
+                Some("previous command")
+            );
+            assert_eq!(
+                snapshot.text.lines().nth(1).map(str::trim_end),
+                Some("previous output")
+            );
+            assert_eq!(
+                snapshot.text.lines().nth(2).map(str::trim_end),
+                Some("project branch > abcdefghijklmnopqrstuvwxyz1234567890x")
+            );
+            assert_eq!((snapshot.cursor_row, snapshot.cursor_col), (2, 54));
+        }
     }
 
     #[test]
