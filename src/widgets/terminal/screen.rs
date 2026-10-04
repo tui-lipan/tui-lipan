@@ -1936,7 +1936,7 @@ impl TerminalScreen {
         });
         let grid = self.term.grid();
         let line = grid.cursor.point.line.0 - anchor.cursor_line_offset as i32;
-        if line < 0 {
+        if line < grid.topmost_line().0 {
             return None;
         }
         let mut logical_start = Line(line);
@@ -1948,7 +1948,7 @@ impl TerminalScreen {
             logical_start -= 1;
         }
         // Alacritty clamps cursor movement at the top of the viewport. Pull a wrapped output
-        // prefix out of history temporarily so widening can track the anchor into that prefix.
+        // prefix and the anchor itself out of history temporarily so reflow can track them.
         anchor.reflow_rows = rows as usize + (-logical_start.0).max(0) as usize;
         self.term.resize(TermDimensions {
             rows: anchor.reflow_rows,
@@ -1990,7 +1990,7 @@ impl TerminalScreen {
         let grid = self.term.grid_mut();
         let line = grid.topmost_line().0 + mark.absolute_line as i32;
         let screen_lines = grid.screen_lines() as i32;
-        if !(0..screen_lines).contains(&line) {
+        if !(grid.topmost_line().0..screen_lines).contains(&line) {
             return None;
         }
 
@@ -4582,6 +4582,60 @@ mod tests {
                 (0, expected.len() as u16 + 1)
             );
         }
+    }
+
+    #[test]
+    fn tall_active_prompt_survives_repeated_height_shrinks() {
+        for short_rows in [2, 3] {
+            let mut screen = TerminalScreen::new(8, 120, 40);
+            let input = "abcdefghij".repeat(80);
+            let expected = format!("prompt > {input}");
+            let prompt = b"prompt > \x1b]133;B\x1b\\";
+            screen.process_bytes(b"\x1b]133;A\x1b\\");
+            screen.process_bytes(prompt);
+            screen.process_bytes(input.as_bytes());
+
+            for _ in 0..3 {
+                for rows in [short_rows, 8] {
+                    screen.resize(rows, 120);
+                    assert!(
+                        screen.active_prompt_mark.is_some(),
+                        "a retained history anchor is valid"
+                    );
+                    if rows == short_rows {
+                        let grid = screen.term.grid();
+                        let mark = screen.active_prompt_mark.expect("retained anchor");
+                        let line = grid.topmost_line().0 + mark.absolute_line as i32;
+                        assert!(line < 0 && line >= grid.topmost_line().0);
+                    }
+                    // Readline clears its seven-row input and redraws without OSC 133;A.
+                    screen.process_bytes(b"\r\x1b[K\r");
+                    for _ in 0..6 {
+                        screen.process_bytes(b"\x1b[A\x1b[K\r");
+                    }
+                    screen.process_bytes(prompt);
+                    screen.process_bytes(input.as_bytes());
+                }
+            }
+            screen.process_bytes(b"x");
+            let actual: String = screen.text_lines(0, screen.total_text_lines()).concat();
+            assert_eq!(actual, format!("{expected}x"));
+            assert_eq!(screen.render_snapshot().cursor_col, 90);
+        }
+    }
+
+    #[test]
+    fn shrinking_drops_a_prompt_anchor_only_after_history_eviction() {
+        let mut screen = TerminalScreen::new(8, 120, 2);
+        screen.process_bytes(b"\x1b]133;A\x1b\\prompt > \x1b]133;B\x1b\\");
+        screen.process_bytes("abcdefghij".repeat(80).as_bytes());
+        screen.resize(2, 120);
+        assert_eq!(screen.term.grid().topmost_line(), Line(-2));
+        assert!(screen.evicted_lines > 0);
+        assert!(
+            screen.active_prompt_mark.is_none(),
+            "the prompt start was actually evicted"
+        );
     }
 
     #[test]
