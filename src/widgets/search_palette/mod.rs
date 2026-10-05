@@ -2,6 +2,7 @@ pub(crate) mod component;
 mod matching;
 mod render;
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use nucleo::pattern::{CaseMatching, Normalization};
@@ -551,6 +552,7 @@ pub(crate) struct SearchPaletteProps<T> {
     /// an internal `TextInput`. The `Input` widget is not rendered.
     query: Option<Arc<str>>,
     placeholder: Arc<str>,
+    results_header: Option<Rc<Element>>,
     // Layout
     width: Length,
     height: Length,
@@ -646,6 +648,11 @@ impl<T: PartialEq> PartialEq for SearchPaletteProps<T> {
             && self.initial_selected_item_index == other.initial_selected_item_index
             && self.query == other.query
             && self.placeholder == other.placeholder
+            && match (&self.results_header, &other.results_header) {
+                (None, None) => true,
+                (Some(left), Some(right)) => Rc::ptr_eq(left, right),
+                _ => false,
+            }
             && self.width == other.width
             && self.height == other.height
             && self.max_width == other.max_width
@@ -810,6 +817,7 @@ impl<T: Clone + PartialEq> Default for SearchPalette<T> {
                 initial_selected_item_index: None,
                 query: None,
                 placeholder: "Search...".into(),
+                results_header: None,
                 width: Length::Flex(1),
                 height: Length::Flex(1),
                 max_width: None,
@@ -1040,6 +1048,17 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// ignored in controlled mode.
     pub fn query(mut self, query: impl Into<Arc<str>>) -> Self {
         self.props.query = Some(query.into());
+        self
+    }
+
+    /// Insert content above the results, after the built-in input and its divider.
+    ///
+    /// Use this for category tabs or result controls while retaining the palette's
+    /// search input, focus, and keyboard navigation. In controlled mode, the content
+    /// appears above the results without a built-in input or divider.
+    /// Give the content an explicit height when the palette uses a fixed height.
+    pub fn results_header(mut self, header: impl Into<Element>) -> Self {
+        self.props.results_header = Some(Rc::new(header.into()));
         self
     }
 

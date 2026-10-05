@@ -110,7 +110,7 @@ For layout reorders, wrap the moving subtree in `Animated::new(...)`, enable `.p
 | `Tooltip` | Help text on hover/focus |
 | `Accordion` | Collapsible sections |
 | `CommandPalette` | Modal command palette backed by the runtime command registry |
-| `SearchPalette` | Fuzzy search overlay with optional grouped entries and hidden aliases |
+| `SearchPalette` | Fuzzy search palette with optional grouped entries, hidden aliases, and a results header for tabs or controls |
 | `ContextMenu` | Right-click menu |
 
 ## Tabs → [tabs.md](tabs.md)
