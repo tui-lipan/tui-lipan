@@ -351,7 +351,9 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
 
         let list_height = match ctx.props.height {
             Length::Auto => Length::Auto,
-            Length::Px(px) if ctx.props.query.is_some() => Length::Px(px),
+            Length::Px(px) if ctx.props.query.is_some() && ctx.props.results_header.is_none() => {
+                Length::Px(px)
+            }
             _ => Length::Flex(1),
         };
 
@@ -521,6 +523,9 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
             }
         }
 
+        if let Some(header) = &ctx.props.results_header {
+            stack = stack.child(header.as_ref().clone());
+        }
         let mut element: Element = stack.child(list).into();
         if let Some(max_width) = ctx.props.max_width {
             element = element.max_width(max_width);
@@ -1027,6 +1032,175 @@ mod tests {
 
     struct PaletteRoot {
         view_count: Rc<Cell<usize>>,
+    }
+
+    struct HeaderPaletteRoot {
+        controlled: bool,
+    }
+
+    impl Component for HeaderPaletteRoot {
+        type Message = ();
+        type Properties = ();
+        type State = bool;
+
+        fn create_state(&self, _props: &()) -> bool {
+            false
+        }
+
+        fn update(&mut self, _msg: (), ctx: &mut Context<Self>) -> Update {
+            ctx.state = !ctx.state;
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let mut palette = SearchPalette::new()
+                .items((0..20).map(|i| SearchItem::new(format!("result-{i}"), i)))
+                .height(Length::Px(6))
+                .placeholder("Find a result")
+                .results_header(
+                    crate::widgets::Text::new(if ctx.state {
+                        "Updated categories"
+                    } else {
+                        "Categories"
+                    })
+                    .height(Length::Px(1)),
+                );
+            if self.controlled {
+                palette = palette.query("");
+            }
+            palette.into()
+        }
+    }
+
+    struct MutableRendererRoot {
+        palette: SearchPalette<usize>,
+        updated: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Component for MutableRendererRoot {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &()) {}
+
+        fn update(&mut self, _msg: (), _ctx: &mut Context<Self>) -> Update {
+            self.updated
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            Update::full()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            // Keep every prop, including callback and optional header identity, unchanged.
+            self.palette.clone().into()
+        }
+    }
+
+    #[test]
+    fn parent_updates_refresh_mutable_render_callbacks_with_equal_palette_props() {
+        use crate::widgets::{ListItem, ListItemGutter, ListItemStatus, Text};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        for with_header in [false, true] {
+            for renderer in 0..3 {
+                let updated = Arc::new(AtomicBool::new(false));
+                let state = updated.clone();
+                let mut palette = SearchPalette::new()
+                    .items([SearchItem::new("result", 0)])
+                    .height(Length::Px(6));
+                palette = match renderer {
+                    0 => palette.render_item(Arc::new(move |_, _| {
+                        Some(ListItem::new(if state.load(Ordering::Relaxed) {
+                            "ROWNEW"
+                        } else {
+                            "ROWOLD"
+                        }))
+                    })),
+                    1 => palette.item_status(Arc::new(move |_, _| {
+                        Some(ListItemStatus::text(if state.load(Ordering::Relaxed) {
+                            "STATUSNEW"
+                        } else {
+                            "STATUSOLD"
+                        }))
+                    })),
+                    _ => palette.item_gutter(Arc::new(move |_, _| {
+                        Some(ListItemGutter::text(if state.load(Ordering::Relaxed) {
+                            "GUTTERNEW"
+                        } else {
+                            "GUTTEROLD"
+                        }))
+                    })),
+                };
+                if with_header {
+                    palette = palette.results_header(Text::new("Categories").height(Length::Px(1)));
+                }
+                let mut backend = crate::TestBackend::new(MutableRendererRoot { palette, updated });
+                backend.set_viewport(Rect {
+                    x: 0,
+                    y: 0,
+                    w: 40,
+                    h: 8,
+                });
+                backend.render();
+                assert!(backend.capture_frame().plain_text().contains("OLD"));
+                backend.dispatch(()).unwrap();
+                backend.render();
+                let frame = backend.capture_frame().plain_text();
+                assert!(
+                    frame.contains("NEW"),
+                    "renderer {renderer}, header {with_header}:\n{frame}"
+                );
+                assert!(!frame.contains("OLD"), "stale callback output:\n{frame}");
+            }
+        }
+    }
+
+    #[test]
+    fn results_header_follows_search_and_updates_in_both_query_modes() {
+        for controlled in [false, true] {
+            let mut backend = crate::TestBackend::new(HeaderPaletteRoot { controlled });
+            backend.set_viewport(Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 6,
+            });
+            backend.render();
+            let frame = backend.capture_frame().plain_text();
+            let header_row = frame
+                .lines()
+                .position(|line| line.contains("Categories"))
+                .unwrap();
+            let result_row = frame
+                .lines()
+                .position(|line| line.contains("result-0"))
+                .unwrap();
+            assert!(header_row < result_row, "header above results:\n{frame}");
+            if !controlled {
+                let input_row = frame
+                    .lines()
+                    .position(|line| line.contains("Find a result"))
+                    .unwrap();
+                assert!(input_row < header_row, "search above header:\n{frame}");
+            }
+            let last_result = if controlled { "result-4" } else { "result-2" };
+            assert!(
+                frame.contains(last_result),
+                "results fill the remaining height:\n{frame}"
+            );
+            assert!(
+                !frame.contains("result-5"),
+                "results stay inside the palette height:\n{frame}"
+            );
+            backend.dispatch(()).unwrap();
+            backend.render();
+            assert!(
+                backend
+                    .capture_frame()
+                    .plain_text()
+                    .contains("Updated categories")
+            );
+        }
     }
 
     impl Component for PaletteRoot {
