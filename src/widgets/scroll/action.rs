@@ -118,6 +118,11 @@ impl ScrollKeymap {
     pub const VIM_HORIZONTAL: Self = Self(1 << 2);
     /// Home and End keys.
     pub const HOME_END: Self = Self(1 << 3);
+    /// Vim-style `g` / `G` (jump to the start / end), the same as Home / End.
+    ///
+    /// Opt-in rather than part of [`Self::DEFAULT`], so a bare `g` stays free for app shortcuts
+    /// unless a widget asks for it. `G` arrives with Shift held, which is not a command modifier.
+    pub const VIM_JUMP: Self = Self(1 << 4);
     /// Vim-style h/j/k/l (both vertical and horizontal navigation).
     /// Note: This is kept for backward compatibility.
     pub const VIM: Self = Self(Self::VIM_VERTICAL.0 | Self::VIM_HORIZONTAL.0);
@@ -289,6 +294,8 @@ pub(crate) fn scroll_action_from_key(key: &KeyEvent, keymap: ScrollKeymap) -> Op
         }
         KeyCode::Home if keymap.contains(ScrollKeymap::HOME_END) => Some(ScrollAction::Home),
         KeyCode::End if keymap.contains(ScrollKeymap::HOME_END) => Some(ScrollAction::End),
+        KeyCode::Char('g') if keymap.contains(ScrollKeymap::VIM_JUMP) => Some(ScrollAction::Home),
+        KeyCode::Char('G') if keymap.contains(ScrollKeymap::VIM_JUMP) => Some(ScrollAction::End),
         _ => None,
     }
 }
@@ -360,6 +367,26 @@ mod tests {
         assert_eq!(
             scroll_action_from_key(&key(KeyCode::Up, KeyMods::SHIFT), keymap),
             Some(ScrollAction::LineUp(1))
+        );
+    }
+
+    #[test]
+    fn vim_jump_is_opt_in_and_maps_g_to_the_ends() {
+        let g = key(KeyCode::Char('g'), KeyMods::NONE);
+        let shift_g = key(KeyCode::Char('G'), KeyMods::SHIFT);
+        let default = ScrollKeymap::default();
+        assert_eq!(scroll_action_from_key(&g, default), None);
+        assert_eq!(scroll_action_from_key(&shift_g, default), None);
+
+        let keymap = default | ScrollKeymap::VIM_JUMP;
+        assert_eq!(scroll_action_from_key(&g, keymap), Some(ScrollAction::Home));
+        assert_eq!(
+            scroll_action_from_key(&shift_g, keymap),
+            Some(ScrollAction::End)
+        );
+        assert_eq!(
+            scroll_action_from_key(&key(KeyCode::Char('g'), KeyMods::CTRL), keymap),
+            None
         );
     }
 }

@@ -26,6 +26,8 @@ mod effect_scope_backdrop;
 mod file_tree_collapsed_projection;
 #[path = "suites/widget_behavior/file_tree_explorer_focus.rs"]
 mod file_tree_explorer_focus;
+#[path = "suites/widget_behavior/file_tree_vim_jump.rs"]
+mod file_tree_vim_jump;
 #[path = "suites/widget_behavior/flow_in_hstack_wraps.rs"]
 mod flow_in_hstack_wraps;
 #[path = "suites/widget_behavior/flow_wrap_height_floor.rs"]

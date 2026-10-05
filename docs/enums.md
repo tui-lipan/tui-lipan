@@ -222,6 +222,20 @@ figures above show what it would take to drop it.
 
 Bitflag-style key set for `PanView`: `NONE`, `ARROWS`, `VIM`, and `DEFAULT` (`ARROWS | VIM`). Combine sets with `|` and test with `.contains(...)`. `VIM` includes `h/j/k/l` cardinal panning.
 
+### `ScrollKeymap`
+
+Bitflag-style key set for `scroll_keys(...)` on `ScrollView`, `List`, `Table`, `Tree`, and `FileTree`. Selection widgets move their selection with these keys; `ScrollView` moves its viewport. Ctrl, Alt, and Super chords never match.
+
+| Flag | Keys | In `DEFAULT` |
+|------|------|--------------|
+| `ARROWS` | Arrow keys | Yes |
+| `VIM_VERTICAL` | `j` / `k` | Yes |
+| `VIM_HORIZONTAL` | `h` / `l` | Yes |
+| `HOME_END` | `Home` / `End` | Yes |
+| `VIM_JUMP` | `g` / `G`, same as `Home` / `End` | No |
+
+`VIM` is `VIM_VERTICAL | VIM_HORIZONTAL`; `NONE` disables keyboard scrolling. `VIM_JUMP` is opt-in so a bare `g` stays available to app shortcuts: `.scroll_keys(ScrollKeymap::DEFAULT | ScrollKeymap::VIM_JUMP)`.
+
 ### `FrameworkAction`
 
 Framework-owned actions configurable from Rust via `FrameworkKeymap` and `App::framework_keymap(...)`. Maps to internal keymap actions after file/env/user bindings are applied.
