@@ -35,6 +35,9 @@ impl ZStack {
     }
 
     /// Allow pointer events to pass through non-interactive layers.
+    ///
+    /// This applies to ordinary pointer targets and scrollbar zones. An interactive upper
+    /// layer still occludes lower targets; a paint-only upper layer lets them through.
     pub fn passthrough(mut self, passthrough: bool) -> Self {
         self.passthrough = passthrough;
         self
