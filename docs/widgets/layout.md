@@ -146,6 +146,10 @@ Overlay container - children stack on top of each other. Each child is laid out 
 | `width` | `Length` | Width |
 | `height` | `Length` | Height |
 
+Scrollbar zones follow the same layering policy as ordinary pointer targets: an interactive
+upper layer occludes a lower scrollbar, while a paint-only layer lets it through when
+`passthrough` is enabled.
+
 For decorative overlays, set `ZStack::passthrough(true)` so a non-interactive
 foreground layer does not block the content below it:
 

@@ -53,6 +53,15 @@ fn node_kind_has_spinners(kind: &NodeKind) -> bool {
     }
 }
 
+/// Layered containers share their occlusion policy across pointer and scrollbar routing.
+fn layered_container_passthrough(kind: &NodeKind) -> Option<bool> {
+    match kind {
+        NodeKind::Canvas(canvas) => Some(canvas.passthrough),
+        NodeKind::ZStack(zstack) => Some(zstack.passthrough),
+        _ => None,
+    }
+}
+
 fn node_kind_has_animated_scroll(kind: &NodeKind) -> bool {
     match kind {
         NodeKind::ScrollView(node) => {
@@ -885,7 +894,7 @@ impl NodeTree {
             }
 
             let parent = self.node(parent_id);
-            if let NodeKind::Canvas(canvas) = &parent.kind {
+            if let Some(passthrough) = layered_container_passthrough(&parent.kind) {
                 if !parent.rect.contains(x, y) {
                     return false;
                 }
@@ -893,7 +902,7 @@ impl NodeTree {
                 let top_containing_child = parent.children.iter().rev().copied().find(|child| {
                     self.is_valid(*child)
                         && self.node(*child).rect.contains(x, y)
-                        && (!canvas.passthrough
+                        && (!passthrough
                             || *child == current
                             || self.depth_first_test(*child, x, y, TestKind::Hit).is_some())
                 });
@@ -1360,23 +1369,8 @@ impl NodeTree {
                     continue;
                 }
 
-                if let NodeKind::ZStack(zstack) = &node.kind {
-                    frame.blocks_self_on_child_miss = !zstack.passthrough;
-                    let mut containing: Vec<NodeId> = node
-                        .children
-                        .iter()
-                        .rev()
-                        .copied()
-                        .filter(|child| {
-                            self.is_valid(*child) && self.node(*child).rect.contains(x, y)
-                        })
-                        .collect();
-                    if frame.blocks_self_on_child_miss {
-                        containing.truncate(1);
-                    }
-                    frame.children = containing;
-                } else if let NodeKind::Canvas(canvas) = &node.kind {
-                    frame.blocks_self_on_child_miss = !canvas.passthrough;
+                if let Some(passthrough) = layered_container_passthrough(&node.kind) {
+                    frame.blocks_self_on_child_miss = !passthrough;
                     let mut containing: Vec<NodeId> = node
                         .children
                         .iter()
@@ -1845,6 +1839,72 @@ mod tests {
                 base,
                 "paint-only upper sibling passes through"
             );
+        }
+    }
+
+    #[test]
+    fn zstack_scrollbars_follow_layered_pointer_routing() {
+        for passthrough in [false, true] {
+            for axis in [ScrollbarAxis::Vertical, ScrollbarAxis::Horizontal] {
+                let (mut tree, base) = build_base_tree();
+                let root = tree.root;
+                tree.node_mut(root).kind = NodeKind::ZStack(crate::widgets::internal::ZStackNode {
+                    passthrough,
+                    ..Default::default()
+                });
+                let zone = ScrollbarZone {
+                    id: base,
+                    axis,
+                    rect: Rect {
+                        x: 5,
+                        y: 5,
+                        w: 1,
+                        h: 1,
+                    },
+                };
+                match axis {
+                    ScrollbarAxis::Vertical => {
+                        tree.scrollbar_zones_by_x.insert(5, vec![zone]);
+                    }
+                    ScrollbarAxis::Horizontal => {
+                        tree.scrollbar_zones_by_y.insert(5, vec![zone]);
+                    }
+                }
+                assert_eq!(tree.scrollbar_target_at(5, 5).unwrap().id, base);
+                let rect = tree.node(root).rect;
+                let upper = alloc_overlay_button(&mut tree, rect);
+                tree.node_mut(upper).parent = Some(root);
+                tree.node_mut(root).children.push(upper);
+                assert_eq!(tree.hit_test(5, 5), Some(upper));
+                assert!(
+                    tree.scrollbar_target_at(5, 5).is_none(),
+                    "upper button covers scrollbar"
+                );
+
+                // A nested passthrough container inherits the same interactivity definition.
+                let button = alloc_overlay_button(&mut tree, rect);
+                tree.node_mut(button).parent = Some(upper);
+                tree.node_mut(upper).kind =
+                    NodeKind::Canvas(crate::widgets::internal::CanvasNode {
+                        passthrough: true,
+                        ..Default::default()
+                    });
+                tree.node_mut(upper).children.push(button);
+                assert_eq!(tree.hit_test(5, 5), Some(button));
+                assert!(tree.scrollbar_target_at(5, 5).is_none());
+
+                // An inert child leaves the upper layer paint-only. Only passthrough reaches below.
+                tree.node_mut(button).inert = true;
+                assert_eq!(tree.hit_test(5, 5), passthrough.then_some(base));
+                assert_eq!(
+                    tree.scrollbar_target_at(5, 5).map(|target| target.id),
+                    passthrough.then_some(base)
+                );
+
+                // A zone outside the parent cannot be reached even if its child extends beyond it.
+                tree.node_mut(root).rect.w = 5;
+                assert!(tree.scrollbar_target_at(5, 5).is_none());
+            }
         }
     }
 
