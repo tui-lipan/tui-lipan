@@ -208,18 +208,6 @@ For a smaller expensive region inside `view()`, use
 captured value that affects output. Use `Memo::with_call_site(...)` when a shared
 helper creates memos, so separate call sites cannot collide.
 
-For child views stored in props, use an `ElementSlot` with comparable input props and a
-non-capturing render function. Fresh slots with the same inputs compare equal. This avoids
-invalidating a retained component merely because its parent allocated a new child element.
-Include paint and event-routing values in the props, not only layout inputs. See
-[Child view slots](components.md#child-view-slots).
-
-`SearchPalette` retains its view across unrelated parent updates, including a freshly constructed
-`results_header` slot with unchanged inputs. Changed items, query, selection, styles, callbacks,
-interceptors, and observed viewport or theme dependencies still invalidate it. Recreating a
-callback or key interceptor gives it a new identity; clone a stable handler when its behavior is
-unchanged.
-
 `Component::memo_key()` retains a component subtree, while `.key(...)` preserves
 reconciliation identity. A stable key is important for dynamic rows, focus, and
 reorders, but does not enable memoization by itself. See

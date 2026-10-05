@@ -8,8 +8,6 @@ pub mod context_value;
 pub mod element;
 #[cfg(debug_assertions)]
 pub(crate) mod element_debug;
-/// Comparable child-view properties.
-pub mod element_slot;
 /// Event handling types.
 pub mod event;
 /// Cell bitmask shared by visual clipping and pointer hit testing.

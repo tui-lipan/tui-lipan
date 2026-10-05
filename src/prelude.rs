@@ -13,7 +13,6 @@ pub use crate::core::component::{
     UpdateLevel,
 };
 pub use crate::core::element::{Element, IntoElement, Key};
-pub use crate::core::element_slot::ElementSlot;
 pub use crate::core::event::{
     KeyCode, KeyEvent, KeyMods, MouseDragEvent, MouseEvent, MouseMoveEvent, MouseRegionEvent,
 };

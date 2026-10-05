@@ -530,7 +530,7 @@ order is the visual order navigation walks.
 | `input_suffix` | `impl Into<Arc<str>>` | Suffix after query text (default: `"{matches}/{total}"`) |
 | `input_border` | `bool` | Show input border |
 | `input_divider` | `bool` | Render divider below input (uncontrolled mode, default: `true`) |
-| `results_header` | `ElementSlot` | [Comparable child view](../components.md#child-view-slots) between the input divider and results, such as category tabs. In controlled mode, appears above the results. Set an explicit content height for fixed-height palettes. |
+| `results_header` | `impl Into<Element>` | Content between the input divider and results, such as category tabs. In controlled mode, appears above the results. Set an explicit content height for fixed-height palettes. |
 | `input_divider_style` | `Style` | Divider style below input |
 | `input_divider_join_frame` | `bool` | Join divider with surrounding frame border (default: `true`) |
 | `input_caret_shape` | `CaretShape` | Override the active theme's input caret shape (`Block`, `Bar`, `Underline`) |
