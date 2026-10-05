@@ -88,6 +88,9 @@ impl Canvas {
     }
 
     /// Allow pointer events to pass through non-interactive top layers.
+    ///
+    /// Interactive upper children still occlude lower pointer targets and scrollbar zones;
+    /// paint-only upper children let both pass through.
     pub fn passthrough(mut self, passthrough: bool) -> Self {
         self.passthrough = passthrough;
         self
