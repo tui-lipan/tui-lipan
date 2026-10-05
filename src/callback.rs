@@ -227,6 +227,15 @@ pub struct Link<Msg: 'static> {
     _marker: PhantomData<fn(Msg)>,
 }
 
+/// Links compare by their dispatch target, independent of the message type's equality.
+impl<Msg: 'static> PartialEq for Link<Msg> {
+    fn eq(&self, other: &Self) -> bool {
+        self.scope == other.scope && Rc::ptr_eq(&self.dispatcher.0, &other.dispatcher.0)
+    }
+}
+
+impl<Msg: 'static> Eq for Link<Msg> {}
+
 impl<Msg: 'static> Clone for Link<Msg> {
     fn clone(&self) -> Self {
         Self {
@@ -336,6 +345,16 @@ mod tests {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Msg {
         Ping,
+    }
+
+    #[test]
+    fn links_compare_by_scope_and_dispatcher() {
+        let dispatcher = Dispatcher::new(|_, _| {});
+        let first = Link::<Msg>::new(ScopeId(1), dispatcher.clone());
+        assert!(first == first.clone());
+        assert!(first == Link::new(ScopeId(1), dispatcher.clone()));
+        assert!(first != Link::new(ScopeId(2), dispatcher));
+        assert!(first != Link::new(ScopeId(1), Dispatcher::new(|_, _| {})));
     }
 
     fn key(code: KeyCode) -> KeyEvent {

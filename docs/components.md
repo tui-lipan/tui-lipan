@@ -103,6 +103,36 @@ fn update(&mut self, msg: Msg, ctx: &mut Context<Self>) -> Update {
 }
 ```
 
+## Child view slots
+
+Use `ElementSlot` for a child view stored in component properties. A slot compares its typed input
+props and render function, so constructing it again with unchanged inputs does not mark the
+component dirty. Equality includes paint and event-routing inputs; it does not use layout hashes.
+
+```rust
+use tui_lipan::prelude::*;
+
+fn heading(props: &(String, Style)) -> Element {
+    Text::new(props.0.clone())
+        .style(props.1)
+        .height(Length::Px(1))
+        .into()
+}
+
+let header = ElementSlot::new(("Categories".to_owned(), Style::new().bold()), heading);
+let palette = SearchPalette::<usize>::new().results_header(header);
+```
+
+The renderer is a non-capturing `fn(&Props) -> Element`. Put every value affecting content, style,
+layout, or event handling in the props, and keep the renderer independent of mutable global state.
+Links can be props: `Link` compares by its component scope and dispatcher. Callback props retain
+their normal equality, so clone an existing callback to preserve its identity when its behavior
+has not changed.
+
+Custom components can derive `PartialEq` for props containing an `ElementSlot` and call
+`slot.render()` in `view()`. Enable `memo_key()` to retain the view while props and observed context
+dependencies remain unchanged. `SearchPalette` enables this retention itself.
+
 ## Context Methods
 
 | Method | Purpose |

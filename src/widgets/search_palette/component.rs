@@ -147,6 +147,12 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
     type Properties = SearchPaletteProps<T>;
     type State = SearchState;
 
+    fn memo_key(&self, _props: &Self::Properties, _ctx: &Context<Self>) -> Option<u64> {
+        // Props equality, local messages, and observed viewport/theme dependencies
+        // invalidate this cache. The key only opts into retaining an unchanged view.
+        Some(0)
+    }
+
     fn create_state(&self, props: &Self::Properties) -> Self::State {
         let query_source = if let Some(q) = &props.query {
             QuerySource::Controlled(q.clone())
@@ -524,7 +530,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
         }
 
         if let Some(header) = &ctx.props.results_header {
-            stack = stack.child(header.as_ref().clone());
+            stack = stack.child(header.render());
         }
         let mut element: Element = stack.child(list).into();
         if let Some(max_width) = ctx.props.max_width {
@@ -1012,6 +1018,7 @@ mod tests {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::super::matching::{build_search_entries, match_items};
     use super::{
@@ -1057,19 +1064,247 @@ mod tests {
                 .items((0..20).map(|i| SearchItem::new(format!("result-{i}"), i)))
                 .height(Length::Px(6))
                 .placeholder("Find a result")
-                .results_header(
-                    crate::widgets::Text::new(if ctx.state {
-                        "Updated categories"
-                    } else {
-                        "Categories"
-                    })
-                    .height(Length::Px(1)),
-                );
+                .results_header(crate::ElementSlot::new(ctx.state, render_header));
             if self.controlled {
                 palette = palette.query("");
             }
             palette.into()
         }
+    }
+
+    fn render_header(updated: &bool) -> Element {
+        crate::widgets::Text::new(if *updated {
+            "Updated categories"
+        } else {
+            "Categories"
+        })
+        .height(Length::Px(1))
+        .into()
+    }
+
+    struct RetainedHeaderRoot {
+        row_renderer: super::super::SearchRenderer<usize>,
+        handlers: [KeyHandler; 2],
+    }
+
+    #[derive(Default)]
+    struct RetainedHeaderState {
+        parent_updates: usize,
+        label_changed: bool,
+        paint_changed: bool,
+        handler_changed: bool,
+        header_removed: bool,
+    }
+
+    enum HeaderUpdate {
+        Parent,
+        Label,
+        Paint,
+        Handler,
+        Remove,
+    }
+
+    impl Component for RetainedHeaderRoot {
+        type Message = HeaderUpdate;
+        type Properties = ();
+        type State = RetainedHeaderState;
+
+        fn create_state(&self, _props: &()) -> Self::State {
+            Self::State::default()
+        }
+
+        fn update(&mut self, msg: HeaderUpdate, ctx: &mut Context<Self>) -> Update {
+            match msg {
+                HeaderUpdate::Parent => ctx.state.parent_updates += 1,
+                HeaderUpdate::Label => ctx.state.label_changed = true,
+                HeaderUpdate::Paint => ctx.state.paint_changed = true,
+                HeaderUpdate::Handler => ctx.state.handler_changed = true,
+                HeaderUpdate::Remove => ctx.state.header_removed = true,
+            }
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let mut palette = SearchPalette::new()
+                .items((0..64).map(|i| SearchItem::new(format!("result-{i}"), i)))
+                .height(Length::Auto)
+                .render_item(self.row_renderer.clone())
+                .input_key_interceptor(
+                    self.handlers[usize::from(ctx.state.handler_changed)].clone(),
+                );
+            if !ctx.state.header_removed {
+                let label = if ctx.state.label_changed {
+                    "Updated"
+                } else {
+                    "Categories"
+                };
+                let fg = if ctx.state.paint_changed {
+                    crate::Color::Blue
+                } else {
+                    crate::Color::Red
+                };
+                palette = palette.results_header(crate::ElementSlot::new(
+                    (label.to_owned(), crate::Style::new().fg(fg)),
+                    render_styled_header,
+                ));
+            }
+            crate::widgets::VStack::new()
+                .child(
+                    crate::widgets::Text::new(format!("Parent {}", ctx.state.parent_updates))
+                        .height(Length::Px(1)),
+                )
+                .child(palette)
+                .into()
+        }
+    }
+
+    fn render_styled_header(props: &(String, crate::Style)) -> Element {
+        crate::widgets::Text::new(props.0.clone())
+            .style(props.1)
+            .height(Length::Px(1))
+            .into()
+    }
+
+    struct RetainedHeaderFixture {
+        backend: crate::TestBackend<RetainedHeaderRoot>,
+        row_calls: Arc<AtomicUsize>,
+        handler_calls: [Rc<Cell<usize>>; 2],
+    }
+
+    fn retained_header_backend() -> RetainedHeaderFixture {
+        let row_calls = Arc::new(AtomicUsize::new(0));
+        let calls = row_calls.clone();
+        let handler_calls = [Rc::new(Cell::new(0)), Rc::new(Cell::new(0))];
+        let handlers = handler_calls.clone().map(|calls| {
+            KeyHandler::new(move |key| {
+                if key.code != KeyCode::Char('x') {
+                    return false;
+                }
+                calls.set(calls.get() + 1);
+                true
+            })
+        });
+        let mut backend = crate::TestBackend::new(RetainedHeaderRoot {
+            row_renderer: Arc::new(move |item, _| {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Some(crate::widgets::ListItem::new(item.label.clone()))
+            }),
+            handlers,
+        });
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 10,
+        });
+        backend.render();
+        RetainedHeaderFixture {
+            backend,
+            row_calls,
+            handler_calls,
+        }
+    }
+
+    #[test]
+    fn parent_only_updates_do_not_rebuild_results_with_fresh_header_slots() {
+        let RetainedHeaderFixture {
+            mut backend,
+            row_calls: calls,
+            ..
+        } = retained_header_backend();
+        let initial_calls = calls.load(Ordering::Relaxed);
+        assert!(initial_calls >= 64);
+        for _ in 0..8 {
+            backend.dispatch(HeaderUpdate::Parent).unwrap();
+            backend.render();
+        }
+        assert!(backend.capture_frame().plain_text().contains("Parent 8"));
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            initial_calls,
+            "unchanged header props retain the palette view"
+        );
+    }
+
+    #[test]
+    fn header_content_paint_and_removal_invalidate_the_retained_view() {
+        let RetainedHeaderFixture {
+            mut backend,
+            row_calls: calls,
+            ..
+        } = retained_header_backend();
+        let before = calls.load(Ordering::Relaxed);
+        backend.dispatch(HeaderUpdate::Label).unwrap();
+        backend.render();
+        assert!(backend.capture_frame().plain_text().contains("Updated"));
+        assert!(calls.load(Ordering::Relaxed) > before);
+
+        let before = calls.load(Ordering::Relaxed);
+        backend.dispatch(HeaderUpdate::Paint).unwrap();
+        backend.render();
+        let frame = backend.capture_frame();
+        let row = frame
+            .plain_text()
+            .lines()
+            .position(|line| line.contains("Updated"))
+            .unwrap() as u16;
+        assert_eq!(frame.cell(0, row).fg, crate::Color::Blue);
+        assert!(
+            calls.load(Ordering::Relaxed) > before,
+            "paint-only props invalidate without a layout hash"
+        );
+
+        backend.dispatch(HeaderUpdate::Remove).unwrap();
+        backend.render();
+        assert!(!backend.capture_frame().plain_text().contains("Updated"));
+    }
+
+    #[test]
+    fn replacing_an_interceptor_updates_the_handler_on_a_retained_palette() {
+        let RetainedHeaderFixture {
+            mut backend,
+            handler_calls: handlers,
+            ..
+        } = retained_header_backend();
+        backend.focus_next();
+        backend.send_key(key(KeyCode::Char('x'))).unwrap();
+        assert_eq!(handlers[0].get(), 1);
+        backend.dispatch(HeaderUpdate::Handler).unwrap();
+        backend.render();
+        backend.send_key(key(KeyCode::Char('x'))).unwrap();
+        assert_eq!(handlers[0].get(), 1);
+        assert_eq!(handlers[1].get(), 1);
+    }
+
+    #[test]
+    fn viewport_changes_invalidate_the_retained_palette() {
+        let RetainedHeaderFixture {
+            mut backend,
+            row_calls: calls,
+            ..
+        } = retained_header_backend();
+        let before = calls.load(Ordering::Relaxed);
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 28,
+            h: 8,
+        });
+        backend.render();
+        assert!(
+            calls.load(Ordering::Relaxed) > before,
+            "the palette observes viewport width for row rendering"
+        );
+        assert!(backend.capture_frame().plain_text().contains("Categories"));
+    }
+
+    #[test]
+    fn input_focus_content_style_participates_in_props_equality() {
+        let plain = SearchPalette::<usize>::new();
+        let styled = plain
+            .clone()
+            .input_focus_content_style(crate::Style::new().fg(crate::Color::Blue));
+        assert!(plain.props != styled.props);
     }
 
     #[test]

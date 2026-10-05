@@ -59,6 +59,11 @@ terminal passthrough (`examples/terminal_copy_mode.rs`).
 
 ## Event Structs
 
+`Link` implements equality by dispatch target: the component scope and dispatcher must both
+match. Cloning a link preserves its equality; links to different scopes or runtimes compare
+unequal. This lets typed child-view props include event routing without recreating a callback
+inside the props on every parent render.
+
 Event structs the framework passes to your callbacks are `#[non_exhaustive]`: read their fields,
 and add `..` to struct patterns (`|DropEvent { local_y, .. }|`). New fields can then be added
 without a source-breaking release. `KeyEvent` and `MouseEvent` are the exception: apps build them

@@ -219,6 +219,7 @@ pub use crate::core::component::{
 };
 pub use crate::core::context_value::ContextValue;
 pub use crate::core::element::{Element, IntoElement, Key};
+pub use crate::core::element_slot::ElementSlot;
 pub use crate::core::event::{
     KeyCode, KeyEvent, KeyMods, MouseDragEvent, MouseEvent, MouseMoveEvent, MouseRegionEvent,
 };

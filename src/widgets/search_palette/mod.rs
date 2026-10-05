@@ -2,13 +2,13 @@ pub(crate) mod component;
 mod matching;
 mod render;
 
-use std::rc::Rc;
 use std::sync::Arc;
 
 use nucleo::pattern::{CaseMatching, Normalization};
 
 use crate::callback::{Callback, KeyHandler};
 use crate::core::element::{Element, Key};
+use crate::core::element_slot::ElementSlot;
 use crate::style::{
     BorderStyle, CaretShape, Color, Length, Padding, ScrollbarConfig, Style, StyleSlot,
 };
@@ -552,7 +552,7 @@ pub(crate) struct SearchPaletteProps<T> {
     /// an internal `TextInput`. The `Input` widget is not rendered.
     query: Option<Arc<str>>,
     placeholder: Arc<str>,
-    results_header: Option<Rc<Element>>,
+    results_header: Option<ElementSlot>,
     // Layout
     width: Length,
     height: Length,
@@ -648,11 +648,7 @@ impl<T: PartialEq> PartialEq for SearchPaletteProps<T> {
             && self.initial_selected_item_index == other.initial_selected_item_index
             && self.query == other.query
             && self.placeholder == other.placeholder
-            && match (&self.results_header, &other.results_header) {
-                (None, None) => true,
-                (Some(left), Some(right)) => Rc::ptr_eq(left, right),
-                _ => false,
-            }
+            && self.results_header == other.results_header
             && self.width == other.width
             && self.height == other.height
             && self.max_width == other.max_width
@@ -671,6 +667,7 @@ impl<T: PartialEq> PartialEq for SearchPaletteProps<T> {
             && self.input_style == other.input_style
             && self.input_hover_style == other.input_hover_style
             && self.input_focus_style == other.input_focus_style
+            && self.input_focus_content_style == other.input_focus_content_style
             && self.input_placeholder_style == other.input_placeholder_style
             && self.input_focus_placeholder_style == other.input_focus_placeholder_style
             && self.input_prefix_style == other.input_prefix_style
@@ -711,7 +708,7 @@ impl<T: PartialEq> PartialEq for SearchPaletteProps<T> {
             && self.match_mode == other.match_mode
             && self.case_matching == other.case_matching
             && self.normalization == other.normalization
-            && self.input_key_interceptor.is_some() == other.input_key_interceptor.is_some()
+            && self.input_key_interceptor == other.input_key_interceptor
             && self.on_query_change == other.on_query_change
             && self.on_select == other.on_select
             && self.on_activate == other.on_activate
@@ -1057,8 +1054,10 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// search input, focus, and keyboard navigation. In controlled mode, the content
     /// appears above the results without a built-in input or divider.
     /// Give the content an explicit height when the palette uses a fixed height.
-    pub fn results_header(mut self, header: impl Into<Element>) -> Self {
-        self.props.results_header = Some(Rc::new(header.into()));
+    /// The slot compares its explicit props rather than element allocation identity,
+    /// allowing unchanged headers to retain the palette across parent-only updates.
+    pub fn results_header(mut self, header: ElementSlot) -> Self {
+        self.props.results_header = Some(header);
         self
     }
 
