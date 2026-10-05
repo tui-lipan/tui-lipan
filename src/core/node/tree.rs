@@ -890,14 +890,17 @@ impl NodeTree {
                     return false;
                 }
 
-                if !canvas.passthrough {
-                    let top_containing_child =
-                        parent.children.iter().rev().copied().find(|child| {
-                            self.is_valid(*child) && self.node(*child).rect.contains(x, y)
-                        });
-                    if top_containing_child != Some(current) {
-                        return false;
-                    }
+                let top_containing_child = parent.children.iter().rev().copied().find(|child| {
+                    self.is_valid(*child)
+                        && self.node(*child).rect.contains(x, y)
+                        && (!canvas.passthrough
+                            || *child == current
+                            || self.depth_first_test(*child, x, y, TestKind::Hit).is_some())
+                });
+                // Passthrough skips paint-only siblings, but an interactive upper subtree
+                // still covers the scrollbar just as it covers ordinary pointer targets.
+                if top_containing_child != Some(current) {
+                    return false;
                 }
             }
 
@@ -1789,6 +1792,60 @@ mod tests {
         overlay.rect = rect;
         overlay.children.clear();
         id
+    }
+
+    #[test]
+    fn passthrough_canvas_scrollbars_respect_interactive_upper_siblings() {
+        for axis in [ScrollbarAxis::Vertical, ScrollbarAxis::Horizontal] {
+            let (mut tree, base) = build_base_tree();
+            let root = tree.root;
+            tree.node_mut(root).kind = NodeKind::Canvas(crate::widgets::internal::CanvasNode {
+                passthrough: true,
+                ..Default::default()
+            });
+            let upper = alloc_overlay_button(
+                &mut tree,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 30,
+                    h: 12,
+                },
+            );
+            tree.node_mut(upper).parent = Some(root);
+            tree.node_mut(root).children.push(upper);
+            let zone = ScrollbarZone {
+                id: base,
+                axis,
+                rect: Rect {
+                    x: 5,
+                    y: 5,
+                    w: 1,
+                    h: 1,
+                },
+            };
+            match axis {
+                ScrollbarAxis::Vertical => {
+                    tree.scrollbar_zones_by_x.insert(5, vec![zone]);
+                }
+                ScrollbarAxis::Horizontal => {
+                    tree.scrollbar_zones_by_y.insert(5, vec![zone]);
+                }
+            }
+            assert!(
+                tree.scrollbar_target_at(5, 5).is_none(),
+                "interactive upper sibling covers the zone"
+            );
+            tree.node_mut(upper).kind = NodeKind::Canvas(crate::widgets::internal::CanvasNode {
+                passthrough: true,
+                ..Default::default()
+            });
+            assert_eq!(
+                tree.scrollbar_target_at(5, 5).unwrap().id,
+                base,
+                "paint-only upper sibling passes through"
+            );
+        }
     }
 
     #[test]
