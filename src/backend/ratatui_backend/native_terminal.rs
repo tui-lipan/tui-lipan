@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use crate::app::context::SurfaceMode;
 use crate::style::{
-    drain_pending_terminal_responses, flush_pending_terminal_responses_on_exit,
-    query_host_capabilities,
+    drain_pending_terminal_responses, flush_pending_terminal_responses_on_exit, host_renders_utf8,
+    query_host_capabilities_with,
 };
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
@@ -340,6 +340,7 @@ impl TerminalGuard {
     pub(crate) fn enter(
         surface_mode: SurfaceMode,
         mouse_enabled: bool,
+        require_utf8: bool,
         panic_keyboard_enhancement: &AtomicBool,
     ) -> io::Result<(OwnedTerminal, Self)> {
         let policy = surface_terminal_policy(surface_mode);
@@ -361,7 +362,23 @@ impl TerminalGuard {
             .unwrap_or_default();
         #[cfg(not(feature = "terminal-images"))]
         let probe_bytes: &[u8] = &[];
-        let capabilities = query_host_capabilities(probe_bytes).unwrap_or_default();
+        let capabilities =
+            query_host_capabilities_with(probe_bytes, require_utf8).unwrap_or_default();
+        // Refused here, before raw mode or the alternate screen, so the error lands on a terminal
+        // that is exactly as the user left it. A probe reply still in flight is dropped first, or
+        // it would surface at the shell prompt. The probe has already restored cooked mode, so raw
+        // mode is held for the drain: in cooked mode the tty would echo the replies it reads.
+        if require_utf8 && host_renders_utf8() == Some(false) {
+            let raw = crossterm::terminal::enable_raw_mode().is_ok();
+            flush_pending_terminal_responses_on_exit();
+            if raw {
+                let _ = crossterm::terminal::disable_raw_mode();
+            }
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "the terminal does not display UTF-8 text",
+            ));
+        }
         let keyboard_enhancement = capabilities.keyboard_enhancement;
         // Recorded rather than acted on: the mode is only worth asking for once the cell size is
         // known too. Both halves have to be settled here, before the runner chooses an input

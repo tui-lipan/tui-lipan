@@ -1,7 +1,7 @@
 #![allow(unsafe_code)]
 
 #[cfg(unix)]
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 #[cfg(unix)]
 use std::time::Duration;
 #[cfg(unix)]
@@ -184,6 +184,55 @@ fn settle_startup_reply(was_outstanding: bool) {
     }
 }
 
+/// Whether the host terminal draws UTF-8 text as UTF-8, as the startup probe measured it.
+///
+/// `None` when nothing has measured it: the probe asks only for an app built with
+/// [`App::require_utf8`](crate::App::require_utf8), and a host that does not report its cursor, or
+/// whose report cannot be read either way, leaves the answer unknown. `Some(false)` means the host
+/// drew one two-byte UTF-8 character as two characters, so every non-ASCII glyph it is sent will
+/// come out wrong.
+pub fn host_renders_utf8() -> Option<bool> {
+    cfg_select! {
+        unix => match HOST_UTF8.load(Ordering::Relaxed) {
+            UTF8_YES => Some(true),
+            UTF8_NO => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// What the last UTF-8 probe found: [`UTF8_UNKNOWN`], [`UTF8_YES`], or [`UTF8_NO`].
+#[cfg(unix)]
+static HOST_UTF8: AtomicU8 = AtomicU8::new(UTF8_UNKNOWN);
+#[cfg(unix)]
+const UTF8_UNKNOWN: u8 = 0;
+#[cfg(unix)]
+const UTF8_YES: u8 = 1;
+#[cfg(unix)]
+const UTF8_NO: u8 = 2;
+
+#[cfg(unix)]
+fn record_utf8(renders_utf8: Option<bool>) {
+    let value = match renders_utf8 {
+        Some(true) => UTF8_YES,
+        Some(false) => UTF8_NO,
+        None => UTF8_UNKNOWN,
+    };
+    HOST_UTF8.store(value, Ordering::Relaxed);
+}
+
+/// The character the UTF-8 probe prints: `ñ`, two bytes in UTF-8 and one cell wherever it is
+/// understood.
+///
+/// Its East Asian Width must be Neutral or Narrow. An Ambiguous character - most accented Latin
+/// letters, `é` among them - is drawn two cells wide by a UTF-8 terminal set to treat ambiguous
+/// characters as wide, and would read as a host that cannot draw UTF-8 at all. Both bytes must
+/// also be printable in Latin-1 (`0xA0` and above, not C1 controls), so a single-byte host
+/// advances one cell for each.
+#[cfg(unix)]
+const UTF8_SAMPLE: &str = "\u{f1}";
+
 /// Ask the host what it implements, in one round trip with a short, bounded timeout.
 ///
 /// The keyboard half mirrors `crossterm::terminal::supports_keyboard_enhancement` (write `CSI ? u`,
@@ -209,6 +258,21 @@ fn settle_startup_reply(was_outstanding: bool) {
 /// that as "nothing supported".
 #[cfg(unix)]
 pub fn query_host_capabilities(graphics_probe: &[u8]) -> Option<HostCapabilities> {
+    query_host_capabilities_with(graphics_probe, false)
+}
+
+/// [`query_host_capabilities`], and with `ask_utf8` also whether the host draws UTF-8 as UTF-8.
+///
+/// The UTF-8 question rides the same batch: [`UTF8_SAMPLE`] goes between the leading cursor report
+/// and one more, and how far the cursor moved over it is the answer, recorded for
+/// [`host_renders_utf8`]. The sample is always printed, so a host asked about it always has the
+/// sample's cells blanked again afterwards, see [`erase_echoed_probe`].
+#[cfg(unix)]
+pub(crate) fn query_host_capabilities_with(
+    graphics_probe: &[u8],
+    ask_utf8: bool,
+) -> Option<HostCapabilities> {
+    record_utf8(None);
     // Cleared before the first thing that can fail. Opening the TTY and raw mode can both return
     // early, and a guard may be entering a different terminal than the one an earlier probe
     // measured. Without this, a probe that never establishes that the current host answers at all
@@ -225,6 +289,10 @@ pub fn query_host_capabilities(graphics_probe: &[u8]) -> Option<HostCapabilities
     // The cursor, before and after everything that could be echoed rather than consumed. Two
     // reports in the same batch cost no extra round trip and are what `erase_echoed_probe` reads.
     probe.extend_from_slice(b"\x1b[6n");
+    if ask_utf8 {
+        probe.extend_from_slice(UTF8_SAMPLE.as_bytes());
+        probe.extend_from_slice(b"\x1b[6n");
+    }
     probe.extend_from_slice(b"\x1b[?u\x1b[?1016$p");
     probe.extend_from_slice(graphics_probe);
     probe.extend_from_slice(b"\x1b[6n");
@@ -264,7 +332,11 @@ pub fn query_host_capabilities(graphics_probe: &[u8]) -> Option<HostCapabilities
         }
     }
 
-    erase_echoed_probe(fd, &buffer);
+    let cursor_reports_asked = if ask_utf8 { 3 } else { 2 };
+    if ask_utf8 {
+        record_utf8(utf8_from_reports(&buffer));
+    }
+    erase_echoed_probe(fd, &buffer, cursor_reports_asked);
 
     // No decisive reply within the budget: treat as unsupported, and leave the round trip unknown -
     // nothing here measured one. The owed-reply flag stays set. An empty buffer does not prove the
@@ -290,38 +362,95 @@ pub fn query_host_capabilities(graphics_probe: &[u8]) -> Option<HostCapabilities
 /// erased - the line is already spoiled, so erasing to its end cannot destroy anything the echo had
 /// not destroyed first.
 ///
+/// The UTF-8 sample is the exception that is printed on purpose. Its cells are known exactly, so
+/// when it is the only thing the host drew they are overwritten with blanks and nothing past them
+/// is touched.
+///
 /// A move to another row is left alone. It means the echo wrapped, and possibly scrolled, and the
 /// saved position no longer names the same cell; erasing from a stale origin would take the user's
 /// own output with it. Leaving a mess is better than that.
 #[cfg(unix)]
-fn erase_echoed_probe(fd: i32, response: &[u8]) {
-    let Some(column) = echoed_from_column(response) else {
-        return;
+fn erase_echoed_probe(fd: i32, response: &[u8], cursor_reports_asked: usize) {
+    let erase = match probe_cleanup(response, cursor_reports_asked) {
+        // CHA back to where the probe began, then erase what follows on that line.
+        Some(ProbeCleanup::EraseLine { from }) => format!("\x1b[{from}G\x1b[K"),
+        // CHA back, blank exactly the sample's cells, and return to where it began.
+        Some(ProbeCleanup::Blank { from, cells }) => {
+            format!("\x1b[{from}G{}\x1b[{from}G", " ".repeat(usize::from(cells)))
+        }
+        None => return,
     };
-    // CHA back to where the probe began, then erase what follows on that line.
-    let _ = tty_write_all(fd, format!("\x1b[{column}G\x1b[K").as_bytes());
+    let _ = tty_write_all(fd, erase.as_bytes());
 }
 
-/// The column the probe began at, if the host echoed it and the mess is confined to that one line.
-///
-/// `None` covers every case that is not demonstrably safe to erase: a host that consumed the probe,
-/// one that never answered `CSI 6 n`, and one whose echo left the row it started on.
+/// What the probe left on the screen that can safely be cleaned up.
 #[cfg(unix)]
-fn echoed_from_column(response: &[u8]) -> Option<u16> {
-    let reports = cursor_reports(response);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProbeCleanup {
+    /// The host printed part of the escape batch: erase from `from` to the end of the line.
+    EraseLine { from: u16 },
+    /// Only the UTF-8 sample was drawn: blank `cells` cells from `from`.
+    Blank { from: u16, cells: u16 },
+}
+
+/// How to clean up after the probe, if the host printed any of it and the mess is confined to one
+/// line.
+///
+/// The `asked` cursor reports are, in order: before everything, after the UTF-8 sample when there
+/// is one, and after the escape batch. `None` covers every case that is not demonstrably safe to
+/// clean: a host that consumed the probe, one that did not answer every `CSI 6 n`, and one whose
+/// output left the row it started on.
+#[cfg(unix)]
+fn probe_cleanup(response: &[u8], asked: usize) -> Option<ProbeCleanup> {
+    let reports = cursor_reports(response, asked);
+    if reports.len() != asked || asked < 2 {
+        return None;
+    }
+    let (first_row, first_column) = reports[0];
+    let (batch_row, batch_column) = reports[asked - 2];
+    let (last_row, last_column) = reports[asked - 1];
+    if first_row != last_row || batch_row != first_row || last_column <= first_column {
+        return None;
+    }
+    if last_column > batch_column {
+        Some(ProbeCleanup::EraseLine { from: first_column })
+    } else {
+        Some(ProbeCleanup::Blank {
+            from: first_column,
+            cells: batch_column - first_column,
+        })
+    }
+}
+
+/// Whether the host drew [`UTF8_SAMPLE`] as one character, from the two cursor reports around it.
+///
+/// One cell is UTF-8. Two or more is a host that drew each byte as a character of its own. Anything
+/// else is left unknown rather than guessed: a cursor that did not move may be a UTF-8 terminal
+/// holding a wrap at the last column, and one that changed rows has wrapped, so neither proves the
+/// host cannot draw UTF-8.
+#[cfg(unix)]
+fn utf8_from_reports(response: &[u8]) -> Option<bool> {
+    let reports = cursor_reports(response, 2);
     let [(before_row, before_column), (after_row, after_column)] = reports[..] else {
         return None;
     };
-    (after_row == before_row && after_column > before_column).then_some(before_column)
+    if after_row != before_row {
+        return None;
+    }
+    match after_column.checked_sub(before_column)? {
+        1 => Some(true),
+        2.. => Some(false),
+        0 => None,
+    }
 }
 
-/// The first two `CSI row ; column R` reports in a response, in the order the host sent them.
+/// The first `limit` `CSI row ; column R` reports in a response, in the order the host sent them.
 ///
 /// Scanned rather than parsed in sequence because the replies to the rest of the probe are
 /// interleaved with these and arrive in whatever order the host schedules them.
 #[cfg(unix)]
-fn cursor_reports(response: &[u8]) -> Vec<(u16, u16)> {
-    let mut reports = Vec::with_capacity(2);
+fn cursor_reports(response: &[u8], limit: usize) -> Vec<(u16, u16)> {
+    let mut reports = Vec::with_capacity(limit);
     let mut rest = response;
     while let Some(introducer) = rest.windows(2).position(|pair| pair == [0x1b, b'[']) {
         rest = &rest[introducer + 2..];
@@ -335,7 +464,7 @@ fn cursor_reports(response: &[u8]) -> Vec<(u16, u16)> {
             && let Some(report) = parse_cursor_report(&rest[..final_byte])
         {
             reports.push(report);
-            if reports.len() == 2 {
+            if reports.len() == limit {
                 break;
             }
         }
@@ -354,6 +483,16 @@ fn parse_cursor_report(params: &[u8]) -> Option<(u16, u16)> {
 /// Query stub for non-Unix hosts (crossterm handles Windows keyboard enhancement natively).
 #[cfg(not(unix))]
 pub fn query_host_capabilities(_graphics_probe: &[u8]) -> Option<HostCapabilities> {
+    None
+}
+
+/// Query stub for non-Unix hosts. The UTF-8 question is not asked there: the Windows console takes
+/// UTF-16 through its own API rather than interpreting bytes.
+#[cfg(not(unix))]
+pub(crate) fn query_host_capabilities_with(
+    _graphics_probe: &[u8],
+    _ask_utf8: bool,
+) -> Option<HostCapabilities> {
     None
 }
 
@@ -1138,10 +1277,10 @@ mod tests {
 
     use super::{
         EXIT_FLUSH_CEILING, EXIT_FLUSH_FLOOR, ExitFlush, HostCapabilities, HostColorResponseParser,
-        Parsed, build_query_batch, cursor_reports, echoed_from_column, exit_flush_plan,
-        host_color_query_settled, probe_round_trip, record_round_trip, resolve_host_colors,
-        scan_host_capabilities, set_startup_reply_outstanding, settle_startup_reply,
-        startup_reply_outstanding,
+        Parsed, ProbeCleanup, UTF8_SAMPLE, build_query_batch, cursor_reports, exit_flush_plan,
+        host_color_query_settled, probe_cleanup, probe_round_trip, record_round_trip,
+        resolve_host_colors, scan_host_capabilities, set_startup_reply_outstanding,
+        settle_startup_reply, startup_reply_outstanding, utf8_from_reports,
     };
     use crate::style::{Color, HostTerminalColors};
 
@@ -1561,12 +1700,20 @@ mod tests {
         );
     }
 
+    /// The column the escape batch began at, if the host echoed it onto one line.
+    fn echoed_from_column(response: &[u8], asked: usize) -> Option<u16> {
+        match probe_cleanup(response, asked)? {
+            ProbeCleanup::EraseLine { from } => Some(from),
+            ProbeCleanup::Blank { .. } => None,
+        }
+    }
+
     /// The case this exists for, as a terminal that drops the `$` of `CSI ? 1016 $ p` produces it:
     /// the final `p` is printed, so the cursor comes back one column further along the same row.
     #[test]
     fn a_host_that_echoed_one_line_is_erased_from_where_it_started() {
         let response = b"\x1b[12;1R\x1b[?1016;2$y\x1b[12;2R\x1b[?62;1;6c";
-        assert_eq!(echoed_from_column(response), Some(1));
+        assert_eq!(echoed_from_column(response, 2), Some(1));
     }
 
     /// A host that consumed the probe reports the same cell twice, and must be left completely
@@ -1574,7 +1721,7 @@ mod tests {
     #[test]
     fn a_host_that_consumed_the_probe_is_not_written_to() {
         let response = b"\x1b[12;40R\x1b[?5u\x1b[12;40R\x1b[?62;1;6c";
-        assert_eq!(echoed_from_column(response), None);
+        assert_eq!(echoed_from_column(response, 2), None);
     }
 
     /// An echo that left its row may have scrolled the screen, which makes the first report a stale
@@ -1582,7 +1729,7 @@ mod tests {
     #[test]
     fn an_echo_that_wrapped_to_another_row_is_left_alone() {
         assert_eq!(
-            echoed_from_column(b"\x1b[12;70R\x1b[13;9R\x1b[?62;1;6c"),
+            echoed_from_column(b"\x1b[12;70R\x1b[13;9R\x1b[?62;1;6c", 2),
             None
         );
     }
@@ -1591,9 +1738,9 @@ mod tests {
     /// cursor is the ordinary case for a pipe or a harness, not an error.
     #[test]
     fn a_host_that_does_not_report_its_cursor_is_not_written_to() {
-        assert_eq!(echoed_from_column(b"\x1b[?62;1;6c"), None);
-        assert_eq!(echoed_from_column(b"\x1b[12;1R\x1b[?62;1;6c"), None);
-        assert_eq!(echoed_from_column(b""), None);
+        assert_eq!(echoed_from_column(b"\x1b[?62;1;6c", 2), None);
+        assert_eq!(echoed_from_column(b"\x1b[12;1R\x1b[?62;1;6c", 2), None);
+        assert_eq!(echoed_from_column(b"", 2), None);
     }
 
     /// The reports are picked out of whatever else the host said, in the order it said them, and
@@ -1601,13 +1748,107 @@ mod tests {
     #[test]
     fn cursor_reports_are_found_among_the_other_replies() {
         let response = b"\x1b[?5u\x1b[3;7R\x1b_Gi=4294967295;OK\x1b\\\x1b[3;9R\x1b[3;11R";
-        assert_eq!(cursor_reports(response), vec![(3, 7), (3, 9)]);
+        assert_eq!(cursor_reports(response, 2), vec![(3, 7), (3, 9)]);
     }
 
     /// A malformed or truncated report is not a position. Reading one as `(0, 0)` would send the
     /// erase to the top-left corner of the screen.
     #[test]
     fn a_report_that_is_not_a_position_is_not_one() {
-        assert_eq!(cursor_reports(b"\x1b[R\x1b[;R\x1b[4R\x1b[9;"), Vec::new());
+        assert_eq!(
+            cursor_reports(b"\x1b[R\x1b[;R\x1b[4R\x1b[9;", 2),
+            Vec::new()
+        );
+    }
+
+    /// The probe's verdict rests on the sample taking exactly one cell on every UTF-8 terminal and
+    /// one cell per byte on every single-byte one. An East Asian Ambiguous sample breaks the first:
+    /// a terminal drawing ambiguous characters wide gives it two cells, and is refused as not UTF-8.
+    ///
+    /// `unicode_width`'s `width_cjk` cannot stand in for that check: it keeps ambiguous letters,
+    /// `é` included, one cell wide, while terminals that widen ambiguous characters go by the raw
+    /// property. The sample is held to U+00A0..U+00FF on purpose, so that the list below - every
+    /// Ambiguous code point in that range as of Unicode 16 - covers every sample the test accepts.
+    /// Other two-byte characters can have Latin-1-printable bytes too, and some are Ambiguous: `ī`
+    /// (U+012B, `C4 AB`) is one.
+    #[test]
+    fn the_utf8_sample_is_one_cell_everywhere_and_two_printable_bytes() {
+        use unicode_width::UnicodeWidthStr;
+        const AMBIGUOUS_LATIN1: &[char] = &[
+            '\u{a1}', '\u{a4}', '\u{a7}', '\u{a8}', '\u{aa}', '\u{ad}', '\u{ae}', '\u{b0}',
+            '\u{b1}', '\u{b2}', '\u{b3}', '\u{b4}', '\u{b6}', '\u{b7}', '\u{b8}', '\u{b9}',
+            '\u{ba}', '\u{bc}', '\u{bd}', '\u{be}', '\u{bf}', '\u{c6}', '\u{d0}', '\u{d7}',
+            '\u{d8}', '\u{de}', '\u{df}', '\u{e0}', '\u{e1}', '\u{e6}', '\u{e8}', '\u{e9}',
+            '\u{ea}', '\u{ec}', '\u{ed}', '\u{f0}', '\u{f2}', '\u{f3}', '\u{f7}', '\u{f8}',
+            '\u{f9}', '\u{fa}', '\u{fc}', '\u{fe}',
+        ];
+        let mut chars = UTF8_SAMPLE.chars();
+        let sample = chars.next().expect("one character");
+        assert_eq!(chars.next(), None, "one character");
+        assert!(
+            ('\u{a0}'..='\u{ff}').contains(&sample),
+            "{sample:?} is outside U+00A0..U+00FF, where the ambiguous list below is not exhaustive"
+        );
+        assert!(
+            !AMBIGUOUS_LATIN1.contains(&sample),
+            "{sample:?} is East Asian Ambiguous"
+        );
+        assert_eq!(UTF8_SAMPLE.width(), 1);
+        assert_eq!(UTF8_SAMPLE.len(), 2);
+        assert!(
+            UTF8_SAMPLE.bytes().all(|byte| byte >= 0xA0),
+            "every byte must be printable in Latin-1"
+        );
+    }
+
+    /// The UTF-8 probe as a UTF-8 terminal answers it: the sample takes one cell.
+    #[test]
+    fn a_utf8_host_moves_one_cell_over_the_sample() {
+        let response = b"\x1b[12;1R\x1b[12;2R\x1b[?5u\x1b[12;2R\x1b[?62;1;6c";
+        assert_eq!(utf8_from_reports(response), Some(true));
+    }
+
+    /// A host that reads the sample's two bytes as two Latin-1 characters draws `Ã±`.
+    #[test]
+    fn a_single_byte_host_moves_two_cells_over_the_sample() {
+        let response = b"\x1b[1;1R\x1b[1;3R\x1b[1;3R\x1b[?62;6c";
+        assert_eq!(utf8_from_reports(response), Some(false));
+    }
+
+    /// A cursor that did not move may be a UTF-8 terminal holding a wrap at the last column, and one
+    /// that changed rows has wrapped. Neither is proof the host cannot draw UTF-8, so neither may
+    /// refuse an app that asked for it.
+    #[test]
+    fn an_ambiguous_answer_is_not_a_verdict() {
+        assert_eq!(utf8_from_reports(b"\x1b[5;80R\x1b[5;80R\x1b[5;80R"), None);
+        assert_eq!(utf8_from_reports(b"\x1b[5;80R\x1b[6;2R\x1b[6;2R"), None);
+        assert_eq!(utf8_from_reports(b"\x1b[5;1R"), None);
+        assert_eq!(utf8_from_reports(b"\x1b[?62;6c"), None);
+    }
+
+    /// The sample is printed on purpose, and blanking exactly its cells is enough: erasing to the
+    /// end of the line could take a right-hand prompt with it.
+    #[test]
+    fn a_host_that_only_drew_the_sample_has_just_those_cells_blanked() {
+        let response = b"\x1b[12;40R\x1b[12;41R\x1b[?5u\x1b[12;41R\x1b[?62;1;6c";
+        assert_eq!(
+            probe_cleanup(response, 3),
+            Some(ProbeCleanup::Blank { from: 40, cells: 1 })
+        );
+        let latin1 = b"\x1b[12;40R\x1b[12;42R\x1b[12;42R\x1b[?62;1;6c";
+        assert_eq!(
+            probe_cleanup(latin1, 3),
+            Some(ProbeCleanup::Blank { from: 40, cells: 2 })
+        );
+    }
+
+    /// An echoed escape batch after the sample still spoils the line from where the probe began.
+    #[test]
+    fn a_host_that_echoed_after_the_sample_is_erased_from_where_the_probe_began() {
+        let response = b"\x1b[12;1R\x1b[12;2R\x1b[?1016;2$y\x1b[12;3R\x1b[?62;1;6c";
+        assert_eq!(
+            probe_cleanup(response, 3),
+            Some(ProbeCleanup::EraseLine { from: 1 })
+        );
     }
 }
