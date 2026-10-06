@@ -1406,6 +1406,7 @@ Note: `ManagedTerminal` is a component; defaults come from `ManagedTerminalProps
 | `placeholder` | `Some(Arc::from("Starting terminal..."))` |
 | `forward_mouse` | `true` |
 | `scroll_wheel` | `true` |
+| `scroll_wheel_multiplier` | `None` |
 | `link_activation_mods` | `KeyMods::CTRL` |
 | `link_hover_style` | `StyleSlot::Replace(Style::new().underline())` |
 | `on_link_activate` | `None` |

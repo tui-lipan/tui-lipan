@@ -48,7 +48,12 @@ pub struct ManagedTerminal {
 }
 
 /// Properties for configuring a managed terminal.
+///
+/// Build these with [`ManagedTerminal`]'s builder methods, or start from
+/// [`ManagedTerminalProps::default()`] and assign fields. The struct is non-exhaustive so new
+/// options can be added without breaking callers.
 #[derive(Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ManagedTerminalProps {
     /// PTY configuration (shell, cwd, env vars, etc.)
     pub config: TerminalPtyConfig,
@@ -74,6 +79,9 @@ pub struct ManagedTerminalProps {
     /// Enable scroll wheel for scrollback.
     /// Default: `true`.
     pub scroll_wheel: bool,
+    /// Scrollback lines per wheel tick, overriding the app-wide multiplier.
+    /// Default: `None` (use the app-wide multiplier).
+    pub scroll_wheel_multiplier: Option<u16>,
     /// Modifiers required to activate explicit OSC 8 links and detected plain-text URLs.
     /// Default: [`KeyMods::CTRL`]. Extra held modifiers are allowed.
     pub link_activation_mods: KeyMods,
@@ -116,6 +124,7 @@ impl Default for ManagedTerminalProps {
             placeholder: Some(Arc::from("Starting terminal...")),
             forward_mouse: true,
             scroll_wheel: true,
+            scroll_wheel_multiplier: None,
             link_activation_mods: KeyMods::CTRL,
             link_hover_style: StyleSlot::Replace(Style::new().underline()),
             on_link_activate: None,
@@ -199,6 +208,12 @@ impl ManagedTerminal {
     /// Set whether scroll wheel controls scrollback.
     pub fn scroll_wheel(mut self, enabled: bool) -> Self {
         self.props.scroll_wheel = enabled;
+        self
+    }
+
+    /// Override the app-wide mouse wheel step multiplier for scrollback.
+    pub fn scroll_wheel_multiplier(mut self, multiplier: u16) -> Self {
+        self.props.scroll_wheel_multiplier = Some(multiplier.max(1));
         self
     }
 
@@ -558,6 +573,9 @@ impl Component for ManagedTerminal {
             }))
             .on_scroll_to(ctx.link().callback(ManagedTerminalMsg::TerminalScrollTo));
 
+        if let Some(multiplier) = ctx.props.scroll_wheel_multiplier {
+            terminal = terminal.scroll_wheel_multiplier(multiplier);
+        }
         if let Some(on_focus) = ctx.props.on_focus.clone() {
             terminal = terminal.on_focus(on_focus);
         }
@@ -632,6 +650,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn scroll_wheel_multiplier_overrides_the_app_default_and_never_drops_below_one() {
+        let terminal = ManagedTerminal::new().scroll_wheel_multiplier(3);
+        assert_eq!(terminal.props.scroll_wheel_multiplier, Some(3));
+        let terminal = ManagedTerminal::new().scroll_wheel_multiplier(0);
+        assert_eq!(terminal.props.scroll_wheel_multiplier, Some(1));
+    }
+
+    #[test]
     fn managed_terminal_props_default() {
         let props = ManagedTerminalProps::default();
         assert_eq!(props.scrollback, 2000);
@@ -640,6 +666,7 @@ mod tests {
         assert!(props.auto_start);
         assert!(props.forward_mouse);
         assert!(props.scroll_wheel);
+        assert_eq!(props.scroll_wheel_multiplier, None);
         assert_eq!(props.link_activation_mods, KeyMods::CTRL);
         assert_eq!(
             props.link_hover_style,
