@@ -20,6 +20,7 @@ The recommended starting point: a complete PTY terminal with automatic lifecycle
 | `placeholder` | `Option<Arc<str>>` | Text shown before PTY is ready |
 | `forward_mouse` | `bool` | Forward mouse events to PTY (default: true) |
 | `scroll_wheel` | `bool` | Mouse wheel for scrollback (default: true) |
+| `scroll_wheel_multiplier` | `Option<u16>` | Scrollback rows per wheel tick, overriding the app-wide multiplier (default: `None`) |
 | `link_activation_mods` | `KeyMods` | Modifiers required for link activation (default: `KeyMods::CTRL`; extras allowed) |
 | `link_hover_style` | `StyleSlot` | Style for the link under a modified pointer (default: underline) |
 | `on_link_activate` | `Callback<TerminalLinkEvent>` | Modified click on an OSC 8 link or detected URL |
@@ -837,9 +838,9 @@ Terminal::new()
 
 Mouse wheel scrolls through scrollback history when `scroll_wheel(true)` (default in `ManagedTerminal`).
 
-`Terminal::scroll_wheel_multiplier(n)` sets how many scrollback rows one wheel tick moves in this terminal,
-overriding the app-wide `App::scroll_wheel_multiplier`. Use it to offer a terminal scroll speed
-without changing the wheel step of every list and view in the app.
+`scroll_wheel_multiplier(n)`, on both `Terminal` and `ManagedTerminal`, sets how many scrollback rows
+one wheel tick moves in this terminal, overriding the app-wide `App::scroll_wheel_multiplier`. Use it
+to offer a terminal scroll speed without changing the wheel step of every list and view in the app.
 
 Use `on_scroll_to` to receive the new offset and call `screen.set_scrollback(offset)`.
 
