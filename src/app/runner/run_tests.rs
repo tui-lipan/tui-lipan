@@ -8,8 +8,8 @@ use web_time::Instant;
 
 use super::{
     AppRunner, DirtyLevel, DirtyTracker, DragState, FrameworkCommandAction, RunnerEvent,
-    effective_active_drag_dirty_level, mouse_dispatch_dirty_level, spinner_frame_for_speed,
-    split_pointer_event,
+    effective_active_drag_dirty_level, mouse_dispatch_dirty_level, paced_pointer_frame_due,
+    spinner_frame_for_speed, split_pointer_event,
 };
 use crate::TextEditor;
 use crate::animation::{Easing, TransitionConfig};
@@ -8285,6 +8285,87 @@ fn wheel_over_a_terminal_asks_only_for_a_repaint() {
         DirtyLevel::None,
         "a terminal already at the bottom does not scroll"
     );
+}
+
+/// Dragging a terminal's scrollbar moves its scrollback the way the wheel does, so it costs a
+/// repaint per report rather than a reconcile of the whole tree.
+#[cfg(feature = "terminal")]
+#[test]
+fn dragging_a_terminal_scrollbar_asks_only_for_a_repaint() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 4,
+    };
+    let screen = Rc::new(RefCell::new(crate::widgets::TerminalScreen::new(
+        4, 19, 100,
+    )));
+    for line in 0..20 {
+        screen
+            .borrow_mut()
+            .process_bytes(format!("line {line}\r\n").as_bytes());
+    }
+    let component = || WheelTerminalSmoke {
+        screen: screen.clone(),
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component(), ());
+    init_runner(&mut runner, component(), viewport);
+
+    runner.dispatch_mouse(MouseEvent {
+        x: 19,
+        y: 3,
+        kind: MouseKind::Down(MouseButton::Left),
+        mods: KeyMods::default(),
+    });
+    assert!(
+        matches!(
+            runner.drag.active,
+            crate::app::interaction_state::ActiveDrag::Scrollbar(_)
+        ),
+        "the press lands on the terminal's scrollbar"
+    );
+    assert_eq!(
+        effective_active_drag_dirty_level(&runner.drag),
+        Some(DirtyLevel::PaintOnly)
+    );
+}
+
+/// Continuous pointer input draws its first frame at once and the rest at the frame cadence.
+#[test]
+fn continuous_pointer_paints_are_paced_to_the_frame_interval() {
+    let interval = Duration::from_millis(8);
+    let painted = Instant::now();
+    let soon = painted + Duration::from_millis(3);
+    let due = painted + interval;
+
+    assert_eq!(
+        paced_pointer_frame_due(DirtyLevel::PaintOnly, true, None, interval, soon),
+        None,
+        "the first frame of a burst draws immediately"
+    );
+    assert_eq!(
+        paced_pointer_frame_due(DirtyLevel::PaintOnly, true, Some(painted), interval, soon),
+        Some(due),
+        "a report inside the interval waits for the interval to end"
+    );
+    assert_eq!(
+        paced_pointer_frame_due(DirtyLevel::PaintOnly, true, Some(painted), interval, due),
+        None,
+        "a report once the interval has passed draws at once"
+    );
+    assert_eq!(
+        paced_pointer_frame_due(DirtyLevel::PaintOnly, false, Some(painted), interval, soon),
+        None,
+        "keys, clicks, and releases are never held back"
+    );
+    for level in [DirtyLevel::LayoutOnly, DirtyLevel::Full] {
+        assert_eq!(
+            paced_pointer_frame_due(level, true, Some(painted), interval, soon),
+            None,
+            "{level:?} draws immediately"
+        );
+    }
 }
 
 /// A pane nobody is looking at still has a child program writing to it, so the cadence the loop

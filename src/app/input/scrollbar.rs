@@ -20,6 +20,9 @@ pub(crate) struct ScrollbarDrag {
     pub axis: crate::core::node::ScrollbarAxis,
     pub grab_offset: u16,
     pub grab_subcell: u8,
+    /// The dragged scrollbar belongs to a node that reads its content when it paints and has no
+    /// children to lay out - a terminal - so moving it needs only a repaint.
+    pub paint_only: bool,
 }
 
 pub(crate) struct ScrollbarMetrics {
@@ -622,7 +625,17 @@ pub(crate) fn start_drag(
         axis,
         grab_offset: grab_offset as u16,
         grab_subcell,
+        paint_only: is_terminal(node),
     })
+}
+
+fn is_terminal(node: &Node) -> bool {
+    #[cfg(feature = "terminal")]
+    if matches!(node.kind, NodeKind::Terminal(_)) {
+        return true;
+    }
+    let _ = node;
+    false
 }
 
 pub(crate) fn rebind_drag_to_key(tree: &NodeTree, drag: &mut ScrollbarDrag) -> bool {
