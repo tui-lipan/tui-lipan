@@ -552,8 +552,8 @@ impl App {
     /// Refuse to start on a terminal that does not display UTF-8 text.
     ///
     /// The startup probe then also prints one two-byte UTF-8 character between two cursor reports
-    /// and erases it again. A terminal that moves the cursor two cells has drawn the bytes as two
-    /// characters, and [`AppRunner::run`](crate::AppRunner::run) returns an
+    /// and erases it again. A terminal that moves the cursor two or more cells has drawn the bytes
+    /// as separate characters, and [`AppRunner::run`](crate::AppRunner::run) returns an
     /// [`io::ErrorKind::Unsupported`](std::io::ErrorKind::Unsupported) error before raw mode or
     /// the alternate screen is entered. A terminal that does not answer, or whose answer is
     /// ambiguous, is let through. [`host_renders_utf8`](crate::style::host_renders_utf8) reports

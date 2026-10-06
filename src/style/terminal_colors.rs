@@ -1767,8 +1767,10 @@ mod tests {
     ///
     /// `unicode_width`'s `width_cjk` cannot stand in for that check: it keeps ambiguous letters,
     /// `é` included, one cell wide, while terminals that widen ambiguous characters go by the raw
-    /// property. The list is every Ambiguous code point in U+00A0..U+00FF as of Unicode 16, the
-    /// only block a two-byte sample with Latin-1-printable bytes can come from.
+    /// property. The sample is held to U+00A0..U+00FF on purpose, so that the list below - every
+    /// Ambiguous code point in that range as of Unicode 16 - covers every sample the test accepts.
+    /// Other two-byte characters can have Latin-1-printable bytes too, and some are Ambiguous: `ī`
+    /// (U+012B, `C4 AB`) is one.
     #[test]
     fn the_utf8_sample_is_one_cell_everywhere_and_two_printable_bytes() {
         use unicode_width::UnicodeWidthStr;
@@ -1783,6 +1785,10 @@ mod tests {
         let mut chars = UTF8_SAMPLE.chars();
         let sample = chars.next().expect("one character");
         assert_eq!(chars.next(), None, "one character");
+        assert!(
+            ('\u{a0}'..='\u{ff}').contains(&sample),
+            "{sample:?} is outside U+00A0..U+00FF, where the ambiguous list below is not exhaustive"
+        );
         assert!(
             !AMBIGUOUS_LATIN1.contains(&sample),
             "{sample:?} is East Asian Ambiguous"
