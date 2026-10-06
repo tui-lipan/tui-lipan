@@ -276,10 +276,11 @@ fn mouse_dispatch_dirty_level(
 ///
 /// A fast wheel or drag reports hundreds of times a second, and each report used to cost a whole
 /// frame - several times what any display can show. Only a paint-only frame from a pass that
-/// handled nothing but motion, drags, and the wheel is held back, and only while the last paint is
-/// younger than one frame interval: the first report of a burst still draws at once, and the rest
-/// draw together at the frame cadence. Keys, clicks, releases, and anything needing layout or a
-/// rebuild always draw immediately.
+/// handled nothing but motion, drags, and the wheel is held back, and only until one frame
+/// interval after the last paint of any kind: a report that finds the last frame at least that old
+/// draws at once, and the rest draw together in the next frame-rate slot. The deadline is fixed by
+/// the last paint, so sustained input cannot push it back. Keys, clicks, releases, and anything
+/// needing layout or a rebuild always draw immediately.
 fn paced_pointer_frame_due(
     level: DirtyLevel,
     pointer_motion_only: bool,

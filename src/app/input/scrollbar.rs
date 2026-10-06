@@ -649,6 +649,9 @@ pub(crate) fn rebind_drag_to_key(tree: &NodeTree, drag: &mut ScrollbarDrag) -> b
         return false;
     };
     drag.id = node.id;
+    // The key may now name a different kind of widget, which can need layout where the old one
+    // needed only a repaint.
+    drag.paint_only = is_terminal(node);
     true
 }
 

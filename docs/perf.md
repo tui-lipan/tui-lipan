@@ -362,9 +362,10 @@ and no live terminal the loop waits on events and wakes on a 50 ms idle timeout.
 
 The same cadence caps continuous pointer input. Motion, drags, and the wheel can
 report hundreds of times a second, far more often than any display shows a frame.
-When such a report only needs a repaint, the first one of a burst draws at once
-and later ones wait for the frame interval to end, so a fast wheel over a
-terminal or a dragged scrollbar paints at most `frame_rate` times a second.
+When such a report only needs a repaint, it draws in the next frame-rate slot
+after the previous paint of any kind: at once if that paint is a full interval
+old, and never later than one interval after it. A fast wheel over a terminal or
+a dragged scrollbar therefore paints at most `frame_rate` times a second.
 Keys, clicks, releases, and anything that needs layout or `view()` still draw
 immediately.
 

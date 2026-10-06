@@ -794,8 +794,9 @@ impl App {
     /// smoothness a video rate producer can reach and the CPU it is allowed to cost.
     ///
     /// It also caps continuous pointer input. Pointer motion, a drag, and the wheel can report
-    /// hundreds of times a second; when one only needs a repaint, the first report of a burst draws
-    /// at once and the rest draw together at most once per frame interval.
+    /// hundreds of times a second; when one only needs a repaint, it draws in the next frame-rate
+    /// slot after the previous paint - at once if that paint is a full interval old, and never
+    /// later than one interval after it. Reports in between draw together in that slot.
     ///
     /// Style-only colors produced by [`Context::animated_color`](crate::Context::animated_color),
     /// and effect strengths from [`Context::animated_amount`](crate::Context::animated_amount),

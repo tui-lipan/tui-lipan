@@ -8331,7 +8331,100 @@ fn dragging_a_terminal_scrollbar_asks_only_for_a_repaint() {
     );
 }
 
-/// Continuous pointer input draws its first frame at once and the rest at the frame cadence.
+#[cfg(feature = "terminal")]
+struct RebindScrollbarSmoke {
+    screen: Rc<RefCell<crate::widgets::TerminalScreen>>,
+    terminal: Rc<Cell<bool>>,
+}
+
+#[cfg(feature = "terminal")]
+impl Component for RebindScrollbarSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, _msg: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _ctx: &Context<Self>) -> Element {
+        if self.terminal.get() {
+            Terminal::new()
+                .screen(crate::widgets::TerminalScreenHandle::new(
+                    self.screen.clone(),
+                ))
+                .key("pane")
+        } else {
+            ScrollView::new()
+                .scrollbar(true)
+                .children((0..20).map(|i| Text::new(format!("row-{i}")).into()))
+                .key("pane")
+        }
+    }
+}
+
+/// A scrollbar drag follows its key across reconciliation, and the key can come to name another
+/// kind of widget. The drag must then cost what the new widget needs: a `ScrollView` has children
+/// to lay out, so carrying the terminal's paint-only verdict over would leave rows unplaced.
+#[cfg(feature = "terminal")]
+#[test]
+fn a_rebound_scrollbar_drag_takes_the_new_widgets_dirty_level() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 4,
+    };
+    let screen = Rc::new(RefCell::new(crate::widgets::TerminalScreen::new(
+        4, 19, 100,
+    )));
+    for line in 0..20 {
+        screen
+            .borrow_mut()
+            .process_bytes(format!("line {line}\r\n").as_bytes());
+    }
+    let terminal = Rc::new(Cell::new(true));
+    let component = || RebindScrollbarSmoke {
+        screen: screen.clone(),
+        terminal: terminal.clone(),
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component(), ());
+    init_runner(&mut runner, component(), viewport);
+
+    runner.dispatch_mouse(MouseEvent {
+        x: 19,
+        y: 3,
+        kind: MouseKind::Down(MouseButton::Left),
+        mods: KeyMods::default(),
+    });
+    assert_eq!(
+        effective_active_drag_dirty_level(&runner.drag),
+        Some(DirtyLevel::PaintOnly),
+        "the drag starts on the terminal"
+    );
+
+    terminal.set(false);
+    runner.core.render_element(viewport, None, None, None);
+    let crate::app::interaction_state::ActiveDrag::Scrollbar(drag) = &mut runner.drag.active else {
+        panic!("the scrollbar drag is still active");
+    };
+    assert!(
+        crate::app::input::scrollbar::rebind_drag_to_key(&runner.core.tree, drag),
+        "the key now names a scroll view with a scrollbar"
+    );
+    assert!(matches!(
+        runner.core.tree.node(drag.id).kind,
+        NodeKind::ScrollView(_)
+    ));
+    assert_eq!(
+        effective_active_drag_dirty_level(&runner.drag),
+        Some(DirtyLevel::LayoutOnly)
+    );
+}
+
+/// Continuous pointer input draws at most once per frame interval after the last paint.
 #[test]
 fn continuous_pointer_paints_are_paced_to_the_frame_interval() {
     let interval = Duration::from_millis(8);
@@ -8342,7 +8435,7 @@ fn continuous_pointer_paints_are_paced_to_the_frame_interval() {
     assert_eq!(
         paced_pointer_frame_due(DirtyLevel::PaintOnly, true, None, interval, soon),
         None,
-        "the first frame of a burst draws immediately"
+        "with no frame painted yet, the report draws immediately"
     );
     assert_eq!(
         paced_pointer_frame_due(DirtyLevel::PaintOnly, true, Some(painted), interval, soon),
