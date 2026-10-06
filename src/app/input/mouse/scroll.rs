@@ -138,6 +138,8 @@ fn effective_scroll_lines(
         NodeKind::ScrollView(node) => node.scroll_wheel_multiplier.unwrap_or(fallback_multiplier),
         NodeKind::TextArea(node) => node.scroll_wheel_multiplier.unwrap_or(fallback_multiplier),
         NodeKind::DocumentView(node) => node.scroll_wheel_multiplier.unwrap_or(fallback_multiplier),
+        #[cfg(feature = "terminal")]
+        NodeKind::Terminal(node) => node.scroll_wheel_multiplier.unwrap_or(fallback_multiplier),
         // PanView scales each tick by its own `key_step` instead, so the
         // dispatcher must hand it raw tick counts.
         NodeKind::PanView(_) => 1,

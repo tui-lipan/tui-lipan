@@ -79,6 +79,7 @@ pub(crate) struct TerminalNode {
     pub viewport_rows: usize,
     pub viewport_cols: usize,
     pub scroll_wheel: bool,
+    pub scroll_wheel_multiplier: Option<u16>,
     pub scroll_override: Option<usize>,
     pub scrollbar: bool,
     pub scrollbar_variant: ScrollbarVariant,

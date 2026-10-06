@@ -8215,6 +8215,7 @@ fn live_screen_output_reaches_the_node_without_a_view_pass() {
 #[cfg(feature = "terminal")]
 struct WheelTerminalSmoke {
     screen: Rc<RefCell<crate::widgets::TerminalScreen>>,
+    multiplier: Option<u16>,
 }
 
 #[cfg(feature = "terminal")]
@@ -8231,12 +8232,16 @@ impl Component for WheelTerminalSmoke {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
-        Terminal::new()
+        let terminal = Terminal::new()
             .screen(crate::widgets::TerminalScreenHandle::new(
                 self.screen.clone(),
             ))
-            .on_scroll_to(ctx.link().callback(|offset| offset))
-            .key("terminal")
+            .on_scroll_to(ctx.link().callback(|offset| offset));
+        match self.multiplier {
+            Some(multiplier) => terminal.scroll_wheel_multiplier(multiplier),
+            None => terminal,
+        }
+        .key("terminal")
     }
 }
 
@@ -8262,6 +8267,7 @@ fn wheel_over_a_terminal_asks_only_for_a_repaint() {
     }
     let component = || WheelTerminalSmoke {
         screen: screen.clone(),
+        multiplier: None,
     };
     let mut runner = AppRunner::new(App::new().mouse(false), component(), ());
     init_runner(&mut runner, component(), viewport);
@@ -8287,6 +8293,61 @@ fn wheel_over_a_terminal_asks_only_for_a_repaint() {
     );
 }
 
+/// A terminal's own multiplier sets how many scrollback rows a wheel tick moves, over the app-wide
+/// default, and coalesced ticks multiply by it too.
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_scroll_wheel_multiplier_overrides_the_app_default() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 4,
+    };
+    let screen = Rc::new(RefCell::new(crate::widgets::TerminalScreen::new(
+        4, 20, 100,
+    )));
+    for line in 0..20 {
+        screen
+            .borrow_mut()
+            .process_bytes(format!("line {line}\r\n").as_bytes());
+    }
+    let component = || WheelTerminalSmoke {
+        screen: screen.clone(),
+        multiplier: Some(3),
+    };
+    let mut runner = AppRunner::new(
+        App::new().mouse(false).scroll_wheel_multiplier(2),
+        component(),
+        (),
+    );
+    init_runner(&mut runner, component(), viewport);
+    let wheel = MouseEvent {
+        x: 1,
+        y: 1,
+        kind: MouseKind::ScrollUp,
+        mods: KeyMods::default(),
+    };
+
+    let terminal_offset = |runner: &AppRunner<WheelTerminalSmoke>| {
+        runner
+            .core
+            .tree
+            .iter()
+            .find_map(|node| match &node.kind {
+                NodeKind::Terminal(terminal) => Some(terminal.scrollback_offset),
+                _ => None,
+            })
+            .expect("terminal widget")
+    };
+
+    runner.dispatch_mouse_scroll_level(wheel, 1);
+    assert_eq!(terminal_offset(&runner), 3);
+
+    runner.dispatch_mouse_scroll_level(wheel, 2);
+    assert_eq!(terminal_offset(&runner), 9);
+}
+
 /// Dragging a terminal's scrollbar moves its scrollback the way the wheel does, so it costs a
 /// repaint per report rather than a reconcile of the whole tree.
 #[cfg(feature = "terminal")]
@@ -8308,6 +8369,7 @@ fn dragging_a_terminal_scrollbar_asks_only_for_a_repaint() {
     }
     let component = || WheelTerminalSmoke {
         screen: screen.clone(),
+        multiplier: None,
     };
     let mut runner = AppRunner::new(App::new().mouse(false), component(), ());
     init_runner(&mut runner, component(), viewport);
