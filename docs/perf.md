@@ -360,6 +360,15 @@ to *look* rather than be told:
 `DEFAULT_FRAME_RATE` (120). An idle app is unaffected: with nothing animating
 and no live terminal the loop waits on events and wakes on a 50 ms idle timeout.
 
+The same cadence caps continuous pointer input. Motion, drags, and the wheel can
+report hundreds of times a second, far more often than any display shows a frame.
+When such a report only needs a repaint, it draws in the next frame-rate slot
+after the previous paint of any kind: at once if that paint is a full interval
+old, and never later than one interval after it. A fast wheel over a terminal or
+a dragged scrollbar therefore paints at most `frame_rate` times a second.
+Keys, clicks, releases, and anything that needs layout or `view()` still draw
+immediately.
+
 Late-bound colors from `Context::animated_color` (and late-bound effect amounts
 from `Context::animated_amount`) are different: advancing one
 needs a repaint, but no `view()` or layout pass. By themselves they use

@@ -787,11 +787,16 @@ impl App {
 
     /// How often the loop is willing to wake for content that changes on its own.
     ///
-    /// A key press or a mouse event draws immediately; this is the ceiling for everything the app
-    /// did not ask for, which in practice means a focused terminal's child program writing output
-    /// and geometry/layout animations advancing. It is a ceiling and a floor at once: the loop
-    /// wakes this often while such content is live, and no oftener, so the number is both the
+    /// A key press or a click draws immediately; this is the ceiling for everything the app did not
+    /// ask for, which in practice means a focused terminal's child program writing output and
+    /// geometry/layout animations advancing. It is a ceiling and a floor at once: the loop wakes
+    /// this often while such content is live, and no oftener, so the number is both the
     /// smoothness a video rate producer can reach and the CPU it is allowed to cost.
+    ///
+    /// It also caps continuous pointer input. Pointer motion, a drag, and the wheel can report
+    /// hundreds of times a second; when one only needs a repaint, it draws in the next frame-rate
+    /// slot after the previous paint - at once if that paint is a full interval old, and never
+    /// later than one interval after it. Reports in between draw together in that slot.
     ///
     /// Style-only colors produced by [`Context::animated_color`](crate::Context::animated_color),
     /// and effect strengths from [`Context::animated_amount`](crate::Context::animated_amount),

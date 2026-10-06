@@ -222,6 +222,7 @@ pub(crate) struct ScrollFrameSnapshot {
 
 fn active_drag_dirty_level(drag: &ActiveDrag) -> Option<DirtyLevel> {
     match drag {
+        ActiveDrag::Scrollbar(drag) if drag.paint_only => Some(DirtyLevel::PaintOnly),
         ActiveDrag::Scrollbar(_) | ActiveDrag::Splitter(_) => Some(DirtyLevel::LayoutOnly),
         ActiveDrag::DragDrop(_) => Some(DirtyLevel::PaintOnly),
         ActiveDrag::TextArea(_)
@@ -269,6 +270,33 @@ fn mouse_dispatch_dirty_level(
         } else {
             DirtyLevel::PaintOnly
         })
+}
+
+/// When a frame of continuous pointer input should draw instead of now, or `None` to draw now.
+///
+/// A fast wheel or drag reports hundreds of times a second, and each report used to cost a whole
+/// frame - several times what any display can show. Only a paint-only frame from a pass that
+/// handled nothing but motion, drags, and the wheel is held back, and only until one frame
+/// interval after the last paint of any kind: a report that finds the last frame at least that old
+/// draws at once, and the rest draw together in the next frame-rate slot. The deadline is fixed by
+/// the last paint, so sustained input cannot push it back. Keys, clicks, releases, and anything
+/// needing layout or a rebuild always draw immediately.
+fn paced_pointer_frame_due(
+    level: DirtyLevel,
+    pointer_motion_only: bool,
+    last_paint_at: Option<Instant>,
+    frame_interval: Duration,
+    now: Instant,
+) -> Option<Instant> {
+    #[cfg(feature = "terminal")]
+    let paint_only = matches!(level, DirtyLevel::PaintOnly | DirtyLevel::TerminalPaintOnly);
+    #[cfg(not(feature = "terminal"))]
+    let paint_only = matches!(level, DirtyLevel::PaintOnly);
+    if !pointer_motion_only || !paint_only {
+        return None;
+    }
+    let due = last_paint_at? + frame_interval;
+    (now < due).then_some(due)
 }
 
 fn apply_dirty_level(dirty: &mut DirtyTracker, level: DirtyLevel) {
@@ -2204,6 +2232,10 @@ impl<C: Component> AppRunner<C> {
             let mut pending_event: Option<RunnerEvent> = None;
             let mut host_color_refresh_quiet_until: Option<Instant> = None;
             let mut deferred_full = false;
+            // A paint-only frame of continuous pointer input held back to the frame cadence, and
+            // when it falls due. See `paced_pointer_frame_due`.
+            let mut paced_frame: Option<(DirtyLevel, Instant)> = None;
+            let mut last_paint_at: Option<Instant> = None;
             // A snapshot callback ran after the last paint and may have queued a message.
             let mut snapshot_answered = false;
             // Last terminal size we observed. Used as a fallback for missed
@@ -2215,6 +2247,8 @@ impl<C: Component> AppRunner<C> {
                 let frame_start = Instant::now();
 
                 let mut dirty = DirtyTracker::default();
+                // Whether this pass handled nothing but pointer motion, a drag, or the wheel.
+                let mut pointer_motion_only = false;
                 let modifier_reporting = self.core.ctx.modifier_key_reporting_enabled();
                 if guard.set_modifier_key_reporting(modifier_reporting)? {
                     self.set_held_modifiers(KeyMods::NONE, &mut dirty);
@@ -2226,6 +2260,9 @@ impl<C: Component> AppRunner<C> {
                     deferred_full = false;
                 }
                 let mut poll_timeout = self.update_animation_cycle(&mut dirty);
+                if let Some((_, due)) = paced_frame {
+                    poll_timeout = poll_timeout.min(due.saturating_duration_since(Instant::now()));
+                }
                 if let Some(remaining) = host_color_refresh_wait_remaining(
                     host_color_refresh_quiet_until,
                     Instant::now(),
@@ -2442,6 +2479,13 @@ impl<C: Component> AppRunner<C> {
                                     self.apply_pointer_leave(&mut dirty);
                                 }
                                 CoalescedPointer::Inside(mut mouse) => {
+                                    pointer_motion_only = matches!(
+                                        mouse.kind,
+                                        MouseKind::Moved
+                                            | MouseKind::Drag(_)
+                                            | MouseKind::ScrollUp
+                                            | MouseKind::ScrollDown
+                                    );
                                     let mut handled = false;
 
                                     let needs_motion = self.needs_mouse_motion();
@@ -2526,6 +2570,7 @@ impl<C: Component> AppRunner<C> {
                                         if let Some((non_drag, non_drag_sub_cell)) =
                                             pending_non_drag
                                         {
+                                            pointer_motion_only = false;
                                             self.mouse.sub_cell.set(non_drag_sub_cell);
                                             let drag_before =
                                                 effective_active_drag_dirty_level(&self.drag);
@@ -2594,6 +2639,7 @@ impl<C: Component> AppRunner<C> {
                                                                     }
                                                                     dispatched_coalesced_move =
                                                                         true;
+                                                                    pointer_motion_only = false;
                                                                     self.mouse
                                                                         .sub_cell
                                                                         .set(next_sub_cell);
@@ -2739,6 +2785,7 @@ impl<C: Component> AppRunner<C> {
                                                                         dirty.mark_full();
                                                                     }
                                                                     count = 0; // Already dispatched
+                                                                    pointer_motion_only = false;
                                                                     break;
                                                                 }
                                                             }
@@ -2948,6 +2995,13 @@ impl<C: Component> AppRunner<C> {
                     }
                 }
 
+                let now = Instant::now();
+                // A held-back frame joins whatever this pass dirtied, or draws on its own once due.
+                if let Some((level, _)) =
+                    paced_frame.take_if(|(_, due)| dirty.is_dirty() || now >= *due)
+                {
+                    apply_dirty_level(&mut dirty, level);
+                }
                 let frame_level = dirty.level();
 
                 // When a Full render is pending but more input events are
@@ -2973,6 +3027,17 @@ impl<C: Component> AppRunner<C> {
                     continue;
                 }
 
+                if let Some(due) = paced_pointer_frame_due(
+                    frame_level,
+                    pointer_motion_only && !force_host_redraw,
+                    last_paint_at,
+                    self.frame_interval,
+                    now,
+                ) {
+                    paced_frame = Some((frame_level, due));
+                    continue;
+                }
+
                 match frame_level {
                     DirtyLevel::Full => {
                         if force_host_redraw {
@@ -2994,6 +3059,7 @@ impl<C: Component> AppRunner<C> {
                 }
 
                 if !matches!(frame_level, DirtyLevel::None) {
+                    last_paint_at = Some(Instant::now());
                     snapshot_answered = self.apply_pending_ui_snapshot_request()?;
                     snapshot_answered |= self.deliver_painted_frame();
                 }
