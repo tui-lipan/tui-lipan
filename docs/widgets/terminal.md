@@ -98,6 +98,7 @@ The low-level terminal viewport widget. Use when you need custom PTY handling, m
 | `tab_stop` | `bool` | Include in sequential Tab traversal (default: `true`) |
 | `on_focus` / `on_blur` | `Callback<()>` | Focus gained / lost |
 | `scroll_wheel` | `bool` | Mouse wheel scrollback |
+| `scroll_wheel_multiplier` | `u16` | Scrollback rows per wheel tick, overriding the app-wide multiplier |
 | `selection_style` | `Style` | Text selection style |
 | `extend_selection_style` / `inherit_selection_style` | `Style` / `()` | Extend or inherit the text-selection theme role instead of replacing it |
 | `selection` | `Option<TerminalSelection>` | Controlled selection in absolute retained-line coordinates |
@@ -835,6 +836,10 @@ Terminal::new()
 ## Scrollback
 
 Mouse wheel scrolls through scrollback history when `scroll_wheel(true)` (default in `ManagedTerminal`).
+
+`Terminal::scroll_wheel_multiplier(n)` sets how many scrollback rows one wheel tick moves in this terminal,
+overriding the app-wide `App::scroll_wheel_multiplier`. Use it to offer a terminal scroll speed
+without changing the wheel step of every list and view in the app.
 
 Use `on_scroll_to` to receive the new offset and call `screen.set_scrollback(offset)`.
 

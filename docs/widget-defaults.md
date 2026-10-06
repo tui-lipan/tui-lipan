@@ -1300,6 +1300,7 @@ Source: `src/widgets/terminal/mod.rs:94` (`Terminal`).
 | `link_hover_style` | `StyleSlot::Replace(Style::new().underline())` |
 | `on_link_activate` | `None` |
 | `scroll_wheel` | `true` |
+| `scroll_wheel_multiplier` | `None` |
 | `on_scroll` | `None` |
 | `on_scroll_to` | `None` |
 | `style` | `Style::default()` |

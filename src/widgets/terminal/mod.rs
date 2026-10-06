@@ -125,6 +125,7 @@ impl Default for Terminal {
             link_hover_style: StyleSlot::Replace(Style::new().underline()),
             on_link_activate: None,
             scroll_wheel: true,
+            scroll_wheel_multiplier: None,
             on_scroll: None,
             on_scroll_to: None,
             style: Style::default(),
@@ -391,6 +392,15 @@ impl Terminal {
     /// Toggle mouse wheel scrolling through scrollback history.
     pub fn scroll_wheel(mut self, scroll_wheel: bool) -> Self {
         self.scroll_wheel = scroll_wheel;
+        self
+    }
+
+    /// Override the app-wide mouse wheel step multiplier for scrollback in this terminal.
+    ///
+    /// Wheel events forwarded to a mouse-tracking child are unaffected: the child applies its own
+    /// scroll step.
+    pub fn scroll_wheel_multiplier(mut self, multiplier: u16) -> Self {
+        self.scroll_wheel_multiplier = Some(multiplier.max(1));
         self
     }
 

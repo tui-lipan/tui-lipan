@@ -215,6 +215,7 @@ pub(crate) fn reconcile_terminal(
         viewport_rows,
         viewport_cols,
         scroll_wheel: terminal.scroll_wheel,
+        scroll_wheel_multiplier: terminal.scroll_wheel_multiplier,
         scroll_override,
         scrollbar: terminal.scrollbar,
         scrollbar_variant: terminal.scrollbar_variant,
