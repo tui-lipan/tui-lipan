@@ -54,12 +54,16 @@ pub(crate) struct SearchState {
     /// Explicit navigation clears this so a queued completion cannot roll the
     /// selection back after the user moves.
     pending_selection_reset: Option<u64>,
+    pending_preserved_selection: Option<(Option<usize>, usize)>,
     last_notified_selection: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SelectionRefresh {
-    PreserveCurrent,
+    PreserveCurrent {
+        item_index: Option<usize>,
+        result_index: usize,
+    },
     ResetToInitial,
 }
 
@@ -170,6 +174,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
             selected,
             query_id: 0,
             pending_selection_reset: None,
+            pending_preserved_selection: None,
             last_notified_selection: None,
         }
     }
@@ -243,12 +248,82 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
         }
 
         if should_refresh {
+            let items_changed = old_props.items != ctx.props.items;
+            let structural_change = old_props.items.len() != ctx.props.items.len()
+                || old_props
+                    .items
+                    .iter()
+                    .zip(ctx.props.items.iter())
+                    .any(|(old, new)| {
+                        if let Some(key) = ctx.props.item_key {
+                            key(old) != key(new)
+                        } else {
+                            old.value != new.value
+                        }
+                    });
             let selection = if reset_selection
-                || old_props.initial_selected_item_index != ctx.props.initial_selected_item_index
+                || (items_changed && current_selected_item_index(&ctx.state).is_none())
+                || ((!structural_change || ctx.props.item_key.is_none())
+                    && old_props.initial_selected_item_index
+                        != ctx.props.initial_selected_item_index)
             {
                 SelectionRefresh::ResetToInitial
             } else {
-                SelectionRefresh::PreserveCurrent
+                let indices = ctx.props.item_key.map(|key| {
+                    let mut indices = std::collections::HashMap::new();
+                    for (index, item) in ctx.props.items.iter().enumerate() {
+                        indices.entry(key(item)).or_insert(index);
+                    }
+                    indices
+                });
+                let find_item = |previous: &SearchItem<T>| {
+                    if let Some(key) = ctx.props.item_key {
+                        indices
+                            .as_ref()
+                            .and_then(|indices| indices.get(&key(previous)).copied())
+                    } else {
+                        ctx.props
+                            .items
+                            .iter()
+                            .position(|item| previous.value == item.value)
+                    }
+                };
+                let item_index = current_selected_item_index(&ctx.state)
+                    .and_then(|index| old_props.items.get(index))
+                    .and_then(find_item);
+                if items_changed {
+                    let previous = current_selected_item_index(&ctx.state)
+                        .and_then(|index| old_props.items.get(index));
+                    let current = current_selected_item_index(&ctx.state)
+                        .and_then(|index| ctx.props.items.get(index));
+                    if previous.map(|item| &item.value) != current.map(|item| &item.value)
+                        || old_props.initial_selected_item_index
+                            != ctx.props.initial_selected_item_index
+                    {
+                        ctx.state.last_notified_selection = None;
+                    }
+                }
+                let result_index = ctx.state.selected;
+                if items_changed && ctx.props.items.len() > sync_match_limit(&ctx.props) {
+                    ctx.state.results = ctx
+                        .state
+                        .results
+                        .iter()
+                        .filter_map(|result| {
+                            let previous = old_props.items.get(result.item_index)?;
+                            let index = find_item(previous)?;
+                            let mut result = result.clone();
+                            result.item_index = index;
+                            Some(result)
+                        })
+                        .collect();
+                    ctx.state.selected =
+                        resolve_preserved_selection(item_index, result_index, &ctx.state.results);
+                }
+                SelectionRefresh::PreserveCurrent {
+                    item_index,
+                    result_index,
+                }
             };
             return refresh_results(ctx, selection);
         }
@@ -268,6 +343,9 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
         // state (e.g. a TextArea key interceptor). Without this, the list highlight
         // never moves when only that prop changes.
         if old_props.initial_selected_item_index != ctx.props.initial_selected_item_index {
+            if ctx.props.initial_selected_item_index != current_selected_item_index(&ctx.state) {
+                ctx.state.pending_preserved_selection = None;
+            }
             ctx.state.selected = resolve_initial_result_index(
                 ctx.props.initial_selected_item_index,
                 &ctx.state.results,
@@ -591,16 +669,23 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                         &ctx.state.results,
                     );
                 } else {
+                    let (item_index, result_index) = ctx
+                        .state
+                        .pending_preserved_selection
+                        .take()
+                        .unwrap_or((selected_item_index, ctx.state.selected));
                     ctx.state.selected =
-                        resolve_source_result_index(selected_item_index, &ctx.state.results);
+                        resolve_preserved_selection(item_index, result_index, &ctx.state.results);
                 }
                 ctx.state.pending_selection_reset = None;
+                ctx.state.pending_preserved_selection = None;
                 sync_current_selection(&ctx.props, &mut ctx.state);
                 Update::layout()
             }
             SearchPaletteMsg::Selected(result_idx) => {
                 ctx.state.selected = result_idx;
                 ctx.state.pending_selection_reset = None;
+                ctx.state.pending_preserved_selection = None;
                 emit_search_event(&ctx.props, &ctx.state.results, result_idx, true);
                 remember_current_selection(&mut ctx.state);
                 Update::layout()
@@ -720,17 +805,16 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
     selection: SelectionRefresh,
 ) -> Update {
     let query: Arc<str> = Arc::from(ctx.state.query_source.query_str().to_owned());
-    let selected_item_index = current_selected_item_index(&ctx.state);
     let query_id = ctx.state.query_id + 1;
     ctx.state.query_id = query_id;
     ctx.state.pending_selection_reset = None;
+    ctx.state.pending_preserved_selection = None;
 
     if query.is_empty() {
         ctx.state.results = initial_results(&ctx.props, query.as_ref());
         ctx.state.results_query = query.clone();
         ctx.state.selected = resolve_refreshed_selection(
             selection,
-            selected_item_index,
             ctx.props.initial_selected_item_index,
             &ctx.state.results,
         );
@@ -745,7 +829,6 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
         ctx.state.results_query = query.clone();
         ctx.state.selected = resolve_refreshed_selection(
             selection,
-            selected_item_index,
             ctx.props.initial_selected_item_index,
             &ctx.state.results,
         );
@@ -759,6 +842,16 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
 
     ctx.state.pending_selection_reset =
         (selection == SelectionRefresh::ResetToInitial).then_some(query_id);
+    if let SelectionRefresh::PreserveCurrent {
+        item_index,
+        result_index,
+    } = selection
+    {
+        ctx.state.pending_preserved_selection = Some((item_index, result_index));
+        if !query.is_empty() {
+            sync_current_selection(&ctx.props, &mut ctx.state);
+        }
+    }
     layout_with_command(spawn_search(
         ctx.link().clone(),
         query_id,
@@ -772,18 +865,28 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
 
 fn resolve_refreshed_selection(
     selection: SelectionRefresh,
-    selected_item_index: Option<usize>,
     initial_item_index: Option<usize>,
     results: &[SearchResult],
 ) -> usize {
     match selection {
-        SelectionRefresh::PreserveCurrent => {
-            resolve_source_result_index(selected_item_index, results)
-        }
+        SelectionRefresh::PreserveCurrent {
+            item_index,
+            result_index,
+        } => resolve_preserved_selection(item_index, result_index, results),
         SelectionRefresh::ResetToInitial => {
             resolve_initial_result_index(initial_item_index, results)
         }
     }
+}
+
+fn resolve_preserved_selection(
+    item_index: Option<usize>,
+    previous_position: usize,
+    results: &[SearchResult],
+) -> usize {
+    item_index
+        .and_then(|index| results.iter().position(|result| result.item_index == index))
+        .unwrap_or_else(|| previous_position.min(results.len().saturating_sub(1)))
 }
 
 fn layout_with_command(command: crate::core::component::Command) -> Update {
@@ -892,6 +995,7 @@ fn clear_pending_reset_after_navigation(
 ) {
     if current_selected_item_index(state) != previous_item_index {
         state.pending_selection_reset = None;
+        state.pending_preserved_selection = None;
     }
 }
 
@@ -1029,6 +1133,201 @@ mod tests {
         ListConfig, SearchEntry, SearchEvent, SearchItem, SearchMatchMode, SearchPalette,
         ThemeProvider,
     };
+
+    struct MutatingItemsRoot {
+        query: &'static str,
+        selected: usize,
+        limit: usize,
+        activated: Rc<RefCell<Vec<Arc<str>>>>,
+        selections: Rc<RefCell<Vec<Arc<str>>>>,
+    }
+
+    struct LoadingItemsRoot(Rc<Cell<usize>>);
+
+    impl Component for LoadingItemsRoot {
+        type Message = ();
+        type Properties = ();
+        type State = bool;
+
+        fn create_state(&self, _: &()) -> bool {
+            false
+        }
+        fn update(&mut self, _: (), ctx: &mut Context<Self>) -> Update {
+            ctx.state = true;
+            Update::layout()
+        }
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let selected = self.0.clone();
+            SearchPalette::new()
+                .items(
+                    (0..if ctx.state { 4 } else { 0 })
+                        .map(|index| SearchItem::new(format!("item-{index}"), index)),
+                )
+                .item_key(|item| item.label.clone())
+                .initial_selected_item_index(Some(2))
+                .sync_selection(true)
+                .on_select(Callback::new(move |event: SearchEvent<usize>| {
+                    selected.set(event.item.value)
+                }))
+                .into()
+        }
+    }
+
+    #[test]
+    fn loading_an_empty_palette_honors_the_initial_selection() {
+        let selected = Rc::new(Cell::new(99));
+        let mut backend = crate::TestBackend::new(LoadingItemsRoot(selected.clone()));
+        backend.render();
+        assert_eq!(selected.get(), 99);
+        backend.dispatch(()).unwrap();
+        backend.render();
+        assert_eq!(selected.get(), 2);
+    }
+
+    impl Component for MutatingItemsRoot {
+        type Message = Vec<&'static str>;
+        type Properties = ();
+        type State = (Vec<&'static str>, bool);
+
+        fn create_state(&self, _: &()) -> Self::State {
+            (
+                vec!["hidden", "keep/a", "hidden-other", "keep/b", "keep/c"],
+                false,
+            )
+        }
+
+        fn update(&mut self, rows: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state = (rows, true);
+            Update::layout()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let activated = self.activated.clone();
+            let selections = self.selections.clone();
+            SearchPalette::new()
+                .items(ctx.state.0.iter().enumerate().map(|(index, label)| {
+                    SearchItem::new(*label, index).priority(i32::from(ctx.state.1))
+                }))
+                .item_key(|item| item.label.clone())
+                .query(self.query)
+                .match_mode(SearchMatchMode::Hybrid)
+                .sync_match_limit(self.limit)
+                .initial_selected_item_index(Some(if ctx.state.1 { 0 } else { self.selected }))
+                .sync_selection(true)
+                .on_select(Callback::new(move |event: SearchEvent<usize>| {
+                    selections.borrow_mut().push(event.item.label)
+                }))
+                .on_activate(Callback::new(move |event: SearchEvent<usize>| {
+                    activated.borrow_mut().push(event.item.label)
+                }))
+                .height(Length::Px(8))
+                .into()
+        }
+    }
+
+    #[test]
+    fn item_mutations_preserve_identity_or_nearest_visible_position_sync_and_async() {
+        for limit in [100, 1] {
+            for (query, selected, remove, expected) in [
+                ("", 3, Some(3), Some("keep/c")),
+                ("", 4, Some(4), Some("keep/b")),
+                ("keep", 3, Some(3), Some("keep/c")),
+                ("keep", 4, Some(4), Some("keep/b")),
+                ("keep", 3, Some(1), Some("keep/b")),
+                ("keep", 3, None, Some("keep/b")),
+                ("keep", 3, Some(98), Some("keep/a")),
+                ("keep", 3, Some(99), None),
+            ] {
+                let activated = Rc::new(RefCell::new(Vec::new()));
+                let selections = Rc::new(RefCell::new(Vec::new()));
+                let bounds = Rect {
+                    x: 0,
+                    y: 0,
+                    w: 40,
+                    h: 12,
+                };
+                let mut runtime = RuntimeCore::new_test(
+                    MutatingItemsRoot {
+                        query,
+                        selected,
+                        limit,
+                        activated: activated.clone(),
+                        selections: selections.clone(),
+                    },
+                    (),
+                    Rect::default(),
+                    Theme::default(),
+                    crate::app::context::SurfaceMode::Fullscreen,
+                    Rc::new(Cell::new(true)),
+                );
+                runtime.render_element(bounds, None, None, None);
+                let mut rows = vec!["hidden", "keep/a", "hidden-other", "keep/b", "keep/c"];
+                let results_for = |rows: &[&str]| {
+                    let items: Vec<_> = rows
+                        .iter()
+                        .enumerate()
+                        .map(|(index, label)| SearchItem::new(*label, index))
+                        .collect();
+                    initial_results(
+                        &SearchPalette::new()
+                            .items(items)
+                            .sync_match_limit(100)
+                            .match_mode(SearchMatchMode::Hybrid)
+                            .props,
+                        query,
+                    )
+                };
+                if limit == 1 {
+                    runtime
+                        .update_from_boxed(
+                            ScopeId(2),
+                            Box::new(SearchPaletteMsg::ResultsReady {
+                                query_id: 1,
+                                results: results_for(&rows),
+                            }),
+                        )
+                        .unwrap();
+                }
+                match remove {
+                    Some(99) => rows.clear(),
+                    Some(98) => {}
+                    Some(index) => {
+                        rows.remove(index);
+                    }
+                    None => rows.reverse(),
+                }
+                runtime
+                    .update_from_boxed(ScopeId(1), Box::new(rows.clone()))
+                    .unwrap();
+                runtime.render_element(bounds, None, None, None);
+                if limit == 1 && rows.len() > 1 {
+                    runtime
+                        .update_from_boxed(
+                            ScopeId(2),
+                            Box::new(SearchPaletteMsg::ResultsReady {
+                                query_id: 2,
+                                results: results_for(&rows),
+                            }),
+                        )
+                        .unwrap();
+                }
+                runtime
+                    .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::ActivateSelected))
+                    .unwrap();
+                if let Some(expected) = expected {
+                    assert_eq!(
+                        selections.borrow().last().map(|label| label.as_ref()),
+                        Some(expected)
+                    );
+                }
+                assert_eq!(
+                    activated.borrow().last().map(|label| label.as_ref()),
+                    expected,
+                    "{limit}: {query}: {remove:?}"
+                );
+            }
+        }
+    }
 
     struct PaletteRoot {
         view_count: Rc<Cell<usize>>,
@@ -1490,6 +1789,7 @@ mod tests {
             selected: 0,
             query_id: 0,
             pending_selection_reset: None,
+            pending_preserved_selection: None,
             last_notified_selection: None,
         };
 
@@ -1524,6 +1824,7 @@ mod tests {
             ),
             query_id: 0,
             pending_selection_reset: None,
+            pending_preserved_selection: None,
             last_notified_selection: None,
         };
 

@@ -140,6 +140,8 @@ pub struct SearchItem<T> {
     pub value: T,
 }
 
+type SearchItemKey<T> = fn(&SearchItem<T>) -> Arc<str>;
+
 impl<T> SearchItem<T> {
     /// Create a new search item.
     pub fn new(label: impl Into<Arc<str>>, value: T) -> Self {
@@ -548,6 +550,7 @@ pub(crate) struct SearchPaletteProps<T> {
     /// reseeds it when the prop changes; otherwise navigation remains
     /// authoritative across result refreshes.
     initial_selected_item_index: Option<usize>,
+    item_key: Option<SearchItemKey<T>>,
     /// Controlled mode: when `Some`, the query is driven by the caller, not by
     /// an internal `TextInput`. The `Input` widget is not rendered.
     query: Option<Arc<str>>,
@@ -646,6 +649,11 @@ impl<T: PartialEq> PartialEq for SearchPaletteProps<T> {
             && self.sync_selection == other.sync_selection
             && self.initial_query == other.initial_query
             && self.initial_selected_item_index == other.initial_selected_item_index
+            && match (self.item_key, other.item_key) {
+                (Some(left), Some(right)) => std::ptr::fn_addr_eq(left, right),
+                (None, None) => true,
+                _ => false,
+            }
             && self.query == other.query
             && self.placeholder == other.placeholder
             && match (&self.results_header, &other.results_header) {
@@ -815,6 +823,7 @@ impl<T: Clone + PartialEq> Default for SearchPalette<T> {
                 sync_selection: false,
                 initial_query: "".into(),
                 initial_selected_item_index: None,
+                item_key: None,
                 query: None,
                 placeholder: "Search...".into(),
                 results_header: None,
@@ -1003,6 +1012,12 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// item does not emit a duplicate callback.
     pub fn sync_selection(mut self, sync: bool) -> Self {
         self.props.sync_selection = sync;
+        self
+    }
+
+    /// Identify items across source updates when their values contain changing indices.
+    pub fn item_key(mut self, key: SearchItemKey<T>) -> Self {
+        self.props.item_key = Some(key);
         self
     }
 
