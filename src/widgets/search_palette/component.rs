@@ -249,23 +249,40 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
 
         if should_refresh {
             let items_changed = old_props.items != ctx.props.items;
-            let structural_change = old_props.items.len() != ctx.props.items.len()
-                || old_props
-                    .items
-                    .iter()
-                    .zip(ctx.props.items.iter())
-                    .any(|(old, new)| {
-                        if let Some(key) = ctx.props.item_key {
-                            key(old) != key(new)
-                        } else {
-                            old.value != new.value
-                        }
-                    });
+            let seed_changed =
+                old_props.initial_selected_item_index != ctx.props.initial_selected_item_index;
+            let reseed = seed_changed
+                && match ctx.props.item_key {
+                    Some(key) => match (
+                        old_props
+                            .initial_selected_item_index
+                            .and_then(|index| old_props.items.get(index)),
+                        ctx.props
+                            .initial_selected_item_index
+                            .and_then(|index| ctx.props.items.get(index)),
+                    ) {
+                        (Some(old), Some(new)) => key(old) != key(new),
+                        _ => true,
+                    },
+                    None => true,
+                };
+            if items_changed {
+                let previous = current_selected_item_index(&ctx.state)
+                    .and_then(|index| old_props.items.get(index));
+                let current = current_selected_item_index(&ctx.state)
+                    .and_then(|index| ctx.props.items.get(index));
+                let identity_changed = if let Some(key) = ctx.props.item_key {
+                    previous.map(key) != current.map(key)
+                } else {
+                    previous.map(|item| &item.value) != current.map(|item| &item.value)
+                };
+                if identity_changed {
+                    ctx.state.last_notified_selection = None;
+                }
+            }
             let selection = if reset_selection
                 || (items_changed && current_selected_item_index(&ctx.state).is_none())
-                || ((!structural_change || ctx.props.item_key.is_none())
-                    && old_props.initial_selected_item_index
-                        != ctx.props.initial_selected_item_index)
+                || reseed
             {
                 SelectionRefresh::ResetToInitial
             } else {
@@ -276,7 +293,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     }
                     indices
                 });
-                let find_item = |previous: &SearchItem<T>| {
+                let find_item = |previous_index: usize, previous: &SearchItem<T>| {
                     if let Some(key) = ctx.props.item_key {
                         indices
                             .as_ref()
@@ -284,25 +301,23 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     } else {
                         ctx.props
                             .items
-                            .iter()
-                            .position(|item| previous.value == item.value)
+                            .get(previous_index)
+                            .filter(|item| previous.value == item.value)
+                            .map(|_| previous_index)
+                            .or_else(|| {
+                                ctx.props
+                                    .items
+                                    .iter()
+                                    .position(|item| previous.value == item.value)
+                            })
                     }
                 };
-                let item_index = current_selected_item_index(&ctx.state)
-                    .and_then(|index| old_props.items.get(index))
-                    .and_then(find_item);
-                if items_changed {
-                    let previous = current_selected_item_index(&ctx.state)
-                        .and_then(|index| old_props.items.get(index));
-                    let current = current_selected_item_index(&ctx.state)
-                        .and_then(|index| ctx.props.items.get(index));
-                    if previous.map(|item| &item.value) != current.map(|item| &item.value)
-                        || old_props.initial_selected_item_index
-                            != ctx.props.initial_selected_item_index
-                    {
-                        ctx.state.last_notified_selection = None;
-                    }
-                }
+                let item_index = current_selected_item_index(&ctx.state).and_then(|index| {
+                    old_props
+                        .items
+                        .get(index)
+                        .and_then(|item| find_item(index, item))
+                });
                 let result_index = ctx.state.selected;
                 if items_changed && ctx.props.items.len() > sync_match_limit(&ctx.props) {
                     ctx.state.results = ctx
@@ -311,7 +326,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                         .iter()
                         .filter_map(|result| {
                             let previous = old_props.items.get(result.item_index)?;
-                            let index = find_item(previous)?;
+                            let index = find_item(result.item_index, previous)?;
                             let mut result = result.clone();
                             result.item_index = index;
                             Some(result)
@@ -810,7 +825,10 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
     ctx.state.pending_selection_reset = None;
     ctx.state.pending_preserved_selection = None;
 
-    if query.is_empty() {
+    if query.is_empty()
+        && !(ctx.props.items.len() > sync_match_limit(&ctx.props)
+            && matches!(selection, SelectionRefresh::PreserveCurrent { .. }))
+    {
         ctx.state.results = initial_results(&ctx.props, query.as_ref());
         ctx.state.results_query = query.clone();
         ctx.state.selected = resolve_refreshed_selection(
@@ -848,9 +866,7 @@ fn refresh_results<T: Clone + PartialEq + 'static>(
     } = selection
     {
         ctx.state.pending_preserved_selection = Some((item_index, result_index));
-        if !query.is_empty() {
-            sync_current_selection(&ctx.props, &mut ctx.state);
-        }
+        sync_current_selection(&ctx.props, &mut ctx.state);
     }
     layout_with_command(spawn_search(
         ctx.link().clone(),
@@ -1117,7 +1133,7 @@ mod tests {
     use std::rc::Rc;
     use std::sync::Arc;
 
-    use super::super::matching::{build_search_entries, match_items};
+    use super::super::matching::{all_item_results, build_search_entries, match_items};
     use super::{
         QuerySource, SearchPaletteMsg, SearchState, initial_results, navigate_down, navigate_up,
         resolve_initial_result_index, search_input_key_interceptor, sync_current_selection,
@@ -1212,7 +1228,7 @@ mod tests {
                 .query(self.query)
                 .match_mode(SearchMatchMode::Hybrid)
                 .sync_match_limit(self.limit)
-                .initial_selected_item_index(Some(if ctx.state.1 { 0 } else { self.selected }))
+                .initial_selected_item_index(Some(self.selected))
                 .sync_selection(true)
                 .on_select(Callback::new(move |event: SearchEvent<usize>| {
                     selections.borrow_mut().push(event.item.label)
@@ -1235,7 +1251,7 @@ mod tests {
                 ("keep", 4, Some(4), Some("keep/b")),
                 ("keep", 3, Some(1), Some("keep/b")),
                 ("keep", 3, None, Some("keep/b")),
-                ("keep", 3, Some(98), Some("keep/a")),
+                ("keep", 3, Some(98), Some("keep/b")),
                 ("keep", 3, Some(99), None),
             ] {
                 let activated = Rc::new(RefCell::new(Vec::new()));
@@ -1302,6 +1318,14 @@ mod tests {
                 runtime.render_element(bounds, None, None, None);
                 if limit == 1 && rows.len() > 1 {
                     runtime
+                        .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::ActivateSelected))
+                        .unwrap();
+                    assert_eq!(
+                        activated.borrow().last().map(|label| label.as_ref()),
+                        expected,
+                        "pending: {query}: {remove:?}"
+                    );
+                    runtime
                         .update_from_boxed(
                             ScopeId(2),
                             Box::new(SearchPaletteMsg::ResultsReady {
@@ -1326,6 +1350,256 @@ mod tests {
                     "{limit}: {query}: {remove:?}"
                 );
             }
+        }
+    }
+
+    struct RefreshRoot {
+        items: Vec<SearchItem<usize>>,
+        seed: Option<usize>,
+        keyed: bool,
+        limit: usize,
+        selections: Rc<RefCell<Vec<Arc<str>>>>,
+        activated: Rc<RefCell<Vec<Arc<str>>>>,
+    }
+
+    impl Component for RefreshRoot {
+        type Message = (Vec<SearchItem<usize>>, Option<usize>);
+        type Properties = ();
+        type State = Self::Message;
+
+        fn create_state(&self, _: &()) -> Self::State {
+            (self.items.clone(), self.seed)
+        }
+
+        fn update(&mut self, message: Self::Message, ctx: &mut Context<Self>) -> Update {
+            ctx.state = message;
+            Update::layout()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let selections = self.selections.clone();
+            let activated = self.activated.clone();
+            let palette = SearchPalette::new()
+                .items(ctx.state.0.clone())
+                .initial_selected_item_index(ctx.state.1)
+                .sync_match_limit(self.limit)
+                .sync_selection(true)
+                .on_select(Callback::new(move |event: SearchEvent<usize>| {
+                    selections.borrow_mut().push(event.item.label)
+                }))
+                .on_activate(Callback::new(move |event: SearchEvent<usize>| {
+                    activated.borrow_mut().push(event.item.label)
+                }));
+            if self.keyed {
+                palette.item_key(|item| item.label.clone()).into()
+            } else {
+                palette.into()
+            }
+        }
+    }
+
+    fn refresh_runtime(root: RefreshRoot) -> RuntimeCore<RefreshRoot> {
+        let mut runtime = RuntimeCore::new_test(
+            root,
+            (),
+            Rect::default(),
+            Theme::default(),
+            crate::app::context::SurfaceMode::Fullscreen,
+            Rc::new(Cell::new(true)),
+        );
+        render_refresh_runtime(&mut runtime);
+        runtime
+    }
+
+    fn render_refresh_runtime(runtime: &mut RuntimeCore<RefreshRoot>) {
+        runtime.render_element(
+            Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 12,
+            },
+            None,
+            None,
+            None,
+        );
+    }
+
+    #[test]
+    fn pending_empty_query_refresh_activates_the_remapped_row_beyond_the_sync_limit() {
+        for removed in [149, 150] {
+            let selections = Rc::new(RefCell::new(Vec::new()));
+            let activated = Rc::new(RefCell::new(Vec::new()));
+            let mut items: Vec<_> = (0..500)
+                .map(|index| SearchItem::new(format!("item-{index}"), index))
+                .collect();
+            let mut runtime = refresh_runtime(RefreshRoot {
+                items: items.clone(),
+                seed: None,
+                keyed: true,
+                limit: 100,
+                selections: selections.clone(),
+                activated: activated.clone(),
+            });
+            runtime
+                .update_from_boxed(
+                    ScopeId(2),
+                    Box::new(SearchPaletteMsg::ResultsReady {
+                        query_id: 1,
+                        results: all_item_results(items.len()),
+                    }),
+                )
+                .unwrap();
+            runtime
+                .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::Selected(150)))
+                .unwrap();
+            items.remove(removed);
+            for (index, item) in items.iter_mut().enumerate() {
+                item.value = index;
+            }
+            runtime
+                .update_from_boxed(ScopeId(1), Box::new((items.clone(), None::<usize>)))
+                .unwrap();
+            render_refresh_runtime(&mut runtime);
+            let expected = if removed == 150 {
+                "item-151"
+            } else {
+                "item-150"
+            };
+            assert_eq!(selections.borrow().last().unwrap().as_ref(), expected);
+            runtime
+                .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::ActivateSelected))
+                .unwrap();
+            assert_eq!(activated.borrow().last().unwrap().as_ref(), expected);
+            runtime
+                .update_from_boxed(
+                    ScopeId(2),
+                    Box::new(SearchPaletteMsg::ResultsReady {
+                        query_id: 2,
+                        results: all_item_results(items.len()),
+                    }),
+                )
+                .unwrap();
+            runtime
+                .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::ActivateSelected))
+                .unwrap();
+            assert_eq!(activated.borrow().last().unwrap().as_ref(), expected);
+        }
+    }
+
+    #[test]
+    fn duplicate_values_keep_the_selected_source_index_on_metadata_refresh() {
+        for mutation in 0..3 {
+            let selections = Rc::new(RefCell::new(Vec::new()));
+            let activated = Rc::new(RefCell::new(Vec::new()));
+            let mut items = vec![SearchItem::new("A", 0_usize), SearchItem::new("B", 0_usize)];
+            let mut runtime = refresh_runtime(RefreshRoot {
+                items: items.clone(),
+                seed: Some(1),
+                keyed: false,
+                limit: 100,
+                selections: selections.clone(),
+                activated: activated.clone(),
+            });
+            match mutation {
+                0 => items[0].label = "A updated".into(),
+                1 => items[0].description = Some("updated".into()),
+                _ => items[0].priority = 2,
+            }
+            runtime
+                .update_from_boxed(ScopeId(1), Box::new((items, Some(1_usize))))
+                .unwrap();
+            render_refresh_runtime(&mut runtime);
+            runtime
+                .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::ActivateSelected))
+                .unwrap();
+            assert_eq!(activated.borrow().last().unwrap().as_ref(), "B");
+            assert_eq!(selections.borrow().len(), 1);
+        }
+    }
+
+    #[test]
+    fn removed_user_selection_notifies_the_new_identity_with_an_unchanged_seed() {
+        for seed in [None, Some(0)] {
+            let selections = Rc::new(RefCell::new(Vec::new()));
+            let activated = Rc::new(RefCell::new(Vec::new()));
+            let mut runtime = refresh_runtime(RefreshRoot {
+                items: vec![
+                    SearchItem::new("A", 0_usize),
+                    SearchItem::new("B", 1_usize),
+                    SearchItem::new("C", 2_usize),
+                ],
+                seed,
+                keyed: true,
+                limit: 100,
+                selections: selections.clone(),
+                activated,
+            });
+            runtime
+                .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::NavigateDown))
+                .unwrap();
+            assert_eq!(selections.borrow().last().unwrap().as_ref(), "B");
+            runtime
+                .update_from_boxed(
+                    ScopeId(1),
+                    Box::new((
+                        vec![SearchItem::new("A", 0_usize), SearchItem::new("C", 1_usize)],
+                        seed,
+                    )),
+                )
+                .unwrap();
+            render_refresh_runtime(&mut runtime);
+            assert_eq!(selections.borrow().last().unwrap().as_ref(), "C");
+            assert_eq!(selections.borrow().len(), 3);
+        }
+    }
+
+    #[test]
+    fn structural_refresh_honors_explicit_reseeds_but_preserves_same_key_index_churn() {
+        for (old_seed, new_seed, expected) in [
+            (None, Some(2_usize), "B"),
+            (Some(1), Some(3), "D"),
+            (Some(1), Some(2), "C"),
+        ] {
+            let selections = Rc::new(RefCell::new(Vec::new()));
+            let activated = Rc::new(RefCell::new(Vec::new()));
+            let mut runtime = refresh_runtime(RefreshRoot {
+                items: vec![
+                    SearchItem::new("A", 0_usize),
+                    SearchItem::new("B", 1_usize),
+                    SearchItem::new("C", 2_usize),
+                ],
+                seed: old_seed,
+                keyed: true,
+                limit: 100,
+                selections: selections.clone(),
+                activated: activated.clone(),
+            });
+            // Navigation supersedes the original seed; a shifted seed for B must not undo it.
+            runtime
+                .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::NavigateLast))
+                .unwrap();
+            runtime
+                .update_from_boxed(
+                    ScopeId(1),
+                    Box::new((
+                        vec![
+                            SearchItem::new("X", 0_usize),
+                            SearchItem::new("A", 1_usize),
+                            SearchItem::new("B", 2_usize),
+                            SearchItem::new("D", 3_usize),
+                            SearchItem::new("C", 4_usize),
+                        ],
+                        new_seed,
+                    )),
+                )
+                .unwrap();
+            render_refresh_runtime(&mut runtime);
+            runtime
+                .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::ActivateSelected))
+                .unwrap();
+            assert_eq!(activated.borrow().last().unwrap().as_ref(), expected);
+            assert_eq!(selections.borrow().last().unwrap().as_ref(), expected);
         }
     }
 

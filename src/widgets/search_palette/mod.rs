@@ -1016,6 +1016,7 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     }
 
     /// Identify items across source updates when their values contain changing indices.
+    /// Keys must be stable across refreshes and unique within the source list.
     pub fn item_key(mut self, key: SearchItemKey<T>) -> Self {
         self.props.item_key = Some(key);
         self
