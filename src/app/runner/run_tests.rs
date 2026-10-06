@@ -7456,14 +7456,14 @@ fn activation_modifiers_hover_only_the_terminal_link_under_the_pointer() {
         "the complete detected URL is underlined"
     );
     assert!(
-        !hovered.cell(4, 0).modifiers.underline.is_some(),
+        hovered.cell(4, 0).modifiers.underline.is_none(),
         "text outside the link keeps its original style"
     );
 
     send_left_mouse(&mut backend, 10, MouseKind::Moved, KeyMods::NONE);
     let cleared = backend.capture_frame();
     assert!(
-        (5..24).all(|col| !cleared.cell(col, 0).modifiers.underline.is_some()),
+        (5..24).all(|col| cleared.cell(col, 0).modifiers.underline.is_none()),
         "moving without the activation modifiers clears the link hover"
     );
 }
@@ -8209,6 +8209,81 @@ fn live_screen_output_reaches_the_node_without_a_view_pass() {
     assert!(
         !backend.refresh_live_terminals(),
         "a refresh that finds the screen unmoved does nothing"
+    );
+}
+
+#[cfg(feature = "terminal")]
+struct WheelTerminalSmoke {
+    screen: Rc<RefCell<crate::widgets::TerminalScreen>>,
+}
+
+#[cfg(feature = "terminal")]
+impl Component for WheelTerminalSmoke {
+    type Message = usize;
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+    fn update(&mut self, offset: Self::Message, _ctx: &mut Context<Self>) -> Update {
+        self.screen.borrow_mut().set_scrollback(offset);
+        Update::paint()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        Terminal::new()
+            .screen(crate::widgets::TerminalScreenHandle::new(
+                self.screen.clone(),
+            ))
+            .on_scroll_to(ctx.link().callback(|offset| offset))
+            .key("terminal")
+    }
+}
+
+/// A terminal reads its rows when it paints and has no children to place, so a wheel tick that
+/// moves its scrollback asks for a repaint. Reconciling the whole tree for every tick of a fast
+/// wheel is what made scrolling a pane cost a large share of a core.
+#[cfg(feature = "terminal")]
+#[test]
+fn wheel_over_a_terminal_asks_only_for_a_repaint() {
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 4,
+    };
+    let screen = Rc::new(RefCell::new(crate::widgets::TerminalScreen::new(
+        4, 20, 100,
+    )));
+    for line in 0..20 {
+        screen
+            .borrow_mut()
+            .process_bytes(format!("line {line}\r\n").as_bytes());
+    }
+    let component = || WheelTerminalSmoke {
+        screen: screen.clone(),
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component(), ());
+    init_runner(&mut runner, component(), viewport);
+    let wheel = |kind| MouseEvent {
+        x: 1,
+        y: 1,
+        kind,
+        mods: KeyMods::default(),
+    };
+
+    assert_eq!(
+        runner.dispatch_mouse_scroll_level(wheel(MouseKind::ScrollUp), 1),
+        DirtyLevel::PaintOnly
+    );
+    assert_eq!(
+        runner.dispatch_mouse_scroll_level(wheel(MouseKind::ScrollDown), 1),
+        DirtyLevel::PaintOnly
+    );
+    assert_eq!(
+        runner.dispatch_mouse_scroll_level(wheel(MouseKind::ScrollDown), 1),
+        DirtyLevel::None,
+        "a terminal already at the bottom does not scroll"
     );
 }
 

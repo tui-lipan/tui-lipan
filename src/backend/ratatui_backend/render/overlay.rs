@@ -87,7 +87,10 @@ pub(crate) fn kitty_placeholder_foregrounds(
     let mut placeholders = Vec::new();
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
+            // Every cell under the pass is visited, every frame, and almost none is a placeholder.
+            // The length test turns the common one-byte cell away before the substring search.
             if let Some(cell) = buf.cell((x, y))
+                && cell.symbol().len() >= KITTY_PLACEHOLDER.len_utf8()
                 && cell.symbol().contains(KITTY_PLACEHOLDER)
             {
                 placeholders.push((ratatui::layout::Position::new(x, y), cell.fg));
