@@ -222,12 +222,16 @@ fn record_utf8(renders_utf8: Option<bool>) {
     HOST_UTF8.store(value, Ordering::Relaxed);
 }
 
-/// The character the UTF-8 probe prints: two bytes in UTF-8, one narrow cell wherever it is
-/// understood. It is not East Asian Ambiguous, so a terminal set to draw those wide still advances
-/// one cell, and a terminal that reads the bytes as Latin-1 or any other single-byte charset draws
-/// two.
+/// The character the UTF-8 probe prints: `ñ`, two bytes in UTF-8 and one cell wherever it is
+/// understood.
+///
+/// Its East Asian Width must be Neutral or Narrow. An Ambiguous character - most accented Latin
+/// letters, `é` among them - is drawn two cells wide by a UTF-8 terminal set to treat ambiguous
+/// characters as wide, and would read as a host that cannot draw UTF-8 at all. Both bytes must
+/// also be printable in Latin-1 (`0xA0` and above, not C1 controls), so a single-byte host
+/// advances one cell for each.
 #[cfg(unix)]
-const UTF8_SAMPLE: &str = "\u{e9}";
+const UTF8_SAMPLE: &str = "\u{f1}";
 
 /// Ask the host what it implements, in one round trip with a short, bounded timeout.
 ///
@@ -1273,7 +1277,7 @@ mod tests {
 
     use super::{
         EXIT_FLUSH_CEILING, EXIT_FLUSH_FLOOR, ExitFlush, HostCapabilities, HostColorResponseParser,
-        Parsed, ProbeCleanup, build_query_batch, cursor_reports, exit_flush_plan,
+        Parsed, ProbeCleanup, UTF8_SAMPLE, build_query_batch, cursor_reports, exit_flush_plan,
         host_color_query_settled, probe_cleanup, probe_round_trip, record_round_trip,
         resolve_host_colors, scan_host_capabilities, set_startup_reply_outstanding,
         settle_startup_reply, startup_reply_outstanding, utf8_from_reports,
@@ -1757,6 +1761,40 @@ mod tests {
         );
     }
 
+    /// The probe's verdict rests on the sample taking exactly one cell on every UTF-8 terminal and
+    /// one cell per byte on every single-byte one. An East Asian Ambiguous sample breaks the first:
+    /// a terminal drawing ambiguous characters wide gives it two cells, and is refused as not UTF-8.
+    ///
+    /// `unicode_width`'s `width_cjk` cannot stand in for that check: it keeps ambiguous letters,
+    /// `é` included, one cell wide, while terminals that widen ambiguous characters go by the raw
+    /// property. The list is every Ambiguous code point in U+00A0..U+00FF as of Unicode 16, the
+    /// only block a two-byte sample with Latin-1-printable bytes can come from.
+    #[test]
+    fn the_utf8_sample_is_one_cell_everywhere_and_two_printable_bytes() {
+        use unicode_width::UnicodeWidthStr;
+        const AMBIGUOUS_LATIN1: &[char] = &[
+            '\u{a1}', '\u{a4}', '\u{a7}', '\u{a8}', '\u{aa}', '\u{ad}', '\u{ae}', '\u{b0}',
+            '\u{b1}', '\u{b2}', '\u{b3}', '\u{b4}', '\u{b6}', '\u{b7}', '\u{b8}', '\u{b9}',
+            '\u{ba}', '\u{bc}', '\u{bd}', '\u{be}', '\u{bf}', '\u{c6}', '\u{d0}', '\u{d7}',
+            '\u{d8}', '\u{de}', '\u{df}', '\u{e0}', '\u{e1}', '\u{e6}', '\u{e8}', '\u{e9}',
+            '\u{ea}', '\u{ec}', '\u{ed}', '\u{f0}', '\u{f2}', '\u{f3}', '\u{f7}', '\u{f8}',
+            '\u{f9}', '\u{fa}', '\u{fc}', '\u{fe}',
+        ];
+        let mut chars = UTF8_SAMPLE.chars();
+        let sample = chars.next().expect("one character");
+        assert_eq!(chars.next(), None, "one character");
+        assert!(
+            !AMBIGUOUS_LATIN1.contains(&sample),
+            "{sample:?} is East Asian Ambiguous"
+        );
+        assert_eq!(UTF8_SAMPLE.width(), 1);
+        assert_eq!(UTF8_SAMPLE.len(), 2);
+        assert!(
+            UTF8_SAMPLE.bytes().all(|byte| byte >= 0xA0),
+            "every byte must be printable in Latin-1"
+        );
+    }
+
     /// The UTF-8 probe as a UTF-8 terminal answers it: the sample takes one cell.
     #[test]
     fn a_utf8_host_moves_one_cell_over_the_sample() {
@@ -1764,7 +1802,7 @@ mod tests {
         assert_eq!(utf8_from_reports(response), Some(true));
     }
 
-    /// A host that reads the sample's two bytes as two Latin-1 characters draws `Ã©`.
+    /// A host that reads the sample's two bytes as two Latin-1 characters draws `Ã±`.
     #[test]
     fn a_single_byte_host_moves_two_cells_over_the_sample() {
         let response = b"\x1b[1;1R\x1b[1;3R\x1b[1;3R\x1b[?62;6c";
