@@ -55,7 +55,13 @@ pub(crate) struct SearchState {
     /// selection back after the user moves.
     pending_selection_reset: Option<u64>,
     pending_preserved_selection: Option<(Option<usize>, usize)>,
-    last_notified_selection: Option<usize>,
+    last_notified_selection: Option<SelectionIdentity>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SelectionIdentity {
+    Key(Arc<str>),
+    SourceIndex(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -266,16 +272,13 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     },
                     None => true,
                 };
-            if items_changed {
+            if items_changed && ctx.props.item_key.is_none() {
                 let previous = current_selected_item_index(&ctx.state)
                     .and_then(|index| old_props.items.get(index));
                 let current = current_selected_item_index(&ctx.state)
                     .and_then(|index| ctx.props.items.get(index));
-                let identity_changed = if let Some(key) = ctx.props.item_key {
-                    previous.map(key) != current.map(key)
-                } else {
-                    previous.map(|item| &item.value) != current.map(|item| &item.value)
-                };
+                let identity_changed =
+                    previous.map(|item| &item.value) != current.map(|item| &item.value);
                 if identity_changed {
                     ctx.state.last_notified_selection = None;
                 }
@@ -702,7 +705,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                 ctx.state.pending_selection_reset = None;
                 ctx.state.pending_preserved_selection = None;
                 emit_search_event(&ctx.props, &ctx.state.results, result_idx, true);
-                remember_current_selection(&mut ctx.state);
+                remember_current_selection(&ctx.props, &mut ctx.state);
                 Update::layout()
             }
             SearchPaletteMsg::Activated(result_idx) => {
@@ -726,7 +729,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     let selected_item_index = current_selected_item_index(&ctx.state);
                     ctx.state.selected = 0;
                     emit_search_event(&ctx.props, &ctx.state.results, 0, true);
-                    remember_current_selection(&mut ctx.state);
+                    remember_current_selection(&ctx.props, &mut ctx.state);
                     clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
                 }
                 Update::layout()
@@ -737,7 +740,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     let selected_item_index = current_selected_item_index(&ctx.state);
                     ctx.state.selected = len - 1;
                     emit_search_event(&ctx.props, &ctx.state.results, len - 1, true);
-                    remember_current_selection(&mut ctx.state);
+                    remember_current_selection(&ctx.props, &mut ctx.state);
                     clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
                 }
                 Update::layout()
@@ -748,7 +751,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     let selected_item_index = current_selected_item_index(&ctx.state);
                     ctx.state.selected = ctx.state.selected.saturating_sub(10);
                     emit_search_event(&ctx.props, &ctx.state.results, ctx.state.selected, true);
-                    remember_current_selection(&mut ctx.state);
+                    remember_current_selection(&ctx.props, &mut ctx.state);
                     clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
                 }
                 Update::layout()
@@ -759,7 +762,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     let selected_item_index = current_selected_item_index(&ctx.state);
                     ctx.state.selected = (ctx.state.selected + 10).min(len - 1);
                     emit_search_event(&ctx.props, &ctx.state.results, ctx.state.selected, true);
-                    remember_current_selection(&mut ctx.state);
+                    remember_current_selection(&ctx.props, &mut ctx.state);
                     clear_pending_reset_after_navigation(&mut ctx.state, selected_item_index);
                 }
                 Update::layout()
@@ -1015,12 +1018,24 @@ fn clear_pending_reset_after_navigation(
     }
 }
 
-fn remember_current_selection(state: &mut SearchState) {
-    state.last_notified_selection = current_selected_item_index(state);
+fn current_selection_identity<T>(
+    props: &SearchPaletteProps<T>,
+    state: &SearchState,
+) -> Option<SelectionIdentity> {
+    let index = current_selected_item_index(state)?;
+    let item = props.items.get(index)?;
+    Some(match props.item_key {
+        Some(key) => SelectionIdentity::Key(key(item)),
+        None => SelectionIdentity::SourceIndex(index),
+    })
+}
+
+fn remember_current_selection<T>(props: &SearchPaletteProps<T>, state: &mut SearchState) {
+    state.last_notified_selection = current_selection_identity(props, state);
 }
 
 fn sync_current_selection<T: Clone>(props: &SearchPaletteProps<T>, state: &mut SearchState) {
-    let current = current_selected_item_index(state);
+    let current = current_selection_identity(props, state);
 
     if !props.sync_selection {
         state.last_notified_selection = current;
@@ -1080,7 +1095,7 @@ fn navigate_up<T: Clone>(props: &SearchPaletteProps<T>, state: &mut SearchState)
     if next != state.selected {
         state.selected = next;
         emit_search_event(props, &state.results, state.selected, true);
-        remember_current_selection(state);
+        remember_current_selection(props, state);
     }
 }
 
@@ -1096,7 +1111,7 @@ fn navigate_down<T: Clone>(props: &SearchPaletteProps<T>, state: &mut SearchStat
     if next != state.selected {
         state.selected = next;
         emit_search_event(props, &state.results, state.selected, true);
-        remember_current_selection(state);
+        remember_current_selection(props, state);
     }
 }
 
@@ -1551,6 +1566,87 @@ mod tests {
             render_refresh_runtime(&mut runtime);
             assert_eq!(selections.borrow().last().unwrap().as_ref(), "C");
             assert_eq!(selections.borrow().len(), 3);
+        }
+    }
+
+    #[test]
+    fn keyed_reordering_keeps_selection_without_a_duplicate_notification() {
+        for limit in [100, 1] {
+            let selections = Rc::new(RefCell::new(Vec::new()));
+            let activated = Rc::new(RefCell::new(Vec::new()));
+            let items = vec![
+                SearchItem::new("A", 0_usize),
+                SearchItem::new("B", 1),
+                SearchItem::new("C", 2),
+            ];
+            let mut runtime = refresh_runtime(RefreshRoot {
+                items: items.clone(),
+                seed: None,
+                keyed: true,
+                limit,
+                selections: selections.clone(),
+                activated: activated.clone(),
+            });
+            if limit == 1 {
+                runtime
+                    .update_from_boxed(
+                        ScopeId(2),
+                        Box::new(SearchPaletteMsg::ResultsReady {
+                            query_id: 1,
+                            results: all_item_results(items.len()),
+                        }),
+                    )
+                    .unwrap();
+            }
+            runtime
+                .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::NavigateDown))
+                .unwrap();
+            assert_eq!(selections.borrow().last().unwrap().as_ref(), "B");
+            let notifications = selections.borrow().len();
+            // Values also shift to match the new source indices, as in index-backed pickers.
+            runtime
+                .update_from_boxed(
+                    ScopeId(1),
+                    Box::new((
+                        vec![
+                            SearchItem::new("B", 0_usize),
+                            SearchItem::new("A", 1),
+                            SearchItem::new("C", 2),
+                        ],
+                        None::<usize>,
+                    )),
+                )
+                .unwrap();
+            render_refresh_runtime(&mut runtime);
+            runtime
+                .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::ActivateSelected))
+                .unwrap();
+            assert_eq!(activated.borrow().last().unwrap().as_ref(), "B");
+            assert_eq!(
+                selections.borrow().len(),
+                notifications,
+                "pending refresh must not repeat B"
+            );
+            if limit == 1 {
+                runtime
+                    .update_from_boxed(
+                        ScopeId(2),
+                        Box::new(SearchPaletteMsg::ResultsReady {
+                            query_id: 2,
+                            results: all_item_results(items.len()),
+                        }),
+                    )
+                    .unwrap();
+            }
+            runtime
+                .update_from_boxed(ScopeId(2), Box::new(SearchPaletteMsg::ActivateSelected))
+                .unwrap();
+            assert_eq!(activated.borrow().last().unwrap().as_ref(), "B");
+            assert_eq!(
+                selections.borrow().len(),
+                notifications,
+                "completed refresh must not repeat B"
+            );
         }
     }
 
