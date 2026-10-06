@@ -74,9 +74,6 @@ pub struct ManagedTerminalProps {
     /// Enable scroll wheel for scrollback.
     /// Default: `true`.
     pub scroll_wheel: bool,
-    /// Scrollback lines per wheel tick, overriding the app-wide multiplier.
-    /// Default: `None` (use the app-wide multiplier).
-    pub scroll_wheel_multiplier: Option<u16>,
     /// Modifiers required to activate explicit OSC 8 links and detected plain-text URLs.
     /// Default: [`KeyMods::CTRL`]. Extra held modifiers are allowed.
     pub link_activation_mods: KeyMods,
@@ -119,7 +116,6 @@ impl Default for ManagedTerminalProps {
             placeholder: Some(Arc::from("Starting terminal...")),
             forward_mouse: true,
             scroll_wheel: true,
-            scroll_wheel_multiplier: None,
             link_activation_mods: KeyMods::CTRL,
             link_hover_style: StyleSlot::Replace(Style::new().underline()),
             on_link_activate: None,
@@ -203,12 +199,6 @@ impl ManagedTerminal {
     /// Set whether scroll wheel controls scrollback.
     pub fn scroll_wheel(mut self, enabled: bool) -> Self {
         self.props.scroll_wheel = enabled;
-        self
-    }
-
-    /// Override the app-wide mouse wheel step multiplier for scrollback.
-    pub fn scroll_wheel_multiplier(mut self, multiplier: u16) -> Self {
-        self.props.scroll_wheel_multiplier = Some(multiplier.max(1));
         self
     }
 
@@ -568,9 +558,6 @@ impl Component for ManagedTerminal {
             }))
             .on_scroll_to(ctx.link().callback(ManagedTerminalMsg::TerminalScrollTo));
 
-        if let Some(multiplier) = ctx.props.scroll_wheel_multiplier {
-            terminal = terminal.scroll_wheel_multiplier(multiplier);
-        }
         if let Some(on_focus) = ctx.props.on_focus.clone() {
             terminal = terminal.on_focus(on_focus);
         }

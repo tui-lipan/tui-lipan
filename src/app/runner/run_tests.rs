@@ -7086,6 +7086,7 @@ fn forward_prefix_replays_swallowed_prefix_on_pending_chord_mismatch() {
 #[cfg(feature = "terminal")]
 struct TerminalWheelForwardSmoke {
     forwarded: Rc<RefCell<Vec<Vec<u8>>>>,
+    multiplier: Option<u16>,
 }
 
 #[cfg(feature = "terminal")]
@@ -7102,7 +7103,7 @@ impl Component for TerminalWheelForwardSmoke {
 
     fn view(&self, _ctx: &Context<Self>) -> Element {
         let forwarded = self.forwarded.clone();
-        Terminal::new()
+        let terminal = Terminal::new()
             .snapshot(crate::widgets::TerminalRenderSnapshot {
                 mouse_mode: crate::widgets::MouseModeState {
                     mode: crate::widgets::MouseMode::Normal,
@@ -7115,8 +7116,12 @@ impl Component for TerminalWheelForwardSmoke {
             .height(Length::Flex(1))
             .on_mouse_forward(Callback::new(move |bytes: Vec<u8>| {
                 forwarded.borrow_mut().push(bytes);
-            }))
-            .into()
+            }));
+        match self.multiplier {
+            Some(multiplier) => terminal.scroll_wheel_multiplier(multiplier),
+            None => terminal,
+        }
+        .into()
     }
 }
 
@@ -7125,18 +7130,23 @@ fn wheel_forward_runner(
     forwarded: &Rc<RefCell<Vec<Vec<u8>>>>,
     app: App,
 ) -> AppRunner<TerminalWheelForwardSmoke> {
-    let mut runner = AppRunner::new(
-        app,
-        TerminalWheelForwardSmoke {
-            forwarded: forwarded.clone(),
-        },
-        (),
-    );
+    wheel_forward_runner_with_multiplier(forwarded, app, None)
+}
+
+#[cfg(feature = "terminal")]
+fn wheel_forward_runner_with_multiplier(
+    forwarded: &Rc<RefCell<Vec<Vec<u8>>>>,
+    app: App,
+    multiplier: Option<u16>,
+) -> AppRunner<TerminalWheelForwardSmoke> {
+    let component = || TerminalWheelForwardSmoke {
+        forwarded: forwarded.clone(),
+        multiplier,
+    };
+    let mut runner = AppRunner::new(app, component(), ());
     init_runner(
         &mut runner,
-        TerminalWheelForwardSmoke {
-            forwarded: forwarded.clone(),
-        },
+        component(),
         Rect {
             x: 0,
             y: 0,
@@ -7296,6 +7306,30 @@ fn forwarded_wheel_ticks_ignore_app_scroll_wheel_multiplier() {
 
     // Forwarding is a passthrough of what the host sent; the child applies its own scroll step, so
     // scaling here would multiply the two together.
+    let emitted = forwarded.borrow();
+    assert_eq!(emitted.len(), 1);
+    assert_eq!(emitted[0], b"\x1b[<64;3;2M".to_vec());
+}
+
+/// A terminal's own multiplier scales its scrollback only. A mouse-tracking child still gets one
+/// wheel report per host tick, so the child's own scroll step is not multiplied by it.
+#[cfg(feature = "terminal")]
+#[test]
+fn forwarded_wheel_ticks_ignore_terminal_scroll_wheel_multiplier() {
+    let forwarded = Rc::new(RefCell::new(Vec::new()));
+    let mut runner =
+        wheel_forward_runner_with_multiplier(&forwarded, App::new().mouse(false), Some(3));
+
+    assert!(runner.dispatch_mouse_scroll(
+        MouseEvent {
+            x: 2,
+            y: 1,
+            kind: MouseKind::ScrollUp,
+            mods: KeyMods::default(),
+        },
+        1,
+    ));
+
     let emitted = forwarded.borrow();
     assert_eq!(emitted.len(), 1);
     assert_eq!(emitted[0], b"\x1b[<64;3;2M".to_vec());
