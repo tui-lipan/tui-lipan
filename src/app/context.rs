@@ -404,6 +404,7 @@ pub struct App {
     pub(crate) title: Option<String>,
     pub(crate) surface_mode: SurfaceMode,
     pub(crate) mouse_enabled: Option<bool>,
+    pub(crate) require_utf8: bool,
     pub(crate) scroll_wheel_multiplier: u16,
     pub(crate) theme: Theme,
     pub(crate) toast_placement: ToastPlacement,
@@ -441,6 +442,7 @@ impl Default for App {
             title: None,
             surface_mode: SurfaceMode::default(),
             mouse_enabled: None,
+            require_utf8: false,
             scroll_wheel_multiplier: 1,
             theme,
             toast_placement: ToastPlacement::default(),
@@ -544,6 +546,22 @@ impl App {
     /// - inline mode: disabled
     pub fn mouse(mut self, enabled: bool) -> Self {
         self.mouse_enabled = Some(enabled);
+        self
+    }
+
+    /// Refuse to start on a terminal that does not display UTF-8 text.
+    ///
+    /// The startup probe then also prints one two-byte UTF-8 character between two cursor reports
+    /// and erases it again. A terminal that moves the cursor two cells has drawn the bytes as two
+    /// characters, and [`AppRunner::run`](crate::AppRunner::run) returns an
+    /// [`io::ErrorKind::Unsupported`](std::io::ErrorKind::Unsupported) error before raw mode or
+    /// the alternate screen is entered. A terminal that does not answer, or whose answer is
+    /// ambiguous, is let through. [`host_renders_utf8`](crate::style::host_renders_utf8) reports
+    /// what the probe found.
+    ///
+    /// Off by default: nothing is printed to probe a host the app does not need UTF-8 from.
+    pub fn require_utf8(mut self, required: bool) -> Self {
+        self.require_utf8 = required;
         self
     }
 

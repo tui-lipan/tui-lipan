@@ -534,6 +534,7 @@ pub struct AppRunner<C: Component> {
     pub(crate) text_area_newline_binding: TextAreaNewlineBinding,
     pub(crate) contrast_policy: ContrastPolicy,
     pub(crate) mouse_enabled: bool,
+    require_utf8: bool,
     pub(crate) scroll_wheel_multiplier: u16,
     /// How often the loop wakes for content nothing asked it to draw - a terminal's child program
     /// writing, or geometry/layout animation advancing. See [`crate::app::App::frame_rate`].
@@ -852,6 +853,7 @@ impl<C: Component> AppRunner<C> {
             text_area_newline_binding: app.text_area_newline_binding,
             contrast_policy: app.contrast_policy,
             mouse_enabled,
+            require_utf8: app.require_utf8,
             scroll_wheel_multiplier: app.scroll_wheel_multiplier.max(1),
             frame_interval,
             color_animation_interval,
@@ -2099,6 +2101,7 @@ impl<C: Component> AppRunner<C> {
             let (mut terminal, guard) = TerminalGuard::enter(
                 self.surface.mode(),
                 self.mouse_enabled,
+                self.require_utf8,
                 panic_keyboard_enhancement.as_ref(),
             )?;
             let mut guard = guard;
