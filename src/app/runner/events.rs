@@ -1190,6 +1190,21 @@ impl<C: Component> AppRunner<C> {
     /// * the tick count is forwarded to the tree handler so that a burst of events results in a
     ///   single tree mutation.
     pub(crate) fn dispatch_mouse_scroll(&mut self, mouse: MouseEvent, scroll_ticks: u16) -> bool {
+        self.dispatch_mouse_scroll_level(mouse, scroll_ticks)
+            .is_dirty()
+    }
+
+    /// [`dispatch_mouse_scroll`](Self::dispatch_mouse_scroll), reporting how much of the next frame
+    /// the wheel invalidated.
+    ///
+    /// A terminal moving through its scrollback needs only a repaint: it reads its rows when it
+    /// paints and has no children to lay out. Re-reconciling the whole tree for each tick of a fast
+    /// wheel over a pane was most of what scrolling one cost.
+    pub(crate) fn dispatch_mouse_scroll_level(
+        &mut self,
+        mouse: MouseEvent,
+        scroll_ticks: u16,
+    ) -> super::DirtyLevel {
         let (x, y) = self.to_content_coords(mouse.x, mouse.y);
         let adjusted_mouse = MouseEvent { x, y, ..mouse };
         self.mouse.last_mouse.set(Some((x, y)));
@@ -1202,16 +1217,16 @@ impl<C: Component> AppRunner<C> {
 
         #[cfg(feature = "terminal")]
         if self.forward_terminal_mouse_ticks(adjusted_mouse, scroll_ticks) {
-            return true;
+            return super::DirtyLevel::LayoutOnly;
         }
 
-        let scroll_dirty = mouse::handle_scroll_wheel_n(
+        let scrolled = mouse::scroll_wheel_n(
             &mut self.core.tree,
             adjusted_mouse,
             usize::from(scroll_ticks),
             self.scroll_wheel_multiplier,
         );
-        let selection_dirty = if scroll_dirty && self.drag.is_active() {
+        let selection_dirty = if scrolled != mouse::WheelScroll::None && self.drag.is_active() {
             self.drag.remember_pointer(x, y);
             self.refresh_active_selection_drag_at(x, y)
         } else {
@@ -1219,7 +1234,15 @@ impl<C: Component> AppRunner<C> {
         };
         let hover_dirty = self.update_hover_impl(x, y, true);
 
-        toast_hover_dirty || hover_dirty || scroll_dirty || selection_dirty
+        if toast_hover_dirty || hover_dirty || selection_dirty {
+            return super::DirtyLevel::LayoutOnly;
+        }
+        match scrolled {
+            mouse::WheelScroll::None => super::DirtyLevel::None,
+            #[cfg(feature = "terminal")]
+            mouse::WheelScroll::Paint => super::DirtyLevel::PaintOnly,
+            mouse::WheelScroll::Layout => super::DirtyLevel::LayoutOnly,
+        }
     }
 
     pub(crate) fn to_content_coords(&self, x: u16, y: u16) -> (u16, u16) {

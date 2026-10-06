@@ -403,7 +403,7 @@ fn text_area_opt_out_hides_unfocused_selection() {
 
     assert_eq!(cell.symbol, "a");
     assert_ne!(cell.bg, ALT_THEME_BG);
-    assert!(!cell.modifiers.underline.is_some());
+    assert!(cell.modifiers.underline.is_none());
 }
 
 #[test]

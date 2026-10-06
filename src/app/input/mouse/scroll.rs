@@ -16,8 +16,31 @@ pub(crate) fn handle_scroll_wheel_n(
     scroll_ticks: usize,
     fallback_multiplier: u16,
 ) -> bool {
+    scroll_wheel_n(tree, event, scroll_ticks, fallback_multiplier) != WheelScroll::None
+}
+
+/// What a wheel event moved, which decides how much of the next frame has to be redone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WheelScroll {
+    /// Nothing under the pointer scrolled.
+    None,
+    /// A terminal moved through its scrollback. It reads its rows when it paints and has no
+    /// children to place, so a repaint shows the new offset.
+    #[cfg(feature = "terminal")]
+    Paint,
+    /// Any other scrollable, whose newly visible children may need laying out.
+    Layout,
+}
+
+/// [`handle_scroll_wheel_n`], reporting what scrolled rather than only whether something did.
+pub(crate) fn scroll_wheel_n(
+    tree: &mut NodeTree,
+    event: MouseEvent,
+    scroll_ticks: usize,
+    fallback_multiplier: u16,
+) -> WheelScroll {
     let Some(hit) = tree.hit_test(event.x as i16, event.y as i16) else {
-        return false;
+        return WheelScroll::None;
     };
 
     let mut cur = Some(hit);
@@ -42,7 +65,7 @@ pub(crate) fn handle_scroll_wheel_n(
             event.mods.shift || remapped,
         );
         let Some(action) = scroll_action_from_mouse_n(event, scroll_lines) else {
-            return false;
+            return WheelScroll::None;
         };
         let action = if remapped {
             to_horizontal_action(action)
@@ -79,13 +102,17 @@ pub(crate) fn handle_scroll_wheel_n(
         };
 
         if handled {
-            return true;
+            #[cfg(feature = "terminal")]
+            if tag == ScrollableTag::Terminal {
+                return WheelScroll::Paint;
+            }
+            return WheelScroll::Layout;
         }
 
         cur = parent;
     }
 
-    false
+    WheelScroll::None
 }
 
 /// Rewrite a vertical wheel action onto the horizontal axis.

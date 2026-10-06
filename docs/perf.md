@@ -58,6 +58,13 @@ also moves an indicator or a border. Nothing has to be proved by hand: any other
 update in the frame widens the level back on its own, and the cases a row
 repaint cannot serve fall back to an ordinary paint.
 
+Scrolling a live terminal is the same shape. The wheel and the scrollbar report
+the new offset through `on_scroll_to`; move the screen with `set_scrollback` and
+return `Update::paint()`, and the runtime asks for no more than a repaint on its
+own side either. Not `terminal_paint()`: a moved viewport changes every row
+without the emulator recording any damage, so a row repaint would leave the old
+rows on screen.
+
 Animated colours have the same two shapes. `Context::transition` returns the
 interpolated value, so every frame of a fade must run `view()` for the new colour
 to reach the rendered styles — a 160 ms focus fade at 60 fps is ten rebuilds of

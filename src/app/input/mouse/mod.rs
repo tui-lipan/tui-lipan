@@ -21,5 +21,5 @@ pub(crate) use hover::{
     mouse_region_hover_transition_affects_paint, release_pointer_hover, should_hover,
 };
 pub(crate) use r#move::gather_mouse_move_action;
-pub(crate) use scroll::handle_scroll_wheel_n;
+pub(crate) use scroll::{WheelScroll, handle_scroll_wheel_n, scroll_wheel_n};
 pub(crate) use types::*;

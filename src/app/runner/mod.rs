@@ -2704,20 +2704,22 @@ impl<C: Component> AppRunner<C> {
                                                                     // Different event - dispatch the
                                                                     // coalesced scroll first, then handle
                                                                     // the non-scroll event.
-                                                                    if self.dispatch_mouse_scroll(
-                                                                        mouse, count,
-                                                                    ) {
-                                                                        // Scroll offset changed - re-reconcile
-                                                                        // with the cached element tree so newly
-                                                                        // visible children are laid out, but skip
-                                                                        // the expensive view() rebuild.
-                                                                        dirty.mark_layout();
+                                                                    let level = self
+                                                                        .dispatch_mouse_scroll_level(
+                                                                            mouse, count,
+                                                                        );
+                                                                    if level.is_dirty() {
+                                                                        // Neither a scrolled view nor a
+                                                                        // scrolled terminal reruns view().
+                                                                        apply_dirty_level(
+                                                                            &mut dirty, level,
+                                                                        );
                                                                         #[cfg(feature = "devtools")]
                                                             self.note_attribution(
                                                                 crate::devtools::state::UpdateSource::Input(
                                                                     "input:scroll",
                                                                 ),
-                                                                DirtyLevel::LayoutOnly,
+                                                                level,
                                                             );
                                                                     }
                                                                     if self
@@ -2756,19 +2758,23 @@ impl<C: Component> AppRunner<C> {
                                                     }
                                                 }
                                             }
-                                            if count > 0 && self.dispatch_mouse_scroll(mouse, count)
-                                            {
-                                                // Scroll offset changed - re-reconcile
-                                                // with the cached element tree so newly
-                                                // visible children are laid out, but skip
-                                                // the expensive view() rebuild.
-                                                dirty.mark_layout();
+                                            let level = if count > 0 {
+                                                self.dispatch_mouse_scroll_level(mouse, count)
+                                            } else {
+                                                DirtyLevel::None
+                                            };
+                                            if level.is_dirty() {
+                                                // A scrolled view is re-reconciled from the
+                                                // cached element tree so newly visible children
+                                                // are laid out, and a scrolled terminal is only
+                                                // repainted; neither reruns view().
+                                                apply_dirty_level(&mut dirty, level);
                                                 #[cfg(feature = "devtools")]
                                                 self.note_attribution(
                                                     crate::devtools::state::UpdateSource::Input(
                                                         "input:scroll",
                                                     ),
-                                                    DirtyLevel::LayoutOnly,
+                                                    level,
                                                 );
                                             }
                                             if left_viewport {

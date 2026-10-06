@@ -263,9 +263,25 @@ fn paint_terminal_rows(
         content_style,
         content_w,
     } = *paint;
-    let lines: Vec<Line<'_>> = rows
-        .clone()
-        .map(|row| {
+    // `Paragraph` clips its area to the buffer before placing anything, which moves where a row
+    // starts when the area hangs off the buffer's left or top. Rows are placed the same way here.
+    let area = area.intersection(buf.area);
+    if area.is_empty() {
+        return;
+    }
+    for (index, row) in rows.enumerate() {
+        let Ok(index) = u16::try_from(index) else {
+            break;
+        };
+        if index >= area.height {
+            break;
+        }
+        let row_area = ratatui::layout::Rect {
+            y: area.y + index,
+            height: 1,
+            ..area
+        };
+        let spans = {
             let source = match flash_range.as_ref() {
                 Some(range) if range.selection.columns_for_row(row, 0).is_some() => range.line(row),
                 _ => node.lines.get(row).map(Vec::as_slice),
@@ -279,9 +295,7 @@ fn paint_terminal_rows(
                     .extend(row_spans.map(|span| (span.start_col..span.end_col, link_hover_style)));
                 Some(restyle_columns(line, &ranges))
             });
-            let mut spans: Vec<ratatui::text::Span<'_>> = if let Some(line) =
-                hovered_source.as_deref()
-            {
+            if let Some(line) = hovered_source.as_deref() {
                 apply_selection_to_row(line, row, paint_selection, selection_style, content_style)
                     .into_iter()
                     .map(|span| ratatui::text::Span::styled(span.content.into_owned(), span.style))
@@ -298,22 +312,48 @@ fn paint_terminal_rows(
                         )
                     })
                     .unwrap_or_default()
-            };
-
-            if spans.is_empty() {
-                spans.push(ratatui::text::Span::styled(
-                    "",
-                    to_ratatui_style(content_style),
-                ));
             }
+        };
+        paint_terminal_row(buf, spans, row_area, content_w, dx);
+    }
+}
 
-            Line::from(clip_spans_no_ellipsis(spans, content_w))
-        })
-        .collect();
+/// Paint one row's spans into `row_area`, a one-row rect already inside `buf`.
+///
+/// This runs for every visible cell of every terminal on every frame that repaints it, so it is
+/// the hot loop of scrolling and of streaming output. A row of printable ASCII - nearly every row
+/// a shell or a log shows - has one cell per byte, so it is written straight into the buffer with
+/// no grapheme segmentation and no width lookups. Anything else, and any row drawn with a
+/// horizontal offset, goes through the general clip-and-`Paragraph` path. Both write the same
+/// cells: `paint_terminal_row_matches_paragraph` holds them to it.
+fn paint_terminal_row(
+    buf: &mut ratatui::buffer::Buffer,
+    spans: Vec<ratatui::text::Span<'_>>,
+    row_area: ratatui::layout::Rect,
+    content_w: u16,
+    dx: u16,
+) {
+    if dx == 0 && spans.iter().all(|span| is_printable_ascii(&span.content)) {
+        let limit = content_w.min(row_area.width);
+        let mut x = 0u16;
+        for span in &spans {
+            for byte in span.content.bytes() {
+                if x >= limit {
+                    return;
+                }
+                buf[(row_area.x + x, row_area.y)]
+                    .set_char(char::from(byte))
+                    .set_style(span.style);
+                x += 1;
+            }
+        }
+        return;
+    }
+    let line = Line::from(clip_spans_no_ellipsis(spans, content_w));
     // `Buffer` rather than `Frame`: this is what `Widget::render` takes anyway, and a partial
     // repaint wants to paint a row into a buffer of its own rather than into the frame the
     // terminal is about to flush.
-    ratatui::widgets::Widget::render(Paragraph::new(lines).scroll((0, dx)), area, buf);
+    ratatui::widgets::Widget::render(Paragraph::new(vec![line]).scroll((0, dx)), row_area, buf);
 }
 
 pub(crate) fn render_terminal(
@@ -596,14 +636,21 @@ fn apply_selection_to_row<'a>(
             .collect();
     };
 
-    if sel.is_empty() {
+    // Asking about the row first keeps the width measurement - a grapheme walk of the whole row -
+    // to the rows the selection actually touches. Every other row is painted on every frame while
+    // a selection drag autoscrolls.
+    if sel.is_empty() || sel.columns_for_row(row, 0).is_none() {
         return spans
             .iter()
             .map(|span| to_ratatui_span(span, base_style))
             .collect();
     }
 
-    let line_width = crate::utils::spans::line_width(spans);
+    let line_width = if spans_are_printable_ascii(spans) {
+        spans.iter().map(|span| span.content.len()).sum()
+    } else {
+        crate::utils::spans::line_width(spans)
+    };
 
     let Some((col_start, col_end)) = sel.columns_for_row(row, line_width) else {
         return spans
@@ -628,7 +675,62 @@ fn apply_column_selection_to_spans(
             .map(|span| to_ratatui_span(span, base_style))
             .collect();
     }
+    if spans_are_printable_ascii(spans) {
+        return select_ascii_columns(spans, col_start, col_end, selection_style, base_style);
+    }
+    select_columns_by_grapheme(spans, col_start, col_end, selection_style, base_style)
+}
 
+/// Whether every byte of `text` is printable ASCII, which makes it exactly one cell per byte.
+fn is_printable_ascii(text: &str) -> bool {
+    text.bytes().all(|byte| (b' '..=b'~').contains(&byte))
+}
+
+fn spans_are_printable_ascii(spans: &[Span]) -> bool {
+    spans.iter().all(|span| is_printable_ascii(&span.content))
+}
+
+/// [`select_columns_by_grapheme`] for a row that is one cell per byte: each span splits at most
+/// twice, at byte offsets, into borrowed pieces.
+fn select_ascii_columns(
+    spans: &[Span],
+    col_start: usize,
+    col_end: usize,
+    selection_style: Style,
+    base_style: Style,
+) -> Vec<ratatui::text::Span<'_>> {
+    let mut out = Vec::with_capacity(spans.len() + 2);
+    let mut col = 0usize;
+    for span in spans {
+        let text: &str = &span.content;
+        let span_style = base_style.patch(span.style);
+        let plain = to_ratatui_style(span_style);
+        let start = col_start.clamp(col, col + text.len()) - col;
+        let end = col_end.clamp(col, col + text.len()) - col;
+        if start > 0 {
+            out.push(ratatui::text::Span::styled(&text[..start], plain));
+        }
+        if end > start {
+            out.push(ratatui::text::Span::styled(
+                &text[start..end],
+                to_ratatui_style(span_style.patch(selection_style)),
+            ));
+        }
+        if end.max(start) < text.len() {
+            out.push(ratatui::text::Span::styled(&text[end.max(start)..], plain));
+        }
+        col += text.len();
+    }
+    out
+}
+
+fn select_columns_by_grapheme(
+    spans: &[Span],
+    col_start: usize,
+    col_end: usize,
+    selection_style: Style,
+    base_style: Style,
+) -> Vec<ratatui::text::Span<'_>> {
     let mut out = Vec::new();
     let mut col = 0usize;
     let mut run_text = String::new();
@@ -779,6 +881,180 @@ pub(crate) fn terminal_cursor_position(
         cursor_x as u16,
         cursor_y as u16,
     ))
+}
+
+#[cfg(test)]
+mod row_paint_tests {
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect as RRect;
+    use ratatui::style::{Color as RColor, Modifier, Style as RStyle};
+    use ratatui::text::{Line, Span as RSpan};
+    use ratatui::widgets::{Paragraph, Widget};
+
+    use super::{clip_spans_no_ellipsis, paint_terminal_row};
+
+    /// The path every row took before the ASCII fast path existed.
+    fn paint_with_paragraph(
+        buf: &mut Buffer,
+        spans: Vec<RSpan<'_>>,
+        row_area: RRect,
+        content_w: u16,
+        dx: u16,
+    ) {
+        let line = Line::from(clip_spans_no_ellipsis(spans, content_w));
+        Paragraph::new(vec![line])
+            .scroll((0, dx))
+            .render(row_area, buf);
+    }
+
+    /// A buffer whose cells already carry symbols and styles, so a writer that skips a cell or
+    /// replaces a style it should only have patched shows up as a difference.
+    fn painted_buffer(area: RRect) -> Buffer {
+        let mut buf = Buffer::empty(area);
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                buf[(x, y)]
+                    .set_symbol(if (x + y) % 2 == 0 { "#" } else { "." })
+                    .set_style(
+                        RStyle::new()
+                            .fg(RColor::Indexed((x % 7) as u8))
+                            .bg(RColor::Indexed((y % 5) as u8))
+                            .add_modifier(Modifier::UNDERLINED),
+                    );
+            }
+        }
+        buf
+    }
+
+    fn rows() -> Vec<Vec<RSpan<'static>>> {
+        let red = RStyle::new().fg(RColor::Red);
+        let on_blue = RStyle::new().bg(RColor::Blue).add_modifier(Modifier::BOLD);
+        let unbold = RStyle::new().remove_modifier(Modifier::UNDERLINED);
+        vec![
+            vec![],
+            vec![RSpan::raw("")],
+            vec![RSpan::styled("hello world", red)],
+            vec![
+                RSpan::styled("ab", red),
+                RSpan::raw(" "),
+                RSpan::styled("cdefghijklmnopqrstuvwxyz0123456789", on_blue),
+            ],
+            vec![RSpan::styled("x".repeat(80), unbold)],
+            vec![RSpan::raw("wide 日本語 text")],
+            vec![RSpan::styled("a👩‍💻b", red), RSpan::raw("tail")],
+            vec![RSpan::raw("e\u{301}combining")],
+            vec![RSpan::raw("tab\there"), RSpan::styled("bell\u{7}", red)],
+            vec![RSpan::raw("del\u{7f}x")],
+            vec![RSpan::raw("abc"), RSpan::raw("界界界界"), RSpan::raw("z")],
+        ]
+    }
+
+    #[test]
+    fn paint_terminal_row_matches_paragraph() {
+        let buf_area = RRect::new(0, 0, 24, 1);
+        for spans in rows() {
+            for (x, width) in [(0, 24), (3, 10), (5, 19), (0, 1), (2, 0)] {
+                for content_w in [0, 1, 4, 9, 24, u16::MAX] {
+                    for dx in [0, 1, 3] {
+                        let row_area = RRect::new(x, 0, width, 1).intersection(buf_area);
+                        let mut expected = painted_buffer(buf_area);
+                        let mut actual = expected.clone();
+                        paint_with_paragraph(&mut expected, spans.clone(), row_area, content_w, dx);
+                        paint_terminal_row(&mut actual, spans.clone(), row_area, content_w, dx);
+                        assert_eq!(
+                            actual, expected,
+                            "spans {spans:?} at x {x} width {width} content_w {content_w} dx {dx}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ascii_selection_matches_grapheme_selection() {
+        use super::{select_ascii_columns, select_columns_by_grapheme};
+        use crate::style::{Color, Span, Style};
+
+        let rows = [
+            vec![Span::new("hello world")],
+            vec![
+                Span::new("ab").style(Style::new().fg(Color::Red)),
+                Span::new(""),
+                Span::new(" cd ").style(Style::new().bg(Color::Blue).bold()),
+                Span::new("efghij"),
+            ],
+        ];
+        let selected = Style::new().bg(Color::Yellow).fg(Color::Black);
+        let base = Style::new().fg(Color::Green);
+        let area = RRect::new(0, 0, 16, 1);
+        for spans in &rows {
+            for col_start in 0..14 {
+                for col_end in col_start + 1..15 {
+                    let mut expected = painted_buffer(area);
+                    let mut actual = expected.clone();
+                    paint_terminal_row(
+                        &mut expected,
+                        select_columns_by_grapheme(spans, col_start, col_end, selected, base),
+                        area,
+                        16,
+                        0,
+                    );
+                    paint_terminal_row(
+                        &mut actual,
+                        select_ascii_columns(spans, col_start, col_end, selected, base),
+                        area,
+                        16,
+                        0,
+                    );
+                    assert_eq!(
+                        actual, expected,
+                        "{spans:?} selecting {col_start}..{col_end}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Not a correctness test: `cargo test --release --features terminal --lib
+    /// paint_terminal_rows_timing -- --ignored --nocapture` prints how long a full 200x60 screen
+    /// of shell output takes through each path.
+    #[test]
+    #[ignore = "timing probe, run by hand"]
+    fn paint_terminal_rows_timing() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let area = RRect::new(0, 0, 200, 60);
+        let prompt = RStyle::new().fg(RColor::Green).add_modifier(Modifier::BOLD);
+        let rows: Vec<Vec<RSpan<'static>>> = (0..60)
+            .map(|row| {
+                let text = format!("{row:>6} {}", "lorem ipsum dolor sit amet ".repeat(7));
+                vec![
+                    RSpan::styled("user@host", prompt),
+                    RSpan::raw(" $ "),
+                    RSpan::raw(text[..188].to_string()),
+                ]
+            })
+            .collect();
+        let frames = 2_000;
+        let mut buf = Buffer::empty(area);
+        for (name, fast) in [("paragraph", false), ("direct", true)] {
+            let start = Instant::now();
+            for _ in 0..frames {
+                for (y, spans) in rows.iter().enumerate() {
+                    let row_area = RRect::new(0, y as u16, 200, 1);
+                    if fast {
+                        paint_terminal_row(&mut buf, spans.clone(), row_area, 200, 0);
+                    } else {
+                        paint_with_paragraph(&mut buf, spans.clone(), row_area, 200, 0);
+                    }
+                }
+                black_box(&buf);
+            }
+            println!("{name}: {:?} per 200x60 frame", start.elapsed() / frames);
+        }
+    }
 }
 
 #[cfg(test)]
