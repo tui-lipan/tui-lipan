@@ -1365,9 +1365,9 @@ impl<C: Component> Context<C> {
     ///
     /// Enable while an overlay needs physical modifier identity or records shortcuts, and
     /// disable when it closes. On Unix, associated text is decoded before key conversion so
-    /// composed text remains usable. Unsupported terminals ignore the request; modifier
-    /// sides then remain unknown. Keys already held when reporting starts may also be unknown
-    /// until released and pressed again.
+    /// composed text remains usable in fullscreen apps. Unix inline surfaces and unsupported
+    /// terminals ignore the request; modifier sides then remain unknown. Keys already held when
+    /// reporting starts may also be unknown until released and pressed again.
     pub fn set_modifier_key_reporting(&self, enabled: bool) {
         self.env.modifier_key_reporting.set(enabled);
     }

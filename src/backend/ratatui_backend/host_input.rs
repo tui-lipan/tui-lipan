@@ -317,6 +317,51 @@ pub(crate) mod pty_test {
     /// Run `test_name` (its path without the crate name) as a child on a fresh pty, close the
     /// master once the child reports `ready`, and return the child's report.
     pub(crate) fn run_and_hang_up(test_name: &str) -> HashMap<String, String> {
+        run_on_pty(test_name, |master| {
+            // Give the child time to block inside its read, then take the terminal away.
+            std::thread::sleep(Duration::from_millis(300));
+            drop(master);
+        })
+    }
+
+    /// Type ordinary text after the child is ready, checking that no all-key mode was enabled.
+    pub(crate) fn run_with_text(test_name: &str, text: &str) -> HashMap<String, String> {
+        use std::io::Read;
+        use std::os::fd::AsRawFd;
+
+        run_on_pty(test_name, |master| {
+            let mut terminal = std::fs::File::from(master);
+            let mut output = Vec::new();
+            let mut poll = libc::pollfd {
+                fd: terminal.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: poll points to one valid descriptor; the bounded wait drains ready output.
+            while unsafe { libc::poll(&mut poll, 1, 20) } > 0 {
+                let mut buffer = [0; 4096];
+                let count = terminal.read(&mut buffer).expect("read terminal modes");
+                if count == 0 {
+                    break;
+                }
+                output.extend_from_slice(&buffer[..count]);
+            }
+            assert!(
+                !output.windows(6).any(|bytes| bytes == b"\x1b[=31u"),
+                "inline reporting must leave the terminal in ordinary text mode"
+            );
+            terminal
+                .write_all(text.as_bytes())
+                .expect("type inline text");
+            // Keep the master open until the child consumes the text.
+            terminal
+        })
+    }
+
+    fn run_on_pty<T>(
+        test_name: &str,
+        interact: impl FnOnce(OwnedFd) -> T,
+    ) -> HashMap<String, String> {
         // SAFETY: straightforward pty allocation; every return value is checked.
         let master = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC) };
         assert!(master >= 0, "posix_openpt failed");
@@ -382,9 +427,7 @@ pub(crate) mod pty_test {
             let _ = child.wait();
             panic!("pty child never became ready");
         }
-        // Give the child time to be blocked inside its read, then take the terminal away.
-        std::thread::sleep(Duration::from_millis(300));
-        drop(master);
+        let _terminal = interact(master);
 
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {

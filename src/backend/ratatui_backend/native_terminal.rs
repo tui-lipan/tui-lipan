@@ -469,6 +469,12 @@ impl TerminalGuard {
     }
 
     pub(crate) fn set_modifier_key_reporting(&mut self, enabled: bool) -> io::Result<bool> {
+        // Unix inline input goes through Termina's EventReader, which drops CSI-u associated
+        // text. Keep its ordinary text mode until that reader can preprocess raw bytes too.
+        #[cfg(unix)]
+        if !self.policy.uses_alternate_screen {
+            return Ok(false);
+        }
         if !self.keyboard_enhancement || self.modifier_key_reporting == enabled {
             return Ok(false);
         }
@@ -573,5 +579,63 @@ mod mouse_motion_tests {
             transcript,
             b"\x1b[?1016h\x1b[?1003h\x1b[?1003l\x1b[?1000h\x1b[?1002h\x1b[?1003h"
         );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use crate::backend::ratatui_backend::host_input::{
+        HostEvent, InlineHostReader,
+        pty_test::{child_report, run_with_text},
+    };
+    use crossterm::event::{Event, KeyCode};
+
+    #[test]
+    fn inline_modifier_request_preserves_shifted_and_composed_text() {
+        if let Some(report) = child_report() {
+            crossterm::terminal::enable_raw_mode().expect("raw PTY");
+            let mut guard = TerminalGuard {
+                stdout: io::stdout(),
+                policy: surface_terminal_policy(SurfaceMode::InlineEphemeral { height: 3.into() }),
+                keyboard_enhancement: true,
+                modifier_key_reporting: false,
+                theme_notifications: false,
+            };
+            assert!(
+                !guard
+                    .set_modifier_key_reporting(true)
+                    .expect("request modifiers")
+            );
+            assert!(!guard.modifier_key_reporting);
+            // The transcript surface shares the same input restriction.
+            guard.policy = surface_terminal_policy(SurfaceMode::InlineTranscript {
+                height: 3.into(),
+                startup: crate::app::context::InlineStartupPolicy::PreserveHost,
+            });
+            assert!(
+                !guard
+                    .set_modifier_key_reporting(true)
+                    .expect("request modifiers")
+            );
+            let reader = InlineHostReader::start().expect("inline reader");
+            report.line("ready", 1);
+            let mut text = String::new();
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while text.chars().count() < 2 && std::time::Instant::now() < deadline {
+                if let HostEvent::Input(Event::Key(key)) =
+                    reader.read(Duration::from_millis(50)).expect("inline key")
+                    && let KeyCode::Char(ch) = key.code
+                {
+                    text.push(ch);
+                }
+            }
+            report.line("text", text);
+            return;
+        }
+        let module = module_path!().split_once("::").unwrap().1;
+        let name = format!("{module}::inline_modifier_request_preserves_shifted_and_composed_text");
+        let report = run_with_text(&name, "Ał");
+        assert_eq!(report.get("text").map(String::as_str), Some("Ał"));
     }
 }

@@ -134,10 +134,15 @@ fn search_input_key_interceptor(
             }
         }
 
-        user_interceptor
+        if user_interceptor
             .as_ref()
-            .map(|handler| handler.handle(key))
-            .unwrap_or(false)
+            .is_some_and(|handler| handler.handle(key))
+        {
+            return true;
+        }
+        // Preserve the caller's chance to handle empty-result navigation, then keep an
+        // unhandled physical navigation chord out of the input's character fallback.
+        key.left_alt_arrow().is_some() && nav_key_to_msg(key).is_some()
     })
 }
 
@@ -2320,6 +2325,36 @@ mod tests {
         // Declined by the caller too: unhandled, rather than silently eaten by the palette.
         assert!(!handler.handle(key(KeyCode::Down)));
         assert_eq!(&*seen.borrow(), &[KeyCode::Enter, KeyCode::Down]);
+    }
+
+    #[test]
+    fn empty_results_consume_left_alt_row_navigation_after_callers_interceptor() {
+        let dispatcher = Dispatcher::new(|_, _| panic!("empty palette must not navigate"));
+        let link = Link::new(ScopeId(1), dispatcher);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen_for_handler = Rc::clone(&seen);
+        let handler = search_input_key_interceptor(
+            link.clone(),
+            Some(KeyHandler::new(move |key| {
+                seen_for_handler.borrow_mut().push(key.code);
+                false
+            })),
+            false,
+        );
+        let without_caller = search_input_key_interceptor(link, None, false);
+        for ch in ['j', 'k'] {
+            let event = KeyEvent {
+                code: KeyCode::Char(ch),
+                mods: KeyMods {
+                    alt_side: crate::AltSide::Left,
+                    ..KeyMods::ALT
+                },
+            };
+            assert!(handler.handle(event), "left Alt+{ch} must not insert text");
+            assert!(without_caller.handle(event));
+        }
+        assert_eq!(&*seen.borrow(), &[KeyCode::Char('j'), KeyCode::Char('k')]);
+        assert!(!handler.handle(key(KeyCode::Char('j'))));
     }
 
     struct SelectionSeedChangeRoot {
