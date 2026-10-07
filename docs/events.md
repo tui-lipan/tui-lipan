@@ -549,10 +549,21 @@ pub struct KeyEvent {
 pub struct KeyMods {
     pub ctrl: bool,
     pub alt: bool,
+    pub alt_side: AltSide, // Unknown, Left, Right, Both
     pub shift: bool,
     pub super_key: bool,
 }
 ```
+
+`AltSide` is exported from the crate root and prelude. Enable
+`ctx.set_modifier_key_reporting(true)` while an overlay needs physical Alt identity, then disable
+it on close. Supported terminals supply standalone modifier reports; otherwise `alt_side` stays
+`Unknown`. Focus loss and reporting-mode changes clear the tracked sides. Right Alt/AltGr is
+separate from left Alt. `key.left_alt_arrow()` maps left Alt+h/j/k/l to arrow codes, with no
+other modifiers. Generic `KeyBinding` strings such as `alt-j` continue to match either side.
+
+Migration: explicit `KeyMods` literals must add `alt_side: AltSide::Unknown` or use
+`..KeyMods::NONE`. `KeyMods::ALT` represents Alt with an unknown physical side.
 
 Common pitfall: matching only `key.code` ignores modifiers. For example, `Ctrl+S` and `S`
 share the same `code`, so prefer key helpers that check both code and modifier state.

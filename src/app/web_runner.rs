@@ -202,6 +202,7 @@ fn keyboard_event_to_key_event(ev: &web_sys::KeyboardEvent) -> Option<KeyEvent> 
         alt: ev.alt_key(),
         shift: ev.shift_key(),
         super_key: ev.meta_key(),
+        alt_side: crate::AltSide::Unknown,
     };
     let key = ev.key();
     let code = match key.as_str() {

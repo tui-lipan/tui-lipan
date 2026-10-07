@@ -420,18 +420,19 @@ struct WorkerInput {
     // Both decoders observe every byte read from the TTY for the worker's full lifetime. The color
     // scanner never takes ownership of a suffix that Termina's parser expects to finish later.
     parser: Parser,
+    text: crate::app::input::kitty_text::KittyText,
     colors: HostColorResponseParser,
 }
 
 impl WorkerInput {
     fn push(&mut self, bytes: &[u8], events: &mpsc::Sender<RunnerEvent>) -> bool {
         self.colors.push(bytes);
-        self.parser.parse(bytes, true);
+        self.parser.parse(&self.text.push(bytes), true);
         self.dispatch(events)
     }
 
     fn settle(&mut self, events: &mpsc::Sender<RunnerEvent>) -> bool {
-        self.parser.parse(&[], false);
+        self.parser.parse(&self.text.settle(), false);
         self.colors.settle_input();
         self.dispatch(events)
     }

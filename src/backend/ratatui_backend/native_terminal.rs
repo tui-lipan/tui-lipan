@@ -476,6 +476,8 @@ impl TerminalGuard {
         let mut executor = CrosstermTransitionExecutor::new(&mut self.stdout);
         execute_plan_with_rollback(&mut executor, &plan)?;
         self.modifier_key_reporting = enabled;
+        #[cfg(unix)]
+        crate::app::input::kitty_text::set_enabled(enabled);
         Ok(true)
     }
 }
@@ -492,6 +494,8 @@ fn rollback_entered_terminal(policy: SurfaceTerminalPolicy, keyboard_enhancement
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        #[cfg(unix)]
+        crate::app::input::kitty_text::set_enabled(false);
         #[cfg(unix)]
         super::terminal_handoff::pause_input_for_terminal_restore();
         let mut executor = CrosstermTransitionExecutor::new(&mut self.stdout);

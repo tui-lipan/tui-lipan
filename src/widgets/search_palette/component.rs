@@ -97,7 +97,14 @@ pub(crate) enum SearchPaletteMsg {
 ///
 /// Shared by both the uncontrolled-mode internal `Input` interceptor and the
 /// controlled-mode `on_key` handler, eliminating the duplicated match block.
-fn nav_key_to_msg(code: KeyCode) -> Option<SearchPaletteMsg> {
+fn nav_key_to_msg(key: crate::KeyEvent) -> Option<SearchPaletteMsg> {
+    let code = if let Some(code) = key.left_alt_arrow() {
+        code
+    } else if key.mods.is_empty() {
+        key.code
+    } else {
+        return None;
+    };
     match code {
         KeyCode::Up => Some(SearchPaletteMsg::NavigateUp),
         KeyCode::Down => Some(SearchPaletteMsg::NavigateDown),
@@ -116,9 +123,7 @@ fn search_input_key_interceptor(
     has_results: bool,
 ) -> KeyHandler {
     KeyHandler::new(move |key| {
-        if key.mods == crate::core::event::KeyMods::default()
-            && let Some(msg) = nav_key_to_msg(key.code)
-        {
+        if let Some(msg) = nav_key_to_msg(key) {
             // Navigation outranks the caller's interceptor, but only where the palette can act on
             // it. With no matching row there is nothing to move to or open, so claiming the key
             // would swallow it for nothing — and the caller loses the one state where giving Enter
@@ -640,10 +645,7 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
         if matches!(ctx.state.query_source, QuerySource::Uncontrolled(_)) {
             return KeyUpdate::unhandled(Update::none());
         }
-        if key.mods != crate::core::event::KeyMods::default() {
-            return KeyUpdate::unhandled(Update::none());
-        }
-        let Some(msg) = nav_key_to_msg(key.code) else {
+        let Some(msg) = nav_key_to_msg(key) else {
             return KeyUpdate::unhandled(Update::none());
         };
         ctx.link().send(msg);
@@ -1898,6 +1900,50 @@ mod tests {
             code,
             mods: KeyMods::default(),
         }
+    }
+
+    #[test]
+    fn navigation_requires_physical_left_alt_and_no_other_modifiers() {
+        use crate::{AltSide, KeyMods};
+        for side in [AltSide::Unknown, AltSide::Right, AltSide::Both] {
+            let event = KeyEvent {
+                code: KeyCode::Char('j'),
+                mods: KeyMods {
+                    alt_side: side,
+                    ..KeyMods::ALT
+                },
+            };
+            assert!(super::nav_key_to_msg(event).is_none());
+        }
+        let event = KeyEvent {
+            code: KeyCode::Char('j'),
+            mods: KeyMods {
+                alt_side: AltSide::Left,
+                ..KeyMods::ALT
+            },
+        };
+        std::assert_matches!(
+            super::nav_key_to_msg(event),
+            Some(SearchPaletteMsg::NavigateDown)
+        );
+        std::assert_matches!(
+            super::nav_key_to_msg(KeyEvent {
+                code: KeyCode::Char('k'),
+                ..event
+            }),
+            Some(SearchPaletteMsg::NavigateUp)
+        );
+        assert!(
+            super::nav_key_to_msg(KeyEvent {
+                mods: KeyMods {
+                    ctrl: true,
+                    ..event.mods
+                },
+                ..event
+            })
+            .is_none()
+        );
+        assert!(super::nav_key_to_msg(key(KeyCode::Char('j'))).is_none());
     }
 
     #[test]

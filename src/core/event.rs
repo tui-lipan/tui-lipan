@@ -132,6 +132,20 @@ pub struct MouseDragEvent {
     pub mods: KeyMods,
 }
 
+/// Physical Alt keys known to be held. `Unknown` means the host did not report a side.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum AltSide {
+    /// No physical side is known (including when Alt is not held).
+    #[default]
+    Unknown,
+    /// Only left Alt is known to be held.
+    Left,
+    /// Only right Alt or AltGr is known to be held.
+    Right,
+    /// Both Alt keys are known to be held.
+    Both,
+}
+
 /// Key modifiers.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct KeyMods {
@@ -139,6 +153,8 @@ pub struct KeyMods {
     pub ctrl: bool,
     /// Alt modifier.
     pub alt: bool,
+    /// Physical Alt side, when standalone modifier reports are available.
+    pub alt_side: AltSide,
     /// Shift modifier.
     pub shift: bool,
     /// Super modifier (Windows/Command/Meta).
@@ -150,6 +166,7 @@ impl KeyMods {
     pub const NONE: Self = Self {
         ctrl: false,
         alt: false,
+        alt_side: AltSide::Unknown,
         shift: false,
         super_key: false,
     };
@@ -158,6 +175,7 @@ impl KeyMods {
     pub const SHIFT: Self = Self {
         ctrl: false,
         alt: false,
+        alt_side: AltSide::Unknown,
         shift: true,
         super_key: false,
     };
@@ -166,6 +184,7 @@ impl KeyMods {
     pub const CTRL: Self = Self {
         ctrl: true,
         alt: false,
+        alt_side: AltSide::Unknown,
         shift: false,
         super_key: false,
     };
@@ -174,6 +193,7 @@ impl KeyMods {
     pub const ALT: Self = Self {
         ctrl: false,
         alt: true,
+        alt_side: AltSide::Unknown,
         shift: false,
         super_key: false,
     };
@@ -182,6 +202,7 @@ impl KeyMods {
     pub const SUPER: Self = Self {
         ctrl: false,
         alt: false,
+        alt_side: AltSide::Unknown,
         shift: false,
         super_key: true,
     };
@@ -263,6 +284,26 @@ pub struct KeyEvent {
 }
 
 impl KeyEvent {
+    /// Map unshifted h/j/k/l held with only physical left Alt to arrow directions.
+    /// Unknown Alt, right Alt (including AltGr), and both Alt keys do not match.
+    pub fn left_alt_arrow(&self) -> Option<KeyCode> {
+        if !self.mods.alt
+            || self.mods.alt_side != AltSide::Left
+            || self.mods.ctrl
+            || self.mods.shift
+            || self.mods.super_key
+        {
+            return None;
+        }
+        match self.code {
+            KeyCode::Char('h') => Some(KeyCode::Left),
+            KeyCode::Char('j') => Some(KeyCode::Down),
+            KeyCode::Char('k') => Some(KeyCode::Up),
+            KeyCode::Char('l') => Some(KeyCode::Right),
+            _ => None,
+        }
+    }
+
     /// Returns true when this key matches `code` with no modifiers.
     pub fn is(&self, code: KeyCode) -> bool {
         self.code == code && self.mods.is_empty()
@@ -345,6 +386,7 @@ mod tests {
             mods: KeyMods {
                 ctrl: true,
                 alt: false,
+                alt_side: AltSide::Unknown,
                 shift: false,
                 super_key: false,
             },
@@ -358,6 +400,7 @@ mod tests {
             mods: KeyMods {
                 ctrl: true,
                 alt: true,
+                alt_side: AltSide::Unknown,
                 shift: true,
                 super_key: false,
             },
@@ -371,6 +414,7 @@ mod tests {
             mods: KeyMods {
                 ctrl: false,
                 alt: false,
+                alt_side: AltSide::Unknown,
                 shift: false,
                 super_key: false,
             },
@@ -383,6 +427,7 @@ mod tests {
             mods: KeyMods {
                 ctrl: false,
                 alt: false,
+                alt_side: AltSide::Unknown,
                 shift: false,
                 super_key: false,
             },

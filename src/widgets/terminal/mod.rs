@@ -646,18 +646,21 @@ mod tests {
         shift: true,
         alt: false,
         super_key: false,
+        alt_side: crate::AltSide::Unknown,
     };
     const CTRL_ALT: KeyMods = KeyMods {
         ctrl: true,
         alt: true,
         shift: false,
         super_key: false,
+        alt_side: crate::AltSide::Unknown,
     };
     const ALT_SHIFT: KeyMods = KeyMods {
         alt: true,
         shift: true,
         ctrl: false,
         super_key: false,
+        alt_side: crate::AltSide::Unknown,
     };
 
     #[test]

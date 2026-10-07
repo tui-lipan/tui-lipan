@@ -1186,6 +1186,18 @@ TextArea is not in Insert mode.
 | `TextAreaVimCurrentLineHighlight::Content` | Highlight only text content rows for the cursor's logical line |
 | `TextAreaVimCurrentLineHighlight::Full` | Highlight the full inner row, including line numbers or custom gutter |
 
+### `AltSide`
+
+Physical Alt identity in `KeyMods::alt_side`, available through standalone modifier reports.
+See [keyboard events](events.md#keyevent).
+
+| Variant | Meaning |
+| --- | --- |
+| `Unknown` | No physical side is known **(default)** |
+| `Left` | Only left Alt is known to be held |
+| `Right` | Only right Alt or AltGr is known to be held |
+| `Both` | Both Alt keys are known to be held |
+
 ### `KeyBinding` / `KeyBindings`
 
 Public shortcut binding types from `tui_lipan::input`. Parsing: **whitespace** = chord steps, **comma** = alternatives. See [`keybindings.md`](keybindings.md).

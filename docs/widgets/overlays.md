@@ -548,7 +548,13 @@ order is the visual order navigation walks.
 | `input_focus_suffix_style` | `Style` | Suffix style when focused |
 | `input_key_interceptor` | `KeyHandler` | Runs before text insertion; return `true` to consume the key (uncontrolled mode only) |
 
-The palette claims its own navigation keys first - arrows, `PageUp`/`PageDown`, `Home`/`End`, and
+With physical modifier reporting enabled by the application
+(`ctx.set_modifier_key_reporting(true)`), left `Alt+j` / `Alt+k` move down/up.
+Right Alt, AltGr, and unknown Alt sides do not navigate. Plain letters still filter.
+Disable reporting when the overlay closes; keys held before reporting starts need to be
+released and pressed again to establish their side.
+
+The palette claims its own navigation keys first - arrows, left `Alt+j` / `Alt+k`, `PageUp`/`PageDown`, `Home`/`End`, and
 `Enter` to activate - so `input_key_interceptor` never sees them *while a matching row exists*.
 With no matches there is nothing to navigate to or open, and those keys fall through to the
 interceptor instead of being swallowed: that is what lets `Enter` mean "create what was typed" or
