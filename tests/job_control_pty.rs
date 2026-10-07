@@ -30,6 +30,9 @@ const FG: &[u8] = b"<FG>";
 const FRAME_START: &[u8] = b"\x1b[?2026h";
 /// How the background release begins: CAN, then the end of synchronized output.
 const RELEASE: &[u8] = b"\x18\x1b[?2026l";
+/// The whole release a fullscreen surface writes.
+const FULL_RELEASE: &[u8] = b"\x18\x1b[?2026l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1016l\
+    \x1b[?1006l\x1b[?1015l\x1b[?2004l\x1b[?1004l\x1b[?2031l\x1b[?7h\x1b[?25h\x1b[?1049l";
 
 #[test]
 fn a_background_stop_hands_back_the_terminal_and_reclaims_it() {
@@ -120,10 +123,18 @@ fn a_background_stop_hands_back_the_terminal_and_reclaims_it() {
             String::from_utf8_lossy(reset)
         );
     }
-    assert_eq!(
-        count(handed_back, FRAME_START),
-        0,
-        "no frame reaches the shell's screen, before bg or after it:\n{shown:?}"
+    // Nothing but the release itself and the shell's markers reaches the pty
+    // between the release and `fg`: no new frame, and no tail of a frame that
+    // had begun before it either.
+    let mut rest = handed_back.to_vec();
+    for expected in [FULL_RELEASE, BG] {
+        rest = remove_all(&rest, expected);
+    }
+    assert!(
+        rest.is_empty(),
+        "only the release reaches the shell's screen, before bg or after it; also got \
+         {:?}:\n{shown:?}",
+        String::from_utf8_lossy(&rest)
     );
 
     let reentered = find(&output, b"\x1b[?1049h", fg)
@@ -367,6 +378,20 @@ fn find(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
         .windows(needle.len())
         .position(|window| window == needle)
         .map(|at| at + from)
+}
+
+fn remove_all(haystack: &[u8], needle: &[u8]) -> Vec<u8> {
+    let mut rest = Vec::with_capacity(haystack.len());
+    let mut at = 0;
+    while at < haystack.len() {
+        if haystack[at..].starts_with(needle) {
+            at += needle.len();
+        } else {
+            rest.push(haystack[at]);
+            at += 1;
+        }
+    }
+    rest
 }
 
 fn count(haystack: &[u8], needle: &[u8]) -> usize {

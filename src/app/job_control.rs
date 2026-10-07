@@ -21,16 +21,18 @@
 //!
 //! Stopping freezes every thread wherever it happens to be, and continuing
 //! resumes them all at once, so a frame that was half written when the signal
-//! landed would otherwise finish on the shell's screen. Before it releases
-//! anything, the handler closes the frame output ([`terminal_released`]):
-//! frame bytes are discarded from then on, until the runner has taken the
-//! terminal back at its next frame boundary and repainted in full. The handler
-//! itself returns only once the job is in the foreground again, so a job
-//! continued with `bg` stops again before any of its threads can matter.
+//! landed would otherwise finish on the shell's screen. Frames are therefore
+//! written through [`frame_write`], and the handler closes that path before it
+//! releases anything: it marks the terminal released, waits for any frame write
+//! already past that check to finish, and only then writes the release. Frame
+//! bytes are discarded from then on, until the runner has taken the terminal
+//! back at its next frame boundary and repainted in full. The handler itself
+//! returns only once the job is in the foreground again, so a job continued
+//! with `bg` stops again before any of its threads can matter.
 //!
 //! [`Context::suspend_to_shell`]: crate::core::component::Context::suspend_to_shell
 
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
 
 /// Targets with the POSIX job control this module needs.
 const SUPPORTED: bool = cfg!(all(unix, not(target_arch = "wasm32")));
@@ -44,6 +46,11 @@ static STOPPED_IN_BACKGROUND: AtomicBool = AtomicBool::new(false);
 /// Closed by the background release, reopened by the runner once it owns the
 /// terminal again. While closed, frame output is discarded.
 static TERMINAL_RELEASED: AtomicBool = AtomicBool::new(false);
+
+/// Frame writes that have found the terminal ours and not finished yet. The
+/// release waits for this to reach zero, so a write it did not stop lands
+/// before the release rather than after it.
+static FRAME_WRITES_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 
 /// Held by the one `SIGTTIN`/`SIGTTOU` handler doing the release and stop. A
 /// job continued in the background can raise the signal again on another
@@ -130,6 +137,61 @@ pub(crate) fn terminal_released() -> bool {
     TERMINAL_RELEASED.load(Ordering::SeqCst)
 }
 
+/// Run `write`, one write of frame output, unless a background stop has
+/// released the terminal; then return `discarded` without running it.
+///
+/// The check and the write form one step the release cannot come between. The
+/// write is counted in flight before the check, and the release, which marks
+/// the terminal released first, waits for the count to drain before it writes
+/// anything: so either this sees the terminal released and drops the frame, or
+/// the release sees this write and lets it land first. The background signals
+/// are blocked on this thread meanwhile, so the handler never runs on top of
+/// the very write it would be waiting for; it is delivered to another thread,
+/// or here once the write is done.
+///
+/// `write` must not block for long: the release waits for it.
+pub(crate) fn frame_write<T>(discarded: T, write: impl FnOnce() -> T) -> T {
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    let unblock = block_background_signals();
+    FRAME_WRITES_IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
+    let result = if TERMINAL_RELEASED.load(Ordering::SeqCst) {
+        discarded
+    } else {
+        write()
+    };
+    FRAME_WRITES_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    restore_signal_mask(&unblock);
+    result
+}
+
+/// Block `SIGTTIN` and `SIGTTOU` on this thread, returning the mask to restore.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn block_background_signals() -> libc::sigset_t {
+    // SAFETY: both sets are initialised by `sigemptyset` before use, and
+    // `pthread_sigmask` only reads `blocked` and writes `previous`.
+    #[allow(unsafe_code)]
+    unsafe {
+        let mut blocked: libc::sigset_t = std::mem::zeroed();
+        let mut previous: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut blocked);
+        libc::sigemptyset(&mut previous);
+        libc::sigaddset(&mut blocked, libc::SIGTTIN);
+        libc::sigaddset(&mut blocked, libc::SIGTTOU);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &blocked, &mut previous);
+        previous
+    }
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn restore_signal_mask(previous: &libc::sigset_t) {
+    // SAFETY: `previous` came from `pthread_sigmask` and is only read.
+    #[allow(unsafe_code)]
+    unsafe {
+        libc::pthread_sigmask(libc::SIG_SETMASK, previous, std::ptr::null_mut())
+    };
+}
+
 /// Record that the runner owns the terminal again after a background stop.
 pub(crate) fn reclaim_terminal() {
     TERMINAL_RELEASED.store(false, Ordering::SeqCst);
@@ -144,16 +206,30 @@ pub(crate) fn retry_background_stop() {
 }
 
 /// Keeps the job-control stop signals routed through the runner for as long as
-/// it owns the terminal, and hands them back to the OS default on the way out.
+/// it owns the terminal, and puts back whatever handled them before on the way
+/// out.
 pub(crate) struct StopSignalGuard {
-    installed: bool,
+    /// The dispositions the runner's replaced, all three or none: installing is
+    /// all or nothing.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    previous: Option<[libc::sigaction; 3]>,
+}
+
+impl StopSignalGuard {
+    #[cfg(test)]
+    fn installed(&self) -> bool {
+        cfg_select! {
+            all(unix, not(target_arch = "wasm32")) => self.previous.is_some(),
+            _ => false,
+        }
+    }
 }
 
 impl Drop for StopSignalGuard {
     fn drop(&mut self) {
         #[cfg(all(unix, not(target_arch = "wasm32")))]
-        if self.installed {
-            set_stop_dispositions(StopDispositions::Default);
+        if let Some(previous) = &self.previous {
+            restore_dispositions(STOP_SIGNALS, previous, STOP_SIGNALS.len());
         }
         RUNNER_TERMIOS_SAVED.store(false, Ordering::SeqCst);
         SUSPEND_REQUESTED.store(false, Ordering::SeqCst);
@@ -182,12 +258,12 @@ pub(crate) fn install_stop_handler(uses_alternate_screen: bool) -> StopSignalGua
         };
         RUNNER_TERMIOS_SAVED.store(saved, Ordering::SeqCst);
         StopSignalGuard {
-            installed: set_stop_dispositions(StopDispositions::Runner),
+            previous: install_runner_dispositions(STOP_SIGNALS),
         }
     }
     #[cfg(not(all(unix, not(target_arch = "wasm32"))))]
     {
-        StopSignalGuard { installed: false }
+        StopSignalGuard {}
     }
 }
 
@@ -224,8 +300,8 @@ extern "C" fn note_stop_request(_signal: libc::c_int) {
 /// still ours. Close the frame output, turn the modes off, and stay stopped
 /// until the job is in the foreground again; the runner does the rest.
 ///
-/// Everything here is async-signal-safe: atomics, `write`, `raise`,
-/// `tcgetpgrp`, `tcsetattr`, `getpgrp` and `getppid`. Both background signals are blocked
+/// Everything here is async-signal-safe: atomics, `write`, `nanosleep`,
+/// `raise`, `tcgetpgrp`, `tcsetattr`, `getpgrp` and `getppid`. Both background signals are blocked
 /// while it runs, which is what lets its own `write` through even on a
 /// terminal with `tostop` set.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
@@ -241,11 +317,10 @@ extern "C" fn release_and_stop(_signal: libc::c_int) {
     if RELEASE_IN_PROGRESS.swap(true, Ordering::SeqCst) {
         return;
     }
-    TERMINAL_RELEASED.store(true, Ordering::SeqCst);
     let pop_keyboard = !USES_ALTERNATE_SCREEN.load(Ordering::SeqCst)
         && crate::backend::ratatui_backend::MAIN_SCREEN_KEYBOARD_PUSHED
             .swap(false, Ordering::SeqCst);
-    write_background_release(
+    release_terminal(
         libc::STDOUT_FILENO,
         USES_ALTERNATE_SCREEN.load(Ordering::SeqCst),
         pop_keyboard,
@@ -303,6 +378,25 @@ fn job_control_parent_present() -> bool {
     parent == JOB_CONTROL_PARENT.load(Ordering::SeqCst)
 }
 
+/// Close frame output, wait out the frame writes already past it, then write
+/// the release, so nothing a frame writes can land after it.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn release_terminal(fd: libc::c_int, uses_alternate_screen: bool, pop_keyboard: bool) {
+    TERMINAL_RELEASED.store(true, Ordering::SeqCst);
+    while FRAME_WRITES_IN_FLIGHT.load(Ordering::SeqCst) != 0 {
+        let pause = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 50_000,
+        };
+        // SAFETY: `pause` is a valid duration; the remainder is not wanted.
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::nanosleep(&pause, std::ptr::null_mut())
+        };
+    }
+    write_background_release(fd, uses_alternate_screen, pop_keyboard);
+}
+
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 fn write_background_release(fd: libc::c_int, uses_alternate_screen: bool, pop_keyboard: bool) {
     write_all_signal_safe(fd, BACKGROUND_RELEASE);
@@ -332,6 +426,10 @@ fn write_all_signal_safe(fd: libc::c_int, mut bytes: &[u8]) {
     }
 }
 
+/// The signals the runner routes through its own handlers, in install order.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+const STOP_SIGNALS: [libc::c_int; 3] = [libc::SIGTSTP, libc::SIGTTIN, libc::SIGTTOU];
+
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 #[derive(Clone, Copy)]
 enum StopDispositions {
@@ -342,31 +440,65 @@ enum StopDispositions {
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn set_stop_dispositions(dispositions: StopDispositions) -> bool {
-    let (stop, background) = match dispositions {
-        StopDispositions::Runner => (
-            note_stop_request as *const () as libc::sighandler_t,
-            release_and_stop as *const () as libc::sighandler_t,
-        ),
-        StopDispositions::Default => (libc::SIG_DFL, libc::SIG_DFL),
-    };
-    // Interrupted calls restart after `SIGTSTP` and `SIGTTIN`, so neither
-    // surfaces as an EINTR error in the input path. Not after `SIGTTOU`: a
-    // frame `write` that `tostop` held back would restart below the frame
-    // output's check and land on the screen the release just handed over.
-    // Failing with EINTR instead sends it back through the check, which
-    // discards it.
-    let stop_set = set_disposition(libc::SIGTSTP, stop, true);
-    let input_set = set_disposition(libc::SIGTTIN, background, true);
-    let output_set = set_disposition(libc::SIGTTOU, background, false);
-    stop_set && input_set && output_set
+impl StopDispositions {
+    fn handler(self, signal: libc::c_int) -> libc::sighandler_t {
+        match (self, signal) {
+            (Self::Default, _) => libc::SIG_DFL,
+            (Self::Runner, libc::SIGTSTP) => note_stop_request as *const () as libc::sighandler_t,
+            (Self::Runner, _) => release_and_stop as *const () as libc::sighandler_t,
+        }
+    }
+}
+
+/// Install the runner's handlers for all of `signals` ([`STOP_SIGNALS`] outside
+/// tests), or for none: a failure part way puts back the ones already replaced.
+/// Returns what they replaced.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn install_runner_dispositions(signals: [libc::c_int; 3]) -> Option<[libc::sigaction; 3]> {
+    // SAFETY: an all-zero `sigaction` is a valid value to be overwritten.
+    #[allow(unsafe_code)]
+    let mut previous: [libc::sigaction; 3] = unsafe { std::mem::zeroed() };
+    for (installed, signal) in signals.into_iter().enumerate() {
+        let handler = StopDispositions::Runner.handler(signal);
+        if !set_disposition(signal, handler, Some(&mut previous[installed])) {
+            restore_dispositions(signals, &previous, installed);
+            return None;
+        }
+    }
+    Some(previous)
+}
+
+/// Put back the first `count` of `previous`, in `signals` order.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn restore_dispositions(signals: [libc::c_int; 3], previous: &[libc::sigaction; 3], count: usize) {
+    for (signal, action) in signals.into_iter().zip(previous).take(count) {
+        // SAFETY: `action` came from `sigaction` itself and is only read.
+        #[allow(unsafe_code)]
+        unsafe {
+            libc::sigaction(signal, action, std::ptr::null_mut())
+        };
+    }
+}
+
+/// Switch between the runner's handlers and the default around a stop the
+/// runner makes itself. Best effort: the guard owns the dispositions.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn set_stop_dispositions(dispositions: StopDispositions) {
+    for signal in STOP_SIGNALS {
+        set_disposition(signal, dispositions.handler(signal), None);
+    }
 }
 
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-fn set_disposition(signal: libc::c_int, handler: libc::sighandler_t, restart: bool) -> bool {
+fn set_disposition(
+    signal: libc::c_int,
+    handler: libc::sighandler_t,
+    previous: Option<&mut libc::sigaction>,
+) -> bool {
     // SAFETY: `action` is a zeroed `sigaction` filled in through libc's own
-    // accessors before use, and `sigaction` copies it; the null third argument
-    // means "do not report the previous disposition".
+    // accessors before use, and `sigaction` copies it; `previous`, when given,
+    // is a valid place for the old disposition, and null means "do not report
+    // it".
     #[allow(unsafe_code)]
     unsafe {
         let mut action: libc::sigaction = std::mem::zeroed();
@@ -376,8 +508,12 @@ fn set_disposition(signal: libc::c_int, handler: libc::sighandler_t, restart: bo
         // release's own `write` is never stopped by `tostop`.
         libc::sigaddset(&mut action.sa_mask, libc::SIGTTIN);
         libc::sigaddset(&mut action.sa_mask, libc::SIGTTOU);
-        action.sa_flags = if restart { libc::SA_RESTART } else { 0 };
-        libc::sigaction(signal, &action, std::ptr::null_mut()) == 0
+        // Restart interrupted calls, so a stop never surfaces as an EINTR
+        // error. Frame writes are never among them: `frame_write` blocks
+        // the background signals around each one.
+        action.sa_flags = libc::SA_RESTART;
+        let previous = previous.map_or(std::ptr::null_mut(), |previous| previous as *mut _);
+        libc::sigaction(signal, &action, previous) == 0
     }
 }
 
@@ -385,13 +521,20 @@ fn set_disposition(signal: libc::c_int, handler: libc::sighandler_t, restart: bo
 mod tests {
     use super::*;
 
+    /// Held by tests that change the module's process-wide state.
+    static STATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn requests_are_taken_once_and_cleared_by_the_guard() {
+        let _state = STATE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         assert!(!take_suspend_request(), "no request is pending initially");
 
         let guard = install_stop_handler(true);
         assert_eq!(
-            guard.installed, SUPPORTED,
+            guard.installed(),
+            SUPPORTED,
             "the handler installs exactly where job control exists"
         );
 
@@ -422,28 +565,132 @@ mod tests {
         assert!(!terminal_released());
     }
 
+    /// The handler installed for `signal` right now.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    fn disposition(signal: libc::c_int) -> libc::sighandler_t {
+        // SAFETY: a null new action only reads the current one into `current`.
+        #[allow(unsafe_code)]
+        unsafe {
+            let mut current: libc::sigaction = std::mem::zeroed();
+            libc::sigaction(signal, std::ptr::null(), &mut current);
+            current.sa_sigaction
+        }
+    }
+
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    #[test]
+    fn handlers_install_all_together_or_not_at_all() {
+        let _state = STATE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let runner = release_and_stop as *const () as libc::sighandler_t;
+        let before = [libc::SIGTSTP, libc::SIGTTIN].map(disposition);
+
+        // `SIGKILL` cannot be caught, so the third install fails, and the two
+        // before it must be put back rather than left behind.
+        let failed = install_runner_dispositions([libc::SIGTSTP, libc::SIGTTIN, libc::SIGKILL]);
+        assert!(
+            failed.is_none(),
+            "an install that fails part way reports it"
+        );
+        assert_eq!([libc::SIGTSTP, libc::SIGTTIN].map(disposition), before);
+
+        let guard = install_stop_handler(true);
+        assert!(guard.installed());
+        assert_eq!(disposition(libc::SIGTTIN), runner);
+        assert_eq!(disposition(libc::SIGTTOU), runner);
+        drop(guard);
+        assert_eq!(
+            [libc::SIGTSTP, libc::SIGTTIN].map(disposition),
+            before,
+            "the guard puts back what was there before"
+        );
+    }
+
+    /// A pipe, as two raw descriptors: read end, write end.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    fn pipe() -> (libc::c_int, libc::c_int) {
+        let mut fds = [0; 2];
+        // SAFETY: `fds` has room for the two descriptors `pipe` writes.
+        #[allow(unsafe_code)]
+        let created = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        assert_eq!(created, 0, "pipe");
+        (fds[0], fds[1])
+    }
+
+    /// Close `write_end`, then read everything written to the pipe.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    fn drain_pipe(read_end: libc::c_int, write_end: libc::c_int) -> Vec<u8> {
+        // SAFETY: both descriptors came from `pipe` and are closed once: the
+        // write end here, the read end by the `File` that takes it over.
+        #[allow(unsafe_code)]
+        let mut reader = unsafe {
+            libc::close(write_end);
+            <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(read_end)
+        };
+        let mut written = Vec::new();
+        std::io::Read::read_to_end(&mut reader, &mut written).expect("read pipe");
+        written
+    }
+
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    #[test]
+    fn the_release_waits_for_a_frame_write_already_past_the_check() {
+        let _state = STATE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reclaim_terminal();
+        let (read_end, write_end) = pipe();
+        let (checked, writer_checked) = std::sync::mpsc::channel();
+        let (resume, writer_resumes) = std::sync::mpsc::channel::<()>();
+
+        // A frame writer that finds the terminal still ours, then loses the CPU
+        // before its `write`.
+        let writer = std::thread::spawn(move || {
+            frame_write(false, || {
+                checked.send(()).unwrap();
+                writer_resumes.recv().unwrap();
+                write_all_signal_safe(write_end, b"FRAME");
+                true
+            })
+        });
+        writer_checked.recv().unwrap();
+
+        let release = std::thread::spawn(move || release_terminal(write_end, true, false));
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(
+            !release.is_finished(),
+            "the release waits for the frame write it did not stop"
+        );
+        assert!(
+            terminal_released(),
+            "and closes frame output before waiting"
+        );
+
+        resume.send(()).unwrap();
+        assert!(writer.join().unwrap(), "the frame write ran");
+        release.join().unwrap();
+        assert!(
+            !frame_write(false, || true),
+            "a frame write after the release is dropped without running"
+        );
+        reclaim_terminal();
+
+        let written = drain_pipe(read_end, write_end);
+        assert!(
+            written.starts_with(b"FRAME\x18\x1b[?2026l"),
+            "the frame lands whole, before the release: {written:?}"
+        );
+        assert!(written.ends_with(LEAVE_ALTERNATE_SCREEN));
+    }
+
     #[cfg(all(unix, not(target_arch = "wasm32")))]
     #[test]
     fn background_release_hands_back_every_mode_the_runner_turned_on() {
         let release = |uses_alternate_screen: bool, pop_keyboard: bool| {
-            let mut fds = [0; 2];
-            // SAFETY: `fds` has room for the two descriptors `pipe` writes.
-            #[allow(unsafe_code)]
-            let created = unsafe { libc::pipe(fds.as_mut_ptr()) };
-            assert_eq!(created, 0, "pipe");
-            write_background_release(fds[1], uses_alternate_screen, pop_keyboard);
-            // SAFETY: both descriptors came from `pipe` above and are closed once.
-            #[allow(unsafe_code)]
-            unsafe {
-                libc::close(fds[1]);
-            }
-            let mut written = Vec::new();
-            // SAFETY: `fds[0]` is the open read end, owned by the `File` from here on.
-            #[allow(unsafe_code)]
-            let mut reader =
-                unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(fds[0]) };
-            std::io::Read::read_to_end(&mut reader, &mut written).expect("read release");
-            written
+            let (read_end, write_end) = pipe();
+            write_background_release(write_end, uses_alternate_screen, pop_keyboard);
+            drain_pipe(read_end, write_end)
         };
         let contains = |haystack: &[u8], needle: &[u8]| {
             haystack

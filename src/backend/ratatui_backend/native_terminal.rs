@@ -52,17 +52,19 @@ fn pop_keyboard_on_exit(policy: SurfaceTerminalPolicy, keyboard_enhancement: boo
 ///
 /// A background stop releases the terminal from a signal handler, wherever the
 /// renderer happens to be, and the renderer carries on from there once the
-/// process is continued. Every write therefore checks whether the terminal is
-/// still ours first, and drops the frame while it is not; the runner repaints
-/// in full once it has taken the terminal back.
+/// process is continued. Every write therefore goes through
+/// [`frame_write`](crate::app::job_control::frame_write), which drops the frame
+/// once the terminal is released and makes the release wait for a write already
+/// under way; the runner repaints in full once it has taken the terminal back.
 ///
-/// That check only holds if no write can be past it already. A `write` that
-/// sleeps in the kernel while the terminal drains is restarted after a stop,
-/// below any check, so frames go through a descriptor of their own opened
-/// non-blocking: a full terminal is waited out in `poll`, and the check runs
-/// again before every write. Writing to a descriptor directly, rather than
-/// through [`Stdout`], also keeps a dropped frame's tail from waiting in
-/// `Stdout`'s own buffer for the next writer to flush it.
+/// The release waits for that write, so it should be short. Frames go through a
+/// descriptor of their own opened non-blocking: a full terminal is waited out
+/// in `poll`, outside `frame_write`, and checked again before the next write.
+/// Where it cannot be reopened, frames fall back to standard output, blocking:
+/// still never after the release, but the release may then wait for the
+/// terminal to drain. Writing to a descriptor directly, rather than through
+/// [`Stdout`], also keeps a dropped frame's tail from waiting in `Stdout`'s own
+/// buffer for the next writer to flush it.
 pub(crate) struct FrameOutput {
     #[cfg(unix)]
     terminal: Option<std::os::fd::OwnedFd>,
@@ -89,12 +91,22 @@ impl FrameOutput {
 fn open_stdout_terminal_nonblocking() -> Option<std::os::fd::OwnedFd> {
     use std::os::fd::FromRawFd;
 
+    // SAFETY: `isatty` takes no pointers.
+    #[allow(unsafe_code)]
+    if unsafe { libc::isatty(libc::STDOUT_FILENO) } != 1 {
+        return None;
+    }
     let mut name = [0 as libc::c_char; 256];
     // SAFETY: `name` is a writable buffer of the length passed, and `ttyname_r`
     // fails rather than overrun it.
     #[allow(unsafe_code)]
     let named = unsafe { libc::ttyname_r(libc::STDOUT_FILENO, name.as_mut_ptr(), name.len()) };
     if named != 0 {
+        crate::debug::internal_log!(
+            "[tui-lipan] frame output: no path for the terminal on stdout ({}), writing \
+             frames to stdout blocking",
+            io::Error::from_raw_os_error(named)
+        );
         return None;
     }
     // SAFETY: `ttyname_r` succeeded, so `name` holds a nul-terminated path.
@@ -105,9 +117,17 @@ fn open_stdout_terminal_nonblocking() -> Option<std::os::fd::OwnedFd> {
             libc::O_WRONLY | libc::O_NOCTTY | libc::O_NONBLOCK | libc::O_CLOEXEC,
         )
     };
+    if fd < 0 {
+        crate::debug::internal_log!(
+            "[tui-lipan] frame output: reopening the terminal failed ({}), writing frames to \
+             stdout blocking",
+            io::Error::last_os_error()
+        );
+        return None;
+    }
     // SAFETY: a non-negative `fd` was just opened here and nothing else owns it.
     #[allow(unsafe_code)]
-    (fd >= 0).then(|| unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+    Some(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
 }
 
 impl Write for FrameOutput {
@@ -121,16 +141,17 @@ impl Write for FrameOutput {
                     .as_ref()
                     .map_or(libc::STDOUT_FILENO, AsRawFd::as_raw_fd);
                 loop {
-                    if crate::app::job_control::terminal_released() {
-                        return Ok(buf.len());
-                    }
-                    // SAFETY: the pointer and length describe the live `buf` slice.
-                    #[allow(unsafe_code)]
-                    let written = unsafe { libc::write(fd, buf.as_ptr().cast(), buf.len()) };
-                    if let Ok(written) = usize::try_from(written) {
-                        return Ok(written);
-                    }
-                    let err = io::Error::last_os_error();
+                    let written = crate::app::job_control::frame_write(None, || {
+                        // SAFETY: the pointer and length describe the live `buf` slice.
+                        #[allow(unsafe_code)]
+                        let written = unsafe { libc::write(fd, buf.as_ptr().cast(), buf.len()) };
+                        Some(usize::try_from(written).map_err(|_| io::Error::last_os_error()))
+                    });
+                    let err = match written {
+                        None => return Ok(buf.len()),
+                        Some(Ok(written)) => return Ok(written),
+                        Some(Err(err)) => err,
+                    };
                     match err.kind() {
                         io::ErrorKind::Interrupted => {}
                         io::ErrorKind::WouldBlock => wait_until_writable(fd),
@@ -139,10 +160,8 @@ impl Write for FrameOutput {
                 }
             }
             _ => {
-                if crate::app::job_control::terminal_released() {
-                    return Ok(buf.len());
-                }
-                self.stdout.write(buf)
+                let stdout = &mut self.stdout;
+                crate::app::job_control::frame_write(Ok(buf.len()), || stdout.write(buf))
             }
         }
     }
