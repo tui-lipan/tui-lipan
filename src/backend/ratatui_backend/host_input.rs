@@ -347,7 +347,7 @@ pub(crate) mod pty_test {
                 output.extend_from_slice(&buffer[..count]);
             }
             assert!(
-                !output.windows(6).any(|bytes| bytes == b"\x1b[=31u"),
+                !output.windows(6).any(|bytes| bytes == b"\x1b[>31u"),
                 "inline reporting must leave the terminal in ordinary text mode"
             );
             terminal

@@ -556,9 +556,10 @@ released and pressed again to establish their side.
 
 The palette claims its own navigation keys first - arrows, left `Alt+j` / `Alt+k`, `PageUp`/`PageDown`, `Home`/`End`, and
 `Enter` to activate - so `input_key_interceptor` never sees them *while a matching row exists*.
-With no matches there is nothing to navigate to or open, and those keys fall through to the
-interceptor instead of being swallowed: that is what lets `Enter` mean "create what was typed" or
-"start something new" in an empty list.
+With no matches there is nothing to navigate to or open, so those keys reach the interceptor
+first: that is what lets `Enter` mean "create what was typed" or "start something new" in an empty
+list. If the interceptor declines left `Alt+j` / `Alt+k`, the palette consumes them to prevent
+inserting `j` / `k` into the query; other declined keys continue through normal input handling.
 
 ### List forwarding
 
