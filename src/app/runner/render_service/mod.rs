@@ -847,11 +847,11 @@ impl<C: Component> AppRunner<C> {
     ///
     /// Used when the only change is a cursor blink toggle, spinner frame
     /// advance, or image frame advance.
-    /// Paint a frame whose only change is live terminal content.
+    /// Paint a frame whose only changes are live terminal content and fixed-allocation labels.
     ///
     /// Reached only from [`DirtyLevel::TerminalPaintOnly`](crate::app::interaction_state::DirtyLevel),
     /// which every source in the frame had to agree on, so by the time control arrives here the
-    /// frame has *proven* that nothing outside a terminal looks different. That is what lets this
+    /// frame has *proven* that nothing outside those live sources looks different. That lets this
     /// mode read the damage and consider repainting only the rows that moved.
     ///
     /// This mode refreshes live terminals itself, because it has to see the damage before choosing
@@ -973,6 +973,8 @@ impl<C: Component> AppRunner<C> {
         // the detail here, so no caller has to remember the refresh.
         #[cfg(feature = "terminal")]
         let _refresh = self.core.tree.refresh_live_terminals_detailed();
+        #[cfg(not(feature = "terminal"))]
+        self.core.tree.refresh_live_texts();
         self.draw_current_tree_after_live_refresh(terminal, draw_mode)
     }
 

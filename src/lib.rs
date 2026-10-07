@@ -296,8 +296,8 @@ pub use crate::widgets::{
     TextAreaMetrics, TextAreaPasteEvent, TextAreaSentinel, TextAreaSentinelClickEvent,
     TextAreaSentinelClickKind, TextAreaSnapshot, TextAreaStateChangeEvent,
     TextAreaStateChangeReason, TextAreaVimConfig, TextAreaVimCurrentLineHighlight,
-    TextAreaVimKeyBinding, TextAreaVimKeymap, TextAreaVimMode, TextAreaVirtualText, Toast,
-    ToastCopyAffordance, TripleClickSelectionMode, VirtualTextPlacement, insert_sentinel,
+    TextAreaVimKeyBinding, TextAreaVimKeymap, TextAreaVimMode, TextAreaVirtualText, TextSource,
+    Toast, ToastCopyAffordance, TripleClickSelectionMode, VirtualTextPlacement, insert_sentinel,
     rank_search_palette_indices, rank_search_palette_indices_with_mode,
     rank_search_palette_indices_with_score,
 };

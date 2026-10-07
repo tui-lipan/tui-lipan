@@ -310,7 +310,7 @@ pub use terminal::{
 };
 #[cfg(feature = "terminal-images")]
 pub use terminal::{GraphicsMediaPolicy, TerminalImage, TerminalImageCrop, TerminalImagePlacement};
-pub use text::{Overflow, Text};
+pub use text::{Overflow, Text, TextSource};
 pub use text_area::{
     IMAGE_SENTINEL_BASE, SENTINEL_BASE, SentinelEvent, SentinelId, TextArea,
     TextAreaClipboardTransform, TextAreaClipboardTransformEvent, TextAreaColorInput,

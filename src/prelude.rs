@@ -210,8 +210,9 @@ pub use crate::widgets::{
     TextAreaGutterSign, TextAreaLineNumberMode, TextAreaMetrics, TextAreaPasteEvent,
     TextAreaStateChangeEvent, TextAreaStateChangeReason, TextAreaVimConfig,
     TextAreaVimCurrentLineHighlight, TextAreaVimKeyBinding, TextAreaVimKeymap, TextAreaVimMode,
-    TextAreaVirtualText, ThemeProvider, Toast, ToastCopyAffordance, Tooltip, Tree, TreeEvent,
-    TreeKeymap, TreeNode, TreePath, TreeToggleEvent, VStack, VirtualTextPlacement, ZStack,
+    TextAreaVirtualText, TextSource, ThemeProvider, Toast, ToastCopyAffordance, Tooltip, Tree,
+    TreeEvent, TreeKeymap, TreeNode, TreePath, TreeToggleEvent, VStack, VirtualTextPlacement,
+    ZStack,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

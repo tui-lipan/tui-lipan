@@ -12,6 +12,7 @@ Renders styled text.
 |------|------|-------------|
 | `content` | `impl Into<String>` | **Constructor** - text content |
 | `spans` | `impl IntoIterator<Item = Span>` | Construct from styled spans |
+| `from_source` | `TextSource` | Construct a live label, defaulting to flexible width and one-row height |
 | `from_ansi` | `&str` | Construct from ANSI-escaped string (SGR sequences → styled spans) |
 | `style` | `Style` | Text style |
 | `overflow` | `Overflow` | `Clip`, `Ellipsis`, `Wrap` |
@@ -28,6 +29,25 @@ Text::new("Hello, World!")
 // Render ANSI-styled output (ls --color, compiler errors, git diff, etc.)
 Text::from_ansi("\x1b[31merror\x1b[0m: file not found")
 ```
+
+`TextSource` shares immutable styled spans between app state and a mounted label. Call
+`source.set([Span::new("Working")])` to update it, then return `Update::paint()` without
+rebuilding the view. With the `terminal` feature, `Update::terminal_paint()` can repaint just
+changed source rows together with terminal damage. Keep the label's allocated width and height
+independent of its contents for paint-only updates; use `Update::layout()` for content-sized text.
+Source updates preserve styling, truncation, and the renderer's ordinary compositing rules.
+
+```rust
+let source = TextSource::new([Span::new("Ready")]);
+let label = Text::from_source(source.clone()).overflow(Overflow::Ellipsis);
+// Later, in update():
+source.set([Span::new("Working")]);
+// Return Update::paint(), or Update::terminal_paint() when only live sources changed.
+```
+
+For existing `Text` or `TextNode` struct literals, add `source: None` or use the constructors.
+These types now carry UI-thread state through an optional `TextSource` and are no longer
+`Send`/`Sync`. Send plain strings or spans through a command and update the source on the UI thread.
 
 ---
 

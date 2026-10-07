@@ -391,8 +391,8 @@ pub enum UpdateLevel {
     #[default]
     None,
     /// Redraw from the node tree as it stands, where the only thing that changed is content in
-    /// one or more live terminal screens. Strictly narrower than [`Paint`](Self::Paint): the
-    /// runtime may consult terminal damage and repaint only the rows that moved.
+    /// one or more live terminal screens or fixed-allocation text sources. Strictly narrower than
+    /// [`Paint`](Self::Paint): the runtime may repaint only the rows that moved.
     #[cfg(feature = "terminal")]
     TerminalPaint,
     /// Redraw from the node tree as it stands: no `view()`, no layout.
@@ -414,13 +414,14 @@ pub struct Update {
 }
 
 impl Update {
-    /// Request a repaint whose only visual change is new content in live terminal screens.
+    /// Request a repaint whose only visual change is live terminal or fixed-allocation text content.
     ///
     /// This is a promise, not a hint. Returning it asserts that nothing else in the tree looks
-    /// different from the last frame - no chrome, no indicator, no animation step - so the runtime
-    /// is free to ask each live [`TerminalScreen`](crate::widgets::TerminalScreen) which rows moved
-    /// and repaint only those. A caller that is unsure, or that also changed something outside a
-    /// terminal, wants [`paint`](Self::paint), which promises nothing and repaints everything.
+    /// different from the last frame except these live sources - no indicator or animation step.
+    /// The runtime asks each live [`TerminalScreen`](crate::widgets::TerminalScreen) which rows moved
+    /// and repaint only those, together with changed [`TextSource`](crate::widgets::TextSource)
+    /// rows. A caller that is unsure, or that also changed something outside a live source, wants
+    /// [`paint`](Self::paint), which promises nothing and repaints everything.
     ///
     /// Anything else marking the same frame dirty - an animation tick, another component's
     /// `paint()` - widens the frame back to an ordinary repaint on its own, so a wrong answer here

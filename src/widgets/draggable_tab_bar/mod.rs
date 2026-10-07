@@ -522,7 +522,7 @@ pub struct DraggableTabBar {
 impl Default for DraggableTabBar {
     fn default() -> Self {
         Self {
-            tabs: Arc::new([]),
+            tabs: Arc::default(),
             active: 0,
             style: Style::default(),
             focus_style: StyleSlot::Inherit,

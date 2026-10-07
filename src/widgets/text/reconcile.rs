@@ -21,6 +21,7 @@ pub fn reconcile_text(
     node.rect = rect;
     node.children.clear();
     if let NodeKind::Text(existing) = &mut node.kind {
+        existing.source = text.source.clone();
         if existing.widget_key != widget_key {
             if existing.render_key != render_key {
                 existing.spans = text.spans.clone();

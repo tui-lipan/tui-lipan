@@ -36,7 +36,7 @@ For layout reorders, wrap the moving subtree in `Animated::new(...)`, enable `.p
 
 | Widget | Feature | Description |
 |--------|---------|-------------|
-| `Text` | - | Styled text |
+| `Text` | - | Styled text, optionally bound to live `TextSource` content |
 | `DocumentView` | `markdown` *(optional formatter)* | Read-only rich document view with tables/code/blockquote rendering |
 | `AsciiCanvas` | - | ASCII art, cell grids, sprite sheets |
 | `BigText` | `big-text` | Large text via FIGlet/pixel fonts |
