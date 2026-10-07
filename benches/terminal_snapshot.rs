@@ -55,5 +55,31 @@ fn snapshots(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, snapshots);
+fn resize_cycles(c: &mut Criterion) {
+    let mut group = c.benchmark_group("terminal_resize");
+    for alternate in [false, true] {
+        let buffer = if alternate { "alternate" } else { "primary" };
+        for kind in ["unchanged", "width", "height"] {
+            group.bench_function(BenchmarkId::new(buffer, kind), |b| {
+                let mut screen = populated("shell");
+                if alternate {
+                    screen.process_bytes(b"\x1b[?1049h");
+                    screen.process_bytes(&corpus("shell", usize::from(ROWS)));
+                }
+                black_box(screen.render_snapshot());
+                let mut step = 0;
+                b.iter(|| {
+                    step ^= 1;
+                    let rows = ROWS + if kind == "height" { step } else { 0 };
+                    let cols = COLS + if kind == "width" { step } else { 0 };
+                    screen.resize(black_box(rows), black_box(cols));
+                    black_box(screen.render_snapshot())
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, snapshots, resize_cycles);
 criterion_main!(benches);
