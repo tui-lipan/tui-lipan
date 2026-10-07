@@ -135,8 +135,18 @@ pub(crate) fn exit_plan(
     TerminalTransitionPlan::new(ops)
 }
 
-pub(crate) fn suspend_plan(policy: SurfaceTerminalPolicy) -> TerminalTransitionPlan {
+/// Hand the terminal to another program until [`resume_plan`].
+///
+/// `pop_keyboard` pops a keyboard enhancement pushed onto the main screen. The
+/// alternate screen keeps its own stack, which leaving it already sets aside.
+pub(crate) fn suspend_plan(
+    policy: SurfaceTerminalPolicy,
+    pop_keyboard: bool,
+) -> TerminalTransitionPlan {
     let mut ops = vec![TerminalOp::DisableRawMode];
+    if pop_keyboard {
+        ops.push(TerminalOp::PopKeyboardEnhancement);
+    }
     if policy.disable_auto_wrap {
         ops.push(TerminalOp::EnableAutoWrap);
     }
@@ -157,9 +167,12 @@ pub(crate) fn suspend_plan(policy: SurfaceTerminalPolicy) -> TerminalTransitionP
     TerminalTransitionPlan::new(ops)
 }
 
+/// Take the terminal back after [`suspend_plan`]; `push_keyboard` restores the
+/// main-screen keyboard enhancement that plan popped.
 pub(crate) fn resume_plan(
     policy: SurfaceTerminalPolicy,
     mouse_enabled: bool,
+    push_keyboard: bool,
 ) -> TerminalTransitionPlan {
     let mut ops = vec![TerminalOp::EnableRawMode];
     if policy.uses_alternate_screen {
@@ -173,6 +186,9 @@ pub(crate) fn resume_plan(
         ops.push(TerminalOp::DisableAutoWrap);
     }
     ops.push(TerminalOp::EnableFocusChange);
+    if push_keyboard {
+        ops.push(TerminalOp::PushKeyboardEnhancement);
+    }
     ops.push(TerminalOp::Flush);
     TerminalTransitionPlan::new(ops)
 }
@@ -258,6 +274,7 @@ impl<W> CrosstermTransitionExecutor<W> {
         Self { writer }
     }
 
+    #[cfg(test)]
     pub(crate) fn into_inner(self) -> W {
         self.writer
     }
@@ -368,7 +385,7 @@ mod tests {
 
     #[test]
     fn handoff_resume_plan_does_not_push_keyboard_enhancement() {
-        let plan = resume_plan(fullscreen_policy(), true);
+        let plan = resume_plan(fullscreen_policy(), true, false);
         assert_eq!(
             plan.ops(),
             &[
@@ -388,7 +405,7 @@ mod tests {
         // and only undoes it when `Terminal` drops, which a handoff never does.
         // Whatever runs next - a shell prompt, a pager - gets the terminal with
         // no visible cursor unless the plan shows it here.
-        let plan = suspend_plan(fullscreen_policy());
+        let plan = suspend_plan(fullscreen_policy(), false);
         assert_eq!(
             plan.ops(),
             &[
@@ -402,6 +419,35 @@ mod tests {
                 TerminalOp::Flush,
             ]
         );
+    }
+
+    #[test]
+    fn an_inline_handoff_pops_the_keyboard_enhancement_and_pushes_it_back() {
+        // An inline surface shares the main screen with the shell, so its
+        // keyboard enhancement would otherwise outlive the handoff.
+        let inline = SurfaceTerminalPolicy {
+            uses_alternate_screen: false,
+            disable_auto_wrap: false,
+            clear_on_start: false,
+        };
+        let suspend = suspend_plan(inline, true);
+        assert_eq!(
+            &suspend.ops()[..2],
+            &[
+                TerminalOp::DisableRawMode,
+                TerminalOp::PopKeyboardEnhancement
+            ]
+        );
+        let resume = resume_plan(inline, true, true);
+        assert_eq!(
+            resume
+                .ops()
+                .iter()
+                .filter(|op| **op == TerminalOp::PushKeyboardEnhancement)
+                .count(),
+            1
+        );
+        assert_eq!(resume.ops().last(), Some(&TerminalOp::Flush));
     }
 
     #[test]
@@ -445,7 +491,7 @@ mod tests {
 
     #[test]
     fn resume_failure_rolls_back_without_keyboard_enhancement() {
-        let plan = resume_plan(fullscreen_policy(), true);
+        let plan = resume_plan(fullscreen_policy(), true, false);
         let mut executor = MockExecutor {
             fail_on: Some(TerminalOp::EnableFocusChange),
             ..MockExecutor::default()

@@ -27,9 +27,11 @@ impl<C: Component> AppRunner<C> {
     ///
     /// A background stop (`SIGTTIN`/`SIGTTOU`) has already released the
     /// terminal modes and stopped from its signal handler, without the input
-    /// reader or the raw-mode bookkeeping knowing. Running the same release and
-    /// restore puts both back in step and re-applies raw mode, which the shell
-    /// may have changed while it held the terminal.
+    /// reader or the raw-mode bookkeeping knowing, and closed the frame output
+    /// behind it. Running the same release and restore puts both back in step
+    /// and re-applies raw mode, which the shell may have changed while it held
+    /// the terminal. Frame output reopens only once that worked; until then a
+    /// failed attempt stays pending for the next frame boundary.
     pub(super) fn run_pending_suspend(&mut self) -> bool {
         let stop_requested = crate::app::job_control::take_suspend_request();
         let stopped_in_background = crate::app::job_control::take_background_stop();
@@ -45,6 +47,7 @@ impl<C: Component> AppRunner<C> {
                 "[tui-lipan] suspend: releasing the terminal failed, staying up: {}",
                 err
             );
+            crate::app::job_control::retry_background_stop();
             return false;
         }
 
@@ -52,8 +55,12 @@ impl<C: Component> AppRunner<C> {
             crate::app::job_control::stop_until_continued();
         }
 
-        if let Err(err) = resume_after_external_process(surface_mode, self.mouse_enabled) {
-            crate::debug::internal_log!("[tui-lipan] suspend: resume failed: {}", err);
+        match resume_after_external_process(surface_mode, self.mouse_enabled) {
+            Ok(()) => crate::app::job_control::reclaim_terminal(),
+            Err(err) => {
+                crate::debug::internal_log!("[tui-lipan] suspend: resume failed: {}", err);
+                crate::app::job_control::retry_background_stop();
+            }
         }
         true
     }

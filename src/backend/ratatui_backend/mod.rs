@@ -21,8 +21,9 @@ pub(crate) mod terminal_transition;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use native_terminal::{
-    Terminal, TerminalGuard, create_inline_terminal, restore_terminal_on_panic,
-    set_mouse_all_motion_enabled, set_mouse_capture_enabled,
+    MAIN_SCREEN_KEYBOARD_PUSHED, MAIN_SCREEN_KEYBOARD_WANTED, Terminal, TerminalGuard,
+    create_inline_terminal, restore_terminal_on_panic, set_mouse_all_motion_enabled,
+    set_mouse_capture_enabled,
 };
 
 pub(crate) use render::{RenderContext, render, render_regions};

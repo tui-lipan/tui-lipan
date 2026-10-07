@@ -1,4 +1,4 @@
-use std::io::{self, BufWriter, Stdout};
+use std::io::{self, BufWriter, Stdout, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -24,8 +24,152 @@ use super::terminal_transition::{
 #[cfg(feature = "image")]
 use super::image_support;
 
-type TerminalWriter = BufWriter<Stdout>;
+type TerminalWriter = BufWriter<FrameOutput>;
 const TERMINAL_BUFFER_CAPACITY: usize = 64 * 1024;
+
+/// Whether the keyboard enhancement a surface pushed is live on the main screen,
+/// which the shell shares with an inline surface. A fullscreen surface pushes
+/// onto the alternate screen's own stack and never sets this.
+///
+/// Swapped rather than read wherever the push is popped, so the stack stays
+/// balanced however many of the exit, suspend and background-stop paths run.
+pub(crate) static MAIN_SCREEN_KEYBOARD_PUSHED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the running inline surface uses keyboard enhancement at all, so a
+/// resume knows to push it again after a suspend popped it.
+pub(crate) static MAIN_SCREEN_KEYBOARD_WANTED: AtomicBool = AtomicBool::new(false);
+
+/// Whether an exit plan should pop the keyboard enhancement: always on the
+/// alternate screen, and on the main screen only while the push is still live.
+fn pop_keyboard_on_exit(policy: SurfaceTerminalPolicy, keyboard_enhancement: bool) -> bool {
+    MAIN_SCREEN_KEYBOARD_WANTED.store(false, Ordering::SeqCst);
+    let main_screen_pushed = MAIN_SCREEN_KEYBOARD_PUSHED.swap(false, Ordering::SeqCst);
+    keyboard_enhancement && (policy.uses_alternate_screen || main_screen_pushed)
+}
+
+/// Where frames go: the terminal on standard output, unbuffered here because
+/// the [`BufWriter`] above it is the only buffer frames may sit in.
+///
+/// A background stop releases the terminal from a signal handler, wherever the
+/// renderer happens to be, and the renderer carries on from there once the
+/// process is continued. Every write therefore checks whether the terminal is
+/// still ours first, and drops the frame while it is not; the runner repaints
+/// in full once it has taken the terminal back.
+///
+/// That check only holds if no write can be past it already. A `write` that
+/// sleeps in the kernel while the terminal drains is restarted after a stop,
+/// below any check, so frames go through a descriptor of their own opened
+/// non-blocking: a full terminal is waited out in `poll`, and the check runs
+/// again before every write. Writing to a descriptor directly, rather than
+/// through [`Stdout`], also keeps a dropped frame's tail from waiting in
+/// `Stdout`'s own buffer for the next writer to flush it.
+pub(crate) struct FrameOutput {
+    #[cfg(unix)]
+    terminal: Option<std::os::fd::OwnedFd>,
+    #[cfg(not(unix))]
+    stdout: Stdout,
+}
+
+impl FrameOutput {
+    pub(crate) fn new() -> Self {
+        Self {
+            #[cfg(unix)]
+            terminal: open_stdout_terminal_nonblocking(),
+            #[cfg(not(unix))]
+            stdout: io::stdout(),
+        }
+    }
+}
+
+/// A new, non-blocking open of the terminal standard output refers to, or
+/// `None` when it is not a terminal or cannot be opened again; frames then go
+/// to standard output itself. Its own open file description, so the flag never
+/// reaches the shell sharing standard output's.
+#[cfg(unix)]
+fn open_stdout_terminal_nonblocking() -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+
+    let mut name = [0 as libc::c_char; 256];
+    // SAFETY: `name` is a writable buffer of the length passed, and `ttyname_r`
+    // fails rather than overrun it.
+    #[allow(unsafe_code)]
+    let named = unsafe { libc::ttyname_r(libc::STDOUT_FILENO, name.as_mut_ptr(), name.len()) };
+    if named != 0 {
+        return None;
+    }
+    // SAFETY: `ttyname_r` succeeded, so `name` holds a nul-terminated path.
+    #[allow(unsafe_code)]
+    let fd = unsafe {
+        libc::open(
+            name.as_ptr(),
+            libc::O_WRONLY | libc::O_NOCTTY | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        )
+    };
+    // SAFETY: a non-negative `fd` was just opened here and nothing else owns it.
+    #[allow(unsafe_code)]
+    (fd >= 0).then(|| unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+}
+
+impl Write for FrameOutput {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        cfg_select! {
+            unix => {
+                use std::os::fd::AsRawFd;
+
+                let fd = self
+                    .terminal
+                    .as_ref()
+                    .map_or(libc::STDOUT_FILENO, AsRawFd::as_raw_fd);
+                loop {
+                    if crate::app::job_control::terminal_released() {
+                        return Ok(buf.len());
+                    }
+                    // SAFETY: the pointer and length describe the live `buf` slice.
+                    #[allow(unsafe_code)]
+                    let written = unsafe { libc::write(fd, buf.as_ptr().cast(), buf.len()) };
+                    if let Ok(written) = usize::try_from(written) {
+                        return Ok(written);
+                    }
+                    let err = io::Error::last_os_error();
+                    match err.kind() {
+                        io::ErrorKind::Interrupted => {}
+                        io::ErrorKind::WouldBlock => wait_until_writable(fd),
+                        _ => return Err(err),
+                    }
+                }
+            }
+            _ => {
+                if crate::app::job_control::terminal_released() {
+                    return Ok(buf.len());
+                }
+                self.stdout.write(buf)
+            }
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        cfg_select! {
+            unix => Ok(()),
+            _ => self.stdout.flush(),
+        }
+    }
+}
+
+/// Wait for room in the terminal's output queue. A signal ends the wait early,
+/// which is the point: the caller checks the frame output again first.
+#[cfg(unix)]
+fn wait_until_writable(fd: libc::c_int) {
+    let mut descriptor = libc::pollfd {
+        fd,
+        events: libc::POLLOUT,
+        revents: 0,
+    };
+    // SAFETY: `descriptor` is one valid `pollfd`, as the count says.
+    #[allow(unsafe_code)]
+    unsafe {
+        libc::poll(&mut descriptor, 1, -1)
+    };
+}
 
 /// Image id for the startup graphics probe, high enough not to collide with a real placement's.
 #[cfg(feature = "terminal-images")]
@@ -138,7 +282,7 @@ impl<W: io::Write> Backend for HostBackend<W> {
 }
 
 fn buffered_stdout() -> TerminalWriter {
-    BufWriter::with_capacity(TERMINAL_BUFFER_CAPACITY, io::stdout())
+    BufWriter::with_capacity(TERMINAL_BUFFER_CAPACITY, FrameOutput::new())
 }
 
 pub(crate) fn create_inline_terminal(height: u16) -> io::Result<Terminal> {
@@ -344,7 +488,7 @@ impl TerminalGuard {
         panic_keyboard_enhancement: &AtomicBool,
     ) -> io::Result<(OwnedTerminal, Self)> {
         let policy = surface_terminal_policy(surface_mode);
-        let mut stdout = io::stdout();
+        let stdout = io::stdout();
         // The object outlives the query so a terminal that declines it still finds it there, and is
         // unlinked when this scope ends whether or not the terminal read it.
         //
@@ -403,8 +547,10 @@ impl TerminalGuard {
         let plan = enter_plan(policy, mouse_enabled, keyboard_enhancement);
         let mut executor = CrosstermTransitionExecutor::new(stdout);
         execute_plan_with_rollback(&mut executor, &plan)?;
-        stdout = executor.into_inner();
         panic_keyboard_enhancement.store(keyboard_enhancement, Ordering::SeqCst);
+        let main_screen_keyboard = keyboard_enhancement && !policy.uses_alternate_screen;
+        MAIN_SCREEN_KEYBOARD_WANTED.store(main_screen_keyboard, Ordering::SeqCst);
+        MAIN_SCREEN_KEYBOARD_PUSHED.store(main_screen_keyboard, Ordering::SeqCst);
 
         #[cfg(feature = "image")]
         image_support::init_image_picker();
@@ -416,8 +562,7 @@ impl TerminalGuard {
         drain_pending_terminal_responses();
 
         let terminal = if policy.uses_alternate_screen {
-            let backend =
-                HostBackend::new(BufWriter::with_capacity(TERMINAL_BUFFER_CAPACITY, stdout));
+            let backend = HostBackend::new(buffered_stdout());
             match ratatui::Terminal::new(backend) {
                 Ok(terminal) => terminal,
                 Err(err) => {
@@ -493,7 +638,7 @@ fn rollback_entered_terminal(policy: SurfaceTerminalPolicy, keyboard_enhancement
     // so it is not echoed to the shell as `^[[?…c`.
     flush_pending_terminal_responses_on_exit();
     let mut stdout = io::stdout();
-    let plan = exit_plan(policy, keyboard_enhancement);
+    let plan = exit_plan(policy, pop_keyboard_on_exit(policy, keyboard_enhancement));
     let mut executor = CrosstermTransitionExecutor::new(&mut stdout);
     let _ = execute_plan(&mut executor, &plan);
 }
@@ -513,7 +658,10 @@ impl Drop for TerminalGuard {
             self.theme_notifications = false;
         }
         flush_pending_terminal_responses_on_exit();
-        let plan = exit_plan(self.policy, self.keyboard_enhancement);
+        let plan = exit_plan(
+            self.policy,
+            pop_keyboard_on_exit(self.policy, self.keyboard_enhancement),
+        );
         let _ = execute_plan(&mut executor, &plan);
     }
 }
@@ -535,7 +683,7 @@ pub(crate) fn restore_terminal_on_panic(
     #[cfg(not(unix))]
     let _ = theme_notifications;
     flush_pending_terminal_responses_on_exit();
-    let plan = exit_plan(policy, keyboard_enhancement);
+    let plan = exit_plan(policy, pop_keyboard_on_exit(policy, keyboard_enhancement));
     let _ = execute_plan(&mut executor, &plan);
     reset_handoff_state_for_terminal_restore();
 }
