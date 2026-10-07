@@ -42,6 +42,7 @@ pub fn mouse_event_from_raw(
             alt,
             shift,
             super_key: false,
+            ..KeyMods::NONE
         },
     })
 }

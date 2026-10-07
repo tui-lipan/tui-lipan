@@ -544,6 +544,7 @@ pub struct AppRunner<C: Component> {
     pub(crate) core: crate::session::SessionEngine<C>,
     pub(crate) focus: FocusState,
     held_modifiers: KeyMods,
+    alt_tracker: crate::app::input::convert::AltTracker,
     on_focus_changed: Option<crate::app::context::FocusChangedHook>,
     pub(crate) drag: DragState,
     pub(crate) mouse: MouseTrackingState,
@@ -863,6 +864,7 @@ impl<C: Component> AppRunner<C> {
             core: core.into(),
             focus,
             held_modifiers: KeyMods::NONE,
+            alt_tracker: Default::default(),
             on_focus_changed,
             drag,
             mouse: MouseTrackingState::with_pointer_cell(last_mouse),
@@ -2251,6 +2253,7 @@ impl<C: Component> AppRunner<C> {
                 let mut pointer_motion_only = false;
                 let modifier_reporting = self.core.ctx.modifier_key_reporting_enabled();
                 if guard.set_modifier_key_reporting(modifier_reporting)? {
+                    self.alt_tracker = Default::default();
                     self.set_held_modifiers(KeyMods::NONE, &mut dirty);
                 }
                 #[cfg(feature = "devtools")]
@@ -2375,11 +2378,13 @@ impl<C: Component> AppRunner<C> {
                         }
                         CEvent::FocusLost => {
                             self.set_window_focused(false, &mut dirty);
+                            self.alt_tracker = Default::default();
                             self.set_held_modifiers(KeyMods::NONE, &mut dirty);
                             self.animation.reset_blink();
                             dirty.mark_paint();
                         }
                         CEvent::Key(k) => {
+                            let alt_side = self.alt_tracker.update(k);
                             #[cfg(feature = "terminal")]
                             if let Some(mods) = modifier_key_state(k)
                                 && self.refresh_terminal_link_hover_at_pointer(mods)
@@ -2388,9 +2393,22 @@ impl<C: Component> AppRunner<C> {
                             }
                             #[cfg(feature = "terminal")]
                             if self.core.ctx.modifier_key_reporting_enabled() {
-                                self.set_held_modifiers(key_modifier_state(k), &mut dirty);
+                                let mut mods = key_modifier_state(k);
+                                mods.alt_side = alt_side;
+                                if matches!(
+                                    k.code,
+                                    crossterm::event::KeyCode::Modifier(
+                                        crossterm::event::ModifierKeyCode::LeftAlt
+                                            | crossterm::event::ModifierKeyCode::RightAlt
+                                            | crossterm::event::ModifierKeyCode::IsoLevel3Shift
+                                    )
+                                ) {
+                                    mods.alt = alt_side != crate::AltSide::Unknown;
+                                }
+                                self.set_held_modifiers(mods, &mut dirty);
                             }
-                            if let Some(key) = to_key_event(k) {
+                            if let Some(mut key) = to_key_event(k) {
+                                key.mods.alt_side = alt_side;
                                 if matches!(key.code, KeyCode::Esc)
                                     && matches!(self.drag.active, ActiveDrag::DragDrop(_))
                                     && self.cancel_drag_drop()

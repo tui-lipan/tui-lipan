@@ -18,3 +18,6 @@ pub(crate) mod runtime_dispatch;
 pub mod scrollbar;
 pub mod text;
 pub(crate) mod text_area_vim;
+
+#[cfg(unix)]
+pub(crate) mod kitty_text;

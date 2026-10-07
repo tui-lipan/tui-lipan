@@ -196,7 +196,7 @@ impl AppHandle {
     ) -> Result<(), JsValue> {
         let x = x.clamp(0, i32::from(u16::MAX)) as u16;
         let y = y.clamp(0, i32::from(u16::MAX)) as u16;
-        let mods = KeyMods { ctrl, alt, shift, super_key: false };
+        let mods = KeyMods { ctrl, alt, shift, ..KeyMods::NONE };
 
         // map (button, phase, is_wheel) -> MouseKind.
         // unsupported wheel/button codes should be ignored.

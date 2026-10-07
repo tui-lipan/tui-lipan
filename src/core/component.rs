@@ -1363,10 +1363,11 @@ impl<C: Component> Context<C> {
 
     /// Request standalone modifier press/release events from the host terminal.
     ///
-    /// Keep this enabled only while the app is explicitly capturing a physical shortcut.
-    /// Enhanced keyboard reporting exposes the unshifted physical key rather than composed text,
-    /// so leaving it active during ordinary text input would mishandle layouts, AltGr, dead keys,
-    /// and IME input. Unsupported terminals ignore the request.
+    /// Enable while an overlay needs physical modifier identity or records shortcuts, and
+    /// disable when it closes. On Unix, associated text is decoded before key conversion so
+    /// composed text remains usable in fullscreen apps. Unix inline surfaces and unsupported
+    /// terminals ignore the request; modifier sides then remain unknown. Keys already held when
+    /// reporting starts may also be unknown until released and pressed again.
     pub fn set_modifier_key_reporting(&self, enabled: bool) {
         self.env.modifier_key_reporting.set(enabled);
     }

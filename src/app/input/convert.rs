@@ -1,5 +1,34 @@
 use crate::core::event::{KeyCode, KeyEvent, KeyMods, MouseButton, MouseEvent, MouseKind};
 
+/// Tracks physical Alt reports separately from the aggregate modifier mask.
+#[derive(Default)]
+pub(crate) struct AltTracker {
+    left: bool,
+    right: bool,
+}
+
+impl AltTracker {
+    pub(crate) fn update(&mut self, key: crossterm::event::KeyEvent) -> crate::AltSide {
+        use crossterm::event::{KeyCode as C, KeyEventKind, ModifierKeyCode as M};
+        let held = key.kind != KeyEventKind::Release;
+        match key.code {
+            C::Modifier(M::LeftAlt) => self.left = held,
+            C::Modifier(M::RightAlt | M::IsoLevel3Shift) => self.right = held,
+            _ if !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) => {
+                self.left = false;
+                self.right = false;
+            }
+            _ => {}
+        }
+        match (self.left, self.right) {
+            (true, false) => crate::AltSide::Left,
+            (false, true) => crate::AltSide::Right,
+            (true, true) => crate::AltSide::Both,
+            (false, false) => crate::AltSide::Unknown,
+        }
+    }
+}
+
 pub(crate) fn to_key_event(k: crossterm::event::KeyEvent) -> Option<KeyEvent> {
     if !matches!(
         k.kind,
@@ -83,6 +112,7 @@ fn to_key_mods(modifiers: crossterm::event::KeyModifiers) -> KeyMods {
         alt: modifiers.contains(crossterm::event::KeyModifiers::ALT),
         shift: modifiers.contains(crossterm::event::KeyModifiers::SHIFT),
         super_key: modifiers.contains(crossterm::event::KeyModifiers::SUPER),
+        alt_side: crate::AltSide::Unknown,
     }
 }
 
@@ -146,6 +176,41 @@ mod tests {
     use crossterm::event::{
         KeyCode as CrosstermKeyCode, KeyEvent as CrosstermKeyEvent, KeyModifiers,
     };
+
+    #[test]
+    fn alt_tracker_preserves_both_sides_and_releases_independently() {
+        use crossterm::event::{
+            KeyEvent as K, KeyEventKind as Kind, KeyModifiers as Mods, ModifierKeyCode as M,
+        };
+        let mut tracker = super::AltTracker::default();
+        let event =
+            |side, kind| K::new_with_kind(CrosstermKeyCode::Modifier(side), Mods::ALT, kind);
+        assert_eq!(
+            tracker.update(event(M::LeftAlt, Kind::Press)),
+            crate::AltSide::Left
+        );
+        assert_eq!(
+            tracker.update(K::new(CrosstermKeyCode::Char('j'), Mods::ALT)),
+            crate::AltSide::Left
+        );
+        assert_eq!(
+            tracker.update(event(M::RightAlt, Kind::Press)),
+            crate::AltSide::Both
+        );
+        assert_eq!(
+            tracker.update(event(M::LeftAlt, Kind::Release)),
+            crate::AltSide::Right
+        );
+        assert_eq!(
+            tracker.update(event(M::RightAlt, Kind::Release)),
+            crate::AltSide::Unknown
+        );
+        tracker.update(event(M::LeftAlt, Kind::Press));
+        assert_eq!(
+            tracker.update(K::new(CrosstermKeyCode::Char('j'), Mods::NONE)),
+            crate::AltSide::Unknown
+        );
+    }
 
     #[test]
     fn function_key_is_translated() {

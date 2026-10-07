@@ -33,11 +33,14 @@ focus APIs for keyboard routing. It is also separate from a child `Terminal` req
 `?1004` focus reporting; the runner continues to send those sequences only to that terminal.
 
 `on_modifiers_changed` runs only on the mounted root and reports the effective set of physically
-held Ctrl, Alt, Shift, and Super keys. Call `ctx.set_modifier_key_reporting(true)` only while
-capturing a physical shortcut, and disable it on every path out of that capture: the enhanced mode
-reports physical keys instead of composed text and is unsuitable for normal text input. Terminals
-without the protocol still report modifiers on ordinary combined `KeyEvent`s. Losing host focus
-clears the held set. Tests can drive the callback with `TestBackend::set_held_modifiers`.
+held Ctrl, Alt, Shift, and Super keys, including physical Alt side when available. Call
+`ctx.set_modifier_key_reporting(true)` while an overlay needs physical modifier identity or captures
+shortcuts, and disable it when the overlay closes. Fullscreen Unix input decodes associated text,
+so shifted, composed, and AltGr text remains usable while reporting is enabled. Unix inline
+surfaces ignore this request until their input reader supports associated text. Unsupported
+terminals also leave physical sides unknown, while ordinary combined `KeyEvent`s still carry
+modifiers. Losing host focus clears the held set. Tests can drive the callback with
+`TestBackend::set_held_modifiers`.
 
 ## State Flow
 

@@ -263,23 +263,20 @@ impl<W> CrosstermTransitionExecutor<W> {
     }
 }
 
-/// What the host is asked to report, and deliberately what it is not.
-///
-/// `REPORT_ALL_KEYS_AS_ESCAPE_CODES` would add standalone modifier press and release events, which
-/// is the only way to refresh a link hover under a stationary pointer. It cannot be asked for: it
-/// also replaces ordinary text keys with `CSI <key>;<mods> u`, reporting the *unshifted layout key*
-/// and leaving the character the layout would have produced to a companion flag. Termina decodes
-/// the shifted alternate of `REPORT_ALTERNATE_KEYS` but has nowhere to put the associated text of
-/// `REPORT_ASSOCIATED_TEXT`, so anything the layout composes - `Shift`+letter, an AltGr character,
-/// a dead-key sequence, an IME commit - would arrive as the bare key it was typed on and be
-/// entered, or forwarded to a PTY, as the wrong character. Text input outranks hover latency.
+/// Default reporting preserves host-decoded text. Explicit physical-modifier reporting adds
+/// all-keys, alternate keys and associated text; the Unix input adapter preserves composed text
+/// before Termina's key-only conversion discards it.
 fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
     KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
         | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
 }
 
 fn modifier_key_reporting_flags() -> KeyboardEnhancementFlags {
-    keyboard_enhancement_flags() | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+    keyboard_enhancement_flags()
+        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+        // Crossterm has no named flag yet; Kitty assigns bit 16 to associated text.
+        | KeyboardEnhancementFlags::from_bits_retain(16)
 }
 
 impl<W: Write> TerminalTransitionExecutor for CrosstermTransitionExecutor<W> {
