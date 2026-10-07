@@ -17,14 +17,23 @@ use super::AppRunner;
 
 impl<C: Component> AppRunner<C> {
     /// Run a pending suspend request — `Context::suspend_to_shell` or an
-    /// external `SIGTSTP` — and report whether the process was stopped.
+    /// external `SIGTSTP` — or take the terminal back after a background stop,
+    /// and report whether either happened.
     ///
     /// Called between frames so the terminal is in a known state: hand it back
     /// to the shell, stop until the job is foregrounded, then take it again.
     /// `resume_after_external_process` asks for the full repaint that redraws
     /// over whatever the shell left on screen.
+    ///
+    /// A background stop (`SIGTTIN`/`SIGTTOU`) has already released the
+    /// terminal modes and stopped from its signal handler, without the input
+    /// reader or the raw-mode bookkeeping knowing. Running the same release and
+    /// restore puts both back in step and re-applies raw mode, which the shell
+    /// may have changed while it held the terminal.
     pub(super) fn run_pending_suspend(&mut self) -> bool {
-        if !crate::app::job_control::take_suspend_request() {
+        let stop_requested = crate::app::job_control::take_suspend_request();
+        let stopped_in_background = crate::app::job_control::take_background_stop();
+        if !stop_requested && !stopped_in_background {
             return false;
         }
 
@@ -39,7 +48,9 @@ impl<C: Component> AppRunner<C> {
             return false;
         }
 
-        crate::app::job_control::stop_until_continued();
+        if stop_requested {
+            crate::app::job_control::stop_until_continued();
+        }
 
         if let Err(err) = resume_after_external_process(surface_mode, self.mouse_enabled) {
             crate::debug::internal_log!("[tui-lipan] suspend: resume failed: {}", err);

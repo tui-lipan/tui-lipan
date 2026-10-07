@@ -90,7 +90,7 @@ Raw mode clears the tty's `ISIG` flag, so the terminal driver never turns `ctrl+
 
 Do **not** raise `SIGTSTP` yourself. Stopping with the terminal still in raw mode leaves the shell prompt drawing over the frozen UI, with mouse motion printing escape sequences into it.
 
-A `SIGTSTP` that arrives from anywhere else - `kill -TSTP`, a parent shell - takes the same path while the runner owns the terminal, so those stops are clean too. The signal is sent to the whole process group, matching what a `ctrl+z` at the tty does; children that must keep running while the TUI sleeps belong in their own process group (`std::process::Command::process_group(0)`).
+A `SIGTSTP` that arrives from anywhere else - `kill -TSTP`, a parent shell - takes the same path while the runner owns the terminal, so those stops are clean too. So do `SIGTTIN` and `SIGTTOU`, which the kernel sends when the app touches the terminal after another process group has taken it over: the runner turns mouse reporting, bracketed paste, focus reporting and the alternate screen off before the process stops, and takes the terminal back once the job is foregrounded. A job sent to the background with `bg` stops again as soon as it touches the terminal, so it never draws over the shell. The signal is sent to the whole process group, matching what a `ctrl+z` at the tty does; children that must keep running while the TUI sleeps belong in their own process group (`std::process::Command::process_group(0)`).
 
 No-op on targets without POSIX job control (Windows, wasm), so the keybinding can be wired unconditionally.
 

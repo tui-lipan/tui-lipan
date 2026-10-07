@@ -2135,9 +2135,11 @@ impl<C: Component> AppRunner<C> {
                 panic_keyboard_enhancement.as_ref(),
             )?;
             let mut guard = guard;
-            // Route SIGTSTP through the loop for as long as we own the terminal,
-            // so a stop — ours or an external `kill -TSTP` — releases it first.
-            let _stop_signal_guard = crate::app::job_control::install_stop_handler();
+            // Route the stop signals through the loop for as long as we own the
+            // terminal, so a stop — ours, an external `kill -TSTP`, or a tty
+            // access from the background — releases it first.
+            let _stop_signal_guard =
+                crate::app::job_control::install_stop_handler(!self.surface.mode().is_inline());
             self.refresh_host_terminal_colors(false, None);
 
             // Startup probing above deliberately finishes before the platform reader takes
