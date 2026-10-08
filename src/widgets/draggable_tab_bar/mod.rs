@@ -500,6 +500,7 @@ pub struct DraggableTabBar {
     pub(crate) file_icon_overrides: HashMap<Arc<str>, FileIconOverride>,
     pub(crate) bar_id: Option<Arc<str>>,
     pub(crate) drag_group: Option<Arc<str>>,
+    pub(crate) drop_area: Option<crate::core::element::Key>,
     pub(crate) draggable: bool,
     pub(crate) drag_preview: bool,
     pub(crate) reorder_mode: DragReorderMode,
@@ -562,6 +563,7 @@ impl Default for DraggableTabBar {
             file_icon_overrides: HashMap::new(),
             bar_id: None,
             drag_group: None,
+            drop_area: None,
             draggable: true,
             drag_preview: true,
             reorder_mode: DragReorderMode::Live,
@@ -963,6 +965,16 @@ impl DraggableTabBar {
         self
     }
 
+    /// Accept cross-bar transfers over a keyed ancestor container, including its body.
+    ///
+    /// The ancestor must contain this bar and carry the supplied `.key(...)`.
+    /// Body transfers append the tab; hovering the bar itself chooses an insertion index.
+    /// Hovering this bar's own body never reorders its tabs.
+    pub fn drop_area(mut self, key: impl Into<crate::core::element::Key>) -> Self {
+        self.drop_area = Some(key.into());
+        self
+    }
+
     /// Toggle drag reordering.
     pub fn draggable(mut self, draggable: bool) -> Self {
         self.draggable = draggable;
@@ -984,7 +996,7 @@ impl DraggableTabBar {
         self
     }
 
-    /// Set drag start threshold in columns.
+    /// Set drag start threshold in terminal cells along either axis.
     pub fn drag_threshold(mut self, threshold: u16) -> Self {
         self.drag_threshold = threshold;
         self

@@ -365,7 +365,7 @@ pub(crate) fn transition_widget_down<C: Component, T: MouseDispatchCtx<C>>(
     }
 
     if let Some(action) = actions.draggable_tab_bar_action
-        && ctx.handle_draggable_tab_bar_click(action, x, *dirty)
+        && ctx.handle_draggable_tab_bar_click(action, x, y, *dirty)
     {
         return Some(true);
     }

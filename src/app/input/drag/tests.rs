@@ -37,6 +37,7 @@ fn on_drop_transfer_carries_destination_selection_callback() {
         reorder_mode: DragReorderMode::OnDrop,
         threshold: 1,
         start_x: 0,
+        start_y: 0,
         started: true,
         preview_label: None,
         preview_snapshot_anchor: None,

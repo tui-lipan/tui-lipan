@@ -956,7 +956,7 @@ impl NodeTree {
             .find(|root| root.captures_focus)
     }
 
-    fn test_overlays(&self, x: i16, y: i16, kind: TestKind) -> OverlayRouting {
+    fn test_overlays(&self, x: i16, y: i16, kind: TestKind<'_>) -> OverlayRouting {
         for root in self.overlay_roots.iter().rev() {
             if let Some(hit) = self.depth_first_test(root.id, x, y, kind) {
                 return OverlayRouting::Hit(hit);
@@ -983,6 +983,11 @@ impl NodeTree {
         self.do_test(x, y, TestKind::Hit)
     }
 
+    /// Hit-test additional drop surfaces without making them clickable or focusable.
+    pub(crate) fn drop_target_test(&self, x: i16, y: i16, targets: &[NodeId]) -> Option<NodeId> {
+        self.do_test(x, y, TestKind::DropTarget(targets))
+    }
+
     /// Return the deepest hoverable node at `(x, y)`, respecting overlay layering.
     pub fn hover_test(&self, x: i16, y: i16) -> Option<NodeId> {
         self.do_test(x, y, TestKind::Hover)
@@ -993,7 +998,7 @@ impl NodeTree {
         self.do_test(x, y, TestKind::MouseMove)
     }
 
-    fn do_test(&self, x: i16, y: i16, kind: TestKind) -> Option<NodeId> {
+    fn do_test(&self, x: i16, y: i16, kind: TestKind<'_>) -> Option<NodeId> {
         if !self.is_valid(self.root) {
             return None;
         }
@@ -1380,7 +1385,13 @@ impl NodeTree {
         None
     }
 
-    fn depth_first_test(&self, start: NodeId, x: i16, y: i16, kind: TestKind) -> Option<NodeId> {
+    fn depth_first_test(
+        &self,
+        start: NodeId,
+        x: i16,
+        y: i16,
+        kind: TestKind<'_>,
+    ) -> Option<NodeId> {
         let mut stack = vec![TraversalFrame::new(start)];
 
         while let Some(frame) = stack.last_mut() {
@@ -1451,8 +1462,10 @@ impl NodeTree {
 
             let node = self.node(done.id);
             let is_match = match kind {
-                TestKind::Hit => {
-                    if let Some(hit) = node.kind.hit_test_refinement(x, y, node.rect) {
+                TestKind::Hit | TestKind::DropTarget(_) => {
+                    if matches!(kind, TestKind::DropTarget(targets) if targets.contains(&done.id)) {
+                        true
+                    } else if let Some(hit) = node.kind.hit_test_refinement(x, y, node.rect) {
                         hit
                     } else {
                         node.is_interactive()
@@ -1701,8 +1714,9 @@ impl NodeTree {
 }
 
 #[derive(Clone, Copy)]
-enum TestKind {
+enum TestKind<'a> {
     Hit,
+    DropTarget(&'a [NodeId]),
     Hover,
     MouseMove,
 }
@@ -1942,6 +1956,43 @@ mod tests {
                 assert!(tree.scrollbar_target_at(5, 5).is_none());
             }
         }
+    }
+
+    #[test]
+    fn drop_surfaces_preserve_clipping_inertness_and_overlay_capture() {
+        let (mut tree, body) = build_base_tree();
+        tree.node_mut(body).kind = NodeKind::Frame(Default::default());
+        assert_eq!(tree.hit_test(1, 1), None);
+        assert_eq!(tree.drop_target_test(1, 1, &[body]), Some(body));
+        tree.node_mut(body).inert = true;
+        assert_eq!(tree.drop_target_test(1, 1, &[body]), None);
+        tree.node_mut(body).inert = false;
+        let root = tree.root;
+        tree.node_mut(root).rect.w = 5;
+        assert_eq!(tree.drop_target_test(6, 1, &[body]), None);
+        tree.node_mut(root).rect.w = 30;
+        let overlay = alloc_overlay_frame(
+            &mut tree,
+            Rect {
+                x: 8,
+                y: 3,
+                w: 10,
+                h: 4,
+            },
+        );
+        tree.set_overlay_roots(vec![overlay_root(
+            overlay,
+            0,
+            PointerCapture::BackdropFullScreen,
+        )]);
+        assert_eq!(tree.drop_target_test(1, 1, &[body]), None);
+        tree.set_overlay_roots(Vec::new());
+        assert_eq!(tree.drop_target_test(1, 1, &[body]), Some(body));
+        assert_eq!(
+            tree.hit_test(1, 1),
+            None,
+            "a drop surface does not become clickable"
+        );
     }
 
     #[test]

@@ -100,7 +100,7 @@ symbol still appears when nothing else about the bar reacts to the pointer.
 | `draggable` | `bool` | Enable drag reordering |
 | `drag_preview` | `bool` | Floating snapshot of the tab near the pointer while dragging (default: `true`). Cap cells keep the destination background so a pill floats instead of a rectangle. |
 | `reorder_mode` | `DragReorderMode` | `Live` or `OnDrop` |
-| `drag_threshold` | `u16` | Pixels before drag starts |
+| `drag_threshold` | `u16` | Terminal cells along either axis before drag starts |
 | `show_close_buttons` | `bool` | Show close buttons |
 | `close_symbol` | `&str` | Close button symbol |
 | `close_on_hover_only` | `bool` | Show close only on hover |
@@ -121,6 +121,7 @@ symbol still appears when nothing else about the bar reacts to the pointer.
 | `file_icon_override` | `HashMap<Arc<str>, FileIconOverride>` | Per-extension overrides |
 | `bar_id` | `&str` | Bar identifier for drag groups |
 | `drag_group` | `&str` | Group name for cross-bar transfer |
+| `drop_area` | `impl Into<Key>` | Key of an ancestor container that also accepts transfers over its body |
 | `style` | `Style` | Bar idle style |
 | `focus_style` | `Style` | Bar focus style |
 | `hover_style` | `Style` | Bar hover style |
@@ -331,6 +332,24 @@ DraggableTabBar::new()
     .tabs(self.right_tabs.clone())
     .on_transfer(ctx.link().callback(Msg::TransferFromRight))
 ```
+
+To accept transfers over the content below a bar, opt into a keyed ancestor container:
+
+```rust
+VStack::new()
+    .child(DraggableTabBar::new()
+        .bar_id("editor")
+        .drag_group("editors")
+        .drop_area("editor-panel"))
+    .child(Text::new("Editor body"))
+    .key("editor-panel")
+```
+
+Body transfers append the tab; the bar still chooses the precise insertion index. Hovering a
+bar's own body does not reorder tabs. The area follows normal clipping and overlay hit testing,
+and only accepts bars with the same `drag_group`. Live transfers can continue across several
+bars, including returning to the original panel, without releasing the mouse. Transfer callbacks
+are taken from the current view after each move.
 
 Tabs can be dragged between bars that share the same `drag_group`. The `on_transfer` callback fires on the **source** bar and reports `from_bar`, `to_bar`, `from` index, and `to` index. After that callback queues the transfer, the destination bar's `on_change` callback fires with `to`, selecting the transferred tab through the same controlled-state path as a mouse click.
 

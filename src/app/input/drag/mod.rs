@@ -42,6 +42,7 @@ pub(crate) struct DraggableTabBarDrag {
     pub reorder_mode: DragReorderMode,
     pub threshold: u16,
     pub start_x: u16,
+    pub start_y: u16,
     pub started: bool,
     pub preview_label: Option<Arc<str>>,
     /// Rect of the source tab in buffer space; set once on drag activation for snapshot preview.
@@ -64,6 +65,7 @@ impl std::fmt::Debug for DraggableTabBarDrag {
             .field("reorder_mode", &self.reorder_mode)
             .field("threshold", &self.threshold)
             .field("start_x", &self.start_x)
+            .field("start_y", &self.start_y)
             .field("started", &self.started)
             .field("preview_label", &self.preview_label)
             .finish()
