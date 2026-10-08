@@ -323,9 +323,10 @@ fn preserving_errno(body: impl FnOnce()) {
     errno::set(saved);
 }
 
-/// This thread's `errno`, through the accessor each platform's C library
-/// provides: the same mapping the standard library uses, resolved through
-/// `libc`. A target outside it has no `errno` the handler could put back, so
+/// This thread's `errno`, through the platform `errno` APIs `libc` exposes,
+/// based on the standard library's platform cases. (std reads RTEMS's and
+/// DragonFly's thread-local `errno` directly; here they go through `libc`'s
+/// `__errno` and `__errno_location`.) A target outside it has no `errno` the handler could put back, so
 /// the background signals are left to their default there ([`errno::KNOWN`]).
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 mod errno {
