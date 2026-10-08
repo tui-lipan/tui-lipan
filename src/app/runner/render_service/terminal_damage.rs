@@ -30,6 +30,8 @@ pub(crate) enum DamageRejection {
     DenseDamage,
     /// The terminal reported `Full` - a resize, a screen swap, decorations.
     FullDamage,
+    /// A snapshot changed but its damage was already consumed by another screen observer.
+    MissingDamage,
     /// The node backing the damage is gone or is no longer a terminal.
     NodeMissing,
     /// There is no retained frame to patch, or it does not match the current geometry.
@@ -110,7 +112,10 @@ where
             let damaged = match damage {
                 TerminalDamage::Rows(rows) => rows,
                 TerminalDamage::Full => return Err(DamageRejection::FullDamage),
-                TerminalDamage::None => continue,
+                // Shared screen handles consume damage once, but every mounted widget can
+                // receive the newer snapshot. Without damage for this widget, a row patch
+                // cannot prove it covers all changed cells.
+                TerminalDamage::None => return Err(DamageRejection::MissingDamage),
             };
             if !self.core.tree.is_valid(*node) {
                 return Err(DamageRejection::NodeMissing);

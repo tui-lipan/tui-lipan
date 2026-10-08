@@ -56,6 +56,12 @@ impl TextSource {
         true
     }
 
+    // Binding identity lets the debug paint guard distinguish content updates from replacing
+    // the source, which requires reconciliation even when the spans happen to match.
+    pub(crate) fn identity(&self) -> usize {
+        Rc::as_ptr(&self.0) as usize
+    }
+
     /// Read the current immutable spans.
     pub fn snapshot(&self) -> Arc<[Span]> {
         self.0.borrow().clone()

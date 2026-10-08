@@ -63,6 +63,10 @@ repaint cannot serve fall back to an ordinary paint. Multiple terminals can cont
 the same frame; their affected rows are combined. Dense damage falls back to a single full paint
 to avoid repeatedly walking the tree for most rows.
 
+If multiple terminal widgets share one screen, refreshing them can consume the screen's damage
+before every widget has observed it. A changed snapshot without damage forces a full paint, so all
+widgets display the current contents.
+
 Scrolling a live terminal is the same shape. The wheel and the scrollbar report
 the new offset through `on_scroll_to`; move the screen with `set_scrollback` and
 return `Update::paint()`, and the runtime asks for no more than a repaint on its

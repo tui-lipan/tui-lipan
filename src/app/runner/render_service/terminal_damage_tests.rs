@@ -165,6 +165,8 @@ struct PaneCfg {
     grid_rows: u16,
     /// Mount a second terminal beside the first.
     second_terminal: bool,
+    /// Display the same screen in both terminal widgets.
+    shared_screen: bool,
     /// Focus the second terminal rather than the first, so the caret sits on a row the first
     /// terminal's output never damages.
     focus_second: bool,
@@ -293,6 +295,9 @@ fn build(cfg: PaneCfg, setup: &[u8]) -> Harness {
     )));
     screen.borrow_mut().process_bytes(setup);
     let second = cfg.second_terminal.then(|| {
+        if cfg.shared_screen {
+            return Rc::clone(&screen);
+        }
         let screen = Rc::new(RefCell::new(TerminalScreen::new(
             cfg.grid_rows(),
             COLS,
@@ -761,6 +766,53 @@ fn two_moved_terminals_match_a_full_paint() {
         .borrow_mut()
         .process_bytes(b"\rY");
     assert_harness_patch_matches_full_paint(&mut harness);
+}
+
+#[test]
+fn shared_screen_updates_fall_back_and_match_a_full_paint() {
+    let cfg = PaneCfg {
+        second_terminal: true,
+        shared_screen: true,
+        grid_rows: ROWS / 2,
+        ..PaneCfg::new()
+    };
+    let mut harness = build(cfg, SETUP);
+    assert!(Rc::ptr_eq(
+        &harness.screen,
+        harness.second.as_ref().unwrap()
+    ));
+    harness
+        .screen
+        .borrow_mut()
+        .process_bytes(b"\x1b[1;1HX\x1b[3;1HY");
+    let refresh = harness.runner.core.tree.refresh_live_terminals_detailed();
+    assert_eq!(refresh.damage.len(), 2);
+    assert!(
+        refresh
+            .damage
+            .iter()
+            .any(|(_, damage)| matches!(damage, crate::widgets::internal::TerminalDamage::None))
+    );
+    assert_eq!(
+        harness.runner.plan_terminal_damage(&refresh, frame_area()),
+        Err(DamageRejection::MissingDamage)
+    );
+
+    // The production planner's None result selects the ordinary draw of the refreshed tree.
+    assert!(
+        harness
+            .runner
+            .prepare_terminal_damage_plan(&refresh, frame_area())
+            .is_none()
+    );
+    let mut oracle = Terminal::new(HostBackend::new(COLS, ROWS)).unwrap();
+    let (expected, _) = full_paint(&harness.runner, &mut oracle);
+    let moved = changed_rows(&harness.retained, &expected);
+    assert!(moved.iter().any(|row| *row < ROWS / 2));
+    assert!(moved.iter().any(|row| *row >= ROWS / 2));
+    let (painted, _) = full_paint(&harness.runner, &mut harness.term);
+    assert_same(&painted, &expected, "fallback frame");
+    assert_host_matches(harness.term.backend().buffer(), &expected, "fallback host");
 }
 
 #[test]

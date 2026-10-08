@@ -45,6 +45,10 @@ source.set([Span::new("Working")]);
 // Return Update::paint(), or Update::terminal_paint() when only live sources changed.
 ```
 
+The debug paint guard permits content updates from the same source when both dimensions are
+independent of content. Changing the source binding, base style, overflow, or sizing still requires
+reconciliation; content-sized labels still require layout.
+
 For existing `Text` or `TextNode` struct literals, add `source: None` or use the constructors.
 These types now carry UI-thread state through an optional `TextSource` and are no longer
 `Send`/`Sync`. Send plain strings or spans through a command and update the source on the UI thread.

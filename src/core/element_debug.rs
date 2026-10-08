@@ -1,11 +1,46 @@
+use std::hash::{Hash, Hasher};
+
 use crate::core::element::{Element, ElementKind};
-use crate::layout::hash::element_layout_hash;
+
+use crate::layout::hash::{LayoutHash, layout_hasher};
+use crate::style::Length;
+
+// Use the normal widget hash machinery, but recurse through this debug-only hash rather than
+// the layout cache: fixed-allocation live text may change without invalidating layout. Include
+// binding identity and non-live text properties so paint cannot conceal a changed source/style.
+fn debug_element_hash(element: &Element) -> Option<u64> {
+    let mut hasher = layout_hasher();
+    std::mem::discriminant(&element.kind).hash(&mut hasher);
+    element.key.hash(&mut hasher);
+    element.layout.hash(&mut hasher);
+    if let ElementKind::Text(text) = &element.kind {
+        text.style.hash(&mut hasher);
+        text.overflow.hash(&mut hasher);
+        text.width.hash(&mut hasher);
+        text.height.hash(&mut hasher);
+        text.source
+            .as_ref()
+            .map(|source| source.identity())
+            .hash(&mut hasher);
+        if !has_fixed_live_allocation(text) {
+            text.spans.hash(&mut hasher);
+        }
+    } else {
+        element.kind.layout_hash(&mut hasher, &debug_element_hash)?;
+    }
+    Some(hasher.finish())
+}
+
+fn has_fixed_live_allocation(text: &crate::widgets::Text) -> bool {
+    text.source.is_some()
+        && !matches!(text.width, Length::Auto)
+        && !matches!(text.height, Length::Auto)
+}
 
 /// Compare two unexpanded view trees for the debug paint-vs-view guard.
 ///
-/// When [`element_layout_hash`](crate::layout::hash::element_layout_hash) returns `None`
-/// (unhashable subtree), common list containers fall back to hashing the full element or
-/// comparing children; other kinds compare unequal unless both subtree hashes agree.
+/// Hashable subtrees use a debug hash that permits fixed-allocation live text content updates.
+/// Unhashable list containers compare children; other unhashable kinds compare unequal.
 pub(crate) fn debug_element_tree_eq(a: &Element, b: &Element) -> bool {
     if a.key != b.key {
         return false;
@@ -15,7 +50,9 @@ pub(crate) fn debug_element_tree_eq(a: &Element, b: &Element) -> bool {
     }
     match (&a.kind, &b.kind) {
         (ElementKind::Text(ta), ElementKind::Text(tb)) => {
-            ta.spans == tb.spans
+            ta.source.as_ref().map(|source| source.identity())
+                == tb.source.as_ref().map(|source| source.identity())
+                && (has_fixed_live_allocation(ta) || ta.spans == tb.spans)
                 && ta.style == tb.style
                 && ta.overflow == tb.overflow
                 && ta.width == tb.width
@@ -46,7 +83,7 @@ pub(crate) fn debug_element_tree_eq(a: &Element, b: &Element) -> bool {
             debug_container_children_or_hash(a, b, &ha.children, &hb.children)
         }
         (ElementKind::ZStack(za), ElementKind::ZStack(zb)) => {
-            match (element_layout_hash(a), element_layout_hash(b)) {
+            match (debug_element_hash(a), debug_element_hash(b)) {
                 (Some(h1), Some(h2)) => h1 == h2,
                 _ => {
                     za.style == zb.style
@@ -61,7 +98,7 @@ pub(crate) fn debug_element_tree_eq(a: &Element, b: &Element) -> bool {
             }
         }
         (ElementKind::Flow(fa), ElementKind::Flow(fb)) => {
-            match (element_layout_hash(a), element_layout_hash(b)) {
+            match (debug_element_hash(a), debug_element_hash(b)) {
                 (Some(h1), Some(h2)) => h1 == h2,
                 _ => {
                     fa.gap == fb.gap
@@ -82,7 +119,7 @@ pub(crate) fn debug_element_tree_eq(a: &Element, b: &Element) -> bool {
             }
         }
         (ElementKind::ScrollView(sa), ElementKind::ScrollView(sb)) => {
-            match (element_layout_hash(a), element_layout_hash(b)) {
+            match (debug_element_hash(a), debug_element_hash(b)) {
                 (Some(h1), Some(h2)) => h1 == h2,
                 _ => {
                     sa.children.len() == sb.children.len()
@@ -97,7 +134,7 @@ pub(crate) fn debug_element_tree_eq(a: &Element, b: &Element) -> bool {
         (a_kind, b_kind) if std::mem::discriminant(a_kind) != std::mem::discriminant(b_kind) => {
             false
         }
-        _ => match (element_layout_hash(a), element_layout_hash(b)) {
+        _ => match (debug_element_hash(a), debug_element_hash(b)) {
             (Some(ha), Some(hb)) => ha == hb,
             _ => false,
         },
@@ -110,7 +147,7 @@ fn debug_container_children_or_hash(
     a_children: &[Element],
     b_children: &[Element],
 ) -> bool {
-    match (element_layout_hash(a), element_layout_hash(b)) {
+    match (debug_element_hash(a), debug_element_hash(b)) {
         (Some(h1), Some(h2)) => h1 == h2,
         _ => {
             a_children.len() == b_children.len()
@@ -119,5 +156,68 @@ fn debug_container_children_or_hash(
                     .zip(b_children.iter())
                     .all(|(c, d)| debug_element_tree_eq(c, d))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::style::{Color, Length, Span, Style};
+    use crate::widgets::{Overflow, Text, TextSource, VStack};
+
+    #[test]
+    fn paint_guard_allows_live_content_updates_directly_and_in_containers() {
+        let source = TextSource::new([Span::new("before")]);
+        let before: Element = Text::from_source(source.clone()).into();
+        let nested_before: Element = VStack::new().child(before.clone()).into();
+        // Prime layout caches too: these must not dictate debug paint equivalence.
+        crate::layout::hash::element_layout_hash(&nested_before);
+        source.set([Span::new("updated").style(Style::default().fg(Color::Red))]);
+        let after: Element = Text::from_source(source).into();
+        let nested_after: Element = VStack::new().child(after.clone()).into();
+        assert!(debug_element_tree_eq(&before, &after));
+        assert!(debug_element_tree_eq(&nested_before, &nested_after));
+    }
+
+    #[test]
+    fn paint_guard_still_rejects_non_live_changes() {
+        let source = TextSource::new([Span::new("same")]);
+        let original = Text::from_source(source.clone());
+        let changes = [
+            original.clone().style(Style::default().fg(Color::Red)),
+            original.clone().width(Length::Px(5)),
+            original.clone().height(Length::Px(2)),
+            original.clone().overflow(Overflow::Ellipsis),
+            Text::from_source(TextSource::new([Span::new("same")])),
+            Text::new("same")
+                .width(Length::Flex(1))
+                .height(Length::Px(1)),
+        ];
+        for changed in changes {
+            let before: Element = original.clone().into();
+            let after: Element = changed.into();
+            assert!(!debug_element_tree_eq(&before, &after));
+            assert!(!debug_element_tree_eq(
+                &VStack::new().child(before).into(),
+                &VStack::new().child(after).into()
+            ));
+        }
+        for (width, height) in [(Length::Auto, Length::Px(1)), (Length::Px(5), Length::Auto)] {
+            let before: Element = Text::from_source(source.clone())
+                .width(width)
+                .height(height)
+                .into();
+            source.set([Span::new("changed")]);
+            let after: Element = Text::from_source(source.clone())
+                .width(width)
+                .height(height)
+                .into();
+            assert!(!debug_element_tree_eq(&before, &after));
+            source.set([Span::new("same")]);
+        }
+        assert!(!debug_element_tree_eq(
+            &Text::new("before").into(),
+            &Text::new("after").into()
+        ));
     }
 }
