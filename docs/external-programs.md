@@ -92,6 +92,8 @@ Do **not** raise `SIGTSTP` yourself. Stopping with the terminal still in raw mod
 
 A `SIGTSTP` that arrives from anywhere else - `kill -TSTP`, a parent shell - takes the same path while the runner owns the terminal, so those stops are clean too. The signal is sent to the whole process group, matching what a `ctrl+z` at the tty does; children that must keep running while the TUI sleeps belong in their own process group (`std::process::Command::process_group(0)`).
 
+`SIGTTIN` and `SIGTTOU` are covered too. The kernel sends them when the app reads the terminal, or changes its settings, after another process group has taken it over, and they cannot wait for a frame boundary. The runner ends synchronized output, turns mouse reporting, bracketed paste, focus reporting and the alternate screen off, pops an inline surface's keyboard enhancement, and stops on the spot. Frames are discarded from then on, wherever the renderer was, until the runner has taken the terminal back with a full repaint once the job is foregrounded. A job continued in the background with `bg` stops again straight away, so it never draws over the shell. Only a job in the background can lose the terminal, so a `SIGTTIN` or `SIGTTOU` that arrives while the app owns it does nothing; ask for a stop with `SIGTSTP`. An inline surface reads the terminal on the runner's own thread, so it takes the terminal back on the first keypress after `fg` rather than straight away.
+
 No-op on targets without POSIX job control (Windows, wasm), so the keybinding can be wired unconditionally.
 
 ---

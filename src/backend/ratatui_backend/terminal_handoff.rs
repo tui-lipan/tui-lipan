@@ -190,8 +190,13 @@ pub fn suspend_for_external_process(surface_mode: SurfaceMode) -> io::Result<()>
         }
     }
 
-    let plan = suspend_plan(policy);
+    let pop_keyboard =
+        !policy.uses_alternate_screen && super::MAIN_SCREEN_KEYBOARD_PUSHED.load(Ordering::SeqCst);
+    let plan = suspend_plan(policy, pop_keyboard);
     let result = execute_plan_with_rollback(&mut executor, &plan);
+    if result.is_ok() && pop_keyboard {
+        super::MAIN_SCREEN_KEYBOARD_PUSHED.store(false, Ordering::SeqCst);
+    }
     // The plan turns pixel reporting off before handing the terminal over. A rollback puts it back,
     // so only a plan that stuck changes what reports are read as.
     #[cfg(unix)]
@@ -224,9 +229,16 @@ pub fn resume_after_external_process(
     #[cfg(not(unix))]
     let termina_paused = false;
     let mut out = stdout();
-    let plan = resume_plan(policy, mouse_enabled);
+    let push_keyboard = !policy.uses_alternate_screen
+        && super::MAIN_SCREEN_KEYBOARD_WANTED.load(Ordering::SeqCst)
+        && !super::MAIN_SCREEN_KEYBOARD_PUSHED.load(Ordering::SeqCst);
+    let plan = resume_plan(policy, mouse_enabled, push_keyboard);
     let mut executor = CrosstermTransitionExecutor::new(&mut out);
-    if let Err(err) = execute_plan_with_rollback(&mut executor, &plan) {
+    let resumed = execute_plan_with_rollback(&mut executor, &plan);
+    if resumed.is_ok() && push_keyboard {
+        super::MAIN_SCREEN_KEYBOARD_PUSHED.store(true, Ordering::SeqCst);
+    }
+    if let Err(err) = resumed {
         if !termina_paused {
             STDIN_READER_PAUSED.store(false, Ordering::SeqCst);
         }

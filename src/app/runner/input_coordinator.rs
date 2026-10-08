@@ -447,14 +447,22 @@ impl WorkerInput {
     }
 }
 
+/// Read what `poll` reported ready, without ever blocking.
+///
+/// A read is the usual way the app finds out it has lost the terminal: it
+/// raises `SIGTTIN`, and the process stops until the job is foregrounded. The
+/// read is then restarted, but the shell has typically consumed the bytes that
+/// were waiting in the meantime, and a blocking read would sit there until the
+/// next keypress, with the runner waiting on this worker to take the terminal
+/// back. Reading non-blocking turns that into an empty read the loop moves past.
 fn read_terminal_bytes(
-    terminal: &mut impl Read,
+    terminal: &mut (impl Read + AsRawFd),
     input: &mut WorkerInput,
     events: &mpsc::Sender<RunnerEvent>,
 ) -> io::Result<bool> {
     let mut bytes = [0; 1024];
     loop {
-        match terminal.read(&mut bytes) {
+        match read_nonblocking(terminal, &mut bytes) {
             Ok(0) => {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -463,9 +471,30 @@ fn read_terminal_bytes(
             }
             Ok(read) => return Ok(input.push(&bytes[..read], events)),
             Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(true),
             Err(err) => return Err(err),
         }
     }
+}
+
+/// One `read` with `O_NONBLOCK` set for its duration only. The worker opened
+/// this description itself, so the flag reaches nobody else, and the worker's
+/// own writes stay blocking.
+fn read_nonblocking(terminal: &mut (impl Read + AsRawFd), bytes: &mut [u8]) -> io::Result<usize> {
+    let fd = terminal.as_raw_fd();
+    // SAFETY: `fcntl` with `F_GETFL`/`F_SETFL` takes no pointers.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || flags & libc::O_NONBLOCK != 0 {
+        return terminal.read(bytes);
+    }
+    // SAFETY: as above.
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return terminal.read(bytes);
+    }
+    let read = terminal.read(bytes);
+    // SAFETY: as above.
+    unsafe { libc::fcntl(fd, libc::F_SETFL, flags) };
+    read
 }
 
 struct ActiveColorQuery {
