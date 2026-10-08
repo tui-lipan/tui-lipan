@@ -539,7 +539,14 @@ cargo bench --bench document_view_wrap --features markdown
 cargo bench --bench scroll_view_rich_children --features markdown
 cargo bench --bench scroll_reorder_reconcile
 cargo bench --bench image_backdrop --features terminal-images
+cargo bench --bench terminal_snapshot --features terminal -- terminal_resize
 ```
+
+The `terminal_resize` group measures resize plus snapshot on persistent 253×64 screens with
+5,000 history lines, in primary and alternate buffers. It separates unchanged dimensions from
+alternating width and height changes. Repeating `TerminalScreen::resize` with the same clamped
+dimensions preserves the cached snapshot and pending paint damage; genuine geometry changes
+still resize and reflow normally. Cell-pixel changes use `set_cell_size` independently.
 
 Save and compare a baseline with Criterion's standard flags:
 

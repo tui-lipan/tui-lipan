@@ -1873,11 +1873,11 @@ impl TerminalScreen {
     pub fn resize(&mut self, rows: u16, cols: u16) {
         let rows = rows.max(1);
         let cols = cols.max(1);
-        let dimensions_changed = rows != self.rows || cols != self.cols;
+        if rows == self.rows && cols == self.cols {
+            return;
+        }
         let reflowed = cols != self.cols;
-        let prompt_anchor = dimensions_changed
-            .then(|| self.prepare_prompt_resize(rows))
-            .flatten();
+        let prompt_anchor = self.prepare_prompt_resize(rows);
         self.rows = rows;
         self.cols = cols;
         let dimensions = TermDimensions {
@@ -4266,6 +4266,74 @@ mod tests {
         assert_eq!(frame.plain_text(), "one\ntwo");
         // The live cursor row is below the viewport while scrolled back.
         assert_eq!(frame.cursor, None);
+    }
+
+    #[test]
+    fn unchanged_resize_preserves_cached_snapshot_and_pending_damage() {
+        let mut screen = TerminalScreen::new(3, 8, 20);
+        screen.process_bytes(b"before");
+        let before = screen.render_snapshot();
+        let _ = screen.take_damage();
+        screen.resize(3, 8);
+        let after = screen.render_snapshot();
+        assert!(Arc::ptr_eq(&before.color_lines, &after.color_lines));
+        assert_eq!(before.sequence, after.sequence);
+        assert!(matches!(screen.take_damage(), TerminalDamage::None));
+
+        screen.process_bytes(b"\x1b[2;1HX");
+        screen.resize(3, 8);
+        assert!(matches!(screen.take_damage(), TerminalDamage::Rows(rows)
+            if rows.iter().any(|row| row.row == 1)));
+        assert!(screen.render_snapshot().text.contains('X'));
+        assert!(!before.text.contains('X'));
+
+        screen.resize(4, 9);
+        let frame = screen.capture_frame();
+        assert_eq!((frame.height, frame.width), (4, 9));
+    }
+
+    #[test]
+    fn unchanged_resize_preserves_alternate_screen_snapshot_and_pending_damage() {
+        let mut screen = TerminalScreen::new(3, 8, 20);
+        screen.process_bytes(b"primary\x1b[?1049h\x1b[Hbefore");
+        let before = screen.render_snapshot();
+        assert!(screen.alt_screen);
+        assert!(before.text.contains("before"));
+        let _ = screen.take_damage();
+
+        screen.resize(3, 8);
+        let after = screen.render_snapshot();
+        assert!(Arc::ptr_eq(&before.color_lines, &after.color_lines));
+        assert_eq!(before.sequence, after.sequence);
+        assert!(matches!(screen.take_damage(), TerminalDamage::None));
+
+        screen.process_bytes(b"\x1b[2;1HX");
+        screen.resize(3, 8);
+        assert!(matches!(screen.take_damage(), TerminalDamage::Rows(rows)
+            if rows.iter().any(|row| row.row == 1)));
+        let updated = screen.render_snapshot();
+        assert!(screen.alt_screen);
+        assert!(updated.text.contains('X'));
+        assert!(!before.text.contains('X'));
+
+        screen.process_bytes(b"\x1b[?1049l");
+        let primary = screen.render_snapshot();
+        assert!(!screen.alt_screen);
+        assert!(primary.text.contains("primary"));
+        assert!(!primary.text.contains('X'));
+    }
+
+    #[test]
+    fn resize_clamps_before_checking_for_unchanged_dimensions() {
+        let mut screen = TerminalScreen::new(1, 1, 20);
+        let before = screen.render_snapshot();
+        screen.resize(0, 0);
+        let after = screen.render_snapshot();
+        assert!(Arc::ptr_eq(&before.color_lines, &after.color_lines));
+        assert_eq!(
+            (screen.capture_frame().width, screen.capture_frame().height),
+            (1, 1)
+        );
     }
 
     #[test]
