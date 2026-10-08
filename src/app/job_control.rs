@@ -32,7 +32,9 @@
 //!
 //! [`Context::suspend_to_shell`]: crate::core::component::Context::suspend_to_shell
 
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+use std::sync::atomic::AtomicI32;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Targets with the POSIX job control this module needs.
 const SUPPORTED: bool = cfg!(all(unix, not(target_arch = "wasm32")));
@@ -57,6 +59,7 @@ static FRAME_WRITES_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 /// thread before the first handler has stopped it; that second handler leaves
 /// the stopping to the first, rather than waking after `fg` and stopping a job
 /// that is back in the foreground.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
 static RELEASE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 /// Whether the running surface is on the alternate screen, which decides
@@ -65,6 +68,7 @@ static USES_ALTERNATE_SCREEN: AtomicBool = AtomicBool::new(false);
 
 /// The parent process when the handler was installed: the job-control shell,
 /// as long as it is still there to continue us.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
 static JOB_CONTROL_PARENT: AtomicI32 = AtomicI32::new(0);
 
 /// The terminal settings the runner put in place (raw mode), captured when the
@@ -300,12 +304,53 @@ extern "C" fn note_stop_request(_signal: libc::c_int) {
 /// still ours. Close the frame output, turn the modes off, and stay stopped
 /// until the job is in the foreground again; the runner does the rest.
 ///
-/// Everything here is async-signal-safe: atomics, `write`, `nanosleep`,
-/// `raise`, `tcgetpgrp`, `tcsetattr`, `getpgrp` and `getppid`. Both background signals are blocked
-/// while it runs, which is what lets its own `write` through even on a
-/// terminal with `tostop` set.
+/// Everything here is on POSIX's async-signal-safe list: atomics, `write`,
+/// `poll`, `raise`, `tcgetpgrp`, `tcsetattr`, `getpgrp` and `getppid`. Both
+/// background signals are blocked while it runs, which is what lets its own
+/// `write` through even on a terminal with `tostop` set. Those calls can change
+/// `errno` under whatever code the signal interrupted, so the handler puts it
+/// back on the way out, whichever way it leaves.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 extern "C" fn release_and_stop(_signal: libc::c_int) {
+    preserving_errno(release_and_stop_body);
+}
+
+/// Run `body`, then put `errno` back as it was before.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn preserving_errno(body: impl FnOnce()) {
+    // SAFETY: `errno_location` points at this thread's `errno`, which lives as
+    // long as the thread does.
+    #[allow(unsafe_code)]
+    let saved = unsafe { *errno_location() };
+    body();
+    // SAFETY: as above.
+    #[allow(unsafe_code)]
+    unsafe {
+        *errno_location() = saved
+    };
+}
+
+/// This thread's `errno`.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+#[allow(unsafe_code)]
+unsafe fn errno_location() -> *mut libc::c_int {
+    // SAFETY: each platform's accessor takes no arguments and returns the
+    // calling thread's `errno`.
+    unsafe {
+        cfg_select! {
+            any(target_os = "android", target_os = "netbsd", target_os = "openbsd",
+                target_os = "cygwin") => libc::__errno(),
+            any(target_vendor = "apple", target_os = "freebsd") => libc::__error(),
+            any(target_os = "solaris", target_os = "illumos") => libc::___errno(),
+            target_os = "haiku" => libc::_errnop(),
+            // Linux and the rest of the glibc/musl-style systems, DragonFly included.
+            _ => libc::__errno_location(),
+        }
+    }
+}
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn release_and_stop_body() {
     // The kernel only raises these for a background job, but one can still
     // reach us after `fg` has continued the job and given it the terminal
     // back: raised on one thread while another was stopping the job. Whatever
@@ -384,14 +429,12 @@ fn job_control_parent_present() -> bool {
 fn release_terminal(fd: libc::c_int, uses_alternate_screen: bool, pop_keyboard: bool) {
     TERMINAL_RELEASED.store(true, Ordering::SeqCst);
     while FRAME_WRITES_IN_FLIGHT.load(Ordering::SeqCst) != 0 {
-        let pause = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 50_000,
-        };
-        // SAFETY: `pause` is a valid duration; the remainder is not wanted.
+        // A timed wait that is async-signal-safe, unlike `nanosleep`: `poll`
+        // on no descriptors for a millisecond.
+        // SAFETY: zero descriptors, so the null array is never read.
         #[allow(unsafe_code)]
         unsafe {
-            libc::nanosleep(&pause, std::ptr::null_mut())
+            libc::poll(std::ptr::null_mut(), 0, 1)
         };
     }
     write_background_release(fd, uses_alternate_screen, pop_keyboard);
@@ -605,6 +648,35 @@ mod tests {
             before,
             "the guard puts back what was there before"
         );
+    }
+
+    /// This thread's `errno`.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    fn errno() -> libc::c_int {
+        std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+    }
+
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    #[test]
+    fn the_background_handler_leaves_errno_as_it_found_it() {
+        // The handler's own calls fail and set `errno`, as `tcgetpgrp` does on
+        // anything that is not a terminal. The code it interrupted must still
+        // see the error it was about to read.
+        let (read_end, write_end) = pipe();
+        // SAFETY: `errno_location` is this thread's `errno`.
+        #[allow(unsafe_code)]
+        unsafe {
+            *errno_location() = libc::EAGAIN
+        };
+        preserving_errno(|| {
+            // SAFETY: `tcgetpgrp` takes no pointers; a pipe is not a terminal.
+            #[allow(unsafe_code)]
+            let group = unsafe { libc::tcgetpgrp(read_end) };
+            assert_eq!(group, -1);
+            assert_eq!(errno(), libc::ENOTTY, "the body really changed errno");
+        });
+        assert_eq!(errno(), libc::EAGAIN);
+        drain_pipe(read_end, write_end);
     }
 
     /// A pipe, as two raw descriptors: read end, write end.
