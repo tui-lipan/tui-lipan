@@ -4293,6 +4293,37 @@ mod tests {
     }
 
     #[test]
+    fn unchanged_resize_preserves_alternate_screen_snapshot_and_pending_damage() {
+        let mut screen = TerminalScreen::new(3, 8, 20);
+        screen.process_bytes(b"primary\x1b[?1049h\x1b[Hbefore");
+        let before = screen.render_snapshot();
+        assert!(screen.alt_screen);
+        assert!(before.text.contains("before"));
+        let _ = screen.take_damage();
+
+        screen.resize(3, 8);
+        let after = screen.render_snapshot();
+        assert!(Arc::ptr_eq(&before.color_lines, &after.color_lines));
+        assert_eq!(before.sequence, after.sequence);
+        assert!(matches!(screen.take_damage(), TerminalDamage::None));
+
+        screen.process_bytes(b"\x1b[2;1HX");
+        screen.resize(3, 8);
+        assert!(matches!(screen.take_damage(), TerminalDamage::Rows(rows)
+            if rows.iter().any(|row| row.row == 1)));
+        let updated = screen.render_snapshot();
+        assert!(screen.alt_screen);
+        assert!(updated.text.contains('X'));
+        assert!(!before.text.contains('X'));
+
+        screen.process_bytes(b"\x1b[?1049l");
+        let primary = screen.render_snapshot();
+        assert!(!screen.alt_screen);
+        assert!(primary.text.contains("primary"));
+        assert!(!primary.text.contains('X'));
+    }
+
+    #[test]
     fn resize_clamps_before_checking_for_unchanged_dimensions() {
         let mut screen = TerminalScreen::new(1, 1, 20);
         let before = screen.render_snapshot();
