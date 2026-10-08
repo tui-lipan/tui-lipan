@@ -137,7 +137,7 @@ pub(crate) fn handle_draggable_tab_bar_drag(
     }
 
     // Callbacks belong to the latest controlled view, not the frame where dragging began.
-    drag.on_transfer = bar.on_transfer.clone();
+    drag.on_transfer = bar.on_transfer.clone().or(drag.on_transfer);
 
     let distance = x.abs_diff(drag.start_x).max(y.abs_diff(drag.start_y));
     if !drag.started && distance < drag.threshold {

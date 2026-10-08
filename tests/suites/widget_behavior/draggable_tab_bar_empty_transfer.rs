@@ -6,6 +6,7 @@ use tui_lipan::prelude::*;
 struct EmptyTransfer {
     body_targets: bool,
     separate_groups: bool,
+    source_only_callback: bool,
     mode: DragReorderMode,
 }
 
@@ -19,7 +20,7 @@ struct State {
 
 #[derive(Clone)]
 enum Msg {
-    Transfer(usize, DraggableTabTransferEvent),
+    Transfer(Option<usize>, DraggableTabTransferEvent),
     Select(TabsEvent),
 }
 
@@ -38,7 +39,7 @@ impl Component for EmptyTransfer {
     fn update(&mut self, msg: Self::Message, ctx: &mut Context<Self>) -> Update {
         match msg {
             Msg::Transfer(epoch, event) => {
-                if epoch != ctx.state.epoch {
+                if epoch.is_some_and(|epoch| epoch != ctx.state.epoch) {
                     return Update::none();
                 }
                 let state = &mut ctx.state;
@@ -57,7 +58,7 @@ impl Component for EmptyTransfer {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Element {
-        let epoch = ctx.state.epoch;
+        let epoch = (!self.source_only_callback).then_some(ctx.state.epoch);
         let bar = |id: &'static str, tabs: &[String]| -> Element {
             let mut bar = DraggableTabBar::new()
                 .tabs(tabs.iter().map(|tab| DraggableTab::new(tab.as_str())))
@@ -69,11 +70,13 @@ impl Component for EmptyTransfer {
                 })
                 .reorder_mode(self.mode)
                 .height(Length::Px(1))
-                .on_change(ctx.link().callback(Msg::Select))
-                .on_transfer(
+                .on_change(ctx.link().callback(Msg::Select));
+            if !self.source_only_callback || id == "top" {
+                bar = bar.on_transfer(
                     ctx.link()
                         .callback(move |event| Msg::Transfer(epoch, event)),
                 );
+            }
             if self.body_targets {
                 bar = bar.drop_area(id);
                 VStack::new()
@@ -227,6 +230,7 @@ fn body_targets_preserve_drag_groups_and_returning_home_cancels_on_drop() {
             body_targets: true,
             separate_groups,
             mode: DragReorderMode::OnDrop,
+            ..Default::default()
         });
         b.set_viewport(Rect {
             x: 0,
@@ -253,4 +257,29 @@ fn body_targets_preserve_drag_groups_and_returning_home_cancels_on_drop() {
         assert!(b.state().right.is_empty());
         assert_eq!(b.state().epoch, 0);
     }
+}
+
+#[test]
+fn a_destination_without_a_transfer_callback_keeps_the_shared_source_handler() {
+    let mut b = TestBackend::new(EmptyTransfer {
+        source_only_callback: true,
+        ..Default::default()
+    });
+    b.set_viewport(Rect {
+        x: 0,
+        y: 0,
+        w: 40,
+        h: 3,
+    });
+    b.render();
+    b.send_mouse(mouse(1, 0, MouseKind::Down(MouseButton::Left)))
+        .unwrap();
+    for y in [2, 0] {
+        b.send_mouse(mouse(2, y, MouseKind::Drag(MouseButton::Left)))
+            .unwrap();
+        b.render();
+    }
+    assert_eq!(b.state().left, ["Agents"]);
+    assert!(b.state().right.is_empty());
+    assert_eq!(b.state().epoch, 2);
 }
