@@ -5,7 +5,7 @@ use rustc_hash::FxHasher;
 use crate::core::node::{NodeKind, WidgetNode};
 use crate::style::{Length, Span, Style};
 
-use super::{Overflow, Text};
+use super::{Overflow, Text, TextSource};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TextRenderKey {
@@ -44,6 +44,7 @@ impl TextWidgetKey {
 #[derive(Clone)]
 pub struct TextNode {
     pub spans: Vec<Span>,
+    pub source: Option<TextSource>,
     pub style: Style,
     pub overflow: Overflow,
     pub(crate) render_key: TextRenderKey,
@@ -54,6 +55,7 @@ impl Default for TextNode {
     fn default() -> Self {
         Self {
             spans: Vec::new(),
+            source: None,
             style: Style::default(),
             overflow: Overflow::Auto,
             render_key: TextRenderKey { hash: 0 },
@@ -74,6 +76,7 @@ impl From<Text> for TextNode {
         let widget_key = TextWidgetKey::new(&text, render_key);
         Self {
             spans: text.spans,
+            source: text.source,
             style: text.style,
             overflow: text.overflow,
             render_key,
@@ -83,6 +86,20 @@ impl From<Text> for TextNode {
 }
 
 impl TextNode {
+    pub(crate) fn refresh_from_source(&mut self) -> bool {
+        let Some(source) = &self.source else {
+            return false;
+        };
+        let spans = source.snapshot();
+        if self.spans.as_slice() == spans.as_ref() {
+            return false;
+        }
+        self.spans = spans.to_vec();
+        self.render_key = TextRenderKey::new(&Text::from(self.clone()));
+        self.widget_key.render_key = self.render_key;
+        true
+    }
+
     pub(crate) fn render_key_for(text: &Text) -> TextRenderKey {
         TextRenderKey::new(text)
     }

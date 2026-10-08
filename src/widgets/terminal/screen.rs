@@ -9,7 +9,7 @@ use std::sync::Arc;
 use super::damage::{DamageAccumulator, TerminalDamage};
 use alacritty_terminal::event::{Event as TermEvent, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, GridCell, Scroll};
-use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::cell::{
     Cell as TermCell, Flags as CellFlags, Hyperlink as TermHyperlink,
 };
@@ -548,6 +548,8 @@ pub struct TerminalScreen {
     dirty: bool,
     /// Viewport rows changed since the last paint took them.
     damage: DamageAccumulator,
+    /// Independent from paint damage: a snapshot reader must not consume the renderer's damage.
+    snapshot_damage: DamageAccumulator,
     sequence: u64,
     /// Bounded history of OSC 133 marks anchored to absolute text lines.
     semantic_marks: VecDeque<SemanticMark>,
@@ -1158,6 +1160,7 @@ impl TerminalScreen {
         let term = Term::new(config, &dimensions, listener.clone());
         let screen = Self {
             damage: DamageAccumulator::default(),
+            snapshot_damage: DamageAccumulator::default(),
             processor: VteProcessor::new(),
             term,
             listener,
@@ -1233,10 +1236,15 @@ impl TerminalScreen {
     fn collect_damage(&mut self) {
         let viewport_rows = usize::from(self.rows);
         match self.term.damage() {
-            alacritty_terminal::term::TermDamage::Full => self.damage.mark_full(),
+            alacritty_terminal::term::TermDamage::Full => {
+                self.damage.mark_full();
+                self.snapshot_damage.mark_full();
+            }
             alacritty_terminal::term::TermDamage::Partial(iter) => {
                 for line in iter {
                     self.damage
+                        .add_row(line.line, line.left, line.right, viewport_rows);
+                    self.snapshot_damage
                         .add_row(line.line, line.left, line.right, viewport_rows);
                 }
             }
@@ -1568,6 +1576,7 @@ impl TerminalScreen {
             self.cell_size = cell;
             self.sync_viewport();
             self.dirty = true;
+            self.snapshot_damage.mark_full();
         }
     }
 
@@ -1649,6 +1658,7 @@ impl TerminalScreen {
     pub fn set_image_budget(&mut self, bytes: usize) {
         self.graphics.set_budget(bytes);
         self.dirty = true;
+        self.snapshot_damage.mark_full();
     }
 
     /// Choose whether this screen retains and decodes terminal image pixels.
@@ -1661,6 +1671,7 @@ impl TerminalScreen {
         self.graphics_scanner.set_decode_payload(enabled);
         self.graphics.set_storage_enabled(enabled);
         self.dirty = true;
+        self.snapshot_damage.mark_full();
     }
 
     /// Choose which out-of-band transmission media (`t=f`, `t=t`, `t=s`) this screen accepts.
@@ -1925,6 +1936,7 @@ impl TerminalScreen {
         self.scrollback_offset = self.term.grid().display_offset();
         self.mouse_mode = mouse_mode_from_term(*self.term.mode(), self.pixel_mouse);
         self.dirty = true;
+        self.snapshot_damage.mark_full();
     }
 
     fn prepare_prompt_resize(&mut self, rows: u16) -> Option<PromptResizeAnchor> {
@@ -2043,13 +2055,56 @@ impl TerminalScreen {
             let cursor_shape = caret_shape_from_term(cursor_style.shape);
             let cursor_blinking = cursor_style.blinking;
 
-            let (mut visible, hyperlinks) = renderable_content_lines(
-                display_iter,
-                display_offset,
-                self.rows,
-                self.cols,
-                self.palette,
-            );
+            let damage = self.snapshot_damage.take();
+            let partial = match &damage {
+                TerminalDamage::Rows(rows)
+                    if self.cache.color_lines.len() == usize::from(self.rows)
+                        && self.cache.scrollback_offset == display_offset =>
+                {
+                    Some(rows)
+                }
+                _ => None,
+            };
+            let (mut visible, hyperlinks) = if let Some(rows) = partial {
+                let mut lines = self.cache.color_lines.to_vec();
+                for row in rows {
+                    lines[usize::from(row.row)].clear();
+                }
+                let grid = self.term.grid();
+                let iter = rows.iter().flat_map(|row| {
+                    let start = Point::new(
+                        Line(i32::from(row.row) - display_offset as i32 - 1),
+                        grid.last_column(),
+                    );
+                    grid.iter_from(start).take(usize::from(self.cols))
+                });
+                let (lines, mut changed_links) = renderable_content_lines(
+                    iter,
+                    display_offset,
+                    self.rows,
+                    self.cols,
+                    self.palette,
+                    lines,
+                );
+                changed_links.extend(
+                    self.cache
+                        .hyperlinks
+                        .iter()
+                        .filter(|link| !rows.iter().any(|row| usize::from(row.row) == link.row))
+                        .cloned(),
+                );
+                changed_links.sort_by_key(|link| (link.row, link.start_col));
+                (lines, changed_links)
+            } else {
+                renderable_content_lines(
+                    display_iter,
+                    display_offset,
+                    self.rows,
+                    self.cols,
+                    self.palette,
+                    vec![Vec::new(); usize::from(self.rows)],
+                )
+            };
             if visible.is_empty() {
                 visible.push(vec![Span::new("")]);
             }
@@ -2308,6 +2363,7 @@ impl TerminalScreen {
             // queries are answered against the current palette.
             *self.listener.palette.borrow_mut() = palette;
             self.dirty = true;
+            self.snapshot_damage.mark_full();
         }
     }
 
@@ -2330,6 +2386,7 @@ impl TerminalScreen {
         }
         self.scrollback_offset = self.term.grid().display_offset();
         self.dirty = true;
+        self.snapshot_damage.mark_full();
     }
 
     /// Probe total scrollback rows available.
@@ -2685,6 +2742,7 @@ impl TerminalScreen {
             self.graphics.reset();
         }
         self.dirty = true;
+        self.snapshot_damage.mark_full();
     }
 
     /// Get current mouse mode state.
@@ -3169,14 +3227,14 @@ fn named_color_index(color: NamedColor) -> Option<u8> {
     }
 }
 
-fn renderable_content_lines(
-    display_iter: alacritty_terminal::grid::GridIterator<'_, TermCell>,
+fn renderable_content_lines<'a>(
+    display_iter: impl Iterator<Item = alacritty_terminal::grid::Indexed<&'a TermCell>>,
     display_offset: usize,
     rows: u16,
     cols: u16,
     palette: TerminalColorPalette,
+    mut lines: Vec<Vec<Span>>,
 ) -> (Vec<Vec<Span>>, Vec<TerminalHyperlink>) {
-    let mut lines: Vec<Vec<Span>> = vec![Vec::new(); rows as usize];
     let mut hyperlinks: Vec<TerminalHyperlink> = Vec::new();
     let mut current_row: Option<usize> = None;
     let mut run_style: Option<Style> = None;
@@ -6522,6 +6580,92 @@ mod tests {
                 "but the placements are not, and the renderer keys on that"
             );
         }
+    }
+
+    fn assert_incremental_snapshot_matches_full(screen: &mut TerminalScreen) {
+        let incremental = screen.render_snapshot();
+        screen.snapshot_damage.mark_full();
+        screen.dirty = true;
+        let full = screen.render_snapshot();
+        assert_eq!(incremental.text, full.text);
+        assert_eq!(incremental.color_lines, full.color_lines);
+        assert_eq!(incremental.wrapped_rows, full.wrapped_rows);
+        assert_eq!(incremental.hyperlinks, full.hyperlinks);
+        assert_eq!(incremental.cursor_row, full.cursor_row);
+        assert_eq!(incremental.cursor_col, full.cursor_col);
+        assert_eq!(incremental.cursor_visible, full.cursor_visible);
+        assert_eq!(incremental.key_modes, full.key_modes);
+        assert_eq!(incremental.mouse_mode, full.mouse_mode);
+    }
+
+    #[test]
+    fn incremental_snapshots_match_full_grid_across_terminal_operations() {
+        let mut screen = TerminalScreen::new(8, 20, 30);
+        let updates: &[&[u8]] = &[
+            b"first\r\nsecond\r\nthird",
+            b"\x1b[2;2H\x1b[31mX\x1b[0m",
+            "\x1b[3;1H你e\u{301}🙂".as_bytes(),
+            b"\x1b[2;1H\x1b[2K",
+            b"\x1b]8;;https://example.test\x07link\x1b]8;;\x07",
+            b"\x1b[2;1Hgone",
+            b"\x1b]2;title only\x07",
+            b"\x1b[?25l",
+            b"\x1b[8;1Hbottom\r\nscroll",
+            b"\x1b[2;7r\x1b[7;1H\n",
+            b"\x1b[r\x1b[?1049h",
+            b"alternate",
+            b"\x1b[1;2H/",
+            b"\x1b[?1049l",
+            b"\x1b[2J",
+            b"\x1b[H01234567890123456789012345",
+            b"\x1b[1;20HX",
+            b"\x1b[2;1H\x1b[@",
+            b"\x1b[P",
+        ];
+        screen.render_snapshot();
+        for update in updates {
+            // Reads and paints may consume damage in either order.
+            screen.process_bytes(update);
+            let _ = screen.take_damage();
+            assert_incremental_snapshot_matches_full(&mut screen);
+        }
+        // Batches must accumulate all changed rows, not just the final write's damage.
+        for update in updates {
+            screen.process_bytes(update);
+        }
+        assert_incremental_snapshot_matches_full(&mut screen);
+        for (rows, cols) in [(4, 10), (12, 30), (8, 20)] {
+            screen.resize(rows, cols);
+            assert_incremental_snapshot_matches_full(&mut screen);
+        }
+        for offset in [1, 10, 0] {
+            screen.set_scrollback(offset);
+            assert_incremental_snapshot_matches_full(&mut screen);
+        }
+        screen.set_palette(TerminalColorPalette {
+            foreground: Some(crate::style::Color::Red),
+            ..Default::default()
+        });
+        assert_incremental_snapshot_matches_full(&mut screen);
+        screen.reset();
+        assert_incremental_snapshot_matches_full(&mut screen);
+    }
+
+    #[test]
+    fn snapshot_reuses_clean_rows_without_consuming_paint_damage() {
+        let mut screen = TerminalScreen::new(4, 20, 10);
+        screen.process_bytes(b"unchanged\r\nstatus");
+        let before = screen.render_snapshot();
+        let _ = screen.take_damage();
+        screen.process_bytes(b"\x1b[2;1H/");
+        let after = screen.render_snapshot();
+        assert!(Arc::ptr_eq(
+            &before.color_lines[0][0].content,
+            &after.color_lines[0][0].content
+        ));
+        assert_ne!(before.color_lines[1], after.color_lines[1]);
+        assert!(matches!(screen.take_damage(), TerminalDamage::Rows(_)));
+        assert_eq!(before.text.lines().nth(1).unwrap().trim(), "status");
     }
 
     #[test]

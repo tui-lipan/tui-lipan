@@ -38,7 +38,7 @@ use crate::runtime::RuntimeCore;
 use crate::style::{Color, Rect, Style, Theme};
 use crate::widgets::{
     Terminal as TerminalWidget, TerminalPos, TerminalScreen, TerminalScreenHandle,
-    TerminalSelection, VStack,
+    TerminalSelection, Text, TextSource, VStack,
 };
 
 const COLS: u16 = 40;
@@ -152,6 +152,7 @@ impl Backend for HostBackend {
 /// renderer produces, so a patch that ignored it would differ from a full paint.
 #[derive(Clone, Copy, Default)]
 struct PaneCfg {
+    live_title: bool,
     focused: bool,
     hovered: bool,
     themed: bool,
@@ -164,6 +165,8 @@ struct PaneCfg {
     grid_rows: u16,
     /// Mount a second terminal beside the first.
     second_terminal: bool,
+    /// Display the same screen in both terminal widgets.
+    shared_screen: bool,
     /// Focus the second terminal rather than the first, so the caret sits on a row the first
     /// terminal's output never damages.
     focus_second: bool,
@@ -189,6 +192,7 @@ impl PaneCfg {
 }
 
 struct Pane {
+    title: TextSource,
     screen: Rc<RefCell<TerminalScreen>>,
     second: Option<Rc<RefCell<TerminalScreen>>>,
     cfg: PaneCfg,
@@ -235,12 +239,20 @@ impl Component for Pane {
     }
 
     fn view(&self, _ctx: &Context<Self>) -> Element {
-        match &self.second {
+        let body: Element = match &self.second {
             Some(second) => VStack::new()
                 .child(self.terminal(&self.screen))
                 .child(self.terminal(second))
                 .into(),
             None => self.terminal(&self.screen).into(),
+        };
+        if self.cfg.live_title {
+            VStack::new()
+                .child(Text::from_source(self.title.clone()))
+                .child(body)
+                .into()
+        } else {
+            body
         }
     }
 }
@@ -272,6 +284,7 @@ struct Harness {
     screen: Rc<RefCell<TerminalScreen>>,
     second: Option<Rc<RefCell<TerminalScreen>>>,
     retained: Buffer,
+    title: TextSource,
 }
 
 fn build(cfg: PaneCfg, setup: &[u8]) -> Harness {
@@ -282,6 +295,9 @@ fn build(cfg: PaneCfg, setup: &[u8]) -> Harness {
     )));
     screen.borrow_mut().process_bytes(setup);
     let second = cfg.second_terminal.then(|| {
+        if cfg.shared_screen {
+            return Rc::clone(&screen);
+        }
         let screen = Rc::new(RefCell::new(TerminalScreen::new(
             cfg.grid_rows(),
             COLS,
@@ -291,7 +307,9 @@ fn build(cfg: PaneCfg, setup: &[u8]) -> Harness {
         screen
     });
 
+    let title = TextSource::new([crate::style::Span::new("initial title")]);
     let component = || Pane {
+        title: title.clone(),
         screen: Rc::clone(&screen),
         second: second.clone(),
         cfg,
@@ -356,6 +374,7 @@ fn build(cfg: PaneCfg, setup: &[u8]) -> Harness {
         screen,
         second,
         retained,
+        title,
     }
 }
 
@@ -422,7 +441,11 @@ fn assert_patch_matches_full_paint(cfg: PaneCfg, setup: &[u8], mutation: &[u8]) 
     let mut harness = build(cfg, setup);
     harness.screen.borrow_mut().process_bytes(mutation);
 
-    let plan = plan_for(&mut harness).expect("this case is meant to be eligible");
+    assert_harness_patch_matches_full_paint(&mut harness);
+}
+
+fn assert_harness_patch_matches_full_paint(harness: &mut Harness) {
+    let plan = plan_for(harness).expect("this case is meant to be eligible");
 
     let mut patched = harness.retained.clone();
     let cursor_position = StdCell::new(None);
@@ -728,7 +751,7 @@ fn a_scrolled_back_terminal_is_rejected() {
 }
 
 #[test]
-fn two_moved_terminals_are_rejected() {
+fn two_moved_terminals_match_a_full_paint() {
     let cfg = PaneCfg {
         second_terminal: true,
         grid_rows: ROWS / 2,
@@ -742,10 +765,100 @@ fn two_moved_terminals_are_rejected() {
         .expect("a second screen")
         .borrow_mut()
         .process_bytes(b"\rY");
-    assert_eq!(
-        plan_for(&mut harness),
-        Err(DamageRejection::SeveralTerminalsMoved)
+    assert_harness_patch_matches_full_paint(&mut harness);
+}
+
+#[test]
+fn shared_screen_updates_fall_back_and_match_a_full_paint() {
+    let cfg = PaneCfg {
+        second_terminal: true,
+        shared_screen: true,
+        grid_rows: ROWS / 2,
+        ..PaneCfg::new()
+    };
+    let mut harness = build(cfg, SETUP);
+    assert!(Rc::ptr_eq(
+        &harness.screen,
+        harness.second.as_ref().unwrap()
+    ));
+    harness
+        .screen
+        .borrow_mut()
+        .process_bytes(b"\x1b[1;1HX\x1b[3;1HY");
+    let refresh = harness.runner.core.tree.refresh_live_terminals_detailed();
+    assert_eq!(refresh.damage.len(), 2);
+    assert!(
+        refresh
+            .damage
+            .iter()
+            .any(|(_, damage)| matches!(damage, crate::widgets::internal::TerminalDamage::None))
     );
+    assert_eq!(
+        harness.runner.plan_terminal_damage(&refresh, frame_area()),
+        Err(DamageRejection::MissingDamage)
+    );
+
+    // The production planner's None result selects the ordinary draw of the refreshed tree.
+    assert!(
+        harness
+            .runner
+            .prepare_terminal_damage_plan(&refresh, frame_area())
+            .is_none()
+    );
+    let mut oracle = Terminal::new(HostBackend::new(COLS, ROWS)).unwrap();
+    let (expected, _) = full_paint(&harness.runner, &mut oracle);
+    let moved = changed_rows(&harness.retained, &expected);
+    assert!(moved.iter().any(|row| *row < ROWS / 2));
+    assert!(moved.iter().any(|row| *row >= ROWS / 2));
+    let (painted, _) = full_paint(&harness.runner, &mut harness.term);
+    assert_same(&painted, &expected, "fallback frame");
+    assert_host_matches(harness.term.backend().buffer(), &expected, "fallback host");
+}
+
+#[test]
+fn a_live_title_and_terminal_update_match_a_full_paint() {
+    for title in [
+        "a much longer title than the original with overflow",
+        "短 e\u{301}",
+        "",
+    ] {
+        let cfg = PaneCfg {
+            live_title: true,
+            focused: true,
+            grid_rows: ROWS - 1,
+            ..PaneCfg::new()
+        };
+        let mut harness = build(cfg, SETUP);
+        harness.title.set([crate::style::Span::new(title)]);
+        harness.screen.borrow_mut().process_bytes(b"\rX");
+        assert_harness_patch_matches_full_paint(&mut harness);
+    }
+}
+
+#[test]
+fn a_live_title_without_terminal_output_matches_a_full_paint() {
+    let cfg = PaneCfg {
+        live_title: true,
+        focused: true,
+        grid_rows: ROWS - 1,
+        ..PaneCfg::new()
+    };
+    let mut harness = build(cfg, SETUP);
+    harness
+        .title
+        .set([crate::style::Span::new("updated title")]);
+    assert_harness_patch_matches_full_paint(&mut harness);
+}
+
+#[test]
+fn dense_row_damage_uses_an_ordinary_paint() {
+    let mut harness = build(PaneCfg::new(), SETUP);
+    let updates: String = (1..=ROWS).map(|row| format!("\x1b[{row};1HX")).collect();
+    harness
+        .screen
+        .borrow_mut()
+        .process_bytes(updates.as_bytes());
+    assert_eq!(plan_for(&mut harness), Err(DamageRejection::DenseDamage));
 }
 
 #[test]

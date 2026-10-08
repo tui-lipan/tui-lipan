@@ -291,6 +291,7 @@ pub(crate) struct NodeTree {
     /// Terminals reading a live screen, so the pre-draw refresh visits only those.
     #[cfg(feature = "terminal")]
     live_terminal_ids: Vec<NodeId>,
+    live_text_ids: Vec<NodeId>,
     has_spinners: bool,
     spinner_ids: Vec<NodeId>,
     has_animated_widgets: bool,
@@ -343,6 +344,8 @@ pub(crate) struct LiveTerminalRefresh {
     pub changed: bool,
     /// The rows each terminal that moved reported.
     pub damage: Vec<(NodeId, crate::widgets::internal::TerminalDamage)>,
+    /// Live labels changed since the last refresh.
+    pub text_damage: Vec<NodeId>,
 }
 
 impl NodeTree {
@@ -361,6 +364,7 @@ impl NodeTree {
             has_terminal_link_hover: false,
             #[cfg(feature = "terminal")]
             live_terminal_ids: Vec::new(),
+            live_text_ids: Vec::new(),
             has_spinners: false,
             spinner_ids: Vec::new(),
             has_animated_widgets: false,
@@ -485,6 +489,21 @@ impl NodeTree {
         &self.spinner_ids
     }
 
+    /// Refresh fixed-allocation live labels before drawing.
+    pub(crate) fn refresh_live_texts(&mut self) -> Vec<NodeId> {
+        let mut changed = Vec::new();
+        for index in 0..self.live_text_ids.len() {
+            let id = self.live_text_ids[index];
+            if self.is_valid(id)
+                && let NodeKind::Text(text) = &mut self.node_mut(id).kind
+                && text.refresh_from_source()
+            {
+                changed.push(id);
+            }
+        }
+        changed
+    }
+
     /// Pull the current snapshot into every terminal reading a live screen.
     ///
     /// Returns whether any of them moved. Called immediately before a draw so a paint-only frame
@@ -501,7 +520,12 @@ impl NodeTree {
     /// want to know whether anything moved use [`refresh_live_terminals`](Self::refresh_live_terminals).
     #[cfg(feature = "terminal")]
     pub(crate) fn refresh_live_terminals_detailed(&mut self) -> LiveTerminalRefresh {
-        let mut refresh = LiveTerminalRefresh::default();
+        let text_damage = self.refresh_live_texts();
+        let mut refresh = LiveTerminalRefresh {
+            changed: !text_damage.is_empty(),
+            text_damage,
+            ..Default::default()
+        };
         for index in 0..self.live_terminal_ids.len() {
             let id = self.live_terminal_ids[index];
             if !self.is_valid(id) {
@@ -1191,6 +1215,9 @@ impl NodeTree {
         if matches!(&node.kind, NodeKind::Terminal(terminal) if terminal.screen.is_some()) {
             self.live_terminal_ids.push(id);
         }
+        if matches!(&node.kind, NodeKind::Text(text) if text.source.is_some()) {
+            self.live_text_ids.push(id);
+        }
         let has_spinner = node_kind_has_spinners(&node.kind);
         if !self.has_spinners && has_spinner {
             self.has_spinners = true;
@@ -1246,6 +1273,7 @@ impl NodeTree {
         self.has_terminal_link_hover = false;
         #[cfg(feature = "terminal")]
         self.live_terminal_ids.clear();
+        self.live_text_ids.clear();
         self.has_spinners = false;
         self.spinner_ids.clear();
         self.has_animated_widgets = false;
@@ -1542,6 +1570,7 @@ impl NodeTree {
         let mut full_terminal_link_hover = false;
         #[cfg(feature = "terminal")]
         let mut full_live_terminal_ids = Vec::new();
+        let mut full_live_text_ids = Vec::new();
         let mut full_spinners = false;
         let mut full_spinner_ids = Vec::new();
         let mut full_animated_widgets = false;
@@ -1571,6 +1600,9 @@ impl NodeTree {
                     full_live_terminal_ids.push(node.id);
                 }
             }
+            if matches!(&node.kind, NodeKind::Text(text) if text.source.is_some()) {
+                full_live_text_ids.push(node.id);
+            }
             if node_kind_has_spinners(&node.kind) {
                 full_spinners = true;
                 full_spinner_ids.push(node.id);
@@ -1596,6 +1628,10 @@ impl NodeTree {
             }
         }
 
+        assert_eq!(
+            self.live_text_ids, full_live_text_ids,
+            "live text index must match full scan"
+        );
         assert_eq!(
             self.has_hoverables, full_hoverables,
             "incremental has_hoverables must match full scan"

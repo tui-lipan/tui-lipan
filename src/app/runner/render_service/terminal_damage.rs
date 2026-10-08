@@ -17,7 +17,7 @@ use std::cell::Cell as StdCell;
 use crate::app::AppRunner;
 use crate::backend::ratatui_backend::{RenderContext, render_regions};
 use crate::core::component::Component;
-use crate::core::node::{LiveTerminalRefresh, NodeId, NodeKind};
+use crate::core::node::{LiveTerminalRefresh, NodeKind};
 use crate::widgets::internal::TerminalDamage;
 
 /// Why a frame could not be repainted from damage. Recorded rather than returned as a bare `None`
@@ -26,10 +26,12 @@ use crate::widgets::internal::TerminalDamage;
 pub(crate) enum DamageRejection {
     /// No live terminal reported anything.
     NothingMoved,
-    /// More than one terminal moved. Supporting several is possible and not yet worth it.
-    SeveralTerminalsMoved,
+    /// Repainting most rows separately costs more than an ordinary single tree walk.
+    DenseDamage,
     /// The terminal reported `Full` - a resize, a screen swap, decorations.
     FullDamage,
+    /// A snapshot changed but its damage was already consumed by another screen observer.
+    MissingDamage,
     /// The node backing the damage is gone or is no longer a terminal.
     NodeMissing,
     /// There is no retained frame to patch, or it does not match the current geometry.
@@ -49,13 +51,9 @@ pub(crate) enum DamageRejection {
     NothingVisible,
 }
 
-/// One terminal's damaged rows, resolved against the node that will paint them.
+/// Live terminals' and labels' damaged rows, resolved to physical frame rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TerminalDamagePlan {
-    /// The terminal node the rows came from. The draw never needs it - it paints screen rows, not
-    /// a node - but a test asserting *which* terminal was accepted does.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub node: NodeId,
     /// Physical frame rows this repaint has to paint, ascending, each inside the frame: every row
     /// the terminal moved, plus the row the focused widget's caret sits on.
     ///
@@ -94,69 +92,78 @@ where
             return Err(DamageRejection::CompositeSurface);
         }
 
-        let mut moved = refresh.damage.iter();
-        let (node, damage) = moved.next().ok_or(DamageRejection::NothingMoved)?;
-        if moved.next().is_some() {
-            return Err(DamageRejection::SeveralTerminalsMoved);
+        if refresh.damage.is_empty() && refresh.text_damage.is_empty() {
+            return Err(DamageRejection::NothingMoved);
         }
-
-        let rows = match damage {
-            TerminalDamage::Rows(rows) => rows,
-            TerminalDamage::Full => return Err(DamageRejection::FullDamage),
-            TerminalDamage::None => return Err(DamageRejection::NothingMoved),
-        };
-
-        // `render_regions` falls back to painting the whole frame when the root is gone, which
-        // would write far outside the rows this draw restores. Nothing else guards that.
-        if !self.core.tree.is_valid(self.core.tree.root) || !self.core.tree.is_valid(*node) {
+        if !self.core.tree.is_valid(self.core.tree.root) {
             return Err(DamageRejection::NodeMissing);
         }
-        let NodeKind::Terminal(terminal) = &self.core.tree.node(*node).kind else {
-            return Err(DamageRejection::NodeMissing);
-        };
-        if terminal.scrollback_offset != 0 {
-            return Err(DamageRejection::ScrolledBack);
-        }
-        if terminal.border {
-            return Err(DamageRejection::BorderedTerminal);
-        }
-        #[cfg(feature = "terminal-images")]
-        if !terminal.images.is_empty() {
-            return Err(DamageRejection::HasImages);
-        }
-
         let snapshot = self
             .last_frame_snapshot
             .as_ref()
             .ok_or(DamageRejection::NoMatchingRetainedFrame)?;
-        let node_rect = self.core.tree.node(*node).rect;
-        if node_rect.w == 0 || node_rect.h == 0 {
-            return Err(DamageRejection::NoMatchingRetainedFrame);
-        }
-        // The retained frame is what the patch is applied to and diffed against, so it has to
-        // describe the same screen. Deciding this here rather than in the draw is what makes a
-        // `TerminalDamagePlan` mean "executable" instead of "promising": the draw should never
-        // discover that its plan was invalid.
         if *snapshot.area() != frame_area || frame_area.width == 0 || frame_area.height == 0 {
             return Err(DamageRejection::NoMatchingRetainedFrame);
         }
-
-        // An undecorated terminal's content starts at its rect plus padding, so a viewport row is
-        // a fixed offset from a screen row. Rows past the content, or off the frame, are dropped:
-        // nothing shows them, so nothing has to repaint them.
-        let content_top = i32::from(node_rect.y) + i32::from(terminal.padding.top);
-        let content_rows = node_rect
-            .h
-            .saturating_sub(terminal.padding.top.saturating_add(terminal.padding.bottom));
         let frame_top = i32::from(frame_area.y);
         let frame_bottom = frame_top + i32::from(frame_area.height);
-        let mut rows: Vec<u16> = rows
-            .iter()
-            .filter(|row| row.row < content_rows)
-            .map(|row| content_top + i32::from(row.row))
-            .filter(|row| *row >= frame_top && *row < frame_bottom)
-            .map(|row| row as u16)
-            .collect();
+        let mut rows = Vec::new();
+        for (node, damage) in &refresh.damage {
+            let damaged = match damage {
+                TerminalDamage::Rows(rows) => rows,
+                TerminalDamage::Full => return Err(DamageRejection::FullDamage),
+                // Shared screen handles consume damage once, but every mounted widget can
+                // receive the newer snapshot. Without damage for this widget, a row patch
+                // cannot prove it covers all changed cells.
+                TerminalDamage::None => return Err(DamageRejection::MissingDamage),
+            };
+            if !self.core.tree.is_valid(*node) {
+                return Err(DamageRejection::NodeMissing);
+            }
+            let node = self.core.tree.node(*node);
+            let NodeKind::Terminal(terminal) = &node.kind else {
+                return Err(DamageRejection::NodeMissing);
+            };
+            if terminal.scrollback_offset != 0 {
+                return Err(DamageRejection::ScrolledBack);
+            }
+            if terminal.border {
+                return Err(DamageRejection::BorderedTerminal);
+            }
+            #[cfg(feature = "terminal-images")]
+            if !terminal.images.is_empty() {
+                return Err(DamageRejection::HasImages);
+            }
+            if node.rect.w == 0 || node.rect.h == 0 {
+                return Err(DamageRejection::NoMatchingRetainedFrame);
+            }
+            let content_top = i32::from(node.rect.y) + i32::from(terminal.padding.top);
+            let content_rows = node
+                .rect
+                .h
+                .saturating_sub(terminal.padding.top.saturating_add(terminal.padding.bottom));
+            rows.extend(
+                damaged
+                    .iter()
+                    .filter(|row| row.row < content_rows)
+                    .map(|row| content_top + i32::from(row.row))
+                    .filter(|row| *row >= frame_top && *row < frame_bottom)
+                    .map(|row| row as u16),
+            );
+        }
+        for id in &refresh.text_damage {
+            if !self.core.tree.is_valid(*id) {
+                return Err(DamageRejection::NodeMissing);
+            }
+            let rect = self.core.tree.node(*id).rect;
+            rows.extend(
+                (i32::from(rect.y)..i32::from(rect.y) + i32::from(rect.h))
+                    .filter(|row| *row >= frame_top && *row < frame_bottom)
+                    .map(|row| row as u16),
+            );
+        }
+        rows.sort_unstable();
+        rows.dedup();
         if rows.is_empty() {
             return Err(DamageRejection::NothingVisible);
         }
@@ -176,7 +183,10 @@ where
             rows.sort_unstable();
         }
 
-        Ok(TerminalDamagePlan { node: *node, rows })
+        if rows.len() > usize::from(frame_area.height) / 2 {
+            return Err(DamageRejection::DenseDamage);
+        }
+        Ok(TerminalDamagePlan { rows })
     }
 
     /// [`plan_terminal_damage`](Self::plan_terminal_damage), with the reason logged and discarded.

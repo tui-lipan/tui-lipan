@@ -9,6 +9,8 @@ pub(crate) use layout::split_spans_on_newlines;
 pub use node::TextNode;
 pub use reconcile::reconcile_text;
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::core::element::{Element, ElementKind};
@@ -30,11 +32,49 @@ pub enum Overflow {
     Wrap,
 }
 
+/// Shared text for a label whose allocated size does not depend on its contents.
+///
+/// Update the source on the UI thread, then request a paint. For content-sized labels, request
+/// layout instead. Clones share content; updating one label does not mutate retained snapshots.
+#[derive(Clone, Debug, Default)]
+pub struct TextSource(Rc<RefCell<Arc<[Span]>>>);
+
+impl TextSource {
+    /// Create a source from styled spans.
+    pub fn new(spans: impl IntoIterator<Item = Span>) -> Self {
+        Self(Rc::new(RefCell::new(spans.into_iter().collect())))
+    }
+
+    /// Replace the spans, returning whether their contents changed.
+    pub fn set(&self, spans: impl IntoIterator<Item = Span>) -> bool {
+        let spans: Arc<[Span]> = spans.into_iter().collect();
+        let mut current = self.0.borrow_mut();
+        if *current == spans {
+            return false;
+        }
+        *current = spans;
+        true
+    }
+
+    // Binding identity lets the debug paint guard distinguish content updates from replacing
+    // the source, which requires reconciliation even when the spans happen to match.
+    pub(crate) fn identity(&self) -> usize {
+        Rc::as_ptr(&self.0) as usize
+    }
+
+    /// Read the current immutable spans.
+    pub fn snapshot(&self) -> Arc<[Span]> {
+        self.0.borrow().clone()
+    }
+}
+
 /// A text element.
 #[derive(Clone, Debug)]
 pub struct Text {
     /// Text segments.
     pub spans: Vec<Span>,
+    /// Optional live content, refreshed before painting.
+    pub source: Option<TextSource>,
     /// Base style for all spans.
     pub style: Style,
     /// Overflow strategy.
@@ -50,6 +90,7 @@ impl Text {
     pub fn new(content: impl Into<Arc<str>>) -> Self {
         Self {
             spans: vec![Span::new(content)],
+            source: None,
             style: Style::default(),
             overflow: Overflow::Auto,
             width: crate::style::Length::Auto,
@@ -61,10 +102,26 @@ impl Text {
     pub fn from_spans(spans: impl IntoIterator<Item = Span>) -> Self {
         Self {
             spans: spans.into_iter().collect(),
+            source: None,
             style: Style::default(),
             overflow: Overflow::Auto,
             width: crate::style::Length::Auto,
             height: crate::style::Length::Auto,
+        }
+    }
+
+    /// Bind a live single-row label. Defaults to flexible width and a fixed one-row height.
+    ///
+    /// Changing the source does not re-run the view. Request `Update::paint()` after a change;
+    /// with terminal support, `Update::terminal_paint()` may repaint just live source rows.
+    /// Keep width/height independent of text for paint-only updates.
+    pub fn from_source(source: TextSource) -> Self {
+        Self {
+            spans: source.snapshot().to_vec(),
+            source: Some(source),
+            width: crate::style::Length::Flex(1),
+            height: crate::style::Length::Px(1),
+            ..Self::default()
         }
     }
 
@@ -121,6 +178,7 @@ impl From<TextNode> for Text {
     fn from(node: TextNode) -> Self {
         Self {
             spans: node.spans,
+            source: node.source,
             style: node.style,
             overflow: node.overflow,
             width: node.widget_key.width,
@@ -139,6 +197,7 @@ impl Default for Text {
     fn default() -> Self {
         Self {
             spans: Vec::new(),
+            source: None,
             style: Style::default(),
             overflow: Overflow::Auto,
             width: crate::style::Length::Auto,

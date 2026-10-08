@@ -47,16 +47,25 @@ handle to app-owned state the widget reads for itself does not.
 `Terminal` shows both shapes: `snapshot` puts the screen's contents in the
 element, so each chunk of PTY output needs `Update::full()`, while
 [`screen`](widgets/terminal.md#live-screens-vs-snapshots) hands over the screen
-and lets the same output be a repaint.
+and lets the same output be a repaint. `Text::from_source` applies the same approach to labels
+whose allocated size is independent of their contents, such as a flex-width single-row title.
+Terminal snapshots also retain unchanged styled rows, with invalidation independent of paint
+damage; a snapshot reader cannot consume the renderer's pending rows.
 
 That repaint has a narrower level of its own. `Update::terminal_paint()` claims
-live terminal content is the *only* thing that looks different, and a frame that
-keeps the claim repaints only the viewport rows the emulator reports as damaged
-— so a spinner rewriting one character costs one row rather than every cell in
+live terminal and fixed-allocation `TextSource` content are the *only* things that look different.
+A frame that keeps the claim repaints only damaged viewport rows and changed live-label rows,
+so a spinner rewriting one character costs one row rather than every cell in
 the window. Return it for pure screen output, and `paint()` when the same event
 also moves an indicator or a border. Nothing has to be proved by hand: any other
 update in the frame widens the level back on its own, and the cases a row
-repaint cannot serve fall back to an ordinary paint.
+repaint cannot serve fall back to an ordinary paint. Multiple terminals can contribute damage to
+the same frame; their affected rows are combined. Dense damage falls back to a single full paint
+to avoid repeatedly walking the tree for most rows.
+
+If multiple terminal widgets share one screen, refreshing them can consume the screen's damage
+before every widget has observed it. A changed snapshot without damage forces a full paint, so all
+widgets display the current contents.
 
 Scrolling a live terminal is the same shape. The wheel and the scrollbar report
 the new offset through `on_scroll_to`; move the screen with `set_scrollback` and

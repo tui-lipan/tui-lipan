@@ -1115,6 +1115,8 @@ where
     fn render_frame(&mut self) -> bool {
         #[cfg(feature = "terminal")]
         self.core.tree.refresh_live_terminals();
+        #[cfg(not(feature = "terminal"))]
+        self.core.tree.refresh_live_texts();
         self.drain_copy_feedback_requests();
         let bounds = self.core.viewport();
         self.core.render_element(
@@ -1123,6 +1125,7 @@ where
             self.focused_key.as_ref(),
             self.mouse.hovered,
         );
+        self.core.tree.refresh_live_texts();
         self.sync_clipboard_config();
         focus_service::restore_focus_after_closed_overlays(&self.core.tree, &mut focus_refs!(self));
         if let Some(request) = self.core.ctx.take_focus_request() {
@@ -2098,6 +2101,46 @@ mod tests {
         TextAreaVimCurrentLineHighlight, TextAreaVimMode, TextAreaVirtualText, ThemeProvider,
         Tooltip, Tree, TreeNode, VStack,
     };
+
+    struct CachedLiveLabel(Element);
+
+    impl Component for CachedLiveLabel {
+        type Message = ();
+        type Properties = ();
+        type State = ();
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {}
+
+        fn update(&mut self, _msg: (), _ctx: &mut Context<Self>) -> Update {
+            Update::paint()
+        }
+
+        fn view(&self, _ctx: &Context<Self>) -> Element {
+            self.0.clone()
+        }
+    }
+
+    #[test]
+    fn live_label_paints_without_view_and_survives_cached_element_reconciliation() {
+        let source = crate::TextSource::new([Span::new("before")]);
+        let retained = source.snapshot();
+        let mut backend =
+            TestBackend::new(CachedLiveLabel(Text::from_source(source.clone()).into()));
+        backend.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 2,
+        });
+        backend.render();
+        assert!(source.set([Span::new("after")]));
+        assert!(!source.set([Span::new("after")]));
+        assert_eq!(retained[0].content.as_ref(), "before");
+        assert_eq!(backend.core.tree.refresh_live_texts().len(), 1);
+        assert!(backend.capture_frame().plain_text().contains("after"));
+        backend.render();
+        assert!(backend.capture_frame().plain_text().contains("after"));
+    }
 
     /// A read-only `Input` that the app can remove, to check cache pruning after reconciliation.
     struct RemovableReadOnlyInput;
