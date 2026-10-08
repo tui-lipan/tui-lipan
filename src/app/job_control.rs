@@ -318,33 +318,114 @@ extern "C" fn release_and_stop(_signal: libc::c_int) {
 /// Run `body`, then put `errno` back as it was before.
 #[cfg(all(unix, not(target_arch = "wasm32")))]
 fn preserving_errno(body: impl FnOnce()) {
-    // SAFETY: `errno_location` points at this thread's `errno`, which lives as
-    // long as the thread does.
-    #[allow(unsafe_code)]
-    let saved = unsafe { *errno_location() };
+    let saved = errno::get();
     body();
-    // SAFETY: as above.
-    #[allow(unsafe_code)]
-    unsafe {
-        *errno_location() = saved
-    };
+    errno::set(saved);
 }
 
-/// This thread's `errno`.
+/// This thread's `errno`, through the accessor each platform's C library
+/// provides: the same mapping the standard library uses, resolved through
+/// `libc`. A target outside it has no `errno` the handler could put back, so
+/// the background signals are left to their default there ([`errno::KNOWN`]).
 #[cfg(all(unix, not(target_arch = "wasm32")))]
-#[allow(unsafe_code)]
-unsafe fn errno_location() -> *mut libc::c_int {
-    // SAFETY: each platform's accessor takes no arguments and returns the
-    // calling thread's `errno`.
-    unsafe {
-        cfg_select! {
-            any(target_os = "android", target_os = "netbsd", target_os = "openbsd",
-                target_os = "cygwin") => libc::__errno(),
-            any(target_vendor = "apple", target_os = "freebsd") => libc::__error(),
-            any(target_os = "solaris", target_os = "illumos") => libc::___errno(),
-            target_os = "haiku" => libc::_errnop(),
-            // Linux and the rest of the glibc/musl-style systems, DragonFly included.
-            _ => libc::__errno_location(),
+mod errno {
+    cfg_select! {
+        target_os = "vxworks" => {
+            pub(super) const KNOWN: bool = true;
+
+            pub(super) fn get() -> libc::c_int {
+                // SAFETY: takes no arguments; reads the calling task's `errno`.
+                #[allow(unsafe_code)]
+                unsafe {
+                    libc::errnoGet()
+                }
+            }
+
+            pub(super) fn set(value: libc::c_int) {
+                // SAFETY: takes a value; sets the calling task's `errno`.
+                #[allow(unsafe_code)]
+                unsafe {
+                    libc::errnoSet(value)
+                };
+            }
+        }
+        any(
+            target_os = "linux",
+            target_os = "emscripten",
+            target_os = "fuchsia",
+            target_os = "l4re",
+            target_os = "hurd",
+            target_os = "redox",
+            target_os = "dragonfly",
+            target_os = "netbsd",
+            target_os = "openbsd",
+            target_os = "cygwin",
+            target_os = "android",
+            target_os = "nuttx",
+            target_env = "newlib",
+            target_os = "solaris",
+            target_os = "illumos",
+            target_os = "nto",
+            target_os = "freebsd",
+            target_vendor = "apple",
+            target_os = "haiku",
+            target_os = "aix",
+        ) => {
+            pub(super) const KNOWN: bool = true;
+
+            pub(super) fn get() -> libc::c_int {
+                // SAFETY: `location` points at the calling thread's `errno`,
+                // which lives as long as the thread.
+                #[allow(unsafe_code)]
+                unsafe {
+                    *location()
+                }
+            }
+
+            pub(super) fn set(value: libc::c_int) {
+                // SAFETY: as in `get`.
+                #[allow(unsafe_code)]
+                unsafe {
+                    *location() = value
+                };
+            }
+
+            #[allow(unsafe_code)]
+            fn location() -> *mut libc::c_int {
+                // SAFETY: every accessor here takes no arguments and returns
+                // the calling thread's `errno`.
+                unsafe {
+                    cfg_select! {
+                        any(
+                            target_os = "netbsd",
+                            target_os = "openbsd",
+                            target_os = "cygwin",
+                            target_os = "android",
+                            target_os = "nuttx",
+                            target_env = "newlib",
+                        ) => libc::__errno(),
+                        any(target_os = "solaris", target_os = "illumos") => libc::___errno(),
+                        target_os = "nto" => libc::__get_errno_ptr(),
+                        any(target_os = "freebsd", target_vendor = "apple") => libc::__error(),
+                        target_os = "haiku" => libc::_errnop(),
+                        target_os = "aix" => libc::_Errno(),
+                        // Only the targets listed above reach this: Linux,
+                        // Emscripten, Fuchsia, L4Re, Hurd, Redox and DragonFly.
+                        _ => libc::__errno_location(),
+                    }
+                }
+            }
+        }
+        _ => {
+            pub(super) const KNOWN: bool = false;
+
+            /// Never called: without a known `errno` the handler that would
+            /// use it is not installed.
+            pub(super) fn get() -> libc::c_int {
+                0
+            }
+
+            pub(super) fn set(_value: libc::c_int) {}
         }
     }
 }
@@ -488,6 +569,9 @@ impl StopDispositions {
         match (self, signal) {
             (Self::Default, _) => libc::SIG_DFL,
             (Self::Runner, libc::SIGTSTP) => note_stop_request as *const () as libc::sighandler_t,
+            // Without an `errno` to put back, the handler could not run safely;
+            // the background signals keep their default stop there.
+            (Self::Runner, _) if !errno::KNOWN => libc::SIG_DFL,
             (Self::Runner, _) => release_and_stop as *const () as libc::sighandler_t,
         }
     }
@@ -663,11 +747,7 @@ mod tests {
         // anything that is not a terminal. The code it interrupted must still
         // see the error it was about to read.
         let (read_end, write_end) = pipe();
-        // SAFETY: `errno_location` is this thread's `errno`.
-        #[allow(unsafe_code)]
-        unsafe {
-            *errno_location() = libc::EAGAIN
-        };
+        errno::set(libc::EAGAIN);
         preserving_errno(|| {
             // SAFETY: `tcgetpgrp` takes no pointers; a pipe is not a terminal.
             #[allow(unsafe_code)]
