@@ -77,40 +77,6 @@ pub(crate) fn handle_progress_drag(
     }
 }
 
-/// Resolve the nearest opted-in panel containing the actual hit, so clipping and overlays
-/// retain ordinary hit-test semantics. Keys are scoped by ancestry, not globally unique.
-fn tab_drop_target(tree: &NodeTree, x: i16, y: i16) -> Option<(NodeId, bool)> {
-    let mut areas = Vec::new();
-    for node in tree.iter_with_overlays() {
-        if let NodeKind::DraggableTabBar(bar) = &node.kind
-            && let Some(key) = &bar.drop_area
-        {
-            let mut parent = node.parent;
-            while let Some(id) = parent {
-                let ancestor = tree.node(id);
-                if ancestor.key.as_ref() == Some(key) {
-                    areas.push((id, node.id));
-                    break;
-                }
-                parent = ancestor.parent;
-            }
-        }
-    }
-    let targets: Vec<_> = areas.iter().map(|(area, _)| *area).collect();
-    let hit = tree.drop_target_test(x, y, &targets)?;
-    if matches!(tree.node(hit).kind, NodeKind::DraggableTabBar(_)) {
-        return Some((hit, false));
-    }
-    let mut ancestor = Some(hit);
-    while let Some(id) = ancestor {
-        if let Some((_, bar)) = areas.iter().find(|(area, _)| *area == id) {
-            return Some((*bar, true));
-        }
-        ancestor = tree.node(id).parent;
-    }
-    None
-}
-
 /// Handle draggable tab bar drag updates.
 pub(crate) fn handle_draggable_tab_bar_drag(
     tree: &NodeTree,
@@ -127,7 +93,8 @@ pub(crate) fn handle_draggable_tab_bar_drag(
         return None;
     };
 
-    if bar.tabs.is_empty()
+    if bar.disabled
+        || bar.tabs.is_empty()
         || !bar
             .tabs
             .get(drag.current_index)
@@ -149,8 +116,9 @@ pub(crate) fn handle_draggable_tab_bar_drag(
     }
     drag.started = true;
 
-    let (target_id, over_body) =
-        tab_drop_target(tree, x as i16, y as i16).unwrap_or((drag.id, false));
+    let (target_id, over_body) = tree
+        .tab_drop_target(x as i16, y as i16)
+        .unwrap_or((drag.id, false));
     if over_body && target_id == drag.id {
         if drag.reorder_mode == DragReorderMode::OnDrop {
             drag.pending_id = drag.id;
@@ -169,6 +137,9 @@ pub(crate) fn handle_draggable_tab_bar_drag(
     let NodeKind::DraggableTabBar(target_bar) = &target_node.kind else {
         return Some((drag, None));
     };
+    if target_bar.disabled {
+        return Some((drag, None));
+    }
     let target_inner = target_node
         .rect
         .inner(target_bar.border, target_bar.padding);
@@ -208,7 +179,11 @@ pub(crate) fn handle_draggable_tab_bar_drag(
 
     if can_transfer {
         let to_index = if over_body {
-            target_bar.tabs.len()
+            target_bar
+                .tabs
+                .iter()
+                .rposition(crate::widgets::draggable_tab_bar::is_reorderable_tab)
+                .map_or(0, |index| index + 1)
         } else {
             DraggableTabBar::reorder_index_at_view_col(
                 &target_bar.tabs,

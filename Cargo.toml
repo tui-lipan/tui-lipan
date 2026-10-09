@@ -336,3 +336,7 @@ required-features = ["terminal"]
 name = "image_backdrop"
 harness = false
 required-features = ["terminal-images"]
+
+[[bench]]
+name = "tab_drop_target"
+harness = false

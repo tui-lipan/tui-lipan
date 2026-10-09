@@ -968,7 +968,8 @@ impl DraggableTabBar {
     /// Accept cross-bar transfers over a keyed ancestor container, including its body.
     ///
     /// The ancestor must contain this bar and carry the supplied `.key(...)`.
-    /// Body transfers append the tab; hovering the bar itself chooses an insertion index.
+    /// Body transfers append before trailing action items; the bar chooses an insertion index.
+    /// Register exactly one bar per ancestor. Ambiguous bodies ignore transfers; strips still work.
     /// Hovering this bar's own body never reorders its tabs.
     pub fn drop_area(mut self, key: impl Into<crate::core::element::Key>) -> Self {
         self.drop_area = Some(key.into());

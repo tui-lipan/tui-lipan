@@ -345,11 +345,14 @@ VStack::new()
     .key("editor-panel")
 ```
 
-Body transfers append the tab; the bar still chooses the precise insertion index. Hovering a
+Body transfers append before trailing action items; the bar still chooses the precise insertion index.
+Register exactly one bar per ancestor container. If multiple bars register the same ancestor,
+its body ignores transfers; each bar remains a direct strip target. Disabled bars reject transfers. Hovering a
 bar's own body does not reorder tabs. The area follows normal clipping and overlay hit testing,
 and only accepts bars with the same `drag_group`. Live transfers can continue across several
 bars, including returning to the original panel, without releasing the mouse. Transfer callbacks
-are taken from the current view after each move.
+are taken from the current view after each move. Area registrations are tracked during reconciliation
+and resolved once per rendered tree; drag updates do not discover registrations by scanning the tree.
 
 Tabs can be dragged between bars that share the same `drag_group`. The `on_transfer` callback fires on the **source** bar and reports `from_bar`, `to_bar`, `from` index, and `to` index. After that callback queues the transfer, the destination bar's `on_change` callback fires with `to`, selecting the transferred tab through the same controlled-state path as a mouse click.
 

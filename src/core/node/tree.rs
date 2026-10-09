@@ -73,6 +73,13 @@ fn node_kind_has_animated_scroll(kind: &NodeKind) -> bool {
     }
 }
 
+/// Resolved once per rendered tree; ambiguous panel registrations deliberately have no owner.
+#[derive(Clone, Default)]
+struct TabDropAreas {
+    owners: FxHashMap<NodeId, Option<NodeId>>,
+    targets: Vec<NodeId>,
+}
+
 /// A realized UI node (post-layout, ready for event routing/rendering).
 #[derive(Clone)]
 pub(crate) struct Node {
@@ -309,6 +316,9 @@ pub(crate) struct NodeTree {
     /// Cached tree-ordered focusable node list, lazily populated on first
     /// `focusables()` call per epoch and cleared in `begin_epoch()`.
     cached_focusables: RefCell<Option<Vec<NodeId>>>,
+    /// Opted-in bars tracked during reconciliation, avoiding drag-time tree discovery.
+    tab_drop_bar_ids: Vec<NodeId>,
+    cached_tab_drop_areas: RefCell<Option<TabDropAreas>>,
     /// Last frame's "scrolled to bottom" for keyed `ScrollView`s. Survives node-id
     /// churn when layout reparents the same logical timeline (same `Element::key`).
     pub(crate) scroll_was_at_bottom_by_key: FxHashMap<Key, bool>,
@@ -380,6 +390,8 @@ impl NodeTree {
             epoch: 0,
             session_now: Instant::now(),
             cached_focusables: RefCell::new(None),
+            tab_drop_bar_ids: Vec::new(),
+            cached_tab_drop_areas: RefCell::new(None),
             scroll_was_at_bottom_by_key: FxHashMap::default(),
             remembered_scroll_anchor_by_key: FxHashMap::default(),
             scroll_input_offset_by_key: FxHashMap::default(),
@@ -988,6 +1000,61 @@ impl NodeTree {
         self.do_test(x, y, TestKind::DropTarget(targets))
     }
 
+    /// Resolve a tab bar or its opted-in ancestor body using reconciliation-time registration.
+    pub(crate) fn tab_drop_target(&self, x: i16, y: i16) -> Option<(NodeId, bool)> {
+        if self.tab_drop_bar_ids.is_empty() {
+            return self.hit_test(x, y).and_then(|id| {
+                matches!(self.node(id).kind, NodeKind::DraggableTabBar(_)).then_some((id, false))
+            });
+        }
+        let mut cached = self.cached_tab_drop_areas.borrow_mut();
+        let areas = cached.get_or_insert_with(|| {
+            let mut areas = TabDropAreas::default();
+            for &bar_id in &self.tab_drop_bar_ids {
+                if !self.is_valid(bar_id) {
+                    continue;
+                }
+                let node = self.node(bar_id);
+                let NodeKind::DraggableTabBar(bar) = &node.kind else {
+                    continue;
+                };
+                let Some(key) = &bar.drop_area else { continue };
+                let mut parent = node.parent;
+                while let Some(id) = parent {
+                    let ancestor = self.node(id);
+                    if ancestor.key.as_ref() == Some(key) {
+                        match areas.owners.entry(id) {
+                            Entry::Vacant(entry) => {
+                                entry.insert(Some(bar_id));
+                                areas.targets.push(id);
+                            }
+                            Entry::Occupied(mut entry) => {
+                                if *entry.get() != Some(bar_id) {
+                                    entry.insert(None);
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    parent = ancestor.parent;
+                }
+            }
+            areas
+        });
+        let hit = self.drop_target_test(x, y, &areas.targets)?;
+        if matches!(self.node(hit).kind, NodeKind::DraggableTabBar(_)) {
+            return Some((hit, false));
+        }
+        let mut ancestor = Some(hit);
+        while let Some(id) = ancestor {
+            if let Some(owner) = areas.owners.get(&id) {
+                return owner.map(|bar| (bar, true));
+            }
+            ancestor = self.node(id).parent;
+        }
+        None
+    }
+
     /// Return the deepest hoverable node at `(x, y)`, respecting overlay layering.
     pub fn hover_test(&self, x: i16, y: i16) -> Option<NodeId> {
         self.do_test(x, y, TestKind::Hover)
@@ -1195,7 +1262,13 @@ impl NodeTree {
     /// skipped entirely.
     #[inline]
     pub(crate) fn note_kind_set(&mut self, id: NodeId) {
+        *self.cached_tab_drop_areas.get_mut() = None;
         let node = self.arena.get(id);
+        if matches!(&node.kind, NodeKind::DraggableTabBar(bar) if bar.drop_area.is_some())
+            && !self.tab_drop_bar_ids.contains(&id)
+        {
+            self.tab_drop_bar_ids.push(id);
+        }
         if !self.has_hoverables && node.is_hoverable() {
             self.has_hoverables = true;
         }
@@ -1294,6 +1367,8 @@ impl NodeTree {
         }
         self.active_theme_stack.truncate(1);
         *self.cached_focusables.borrow_mut() = None;
+        self.tab_drop_bar_ids.clear();
+        *self.cached_tab_drop_areas.get_mut() = None;
         self.offscreen_doc_restore_stack.clear();
         self.epoch = self.epoch.wrapping_add(1).max(1);
         self.epoch
@@ -1456,7 +1531,10 @@ impl NodeTree {
             }
 
             let done = stack.pop().expect("frame must exist");
-            if done.blocks_self_on_child_miss && !done.children.is_empty() {
+            if done.blocks_self_on_child_miss
+                && !done.children.is_empty()
+                && !matches!(kind, TestKind::DropTarget(targets) if targets.contains(&done.id))
+            {
                 continue;
             }
 
@@ -1955,6 +2033,120 @@ mod tests {
                 tree.node_mut(root).rect.w = 5;
                 assert!(tree.scrollbar_target_at(5, 5).is_none());
             }
+        }
+    }
+
+    #[test]
+    fn tab_drop_registration_cache_tracks_reconciliation_and_rejects_ambiguous_areas() {
+        use crate::core::element::IntoElement;
+        use crate::layout::LayoutEngine;
+        use crate::widgets::{DraggableTab, DraggableTabBar, VStack};
+        let view = |area: &'static str, registration: Option<&'static str>, duplicate: bool| {
+            let bar = |name: &str| {
+                let mut bar = DraggableTabBar::new().tabs([DraggableTab::new(name)]);
+                if let Some(registration) = registration {
+                    bar = bar.drop_area(registration);
+                }
+                bar
+            };
+            let mut panel = VStack::new().child(bar("First"));
+            if duplicate {
+                panel = panel.child(bar("Second"));
+            }
+            panel.child(crate::widgets::Spacer::new()).key(area)
+        };
+        let mut tree = NodeTree::new();
+        let bounds = Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 10,
+        };
+        for area in ["original", "renamed"] {
+            LayoutEngine::reconcile_with_focus(
+                &mut tree,
+                &view(area, Some(area), false),
+                bounds,
+                None,
+            );
+            assert!(tree.cached_tab_drop_areas.borrow().is_none());
+            let target = tree.tab_drop_target(1, 5).expect("registered body");
+            assert!(target.1);
+            assert!(matches!(
+                tree.node(target.0).kind,
+                NodeKind::DraggableTabBar(_)
+            ));
+            assert_eq!(tree.tab_drop_target(1, 5), Some(target));
+            assert_eq!(
+                tree.cached_tab_drop_areas
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .owners
+                    .len(),
+                1
+            );
+        }
+        LayoutEngine::reconcile_with_focus(
+            &mut tree,
+            &view("renamed", Some("renamed"), true),
+            bounds,
+            None,
+        );
+        assert_eq!(
+            tree.tab_drop_target(1, 5),
+            None,
+            "ambiguous body has no owner"
+        );
+        assert!(
+            tree.tab_drop_target(1, 0).is_some(),
+            "explicit strip remains a target"
+        );
+        LayoutEngine::reconcile_with_focus(&mut tree, &view("renamed", None, false), bounds, None);
+        assert!(tree.tab_drop_bar_ids.is_empty());
+        assert_eq!(tree.tab_drop_target(1, 5), None);
+        assert!(tree.tab_drop_target(1, 0).is_some());
+        assert!(
+            tree.cached_tab_drop_areas.borrow().is_none(),
+            "unopted-in apps never populate registration cache"
+        );
+    }
+
+    #[test]
+    fn layered_drop_surfaces_accept_paint_only_children_without_exposing_lower_siblings() {
+        for canvas in [false, true] {
+            let (mut tree, lower) = build_base_tree();
+            let root = tree.root;
+            tree.node_mut(root).kind = if canvas {
+                NodeKind::Canvas(crate::widgets::internal::CanvasNode {
+                    passthrough: false,
+                    ..Default::default()
+                })
+            } else {
+                NodeKind::ZStack(crate::widgets::internal::ZStackNode {
+                    passthrough: false,
+                    ..Default::default()
+                })
+            };
+            let rect = tree.node(root).rect;
+            let cover = alloc_overlay_frame(&mut tree, rect);
+            tree.node_mut(cover).parent = Some(root);
+            tree.node_mut(root).children.push(cover);
+            assert_eq!(
+                tree.drop_target_test(1, 1, &[lower]),
+                None,
+                "paint-only upper sibling still occludes the lower drop surface"
+            );
+            assert_eq!(
+                tree.drop_target_test(1, 1, &[root]),
+                Some(root),
+                "the registered container accepts misses from its own covering child"
+            );
+            assert_eq!(
+                tree.hit_test(1, 1),
+                None,
+                "ordinary pointer routing stays unchanged"
+            );
         }
     }
 

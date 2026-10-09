@@ -7,6 +7,8 @@ struct EmptyTransfer {
     body_targets: bool,
     separate_groups: bool,
     source_only_callback: bool,
+    disabled_destination: bool,
+    layered_body: bool,
     mode: DragReorderMode,
 }
 
@@ -61,7 +63,14 @@ impl Component for EmptyTransfer {
         let epoch = (!self.source_only_callback).then_some(ctx.state.epoch);
         let bar = |id: &'static str, tabs: &[String]| -> Element {
             let mut bar = DraggableTabBar::new()
-                .tabs(tabs.iter().map(|tab| DraggableTab::new(tab.as_str())))
+                .tabs(tabs.iter().map(|tab| {
+                    if tab == "+" {
+                        DraggableTab::action(tab.as_str())
+                    } else {
+                        DraggableTab::new(tab.as_str())
+                    }
+                }))
+                .disabled(self.disabled_destination && id == "bottom")
                 .bar_id(id)
                 .drag_group(if self.separate_groups && id == "bottom" {
                     "other"
@@ -79,11 +88,24 @@ impl Component for EmptyTransfer {
             }
             if self.body_targets {
                 bar = bar.drop_area(id);
-                VStack::new()
-                    .height(Length::Px(5))
-                    .child(bar)
-                    .child(Text::new("Body").height(Length::Flex(1)))
-                    .key(id)
+                let body = Text::new("Body").height(Length::Flex(1));
+                if self.layered_body {
+                    VStack::new()
+                        .height(Length::Px(5))
+                        .child(
+                            ZStack::new()
+                                .passthrough(false)
+                                .child(VStack::new().child(bar).child(body))
+                                .key(id),
+                        )
+                        .into()
+                } else {
+                    VStack::new()
+                        .height(Length::Px(5))
+                        .child(bar)
+                        .child(body)
+                        .key(id)
+                }
             } else {
                 bar.into()
             }
@@ -282,4 +304,102 @@ fn a_destination_without_a_transfer_callback_keeps_the_shared_source_handler() {
     assert_eq!(b.state().left, ["Agents"]);
     assert!(b.state().right.is_empty());
     assert_eq!(b.state().epoch, 2);
+}
+
+#[test]
+fn disabled_destinations_reject_body_and_bar_transfers() {
+    for mode in [DragReorderMode::Live, DragReorderMode::OnDrop] {
+        for y in [6, 9] {
+            let mut b = TestBackend::new(EmptyTransfer {
+                body_targets: true,
+                disabled_destination: true,
+                mode,
+                ..Default::default()
+            });
+            b.set_viewport(Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 11,
+            });
+            b.state_mut().right = vec!["Existing".into()];
+            b.render();
+            b.send_mouse(mouse(1, 0, MouseKind::Down(MouseButton::Left)))
+                .unwrap();
+            b.send_mouse(mouse(1, y, MouseKind::Drag(MouseButton::Left)))
+                .unwrap();
+            b.send_mouse(mouse(1, y, MouseKind::Up(MouseButton::Left)))
+                .unwrap();
+            assert_eq!(b.state().left, ["Agents"]);
+            assert_eq!(b.state().right, ["Existing"]);
+            assert_eq!(b.state().epoch, 0);
+        }
+    }
+}
+
+#[test]
+fn body_append_inserts_before_trailing_actions_including_action_only_bars() {
+    for mode in [DragReorderMode::Live, DragReorderMode::OnDrop] {
+        for (existing, insertion) in [
+            (vec!["Editor".to_string(), "+".to_string()], 1),
+            (vec!["+".to_string()], 0),
+            (
+                vec!["Editor".to_string(), "+".to_string(), "+".to_string()],
+                1,
+            ),
+            (vec!["+".to_string(), "+".to_string()], 0),
+        ] {
+            let mut b = TestBackend::new(EmptyTransfer {
+                body_targets: true,
+                mode,
+                ..Default::default()
+            });
+            b.set_viewport(Rect {
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 11,
+            });
+            b.state_mut().right = existing.clone();
+            b.render();
+            b.send_mouse(mouse(1, 0, MouseKind::Down(MouseButton::Left)))
+                .unwrap();
+            b.send_mouse(mouse(1, 9, MouseKind::Drag(MouseButton::Left)))
+                .unwrap();
+            b.send_mouse(mouse(1, 9, MouseKind::Up(MouseButton::Left)))
+                .unwrap();
+            let mut expected = existing;
+            expected.insert(insertion, "Agents".into());
+            assert!(b.state().left.is_empty());
+            assert_eq!(b.state().right, expected);
+            assert_eq!(b.state().selected, Some(insertion));
+        }
+    }
+}
+
+#[test]
+fn non_passthrough_layered_panel_accepts_body_transfers_over_paint_only_children() {
+    for mode in [DragReorderMode::Live, DragReorderMode::OnDrop] {
+        let mut b = TestBackend::new(EmptyTransfer {
+            body_targets: true,
+            layered_body: true,
+            mode,
+            ..Default::default()
+        });
+        b.set_viewport(Rect {
+            x: 0,
+            y: 0,
+            w: 40,
+            h: 11,
+        });
+        b.render();
+        b.send_mouse(mouse(1, 0, MouseKind::Down(MouseButton::Left)))
+            .unwrap();
+        b.send_mouse(mouse(1, 9, MouseKind::Drag(MouseButton::Left)))
+            .unwrap();
+        b.send_mouse(mouse(1, 9, MouseKind::Up(MouseButton::Left)))
+            .unwrap();
+        assert!(b.state().left.is_empty());
+        assert_eq!(b.state().right, ["Agents"]);
+    }
 }
