@@ -168,29 +168,20 @@ impl<C: Component> AppRunner<C> {
 
     #[cfg(feature = "terminal")]
     pub(super) fn emit_terminal_focus_change(&mut self) {
-        let prev_focus = self.focus.last_emitted_focus;
-        let prev_window = self.focus.last_emitted_window_focused;
-        let current_focus = self.focus.focused;
-        let current_window = self.focus.window_focused;
-
-        if prev_focus == current_focus && prev_window == current_window {
+        // Track the terminal that received focus, including its reporting mode. A live screen
+        // can enable reporting after the widget already took focus, such as a session replay.
+        let previous = self.focus.last_emitted_terminal_focus;
+        let current = self.terminal_focus_id(self.focus.focused, self.focus.window_focused);
+        if previous == current {
             return;
         }
-
-        let prev_terminal = self.terminal_focus_id(prev_focus, prev_window);
-        let next_terminal = self.terminal_focus_id(current_focus, current_window);
-
-        if prev_terminal != next_terminal {
-            if let Some(id) = prev_terminal {
-                self.emit_terminal_focus_sequence(id, false);
-            }
-            if let Some(id) = next_terminal {
-                self.emit_terminal_focus_sequence(id, true);
-            }
+        if let Some(id) = previous {
+            self.emit_terminal_focus_sequence(id, false);
         }
-
-        self.focus.last_emitted_focus = current_focus;
-        self.focus.last_emitted_window_focused = current_window;
+        if let Some(id) = current {
+            self.emit_terminal_focus_sequence(id, true);
+        }
+        self.focus.last_emitted_terminal_focus = current;
     }
 
     #[cfg(feature = "terminal")]
@@ -203,7 +194,11 @@ impl<C: Component> AppRunner<C> {
             return None;
         }
         match self.core.tree.node(id).kind {
-            NodeKind::Terminal(_) => Some(id),
+            NodeKind::Terminal(ref node)
+                if node.mouse_mode.focus_events_enabled && node.on_input.is_some() =>
+            {
+                Some(id)
+            }
             _ => None,
         }
     }

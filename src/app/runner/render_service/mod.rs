@@ -817,8 +817,6 @@ impl<C: Component> AppRunner<C> {
         self.notify_focus_change();
         #[cfg(feature = "devtools")]
         self.update_devtools_focus_metrics();
-        #[cfg(feature = "terminal")]
-        self.emit_terminal_focus_change();
         self.mouse.hovered = self.mouse.hovered.filter(|id| self.core.tree.is_valid(*id));
         self.refresh_active_selection_drag_from_last_pointer();
         self.refresh_hover_from_last_mouse();
@@ -876,6 +874,7 @@ impl<C: Component> AppRunner<C> {
         }
 
         let refresh = self.core.tree.refresh_live_terminals_detailed();
+        self.emit_terminal_focus_change();
         let frame_area = terminal.get_frame().area();
         if let Some(plan) = self.prepare_terminal_damage_plan(&refresh, frame_area) {
             self.draw_terminal_damage(terminal, &plan)?;
@@ -973,6 +972,8 @@ impl<C: Component> AppRunner<C> {
         // the detail here, so no caller has to remember the refresh.
         #[cfg(feature = "terminal")]
         let _refresh = self.core.tree.refresh_live_terminals_detailed();
+        #[cfg(feature = "terminal")]
+        self.emit_terminal_focus_change();
         #[cfg(not(feature = "terminal"))]
         self.core.tree.refresh_live_texts();
         self.draw_current_tree_after_live_refresh(terminal, draw_mode)

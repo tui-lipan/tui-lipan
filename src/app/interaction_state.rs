@@ -475,9 +475,7 @@ pub(crate) struct FocusState {
     pub last_notified: Option<NotifiedFocus>,
     pub window_focused: bool,
     #[cfg(feature = "terminal")]
-    pub last_emitted_focus: Option<NodeId>,
-    #[cfg(feature = "terminal")]
-    pub last_emitted_window_focused: bool,
+    pub last_emitted_terminal_focus: Option<NodeId>,
 }
 
 impl FocusState {
@@ -511,9 +509,7 @@ impl Default for FocusState {
             last_notified: None,
             window_focused: true,
             #[cfg(feature = "terminal")]
-            last_emitted_focus: None,
-            #[cfg(feature = "terminal")]
-            last_emitted_window_focused: false,
+            last_emitted_terminal_focus: None,
         }
     }
 }

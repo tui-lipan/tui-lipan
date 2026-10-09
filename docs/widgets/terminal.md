@@ -81,6 +81,11 @@ match status {
 
 The low-level terminal viewport widget. Use when you need custom PTY handling, multiple terminals, or specialized input routing.
 
+When the child enables focus reporting with `CSI ? 1004 h`, `on_input` receives focus-in
+and focus-out events as keyboard or host-window focus changes. Enabling reporting while the
+terminal already holds focus sends one focus-in event, including when a live screen restores
+the mode during session replay. Paint-only updates also synchronize these reports.
+
 | Prop | Type | Description |
 |------|------|-------------|
 | `snapshot` | `TerminalRenderSnapshot` | Current screen snapshot |
