@@ -2,6 +2,8 @@
 use std::sync::Arc;
 
 use crate::Result;
+#[cfg(feature = "terminal")]
+use crate::app::interaction_state::TerminalFocusRecipient;
 use crate::backend::ratatui_backend::terminal_handoff::{
     resume_after_external_process, suspend_for_external_process,
 };
@@ -168,33 +170,28 @@ impl<C: Component> AppRunner<C> {
 
     #[cfg(feature = "terminal")]
     pub(super) fn emit_terminal_focus_change(&mut self) {
-        let prev_focus = self.focus.last_emitted_focus;
-        let prev_window = self.focus.last_emitted_window_focused;
-        let current_focus = self.focus.focused;
-        let current_window = self.focus.window_focused;
-
-        if prev_focus == current_focus && prev_window == current_window {
+        // Reporting can become enabled, or a live screen can be replaced, after a keyed
+        // terminal already took focus. Both need a fresh focus-in for the current child.
+        let previous = self.focus.last_emitted_terminal_focus.as_ref();
+        let current = self.terminal_focus_recipient(self.focus.focused, self.focus.window_focused);
+        if previous == current.as_ref() {
             return;
         }
-
-        let prev_terminal = self.terminal_focus_id(prev_focus, prev_window);
-        let next_terminal = self.terminal_focus_id(current_focus, current_window);
-
-        if prev_terminal != next_terminal {
-            if let Some(id) = prev_terminal {
-                self.emit_terminal_focus_sequence(id, false);
-            }
-            if let Some(id) = next_terminal {
-                self.emit_terminal_focus_sequence(id, true);
-            }
+        if let Some(recipient) = previous {
+            self.emit_terminal_focus_sequence(recipient, false);
         }
-
-        self.focus.last_emitted_focus = current_focus;
-        self.focus.last_emitted_window_focused = current_window;
+        if let Some(recipient) = current.as_ref() {
+            self.emit_terminal_focus_sequence(recipient, true);
+        }
+        self.focus.last_emitted_terminal_focus = current;
     }
 
     #[cfg(feature = "terminal")]
-    fn terminal_focus_id(&self, focus: Option<NodeId>, window_focused: bool) -> Option<NodeId> {
+    fn terminal_focus_recipient(
+        &self,
+        focus: Option<NodeId>,
+        window_focused: bool,
+    ) -> Option<TerminalFocusRecipient> {
         if !window_focused {
             return None;
         }
@@ -203,13 +200,21 @@ impl<C: Component> AppRunner<C> {
             return None;
         }
         match self.core.tree.node(id).kind {
-            NodeKind::Terminal(_) => Some(id),
+            NodeKind::Terminal(ref node)
+                if node.mouse_mode.focus_events_enabled && node.on_input.is_some() =>
+            {
+                Some(TerminalFocusRecipient {
+                    node_id: id,
+                    screen: node.screen.clone(),
+                })
+            }
             _ => None,
         }
     }
 
     #[cfg(feature = "terminal")]
-    fn emit_terminal_focus_sequence(&self, id: NodeId, focused: bool) {
+    fn emit_terminal_focus_sequence(&self, recipient: &TerminalFocusRecipient, focused: bool) {
+        let id = recipient.node_id;
         if !self.core.tree.is_valid(id) {
             return;
         }
@@ -218,7 +223,10 @@ impl<C: Component> AppRunner<C> {
         };
         // Only send focus events if the PTY application has requested them
         // via CSI ? 1004 h (ReportFocusInOut mode).
-        if !node.mouse_mode.focus_events_enabled {
+        // A replacement screen has a different input recipient. Never send the old child's
+        // focus-out through the new child's callback. Callbacks themselves are recreated by
+        // view(), so the live screen is the stable identity across ordinary reconciliations.
+        if node.screen != recipient.screen || !node.mouse_mode.focus_events_enabled {
             return;
         }
         let Some(cb) = node.on_input.as_ref() else {

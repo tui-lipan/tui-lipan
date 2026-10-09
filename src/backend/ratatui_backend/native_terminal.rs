@@ -66,6 +66,8 @@ fn pop_keyboard_on_exit(policy: SurfaceTerminalPolicy, keyboard_enhancement: boo
 /// [`Stdout`], also keeps a dropped frame's tail from waiting in `Stdout`'s own
 /// buffer for the next writer to flush it.
 pub(crate) struct FrameOutput {
+    #[cfg(test)]
+    test_buffer: Option<Vec<u8>>,
     #[cfg(unix)]
     terminal: Option<std::os::fd::OwnedFd>,
     #[cfg(not(unix))]
@@ -75,6 +77,8 @@ pub(crate) struct FrameOutput {
 impl FrameOutput {
     pub(crate) fn new() -> Self {
         Self {
+            #[cfg(test)]
+            test_buffer: None,
             #[cfg(unix)]
             terminal: open_stdout_terminal_nonblocking(),
             #[cfg(not(unix))]
@@ -132,6 +136,11 @@ fn open_stdout_terminal_nonblocking() -> Option<std::os::fd::OwnedFd> {
 
 impl Write for FrameOutput {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        #[cfg(test)]
+        if let Some(buffer) = &mut self.test_buffer {
+            buffer.extend_from_slice(buf);
+            return Ok(buf.len());
+        }
         cfg_select! {
             unix => {
                 use std::os::fd::AsRawFd;
@@ -167,6 +176,10 @@ impl Write for FrameOutput {
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        #[cfg(test)]
+        if self.test_buffer.is_some() {
+            return Ok(());
+        }
         cfg_select! {
             unix => Ok(()),
             _ => self.stdout.flush(),
@@ -302,6 +315,25 @@ impl<W: io::Write> Backend for HostBackend<W> {
 
 fn buffered_stdout() -> TerminalWriter {
     BufWriter::with_capacity(TERMINAL_BUFFER_CAPACITY, FrameOutput::new())
+}
+
+/// Exercise the production renderer without reading or writing the host terminal.
+#[cfg(all(test, feature = "terminal"))]
+pub(crate) fn create_test_terminal(width: u16, height: u16) -> io::Result<Terminal> {
+    let output = FrameOutput {
+        test_buffer: Some(Vec::new()),
+        #[cfg(unix)]
+        terminal: None,
+        #[cfg(not(unix))]
+        stdout: io::stdout(),
+    };
+    let backend = HostBackend::new(BufWriter::new(output));
+    ratatui::Terminal::with_options(
+        backend,
+        TerminalOptions {
+            viewport: Viewport::Fixed(ratatui::layout::Rect::new(0, 0, width, height)),
+        },
+    )
 }
 
 pub(crate) fn create_inline_terminal(height: u16) -> io::Result<Terminal> {

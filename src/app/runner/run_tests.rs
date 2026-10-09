@@ -10214,3 +10214,239 @@ fn key_capture_records_a_framework_chord_prefix_before_the_chord_claims_it() {
         &[ctrl_char('x'), key(KeyCode::Char('b'))]
     );
 }
+
+#[cfg(feature = "terminal")]
+#[derive(Clone)]
+struct TerminalFocusReportSmoke {
+    views: Rc<Cell<usize>>,
+    screens: [Rc<RefCell<crate::widgets::TerminalScreen>>; 2],
+    reports: Rc<RefCell<Vec<(usize, crate::widgets::TerminalInputKind)>>>,
+}
+
+#[cfg(feature = "terminal")]
+impl Component for TerminalFocusReportSmoke {
+    type Message = ();
+    type Properties = ();
+    type State = ();
+
+    fn create_state(&self, _: &()) -> Self::State {}
+
+    fn update(&mut self, _: (), _: &mut Context<Self>) -> Update {
+        Update::none()
+    }
+
+    fn view(&self, _: &Context<Self>) -> Element {
+        self.views.set(self.views.get() + 1);
+        VStack::new()
+            .children(self.screens.iter().enumerate().map(|(index, screen)| {
+                let reports = self.reports.clone();
+                Terminal::new()
+                    .screen(crate::widgets::TerminalScreenHandle::new(screen.clone()))
+                    .on_input(Callback::new(
+                        move |event: crate::widgets::TerminalInputEvent| {
+                            reports.borrow_mut().push((index, event.kind));
+                        },
+                    ))
+                    .key(format!("terminal-{index}"))
+            }))
+            .into()
+    }
+}
+
+/// A session replay can enable reports after focus was assigned. Refreshing the live screen
+/// must announce that focus once, without requiring a click or rebuilding the widget tree.
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_focus_reports_follow_live_mode_and_window_changes() {
+    use crate::widgets::{
+        TerminalInputKind::{FocusIn, FocusOut},
+        TerminalScreen,
+    };
+
+    let screens = std::array::from_fn(|_| Rc::new(RefCell::new(TerminalScreen::new(4, 20, 10))));
+    let reports = Rc::new(RefCell::new(Vec::new()));
+    let component = TerminalFocusReportSmoke {
+        views: Rc::new(Cell::new(0)),
+        screens: screens.clone(),
+        reports: reports.clone(),
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component.clone(), ());
+    init_runner(
+        &mut runner,
+        component,
+        Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 8,
+        },
+    );
+    let first = node_id_by_key(&runner.core.tree, "terminal-0");
+    let second = node_id_by_key(&runner.core.tree, "terminal-1");
+    runner.focus.focused = Some(first);
+    runner.emit_terminal_focus_change();
+    assert!(reports.borrow().is_empty());
+
+    let refresh = |runner: &mut AppRunner<TerminalFocusReportSmoke>| {
+        runner.core.tree.refresh_live_terminals_detailed();
+        runner.emit_terminal_focus_change();
+    };
+    screens[0].borrow_mut().process_bytes(b"\x1b[?1004h");
+    refresh(&mut runner);
+    assert_eq!(*reports.borrow(), vec![(0, FocusIn)]);
+    refresh(&mut runner);
+    assert_eq!(
+        reports.borrow().len(),
+        1,
+        "ordinary output must not repeat focus-in"
+    );
+
+    screens[1].borrow_mut().process_bytes(b"\x1b[?1004h");
+    refresh(&mut runner);
+    assert_eq!(
+        reports.borrow().len(),
+        1,
+        "background panes must not receive focus-in"
+    );
+    runner.focus.focused = Some(second);
+    refresh(&mut runner);
+    assert_eq!(
+        *reports.borrow(),
+        vec![(0, FocusIn), (0, FocusOut), (1, FocusIn)]
+    );
+
+    runner.focus.window_focused = false;
+    refresh(&mut runner);
+    runner.focus.window_focused = true;
+    refresh(&mut runner);
+    assert_eq!(&reports.borrow()[3..], &[(1, FocusOut), (1, FocusIn)]);
+
+    screens[1].borrow_mut().process_bytes(b"\x1b[?1004l");
+    refresh(&mut runner);
+    assert_eq!(
+        reports.borrow().len(),
+        5,
+        "disabled reporting must stay silent"
+    );
+    screens[1].borrow_mut().process_bytes(b"\x1b[?1004h");
+    refresh(&mut runner);
+    assert_eq!(reports.borrow().last(), Some(&(1, FocusIn)));
+}
+
+/// Exercise both production paint entry points. Neither should need reconciliation for a
+/// reporting-mode change in an already-focused live screen.
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_focus_reports_sync_in_ordinary_and_terminal_only_paints() {
+    use crate::widgets::{TerminalInputKind::FocusIn, TerminalScreen};
+
+    for terminal_only in [false, true] {
+        let screens =
+            std::array::from_fn(|_| Rc::new(RefCell::new(TerminalScreen::new(4, 20, 10))));
+        let reports = Rc::new(RefCell::new(Vec::new()));
+        let views = Rc::new(Cell::new(0));
+        let component = TerminalFocusReportSmoke {
+            views: views.clone(),
+            screens: screens.clone(),
+            reports: reports.clone(),
+        };
+        let mut runner = AppRunner::new(App::new().mouse(false), component.clone(), ());
+        let viewport = Rect {
+            x: 0,
+            y: 0,
+            w: 20,
+            h: 8,
+        };
+        init_runner(&mut runner, component, viewport);
+        let focused = node_id_by_key(&runner.core.tree, "terminal-0");
+        runner.focus.focused = Some(focused);
+        let mut terminal = crate::backend::ratatui_backend::create_test_terminal(20, 8)
+            .expect("in-memory terminal");
+        let paint = |runner: &mut AppRunner<TerminalFocusReportSmoke>,
+                     terminal: &mut crate::backend::ratatui_backend::Terminal| {
+            if terminal_only {
+                runner.render_terminal_paint_only(terminal)
+            } else {
+                runner.render_paint_only(terminal)
+            }
+            .expect("paint terminal");
+        };
+        paint(&mut runner, &mut terminal);
+        assert!(reports.borrow().is_empty());
+        let view_count = views.get();
+        screens[0].borrow_mut().process_bytes(b"\x1b[?1004h");
+        paint(&mut runner, &mut terminal);
+        assert_eq!(
+            *reports.borrow(),
+            vec![(0, FocusIn)],
+            "terminal_only={terminal_only}"
+        );
+        screens[0].borrow_mut().process_bytes(b"output");
+        paint(&mut runner, &mut terminal);
+        assert_eq!(reports.borrow().len(), 1);
+        assert_eq!(
+            views.get(),
+            view_count,
+            "paint must not rebuild the component tree"
+        );
+        assert_eq!(runner.focus.focused, Some(focused));
+        assert_eq!(node_id_by_key(&runner.core.tree, "terminal-0"), focused);
+    }
+}
+
+/// Reconciliation preserves a keyed node but can replace its screen and input callback. The
+/// replacement child needs focus-in; it must not receive the previous child's focus-out.
+#[cfg(feature = "terminal")]
+#[test]
+fn terminal_focus_reports_follow_a_replaced_live_recipient() {
+    use crate::widgets::{TerminalInputKind::FocusIn, TerminalScreen};
+
+    let screens = std::array::from_fn(|_| Rc::new(RefCell::new(TerminalScreen::new(4, 20, 10))));
+    screens[0].borrow_mut().process_bytes(b"\x1b[?1004h");
+    let old_reports = Rc::new(RefCell::new(Vec::new()));
+    let component = TerminalFocusReportSmoke {
+        views: Rc::new(Cell::new(0)),
+        screens,
+        reports: old_reports.clone(),
+    };
+    let mut runner = AppRunner::new(App::new().mouse(false), component.clone(), ());
+    let viewport = Rect {
+        x: 0,
+        y: 0,
+        w: 20,
+        h: 8,
+    };
+    init_runner(&mut runner, component, viewport);
+    let focused = node_id_by_key(&runner.core.tree, "terminal-0");
+    runner.focus.focused = Some(focused);
+    let mut terminal =
+        crate::backend::ratatui_backend::create_test_terminal(20, 8).expect("in-memory terminal");
+    runner
+        .render_paint_only(&mut terminal)
+        .expect("initial paint");
+    assert_eq!(*old_reports.borrow(), vec![(0, FocusIn)]);
+
+    let replacement = Rc::new(RefCell::new(TerminalScreen::new(4, 20, 10)));
+    replacement.borrow_mut().process_bytes(b"\x1b[?1004h");
+    let new_reports = Rc::new(RefCell::new(Vec::new()));
+    runner.core.component.screens[0] = replacement;
+    runner.core.component.reports = new_reports.clone();
+    runner
+        .core
+        .render_element(viewport, Some(focused), None, None);
+    assert_eq!(node_id_by_key(&runner.core.tree, "terminal-0"), focused);
+    runner
+        .render_paint_only(&mut terminal)
+        .expect("replacement paint");
+    assert_eq!(*new_reports.borrow(), vec![(0, FocusIn)]);
+    assert_eq!(*old_reports.borrow(), vec![(0, FocusIn)]);
+
+    // view() recreates callbacks on every pass. That alone must not announce focus again.
+    runner
+        .core
+        .render_element(viewport, Some(focused), None, None);
+    runner
+        .render_paint_only(&mut terminal)
+        .expect("ordinary reconciliation paint");
+    assert_eq!(new_reports.borrow().len(), 1);
+}
