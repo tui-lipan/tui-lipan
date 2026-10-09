@@ -464,6 +464,14 @@ pub(crate) struct DiffLineRangeDragState {
     pub start: crate::widgets::DiffLineClickEvent,
 }
 
+/// A keyed terminal node can be rebound to another live child without moving focus.
+#[cfg(feature = "terminal")]
+#[derive(Clone, PartialEq)]
+pub(crate) struct TerminalFocusRecipient {
+    pub node_id: NodeId,
+    pub screen: Option<crate::widgets::TerminalScreenHandle>,
+}
+
 pub(crate) struct FocusState {
     pub policy: FocusPolicy,
     pub focused: Option<NodeId>,
@@ -475,7 +483,7 @@ pub(crate) struct FocusState {
     pub last_notified: Option<NotifiedFocus>,
     pub window_focused: bool,
     #[cfg(feature = "terminal")]
-    pub last_emitted_terminal_focus: Option<NodeId>,
+    pub last_emitted_terminal_focus: Option<TerminalFocusRecipient>,
 }
 
 impl FocusState {

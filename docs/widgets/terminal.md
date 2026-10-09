@@ -84,7 +84,9 @@ The low-level terminal viewport widget. Use when you need custom PTY handling, m
 When the child enables focus reporting with `CSI ? 1004 h`, `on_input` receives focus-in
 and focus-out events as keyboard or host-window focus changes. Enabling reporting while the
 terminal already holds focus sends one focus-in event, including when a live screen restores
-the mode during session replay. Paint-only updates also synchronize these reports.
+the mode during session replay. Replacing the live screen on a focused keyed widget also sends
+focus-in to the replacement child if it has reporting enabled. Recreating a callback for the
+same live screen does not repeat the report. Paint-only updates also synchronize these reports.
 
 | Prop | Type | Description |
 |------|------|-------------|
