@@ -50,7 +50,11 @@ keeps the last one it was given.
 Images placed at the cursor honor the `X`/`Y` pixel offsets within that cell. Natural-size images
 keep their pixel dimensions rather than stretching to fill the final cell. Overlapping images
 blend in pixel space before host placeholders are drawn, so a small patch preserves the rest of
-the cell. Unchanged regions reuse cached pixels and encodings. Captures use the same composition. Terminal `CapturedImage` values set `fill_cell_box` so changing
+the cell. Unchanged regions reuse cached pixels and encodings. Natural-size RGB and RGBA patches
+copy contiguous pixel rows; opaque RGBA rows use a bulk copy, while transparent rows retain
+source-over blending. Scaled images use the resampling path.
+
+Captures use the same composition. Terminal `CapturedImage` values set `fill_cell_box` so changing
 the screenshot font cannot open gaps between tiles. When constructing `CapturedImage` with a
 struct literal, add `fill_cell_box: false` for the previous aspect-preserving behavior;
 `CapturedImage::new` already uses that default.

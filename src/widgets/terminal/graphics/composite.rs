@@ -99,6 +99,9 @@ impl<'a> Layer<'a> {
         let top = self.y.max(origin.1);
         let right = (self.x + i64::from(self.width)).min(origin.0 + i64::from(canvas.width()));
         let bottom = (self.y + i64::from(self.height)).min(origin.1 + i64::from(canvas.height()));
+        if self.paint_unscaled(canvas, pixels, origin, (left, top, right, bottom)) {
+            return;
+        }
         for y in top..bottom {
             let sy = self.source.y
                 + ((y - self.y) as u64 * u64::from(self.source.height) / u64::from(self.height))
@@ -113,6 +116,51 @@ impl<'a> Layer<'a> {
                 blend_rgba(&mut dest.0, pixel.0);
             }
         }
+    }
+
+    /// Browser patches already match the terminal's pixel size. Copy contiguous rows instead of
+    /// dividing and dispatching through DynamicImage for each pixel.
+    fn paint_unscaled(
+        &self,
+        canvas: &mut RgbaImage,
+        pixels: &DynamicImage,
+        origin: (i64, i64),
+        bounds: (i64, i64, i64, i64),
+    ) -> bool {
+        if self.width != self.source.width || self.height != self.source.height {
+            return false;
+        }
+        let (left, top, right, bottom) = bounds;
+        if left >= right || top >= bottom {
+            return true;
+        }
+        let sx = u64::from(self.source.x) + (left - self.x) as u64;
+        let sy = u64::from(self.source.y) + (top - self.y) as u64;
+        let width = (right - left) as usize;
+        let height = (bottom - top) as usize;
+        if sx + width as u64 > u64::from(pixels.width())
+            || sy + height as u64 > u64::from(pixels.height())
+        {
+            return false;
+        }
+        let Some((source, channels)) = image_bytes(pixels) else {
+            return false;
+        };
+        let source_stride = pixels.width() as usize * channels;
+        let dest_stride = canvas.width() as usize * 4;
+        let source_start = sy as usize * source_stride + sx as usize * channels;
+        let dest_start = (top - origin.1) as usize * dest_stride + (left - origin.0) as usize * 4;
+        let dest = canvas.as_flat_samples_mut().samples;
+        for row in 0..height {
+            let src = source_start + row * source_stride;
+            let dst = dest_start + row * dest_stride;
+            paint_row(
+                &mut dest[dst..dst + width * 4],
+                &source[src..src + width * channels],
+                channels,
+            );
+        }
+        true
     }
 }
 
@@ -268,6 +316,43 @@ fn cell_overlap(a: &TerminalImagePlacement, b: &TerminalImagePlacement) -> bool 
         && b.row < a.row + i32::from(a.rows)
 }
 
+fn image_bytes(pixels: &DynamicImage) -> Option<(&[u8], usize)> {
+    match pixels {
+        DynamicImage::ImageRgba8(image) => Some((image.as_raw(), 4)),
+        DynamicImage::ImageRgb8(image) => Some((image.as_raw(), 3)),
+        _ => None,
+    }
+}
+
+fn paint_row(dest: &mut [u8], source: &[u8], channels: usize) {
+    if channels == 3 {
+        for (dest, source) in dest
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(source.as_chunks::<3>().0)
+        {
+            *dest = [source[0], source[1], source[2], 255];
+        }
+    } else if source
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|pixel| pixel[3] == 255)
+    {
+        dest.copy_from_slice(source);
+    } else {
+        for (dest, source) in dest
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(source.as_chunks::<4>().0)
+        {
+            blend_rgba(dest, *source);
+        }
+    }
+}
+
 // Integer source-over keeps an opaque background opaque, including after many tiny patches.
 fn blend_rgba(dest: &mut [u8; 4], source: [u8; 4]) {
     let alpha = u32::from(source[3]);
@@ -386,5 +471,90 @@ mod tests {
         let mut restored = TerminalScreen::new(16, 32, 0);
         restored.process_bytes(&screen.export_replay_bytes());
         assert_eq!(canvas(&mut screen).1, canvas(&mut restored).1);
+    }
+
+    fn reference_paint(layer: &Layer<'_>, canvas: &mut RgbaImage, origin: (i64, i64), scale: u32) {
+        let pixels = layer.placement.image.pixels().unwrap();
+        for (x, y, dest) in canvas.enumerate_pixels_mut() {
+            let sx = i64::from(x) + origin.0 - layer.x;
+            let sy = i64::from(y) + origin.1 - layer.y;
+            if sx >= 0 && sx < i64::from(layer.width) && sy >= 0 && sy < i64::from(layer.height) {
+                blend_rgba(
+                    &mut dest.0,
+                    pixels
+                        .get_pixel(
+                            (layer.source.x + sx as u32 / scale).min(pixels.width() - 1),
+                            (layer.source.y + sy as u32 / scale).min(pixels.height() - 1),
+                        )
+                        .0,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn row_copy_preserves_crops_clipping_and_mixed_alpha() {
+        let mut screen = TerminalScreen::new(16, 32, 0);
+        transmit(&mut screen, "i=1,z=0", 20, 15, [0, 0, 0, 255]);
+        let mut placement = screen.render_snapshot().images[0].clone();
+        for format in [0, 1, 2] {
+            let pixels = RgbaImage::from_fn(20, 15, |x, y| {
+                image::Rgba([
+                    x as u8 * 9,
+                    y as u8 * 13,
+                    70,
+                    [0, 128, 255][(y % 3) as usize],
+                ])
+            });
+            let pixels = DynamicImage::ImageRgba8(pixels);
+            let pixels = match format {
+                0 => pixels,
+                1 => DynamicImage::ImageRgb8(pixels.to_rgb8()),
+                _ => DynamicImage::ImageRgba16(pixels.to_rgba16()),
+            };
+            placement.image.source = ImageSource::Decoded(Arc::new(pixels));
+            for origin in [(-3, -5), (0, 0), (7, 6), (30, 30)] {
+                for source in [
+                    TerminalImageCrop {
+                        x: 0,
+                        y: 0,
+                        width: 20,
+                        height: 15,
+                    },
+                    TerminalImageCrop {
+                        x: 4,
+                        y: 3,
+                        width: 9,
+                        height: 8,
+                    },
+                    TerminalImageCrop {
+                        x: 17,
+                        y: 13,
+                        width: 9,
+                        height: 8,
+                    },
+                ] {
+                    for scale in [1, 2] {
+                        let layer = Layer {
+                            placement: &placement,
+                            source,
+                            x: 2,
+                            y: 1,
+                            width: source.width * scale,
+                            height: source.height * scale,
+                        };
+                        let mut actual =
+                            RgbaImage::from_pixel(12, 9, image::Rgba([30, 80, 90, 140]));
+                        let mut expected = actual.clone();
+                        reference_paint(&layer, &mut expected, origin, scale);
+                        layer.paint(&mut actual, origin);
+                        assert_eq!(
+                            actual, expected,
+                            "format={format}, scale={scale}, origin={origin:?}, crop={source:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
