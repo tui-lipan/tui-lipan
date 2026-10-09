@@ -412,6 +412,7 @@ pub(crate) fn handle_draggable_tab_bar_click_test_backend<C: Component>(
     backend: &mut TestBackend<C>,
     action: crate::app::input::mouse::DraggableTabBarAction,
     x: u16,
+    y: u16,
     dirty: bool,
 ) -> bool {
     if action.overflow_scroll_step != 0 {
@@ -509,6 +510,7 @@ pub(crate) fn handle_draggable_tab_bar_click_test_backend<C: Component>(
                     reorder_mode: action.reorder_mode,
                     threshold: action.drag_threshold,
                     start_x: x,
+                    start_y: y,
                     started: false,
                     preview_label,
                     preview_snapshot_anchor: None,

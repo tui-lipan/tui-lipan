@@ -193,6 +193,7 @@ pub(crate) trait MouseDispatchCtx<C: Component> {
         &mut self,
         action: crate::app::input::mouse::DraggableTabBarAction,
         x: u16,
+        y: u16,
         dirty: bool,
     ) -> bool;
     fn handle_splitter_click(
@@ -737,9 +738,10 @@ impl<C: Component> MouseDispatchCtx<C> for AppRunner<C> {
         &mut self,
         action: crate::app::input::mouse::DraggableTabBarAction,
         x: u16,
+        y: u16,
         dirty: bool,
     ) -> bool {
-        AppRunner::<C>::handle_draggable_tab_bar_click(self, action, x, dirty)
+        AppRunner::<C>::handle_draggable_tab_bar_click(self, action, x, y, dirty)
     }
 
     fn handle_splitter_click(
@@ -1272,9 +1274,10 @@ impl<C: Component> MouseDispatchCtx<C> for TestBackend<C> {
         &mut self,
         action: crate::app::input::mouse::DraggableTabBarAction,
         x: u16,
+        y: u16,
         dirty: bool,
     ) -> bool {
-        handle_draggable_tab_bar_click_test_backend(self, action, x, dirty)
+        handle_draggable_tab_bar_click_test_backend(self, action, x, y, dirty)
     }
 
     fn handle_splitter_click(

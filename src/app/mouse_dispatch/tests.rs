@@ -384,6 +384,7 @@ impl MouseDispatchCtx<MockComponent> for MockCtx {
         &mut self,
         _action: mouse::DraggableTabBarAction,
         _x: u16,
+        _y: u16,
         _dirty: bool,
     ) -> bool {
         false

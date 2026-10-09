@@ -873,3 +873,10 @@ Prefer removing nondeterminism over raising `tolerance`; a tolerance that hides
 a real change is worse than no baseline.
 
 ---
+
+## Tab drag benchmarks
+
+`cargo bench --bench tab_drop_target` measures repeated held-drag target lookup with zero,
+1,000, and 10,000 unrelated nodes, both with and without panel-body drop registration. It warms
+the rendered-tree cache and excludes setup and reconciliation from the timed loop. Use it to
+check that unrelated subtree size does not add registration-discovery work to each mouse move.
