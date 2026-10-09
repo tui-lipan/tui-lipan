@@ -1,0 +1,390 @@
+//! Resolve pixel placements into disjoint cell-aligned images before writing host placeholders.
+//!
+//! A placeholder replaces a whole cell. Sending overlapping patches independently would erase
+//! the earlier image even where the later patch covers only a few pixels of that cell. Small
+//! cached tiles preserve those pixels without composing or encoding the entire viewport on each
+//! update. The cache belongs to the source screen and retains only the current visible tiles.
+
+use std::collections::{BTreeMap, HashMap};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use image::{DynamicImage, GenericImageView, RgbaImage};
+
+use super::{
+    ImageSource, TerminalImage, TerminalImageCrop, TerminalImagePlacement, next_stream_namespace,
+};
+
+const TILE_COLS: i32 = 16;
+const TILE_ROWS: i32 = 8;
+
+pub(super) struct CompositionCache {
+    namespace: u64,
+    pub(super) tiles: HashMap<(i32, i32), TerminalImage>,
+}
+
+impl Default for CompositionCache {
+    fn default() -> Self {
+        Self {
+            namespace: next_stream_namespace(),
+            tiles: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Layer<'a> {
+    placement: &'a TerminalImagePlacement,
+    source: TerminalImageCrop,
+    // Destination in viewport pixels, before clipping.
+    x: i64,
+    y: i64,
+    width: u32,
+    height: u32,
+}
+
+impl<'a> Layer<'a> {
+    fn new(placement: &'a TerminalImagePlacement, cell: (u16, u16)) -> Self {
+        let image = &placement.image;
+        let source = placement.source_crop.unwrap_or(TerminalImageCrop {
+            x: 0,
+            y: 0,
+            width: image.width,
+            height: image.height,
+        });
+        let (offset, size) = image.geometry.map_or(
+            (
+                (0, 0),
+                (
+                    u32::from(placement.cols) * u32::from(cell.0),
+                    u32::from(placement.rows) * u32::from(cell.1),
+                ),
+            ),
+            |geometry| (geometry.offset, geometry.size),
+        );
+        Self {
+            placement,
+            source,
+            x: i64::from(placement.col) * i64::from(cell.0) + i64::from(offset.0),
+            y: i64::from(placement.row) * i64::from(cell.1) + i64::from(offset.1),
+            width: size.0,
+            height: size.1,
+        }
+    }
+
+    fn hash(&self, hasher: &mut impl Hasher) {
+        let p = self.placement;
+        (
+            p.image.stream_namespace,
+            p.image.source_hash,
+            p.image_id,
+            p.z,
+        )
+            .hash(hasher);
+        (self.x, self.y, self.width, self.height).hash(hasher);
+        (
+            self.source.x,
+            self.source.y,
+            self.source.width,
+            self.source.height,
+        )
+            .hash(hasher);
+    }
+
+    fn paint(&self, canvas: &mut RgbaImage, origin: (i64, i64)) {
+        let Some(pixels) = self.placement.image.pixels() else {
+            return;
+        };
+        let left = self.x.max(origin.0);
+        let top = self.y.max(origin.1);
+        let right = (self.x + i64::from(self.width)).min(origin.0 + i64::from(canvas.width()));
+        let bottom = (self.y + i64::from(self.height)).min(origin.1 + i64::from(canvas.height()));
+        for y in top..bottom {
+            let sy = self.source.y
+                + ((y - self.y) as u64 * u64::from(self.source.height) / u64::from(self.height))
+                    as u32;
+            for x in left..right {
+                let sx = self.source.x
+                    + ((x - self.x) as u64 * u64::from(self.source.width) / u64::from(self.width))
+                        as u32;
+                let pixel =
+                    pixels.get_pixel(sx.min(pixels.width() - 1), sy.min(pixels.height() - 1));
+                let dest = canvas.get_pixel_mut((x - origin.0) as u32, (y - origin.1) as u32);
+                blend_rgba(&mut dest.0, pixel.0);
+            }
+        }
+    }
+}
+
+/// Compose only changed tiles. Raw placement geometry remains in snapshots and replay state.
+pub(crate) fn composite_terminal_images(
+    placements: &[TerminalImagePlacement],
+    cols: u16,
+    rows: u16,
+) -> Vec<TerminalImagePlacement> {
+    let Some(first) = placements.first() else {
+        return Vec::new();
+    };
+    let Some(cache) = &first.image.composition else {
+        return placements.to_vec();
+    };
+    let Some(geometry) = first.image.geometry else {
+        return placements.to_vec();
+    };
+    let cell = geometry.cell;
+    if placements
+        .iter()
+        .all(|placement| cell_aligned(placement, cell))
+        && placements.iter().enumerate().all(|(index, placement)| {
+            placements[index + 1..]
+                .iter()
+                .all(|other| !cell_overlap(placement, other))
+        })
+    {
+        cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .tiles
+            .clear();
+        return placements.to_vec();
+    }
+    let mut layers: Vec<_> = placements.iter().map(|p| Layer::new(p, cell)).collect();
+    // Equal z values stack by image id, as specified by Kitty.
+    layers.sort_by_key(|layer| (layer.placement.z, layer.placement.image_id));
+    let buckets = tile_layers(&layers, (cols, rows), cell);
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut retained = HashMap::new();
+    let mut result = Vec::with_capacity(buckets.len());
+    for ((tx, ty), layers) in buckets {
+        let col = tx * TILE_COLS;
+        let row = ty * TILE_ROWS;
+        let width = (i32::from(cols) - col).min(TILE_COLS) as u16;
+        let height = (i32::from(rows) - row).min(TILE_ROWS) as u16;
+        let image = compose_tile(&cache, (tx, ty), &layers, cell, (width, height));
+        retained.insert((tx, ty), image.clone());
+        result.push(TerminalImagePlacement {
+            image_id: ((ty as u32) << 16) | tx as u32,
+            image,
+            row,
+            col,
+            rows: height,
+            cols: width,
+            z: layers.last().map_or(0, |layer| layer.placement.z),
+            source_crop: None,
+        });
+    }
+    cache.tiles = retained;
+    result
+}
+
+fn tile_layers<'a>(
+    layers: &'a [Layer<'a>],
+    viewport: (u16, u16),
+    cell: (u16, u16),
+) -> BTreeMap<(i32, i32), Vec<Layer<'a>>> {
+    let tile_w = i64::from(TILE_COLS) * i64::from(cell.0);
+    let tile_h = i64::from(TILE_ROWS) * i64::from(cell.1);
+    let mut buckets = BTreeMap::<_, Vec<_>>::new();
+    for layer in layers {
+        let left = layer.x.max(0);
+        let top = layer.y.max(0);
+        let right =
+            (layer.x + i64::from(layer.width)).min(i64::from(viewport.0) * i64::from(cell.0));
+        let bottom =
+            (layer.y + i64::from(layer.height)).min(i64::from(viewport.1) * i64::from(cell.1));
+        if left >= right || top >= bottom {
+            continue;
+        }
+        for ty in top / tile_h..=(bottom - 1) / tile_h {
+            for tx in left / tile_w..=(right - 1) / tile_w {
+                buckets
+                    .entry((tx as i32, ty as i32))
+                    .or_default()
+                    .push(*layer);
+            }
+        }
+    }
+    buckets
+}
+
+fn compose_tile(
+    cache: &CompositionCache,
+    tile: (i32, i32),
+    layers: &[Layer<'_>],
+    cell: (u16, u16),
+    cells: (u16, u16),
+) -> TerminalImage {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (cache.namespace, tile, cell, cells).hash(&mut hasher);
+    for layer in layers {
+        layer.hash(&mut hasher)
+    }
+    let source_hash = hasher.finish();
+    if let Some(image) = cache
+        .tiles
+        .get(&tile)
+        .filter(|image| image.source_hash == source_hash)
+    {
+        return image.clone();
+    }
+    let width = u32::from(cells.0) * u32::from(cell.0);
+    let height = u32::from(cells.1) * u32::from(cell.1);
+    let origin = (
+        i64::from(tile.0 * TILE_COLS) * i64::from(cell.0),
+        i64::from(tile.1 * TILE_ROWS) * i64::from(cell.1),
+    );
+    let mut pixels = RgbaImage::new(width, height);
+    for layer in layers {
+        layer.paint(&mut pixels, origin)
+    }
+    TerminalImage {
+        source: ImageSource::Decoded(Arc::new(DynamicImage::ImageRgba8(pixels))),
+        width,
+        height,
+        source_hash,
+        stream_namespace: cache.namespace,
+        geometry: None,
+        composition: None,
+    }
+}
+
+fn cell_aligned(placement: &TerminalImagePlacement, cell: (u16, u16)) -> bool {
+    placement.image.geometry.is_some_and(|geometry| {
+        geometry.offset == (0, 0)
+            && geometry.size
+                == (
+                    u32::from(placement.cols) * u32::from(cell.0),
+                    u32::from(placement.rows) * u32::from(cell.1),
+                )
+    })
+}
+
+fn cell_overlap(a: &TerminalImagePlacement, b: &TerminalImagePlacement) -> bool {
+    a.col < b.col + i32::from(b.cols)
+        && b.col < a.col + i32::from(a.cols)
+        && a.row < b.row + i32::from(b.rows)
+        && b.row < a.row + i32::from(a.rows)
+}
+
+// Integer source-over keeps an opaque background opaque, including after many tiny patches.
+fn blend_rgba(dest: &mut [u8; 4], source: [u8; 4]) {
+    let alpha = u32::from(source[3]);
+    if alpha == 0 {
+        return;
+    }
+    if alpha == 255 {
+        *dest = source;
+        return;
+    }
+    let background_alpha = u32::from(dest[3]) * (255 - alpha);
+    let combined = alpha * 255 + background_alpha;
+    for channel in 0..3 {
+        dest[channel] = ((u32::from(source[channel]) * alpha * 255
+            + u32::from(dest[channel]) * background_alpha
+            + combined / 2)
+            / combined) as u8;
+    }
+    dest[3] = ((combined + 127) / 255) as u8;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::widgets::{TerminalCellSize, TerminalScreen};
+    use base64::Engine as _;
+
+    fn transmit(screen: &mut TerminalScreen, keys: &str, width: u32, height: u32, color: [u8; 4]) {
+        let payload = base64::engine::general_purpose::STANDARD
+            .encode(color.repeat((width * height) as usize));
+        screen.process_bytes(
+            format!("\x1b_Ga=T,f=32,s={width},v={height},C=1,q=2,{keys};{payload}\x1b\\")
+                .as_bytes(),
+        );
+    }
+
+    fn canvas(screen: &mut TerminalScreen) -> (Vec<TerminalImagePlacement>, RgbaImage) {
+        let snapshot = screen.render_snapshot();
+        let images = composite_terminal_images(&snapshot.images, 32, 16);
+        let mut pixels = RgbaImage::new(320, 320);
+        for image in &images {
+            let source = image.image.pixels().unwrap();
+            image::imageops::overlay(
+                &mut pixels,
+                source.as_ref(),
+                i64::from(image.col) * 10,
+                i64::from(image.row) * 20,
+            );
+        }
+        (images, pixels)
+    }
+
+    #[test]
+    fn patches_preserve_cell_edges_offsets_alpha_and_the_unscaled_toolbar() {
+        let mut screen = TerminalScreen::new(16, 32, 0);
+        screen.set_cell_size(TerminalCellSize {
+            width: 10,
+            height: 20,
+        });
+        transmit(&mut screen, "i=1,z=0", 320, 320, [0, 0, 255, 255]);
+        transmit(&mut screen, "i=100000,z=1", 256, 51, [0, 255, 0, 255]);
+        screen.process_bytes(b"\x1b[3;2H");
+        transmit(&mut screen, "i=2,z=2,X=3,Y=15", 3, 2, [255, 0, 0, 128]);
+        let (_, pixels) = canvas(&mut screen);
+        assert_eq!(pixels.get_pixel(255, 50).0, [0, 255, 0, 255]);
+        assert_eq!(pixels.get_pixel(256, 50).0, [0, 0, 255, 255]);
+        assert_eq!(pixels.get_pixel(13, 54).0, [0, 0, 255, 255]);
+        assert_eq!(pixels.get_pixel(13, 55).0, [128, 0, 127, 255]);
+        assert_eq!(pixels.get_pixel(16, 55).0, [0, 0, 255, 255]);
+        screen.process_bytes(b"\x1b_Ga=d,d=I,i=2,q=2;\x1b\\");
+        assert_eq!(canvas(&mut screen).1.get_pixel(13, 55).0, [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn unchanged_tiles_reuse_pixels_and_only_the_changed_tile_is_rebuilt() {
+        let mut screen = TerminalScreen::new(16, 32, 0);
+        transmit(&mut screen, "i=1,z=0", 320, 320, [0, 0, 255, 255]);
+        transmit(&mut screen, "i=2,z=1,X=3,Y=5", 3, 2, [255, 0, 0, 255]);
+        let (before, _) = canvas(&mut screen);
+        let (same, _) = canvas(&mut screen);
+        for (a, b) in before.iter().zip(&same) {
+            assert!(Arc::ptr_eq(
+                a.image.pixels().unwrap(),
+                b.image.pixels().unwrap()
+            ));
+        }
+        transmit(&mut screen, "i=2,z=1,X=3,Y=5", 3, 2, [0, 255, 0, 255]);
+        let (after, pixels) = canvas(&mut screen);
+        assert_eq!(pixels.get_pixel(3, 5).0, [0, 255, 0, 255]);
+        let changed = before
+            .iter()
+            .zip(&after)
+            .filter(|(a, b)| !Arc::ptr_eq(a.image.pixels().unwrap(), b.image.pixels().unwrap()))
+            .count();
+        assert_eq!(changed, 1, "a small patch must not rebuild every tile");
+    }
+
+    #[test]
+    fn explicit_cell_bounds_preserve_the_source_aspect_ratio() {
+        let mut screen = TerminalScreen::new(16, 32, 0);
+        transmit(&mut screen, "i=1,z=0", 320, 320, [0, 0, 255, 255]);
+        transmit(&mut screen, "i=2,z=1,c=2,r=2", 10, 10, [255, 0, 0, 255]);
+        let (_, pixels) = canvas(&mut screen);
+        assert_eq!(pixels.get_pixel(19, 19).0, [255, 0, 0, 255]);
+        assert_eq!(pixels.get_pixel(19, 20).0, [0, 0, 255, 255]);
+        transmit(&mut screen, "i=2,z=1,c=2", 10, 10, [0, 255, 0, 255]);
+        assert_eq!(canvas(&mut screen).1.get_pixel(19, 20).0, [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn replay_preserves_natural_size_and_subcell_placement() {
+        let mut screen = TerminalScreen::new(16, 32, 0);
+        transmit(&mut screen, "i=1,z=0", 320, 320, [0, 0, 255, 255]);
+        screen.process_bytes(b"\x1b[8;16H");
+        transmit(&mut screen, "i=2,p=1,z=2,X=9,Y=19", 3, 2, [255, 0, 0, 255]);
+        let mut restored = TerminalScreen::new(16, 32, 0);
+        restored.process_bytes(&screen.export_replay_bytes());
+        assert_eq!(canvas(&mut screen).1, canvas(&mut restored).1);
+    }
+}

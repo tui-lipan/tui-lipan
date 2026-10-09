@@ -352,6 +352,7 @@ fn captured_images(
                 pixel_height,
                 rgba.into_raw().into(),
             );
+            image.fill_cell_box = true;
             image.visible.fill(false);
             image
         })

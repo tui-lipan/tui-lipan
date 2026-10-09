@@ -47,6 +47,14 @@ gap, because the child reserved a different number of rows than the pane drew.
 Pass the cell size to later resizes too, with `TerminalPty::resize_with_cell_size`; plain `resize`
 keeps the last one it was given.
 
+Images placed at the cursor honor the `X`/`Y` pixel offsets within that cell. Natural-size images
+keep their pixel dimensions rather than stretching to fill the final cell. Overlapping images
+blend in pixel space before host placeholders are drawn, so a small patch preserves the rest of
+the cell. Unchanged regions reuse cached pixels and encodings. Captures use the same composition. Terminal `CapturedImage` values set `fill_cell_box` so changing
+the screenshot font cannot open gaps between tiles. When constructing `CapturedImage` with a
+struct literal, add `fill_cell_box: false` for the previous aspect-preserving behavior;
+`CapturedImage::new` already uses that default.
+
 ## Where images live
 
 ### Two ways an image gets placed

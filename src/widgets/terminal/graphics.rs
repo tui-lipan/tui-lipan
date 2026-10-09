@@ -39,6 +39,10 @@
 //!
 //! [Kitty graphics protocol]: https://sw.kovidgoyal.net/kitty/graphics-protocol/
 
+mod composite;
+
+pub(crate) use composite::composite_terminal_images;
+
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -122,6 +126,16 @@ pub struct TerminalImage {
     height: u32,
     source_hash: u64,
     stream_namespace: u64,
+    geometry: Option<ImageGeometry>,
+    composition: Option<Arc<std::sync::Mutex<composite::CompositionCache>>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ImageGeometry {
+    offset: (u32, u32),
+    size: (u32, u32),
+    cell: (u16, u16),
+    requested_cells: (u32, u32),
 }
 
 /// Everything [`decode_payload`] needs, kept so the decode can happen later.
@@ -194,7 +208,7 @@ impl TerminalImage {
 impl PartialEq for TerminalImage {
     /// Same payload, same image: contents are immutable once decoded.
     fn eq(&self, other: &Self) -> bool {
-        self.source_hash == other.source_hash
+        self.source_hash == other.source_hash && self.geometry == other.geometry
     }
 }
 
@@ -539,6 +553,9 @@ pub(super) struct GraphicsCommand {
     src_y: u32,
     src_w: u32,
     src_h: u32,
+    /// `X` / `Y` - displacement within the cursor cell, in pixels.
+    pixel_x: u32,
+    pixel_y: u32,
     /// `c` / `r` - explicit cell size of the placement.
     cols: u32,
     rows: u32,
@@ -585,6 +602,8 @@ impl Default for GraphicsCommand {
             src_h: 0,
             cols: 0,
             rows: 0,
+            pixel_x: 0,
+            pixel_y: 0,
             z: 0,
             no_cursor_move: false,
             virtual_placement: false,
@@ -600,6 +619,16 @@ impl Default for GraphicsCommand {
 }
 
 impl GraphicsCommand {
+    pub(super) fn affects_images(&self) -> bool {
+        matches!(
+            self.action,
+            GraphicsAction::Transmit
+                | GraphicsAction::TransmitAndDisplay
+                | GraphicsAction::Display
+                | GraphicsAction::Delete
+        )
+    }
+
     fn parse(body: &[u8], decode_payload: bool) -> Option<Self> {
         let (control, payload) = match body.iter().position(|byte| *byte == b';') {
             Some(at) => (&body[..at], &body[at + 1..]),
@@ -670,6 +699,8 @@ impl GraphicsCommand {
             b'y' => self.src_y = text.parse().unwrap_or(0),
             b'w' => self.src_w = text.parse().unwrap_or(0),
             b'h' => self.src_h = text.parse().unwrap_or(0),
+            b'X' => self.pixel_x = text.parse().unwrap_or(0),
+            b'Y' => self.pixel_y = text.parse().unwrap_or(0),
             b'c' => self.cols = text.parse().unwrap_or(0),
             b'r' => self.rows = text.parse().unwrap_or(0),
             b'z' => self.z = text.parse().unwrap_or(0),
@@ -1294,6 +1325,7 @@ struct Placement {
     cols: u16,
     z: i32,
     crop: Option<TerminalImageCrop>,
+    geometry: ImageGeometry,
     /// Placements made on the alternate screen die with it.
     alt_screen: bool,
 }
@@ -1353,6 +1385,7 @@ pub(super) struct TerminalGraphics {
     /// Counts transmissions that named their pixels rather than carrying them. See
     /// [`TerminalGraphics::named_source_identity`].
     source_serial: u64,
+    composition: Arc<std::sync::Mutex<composite::CompositionCache>>,
 }
 
 impl Default for TerminalGraphics {
@@ -1372,6 +1405,7 @@ impl Default for TerminalGraphics {
             storage_enabled: true,
             media: GraphicsMediaPolicy::default(),
             source_serial: 0,
+            composition: Arc::default(),
         }
     }
 }
@@ -1412,6 +1446,7 @@ impl TerminalGraphics {
         self.discarding_run = false;
         self.used_bytes = 0;
         self.source_serial = 0;
+        self.composition = Arc::default();
     }
 
     /// Drop every placement while keeping the images themselves.
@@ -1471,7 +1506,11 @@ impl TerminalGraphics {
                 }
                 Some(TerminalImagePlacement {
                     image_id: placement.image_id,
-                    image: self.images.get(&placement.image_id)?.image.clone(),
+                    image: {
+                        let mut image = self.images.get(&placement.image_id)?.image.clone();
+                        image.geometry = Some(placement.geometry);
+                        image
+                    },
                     row: row.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
                     col: i32::from(placement.col),
                     rows: placement.rows,
@@ -1481,7 +1520,7 @@ impl TerminalGraphics {
                 })
             })
             .collect();
-        visible.sort_by_key(|placement| placement.z);
+        visible.sort_by_key(|placement| (placement.z, placement.image_id));
         visible
     }
 
@@ -1530,7 +1569,19 @@ impl TerminalGraphics {
                 };
                 Some(TerminalImagePlacement {
                     image_id: rect.image_id,
-                    image: stored.image.clone(),
+                    image: {
+                        let mut image = stored.image.clone();
+                        image.geometry = Some(ImageGeometry {
+                            offset: (0, 0),
+                            size: (
+                                u32::from(rect.width) * u32::from(cell.width),
+                                u32::from(rect.height) * u32::from(cell.height),
+                            ),
+                            cell: (cell.width, cell.height),
+                            requested_cells: (u32::from(rect.width), u32::from(rect.height)),
+                        });
+                        image
+                    },
                     row: i32::from(rect.row),
                     col: i32::from(rect.col),
                     rows: rect.height,
@@ -1771,6 +1822,8 @@ impl TerminalGraphics {
                     height,
                     source_hash,
                     stream_namespace: self.stream_namespace,
+                    geometry: None,
+                    composition: Some(Arc::clone(&self.composition)),
                 };
                 (image, bytes)
             }
@@ -1791,6 +1844,8 @@ impl TerminalGraphics {
                     source: ImageSource::Decoded(Arc::new(decoded)),
                     source_hash,
                     stream_namespace: self.stream_namespace,
+                    geometry: None,
+                    composition: Some(Arc::clone(&self.composition)),
                 };
                 (image, bytes)
             }
@@ -1863,12 +1918,7 @@ impl TerminalGraphics {
         // image is meant to be - a frame drawn at twice the cell resolution is read as covering half
         // as many cells without it.
         if command.virtual_placement {
-            if command.cols != 0
-                && command.rows != 0
-                && let Some(stored) = self.images.get_mut(&id)
-            {
-                stored.virtual_cells = Some((command.cols, command.rows));
-            }
+            self.set_virtual_cells(id, command);
             return None;
         }
         if image_w == 0 || image_h == 0 {
@@ -1880,17 +1930,15 @@ impl TerminalGraphics {
             .map(|crop| (crop.width, crop.height))
             .unwrap_or((image_w, image_h));
 
-        // Cells the image occupies: what the client asked for, else what its pixels need.
-        let cols = match command.cols {
-            0 => src_w.div_ceil(u32::from(ctx.cell.width)),
-            cols => cols,
-        };
-        let rows = match command.rows {
-            0 => src_h.div_ceil(u32::from(ctx.cell.height)),
-            rows => rows,
-        };
-        let cols = cols.clamp(1, u32::from(ctx.cols.max(1))) as u16;
-        let rows = rows.clamp(1, u32::from(u16::MAX)) as u16;
+        let geometry = placement_geometry(command, ctx, (src_w, src_h));
+        let cols = (geometry.size.0 + geometry.offset.0)
+            .div_ceil(u32::from(geometry.cell.0))
+            .max(geometry.requested_cells.0)
+            .clamp(1, u32::from(ctx.cols.max(1))) as u16;
+        let rows = (geometry.size.1 + geometry.offset.1)
+            .div_ceil(u32::from(geometry.cell.1))
+            .max(geometry.requested_cells.1)
+            .clamp(1, u32::from(u16::MAX)) as u16;
 
         if self.storage_enabled {
             // A second placement with the same ids replaces the first, as the protocol specifies.
@@ -1906,6 +1954,7 @@ impl TerminalGraphics {
                 cols,
                 z: command.z,
                 crop,
+                geometry,
                 alt_screen: ctx.alt_screen,
             });
             while self.placements.len() > MAX_PLACEMENTS {
@@ -1914,6 +1963,15 @@ impl TerminalGraphics {
         }
 
         (!command.no_cursor_move).then_some((rows, cols))
+    }
+
+    fn set_virtual_cells(&mut self, id: u32, command: &GraphicsCommand) {
+        if command.cols != 0
+            && command.rows != 0
+            && let Some(stored) = self.images.get_mut(&id)
+        {
+            stored.virtual_cells = Some((command.cols, command.rows));
+        }
     }
 
     fn delete(&mut self, command: &GraphicsCommand, ctx: GraphicsContext) {
@@ -2015,6 +2073,13 @@ impl TerminalGraphics {
         self.image_dimensions.remove(&id);
         self.numbers.retain(|_, mapped| *mapped != id);
         self.placements.retain(|placement| placement.image_id != id);
+        if self.images.is_empty() {
+            self.composition
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .tiles
+                .clear();
+        }
     }
 
     /// Write the retained image definitions before a replay repaints either grid.
@@ -2120,9 +2185,16 @@ impl TerminalGraphics {
             }
             write!(
                 writer,
-                ",c={},r={},z={},C=1,q=2;\x1b\\\r",
-                placement.cols, placement.rows, placement.z
+                ",X={},Y={}",
+                placement.geometry.offset.0, placement.geometry.offset.1
             )?;
+            if placement.geometry.requested_cells.0 != 0 {
+                write!(writer, ",c={}", placement.geometry.requested_cells.0)?;
+            }
+            if placement.geometry.requested_cells.1 != 0 {
+                write!(writer, ",r={}", placement.geometry.requested_cells.1)?;
+            }
+            write!(writer, ",z={},C=1,q=2;\x1b\\\r", placement.z)?;
         }
         Ok(())
     }
@@ -2513,6 +2585,45 @@ fn report(command: &GraphicsCommand, id: u32, result: Result<(), &str>) -> Optio
     let body = result.err().unwrap_or("OK");
     let _ = write!(response, ";{body}\x1b\\");
     Some(response.into_bytes())
+}
+
+fn placement_geometry(
+    command: &GraphicsCommand,
+    ctx: GraphicsContext,
+    source: (u32, u32),
+) -> ImageGeometry {
+    let cell = (ctx.cell.width.max(1), ctx.cell.height.max(1));
+    let requested_cells = (
+        command.cols.min(u32::from(ctx.cols.max(1))),
+        command.rows.min(u32::from(u16::MAX)),
+    );
+    let offset = (
+        command.pixel_x.min(u32::from(cell.0) - 1),
+        command.pixel_y.min(u32::from(cell.1) - 1),
+    );
+    let size = if requested_cells == (0, 0) {
+        source
+    } else {
+        let bounds = (
+            if requested_cells.0 == 0 {
+                u32::MAX
+            } else {
+                requested_cells.0 * u32::from(cell.0) - offset.0
+            },
+            if requested_cells.1 == 0 {
+                u32::MAX
+            } else {
+                requested_cells.1 * u32::from(cell.1) - offset.1
+            },
+        );
+        crate::capture::fitted_pixel_size(source, bounds)
+    };
+    ImageGeometry {
+        offset,
+        size,
+        cell,
+        requested_cells,
+    }
 }
 
 #[cfg(test)]

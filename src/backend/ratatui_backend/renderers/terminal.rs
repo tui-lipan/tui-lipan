@@ -94,7 +94,9 @@ fn render_terminal_images(
     let clip_right = clip_left + i32::from(effective.width);
     let clip_bottom = clip_top + i32::from(effective.height);
 
-    for placement in node.images.iter() {
+    let images =
+        crate::widgets::composite_terminal_images(&node.images, content_rect.w, content_rect.h);
+    for placement in &images {
         let left = i32::from(content_rect.x) + placement.col;
         let top = i32::from(content_rect.y) + placement.row;
         let cols = i32::from(placement.cols);

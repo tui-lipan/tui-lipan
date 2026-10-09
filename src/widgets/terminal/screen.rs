@@ -1471,6 +1471,11 @@ impl TerminalScreen {
             cell: self.cell_size,
             cols: self.cols,
         };
+        if command.affects_images() {
+            // Image-only updates and deleting the last placement still need a paint even when
+            // the VT grid and cursor stay unchanged. Text snapshot damage remains independent.
+            self.damage.mark_full();
+        }
         let outcome = self.graphics.apply(command, ctx);
         if let Some(response) = outcome.response {
             self.listener.responses.borrow_mut().push(response);
@@ -2279,7 +2284,12 @@ impl TerminalScreen {
         let cols = i32::from(self.cols);
         let rows = i32::from(self.rows);
         let mut images: Vec<crate::capture::CapturedImage> = Vec::new();
-        for placement in self.visible_images(display_offset, alt_screen) {
+        let placements = super::graphics::composite_terminal_images(
+            &self.visible_images(display_offset, alt_screen),
+            self.cols,
+            self.rows,
+        );
+        for placement in placements {
             let (left, top) = (placement.col, placement.row);
             let (placed_cols, placed_rows) = (i32::from(placement.cols), i32::from(placement.rows));
             if placed_cols <= 0 || placed_rows <= 0 {
@@ -2316,7 +2326,7 @@ impl TerminalScreen {
                 .crop_imm(crop.x, crop.y, crop.width, crop.height)
                 .to_rgba8();
             let (pixel_width, pixel_height) = rgba.dimensions();
-            let image = crate::capture::CapturedImage::new(
+            let mut image = crate::capture::CapturedImage::new(
                 Rect {
                     x: vis_left as i16,
                     y: vis_top as i16,
@@ -2327,6 +2337,7 @@ impl TerminalScreen {
                 pixel_height,
                 rgba.into_raw().into(),
             );
+            image.fill_cell_box = true;
             for earlier in &mut images {
                 for y in image.area.y..image.area.y + image.area.h as i16 {
                     for x in image.area.x..image.area.x + image.area.w as i16 {

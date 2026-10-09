@@ -43,6 +43,9 @@ pub struct CapturedImage {
     /// Cells the image is laid out over, in frame coordinates. The pixels are scaled to fit
     /// inside, keeping their aspect ratio, from the top-left corner, as a terminal draws them.
     pub area: Rect,
+    /// Fill the cell box even when the capture font has a different pixel aspect ratio.
+    /// Terminal image tiles use this to preserve their exact cell coverage.
+    pub fill_cell_box: bool,
     /// Width of [`Self::rgba`] in pixels.
     pub width: u32,
     /// Height of [`Self::rgba`] in pixels.
@@ -72,6 +75,7 @@ impl CapturedImage {
         );
         Self {
             area,
+            fill_cell_box: false,
             width,
             height,
             rgba,
@@ -109,6 +113,12 @@ impl CapturedImage {
         allow(dead_code)
     )]
     pub(crate) fn fitted_size(&self, cell_w: u32, cell_h: u32) -> (u32, u32) {
+        if self.fill_cell_box {
+            return (
+                u32::from(self.area.w) * cell_w,
+                u32::from(self.area.h) * cell_h,
+            );
+        }
         fitted_pixel_size(
             (self.width, self.height),
             (
@@ -255,6 +265,15 @@ mod tests {
         assert_eq!(wide.fitted_size(10, 20), (40, 20));
         let tall = image(area(0, 0, 4, 1), 10, 40, |_, _| [0, 0, 0, 255]);
         assert_eq!(tall.fitted_size(10, 20), (5, 20));
+    }
+
+    #[test]
+    fn terminal_tiles_cover_the_same_cells_with_a_different_capture_font() {
+        let mut tile = image(area(0, 0, 16, 8), 224, 256, |_, _| [0, 0, 255, 255]);
+        assert_eq!(tile.fitted_size(8, 16), (112, 128));
+        tile.fill_cell_box = true;
+        assert_eq!(tile.fitted_size(8, 16), (128, 128));
+        assert_eq!(tile.fitted_size(14, 32), (224, 256));
     }
 
     #[test]
