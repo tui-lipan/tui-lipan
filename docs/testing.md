@@ -207,6 +207,7 @@ assert_eq!(frame.height, 10);
 | `to_ansi_text()` | `String` | Static ANSI document: SGR only, full-width rows, each ending in a reset and a newline |
 | `to_ansi_diff(prev)` | `String` | Incremental ANSI update from a previous frame |
 | `to_png(&PngOptions)` | `Result<Vec<u8>>` | PNG bytes with font-backed or bitmap rendering (`ui-snapshot-png`) |
+| `visible_image_underlays()` | `Vec<Vec<Option<CapturedCell>>>` | PNG-required original cells, one row-major array per image (`ui-snapshot-png`) |
 
 `CapturedFrame::images` holds the pixel images drawn with the cells, such as a terminal pane's Kitty
 graphics. Each `CapturedImage` has its RGBA pixels, the `area` it covers, `z_index`, and per-cell
@@ -215,6 +216,11 @@ images keep contributing layers visible. Image cells carry a `▀` half-block st
 above negative-z images keeps its glyphs. `underlying_cells` preserves the original glyphs and
 styles for `to_png()`, which draws negative planes beneath glyph pixels and other images above
 them. `CapturedImage::new()` defaults to `z_index = 0`; frame captures fill the cell metadata.
+Serializers can use `visible_image_underlays()` to omit fully occluded text while preserving PNG
+replay. It uses the renderer's glyph spans, private-use icon room, image stack, and final cursor
+layer. Non-block cursors keep anonymous whitespace with the original span and styles when only
+those affect the output. Aspect-fitted images conservatively keep underlays because font changes
+can uncover text. Image pixel buffers are unchanged; this method does not redact pixel content.
 `CapturedImage::to_png()` encodes one image's own pixels, at their own size and with alpha, for a
 serializer that carries images beside the cells (`ui-snapshot-png`). See
 [terminal-images.md](widgets/terminal-images.md#captures).
