@@ -66,8 +66,12 @@ fn pop_keyboard_on_exit(policy: SurfaceTerminalPolicy, keyboard_enhancement: boo
 /// [`Stdout`], also keeps a dropped frame's tail from waiting in `Stdout`'s own
 /// buffer for the next writer to flush it.
 pub(crate) struct FrameOutput {
+    // Successful writes discarded by job control still invalidate the frame's handoffs.
+    dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     #[cfg(test)]
-    test_buffer: Option<Vec<u8>>,
+    test_buffer: Option<std::sync::Arc<std::sync::Mutex<Vec<u8>>>>,
+    #[cfg(test)]
+    test_job_control: bool,
     #[cfg(unix)]
     terminal: Option<std::os::fd::OwnedFd>,
     #[cfg(not(unix))]
@@ -77,8 +81,11 @@ pub(crate) struct FrameOutput {
 impl FrameOutput {
     pub(crate) fn new() -> Self {
         Self {
+            dropped: Default::default(),
             #[cfg(test)]
             test_buffer: None,
+            #[cfg(test)]
+            test_job_control: false,
             #[cfg(unix)]
             terminal: open_stdout_terminal_nonblocking(),
             #[cfg(not(unix))]
@@ -138,7 +145,19 @@ impl Write for FrameOutput {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         #[cfg(test)]
         if let Some(buffer) = &mut self.test_buffer {
-            buffer.extend_from_slice(buf);
+            let mut buffer = buffer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !self.test_job_control {
+                buffer.extend_from_slice(buf);
+                return Ok(buf.len());
+            }
+            if !crate::app::job_control::frame_write(false, || {
+                buffer.extend_from_slice(buf);
+                true
+            }) {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
             return Ok(buf.len());
         }
         cfg_select! {
@@ -157,7 +176,10 @@ impl Write for FrameOutput {
                         Some(usize::try_from(written).map_err(|_| io::Error::last_os_error()))
                     });
                     let err = match written {
-                        None => return Ok(buf.len()),
+                        None => {
+                            self.dropped.fetch_add(1, Ordering::Relaxed);
+                            return Ok(buf.len());
+                        },
                         Some(Ok(written)) => return Ok(written),
                         Some(Err(err)) => err,
                     };
@@ -170,7 +192,13 @@ impl Write for FrameOutput {
             }
             _ => {
                 let stdout = &mut self.stdout;
-                crate::app::job_control::frame_write(Ok(buf.len()), || stdout.write(buf))
+                match crate::app::job_control::frame_write(None, || Some(stdout.write(buf))) {
+                    Some(result) => result,
+                    None => {
+                        self.dropped.fetch_add(1, Ordering::Relaxed);
+                        Ok(buf.len())
+                    }
+                }
             }
         }
     }
@@ -212,29 +240,95 @@ pub(crate) type Terminal = ratatui::Terminal<HostBackend<TerminalWriter>>;
 /// How long a cursor position query waits for the terminal, as crossterm's own query does.
 const CURSOR_REPLY_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// The crossterm backend with its cursor position query read through [`host_input`].
+/// The crossterm backend with guarded graphics handoffs and cursor queries through [`host_input`].
 ///
 /// ratatui asks for the cursor whenever it places an inline viewport: on creation, on autoresize,
 /// and around `insert_before`. crossterm answers that by reading its own Unix event source, which
 /// spins forever if the terminal hangs up during the wait, and which would compete with the
-/// runner's reader for the reply. Everything else passes straight through.
+/// runner's reader for the reply. Graphics handoffs become final only after a successful flush
+/// without discarded frame output; ordinary placements are deleted on the following frame.
 ///
 /// [`host_input`]: super::host_input
-pub(crate) struct HostBackend<W: io::Write>(CrosstermBackend<W>);
+pub(crate) struct HostBackend<W: io::Write> {
+    backend: CrosstermBackend<W>,
+    #[cfg(all(test, feature = "terminal-images"))]
+    test_output: Option<std::sync::Arc<std::sync::Mutex<Vec<u8>>>>,
+    dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    #[cfg(feature = "terminal-images")]
+    placement_deletes: Vec<String>,
+    #[cfg(feature = "terminal-images")]
+    placement_retirement: Option<(usize, usize)>,
+    #[cfg(feature = "terminal-images")]
+    uploads: Vec<(std::sync::Arc<super::renderers::image::KittyUpload>, usize)>,
+}
 
 impl<W: io::Write> HostBackend<W> {
     pub(crate) fn new(writer: W) -> Self {
-        Self(CrosstermBackend::new(writer))
+        Self {
+            backend: CrosstermBackend::new(writer),
+            #[cfg(all(test, feature = "terminal-images"))]
+            test_output: None,
+            dropped: Default::default(),
+            #[cfg(feature = "terminal-images")]
+            uploads: Vec::new(),
+            #[cfg(feature = "terminal-images")]
+            placement_deletes: Vec::new(),
+            #[cfg(feature = "terminal-images")]
+            placement_retirement: None,
+        }
+    }
+
+    fn flush_frame(&mut self) -> io::Result<()> {
+        let result = io::Write::flush(&mut self.backend);
+        #[cfg(feature = "terminal-images")]
+        if result.is_ok()
+            && let Some((retired, epoch)) = self.placement_retirement.take()
+            && epoch == self.dropped.load(Ordering::Relaxed)
+        {
+            self.placement_deletes.drain(..retired);
+        }
+        #[cfg(feature = "terminal-images")]
+        for (upload, epoch) in self.uploads.drain(..) {
+            if result.is_ok() && epoch == self.dropped.load(Ordering::Relaxed) {
+                upload.handed_over();
+            }
+        }
+        result
+    }
+}
+
+impl HostBackend<TerminalWriter> {
+    #[cfg(all(test, feature = "terminal-images"))]
+    pub(crate) fn test_output(&self) -> Vec<u8> {
+        self.test_output
+            .as_ref()
+            .expect("test output")
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn buffered(writer: TerminalWriter) -> Self {
+        let dropped = std::sync::Arc::clone(&writer.get_ref().dropped);
+        #[cfg(all(test, feature = "terminal-images"))]
+        let test_output = writer.get_ref().test_buffer.clone();
+        let mut backend = Self::new(writer);
+        #[cfg(all(test, feature = "terminal-images"))]
+        {
+            backend.test_output = test_output;
+        }
+        backend.dropped = dropped;
+        backend
     }
 }
 
 impl<W: io::Write> io::Write for HostBackend<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.write(buf)
+        self.backend.write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        io::Write::flush(&mut self.0)
+        self.flush_frame()
     }
 }
 
@@ -247,43 +341,49 @@ impl<W: io::Write> Backend for HostBackend<W> {
     {
         #[cfg(feature = "terminal-images")]
         {
-            use super::renderers::image::{has_pending_kitty_uploads, prepare_kitty_cells};
-            if !has_pending_kitty_uploads() {
-                return self.0.draw(content);
+            use super::renderers::image::{kitty_draw_pending, prepare_kitty_cells};
+            let epoch = self.dropped.load(Ordering::Relaxed);
+            self.placement_retirement = None;
+            for delete in &self.placement_deletes {
+                self.backend.write_all(delete.as_bytes())?;
+            }
+            self.placement_retirement = Some((self.placement_deletes.len(), epoch));
+            if !kitty_draw_pending() {
+                return self.backend.draw(content);
             }
             let prepared = prepare_kitty_cells(content);
-            self.0.draw(
+            self.placement_deletes.extend(prepared.placement_deletes);
+            self.backend.draw(
                 prepared
                     .cells
                     .iter()
                     .map(|(x, y, cell)| (*x, *y, cell.as_ref())),
             )?;
-            // The final diff was accepted by the writer. Keep file/shared-memory handoffs alive
-            // from this point, including when the frame remains buffered until flush.
-            for upload in prepared.uploads {
-                upload.handed_over();
-            }
+            // Draw may only fill BufWriter. Acknowledge after flush, provided FrameOutput
+            // has not discarded any part of this frame during terminal release.
+            self.uploads
+                .extend(prepared.uploads.into_iter().map(|upload| (upload, epoch)));
             Ok(())
         }
         #[cfg(not(feature = "terminal-images"))]
-        self.0.draw(content)
+        self.backend.draw(content)
     }
 
     fn append_lines(&mut self, n: u16) -> io::Result<()> {
-        self.0.append_lines(n)
+        self.backend.append_lines(n)
     }
 
     fn hide_cursor(&mut self) -> io::Result<()> {
-        self.0.hide_cursor()
+        self.backend.hide_cursor()
     }
 
     fn show_cursor(&mut self) -> io::Result<()> {
-        self.0.show_cursor()
+        self.backend.show_cursor()
     }
 
     fn get_cursor_position(&mut self) -> io::Result<ratatui::layout::Position> {
         // Anything still buffered has to reach the terminal before it can say where the cursor is.
-        io::Write::flush(&mut self.0)?;
+        self.flush_frame()?;
         match super::host_input::cursor_position(CURSOR_REPLY_TIMEOUT)? {
             Some((x, y)) => Ok(ratatui::layout::Position { x, y }),
             None => Err(io::Error::other("the cursor position could not be read")),
@@ -294,27 +394,27 @@ impl<W: io::Write> Backend for HostBackend<W> {
         &mut self,
         position: P,
     ) -> io::Result<()> {
-        self.0.set_cursor_position(position)
+        self.backend.set_cursor_position(position)
     }
 
     fn clear(&mut self) -> io::Result<()> {
-        self.0.clear()
+        self.backend.clear()
     }
 
     fn clear_region(&mut self, clear_type: ratatui::backend::ClearType) -> io::Result<()> {
-        self.0.clear_region(clear_type)
+        self.backend.clear_region(clear_type)
     }
 
     fn size(&self) -> io::Result<ratatui::layout::Size> {
-        self.0.size()
+        self.backend.size()
     }
 
     fn window_size(&mut self) -> io::Result<ratatui::backend::WindowSize> {
-        self.0.window_size()
+        self.backend.window_size()
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        Backend::flush(&mut self.0)
+        self.flush_frame()
     }
 
     fn scroll_region_up(
@@ -322,7 +422,7 @@ impl<W: io::Write> Backend for HostBackend<W> {
         region: std::ops::Range<u16>,
         line_count: u16,
     ) -> io::Result<()> {
-        self.0.scroll_region_up(region, line_count)
+        self.backend.scroll_region_up(region, line_count)
     }
 
     fn scroll_region_down(
@@ -330,7 +430,7 @@ impl<W: io::Write> Backend for HostBackend<W> {
         region: std::ops::Range<u16>,
         line_count: u16,
     ) -> io::Result<()> {
-        self.0.scroll_region_down(region, line_count)
+        self.backend.scroll_region_down(region, line_count)
     }
 }
 
@@ -338,17 +438,40 @@ fn buffered_stdout() -> TerminalWriter {
     BufWriter::with_capacity(TERMINAL_BUFFER_CAPACITY, FrameOutput::new())
 }
 
+#[cfg(all(test, feature = "terminal-images"))]
+pub(crate) fn buffered_test_output() -> (
+    HostBackend<TerminalWriter>,
+    std::sync::MutexGuard<'static, ()>,
+) {
+    let state = crate::app::job_control::lock_test_terminal_state();
+    let backend = HostBackend::buffered(BufWriter::with_capacity(
+        TERMINAL_BUFFER_CAPACITY,
+        FrameOutput {
+            dropped: Default::default(),
+            test_buffer: Some(Default::default()),
+            test_job_control: true,
+            #[cfg(unix)]
+            terminal: None,
+            #[cfg(not(unix))]
+            stdout: io::stdout(),
+        },
+    ));
+    (backend, state)
+}
+
 /// Exercise the production renderer without reading or writing the host terminal.
 #[cfg(all(test, feature = "terminal"))]
 pub(crate) fn create_test_terminal(width: u16, height: u16) -> io::Result<Terminal> {
     let output = FrameOutput {
-        test_buffer: Some(Vec::new()),
+        dropped: Default::default(),
+        test_buffer: Some(Default::default()),
+        test_job_control: false,
         #[cfg(unix)]
         terminal: None,
         #[cfg(not(unix))]
         stdout: io::stdout(),
     };
-    let backend = HostBackend::new(BufWriter::new(output));
+    let backend = HostBackend::buffered(BufWriter::new(output));
     ratatui::Terminal::with_options(
         backend,
         TerminalOptions {
@@ -358,7 +481,7 @@ pub(crate) fn create_test_terminal(width: u16, height: u16) -> io::Result<Termin
 }
 
 pub(crate) fn create_inline_terminal(height: u16) -> io::Result<Terminal> {
-    let backend = HostBackend::new(buffered_stdout());
+    let backend = HostBackend::buffered(buffered_stdout());
     let options = TerminalOptions {
         viewport: Viewport::Inline(height.max(1)),
     };
@@ -634,7 +757,7 @@ impl TerminalGuard {
         drain_pending_terminal_responses();
 
         let terminal = if policy.uses_alternate_screen {
-            let backend = HostBackend::new(buffered_stdout());
+            let backend = HostBackend::buffered(buffered_stdout());
             match ratatui::Terminal::new(backend) {
                 Ok(terminal) => terminal,
                 Err(err) => {

@@ -1,4 +1,4 @@
-//! Resolve pixel placements into disjoint cell-aligned images before writing host placeholders.
+//! Resolve pixel placements into disjoint cell-aligned images within each exact z plane.
 //!
 //! A placeholder replaces a whole cell. Sending overlapping patches independently would erase
 //! the earlier image even where the later patch covers only a few pixels of that cell. Small
@@ -21,7 +21,7 @@ const TILE_ROWS: i32 = 8;
 pub(super) struct CompositionCache {
     namespace: u64,
     pub(super) alive: Arc<std::sync::atomic::AtomicBool>,
-    pub(super) tiles: HashMap<(i32, i32), TerminalImage>,
+    pub(super) tiles: HashMap<(i32, i32, i32), TerminalImage>,
 }
 
 impl Default for CompositionCache {
@@ -215,13 +215,13 @@ pub(crate) fn composite_terminal_images(
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut retained = HashMap::new();
     let mut result = Vec::with_capacity(buckets.len());
-    for ((tx, ty), layers) in buckets {
+    for ((z, tx, ty), layers) in buckets {
         let col = tx * TILE_COLS;
         let row = ty * TILE_ROWS;
         let width = (i32::from(cols) - col).min(TILE_COLS) as u16;
         let height = (i32::from(rows) - row).min(TILE_ROWS) as u16;
-        let image = compose_tile(&cache, (tx, ty), &layers, cell, (width, height));
-        retained.insert((tx, ty), image.clone());
+        let image = compose_tile(&cache, (z, tx, ty), &layers, cell, (width, height));
+        retained.insert((z, tx, ty), image.clone());
         result.push(TerminalImagePlacement {
             image_id: ((ty as u32) << 16) | tx as u32,
             image,
@@ -229,7 +229,7 @@ pub(crate) fn composite_terminal_images(
             col,
             rows: height,
             cols: width,
-            z: layers.last().map_or(0, |layer| layer.placement.z),
+            z,
             source_crop: None,
         });
     }
@@ -241,7 +241,7 @@ fn tile_layers<'a>(
     layers: &'a [Layer<'a>],
     viewport: (u16, u16),
     cell: (u16, u16),
-) -> BTreeMap<(i32, i32), Vec<Layer<'a>>> {
+) -> BTreeMap<(i32, i32, i32), Vec<Layer<'a>>> {
     let tile_w = i64::from(TILE_COLS) * i64::from(cell.0);
     let tile_h = i64::from(TILE_ROWS) * i64::from(cell.1);
     let mut buckets = BTreeMap::<_, Vec<_>>::new();
@@ -258,7 +258,7 @@ fn tile_layers<'a>(
         for ty in top / tile_h..=(bottom - 1) / tile_h {
             for tx in left / tile_w..=(right - 1) / tile_w {
                 buckets
-                    .entry((tx as i32, ty as i32))
+                    .entry((layer.placement.z, tx as i32, ty as i32))
                     .or_default()
                     .push(*layer);
             }
@@ -269,7 +269,7 @@ fn tile_layers<'a>(
 
 fn compose_tile(
     cache: &CompositionCache,
-    tile: (i32, i32),
+    tile: (i32, i32, i32),
     layers: &[Layer<'_>],
     cell: (u16, u16),
     cells: (u16, u16),
@@ -290,19 +290,21 @@ fn compose_tile(
     let width = u32::from(cells.0) * u32::from(cell.0);
     let height = u32::from(cells.1) * u32::from(cell.1);
     let origin = (
-        i64::from(tile.0 * TILE_COLS) * i64::from(cell.0),
-        i64::from(tile.1 * TILE_ROWS) * i64::from(cell.1),
+        i64::from(tile.1 * TILE_COLS) * i64::from(cell.0),
+        i64::from(tile.2 * TILE_ROWS) * i64::from(cell.1),
     );
     let mut pixels = RgbaImage::new(width, height);
     for layer in layers {
         layer.paint(&mut pixels, origin)
     }
+    let mut stream = std::collections::hash_map::DefaultHasher::new();
+    (cache.namespace, tile.0).hash(&mut stream);
     TerminalImage {
         source: ImageSource::Decoded(Arc::new(DynamicImage::ImageRgba8(pixels))),
         width,
         height,
         source_hash,
-        stream_namespace: cache.namespace,
+        stream_namespace: stream.finish(),
         geometry: None,
         composition: None,
     }
@@ -405,14 +407,83 @@ mod tests {
         let mut pixels = RgbaImage::new(320, 320);
         for image in &images {
             let source = image.image.pixels().unwrap();
-            image::imageops::overlay(
-                &mut pixels,
-                source.as_ref(),
-                i64::from(image.col) * 10,
-                i64::from(image.row) * 20,
-            );
+            for (x, y, pixel) in source.to_rgba8().enumerate_pixels() {
+                blend_rgba(
+                    &mut pixels
+                        .get_pixel_mut(x + image.col as u32 * 10, y + image.row as u32 * 20)
+                        .0,
+                    pixel.0,
+                );
+            }
         }
         (images, pixels)
+    }
+
+    #[test]
+    fn composition_preserves_exact_z_planes_across_text_and_cell_backgrounds() {
+        for z in [-1, i32::MIN / 2 - 1] {
+            let mut screen = TerminalScreen::new(16, 32, 0);
+            screen.process_bytes(b"\x1b[41mtext across the base\x1b[0m\r");
+            transmit(
+                &mut screen,
+                &format!("i=1,z={z}"),
+                320,
+                320,
+                [0, 0, 255, 255],
+            );
+            transmit(&mut screen, "i=2,z=1,X=3,Y=5", 3, 2, [255, 0, 0, 255]);
+            let snapshot = screen.render_snapshot();
+            let images = composite_terminal_images(&snapshot.images, 32, 16);
+            let base = images
+                .iter()
+                .find(|p| p.z == z && p.col == 0 && p.row == 0)
+                .unwrap();
+            let patch = images.iter().find(|p| p.z == 1).unwrap();
+            assert_eq!(
+                base.image.pixels().unwrap().get_pixel(3, 5).0,
+                [0, 0, 255, 255]
+            );
+            assert_eq!(
+                patch.image.pixels().unwrap().get_pixel(3, 5).0,
+                [255, 0, 0, 255]
+            );
+            assert_eq!(
+                patch.image.pixels().unwrap().get_pixel(0, 0).0,
+                [0, 0, 0, 0]
+            );
+            assert_ne!(base.image.stream_namespace, patch.image.stream_namespace);
+            assert!(images.iter().all(|p| p.z == z || p.z == 1));
+        }
+    }
+
+    #[test]
+    fn final_placement_removal_releases_composed_pixels_but_keeps_definitions() {
+        for reflow in [false, true] {
+            let mut screen = TerminalScreen::new(16, 32, 0);
+            screen.process_bytes(&[b'x'; 64]);
+            screen.process_bytes(b"\x1b[H");
+            transmit(&mut screen, "i=1,z=0", 320, 320, [0, 0, 255, 255]);
+            transmit(&mut screen, "i=2,z=0,X=3,Y=5", 3, 2, [255, 0, 0, 255]);
+            let (images, _) = canvas(&mut screen);
+            let pixels: Vec<_> = images
+                .iter()
+                .map(|p| Arc::downgrade(p.image.pixels().unwrap()))
+                .collect();
+            drop(images);
+            assert!(pixels.iter().all(|p| p.upgrade().is_some()));
+            if reflow {
+                screen.resize(16, 33);
+            } else {
+                screen.process_bytes(b"\x1b_Ga=d,d=a,q=2;\x1b\\");
+            }
+            assert!(pixels.iter().all(|p| p.upgrade().is_none()));
+            assert!(screen.render_snapshot().images.is_empty());
+            screen.process_bytes(b"\x1b_Ga=p,i=1,q=2;\x1b\\");
+            assert!(
+                !screen.render_snapshot().images.is_empty(),
+                "lowercase delete/reflow keeps stored images"
+            );
+        }
     }
 
     #[test]

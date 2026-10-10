@@ -71,7 +71,7 @@ fn clip_spans_no_ellipsis<'a>(
     out
 }
 
-/// Paint the child program's images over the text that was just drawn.
+/// Paint the child program's image z planes after drawing its text.
 ///
 /// A placement carries the rect it would occupy in full, even when most of that rect is off the
 /// pane, so the pixels are cropped to what is actually visible rather than squashed into it. That
@@ -100,6 +100,12 @@ fn render_terminal_images(
         .and_then(|image| image.image.image_lifetime());
     let images =
         crate::widgets::composite_terminal_images(&node.images, content_rect.w, content_rect.h);
+    let render = crate::backend::ratatui_backend::renderers::image::TerminalImageRender {
+        alive: lifetime,
+        use_placements: images
+            .first()
+            .is_some_and(|first| first.z < 0 || images.iter().any(|p| p.z != first.z)),
+    };
     for placement in &images {
         let left = i32::from(content_rect.x) + placement.col;
         let top = i32::from(content_rect.y) + placement.row;
@@ -153,7 +159,7 @@ fn render_terminal_images(
                 placement.image.source_hash(),
                 full_crop,
             ),
-            lifetime.clone(),
+            render.clone(),
         ) {
             continue;
         }
@@ -198,7 +204,7 @@ fn render_terminal_images(
                 crop,
             ),
             placement.z,
-            lifetime.clone(),
+            render.clone(),
             || {
                 if whole {
                     Arc::clone(pixels)

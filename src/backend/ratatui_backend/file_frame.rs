@@ -20,13 +20,22 @@ struct Reservation(usize);
 
 impl Reservation {
     fn new(bytes: usize) -> io::Result<Self> {
-        SNAPSHOT_BYTES
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
-                used.checked_add(bytes)
-                    .filter(|sum| *sum <= SNAPSHOT_BUDGET)
-            })
-            .map(|_| Self(bytes))
-            .map_err(|_| io::Error::other("terminal frame file budget exceeded"))
+        let mut used = SNAPSHOT_BYTES.load(Ordering::Acquire);
+        loop {
+            let next = used
+                .checked_add(bytes)
+                .filter(|sum| *sum <= SNAPSHOT_BUDGET)
+                .ok_or_else(|| io::Error::other("terminal frame file budget exceeded"))?;
+            match SNAPSHOT_BYTES.compare_exchange_weak(
+                used,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Ok(Self(bytes)),
+                Err(actual) => used = actual,
+            }
+        }
     }
 }
 

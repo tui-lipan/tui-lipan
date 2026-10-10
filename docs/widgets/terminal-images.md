@@ -49,8 +49,12 @@ keeps the last one it was given.
 
 Images placed at the cursor honor the `X`/`Y` pixel offsets within that cell. Natural-size images
 keep their pixel dimensions rather than stretching to fill the final cell. Overlapping images
-blend in pixel space before host placeholders are drawn, so a small patch preserves the rest of
-the cell. Unchanged regions reuse cached pixels and encodings. Natural-size RGB and RGBA patches
+blend in pixel space within each exact z plane, so a small patch preserves the rest of the cell.
+On Kitty hosts, mixed-z and negative-z images use ordinary placements that leave text cells intact.
+Negative z values remain below text; values below `INT32_MIN/2` also remain below non-default cell
+backgrounds. The backend deletes these placements before drawing the next frame, including when
+the pane disappears. Single-plane images at non-negative z use Unicode placeholders.
+Unchanged regions reuse cached pixels and encodings. Natural-size RGB and RGBA patches
 copy contiguous pixel rows; opaque RGBA rows use a bulk copy, while transparent rows retain
 source-over blending. Scaled images use the resampling path.
 
@@ -205,14 +209,14 @@ land between cells still need composition, and therefore need decoded pixels on 
 client. File snapshots reduce heap allocations, but their pages still use the filesystem cache.
 Compare total memory and frame pacing as well as application RSS when evaluating this mode.
 
-Kitty uploads remain pending until the native backend writes their escape sequence in the final
-cell diff. An offscreen capture, clipped frame or startup effect cannot consume the upload.
+Kitty uploads remain pending until the native backend flushes their escape sequence from the final
+cell diff without failed or discarded output. An offscreen capture, clipped frame or startup effect cannot consume the upload.
 If an effect removes its original cell, the backend moves the upload before the first surviving
-placeholder row in the final diff. No placeholder for a new image reaches the host ahead of its
+image row in the final diff. No placeholder for a new image reaches the host ahead of its
 upload, and a relocated upload is sent only once.
 Uploads staged for a frame survive encoding-cache eviction through the backend write. A subsequent
 paint releases staging references from discarded frames. File and shared-memory handoff lifetimes
-begin at the write, so a static image can be presented after startup or client reattachment without
+begin after successful flush, so a static image can be presented after startup or client reattachment without
 requiring another frame from its producer.
 
 ### Out the other side, to the host

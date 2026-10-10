@@ -1513,12 +1513,14 @@ impl TerminalGraphics {
     /// anchored to no longer names the text it was drawn against, and no shift can correct it.
     pub(super) fn clear_placements(&mut self) {
         self.placements.clear();
+        self.clear_composed_tiles();
     }
 
     /// Drop placements made on the alternate screen, on the way back to the primary one.
     pub(super) fn clear_alt_screen(&mut self) -> bool {
         let before = self.placements.len();
         self.placements.retain(|placement| !placement.alt_screen);
+        self.clear_composed_tiles();
         before != self.placements.len()
     }
 
@@ -1534,6 +1536,7 @@ impl TerminalGraphics {
         // instead of vanishing whole.
         self.placements
             .retain(|placement| placement.line + usize::from(placement.rows) > evicted);
+        self.clear_composed_tiles();
         for placement in &mut self.placements {
             placement.line = placement.line.saturating_sub(evicted);
         }
@@ -2137,6 +2140,7 @@ impl TerminalGraphics {
             false
         });
 
+        self.clear_composed_tiles();
         if free_data {
             match selector {
                 // "Delete all" frees every stored image, placed or not.
@@ -2189,13 +2193,19 @@ impl TerminalGraphics {
         self.image_dimensions.remove(&id);
         self.numbers.retain(|_, mapped| *mapped != id);
         self.placements.retain(|placement| placement.image_id != id);
-        if self.images.is_empty() {
-            self.composition
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .tiles
-                .clear();
+        self.clear_composed_tiles();
+    }
+
+    // With no placements left, no render can reach the composition cache to clear it.
+    fn clear_composed_tiles(&self) {
+        if !self.placements.is_empty() {
+            return;
         }
+        self.composition
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .tiles
+            .clear();
     }
 
     /// Write the retained image definitions before a replay repaints either grid.

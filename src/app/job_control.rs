@@ -645,12 +645,36 @@ fn set_disposition(
     }
 }
 
+#[cfg(all(test, feature = "terminal-images"))]
+pub(crate) fn lock_test_terminal_state() -> std::sync::MutexGuard<'static, ()> {
+    tests::STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+// The buffered test output holds lock_test_terminal_state for its whole test.
+#[cfg(all(test, feature = "terminal-images"))]
+pub(crate) fn with_released_terminal(
+    _state: &std::sync::MutexGuard<'static, ()>,
+    test: impl FnOnce(),
+) {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TERMINAL_RELEASED.store(false, Ordering::SeqCst);
+        }
+    }
+    let _restore = Restore;
+    TERMINAL_RELEASED.store(true, Ordering::SeqCst);
+    test();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// Held by tests that change the module's process-wide state.
-    static STATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    pub(super) static STATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn requests_are_taken_once_and_cleared_by_the_guard() {

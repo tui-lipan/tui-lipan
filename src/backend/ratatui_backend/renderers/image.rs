@@ -756,6 +756,9 @@ impl EncodedProtocol {
 
 #[cfg(feature = "terminal-images")]
 struct CompressedKitty {
+    id: u32,
+    z_index: i32,
+    pixels: (u32, u32),
     upload: Arc<KittyUpload>,
     id_color: String,
     id_extra: u16,
@@ -817,6 +820,9 @@ impl CompressedKitty {
         let [id_extra, id_r, id_g, id_b] = id.to_be_bytes();
 
         Some(Self {
+            id,
+            z_index,
+            pixels: (width, height),
             upload: Arc::new(KittyUpload {
                 transmit: Mutex::new(Some(transmit)),
                 shared: Mutex::new(shared),
@@ -847,6 +853,9 @@ impl CompressedKitty {
         transmit.push_str("\x1b\\");
         let [id_extra, id_r, id_g, id_b] = id.to_be_bytes();
         Some(Self {
+            id,
+            z_index,
+            pixels: dimensions,
             upload: Arc::new(KittyUpload {
                 transmit: Mutex::new(Some(transmit)),
                 shared: Mutex::new(None),
@@ -963,6 +972,77 @@ impl CompressedKitty {
         }
     }
 
+    // Ordinary placements leave text cells intact and allow several exact z planes per cell.
+    fn render_placed(
+        &self,
+        f: &mut ratatui::Frame<'_>,
+        origin: (i32, i32),
+        clip: ratatui::layout::Rect,
+    ) {
+        let mut holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
+        holes.extend(super::image_effects::pending_image_occlusions());
+        let mut transmit = self.pending_transmission();
+        for y in clip.y..clip.bottom() {
+            for (left, right) in uncovered_x_spans(clip.x, clip.right(), y, &holes) {
+                self.place_row(f, origin, (left, right, y), &mut transmit);
+            }
+        }
+    }
+
+    fn place_row(
+        &self,
+        f: &mut ratatui::Frame<'_>,
+        origin: (i32, i32),
+        span: (u16, u16, u16),
+        transmit: &mut Option<String>,
+    ) {
+        let (left, right, y) = span;
+        let Some(cell) = f.buffer_mut().cell_mut((left, y)) else {
+            return;
+        };
+        let p = NEXT_KITTY_PLACEMENT.with(|next| {
+            let p = next.get().wrapping_add(1).max(1);
+            next.set(p);
+            p
+        });
+        let x = (i32::from(left) - origin.0) as u32;
+        let row = (i32::from(y) - origin.1) as u32;
+        let sx = x * self.pixels.0 / u32::from(self.size.width);
+        let sy = row * self.pixels.1 / u32::from(self.size.height);
+        let ex = (x + u32::from(right - left)) * self.pixels.0 / u32::from(self.size.width);
+        let ey = (row + 1) * self.pixels.1 / u32::from(self.size.height);
+        let command = format!(
+            "\x1b_Ga=p,q=2,i={},p={p},x={sx},y={sy},w={},h={},c={},r=1,z={},C=1;\x1b\\",
+            self.id,
+            ex - sx,
+            ey - sy,
+            right - left,
+            self.z_index
+        );
+        let delete = format!("\x1b_Ga=d,q=2,d=i,i={},p={p};\x1b\\", self.id);
+        PENDING_KITTY_PLACEMENTS.with(|pending| {
+            pending.borrow_mut().push(KittyPlacement {
+                command: command.clone(),
+                delete,
+                upload: Arc::clone(&self.upload),
+            })
+        });
+        let symbol = format!(
+            "{}\x1b[s{command}\x1b[u{}",
+            transmit.take().unwrap_or_default(),
+            cell.symbol()
+        );
+        let width = match cell.diff_option {
+            CellDiffOption::ForcedWidth(width) => width,
+            _ => {
+                NonZeroU16::new(unicode_width::UnicodeWidthStr::width(cell.symbol()).max(1) as u16)
+                    .expect("positive cell width")
+            }
+        };
+        cell.set_symbol(&symbol)
+            .set_diff_option(CellDiffOption::ForcedWidth(width));
+    }
+
     fn transmission_pending(&self) -> bool {
         self.upload
             .transmit
@@ -982,8 +1062,8 @@ impl CompressedKitty {
     }
 }
 
-/// An encode stays pending until its escape actually survives clipping/effects and reaches the
-/// native backend. Offscreen paints and frames discarded during startup cannot consume it.
+/// An encode stays pending until its escape survives clipping/effects and the native backend
+/// confirms a flush without failed or discarded output. Offscreen paints cannot consume it.
 #[cfg(feature = "terminal-images")]
 pub(crate) struct KittyUpload {
     transmit: Mutex<Option<String>>,
@@ -994,8 +1074,17 @@ pub(crate) struct KittyUpload {
 }
 
 #[cfg(feature = "terminal-images")]
+struct KittyPlacement {
+    command: String,
+    delete: String,
+    upload: Arc<KittyUpload>,
+}
+
+#[cfg(feature = "terminal-images")]
 thread_local! {
     static PENDING_KITTY_UPLOADS: RefCell<Vec<Arc<KittyUpload>>> = const { RefCell::new(Vec::new()) };
+    static PENDING_KITTY_PLACEMENTS: RefCell<Vec<KittyPlacement>> = const { RefCell::new(Vec::new()) };
+    static NEXT_KITTY_PLACEMENT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(feature = "terminal-images")]
@@ -1039,6 +1128,7 @@ impl KittyUpload {
 pub(crate) fn begin_kitty_frame() {
     if !capturing_images() {
         PENDING_KITTY_UPLOADS.with(|pending| pending.borrow_mut().clear());
+        PENDING_KITTY_PLACEMENTS.with(|pending| pending.borrow_mut().clear());
     }
 }
 
@@ -1066,8 +1156,9 @@ fn kitty_upload_in_symbol(symbol: &str) -> Option<Arc<KittyUpload>> {
 }
 
 #[cfg(feature = "terminal-images")]
-pub(crate) fn has_pending_kitty_uploads() -> bool {
+pub(crate) fn kitty_draw_pending() -> bool {
     PENDING_KITTY_UPLOADS.with(|pending| !pending.borrow().is_empty())
+        || PENDING_KITTY_PLACEMENTS.with(|pending| !pending.borrow().is_empty())
 }
 
 #[cfg(feature = "terminal-images")]
@@ -1092,6 +1183,42 @@ fn kitty_cell_with_upload<'a>(
     std::borrow::Cow::Owned(cell)
 }
 
+#[cfg(feature = "terminal-images")]
+fn prepare_placed_cell<'a>(
+    cell: &'a ratatui::buffer::Cell,
+    uploads: &mut Vec<Arc<KittyUpload>>,
+) -> std::borrow::Cow<'a, ratatui::buffer::Cell> {
+    let mut symbol = cell.symbol().to_owned();
+    PENDING_KITTY_PLACEMENTS.with(|pending| {
+        for placement in pending
+            .borrow()
+            .iter()
+            .filter(|p| cell.symbol().contains(&p.command))
+        {
+            let Ok(sequence) = placement.upload.transmit.lock() else {
+                continue;
+            };
+            let Some(sequence) = sequence.as_ref() else {
+                continue;
+            };
+            if uploads
+                .iter()
+                .any(|upload| Arc::ptr_eq(upload, &placement.upload))
+            {
+                symbol = symbol.replace(sequence, "");
+            } else {
+                if !symbol.contains(sequence) {
+                    symbol.insert_str(0, sequence);
+                }
+                uploads.push(Arc::clone(&placement.upload));
+            }
+        }
+    });
+    let mut cell = cell.clone();
+    cell.set_symbol(&symbol);
+    std::borrow::Cow::Owned(cell)
+}
+
 /// Place each upload before its first surviving row in the actual host diff. Effects can remove
 /// the cell where rendering originally put it while leaving other rows visible.
 #[cfg(feature = "terminal-images")]
@@ -1099,8 +1226,11 @@ pub(crate) fn prepare_kitty_cells<'a>(
     content: impl Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
 ) -> PreparedKittyDraw<'a> {
     let mut uploads = Vec::new();
-    let cells = content
+    let cells: Vec<_> = content
         .map(|(x, y, cell)| {
+            if cell.symbol().contains("\x1b_Ga=p,") {
+                return (x, y, prepare_placed_cell(cell, &mut uploads));
+            }
             let Some(upload) = kitty_upload_in_symbol(cell.symbol()) else {
                 return (x, y, std::borrow::Cow::Borrowed(cell));
             };
@@ -1112,11 +1242,28 @@ pub(crate) fn prepare_kitty_cells<'a>(
             (x, y, cell)
         })
         .collect();
-    PreparedKittyDraw { cells, uploads }
+    let placement_deletes = PENDING_KITTY_PLACEMENTS.with(|pending| {
+        pending
+            .borrow()
+            .iter()
+            .filter(|p| {
+                cells
+                    .iter()
+                    .any(|(_, _, cell)| cell.symbol().contains(&p.command))
+            })
+            .map(|p| p.delete.clone())
+            .collect()
+    });
+    PreparedKittyDraw {
+        cells,
+        uploads,
+        placement_deletes,
+    }
 }
 
 #[cfg(feature = "terminal-images")]
 pub(crate) struct PreparedKittyDraw<'a> {
+    pub(crate) placement_deletes: Vec<String>,
     pub(crate) cells: Vec<(u16, u16, std::borrow::Cow<'a, ratatui::buffer::Cell>)>,
     pub(crate) uploads: Vec<Arc<KittyUpload>>,
 }
@@ -2415,6 +2562,13 @@ fn resolve_protocol_async(
     encoder.resolve_miss(request, false)
 }
 
+#[cfg(feature = "terminal-images")]
+#[derive(Clone)]
+pub(crate) struct TerminalImageRender {
+    pub(crate) alive: Option<Arc<AtomicBool>>,
+    pub(crate) use_placements: bool,
+}
+
 /// Upload a cell-aligned immutable file without decoding or allocating host shared memory.
 #[cfg(feature = "terminal-images")]
 pub(crate) fn draw_file_terminal_image(
@@ -2424,7 +2578,7 @@ pub(crate) fn draw_file_terminal_image(
     area: ratatui::layout::Rect,
     stream_key: u64,
     source_hash: u64,
-    terminal_alive: Option<Arc<AtomicBool>>,
+    render: TerminalImageRender,
 ) -> bool {
     if capturing_images()
         || image_support::image_rendering_suspended()
@@ -2486,14 +2640,32 @@ pub(crate) fn draw_file_terminal_image(
             1024,
             CacheRetention::LatestOnly,
         );
-        inner.cache.mark_terminal_owner(&key, terminal_alive);
+        inner.cache.mark_terminal_owner(&key, render.alive);
         protocol
     };
     if let EncodedProtocol::CompressedKitty(protocol) = &*protocol {
-        protocol.render_clipped(f, origin, area);
+        if render.use_placements {
+            protocol.render_placed(f, origin, area);
+        } else {
+            protocol.render_clipped(f, origin, area);
+        }
         true
     } else {
         false
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+fn render_terminal_protocol(
+    protocol: &EncodedProtocol,
+    f: &mut ratatui::Frame<'_>,
+    area: ratatui::layout::Rect,
+    use_placements: bool,
+) {
+    if use_placements && let EncodedProtocol::CompressedKitty(protocol) = protocol {
+        protocol.render_placed(f, (i32::from(area.x), i32::from(area.y)), area);
+    } else {
+        protocol.render(f, area);
     }
 }
 
@@ -2519,7 +2691,7 @@ pub(crate) fn draw_encoded_image(
     stream_key: u64,
     source_hash: u64,
     z_index: i32,
-    terminal_alive: Option<Arc<AtomicBool>>,
+    render: TerminalImageRender,
     pixels: impl FnOnce() -> Arc<image::DynamicImage>,
 ) -> bool {
     if area.width == 0 || area.height == 0 {
@@ -2572,14 +2744,14 @@ pub(crate) fn draw_encoded_image(
 
     let encoder = async_encoder();
     if let Some(protocol) = encoder.cache_get(&key) {
-        protocol.render(f, area);
+        render_terminal_protocol(&protocol, f, area, render.use_placements);
         return true;
     }
 
     let mut request = EncodeRequest::new(stream_key, key, pixels(), CacheRetention::LatestOnly)
         .with_backdrop(backdrop)
         .filling_its_box();
-    request.terminal_alive = terminal_alive;
+    request.terminal_alive = render.alive;
 
     // A terminal application has already paced and decoded this frame. Native Kitty encoding is
     // fast enough to finish inside that paint, which avoids coupling visible frame cadence to the
@@ -2588,7 +2760,7 @@ pub(crate) fn draw_encoded_image(
     let synchronous = matches!(key.resolved_protocol, ImageProtocol::Kitty);
     match encoder.resolve_miss(request, synchronous) {
         ProtocolResolve::Ready(protocol) | ProtocolResolve::Stale(protocol) => {
-            protocol.render(f, area);
+            render_terminal_protocol(&protocol, f, area, render.use_placements);
             true
         }
         ProtocolResolve::Pending | ProtocolResolve::Unavailable => false,
@@ -2981,6 +3153,9 @@ mod tests {
     #[test]
     fn a_kitty_row_does_not_skip_cells_under_an_opaque_overlay() {
         let kitty = CompressedKitty {
+            id: 7,
+            z_index: 0,
+            pixels: (1, 1),
             upload: Arc::new(KittyUpload {
                 transmit: Mutex::new(None),
                 placeholder_prefix: String::new(),
@@ -3723,6 +3898,8 @@ mod tests {
             std::iter::once((0, 0, &terminal.backend().buffer()[(0, 0)])),
         )
         .unwrap();
+        assert!(encoded.transmission_pending());
+        ratatui::backend::Backend::flush(&mut host).unwrap();
         assert!(!encoded.transmission_pending());
         terminal
             .draw(|frame| encoded.render(frame, frame.area()))
@@ -3760,6 +3937,7 @@ mod tests {
                 (1..3).map(|y| (0, y, &terminal.backend().buffer()[(0, y)])),
             )
             .unwrap();
+            ratatui::backend::Backend::flush(&mut host).unwrap();
         }
         let output = String::from_utf8(output).unwrap();
         assert_eq!(output.matches("\x1b_G").count(), 1);
@@ -3787,7 +3965,7 @@ mod tests {
             .draw(|frame| encoded.render(frame, frame.area()))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        let PreparedKittyDraw { cells, uploads } =
+        let PreparedKittyDraw { cells, uploads, .. } =
             prepare_kitty_cells([(0, 1, &buffer[(0, 1)]), (0, 0, &buffer[(0, 0)])].into_iter());
         assert_eq!(uploads.len(), 1);
         assert!(cells[0].2.symbol().starts_with("\x1b_G"));
@@ -3821,6 +3999,8 @@ mod tests {
             std::iter::once((0, 0, &terminal.backend().buffer()[(0, 0)])),
         )
         .unwrap();
+        assert!(upload.upgrade().is_some());
+        ratatui::backend::Backend::flush(&mut host).unwrap();
         assert!(upload.upgrade().is_none());
     }
 
@@ -3841,6 +4021,168 @@ mod tests {
         assert!(upload.upgrade().is_some());
         begin_kitty_frame();
         assert!(upload.upgrade().is_none());
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn ordinary_kitty_planes_preserve_text_and_cleanup_on_the_next_frame() {
+        use ratatui::backend::Backend;
+        begin_kitty_frame();
+        let size = ratatui::layout::Size::new(1, 2);
+        let base = CompressedKitty::new(
+            &image::DynamicImage::new_rgba8(10, 40),
+            size,
+            7,
+            i32::MIN / 2 - 1,
+        )
+        .unwrap();
+        let patch =
+            CompressedKitty::new(&image::DynamicImage::new_rgba8(10, 40), size, 8, 1).unwrap();
+        let mut frame = ratatui::Terminal::new(ratatui::backend::TestBackend::new(1, 2)).unwrap();
+        frame
+            .draw(|f| {
+                f.buffer_mut()[(0, 0)]
+                    .set_symbol("t")
+                    .set_bg(ratatui::style::Color::Red);
+                base.render_placed(f, (0, 0), f.area());
+                patch.render_placed(f, (0, 0), f.area());
+            })
+            .unwrap();
+        let buffer = frame.backend().buffer();
+        assert!(buffer[(0, 0)].symbol().ends_with('t'));
+        assert_eq!(buffer[(0, 0)].bg, ratatui::style::Color::Red);
+        assert!(
+            !buffer[(0, 0)]
+                .symbol()
+                .contains(crate::widgets::KITTY_PLACEHOLDER)
+        );
+        let mut output = Vec::new();
+        {
+            let mut host =
+                crate::backend::ratatui_backend::native_terminal::HostBackend::new(&mut output);
+            // Row zero, including both initial uploads, was clipped away by a later effect.
+            Backend::draw(&mut host, std::iter::once((0, 1, &buffer[(0, 1)]))).unwrap();
+            Backend::flush(&mut host).unwrap();
+            assert!(!base.transmission_pending());
+            assert!(!patch.transmission_pending());
+            // The next frame removed the pane. Every surviving placement must be deleted.
+            Backend::draw(&mut host, std::iter::empty()).unwrap();
+            Backend::flush(&mut host).unwrap();
+        }
+        let output = String::from_utf8(output).unwrap();
+        assert_eq!(output.matches("a=T").count(), 2);
+        assert_eq!(output.matches("a=p,").count(), 2);
+        assert_eq!(output.matches("a=d,").count(), 2);
+        assert!(output.contains("z=-1073741825"));
+        assert!(output.contains("z=1,C=1"));
+        assert!(output.find("a=T").unwrap() < output.find("a=p,").unwrap());
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn discarded_placement_cleanup_is_retried_after_recovery() {
+        use ratatui::backend::Backend;
+        begin_kitty_frame();
+        let encoded = CompressedKitty::new(
+            &image::DynamicImage::new_rgba8(10, 20),
+            ratatui::layout::Size::new(1, 1),
+            7,
+            -1,
+        )
+        .unwrap();
+        let mut frame = ratatui::Terminal::new(ratatui::backend::TestBackend::new(1, 1)).unwrap();
+        frame
+            .draw(|f| encoded.render_placed(f, (0, 0), f.area()))
+            .unwrap();
+        let (mut host, _state) =
+            crate::backend::ratatui_backend::native_terminal::buffered_test_output();
+        Backend::draw(
+            &mut host,
+            std::iter::once((0, 0, &frame.backend().buffer()[(0, 0)])),
+        )
+        .unwrap();
+        Backend::flush(&mut host).unwrap();
+        let before = host.test_output().len();
+        Backend::draw(&mut host, std::iter::empty()).unwrap();
+        crate::app::job_control::with_released_terminal(&_state, || {
+            Backend::flush(&mut host).unwrap()
+        });
+        assert_eq!(host.test_output().len(), before);
+        Backend::draw(&mut host, std::iter::empty()).unwrap();
+        Backend::flush(&mut host).unwrap();
+        let output = host.test_output();
+        let cleanup = std::str::from_utf8(&output[before..]).unwrap();
+        assert_eq!(cleanup.matches("a=d,").count(), 1);
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn buffered_upload_survives_discarded_flush_and_retransmits_after_recovery() {
+        use ratatui::backend::Backend;
+        let encoded = CompressedKitty::new(
+            &image::DynamicImage::new_rgba8(1, 1),
+            ratatui::layout::Size::new(1, 1),
+            7,
+            0,
+        )
+        .unwrap();
+        let mut frame = ratatui::Terminal::new(ratatui::backend::TestBackend::new(1, 1)).unwrap();
+        frame.draw(|f| encoded.render(f, f.area())).unwrap();
+        let cell = &frame.backend().buffer()[(0, 0)];
+        let (mut host, _state) =
+            crate::backend::ratatui_backend::native_terminal::buffered_test_output();
+        Backend::draw(&mut host, std::iter::once((0, 0, cell))).unwrap();
+        assert!(
+            encoded.transmission_pending(),
+            "draw only fills the 64 KiB buffer"
+        );
+        assert!(host.test_output().is_empty());
+        crate::app::job_control::with_released_terminal(&_state, || {
+            Backend::flush(&mut host).unwrap()
+        });
+        assert!(
+            encoded.transmission_pending(),
+            "discarded successful write is not delivery"
+        );
+        assert!(host.test_output().is_empty());
+        Backend::draw(&mut host, std::iter::once((0, 0, cell))).unwrap();
+        assert!(encoded.transmission_pending());
+        Backend::flush(&mut host).unwrap();
+        assert!(!encoded.transmission_pending());
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn buffered_upload_survives_failed_flush() {
+        use ratatui::backend::Backend;
+        struct Reject;
+        impl std::io::Write for Reject {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("rejected flush"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let encoded = CompressedKitty::new(
+            &image::DynamicImage::new_rgba8(1, 1),
+            ratatui::layout::Size::new(1, 1),
+            7,
+            0,
+        )
+        .unwrap();
+        let mut frame = ratatui::Terminal::new(ratatui::backend::TestBackend::new(1, 1)).unwrap();
+        frame.draw(|f| encoded.render(f, f.area())).unwrap();
+        let mut host = crate::backend::ratatui_backend::native_terminal::HostBackend::new(
+            std::io::BufWriter::with_capacity(64 * 1024, Reject),
+        );
+        Backend::draw(
+            &mut host,
+            std::iter::once((0, 0, &frame.backend().buffer()[(0, 0)])),
+        )
+        .unwrap();
+        assert!(Backend::flush(&mut host).is_err());
+        assert!(encoded.transmission_pending());
     }
 
     #[cfg(feature = "terminal-images")]
@@ -3911,6 +4253,8 @@ mod tests {
             std::iter::once((0, 0, &old_frame.backend().buffer()[(0, 0)])),
         )
         .unwrap();
+        assert!(older.transmission_pending());
+        ratatui::backend::Backend::flush(&mut host).unwrap();
         assert!(!older.transmission_pending());
         assert!(newer.transmission_pending());
     }
