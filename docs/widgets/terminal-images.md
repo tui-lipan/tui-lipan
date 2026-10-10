@@ -207,6 +207,9 @@ Compare total memory and frame pacing as well as application RSS when evaluating
 
 Kitty uploads remain pending until the native backend writes their escape sequence in the final
 cell diff. An offscreen capture, clipped frame or startup effect cannot consume the upload.
+If an effect removes its original cell, the backend moves the upload before the first surviving
+placeholder row in the final diff. No placeholder for a new image reaches the host ahead of its
+upload, and a relocated upload is sent only once.
 Uploads staged for a frame survive encoding-cache eviction through the backend write. A subsequent
 paint releases staging references from discarded frames. File and shared-memory handoff lifetimes
 begin at the write, so a static image can be presented after startup or client reattachment without

@@ -247,15 +247,20 @@ impl<W: io::Write> Backend for HostBackend<W> {
     {
         #[cfg(feature = "terminal-images")]
         {
-            let mut uploads = Vec::new();
-            self.0.draw(content.inspect(|(_, _, cell)| {
-                uploads.extend(super::renderers::image::kitty_uploads_in_symbol(
-                    cell.symbol(),
-                ));
-            }))?;
+            use super::renderers::image::{has_pending_kitty_uploads, prepare_kitty_cells};
+            if !has_pending_kitty_uploads() {
+                return self.0.draw(content);
+            }
+            let prepared = prepare_kitty_cells(content);
+            self.0.draw(
+                prepared
+                    .cells
+                    .iter()
+                    .map(|(x, y, cell)| (*x, *y, cell.as_ref())),
+            )?;
             // The final diff was accepted by the writer. Keep file/shared-memory handoffs alive
             // from this point, including when the frame remains buffered until flush.
-            for upload in uploads {
+            for upload in prepared.uploads {
                 upload.handed_over();
             }
             Ok(())

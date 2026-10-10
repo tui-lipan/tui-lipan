@@ -821,6 +821,8 @@ impl CompressedKitty {
                 transmit: Mutex::new(Some(transmit)),
                 shared: Mutex::new(shared),
                 file: Mutex::new(None),
+                placeholder_prefix: format!("\x1b[s\x1b[38;2;{id_r};{id_g};{id_b}m\u{10EEEE}"),
+                id_extra: crate::widgets::kitty_diacritic(u16::from(id_extra)),
             }),
             id_color: format!("\x1b[38;2;{id_r};{id_g};{id_b}m"),
             id_extra: u16::from(id_extra),
@@ -849,6 +851,8 @@ impl CompressedKitty {
                 transmit: Mutex::new(Some(transmit)),
                 shared: Mutex::new(None),
                 file: Mutex::new(Some(file)),
+                placeholder_prefix: format!("\x1b[s\x1b[38;2;{id_r};{id_g};{id_b}m\u{10EEEE}"),
+                id_extra: crate::widgets::kitty_diacritic(u16::from(id_extra)),
             }),
             id_color: format!("\x1b[38;2;{id_r};{id_g};{id_b}m"),
             id_extra: u16::from(id_extra),
@@ -983,6 +987,8 @@ impl CompressedKitty {
 #[cfg(feature = "terminal-images")]
 pub(crate) struct KittyUpload {
     transmit: Mutex<Option<String>>,
+    placeholder_prefix: String,
+    id_extra: char,
     shared: Mutex<Option<SharedFrame>>,
     file: Mutex<Option<crate::backend::ratatui_backend::file_frame::HostFile>>,
 }
@@ -1036,20 +1042,83 @@ pub(crate) fn begin_kitty_frame() {
     }
 }
 
-/// Match exact payloads, not just host image IDs: successive stream frames reuse the same ID.
+/// Match exact payloads first because stream frames reuse IDs. A row whose original upload was
+/// clipped uses the latest upload staged for that image in this paint.
 #[cfg(feature = "terminal-images")]
-pub(crate) fn kitty_uploads_in_symbol(symbol: &str) -> Vec<Arc<KittyUpload>> {
-    if !symbol.starts_with("\x1b_G") {
-        return Vec::new();
+fn kitty_upload_in_symbol(symbol: &str) -> Option<Arc<KittyUpload>> {
+    if !symbol.starts_with("\x1b_G") && !symbol.starts_with("\x1b[s") {
+        return None;
     }
     PENDING_KITTY_UPLOADS.with(|pending| {
+        let pending = pending.borrow();
         pending
-            .borrow()
             .iter()
-            .filter(|upload| upload.starts_symbol(symbol))
+            .find(|upload| upload.starts_symbol(symbol))
+            .or_else(|| {
+                pending.iter().rev().find(|upload| {
+                    symbol
+                        .strip_prefix(&upload.placeholder_prefix)
+                        .is_some_and(|rest| rest.chars().nth(2) == Some(upload.id_extra))
+                })
+            })
             .cloned()
-            .collect()
     })
+}
+
+#[cfg(feature = "terminal-images")]
+pub(crate) fn has_pending_kitty_uploads() -> bool {
+    PENDING_KITTY_UPLOADS.with(|pending| !pending.borrow().is_empty())
+}
+
+#[cfg(feature = "terminal-images")]
+fn kitty_cell_with_upload<'a>(
+    cell: &'a ratatui::buffer::Cell,
+    upload: &KittyUpload,
+    already_sent: bool,
+) -> std::borrow::Cow<'a, ratatui::buffer::Cell> {
+    let Ok(sequence) = upload.transmit.lock() else {
+        return std::borrow::Cow::Borrowed(cell);
+    };
+    let Some(sequence) = sequence.as_ref() else {
+        return std::borrow::Cow::Borrowed(cell);
+    };
+    let symbol = match (already_sent, cell.symbol().strip_prefix(sequence)) {
+        (true, Some(rest)) => rest.to_owned(),
+        (false, None) => format!("{sequence}{}", cell.symbol()),
+        _ => return std::borrow::Cow::Borrowed(cell),
+    };
+    let mut cell = cell.clone();
+    cell.set_symbol(&symbol);
+    std::borrow::Cow::Owned(cell)
+}
+
+/// Place each upload before its first surviving row in the actual host diff. Effects can remove
+/// the cell where rendering originally put it while leaving other rows visible.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn prepare_kitty_cells<'a>(
+    content: impl Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
+) -> PreparedKittyDraw<'a> {
+    let mut uploads = Vec::new();
+    let cells = content
+        .map(|(x, y, cell)| {
+            let Some(upload) = kitty_upload_in_symbol(cell.symbol()) else {
+                return (x, y, std::borrow::Cow::Borrowed(cell));
+            };
+            let already_sent = uploads.iter().any(|entry| Arc::ptr_eq(entry, &upload));
+            let cell = kitty_cell_with_upload(cell, &upload, already_sent);
+            if !already_sent {
+                uploads.push(upload);
+            }
+            (x, y, cell)
+        })
+        .collect();
+    PreparedKittyDraw { cells, uploads }
+}
+
+#[cfg(feature = "terminal-images")]
+pub(crate) struct PreparedKittyDraw<'a> {
+    pub(crate) cells: Vec<(u16, u16, std::borrow::Cow<'a, ratatui::buffer::Cell>)>,
+    pub(crate) uploads: Vec<Arc<KittyUpload>>,
 }
 
 #[cfg(feature = "terminal-images")]
@@ -2914,6 +2983,8 @@ mod tests {
         let kitty = CompressedKitty {
             upload: Arc::new(KittyUpload {
                 transmit: Mutex::new(None),
+                placeholder_prefix: String::new(),
+                id_extra: crate::widgets::kitty_diacritic(0),
                 shared: Mutex::new(None),
                 file: Mutex::new(None),
             }),
@@ -3661,6 +3732,67 @@ mod tests {
                 .symbol()
                 .contains("\x1b_G")
         );
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn clipped_upload_moves_before_the_first_surviving_placeholder() {
+        begin_kitty_frame();
+        let encoded = CompressedKitty::new(
+            &image::DynamicImage::new_rgba8(1, 3),
+            ratatui::layout::Size::new(1, 3),
+            0x80ab_cdef,
+            0,
+        )
+        .unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(1, 3)).unwrap();
+        terminal
+            .draw(|frame| encoded.render(frame, frame.area()))
+            .unwrap();
+        let mut output = Vec::new();
+        {
+            let mut host =
+                crate::backend::ratatui_backend::native_terminal::HostBackend::new(&mut output);
+            // A startup effect removed row zero, including its original transmission.
+            ratatui::backend::Backend::draw(
+                &mut host,
+                (1..3).map(|y| (0, y, &terminal.backend().buffer()[(0, y)])),
+            )
+            .unwrap();
+        }
+        let output = String::from_utf8(output).unwrap();
+        assert_eq!(output.matches("\x1b_G").count(), 1);
+        assert!(
+            output.find("\x1b_G").unwrap()
+                < output.find(crate::widgets::KITTY_PLACEHOLDER).unwrap()
+        );
+        assert!(!encoded.transmission_pending());
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn a_relocated_upload_is_not_sent_again_at_its_original_cell() {
+        begin_kitty_frame();
+        let encoded = CompressedKitty::new(
+            &image::DynamicImage::new_rgba8(1, 2),
+            ratatui::layout::Size::new(1, 2),
+            7,
+            0,
+        )
+        .unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(1, 2)).unwrap();
+        terminal
+            .draw(|frame| encoded.render(frame, frame.area()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let PreparedKittyDraw { cells, uploads } =
+            prepare_kitty_cells([(0, 1, &buffer[(0, 1)]), (0, 0, &buffer[(0, 0)])].into_iter());
+        assert_eq!(uploads.len(), 1);
+        assert!(cells[0].2.symbol().starts_with("\x1b_G"));
+        assert!(!cells[1].2.symbol().contains("\x1b_G"));
+        begin_kitty_frame();
     }
 
     #[cfg(feature = "terminal-images")]
