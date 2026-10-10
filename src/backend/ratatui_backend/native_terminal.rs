@@ -351,7 +351,7 @@ impl<W: io::Write> Backend for HostBackend<W> {
             if !kitty_draw_pending() {
                 return self.backend.draw(content);
             }
-            let prepared = prepare_kitty_cells(content);
+            let prepared = prepare_kitty_cells(content)?;
             self.placement_deletes.extend(prepared.placement_deletes);
             self.backend.draw(
                 prepared

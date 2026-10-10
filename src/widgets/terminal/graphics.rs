@@ -56,7 +56,7 @@ use base64::alphabet;
 use base64::engine::DecodePaddingMode;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
-use image::DynamicImage;
+use image::{DynamicImage, GenericImageView};
 
 use super::graphics_media::{self, GraphicsMediaPolicy, GraphicsMedium};
 use super::screen::TerminalCellSize;
@@ -2751,6 +2751,31 @@ fn placement_geometry(
         cell,
         requested_cells,
     }
+}
+
+/// Capture visibility at cell granularity. Very low planes also sit behind cell backgrounds.
+pub(crate) fn image_covers_cell(z: i32, has_text: bool, has_background: bool) -> bool {
+    z >= 0 || (!has_text && (z >= i32::MIN / 2 || !has_background))
+}
+
+/// Transparent padding in a composed z-plane tile must not hide cells in lower planes.
+pub(crate) fn image_cell_has_pixels(
+    pixels: &DynamicImage,
+    cells: (u16, u16),
+    cell: (u16, u16),
+) -> bool {
+    if !pixels.color().has_alpha() {
+        return true;
+    }
+    let (width, height) = pixels.dimensions();
+    let bounds = |index: u16, length: u32, count: u16| {
+        let start = u64::from(index) * u64::from(length) / u64::from(count);
+        let end = ((u64::from(index) + 1) * u64::from(length)).div_ceil(u64::from(count));
+        (start as u32, end.min(u64::from(length)) as u32)
+    };
+    let (left, right) = bounds(cell.0, width, cells.0);
+    let (top, bottom) = bounds(cell.1, height, cells.1);
+    (top..bottom).any(|y| (left..right).any(|x| pixels.get_pixel(x, y).0[3] != 0))
 }
 
 #[cfg(test)]

@@ -210,7 +210,10 @@ client. File snapshots reduce heap allocations, but their pages still use the fi
 Compare total memory and frame pacing as well as application RSS when evaluating this mode.
 
 Kitty uploads remain pending until the native backend flushes their escape sequence from the final
-cell diff without failed or discarded output. An offscreen capture, clipped frame or startup effect cannot consume the upload.
+cell diff without failed or discarded output. If buffering sends a temporary-file or shared-memory
+name before a later write fails or is discarded, the retry creates a fresh name from retained
+immutable pixels. The terminal consuming the first name cannot invalidate the retry.
+An offscreen capture, clipped frame or startup effect cannot consume the upload.
 If an effect removes its original cell, the backend moves the upload before the first surviving
 image row in the final diff. No placeholder for a new image reaches the host ahead of its
 upload, and a relocated upload is sent only once.
@@ -377,6 +380,10 @@ cells still show it.
   then checks each of its cells after everything else has drawn. An overlay, a border, a toast, or
   a pane above takes the cells it covers, exactly as on the host. `CapturedImage::shows(x, y)`
   answers per cell.
+- **Negative z planes stay below text.** Both pane and UI captures hide a negative-z image in cells
+  occupied by text, including both columns of a wide glyph. Planes below `INT32_MIN / 2` also stay
+  behind non-default cell backgrounds. This visibility is resolved per cell before constructing
+  the image layer; transparent tile padding does not replace text or images in lower planes.
 - **The cells get a half-block stand-in.** Each visible cell holds `▀` in the colors of its top
   and bottom halves, so `plain_text()` marks where an image is, `to_ansi_text()` shows a coarse
   version in any terminal, and cell assertions read colors straight out of the grid. A cell the

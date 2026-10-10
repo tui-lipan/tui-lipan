@@ -5,8 +5,8 @@
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const SNAPSHOT_BUDGET: usize = 256 * 1024 * 1024;
@@ -45,10 +45,10 @@ impl Drop for Reservation {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct FilePixels {
-    file: tempfile::NamedTempFile,
-    reservation: Reservation,
+    file: Arc<tempfile::NamedTempFile>,
+    reservation: Arc<Reservation>,
     pub(crate) format: u32,
 }
 
@@ -79,8 +79,8 @@ impl FilePixels {
             ));
         }
         Ok(Self {
-            file,
-            reservation,
+            file: Arc::new(file),
+            reservation: Arc::new(reservation),
             format,
         })
     }
@@ -115,6 +115,7 @@ impl FilePixels {
         Ok(HostFile {
             path,
             handed: false,
+            backing: Some(self.clone()),
         })
     }
 }
@@ -170,13 +171,28 @@ pub(crate) fn reap_host_links() {
 pub(crate) struct HostFile {
     path: PathBuf,
     handed: bool,
+    backing: Option<FilePixels>,
 }
 
 impl HostFile {
     pub(crate) fn path(&self) -> &std::path::Path {
         &self.path
     }
+    pub(crate) fn renew(&mut self) -> io::Result<()> {
+        // Retire the failed attempt before reserving another link, so a full budget can retry.
+        let _ = std::fs::remove_file(&self.path);
+        reap_host_links();
+        let fresh = self
+            .backing
+            .as_ref()
+            .ok_or_else(|| io::Error::other("file upload already handed over"))?
+            .host_link()?;
+        *self = fresh;
+        Ok(())
+    }
+
     pub(crate) fn handed_over(&mut self) {
+        self.backing = None;
         self.handed = true;
         if let Some(link) = pending()
             .links

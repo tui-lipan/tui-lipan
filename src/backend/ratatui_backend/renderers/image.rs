@@ -534,12 +534,16 @@ fn record_capture_image(
     f: &mut ratatui::Frame<'_>,
     area: ratatui::layout::Rect,
     pixels: Arc<image::DynamicImage>,
+    z_index: i32,
 ) {
     let index = CAPTURE_IMAGES.with(|slot| {
         let mut slot = slot.borrow_mut();
         let drawn = slot.as_mut().expect("checked above");
         (drawn.len() < CAPTURE_IMAGE_LIMIT).then(|| {
-            drawn.push(CaptureImageDraw { area, pixels });
+            drawn.push(CaptureImageDraw {
+                area,
+                pixels: Arc::clone(&pixels),
+            });
             drawn.len() - 1
         })
     });
@@ -547,12 +551,40 @@ fn record_capture_image(
         return;
     };
     let buffer = f.buffer_mut();
-    let area = area.intersection(buffer.area);
-    for y in area.top()..area.bottom() {
-        for x in area.left()..area.right() {
-            buffer[(x, y)].set_symbol(&marker);
+    let visible = area.intersection(buffer.area);
+    for y in visible.top()..visible.bottom() {
+        for x in visible.left()..visible.right() {
+            if capture_cell_shows_image(buffer, (x, y), area, &pixels, z_index) {
+                buffer[(x, y)].set_symbol(&marker);
+            }
         }
     }
+}
+
+#[cfg(feature = "terminal-images")]
+fn capture_cell_shows_image(
+    buffer: &ratatui::buffer::Buffer,
+    (x, y): (u16, u16),
+    area: ratatui::layout::Rect,
+    pixels: &image::DynamicImage,
+    z_index: i32,
+) -> bool {
+    let continuation = x > buffer.area.x && {
+        let previous = buffer[(x - 1, y)].symbol();
+        capture_image_mark_index(previous).is_none()
+            && unicode_width::UnicodeWidthStr::width(previous) >= 2
+    };
+    let cell = &buffer[(x, y)];
+    let has_text =
+        continuation || (cell.symbol() != " " && capture_image_mark_index(cell.symbol()).is_none());
+    let has_background = cell.bg != ratatui::style::Color::Reset
+        || cell.modifier.contains(ratatui::style::Modifier::REVERSED);
+    crate::widgets::image_covers_cell(z_index, has_text, has_background)
+        && crate::widgets::image_cell_has_pixels(
+            pixels,
+            (area.width, area.height),
+            (x - area.x, y - area.y),
+        )
 }
 
 /// Remember which cells a Kitty placeholder row must not cover this frame.
@@ -825,6 +857,7 @@ impl CompressedKitty {
             pixels: (width, height),
             upload: Arc::new(KittyUpload {
                 transmit: Mutex::new(Some(transmit)),
+                attempted: AtomicBool::new(false),
                 shared: Mutex::new(shared),
                 file: Mutex::new(None),
                 placeholder_prefix: format!("\x1b[s\x1b[38;2;{id_r};{id_g};{id_b}m\u{10EEEE}"),
@@ -858,6 +891,7 @@ impl CompressedKitty {
             pixels: dimensions,
             upload: Arc::new(KittyUpload {
                 transmit: Mutex::new(Some(transmit)),
+                attempted: AtomicBool::new(false),
                 shared: Mutex::new(None),
                 file: Mutex::new(Some(file)),
                 placeholder_prefix: format!("\x1b[s\x1b[38;2;{id_r};{id_g};{id_b}m\u{10EEEE}"),
@@ -1067,6 +1101,7 @@ impl CompressedKitty {
 #[cfg(feature = "terminal-images")]
 pub(crate) struct KittyUpload {
     transmit: Mutex<Option<String>>,
+    attempted: AtomicBool,
     placeholder_prefix: String,
     id_extra: char,
     shared: Mutex<Option<SharedFrame>>,
@@ -1089,6 +1124,49 @@ thread_local! {
 
 #[cfg(feature = "terminal-images")]
 impl KittyUpload {
+    fn attempt_sequence(&self) -> std::io::Result<Option<String>> {
+        let sequence = self
+            .transmit
+            .lock()
+            .map_err(|_| std::io::Error::other("upload lock poisoned"))?;
+        let Some(template) = sequence.as_ref() else {
+            return Ok(None);
+        };
+        if !self.attempted.swap(true, Ordering::Relaxed) {
+            return Ok(Some(template.clone()));
+        }
+        let mut shared = self
+            .shared
+            .lock()
+            .map_err(|_| std::io::Error::other("upload lock poisoned"))?;
+        let mut file = self
+            .file
+            .lock()
+            .map_err(|_| std::io::Error::other("upload lock poisoned"))?;
+        let name = if let Some(frame) = shared.as_mut() {
+            frame.renew()?;
+            Some(frame.name().to_owned())
+        } else if let Some(file) = file.as_mut() {
+            file.renew()?;
+            Some(
+                file.path()
+                    .to_str()
+                    .ok_or_else(|| std::io::Error::other("invalid upload path"))?
+                    .to_owned(),
+            )
+        } else {
+            None
+        };
+        let Some(name) = name else {
+            return Ok(Some(template.clone()));
+        };
+        let header = template
+            .split_once(';')
+            .ok_or_else(|| std::io::Error::other("invalid upload escape"))?
+            .0;
+        Ok(Some(format!("{header};{}\x1b\\", BASE64.encode(name))))
+    }
+
     pub(crate) fn handed_over(&self) {
         if self
             .transmit
@@ -1119,6 +1197,26 @@ impl KittyUpload {
                 .as_ref()
                 .is_some_and(|sequence| symbol.starts_with(sequence))
         })
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+impl Drop for KittyUpload {
+    fn drop(&mut self) {
+        let pending = self
+            .transmit
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.attempted.load(Ordering::Relaxed)
+            && pending.is_some()
+            && let Some(frame) = self
+                .shared
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_mut()
+        {
+            frame.abandon_attempt();
+        }
     }
 }
 
@@ -1219,14 +1317,44 @@ fn prepare_placed_cell<'a>(
     std::borrow::Cow::Owned(cell)
 }
 
+#[cfg(feature = "terminal-images")]
+fn renew_kitty_uploads(
+    cells: &mut [(u16, u16, std::borrow::Cow<'_, ratatui::buffer::Cell>)],
+    uploads: &[Arc<KittyUpload>],
+) -> std::io::Result<()> {
+    // Cells still carry the encode's original escape. Regenerate one-shot names for every retry,
+    // including after draw itself failed, and replace the escape only in this outgoing diff.
+    for upload in uploads {
+        let Some(sequence) = upload.attempt_sequence()? else {
+            continue;
+        };
+        let original = upload
+            .transmit
+            .lock()
+            .map_err(|_| std::io::Error::other("upload lock poisoned"))?;
+        let Some(original) = original.as_ref() else {
+            continue;
+        };
+        if *original != sequence {
+            for (_, _, cell) in cells.iter_mut() {
+                if cell.symbol().contains(original) {
+                    let symbol = cell.symbol().replace(original, &sequence);
+                    cell.to_mut().set_symbol(&symbol);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Place each upload before its first surviving row in the actual host diff. Effects can remove
 /// the cell where rendering originally put it while leaving other rows visible.
 #[cfg(feature = "terminal-images")]
 pub(crate) fn prepare_kitty_cells<'a>(
     content: impl Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
-) -> PreparedKittyDraw<'a> {
+) -> std::io::Result<PreparedKittyDraw<'a>> {
     let mut uploads = Vec::new();
-    let cells: Vec<_> = content
+    let mut cells: Vec<_> = content
         .map(|(x, y, cell)| {
             if cell.symbol().contains("\x1b_Ga=p,") {
                 return (x, y, prepare_placed_cell(cell, &mut uploads));
@@ -1242,6 +1370,7 @@ pub(crate) fn prepare_kitty_cells<'a>(
             (x, y, cell)
         })
         .collect();
+    renew_kitty_uploads(&mut cells, &uploads)?;
     let placement_deletes = PENDING_KITTY_PLACEMENTS.with(|pending| {
         pending
             .borrow()
@@ -1254,11 +1383,11 @@ pub(crate) fn prepare_kitty_cells<'a>(
             .map(|p| p.delete.clone())
             .collect()
     });
-    PreparedKittyDraw {
+    Ok(PreparedKittyDraw {
         cells,
         uploads,
         placement_deletes,
-    }
+    })
 }
 
 #[cfg(feature = "terminal-images")]
@@ -2718,7 +2847,7 @@ pub(crate) fn draw_encoded_image(
             }
             None => pixels(),
         };
-        record_capture_image(f, area, pixels);
+        record_capture_image(f, area, pixels, z_index);
         return true;
     }
     if image_support::image_rendering_suspended() {
@@ -3158,6 +3287,7 @@ mod tests {
             pixels: (1, 1),
             upload: Arc::new(KittyUpload {
                 transmit: Mutex::new(None),
+                attempted: AtomicBool::new(false),
                 placeholder_prefix: String::new(),
                 id_extra: crate::widgets::kitty_diacritic(0),
                 shared: Mutex::new(None),
@@ -3966,7 +4096,8 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         let PreparedKittyDraw { cells, uploads, .. } =
-            prepare_kitty_cells([(0, 1, &buffer[(0, 1)]), (0, 0, &buffer[(0, 0)])].into_iter());
+            prepare_kitty_cells([(0, 1, &buffer[(0, 1)]), (0, 0, &buffer[(0, 0)])].into_iter())
+                .unwrap();
         assert_eq!(uploads.len(), 1);
         assert!(cells[0].2.symbol().starts_with("\x1b_G"));
         assert!(!cells[1].2.symbol().contains("\x1b_G"));
@@ -4149,6 +4280,145 @@ mod tests {
         assert!(encoded.transmission_pending());
         Backend::flush(&mut host).unwrap();
         assert!(!encoded.transmission_pending());
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn retry_consumed_media(encoded: CompressedKitty, pixels: &[u8]) {
+        use ratatui::backend::Backend;
+
+        #[derive(Default)]
+        struct Consumer {
+            output: String,
+            scanned: usize,
+            names: Vec<String>,
+            pixels: Vec<Vec<u8>>,
+            reject: bool,
+            fail_after_upload: bool,
+        }
+        struct Writer(Arc<Mutex<Consumer>>);
+        impl std::io::Write for Writer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                let mut state = self.0.lock().unwrap();
+                if state.reject {
+                    return Err(std::io::Error::other("write after consumed upload failed"));
+                }
+                state.output.push_str(std::str::from_utf8(bytes).unwrap());
+                while let Some(end) = state.output[state.scanned..].find("\x1b\\") {
+                    let end = state.scanned + end + 2;
+                    let escape = state.output[state.scanned..end].to_owned();
+                    state.scanned = end;
+                    if !escape.contains("a=T,") {
+                        continue;
+                    }
+                    let escape = escape.rsplit_once("\x1b_G").unwrap().1;
+                    let payload = escape.split_once(';').unwrap().1.trim_end_matches("\x1b\\");
+                    let name = String::from_utf8(BASE64.decode(payload).unwrap()).unwrap();
+                    let path = if escape.contains("t=s,") {
+                        format!("/dev/shm{name}")
+                    } else {
+                        name.clone()
+                    };
+                    let bytes = std::fs::read(&path).expect("retry names a live resource");
+                    std::fs::remove_file(&path).unwrap();
+                    state.names.push(name);
+                    state.pixels.push(bytes);
+                    state.reject = state.fail_after_upload;
+                }
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                if self.0.lock().unwrap().reject {
+                    Err(std::io::Error::other("flush after consumed upload failed"))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        begin_kitty_frame();
+        let mut frame = ratatui::Terminal::new(ratatui::backend::TestBackend::new(1, 1)).unwrap();
+        frame
+            .draw(|f| {
+                if encoded.z_index < 0 {
+                    encoded.render_placed(f, (0, 0), f.area());
+                } else {
+                    encoded.render(f, f.area());
+                }
+            })
+            .unwrap();
+        let cell = &frame.backend().buffer()[(0, 0)];
+        let consumer = Arc::new(Mutex::new(Consumer {
+            fail_after_upload: true,
+            ..Default::default()
+        }));
+        let mut host = crate::backend::ratatui_backend::native_terminal::HostBackend::new(
+            std::io::BufWriter::with_capacity(1, Writer(Arc::clone(&consumer))),
+        );
+        assert!(Backend::draw(&mut host, std::iter::once((0, 0, cell))).is_err());
+        assert_eq!(
+            consumer.lock().unwrap().names.len(),
+            1,
+            "draw auto-flushed the upload"
+        );
+        assert!(Backend::flush(&mut host).is_err());
+        assert!(encoded.transmission_pending());
+        {
+            let mut state = consumer.lock().unwrap();
+            state.reject = false;
+            state.fail_after_upload = false;
+        }
+        Backend::draw(&mut host, std::iter::once((0, 0, cell))).unwrap();
+        Backend::flush(&mut host).unwrap();
+        assert!(!encoded.transmission_pending());
+        let state = consumer.lock().unwrap();
+        assert_eq!(state.names.len(), 2);
+        assert_ne!(
+            state.names[0], state.names[1],
+            "retry needs a fresh consumable name"
+        );
+        assert_eq!(state.pixels, vec![pixels.to_vec(), pixels.to_vec()]);
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn auto_flushed_temporary_file_upload_retries_after_host_consumption() {
+        use std::io::Write as _;
+        let pixels = [1, 2, 3, 255];
+        let mut source = tempfile::NamedTempFile::new().unwrap();
+        source.write_all(&pixels).unwrap();
+        let file =
+            crate::backend::ratatui_backend::file_frame::FilePixels::snapshot(source.path(), 4, 32)
+                .unwrap();
+        let encoded =
+            CompressedKitty::from_file(&file, (1, 1), ratatui::layout::Size::new(1, 1), 7, -1)
+                .unwrap();
+        drop(file);
+        drop(source);
+        retry_consumed_media(encoded, &pixels);
+    }
+
+    #[cfg(all(feature = "terminal-images", target_os = "linux"))]
+    #[test]
+    fn auto_flushed_shared_memory_upload_retries_after_host_consumption() {
+        let pixels = [1, 2, 3, 255];
+        let shared = SharedFrame::write(&pixels).unwrap();
+        let encoded = CompressedKitty::new(
+            &image::DynamicImage::new_rgba8(1, 1),
+            ratatui::layout::Size::new(1, 1),
+            7,
+            0,
+        )
+        .unwrap();
+        *encoded.upload.transmit.lock().unwrap() = Some(kitty_transmit_shared_memory(
+            shared.name(),
+            1,
+            1,
+            32,
+            7,
+            ratatui::layout::Size::new(1, 1),
+        ));
+        *encoded.upload.shared.lock().unwrap() = Some(shared);
+        retry_consumed_media(encoded, &pixels);
     }
 
     #[cfg(feature = "terminal-images")]

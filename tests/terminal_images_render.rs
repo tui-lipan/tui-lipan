@@ -966,3 +966,94 @@ fn each_clipped_effect_of_a_scope_recolors_only_the_pixels_it_covers() {
         assert_eq!(pixel, expected, "pixel {index}");
     }
 }
+
+/// Both pane captures and renderer captures resolve negative planes before making image layers.
+#[test]
+fn negative_planes_preserve_text_and_low_planes_preserve_backgrounds_in_captures() {
+    for z in [-1, i32::MIN / 2, i32::MIN / 2 - 1] {
+        let image = String::from_utf8(red_image(4, 2))
+            .unwrap()
+            .replace("a=T,", &format!("a=T,z={z},"));
+        // A subcell patch in another plane forces composition with transparent tile padding.
+        let patch = format!(
+            "\x1b_Ga=T,f=24,t=d,i=2,z=1,s=2,v=2;{}\x1b\\",
+            BASE64.encode([0, 255, 0].repeat(4))
+        );
+        let output = format!("{image}\x1b[1;4H{patch}\x1b[HA\x1b[44m \x1b[49m \x1b[2;1H汉");
+        let (mut backend, screen) = pane_with_screen(output.as_bytes(), 3, 6);
+        backend.render();
+        let frames = [screen.borrow().capture_frame(), backend.capture_frame()];
+        for (_kind, frame) in ["pane", "ui"].into_iter().zip(frames) {
+            assert_eq!(frame.cell(0, 0).symbol, "A", "z={z}");
+            let image = frame
+                .images
+                .first()
+                .expect("blank cells still show the image");
+            assert!(!image.visible[0], "text stays above a negative plane");
+            assert_eq!(frame.cell(0, 1).symbol, "汉");
+            assert!(!image.shows(0, 1));
+            assert!(
+                !image.shows(1, 1),
+                "wide glyph continuation stays above images"
+            );
+            assert!(
+                image.visible[2],
+                "default background stays below every plane"
+            );
+            if z < i32::MIN / 2 {
+                assert_eq!(frame.cell(1, 0).symbol, " ");
+                assert!(
+                    !image.visible[1],
+                    "non-default background stays above this plane"
+                );
+                assert_ne!(frame.cell(1, 0).bg, RED);
+                assert_ne!(frame.cell(1, 0).bg, Color::Reset);
+            } else {
+                assert!(
+                    image.visible[1],
+                    "ordinary negative planes cover backgrounds"
+                );
+            }
+            #[cfg(feature = "ui-snapshot-png")]
+            {
+                let options = tui_lipan::PngOptions {
+                    cell_width: 10,
+                    cell_height: 20,
+                    scale: 1,
+                    text_renderer: tui_lipan::PngTextRenderer::Bitmap,
+                    ..Default::default()
+                };
+                let png = frame.to_png(&options).unwrap();
+                let pixels = image::load_from_memory(&png).unwrap().to_rgb8();
+                assert_ne!(
+                    pixels.get_pixel(0, 0).0,
+                    [255, 0, 0],
+                    "text cell not replaced"
+                );
+                assert_eq!(
+                    pixels.get_pixel(25, 10).0,
+                    [255, 0, 0],
+                    "blank cell shows image"
+                );
+                if z < i32::MIN / 2 {
+                    assert_ne!(
+                        pixels.get_pixel(15, 10).0,
+                        [255, 0, 0],
+                        "background not replaced"
+                    );
+                }
+                if let Some(directory) = std::env::var_os("TUI_LIPAN_Z_CAPTURE_REVIEW") {
+                    std::fs::create_dir_all(&directory).unwrap();
+                    let path = std::path::Path::new(&directory).join(format!("z-{z}-{_kind}.png"));
+                    let review = frame
+                        .to_png(&tui_lipan::PngOptions {
+                            scale: 4,
+                            ..options
+                        })
+                        .unwrap();
+                    std::fs::write(path, review).unwrap();
+                }
+            }
+        }
+    }
+}

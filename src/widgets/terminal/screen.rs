@@ -2333,9 +2333,8 @@ impl TerminalScreen {
             ) else {
                 continue;
             };
-            let rgba = pixels
-                .crop_imm(crop.x, crop.y, crop.width, crop.height)
-                .to_rgba8();
+            let cropped = pixels.crop_imm(crop.x, crop.y, crop.width, crop.height);
+            let rgba = cropped.to_rgba8();
             let (pixel_width, pixel_height) = rgba.dimensions();
             let mut image = crate::capture::CapturedImage::new(
                 Rect {
@@ -2349,15 +2348,8 @@ impl TerminalScreen {
                 rgba.into_raw().into(),
             );
             image.fill_cell_box = true;
-            for earlier in &mut images {
-                for y in image.area.y..image.area.y + image.area.h as i16 {
-                    for x in image.area.x..image.area.x + image.area.w as i16 {
-                        if let Some(offset) = earlier.area_offset(x as u16, y as u16) {
-                            earlier.visible[offset] = false;
-                        }
-                    }
-                }
-            }
+            mask_capture_image(&mut image, cells, self.cols, &cropped, placement.z);
+            hide_covered_capture_cells(&mut images, &image);
             images.push(image);
         }
         images.retain(|image| image.visible.contains(&true));
@@ -3684,6 +3676,49 @@ fn capture_underline(flags: CellFlags) -> Option<UnderlineStyle> {
     ]
     .into_iter()
     .find_map(|(flag, style)| flags.contains(flag).then_some(style))
+}
+
+#[cfg(feature = "terminal-images")]
+fn mask_capture_image(
+    image: &mut crate::capture::CapturedImage,
+    cells: &[CapturedCell],
+    cols: u16,
+    pixels: &image::DynamicImage,
+    z: i32,
+) {
+    for row in 0..image.area.h {
+        for col in 0..image.area.w {
+            let x = image.area.x as u16 + col;
+            let y = image.area.y as u16 + row;
+            let cell = &cells[usize::from(y) * usize::from(cols) + usize::from(x)];
+            image.visible[usize::from(row) * usize::from(image.area.w) + usize::from(col)] =
+                super::image_covers_cell(
+                    z,
+                    cell.symbol != " ",
+                    cell.bg != UiColor::Reset || cell.modifiers.reverse,
+                ) && super::image_cell_has_pixels(pixels, (image.area.w, image.area.h), (col, row));
+        }
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+fn hide_covered_capture_cells(
+    earlier: &mut [crate::capture::CapturedImage],
+    image: &crate::capture::CapturedImage,
+) {
+    for earlier in earlier {
+        for row in 0..image.area.h {
+            for col in 0..image.area.w {
+                let x = image.area.x as u16 + col;
+                let y = image.area.y as u16 + row;
+                if image.shows(x, y)
+                    && let Some(offset) = earlier.area_offset(x, y)
+                {
+                    earlier.visible[offset] = false;
+                }
+            }
+        }
+    }
 }
 
 /// A terminal color as the program set it, with no palette applied.
