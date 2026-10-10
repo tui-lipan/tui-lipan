@@ -32,7 +32,7 @@ pub use events::{
 #[cfg(feature = "terminal-images")]
 pub(crate) use graphics::{
     PLACEHOLDER as KITTY_PLACEHOLDER, composite_terminal_images, crop_for_visible_cells,
-    diacritic as kitty_diacritic, image_cell_has_pixels, image_covers_cell,
+    diacritic as kitty_diacritic, image_cell_has_pixels, image_cell_is_opaque, image_covers_cell,
 };
 #[cfg(feature = "terminal-images")]
 pub use graphics::{TerminalImage, TerminalImageCrop, TerminalImagePlacement};

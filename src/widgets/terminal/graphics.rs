@@ -2767,6 +2767,30 @@ pub(crate) fn image_cell_has_pixels(
     if !pixels.color().has_alpha() {
         return true;
     }
+    let (left, top, right, bottom) = image_cell_bounds(pixels, cells, cell);
+    (top..bottom).any(|y| (left..right).any(|x| pixels.get_pixel(x, y).0[3] != 0))
+}
+
+/// Only fully opaque cells can discard lower capture layers.
+pub(crate) fn image_cell_is_opaque(
+    pixels: &DynamicImage,
+    cells: (u16, u16),
+    cell: (u16, u16),
+) -> bool {
+    if !pixels.color().has_alpha() {
+        return true;
+    }
+    let (left, top, right, bottom) = image_cell_bounds(pixels, cells, cell);
+    left < right
+        && top < bottom
+        && (top..bottom).all(|y| (left..right).all(|x| pixels.get_pixel(x, y).0[3] == 255))
+}
+
+fn image_cell_bounds(
+    pixels: &DynamicImage,
+    cells: (u16, u16),
+    cell: (u16, u16),
+) -> (u32, u32, u32, u32) {
     let (width, height) = pixels.dimensions();
     let bounds = |index: u16, length: u32, count: u16| {
         let start = u64::from(index) * u64::from(length) / u64::from(count);
@@ -2775,7 +2799,7 @@ pub(crate) fn image_cell_has_pixels(
     };
     let (left, right) = bounds(cell.0, width, cells.0);
     let (top, bottom) = bounds(cell.1, height, cells.1);
-    (top..bottom).any(|y| (left..right).any(|x| pixels.get_pixel(x, y).0[3] != 0))
+    (left, top, right, bottom)
 }
 
 #[cfg(test)]

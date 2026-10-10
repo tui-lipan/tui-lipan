@@ -2349,7 +2349,7 @@ impl TerminalScreen {
             );
             image.fill_cell_box = true;
             mask_capture_image(&mut image, cells, self.cols, &cropped, placement.z);
-            hide_covered_capture_cells(&mut images, &image);
+            hide_covered_capture_cells(&mut images, &image, &cropped);
             images.push(image);
         }
         images.retain(|image| image.visible.contains(&true));
@@ -3705,15 +3705,19 @@ fn mask_capture_image(
 fn hide_covered_capture_cells(
     earlier: &mut [crate::capture::CapturedImage],
     image: &crate::capture::CapturedImage,
+    pixels: &image::DynamicImage,
 ) {
-    for earlier in earlier {
-        for row in 0..image.area.h {
-            for col in 0..image.area.w {
-                let x = image.area.x as u16 + col;
-                let y = image.area.y as u16 + row;
-                if image.shows(x, y)
-                    && let Some(offset) = earlier.area_offset(x, y)
-                {
+    for row in 0..image.area.h {
+        for col in 0..image.area.w {
+            let x = image.area.x as u16 + col;
+            let y = image.area.y as u16 + row;
+            if !image.shows(x, y)
+                || !super::image_cell_is_opaque(pixels, (image.area.w, image.area.h), (col, row))
+            {
+                continue;
+            }
+            for earlier in earlier.iter_mut() {
+                if let Some(offset) = earlier.area_offset(x, y) {
                     earlier.visible[offset] = false;
                 }
             }

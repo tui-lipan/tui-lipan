@@ -497,6 +497,8 @@ pub(crate) fn capture_image_mark_index(symbol: &str) -> Option<usize> {
 pub(crate) struct CaptureImageDraw {
     pub(crate) area: ratatui::layout::Rect,
     pub(crate) pixels: Arc<image::DynamicImage>,
+    /// Earlier image markers retained beneath partially transparent cells, indexed in `area`.
+    pub(crate) underlays: Vec<Option<usize>>,
 }
 
 /// Run `render` with image draws recorded for a frame capture instead of encoded for the host.
@@ -543,22 +545,38 @@ fn record_capture_image(
             drawn.push(CaptureImageDraw {
                 area,
                 pixels: Arc::clone(&pixels),
+                underlays: Vec::new(),
             });
             drawn.len() - 1
         })
     });
-    let Some(marker) = index.map(capture_image_mark) else {
+    let Some(index) = index else {
         return;
     };
+    let marker = capture_image_mark(index);
+    let mut underlays = vec![None; usize::from(area.width) * usize::from(area.height)];
     let buffer = f.buffer_mut();
     let visible = area.intersection(buffer.area);
     for y in visible.top()..visible.bottom() {
         for x in visible.left()..visible.right() {
             if capture_cell_shows_image(buffer, (x, y), area, &pixels, z_index) {
+                if !crate::widgets::image_cell_is_opaque(
+                    &pixels,
+                    (area.width, area.height),
+                    (x - area.x, y - area.y),
+                ) {
+                    let offset =
+                        usize::from(y - area.y) * usize::from(area.width) + usize::from(x - area.x);
+                    underlays[offset] = capture_image_mark_index(buffer[(x, y)].symbol())
+                        .filter(|previous| *previous < index);
+                }
                 buffer[(x, y)].set_symbol(&marker);
             }
         }
     }
+    CAPTURE_IMAGES.with(|slot| {
+        slot.borrow_mut().as_mut().expect("capture active")[index].underlays = underlays;
+    });
 }
 
 #[cfg(feature = "terminal-images")]

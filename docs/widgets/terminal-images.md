@@ -391,7 +391,9 @@ cells still show it.
   cell's background from before the stand-in.
 - **A PNG draws the pixels.** `to_png()` scales each image into its cells at the PNG's own cell
   size, keeping its aspect ratio from the top-left corner as a terminal does, and draws only the
-  cells it still shows in. Transparent pixels show the recorded background, not the stand-in.
+  cells it still shows in. Partially transparent upper z planes keep lower images visible in the
+  same cell, so their pixels blend in draw order. Transparent pixels reveal those lower images
+  and then the recorded background. Half-block output remains a coarse approximation of the stack.
 - **One image on its own.** `CapturedImage::to_png()` encodes just `rgba`, at `width` x `height`
   with its alpha, for a serializer that reports images beside the cells. A terminal capture has
   already cropped an image that runs past the viewport, so these are the pixels inside it.
