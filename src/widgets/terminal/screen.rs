@@ -2348,17 +2348,20 @@ impl TerminalScreen {
                 rgba.into_raw().into(),
             );
             image.fill_cell_box = true;
+            image.z_index = placement.z;
             mask_capture_image(&mut image, cells, self.cols, &cropped, placement.z);
             hide_covered_capture_cells(&mut images, &image, &cropped);
             images.push(image);
         }
         images.retain(|image| image.visible.contains(&true));
+        let original_cells = cells.to_vec();
         for image in &mut images {
             image.paint_half_blocks(
                 cells,
                 self.cols,
                 u32::from(self.cell_size.width),
                 u32::from(self.cell_size.height),
+                &original_cells,
             );
         }
         images
@@ -3692,11 +3695,12 @@ fn mask_capture_image(
             let y = image.area.y as u16 + row;
             let cell = &cells[usize::from(y) * usize::from(cols) + usize::from(x)];
             image.visible[usize::from(row) * usize::from(image.area.w) + usize::from(col)] =
-                super::image_covers_cell(
-                    z,
-                    cell.symbol != " ",
-                    cell.bg != UiColor::Reset || cell.modifiers.reverse,
-                ) && super::image_cell_has_pixels(pixels, (image.area.w, image.area.h), (col, row));
+                super::image_covers_cell(z, cell.bg != UiColor::Reset || cell.modifiers.reverse)
+                    && super::image_cell_has_pixels(
+                        pixels,
+                        (image.area.w, image.area.h),
+                        (col, row),
+                    );
         }
     }
 }

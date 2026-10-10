@@ -2753,9 +2753,9 @@ fn placement_geometry(
     }
 }
 
-/// Capture visibility at cell granularity. Very low planes also sit behind cell backgrounds.
-pub(crate) fn image_covers_cell(z: i32, has_text: bool, has_background: bool) -> bool {
-    z >= 0 || (!has_text && (z >= i32::MIN / 2 || !has_background))
+/// Opaque non-default backgrounds cover very low planes; glyph occlusion is resolved in PNGs.
+pub(crate) fn image_covers_cell(z: i32, has_background: bool) -> bool {
+    z >= i32::MIN / 2 || !has_background
 }
 
 /// Transparent padding in a composed z-plane tile must not hide cells in lower planes.

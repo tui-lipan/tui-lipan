@@ -497,6 +497,8 @@ pub(crate) fn capture_image_mark_index(symbol: &str) -> Option<usize> {
 pub(crate) struct CaptureImageDraw {
     pub(crate) area: ratatui::layout::Rect,
     pub(crate) pixels: Arc<image::DynamicImage>,
+    pub(crate) z_index: i32,
+    pub(crate) symbols: Vec<String>,
     /// Earlier image markers retained beneath partially transparent cells, indexed in `area`.
     pub(crate) underlays: Vec<Option<usize>>,
 }
@@ -546,6 +548,8 @@ fn record_capture_image(
                 area,
                 pixels: Arc::clone(&pixels),
                 underlays: Vec::new(),
+                z_index,
+                symbols: Vec::new(),
             });
             drawn.len() - 1
         })
@@ -555,18 +559,20 @@ fn record_capture_image(
     };
     let marker = capture_image_mark(index);
     let mut underlays = vec![None; usize::from(area.width) * usize::from(area.height)];
+    let mut symbols = vec![String::new(); underlays.len()];
     let buffer = f.buffer_mut();
     let visible = area.intersection(buffer.area);
     for y in visible.top()..visible.bottom() {
         for x in visible.left()..visible.right() {
             if capture_cell_shows_image(buffer, (x, y), area, &pixels, z_index) {
+                let offset =
+                    usize::from(y - area.y) * usize::from(area.width) + usize::from(x - area.x);
+                symbols[offset] = capture_underlying_symbol(&buffer[(x, y)], x, y);
                 if !crate::widgets::image_cell_is_opaque(
                     &pixels,
                     (area.width, area.height),
                     (x - area.x, y - area.y),
                 ) {
-                    let offset =
-                        usize::from(y - area.y) * usize::from(area.width) + usize::from(x - area.x);
                     underlays[offset] = capture_image_mark_index(buffer[(x, y)].symbol())
                         .filter(|previous| *previous < index);
                 }
@@ -575,8 +581,32 @@ fn record_capture_image(
         }
     }
     CAPTURE_IMAGES.with(|slot| {
-        slot.borrow_mut().as_mut().expect("capture active")[index].underlays = underlays;
+        let mut slot = slot.borrow_mut();
+        let draw = &mut slot.as_mut().expect("capture active")[index];
+        draw.underlays = underlays;
+        draw.symbols = symbols;
     });
+}
+
+#[cfg(feature = "terminal-images")]
+fn capture_underlying_symbol(cell: &ratatui::buffer::Cell, x: u16, y: u16) -> String {
+    CAPTURE_IMAGES.with(|slot| {
+        let slot = slot.borrow();
+        let previous =
+            capture_image_mark_index(cell.symbol()).and_then(|index| slot.as_ref()?.get(index));
+        previous
+            .and_then(|draw| {
+                let col = x.checked_sub(draw.area.x)?;
+                let row = y.checked_sub(draw.area.y)?;
+                if col >= draw.area.width || row >= draw.area.height {
+                    return None;
+                }
+                draw.symbols
+                    .get(usize::from(row) * usize::from(draw.area.width) + usize::from(col))
+            })
+            .cloned()
+            .unwrap_or_else(|| cell.symbol().to_owned())
+    })
 }
 
 #[cfg(feature = "terminal-images")]
@@ -587,17 +617,10 @@ fn capture_cell_shows_image(
     pixels: &image::DynamicImage,
     z_index: i32,
 ) -> bool {
-    let continuation = x > buffer.area.x && {
-        let previous = buffer[(x - 1, y)].symbol();
-        capture_image_mark_index(previous).is_none()
-            && unicode_width::UnicodeWidthStr::width(previous) >= 2
-    };
     let cell = &buffer[(x, y)];
-    let has_text =
-        continuation || (cell.symbol() != " " && capture_image_mark_index(cell.symbol()).is_none());
     let has_background = cell.bg != ratatui::style::Color::Reset
         || cell.modifier.contains(ratatui::style::Modifier::REVERSED);
-    crate::widgets::image_covers_cell(z_index, has_text, has_background)
+    crate::widgets::image_covers_cell(z_index, has_background)
         && crate::widgets::image_cell_has_pixels(
             pixels,
             (area.width, area.height),

@@ -335,6 +335,24 @@ fn captured_images(
     if drawn.is_empty() || width == 0 {
         return Vec::new();
     }
+    let restored_symbols: Vec<_> = cells
+        .iter()
+        .enumerate()
+        .map(|(offset, cell)| {
+            let index = capture_image_mark_index(&cell.symbol)?;
+            let draw = drawn.get(index)?;
+            let x = (offset % usize::from(width)) as u16;
+            let y = (offset / usize::from(width)) as u16;
+            let col = x.checked_sub(draw.area.x)?;
+            let row = y.checked_sub(draw.area.y)?;
+            if col >= draw.area.width || row >= draw.area.height {
+                return None;
+            }
+            draw.symbols
+                .get(usize::from(row) * usize::from(draw.area.width) + usize::from(col))
+                .cloned()
+        })
+        .collect();
     let (mut images, underlays): (Vec<_>, Vec<_>) = drawn
         .into_iter()
         .map(|draw| {
@@ -353,6 +371,7 @@ fn captured_images(
                 rgba.into_raw().into(),
             );
             image.fill_cell_box = true;
+            image.z_index = draw.z_index;
             image.visible.fill(false);
             (image, draw.underlays)
         })
@@ -370,14 +389,23 @@ fn captured_images(
         {
             continue;
         }
-        cell.symbol = " ".to_string();
+        if let Some(symbol) = &restored_symbols[offset] {
+            cell.symbol.clone_from(symbol);
+        }
         show_capture_layers(&mut images, &underlays, index, x, y);
     }
 
     images.retain(|image| image.visible.contains(&true));
     let font = super::image_support::picker_snapshot().font_size();
+    let original_cells = cells.to_vec();
     for image in &mut images {
-        image.paint_half_blocks(cells, width, u32::from(font.width), u32::from(font.height));
+        image.paint_half_blocks(
+            cells,
+            width,
+            u32::from(font.width),
+            u32::from(font.height),
+            &original_cells,
+        );
     }
     images
 }

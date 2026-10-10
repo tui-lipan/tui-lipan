@@ -380,20 +380,22 @@ cells still show it.
   then checks each of its cells after everything else has drawn. An overlay, a border, a toast, or
   a pane above takes the cells it covers, exactly as on the host. `CapturedImage::shows(x, y)`
   answers per cell.
-- **Negative z planes stay below text.** Both pane and UI captures hide a negative-z image in cells
-  occupied by text, including both columns of a wide glyph. Planes below `INT32_MIN / 2` also stay
-  behind non-default cell backgrounds. This visibility is resolved per cell before constructing
-  the image layer; transparent tile padding does not replace text or images in lower planes.
-- **The cells get a half-block stand-in.** Each visible cell holds `▀` in the colors of its top
+- **Negative z planes stay below text.** PNG captures draw these images before glyphs, so image
+  pixels remain visible between glyph strokes, including wide glyphs and antialiased text. Planes
+  below `INT32_MIN / 2` also stay behind non-default cell backgrounds. Text and ANSI captures
+  preserve the text in these cells and approximate images in blank cells with half blocks.
+- **The cells get a half-block stand-in.** Image cells hold `▀` in the colors of their top
   and bottom halves, so `plain_text()` marks where an image is, `to_ansi_text()` shows a coarse
   version in any terminal, and cell assertions read colors straight out of the grid. A cell the
-  image leaves fully transparent keeps what it held. `CapturedImage::backgrounds` records each
-  cell's background from before the stand-in.
+  image leaves fully transparent keeps what it held. `CapturedImage::underlying_cells` preserves
+  the original glyphs and styles for PNG output; `backgrounds` records the backgrounds before
+  the stand-in.
 - **A PNG draws the pixels.** `to_png()` scales each image into its cells at the PNG's own cell
   size, keeping its aspect ratio from the top-left corner as a terminal does, and draws only the
   cells it still shows in. Partially transparent upper z planes keep lower images visible in the
-  same cell, so their pixels blend in draw order. Transparent pixels reveal those lower images
-  and then the recorded background. Half-block output remains a coarse approximation of the stack.
+  same cell, so their pixels blend in draw order. `CapturedImage::z_index` controls whether the
+  image draws before or after text. Transparent pixels reveal lower images, glyphs, and the
+  recorded background. Half-block output remains a coarse approximation of the stack.
 - **One image on its own.** `CapturedImage::to_png()` encodes just `rgba`, at `width` x `height`
   with its alpha, for a serializer that reports images beside the cells. A terminal capture has
   already cropped an image that runs past the viewport, so these are the pixels inside it.
