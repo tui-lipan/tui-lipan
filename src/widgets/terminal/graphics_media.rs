@@ -127,7 +127,7 @@ pub(super) fn load(
 }
 
 #[cfg(unix)]
-fn decode_path(name: &[u8]) -> Result<PathBuf, &'static str> {
+pub(super) fn decode_path(name: &[u8]) -> Result<PathBuf, &'static str> {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt as _;
 
@@ -138,7 +138,7 @@ fn decode_path(name: &[u8]) -> Result<PathBuf, &'static str> {
 }
 
 #[cfg(not(unix))]
-fn decode_path(name: &[u8]) -> Result<PathBuf, &'static str> {
+pub(super) fn decode_path(name: &[u8]) -> Result<PathBuf, &'static str> {
     if name.is_empty() {
         return Err("EINVAL:missing path");
     }

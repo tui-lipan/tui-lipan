@@ -65,6 +65,7 @@ fn encode_with(
     options: &PngOptions,
     mut fonts: Option<&mut FontRenderer>,
 ) -> image::ImageResult<Vec<u8>> {
+    let (cells, restored) = restore_image_cells(frame);
     let cell_width = u32::from(options.cell_width.max(1));
     let cell_height = u32::from(options.cell_height.max(1));
     let scale = u32::from(options.scale.max(1));
@@ -74,22 +75,94 @@ fn encode_with(
     let height = u32::from(frame.height).saturating_mul(final_cell_height);
 
     let mut image = RgbImage::new(width, height);
-    let columns = usize::from(frame.width);
     let image_backgrounds = image_cell_backgrounds(frame);
+    let layout = cell_layout(
+        &cells,
+        frame.width,
+        frame.height,
+        final_cell_width,
+        final_cell_height,
+    );
+
+    // Backgrounds first, then everything drawn on them, so a glyph allowed past its own cell - an
+    // icon spreading into the blank beside it - is not painted over by that cell's background.
+    let stand_in = |idx: usize| {
+        image_backgrounds
+            .get(idx)
+            .copied()
+            .flatten()
+            .filter(|_| !restored[idx] && cells[idx].symbol == super::image_layer::UPPER_HALF)
+    };
+    for &(idx, _, cell_rect) in &layout {
+        let background = match stand_in(idx) {
+            Some(background) => resolve_bg(background, options),
+            None => effective_colors(&cells[idx], options).bg,
+        };
+        fill_background(&mut image, cell_rect, background);
+    }
+    for captured in frame.images.iter().filter(|image| image.z_index < 0) {
+        draw_image(&mut image, captured, final_cell_width, final_cell_height);
+    }
+    for &(idx, x, cell_rect) in &layout {
+        if stand_in(idx).is_some() {
+            continue;
+        }
+        let cell = &cells[idx];
+        let room = glyph_room(&cells, frame.width, idx, x, cell_rect);
+        let style = effective_colors(cell, options);
+        draw_glyph(
+            &mut image,
+            cell_rect,
+            room,
+            cell,
+            style.fg,
+            fonts.as_deref_mut(),
+        );
+        draw_decorations(&mut image, cell_rect, cell, style);
+    }
+
+    for captured in frame.images.iter().filter(|image| image.z_index >= 0) {
+        draw_image(&mut image, captured, final_cell_width, final_cell_height);
+    }
+
+    draw_capture_cursor(
+        &mut image,
+        frame,
+        &cells,
+        &layout,
+        (final_cell_width, final_cell_height),
+        options,
+        fonts,
+    );
+
+    let mut out = Cursor::new(Vec::new());
+    DynamicImage::ImageRgb8(image).write_to(&mut out, ImageFormat::Png)?;
+    Ok(out.into_inner())
+}
+
+/// Cell spans used for backgrounds, glyph clipping, and cursor placement.
+fn cell_layout(
+    cells: &[CapturedCell],
+    width: u16,
+    height: u16,
+    final_cell_width: u32,
+    final_cell_height: u32,
+) -> Vec<(usize, u16, CellPixels)> {
+    let columns = usize::from(width);
 
     // Every cell to draw, left to right: its index, and its pixels across its full span.
-    let mut layout = Vec::with_capacity(frame.cells.len());
-    for y in 0..frame.height {
+    let mut layout = Vec::with_capacity(cells.len());
+    for y in 0..height {
         let mut x = 0;
-        while x < frame.width {
+        while x < width {
             let idx = usize::from(y)
                 .saturating_mul(columns)
                 .saturating_add(usize::from(x));
-            let Some(cell) = frame.cells.get(idx) else {
+            let Some(cell) = cells.get(idx) else {
                 x = x.saturating_add(1);
                 continue;
             };
-            let cell_span = cell.span_at(x, frame.width);
+            let cell_span = cell.span_at(x, width);
             layout.push((
                 idx,
                 x,
@@ -103,45 +176,19 @@ fn encode_with(
             x = x.saturating_add(cell_span);
         }
     }
+    layout
+}
 
-    // Backgrounds first, then everything drawn on them, so a glyph allowed past its own cell - an
-    // icon spreading into the blank beside it - is not painted over by that cell's background.
-    let stand_in = |idx: usize| {
-        image_backgrounds
-            .get(idx)
-            .copied()
-            .flatten()
-            .filter(|_| frame.cells[idx].symbol == super::image_layer::UPPER_HALF)
-    };
-    for &(idx, _, cell_rect) in &layout {
-        let background = match stand_in(idx) {
-            Some(background) => resolve_bg(background, options),
-            None => effective_colors(&frame.cells[idx], options).bg,
-        };
-        fill_background(&mut image, cell_rect, background);
-    }
-    for &(idx, x, cell_rect) in &layout {
-        if stand_in(idx).is_some() {
-            continue;
-        }
-        let cell = &frame.cells[idx];
-        let room = glyph_room(frame, idx, x, cell_rect);
-        let style = effective_colors(cell, options);
-        draw_glyph(
-            &mut image,
-            cell_rect,
-            room,
-            cell,
-            style.fg,
-            fonts.as_deref_mut(),
-        );
-        draw_decorations(&mut image, cell_rect, cell, style);
-    }
-
-    for captured in &frame.images {
-        draw_image(&mut image, captured, final_cell_width, final_cell_height);
-    }
-
+fn draw_capture_cursor(
+    image: &mut RgbImage,
+    frame: &CapturedFrame,
+    cells: &[CapturedCell],
+    layout: &[(usize, u16, CellPixels)],
+    (final_cell_width, final_cell_height): (u32, u32),
+    options: &PngOptions,
+    fonts: Option<&mut FontRenderer>,
+) {
+    let columns = usize::from(frame.width);
     if options.render_cursor
         && let Some(cursor) = frame.cursor.as_ref().filter(|cursor| cursor.visible)
         && cursor.x < frame.width
@@ -163,14 +210,14 @@ fn encode_with(
                 },
                 |&(_, _, rect)| rect,
             );
-        let cell = frame.cells.get(idx);
+        let cell = cells.get(idx);
         let cell_style = cell.map(|cell| effective_colors(cell, options));
         let color = cursor
             .color
             .and_then(|color| resolve_color(color, options))
             .or(cell_style.map(|style| style.fg))
             .unwrap_or_else(|| resolve_fg(options.default_fg, options));
-        draw_cursor(&mut image, cell_rect, cursor.shape, color);
+        draw_cursor(image, cell_rect, cursor.shape, color);
         if cursor.shape == CursorShape::Block
             && let Some(cell) = cell
             && let Some(style) = cell_style
@@ -180,13 +227,32 @@ fn encode_with(
             } else {
                 style.bg
             };
-            draw_glyph(&mut image, cell_rect, cell_rect, cell, text, fonts);
+            draw_glyph(image, cell_rect, cell_rect, cell, text, fonts);
         }
     }
+}
 
-    let mut out = Cursor::new(Vec::new());
-    DynamicImage::ImageRgb8(image).write_to(&mut out, ImageFormat::Png)?;
-    Ok(out.into_inner())
+/// Recover glyphs and styles replaced by half-block approximations. The earliest visible image
+/// supplies the original cell; subsequent image layers keep the same glyphs and styles.
+fn restore_image_cells(frame: &CapturedFrame) -> (Vec<CapturedCell>, Vec<bool>) {
+    let mut cells = frame.cells.clone();
+    let mut restored = vec![false; frame.cells.len()];
+    for image in &frame.images {
+        for (offset, original) in image.underlying_cells.iter().enumerate() {
+            let Some(original) = original else { continue };
+            if !image.visible.get(offset).copied().unwrap_or(false) {
+                continue;
+            }
+            let Some(index) = image.frame_cell_offset(offset, frame.width, cells.len()) else {
+                continue;
+            };
+            if !restored[index] {
+                cells[index] = original.clone();
+                restored[index] = true;
+            }
+        }
+    }
+    (cells, restored)
 }
 
 pub(super) fn encode_image(image: &CapturedImage) -> image::ImageResult<Vec<u8>> {
@@ -266,14 +332,19 @@ fn draw_image(canvas: &mut RgbImage, captured: &CapturedImage, cell_w: u32, cell
 /// The pixels the glyph at `idx` may draw into. A private-use icon followed by a plain blank gets
 /// both cells, as terminals give it: Nerd Font icons are often wider than one cell, and a program
 /// leaves the blank after one for exactly that. Everything else keeps its own cell.
-fn glyph_room(frame: &CapturedFrame, idx: usize, x: u16, cell_rect: CellPixels) -> CellPixels {
-    let cell = &frame.cells[idx];
+fn glyph_room(
+    cells: &[CapturedCell],
+    width: u16,
+    idx: usize,
+    x: u16,
+    cell_rect: CellPixels,
+) -> CellPixels {
+    let cell = &cells[idx];
     let is_icon = primary_grapheme(&cell.symbol)
         .and_then(base_char)
         .is_some_and(is_private_use);
-    let next_is_blank = x + 1 < frame.width
-        && frame
-            .cells
+    let next_is_blank = x + 1 < width
+        && cells
             .get(idx + 1)
             .is_some_and(|next| next.symbol == " " && next.bg == cell.bg);
     if is_icon && next_is_blank && cell_rect.width > 0 {
@@ -785,18 +856,22 @@ mod tests {
         );
 
         assert_eq!(
-            glyph_room(&frame, 0, 0, rect(0)).width,
+            glyph_room(&frame.cells, frame.width, 0, 0, rect(0)).width,
             16,
             "icon, then a blank"
         );
         assert_eq!(
-            glyph_room(&frame, 2, 2, rect(2)).width,
+            glyph_room(&frame.cells, frame.width, 2, 2, rect(2)).width,
             8,
             "icon, then text"
         );
-        assert_eq!(glyph_room(&frame, 4, 4, rect(4)).width, 8, "not an icon");
         assert_eq!(
-            glyph_room(&frame, 6, 6, rect(6)).width,
+            glyph_room(&frame.cells, frame.width, 4, 4, rect(4)).width,
+            8,
+            "not an icon"
+        );
+        assert_eq!(
+            glyph_room(&frame.cells, frame.width, 6, 6, rect(6)).width,
             8,
             "icon at the row's end"
         );
@@ -804,7 +879,10 @@ mod tests {
         // A blank of another color is a different surface, not room to spread into.
         let mut split = row_of(&["\u{F06E4}", " "], Color::Reset);
         split.cells[1].bg = Color::Red;
-        assert_eq!(glyph_room(&split, 0, 0, rect(0)).width, 8);
+        assert_eq!(
+            glyph_room(&split.cells, split.width, 0, 0, rect(0)).width,
+            8
+        );
     }
 
     #[test]

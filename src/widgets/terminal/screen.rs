@@ -1471,6 +1471,11 @@ impl TerminalScreen {
             cell: self.cell_size,
             cols: self.cols,
         };
+        if command.affects_images() {
+            // Image-only updates and deleting the last placement still need a paint even when
+            // the VT grid and cursor stay unchanged. Text snapshot damage remains independent.
+            self.damage.mark_full();
+        }
         let outcome = self.graphics.apply(command, ctx);
         if let Some(response) = outcome.response {
             self.listener.responses.borrow_mut().push(response);
@@ -1672,6 +1677,17 @@ impl TerminalScreen {
         self.graphics.set_storage_enabled(enabled);
         self.dirty = true;
         self.snapshot_damage.mark_full();
+    }
+
+    /// Retain quiet raw file transmissions as private immutable file snapshots instead of heap
+    /// pixel buffers. Capture, replay and composition read their pixels on demand. A local Kitty
+    /// host can load a cell-aligned frame directly, without decoding it in the application.
+    ///
+    /// Disabled by default. Snapshot failure uses the ordinary in-memory path. File storage is
+    /// bounded independently as well as by the screen image budget.
+    #[cfg(feature = "terminal-images")]
+    pub fn set_image_file_storage_enabled(&mut self, enabled: bool) {
+        self.graphics.set_file_storage_enabled(enabled);
     }
 
     /// Choose which out-of-band transmission media (`t=f`, `t=t`, `t=s`) this screen accepts.
@@ -2279,7 +2295,12 @@ impl TerminalScreen {
         let cols = i32::from(self.cols);
         let rows = i32::from(self.rows);
         let mut images: Vec<crate::capture::CapturedImage> = Vec::new();
-        for placement in self.visible_images(display_offset, alt_screen) {
+        let placements = super::graphics::composite_terminal_images(
+            &self.visible_images(display_offset, alt_screen),
+            self.cols,
+            self.rows,
+        );
+        for placement in placements {
             let (left, top) = (placement.col, placement.row);
             let (placed_cols, placed_rows) = (i32::from(placement.cols), i32::from(placement.rows));
             if placed_cols <= 0 || placed_rows <= 0 {
@@ -2312,11 +2333,10 @@ impl TerminalScreen {
             ) else {
                 continue;
             };
-            let rgba = pixels
-                .crop_imm(crop.x, crop.y, crop.width, crop.height)
-                .to_rgba8();
+            let cropped = pixels.crop_imm(crop.x, crop.y, crop.width, crop.height);
+            let rgba = cropped.to_rgba8();
             let (pixel_width, pixel_height) = rgba.dimensions();
-            let image = crate::capture::CapturedImage::new(
+            let mut image = crate::capture::CapturedImage::new(
                 Rect {
                     x: vis_left as i16,
                     y: vis_top as i16,
@@ -2327,24 +2347,21 @@ impl TerminalScreen {
                 pixel_height,
                 rgba.into_raw().into(),
             );
-            for earlier in &mut images {
-                for y in image.area.y..image.area.y + image.area.h as i16 {
-                    for x in image.area.x..image.area.x + image.area.w as i16 {
-                        if let Some(offset) = earlier.area_offset(x as u16, y as u16) {
-                            earlier.visible[offset] = false;
-                        }
-                    }
-                }
-            }
+            image.fill_cell_box = true;
+            image.z_index = placement.z;
+            mask_capture_image(&mut image, cells, self.cols, &cropped, placement.z);
+            hide_covered_capture_cells(&mut images, &image, &cropped);
             images.push(image);
         }
         images.retain(|image| image.visible.contains(&true));
+        let original_cells = cells.to_vec();
         for image in &mut images {
             image.paint_half_blocks(
                 cells,
                 self.cols,
                 u32::from(self.cell_size.width),
                 u32::from(self.cell_size.height),
+                &original_cells,
             );
         }
         images
@@ -3662,6 +3679,54 @@ fn capture_underline(flags: CellFlags) -> Option<UnderlineStyle> {
     ]
     .into_iter()
     .find_map(|(flag, style)| flags.contains(flag).then_some(style))
+}
+
+#[cfg(feature = "terminal-images")]
+fn mask_capture_image(
+    image: &mut crate::capture::CapturedImage,
+    cells: &[CapturedCell],
+    cols: u16,
+    pixels: &image::DynamicImage,
+    z: i32,
+) {
+    for row in 0..image.area.h {
+        for col in 0..image.area.w {
+            let x = image.area.x as u16 + col;
+            let y = image.area.y as u16 + row;
+            let cell = &cells[usize::from(y) * usize::from(cols) + usize::from(x)];
+            image.visible[usize::from(row) * usize::from(image.area.w) + usize::from(col)] =
+                super::image_covers_cell(z, cell.bg != UiColor::Reset || cell.modifiers.reverse)
+                    && super::image_cell_has_pixels(
+                        pixels,
+                        (image.area.w, image.area.h),
+                        (col, row),
+                    );
+        }
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+fn hide_covered_capture_cells(
+    earlier: &mut [crate::capture::CapturedImage],
+    image: &crate::capture::CapturedImage,
+    pixels: &image::DynamicImage,
+) {
+    for row in 0..image.area.h {
+        for col in 0..image.area.w {
+            let x = image.area.x as u16 + col;
+            let y = image.area.y as u16 + row;
+            if !image.shows(x, y)
+                || !super::image_cell_is_opaque(pixels, (image.area.w, image.area.h), (col, row))
+            {
+                continue;
+            }
+            for earlier in earlier.iter_mut() {
+                if let Some(offset) = earlier.area_offset(x, y) {
+                    earlier.visible[offset] = false;
+                }
+            }
+        }
+    }
 }
 
 /// A terminal color as the program set it, with no palette applied.

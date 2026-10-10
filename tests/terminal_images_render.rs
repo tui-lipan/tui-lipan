@@ -966,3 +966,337 @@ fn each_clipped_effect_of_a_scope_recolors_only_the_pixels_it_covers() {
         assert_eq!(pixel, expected, "pixel {index}");
     }
 }
+
+/// Both pane and renderer captures retain negative planes beneath the individual glyph pixels.
+#[test]
+fn negative_planes_preserve_text_and_low_planes_preserve_backgrounds_in_captures() {
+    for z in [-1, i32::MIN / 2, i32::MIN / 2 - 1] {
+        let image = String::from_utf8(red_image(4, 2))
+            .unwrap()
+            .replace("a=T,", &format!("a=T,z={z},"));
+        // A subcell patch in another plane forces composition with transparent tile padding.
+        let patch = format!(
+            "\x1b_Ga=T,f=24,t=d,i=2,z=1,s=2,v=2;{}\x1b\\",
+            BASE64.encode([0, 255, 0].repeat(4))
+        );
+        let output = format!("{image}\x1b[1;4H{patch}\x1b[HA\x1b[44m \x1b[49m \x1b[2;1H汉");
+        let (mut backend, screen) = pane_with_screen(output.as_bytes(), 3, 6);
+        backend.render();
+        let frames = [screen.borrow().capture_frame(), backend.capture_frame()];
+        for (_kind, frame) in ["pane", "ui"].into_iter().zip(frames) {
+            assert_eq!(frame.cell(0, 0).symbol, "A", "z={z}");
+            let image = frame
+                .images
+                .first()
+                .expect("blank cells still show the image");
+            assert!(
+                image.visible[0],
+                "image remains visible between glyph strokes"
+            );
+            assert_eq!(frame.cell(0, 1).symbol, "汉");
+            assert!(image.shows(0, 1));
+            assert!(
+                image.shows(1, 1),
+                "images remain beneath both columns of a wide glyph"
+            );
+            assert!(
+                image.visible[2],
+                "default background stays below every plane"
+            );
+            if z < i32::MIN / 2 {
+                assert_eq!(frame.cell(1, 0).symbol, " ");
+                assert!(
+                    !image.visible[1],
+                    "non-default background stays above this plane"
+                );
+                assert_ne!(frame.cell(1, 0).bg, RED);
+                assert_ne!(frame.cell(1, 0).bg, Color::Reset);
+            } else {
+                assert!(
+                    image.visible[1],
+                    "ordinary negative planes cover backgrounds"
+                );
+            }
+            #[cfg(feature = "ui-snapshot-png")]
+            {
+                let options = tui_lipan::PngOptions {
+                    cell_width: 10,
+                    cell_height: 20,
+                    scale: 1,
+                    text_renderer: tui_lipan::PngTextRenderer::Bitmap,
+                    render_cursor: false,
+                    ..Default::default()
+                };
+                let png = frame.to_png(&options).unwrap();
+                let pixels = image::load_from_memory(&png).unwrap().to_rgb8();
+                assert_eq!(
+                    pixels.get_pixel(0, 0).0,
+                    [255, 0, 0],
+                    "image fills the glyph margin"
+                );
+                assert!(
+                    (0..20).any(|y| (0..10).any(|x| pixels.get_pixel(x, y).0 != [255, 0, 0])),
+                    "glyph strokes remain above the image"
+                );
+                assert_eq!(
+                    pixels.get_pixel(25, 10).0,
+                    [255, 0, 0],
+                    "blank cell shows image"
+                );
+                if z < i32::MIN / 2 {
+                    assert_ne!(
+                        pixels.get_pixel(15, 10).0,
+                        [255, 0, 0],
+                        "background not replaced"
+                    );
+                }
+                if let Some(directory) = std::env::var_os("TUI_LIPAN_Z_CAPTURE_REVIEW") {
+                    std::fs::create_dir_all(&directory).unwrap();
+                    let path = std::path::Path::new(&directory).join(format!("z-{z}-{_kind}.png"));
+                    let review = frame
+                        .to_png(&tui_lipan::PngOptions {
+                            scale: 4,
+                            ..options
+                        })
+                        .unwrap();
+                    std::fs::write(path, review).unwrap();
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+#[test]
+fn partially_transparent_z_planes_keep_lower_pixels_inside_the_same_capture_cell() {
+    for (name, width, height, alpha, offset, extra, expected_layers) in [
+        ("tiny", 2, 2, 255, (4, 8), false, 2),
+        ("translucent", 10, 20, 128, (0, 0), false, 2),
+        ("chain", 2, 2, 255, (4, 8), true, 3),
+        ("opaque", 10, 20, 255, (0, 0), false, 1),
+    ] {
+        let base = String::from_utf8(red_image(1, 1)).unwrap();
+        let patch = format!(
+            "\x1b_Ga=T,f=32,t=d,i=2,z=1,s={width},v={height},X={},Y={};{}\x1b\\",
+            offset.0,
+            offset.1,
+            BASE64.encode([0, 255, 0, alpha].repeat(width * height)),
+        );
+        let top = if extra {
+            format!(
+                "\x1b[H\x1b_Ga=T,f=24,t=d,i=3,z=2,s=2,v=2;{}\x1b\\",
+                BASE64.encode([0, 0, 255].repeat(4))
+            )
+        } else {
+            String::new()
+        };
+        let output = format!("{base}\x1b[H{patch}{top}");
+        let (mut backend, screen) = pane_with_screen(output.as_bytes(), 2, 2);
+        backend.render();
+        for (kind, frame) in ["pane", "ui"]
+            .into_iter()
+            .zip([screen.borrow().capture_frame(), backend.capture_frame()])
+        {
+            assert_eq!(frame.images.len(), expected_layers, "{name}/{kind}");
+            assert!(
+                frame.images.iter().all(|image| image.shows(0, 0)),
+                "each contributing plane stays visible"
+            );
+            let options = tui_lipan::PngOptions {
+                cell_width: CELL.width,
+                cell_height: CELL.height,
+                scale: 1,
+                render_cursor: false,
+                text_renderer: tui_lipan::PngTextRenderer::Bitmap,
+                ..Default::default()
+            };
+            let png = frame.to_png(&options).unwrap();
+            let pixels = image::load_from_memory(&png).unwrap().to_rgb8();
+            for y in 0..u32::from(CELL.height) {
+                for x in 0..u32::from(CELL.width) {
+                    let expected =
+                        expected_z_plane_pixel((x, y), (width, height), offset, alpha, extra);
+                    assert_eq!(
+                        pixels.get_pixel(x, y).0,
+                        expected,
+                        "{name}/{kind} pixel ({x},{y})"
+                    );
+                }
+            }
+            if let Some(directory) = std::env::var_os("TUI_LIPAN_Z_CAPTURE_REVIEW") {
+                std::fs::create_dir_all(&directory).unwrap();
+                let path =
+                    std::path::Path::new(&directory).join(format!("overlap-{name}-{kind}.png"));
+                std::fs::write(
+                    path,
+                    frame
+                        .to_png(&tui_lipan::PngOptions {
+                            scale: 8,
+                            ..options
+                        })
+                        .unwrap(),
+                )
+                .unwrap();
+            }
+        }
+        let covered = labelled_pane(output.as_bytes(), "X").capture_frame();
+        assert_eq!(covered.cell(0, 0).symbol, "X");
+        assert!(
+            covered.images.is_empty(),
+            "a later text overlay hides the entire image stack"
+        );
+    }
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+fn expected_z_plane_pixel(
+    (x, y): (u32, u32),
+    (width, height): (usize, usize),
+    offset: (u32, u32),
+    alpha: u8,
+    extra: bool,
+) -> [u8; 3] {
+    if extra && x < 2 && y < 2 {
+        return [0, 0, 255];
+    }
+    if x >= offset.0 && x < offset.0 + width as u32 && y >= offset.1 && y < offset.1 + height as u32
+    {
+        [255 - alpha, alpha, 0]
+    } else {
+        [255, 0, 0]
+    }
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+#[test]
+fn png_negative_planes_blend_beneath_glyph_pixels_in_both_capture_paths() {
+    let text = "\x1b[H\x1b[38;2;255;255;255m\x1b[4mA汉▀\x1b[24m\x1b[2;1H\x1b[48;2;0;0;255mA汉▀";
+    let (mut baseline_backend, baseline_screen) = pane_with_screen(text.as_bytes(), 2, 4);
+    baseline_backend.render();
+    let baselines = [
+        baseline_screen.borrow().capture_frame(),
+        baseline_backend.capture_frame(),
+    ];
+    for z in [-1, i32::MIN / 2, i32::MIN / 2 - 1, 0] {
+        for alpha in [128, 255] {
+            let base = format!(
+                "\x1b_Ga=T,f=32,t=d,i=1,z={z},s=40,v=40;{}\x1b\\",
+                BASE64.encode([255, 0, 0, alpha].repeat(40 * 40)),
+            );
+            let patch = format!(
+                "\x1b[H\x1b_Ga=T,f=32,t=d,i=2,z=1,s=2,v=2,X=4,Y=8;{}\x1b\\",
+                BASE64.encode([0, 255, 0, 128].repeat(4)),
+            );
+            let output = format!("{base}{patch}{text}");
+            let (mut backend, screen) = pane_with_screen(output.as_bytes(), 2, 4);
+            backend.render();
+            for ((kind, frame), baseline) in ["pane", "ui"]
+                .into_iter()
+                .zip([screen.borrow().capture_frame(), backend.capture_frame()])
+                .zip(&baselines)
+            {
+                for renderer in [
+                    tui_lipan::PngTextRenderer::Bitmap,
+                    tui_lipan::PngTextRenderer::Font,
+                ] {
+                    assert_negative_plane_pixels(&frame, baseline, z, alpha, renderer, kind);
+                }
+            }
+            let covered = labelled_pane(output.as_bytes(), "X").capture_frame();
+            assert_eq!(covered.cell(0, 0).symbol, "X");
+            assert!(
+                covered.images.iter().all(|image| !image.shows(0, 0)),
+                "later text hides negative and positive images"
+            );
+        }
+    }
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+fn assert_negative_plane_pixels(
+    frame: &CapturedFrame,
+    baseline: &CapturedFrame,
+    z: i32,
+    alpha: u8,
+    renderer: tui_lipan::PngTextRenderer,
+    kind: &str,
+) {
+    let options = tui_lipan::PngOptions {
+        cell_width: 10,
+        cell_height: 20,
+        scale: 1,
+        render_cursor: false,
+        text_renderer: renderer,
+        default_fg: Color::Rgb(255, 255, 255),
+        ..Default::default()
+    };
+    // A white-on-black capture measures glyph coverage, including antialiasing and decorations.
+    let mut glyphs = baseline.clone();
+    for cell in &mut glyphs.cells {
+        cell.bg = Color::Reset;
+    }
+    let coverage = image::load_from_memory(&glyphs.to_png(&options).unwrap())
+        .unwrap()
+        .to_rgb8();
+    let png = frame.to_png(&options).unwrap();
+    let pixels = image::load_from_memory(&png).unwrap().to_rgb8();
+    for (x, y, actual) in pixels.enumerate_pixels() {
+        let expected =
+            expected_negative_plane_pixel((x, y), coverage.get_pixel(x, y).0[0], z, alpha);
+        assert_eq!(
+            actual.0, expected,
+            "{kind}/{renderer:?} z={z} alpha={alpha} pixel ({x},{y})"
+        );
+    }
+    if z == -1
+        && alpha == 128
+        && renderer == tui_lipan::PngTextRenderer::Bitmap
+        && let Some(directory) = std::env::var_os("TUI_LIPAN_Z_CAPTURE_REVIEW")
+    {
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            std::path::Path::new(&directory).join(format!("glyph-blend-{kind}.png")),
+            frame
+                .to_png(&tui_lipan::PngOptions {
+                    scale: 8,
+                    ..options
+                })
+                .unwrap(),
+        )
+        .unwrap();
+    }
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+fn expected_negative_plane_pixel((x, y): (u32, u32), coverage: u8, z: i32, alpha: u8) -> [u8; 3] {
+    let background = if y < 20 { [0, 0, 0] } else { [0, 0, 255] };
+    let under_text = if z < i32::MIN / 2 && y >= 20 {
+        background
+    } else {
+        capture_test_blend([255, 0, 0], background, alpha)
+    };
+    let text = capture_test_blend([255, 255, 255], under_text, coverage);
+    let text = if z >= 0 {
+        capture_test_blend(
+            [255, 0, 0],
+            capture_test_blend([255, 255, 255], background, coverage),
+            alpha,
+        )
+    } else {
+        text
+    };
+    if (4..6).contains(&x) && (8..10).contains(&y) {
+        capture_test_blend([0, 255, 0], text, 128)
+    } else {
+        text
+    }
+}
+
+#[cfg(feature = "ui-snapshot-png")]
+fn capture_test_blend(above: [u8; 3], below: [u8; 3], alpha: u8) -> [u8; 3] {
+    std::array::from_fn(|channel| {
+        ((u32::from(above[channel]) * u32::from(alpha)
+            + u32::from(below[channel]) * (255 - u32::from(alpha)))
+            / 255) as u8
+    })
+}

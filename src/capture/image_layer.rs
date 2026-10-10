@@ -40,17 +40,26 @@ pub(crate) fn fitted_pixel_size(
 /// [`CapturedFrame::to_png`](super::CapturedFrame::to_png) draws the pixels themselves.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CapturedImage {
+    /// Kitty stacking order. Negative values draw beneath text in PNG captures.
+    pub z_index: i32,
+    /// Original cells beneath the half-block approximation, row-major in [`Self::area`]. PNG captures
+    /// restore these before drawing images and glyphs in stacking order.
+    pub underlying_cells: Vec<Option<CapturedCell>>,
     /// Cells the image is laid out over, in frame coordinates. The pixels are scaled to fit
     /// inside, keeping their aspect ratio, from the top-left corner, as a terminal draws them.
     pub area: Rect,
+    /// Fill the cell box even when the capture font has a different pixel aspect ratio.
+    /// Terminal image tiles use this to preserve their exact cell coverage.
+    pub fill_cell_box: bool,
     /// Width of [`Self::rgba`] in pixels.
     pub width: u32,
     /// Height of [`Self::rgba`] in pixels.
     pub height: u32,
     /// The pixels, 8-bit RGBA, row-major: `width * height * 4` bytes.
     pub rgba: Arc<[u8]>,
-    /// Whether each cell of [`Self::area`] still shows the image, row-major. `false` where something
-    /// drawn after it covers the cell: an overlay, a border, a pane above it.
+    /// Whether each cell of [`Self::area`] participates in image compositing, row-major. Multiple
+    /// images can share a cell when an upper image contains transparency. `false` where later
+    /// drawing fully covers the cell: an opaque image, an overlay, a border, a pane above it.
     pub visible: Vec<bool>,
     /// The background each cell of [`Self::area`] had before its half-block stand-in replaced it,
     /// row-major. A PNG draws the image over these, so its transparent parts show what is behind
@@ -71,7 +80,10 @@ impl CapturedImage {
             "rgba must hold width * height pixels"
         );
         Self {
+            z_index: 0,
+            underlying_cells: vec![None; usize::from(area.w) * usize::from(area.h)],
             area,
+            fill_cell_box: false,
             width,
             height,
             rgba,
@@ -102,6 +114,29 @@ impl CapturedImage {
             .then(|| row as usize * usize::from(self.area.w) + col as usize)
     }
 
+    /// Frame-grid index of a local image cell, clipped to the frame's cell storage.
+    #[cfg_attr(
+        not(any(feature = "terminal-images", feature = "ui-snapshot-png")),
+        allow(dead_code)
+    )]
+    pub(crate) fn frame_cell_offset(
+        &self,
+        local: usize,
+        width: u16,
+        cell_count: usize,
+    ) -> Option<usize> {
+        if self.area.w == 0 {
+            return None;
+        }
+        let x = i32::from(self.area.x) + (local % usize::from(self.area.w)) as i32;
+        let y = i32::from(self.area.y) + (local / usize::from(self.area.w)) as i32;
+        if x < 0 || y < 0 || x >= i32::from(width) {
+            return None;
+        }
+        let offset = y as usize * usize::from(width) + x as usize;
+        (offset < cell_count).then_some(offset)
+    }
+
     /// The size in pixels the image is drawn at, given cells of `cell_w` x `cell_h` pixels: as large
     /// as fits in [`Self::area`] without changing its aspect ratio.
     #[cfg_attr(
@@ -109,6 +144,12 @@ impl CapturedImage {
         allow(dead_code)
     )]
     pub(crate) fn fitted_size(&self, cell_w: u32, cell_h: u32) -> (u32, u32) {
+        if self.fill_cell_box {
+            return (
+                u32::from(self.area.w) * cell_w,
+                u32::from(self.area.h) * cell_h,
+            );
+        }
         fitted_pixel_size(
             (self.width, self.height),
             (
@@ -171,8 +212,8 @@ impl CapturedImage {
 
     /// Replace the visible cells this image covers with a half-block approximation of it, drawn with
     /// cells of `cell_w` x `cell_h` pixels, remembering each cell's background in
-    /// [`Self::backgrounds`]. A half the image leaves transparent keeps the cell's background; a cell
-    /// outside the drawn image is left as it is.
+    /// [`Self::backgrounds`]. A transparent half keeps the image approximation or background below
+    /// it; a cell outside the drawn image is left as it is.
     #[cfg_attr(not(feature = "terminal-images"), allow(dead_code))]
     pub(crate) fn paint_half_blocks(
         &mut self,
@@ -180,49 +221,74 @@ impl CapturedImage {
         frame_width: u16,
         cell_w: u32,
         cell_h: u32,
+        original_cells: &[CapturedCell],
     ) {
         let (cell_w, cell_h) = (cell_w.max(1), cell_h.max(2));
         let fitted = self.fitted_size(cell_w, cell_h);
-        for row in 0..self.area.h {
-            for col in 0..self.area.w {
-                if !self.visible[usize::from(row) * usize::from(self.area.w) + usize::from(col)] {
-                    continue;
-                }
-                let x = i32::from(self.area.x) + i32::from(col);
-                let y = i32::from(self.area.y) + i32::from(row);
-                if x < 0 || y < 0 || x >= i32::from(frame_width) {
-                    continue;
-                }
-                let Some(cell) = cells.get_mut(y as usize * usize::from(frame_width) + x as usize)
-                else {
-                    continue;
-                };
-                self.backgrounds[usize::from(row) * usize::from(self.area.w) + usize::from(col)] =
-                    cell.bg;
-                let left = (u32::from(col) * cell_w).min(fitted.0);
-                let right = ((u32::from(col) + 1) * cell_w).min(fitted.0);
-                let top = (u32::from(row) * cell_h).min(fitted.1);
-                let middle = (u32::from(row) * cell_h + cell_h / 2).min(fitted.1);
-                let bottom = ((u32::from(row) + 1) * cell_h).min(fitted.1);
-                let opaque = |sample: Option<[u8; 4]>| sample.filter(|&[.., alpha]| alpha >= 128);
-                let upper = opaque(self.sample(fitted, (left, top), (right, middle)));
-                let lower = opaque(self.sample(fitted, (left, middle), (right, bottom)));
-                // A cell the image leaves clear keeps what it showed, so text output marks only
-                // where the picture actually is.
-                if upper.is_none() && lower.is_none() {
-                    continue;
-                }
-                let background = cell.bg;
-                let color = |sample: Option<[u8; 4]>| match sample {
-                    Some([r, g, b, _]) => Color::Rgb(r, g, b),
-                    None => background,
-                };
-                cell.symbol = UPPER_HALF.to_string();
-                cell.fg = color(upper);
-                cell.bg = color(lower);
-                cell.modifiers = super::CellModifiers::default();
+        for local in 0..usize::from(self.area.w) * usize::from(self.area.h) {
+            if !self.visible[local] {
+                continue;
             }
+            let Some(offset) = self.frame_cell_offset(local, frame_width, cells.len()) else {
+                continue;
+            };
+            let x = (offset % usize::from(frame_width)) as u16;
+            let continuation = x > 0
+                && original_cells
+                    .get(offset - 1)
+                    .is_some_and(|previous| previous.span_at(x - 1, frame_width) > 1);
+            let cell = &mut cells[offset];
+            let original = original_cells.get(offset).unwrap_or(cell);
+            self.underlying_cells[local] = Some(original.clone());
+            self.backgrounds[local] = original.bg;
+            if self.z_index < 0 && (original.symbol != " " || continuation) {
+                continue;
+            }
+            let col = (local % usize::from(self.area.w)) as u16;
+            let row = (local / usize::from(self.area.w)) as u16;
+            self.paint_half_block_cell(cell, fitted, (col, row), (cell_w, cell_h));
         }
+    }
+
+    #[cfg_attr(not(feature = "terminal-images"), allow(dead_code))]
+    fn paint_half_block_cell(
+        &mut self,
+        cell: &mut CapturedCell,
+        fitted: (u32, u32),
+        (col, row): (u16, u16),
+        (cell_w, cell_h): (u32, u32),
+    ) {
+        let left = (u32::from(col) * cell_w).min(fitted.0);
+        let right = ((u32::from(col) + 1) * cell_w).min(fitted.0);
+        let top = (u32::from(row) * cell_h).min(fitted.1);
+        let middle = (u32::from(row) * cell_h + cell_h / 2).min(fitted.1);
+        let bottom = ((u32::from(row) + 1) * cell_h).min(fitted.1);
+        let opaque = |sample: Option<[u8; 4]>| sample.filter(|&[.., alpha]| alpha >= 128);
+        let upper = opaque(self.sample(fitted, (left, top), (right, middle)));
+        let lower = opaque(self.sample(fitted, (left, middle), (right, bottom)));
+        // A cell the image leaves clear keeps what it showed, so text output marks only
+        // where the picture actually is.
+        if upper.is_none() && lower.is_none() {
+            return;
+        }
+        let background = cell.bg;
+        let foreground = if cell.symbol == UPPER_HALF {
+            cell.fg
+        } else {
+            background
+        };
+        cell.symbol = UPPER_HALF.to_string();
+        cell.fg = half_block_sample_color(upper, foreground);
+        cell.bg = half_block_sample_color(lower, background);
+        cell.modifiers = super::CellModifiers::default();
+    }
+}
+
+#[cfg_attr(not(feature = "terminal-images"), allow(dead_code))]
+fn half_block_sample_color(sample: Option<[u8; 4]>, below: Color) -> Color {
+    match sample {
+        Some([r, g, b, _]) => Color::Rgb(r, g, b),
+        None => below,
     }
 }
 
@@ -258,6 +324,15 @@ mod tests {
     }
 
     #[test]
+    fn terminal_tiles_cover_the_same_cells_with_a_different_capture_font() {
+        let mut tile = image(area(0, 0, 16, 8), 224, 256, |_, _| [0, 0, 255, 255]);
+        assert_eq!(tile.fitted_size(8, 16), (112, 128));
+        tile.fill_cell_box = true;
+        assert_eq!(tile.fitted_size(8, 16), (128, 128));
+        assert_eq!(tile.fitted_size(14, 32), (224, 256));
+    }
+
+    #[test]
     fn half_blocks_carry_the_top_and_bottom_colors_of_each_cell() {
         // Red above green, drawn over two rows of one cell each: every cell is half of each.
         let mut two_tone = image(area(1, 0, 1, 1), 10, 20, |_, y| {
@@ -275,7 +350,7 @@ mod tests {
             modifiers: super::super::CellModifiers::default(),
         };
         let mut cells = vec![blank.clone(); 3];
-        two_tone.paint_half_blocks(&mut cells, 3, 10, 20);
+        two_tone.paint_half_blocks(&mut cells, 3, 10, 20, &[]);
 
         assert_eq!(cells[0], blank);
         assert_eq!(cells[1].symbol, UPPER_HALF);
@@ -283,6 +358,35 @@ mod tests {
         assert_eq!(cells[1].bg, Color::Rgb(0, 255, 0));
         assert_eq!(cells[2], blank);
         assert_eq!(two_tone.backgrounds, vec![Color::Blue]);
+    }
+
+    #[test]
+    fn a_transparent_upper_half_keeps_the_lower_images_foreground() {
+        let mut base = image(area(0, 0, 1, 1), 10, 20, |_, y| {
+            if y < 10 {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 255, 255]
+            }
+        });
+        let mut patch = image(area(0, 0, 1, 1), 10, 20, |_, y| {
+            if y < 10 {
+                [0, 0, 0, 0]
+            } else {
+                [0, 255, 0, 255]
+            }
+        });
+        let mut cells = vec![CapturedCell {
+            symbol: " ".to_string(),
+            fg: Color::Reset,
+            bg: Color::Reset,
+            underline_color: Color::Reset,
+            modifiers: super::super::CellModifiers::default(),
+        }];
+        base.paint_half_blocks(&mut cells, 1, 10, 20, &[]);
+        patch.paint_half_blocks(&mut cells, 1, 10, 20, &[]);
+        assert_eq!(cells[0].fg, Color::Rgb(255, 0, 0));
+        assert_eq!(cells[0].bg, Color::Rgb(0, 255, 0));
     }
 
     #[test]
@@ -299,7 +403,7 @@ mod tests {
             modifiers: super::super::CellModifiers::default(),
         };
         let mut cells = vec![blank.clone(); 2];
-        clear_below.paint_half_blocks(&mut cells, 2, 10, 20);
+        clear_below.paint_half_blocks(&mut cells, 2, 10, 20, &[]);
 
         assert_eq!(cells[0].fg, Color::Rgb(9, 9, 9));
         assert_eq!(cells[0].bg, Color::Blue);
@@ -308,7 +412,7 @@ mod tests {
         // A cell the image leaves wholly transparent keeps its text.
         let mut clear = image(area(0, 0, 1, 1), 10, 20, |_, _| [0, 0, 0, 0]);
         let mut cells = vec![blank.clone()];
-        clear.paint_half_blocks(&mut cells, 1, 10, 20);
+        clear.paint_half_blocks(&mut cells, 1, 10, 20, &[]);
         assert_eq!(cells[0], blank);
         assert_eq!(clear.backgrounds, vec![Color::Blue]);
         assert!(clear_below.shows(0, 0));

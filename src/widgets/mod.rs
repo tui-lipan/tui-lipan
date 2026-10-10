@@ -111,7 +111,10 @@ pub(crate) use scroll_view::utils::{
 };
 pub(crate) use status_bar_layout::StatusBarLayout;
 #[cfg(feature = "terminal-images")]
-pub(crate) use terminal::{KITTY_PLACEHOLDER, crop_for_visible_cells, kitty_diacritic};
+pub(crate) use terminal::{
+    KITTY_PLACEHOLDER, composite_terminal_images, crop_for_visible_cells, image_cell_has_pixels,
+    image_cell_is_opaque, image_covers_cell, kitty_diacritic,
+};
 pub(crate) use text_area::TextAreaGeometry;
 pub(crate) use text_area::text_area_cursor_reserve;
 pub(crate) use text_area::text_area_visual_line_for_cursor;

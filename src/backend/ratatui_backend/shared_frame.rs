@@ -315,6 +315,28 @@ mod imp {
         slot.destroy();
     }
 
+    impl Pool {
+        fn trim_idle(&mut self) {
+            let mut index = 0;
+            while index < self.slots.len() {
+                let slot = &self.slots[index];
+                let idle = slot
+                    .handed
+                    .as_ref()
+                    .is_none_or(|(_, at)| at.elapsed() >= Duration::from_secs(1));
+                if idle && slot.reusable() {
+                    self.slots.swap_remove(index).destroy();
+                } else {
+                    index += 1;
+                }
+            }
+        }
+    }
+
+    pub(crate) fn trim_idle_pool() {
+        pool().trim_idle();
+    }
+
     /// Pixels in a shared-memory object, waiting for the host to read them.
     ///
     /// Owns the name until the host is told about it. A frame that is encoded and then never
@@ -326,6 +348,10 @@ mod imp {
         /// overwrite the pixels the host has not been told about yet. `None` for a frame that
         /// allocated its own object.
         slot: Option<Slot>,
+        backing: Option<std::fs::File>,
+        // Unlinking an unread retry name cannot prove that a reader with an open descriptor is
+        // finished. Retire that backing object instead of ever overwriting its pixels.
+        reuse_after_retry: bool,
         /// Cleared once the host has been told the name, since reading is what unlinks the name
         /// and the host is the reader.
         owned: bool,
@@ -372,6 +398,8 @@ mod imp {
                     ..slot
                 }),
                 owned: true,
+                backing: None,
+                reuse_after_retry: true,
             })
         }
 
@@ -396,16 +424,80 @@ mod imp {
             // SAFETY: `shm_open` just produced this descriptor and nothing else holds a copy, so the
             // `File` is its sole owner and closes it on every path out of here.
             let mut file = unsafe { std::fs::File::from_raw_fd(descriptor) };
-            let frame = Self {
+            let mut frame = Self {
                 name,
                 slot: None,
+                backing: None,
+                reuse_after_retry: true,
                 owned: true,
             };
             if unsafe { libc::ftruncate(descriptor, length) } < 0 {
                 return None;
             }
             file.write_all(pixels).ok()?;
+            frame.backing = Some(file);
             Some(frame)
+        }
+
+        /// Give a retry its own consumable name while keeping the pixels alive independently.
+        pub(crate) fn renew(&mut self) -> std::io::Result<()> {
+            use std::io::{Seek as _, SeekFrom};
+            use std::os::fd::FromRawFd as _;
+
+            let name = CString::new(super::next_name()).map_err(std::io::Error::other)?;
+            if let Some(slot) = self.slot.as_mut() {
+                let link = shm_path(name.to_str().unwrap_or_default())
+                    .ok_or_else(|| std::io::Error::other("shared memory path unavailable"))?;
+                if unsafe { libc::link(slot.source_path.as_ptr(), link.as_ptr()) } < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if let Some((old_link, _)) = &slot.handed {
+                    // SAFETY: the slot owns this CString; access only checks whether the host has
+                    // removed the link after reading. An existing link requires retiring the slot.
+                    self.reuse_after_retry &=
+                        unsafe { libc::access(old_link.as_ptr(), libc::F_OK) } != 0;
+                }
+                slot.handed = Some((link, Instant::now()));
+            } else {
+                let source = self
+                    .backing
+                    .as_mut()
+                    .ok_or_else(|| std::io::Error::other("shared upload already handed over"))?;
+                let descriptor = unsafe {
+                    libc::shm_open(
+                        name.as_ptr(),
+                        libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
+                        0o600,
+                    )
+                };
+                if descriptor < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // SAFETY: this descriptor was just created and File becomes its sole owner.
+                let mut file = unsafe { std::fs::File::from_raw_fd(descriptor) };
+                let copied = (|| {
+                    let length = libc::off_t::try_from(source.metadata()?.len())
+                        .map_err(std::io::Error::other)?;
+                    if unsafe { libc::ftruncate(descriptor, length) } < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    source.seek(SeekFrom::Start(0))?;
+                    std::io::copy(source, &mut file)
+                })();
+                if let Err(error) = copied {
+                    unsafe { libc::shm_unlink(name.as_ptr()) };
+                    return Err(error);
+                }
+                self.backing = Some(file);
+            }
+            unsafe { libc::shm_unlink(self.name.as_ptr()) };
+            self.name = name;
+            Ok(())
+        }
+
+        /// A failed attempt may already have an open reader even when no retry is painted.
+        pub(crate) fn abandon_attempt(&mut self) {
+            self.reuse_after_retry = false;
         }
 
         /// The object's name, for the `t=s` payload.
@@ -420,6 +512,7 @@ mod imp {
         /// overwriting them before it has.
         pub(crate) fn handed_over(&mut self) {
             self.owned = false;
+            self.backing = None;
             if let Some(mut slot) = self.slot.take() {
                 // The grace runs from here rather than from the write. An encode can finish long
                 // before the frame it produced is painted - the widget path encodes on a worker -
@@ -428,7 +521,18 @@ mod imp {
                 if let Some((_, at)) = slot.handed.as_mut() {
                     *at = Instant::now();
                 }
+                self.finish_slot(slot);
+            }
+        }
+
+        fn finish_slot(&self, mut slot: Slot) {
+            if self.reuse_after_retry {
                 release(slot);
+            } else {
+                // Leave the current host link alive after handoff, while closing our mapping and
+                // private source. Any already-open reader keeps its own immutable inode alive.
+                slot.handed = None;
+                discard(slot);
             }
         }
     }
@@ -442,7 +546,7 @@ mod imp {
                 // Never handed over, so nothing outside this process ever knew the link existed and
                 // the slot is free the moment it goes back.
                 slot.handed = None;
-                release(slot);
+                self.finish_slot(slot);
             }
         }
     }
@@ -450,6 +554,143 @@ mod imp {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[cfg(target_os = "linux")]
+        fn private_pooled_frame(pixels: &[u8]) -> SharedFrame {
+            // A private slot avoids depending on other tests filling the process-wide pool.
+            let mut slot = create_slot(pixels.len()).unwrap();
+            let name = CString::new(super::super::next_name()).unwrap();
+            let link = shm_path(name.to_str().unwrap()).unwrap();
+            assert_eq!(
+                unsafe { libc::link(slot.source_path.as_ptr(), link.as_ptr()) },
+                0
+            );
+            unsafe {
+                std::ptr::copy_nonoverlapping(pixels.as_ptr(), slot.map as *mut u8, pixels.len())
+            };
+            slot.handed = Some((link, Instant::now()));
+            {
+                let mut pool = pool();
+                pool.claimed += 1;
+                pool.claimed_bytes += slot.len;
+            }
+            SharedFrame {
+                name,
+                slot: Some(slot),
+                backing: None,
+                owned: true,
+                reuse_after_retry: true,
+            }
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn abandoned_attempt_retires_backing_without_a_retry() {
+            let pixels = [1, 2, 3, 255];
+            let mut frame = private_pooled_frame(&pixels);
+            let source = frame
+                .slot
+                .as_ref()
+                .unwrap()
+                .source_path
+                .to_str()
+                .unwrap()
+                .to_owned();
+            let mut reader = std::fs::File::open(format!("/dev/shm{}", frame.name())).unwrap();
+            frame.abandon_attempt();
+            drop(frame);
+            assert!(!std::path::Path::new(&source).exists());
+            use std::io::Read as _;
+            let mut read = Vec::new();
+            reader.read_to_end(&mut read).unwrap();
+            assert_eq!(read, pixels);
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn retry_of_an_unread_pooled_upload_retires_its_backing() {
+            let pixels = [1, 2, 3, 255];
+            let mut frame = private_pooled_frame(&pixels);
+            let slot = frame.slot.as_ref().unwrap();
+            let source = slot.source.to_str().unwrap().to_owned();
+            let source_path = slot.source_path.to_str().unwrap().to_owned();
+            let old_path = format!("/dev/shm{}", frame.name());
+            let mut reader = std::fs::File::open(&old_path).unwrap();
+            frame.renew().unwrap();
+            assert!(!frame.reuse_after_retry);
+            let current = format!("/dev/shm{}", frame.name());
+            frame.handed_over();
+            assert!(!std::path::Path::new(&source_path).exists());
+            assert!(
+                !pool()
+                    .slots
+                    .iter()
+                    .any(|slot| slot.source.to_str().unwrap() == source)
+            );
+            use std::io::Read as _;
+            let mut read = Vec::new();
+            reader.read_to_end(&mut read).unwrap();
+            assert_eq!(
+                read, pixels,
+                "an already-open reader keeps immutable pixels"
+            );
+            assert_eq!(std::fs::read(&current).unwrap(), pixels);
+            std::fs::remove_file(current).unwrap();
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn allocated_upload_can_renew_after_the_host_unlinks_its_name() {
+            let pixels = [1, 2, 3, 255];
+            let mut frame = SharedFrame::allocated(&pixels).unwrap();
+            let first = frame.name().to_owned();
+            std::fs::remove_file(format!("/dev/shm{first}")).unwrap();
+            frame.renew().unwrap();
+            assert_ne!(frame.name(), first);
+            assert_eq!(
+                std::fs::read(format!("/dev/shm{}", frame.name())).unwrap(),
+                pixels
+            );
+        }
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn idle_pool_slots_expire_after_the_host_finishes_reading() {
+            let mut idle = create_slot(4096).unwrap();
+            let mut pending = create_slot(4096).unwrap();
+            let mut recent = create_slot(4096).unwrap();
+            let gone = CString::new(format!("/dev/shm{}", super::super::next_name())).unwrap();
+            idle.handed = Some((gone.clone(), Instant::now() - Duration::from_secs(2)));
+            recent.handed = Some((gone, Instant::now()));
+            let outstanding =
+                CString::new(format!("/dev/shm{}", super::super::next_name())).unwrap();
+            assert_eq!(
+                unsafe { libc::link(pending.source_path.as_ptr(), outstanding.as_ptr()) },
+                0
+            );
+            pending.handed = Some((outstanding.clone(), Instant::now() - Duration::from_secs(2)));
+            let mut pool = Pool {
+                slots: vec![idle, pending, recent],
+                claimed: 0,
+                claimed_bytes: 0,
+            };
+            pool.trim_idle();
+            assert_eq!(
+                pool.resident(),
+                8192,
+                "recent and unread buffers remain resident"
+            );
+            std::fs::remove_file(outstanding.to_str().unwrap()).unwrap();
+            for slot in &mut pool.slots {
+                slot.handed.as_mut().unwrap().1 = Instant::now() - Duration::from_secs(2);
+            }
+            pool.trim_idle();
+            assert_eq!(
+                pool.resident(),
+                0,
+                "old buffers are unmapped once safe to release"
+            );
+        }
 
         /// These three tests share the process-wide pool, so they take turns.
         #[cfg(target_os = "linux")]
@@ -593,9 +834,21 @@ mod imp {
             ""
         }
 
+        pub(crate) fn renew(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("shared memory unavailable"))
+        }
+
+        pub(crate) fn abandon_attempt(&mut self) {}
+
         pub(crate) fn handed_over(&mut self) {}
     }
 }
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub(crate) use imp::trim_idle_pool;
+
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+pub(crate) fn trim_idle_pool() {}
 
 pub(crate) use imp::SharedFrame;
 

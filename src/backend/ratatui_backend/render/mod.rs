@@ -165,6 +165,8 @@ fn build_focus_chain(tree: &NodeTree, focused: Option<NodeId>) -> Vec<NodeId> {
 }
 
 pub(crate) fn render(f: &mut ratatui::Frame<'_>, ctx: &RenderContext<'_>) {
+    #[cfg(feature = "terminal-images")]
+    crate::backend::ratatui_backend::renderers::image::begin_kitty_frame();
     let _terminal_bg_scope = push_render_terminal_bg(ctx.terminal_bg);
     if let Some(caches_cell) = ctx.paint_glyph_caches.as_ref() {
         caches_cell.borrow_mut().clear();
@@ -519,6 +521,8 @@ pub(crate) fn render_regions(
     ctx: &RenderContext<'_>,
     regions: &[Rect],
 ) {
+    #[cfg(feature = "terminal-images")]
+    crate::backend::ratatui_backend::renderers::image::begin_kitty_frame();
     let tree = ctx.tree;
     let content = f.area();
     let focus_chain = build_focus_chain(tree, ctx.focused);

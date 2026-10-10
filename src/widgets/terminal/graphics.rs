@@ -39,6 +39,10 @@
 //!
 //! [Kitty graphics protocol]: https://sw.kovidgoyal.net/kitty/graphics-protocol/
 
+mod composite;
+
+pub(crate) use composite::composite_terminal_images;
+
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -52,7 +56,7 @@ use base64::alphabet;
 use base64::engine::DecodePaddingMode;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
-use image::DynamicImage;
+use image::{DynamicImage, GenericImageView};
 
 use super::graphics_media::{self, GraphicsMediaPolicy, GraphicsMedium};
 use super::screen::TerminalCellSize;
@@ -122,12 +126,22 @@ pub struct TerminalImage {
     height: u32,
     source_hash: u64,
     stream_namespace: u64,
+    geometry: Option<ImageGeometry>,
+    composition: Option<Arc<std::sync::Mutex<composite::CompositionCache>>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ImageGeometry {
+    offset: (u32, u32),
+    size: (u32, u32),
+    cell: (u16, u16),
+    requested_cells: (u32, u32),
 }
 
 /// Everything [`decode_payload`] needs, kept so the decode can happen later.
 #[derive(Debug)]
 struct DeferredDecode {
-    payload: Vec<u8>,
+    payload: std::sync::Mutex<Option<Vec<u8>>>,
     compressed: bool,
     format: u32,
     width: u32,
@@ -145,12 +159,16 @@ struct DeferredDecode {
 /// why [`GraphicsStore::finish_transmit`] applies it to `q=2` transmissions alone. See there.
 #[derive(Clone)]
 enum ImageSource {
+    File {
+        input: Arc<crate::backend::ratatui_backend::file_frame::FilePixels>,
+        decoded: Arc<std::sync::OnceLock<Option<Arc<DynamicImage>>>>,
+    },
     Decoded(Arc<DynamicImage>),
     Deferred {
         input: Arc<DeferredDecode>,
         /// `None` once decoding has been attempted and failed, so a broken payload is not retried
         /// on every frame.
-        decoded: std::sync::OnceLock<Option<Arc<DynamicImage>>>,
+        decoded: Arc<std::sync::OnceLock<Option<Arc<DynamicImage>>>>,
     },
 }
 
@@ -179,11 +197,48 @@ impl TerminalImage {
     /// budget evicted.
     pub(crate) fn pixels(&self) -> Option<&Arc<DynamicImage>> {
         match &self.source {
+            ImageSource::File { input, decoded } => decoded
+                .get_or_init(|| {
+                    let bytes = input.read().ok()?;
+                    let pixels = match input.format {
+                        24 => DynamicImage::ImageRgb8(image::RgbImage::from_raw(
+                            self.width,
+                            self.height,
+                            bytes,
+                        )?),
+                        _ => DynamicImage::ImageRgba8(image::RgbaImage::from_raw(
+                            self.width,
+                            self.height,
+                            bytes,
+                        )?),
+                    };
+                    Some(Arc::new(pixels))
+                })
+                .as_ref(),
             ImageSource::Decoded(pixels) => Some(pixels),
             ImageSource::Deferred { input, decoded } => decoded
                 .get_or_init(|| decode_deferred(input).map(Arc::new))
                 .as_ref(),
         }
+    }
+
+    pub(crate) fn file_pixels(
+        &self,
+    ) -> Option<&Arc<crate::backend::ratatui_backend::file_frame::FilePixels>> {
+        match &self.source {
+            ImageSource::File { input, .. } => Some(input),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn image_lifetime(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        let cache = self.composition.as_ref()?;
+        Some(Arc::clone(
+            &cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .alive,
+        ))
     }
 
     pub(crate) fn stream_namespace(&self) -> u64 {
@@ -194,7 +249,7 @@ impl TerminalImage {
 impl PartialEq for TerminalImage {
     /// Same payload, same image: contents are immutable once decoded.
     fn eq(&self, other: &Self) -> bool {
-        self.source_hash == other.source_hash
+        self.source_hash == other.source_hash && self.geometry == other.geometry
     }
 }
 
@@ -539,6 +594,9 @@ pub(super) struct GraphicsCommand {
     src_y: u32,
     src_w: u32,
     src_h: u32,
+    /// `X` / `Y` - displacement within the cursor cell, in pixels.
+    pixel_x: u32,
+    pixel_y: u32,
     /// `c` / `r` - explicit cell size of the placement.
     cols: u32,
     rows: u32,
@@ -585,6 +643,8 @@ impl Default for GraphicsCommand {
             src_h: 0,
             cols: 0,
             rows: 0,
+            pixel_x: 0,
+            pixel_y: 0,
             z: 0,
             no_cursor_move: false,
             virtual_placement: false,
@@ -600,6 +660,16 @@ impl Default for GraphicsCommand {
 }
 
 impl GraphicsCommand {
+    pub(super) fn affects_images(&self) -> bool {
+        matches!(
+            self.action,
+            GraphicsAction::Transmit
+                | GraphicsAction::TransmitAndDisplay
+                | GraphicsAction::Display
+                | GraphicsAction::Delete
+        )
+    }
+
     fn parse(body: &[u8], decode_payload: bool) -> Option<Self> {
         let (control, payload) = match body.iter().position(|byte| *byte == b';') {
             Some(at) => (&body[..at], &body[at + 1..]),
@@ -670,6 +740,8 @@ impl GraphicsCommand {
             b'y' => self.src_y = text.parse().unwrap_or(0),
             b'w' => self.src_w = text.parse().unwrap_or(0),
             b'h' => self.src_h = text.parse().unwrap_or(0),
+            b'X' => self.pixel_x = text.parse().unwrap_or(0),
+            b'Y' => self.pixel_y = text.parse().unwrap_or(0),
             b'c' => self.cols = text.parse().unwrap_or(0),
             b'r' => self.rows = text.parse().unwrap_or(0),
             b'z' => self.z = text.parse().unwrap_or(0),
@@ -1270,15 +1342,26 @@ struct StoredImage {
 }
 
 impl StoredImage {
-    fn replay_payload(&self) -> (Cow<'_, [u8]>, u32, bool) {
-        match &self.image.source {
+    fn replay_payload(&self) -> io::Result<(Cow<'_, [u8]>, u32, bool)> {
+        Ok(match &self.image.source {
+            ImageSource::File { input, .. } => (Cow::Owned(input.read()?), input.format, false),
             ImageSource::Decoded(image) => (Cow::Owned(image.to_rgba8().into_raw()), 32, false),
-            ImageSource::Deferred { input, .. } => (
-                Cow::Borrowed(input.payload.as_slice()),
-                input.format,
-                input.compressed,
-            ),
-        }
+            ImageSource::Deferred { input, .. } => {
+                let payload = input
+                    .payload
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(payload) = payload.as_ref() {
+                    return Ok((Cow::Owned(payload.clone()), input.format, input.compressed));
+                }
+                drop(payload);
+                let rgba = self
+                    .image
+                    .pixels()
+                    .map_or_else(Vec::new, |pixels| pixels.to_rgba8().into_raw());
+                (Cow::Owned(rgba), 32, false)
+            }
+        })
     }
 }
 
@@ -1294,6 +1377,7 @@ struct Placement {
     cols: u16,
     z: i32,
     crop: Option<TerminalImageCrop>,
+    geometry: ImageGeometry,
     /// Placements made on the alternate screen die with it.
     alt_screen: bool,
 }
@@ -1349,10 +1433,12 @@ pub(super) struct TerminalGraphics {
     used_bytes: usize,
     clock: u64,
     storage_enabled: bool,
+    file_storage_enabled: bool,
     media: GraphicsMediaPolicy,
     /// Counts transmissions that named their pixels rather than carrying them. See
     /// [`TerminalGraphics::named_source_identity`].
     source_serial: u64,
+    composition: Arc<std::sync::Mutex<composite::CompositionCache>>,
 }
 
 impl Default for TerminalGraphics {
@@ -1370,8 +1456,10 @@ impl Default for TerminalGraphics {
             used_bytes: 0,
             clock: 0,
             storage_enabled: true,
+            file_storage_enabled: false,
             media: GraphicsMediaPolicy::default(),
             source_serial: 0,
+            composition: Arc::default(),
         }
     }
 }
@@ -1397,6 +1485,10 @@ impl TerminalGraphics {
         self.reset();
     }
 
+    pub(super) fn set_file_storage_enabled(&mut self, enabled: bool) {
+        self.file_storage_enabled = enabled;
+    }
+
     pub(super) fn set_media_policy(&mut self, media: GraphicsMediaPolicy) {
         self.media = media;
     }
@@ -1412,6 +1504,7 @@ impl TerminalGraphics {
         self.discarding_run = false;
         self.used_bytes = 0;
         self.source_serial = 0;
+        self.composition = Arc::default();
     }
 
     /// Drop every placement while keeping the images themselves.
@@ -1420,12 +1513,14 @@ impl TerminalGraphics {
     /// anchored to no longer names the text it was drawn against, and no shift can correct it.
     pub(super) fn clear_placements(&mut self) {
         self.placements.clear();
+        self.clear_composed_tiles();
     }
 
     /// Drop placements made on the alternate screen, on the way back to the primary one.
     pub(super) fn clear_alt_screen(&mut self) -> bool {
         let before = self.placements.len();
         self.placements.retain(|placement| !placement.alt_screen);
+        self.clear_composed_tiles();
         before != self.placements.len()
     }
 
@@ -1441,6 +1536,7 @@ impl TerminalGraphics {
         // instead of vanishing whole.
         self.placements
             .retain(|placement| placement.line + usize::from(placement.rows) > evicted);
+        self.clear_composed_tiles();
         for placement in &mut self.placements {
             placement.line = placement.line.saturating_sub(evicted);
         }
@@ -1471,7 +1567,11 @@ impl TerminalGraphics {
                 }
                 Some(TerminalImagePlacement {
                     image_id: placement.image_id,
-                    image: self.images.get(&placement.image_id)?.image.clone(),
+                    image: {
+                        let mut image = self.images.get(&placement.image_id)?.image.clone();
+                        image.geometry = Some(placement.geometry);
+                        image
+                    },
                     row: row.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
                     col: i32::from(placement.col),
                     rows: placement.rows,
@@ -1481,7 +1581,7 @@ impl TerminalGraphics {
                 })
             })
             .collect();
-        visible.sort_by_key(|placement| placement.z);
+        visible.sort_by_key(|placement| (placement.z, placement.image_id));
         visible
     }
 
@@ -1530,7 +1630,19 @@ impl TerminalGraphics {
                 };
                 Some(TerminalImagePlacement {
                     image_id: rect.image_id,
-                    image: stored.image.clone(),
+                    image: {
+                        let mut image = stored.image.clone();
+                        image.geometry = Some(ImageGeometry {
+                            offset: (0, 0),
+                            size: (
+                                u32::from(rect.width) * u32::from(cell.width),
+                                u32::from(rect.height) * u32::from(cell.height),
+                            ),
+                            cell: (cell.width, cell.height),
+                            requested_cells: (u32::from(rect.width), u32::from(rect.height)),
+                        });
+                        image
+                    },
                     row: i32::from(rect.row),
                     col: i32::from(rect.col),
                     rows: rect.height,
@@ -1692,6 +1804,116 @@ impl TerminalGraphics {
         self.finish_transmit(pending.id, &pending.header, pending.data, ctx)
     }
 
+    fn retain_image(
+        &self,
+        command: &GraphicsCommand,
+        payload: Vec<u8>,
+        source_hash: u64,
+    ) -> Result<(TerminalImage, usize), &'static str> {
+        let file = self.snapshot_file(command, &payload);
+        let (image, bytes) = if let Some((input, bytes)) = file {
+            (
+                TerminalImage {
+                    source: ImageSource::File {
+                        input: Arc::new(input),
+                        decoded: Arc::default(),
+                    },
+                    width: command.width,
+                    height: command.height,
+                    source_hash,
+                    stream_namespace: self.stream_namespace,
+                    geometry: None,
+                    composition: Some(Arc::clone(&self.composition)),
+                },
+                bytes,
+            )
+        } else {
+            let payload = self.resolve_medium(command, payload)?;
+            let (image, bytes) = match deferrable(command) {
+                // Nothing is waiting to hear whether this decodes and the size is already known, so the
+                // work waits until something asks to draw it. A frame superseded before then - the
+                // common case for a sender streaming under one id - is dropped without ever being
+                // inflated. See [`ImageSource`].
+                Some((width, height, channels)) => {
+                    let bytes = (width as usize)
+                        .saturating_mul(height as usize)
+                        .saturating_mul(channels);
+                    let image = TerminalImage {
+                        source: ImageSource::Deferred {
+                            input: Arc::new(DeferredDecode {
+                                payload: std::sync::Mutex::new(Some(payload)),
+                                compressed: command.compressed,
+                                format: command.format,
+                                width,
+                                height,
+                            }),
+                            decoded: Arc::new(std::sync::OnceLock::new()),
+                        },
+                        width,
+                        height,
+                        source_hash,
+                        stream_namespace: self.stream_namespace,
+                        geometry: None,
+                        composition: Some(Arc::clone(&self.composition)),
+                    };
+                    (image, bytes)
+                }
+                None => {
+                    let decoded = decode_payload(command, payload)?;
+                    let bytes = decoded_bytes(&decoded);
+                    let image = TerminalImage {
+                        width: decoded.width(),
+                        height: decoded.height(),
+                        source: ImageSource::Decoded(Arc::new(decoded)),
+                        source_hash,
+                        stream_namespace: self.stream_namespace,
+                        geometry: None,
+                        composition: Some(Arc::clone(&self.composition)),
+                    };
+                    (image, bytes)
+                }
+            };
+            (image, bytes)
+        };
+        Ok((image, bytes))
+    }
+
+    fn snapshot_file(
+        &self,
+        command: &GraphicsCommand,
+        payload: &[u8],
+    ) -> Option<(
+        crate::backend::ratatui_backend::file_frame::FilePixels,
+        usize,
+    )> {
+        if !self.file_storage_enabled
+            || command.medium != GraphicsMedium::File
+            || !self.media.allows(command.medium)
+            || command.compressed
+            || command.source_offset != 0
+        {
+            return None;
+        }
+        let (width, height, channels) = deferrable(command)?;
+        let bytes = (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(channels)?;
+        if bytes > MAX_TRANSMIT_BYTES
+            || bytes > self.budget
+            || (command.source_size != 0 && command.source_size != bytes)
+        {
+            return None;
+        }
+        let path = graphics_media::decode_path(payload).ok()?;
+        let input = crate::backend::ratatui_backend::file_frame::FilePixels::snapshot(
+            &path,
+            bytes,
+            command.format,
+        )
+        .ok()?;
+        Some((input, bytes))
+    }
+
     fn finish_transmit(
         &mut self,
         id: u32,
@@ -1738,61 +1960,13 @@ impl TerminalGraphics {
         } else {
             hash_payload(command.format, &payload)
         };
-        let payload = match self.resolve_medium(command, payload) {
-            Ok(payload) => payload,
+        let (image, bytes) = match self.retain_image(command, payload, source_hash) {
+            Ok(stored) => stored,
             Err(error) => {
                 return GraphicsOutcome {
                     response: report(command, id, Err(error)),
                     advance: None,
                 };
-            }
-        };
-        let (image, bytes) = match deferrable(command) {
-            // Nothing is waiting to hear whether this decodes and the size is already known, so the
-            // work waits until something asks to draw it. A frame superseded before then - the
-            // common case for a sender streaming under one id - is dropped without ever being
-            // inflated. See [`ImageSource`].
-            Some((width, height, channels)) => {
-                let bytes = (width as usize)
-                    .saturating_mul(height as usize)
-                    .saturating_mul(channels);
-                let image = TerminalImage {
-                    source: ImageSource::Deferred {
-                        input: Arc::new(DeferredDecode {
-                            payload,
-                            compressed: command.compressed,
-                            format: command.format,
-                            width,
-                            height,
-                        }),
-                        decoded: std::sync::OnceLock::new(),
-                    },
-                    width,
-                    height,
-                    source_hash,
-                    stream_namespace: self.stream_namespace,
-                };
-                (image, bytes)
-            }
-            None => {
-                let decoded = match decode_payload(command, payload) {
-                    Ok(image) => image,
-                    Err(error) => {
-                        return GraphicsOutcome {
-                            response: report(command, id, Err(error)),
-                            advance: None,
-                        };
-                    }
-                };
-                let bytes = decoded_bytes(&decoded);
-                let image = TerminalImage {
-                    width: decoded.width(),
-                    height: decoded.height(),
-                    source: ImageSource::Decoded(Arc::new(decoded)),
-                    source_hash,
-                    stream_namespace: self.stream_namespace,
-                };
-                (image, bytes)
             }
         };
         self.insert_image(id, image, bytes);
@@ -1863,12 +2037,7 @@ impl TerminalGraphics {
         // image is meant to be - a frame drawn at twice the cell resolution is read as covering half
         // as many cells without it.
         if command.virtual_placement {
-            if command.cols != 0
-                && command.rows != 0
-                && let Some(stored) = self.images.get_mut(&id)
-            {
-                stored.virtual_cells = Some((command.cols, command.rows));
-            }
+            self.set_virtual_cells(id, command);
             return None;
         }
         if image_w == 0 || image_h == 0 {
@@ -1880,17 +2049,15 @@ impl TerminalGraphics {
             .map(|crop| (crop.width, crop.height))
             .unwrap_or((image_w, image_h));
 
-        // Cells the image occupies: what the client asked for, else what its pixels need.
-        let cols = match command.cols {
-            0 => src_w.div_ceil(u32::from(ctx.cell.width)),
-            cols => cols,
-        };
-        let rows = match command.rows {
-            0 => src_h.div_ceil(u32::from(ctx.cell.height)),
-            rows => rows,
-        };
-        let cols = cols.clamp(1, u32::from(ctx.cols.max(1))) as u16;
-        let rows = rows.clamp(1, u32::from(u16::MAX)) as u16;
+        let geometry = placement_geometry(command, ctx, (src_w, src_h));
+        let cols = (geometry.size.0 + geometry.offset.0)
+            .div_ceil(u32::from(geometry.cell.0))
+            .max(geometry.requested_cells.0)
+            .clamp(1, u32::from(ctx.cols.max(1))) as u16;
+        let rows = (geometry.size.1 + geometry.offset.1)
+            .div_ceil(u32::from(geometry.cell.1))
+            .max(geometry.requested_cells.1)
+            .clamp(1, u32::from(u16::MAX)) as u16;
 
         if self.storage_enabled {
             // A second placement with the same ids replaces the first, as the protocol specifies.
@@ -1906,6 +2073,7 @@ impl TerminalGraphics {
                 cols,
                 z: command.z,
                 crop,
+                geometry,
                 alt_screen: ctx.alt_screen,
             });
             while self.placements.len() > MAX_PLACEMENTS {
@@ -1914,6 +2082,15 @@ impl TerminalGraphics {
         }
 
         (!command.no_cursor_move).then_some((rows, cols))
+    }
+
+    fn set_virtual_cells(&mut self, id: u32, command: &GraphicsCommand) {
+        if command.cols != 0
+            && command.rows != 0
+            && let Some(stored) = self.images.get_mut(&id)
+        {
+            stored.virtual_cells = Some((command.cols, command.rows));
+        }
     }
 
     fn delete(&mut self, command: &GraphicsCommand, ctx: GraphicsContext) {
@@ -1963,6 +2140,7 @@ impl TerminalGraphics {
             false
         });
 
+        self.clear_composed_tiles();
         if free_data {
             match selector {
                 // "Delete all" frees every stored image, placed or not.
@@ -2015,6 +2193,19 @@ impl TerminalGraphics {
         self.image_dimensions.remove(&id);
         self.numbers.retain(|_, mapped| *mapped != id);
         self.placements.retain(|placement| placement.image_id != id);
+        self.clear_composed_tiles();
+    }
+
+    // With no placements left, no render can reach the composition cache to clear it.
+    fn clear_composed_tiles(&self) {
+        if !self.placements.is_empty() {
+            return;
+        }
+        self.composition
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .tiles
+            .clear();
     }
 
     /// Write the retained image definitions before a replay repaints either grid.
@@ -2058,7 +2249,7 @@ impl TerminalGraphics {
         id: u32,
         stored: &StoredImage,
     ) -> io::Result<()> {
-        let (payload, format, compressed) = stored.replay_payload();
+        let (payload, format, compressed) = stored.replay_payload()?;
         let mut numbers: Vec<_> = self
             .numbers
             .iter()
@@ -2120,9 +2311,16 @@ impl TerminalGraphics {
             }
             write!(
                 writer,
-                ",c={},r={},z={},C=1,q=2;\x1b\\\r",
-                placement.cols, placement.rows, placement.z
+                ",X={},Y={}",
+                placement.geometry.offset.0, placement.geometry.offset.1
             )?;
+            if placement.geometry.requested_cells.0 != 0 {
+                write!(writer, ",c={}", placement.geometry.requested_cells.0)?;
+            }
+            if placement.geometry.requested_cells.1 != 0 {
+                write!(writer, ",r={}", placement.geometry.requested_cells.1)?;
+            }
+            write!(writer, ",z={},C=1,q=2;\x1b\\\r", placement.z)?;
         }
         Ok(())
     }
@@ -2358,6 +2556,7 @@ fn deferrable(command: &GraphicsCommand) -> Option<(u32, u32, usize)> {
 
 /// Run a decode that [`ImageSource::Deferred`] put off.
 fn decode_deferred(input: &DeferredDecode) -> Option<DynamicImage> {
+    let payload = input.payload.lock().ok()?.take()?;
     decode_payload(
         &GraphicsCommand {
             compressed: input.compressed,
@@ -2366,7 +2565,7 @@ fn decode_deferred(input: &DeferredDecode) -> Option<DynamicImage> {
             height: input.height,
             ..GraphicsCommand::default()
         },
-        input.payload.clone(),
+        payload,
     )
     .ok()
 }
@@ -2515,6 +2714,94 @@ fn report(command: &GraphicsCommand, id: u32, result: Result<(), &str>) -> Optio
     Some(response.into_bytes())
 }
 
+fn placement_geometry(
+    command: &GraphicsCommand,
+    ctx: GraphicsContext,
+    source: (u32, u32),
+) -> ImageGeometry {
+    let cell = (ctx.cell.width.max(1), ctx.cell.height.max(1));
+    let requested_cells = (
+        command.cols.min(u32::from(ctx.cols.max(1))),
+        command.rows.min(u32::from(u16::MAX)),
+    );
+    let offset = (
+        command.pixel_x.min(u32::from(cell.0) - 1),
+        command.pixel_y.min(u32::from(cell.1) - 1),
+    );
+    let size = if requested_cells == (0, 0) {
+        source
+    } else {
+        let bounds = (
+            if requested_cells.0 == 0 {
+                u32::MAX
+            } else {
+                requested_cells.0 * u32::from(cell.0) - offset.0
+            },
+            if requested_cells.1 == 0 {
+                u32::MAX
+            } else {
+                requested_cells.1 * u32::from(cell.1) - offset.1
+            },
+        );
+        crate::capture::fitted_pixel_size(source, bounds)
+    };
+    ImageGeometry {
+        offset,
+        size,
+        cell,
+        requested_cells,
+    }
+}
+
+/// Opaque non-default backgrounds cover very low planes; glyph occlusion is resolved in PNGs.
+pub(crate) fn image_covers_cell(z: i32, has_background: bool) -> bool {
+    z >= i32::MIN / 2 || !has_background
+}
+
+/// Transparent padding in a composed z-plane tile must not hide cells in lower planes.
+pub(crate) fn image_cell_has_pixels(
+    pixels: &DynamicImage,
+    cells: (u16, u16),
+    cell: (u16, u16),
+) -> bool {
+    if !pixels.color().has_alpha() {
+        return true;
+    }
+    let (left, top, right, bottom) = image_cell_bounds(pixels, cells, cell);
+    (top..bottom).any(|y| (left..right).any(|x| pixels.get_pixel(x, y).0[3] != 0))
+}
+
+/// Only fully opaque cells can discard lower capture layers.
+pub(crate) fn image_cell_is_opaque(
+    pixels: &DynamicImage,
+    cells: (u16, u16),
+    cell: (u16, u16),
+) -> bool {
+    if !pixels.color().has_alpha() {
+        return true;
+    }
+    let (left, top, right, bottom) = image_cell_bounds(pixels, cells, cell);
+    left < right
+        && top < bottom
+        && (top..bottom).all(|y| (left..right).all(|x| pixels.get_pixel(x, y).0[3] == 255))
+}
+
+fn image_cell_bounds(
+    pixels: &DynamicImage,
+    cells: (u16, u16),
+    cell: (u16, u16),
+) -> (u32, u32, u32, u32) {
+    let (width, height) = pixels.dimensions();
+    let bounds = |index: u16, length: u32, count: u16| {
+        let start = u64::from(index) * u64::from(length) / u64::from(count);
+        let end = ((u64::from(index) + 1) * u64::from(length)).div_ceil(u64::from(count));
+        (start as u32, end.min(u64::from(length)) as u32)
+    };
+    let (left, right) = bounds(cell.0, width, cells.0);
+    let (top, bottom) = bounds(cell.1, height, cells.1);
+    (left, top, right, bottom)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2564,6 +2851,111 @@ mod tests {
             "two words exchanged is a different frame, not the same one reordered"
         );
         assert_eq!(hash_payload(24, &base), hash, "and it is stable");
+    }
+
+    #[test]
+    fn file_storage_retains_immutable_pixels_and_replays_without_decoding() {
+        use std::io::Write;
+        let mut source = tempfile::NamedTempFile::new().unwrap();
+        source.write_all(&[1, 2, 3, 255].repeat(200)).unwrap();
+        let mut graphics = TerminalGraphics::default();
+        graphics.set_file_storage_enabled(true);
+        let command = GraphicsCommand {
+            action: GraphicsAction::TransmitAndDisplay,
+            medium: GraphicsMedium::File,
+            quiet: 2,
+            format: 32,
+            width: 10,
+            height: 20,
+            id: 7,
+            payload: source.path().to_str().unwrap().as_bytes().to_vec(),
+            ..GraphicsCommand::default()
+        };
+        graphics.apply(command, context());
+        let stored = &graphics.images[&7];
+        let ImageSource::File { decoded, .. } = &stored.image.source else {
+            panic!("expected file-backed image");
+        };
+        assert!(decoded.get().is_none());
+        std::fs::write(source.path(), [9, 8, 7, 255].repeat(200)).unwrap();
+        drop(source);
+        let mut replay = Vec::new();
+        graphics.write_replay_transmissions(&mut replay).unwrap();
+        assert!(
+            decoded.get().is_none(),
+            "replay reads files without populating the pixel cache"
+        );
+        let mut restored = TerminalGraphics::default();
+        let mut scanner = GraphicsScanner::default();
+        let (_, commands) = scan_all(&mut scanner, &replay);
+        for command in commands {
+            restored.apply(command, context());
+        }
+        assert_eq!(
+            restored.images[&7].image.pixels().unwrap().as_bytes(),
+            &[1, 2, 3, 255].repeat(200)
+        );
+        let visible = graphics.visible(0, 0, 24, false);
+        let composed = composite::composite_terminal_images(&visible, 80, 24);
+        assert!(composed[0].image.file_pixels().is_some());
+        assert!(decoded.get().is_none(), "aligned frames bypass composition");
+        let snapshot = stored.image.clone();
+        let first = stored.image.pixels().unwrap();
+        assert!(Arc::ptr_eq(first, snapshot.pixels().unwrap()));
+    }
+
+    #[test]
+    fn file_storage_replacement_reclaims_previous_frame() {
+        use std::io::Write;
+        let mut source = tempfile::NamedTempFile::new().unwrap();
+        source.write_all(&[1, 2, 3, 255]).unwrap();
+        let mut graphics = TerminalGraphics::default();
+        graphics.set_file_storage_enabled(true);
+        let command = GraphicsCommand {
+            medium: GraphicsMedium::File,
+            quiet: 2,
+            format: 32,
+            width: 1,
+            height: 1,
+            id: 7,
+            payload: source.path().to_str().unwrap().as_bytes().to_vec(),
+            ..GraphicsCommand::default()
+        };
+        graphics.apply(command.clone(), context());
+        let first = Arc::downgrade(graphics.images[&7].image.file_pixels().unwrap());
+        for _ in 0..60 {
+            graphics.apply(command.clone(), context());
+        }
+        assert!(first.upgrade().is_none());
+        assert_eq!(graphics.images.len(), 1);
+        assert_eq!(graphics.used_bytes, 4);
+        let last = Arc::downgrade(graphics.images[&7].image.file_pixels().unwrap());
+        graphics.reset();
+        assert!(last.upgrade().is_none());
+    }
+
+    #[test]
+    fn file_storage_respects_disabled_file_media() {
+        use std::io::Write;
+        let mut source = tempfile::NamedTempFile::new().unwrap();
+        source.write_all(&[1, 2, 3, 255]).unwrap();
+        let mut graphics = TerminalGraphics::default();
+        graphics.set_file_storage_enabled(true);
+        graphics.set_media_policy(GraphicsMediaPolicy::NONE);
+        graphics.apply(
+            GraphicsCommand {
+                medium: GraphicsMedium::File,
+                quiet: 2,
+                format: 32,
+                width: 1,
+                height: 1,
+                id: 7,
+                payload: source.path().to_str().unwrap().as_bytes().to_vec(),
+                ..GraphicsCommand::default()
+            },
+            context(),
+        );
+        assert!(graphics.images.is_empty());
     }
 
     /// Deferring a decode moves the moment a bad payload is noticed to the first draw, so it is
@@ -2635,6 +3027,65 @@ mod tests {
         assert_eq!(pixels.width(), 3);
         assert_eq!(pixels.height(), 2);
         assert_eq!(pixels.to_rgb8().as_raw(), &vec![0xa0u8; 3 * 2 * 3]);
+    }
+
+    #[test]
+    fn snapshots_share_one_decode_and_release_the_consumed_upload() {
+        let mut graphics = TerminalGraphics::default();
+        let mut scanner = GraphicsScanner::default();
+        let (_, commands) = scan_all(&mut scanner, &rgb_command("q=2,i=7,a=T", 3, 2));
+        for command in commands {
+            graphics.apply(command, context());
+        }
+        let stored = &graphics.images.get(&7).unwrap().image;
+        let first = stored.clone();
+        let second = stored.clone();
+        let ImageSource::Deferred { input, .. } = &stored.source else {
+            panic!("deferred source");
+        };
+        let buffer = input.payload.lock().unwrap().as_ref().unwrap().as_ptr();
+        let first_pixels = first.pixels().unwrap();
+        assert!(Arc::ptr_eq(first_pixels, second.pixels().unwrap()));
+        assert!(Arc::ptr_eq(first_pixels, stored.pixels().unwrap()));
+        assert!(
+            input.payload.lock().unwrap().is_none(),
+            "the decoded source must release its upload"
+        );
+        assert_eq!(
+            first_pixels.as_rgb8().unwrap().as_raw().as_ptr(),
+            buffer,
+            "a raw upload becomes the decoded image without a full-frame copy"
+        );
+        let weak = Arc::downgrade(first_pixels);
+        drop(first);
+        drop(second);
+        graphics.reset();
+        assert!(
+            weak.upgrade().is_none(),
+            "dropping the screen releases the shared pixel buffer"
+        );
+    }
+
+    #[test]
+    fn replay_preserves_a_deferred_image_before_and_after_decoding() {
+        let mut original = crate::widgets::TerminalScreen::new(8, 10, 0);
+        original.process_bytes(&rgb_command("q=2,i=7,a=T", 3, 2));
+        let before = original.export_replay_bytes();
+        let snapshot = original.render_snapshot();
+        let expected = snapshot.images[0].image.pixels().unwrap().to_rgba8();
+        let after = original.export_replay_bytes();
+        for replay in [before, after] {
+            let mut restored = crate::widgets::TerminalScreen::new(8, 10, 0);
+            restored.process_bytes(&replay);
+            assert_eq!(
+                restored.render_snapshot().images[0]
+                    .image
+                    .pixels()
+                    .unwrap()
+                    .to_rgba8(),
+                expected
+            );
+        }
     }
 
     fn context() -> GraphicsContext {

@@ -47,6 +47,33 @@ gap, because the child reserved a different number of rows than the pane drew.
 Pass the cell size to later resizes too, with `TerminalPty::resize_with_cell_size`; plain `resize`
 keeps the last one it was given.
 
+Images placed at the cursor honor the `X`/`Y` pixel offsets within that cell. Natural-size images
+keep their pixel dimensions rather than stretching to fill the final cell. Overlapping images
+blend in pixel space within each exact z plane, so a small patch preserves the rest of the cell.
+On Kitty hosts, mixed-z and negative-z images use ordinary placements that leave text cells intact.
+Negative z values remain below text; values below `INT32_MIN/2` also remain below non-default cell
+backgrounds. The backend deletes these placements before drawing the next frame, including when
+the pane disappears. Single-plane images at non-negative z use Unicode placeholders.
+Unchanged regions reuse cached pixels and encodings. Natural-size RGB and RGBA patches
+copy contiguous pixel rows; opaque RGBA rows use a bulk copy, while transparent rows retain
+source-over blending. Scaled images use the resampling path.
+
+Quiet raw uploads decode once per stored image, shared by the screen and its snapshots. The
+upload buffer is consumed by that decode rather than retained beside a second copy of the pixels.
+Replay preserves both uploads that have not been decoded and images already drawn.
+
+Once a screen and its last snapshot are dropped, its queued and cached terminal encodings are
+released, and results from encodes still in flight are discarded. Shared-memory upload slots
+expire after a second without use; the idle encoder sweeps the pool every five seconds.
+A slot the host has not finished reading is retained until safe to unmap. Releasing image
+buffers does not guarantee an immediate drop in process RSS, since the heap allocator can keep
+freed memory for reuse.
+
+Captures use the same composition. Terminal `CapturedImage` values set `fill_cell_box` so changing
+the screenshot font cannot open gaps between tiles. When constructing `CapturedImage` with a
+struct literal, add `fill_cell_box: false` for the previous aspect-preserving behavior;
+`CapturedImage::new` already uses that default.
+
 ## Where images live
 
 ### Two ways an image gets placed
@@ -160,6 +187,40 @@ transmission budget as an inline payload.
 A path only means something on the machine that wrote it, so a pane attached from elsewhere should
 decline: a remote client reading `/tmp/...` from its own filesystem is the one failure mode here that
 is not a clean error.
+
+### Retain streamed frames in files
+
+`screen.set_image_file_storage_enabled(true)` opts into immutable file snapshots for quiet raw
+`t=f` uploads. Each snapshot copies a validated regular file into an application-owned temporary
+file. Producer rewrites and deletion cannot change a stored frame. Snapshots and replay share the
+file instead of allocating another pixel buffer; capture and composition read pixels on demand.
+The normal image budget still counts the raw pixel size. Snapshot files also have a process-wide
+256 MiB limit. If a snapshot cannot be made, the ordinary in-memory path remains available.
+
+A cell-aligned frame can be uploaded directly to a local Kitty host that passed the shared-memory
+probe. The host receives an immutable temporary hard link with `t=t` and removes it after reading.
+At most 32 outstanding links, totaling 64 MiB, are admitted. Unread links expire after 10 seconds;
+idle encoder workers check them every five seconds. This path does not map frame pixels into the
+application and does not allocate a shared-memory upload slot. Cropping, overlapping patches,
+modal dimming, captures and other host protocols retain their existing pixel rendering behavior.
+
+This is useful for a producer sending complete frames under one image ID. Patches that overlap or
+land between cells still need composition, and therefore need decoded pixels on the rendering
+client. File snapshots reduce heap allocations, but their pages still use the filesystem cache.
+Compare total memory and frame pacing as well as application RSS when evaluating this mode.
+
+Kitty uploads remain pending until the native backend flushes their escape sequence from the final
+cell diff without failed or discarded output. If buffering sends a temporary-file or shared-memory
+name before a later write fails or is discarded, the retry creates a fresh name from retained
+immutable pixels. The terminal consuming the first name cannot invalidate the retry.
+An offscreen capture, clipped frame or startup effect cannot consume the upload.
+If an effect removes its original cell, the backend moves the upload before the first surviving
+image row in the final diff. No placeholder for a new image reaches the host ahead of its
+upload, and a relocated upload is sent only once.
+Uploads staged for a frame survive encoding-cache eviction through the backend write. A subsequent
+paint releases staging references from discarded frames. File and shared-memory handoff lifetimes
+begin after successful flush, so a static image can be presented after startup or client reattachment without
+requiring another frame from its producer.
 
 ### Out the other side, to the host
 
@@ -319,14 +380,22 @@ cells still show it.
   then checks each of its cells after everything else has drawn. An overlay, a border, a toast, or
   a pane above takes the cells it covers, exactly as on the host. `CapturedImage::shows(x, y)`
   answers per cell.
-- **The cells get a half-block stand-in.** Each visible cell holds `▀` in the colors of its top
+- **Negative z planes stay below text.** PNG captures draw these images before glyphs, so image
+  pixels remain visible between glyph strokes, including wide glyphs and antialiased text. Planes
+  below `INT32_MIN / 2` also stay behind non-default cell backgrounds. Text and ANSI captures
+  preserve the text in these cells and approximate images in blank cells with half blocks.
+- **The cells get a half-block stand-in.** Image cells hold `▀` in the colors of their top
   and bottom halves, so `plain_text()` marks where an image is, `to_ansi_text()` shows a coarse
   version in any terminal, and cell assertions read colors straight out of the grid. A cell the
-  image leaves fully transparent keeps what it held. `CapturedImage::backgrounds` records each
-  cell's background from before the stand-in.
+  image leaves fully transparent keeps what it held. `CapturedImage::underlying_cells` preserves
+  the original glyphs and styles for PNG output; `backgrounds` records the backgrounds before
+  the stand-in.
 - **A PNG draws the pixels.** `to_png()` scales each image into its cells at the PNG's own cell
   size, keeping its aspect ratio from the top-left corner as a terminal does, and draws only the
-  cells it still shows in. Transparent pixels show the recorded background, not the stand-in.
+  cells it still shows in. Partially transparent upper z planes keep lower images visible in the
+  same cell, so their pixels blend in draw order. `CapturedImage::z_index` controls whether the
+  image draws before or after text. Transparent pixels reveal lower images, glyphs, and the
+  recorded background. Half-block output remains a coarse approximation of the stack.
 - **One image on its own.** `CapturedImage::to_png()` encodes just `rgba`, at `width` x `height`
   with its alpha, for a serializer that reports images beside the cells. A terminal capture has
   already cropped an image that runs past the viewport, so these are the pixels inside it.

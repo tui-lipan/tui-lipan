@@ -208,12 +208,15 @@ assert_eq!(frame.height, 10);
 | `to_ansi_diff(prev)` | `String` | Incremental ANSI update from a previous frame |
 | `to_png(&PngOptions)` | `Result<Vec<u8>>` | PNG bytes with font-backed or bitmap rendering (`ui-snapshot-png`) |
 
-`CapturedFrame::images` holds the pixel images drawn over the cells, such as a terminal pane's Kitty
-graphics: each `CapturedImage` has its RGBA pixels, the `area` it covers, and per-cell `visible`
-flags (`shows(x, y)`), since whatever is drawn over an image hides it. The cells under a visible
-image hold a `▀` half-block stand-in, and `to_png()` draws the pixels. `CapturedImage::to_png()`
-encodes one image's own pixels, at their own size and with alpha, for a serializer that carries
-images beside the cells (`ui-snapshot-png`). See
+`CapturedFrame::images` holds the pixel images drawn with the cells, such as a terminal pane's Kitty
+graphics. Each `CapturedImage` has its RGBA pixels, the `area` it covers, `z_index`, and per-cell
+`visible` flags (`shows(x, y)`). An opaque image or later UI surface hides lower images; translucent
+images keep contributing layers visible. Image cells carry a `▀` half-block stand-in, while text
+above negative-z images keeps its glyphs. `underlying_cells` preserves the original glyphs and
+styles for `to_png()`, which draws negative planes beneath glyph pixels and other images above
+them. `CapturedImage::new()` defaults to `z_index = 0`; frame captures fill the cell metadata.
+`CapturedImage::to_png()` encodes one image's own pixels, at their own size and with alpha, for a
+serializer that carries images beside the cells (`ui-snapshot-png`). See
 [terminal-images.md](widgets/terminal-images.md#captures).
 
 `CapturedCell` fields: `symbol`, `fg`, `bg`, `underline_color`, `modifiers` (`CellModifiers` with bool fields `bold`, `dim`, `italic`, `reverse`, `strikethrough`, and `underline: Option<UnderlineStyle>`: `Single`, `Double`, `Curly`, `Dotted`, or `Dashed`). UI renders only produce `Single`; terminal captures keep the shape the program asked for.

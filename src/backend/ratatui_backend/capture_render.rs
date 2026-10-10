@@ -321,9 +321,9 @@ fn captured_frame(
 
 /// Turn the images drawn during a capture into the frame's image layer.
 ///
-/// A cell still holding an image's marker shows that image; anything drawn over it later replaced
-/// the marker. Those cells get a half-block approximation, sized with the host's cell pixels as the
-/// live renderer would draw them, and an image nothing left visible is dropped.
+/// A cell still holding an image's marker shows that image and any markers it retained beneath
+/// translucent pixels. Later text or surfaces replace the marker and hide the entire stack.
+/// Visible layers get half-block approximations in draw order; fully hidden images are dropped.
 #[cfg(feature = "terminal-images")]
 fn captured_images(
     cells: &mut [CapturedCell],
@@ -335,7 +335,25 @@ fn captured_images(
     if drawn.is_empty() || width == 0 {
         return Vec::new();
     }
-    let mut images: Vec<_> = drawn
+    let restored_symbols: Vec<_> = cells
+        .iter()
+        .enumerate()
+        .map(|(offset, cell)| {
+            let index = capture_image_mark_index(&cell.symbol)?;
+            let draw = drawn.get(index)?;
+            let x = (offset % usize::from(width)) as u16;
+            let y = (offset / usize::from(width)) as u16;
+            let col = x.checked_sub(draw.area.x)?;
+            let row = y.checked_sub(draw.area.y)?;
+            if col >= draw.area.width || row >= draw.area.height {
+                return None;
+            }
+            draw.symbols
+                .get(usize::from(row) * usize::from(draw.area.width) + usize::from(col))
+                .cloned()
+        })
+        .collect();
+    let (mut images, underlays): (Vec<_>, Vec<_>) = drawn
         .into_iter()
         .map(|draw| {
             let rgba = draw.pixels.to_rgba8();
@@ -352,10 +370,12 @@ fn captured_images(
                 pixel_height,
                 rgba.into_raw().into(),
             );
+            image.fill_cell_box = true;
+            image.z_index = draw.z_index;
             image.visible.fill(false);
-            image
+            (image, draw.underlays)
         })
-        .collect();
+        .unzip();
 
     for (offset, cell) in cells.iter_mut().enumerate() {
         let Some(index) = capture_image_mark_index(&cell.symbol) else {
@@ -363,23 +383,52 @@ fn captured_images(
         };
         let x = (offset % usize::from(width)) as u16;
         let y = (offset / usize::from(width)) as u16;
-        // Marks are stamped only inside their image's area; anything else is not one.
-        let Some((image, visible)) = images
-            .get_mut(index)
-            .and_then(|image| image.area_offset(x, y).map(|visible| (image, visible)))
-        else {
+        if !images
+            .get(index)
+            .is_some_and(|image| image.area_offset(x, y).is_some())
+        {
             continue;
-        };
-        cell.symbol = " ".to_string();
-        image.visible[visible] = true;
+        }
+        if let Some(symbol) = &restored_symbols[offset] {
+            cell.symbol.clone_from(symbol);
+        }
+        show_capture_layers(&mut images, &underlays, index, x, y);
     }
 
     images.retain(|image| image.visible.contains(&true));
     let font = super::image_support::picker_snapshot().font_size();
+    let original_cells = cells.to_vec();
     for image in &mut images {
-        image.paint_half_blocks(cells, width, u32::from(font.width), u32::from(font.height));
+        image.paint_half_blocks(
+            cells,
+            width,
+            u32::from(font.width),
+            u32::from(font.height),
+            &original_cells,
+        );
     }
     images
+}
+
+/// Follow only markers actually covered by this image, so later UI surfaces still occlude panes.
+#[cfg(feature = "terminal-images")]
+fn show_capture_layers(
+    images: &mut [crate::capture::CapturedImage],
+    underlays: &[Vec<Option<usize>>],
+    mut index: usize,
+    x: u16,
+    y: u16,
+) {
+    while let Some(image) = images.get_mut(index) {
+        let Some(offset) = image.area_offset(x, y) else {
+            break;
+        };
+        image.visible[offset] = true;
+        let Some(previous) = underlays[index].get(offset).copied().flatten() else {
+            break;
+        };
+        index = previous;
+    }
 }
 
 #[cfg(test)]
