@@ -94,6 +94,10 @@ fn render_terminal_images(
     let clip_right = clip_left + i32::from(effective.width);
     let clip_bottom = clip_top + i32::from(effective.height);
 
+    let lifetime = node
+        .images
+        .first()
+        .and_then(|image| image.image.image_lifetime());
     let images =
         crate::widgets::composite_terminal_images(&node.images, content_rect.w, content_rect.h);
     for placement in &images {
@@ -165,6 +169,7 @@ fn render_terminal_images(
                 crop,
             ),
             placement.z,
+            lifetime.clone(),
             || {
                 if whole {
                     Arc::clone(pixels)

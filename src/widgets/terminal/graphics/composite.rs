@@ -20,6 +20,7 @@ const TILE_ROWS: i32 = 8;
 
 pub(super) struct CompositionCache {
     namespace: u64,
+    pub(super) alive: Arc<std::sync::atomic::AtomicBool>,
     pub(super) tiles: HashMap<(i32, i32), TerminalImage>,
 }
 
@@ -27,8 +28,17 @@ impl Default for CompositionCache {
     fn default() -> Self {
         Self {
             namespace: next_stream_namespace(),
+            alive: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             tiles: HashMap::new(),
         }
+    }
+}
+
+impl Drop for CompositionCache {
+    fn drop(&mut self) {
+        self.alive
+            .store(false, std::sync::atomic::Ordering::Release);
+        crate::backend::ratatui_backend::renderers::image::release_closed_terminal_images();
     }
 }
 

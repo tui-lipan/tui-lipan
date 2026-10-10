@@ -54,6 +54,17 @@ the cell. Unchanged regions reuse cached pixels and encodings. Natural-size RGB 
 copy contiguous pixel rows; opaque RGBA rows use a bulk copy, while transparent rows retain
 source-over blending. Scaled images use the resampling path.
 
+Quiet raw uploads decode once per stored image, shared by the screen and its snapshots. The
+upload buffer is consumed by that decode rather than retained beside a second copy of the pixels.
+Replay preserves both uploads that have not been decoded and images already drawn.
+
+Once a screen and its last snapshot are dropped, its queued and cached terminal encodings are
+released, and results from encodes still in flight are discarded. Shared-memory upload slots
+expire after a second without use; the idle encoder sweeps the pool every five seconds.
+A slot the host has not finished reading is retained until safe to unmap. Releasing image
+buffers does not guarantee an immediate drop in process RSS, since the heap allocator can keep
+freed memory for reuse.
+
 Captures use the same composition. Terminal `CapturedImage` values set `fill_cell_box` so changing
 the screenshot font cannot open gaps between tiles. When constructing `CapturedImage` with a
 struct literal, add `fill_cell_box: false` for the previous aspect-preserving behavior;

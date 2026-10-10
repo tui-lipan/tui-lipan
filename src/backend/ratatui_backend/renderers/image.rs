@@ -1117,6 +1117,7 @@ struct CacheEntry {
     protocol: Arc<EncodedProtocol>,
     estimated_bytes: usize,
     last_used: Instant,
+    terminal_alive: Option<Arc<AtomicBool>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1143,6 +1144,7 @@ struct EncodeRequest {
     /// Whether the key's cell box is the placement itself rather than room to fit the image into.
     /// See [`EncodeRequest::filling_its_box`].
     fills_box: bool,
+    terminal_alive: Option<Arc<AtomicBool>>,
 }
 
 impl EncodeRequest {
@@ -1161,7 +1163,14 @@ impl EncodeRequest {
             retention,
             backdrop: None,
             fills_box: false,
+            terminal_alive: None,
         }
+    }
+
+    fn owner_alive(&self) -> bool {
+        self.terminal_alive
+            .as_ref()
+            .is_none_or(|alive| alive.load(Ordering::Acquire))
     }
 
     /// Encode onto exactly the key's cell box, not the box the image's pixels would round to.
@@ -1363,6 +1372,7 @@ impl ImageRenderCache {
             protocol,
             estimated_bytes,
             last_used: Instant::now(),
+            terminal_alive: None,
         });
         self.total_estimated_bytes = self.total_estimated_bytes.saturating_add(estimated_bytes);
 
@@ -1374,7 +1384,25 @@ impl ImageRenderCache {
         }
     }
 
+    fn mark_terminal_owner(&mut self, key: &RenderCacheKey, alive: Option<Arc<AtomicBool>>) {
+        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.key == *key) {
+            entry.terminal_alive = alive;
+        }
+    }
+
+    fn remove_closed_terminals(&mut self) {
+        while let Some(index) = self.entries.iter().position(|entry| {
+            entry
+                .terminal_alive
+                .as_ref()
+                .is_some_and(|alive| !alive.load(Ordering::Acquire))
+        }) {
+            self.remove_at(index);
+        }
+    }
+
     fn evict_expired(&mut self, now: Instant) {
+        self.remove_closed_terminals();
         const IDLE_TTL: Duration = Duration::from_secs(30);
 
         while let Some(idx) = self
@@ -1443,6 +1471,9 @@ impl AsyncEncoder {
         let Ok(mut inner) = self.inner.lock() else {
             return Some(protocol);
         };
+        if !request.owner_alive() {
+            return None;
+        }
         inner.cache.insert(
             request.stream_key,
             request.key,
@@ -1450,6 +1481,9 @@ impl AsyncEncoder {
             request.estimated_bytes,
             request.retention,
         );
+        inner
+            .cache
+            .mark_terminal_owner(&request.key, request.terminal_alive.clone());
         Some(protocol)
     }
 
@@ -1539,6 +1573,8 @@ impl AsyncEncoder {
 
         loop {
             inner.cache.evict_expired(Instant::now());
+            #[cfg(feature = "terminal-images")]
+            shared_frame::trim_idle_pool();
             let queued_count = inner.queue.len();
             for _ in 0..queued_count {
                 let Some(slot) = inner.queue.pop_front() else {
@@ -1576,6 +1612,9 @@ impl AsyncEncoder {
         inner.in_flight_keys.remove(&slot);
         self.wake.notify_all();
 
+        if !request.owner_alive() {
+            return;
+        }
         let Some(protocol) = protocol else {
             return;
         };
@@ -1587,7 +1626,22 @@ impl AsyncEncoder {
             request.estimated_bytes,
             request.retention,
         );
+        inner
+            .cache
+            .mark_terminal_owner(&request.key, request.terminal_alive.clone());
         protocol_ready_epoch_counter().fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn release_closed_terminals(&self) {
+        let Ok(mut inner) = self.inner.lock() else {
+            return;
+        };
+        inner.cache.remove_closed_terminals();
+        inner.queued.retain(|_, request| request.owner_alive());
+        let AsyncEncoderInner { queue, queued, .. } = &mut *inner;
+        queue.retain(|slot| queued.contains_key(slot));
+        self.wake.notify_all();
     }
 }
 
@@ -1615,8 +1669,17 @@ pub(crate) fn image_protocol_ready_epoch() -> u64 {
     protocol_ready_epoch_counter().load(Ordering::Relaxed)
 }
 
+static ENCODER: OnceLock<Arc<AsyncEncoder>> = OnceLock::new();
+
+#[cfg(feature = "terminal-images")]
+pub(crate) fn release_closed_terminal_images() {
+    if let Some(encoder) = ENCODER.get() {
+        encoder.release_closed_terminals();
+    }
+    shared_frame::trim_idle_pool();
+}
+
 fn async_encoder() -> &'static Arc<AsyncEncoder> {
-    static ENCODER: OnceLock<Arc<AsyncEncoder>> = OnceLock::new();
     ENCODER.get_or_init(|| {
         let encoder = Arc::new(AsyncEncoder::default());
         let worker_count = image_encode_worker_count();
@@ -2200,6 +2263,7 @@ pub(crate) fn draw_encoded_image(
     stream_key: u64,
     source_hash: u64,
     z_index: i32,
+    terminal_alive: Option<Arc<AtomicBool>>,
     pixels: impl FnOnce() -> Arc<image::DynamicImage>,
 ) -> bool {
     if area.width == 0 || area.height == 0 {
@@ -2256,9 +2320,10 @@ pub(crate) fn draw_encoded_image(
         return true;
     }
 
-    let request = EncodeRequest::new(stream_key, key, pixels(), CacheRetention::LatestOnly)
+    let mut request = EncodeRequest::new(stream_key, key, pixels(), CacheRetention::LatestOnly)
         .with_backdrop(backdrop)
         .filling_its_box();
+    request.terminal_alive = terminal_alive;
 
     // A terminal application has already paced and decoded this frame. Native Kitty encoding is
     // fast enough to finish inside that paint, which avoids coupling visible frame cadence to the
@@ -3716,6 +3781,50 @@ mod tests {
         );
 
         assert!(estimated > 2_000_000);
+    }
+
+    #[test]
+    #[cfg(feature = "terminal-images")]
+    fn closing_a_terminal_releases_encodes_and_rejects_late_worker_results() {
+        let encoder = AsyncEncoder::default();
+        let alive = Arc::new(AtomicBool::new(true));
+        let mut in_flight = request(8, 20);
+        in_flight.terminal_alive = Some(Arc::clone(&alive));
+        encoder.enqueue(in_flight);
+        let in_flight = encoder.next_request_blocking();
+        let mut queued = request(7, 11);
+        queued.terminal_alive = Some(Arc::clone(&alive));
+        encoder.enqueue(queued);
+        encoder.enqueue(request(9, 30));
+        let cached = protocol();
+        let weak = Arc::downgrade(&cached);
+        {
+            let mut inner = encoder.inner.lock().unwrap();
+            inner
+                .cache
+                .insert(7, key(10), cached, 10, CacheRetention::LatestOnly);
+            inner
+                .cache
+                .mark_terminal_owner(&key(10), Some(Arc::clone(&alive)));
+        }
+        alive.store(false, Ordering::Release);
+        encoder.release_closed_terminals();
+        assert!(weak.upgrade().is_none());
+        let late = EncodedProtocol::ratatui(
+            Protocol::Halfblocks(Default::default()),
+            ImageProtocol::Halfblocks,
+        );
+        encoder.complete_request(&in_flight, Some(late));
+        let inner = encoder.inner.lock().unwrap();
+        assert!(inner.cache.entries.is_empty());
+        assert_eq!(inner.cache.total_estimated_bytes, 0);
+        assert_eq!(inner.queue.iter().copied().collect::<Vec<_>>(), [9]);
+        assert_eq!(
+            inner.queued.len(),
+            1,
+            "unrelated widgets keep their queued work"
+        );
+        assert!(inner.in_flight.is_empty());
     }
 
     #[test]

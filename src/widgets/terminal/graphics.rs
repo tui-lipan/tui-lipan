@@ -141,7 +141,7 @@ struct ImageGeometry {
 /// Everything [`decode_payload`] needs, kept so the decode can happen later.
 #[derive(Debug)]
 struct DeferredDecode {
-    payload: Vec<u8>,
+    payload: std::sync::Mutex<Option<Vec<u8>>>,
     compressed: bool,
     format: u32,
     width: u32,
@@ -164,7 +164,7 @@ enum ImageSource {
         input: Arc<DeferredDecode>,
         /// `None` once decoding has been attempted and failed, so a broken payload is not retried
         /// on every frame.
-        decoded: std::sync::OnceLock<Option<Arc<DynamicImage>>>,
+        decoded: Arc<std::sync::OnceLock<Option<Arc<DynamicImage>>>>,
     },
 }
 
@@ -198,6 +198,16 @@ impl TerminalImage {
                 .get_or_init(|| decode_deferred(input).map(Arc::new))
                 .as_ref(),
         }
+    }
+
+    pub(crate) fn image_lifetime(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        let cache = self.composition.as_ref()?;
+        Some(Arc::clone(
+            &cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .alive,
+        ))
     }
 
     pub(crate) fn stream_namespace(&self) -> u64 {
@@ -1304,11 +1314,21 @@ impl StoredImage {
     fn replay_payload(&self) -> (Cow<'_, [u8]>, u32, bool) {
         match &self.image.source {
             ImageSource::Decoded(image) => (Cow::Owned(image.to_rgba8().into_raw()), 32, false),
-            ImageSource::Deferred { input, .. } => (
-                Cow::Borrowed(input.payload.as_slice()),
-                input.format,
-                input.compressed,
-            ),
+            ImageSource::Deferred { input, .. } => {
+                let payload = input
+                    .payload
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(payload) = payload.as_ref() {
+                    return (Cow::Owned(payload.clone()), input.format, input.compressed);
+                }
+                drop(payload);
+                let rgba = self
+                    .image
+                    .pixels()
+                    .map_or_else(Vec::new, |pixels| pixels.to_rgba8().into_raw());
+                (Cow::Owned(rgba), 32, false)
+            }
         }
     }
 }
@@ -1810,13 +1830,13 @@ impl TerminalGraphics {
                 let image = TerminalImage {
                     source: ImageSource::Deferred {
                         input: Arc::new(DeferredDecode {
-                            payload,
+                            payload: std::sync::Mutex::new(Some(payload)),
                             compressed: command.compressed,
                             format: command.format,
                             width,
                             height,
                         }),
-                        decoded: std::sync::OnceLock::new(),
+                        decoded: Arc::new(std::sync::OnceLock::new()),
                     },
                     width,
                     height,
@@ -2430,6 +2450,7 @@ fn deferrable(command: &GraphicsCommand) -> Option<(u32, u32, usize)> {
 
 /// Run a decode that [`ImageSource::Deferred`] put off.
 fn decode_deferred(input: &DeferredDecode) -> Option<DynamicImage> {
+    let payload = input.payload.lock().ok()?.take()?;
     decode_payload(
         &GraphicsCommand {
             compressed: input.compressed,
@@ -2438,7 +2459,7 @@ fn decode_deferred(input: &DeferredDecode) -> Option<DynamicImage> {
             height: input.height,
             ..GraphicsCommand::default()
         },
-        input.payload.clone(),
+        payload,
     )
     .ok()
 }
@@ -2746,6 +2767,65 @@ mod tests {
         assert_eq!(pixels.width(), 3);
         assert_eq!(pixels.height(), 2);
         assert_eq!(pixels.to_rgb8().as_raw(), &vec![0xa0u8; 3 * 2 * 3]);
+    }
+
+    #[test]
+    fn snapshots_share_one_decode_and_release_the_consumed_upload() {
+        let mut graphics = TerminalGraphics::default();
+        let mut scanner = GraphicsScanner::default();
+        let (_, commands) = scan_all(&mut scanner, &rgb_command("q=2,i=7,a=T", 3, 2));
+        for command in commands {
+            graphics.apply(command, context());
+        }
+        let stored = &graphics.images.get(&7).unwrap().image;
+        let first = stored.clone();
+        let second = stored.clone();
+        let ImageSource::Deferred { input, .. } = &stored.source else {
+            panic!("deferred source");
+        };
+        let buffer = input.payload.lock().unwrap().as_ref().unwrap().as_ptr();
+        let first_pixels = first.pixels().unwrap();
+        assert!(Arc::ptr_eq(first_pixels, second.pixels().unwrap()));
+        assert!(Arc::ptr_eq(first_pixels, stored.pixels().unwrap()));
+        assert!(
+            input.payload.lock().unwrap().is_none(),
+            "the decoded source must release its upload"
+        );
+        assert_eq!(
+            first_pixels.as_rgb8().unwrap().as_raw().as_ptr(),
+            buffer,
+            "a raw upload becomes the decoded image without a full-frame copy"
+        );
+        let weak = Arc::downgrade(first_pixels);
+        drop(first);
+        drop(second);
+        graphics.reset();
+        assert!(
+            weak.upgrade().is_none(),
+            "dropping the screen releases the shared pixel buffer"
+        );
+    }
+
+    #[test]
+    fn replay_preserves_a_deferred_image_before_and_after_decoding() {
+        let mut original = crate::widgets::TerminalScreen::new(8, 10, 0);
+        original.process_bytes(&rgb_command("q=2,i=7,a=T", 3, 2));
+        let before = original.export_replay_bytes();
+        let snapshot = original.render_snapshot();
+        let expected = snapshot.images[0].image.pixels().unwrap().to_rgba8();
+        let after = original.export_replay_bytes();
+        for replay in [before, after] {
+            let mut restored = crate::widgets::TerminalScreen::new(8, 10, 0);
+            restored.process_bytes(&replay);
+            assert_eq!(
+                restored.render_snapshot().images[0]
+                    .image
+                    .pixels()
+                    .unwrap()
+                    .to_rgba8(),
+                expected
+            );
+        }
     }
 
     fn context() -> GraphicsContext {

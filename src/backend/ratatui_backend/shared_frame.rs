@@ -315,6 +315,28 @@ mod imp {
         slot.destroy();
     }
 
+    impl Pool {
+        fn trim_idle(&mut self) {
+            let mut index = 0;
+            while index < self.slots.len() {
+                let slot = &self.slots[index];
+                let idle = slot
+                    .handed
+                    .as_ref()
+                    .is_none_or(|(_, at)| at.elapsed() >= Duration::from_secs(1));
+                if idle && slot.reusable() {
+                    self.slots.swap_remove(index).destroy();
+                } else {
+                    index += 1;
+                }
+            }
+        }
+    }
+
+    pub(crate) fn trim_idle_pool() {
+        pool().trim_idle();
+    }
+
     /// Pixels in a shared-memory object, waiting for the host to read them.
     ///
     /// Owns the name until the host is told about it. A frame that is encoded and then never
@@ -450,6 +472,45 @@ mod imp {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        #[cfg(target_os = "linux")]
+        fn idle_pool_slots_expire_after_the_host_finishes_reading() {
+            let mut idle = create_slot(4096).unwrap();
+            let mut pending = create_slot(4096).unwrap();
+            let mut recent = create_slot(4096).unwrap();
+            let gone = CString::new(format!("/dev/shm{}", super::super::next_name())).unwrap();
+            idle.handed = Some((gone.clone(), Instant::now() - Duration::from_secs(2)));
+            recent.handed = Some((gone, Instant::now()));
+            let outstanding =
+                CString::new(format!("/dev/shm{}", super::super::next_name())).unwrap();
+            assert_eq!(
+                unsafe { libc::link(pending.source_path.as_ptr(), outstanding.as_ptr()) },
+                0
+            );
+            pending.handed = Some((outstanding.clone(), Instant::now() - Duration::from_secs(2)));
+            let mut pool = Pool {
+                slots: vec![idle, pending, recent],
+                claimed: 0,
+                claimed_bytes: 0,
+            };
+            pool.trim_idle();
+            assert_eq!(
+                pool.resident(),
+                8192,
+                "recent and unread buffers remain resident"
+            );
+            std::fs::remove_file(outstanding.to_str().unwrap()).unwrap();
+            for slot in &mut pool.slots {
+                slot.handed.as_mut().unwrap().1 = Instant::now() - Duration::from_secs(2);
+            }
+            pool.trim_idle();
+            assert_eq!(
+                pool.resident(),
+                0,
+                "old buffers are unmapped once safe to release"
+            );
+        }
 
         /// These three tests share the process-wide pool, so they take turns.
         #[cfg(target_os = "linux")]
@@ -596,6 +657,12 @@ mod imp {
         pub(crate) fn handed_over(&mut self) {}
     }
 }
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+pub(crate) use imp::trim_idle_pool;
+
+#[cfg(not(all(unix, not(target_arch = "wasm32"))))]
+pub(crate) fn trim_idle_pool() {}
 
 pub(crate) use imp::SharedFrame;
 
