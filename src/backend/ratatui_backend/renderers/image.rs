@@ -1608,6 +1608,7 @@ impl AsyncEncoder {
             inner.cache.evict_expired(Instant::now());
             #[cfg(feature = "terminal-images")]
             shared_frame::trim_idle_pool();
+            #[cfg(feature = "terminal-images")]
             crate::backend::ratatui_backend::file_frame::reap_host_links();
             let queued_count = inner.queue.len();
             for _ in 0..queued_count {
