@@ -129,6 +129,35 @@ fn render_terminal_images(
             continue;
         }
 
+        // Cell-aligned immutable files can go straight to a local host, including clipped
+        // panes. Composition, captures and dimming keep the ordinary pixel path below.
+        let full_crop = TerminalImageCrop {
+            x: 0,
+            y: 0,
+            width: placement.image.width(),
+            height: placement.image.height(),
+        };
+        if crate::backend::ratatui_backend::renderers::image::draw_file_terminal_image(
+            f,
+            placement,
+            (left, top),
+            area,
+            placement_stream_hash(
+                placement.image.stream_namespace(),
+                placement.image_id,
+                full_crop,
+            ),
+            placement_source_hash(
+                placement.image.stream_namespace(),
+                placement.image_id,
+                placement.image.source_hash(),
+                full_crop,
+            ),
+            lifetime.clone(),
+        ) {
+            continue;
+        }
+
         // A payload whose decode was deferred is decoded here, on the first frame that draws it.
         // `None` means it did not decode at all, which leaves nothing to paint.
         let Some(pixels) = placement.image.pixels() else {

@@ -261,14 +261,9 @@ impl Node {
     }
 
     pub(crate) fn reset_for_free(&mut self) {
-        self.key = None;
-        self.pointer_focus = true;
-        self.parent = None;
-        self.children.clear();
-        self.epoch = 0;
-        self.inert = false;
-        self.portal_suppressed = false;
-        self.active_theme = default_active_theme();
+        // Arena slots may stay unused indefinitely. Release widget payloads and live handles
+        // when they leave the tree, rather than waiting for another widget to reuse the slot.
+        self.reset_for_reuse(self.id);
     }
 }
 
@@ -1841,6 +1836,47 @@ mod tests {
     use crate::style::{Color, Style};
     use crate::widgets::internal::SplitterNode;
     use crate::widgets::{Button, MouseRegion, Splitter, SplitterHandleMode};
+
+    #[cfg(feature = "terminal")]
+    #[test]
+    fn sweeping_terminal_nodes_releases_their_live_screen() {
+        use crate::core::element::{Element, ElementKind};
+        use crate::style::LayoutConstraints;
+        use crate::widgets::{Terminal, TerminalScreen};
+        use std::cell::RefCell;
+        let screen = Rc::new(RefCell::new(TerminalScreen::new(2, 4, 0)));
+        let weak = Rc::downgrade(&screen);
+        let element: Element = Terminal::new().screen(screen.clone()).into();
+        let ElementKind::Terminal(terminal) = &element.kind else {
+            panic!("terminal element");
+        };
+        let mut tree = NodeTree::new();
+        let root = tree.alloc();
+        tree.root = root;
+        tree.node_mut(root).epoch = 1;
+        let child = tree.alloc();
+        crate::widgets::internal::reconcile_terminal(
+            &mut tree,
+            child,
+            terminal,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 2,
+            },
+            &LayoutConstraints::default(),
+        );
+        drop(element);
+        drop(screen);
+        assert!(weak.upgrade().is_some());
+        tree.sweep(1);
+        assert!(
+            weak.upgrade().is_none(),
+            "free arena slots must not retain terminal screens"
+        );
+        assert!(!tree.is_valid(child));
+    }
 
     fn overlay_root(id: NodeId, order: u64, captures_pointer: PointerCapture) -> OverlayRoot {
         OverlayRoot {

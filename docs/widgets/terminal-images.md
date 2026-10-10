@@ -184,6 +184,27 @@ A path only means something on the machine that wrote it, so a pane attached fro
 decline: a remote client reading `/tmp/...` from its own filesystem is the one failure mode here that
 is not a clean error.
 
+### Retain streamed frames in files
+
+`screen.set_image_file_storage_enabled(true)` opts into immutable file snapshots for quiet raw
+`t=f` uploads. Each snapshot copies a validated regular file into an application-owned temporary
+file. Producer rewrites and deletion cannot change a stored frame. Snapshots and replay share the
+file instead of allocating another pixel buffer; capture and composition read pixels on demand.
+The normal image budget still counts the raw pixel size. Snapshot files also have a process-wide
+256 MiB limit. If a snapshot cannot be made, the ordinary in-memory path remains available.
+
+A cell-aligned frame can be uploaded directly to a local Kitty host that passed the shared-memory
+probe. The host receives an immutable temporary hard link with `t=t` and removes it after reading.
+At most 32 outstanding links, totaling 64 MiB, are admitted. Unread links expire after 10 seconds;
+idle encoder workers check them every five seconds. This path does not map frame pixels into the
+application and does not allocate a shared-memory upload slot. Cropping, overlapping patches,
+modal dimming, captures and other host protocols retain their existing pixel rendering behavior.
+
+This is useful for a producer sending complete frames under one image ID. Patches that overlap or
+land between cells still need composition, and therefore need decoded pixels on the rendering
+client. File snapshots reduce heap allocations, but their pages still use the filesystem cache.
+Compare total memory and frame pacing as well as application RSS when evaluating this mode.
+
 ### Out the other side, to the host
 
 The same reasoning applies to what this framework writes *to* the terminal it is running in, and the

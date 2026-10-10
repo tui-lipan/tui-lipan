@@ -1,5 +1,7 @@
 pub(crate) mod capture_render;
 pub(crate) mod common;
+#[cfg(feature = "terminal-images")]
+pub(crate) mod file_frame;
 pub(crate) mod glyph_paint_cache;
 #[cfg(feature = "image")]
 pub(crate) mod image_support;

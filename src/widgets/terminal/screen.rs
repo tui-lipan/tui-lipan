@@ -1679,6 +1679,17 @@ impl TerminalScreen {
         self.snapshot_damage.mark_full();
     }
 
+    /// Retain quiet raw file transmissions as private immutable file snapshots instead of heap
+    /// pixel buffers. Capture, replay and composition read their pixels on demand. A local Kitty
+    /// host can load a cell-aligned frame directly, without decoding it in the application.
+    ///
+    /// Disabled by default. Snapshot failure uses the ordinary in-memory path. File storage is
+    /// bounded independently as well as by the screen image budget.
+    #[cfg(feature = "terminal-images")]
+    pub fn set_image_file_storage_enabled(&mut self, enabled: bool) {
+        self.graphics.set_file_storage_enabled(enabled);
+    }
+
     /// Choose which out-of-band transmission media (`t=f`, `t=t`, `t=s`) this screen accepts.
     ///
     /// These let a child leave a frame in a file or a shared-memory object and name it in a

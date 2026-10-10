@@ -159,6 +159,10 @@ struct DeferredDecode {
 /// why [`GraphicsStore::finish_transmit`] applies it to `q=2` transmissions alone. See there.
 #[derive(Clone)]
 enum ImageSource {
+    File {
+        input: Arc<crate::backend::ratatui_backend::file_frame::FilePixels>,
+        decoded: Arc<std::sync::OnceLock<Option<Arc<DynamicImage>>>>,
+    },
     Decoded(Arc<DynamicImage>),
     Deferred {
         input: Arc<DeferredDecode>,
@@ -193,10 +197,37 @@ impl TerminalImage {
     /// budget evicted.
     pub(crate) fn pixels(&self) -> Option<&Arc<DynamicImage>> {
         match &self.source {
+            ImageSource::File { input, decoded } => decoded
+                .get_or_init(|| {
+                    let bytes = input.read().ok()?;
+                    let pixels = match input.format {
+                        24 => DynamicImage::ImageRgb8(image::RgbImage::from_raw(
+                            self.width,
+                            self.height,
+                            bytes,
+                        )?),
+                        _ => DynamicImage::ImageRgba8(image::RgbaImage::from_raw(
+                            self.width,
+                            self.height,
+                            bytes,
+                        )?),
+                    };
+                    Some(Arc::new(pixels))
+                })
+                .as_ref(),
             ImageSource::Decoded(pixels) => Some(pixels),
             ImageSource::Deferred { input, decoded } => decoded
                 .get_or_init(|| decode_deferred(input).map(Arc::new))
                 .as_ref(),
+        }
+    }
+
+    pub(crate) fn file_pixels(
+        &self,
+    ) -> Option<&Arc<crate::backend::ratatui_backend::file_frame::FilePixels>> {
+        match &self.source {
+            ImageSource::File { input, .. } => Some(input),
+            _ => None,
         }
     }
 
@@ -1311,8 +1342,9 @@ struct StoredImage {
 }
 
 impl StoredImage {
-    fn replay_payload(&self) -> (Cow<'_, [u8]>, u32, bool) {
-        match &self.image.source {
+    fn replay_payload(&self) -> io::Result<(Cow<'_, [u8]>, u32, bool)> {
+        Ok(match &self.image.source {
+            ImageSource::File { input, .. } => (Cow::Owned(input.read()?), input.format, false),
             ImageSource::Decoded(image) => (Cow::Owned(image.to_rgba8().into_raw()), 32, false),
             ImageSource::Deferred { input, .. } => {
                 let payload = input
@@ -1320,7 +1352,7 @@ impl StoredImage {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if let Some(payload) = payload.as_ref() {
-                    return (Cow::Owned(payload.clone()), input.format, input.compressed);
+                    return Ok((Cow::Owned(payload.clone()), input.format, input.compressed));
                 }
                 drop(payload);
                 let rgba = self
@@ -1329,7 +1361,7 @@ impl StoredImage {
                     .map_or_else(Vec::new, |pixels| pixels.to_rgba8().into_raw());
                 (Cow::Owned(rgba), 32, false)
             }
-        }
+        })
     }
 }
 
@@ -1401,6 +1433,7 @@ pub(super) struct TerminalGraphics {
     used_bytes: usize,
     clock: u64,
     storage_enabled: bool,
+    file_storage_enabled: bool,
     media: GraphicsMediaPolicy,
     /// Counts transmissions that named their pixels rather than carrying them. See
     /// [`TerminalGraphics::named_source_identity`].
@@ -1423,6 +1456,7 @@ impl Default for TerminalGraphics {
             used_bytes: 0,
             clock: 0,
             storage_enabled: true,
+            file_storage_enabled: false,
             media: GraphicsMediaPolicy::default(),
             source_serial: 0,
             composition: Arc::default(),
@@ -1449,6 +1483,10 @@ impl TerminalGraphics {
         }
         self.storage_enabled = enabled;
         self.reset();
+    }
+
+    pub(super) fn set_file_storage_enabled(&mut self, enabled: bool) {
+        self.file_storage_enabled = enabled;
     }
 
     pub(super) fn set_media_policy(&mut self, media: GraphicsMediaPolicy) {
@@ -1763,6 +1801,116 @@ impl TerminalGraphics {
         self.finish_transmit(pending.id, &pending.header, pending.data, ctx)
     }
 
+    fn retain_image(
+        &self,
+        command: &GraphicsCommand,
+        payload: Vec<u8>,
+        source_hash: u64,
+    ) -> Result<(TerminalImage, usize), &'static str> {
+        let file = self.snapshot_file(command, &payload);
+        let (image, bytes) = if let Some((input, bytes)) = file {
+            (
+                TerminalImage {
+                    source: ImageSource::File {
+                        input: Arc::new(input),
+                        decoded: Arc::default(),
+                    },
+                    width: command.width,
+                    height: command.height,
+                    source_hash,
+                    stream_namespace: self.stream_namespace,
+                    geometry: None,
+                    composition: Some(Arc::clone(&self.composition)),
+                },
+                bytes,
+            )
+        } else {
+            let payload = self.resolve_medium(command, payload)?;
+            let (image, bytes) = match deferrable(command) {
+                // Nothing is waiting to hear whether this decodes and the size is already known, so the
+                // work waits until something asks to draw it. A frame superseded before then - the
+                // common case for a sender streaming under one id - is dropped without ever being
+                // inflated. See [`ImageSource`].
+                Some((width, height, channels)) => {
+                    let bytes = (width as usize)
+                        .saturating_mul(height as usize)
+                        .saturating_mul(channels);
+                    let image = TerminalImage {
+                        source: ImageSource::Deferred {
+                            input: Arc::new(DeferredDecode {
+                                payload: std::sync::Mutex::new(Some(payload)),
+                                compressed: command.compressed,
+                                format: command.format,
+                                width,
+                                height,
+                            }),
+                            decoded: Arc::new(std::sync::OnceLock::new()),
+                        },
+                        width,
+                        height,
+                        source_hash,
+                        stream_namespace: self.stream_namespace,
+                        geometry: None,
+                        composition: Some(Arc::clone(&self.composition)),
+                    };
+                    (image, bytes)
+                }
+                None => {
+                    let decoded = decode_payload(command, payload)?;
+                    let bytes = decoded_bytes(&decoded);
+                    let image = TerminalImage {
+                        width: decoded.width(),
+                        height: decoded.height(),
+                        source: ImageSource::Decoded(Arc::new(decoded)),
+                        source_hash,
+                        stream_namespace: self.stream_namespace,
+                        geometry: None,
+                        composition: Some(Arc::clone(&self.composition)),
+                    };
+                    (image, bytes)
+                }
+            };
+            (image, bytes)
+        };
+        Ok((image, bytes))
+    }
+
+    fn snapshot_file(
+        &self,
+        command: &GraphicsCommand,
+        payload: &[u8],
+    ) -> Option<(
+        crate::backend::ratatui_backend::file_frame::FilePixels,
+        usize,
+    )> {
+        if !self.file_storage_enabled
+            || command.medium != GraphicsMedium::File
+            || !self.media.allows(command.medium)
+            || command.compressed
+            || command.source_offset != 0
+        {
+            return None;
+        }
+        let (width, height, channels) = deferrable(command)?;
+        let bytes = (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(channels)?;
+        if bytes > MAX_TRANSMIT_BYTES
+            || bytes > self.budget
+            || (command.source_size != 0 && command.source_size != bytes)
+        {
+            return None;
+        }
+        let path = graphics_media::decode_path(payload).ok()?;
+        let input = crate::backend::ratatui_backend::file_frame::FilePixels::snapshot(
+            &path,
+            bytes,
+            command.format,
+        )
+        .ok()?;
+        Some((input, bytes))
+    }
+
     fn finish_transmit(
         &mut self,
         id: u32,
@@ -1809,65 +1957,13 @@ impl TerminalGraphics {
         } else {
             hash_payload(command.format, &payload)
         };
-        let payload = match self.resolve_medium(command, payload) {
-            Ok(payload) => payload,
+        let (image, bytes) = match self.retain_image(command, payload, source_hash) {
+            Ok(stored) => stored,
             Err(error) => {
                 return GraphicsOutcome {
                     response: report(command, id, Err(error)),
                     advance: None,
                 };
-            }
-        };
-        let (image, bytes) = match deferrable(command) {
-            // Nothing is waiting to hear whether this decodes and the size is already known, so the
-            // work waits until something asks to draw it. A frame superseded before then - the
-            // common case for a sender streaming under one id - is dropped without ever being
-            // inflated. See [`ImageSource`].
-            Some((width, height, channels)) => {
-                let bytes = (width as usize)
-                    .saturating_mul(height as usize)
-                    .saturating_mul(channels);
-                let image = TerminalImage {
-                    source: ImageSource::Deferred {
-                        input: Arc::new(DeferredDecode {
-                            payload: std::sync::Mutex::new(Some(payload)),
-                            compressed: command.compressed,
-                            format: command.format,
-                            width,
-                            height,
-                        }),
-                        decoded: Arc::new(std::sync::OnceLock::new()),
-                    },
-                    width,
-                    height,
-                    source_hash,
-                    stream_namespace: self.stream_namespace,
-                    geometry: None,
-                    composition: Some(Arc::clone(&self.composition)),
-                };
-                (image, bytes)
-            }
-            None => {
-                let decoded = match decode_payload(command, payload) {
-                    Ok(image) => image,
-                    Err(error) => {
-                        return GraphicsOutcome {
-                            response: report(command, id, Err(error)),
-                            advance: None,
-                        };
-                    }
-                };
-                let bytes = decoded_bytes(&decoded);
-                let image = TerminalImage {
-                    width: decoded.width(),
-                    height: decoded.height(),
-                    source: ImageSource::Decoded(Arc::new(decoded)),
-                    source_hash,
-                    stream_namespace: self.stream_namespace,
-                    geometry: None,
-                    composition: Some(Arc::clone(&self.composition)),
-                };
-                (image, bytes)
             }
         };
         self.insert_image(id, image, bytes);
@@ -2143,7 +2239,7 @@ impl TerminalGraphics {
         id: u32,
         stored: &StoredImage,
     ) -> io::Result<()> {
-        let (payload, format, compressed) = stored.replay_payload();
+        let (payload, format, compressed) = stored.replay_payload()?;
         let mut numbers: Vec<_> = self
             .numbers
             .iter()
@@ -2696,6 +2792,111 @@ mod tests {
             "two words exchanged is a different frame, not the same one reordered"
         );
         assert_eq!(hash_payload(24, &base), hash, "and it is stable");
+    }
+
+    #[test]
+    fn file_storage_retains_immutable_pixels_and_replays_without_decoding() {
+        use std::io::Write;
+        let mut source = tempfile::NamedTempFile::new().unwrap();
+        source.write_all(&[1, 2, 3, 255].repeat(200)).unwrap();
+        let mut graphics = TerminalGraphics::default();
+        graphics.set_file_storage_enabled(true);
+        let command = GraphicsCommand {
+            action: GraphicsAction::TransmitAndDisplay,
+            medium: GraphicsMedium::File,
+            quiet: 2,
+            format: 32,
+            width: 10,
+            height: 20,
+            id: 7,
+            payload: source.path().to_str().unwrap().as_bytes().to_vec(),
+            ..GraphicsCommand::default()
+        };
+        graphics.apply(command, context());
+        let stored = &graphics.images[&7];
+        let ImageSource::File { decoded, .. } = &stored.image.source else {
+            panic!("expected file-backed image");
+        };
+        assert!(decoded.get().is_none());
+        std::fs::write(source.path(), [9, 8, 7, 255].repeat(200)).unwrap();
+        drop(source);
+        let mut replay = Vec::new();
+        graphics.write_replay_transmissions(&mut replay).unwrap();
+        assert!(
+            decoded.get().is_none(),
+            "replay reads files without populating the pixel cache"
+        );
+        let mut restored = TerminalGraphics::default();
+        let mut scanner = GraphicsScanner::default();
+        let (_, commands) = scan_all(&mut scanner, &replay);
+        for command in commands {
+            restored.apply(command, context());
+        }
+        assert_eq!(
+            restored.images[&7].image.pixels().unwrap().as_bytes(),
+            &[1, 2, 3, 255].repeat(200)
+        );
+        let visible = graphics.visible(0, 0, 24, false);
+        let composed = composite::composite_terminal_images(&visible, 80, 24);
+        assert!(composed[0].image.file_pixels().is_some());
+        assert!(decoded.get().is_none(), "aligned frames bypass composition");
+        let snapshot = stored.image.clone();
+        let first = stored.image.pixels().unwrap();
+        assert!(Arc::ptr_eq(first, snapshot.pixels().unwrap()));
+    }
+
+    #[test]
+    fn file_storage_replacement_reclaims_previous_frame() {
+        use std::io::Write;
+        let mut source = tempfile::NamedTempFile::new().unwrap();
+        source.write_all(&[1, 2, 3, 255]).unwrap();
+        let mut graphics = TerminalGraphics::default();
+        graphics.set_file_storage_enabled(true);
+        let command = GraphicsCommand {
+            medium: GraphicsMedium::File,
+            quiet: 2,
+            format: 32,
+            width: 1,
+            height: 1,
+            id: 7,
+            payload: source.path().to_str().unwrap().as_bytes().to_vec(),
+            ..GraphicsCommand::default()
+        };
+        graphics.apply(command.clone(), context());
+        let first = Arc::downgrade(graphics.images[&7].image.file_pixels().unwrap());
+        for _ in 0..60 {
+            graphics.apply(command.clone(), context());
+        }
+        assert!(first.upgrade().is_none());
+        assert_eq!(graphics.images.len(), 1);
+        assert_eq!(graphics.used_bytes, 4);
+        let last = Arc::downgrade(graphics.images[&7].image.file_pixels().unwrap());
+        graphics.reset();
+        assert!(last.upgrade().is_none());
+    }
+
+    #[test]
+    fn file_storage_respects_disabled_file_media() {
+        use std::io::Write;
+        let mut source = tempfile::NamedTempFile::new().unwrap();
+        source.write_all(&[1, 2, 3, 255]).unwrap();
+        let mut graphics = TerminalGraphics::default();
+        graphics.set_file_storage_enabled(true);
+        graphics.set_media_policy(GraphicsMediaPolicy::NONE);
+        graphics.apply(
+            GraphicsCommand {
+                medium: GraphicsMedium::File,
+                quiet: 2,
+                format: 32,
+                width: 1,
+                height: 1,
+                id: 7,
+                payload: source.path().to_str().unwrap().as_bytes().to_vec(),
+                ..GraphicsCommand::default()
+            },
+            context(),
+        );
+        assert!(graphics.images.is_empty());
     }
 
     /// Deferring a decode moves the moment a bad payload is noticed to the first draw, so it is

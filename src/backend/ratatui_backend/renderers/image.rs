@@ -760,6 +760,7 @@ struct CompressedKitty {
     /// Held for as long as the transmission that names it might still be written, and unlinked on
     /// drop if it never was. `None` for an inline transmission, which carries its own pixels.
     shared: Mutex<Option<SharedFrame>>,
+    file: Mutex<Option<crate::backend::ratatui_backend::file_frame::HostFile>>,
     id_color: String,
     id_extra: u16,
     size: ratatui::layout::Size,
@@ -822,6 +823,33 @@ impl CompressedKitty {
         Some(Self {
             transmit: Mutex::new(Some(transmit)),
             shared: Mutex::new(shared),
+            file: Mutex::new(None),
+            id_color: format!("\x1b[38;2;{id_r};{id_g};{id_b}m"),
+            id_extra: u16::from(id_extra),
+            size,
+        })
+    }
+
+    fn from_file(
+        input: &crate::backend::ratatui_backend::file_frame::FilePixels,
+        dimensions: (u32, u32),
+        size: ratatui::layout::Size,
+        id: u32,
+        z_index: i32,
+    ) -> Option<Self> {
+        let file = input.host_link().ok()?;
+        let name = file.path().to_str()?;
+        let mut transmit = format!(
+            "\x1b_Gq=2,i={id},a=T,U=1,f={},t=t,s={},v={},c={},r={},z={z_index};",
+            input.format, dimensions.0, dimensions.1, size.width, size.height,
+        );
+        BASE64.encode_string(name, &mut transmit);
+        transmit.push_str("\x1b\\");
+        let [id_extra, id_r, id_g, id_b] = id.to_be_bytes();
+        Some(Self {
+            transmit: Mutex::new(Some(transmit)),
+            shared: Mutex::new(None),
+            file: Mutex::new(Some(file)),
             id_color: format!("\x1b[38;2;{id_r};{id_g};{id_b}m"),
             id_extra: u16::from(id_extra),
             size,
@@ -949,6 +977,11 @@ impl CompressedKitty {
             && let Some(frame) = shared.as_mut()
         {
             frame.handed_over();
+        }
+        if let Ok(mut file) = self.file.lock()
+            && let Some(file) = file.as_mut()
+        {
+            file.handed_over();
         }
         Some(sequence)
     }
@@ -1575,6 +1608,7 @@ impl AsyncEncoder {
             inner.cache.evict_expired(Instant::now());
             #[cfg(feature = "terminal-images")]
             shared_frame::trim_idle_pool();
+            crate::backend::ratatui_backend::file_frame::reap_host_links();
             let queued_count = inner.queue.len();
             for _ in 0..queued_count {
                 let Some(slot) = inner.queue.pop_front() else {
@@ -1677,6 +1711,7 @@ pub(crate) fn release_closed_terminal_images() {
         encoder.release_closed_terminals();
     }
     shared_frame::trim_idle_pool();
+    crate::backend::ratatui_backend::file_frame::reap_host_links();
 }
 
 fn async_encoder() -> &'static Arc<AsyncEncoder> {
@@ -2062,20 +2097,25 @@ fn kitty_image_id(request: &EncodeRequest) -> u32 {
             // Terminal placements replace their pixels continuously. Keep their host image id
             // stable so native terminals replace one image instead of allocating a new image and
             // repainting differently-colored Unicode placeholders for every producer frame.
-            b"tui-lipan-terminal-image-stream".hash(&mut hasher);
-            request.stream_key.hash(&mut hasher);
-            // The dimmed variant needs its own host image. Sharing the id would overwrite the
-            // undimmed pixels on the host, and closing the overlay would switch back to a cached
-            // encode that no longer transmits them.
-            if request.key.backdrop != 0 {
-                request.key.backdrop.hash(&mut hasher);
-            }
+            return terminal_image_id(request.stream_key, request.key.backdrop);
         }
         CacheRetention::Variants => {
             // Image widgets may render the same source independently at the same size. Preserve
             // the frame-specific identity until those widgets have their own stream namespace.
             request.key.hash(&mut hasher);
         }
+    }
+    (hasher.finish() as u32).max(1)
+}
+
+#[cfg(feature = "terminal-images")]
+fn terminal_image_id(stream_key: u64, backdrop: u64) -> u32 {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    b"tui-lipan-terminal-image-stream".hash(&mut hasher);
+    stream_key.hash(&mut hasher);
+    if backdrop != 0 {
+        backdrop.hash(&mut hasher);
     }
     (hasher.finish() as u32).max(1)
 }
@@ -2239,6 +2279,88 @@ fn resolve_protocol_async(
         return ProtocolResolve::Ready(protocol);
     }
     encoder.resolve_miss(request, false)
+}
+
+/// Upload a cell-aligned immutable file without decoding or allocating host shared memory.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn draw_file_terminal_image(
+    f: &mut ratatui::Frame<'_>,
+    placement: &crate::widgets::TerminalImagePlacement,
+    origin: (i32, i32),
+    area: ratatui::layout::Rect,
+    stream_key: u64,
+    source_hash: u64,
+    terminal_alive: Option<Arc<AtomicBool>>,
+) -> bool {
+    if capturing_images()
+        || image_support::image_rendering_suspended()
+        || !shared_frame::host_reads_shared_memory()
+        || placement.source_crop.is_some()
+    {
+        return false;
+    }
+    let Some(input) = placement.image.file_pixels() else {
+        return false;
+    };
+    let cells = Rect {
+        x: area.x as i16,
+        y: area.y as i16,
+        w: area.width,
+        h: area.height,
+    };
+    let resolved_protocol =
+        protocol_type_to_public(image_support::picker_snapshot().protocol_type());
+    if resolved_protocol != ImageProtocol::Kitty
+        || live_backdrop_mask(cells, resolved_protocol).is_some()
+    {
+        return false;
+    }
+    let key = RenderCacheKey {
+        source_hash,
+        frame_index: 0,
+        width: placement.cols,
+        height: placement.rows,
+        crop: None,
+        background_rgb: None,
+        fit: ImageFit::Scale,
+        protocol: ImageProtocol::Auto,
+        resolved_protocol,
+        z_index: placement.z,
+        backdrop: 0,
+    };
+    let encoder = async_encoder();
+    let protocol = if let Some(protocol) = encoder.cache_get(&key) {
+        protocol
+    } else {
+        let Some(protocol) = CompressedKitty::from_file(
+            input,
+            (placement.image.width(), placement.image.height()),
+            ratatui::layout::Size::new(placement.cols, placement.rows),
+            terminal_image_id(stream_key, 0),
+            placement.z,
+        ) else {
+            return false;
+        };
+        let protocol = Arc::new(EncodedProtocol::CompressedKitty(protocol));
+        let Ok(mut inner) = encoder.inner.lock() else {
+            return false;
+        };
+        inner.cache.insert(
+            stream_key,
+            key,
+            Arc::clone(&protocol),
+            1024,
+            CacheRetention::LatestOnly,
+        );
+        inner.cache.mark_terminal_owner(&key, terminal_alive);
+        protocol
+    };
+    if let EncodedProtocol::CompressedKitty(protocol) = &*protocol {
+        protocol.render_clipped(f, origin, area);
+        true
+    } else {
+        false
+    }
 }
 
 /// Resolve an encoded protocol for pixels the caller already holds.
@@ -2727,6 +2849,7 @@ mod tests {
         let kitty = CompressedKitty {
             transmit: Mutex::new(None),
             shared: Mutex::new(None),
+            file: Mutex::new(None),
             id_color: "\x1b[38;2;1;2;3m".into(),
             id_extra: 0,
             size: ratatui::layout::Size {
@@ -3436,6 +3559,35 @@ mod tests {
             7,
             &moved_behind_text
         ));
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn raw_file_upload_names_an_immutable_host_link() {
+        use crate::backend::ratatui_backend::file_frame::FilePixels;
+        use std::io::Write;
+        let mut source = tempfile::NamedTempFile::new().unwrap();
+        source.write_all(&[1, 2, 3, 255]).unwrap();
+        let frame = FilePixels::snapshot(source.path(), 4, 32).unwrap();
+        let encoded =
+            CompressedKitty::from_file(&frame, (1, 1), ratatui::layout::Size::new(1, 1), 7, 0)
+                .unwrap();
+        let link = encoded
+            .file
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .path()
+            .to_owned();
+        let transmit = encoded.take_transmission().unwrap();
+        assert!(transmit.contains("f=32,t=t,s=1,v=1,c=1,r=1"));
+        assert!(transmit.contains(&BASE64.encode(link.to_str().unwrap())));
+        drop(encoded);
+        drop(frame);
+        assert_eq!(std::fs::read(&link).unwrap(), [1, 2, 3, 255]);
+        std::fs::remove_file(link).unwrap();
+        crate::backend::ratatui_backend::file_frame::reap_host_links();
     }
 
     #[cfg(feature = "terminal-images")]
