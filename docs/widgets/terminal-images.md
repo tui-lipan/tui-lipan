@@ -205,6 +205,13 @@ land between cells still need composition, and therefore need decoded pixels on 
 client. File snapshots reduce heap allocations, but their pages still use the filesystem cache.
 Compare total memory and frame pacing as well as application RSS when evaluating this mode.
 
+Kitty uploads remain pending until the native backend writes their escape sequence in the final
+cell diff. An offscreen capture, clipped frame or startup effect cannot consume the upload.
+Uploads staged for a frame survive encoding-cache eviction through the backend write. A subsequent
+paint releases staging references from discarded frames. File and shared-memory handoff lifetimes
+begin at the write, so a static image can be presented after startup or client reattachment without
+requiring another frame from its producer.
+
 ### Out the other side, to the host
 
 The same reasoning applies to what this framework writes *to* the terminal it is running in, and the

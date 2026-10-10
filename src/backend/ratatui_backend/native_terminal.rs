@@ -245,6 +245,22 @@ impl<W: io::Write> Backend for HostBackend<W> {
     where
         I: Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
     {
+        #[cfg(feature = "terminal-images")]
+        {
+            let mut uploads = Vec::new();
+            self.0.draw(content.inspect(|(_, _, cell)| {
+                uploads.extend(super::renderers::image::kitty_uploads_in_symbol(
+                    cell.symbol(),
+                ));
+            }))?;
+            // The final diff was accepted by the writer. Keep file/shared-memory handoffs alive
+            // from this point, including when the frame remains buffered until flush.
+            for upload in uploads {
+                upload.handed_over();
+            }
+            Ok(())
+        }
+        #[cfg(not(feature = "terminal-images"))]
         self.0.draw(content)
     }
 

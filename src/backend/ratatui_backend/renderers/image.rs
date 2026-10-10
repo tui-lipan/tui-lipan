@@ -756,11 +756,7 @@ impl EncodedProtocol {
 
 #[cfg(feature = "terminal-images")]
 struct CompressedKitty {
-    transmit: Mutex<Option<String>>,
-    /// Held for as long as the transmission that names it might still be written, and unlinked on
-    /// drop if it never was. `None` for an inline transmission, which carries its own pixels.
-    shared: Mutex<Option<SharedFrame>>,
-    file: Mutex<Option<crate::backend::ratatui_backend::file_frame::HostFile>>,
+    upload: Arc<KittyUpload>,
     id_color: String,
     id_extra: u16,
     size: ratatui::layout::Size,
@@ -821,9 +817,11 @@ impl CompressedKitty {
         let [id_extra, id_r, id_g, id_b] = id.to_be_bytes();
 
         Some(Self {
-            transmit: Mutex::new(Some(transmit)),
-            shared: Mutex::new(shared),
-            file: Mutex::new(None),
+            upload: Arc::new(KittyUpload {
+                transmit: Mutex::new(Some(transmit)),
+                shared: Mutex::new(shared),
+                file: Mutex::new(None),
+            }),
             id_color: format!("\x1b[38;2;{id_r};{id_g};{id_b}m"),
             id_extra: u16::from(id_extra),
             size,
@@ -847,9 +845,11 @@ impl CompressedKitty {
         transmit.push_str("\x1b\\");
         let [id_extra, id_r, id_g, id_b] = id.to_be_bytes();
         Some(Self {
-            transmit: Mutex::new(Some(transmit)),
-            shared: Mutex::new(None),
-            file: Mutex::new(Some(file)),
+            upload: Arc::new(KittyUpload {
+                transmit: Mutex::new(Some(transmit)),
+                shared: Mutex::new(None),
+                file: Mutex::new(Some(file)),
+            }),
             id_color: format!("\x1b[38;2;{id_r};{id_g};{id_b}m"),
             id_extra: u16::from(id_extra),
             size,
@@ -881,7 +881,7 @@ impl CompressedKitty {
         }
         let (row_start, row_end) = (row_start as u16, row_end as u16);
         let height = self.size.height.min(297);
-        let mut transmit = self.take_transmission();
+        let mut transmit = self.pending_transmission();
         let mut symbol = String::new();
         let mut holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
         holes.extend(super::image_effects::pending_image_occlusions());
@@ -960,34 +960,98 @@ impl CompressedKitty {
     }
 
     fn transmission_pending(&self) -> bool {
-        self.transmit
-            .lock()
-            .is_ok_and(|transmission| transmission.is_some())
-    }
-
-    fn take_transmission(&self) -> Option<String> {
-        let sequence = self
+        self.upload
             .transmit
             .lock()
-            .ok()
-            .and_then(|mut sequence| sequence.take())?;
-        // Written into this frame's buffer, so the host is about to be told the name and reading is
-        // what unlinks the object. Until this point it was this process's to clean up.
-        if let Ok(mut shared) = self.shared.lock()
-            && let Some(frame) = shared.as_mut()
-        {
-            frame.handed_over();
-        }
-        if let Ok(mut file) = self.file.lock()
-            && let Some(file) = file.as_mut()
-        {
-            file.handed_over();
-        }
+            .is_ok_and(|sequence| sequence.is_some())
+    }
+
+    fn pending_transmission(&self) -> Option<String> {
+        let sequence = self.upload.transmit.lock().ok()?.clone()?;
+        PENDING_KITTY_UPLOADS.with(|pending| {
+            let mut pending = pending.borrow_mut();
+            if !pending.iter().any(|entry| Arc::ptr_eq(entry, &self.upload)) {
+                pending.push(Arc::clone(&self.upload));
+            }
+        });
         Some(sequence)
     }
 }
 
-/// Pixels in shared memory, when that is a medium the host said it can read.
+/// An encode stays pending until its escape actually survives clipping/effects and reaches the
+/// native backend. Offscreen paints and frames discarded during startup cannot consume it.
+#[cfg(feature = "terminal-images")]
+pub(crate) struct KittyUpload {
+    transmit: Mutex<Option<String>>,
+    shared: Mutex<Option<SharedFrame>>,
+    file: Mutex<Option<crate::backend::ratatui_backend::file_frame::HostFile>>,
+}
+
+#[cfg(feature = "terminal-images")]
+thread_local! {
+    static PENDING_KITTY_UPLOADS: RefCell<Vec<Arc<KittyUpload>>> = const { RefCell::new(Vec::new()) };
+}
+
+#[cfg(feature = "terminal-images")]
+impl KittyUpload {
+    pub(crate) fn handed_over(&self) {
+        if self
+            .transmit
+            .lock()
+            .is_ok_and(|mut sequence| sequence.take().is_some())
+        {
+            if let Ok(mut shared) = self.shared.lock()
+                && let Some(frame) = shared.as_mut()
+            {
+                frame.handed_over();
+            }
+            if let Ok(mut file) = self.file.lock()
+                && let Some(file) = file.as_mut()
+            {
+                file.handed_over();
+            }
+            PENDING_KITTY_UPLOADS.with(|pending| {
+                pending
+                    .borrow_mut()
+                    .retain(|upload| !std::ptr::eq(Arc::as_ptr(upload), self));
+            });
+        }
+    }
+
+    fn starts_symbol(&self, symbol: &str) -> bool {
+        self.transmit.lock().is_ok_and(|sequence| {
+            sequence
+                .as_ref()
+                .is_some_and(|sequence| symbol.starts_with(sequence))
+        })
+    }
+}
+
+/// Keep this frame's uploads alive through cache eviction, but release discarded paints on the
+/// next frame. Captures must not clear uploads staged by an outer live paint.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn begin_kitty_frame() {
+    if !capturing_images() {
+        PENDING_KITTY_UPLOADS.with(|pending| pending.borrow_mut().clear());
+    }
+}
+
+/// Match exact payloads, not just host image IDs: successive stream frames reuse the same ID.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn kitty_uploads_in_symbol(symbol: &str) -> Vec<Arc<KittyUpload>> {
+    if !symbol.starts_with("\x1b_G") {
+        return Vec::new();
+    }
+    PENDING_KITTY_UPLOADS.with(|pending| {
+        pending
+            .borrow()
+            .iter()
+            .filter(|upload| upload.starts_symbol(symbol))
+            .cloned()
+            .collect()
+    })
+}
+
 #[cfg(feature = "terminal-images")]
 fn shared_frame(pixels: &[u8]) -> Option<SharedFrame> {
     if !shared_frame::host_reads_shared_memory() {
@@ -2848,9 +2912,11 @@ mod tests {
     #[test]
     fn a_kitty_row_does_not_skip_cells_under_an_opaque_overlay() {
         let kitty = CompressedKitty {
-            transmit: Mutex::new(None),
-            shared: Mutex::new(None),
-            file: Mutex::new(None),
+            upload: Arc::new(KittyUpload {
+                transmit: Mutex::new(None),
+                shared: Mutex::new(None),
+                file: Mutex::new(None),
+            }),
             id_color: "\x1b[38;2;1;2;3m".into(),
             id_extra: 0,
             size: ratatui::layout::Size {
@@ -3564,6 +3630,161 @@ mod tests {
 
     #[cfg(feature = "terminal-images")]
     #[test]
+    fn discarded_frame_keeps_its_kitty_upload_pending() {
+        let encoded = CompressedKitty::new(
+            &image::DynamicImage::new_rgba8(1, 1),
+            ratatui::layout::Size::new(1, 1),
+            7,
+            0,
+        )
+        .unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(1, 1)).unwrap();
+        terminal
+            .draw(|frame| encoded.render(frame, frame.area()))
+            .unwrap();
+        // Rendering into an offscreen/discarded buffer is not delivery to the host terminal.
+        assert!(encoded.transmission_pending());
+        let mut host =
+            crate::backend::ratatui_backend::native_terminal::HostBackend::new(Vec::new());
+        ratatui::backend::Backend::draw(
+            &mut host,
+            std::iter::once((0, 0, &terminal.backend().buffer()[(0, 0)])),
+        )
+        .unwrap();
+        assert!(!encoded.transmission_pending());
+        terminal
+            .draw(|frame| encoded.render(frame, frame.area()))
+            .unwrap();
+        assert!(
+            !terminal.backend().buffer()[(0, 0)]
+                .symbol()
+                .contains("\x1b_G")
+        );
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn queued_upload_survives_cache_eviction_until_host_write() {
+        begin_kitty_frame();
+        let encoded = CompressedKitty::new(
+            &image::DynamicImage::new_rgba8(1, 1),
+            ratatui::layout::Size::new(1, 1),
+            7,
+            0,
+        )
+        .unwrap();
+        let upload = Arc::downgrade(&encoded.upload);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(1, 1)).unwrap();
+        terminal
+            .draw(|frame| encoded.render(frame, frame.area()))
+            .unwrap();
+        drop(encoded);
+        assert!(upload.upgrade().is_some());
+        let mut host =
+            crate::backend::ratatui_backend::native_terminal::HostBackend::new(Vec::new());
+        ratatui::backend::Backend::draw(
+            &mut host,
+            std::iter::once((0, 0, &terminal.backend().buffer()[(0, 0)])),
+        )
+        .unwrap();
+        assert!(upload.upgrade().is_none());
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn next_frame_releases_discarded_uploads() {
+        begin_kitty_frame();
+        let encoded = CompressedKitty::new(
+            &image::DynamicImage::new_rgba8(1, 1),
+            ratatui::layout::Size::new(1, 1),
+            7,
+            0,
+        )
+        .unwrap();
+        let upload = Arc::downgrade(&encoded.upload);
+        encoded.pending_transmission().unwrap();
+        drop(encoded);
+        assert!(upload.upgrade().is_some());
+        begin_kitty_frame();
+        assert!(upload.upgrade().is_none());
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn failed_host_write_keeps_the_upload_pending() {
+        struct Reject;
+        impl std::io::Write for Reject {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("rejected host write"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let encoded = CompressedKitty::new(
+            &image::DynamicImage::new_rgba8(1, 1),
+            ratatui::layout::Size::new(1, 1),
+            7,
+            0,
+        )
+        .unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(1, 1)).unwrap();
+        terminal
+            .draw(|frame| encoded.render(frame, frame.area()))
+            .unwrap();
+        let mut host = crate::backend::ratatui_backend::native_terminal::HostBackend::new(Reject);
+        assert!(
+            ratatui::backend::Backend::draw(
+                &mut host,
+                std::iter::once((0, 0, &terminal.backend().buffer()[(0, 0)]))
+            )
+            .is_err()
+        );
+        assert!(encoded.transmission_pending());
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
+    fn host_write_acknowledges_the_payload_not_a_reused_image_id() {
+        let image = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            1,
+            1,
+            image::Rgb([1, 2, 3]),
+        ));
+        let older = CompressedKitty::new(&image, ratatui::layout::Size::new(1, 1), 7, 0).unwrap();
+        let newer = CompressedKitty::new(
+            &image::DynamicImage::new_rgb8(1, 1),
+            ratatui::layout::Size::new(1, 1),
+            7,
+            0,
+        )
+        .unwrap();
+        let mut old_frame =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(1, 1)).unwrap();
+        let mut new_frame =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(1, 1)).unwrap();
+        old_frame
+            .draw(|frame| older.render(frame, frame.area()))
+            .unwrap();
+        new_frame
+            .draw(|frame| newer.render(frame, frame.area()))
+            .unwrap();
+        let mut host =
+            crate::backend::ratatui_backend::native_terminal::HostBackend::new(Vec::new());
+        ratatui::backend::Backend::draw(
+            &mut host,
+            std::iter::once((0, 0, &old_frame.backend().buffer()[(0, 0)])),
+        )
+        .unwrap();
+        assert!(!older.transmission_pending());
+        assert!(newer.transmission_pending());
+    }
+
+    #[cfg(feature = "terminal-images")]
+    #[test]
     fn raw_file_upload_names_an_immutable_host_link() {
         use crate::backend::ratatui_backend::file_frame::FilePixels;
         use std::io::Write;
@@ -3574,6 +3795,7 @@ mod tests {
             CompressedKitty::from_file(&frame, (1, 1), ratatui::layout::Size::new(1, 1), 7, 0)
                 .unwrap();
         let link = encoded
+            .upload
             .file
             .lock()
             .unwrap()
@@ -3581,9 +3803,10 @@ mod tests {
             .unwrap()
             .path()
             .to_owned();
-        let transmit = encoded.take_transmission().unwrap();
+        let transmit = encoded.pending_transmission().unwrap();
         assert!(transmit.contains("f=32,t=t,s=1,v=1,c=1,r=1"));
         assert!(transmit.contains(&BASE64.encode(link.to_str().unwrap())));
+        encoded.upload.handed_over();
         drop(encoded);
         drop(frame);
         assert_eq!(std::fs::read(&link).unwrap(), [1, 2, 3, 255]);
@@ -3639,7 +3862,7 @@ mod tests {
         else {
             panic!("terminal Kitty pixels should use the compressed encoder");
         };
-        let transmission = encoded.transmit.lock().expect("transmission lock");
+        let transmission = encoded.upload.transmit.lock().expect("transmission lock");
         let transmission = transmission.as_deref().expect("pending transmission");
 
         assert!(transmission.contains("a=T,U=1"));
@@ -4023,11 +4246,12 @@ mod tests {
 
     #[cfg(feature = "terminal-images")]
     #[test]
-    fn compressed_kitty_releases_transmission_after_render() {
+    fn compressed_kitty_releases_transmission_after_host_write() {
         let image = image::DynamicImage::new_rgba8(400, 200);
         let protocol =
             CompressedKitty::new(&image, ratatui::layout::Size::new(40, 10), 7, 0).unwrap();
         let encoded_len = protocol
+            .upload
             .transmit
             .lock()
             .unwrap()
@@ -4036,13 +4260,20 @@ mod tests {
             .unwrap();
         assert!(encoded_len < 400 * 200 * 4 / 4);
 
-        let backend = ratatui::backend::TestBackend::new(40, 10);
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let backend =
+            crate::backend::ratatui_backend::native_terminal::HostBackend::new(Vec::new());
+        let mut terminal = ratatui::Terminal::with_options(
+            backend,
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 40, 10)),
+            },
+        )
+        .unwrap();
         terminal
             .draw(|frame| protocol.render(frame, frame.area()))
             .unwrap();
 
-        assert!(protocol.transmit.lock().unwrap().is_none());
+        assert!(protocol.upload.transmit.lock().unwrap().is_none());
     }
 
     #[cfg(feature = "terminal-images")]
