@@ -383,9 +383,9 @@ fn captured_images(
         };
         let x = (offset % usize::from(width)) as u16;
         let y = (offset / usize::from(width)) as u16;
-        if !images
+        if images
             .get(index)
-            .is_some_and(|image| image.area_offset(x, y).is_some())
+            .is_none_or(|image| image.area_offset(x, y).is_none())
         {
             continue;
         }
