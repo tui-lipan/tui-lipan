@@ -71,7 +71,9 @@ const PAYLOAD_BASE64: GeneralPurpose = GeneralPurpose::new(
 );
 
 /// Largest payload accumulated across `m=1` chunks, before decoding.
-const MAX_TRANSMIT_BYTES: usize = 32 * 1024 * 1024;
+// High-DPI full-window RGBA frames can exceed 32 MiB. Keep the same bound for named
+// media and inline replay so a frame accepted from a file survives reconnect.
+const MAX_TRANSMIT_BYTES: usize = 64 * 1024 * 1024;
 
 /// Largest single `APC` sequence buffered before it is abandoned.
 ///
@@ -79,9 +81,9 @@ const MAX_TRANSMIT_BYTES: usize = 32 * 1024 * 1024;
 /// that: plenty of senders emit raw pixels in one escape, which clears 64 KiB with a picture only
 /// a few hundred cells wide, and a dropped transmission is indistinguishable - from the sender's
 /// side - from a terminal with no graphics support at all. What this bound is actually for is
-/// stopping an *unterminated* `APC` from growing without end, and the accumulated-payload cap
-/// already decides how much a transmission may total, so matching it costs nothing.
-const MAX_APC_BYTES: usize = MAX_TRANSMIT_BYTES;
+/// stopping an *unterminated* `APC` from growing without end. Larger transmissions must use chunks
+/// or named media, rather than a larger single escape sequence.
+const MAX_APC_BYTES: usize = 32 * 1024 * 1024;
 
 /// Default decoded-pixel budget kept per screen, across every stored image.
 ///
@@ -2916,6 +2918,69 @@ mod tests {
         let snapshot = stored.image.clone();
         let first = stored.image.pixels().unwrap();
         assert!(Arc::ptr_eq(first, snapshot.pixels().unwrap()));
+    }
+
+    #[test]
+    fn large_file_frames_survive_inline_replay_without_decoding() {
+        use std::io::{Seek, SeekFrom, Write};
+        let (width, height) = (8192, 1025);
+        let bytes = (width * height * 4) as usize;
+        assert!(bytes > 32 * 1024 * 1024 && bytes < MAX_TRANSMIT_BYTES);
+        let mut source = tempfile::NamedTempFile::new().unwrap();
+        source.as_file().set_len(bytes as u64).unwrap();
+        source.write_all(&[0xab]).unwrap();
+        source.seek(SeekFrom::End(-1)).unwrap();
+        source.write_all(&[0xcd]).unwrap();
+        let command = GraphicsCommand {
+            medium: GraphicsMedium::File,
+            quiet: 2,
+            format: 32,
+            width,
+            height,
+            id: 7,
+            payload: source.path().to_str().unwrap().as_bytes().to_vec(),
+            ..GraphicsCommand::default()
+        };
+        let mut graphics = TerminalGraphics::default();
+        graphics.set_file_storage_enabled(true);
+        graphics.set_budget(bytes - 1);
+        assert!(graphics.snapshot_file(&command, &command.payload).is_none());
+        graphics.set_budget(bytes);
+        graphics.apply(command, context());
+        let ImageSource::File { decoded, .. } = &graphics.images[&7].image.source else {
+            panic!("large frame must remain file-backed");
+        };
+
+        #[derive(Default)]
+        struct Replay {
+            scanner: GraphicsScanner,
+            graphics: TerminalGraphics,
+        }
+        impl Write for Replay {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                let (_, commands) = scan_all(&mut self.scanner, bytes);
+                for command in commands {
+                    self.graphics.apply(command, context());
+                }
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut replay = Replay::default();
+        graphics.write_replay_transmissions(&mut replay).unwrap();
+        assert!(decoded.get().is_none());
+        let stored = &replay.graphics.images[&7];
+        assert_eq!(stored.bytes, bytes);
+        let ImageSource::Deferred { input, decoded } = &stored.image.source else {
+            panic!("inline replay must defer decoding");
+        };
+        assert!(decoded.get().is_none());
+        let payload = input.payload.lock().unwrap();
+        let payload = payload.as_ref().unwrap();
+        assert_eq!(payload.len(), bytes);
+        assert_eq!((payload[0], payload[bytes - 1]), (0xab, 0xcd));
     }
 
     #[test]

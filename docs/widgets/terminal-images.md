@@ -169,7 +169,9 @@ view. Visible placements this frame are `snapshot.images`. A host that needs the
 whose image layer does not follow a widget shrink or fade should look at the flag, not at the
 process in front of the PTY.
 
-Payloads are bounded before decoding as well: 32 MiB per transmission, 16384 pixels per axis.
+Payloads are bounded before decoding as well: 64 MiB per transmission, 16384 pixels per axis.
+A single unterminated APC sequence is still bounded to 32 MiB; larger inline uploads must be chunked. Named-file frames and their inline
+replay share the transmission limit, so a retained high-DPI frame survives reconnect.
 
 ## Out-of-band payloads
 
