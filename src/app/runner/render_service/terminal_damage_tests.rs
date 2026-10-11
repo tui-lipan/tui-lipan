@@ -173,6 +173,8 @@ struct PaneCfg {
     /// Run on an inline surface rather than the alternate screen.
     inline: bool,
     image_overlay: u8,
+    transparent_modal: bool,
+    terminal_portal: bool,
 }
 
 impl PaneCfg {
@@ -247,6 +249,30 @@ impl Component for Pane {
                 .into(),
             None => self.terminal(&self.screen).into(),
         };
+        if self.cfg.terminal_portal {
+            return crate::widgets::Modal::new()
+                .width(crate::style::Length::Px(COLS))
+                .height(crate::style::Length::Px(ROWS))
+                .border(false)
+                .padding(0)
+                .frame_style(Style::default().bg(Color::Transparent))
+                .child(body)
+                .into();
+        }
+        if self.cfg.transparent_modal {
+            return crate::widgets::ZStack::new()
+                .child(body)
+                .child(crate::widgets::Animated::new(
+                    crate::widgets::Modal::new()
+                        .width(crate::style::Length::Px(5))
+                        .height(crate::style::Length::Px(1))
+                        .border(false)
+                        .padding(0)
+                        .frame_style(Style::default().bg(Color::Transparent))
+                        .child(Text::new("COVER")),
+                ))
+                .into();
+        }
         if self.cfg.image_overlay == 8 {
             let border = crate::widgets::Frame::new()
                 .padding(0)
@@ -1269,4 +1295,135 @@ fn ordinary_overlays_cover_image_pixels_without_covering_the_anchor() {
             assert_eq!(symbols, "COVER", "widget {image_overlay}: {output:?}");
         }
     }
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn transparent_modal_text_reaches_the_host_above_positive_z_images() {
+    assert_transparent_modal_text_above_positive_z_images(false);
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn transparent_modal_ignores_translation_above_its_portal_root() {
+    assert_transparent_modal_text_above_positive_z_images(true);
+}
+
+#[cfg(feature = "terminal-images")]
+fn assert_transparent_modal_text_above_positive_z_images(translated: bool) {
+    use base64::Engine as _;
+    // Measured cells allow native forwarding; unmeasured cells force the composed reference.
+    for measured in [true, false] {
+        let _host =
+            crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), measured);
+        let mut harness = build(
+            PaneCfg {
+                transparent_modal: true,
+                ..PaneCfg::new()
+            },
+            b"\x1b[?25l\x1b[H",
+        );
+        harness
+            .screen
+            .borrow_mut()
+            .set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+        let payload =
+            base64::engine::general_purpose::STANDARD.encode([0, 255, 0, 255].repeat(240 * 120));
+        harness.screen.borrow_mut().process_bytes(
+            format!("\x1b_Ga=T,f=32,s=240,v=120,i=921,z=2;{payload}\x1b\\").as_bytes(),
+        );
+        harness.runner.core.tree.refresh_live_terminals_detailed();
+        if translated {
+            let animated = harness
+                .runner
+                .core
+                .tree
+                .iter()
+                .find(|node| matches!(node.kind, NodeKind::Animated(_)))
+                .unwrap()
+                .id;
+            let NodeKind::Animated(animated) =
+                &mut harness.runner.core.tree.node_mut(animated).kind
+            else {
+                unreachable!();
+            };
+            animated.current_x_offset = 100.0;
+        }
+        let overlays = harness.runner.core.tree.overlay_roots();
+        assert_eq!(overlays.len(), 1);
+        assert!(overlays[0].backdrop.is_none_or(|style| style.is_empty()));
+        let overlay = harness.runner.core.tree.node(overlays[0].id);
+        assert!(matches!(
+            crate::backend::ratatui_backend::render::overlay_clear_restore_mode(overlay),
+            crate::backend::ratatui_backend::render::OverlayClearRestoreMode::PreserveForeground,
+        ));
+        let rect = overlay.rect;
+        let mut terminal =
+            crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+        let cursor = StdCell::new(None);
+        let rendered = harness.runner.with_render_context(&cursor, |ctx| {
+            terminal.draw(|f| render(f, ctx)).unwrap().buffer.clone()
+        });
+        let output = terminal.backend().test_output();
+        let output = String::from_utf8_lossy(&output);
+        assert!(
+            output.contains("COVER"),
+            "modal text must reach the host: {output:?}"
+        );
+        let symbols: String = (rect.x as u16..rect.x as u16 + 5)
+            .map(|x| rendered[(x, rect.y as u16)].symbol().to_owned())
+            .collect();
+        assert_eq!(symbols, "COVER");
+        assert!(
+            output.contains("a=p,") || output.contains('\u{10EEEE}'),
+            "the image must still reach the host: {output:?}"
+        );
+        assert!(
+            !output
+                .split("\x1b_Ga=p,")
+                .skip(1)
+                .any(|command| { !command.split("\x1b\\").next().unwrap().contains("c=") }),
+            "positive native placements must not cover modal text: {output:?}"
+        );
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn terminal_inside_declarative_portal_emits_native_placements() {
+    use base64::Engine as _;
+    let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
+    let mut harness = build(
+        PaneCfg {
+            terminal_portal: true,
+            ..PaneCfg::new()
+        },
+        b"\x1b[?25l\x1b[H",
+    );
+    harness
+        .screen
+        .borrow_mut()
+        .set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+    let payload =
+        base64::engine::general_purpose::STANDARD.encode([0, 255, 0, 255].repeat(120 * 100));
+    harness
+        .screen
+        .borrow_mut()
+        .process_bytes(format!("\x1b_Ga=T,f=32,s=120,v=100,i=922,z=2;{payload}\x1b\\").as_bytes());
+    harness.runner.core.tree.refresh_live_terminals_detailed();
+    assert_eq!(harness.runner.core.tree.overlay_roots().len(), 1);
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+    let cursor = StdCell::new(None);
+    harness.runner.with_render_context(&cursor, |ctx| {
+        terminal.draw(|f| render(f, ctx)).unwrap();
+    });
+    let output = terminal.backend().test_output();
+    let output = String::from_utf8_lossy(&output);
+    assert!(
+        output
+            .split("\x1b_Ga=p,")
+            .skip(1)
+            .any(|command| { !command.split("\x1b\\").next().unwrap().contains("c=") }),
+        "eligible portal terminal must emit native placements: {output:?}"
+    );
 }
