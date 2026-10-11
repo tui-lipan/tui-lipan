@@ -5,6 +5,25 @@ use web_time::Instant;
 use ratatui_image::picker::cap_parser::QueryStdioOptions;
 use ratatui_image::picker::{Capability, Picker};
 
+#[cfg(test)]
+thread_local! {
+    static TEST_HOST: std::cell::RefCell<Option<(Picker, bool)>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(all(test, feature = "terminal-images"))]
+pub(crate) fn test_kitty_host(cell: (u16, u16), measured: bool) -> impl Drop {
+    struct Scope(Option<(Picker, bool)>);
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            TEST_HOST.with(|host| *host.borrow_mut() = self.0.take());
+        }
+    }
+    #[allow(deprecated)]
+    let mut picker = Picker::from_fontsize(cell.into());
+    picker.set_protocol_type(ratatui_image::picker::ProtocolType::Kitty);
+    Scope(TEST_HOST.with(|host| host.replace(Some((picker, measured)))))
+}
+
 fn picker_state() -> &'static RwLock<Picker> {
     static PICKER: OnceLock<RwLock<Picker>> = OnceLock::new();
     PICKER.get_or_init(|| RwLock::new(Picker::halfblocks()))
@@ -85,6 +104,26 @@ pub(crate) fn queried_host_cell_size() -> Option<(u16, u16)> {
     Some((size.width, size.height))
 }
 
+/// Exact dimensions required by unscaled native Kitty placements.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn measured_host_cell_size() -> Option<(u16, u16)> {
+    #[cfg(test)]
+    if let Some(cell) = TEST_HOST.with(|host| {
+        host.borrow().as_ref().map(|(picker, measured)| {
+            let size = picker.font_size();
+            measured.then_some((size.width, size.height))
+        })
+    }) {
+        return cell;
+    }
+
+    #[cfg(unix)]
+    if let Some(cell) = crate::app::input::pixel_mouse::cell_size() {
+        return Some(cell);
+    }
+    queried_host_cell_size()
+}
+
 /// The host terminal's cell size in pixels.
 ///
 /// The window size the host reports comes first: it divides into the grid exactly or not at all, it
@@ -107,6 +146,13 @@ pub(crate) fn host_cell_size() -> crate::widgets::TerminalCellSize {
 }
 
 pub(crate) fn picker_snapshot() -> Picker {
+    #[cfg(test)]
+    if let Some(picker) =
+        TEST_HOST.with(|host| host.borrow().as_ref().map(|(picker, _)| picker.clone()))
+    {
+        return picker;
+    }
+
     picker_state()
         .read()
         .map(|picker| picker.clone())
@@ -123,6 +169,11 @@ pub(crate) fn suspend_image_rendering_for(duration: Duration) {
 }
 
 pub(crate) fn image_rendering_suspended() -> bool {
+    #[cfg(test)]
+    if TEST_HOST.with(|host| host.borrow().is_some()) {
+        return false;
+    }
+
     let now = Instant::now();
     let Ok(mut slot) = render_suspend_until().write() else {
         return false;

@@ -1227,18 +1227,7 @@ fn render_node(
         }
         NodeKind::Animated(animated) => {
             child_clip = Some(intersect_clip(rect));
-            let color_animated = animated.current_fg != animated.target_fg
-                || animated.fg_anim.is_some()
-                || animated.current_fg.is_some()
-                || animated.current_bg != animated.target_bg
-                || animated.bg_anim.is_some()
-                || animated.current_bg.is_some();
-            defer_animated_render = animated.effective_opacity() < 1.0
-                || color_animated
-                || animated
-                    .visibility
-                    .as_ref()
-                    .is_some_and(|state| state.recipe.paints_effect() && state.progress() < 1.0);
+            defer_animated_render = animated_paints_cells(animated);
         }
         NodeKind::CenterPin(node) => {
             let style = resolve_base_style(active_theme, node.style);
@@ -1820,6 +1809,134 @@ fn render_hstack_node(
     render_hstack(f, &props, rect, rrect, clip_bounds, terminal_bg);
 }
 
+// Keep native eligibility aligned with the actual deferred painting of an Animated wrapper.
+fn animated_paints_cells(animated: &crate::widgets::internal::AnimatedNode) -> bool {
+    let color_animated = [
+        animated.current_fg,
+        animated.target_fg,
+        animated.current_bg,
+        animated.target_bg,
+    ]
+    .iter()
+    .any(Option::is_some)
+        || animated.fg_anim.is_some()
+        || animated.bg_anim.is_some();
+    animated.effective_opacity() < 1.0
+        || color_animated
+        || animated
+            .visibility
+            .as_ref()
+            .is_some_and(|state| state.recipe.paints_effect() && state.progress() < 1.0)
+}
+
+/// Ordinary widgets can erase composed image placeholders, but cannot cover a positive host
+/// placement. Until those widgets expose pixel occlusions, compose any overlapping later branch.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn terminal_native_layers_supported(
+    tree: &NodeTree,
+    owner: NodeId,
+    content: ratatui::layout::Rect,
+) -> bool {
+    let content = Rect {
+        x: content.x as i16,
+        y: content.y as i16,
+        w: content.width,
+        h: content.height,
+    };
+    let Some(rank) = tree.iter().position(|node| node.id == owner) else {
+        return false;
+    };
+    tree.iter().skip(rank + 1).all(|node| {
+        let in_owner =
+            std::iter::successors(node.parent, |id| tree.node(*id).parent).any(|id| id == owner);
+        in_owner
+            || nonpainting_native_layer(tree, node, content)
+            || clipped_layer_rect(tree, node.id)
+                .intersection(&content)
+                .is_empty()
+    })
+}
+
+#[cfg(feature = "terminal-images")]
+fn nonpainting_native_layer(
+    tree: &NodeTree,
+    node: &crate::core::node::Node,
+    content: Rect,
+) -> bool {
+    match &node.kind {
+        NodeKind::Animated(animated) => !animated_paints_cells(animated),
+        NodeKind::Canvas(canvas) => {
+            native_layer_style_is_transparent(resolve_base_style(node.active_theme(), canvas.style))
+        }
+        NodeKind::Text(text) => {
+            text.spans.iter().all(|span| span.content.is_empty())
+                && native_layer_style_is_transparent(resolve_base_style(
+                    node.active_theme(),
+                    text.style,
+                ))
+        }
+        NodeKind::Frame(frame) => native_frame_border_misses_content(tree, node, frame, content),
+        _ => false,
+    }
+}
+
+#[cfg(feature = "terminal-images")]
+fn native_layer_style_is_transparent(style: Style) -> bool {
+    style.bg.is_none()
+        && style.fg_transform.is_none()
+        && style.bg_transform.is_none()
+        && style.dim_amount.is_none()
+        && style.tint.is_none()
+        && style.contrast_policy.is_none()
+}
+
+#[cfg(feature = "terminal-images")]
+fn native_frame_border_misses_content(
+    tree: &NodeTree,
+    node: &crate::core::node::Node,
+    frame: &crate::widgets::internal::FrameNode,
+    content: Rect,
+) -> bool {
+    // Complete border rings stay outside their interior. Plain frames are transparent only
+    // without header/footer labels; joined and decorated borders can extend beyond their ring.
+    if !native_frame_geometry_is_plain(frame, node.rect.h)
+        || !frame.decorations.is_empty()
+        || frame.inner_style().is_some()
+    {
+        return false;
+    }
+    let theme = node.active_theme();
+    let fills = [
+        Some(frame.style),
+        frame.focus_style(),
+        frame.hover_style(),
+        Some(theme.focus),
+        Some(theme.hover),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|style| style.bg.is_some());
+    let overlap = clipped_layer_rect(tree, node.id).intersection(&content);
+    let inner = visually_offset_node_rect(tree, node.id).inset(frame.border_padding());
+    !fills && overlap.intersection(&inner) == overlap
+}
+
+#[cfg(feature = "terminal-images")]
+fn native_frame_geometry_is_plain(
+    frame: &crate::widgets::internal::FrameNode,
+    height: u16,
+) -> bool {
+    !frame.compact && (!frame.collapsible || height >= 3) && native_frame_rows_are_unfilled(frame)
+}
+
+#[cfg(feature = "terminal-images")]
+fn native_frame_rows_are_unfilled(frame: &crate::widgets::internal::FrameNode) -> bool {
+    if frame.border {
+        return frame.border_edges == crate::style::BorderEdges::All && !frame.join_frame;
+    }
+    !frame.header.has_labels() && !frame.footer.has_labels() && frame.tab_titles.is_empty()
+}
+
 /// Rectangles of later Canvas terminal layers that paint above `owner`.
 ///
 /// A Canvas child is the framework's absolute-positioned layer boundary. Terminal hosts use it for
@@ -1852,21 +1969,59 @@ pub(crate) fn terminal_image_layer_occlusions(
             if rank <= owner_rank {
                 return None;
             }
-            let parent_id = node.parent?;
-            let parent = tree.is_valid(parent_id).then(|| tree.node(parent_id))?;
-            if !matches!(parent.kind, NodeKind::Canvas(_))
-                || !terminal_layer_branch_is_opaque(tree, node.id, &owner_ancestors)
-                || !subtree_has_opaque_terminal(tree, node.id)
-            {
-                return None;
-            }
-
-            let rect = visually_offset_node_rect(tree, node.id)
-                .intersection(&visually_offset_node_rect(tree, parent_id))
-                .intersection(&content_rect);
-            (!rect.is_empty()).then(|| to_ratatui_rect(rect))
+            later_image_layer_rect(tree, node.id, &owner_ancestors, &content_rect)
         })
         .collect()
+}
+
+#[cfg(feature = "terminal-images")]
+fn later_image_layer_rect(
+    tree: &NodeTree,
+    id: NodeId,
+    owner_ancestors: &HashSet<NodeId>,
+    content_rect: &Rect,
+) -> Option<ratatui::layout::Rect> {
+    let node = tree.node(id);
+    // Paragraph backgrounds also cover blank cells inside their area.
+    if matches!(&node.kind, NodeKind::Text(text) if resolve_base_style(node.active_theme(), text.style).bg.is_some())
+        && terminal_layer_branch_is_opaque(tree, id, owner_ancestors)
+    {
+        let rect = clipped_layer_rect(tree, id).intersection(content_rect);
+        return (!rect.is_empty()).then(|| to_ratatui_rect(rect));
+    }
+    let parent_rect = opaque_terminal_layer_parent(tree, id, owner_ancestors)?;
+    let rect = visually_offset_node_rect(tree, id)
+        .intersection(&parent_rect)
+        .intersection(content_rect);
+    (!rect.is_empty()).then(|| to_ratatui_rect(rect))
+}
+
+#[cfg(feature = "terminal-images")]
+fn opaque_terminal_layer_parent(
+    tree: &NodeTree,
+    id: NodeId,
+    owner_ancestors: &HashSet<NodeId>,
+) -> Option<Rect> {
+    let node = tree.node(id);
+    let parent_id = node.parent?;
+    let parent = tree.is_valid(parent_id).then(|| tree.node(parent_id))?;
+    if !matches!(parent.kind, NodeKind::Canvas(_))
+        || !terminal_layer_branch_is_opaque(tree, id, owner_ancestors)
+        || !subtree_has_opaque_terminal(tree, id)
+    {
+        return None;
+    }
+
+    Some(visually_offset_node_rect(tree, parent_id))
+}
+
+#[cfg(feature = "terminal-images")]
+fn clipped_layer_rect(tree: &NodeTree, id: NodeId) -> Rect {
+    let mut rect = visually_offset_node_rect(tree, id);
+    for ancestor in std::iter::successors(tree.node(id).parent, |id| tree.node(*id).parent) {
+        rect = rect.intersection(&visually_offset_node_rect(tree, ancestor));
+    }
+    rect
 }
 
 /// Whether wrappers unique to this later layer leave it fully opaque.

@@ -1,4 +1,11 @@
 #[cfg(feature = "terminal-images")]
+mod native_patches;
+#[cfg(feature = "terminal-images")]
+pub(crate) use native_patches::{
+    NativeImageLease, native_layer_scope, render_native_terminal_images, take_retired_native_ids,
+};
+
+#[cfg(feature = "terminal-images")]
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -827,6 +834,40 @@ impl EncodedProtocol {
     }
 }
 
+/// A later ordinary widget can overwrite individual anchors. Batched rows would leave Skip
+/// cells, or an ordinary placement anchored outside the widget, covering its middle instead.
+#[cfg(feature = "terminal-images")]
+fn terminal_image_cell_spans(spans: Vec<(u16, u16)>) -> Vec<(u16, u16)> {
+    if native_patches::terminal_image_rows_can_batch() {
+        return spans;
+    }
+    spans
+        .into_iter()
+        .flat_map(|(left, right)| (left..right).map(|x| (x, x + 1)))
+        .collect()
+}
+
+#[cfg(feature = "terminal-images")]
+fn record_painted_image_holes(area: ratatui::layout::Rect, holes: Vec<ratatui::layout::Rect>) {
+    PAINTED_IMAGE_OCCLUSIONS.with(|slot| {
+        let mut painted = slot.borrow_mut();
+        for hole in holes {
+            let intersection = area.intersection(hole);
+            if intersection.width > 0 && intersection.height > 0 && !painted.contains(&intersection)
+            {
+                painted.push(intersection);
+            }
+        }
+    });
+}
+
+#[cfg(feature = "terminal-images")]
+struct PlaceholderSpan {
+    anchor: (u16, u16),
+    source: (u16, u16),
+    width: u16,
+}
+
 #[cfg(feature = "terminal-images")]
 struct CompressedKitty {
     id: u32,
@@ -845,6 +886,26 @@ impl CompressedKitty {
         size: ratatui::layout::Size,
         id: u32,
         z_index: i32,
+    ) -> Option<Self> {
+        Self::encode_pixels(image, size, id, z_index, usize::MAX)
+    }
+
+    fn new_native(
+        image: &image::DynamicImage,
+        size: ratatui::layout::Size,
+        id: u32,
+    ) -> Option<Self> {
+        // Native sources are prepared on the UI thread. Large inline uploads stay on the
+        // existing asynchronous path when named transports are unavailable or full.
+        Self::encode_pixels(image, size, id, 0, 128 * 1024)
+    }
+
+    fn encode_pixels(
+        image: &image::DynamicImage,
+        size: ratatui::layout::Size,
+        id: u32,
+        z_index: i32,
+        inline_limit: usize,
     ) -> Option<Self> {
         let width = image.width();
         let height = image.height();
@@ -873,9 +934,7 @@ impl CompressedKitty {
                 Some(frame),
             ),
             None => {
-                let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
-                encoder.write_all(pixels).ok()?;
-                let compressed = encoder.finish().ok()?;
+                let compressed = compressed_kitty_payload(pixels, inline_limit)?;
                 (
                     kitty_transmit_compressed_format(
                         &compressed,
@@ -897,6 +956,7 @@ impl CompressedKitty {
             z_index,
             pixels: (width, height),
             upload: Arc::new(KittyUpload {
+                native_lease: OnceLock::new(),
                 transmit: Mutex::new(Some(transmit)),
                 attempted: AtomicBool::new(false),
                 shared: Mutex::new(shared),
@@ -931,6 +991,7 @@ impl CompressedKitty {
             z_index,
             pixels: dimensions,
             upload: Arc::new(KittyUpload {
+                native_lease: OnceLock::new(),
                 transmit: Mutex::new(Some(transmit)),
                 attempted: AtomicBool::new(false),
                 shared: Mutex::new(None),
@@ -958,9 +1019,6 @@ impl CompressedKitty {
         origin: (i32, i32),
         clip: ratatui::layout::Rect,
     ) {
-        const UNIT_WIDTH: CellDiffOption =
-            CellDiffOption::ForcedWidth(NonZeroU16::new(1).expect("one is non-zero"));
-
         let (origin_x, origin_y) = origin;
         let row_start = origin_x.max(i32::from(clip.x));
         let row_end = (origin_x + i32::from(self.size.width)).min(i32::from(clip.right()));
@@ -990,61 +1048,67 @@ impl CompressedKitty {
                 continue;
             }
             let row_y = row_y as u16;
-            let spans = uncovered_x_spans(row_start, row_end, row_y, &holes);
+            let spans =
+                terminal_image_cell_spans(uncovered_x_spans(row_start, row_end, row_y, &holes));
             for &(start, end) in &spans {
-                let span_width = end.saturating_sub(start);
-                if span_width == 0 {
-                    continue;
-                }
-                // One walk per span, from that span's first cell. A gap in the *same* cell's
-                // sequence is invisible to the host: placeholders are a consecutive run, and
-                // jumping the cursor mid-walk never starts a second one, which left everything
-                // to the right of a modal black.
-                symbol.clear();
-                if let Some(sequence) = transmit.take() {
-                    symbol.push_str(&sequence);
-                }
-                let col = (i32::from(start) - origin_x) as u16;
-                let right = span_width.saturating_sub(1);
-                let _ = write!(
-                    symbol,
-                    "\x1b[s{}\u{10EEEE}{}{}{}",
-                    self.id_color,
-                    crate::widgets::kitty_diacritic(y),
-                    crate::widgets::kitty_diacritic(col),
-                    crate::widgets::kitty_diacritic(self.id_extra),
-                );
-                for _ in 1..span_width {
-                    symbol.push(crate::widgets::KITTY_PLACEHOLDER);
-                }
-                let _ = write!(symbol, "\x1b[u\x1b[{right}C");
-
-                for x in start.saturating_add(1)..end {
-                    if let Some(cell) = f.buffer_mut().cell_mut((x, row_y)) {
-                        cell.set_diff_option(CellDiffOption::Skip);
-                    }
-                }
-                if let Some(cell) = f.buffer_mut().cell_mut((start, row_y)) {
-                    cell.set_symbol(&symbol).set_diff_option(UNIT_WIDTH);
-                }
-                IMAGE_PLACEHOLDERS_PAINTED.set(true);
-                painted_placeholders = true;
+                let span = PlaceholderSpan {
+                    anchor: (start, row_y),
+                    source: ((i32::from(start) - origin_x) as u16, y),
+                    width: end.saturating_sub(start),
+                };
+                painted_placeholders |=
+                    self.paint_placeholder_span(f, span, &mut transmit, &mut symbol);
             }
         }
         if painted_placeholders {
-            PAINTED_IMAGE_OCCLUSIONS.with(|slot| {
-                let mut painted = slot.borrow_mut();
-                for hole in holes {
-                    let intersection = area.intersection(hole);
-                    if intersection.width > 0
-                        && intersection.height > 0
-                        && !painted.contains(&intersection)
-                    {
-                        painted.push(intersection);
-                    }
-                }
-            });
+            record_painted_image_holes(area, holes);
         }
+    }
+
+    fn paint_placeholder_span(
+        &self,
+        f: &mut ratatui::Frame<'_>,
+        span: PlaceholderSpan,
+        transmit: &mut Option<String>,
+        symbol: &mut String,
+    ) -> bool {
+        const UNIT_WIDTH: CellDiffOption =
+            CellDiffOption::ForcedWidth(NonZeroU16::new(1).expect("one is non-zero"));
+        if span.width == 0 {
+            return false;
+        }
+        // One walk per span, from that span's first cell. A gap in the *same* cell's
+        // sequence is invisible to the host: placeholders are a consecutive run, and
+        // jumping the cursor mid-walk never starts a second one, which left everything
+        // to the right of a modal black.
+        symbol.clear();
+        if let Some(sequence) = transmit.take() {
+            symbol.push_str(&sequence);
+        }
+        let right = span.width.saturating_sub(1);
+        let _ = write!(
+            symbol,
+            "\x1b[s{}\u{10EEEE}{}{}{}",
+            self.id_color,
+            crate::widgets::kitty_diacritic(span.source.1),
+            crate::widgets::kitty_diacritic(span.source.0),
+            crate::widgets::kitty_diacritic(self.id_extra),
+        );
+        for _ in 1..span.width {
+            symbol.push(crate::widgets::KITTY_PLACEHOLDER);
+        }
+        let _ = write!(symbol, "\x1b[u\x1b[{right}C");
+
+        for x in span.anchor.0.saturating_add(1)..span.anchor.0.saturating_add(span.width) {
+            if let Some(cell) = f.buffer_mut().cell_mut((x, span.anchor.1)) {
+                cell.set_diff_option(CellDiffOption::Skip);
+            }
+        }
+        if let Some(cell) = f.buffer_mut().cell_mut(span.anchor) {
+            cell.set_symbol(symbol).set_diff_option(UNIT_WIDTH);
+        }
+        IMAGE_PLACEHOLDERS_PAINTED.set(true);
+        true
     }
 
     // Ordinary placements leave text cells intact and allow several exact z planes per cell.
@@ -1058,7 +1122,9 @@ impl CompressedKitty {
         holes.extend(super::image_effects::pending_image_occlusions());
         let mut transmit = self.pending_transmission();
         for y in clip.y..clip.bottom() {
-            for (left, right) in uncovered_x_spans(clip.x, clip.right(), y, &holes) {
+            for (left, right) in
+                terminal_image_cell_spans(uncovered_x_spans(clip.x, clip.right(), y, &holes))
+            {
                 self.place_row(f, origin, (left, right, y), &mut transmit);
             }
         }
@@ -1072,9 +1138,9 @@ impl CompressedKitty {
         transmit: &mut Option<String>,
     ) {
         let (left, right, y) = span;
-        let Some(cell) = f.buffer_mut().cell_mut((left, y)) else {
+        if f.buffer_mut().cell_mut((left, y)).is_none() {
             return;
-        };
+        }
         let p = NEXT_KITTY_PLACEMENT.with(|next| {
             let p = next.get().wrapping_add(1).max(1);
             next.set(p);
@@ -1094,14 +1160,32 @@ impl CompressedKitty {
             right - left,
             self.z_index
         );
+        self.stage_placement(f, (left, y), command, p, transmit);
+    }
+
+    fn stage_placement(
+        &self,
+        f: &mut ratatui::Frame<'_>,
+        anchor: (u16, u16),
+        command: String,
+        p: u32,
+        transmit: &mut Option<String>,
+    ) {
         let delete = format!("\x1b_Ga=d,q=2,d=i,i={},p={p};\x1b\\", self.id);
         PENDING_KITTY_PLACEMENTS.with(|pending| {
-            pending.borrow_mut().push(KittyPlacement {
-                command: command.clone(),
-                delete,
-                upload: Arc::clone(&self.upload),
-            })
+            pending
+                .borrow_mut()
+                .entry(anchor)
+                .or_default()
+                .push(KittyPlacement {
+                    command: command.clone(),
+                    delete,
+                    upload: Arc::clone(&self.upload),
+                })
         });
+        let Some(cell) = f.buffer_mut().cell_mut(anchor) else {
+            return;
+        };
         let symbol = format!(
             "{}\x1b[s{command}\x1b[u{}",
             transmit.take().unwrap_or_default(),
@@ -1137,10 +1221,21 @@ impl CompressedKitty {
     }
 }
 
+#[cfg(feature = "terminal-images")]
+fn compressed_kitty_payload(pixels: &[u8], limit: usize) -> Option<Vec<u8>> {
+    if pixels.len() > limit {
+        return None;
+    }
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+    encoder.write_all(pixels).ok()?;
+    encoder.finish().ok()
+}
+
 /// An encode stays pending until its escape survives clipping/effects and the native backend
 /// confirms a flush without failed or discarded output. Offscreen paints cannot consume it.
 #[cfg(feature = "terminal-images")]
 pub(crate) struct KittyUpload {
+    native_lease: OnceLock<native_patches::NativeImageOwnership>,
     transmit: Mutex<Option<String>>,
     attempted: AtomicBool,
     placeholder_prefix: String,
@@ -1159,7 +1254,9 @@ struct KittyPlacement {
 #[cfg(feature = "terminal-images")]
 thread_local! {
     static PENDING_KITTY_UPLOADS: RefCell<Vec<Arc<KittyUpload>>> = const { RefCell::new(Vec::new()) };
-    static PENDING_KITTY_PLACEMENTS: RefCell<Vec<KittyPlacement>> = const { RefCell::new(Vec::new()) };
+    // Match only commands staged at the outgoing cell, rather than scanning every placement
+    // for every image cell. Real browser scenes can have hundreds of retained patch rows.
+    static PENDING_KITTY_PLACEMENTS: RefCell<HashMap<(u16, u16), Vec<KittyPlacement>>> = RefCell::default();
     static NEXT_KITTY_PLACEMENT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
@@ -1268,6 +1365,11 @@ pub(crate) fn begin_kitty_frame() {
     if !capturing_images() {
         PENDING_KITTY_UPLOADS.with(|pending| pending.borrow_mut().clear());
         PENDING_KITTY_PLACEMENTS.with(|pending| pending.borrow_mut().clear());
+        if let Some(encoder) = ENCODER.get()
+            && let Ok(mut inner) = encoder.inner.lock()
+        {
+            inner.cache.remove_unowned_native_images();
+        }
     }
 }
 
@@ -1324,35 +1426,50 @@ fn kitty_cell_with_upload<'a>(
 
 #[cfg(feature = "terminal-images")]
 fn prepare_placed_cell<'a>(
+    anchor: (u16, u16),
     cell: &'a ratatui::buffer::Cell,
     uploads: &mut Vec<Arc<KittyUpload>>,
+    placement_deletes: &mut Vec<String>,
 ) -> std::borrow::Cow<'a, ratatui::buffer::Cell> {
     let mut symbol = cell.symbol().to_owned();
+    let commands: HashSet<_> = cell
+        .symbol()
+        .match_indices("\x1b_Ga=p,")
+        .filter_map(|(start, _)| {
+            let command = &cell.symbol()[start..];
+            command.find("\x1b\\").map(|end| &command[..end + 2])
+        })
+        .collect();
+    let mut transmissions = String::new();
     PENDING_KITTY_PLACEMENTS.with(|pending| {
-        for placement in pending
-            .borrow()
+        let pending = pending.borrow();
+        let Some(placements) = pending.get(&anchor) else {
+            return;
+        };
+        for placement in placements
             .iter()
-            .filter(|p| cell.symbol().contains(&p.command))
+            .filter(|p| commands.contains(p.command.as_str()))
         {
+            placement_deletes.push(placement.delete.clone());
             let Ok(sequence) = placement.upload.transmit.lock() else {
                 continue;
             };
             let Some(sequence) = sequence.as_ref() else {
                 continue;
             };
-            if uploads
+            // Strip every staged copy before adding one canonical upload for this anchor.
+            // Inserting inside the loop lets a later duplicate strip the sole surviving copy.
+            symbol = symbol.replace(sequence, "");
+            if !uploads
                 .iter()
                 .any(|upload| Arc::ptr_eq(upload, &placement.upload))
             {
-                symbol = symbol.replace(sequence, "");
-            } else {
-                if !symbol.contains(sequence) {
-                    symbol.insert_str(0, sequence);
-                }
+                transmissions.push_str(sequence);
                 uploads.push(Arc::clone(&placement.upload));
             }
         }
     });
+    symbol.insert_str(0, &transmissions);
     let mut cell = cell.clone();
     cell.set_symbol(&symbol);
     std::borrow::Cow::Owned(cell)
@@ -1395,10 +1512,15 @@ pub(crate) fn prepare_kitty_cells<'a>(
     content: impl Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
 ) -> std::io::Result<PreparedKittyDraw<'a>> {
     let mut uploads = Vec::new();
+    let mut placement_deletes = Vec::new();
     let mut cells: Vec<_> = content
         .map(|(x, y, cell)| {
             if cell.symbol().contains("\x1b_Ga=p,") {
-                return (x, y, prepare_placed_cell(cell, &mut uploads));
+                return (
+                    x,
+                    y,
+                    prepare_placed_cell((x, y), cell, &mut uploads, &mut placement_deletes),
+                );
             }
             let Some(upload) = kitty_upload_in_symbol(cell.symbol()) else {
                 return (x, y, std::borrow::Cow::Borrowed(cell));
@@ -1412,18 +1534,6 @@ pub(crate) fn prepare_kitty_cells<'a>(
         })
         .collect();
     renew_kitty_uploads(&mut cells, &uploads)?;
-    let placement_deletes = PENDING_KITTY_PLACEMENTS.with(|pending| {
-        pending
-            .borrow()
-            .iter()
-            .filter(|p| {
-                cells
-                    .iter()
-                    .any(|(_, _, cell)| cell.symbol().contains(&p.command))
-            })
-            .map(|p| p.delete.clone())
-            .collect()
-    });
     Ok(PreparedKittyDraw {
         cells,
         uploads,
@@ -1739,6 +1849,45 @@ struct ImageRenderCache {
 }
 
 impl ImageRenderCache {
+    #[cfg(feature = "terminal-images")]
+    fn remove_unattempted_native_images(&mut self) {
+        for index in (0..self.entries.len()).rev() {
+            let EncodedProtocol::CompressedKitty(image) = &*self.entries[index].protocol else {
+                continue;
+            };
+            if image.upload.native_lease.get().is_some()
+                && !image.upload.attempted.load(Ordering::Relaxed)
+            {
+                let source = image
+                    .upload
+                    .native_lease
+                    .get()
+                    .and_then(|owner| owner.source.upgrade());
+                self.remove_at(index);
+                if let Some(source) = source {
+                    source.discard_unattempted();
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn remove_unowned_native_images(&mut self) {
+        for index in (0..self.entries.len()).rev() {
+            let EncodedProtocol::CompressedKitty(image) = &*self.entries[index].protocol else {
+                continue;
+            };
+            if image
+                .upload
+                .native_lease
+                .get()
+                .is_some_and(|lease| lease.source.upgrade().is_none())
+            {
+                self.remove_at(index);
+            }
+        }
+    }
+
     fn get(&mut self, key: &RenderCacheKey) -> Option<Arc<EncodedProtocol>> {
         let idx = self.entries.iter().position(|entry| &entry.key == key)?;
         let mut entry = self.entries.remove(idx);
@@ -2556,7 +2705,7 @@ fn kitty_image_id(request: &EncodeRequest) -> u32 {
             request.key.hash(&mut hasher);
         }
     }
-    (hasher.finish() as u32).max(1)
+    (hasher.finish() as u32 & 0x7fff_ffff).max(1)
 }
 
 #[cfg(feature = "terminal-images")]
@@ -2568,7 +2717,7 @@ fn terminal_image_id(stream_key: u64, backdrop: u64) -> u32 {
     if backdrop != 0 {
         backdrop.hash(&mut hasher);
     }
-    (hasher.finish() as u32).max(1)
+    (hasher.finish() as u32 & 0x7fff_ffff).max(1)
 }
 
 fn encode_request(request: &EncodeRequest) -> Option<EncodedProtocol> {
@@ -3327,6 +3476,7 @@ mod tests {
             z_index: 0,
             pixels: (1, 1),
             upload: Arc::new(KittyUpload {
+                native_lease: OnceLock::new(),
                 transmit: Mutex::new(None),
                 attempted: AtomicBool::new(false),
                 placeholder_prefix: String::new(),

@@ -84,15 +84,14 @@ fn render_terminal_images(
     content_rect: Rect,
     effective: ratatui::layout::Rect,
 ) {
-    use std::sync::Arc;
-
-    use crate::backend::ratatui_backend::renderers::image::draw_encoded_image;
-    use crate::widgets::crop_for_visible_cells;
-
-    let clip_left = i32::from(effective.x);
-    let clip_top = i32::from(effective.y);
-    let clip_right = clip_left + i32::from(effective.width);
-    let clip_bottom = clip_top + i32::from(effective.height);
+    if crate::backend::ratatui_backend::renderers::image::render_native_terminal_images(
+        f,
+        &node.images,
+        content_rect,
+        effective,
+    ) {
+        return;
+    }
 
     let lifetime = node
         .images
@@ -107,113 +106,142 @@ fn render_terminal_images(
             .is_some_and(|first| first.z < 0 || images.iter().any(|p| p.z != first.z)),
     };
     for placement in &images {
-        let left = i32::from(content_rect.x) + placement.col;
-        let top = i32::from(content_rect.y) + placement.row;
-        let cols = i32::from(placement.cols);
-        let rows = i32::from(placement.rows);
-        if cols <= 0 || rows <= 0 {
-            continue;
+        if let Some((origin, area)) = visible_terminal_image(placement, content_rect, effective) {
+            draw_composed_terminal_image(f, placement, origin, area, render.clone());
         }
-
-        let vis_left = left.max(clip_left);
-        let vis_top = top.max(clip_top);
-        let vis_right = (left + cols).min(clip_right);
-        let vis_bottom = (top + rows).min(clip_bottom);
-        if vis_right <= vis_left || vis_bottom <= vis_top {
-            continue;
-        }
-
-        let area = ratatui::layout::Rect {
-            x: vis_left as u16,
-            y: vis_top as u16,
-            width: (vis_right - vis_left) as u16,
-            height: (vis_bottom - vis_top) as u16,
-        };
-        // Asked before the decode, because everything below it - decode, encode, the copy into
-        // shared memory - is work for a picture a later layer is going to cover completely.
-        if crate::backend::ratatui_backend::renderers::image::image_area_fully_occluded(area) {
-            continue;
-        }
-
-        // Cell-aligned immutable files can go straight to a local host, including clipped
-        // panes. Composition, captures and dimming keep the ordinary pixel path below.
-        let full_crop = TerminalImageCrop {
-            x: 0,
-            y: 0,
-            width: placement.image.width(),
-            height: placement.image.height(),
-        };
-        if crate::backend::ratatui_backend::renderers::image::draw_file_terminal_image(
-            f,
-            placement,
-            (left, top),
-            area,
-            placement_stream_hash(
-                placement.image.stream_namespace(),
-                placement.image_id,
-                full_crop,
-            ),
-            placement_source_hash(
-                placement.image.stream_namespace(),
-                placement.image_id,
-                placement.image.source_hash(),
-                full_crop,
-            ),
-            render.clone(),
-        ) {
-            continue;
-        }
-
-        // A payload whose decode was deferred is decoded here, on the first frame that draws it.
-        // `None` means it did not decode at all, which leaves nothing to paint.
-        let Some(pixels) = placement.image.pixels() else {
-            continue;
-        };
-        let source = placement.source_crop.unwrap_or(TerminalImageCrop {
-            x: 0,
-            y: 0,
-            width: pixels.width(),
-            height: pixels.height(),
-        });
-        let Some(crop) = crop_for_visible_cells(
-            source,
-            (cols as u32, rows as u32),
-            (
-                (vis_left - left) as u32,
-                (vis_top - top) as u32,
-                (vis_right - vis_left) as u32,
-                (vis_bottom - vis_top) as u32,
-            ),
-        ) else {
-            continue;
-        };
-
-        let whole = crop.x == 0
-            && crop.y == 0
-            && crop.width == pixels.width()
-            && crop.height == pixels.height();
-
-        draw_encoded_image(
-            f,
-            area,
-            placement_stream_hash(placement.image.stream_namespace(), placement.image_id, crop),
-            placement_source_hash(
-                placement.image.stream_namespace(),
-                placement.image_id,
-                placement.image.source_hash(),
-                crop,
-            ),
-            placement.z,
-            render.clone(),
-            || {
-                if whole {
-                    Arc::clone(pixels)
-                } else {
-                    Arc::new(pixels.crop_imm(crop.x, crop.y, crop.width, crop.height))
-                }
-            },
-        );
     }
+}
+
+#[cfg(feature = "terminal-images")]
+fn visible_terminal_image(
+    placement: &crate::widgets::TerminalImagePlacement,
+    content_rect: Rect,
+    effective: ratatui::layout::Rect,
+) -> Option<((i32, i32), ratatui::layout::Rect)> {
+    let clip_left = i32::from(effective.x);
+    let clip_top = i32::from(effective.y);
+    let clip_right = clip_left + i32::from(effective.width);
+    let clip_bottom = clip_top + i32::from(effective.height);
+    let left = i32::from(content_rect.x) + placement.col;
+    let top = i32::from(content_rect.y) + placement.row;
+    let cols = i32::from(placement.cols);
+    let rows = i32::from(placement.rows);
+    if cols <= 0 || rows <= 0 {
+        return None;
+    }
+
+    let vis_left = left.max(clip_left);
+    let vis_top = top.max(clip_top);
+    let vis_right = (left + cols).min(clip_right);
+    let vis_bottom = (top + rows).min(clip_bottom);
+    if vis_right <= vis_left || vis_bottom <= vis_top {
+        return None;
+    }
+
+    let area = ratatui::layout::Rect {
+        x: vis_left as u16,
+        y: vis_top as u16,
+        width: (vis_right - vis_left) as u16,
+        height: (vis_bottom - vis_top) as u16,
+    };
+    Some(((left, top), area))
+}
+
+#[cfg(feature = "terminal-images")]
+fn draw_composed_terminal_image(
+    f: &mut ratatui::Frame<'_>,
+    placement: &crate::widgets::TerminalImagePlacement,
+    (left, top): (i32, i32),
+    area: ratatui::layout::Rect,
+    render: crate::backend::ratatui_backend::renderers::image::TerminalImageRender,
+) {
+    use crate::backend::ratatui_backend::renderers::image::draw_encoded_image;
+    use crate::widgets::crop_for_visible_cells;
+    use std::sync::Arc;
+    // Asked before the decode, because everything below it - decode, encode, the copy into
+    // shared memory - is work for a picture a later layer is going to cover completely.
+    if crate::backend::ratatui_backend::renderers::image::image_area_fully_occluded(area) {
+        return;
+    }
+
+    // Cell-aligned immutable files can go straight to a local host, including clipped
+    // panes. Composition, captures and dimming keep the ordinary pixel path below.
+    let full_crop = TerminalImageCrop {
+        x: 0,
+        y: 0,
+        width: placement.image.width(),
+        height: placement.image.height(),
+    };
+    if crate::backend::ratatui_backend::renderers::image::draw_file_terminal_image(
+        f,
+        placement,
+        (left, top),
+        area,
+        placement_stream_hash(
+            placement.image.stream_namespace(),
+            placement.image_id,
+            full_crop,
+        ),
+        placement_source_hash(
+            placement.image.stream_namespace(),
+            placement.image_id,
+            placement.image.source_hash(),
+            full_crop,
+        ),
+        render.clone(),
+    ) {
+        return;
+    }
+
+    // A payload whose decode was deferred is decoded here, on the first frame that draws it.
+    // `None` means it did not decode at all, which leaves nothing to paint.
+    let Some(pixels) = placement.image.pixels() else {
+        return;
+    };
+    let source = placement.source_crop.unwrap_or(TerminalImageCrop {
+        x: 0,
+        y: 0,
+        width: pixels.width(),
+        height: pixels.height(),
+    });
+    let Some(crop) = crop_for_visible_cells(
+        source,
+        (u32::from(placement.cols), u32::from(placement.rows)),
+        (
+            (i32::from(area.x) - left) as u32,
+            (i32::from(area.y) - top) as u32,
+            u32::from(area.width),
+            u32::from(area.height),
+        ),
+    ) else {
+        return;
+    };
+
+    let whole = crop.x == 0
+        && crop.y == 0
+        && crop.width == pixels.width()
+        && crop.height == pixels.height();
+
+    draw_encoded_image(
+        f,
+        area,
+        placement_stream_hash(placement.image.stream_namespace(), placement.image_id, crop),
+        placement_source_hash(
+            placement.image.stream_namespace(),
+            placement.image_id,
+            placement.image.source_hash(),
+            crop,
+        ),
+        placement.z,
+        render,
+        || {
+            if whole {
+                Arc::clone(pixels)
+            } else {
+                Arc::new(pixels.crop_imm(crop.x, crop.y, crop.width, crop.height))
+            }
+        },
+    );
 }
 
 /// Stable identity of one terminal placement while its pixels change.
@@ -861,6 +889,16 @@ pub(crate) fn render_terminal_node(
         .ctx
         .copy_feedback
         .and_then(|feedback| feedback.active_range(node_id));
+    #[cfg(feature = "terminal-images")]
+    let _native_layer_scope = (!term.images.is_empty()).then(|| {
+        crate::backend::ratatui_backend::renderers::image::native_layer_scope(
+            crate::backend::ratatui_backend::render::terminal_native_layers_supported(
+                state.ctx.tree,
+                node_id,
+                rrect.intersection(state.content),
+            ),
+        )
+    });
     #[cfg(feature = "terminal-images")]
     let _image_occlusion_scope = (!term.images.is_empty()).then(|| {
         crate::backend::ratatui_backend::renderers::image::push_image_occlusions(

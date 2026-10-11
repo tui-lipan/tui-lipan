@@ -16,13 +16,34 @@ cargo run --example terminal_images --features terminal-images
 
 ## It does not depend on the host terminal
 
-The child's escapes are never forwarded to the host. They are decoded into pixels and re-encoded
-through the same path the [`Image`](display.md#image-requires-feature-image) widget uses, so the host renders them with whatever
-*it* supports — Kitty, iTerm2, sixel, or half-blocks. A pane in a plain `xterm` shows pictures.
+The framework parses the child's graphics commands and retains their source images. It gives each
+pane separate host image IDs and clips placements to the visible pane and uncovered UI cells.
+On Kitty hosts, eligible natural-size images are uploaded once and placed as pixel-cropped patches.
+The host blends their z planes, avoiding pane-side composition and retransmission of unchanged pixels.
 
-Decoding rather than forwarding is also what makes the rest work: image ids from two panes cannot
-collide, a pane that is half scrolled off gets its pixels cropped instead of squashed, and the
-cell-diff render pipeline is untouched.
+Scaled images, mismatched or unmeasured host cell sizes, overlapping images at the same z,
+and backdrop effects use pixel composition. An overlapping later widget branch also uses composition
+so opaque text and filled blocks cover the image. Nonpainting Canvas hosts and inactive Animated
+wrappers preserve native eligibility; their children are checked individually. Unfilled frame borders
+outside terminal content also preserve native rendering. Overlap checks include ancestor clipping. The fallback emits individual image cells
+in overlapping branches; batched placeholder rows and ordinary placements cannot cover a later widget
+whose anchor leaves the image anchor intact. Opaque text backgrounds exclude the pixels they cover. Image-bearing trees use full tree paints even
+when only another pane reports damage, because each host draw replaces ordinary placements.
+Each source retains its upload state until the source and pending host output are released,
+independently of render-cache eviction. Large sources that cannot use file or shared-memory transport stay on the
+asynchronous composed path; only inline uploads up to 128 KiB are prepared directly.
+Other host protocols still use the same encoding path as the
+[`Image`](display.md#image-requires-feature-image) widget: iTerm2, sixel, or half-blocks.
+A pane in a plain `xterm` shows pictures.
+
+For a controlled comparison or to diagnose host graphics behavior, launch the app with
+`TUI_LIPAN_TERMINAL_IMAGES=composed` to disable native patch placements. Captures always compose
+retained source images, so PNG output and replay do not depend on the host's image storage.
+
+Run `cargo run --example terminal_patch_layers --features terminal-images` to compare image-only,
+text-overlay, and filled-block scenes on a real host. The overlays leave the image anchor uncovered.
+Compare with the composed environment setting and resize the host in both modes.
+`TUI_LIPAN_PATCH_LAYER=t` or `b` selects an initial overlay in that example.
 
 ## Setting the cell size
 
@@ -53,7 +74,8 @@ blend in pixel space within each exact z plane, so a small patch preserves the r
 On Kitty hosts, mixed-z and negative-z images use ordinary placements that leave text cells intact.
 Negative z values remain below text; values below `INT32_MIN/2` also remain below non-default cell
 backgrounds. The backend deletes these placements before drawing the next frame, including when
-the pane disappears. Single-plane images at non-negative z use Unicode placeholders.
+the pane disappears. Composed single-plane images at non-negative z use Unicode placeholders. Native patches use
+ordinary pixel-cropped placements at every z.
 Unchanged regions reuse cached pixels and encodings. Natural-size RGB and RGBA patches
 copy contiguous pixel rows; opaque RGBA rows use a bulk copy, while transparent rows retain
 source-over blending. Scaled images use the resampling path.
@@ -63,7 +85,8 @@ upload buffer is consumed by that decode rather than retained beside a second co
 Replay preserves both uploads that have not been decoded and images already drawn.
 
 Once a screen and its last snapshot are dropped, its queued and cached terminal encodings are
-released, and results from encodes still in flight are discarded. Shared-memory upload slots
+released, and results from encodes still in flight are discarded. Retired native patches also delete their host image data after a successful output flush.
+Shared-memory upload slots
 expire after a second without use; the idle encoder sweeps the pool every five seconds.
 A slot the host has not finished reading is retained until safe to unmap. Releasing image
 buffers does not guarantee an immediate drop in process RSS, since the heap allocator can keep
@@ -159,7 +182,9 @@ view. Visible placements this frame are `snapshot.images`. A host that needs the
 whose image layer does not follow a widget shrink or fade should look at the flag, not at the
 process in front of the PTY.
 
-Payloads are bounded before decoding as well: 32 MiB per transmission, 16384 pixels per axis.
+Payloads are bounded before decoding as well: 64 MiB per transmission, 16384 pixels per axis.
+A single unterminated APC sequence is still bounded to 32 MiB; larger inline uploads must be chunked. Named-file frames and their inline
+replay share the transmission limit, so a retained high-DPI frame survives reconnect.
 
 ## Out-of-band payloads
 

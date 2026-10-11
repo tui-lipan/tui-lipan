@@ -314,6 +314,7 @@ cargo run --example terminal_hints --features terminal
 | Example | Description |
 |---------|-------------|
 | `terminal_images` | Kitty graphics escapes drawn inside a terminal pane child's output |
+| `terminal_patch_layers` | Native Kitty images with ordinary text/block overlays, mode transitions and host resizing |
 | `image_backdrop` | Terminal-pane and `Image` widget pictures dimming with the cells beside them under a modal backdrop |
 
 ```bash
