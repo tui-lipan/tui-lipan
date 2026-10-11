@@ -1,4 +1,11 @@
 #[cfg(feature = "terminal-images")]
+mod native_patches;
+#[cfg(feature = "terminal-images")]
+pub(crate) use native_patches::{
+    NativeImageLease, render_native_terminal_images, take_retired_native_ids,
+};
+
+#[cfg(feature = "terminal-images")]
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -897,6 +904,7 @@ impl CompressedKitty {
             z_index,
             pixels: (width, height),
             upload: Arc::new(KittyUpload {
+                native_lease: OnceLock::new(),
                 transmit: Mutex::new(Some(transmit)),
                 attempted: AtomicBool::new(false),
                 shared: Mutex::new(shared),
@@ -931,6 +939,7 @@ impl CompressedKitty {
             z_index,
             pixels: dimensions,
             upload: Arc::new(KittyUpload {
+                native_lease: OnceLock::new(),
                 transmit: Mutex::new(Some(transmit)),
                 attempted: AtomicBool::new(false),
                 shared: Mutex::new(None),
@@ -1072,9 +1081,9 @@ impl CompressedKitty {
         transmit: &mut Option<String>,
     ) {
         let (left, right, y) = span;
-        let Some(cell) = f.buffer_mut().cell_mut((left, y)) else {
+        if f.buffer_mut().cell_mut((left, y)).is_none() {
             return;
-        };
+        }
         let p = NEXT_KITTY_PLACEMENT.with(|next| {
             let p = next.get().wrapping_add(1).max(1);
             next.set(p);
@@ -1094,6 +1103,17 @@ impl CompressedKitty {
             right - left,
             self.z_index
         );
+        self.stage_placement(f, (left, y), command, p, transmit);
+    }
+
+    fn stage_placement(
+        &self,
+        f: &mut ratatui::Frame<'_>,
+        anchor: (u16, u16),
+        command: String,
+        p: u32,
+        transmit: &mut Option<String>,
+    ) {
         let delete = format!("\x1b_Ga=d,q=2,d=i,i={},p={p};\x1b\\", self.id);
         PENDING_KITTY_PLACEMENTS.with(|pending| {
             pending.borrow_mut().push(KittyPlacement {
@@ -1102,6 +1122,9 @@ impl CompressedKitty {
                 upload: Arc::clone(&self.upload),
             })
         });
+        let Some(cell) = f.buffer_mut().cell_mut(anchor) else {
+            return;
+        };
         let symbol = format!(
             "{}\x1b[s{command}\x1b[u{}",
             transmit.take().unwrap_or_default(),
@@ -1141,6 +1164,7 @@ impl CompressedKitty {
 /// confirms a flush without failed or discarded output. Offscreen paints cannot consume it.
 #[cfg(feature = "terminal-images")]
 pub(crate) struct KittyUpload {
+    native_lease: OnceLock<Arc<NativeImageLease>>,
     transmit: Mutex<Option<String>>,
     attempted: AtomicBool,
     placeholder_prefix: String,
@@ -1268,6 +1292,11 @@ pub(crate) fn begin_kitty_frame() {
     if !capturing_images() {
         PENDING_KITTY_UPLOADS.with(|pending| pending.borrow_mut().clear());
         PENDING_KITTY_PLACEMENTS.with(|pending| pending.borrow_mut().clear());
+        if let Some(encoder) = ENCODER.get()
+            && let Ok(mut inner) = encoder.inner.lock()
+        {
+            inner.cache.remove_unowned_native_images();
+        }
     }
 }
 
@@ -1739,6 +1768,23 @@ struct ImageRenderCache {
 }
 
 impl ImageRenderCache {
+    #[cfg(feature = "terminal-images")]
+    fn remove_unowned_native_images(&mut self) {
+        for index in (0..self.entries.len()).rev() {
+            let EncodedProtocol::CompressedKitty(image) = &*self.entries[index].protocol else {
+                continue;
+            };
+            if image
+                .upload
+                .native_lease
+                .get()
+                .is_some_and(|lease| Arc::strong_count(lease) == 1)
+            {
+                self.remove_at(index);
+            }
+        }
+    }
+
     fn get(&mut self, key: &RenderCacheKey) -> Option<Arc<EncodedProtocol>> {
         let idx = self.entries.iter().position(|entry| &entry.key == key)?;
         let mut entry = self.entries.remove(idx);
@@ -2556,7 +2602,7 @@ fn kitty_image_id(request: &EncodeRequest) -> u32 {
             request.key.hash(&mut hasher);
         }
     }
-    (hasher.finish() as u32).max(1)
+    (hasher.finish() as u32 & 0x7fff_ffff).max(1)
 }
 
 #[cfg(feature = "terminal-images")]
@@ -2568,7 +2614,7 @@ fn terminal_image_id(stream_key: u64, backdrop: u64) -> u32 {
     if backdrop != 0 {
         backdrop.hash(&mut hasher);
     }
-    (hasher.finish() as u32).max(1)
+    (hasher.finish() as u32 & 0x7fff_ffff).max(1)
 }
 
 fn encode_request(request: &EncodeRequest) -> Option<EncodedProtocol> {
@@ -3327,6 +3373,7 @@ mod tests {
             z_index: 0,
             pixels: (1, 1),
             upload: Arc::new(KittyUpload {
+                native_lease: OnceLock::new(),
                 transmit: Mutex::new(None),
                 attempted: AtomicBool::new(false),
                 placeholder_prefix: String::new(),

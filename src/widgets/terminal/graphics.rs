@@ -122,6 +122,7 @@ fn next_stream_namespace() -> u64 {
 #[derive(Clone)]
 pub struct TerminalImage {
     source: ImageSource,
+    native: Arc<crate::backend::ratatui_backend::renderers::image::NativeImageLease>,
     width: u32,
     height: u32,
     source_hash: u64,
@@ -131,10 +132,10 @@ pub struct TerminalImage {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct ImageGeometry {
-    offset: (u32, u32),
-    size: (u32, u32),
-    cell: (u16, u16),
+pub(crate) struct ImageGeometry {
+    pub(crate) offset: (u32, u32),
+    pub(crate) size: (u32, u32),
+    pub(crate) cell: (u16, u16),
     requested_cells: (u32, u32),
 }
 
@@ -239,6 +240,16 @@ impl TerminalImage {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .alive,
         ))
+    }
+
+    pub(crate) fn native_lease(
+        &self,
+    ) -> Arc<crate::backend::ratatui_backend::renderers::image::NativeImageLease> {
+        Arc::clone(&self.native)
+    }
+
+    pub(crate) fn geometry(&self) -> Option<ImageGeometry> {
+        self.geometry
     }
 
     pub(crate) fn stream_namespace(&self) -> u64 {
@@ -1814,6 +1825,7 @@ impl TerminalGraphics {
         let (image, bytes) = if let Some((input, bytes)) = file {
             (
                 TerminalImage {
+                    native: Arc::default(),
                     source: ImageSource::File {
                         input: Arc::new(input),
                         decoded: Arc::default(),
@@ -1839,6 +1851,7 @@ impl TerminalGraphics {
                         .saturating_mul(height as usize)
                         .saturating_mul(channels);
                     let image = TerminalImage {
+                        native: Arc::default(),
                         source: ImageSource::Deferred {
                             input: Arc::new(DeferredDecode {
                                 payload: std::sync::Mutex::new(Some(payload)),
@@ -1862,6 +1875,7 @@ impl TerminalGraphics {
                     let decoded = decode_payload(command, payload)?;
                     let bytes = decoded_bytes(&decoded);
                     let image = TerminalImage {
+                        native: Arc::default(),
                         width: decoded.width(),
                         height: decoded.height(),
                         source: ImageSource::Decoded(Arc::new(decoded)),

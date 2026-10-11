@@ -1,0 +1,700 @@
+//! Forward natural-size patches as ordinary Kitty placements. The host blends pixel overlap;
+//! source images remain in the parser for captures, replay and reconnects.
+use super::*;
+use crate::widgets::{TerminalImageCrop, TerminalImagePlacement};
+
+static NEXT_NATIVE_ID: AtomicU64 = AtomicU64::new(1 << 31);
+type RetiredNativeIds = HashMap<std::thread::ThreadId, Vec<u32>>;
+fn retired_ids() -> &'static Mutex<RetiredNativeIds> {
+    static RETIRED: OnceLock<Mutex<RetiredNativeIds>> = OnceLock::new();
+    RETIRED.get_or_init(Mutex::default)
+}
+
+#[derive(Default)]
+pub(crate) struct NativeImageLease {
+    allocation: OnceLock<Option<(u32, std::thread::ThreadId)>>,
+}
+
+impl NativeImageLease {
+    fn id(&self) -> Option<u32> {
+        self.allocation
+            .get_or_init(|| {
+                NEXT_NATIVE_ID
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
+                        (id < u64::from(u32::MAX)).then_some(id + 1)
+                    })
+                    .ok()
+                    .map(|id| (id as u32, std::thread::current().id()))
+            })
+            .map(|(id, _)| id)
+    }
+}
+
+impl Drop for NativeImageLease {
+    fn drop(&mut self) {
+        if let Some(Some((id, owner))) = self.allocation.get() {
+            retired_ids()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .entry(*owner)
+                .or_default()
+                .push(*id);
+        }
+    }
+}
+
+pub(crate) fn take_retired_native_ids() -> Vec<u32> {
+    retired_ids()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove(&std::thread::current().id())
+        .unwrap_or_default()
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NativeGeometry {
+    origin: (i64, i64),
+    source: TerminalImageCrop,
+    cell: (u16, u16),
+    z: i32,
+}
+
+impl NativeGeometry {
+    fn new(p: &TerminalImagePlacement, content: Rect, cell: (u16, u16)) -> Option<Self> {
+        let g = p.image.geometry()?;
+        let source = p.source_crop.unwrap_or(TerminalImageCrop {
+            x: 0,
+            y: 0,
+            width: p.image.width(),
+            height: p.image.height(),
+        });
+        if g.cell != cell || g.size != (source.width, source.height) {
+            return None;
+        }
+        if source.x.checked_add(source.width)? > p.image.width()
+            || source.y.checked_add(source.height)? > p.image.height()
+        {
+            return None;
+        }
+        Some(Self {
+            origin: (
+                (i64::from(content.x) + i64::from(p.col)) * i64::from(cell.0)
+                    + i64::from(g.offset.0),
+                (i64::from(content.y) + i64::from(p.row)) * i64::from(cell.1)
+                    + i64::from(g.offset.1),
+            ),
+            source,
+            cell,
+            z: p.z,
+        })
+    }
+
+    fn overlaps(self, other: Self) -> bool {
+        self.origin.0 < other.origin.0 + i64::from(other.source.width)
+            && other.origin.0 < self.origin.0 + i64::from(self.source.width)
+            && self.origin.1 < other.origin.1 + i64::from(other.source.height)
+            && other.origin.1 < self.origin.1 + i64::from(self.source.height)
+    }
+
+    fn visible_row(self, left: u16, right: u16, y: u16) -> Option<NativeRegion> {
+        let x0 = self.origin.0.max(i64::from(left) * i64::from(self.cell.0));
+        let y0 = self.origin.1.max(i64::from(y) * i64::from(self.cell.1));
+        let x1 = (self.origin.0 + i64::from(self.source.width))
+            .min(i64::from(right) * i64::from(self.cell.0));
+        let y1 = (self.origin.1 + i64::from(self.source.height))
+            .min((i64::from(y) + 1) * i64::from(self.cell.1));
+        if x0 >= x1 || y0 >= y1 {
+            return None;
+        }
+        Some(NativeRegion {
+            anchor: ((x0 / i64::from(self.cell.0)) as u16, y),
+            offset: (
+                (x0 % i64::from(self.cell.0)) as u32,
+                (y0 % i64::from(self.cell.1)) as u32,
+            ),
+            z: self.z,
+            source: TerminalImageCrop {
+                x: self.source.x + (x0 - self.origin.0) as u32,
+                y: self.source.y + (y0 - self.origin.1) as u32,
+                width: (x1 - x0) as u32,
+                height: (y1 - y0) as u32,
+            },
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NativeRegion {
+    anchor: (u16, u16),
+    offset: (u32, u32),
+    source: TerminalImageCrop,
+    z: i32,
+}
+
+impl NativeRegion {
+    fn command(self, image: &CompressedKitty, p: u32) -> String {
+        let s = self.source;
+        // No c/r: scaling a partially occupied cell would stretch the patch. X/Y place its first
+        // pixel inside the cell; w/h are source pixels at the host's own cell resolution.
+        format!(
+            "\x1b_Ga=p,q=2,i={},p={p},x={},y={},w={},h={},X={},Y={},z={},C=1;\x1b\\",
+            image.id, s.x, s.y, s.width, s.height, self.offset.0, self.offset.1, self.z
+        )
+    }
+}
+
+pub(crate) fn render_native_terminal_images(
+    f: &mut ratatui::Frame<'_>,
+    placements: &[TerminalImagePlacement],
+    content: Rect,
+    clip: ratatui::layout::Rect,
+) -> bool {
+    if placements.is_empty() || !native_scene_supported(clip) {
+        return false;
+    }
+    let cell = image_support::host_cell_size();
+    let Some(geometry) = scene_geometry(placements, content, (cell.width, cell.height)) else {
+        return false;
+    };
+    let mut holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
+    holes.extend(super::super::image_effects::pending_image_occlusions());
+    // Resolve visible sources before staging so failure can fall back for the whole scene.
+    // Covered/offscreen sources must not be decoded, linked or uploaded.
+    let Some(encoded) = placements
+        .iter()
+        .zip(geometry)
+        .filter_map(|(p, geometry)| {
+            let regions = native_regions(geometry, clip, &holes);
+            (!regions.is_empty()).then(|| native_protocol(p).map(|protocol| (protocol, regions)))
+        })
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    for (protocol, regions) in encoded {
+        let EncodedProtocol::CompressedKitty(image) = &*protocol else {
+            unreachable!()
+        };
+        render_native_regions(image, f, &regions);
+    }
+    true
+}
+
+fn native_scene_supported(clip: ratatui::layout::Rect) -> bool {
+    if capturing_images() || image_support::image_rendering_suspended() {
+        return false;
+    }
+    if std::env::var("TUI_LIPAN_TERMINAL_IMAGES").is_ok_and(|mode| mode == "composed") {
+        return false;
+    }
+    let protocol = protocol_type_to_public(image_support::picker_snapshot().protocol_type());
+    let area = Rect {
+        x: clip.x as i16,
+        y: clip.y as i16,
+        w: clip.width,
+        h: clip.height,
+    };
+    protocol == ImageProtocol::Kitty && live_backdrop_mask(area, protocol).is_none()
+}
+
+fn scene_geometry(
+    placements: &[TerminalImagePlacement],
+    content: Rect,
+    cell: (u16, u16),
+) -> Option<Vec<NativeGeometry>> {
+    let geometry: Vec<_> = placements
+        .iter()
+        .map(|p| NativeGeometry::new(p, content, cell))
+        .collect::<Option<_>>()?;
+    // Host IDs do not preserve the producer's same-z ordering, so those overlaps compose.
+    // Exact z values stay intact, including the very low plane below cell backgrounds.
+    for (index, p) in placements.iter().enumerate() {
+        if placements[index + 1..]
+            .iter()
+            .zip(&geometry[index + 1..])
+            .any(|(other, g)| other.z == p.z && geometry[index].overlaps(*g))
+        {
+            return None;
+        }
+    }
+    Some(geometry)
+}
+
+fn native_protocol(p: &TerminalImagePlacement) -> Option<Arc<EncodedProtocol>> {
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    use std::hash::{Hash, Hasher};
+    (
+        "native-terminal-patches",
+        p.image.stream_namespace(),
+        p.image_id,
+    )
+        .hash(&mut hash);
+    let stream = hash.finish();
+    let lease = p.image.native_lease();
+    let id = lease.id()?;
+    id.hash(&mut hash);
+    (p.image.source_hash(), p.image.width(), p.image.height()).hash(&mut hash);
+    let key = RenderCacheKey {
+        source_hash: hash.finish(),
+        frame_index: 0,
+        width: 1,
+        height: 1,
+        crop: None,
+        background_rgb: None,
+        fit: ImageFit::Scale,
+        protocol: ImageProtocol::Auto,
+        resolved_protocol: ImageProtocol::Kitty,
+        z_index: 0,
+        backdrop: 0,
+    };
+    let encoder = async_encoder();
+    if let Some(encoded) = encoder.cache_get(&key) {
+        return Some(encoded);
+    }
+    let (protocol, bytes) = encode_native_source(p, id, lease)?;
+    let mut inner = encoder.inner.lock().ok()?;
+    inner.cache.insert(
+        stream,
+        key,
+        Arc::clone(&protocol),
+        bytes,
+        CacheRetention::LatestOnly,
+    );
+    inner
+        .cache
+        .mark_terminal_owner(&key, p.image.image_lifetime());
+    Some(protocol)
+}
+
+fn encode_native_source(
+    p: &TerminalImagePlacement,
+    id: u32,
+    lease: Arc<NativeImageLease>,
+) -> Option<(Arc<EncodedProtocol>, usize)> {
+    let size = ratatui::layout::Size::new(1, 1);
+    let file = p
+        .image
+        .file_pixels()
+        .filter(|_| shared_frame::host_reads_shared_memory());
+    let encoded = file
+        .and_then(|input| {
+            CompressedKitty::from_file(input, (p.image.width(), p.image.height()), size, id, 0)
+        })
+        .or_else(|| CompressedKitty::new(p.image.pixels()?, size, id, 0))?;
+    let file_backed = encoded.upload.file.lock().ok()?.is_some();
+    encoded.upload.native_lease.set(lease).ok()?;
+    let bytes = if file_backed {
+        1024
+    } else {
+        usize::try_from(u64::from(p.image.width()) * u64::from(p.image.height()) * 4).ok()?
+    };
+    Some((Arc::new(EncodedProtocol::CompressedKitty(encoded)), bytes))
+}
+
+fn native_regions(
+    geometry: NativeGeometry,
+    clip: ratatui::layout::Rect,
+    holes: &[ratatui::layout::Rect],
+) -> Vec<NativeRegion> {
+    let mut regions = Vec::new();
+    for y in clip.y..clip.bottom() {
+        for (left, right) in uncovered_x_spans(clip.x, clip.right(), y, holes) {
+            if let Some(region) = geometry.visible_row(left, right, y) {
+                regions.push(region);
+            }
+        }
+    }
+    regions
+}
+
+fn render_native_regions(
+    image: &CompressedKitty,
+    f: &mut ratatui::Frame<'_>,
+    regions: &[NativeRegion],
+) {
+    let mut transmit = image.pending_transmission();
+    for region in regions {
+        let p = NEXT_KITTY_PLACEMENT.with(|next| {
+            let p = next.get().wrapping_add(1).max(1);
+            next.set(p);
+            p
+        });
+        image.stage_placement(f, region.anchor, region.command(image, p), p, &mut transmit);
+    }
+}
+
+#[cfg(test)]
+fn render_native_image(
+    image: &CompressedKitty,
+    f: &mut ratatui::Frame<'_>,
+    geometry: NativeGeometry,
+    clip: ratatui::layout::Rect,
+) {
+    let holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
+    render_native_regions(image, f, &native_regions(geometry, clip, &holes));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::widgets::{TerminalCellSize, TerminalScreen};
+    use ratatui::backend::Backend;
+
+    fn scene(keys: &str, size: (u32, u32)) -> Vec<TerminalImagePlacement> {
+        let mut screen = TerminalScreen::new(6, 8, 0);
+        screen.set_cell_size(TerminalCellSize::new(10, 20));
+        screen.process_bytes(
+            format!(
+                "\x1b_Ga=T,f=32,q=2,C=1,{keys},s={},v={};{}\x1b\\",
+                size.0,
+                size.1,
+                BASE64.encode([10, 20, 30, 255].repeat((size.0 * size.1) as usize))
+            )
+            .as_bytes(),
+        );
+        screen.render_snapshot().images.to_vec()
+    }
+
+    #[test]
+    fn native_geometry_preserves_pixel_offsets_and_clips_without_scaling() {
+        let p = scene("i=1,X=3,Y=5,z=2", (17, 23)).remove(0);
+        let content = Rect {
+            x: 2,
+            y: 3,
+            w: 8,
+            h: 6,
+        };
+        let g = NativeGeometry::new(&p, content, (10, 20)).unwrap();
+        assert_eq!(g.origin, (23, 65));
+        let first = g.visible_row(2, 8, 3).unwrap();
+        assert_eq!(first.anchor, (2, 3));
+        assert_eq!(first.offset, (3, 5));
+        assert_eq!(
+            first.source,
+            TerminalImageCrop {
+                x: 0,
+                y: 0,
+                width: 17,
+                height: 15
+            }
+        );
+        let clipped = g.visible_row(3, 8, 4).unwrap();
+        assert_eq!(clipped.anchor, (3, 4));
+        assert_eq!(clipped.offset, (0, 0));
+        assert_eq!(
+            clipped.source,
+            TerminalImageCrop {
+                x: 7,
+                y: 15,
+                width: 10,
+                height: 8
+            }
+        );
+        assert!(g.visible_row(4, 8, 3).is_none());
+        assert!(NativeGeometry::new(&p, content, (11, 20)).is_none());
+    }
+
+    #[test]
+    fn native_geometry_preserves_an_image_scrolled_above_and_left_of_the_pane() {
+        let mut p = scene("i=1,X=3,Y=5,z=2", (27, 43)).remove(0);
+        p.col = -1;
+        p.row = -1;
+        let g = NativeGeometry::new(&p, Rect::default(), (10, 20)).unwrap();
+        let visible = g.visible_row(0, 8, 0).unwrap();
+        assert_eq!(
+            visible.source,
+            TerminalImageCrop {
+                x: 7,
+                y: 15,
+                width: 20,
+                height: 20
+            }
+        );
+        assert_eq!(visible.offset, (0, 0));
+    }
+
+    #[test]
+    fn scaling_and_same_depth_pixel_overlap_use_composition() {
+        let mut p = scene("i=1,X=3,Y=5,z=0", (17, 23)).remove(0);
+        let mut other = p.clone();
+        other.image_id = 2;
+        assert!(scene_geometry(&[p.clone(), other.clone()], Rect::default(), (10, 20)).is_none());
+        other.z = 1;
+        assert!(scene_geometry(&[p.clone(), other.clone()], Rect::default(), (10, 20)).is_some());
+        other.z = 0;
+        other.col = 3;
+        assert!(scene_geometry(&[p.clone(), other], Rect::default(), (10, 20)).is_some());
+        p.source_crop = Some(TerminalImageCrop {
+            x: 0,
+            y: 0,
+            width: 3,
+            height: 4,
+        });
+        assert!(scene_geometry(&[p], Rect::default(), (10, 20)).is_none());
+    }
+
+    #[test]
+    fn native_rows_survive_lost_upload_anchors_and_are_deleted_when_the_pane_closes() {
+        begin_kitty_frame();
+        clear_image_occlusions();
+        let p = scene("i=1,X=3,Y=5,z=2", (17, 43)).remove(0);
+        let geometry = NativeGeometry::new(&p, Rect::default(), (10, 20)).unwrap();
+        let encoded = CompressedKitty::new(
+            p.image.pixels().unwrap(),
+            ratatui::layout::Size::new(p.cols, p.rows),
+            77,
+            2,
+        )
+        .unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(8, 6)).unwrap();
+        terminal
+            .draw(|f| render_native_image(&encoded, f, geometry, f.area()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let mut output = Vec::new();
+        {
+            let mut host =
+                crate::backend::ratatui_backend::native_terminal::HostBackend::new(&mut output);
+            // A later pass removed the first row carrying the upload. Other rows still draw.
+            host.draw((1..3).map(|y| (0, y, &buffer[(0, y)]))).unwrap();
+            Backend::flush(&mut host).unwrap();
+            assert!(!encoded.transmission_pending());
+            begin_kitty_frame();
+            host.draw(std::iter::empty()).unwrap();
+            Backend::flush(&mut host).unwrap();
+        }
+        let output = String::from_utf8(output).unwrap();
+        assert_eq!(output.matches("a=T").count(), 1);
+        assert_eq!(output.matches("a=p").count(), 2);
+        assert_eq!(output.matches("a=d").count(), 2);
+        assert!(output.contains("x=0,y=15,w=17,h=20,X=3,Y=0,z=2,C=1"));
+        assert!(output.contains("x=0,y=35,w=17,h=8,X=3,Y=0,z=2,C=1"));
+        assert!(!output.contains("r=1"));
+    }
+
+    #[test]
+    fn native_rows_cut_holes_without_stretching_pixels() {
+        begin_kitty_frame();
+        set_image_occlusions(vec![ratatui::layout::Rect::new(1, 0, 1, 2)]);
+        let p = scene("i=1,z=-1", (30, 40)).remove(0);
+        let g = NativeGeometry::new(&p, Rect::default(), (10, 20)).unwrap();
+        let encoded = CompressedKitty::new(
+            p.image.pixels().unwrap(),
+            ratatui::layout::Size::new(3, 2),
+            77,
+            -1,
+        )
+        .unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(3, 2)).unwrap();
+        terminal
+            .draw(|f| render_native_image(&encoded, f, g, f.area()))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        for y in 0..2 {
+            assert!(!buffer[(1, y)].symbol().contains("a=p"));
+            assert!(buffer[(0, y)].symbol().contains("x=0,"));
+            assert!(buffer[(2, y)].symbol().contains("x=20,"));
+            assert!(buffer[(0, y)].symbol().contains("w=10,h=20,X=0,Y=0,z=-1"));
+        }
+        clear_image_occlusions();
+        begin_kitty_frame();
+    }
+    #[test]
+    fn source_and_staged_upload_keep_the_native_image_alive_until_host_cleanup() {
+        let lease = Arc::new(NativeImageLease::default());
+        let id = lease.id().unwrap();
+        let encoded = CompressedKitty::new(
+            &image::DynamicImage::new_rgba8(1, 1),
+            ratatui::layout::Size::new(1, 1),
+            id,
+            0,
+        )
+        .unwrap();
+        encoded
+            .upload
+            .native_lease
+            .set(Arc::clone(&lease))
+            .ok()
+            .unwrap();
+        let upload = Arc::clone(&encoded.upload);
+        drop(lease);
+        drop(encoded);
+        assert!(!take_retired_native_ids().contains(&id));
+        drop(upload);
+        let mut output = Vec::new();
+        {
+            let mut host =
+                crate::backend::ratatui_backend::native_terminal::HostBackend::new(&mut output);
+            host.draw(std::iter::empty()).unwrap();
+            Backend::flush(&mut host).unwrap();
+        }
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains(&format!("d=I,i={id}"))
+        );
+    }
+
+    #[test]
+    fn identical_payload_replacements_receive_distinct_host_ids() {
+        let first = NativeImageLease::default();
+        let second = NativeImageLease::default();
+        assert_ne!(first.id(), second.id());
+        assert_eq!(first.id(), first.id());
+        assert!(first.id().unwrap() >= 1 << 31);
+    }
+    #[test]
+    fn fully_covered_and_offscreen_images_have_no_native_regions() {
+        let p = scene("i=1", (30, 40)).remove(0);
+        let g = NativeGeometry::new(&p, Rect::default(), (10, 20)).unwrap();
+        let clip = ratatui::layout::Rect::new(0, 0, 8, 6);
+        assert!(native_regions(g, clip, &[ratatui::layout::Rect::new(0, 0, 3, 2)]).is_empty());
+        assert!(native_regions(g, ratatui::layout::Rect::new(4, 3, 2, 2), &[]).is_empty());
+    }
+
+    #[test]
+    fn a_worker_drops_the_source_but_only_the_owning_host_retires_it() {
+        let lease = NativeImageLease::default();
+        let id = lease.id().unwrap();
+        std::thread::spawn(move || {
+            drop(lease);
+            assert!(!take_retired_native_ids().contains(&id));
+        })
+        .join()
+        .unwrap();
+        assert!(take_retired_native_ids().contains(&id));
+    }
+
+    #[test]
+    fn discarded_native_storage_cleanup_retries_after_recovery() {
+        let lease = NativeImageLease::default();
+        let id = lease.id().unwrap();
+        let (mut host, state) =
+            crate::backend::ratatui_backend::native_terminal::buffered_test_output();
+        drop(lease);
+        host.draw(std::iter::empty()).unwrap();
+        crate::app::job_control::with_released_terminal(&state, || {
+            Backend::flush(&mut host).unwrap()
+        });
+        assert!(host.test_output().is_empty());
+        host.draw(std::iter::empty()).unwrap();
+        Backend::flush(&mut host).unwrap();
+        let output = String::from_utf8(host.test_output()).unwrap();
+        assert_eq!(output.matches(&format!("d=I,i={id};")).count(), 1);
+        host.draw(std::iter::empty()).unwrap();
+        Backend::flush(&mut host).unwrap();
+        assert_eq!(
+            String::from_utf8(host.test_output())
+                .unwrap()
+                .matches(&format!("d=I,i={id};"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn failed_native_storage_cleanup_retries_until_flushed() {
+        #[derive(Default)]
+        struct State {
+            reject: bool,
+            output: Vec<u8>,
+        }
+        struct Writer(std::rc::Rc<std::cell::RefCell<State>>);
+        impl std::io::Write for Writer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.borrow_mut().output.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                if self.0.borrow().reject {
+                    Err(std::io::Error::other("failed flush"))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        let lease = NativeImageLease::default();
+        let id = lease.id().unwrap();
+        drop(lease);
+        let state = std::rc::Rc::new(std::cell::RefCell::new(State {
+            reject: true,
+            ..Default::default()
+        }));
+        let mut host = crate::backend::ratatui_backend::native_terminal::HostBackend::new(Writer(
+            state.clone(),
+        ));
+        host.draw(std::iter::empty()).unwrap();
+        assert!(Backend::flush(&mut host).is_err());
+        state.borrow_mut().reject = false;
+        host.draw(std::iter::empty()).unwrap();
+        Backend::flush(&mut host).unwrap();
+        let output = state.borrow().output.clone();
+        assert_eq!(
+            String::from_utf8(output.clone())
+                .unwrap()
+                .matches(&format!("d=I,i={id};"))
+                .count(),
+            2
+        );
+        host.draw(std::iter::empty()).unwrap();
+        Backend::flush(&mut host).unwrap();
+        assert_eq!(
+            String::from_utf8(state.borrow().output.clone())
+                .unwrap()
+                .matches(&format!("d=I,i={id};"))
+                .count(),
+            2
+        );
+    }
+    #[test]
+    fn one_source_upload_serves_placements_at_different_depths_and_offsets() {
+        begin_kitty_frame();
+        clear_image_occlusions();
+        let p = scene("i=1,z=-1", (17, 23)).remove(0);
+        let mut upper = p.clone();
+        upper.z = 3;
+        upper.col = 2;
+        upper.cols = 3;
+        let first = native_protocol(&p).unwrap();
+        let second = native_protocol(&upper).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        let EncodedProtocol::CompressedKitty(image) = &*first else {
+            panic!("Kitty source")
+        };
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(8, 6)).unwrap();
+        terminal
+            .draw(|f| {
+                render_native_image(
+                    image,
+                    f,
+                    NativeGeometry::new(&p, Rect::default(), (10, 20)).unwrap(),
+                    f.area(),
+                );
+                render_native_image(
+                    image,
+                    f,
+                    NativeGeometry::new(&upper, Rect::default(), (10, 20)).unwrap(),
+                    f.area(),
+                );
+            })
+            .unwrap();
+        let mut output = Vec::new();
+        {
+            let mut host =
+                crate::backend::ratatui_backend::native_terminal::HostBackend::new(&mut output);
+            let buffer = terminal.backend().buffer();
+            host.draw((0..6).flat_map(|y| (0..8).map(move |x| (x, y, &buffer[(x, y)]))))
+                .unwrap();
+            Backend::flush(&mut host).unwrap();
+        }
+        let output = String::from_utf8(output).unwrap();
+        assert_eq!(output.matches("a=T").count(), 1);
+        assert_eq!(output.matches("a=p,").count(), 4);
+        assert_eq!(output.matches("z=-1,C=1").count(), 2);
+        assert_eq!(output.matches("z=3,C=1").count(), 2);
+        begin_kitty_frame();
+    }
+}

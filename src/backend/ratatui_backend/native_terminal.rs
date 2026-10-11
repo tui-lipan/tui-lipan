@@ -257,6 +257,8 @@ pub(crate) struct HostBackend<W: io::Write> {
     #[cfg(feature = "terminal-images")]
     placement_deletes: Vec<String>,
     #[cfg(feature = "terminal-images")]
+    retired_native_ids: Vec<u32>,
+    #[cfg(feature = "terminal-images")]
     placement_retirement: Option<(usize, usize)>,
     #[cfg(feature = "terminal-images")]
     uploads: Vec<(std::sync::Arc<super::renderers::image::KittyUpload>, usize)>,
@@ -274,6 +276,8 @@ impl<W: io::Write> HostBackend<W> {
             #[cfg(feature = "terminal-images")]
             placement_deletes: Vec::new(),
             #[cfg(feature = "terminal-images")]
+            retired_native_ids: Vec::new(),
+            #[cfg(feature = "terminal-images")]
             placement_retirement: None,
         }
     }
@@ -286,6 +290,7 @@ impl<W: io::Write> HostBackend<W> {
             && epoch == self.dropped.load(Ordering::Relaxed)
         {
             self.placement_deletes.drain(..retired);
+            self.retired_native_ids.clear();
         }
         #[cfg(feature = "terminal-images")]
         for (upload, epoch) in self.uploads.drain(..) {
@@ -344,6 +349,11 @@ impl<W: io::Write> Backend for HostBackend<W> {
             use super::renderers::image::{kitty_draw_pending, prepare_kitty_cells};
             let epoch = self.dropped.load(Ordering::Relaxed);
             self.placement_retirement = None;
+            self.retired_native_ids
+                .extend(super::renderers::image::take_retired_native_ids());
+            for id in &self.retired_native_ids {
+                write!(self.backend, "\x1b_Ga=d,q=2,d=I,i={id};\x1b\\")?;
+            }
             for delete in &self.placement_deletes {
                 self.backend.write_all(delete.as_bytes())?;
             }
