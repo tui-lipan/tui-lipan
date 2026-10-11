@@ -107,7 +107,7 @@ impl Component for PatchLayers {
                 w: 40,
                 h: 12,
             },
-            Canvas::new(),
+            Animated::new(Canvas::new()),
         );
         VStack::new()
             .child(Text::new("t: text | b: block | n: image only | q: quit"))

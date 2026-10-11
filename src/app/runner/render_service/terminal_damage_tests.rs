@@ -247,9 +247,59 @@ impl Component for Pane {
                 .into(),
             None => self.terminal(&self.screen).into(),
         };
+        if self.cfg.image_overlay == 8 {
+            let border = crate::widgets::Frame::new()
+                .padding(0)
+                .style(Style::default().fg(Color::White))
+                .child(Text::new(""));
+            return crate::widgets::Canvas::new()
+                .child_at(
+                    viewport(),
+                    crate::widgets::Frame::new().padding(0).child(body),
+                )
+                .child_at(viewport(), crate::widgets::Animated::new(border))
+                .into();
+        }
+        if self.cfg.image_overlay == 10 {
+            return crate::widgets::Canvas::new()
+                .child_at(viewport(), body)
+                .child_at(
+                    Rect {
+                        x: 5,
+                        y: 2,
+                        w: 0,
+                        h: 3,
+                    },
+                    crate::widgets::PanView::new().clamp(false).child(
+                        crate::widgets::Frame::new()
+                            .width(crate::style::Length::Px(COLS))
+                            .height(crate::style::Length::Px(ROWS))
+                            .style(Style::default().bg(Color::Red)),
+                    ),
+                )
+                .into();
+        }
         if self.cfg.image_overlay != 0 {
             let overlay: Element = if self.cfg.image_overlay == 4 {
                 crate::widgets::Canvas::new().into()
+            } else if self.cfg.image_overlay == 5 {
+                crate::widgets::Animated::new(crate::widgets::Canvas::new()).into()
+            } else if self.cfg.image_overlay == 6 {
+                crate::widgets::Animated::new(
+                    Text::new("COVER").style(Style::default().bg(Color::Red)),
+                )
+                .into()
+            } else if self.cfg.image_overlay == 7 {
+                crate::widgets::Animated::new(crate::widgets::Canvas::new())
+                    .opacity(0.5)
+                    .into()
+            } else if self.cfg.image_overlay == 9 {
+                crate::widgets::Frame::new()
+                    .border(false)
+                    .padding(0)
+                    .footer(crate::widgets::BorderLabels::new().center("COVER"))
+                    .child(Text::new(""))
+                    .into()
             } else if self.cfg.image_overlay != 2 {
                 let style = if self.cfg.image_overlay == 1 {
                     Style::default().bg(Color::Red)
@@ -1150,7 +1200,7 @@ fn an_unchanged_image_pane_survives_an_unrelated_terminal_update() {
 fn ordinary_overlays_cover_image_pixels_without_covering_the_anchor() {
     use base64::Engine as _;
     let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
-    for (image_overlay, stacked) in [0, 1, 2, 3, 4]
+    for (image_overlay, stacked) in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         .into_iter()
         .flat_map(|overlay| [false, true].map(|stacked| (overlay, stacked)))
     {
@@ -1192,11 +1242,17 @@ fn ordinary_overlays_cover_image_pixels_without_covering_the_anchor() {
         if image_overlay != 0 || !stacked {
             assert_eq!(
                 native,
-                matches!(image_overlay, 0 | 4),
+                matches!(image_overlay, 0 | 4 | 5 | 8 | 10),
                 "native placements may not cover a later widget"
             );
         }
-        if matches!(image_overlay, 1..=3) {
+        if image_overlay == 9 {
+            assert!(
+                output.contains("COVER"),
+                "the plain frame footer must reach the host: {output:?}"
+            );
+        }
+        if matches!(image_overlay, 1..=3 | 6) {
             assert!(
                 output.contains("COVER"),
                 "the overlay must reach the host: {output:?}"
