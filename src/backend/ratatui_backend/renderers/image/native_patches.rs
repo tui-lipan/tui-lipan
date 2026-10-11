@@ -18,16 +18,21 @@ pub(crate) struct NativeImageLease {
 impl NativeImageLease {
     fn id(&self) -> Option<u32> {
         self.allocation
-            .get_or_init(|| {
-                NEXT_NATIVE_ID
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| {
-                        (id < u64::from(u32::MAX)).then_some(id + 1)
-                    })
-                    .ok()
-                    .map(|id| (id as u32, std::thread::current().id()))
-            })
+            .get_or_init(|| allocate_native_id().map(|id| (id, std::thread::current().id())))
             .map(|(id, _)| id)
     }
+}
+
+fn allocate_native_id() -> Option<u32> {
+    let mut id = NEXT_NATIVE_ID.load(Ordering::Relaxed);
+    while id < u64::from(u32::MAX) {
+        match NEXT_NATIVE_ID.compare_exchange_weak(id, id + 1, Ordering::Relaxed, Ordering::Relaxed)
+        {
+            Ok(_) => return Some(id as u32),
+            Err(current) => id = current,
+        }
+    }
+    None
 }
 
 impl Drop for NativeImageLease {
