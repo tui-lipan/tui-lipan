@@ -300,6 +300,12 @@ impl Component for Pane {
                     .footer(crate::widgets::BorderLabels::new().center("COVER"))
                     .child(Text::new(""))
                     .into()
+            } else if self.cfg.image_overlay == 11 {
+                crate::widgets::Frame::new()
+                    .border(false)
+                    .padding(0)
+                    .child(Text::new(""))
+                    .into()
             } else if self.cfg.image_overlay != 2 {
                 let style = if self.cfg.image_overlay == 1 {
                     Style::default().bg(Color::Red)
@@ -1200,7 +1206,7 @@ fn an_unchanged_image_pane_survives_an_unrelated_terminal_update() {
 fn ordinary_overlays_cover_image_pixels_without_covering_the_anchor() {
     use base64::Engine as _;
     let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
-    for (image_overlay, stacked) in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    for (image_overlay, stacked) in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
         .into_iter()
         .flat_map(|overlay| [false, true].map(|stacked| (overlay, stacked)))
     {
@@ -1242,7 +1248,7 @@ fn ordinary_overlays_cover_image_pixels_without_covering_the_anchor() {
         if image_overlay != 0 || !stacked {
             assert_eq!(
                 native,
-                matches!(image_overlay, 0 | 4 | 5 | 8 | 10),
+                matches!(image_overlay, 0 | 4 | 5 | 8 | 10 | 11),
                 "native placements may not cover a later widget"
             );
         }

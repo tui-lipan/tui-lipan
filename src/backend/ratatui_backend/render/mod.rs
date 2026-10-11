@@ -1897,9 +1897,9 @@ fn native_frame_border_misses_content(
     frame: &crate::widgets::internal::FrameNode,
     content: Rect,
 ) -> bool {
-    // Restrict this exemption to a complete border ring. Plain frames can paint header/footer
-    // rows inside their body, and joined or decorated borders can extend beyond that ring.
-    if !native_frame_has_plain_border(frame, node.rect.h)
+    // Complete border rings stay outside their interior. Plain frames are transparent only
+    // without header/footer labels; joined and decorated borders can extend beyond their ring.
+    if !native_frame_geometry_is_plain(frame, node.rect.h)
         || !frame.decorations.is_empty()
         || frame.inner_style().is_some()
     {
@@ -1922,12 +1922,19 @@ fn native_frame_border_misses_content(
 }
 
 #[cfg(feature = "terminal-images")]
-fn native_frame_has_plain_border(frame: &crate::widgets::internal::FrameNode, height: u16) -> bool {
-    frame.border
-        && frame.border_edges == crate::style::BorderEdges::All
-        && !frame.join_frame
-        && !frame.compact
-        && (!frame.collapsible || height >= 3)
+fn native_frame_geometry_is_plain(
+    frame: &crate::widgets::internal::FrameNode,
+    height: u16,
+) -> bool {
+    !frame.compact && (!frame.collapsible || height >= 3) && native_frame_rows_are_unfilled(frame)
+}
+
+#[cfg(feature = "terminal-images")]
+fn native_frame_rows_are_unfilled(frame: &crate::widgets::internal::FrameNode) -> bool {
+    if frame.border {
+        return frame.border_edges == crate::style::BorderEdges::All && !frame.join_frame;
+    }
+    !frame.header.has_labels() && !frame.footer.has_labels() && frame.tab_titles.is_empty()
 }
 
 /// Rectangles of later Canvas terminal layers that paint above `owner`.
