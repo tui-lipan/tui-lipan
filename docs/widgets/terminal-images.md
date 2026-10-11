@@ -28,8 +28,11 @@ wrappers preserve native eligibility; their children are checked individually. U
 outside terminal content also preserve native rendering. Overlap checks include ancestor clipping
 and separately rendered modal and portal subtrees.
 Transparent overlays containing painted content also select composition, so positive-z host images
-cannot cover their text. The fallback emits individual image cells
-in overlapping branches; batched placeholder rows and ordinary placements cannot cover a later widget
+cannot cover their text. Overlay geometry uses Animated offsets only within its own paint layer,
+so translations above a portal do not move its separately rendered content. Eligibility checks each portal subtree once
+in paint order; an eligible terminal inside a portal can still forward native patches.
+The fallback emits individual image cells in overlapping branches; batched placeholder rows and
+ordinary placements cannot cover a later widget
 whose anchor leaves the image anchor intact. Opaque text backgrounds exclude the pixels they cover. Image-bearing trees use full tree paints even
 when only another pane reports damage, because each host draw replaces ordinary placements.
 Each source retains its upload state until the source and pending host output are released,
@@ -46,9 +49,10 @@ retained source images, so PNG output and replay do not depend on the host's ima
 Run `cargo run --example terminal_patch_layers --features terminal-images` to compare image-only,
 text-overlay, and filled-block scenes on a real host. The overlays leave the image anchor uncovered.
 Compare with the composed environment setting and resize the host in both modes.
-`TUI_LIPAN_PATCH_LAYER=t`, `b` or `m` selects an initial overlay in that example.
+`TUI_LIPAN_PATCH_LAYER=t`, `b`, `m` or `p` selects an initial overlay in that example.
 The `m` key opens a backdrop-free transparent modal over a positive-z image; its text must remain
-visible in both native and composed modes.
+visible in both native and composed modes. The `p` key hosts the terminal inside a root portal;
+its image should still use native placements when eligible.
 
 ## Setting the cell size
 

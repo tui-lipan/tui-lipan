@@ -2,7 +2,7 @@
 //!
 //! Run with `cargo run --example terminal_patch_layers --features terminal-images`.
 //! `t` shows opaque text, `b` a filled frame, `m` a transparent modal, `n` removes the
-//! overlay, and `q` quits.
+//! overlay, `p` hosts the terminal in a portal, and `q` quits.
 //! Compare with `TUI_LIPAN_TERMINAL_IMAGES=composed`; resize the host in both modes.
 use base64::Engine as _;
 use tui_lipan::prelude::*;
@@ -37,7 +37,7 @@ impl Component for PatchLayers {
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
-        let KeyCode::Char(key @ ('t' | 'b' | 'm' | 'n' | 'q')) = key.code else {
+        let KeyCode::Char(key @ ('t' | 'b' | 'm' | 'n' | 'p' | 'q')) = key.code else {
             return KeyUpdate::unhandled(Update::none());
         };
         ctx.link().send(key);
@@ -110,9 +110,23 @@ impl Component for PatchLayers {
             },
             Animated::new(Canvas::new()),
         );
+        if ctx.state.overlay == 'p' {
+            return VStack::new()
+                .child(Text::new("p: terminal in portal | n: image | q: quit"))
+                .child(
+                    Modal::new()
+                        .width(Length::Px(40))
+                        .height(Length::Px(12))
+                        .border(false)
+                        .padding(0)
+                        .frame_style(Style::default().bg(Color::Transparent))
+                        .child(canvas),
+                )
+                .into();
+        }
         let scene: Element = VStack::new()
             .child(Text::new(
-                "t: text | b: block | m: modal | n: image | q: quit",
+                "t: text | b: block | m: modal | p: portal | n: image | q: quit",
             ))
             .child(canvas.height(Length::Px(12)))
             .into();

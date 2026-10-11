@@ -1843,10 +1843,11 @@ pub(crate) fn terminal_native_layers_supported(
         w: content.width,
         h: content.height,
     };
-    let Some(rank) = tree.iter_with_overlays().position(|node| node.id == owner) else {
+    let mut layers = terminal_layer_paint_order(tree);
+    if !layers.any(|node| node.id == owner) {
         return false;
-    };
-    tree.iter_with_overlays().skip(rank + 1).all(|node| {
+    }
+    layers.all(|node| {
         let in_owner =
             std::iter::successors(node.parent, |id| tree.node(*id).parent).any(|id| id == owner);
         in_owner
@@ -1854,6 +1855,38 @@ pub(crate) fn terminal_native_layers_supported(
             || clipped_layer_rect(tree, node.id)
                 .intersection(&content)
                 .is_empty()
+    })
+}
+
+/// Match the renderer: main tree first, then overlay roots, skipping hoisted portal content in
+/// each enclosing pass. A declarative portal's subtree remains attached for reconciliation but
+/// paints only in the overlay pass.
+#[cfg(feature = "terminal-images")]
+fn terminal_layer_paint_order(tree: &NodeTree) -> impl Iterator<Item = &crate::core::node::Node> {
+    let mut stack: Vec<_> = tree
+        .overlay_roots()
+        .iter()
+        .rev()
+        .map(|root| root.id)
+        .collect();
+    stack.push(tree.root);
+    std::iter::from_fn(move || {
+        while let Some(id) = stack.pop() {
+            if !tree.is_valid(id) {
+                continue;
+            }
+            let node = tree.node(id);
+            let portal_content = node.kind.root_portal_content();
+            stack.extend(
+                node.children
+                    .iter()
+                    .rev()
+                    .copied()
+                    .filter(|child| Some(*child) != portal_content),
+            );
+            return Some(node);
+        }
+        None
     })
 }
 
@@ -2088,21 +2121,10 @@ fn animated_exposes_underlay(animated: &crate::widgets::internal::AnimatedNode) 
         && !animated.opacity_fg_only
 }
 
-/// Apply every render-only Animated offset on a node's ancestor chain.
+/// Apply render-only Animated offsets within this node's paint layer.
 #[cfg(feature = "terminal-images")]
 fn visually_offset_node_rect(tree: &NodeTree, id: NodeId) -> Rect {
-    let mut rect = tree.node(id).rect;
-    let mut current = Some(id);
-    while let Some(current_id) = current {
-        let node = tree.node(current_id);
-        if let NodeKind::Animated(animated) = &node.kind {
-            let (dx, dy) = animated.visual_position_offset_cells();
-            rect.x = rect.x.saturating_add(dx);
-            rect.y = rect.y.saturating_add(dy);
-        }
-        current = node.parent;
-    }
-    rect
+    render_offset_for_node(tree, id).apply_to_rect(tree.node(id).rect)
 }
 
 /// Drops the frame's Kitty occlusion list even if paint panics, so a later frame cannot
