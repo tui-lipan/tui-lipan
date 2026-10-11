@@ -22,7 +22,9 @@ On Kitty hosts, eligible natural-size images are uploaded once and placed as pix
 The host blends their z planes, avoiding pane-side composition and retransmission of unchanged pixels.
 
 Scaled images, mismatched cell sizes, overlapping images at the same z, and backdrop effects use
-pixel composition. Other host protocols still use the same encoding path as the
+pixel composition. Large sources that cannot use file or shared-memory transport stay on the
+asynchronous composed path; only inline uploads up to 128 KiB are prepared directly.
+Other host protocols still use the same encoding path as the
 [`Image`](display.md#image-requires-feature-image) widget: iTerm2, sixel, or half-blocks.
 A pane in a plain `xterm` shows pictures.
 

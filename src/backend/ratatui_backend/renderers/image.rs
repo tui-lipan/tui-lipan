@@ -853,6 +853,26 @@ impl CompressedKitty {
         id: u32,
         z_index: i32,
     ) -> Option<Self> {
+        Self::encode_pixels(image, size, id, z_index, usize::MAX)
+    }
+
+    fn new_native(
+        image: &image::DynamicImage,
+        size: ratatui::layout::Size,
+        id: u32,
+    ) -> Option<Self> {
+        // Native sources are prepared on the UI thread. Large inline uploads stay on the
+        // existing asynchronous path when named transports are unavailable or full.
+        Self::encode_pixels(image, size, id, 0, 128 * 1024)
+    }
+
+    fn encode_pixels(
+        image: &image::DynamicImage,
+        size: ratatui::layout::Size,
+        id: u32,
+        z_index: i32,
+        inline_limit: usize,
+    ) -> Option<Self> {
         let width = image.width();
         let height = image.height();
         let converted;
@@ -880,9 +900,7 @@ impl CompressedKitty {
                 Some(frame),
             ),
             None => {
-                let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
-                encoder.write_all(pixels).ok()?;
-                let compressed = encoder.finish().ok()?;
+                let compressed = compressed_kitty_payload(pixels, inline_limit)?;
                 (
                     kitty_transmit_compressed_format(
                         &compressed,
@@ -1158,6 +1176,16 @@ impl CompressedKitty {
         });
         Some(sequence)
     }
+}
+
+#[cfg(feature = "terminal-images")]
+fn compressed_kitty_payload(pixels: &[u8], limit: usize) -> Option<Vec<u8>> {
+    if pixels.len() > limit {
+        return None;
+    }
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+    encoder.write_all(pixels).ok()?;
+    encoder.finish().ok()
 }
 
 /// An encode stays pending until its escape survives clipping/effects and the native backend
@@ -1768,6 +1796,20 @@ struct ImageRenderCache {
 }
 
 impl ImageRenderCache {
+    #[cfg(feature = "terminal-images")]
+    fn remove_unattempted_native_images(&mut self) {
+        for index in (0..self.entries.len()).rev() {
+            let EncodedProtocol::CompressedKitty(image) = &*self.entries[index].protocol else {
+                continue;
+            };
+            if image.upload.native_lease.get().is_some()
+                && !image.upload.attempted.load(Ordering::Relaxed)
+            {
+                self.remove_at(index);
+            }
+        }
+    }
+
     #[cfg(feature = "terminal-images")]
     fn remove_unowned_native_images(&mut self) {
         for index in (0..self.entries.len()).rev() {

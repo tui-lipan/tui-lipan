@@ -174,6 +174,11 @@ pub(crate) fn render_native_terminal_images(
         })
         .collect::<Option<Vec<_>>>()
     else {
+        // A partially prepared batch must not reserve the file/shared-memory pool while the
+        // composed path needs it. Staged uploads from another pane keep their own references.
+        if let Ok(mut inner) = async_encoder().inner.lock() {
+            inner.cache.remove_unattempted_native_images();
+        }
         return false;
     };
     for (protocol, regions) in encoded {
@@ -285,7 +290,7 @@ fn encode_native_source(
         .and_then(|input| {
             CompressedKitty::from_file(input, (p.image.width(), p.image.height()), size, id, 0)
         })
-        .or_else(|| CompressedKitty::new(p.image.pixels()?, size, id, 0))?;
+        .or_else(|| CompressedKitty::new_native(p.image.pixels()?, size, id))?;
     let file_backed = encoded.upload.file.lock().ok()?.is_some();
     encoded.upload.native_lease.set(lease).ok()?;
     let bytes = if file_backed {
@@ -701,5 +706,60 @@ mod tests {
         assert_eq!(output.matches("z=-1,C=1").count(), 2);
         assert_eq!(output.matches("z=3,C=1").count(), 2);
         begin_kitty_frame();
+    }
+    #[test]
+    fn a_large_inline_source_keeps_the_asynchronous_composed_path() {
+        assert!(!shared_frame::host_reads_shared_memory());
+        let p = scene("i=1", (300, 300)).remove(0);
+        assert!(native_protocol(&p).is_none());
+        assert!(
+            CompressedKitty::new(
+                p.image.pixels().unwrap(),
+                ratatui::layout::Size::new(30, 15),
+                77,
+                0
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn abandoned_native_preparations_release_their_cache_resources() {
+        let lease = Arc::new(NativeImageLease::default());
+        let id = lease.id().unwrap();
+        let encoded = CompressedKitty::new(
+            &image::DynamicImage::new_rgba8(1, 1),
+            ratatui::layout::Size::new(1, 1),
+            id,
+            0,
+        )
+        .unwrap();
+        encoded.upload.native_lease.set(lease.clone()).ok().unwrap();
+        let upload = Arc::downgrade(&encoded.upload);
+        let key = RenderCacheKey {
+            source_hash: 1,
+            frame_index: 0,
+            width: 1,
+            height: 1,
+            crop: None,
+            background_rgb: None,
+            fit: ImageFit::Scale,
+            protocol: ImageProtocol::Auto,
+            resolved_protocol: ImageProtocol::Kitty,
+            z_index: 0,
+            backdrop: 0,
+        };
+        let mut cache = ImageRenderCache::default();
+        cache.insert(
+            1,
+            key,
+            Arc::new(EncodedProtocol::CompressedKitty(encoded)),
+            4,
+            CacheRetention::LatestOnly,
+        );
+        assert!(upload.upgrade().is_some());
+        cache.remove_unattempted_native_images();
+        assert!(upload.upgrade().is_none());
+        assert!(cache.entries.is_empty());
     }
 }
