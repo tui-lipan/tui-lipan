@@ -23,7 +23,8 @@ The host blends their z planes, avoiding pane-side composition and retransmissio
 
 Scaled images, mismatched or unmeasured host cell sizes, overlapping images at the same z,
 and backdrop effects use pixel composition. An overlapping later widget branch also uses composition
-so opaque text and filled blocks cover the image. That fallback emits individual image cells
+so opaque text and filled blocks cover the image. Nonpainting Canvas hosts preserve native
+eligibility; their children are checked individually. The fallback emits individual image cells
 in overlapping branches; batched placeholder rows and ordinary placements cannot cover a later widget
 whose anchor leaves the image anchor intact. Opaque text backgrounds exclude the pixels they cover. Image-bearing trees use full tree paints even
 when only another pane reports damage, because each host draw replaces ordinary placements.

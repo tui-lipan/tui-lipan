@@ -1841,10 +1841,27 @@ pub(crate) fn terminal_native_layers_supported(
         let in_owner =
             std::iter::successors(node.parent, |id| tree.node(*id).parent).any(|id| id == owner);
         in_owner
+            || nonpainting_native_layer(node)
             || visually_offset_node_rect(tree, node.id)
                 .intersection(&content)
                 .is_empty()
     })
+}
+
+#[cfg(feature = "terminal-images")]
+fn nonpainting_native_layer(node: &crate::core::node::Node) -> bool {
+    let NodeKind::Canvas(canvas) = &node.kind else {
+        return false;
+    };
+    // An always-mounted popup host need not paint. Its descendants are checked separately,
+    // so ignoring this container cannot hide text, pictures or filled widgets inside it.
+    let style = resolve_base_style(node.active_theme(), canvas.style);
+    style.bg.is_none()
+        && style.fg_transform.is_none()
+        && style.bg_transform.is_none()
+        && style.dim_amount.is_none()
+        && style.tint.is_none()
+        && style.contrast_policy.is_none()
 }
 
 /// Rectangles of later Canvas terminal layers that paint above `owner`.
