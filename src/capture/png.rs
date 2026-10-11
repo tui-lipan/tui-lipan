@@ -12,6 +12,8 @@ use crate::style::Color;
 
 mod boxdraw;
 mod font;
+mod underlays;
+pub(super) use underlays::visible_image_underlays;
 
 use font::FontRenderer;
 

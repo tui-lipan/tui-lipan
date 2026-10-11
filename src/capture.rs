@@ -374,6 +374,18 @@ impl CapturedCell {
 }
 
 impl CapturedFrame {
+    /// Original image cells needed to preserve PNG rendering, one row-major array per image.
+    ///
+    /// Omit text hidden by opaque cell-filling image planes. Glyph spans, private-use icon room,
+    /// and the final cursor layer use the PNG renderer's own layout rules. Non-block cursors keep
+    /// original styles and anonymous whitespace of the same span when the text itself is hidden.
+    /// Aspect-fitted images conservatively retain underlays because capture fonts can change
+    /// their coverage. Pixel buffers are unchanged; this is not pixel-content redaction.
+    #[cfg(feature = "ui-snapshot-png")]
+    pub fn visible_image_underlays(&self) -> Vec<Vec<Option<CapturedCell>>> {
+        png::visible_image_underlays(self)
+    }
+
     /// Encode this frame as a PNG byte buffer.
     ///
     /// With [`PngTextRenderer::Auto`], text is rendered with a discovered system
