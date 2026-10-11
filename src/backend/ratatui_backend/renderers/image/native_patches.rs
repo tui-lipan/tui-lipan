@@ -3,6 +3,26 @@
 use super::*;
 use crate::widgets::{TerminalImageCrop, TerminalImagePlacement};
 
+thread_local! {
+    static NATIVE_LAYERS_SUPPORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+pub(super) fn terminal_image_rows_can_batch() -> bool {
+    NATIVE_LAYERS_SUPPORTED.with(|slot| slot.get())
+}
+
+pub(crate) struct NativeLayerScope(bool);
+
+pub(crate) fn native_layer_scope(supported: bool) -> NativeLayerScope {
+    NativeLayerScope(NATIVE_LAYERS_SUPPORTED.with(|slot| slot.replace(supported)))
+}
+
+impl Drop for NativeLayerScope {
+    fn drop(&mut self) {
+        NATIVE_LAYERS_SUPPORTED.with(|slot| slot.set(self.0));
+    }
+}
+
 static NEXT_NATIVE_ID: AtomicU64 = AtomicU64::new(1 << 31);
 type RetiredNativeIds = HashMap<std::thread::ThreadId, Vec<u32>>;
 fn retired_ids() -> &'static Mutex<RetiredNativeIds> {
@@ -12,14 +32,38 @@ fn retired_ids() -> &'static Mutex<RetiredNativeIds> {
 
 #[derive(Default)]
 pub(crate) struct NativeImageLease {
-    allocation: OnceLock<Option<(u32, std::thread::ThreadId)>>,
+    allocation: OnceLock<Option<Arc<NativeImageAllocation>>>,
+    protocol: Mutex<Option<Arc<EncodedProtocol>>>,
 }
 
 impl NativeImageLease {
     fn id(&self) -> Option<u32> {
+        self.allocation().map(|allocation| allocation.id)
+    }
+    pub(super) fn discard_unattempted(&self) {
+        // Cache cleanup already holds the encoder lock. Never wait on a source whose
+        // resolver may be holding its protocol lock while waiting for that encoder.
+        if let Ok(mut canonical) = self.protocol.try_lock() {
+            let unused = canonical.as_ref().is_some_and(|protocol| {
+                Arc::strong_count(protocol) == 1 && matches!(&**protocol, EncodedProtocol::CompressedKitty(image)
+                    if !image.upload.attempted.load(Ordering::Relaxed) && Arc::strong_count(&image.upload) == 1)
+            });
+            if unused {
+                *canonical = None;
+            }
+        }
+    }
+    fn allocation(&self) -> Option<Arc<NativeImageAllocation>> {
         self.allocation
-            .get_or_init(|| allocate_native_id().map(|id| (id, std::thread::current().id())))
-            .map(|(id, _)| id)
+            .get_or_init(|| {
+                allocate_native_id().map(|id| {
+                    Arc::new(NativeImageAllocation {
+                        id,
+                        owner: std::thread::current().id(),
+                    })
+                })
+            })
+            .clone()
     }
 }
 
@@ -35,16 +79,24 @@ fn allocate_native_id() -> Option<u32> {
     None
 }
 
-impl Drop for NativeImageLease {
+struct NativeImageAllocation {
+    id: u32,
+    owner: std::thread::ThreadId,
+}
+
+pub(super) struct NativeImageOwnership {
+    _allocation: Arc<NativeImageAllocation>,
+    pub(super) source: std::sync::Weak<NativeImageLease>,
+}
+
+impl Drop for NativeImageAllocation {
     fn drop(&mut self) {
-        if let Some(Some((id, owner))) = self.allocation.get() {
-            retired_ids()
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .entry(*owner)
-                .or_default()
-                .push(*id);
-        }
+        retired_ids()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(self.owner)
+            .or_default()
+            .push(self.id);
     }
 }
 
@@ -157,8 +209,10 @@ pub(crate) fn render_native_terminal_images(
     if placements.is_empty() || !native_scene_supported(clip) {
         return false;
     }
-    let cell = image_support::host_cell_size();
-    let Some(geometry) = scene_geometry(placements, content, (cell.width, cell.height)) else {
+    let Some((width, height)) = image_support::measured_host_cell_size() else {
+        return false;
+    };
+    let Some(geometry) = scene_geometry(placements, content, (width, height)) else {
         return false;
     };
     let mut holes = IMAGE_OCCLUSIONS.with(|slot| slot.borrow().clone());
@@ -179,6 +233,9 @@ pub(crate) fn render_native_terminal_images(
         if let Ok(mut inner) = async_encoder().inner.lock() {
             inner.cache.remove_unattempted_native_images();
         }
+        for placement in placements {
+            placement.image.native_lease().discard_unattempted();
+        }
         return false;
     };
     for (protocol, regions) in encoded {
@@ -191,7 +248,10 @@ pub(crate) fn render_native_terminal_images(
 }
 
 fn native_scene_supported(clip: ratatui::layout::Rect) -> bool {
-    if capturing_images() || image_support::image_rendering_suspended() {
+    if capturing_images()
+        || image_support::image_rendering_suspended()
+        || !NATIVE_LAYERS_SUPPORTED.with(|slot| slot.get())
+    {
         return false;
     }
     if std::env::var("TUI_LIPAN_TERMINAL_IMAGES").is_ok_and(|mode| mode == "composed") {
@@ -241,6 +301,12 @@ fn native_protocol(p: &TerminalImagePlacement) -> Option<Arc<EncodedProtocol>> {
         .hash(&mut hash);
     let stream = hash.finish();
     let lease = p.image.native_lease();
+    // The source owns one canonical protocol independently of the evictable render cache.
+    // Uploads own only the allocation, so this cannot form an Arc cycle with the source.
+    let mut canonical = lease.protocol.lock().ok()?;
+    if let Some(protocol) = canonical.as_ref() {
+        return Some(Arc::clone(protocol));
+    }
     let id = lease.id()?;
     id.hash(&mut hash);
     (p.image.source_hash(), p.image.width(), p.image.height()).hash(&mut hash);
@@ -259,9 +325,10 @@ fn native_protocol(p: &TerminalImagePlacement) -> Option<Arc<EncodedProtocol>> {
     };
     let encoder = async_encoder();
     if let Some(encoded) = encoder.cache_get(&key) {
+        *canonical = Some(Arc::clone(&encoded));
         return Some(encoded);
     }
-    let (protocol, bytes) = encode_native_source(p, id, lease)?;
+    let (protocol, bytes) = encode_native_source(p, id, Arc::clone(&lease))?;
     let mut inner = encoder.inner.lock().ok()?;
     inner.cache.insert(
         stream,
@@ -273,6 +340,7 @@ fn native_protocol(p: &TerminalImagePlacement) -> Option<Arc<EncodedProtocol>> {
     inner
         .cache
         .mark_terminal_owner(&key, p.image.image_lifetime());
+    *canonical = Some(Arc::clone(&protocol));
     Some(protocol)
 }
 
@@ -292,7 +360,14 @@ fn encode_native_source(
         })
         .or_else(|| CompressedKitty::new_native(p.image.pixels()?, size, id))?;
     let file_backed = encoded.upload.file.lock().ok()?.is_some();
-    encoded.upload.native_lease.set(lease).ok()?;
+    encoded
+        .upload
+        .native_lease
+        .set(NativeImageOwnership {
+            _allocation: lease.allocation()?,
+            source: Arc::downgrade(&lease),
+        })
+        .ok()?;
     let bytes = if file_backed {
         1024
     } else {
@@ -583,7 +658,10 @@ mod tests {
         encoded
             .upload
             .native_lease
-            .set(Arc::clone(&lease))
+            .set(NativeImageOwnership {
+                _allocation: lease.allocation().unwrap(),
+                source: Arc::downgrade(&lease),
+            })
             .ok()
             .unwrap();
         let upload = Arc::clone(&encoded.upload);
@@ -766,6 +844,136 @@ mod tests {
         begin_kitty_frame();
     }
     #[test]
+    fn same_anchor_depths_emit_one_upload_before_both_placements() {
+        assert_native_upload_lifecycle(false);
+    }
+
+    #[test]
+    fn cache_eviction_between_resolutions_preserves_one_host_upload() {
+        assert_native_upload_lifecycle(true);
+    }
+
+    fn assert_native_upload_lifecycle(evict: bool) {
+        begin_kitty_frame();
+        clear_image_occlusions();
+        let p = scene("i=1,z=0", (10, 20)).remove(0);
+        let mut upper = p.clone();
+        upper.z = 1;
+        let first = native_protocol(&p).unwrap();
+        if evict {
+            let mut inner = async_encoder().inner.lock().unwrap();
+            inner.cache.remove_unattempted_native_images();
+            while !inner.cache.entries.is_empty() {
+                inner.cache.remove_at(0);
+            }
+            inner.cache.remove_unattempted_native_images();
+        }
+        let second = native_protocol(&upper).unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(2, 1)).unwrap();
+        terminal
+            .draw(|f| {
+                for (protocol, placement) in [(&first, &p), (&second, &upper)] {
+                    let EncodedProtocol::CompressedKitty(image) = &**protocol else {
+                        panic!("Kitty source")
+                    };
+                    render_native_image(
+                        image,
+                        f,
+                        NativeGeometry::new(placement, Rect::default(), (10, 20)).unwrap(),
+                        f.area(),
+                    );
+                }
+            })
+            .unwrap();
+        let mut output = Vec::new();
+        {
+            let mut host =
+                crate::backend::ratatui_backend::native_terminal::HostBackend::new(&mut output);
+            let buffer = terminal.backend().buffer();
+            host.draw((0..2).map(|x| (x, 0, &buffer[(x, 0)]))).unwrap();
+            Backend::flush(&mut host).unwrap();
+        }
+        let output = String::from_utf8(output).unwrap();
+        assert_eq!(output.matches("a=T").count(), 1, "{output:?}");
+        assert_eq!(output.matches("a=p,").count(), 2);
+        assert!(output.find("a=T").unwrap() < output.find("a=p,").unwrap());
+        let EncodedProtocol::CompressedKitty(image) = &*first else {
+            unreachable!()
+        };
+        assert!(
+            image.pending_transmission().is_none(),
+            "only the emitted upload is acknowledged"
+        );
+        begin_kitty_frame();
+    }
+
+    #[test]
+    fn discarded_native_upload_retries_after_cache_eviction() {
+        begin_kitty_frame();
+        let p = scene("i=1,z=0", (10, 20)).remove(0);
+        let protocol = native_protocol(&p).unwrap();
+        let EncodedProtocol::CompressedKitty(image) = &*protocol else {
+            unreachable!()
+        };
+        let mut frame = ratatui::Terminal::new(ratatui::backend::TestBackend::new(1, 1)).unwrap();
+        frame
+            .draw(|f| {
+                render_native_image(
+                    image,
+                    f,
+                    NativeGeometry::new(&p, Rect::default(), (10, 20)).unwrap(),
+                    f.area(),
+                )
+            })
+            .unwrap();
+        let cell = &frame.backend().buffer()[(0, 0)];
+        let (mut host, state) =
+            crate::backend::ratatui_backend::native_terminal::buffered_test_output();
+        host.draw(std::iter::once((0, 0, cell))).unwrap();
+        crate::app::job_control::with_released_terminal(&state, || {
+            Backend::flush(&mut host).unwrap()
+        });
+        assert!(host.test_output().is_empty());
+        assert!(image.pending_transmission().is_some());
+        {
+            let mut inner = async_encoder().inner.lock().unwrap();
+            while !inner.cache.entries.is_empty() {
+                inner.cache.remove_at(0);
+            }
+        }
+        assert!(Arc::ptr_eq(&protocol, &native_protocol(&p).unwrap()));
+        host.draw(std::iter::once((0, 0, cell))).unwrap();
+        Backend::flush(&mut host).unwrap();
+        let output = String::from_utf8(host.test_output()).unwrap();
+        assert_eq!(output.matches("a=T").count(), 1);
+        assert_eq!(output.matches("a=p,").count(), 1);
+        assert!(output.find("a=T").unwrap() < output.find("a=p,").unwrap());
+        assert!(image.pending_transmission().is_none());
+        begin_kitty_frame();
+    }
+
+    #[test]
+    fn matching_guessed_cells_cannot_enable_native_placements() {
+        let p = scene("i=1", (10, 20));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(2, 1)).unwrap();
+        for measured in [false, true] {
+            let _host = image_support::test_kitty_host((10, 20), measured);
+            begin_kitty_frame();
+            terminal
+                .draw(|f| {
+                    assert_eq!(
+                        render_native_terminal_images(f, &p, Rect::default(), f.area()),
+                        measured
+                    );
+                })
+                .unwrap();
+        }
+        begin_kitty_frame();
+    }
+
+    #[test]
     fn a_large_inline_source_keeps_the_asynchronous_composed_path() {
         assert!(!shared_frame::host_reads_shared_memory());
         let p = scene("i=1", (300, 300)).remove(0);
@@ -792,7 +1000,15 @@ mod tests {
             0,
         )
         .unwrap();
-        encoded.upload.native_lease.set(lease.clone()).ok().unwrap();
+        encoded
+            .upload
+            .native_lease
+            .set(NativeImageOwnership {
+                _allocation: lease.allocation().unwrap(),
+                source: Arc::downgrade(&lease),
+            })
+            .ok()
+            .unwrap();
         let upload = Arc::downgrade(&encoded.upload);
         let key = RenderCacheKey {
             source_hash: 1,

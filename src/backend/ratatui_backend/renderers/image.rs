@@ -2,7 +2,7 @@
 mod native_patches;
 #[cfg(feature = "terminal-images")]
 pub(crate) use native_patches::{
-    NativeImageLease, render_native_terminal_images, take_retired_native_ids,
+    NativeImageLease, native_layer_scope, render_native_terminal_images, take_retired_native_ids,
 };
 
 #[cfg(feature = "terminal-images")]
@@ -834,6 +834,40 @@ impl EncodedProtocol {
     }
 }
 
+/// A later ordinary widget can overwrite individual anchors. Batched rows would leave Skip
+/// cells, or an ordinary placement anchored outside the widget, covering its middle instead.
+#[cfg(feature = "terminal-images")]
+fn terminal_image_cell_spans(spans: Vec<(u16, u16)>) -> Vec<(u16, u16)> {
+    if native_patches::terminal_image_rows_can_batch() {
+        return spans;
+    }
+    spans
+        .into_iter()
+        .flat_map(|(left, right)| (left..right).map(|x| (x, x + 1)))
+        .collect()
+}
+
+#[cfg(feature = "terminal-images")]
+fn record_painted_image_holes(area: ratatui::layout::Rect, holes: Vec<ratatui::layout::Rect>) {
+    PAINTED_IMAGE_OCCLUSIONS.with(|slot| {
+        let mut painted = slot.borrow_mut();
+        for hole in holes {
+            let intersection = area.intersection(hole);
+            if intersection.width > 0 && intersection.height > 0 && !painted.contains(&intersection)
+            {
+                painted.push(intersection);
+            }
+        }
+    });
+}
+
+#[cfg(feature = "terminal-images")]
+struct PlaceholderSpan {
+    anchor: (u16, u16),
+    source: (u16, u16),
+    width: u16,
+}
+
 #[cfg(feature = "terminal-images")]
 struct CompressedKitty {
     id: u32,
@@ -985,9 +1019,6 @@ impl CompressedKitty {
         origin: (i32, i32),
         clip: ratatui::layout::Rect,
     ) {
-        const UNIT_WIDTH: CellDiffOption =
-            CellDiffOption::ForcedWidth(NonZeroU16::new(1).expect("one is non-zero"));
-
         let (origin_x, origin_y) = origin;
         let row_start = origin_x.max(i32::from(clip.x));
         let row_end = (origin_x + i32::from(self.size.width)).min(i32::from(clip.right()));
@@ -1017,61 +1048,67 @@ impl CompressedKitty {
                 continue;
             }
             let row_y = row_y as u16;
-            let spans = uncovered_x_spans(row_start, row_end, row_y, &holes);
+            let spans =
+                terminal_image_cell_spans(uncovered_x_spans(row_start, row_end, row_y, &holes));
             for &(start, end) in &spans {
-                let span_width = end.saturating_sub(start);
-                if span_width == 0 {
-                    continue;
-                }
-                // One walk per span, from that span's first cell. A gap in the *same* cell's
-                // sequence is invisible to the host: placeholders are a consecutive run, and
-                // jumping the cursor mid-walk never starts a second one, which left everything
-                // to the right of a modal black.
-                symbol.clear();
-                if let Some(sequence) = transmit.take() {
-                    symbol.push_str(&sequence);
-                }
-                let col = (i32::from(start) - origin_x) as u16;
-                let right = span_width.saturating_sub(1);
-                let _ = write!(
-                    symbol,
-                    "\x1b[s{}\u{10EEEE}{}{}{}",
-                    self.id_color,
-                    crate::widgets::kitty_diacritic(y),
-                    crate::widgets::kitty_diacritic(col),
-                    crate::widgets::kitty_diacritic(self.id_extra),
-                );
-                for _ in 1..span_width {
-                    symbol.push(crate::widgets::KITTY_PLACEHOLDER);
-                }
-                let _ = write!(symbol, "\x1b[u\x1b[{right}C");
-
-                for x in start.saturating_add(1)..end {
-                    if let Some(cell) = f.buffer_mut().cell_mut((x, row_y)) {
-                        cell.set_diff_option(CellDiffOption::Skip);
-                    }
-                }
-                if let Some(cell) = f.buffer_mut().cell_mut((start, row_y)) {
-                    cell.set_symbol(&symbol).set_diff_option(UNIT_WIDTH);
-                }
-                IMAGE_PLACEHOLDERS_PAINTED.set(true);
-                painted_placeholders = true;
+                let span = PlaceholderSpan {
+                    anchor: (start, row_y),
+                    source: ((i32::from(start) - origin_x) as u16, y),
+                    width: end.saturating_sub(start),
+                };
+                painted_placeholders |=
+                    self.paint_placeholder_span(f, span, &mut transmit, &mut symbol);
             }
         }
         if painted_placeholders {
-            PAINTED_IMAGE_OCCLUSIONS.with(|slot| {
-                let mut painted = slot.borrow_mut();
-                for hole in holes {
-                    let intersection = area.intersection(hole);
-                    if intersection.width > 0
-                        && intersection.height > 0
-                        && !painted.contains(&intersection)
-                    {
-                        painted.push(intersection);
-                    }
-                }
-            });
+            record_painted_image_holes(area, holes);
         }
+    }
+
+    fn paint_placeholder_span(
+        &self,
+        f: &mut ratatui::Frame<'_>,
+        span: PlaceholderSpan,
+        transmit: &mut Option<String>,
+        symbol: &mut String,
+    ) -> bool {
+        const UNIT_WIDTH: CellDiffOption =
+            CellDiffOption::ForcedWidth(NonZeroU16::new(1).expect("one is non-zero"));
+        if span.width == 0 {
+            return false;
+        }
+        // One walk per span, from that span's first cell. A gap in the *same* cell's
+        // sequence is invisible to the host: placeholders are a consecutive run, and
+        // jumping the cursor mid-walk never starts a second one, which left everything
+        // to the right of a modal black.
+        symbol.clear();
+        if let Some(sequence) = transmit.take() {
+            symbol.push_str(&sequence);
+        }
+        let right = span.width.saturating_sub(1);
+        let _ = write!(
+            symbol,
+            "\x1b[s{}\u{10EEEE}{}{}{}",
+            self.id_color,
+            crate::widgets::kitty_diacritic(span.source.1),
+            crate::widgets::kitty_diacritic(span.source.0),
+            crate::widgets::kitty_diacritic(self.id_extra),
+        );
+        for _ in 1..span.width {
+            symbol.push(crate::widgets::KITTY_PLACEHOLDER);
+        }
+        let _ = write!(symbol, "\x1b[u\x1b[{right}C");
+
+        for x in span.anchor.0.saturating_add(1)..span.anchor.0.saturating_add(span.width) {
+            if let Some(cell) = f.buffer_mut().cell_mut((x, span.anchor.1)) {
+                cell.set_diff_option(CellDiffOption::Skip);
+            }
+        }
+        if let Some(cell) = f.buffer_mut().cell_mut(span.anchor) {
+            cell.set_symbol(symbol).set_diff_option(UNIT_WIDTH);
+        }
+        IMAGE_PLACEHOLDERS_PAINTED.set(true);
+        true
     }
 
     // Ordinary placements leave text cells intact and allow several exact z planes per cell.
@@ -1085,7 +1122,9 @@ impl CompressedKitty {
         holes.extend(super::image_effects::pending_image_occlusions());
         let mut transmit = self.pending_transmission();
         for y in clip.y..clip.bottom() {
-            for (left, right) in uncovered_x_spans(clip.x, clip.right(), y, &holes) {
+            for (left, right) in
+                terminal_image_cell_spans(uncovered_x_spans(clip.x, clip.right(), y, &holes))
+            {
                 self.place_row(f, origin, (left, right, y), &mut transmit);
             }
         }
@@ -1196,7 +1235,7 @@ fn compressed_kitty_payload(pixels: &[u8], limit: usize) -> Option<Vec<u8>> {
 /// confirms a flush without failed or discarded output. Offscreen paints cannot consume it.
 #[cfg(feature = "terminal-images")]
 pub(crate) struct KittyUpload {
-    native_lease: OnceLock<Arc<NativeImageLease>>,
+    native_lease: OnceLock<native_patches::NativeImageOwnership>,
     transmit: Mutex<Option<String>>,
     attempted: AtomicBool,
     placeholder_prefix: String,
@@ -1401,6 +1440,7 @@ fn prepare_placed_cell<'a>(
             command.find("\x1b\\").map(|end| &command[..end + 2])
         })
         .collect();
+    let mut transmissions = String::new();
     PENDING_KITTY_PLACEMENTS.with(|pending| {
         let pending = pending.borrow();
         let Some(placements) = pending.get(&anchor) else {
@@ -1417,19 +1457,19 @@ fn prepare_placed_cell<'a>(
             let Some(sequence) = sequence.as_ref() else {
                 continue;
             };
-            if uploads
+            // Strip every staged copy before adding one canonical upload for this anchor.
+            // Inserting inside the loop lets a later duplicate strip the sole surviving copy.
+            symbol = symbol.replace(sequence, "");
+            if !uploads
                 .iter()
                 .any(|upload| Arc::ptr_eq(upload, &placement.upload))
             {
-                symbol = symbol.replace(sequence, "");
-            } else {
-                if !symbol.contains(sequence) {
-                    symbol.insert_str(0, sequence);
-                }
+                transmissions.push_str(sequence);
                 uploads.push(Arc::clone(&placement.upload));
             }
         }
     });
+    symbol.insert_str(0, &transmissions);
     let mut cell = cell.clone();
     cell.set_symbol(&symbol);
     std::borrow::Cow::Owned(cell)
@@ -1818,7 +1858,15 @@ impl ImageRenderCache {
             if image.upload.native_lease.get().is_some()
                 && !image.upload.attempted.load(Ordering::Relaxed)
             {
+                let source = image
+                    .upload
+                    .native_lease
+                    .get()
+                    .and_then(|owner| owner.source.upgrade());
                 self.remove_at(index);
+                if let Some(source) = source {
+                    source.discard_unattempted();
+                }
             }
         }
     }
@@ -1833,7 +1881,7 @@ impl ImageRenderCache {
                 .upload
                 .native_lease
                 .get()
-                .is_some_and(|lease| Arc::strong_count(lease) == 1)
+                .is_some_and(|lease| lease.source.upgrade().is_none())
             {
                 self.remove_at(index);
             }

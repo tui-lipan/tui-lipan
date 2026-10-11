@@ -890,6 +890,16 @@ pub(crate) fn render_terminal_node(
         .copy_feedback
         .and_then(|feedback| feedback.active_range(node_id));
     #[cfg(feature = "terminal-images")]
+    let _native_layer_scope = (!term.images.is_empty()).then(|| {
+        crate::backend::ratatui_backend::renderers::image::native_layer_scope(
+            crate::backend::ratatui_backend::render::terminal_native_layers_supported(
+                state.ctx.tree,
+                node_id,
+                rrect.intersection(state.content),
+            ),
+        )
+    });
+    #[cfg(feature = "terminal-images")]
     let _image_occlusion_scope = (!term.images.is_empty()).then(|| {
         crate::backend::ratatui_backend::renderers::image::push_image_occlusions(
             crate::backend::ratatui_backend::render::terminal_image_layer_occlusions(

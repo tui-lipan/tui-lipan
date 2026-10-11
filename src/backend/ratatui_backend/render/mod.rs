@@ -1820,6 +1820,33 @@ fn render_hstack_node(
     render_hstack(f, &props, rect, rrect, clip_bounds, terminal_bg);
 }
 
+/// Ordinary widgets can erase composed image placeholders, but cannot cover a positive host
+/// placement. Until those widgets expose pixel occlusions, compose any overlapping later branch.
+#[cfg(feature = "terminal-images")]
+pub(crate) fn terminal_native_layers_supported(
+    tree: &NodeTree,
+    owner: NodeId,
+    content: ratatui::layout::Rect,
+) -> bool {
+    let content = Rect {
+        x: content.x as i16,
+        y: content.y as i16,
+        w: content.width,
+        h: content.height,
+    };
+    let Some(rank) = tree.iter().position(|node| node.id == owner) else {
+        return false;
+    };
+    tree.iter().skip(rank + 1).all(|node| {
+        let in_owner =
+            std::iter::successors(node.parent, |id| tree.node(*id).parent).any(|id| id == owner);
+        in_owner
+            || visually_offset_node_rect(tree, node.id)
+                .intersection(&content)
+                .is_empty()
+    })
+}
+
 /// Rectangles of later Canvas terminal layers that paint above `owner`.
 ///
 /// A Canvas child is the framework's absolute-positioned layer boundary. Terminal hosts use it for
@@ -1852,21 +1879,59 @@ pub(crate) fn terminal_image_layer_occlusions(
             if rank <= owner_rank {
                 return None;
             }
-            let parent_id = node.parent?;
-            let parent = tree.is_valid(parent_id).then(|| tree.node(parent_id))?;
-            if !matches!(parent.kind, NodeKind::Canvas(_))
-                || !terminal_layer_branch_is_opaque(tree, node.id, &owner_ancestors)
-                || !subtree_has_opaque_terminal(tree, node.id)
-            {
-                return None;
-            }
-
-            let rect = visually_offset_node_rect(tree, node.id)
-                .intersection(&visually_offset_node_rect(tree, parent_id))
-                .intersection(&content_rect);
-            (!rect.is_empty()).then(|| to_ratatui_rect(rect))
+            later_image_layer_rect(tree, node.id, &owner_ancestors, &content_rect)
         })
         .collect()
+}
+
+#[cfg(feature = "terminal-images")]
+fn later_image_layer_rect(
+    tree: &NodeTree,
+    id: NodeId,
+    owner_ancestors: &HashSet<NodeId>,
+    content_rect: &Rect,
+) -> Option<ratatui::layout::Rect> {
+    let node = tree.node(id);
+    // Paragraph backgrounds also cover blank cells inside their area.
+    if matches!(&node.kind, NodeKind::Text(text) if resolve_base_style(node.active_theme(), text.style).bg.is_some())
+        && terminal_layer_branch_is_opaque(tree, id, owner_ancestors)
+    {
+        let rect = clipped_layer_rect(tree, id).intersection(content_rect);
+        return (!rect.is_empty()).then(|| to_ratatui_rect(rect));
+    }
+    let parent_rect = opaque_terminal_layer_parent(tree, id, owner_ancestors)?;
+    let rect = visually_offset_node_rect(tree, id)
+        .intersection(&parent_rect)
+        .intersection(content_rect);
+    (!rect.is_empty()).then(|| to_ratatui_rect(rect))
+}
+
+#[cfg(feature = "terminal-images")]
+fn opaque_terminal_layer_parent(
+    tree: &NodeTree,
+    id: NodeId,
+    owner_ancestors: &HashSet<NodeId>,
+) -> Option<Rect> {
+    let node = tree.node(id);
+    let parent_id = node.parent?;
+    let parent = tree.is_valid(parent_id).then(|| tree.node(parent_id))?;
+    if !matches!(parent.kind, NodeKind::Canvas(_))
+        || !terminal_layer_branch_is_opaque(tree, id, owner_ancestors)
+        || !subtree_has_opaque_terminal(tree, id)
+    {
+        return None;
+    }
+
+    Some(visually_offset_node_rect(tree, parent_id))
+}
+
+#[cfg(feature = "terminal-images")]
+fn clipped_layer_rect(tree: &NodeTree, id: NodeId) -> Rect {
+    let mut rect = visually_offset_node_rect(tree, id);
+    for ancestor in std::iter::successors(tree.node(id).parent, |id| tree.node(*id).parent) {
+        rect = rect.intersection(&visually_offset_node_rect(tree, ancestor));
+    }
+    rect
 }
 
 /// Whether wrappers unique to this later layer leave it fully opaque.

@@ -21,8 +21,14 @@ pane separate host image IDs and clips placements to the visible pane and uncove
 On Kitty hosts, eligible natural-size images are uploaded once and placed as pixel-cropped patches.
 The host blends their z planes, avoiding pane-side composition and retransmission of unchanged pixels.
 
-Scaled images, mismatched cell sizes, overlapping images at the same z, and backdrop effects use
-pixel composition. Large sources that cannot use file or shared-memory transport stay on the
+Scaled images, mismatched or unmeasured host cell sizes, overlapping images at the same z,
+and backdrop effects use pixel composition. An overlapping later widget branch also uses composition
+so opaque text and filled blocks cover the image. That fallback emits individual image cells
+in overlapping branches; batched placeholder rows and ordinary placements cannot cover a later widget
+whose anchor leaves the image anchor intact. Opaque text backgrounds exclude the pixels they cover. Image-bearing trees use full tree paints even
+when only another pane reports damage, because each host draw replaces ordinary placements.
+Each source retains its upload state until the source and pending host output are released,
+independently of render-cache eviction. Large sources that cannot use file or shared-memory transport stay on the
 asynchronous composed path; only inline uploads up to 128 KiB are prepared directly.
 Other host protocols still use the same encoding path as the
 [`Image`](display.md#image-requires-feature-image) widget: iTerm2, sixel, or half-blocks.
@@ -31,6 +37,11 @@ A pane in a plain `xterm` shows pictures.
 For a controlled comparison or to diagnose host graphics behavior, launch the app with
 `TUI_LIPAN_TERMINAL_IMAGES=composed` to disable native patch placements. Captures always compose
 retained source images, so PNG output and replay do not depend on the host's image storage.
+
+Run `cargo run --example terminal_patch_layers --features terminal-images` to compare image-only,
+text-overlay, and filled-block scenes on a real host. The overlays leave the image anchor uncovered.
+Compare with the composed environment setting and resize the host in both modes.
+`TUI_LIPAN_PATCH_LAYER=t` or `b` selects an initial overlay in that example.
 
 ## Setting the cell size
 

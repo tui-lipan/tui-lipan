@@ -172,6 +172,7 @@ struct PaneCfg {
     focus_second: bool,
     /// Run on an inline surface rather than the alternate screen.
     inline: bool,
+    image_overlay: u8,
 }
 
 impl PaneCfg {
@@ -246,6 +247,35 @@ impl Component for Pane {
                 .into(),
             None => self.terminal(&self.screen).into(),
         };
+        if self.cfg.image_overlay != 0 {
+            let overlay: Element = if self.cfg.image_overlay != 2 {
+                let style = if self.cfg.image_overlay == 1 {
+                    Style::default().bg(Color::Red)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                Text::new("COVER").style(style).into()
+            } else {
+                crate::widgets::Frame::new()
+                    .border(false)
+                    .padding(0)
+                    .child(Text::new("COVER"))
+                    .style(Style::default().bg(Color::Red))
+                    .into()
+            };
+            return crate::widgets::Canvas::new()
+                .child_at(viewport(), body)
+                .child_at(
+                    Rect {
+                        x: 5,
+                        y: 2,
+                        w: 5,
+                        h: 3,
+                    },
+                    overlay,
+                )
+                .into();
+        }
         if self.cfg.live_title {
             VStack::new()
                 .child(Text::from_source(self.title.clone()))
@@ -1057,4 +1087,122 @@ fn planning_the_same_refresh_twice_agrees() {
         second.map(|plan| plan.rows),
         "planning twice should agree"
     );
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn an_unchanged_image_pane_survives_an_unrelated_terminal_update() {
+    let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
+    let mut harness = build(
+        PaneCfg {
+            second_terminal: true,
+            grid_rows: ROWS / 2,
+            ..PaneCfg::new()
+        },
+        SETUP,
+    );
+    harness
+        .screen
+        .borrow_mut()
+        .process_bytes(b"\x1b_Ga=T,f=32,s=1,v=1,i=919;/////w==\x1b\\");
+    harness.runner.core.tree.refresh_live_terminals_detailed();
+    harness.screen.borrow_mut().take_damage();
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+    let cursor = StdCell::new(None);
+    let buffer = harness.runner.with_render_context(&cursor, |ctx| {
+        terminal.draw(|f| render(f, ctx)).unwrap().buffer.clone()
+    });
+    harness.runner.last_frame_snapshot = Some(buffer);
+    let initial = terminal.backend().test_output().len();
+    harness
+        .second
+        .as_ref()
+        .unwrap()
+        .borrow_mut()
+        .process_bytes(b"\rX");
+    let refresh = harness.runner.core.tree.refresh_live_terminals_detailed();
+    let plan = harness.runner.plan_terminal_damage(&refresh, frame_area());
+    match &plan {
+        Ok(plan) => harness
+            .runner
+            .draw_terminal_damage(&mut terminal, plan)
+            .unwrap(),
+        Err(_) => {
+            harness
+                .runner
+                .with_render_context(&cursor, |ctx| terminal.draw(|f| render(f, ctx)).unwrap());
+        }
+    }
+    let output = terminal.backend().test_output();
+    let update = String::from_utf8_lossy(&output[initial..]);
+    assert!(update.contains('X'));
+    assert!(
+        update.contains("a=p,") || update.contains('\u{10EEEE}'),
+        "the unchanged image must be placed again: {update:?}"
+    );
+    assert_eq!(plan, Err(DamageRejection::HasImages));
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn ordinary_overlays_cover_image_pixels_without_covering_the_anchor() {
+    use base64::Engine as _;
+    let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
+    for (image_overlay, stacked) in [0, 1, 2, 3]
+        .into_iter()
+        .flat_map(|overlay| [false, true].map(|stacked| (overlay, stacked)))
+    {
+        let mut harness = build(
+            PaneCfg {
+                image_overlay,
+                ..PaneCfg::new()
+            },
+            b"\x1b[?25l\x1b[H",
+        );
+        harness
+            .screen
+            .borrow_mut()
+            .set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+        let payload =
+            base64::engine::general_purpose::STANDARD.encode([0, 255, 0, 255].repeat(120 * 100));
+        harness.screen.borrow_mut().process_bytes(
+            format!("\x1b_Ga=T,f=32,s=120,v=100,i=920,z=1;{payload}\x1b\\").as_bytes(),
+        );
+        if stacked {
+            harness
+                .screen
+                .borrow_mut()
+                .process_bytes(b"\x1b[H\x1b_Ga=p,i=920,p=2,z=2;\x1b\\");
+        }
+        harness.runner.core.tree.refresh_live_terminals_detailed();
+        let mut terminal =
+            crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+        let cursor = StdCell::new(None);
+        let rendered = harness.runner.with_render_context(&cursor, |ctx| {
+            terminal.draw(|f| render(f, ctx)).unwrap().buffer.clone()
+        });
+        let output = terminal.backend().test_output();
+        let output = String::from_utf8_lossy(&output);
+        let native = output
+            .split("\x1b_Ga=p,")
+            .skip(1)
+            .any(|command| !command.split("\x1b\\").next().unwrap().contains("c="));
+        if image_overlay != 0 || !stacked {
+            assert_eq!(
+                native,
+                image_overlay == 0,
+                "native placements may not cover a later widget"
+            );
+        }
+        if image_overlay != 0 {
+            assert!(
+                output.contains("COVER"),
+                "the overlay must reach the host: {output:?}"
+            );
+            let symbols: String = (5..10)
+                .map(|x| rendered[(x, 2)].symbol().to_owned())
+                .collect();
+            assert_eq!(symbols, "COVER", "widget {image_overlay}: {output:?}");
+        }
+    }
 }

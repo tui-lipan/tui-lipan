@@ -105,6 +105,12 @@ where
         if *snapshot.area() != frame_area || frame_area.width == 0 || frame_area.height == 0 {
             return Err(DamageRejection::NoMatchingRetainedFrame);
         }
+        // HostBackend replaces ordinary Kitty placements on every draw. A partial row walk
+        // cannot recreate images in an unchanged pane, so any image requires a full tree paint.
+        #[cfg(feature = "terminal-images")]
+        if self.core.tree.iter().any(|node| matches!(&node.kind, NodeKind::Terminal(terminal) if !terminal.images.is_empty())) {
+            return Err(DamageRejection::HasImages);
+        }
         let frame_top = i32::from(frame_area.y);
         let frame_bottom = frame_top + i32::from(frame_area.height);
         let mut rows = Vec::new();
