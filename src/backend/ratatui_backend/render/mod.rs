@@ -1843,10 +1843,10 @@ pub(crate) fn terminal_native_layers_supported(
         w: content.width,
         h: content.height,
     };
-    let Some(rank) = tree.iter().position(|node| node.id == owner) else {
+    let Some(rank) = tree.iter_with_overlays().position(|node| node.id == owner) else {
         return false;
     };
-    tree.iter().skip(rank + 1).all(|node| {
+    tree.iter_with_overlays().skip(rank + 1).all(|node| {
         let in_owner =
             std::iter::successors(node.parent, |id| tree.node(*id).parent).any(|id| id == owner);
         in_owner
@@ -2018,8 +2018,19 @@ fn opaque_terminal_layer_parent(
 #[cfg(feature = "terminal-images")]
 fn clipped_layer_rect(tree: &NodeTree, id: NodeId) -> Rect {
     let mut rect = visually_offset_node_rect(tree, id);
-    for ancestor in std::iter::successors(tree.node(id).parent, |id| tree.node(*id).parent) {
-        rect = rect.intersection(&visually_offset_node_rect(tree, ancestor));
+    let mut current = id;
+    // Portal content is painted separately. Its zero-sized placeholder and ancestors in the
+    // normal tree do not clip it; only ancestors within the overlay subtree do.
+    while !tree
+        .overlay_roots()
+        .iter()
+        .any(|overlay| overlay.id == current)
+    {
+        let Some(parent) = tree.node(current).parent else {
+            break;
+        };
+        rect = rect.intersection(&visually_offset_node_rect(tree, parent));
+        current = parent;
     }
     rect
 }

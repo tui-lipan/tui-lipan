@@ -1,7 +1,8 @@
 //! Host-visible regression scene for native Kitty image layers.
 //!
 //! Run with `cargo run --example terminal_patch_layers --features terminal-images`.
-//! `t` shows opaque text, `b` a filled frame, `n` removes the overlay, and `q` quits.
+//! `t` shows opaque text, `b` a filled frame, `m` a transparent modal, `n` removes the
+//! overlay, and `q` quits.
 //! Compare with `TUI_LIPAN_TERMINAL_IMAGES=composed`; resize the host in both modes.
 use base64::Engine as _;
 use tui_lipan::prelude::*;
@@ -36,7 +37,7 @@ impl Component for PatchLayers {
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut Context<Self>) -> KeyUpdate {
-        let KeyCode::Char(key @ ('t' | 'b' | 'n' | 'q')) = key.code else {
+        let KeyCode::Char(key @ ('t' | 'b' | 'm' | 'n' | 'q')) = key.code else {
             return KeyUpdate::unhandled(Update::none());
         };
         ctx.link().send(key);
@@ -109,10 +110,36 @@ impl Component for PatchLayers {
             },
             Animated::new(Canvas::new()),
         );
-        VStack::new()
-            .child(Text::new("t: text | b: block | n: image only | q: quit"))
+        let scene: Element = VStack::new()
+            .child(Text::new(
+                "t: text | b: block | m: modal | n: image | q: quit",
+            ))
             .child(canvas.height(Length::Px(12)))
-            .into()
+            .into();
+        if ctx.state.overlay == 'm' {
+            ZStack::new()
+                .child(scene)
+                .child(
+                    Modal::new()
+                        .width(Length::Percent(100))
+                        .height(Length::Percent(100))
+                        .border(false)
+                        .padding(0)
+                        .frame_style(Style::default().bg(Color::Transparent))
+                        .child(Canvas::new().child_at(
+                            Rect {
+                                x: 5,
+                                y: 3,
+                                w: 16,
+                                h: 1,
+                            },
+                            Text::new("TRANSPARENT TEXT").style(Style::default().fg(Color::White)),
+                        )),
+                )
+                .into()
+        } else {
+            scene
+        }
     }
 }
 
@@ -126,7 +153,7 @@ fn image_snapshot(cell: TerminalCellSize) -> TerminalRenderSnapshot {
     let pixels = [40, 190, 90, 255].repeat((width * height) as usize);
     let payload = base64::engine::general_purpose::STANDARD.encode(pixels);
     screen.process_bytes(
-        format!("\x1b_Ga=T,f=32,s={width},v={height},i=1,z=1;{payload}\x1b\\").as_bytes(),
+        format!("\x1b_Ga=T,f=32,s={width},v={height},i=1,z=2;{payload}\x1b\\").as_bytes(),
     );
     screen.render_snapshot()
 }
