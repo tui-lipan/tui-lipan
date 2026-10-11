@@ -1393,6 +1393,14 @@ fn prepare_placed_cell<'a>(
     placement_deletes: &mut Vec<String>,
 ) -> std::borrow::Cow<'a, ratatui::buffer::Cell> {
     let mut symbol = cell.symbol().to_owned();
+    let commands: HashSet<_> = cell
+        .symbol()
+        .match_indices("\x1b_Ga=p,")
+        .filter_map(|(start, _)| {
+            let command = &cell.symbol()[start..];
+            command.find("\x1b\\").map(|end| &command[..end + 2])
+        })
+        .collect();
     PENDING_KITTY_PLACEMENTS.with(|pending| {
         let pending = pending.borrow();
         let Some(placements) = pending.get(&anchor) else {
@@ -1400,7 +1408,7 @@ fn prepare_placed_cell<'a>(
         };
         for placement in placements
             .iter()
-            .filter(|p| cell.symbol().contains(&p.command))
+            .filter(|p| commands.contains(p.command.as_str()))
         {
             placement_deletes.push(placement.delete.clone());
             let Ok(sequence) = placement.upload.transmit.lock() else {
