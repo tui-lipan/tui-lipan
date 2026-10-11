@@ -1134,11 +1134,15 @@ impl CompressedKitty {
     ) {
         let delete = format!("\x1b_Ga=d,q=2,d=i,i={},p={p};\x1b\\", self.id);
         PENDING_KITTY_PLACEMENTS.with(|pending| {
-            pending.borrow_mut().push(KittyPlacement {
-                command: command.clone(),
-                delete,
-                upload: Arc::clone(&self.upload),
-            })
+            pending
+                .borrow_mut()
+                .entry(anchor)
+                .or_default()
+                .push(KittyPlacement {
+                    command: command.clone(),
+                    delete,
+                    upload: Arc::clone(&self.upload),
+                })
         });
         let Some(cell) = f.buffer_mut().cell_mut(anchor) else {
             return;
@@ -1211,7 +1215,9 @@ struct KittyPlacement {
 #[cfg(feature = "terminal-images")]
 thread_local! {
     static PENDING_KITTY_UPLOADS: RefCell<Vec<Arc<KittyUpload>>> = const { RefCell::new(Vec::new()) };
-    static PENDING_KITTY_PLACEMENTS: RefCell<Vec<KittyPlacement>> = const { RefCell::new(Vec::new()) };
+    // Match only commands staged at the outgoing cell, rather than scanning every placement
+    // for every image cell. Real browser scenes can have hundreds of retained patch rows.
+    static PENDING_KITTY_PLACEMENTS: RefCell<HashMap<(u16, u16), Vec<KittyPlacement>>> = RefCell::default();
     static NEXT_KITTY_PLACEMENT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
@@ -1381,16 +1387,22 @@ fn kitty_cell_with_upload<'a>(
 
 #[cfg(feature = "terminal-images")]
 fn prepare_placed_cell<'a>(
+    anchor: (u16, u16),
     cell: &'a ratatui::buffer::Cell,
     uploads: &mut Vec<Arc<KittyUpload>>,
+    placement_deletes: &mut Vec<String>,
 ) -> std::borrow::Cow<'a, ratatui::buffer::Cell> {
     let mut symbol = cell.symbol().to_owned();
     PENDING_KITTY_PLACEMENTS.with(|pending| {
-        for placement in pending
-            .borrow()
+        let pending = pending.borrow();
+        let Some(placements) = pending.get(&anchor) else {
+            return;
+        };
+        for placement in placements
             .iter()
             .filter(|p| cell.symbol().contains(&p.command))
         {
+            placement_deletes.push(placement.delete.clone());
             let Ok(sequence) = placement.upload.transmit.lock() else {
                 continue;
             };
@@ -1452,10 +1464,15 @@ pub(crate) fn prepare_kitty_cells<'a>(
     content: impl Iterator<Item = (u16, u16, &'a ratatui::buffer::Cell)>,
 ) -> std::io::Result<PreparedKittyDraw<'a>> {
     let mut uploads = Vec::new();
+    let mut placement_deletes = Vec::new();
     let mut cells: Vec<_> = content
         .map(|(x, y, cell)| {
             if cell.symbol().contains("\x1b_Ga=p,") {
-                return (x, y, prepare_placed_cell(cell, &mut uploads));
+                return (
+                    x,
+                    y,
+                    prepare_placed_cell((x, y), cell, &mut uploads, &mut placement_deletes),
+                );
             }
             let Some(upload) = kitty_upload_in_symbol(cell.symbol()) else {
                 return (x, y, std::borrow::Cow::Borrowed(cell));
@@ -1469,18 +1486,6 @@ pub(crate) fn prepare_kitty_cells<'a>(
         })
         .collect();
     renew_kitty_uploads(&mut cells, &uploads)?;
-    let placement_deletes = PENDING_KITTY_PLACEMENTS.with(|pending| {
-        pending
-            .borrow()
-            .iter()
-            .filter(|p| {
-                cells
-                    .iter()
-                    .any(|(_, _, cell)| cell.symbol().contains(&p.command))
-            })
-            .map(|p| p.delete.clone())
-            .collect()
-    });
     Ok(PreparedKittyDraw {
         cells,
         uploads,

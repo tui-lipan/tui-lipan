@@ -484,6 +484,64 @@ mod tests {
     }
 
     #[test]
+    fn many_native_anchors_retire_only_surviving_placements_and_share_uploads() {
+        begin_kitty_frame();
+        clear_image_occlusions();
+        let mut p = scene("i=1,z=2", (10, 20)).remove(0);
+        let base = CompressedKitty::new(
+            p.image.pixels().unwrap(),
+            ratatui::layout::Size::new(1, 1),
+            77,
+            2,
+        )
+        .unwrap();
+        let patch = CompressedKitty::new(
+            p.image.pixels().unwrap(),
+            ratatui::layout::Size::new(1, 1),
+            88,
+            3,
+        )
+        .unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(64, 2)).unwrap();
+        terminal
+            .draw(|f| {
+                for col in 0..64 {
+                    p.col = col;
+                    let g = NativeGeometry::new(&p, Rect::default(), (10, 20)).unwrap();
+                    render_native_image(&base, f, g, f.area());
+                }
+                p.col = 1;
+                let mut g = NativeGeometry::new(&p, Rect::default(), (10, 20)).unwrap();
+                g.z = 3;
+                render_native_image(&patch, f, g, f.area());
+                // A later UI pass hides half the anchors, including the initial upload row.
+                for col in (0..64).step_by(2) {
+                    f.buffer_mut()[(col, 0)].set_symbol("overlay");
+                }
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let mut output = Vec::new();
+        {
+            let mut host =
+                crate::backend::ratatui_backend::native_terminal::HostBackend::new(&mut output);
+            host.draw((0..64).rev().map(|x| (x, 0, &buffer[(x, 0)])))
+                .unwrap();
+            Backend::flush(&mut host).unwrap();
+            begin_kitty_frame();
+            host.draw(std::iter::empty()).unwrap();
+            Backend::flush(&mut host).unwrap();
+        }
+        let output = String::from_utf8(output).unwrap();
+        assert_eq!(output.matches("a=T").count(), 2);
+        assert_eq!(output.matches("a=p").count(), 33);
+        assert_eq!(output.matches("a=d").count(), 33);
+        assert!(!base.transmission_pending());
+        assert!(!patch.transmission_pending());
+    }
+
+    #[test]
     fn native_rows_cut_holes_without_stretching_pixels() {
         begin_kitty_frame();
         set_image_occlusions(vec![ratatui::layout::Rect::new(1, 0, 1, 2)]);
