@@ -1684,7 +1684,9 @@ impl TerminalScreen {
     /// host can load a cell-aligned frame directly, without decoding it in the application.
     ///
     /// Disabled by default. Snapshot failure uses the ordinary in-memory path. File storage is
-    /// bounded independently as well as by the screen image budget.
+    /// bounded independently as well as by the screen image budget. Retired storage is reused only
+    /// after its last reader releases it and only if it was never handed to a host. Disabling
+    /// file storage or resetting/dropping the screen releases its bounded spare allocations.
     #[cfg(feature = "terminal-images")]
     pub fn set_image_file_storage_enabled(&mut self, enabled: bool) {
         self.graphics.set_file_storage_enabled(enabled);

@@ -230,6 +230,11 @@ file. Producer rewrites and deletion cannot change a stored frame. Snapshots and
 file instead of allocating another pixel buffer; capture and composition read pixels on demand.
 The normal image budget still counts the raw pixel size. Snapshot files also have a process-wide
 256 MiB limit. If a snapshot cannot be made, the ordinary in-memory path remains available.
+Each screen may keep up to two retired files, capped at 32 MiB and its image budget, to reuse
+allocated pages for equal-sized frames. These spares count against the same 256 MiB limit and
+are released on screen reset, file-storage disable, or screen drop. Live readers prevent reuse.
+A snapshot handed to a host is never recycled, even after its handoff path is removed: the host
+may still have the file open.
 
 A cell-aligned frame can be uploaded directly to a local Kitty host that passed the shared-memory
 probe. The host receives an immutable temporary hard link with `t=t` and removes it after reading.
