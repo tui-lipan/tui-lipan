@@ -3443,8 +3443,11 @@ impl<C: Component> crate::session::OperationHost for HeadlessActionHost<'_, C> {
         if !self.runner.core.tree.node(node).is_focusable() {
             return Ok(false);
         }
-        self.runner.focus.focused = Some(node);
-        self.runner.focus.focused_key = self.runner.core.tree.node(node).key.clone();
+        self.runner.set_focus(node);
+        crate::app::focus_service::release_closing_saves(
+            &self.runner.core.tree,
+            &mut self.runner.focus.focus_stack,
+        );
         self.runner.notify_focus_change();
         Ok(true)
     }

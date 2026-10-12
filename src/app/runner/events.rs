@@ -751,6 +751,10 @@ impl<C: Component> AppRunner<C> {
             return false;
         }
         self.set_focus(target);
+        crate::app::focus_service::release_closing_saves(
+            &self.core.tree,
+            &mut self.focus.focus_stack,
+        );
         self.ensure_draggable_tab_bar_active_visible(target);
         true
     }

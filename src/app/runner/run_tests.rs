@@ -10450,3 +10450,166 @@ fn terminal_focus_reports_follow_a_replaced_live_recipient() {
         .expect("ordinary reconciliation paint");
     assert_eq!(new_reports.borrow().len(), 1);
 }
+
+/// A modal over two buttons, opened and closed by messages the test sends through the root link.
+struct ClosingModalHost {
+    link: Rc<RefCell<Option<crate::callback::Link<bool>>>>,
+}
+
+impl Component for ClosingModalHost {
+    type Message = bool;
+    type Properties = ();
+    type State = bool;
+
+    fn create_state(&self, _props: &Self::Properties) -> Self::State {
+        false
+    }
+
+    fn init(&mut self, ctx: &mut Context<Self>) -> Option<crate::core::component::Command> {
+        *self.link.borrow_mut() = Some(ctx.link().clone());
+        None
+    }
+
+    fn update(&mut self, open: bool, ctx: &mut Context<Self>) -> Update {
+        ctx.state = open;
+        Update::full()
+    }
+
+    fn view(&self, ctx: &Context<Self>) -> Element {
+        let buttons = VStack::new()
+            .child(Button::new("before").key("before"))
+            .child(Button::new("after").key("after"));
+        let mut root = crate::widgets::ZStack::new().child(buttons);
+        if ctx.state {
+            let modal: Element = crate::widgets::Modal::new()
+                .width(Length::Px(20))
+                .height(Length::Px(5))
+                .animation(
+                    crate::animation::VisibilityAnimation::new()
+                        .enter(TransitionConfig {
+                            duration: Duration::ZERO,
+                            easing: Easing::Linear,
+                        })
+                        .exit(TransitionConfig {
+                            duration: Duration::from_millis(200),
+                            easing: Easing::Linear,
+                        }),
+                )
+                .child(Button::new("inside").key("inside"))
+                .into();
+            root = root.child(modal.key("modal"));
+        }
+        root.into()
+    }
+}
+
+const CLOSING_MODAL_VIEWPORT: Rect = Rect {
+    x: 0,
+    y: 0,
+    w: 40,
+    h: 12,
+};
+
+fn closing_modal_node(runner: &AppRunner<ClosingModalHost>, key: &'static str) -> NodeId {
+    let key = crate::core::element::Key::from(key);
+    runner
+        .core
+        .tree
+        .iter()
+        .find(|node| !node.inert && node.key.as_ref() == Some(&key))
+        .map(|node| node.id)
+        .expect("keyed widget exists")
+}
+
+fn closing_modal_focused_key(runner: &AppRunner<ClosingModalHost>) -> Option<String> {
+    runner.focus.focused_key.as_ref().map(ToString::to_string)
+}
+
+/// Send `open` to the host and settle the frame, as the event loop would.
+fn closing_modal_send(
+    runner: &mut AppRunner<ClosingModalHost>,
+    link: &Rc<RefCell<Option<crate::callback::Link<bool>>>>,
+    open: bool,
+) {
+    link.borrow().as_ref().expect("host initialised").send(open);
+    let mut dirty = DirtyTracker::default();
+    runner
+        .drain_messages_and_commands(&mut dirty)
+        .expect("messages drain");
+    runner.headless_render(CLOSING_MODAL_VIEWPORT);
+}
+
+/// A runner whose modal was opened over the focused `before` button and is now playing its exit
+/// animation.
+fn closing_modal_runner() -> AppRunner<ClosingModalHost> {
+    let link = Rc::new(RefCell::new(None));
+    let host = || ClosingModalHost { link: link.clone() };
+    let mut runner = AppRunner::new(App::new().mouse(false), host(), ());
+    init_runner(&mut runner, host(), CLOSING_MODAL_VIEWPORT);
+    runner.headless_render(CLOSING_MODAL_VIEWPORT);
+    let before = closing_modal_node(&runner, "before");
+    runner.set_focus(before);
+
+    closing_modal_send(&mut runner, &link, true);
+    assert_eq!(
+        closing_modal_focused_key(&runner).as_deref(),
+        Some("inside")
+    );
+    closing_modal_send(&mut runner, &link, false);
+    runner
+}
+
+fn finish_closing_modal(runner: &mut AppRunner<ClosingModalHost>) {
+    runner
+        .headless_advance_clock(Duration::from_millis(250), CLOSING_MODAL_VIEWPORT)
+        .expect("animation runs");
+}
+
+#[test]
+fn closing_modal_without_a_focus_change_restores_its_saved_focus() {
+    let mut runner = closing_modal_runner();
+    finish_closing_modal(&mut runner);
+    assert_eq!(
+        closing_modal_focused_key(&runner).as_deref(),
+        Some("before")
+    );
+}
+
+#[test]
+fn framework_focus_command_during_an_exit_animation_outlasts_it() {
+    let mut runner = closing_modal_runner();
+    let before = closing_modal_node(&runner, "before");
+    runner.set_focus(before);
+
+    runner
+        .framework_command_queue
+        .borrow_mut()
+        .push(FrameworkCommandAction::FocusNext);
+    assert!(runner.apply_framework_commands());
+    assert_eq!(closing_modal_focused_key(&runner).as_deref(), Some("after"));
+
+    finish_closing_modal(&mut runner);
+    assert_eq!(closing_modal_focused_key(&runner).as_deref(), Some("after"));
+}
+
+#[test]
+fn scripted_focus_during_an_exit_animation_outlasts_it() {
+    use crate::session::OperationHost;
+
+    let mut runner = closing_modal_runner();
+    let after = closing_modal_node(&runner, "after");
+    let focused = super::HeadlessActionHost {
+        runner: &mut runner,
+        bounds: CLOSING_MODAL_VIEWPORT,
+        deadline: None,
+        cancelled: None,
+        controlled_operations: true,
+    }
+    .focus_node(after)
+    .expect("focus succeeds");
+    assert!(focused);
+    assert_eq!(closing_modal_focused_key(&runner).as_deref(), Some("after"));
+
+    finish_closing_modal(&mut runner);
+    assert_eq!(closing_modal_focused_key(&runner).as_deref(), Some("after"));
+}

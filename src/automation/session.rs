@@ -1507,3 +1507,100 @@ mod wrapper_click_tests {
             .unwrap();
     }
 }
+
+#[cfg(test)]
+mod closing_overlay_focus_tests {
+    use super::*;
+    use crate::animation::{Easing, TransitionConfig, VisibilityAnimation};
+    use crate::automation::AutomationId;
+    use crate::core::component::{Context, Update};
+    use crate::core::element::{Element, IntoElement};
+    use crate::style::Length;
+    use crate::widgets::{Button, Modal, VStack, ZStack};
+
+    /// `open` raises a modal with an exit animation; its `close` button starts that animation.
+    struct Host;
+
+    impl Component for Host {
+        type Message = bool;
+        type Properties = ();
+        type State = bool;
+
+        fn create_state(&self, _props: &Self::Properties) -> Self::State {
+            false
+        }
+
+        fn update(&mut self, open: bool, ctx: &mut Context<Self>) -> Update {
+            ctx.state = open;
+            Update::full()
+        }
+
+        fn view(&self, ctx: &Context<Self>) -> Element {
+            let buttons = VStack::new()
+                .child(
+                    Button::new("open")
+                        .on_click(ctx.link().callback(|_| true))
+                        .automation_id("open"),
+                )
+                .child(Button::new("after").automation_id("after"));
+            let mut root = ZStack::new().child(buttons);
+            if ctx.state {
+                let modal: Element = Modal::new()
+                    .width(Length::Px(20))
+                    .height(Length::Px(5))
+                    .animation(
+                        VisibilityAnimation::new()
+                            .enter(TransitionConfig {
+                                duration: Duration::ZERO,
+                                easing: Easing::Linear,
+                            })
+                            .exit(TransitionConfig {
+                                duration: Duration::from_millis(200),
+                                easing: Easing::Linear,
+                            }),
+                    )
+                    .child(
+                        Button::new("close")
+                            .on_click(ctx.link().callback(|_| false))
+                            .automation_id("close"),
+                    )
+                    .into();
+                root = root.child(modal.key("modal"));
+            }
+            root.into()
+        }
+    }
+
+    fn focused(session: &AutomationSession<Host>, id: &str) -> bool {
+        session
+            .snapshot()
+            .semantics
+            .by_id(&AutomationId::try_new(id).unwrap())
+            .first()
+            .is_some_and(|node| node.focused)
+    }
+
+    #[test]
+    fn scripted_focus_during_an_exit_animation_outlasts_it() {
+        let mut session = AutomationSession::new(Host, AutomationOptions::default()).unwrap();
+        session
+            .execute(AutomationStep::click(Selector::id("open")))
+            .unwrap();
+        session
+            .execute(AutomationStep::click(Selector::id("close")))
+            .unwrap();
+
+        session
+            .execute(AutomationStep::focus(Selector::id("after")))
+            .unwrap();
+        assert!(focused(&session, "after"));
+
+        session
+            .execute(AutomationStep::advance(Duration::from_millis(250)))
+            .unwrap();
+        assert!(
+            focused(&session, "after"),
+            "the modal's saved focus must not come back once it is gone"
+        );
+    }
+}

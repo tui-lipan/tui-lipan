@@ -189,6 +189,10 @@ impl<C: Component> AppRunner<C> {
             return false;
         }
         if self.focus.focused != before {
+            crate::app::focus_service::release_closing_saves(
+                &self.core.tree,
+                &mut self.focus.focus_stack,
+            );
             self.animation.reset_blink();
             return true;
         }

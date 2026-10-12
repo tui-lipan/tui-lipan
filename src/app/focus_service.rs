@@ -57,6 +57,14 @@ fn overlay_is_live(tree: &NodeTree, key: OverlayKey) -> bool {
         .any(|overlay| OverlayKey::of(overlay) == key)
 }
 
+/// Whether `key` identifies an overlay that still holds focus captive. An overlay playing its exit
+/// animation stays live but has stopped capturing.
+fn overlay_captures_focus(tree: &NodeTree, key: OverlayKey) -> bool {
+    tree.overlay_roots()
+        .iter()
+        .any(|overlay| overlay.captures_focus && OverlayKey::of(overlay) == key)
+}
+
 /// Focus saved before a capturing overlay took it over.
 #[derive(Clone)]
 pub(crate) struct FocusStackEntry {
@@ -295,6 +303,7 @@ pub(crate) fn overlay_step(
         return true;
     };
     refs.set_focus(tree, target);
+    release_closing_saves(tree, refs.focus_stack);
     true
 }
 
@@ -318,15 +327,18 @@ pub(crate) fn apply_focus_request(
             *refs.focused_tag = None;
             *refs.unclassified_focus_request = None;
             *refs.deferred_outside_focus = None;
+            release_closing_saves(tree, refs.focus_stack);
         }
         FocusRequest::Next => {
             if !overlay_step(tree, refs, FocusDirection::Next) {
                 focus::focus_next(tree, refs.focused, refs.focused_key, refs.focused_tag);
+                release_closing_saves(tree, refs.focus_stack);
             }
         }
         FocusRequest::Prev => {
             if !overlay_step(tree, refs, FocusDirection::Prev) {
                 focus::focus_prev(tree, refs.focused, refs.focused_key, refs.focused_tag);
+                release_closing_saves(tree, refs.focus_stack);
             }
         }
     }
@@ -426,7 +438,32 @@ fn restore_unclassified_request(tree: &NodeTree, refs: &mut FocusRefs<'_>) -> bo
 pub(crate) fn classify_focus_request(tree: &NodeTree, refs: &mut FocusRefs<'_>) -> bool {
     match tree.top_capturing_overlay() {
         Some(overlay) => classify_unclassified_request(tree, refs, overlay.id),
-        None => restore_unclassified_request(tree, refs),
+        None => {
+            if refs.unclassified_focus_request.is_some() {
+                release_closing_saves(tree, refs.focus_stack);
+            }
+            restore_unclassified_request(tree, refs)
+        }
+    }
+}
+
+/// Forget the focus saved by overlays still playing their exit animation.
+///
+/// Such an overlay is live until the animation ends, and only then is its save restored. Focus that
+/// was moved on purpose in between is where focus belongs now: restoring the save afterwards would
+/// undo it, as with a picker that closes onto the item it picked.
+///
+/// This is the line between the two kinds of focus change. Every *deliberate* change calls it once
+/// focus has moved: app requests (keyed, `blur`, `focus_next`, `focus_prev`), framework commands,
+/// user input (a click, Tab inside or outside an overlay), and direct or scripted focus
+/// (`TestBackend::set_focused`/`focus_key`/`blur`, automation `focus_node`). *Automatic* changes
+/// never do: overlay capture, restoring a save, and falling back to a default target. A new focus
+/// entry point must pick a side.
+pub(crate) fn release_closing_saves(tree: &NodeTree, focus_stack: &mut Vec<FocusStackEntry>) {
+    while focus_stack.last().is_some_and(|entry| {
+        overlay_is_live(tree, entry.overlay) && !overlay_captures_focus(tree, entry.overlay)
+    }) {
+        focus_stack.pop();
     }
 }
 
