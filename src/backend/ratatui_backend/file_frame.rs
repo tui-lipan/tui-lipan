@@ -6,46 +6,110 @@ use std::fs::File;
 use std::io::{self, Read, Seek};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 const SNAPSHOT_BUDGET: usize = 256 * 1024 * 1024;
 const HOST_BUDGET: usize = 64 * 1024 * 1024;
 const HOST_LINK_LIMIT: usize = 32;
 const HOST_TIMEOUT: Duration = Duration::from_secs(10);
-static SNAPSHOT_BYTES: AtomicUsize = AtomicUsize::new(0);
-
 #[derive(Debug)]
-struct Reservation(usize);
+struct SnapshotBudget {
+    used: AtomicUsize,
+    limit: usize,
+    pools: Mutex<Vec<Weak<Mutex<Spares>>>>,
+}
 
-impl Reservation {
-    fn new(bytes: usize) -> io::Result<Self> {
-        let mut used = SNAPSHOT_BYTES.load(Ordering::Acquire);
+impl SnapshotBudget {
+    fn new(limit: usize) -> Self {
+        Self {
+            used: AtomicUsize::new(0),
+            limit,
+            pools: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn register(&self, spares: &Arc<Mutex<Spares>>) {
+        let mut pools = self
+            .pools
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        pools.retain(|pool| pool.strong_count() != 0);
+        pools.push(Arc::downgrade(spares));
+    }
+
+    fn reserve(self: &Arc<Self>, bytes: usize) -> io::Result<Reservation> {
+        if bytes > self.limit {
+            return Err(io::Error::other("terminal frame file budget exceeded"));
+        }
+        self.try_reserve(bytes)
+            .or_else(|| self.reclaim_and_reserve(bytes))
+            .ok_or_else(|| io::Error::other("terminal frame file budget exceeded"))
+    }
+
+    fn try_reserve(self: &Arc<Self>, bytes: usize) -> Option<Reservation> {
+        let mut used = self.used.load(Ordering::Acquire);
         loop {
-            let next = used
-                .checked_add(bytes)
-                .filter(|sum| *sum <= SNAPSHOT_BUDGET)
-                .ok_or_else(|| io::Error::other("terminal frame file budget exceeded"))?;
-            match SNAPSHOT_BYTES.compare_exchange_weak(
-                used,
-                next,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => return Ok(Self(bytes)),
+            let next = used.checked_add(bytes).filter(|sum| *sum <= self.limit)?;
+            match self
+                .used
+                .compare_exchange_weak(used, next, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => {
+                    return Some(Reservation {
+                        bytes,
+                        budget: Arc::clone(self),
+                    });
+                }
                 Err(actual) => used = actual,
             }
         }
     }
+
+    fn reclaim_and_reserve(self: &Arc<Self>, bytes: usize) -> Option<Reservation> {
+        // Only the pressure path visits other screens. Registry -> spares is the sole nested
+        // lock order; a pool must release its spare lock before requesting a reservation.
+        let mut pools = self
+            .pools
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        pools.retain(|pool| pool.strong_count() != 0);
+        if let Some(reservation) = self.try_reserve(bytes) {
+            return Some(reservation);
+        }
+        for pool in pools.iter().filter_map(Weak::upgrade) {
+            let mut spares = pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            while let Some(file) = spares.files.pop() {
+                drop(file);
+                if let Some(reservation) = self.try_reserve(bytes) {
+                    return Some(reservation);
+                }
+            }
+        }
+        self.try_reserve(bytes)
+    }
+}
+
+fn snapshot_budget() -> Arc<SnapshotBudget> {
+    static BUDGET: OnceLock<Arc<SnapshotBudget>> = OnceLock::new();
+    Arc::clone(BUDGET.get_or_init(|| Arc::new(SnapshotBudget::new(SNAPSHOT_BUDGET))))
+}
+
+#[derive(Debug)]
+struct Reservation {
+    bytes: usize,
+    budget: Arc<SnapshotBudget>,
 }
 
 impl Drop for Reservation {
     fn drop(&mut self) {
-        SNAPSHOT_BYTES.fetch_sub(self.0, Ordering::AcqRel);
+        self.budget.used.fetch_sub(self.bytes, Ordering::AcqRel);
     }
 }
 
-// A stream keeps at most two retired allocations, still charged to SNAPSHOT_BYTES. The pool
+// A stream keeps at most two retired allocations, still charged to the process budget. The pool
 // belongs to the terminal screen, not a global cache, so closing/resetting it releases its spares.
 const SPARE_LIMIT: usize = 2;
 const SPARE_BUDGET: usize = 32 * 1024 * 1024;
@@ -65,12 +129,12 @@ struct Spares {
 
 impl Spares {
     fn bytes(&self) -> usize {
-        self.files.iter().map(|file| file.reservation.0).sum()
+        self.files.iter().map(|file| file.reservation.bytes).sum()
     }
 
     fn put(&mut self, file: SnapshotFile) {
         if self.files.len() < SPARE_LIMIT
-            && self.bytes().saturating_add(file.reservation.0) <= self.budget
+            && self.bytes().saturating_add(file.reservation.bytes) <= self.budget
         {
             self.files.push(file);
         }
@@ -79,16 +143,24 @@ impl Spares {
 
 #[derive(Debug)]
 pub(crate) struct SnapshotPool {
-    spares: Mutex<Spares>,
+    spares: Arc<Mutex<Spares>>,
+    snapshot_budget: Arc<SnapshotBudget>,
 }
 
 impl SnapshotPool {
     pub(crate) fn new(budget: usize) -> Self {
+        Self::with_snapshot_budget(budget, snapshot_budget())
+    }
+
+    fn with_snapshot_budget(budget: usize, snapshot_budget: Arc<SnapshotBudget>) -> Self {
+        let spares = Arc::new(Mutex::new(Spares {
+            files: Vec::new(),
+            budget: budget.min(SPARE_BUDGET),
+        }));
+        snapshot_budget.register(&spares);
         Self {
-            spares: Mutex::new(Spares {
-                files: Vec::new(),
-                budget: budget.min(SPARE_BUDGET),
-            }),
+            spares,
+            snapshot_budget,
         }
     }
 
@@ -109,13 +181,13 @@ impl SnapshotPool {
     fn destination(&self, len: usize) -> io::Result<SnapshotFile> {
         let mut spares = self.spares();
         // Resize retires obsolete capacities instead of accumulating one pool per frame size.
-        spares.files.retain(|file| file.reservation.0 == len);
+        spares.files.retain(|file| file.reservation.bytes == len);
         if let Some(mut file) = spares.files.pop() {
             file.file.as_file_mut().rewind()?;
             return Ok(file);
         }
         drop(spares);
-        let reservation = Reservation::new(len)?;
+        let reservation = self.snapshot_budget.reserve(len)?;
         let file = tempfile::Builder::new()
             .prefix("tty-graphics-protocol-frame-")
             .tempfile()?;
@@ -444,6 +516,121 @@ mod tests {
         drop(resized);
         assert!(!resized_path.exists());
         assert!(pool.spares().files.is_empty());
+    }
+
+    #[test]
+    fn snapshot_pressure_reclaims_spares_from_independent_idle_pools() {
+        // Scale the process limit down so this exercises the real admission/reclamation path
+        // with several screens without allocating hundreds of MiB or changing global test state.
+        let budget = Arc::new(SnapshotBudget::new(128));
+        let source = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(source.path(), [1; 8]).unwrap();
+        let pools: Vec<_> = (0..8)
+            .map(|_| Arc::new(SnapshotPool::with_snapshot_budget(32, Arc::clone(&budget))))
+            .collect();
+        for pool in &pools {
+            let first = pool.snapshot(source.path(), 8, 32).unwrap();
+            let second = pool.snapshot(source.path(), 8, 32).unwrap();
+            drop((first, second));
+            assert_eq!(pool.spares().bytes(), 16);
+        }
+        assert_eq!(budget.used.load(Ordering::Acquire), 128);
+        let active = Arc::new(SnapshotPool::with_snapshot_budget(32, Arc::clone(&budget)));
+        std::fs::write(source.path(), [2; 8]).unwrap();
+        let frame = active.snapshot(source.path(), 8, 32).unwrap();
+        assert_eq!(frame.read().unwrap(), [2; 8]);
+        assert_eq!(
+            pools
+                .iter()
+                .map(|pool| pool.spares().bytes())
+                .sum::<usize>(),
+            120
+        );
+        assert_eq!(budget.used.load(Ordering::Acquire), 128);
+        drop(active);
+        drop(pools);
+        assert_eq!(frame.read().unwrap(), [2; 8]);
+        assert_eq!(budget.used.load(Ordering::Acquire), 8);
+        drop(frame);
+        assert_eq!(budget.used.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn concurrent_admission_reclaims_spares_without_exceeding_the_budget() {
+        let budget = Arc::new(SnapshotBudget::new(64));
+        let source = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(source.path(), [1; 8]).unwrap();
+        let pools: Vec<_> = (0..4)
+            .map(|_| Arc::new(SnapshotPool::with_snapshot_budget(32, Arc::clone(&budget))))
+            .collect();
+        for pool in &pools {
+            let first = pool.snapshot(source.path(), 8, 32).unwrap();
+            let second = pool.snapshot(source.path(), 8, 32).unwrap();
+            drop((first, second));
+        }
+        std::fs::write(source.path(), [2; 16]).unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let threads: Vec<_> = (0..2)
+            .map(|_| {
+                let budget = Arc::clone(&budget);
+                let barrier = Arc::clone(&barrier);
+                let path = source.path().to_owned();
+                std::thread::spawn(move || {
+                    let pool = Arc::new(SnapshotPool::with_snapshot_budget(32, budget));
+                    barrier.wait();
+                    pool.snapshot(&path, 16, 32).unwrap()
+                })
+            })
+            .collect();
+        let frames: Vec<_> = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect();
+        assert_eq!(budget.used.load(Ordering::Acquire), 64);
+        assert_eq!(
+            pools
+                .iter()
+                .map(|pool| pool.spares().bytes())
+                .sum::<usize>(),
+            32
+        );
+        for frame in &frames {
+            assert_eq!(frame.read().unwrap(), [2; 16]);
+        }
+        drop(frames);
+        drop(pools);
+        assert_eq!(budget.used.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn pressure_preserves_live_readers_and_reports_live_budget_exhaustion() {
+        let budget = Arc::new(SnapshotBudget::new(32));
+        let source = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(source.path(), [1; 8]).unwrap();
+        let live_pool = Arc::new(SnapshotPool::with_snapshot_budget(32, Arc::clone(&budget)));
+        let live = live_pool.snapshot(source.path(), 8, 32).unwrap();
+        let reader = live.clone();
+        drop(live);
+        let idle = Arc::new(SnapshotPool::with_snapshot_budget(32, Arc::clone(&budget)));
+        let first = idle.snapshot(source.path(), 8, 32).unwrap();
+        let second = idle.snapshot(source.path(), 8, 32).unwrap();
+        drop((first, second));
+        let active = Arc::new(SnapshotPool::with_snapshot_budget(32, Arc::clone(&budget)));
+        std::fs::write(source.path(), [2; 24]).unwrap();
+        let frame = active.snapshot(source.path(), 24, 32).unwrap();
+        assert!(idle.spares().files.is_empty());
+        assert_eq!(reader.read().unwrap(), [1; 8]);
+        assert_eq!(frame.read().unwrap(), [2; 24]);
+        assert_eq!(budget.used.load(Ordering::Acquire), 32);
+        assert!(idle.snapshot(source.path(), 24, 32).is_err());
+        assert_eq!(reader.read().unwrap(), [1; 8]);
+        assert_eq!(frame.read().unwrap(), [2; 24]);
+        // An impossible request must not evict otherwise useful spare storage.
+        drop(reader);
+        assert_eq!(live_pool.spares().bytes(), 8);
+        std::fs::write(source.path(), [3; 40]).unwrap();
+        assert!(idle.snapshot(source.path(), 40, 32).is_err());
+        assert_eq!(live_pool.spares().bytes(), 8);
     }
 
     #[test]

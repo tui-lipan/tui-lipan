@@ -232,7 +232,9 @@ The normal image budget still counts the raw pixel size. Snapshot files also hav
 256 MiB limit. If a snapshot cannot be made, the ordinary in-memory path remains available.
 Each screen may keep up to two retired files, capped at 32 MiB and its image budget, to reuse
 allocated pages for equal-sized frames. These spares count against the same 256 MiB limit and
-are released on screen reset, file-storage disable, or screen drop. Live readers prevent reuse.
+are released on screen reset, file-storage disable, or screen drop. When the process-wide limit
+blocks a new snapshot, admission evicts idle spares across screens and retries. Only retired
+allocations are eligible; live readers prevent reuse.
 A snapshot handed to a host is never recycled, even after its handoff path is removed: the host
 may still have the file open.
 
