@@ -2,6 +2,8 @@
 mod animated_crossfade_render;
 #[path = "suites/widget_behavior/chart_axis_tick_labels.rs"]
 mod chart_axis_tick_labels;
+#[path = "suites/widget_behavior/closing_modal_focus.rs"]
+mod closing_modal_focus;
 #[path = "suites/widget_behavior/cursor_occlusion.rs"]
 mod cursor_occlusion;
 #[path = "suites/widget_behavior/data_overflow_indicator_clicks.rs"]

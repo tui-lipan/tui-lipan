@@ -57,6 +57,14 @@ fn overlay_is_live(tree: &NodeTree, key: OverlayKey) -> bool {
         .any(|overlay| OverlayKey::of(overlay) == key)
 }
 
+/// Whether `key` identifies an overlay that still holds focus captive. An overlay playing its exit
+/// animation stays live but has stopped capturing.
+fn overlay_captures_focus(tree: &NodeTree, key: OverlayKey) -> bool {
+    tree.overlay_roots()
+        .iter()
+        .any(|overlay| overlay.captures_focus && OverlayKey::of(overlay) == key)
+}
+
 /// Focus saved before a capturing overlay took it over.
 #[derive(Clone)]
 pub(crate) struct FocusStackEntry {
@@ -426,7 +434,25 @@ fn restore_unclassified_request(tree: &NodeTree, refs: &mut FocusRefs<'_>) -> bo
 pub(crate) fn classify_focus_request(tree: &NodeTree, refs: &mut FocusRefs<'_>) -> bool {
     match tree.top_capturing_overlay() {
         Some(overlay) => classify_unclassified_request(tree, refs, overlay.id),
-        None => restore_unclassified_request(tree, refs),
+        None => {
+            if refs.unclassified_focus_request.is_some() {
+                drop_released_saves(tree, refs);
+            }
+            restore_unclassified_request(tree, refs)
+        }
+    }
+}
+
+/// Forget the focus saved by overlays still playing their exit animation.
+///
+/// Such an overlay is live until the animation ends, and only then is its save restored. A focus
+/// request made in between is where the app wants focus now: restoring the save afterwards would
+/// undo it, as with a picker that closes onto the item it picked.
+fn drop_released_saves(tree: &NodeTree, refs: &mut FocusRefs<'_>) {
+    while refs.focus_stack.last().is_some_and(|entry| {
+        overlay_is_live(tree, entry.overlay) && !overlay_captures_focus(tree, entry.overlay)
+    }) {
+        refs.focus_stack.pop();
     }
 }
 
