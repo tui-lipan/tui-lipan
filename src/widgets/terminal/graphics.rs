@@ -1447,6 +1447,7 @@ pub(super) struct TerminalGraphics {
     clock: u64,
     storage_enabled: bool,
     file_storage_enabled: bool,
+    file_pool: Arc<crate::backend::ratatui_backend::file_frame::SnapshotPool>,
     media: GraphicsMediaPolicy,
     /// Counts transmissions that named their pixels rather than carrying them. See
     /// [`TerminalGraphics::named_source_identity`].
@@ -1470,6 +1471,11 @@ impl Default for TerminalGraphics {
             clock: 0,
             storage_enabled: true,
             file_storage_enabled: false,
+            file_pool: Arc::new(
+                crate::backend::ratatui_backend::file_frame::SnapshotPool::new(
+                    DEFAULT_IMAGE_BUDGET_BYTES,
+                ),
+            ),
             media: GraphicsMediaPolicy::default(),
             source_serial: 0,
             composition: Arc::default(),
@@ -1487,6 +1493,7 @@ impl TerminalGraphics {
     /// Replace the decoded-pixel budget, evicting immediately if it shrank.
     pub(super) fn set_budget(&mut self, bytes: usize) {
         self.budget = bytes;
+        self.file_pool.set_budget(bytes);
         self.enforce_budget();
     }
 
@@ -1500,16 +1507,25 @@ impl TerminalGraphics {
 
     pub(super) fn set_file_storage_enabled(&mut self, enabled: bool) {
         self.file_storage_enabled = enabled;
+        if !enabled {
+            self.replace_file_pool();
+        }
     }
 
     pub(super) fn set_media_policy(&mut self, media: GraphicsMediaPolicy) {
         self.media = media;
     }
 
+    fn replace_file_pool(&mut self) {
+        self.file_pool =
+            Arc::new(crate::backend::ratatui_backend::file_frame::SnapshotPool::new(self.budget));
+    }
+
     /// Drop everything, for `RIS` or a screen reset.
     pub(super) fn reset(&mut self) {
         self.stream_namespace = next_stream_namespace();
         self.images.clear();
+        self.replace_file_pool();
         self.image_dimensions.clear();
         self.numbers.clear();
         self.placements.clear();
@@ -1921,12 +1937,7 @@ impl TerminalGraphics {
             return None;
         }
         let path = graphics_media::decode_path(payload).ok()?;
-        let input = crate::backend::ratatui_backend::file_frame::FilePixels::snapshot(
-            &path,
-            bytes,
-            command.format,
-        )
-        .ok()?;
+        let input = self.file_pool.snapshot(&path, bytes, command.format).ok()?;
         Some((input, bytes))
     }
 
@@ -3011,6 +3022,18 @@ mod tests {
         let last = Arc::downgrade(graphics.images[&7].image.file_pixels().unwrap());
         graphics.reset();
         assert!(last.upgrade().is_none());
+    }
+
+    #[test]
+    fn reset_and_disable_release_the_old_snapshot_pool() {
+        let mut graphics = TerminalGraphics::default();
+        graphics.set_file_storage_enabled(true);
+        let previous = Arc::downgrade(&graphics.file_pool);
+        graphics.reset();
+        assert!(previous.upgrade().is_none());
+        let previous = Arc::downgrade(&graphics.file_pool);
+        graphics.set_file_storage_enabled(false);
+        assert!(previous.upgrade().is_none());
     }
 
     #[test]
