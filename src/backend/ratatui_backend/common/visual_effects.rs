@@ -1,4 +1,4 @@
-use ratatui::buffer::{Buffer, Cell};
+use ratatui::buffer::{Buffer, Cell, CellDiffOption};
 use ratatui::layout::Rect as RRect;
 use ratatui::style::{Color as RColor, Modifier as RMod};
 use unicode_width::UnicodeWidthStr;
@@ -1494,10 +1494,7 @@ fn normalize_wide_grapheme_rows(buf: &mut Buffer, affected: RRect) {
     let scan_max_x = affected.x.saturating_add(affected.width).min(area_max_x);
     for y in affected.y..affected.y.saturating_add(affected.height) {
         for x in scan_min_x..scan_max_x {
-            let width = buf
-                .cell((x, y))
-                .map(|cell| UnicodeWidthStr::width(cell.symbol()))
-                .unwrap_or_default();
+            let width = buf.cell((x, y)).map(cell_width).unwrap_or_default();
             let continuation_end = (usize::from(x) + width).min(usize::from(area_max_x));
             for continuation_x in usize::from(x) + 1..continuation_end {
                 if let Some(cell) = buf.cell_mut((continuation_x as u16, y)) {
@@ -1505,6 +1502,16 @@ fn normalize_wide_grapheme_rows(buf: &mut Buffer, affected: RRect) {
                 }
             }
         }
+    }
+}
+
+/// The columns `cell` occupies. A cell that declares its width carries a sequence rather than
+/// a grapheme - a Kitty placeholder walk or placement - whose escape bytes are not columns;
+/// measuring them as text would clear the image cells after it.
+fn cell_width(cell: &Cell) -> usize {
+    match cell.diff_option {
+        CellDiffOption::ForcedWidth(width) => usize::from(width.get()),
+        _ => UnicodeWidthStr::width(cell.symbol()),
     }
 }
 
@@ -1524,6 +1531,27 @@ mod wide_grapheme_tests {
 
         assert_eq!(buf[(2, 0)].symbol(), " ");
         assert_eq!(buf[(6, 0)].symbol(), "Z");
+    }
+
+    /// An image anchor's symbol is an escape sequence many characters long. Read as text it
+    /// spans the row, and normalizing it erased every image cell after the first under a reveal.
+    #[test]
+    fn normalization_keeps_cells_after_a_declared_width_anchor() {
+        let mut buf = Buffer::empty(RRect::new(0, 0, 8, 1));
+        for x in 0..8 {
+            buf[(x, 0)]
+                .set_symbol("\x1b[s\x1b[38;2;1;2;3m\u{10EEEE}\x1b[u")
+                .set_diff_option(CellDiffOption::ForcedWidth(
+                    std::num::NonZeroU16::new(1).unwrap(),
+                ));
+        }
+        let anchor = buf[(0, 0)].clone();
+
+        normalize_wide_grapheme_rows(&mut buf, RRect::new(0, 0, 8, 1));
+
+        for x in 0..8 {
+            assert_eq!(buf[(x, 0)], anchor, "anchor {x} was cleared");
+        }
     }
 
     #[test]
