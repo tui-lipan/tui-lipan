@@ -457,34 +457,52 @@ mod tests {
         }
     }
 
+    fn wrapped_canvas() -> TerminalScreen {
+        let mut screen = TerminalScreen::new(16, 32, 0);
+        screen.process_bytes(&[b'x'; 64]);
+        screen.process_bytes(b"\x1b[H");
+        transmit(&mut screen, "i=1,z=0", 320, 320, [0, 0, 255, 255]);
+        transmit(&mut screen, "i=2,z=0,X=3,Y=5", 3, 2, [255, 0, 0, 255]);
+        screen
+    }
+
     #[test]
     fn final_placement_removal_releases_composed_pixels_but_keeps_definitions() {
-        for reflow in [false, true] {
-            let mut screen = TerminalScreen::new(16, 32, 0);
-            screen.process_bytes(&[b'x'; 64]);
-            screen.process_bytes(b"\x1b[H");
-            transmit(&mut screen, "i=1,z=0", 320, 320, [0, 0, 255, 255]);
-            transmit(&mut screen, "i=2,z=0,X=3,Y=5", 3, 2, [255, 0, 0, 255]);
-            let (images, _) = canvas(&mut screen);
-            let pixels: Vec<_> = images
+        let mut screen = wrapped_canvas();
+        let (images, _) = canvas(&mut screen);
+        let pixels: Vec<_> = images
+            .iter()
+            .map(|p| Arc::downgrade(p.image.pixels().unwrap()))
+            .collect();
+        drop(images);
+        assert!(pixels.iter().all(|p| p.upgrade().is_some()));
+        screen.process_bytes(b"\x1b_Ga=d,d=a,q=2;\x1b\\");
+        assert!(pixels.iter().all(|p| p.upgrade().is_none()));
+        assert!(screen.render_snapshot().images.is_empty());
+        screen.process_bytes(b"\x1b_Ga=p,i=1,q=2;\x1b\\");
+        assert!(
+            !screen.render_snapshot().images.is_empty(),
+            "lowercase delete keeps stored images"
+        );
+    }
+
+    #[test]
+    fn a_reflow_keeps_composed_placements() {
+        let mut screen = wrapped_canvas();
+        let placed = |screen: &mut TerminalScreen| {
+            let mut ids: Vec<_> = screen
+                .render_snapshot()
+                .images
                 .iter()
-                .map(|p| Arc::downgrade(p.image.pixels().unwrap()))
+                .map(|p| p.image_id)
                 .collect();
-            drop(images);
-            assert!(pixels.iter().all(|p| p.upgrade().is_some()));
-            if reflow {
-                screen.resize(16, 33);
-            } else {
-                screen.process_bytes(b"\x1b_Ga=d,d=a,q=2;\x1b\\");
-            }
-            assert!(pixels.iter().all(|p| p.upgrade().is_none()));
-            assert!(screen.render_snapshot().images.is_empty());
-            screen.process_bytes(b"\x1b_Ga=p,i=1,q=2;\x1b\\");
-            assert!(
-                !screen.render_snapshot().images.is_empty(),
-                "lowercase delete/reflow keeps stored images"
-            );
-        }
+            ids.sort_unstable();
+            ids
+        };
+        let before = placed(&mut screen);
+        assert_eq!(before.len(), 2);
+        screen.resize(16, 33);
+        assert_eq!(placed(&mut screen), before);
     }
 
     #[test]
