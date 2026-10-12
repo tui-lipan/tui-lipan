@@ -2084,8 +2084,7 @@ fn terminal_layer_branch_is_opaque(
             return false;
         }
         let node = tree.node(id);
-        if matches!(&node.kind, NodeKind::Animated(animated) if animated_exposes_underlay(animated))
-        {
+        if layer_exposes_underlay(node) {
             return false;
         }
         current = node.parent;
@@ -2102,8 +2101,7 @@ fn subtree_has_opaque_terminal(tree: &NodeTree, root: NodeId) -> bool {
             continue;
         }
         let node = tree.node(id);
-        if matches!(&node.kind, NodeKind::Animated(animated) if animated_exposes_underlay(animated))
-        {
+        if layer_exposes_underlay(node) {
             continue;
         }
         if matches!(node.kind, NodeKind::Terminal(_)) {
@@ -2112,6 +2110,22 @@ fn subtree_has_opaque_terminal(tree: &NodeTree, root: NodeId) -> bool {
         stack.extend(node.children.iter().rev().copied());
     }
     false
+}
+
+/// A node that lets the layer below show through what it holds, so a terminal inside it cannot
+/// punch a hole in an image beneath it.
+///
+/// An `EffectScope` whose effect reads its backdrop composites over that layer: a pane opening or
+/// closing through such an effect shows what lies beneath wherever its own cells have not arrived
+/// yet. A hole there would keep the image beneath out of the backdrop, and the effect would copy
+/// back the blank cells instead of the picture.
+#[cfg(feature = "terminal-images")]
+fn layer_exposes_underlay(node: &crate::core::node::Node) -> bool {
+    match &node.kind {
+        NodeKind::Animated(animated) => animated_exposes_underlay(animated),
+        NodeKind::EffectScope(scope) => scope.effects.iter().any(VisualEffect::uses_backdrop),
+        _ => false,
+    }
 }
 
 #[cfg(feature = "terminal-images")]
@@ -2569,14 +2583,38 @@ mod terminal_image_layer_tests {
     use super::terminal_image_layer_occlusions;
     use crate::app::context::SurfaceMode;
     use crate::core::component::{Component, Context, Update};
-    use crate::core::element::{Element, IntoElement};
+    use crate::core::element::Element;
     use crate::runtime::RuntimeCore;
-    use crate::style::{Color, Rect, Theme};
-    use crate::widgets::{Animated, Canvas, Terminal};
+    use crate::style::{CellEffect, Color, EffectCell, EffectContext, Rect, Theme};
+    use crate::widgets::{Animated, Canvas, EffectScope, Terminal};
 
     struct LayeredTerminals {
         top_opacity: f32,
         top_opacity_target: Option<Color>,
+        top_effect: Option<Reveal>,
+    }
+
+    /// A reveal in progress: every cell shows what lay beneath the scope, or only its own content.
+    #[derive(Clone, Copy, Debug)]
+    struct Reveal {
+        compositing: bool,
+    }
+
+    impl CellEffect for Reveal {
+        fn apply(&self, _cell: &mut EffectCell, _ctx: &EffectContext) {}
+
+        fn uses_backdrop(&self) -> bool {
+            self.compositing
+        }
+
+        fn apply_with_backdrop(
+            &self,
+            cell: &mut EffectCell,
+            backdrop: &EffectCell,
+            _ctx: &EffectContext,
+        ) {
+            *cell = backdrop.clone();
+        }
     }
 
     impl Component for LayeredTerminals {
@@ -2597,6 +2635,13 @@ mod terminal_image_layer_tests {
             if let Some(target) = self.top_opacity_target {
                 top_layer = top_layer.opacity_target(target);
             }
+            let top_layer: Element = match self.top_effect {
+                Some(reveal) => EffectScope::new()
+                    .child(top_layer)
+                    .custom_effect(reveal)
+                    .into(),
+                None => top_layer.into(),
+            };
             Canvas::new()
                 .child_at(
                     Rect {
@@ -2624,6 +2669,14 @@ mod terminal_image_layer_tests {
         top_opacity: f32,
         top_opacity_target: Option<Color>,
     ) -> RuntimeCore<LayeredTerminals> {
+        runtime_with_effect(top_opacity, top_opacity_target, None)
+    }
+
+    fn runtime_with_effect(
+        top_opacity: f32,
+        top_opacity_target: Option<Color>,
+        top_effect: Option<Reveal>,
+    ) -> RuntimeCore<LayeredTerminals> {
         let viewport = Rect {
             x: 0,
             y: 0,
@@ -2634,6 +2687,7 @@ mod terminal_image_layer_tests {
             LayeredTerminals {
                 top_opacity,
                 top_opacity_target,
+                top_effect,
             },
             (),
             viewport,
@@ -2691,6 +2745,39 @@ mod terminal_image_layer_tests {
                 ratatui::layout::Rect::new(0, 0, 10, 5),
             )
             .is_empty()
+        );
+    }
+
+    /// A pane opening through a reveal shows the layer beneath wherever it has not arrived yet.
+    /// A hole there kept the image beneath out of the reveal's backdrop, so the reveal copied back
+    /// blank cells and the picture went black under the whole animated area.
+    #[test]
+    fn compositing_effect_scope_does_not_hide_lower_image() {
+        let runtime = runtime_with_effect(1.0, None, Some(Reveal { compositing: true }));
+        let bottom = node_with_key(&runtime, "bottom-terminal");
+
+        assert!(
+            terminal_image_layer_occlusions(
+                &runtime.tree,
+                bottom,
+                ratatui::layout::Rect::new(0, 0, 10, 5),
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn settled_effect_scope_keeps_canvas_terminal_layer_opaque() {
+        let runtime = runtime_with_effect(1.0, None, Some(Reveal { compositing: false }));
+        let bottom = node_with_key(&runtime, "bottom-terminal");
+
+        assert_eq!(
+            terminal_image_layer_occlusions(
+                &runtime.tree,
+                bottom,
+                ratatui::layout::Rect::new(0, 0, 10, 5),
+            ),
+            vec![ratatui::layout::Rect::new(2, 1, 4, 3)]
         );
     }
 

@@ -10,6 +10,8 @@ use super::damage::{DamageAccumulator, TerminalDamage};
 use alacritty_terminal::event::{Event as TermEvent, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, GridCell, Scroll};
 use alacritty_terminal::index::{Column, Line, Point};
+#[cfg(feature = "terminal-images")]
+use alacritty_terminal::term::cell::CellExtra as TermCellExtra;
 use alacritty_terminal::term::cell::{
     Cell as TermCell, Flags as CellFlags, Hyperlink as TermHyperlink,
 };
@@ -1646,6 +1648,90 @@ impl TerminalScreen {
         false
     }
 
+    /// Mark the cell each placement is anchored to, so a rewrap carries the mark to wherever that
+    /// text goes. Returns what each marked cell held before, by placement order; `None` for a
+    /// placement that could not be marked, which the relocation then drops.
+    ///
+    /// Line indices cannot be corrected after a rewrap: history is redistributed across a
+    /// different number of rows, and lines can be pulled back from or pushed out past scrollback.
+    /// The cell itself is the one thing that reliably moves with the text, and a marked cell is
+    /// never empty, so the rewrap cannot trim it either.
+    #[cfg(feature = "terminal-images")]
+    fn mark_reflow_anchors(&mut self) -> Vec<Option<Option<Arc<TermCellExtra>>>> {
+        let anchors = self.graphics.placement_anchors();
+        if anchors.is_empty() {
+            return Vec::new();
+        }
+        let alt_screen = self.term.mode().contains(TermMode::ALT_SCREEN);
+        let grid = self.term.grid_mut();
+        let top = grid.topmost_line().0;
+        let bottom = grid.bottommost_line().0;
+        let last_column = grid.last_column().0;
+        // Placements can share an anchor cell; each must restore what the cell held before any
+        // of them marked it.
+        let mut originals: BTreeMap<(i32, usize), Option<Arc<TermCellExtra>>> = BTreeMap::new();
+        anchors
+            .into_iter()
+            .enumerate()
+            .map(|(index, (line, col, placement_alt_screen))| {
+                // Primary-screen placements are not on the grid being shown, and the alternate
+                // screen keeps no history to rewrap them against.
+                if placement_alt_screen != alt_screen {
+                    return None;
+                }
+                let index_mark = reflow_anchor_index_mark(index)?;
+                let line = top.checked_add(i32::try_from(line).ok()?)?;
+                if line > bottom {
+                    return None;
+                }
+                let column = usize::from(col).min(last_column);
+                let cell = &mut grid[Line(line)][Column(column)];
+                let saved = originals
+                    .entry((line, column))
+                    .or_insert_with(|| cell.extra.clone())
+                    .clone();
+                cell.push_zerowidth(REFLOW_ANCHOR_MARK);
+                cell.push_zerowidth(index_mark);
+                Some(saved)
+            })
+            .collect()
+    }
+
+    /// Find where the rewrap put each mark [`Self::mark_reflow_anchors`] left, restore the cell
+    /// it was left on, and move the placements there. A placement whose mark is gone - evicted
+    /// from scrollback, or never marked - is dropped.
+    #[cfg(feature = "terminal-images")]
+    fn relocate_reflow_anchors(&mut self, saved: Vec<Option<Option<Arc<TermCellExtra>>>>) {
+        let mut relocated = vec![None; saved.len()];
+        let mut remaining = saved.iter().filter(|extra| extra.is_some()).count();
+        let grid = self.term.grid_mut();
+        let top = grid.topmost_line().0;
+        let bottom = grid.bottommost_line().0;
+        let columns = grid.columns();
+        let mut line = top;
+        while remaining > 0 && line <= bottom {
+            let row = &mut grid[Line(line)];
+            for column in 0..columns {
+                let cell = &mut row[Column(column)];
+                let indices = cell
+                    .zerowidth()
+                    .map_or_else(Vec::new, reflow_anchor_indices);
+                for index in indices {
+                    let Some(extra) = saved.get(index).and_then(Option::as_ref) else {
+                        continue;
+                    };
+                    cell.extra = extra.clone();
+                    if relocated[index].is_none() {
+                        relocated[index] = Some(((line - top) as usize, column as u16));
+                        remaining = remaining.saturating_sub(1);
+                    }
+                }
+            }
+            line += 1;
+        }
+        self.graphics.relocate_placements(&relocated);
+    }
+
     /// Republish the viewport to the listener that answers pixel-size queries.
     fn sync_viewport(&self) {
         self.listener.viewport.set(ViewportGeometry {
@@ -1916,7 +2002,8 @@ impl TerminalScreen {
             cols: self.cols as usize,
         };
         #[cfg(feature = "terminal-images")]
-        let rewraps = self.width_change_rewraps(cols.max(1));
+        let reflow_anchors = (reflowed && self.width_change_rewraps(cols.max(1)))
+            .then(|| self.mark_reflow_anchors());
         self.term.resize(dimensions);
         if let Some(anchor) = prompt_anchor {
             self.finish_prompt_resize(anchor, rows, cols);
@@ -1935,13 +2022,12 @@ impl TerminalScreen {
             // A column change rewraps history, so line indices no longer refer to the
             // text they were recorded against and cannot be corrected by a shift.
             self.semantic_marks.clear();
-            // Images are dropped on the same reasoning, but only when the rewrap actually
-            // happened. Treating every width change as a rewrap costs every image in the pane on
-            // every resize, which in a tiling multiplexer is every split - and a pane full of
-            // plots going blank because a neighbour opened is worse than the drift this risks.
+            // Images follow the text instead: each anchor cell carried a mark through the rewrap,
+            // and the placement moves to wherever that cell landed. Only when the rewrap actually
+            // happened - with nothing moved, the lines they are anchored to still hold.
             #[cfg(feature = "terminal-images")]
-            if rewraps {
-                self.graphics.clear_placements();
+            if let Some(anchors) = reflow_anchors {
+                self.relocate_reflow_anchors(anchors);
             }
         } else {
             self.settle_graphics(evicted);
@@ -3819,6 +3905,33 @@ fn default_ansi_palette() -> [UiColor; 16] {
         UiColor::LightCyan,
         UiColor::White,
     ]
+}
+
+/// Leads the marks a rewrapping resize leaves on image anchor cells. A noncharacter, so no
+/// program can have written it into a cell's zero-width characters.
+#[cfg(feature = "terminal-images")]
+const REFLOW_ANCHOR_MARK: char = '\u{FDD0}';
+
+/// Where the placement index after a [`REFLOW_ANCHOR_MARK`] counts from: supplementary
+/// private-use plane A, which holds 65534 values.
+#[cfg(feature = "terminal-images")]
+const REFLOW_ANCHOR_INDEX_BASE: u32 = 0xF0000;
+
+#[cfg(feature = "terminal-images")]
+fn reflow_anchor_index_mark(index: usize) -> Option<char> {
+    let index = u32::try_from(index).ok().filter(|index| *index < 0xFFFE)?;
+    char::from_u32(REFLOW_ANCHOR_INDEX_BASE + index)
+}
+
+/// The placement indices marked on a cell, one per [`REFLOW_ANCHOR_MARK`].
+#[cfg(feature = "terminal-images")]
+fn reflow_anchor_indices(zerowidth: &[char]) -> Vec<usize> {
+    zerowidth
+        .windows(2)
+        .filter(|pair| pair[0] == REFLOW_ANCHOR_MARK)
+        .filter_map(|pair| u32::from(pair[1]).checked_sub(REFLOW_ANCHOR_INDEX_BASE))
+        .filter_map(|index| usize::try_from(index).ok())
+        .collect()
 }
 
 #[cfg(test)]
@@ -6592,18 +6705,124 @@ mod tests {
             assert!(screen.render_snapshot().images.is_empty());
         }
 
-        #[test]
-        fn a_width_change_that_rewraps_drops_placements() {
-            let mut screen = screen(8, 20, 50);
-            // A line long enough to wrap, so widening really does redistribute text and the
-            // absolute line a placement is anchored to stops naming what it named.
+        /// Where the snapshot shows each image, as `(row, col)`.
+        fn image_cells(screen: &mut TerminalScreen) -> Vec<(i32, i32)> {
+            screen
+                .render_snapshot()
+                .images
+                .iter()
+                .map(|image| (image.row, image.col))
+                .collect()
+        }
+
+        /// The viewport row whose text starts with `prefix`.
+        fn row_of(screen: &mut TerminalScreen, prefix: &str) -> i32 {
+            screen
+                .snapshot()
+                .lines()
+                .position(|line| line.starts_with(prefix))
+                .expect("the line is on screen") as i32
+        }
+
+        /// A long line, then `ab` with an image placed right after it, at column 2.
+        fn image_after_a_long_line(rows: u16, cols: u16) -> TerminalScreen {
+            let mut screen = screen(rows, cols, 50);
             screen.process_bytes("x".repeat(35).as_bytes());
-            screen.process_bytes(b"\r\n");
+            screen.process_bytes(b"\r\nab");
             screen.process_bytes(&place(20, 40, "i=1,C=1"));
-            assert_eq!(screen.render_snapshot().images.len(), 1);
+            screen
+        }
+
+        /// A rewrap moves the text above an image, and the image has to move with it rather than
+        /// vanish: a pane resized while showing pictures otherwise loses every one of them for
+        /// good, since nothing redraws them.
+        #[test]
+        fn a_widening_rewrap_moves_placements_with_their_text() {
+            // The long line takes two rows at this width, one once the pane widens.
+            let mut screen = image_after_a_long_line(8, 20);
+            assert_eq!(image_cells(&mut screen), vec![(2, 2)]);
 
             screen.resize(8, 40);
-            assert!(screen.render_snapshot().images.is_empty());
+            assert_eq!(row_of(&mut screen, "ab"), 1);
+            assert_eq!(image_cells(&mut screen), vec![(1, 2)]);
+        }
+
+        #[test]
+        fn a_narrowing_rewrap_moves_placements_with_their_text() {
+            let mut screen = image_after_a_long_line(8, 40);
+            assert_eq!(image_cells(&mut screen), vec![(1, 2)]);
+
+            for cols in [20, 40, 12] {
+                screen.resize(8, cols);
+                let row = row_of(&mut screen, "ab");
+                assert_eq!(
+                    image_cells(&mut screen),
+                    vec![(row, 2)],
+                    "at {cols} columns"
+                );
+            }
+        }
+
+        /// The marks that carry anchors through a rewrap are bookkeeping, never content.
+        #[test]
+        fn a_rewrap_leaves_no_anchor_marks_in_the_text() {
+            let mut screen = image_after_a_long_line(8, 20);
+            screen.resize(8, 40);
+            screen.resize(8, 20);
+
+            let grid = screen.term.grid();
+            for line in grid.topmost_line().0..=grid.bottommost_line().0 {
+                for column in 0..grid.columns() {
+                    assert!(
+                        grid[Line(line)][Column(column)]
+                            .zerowidth()
+                            .is_none_or(<[char]>::is_empty),
+                        "a mark survived at {line},{column}"
+                    );
+                }
+            }
+            assert!(!screen.snapshot().contains(REFLOW_ANCHOR_MARK));
+        }
+
+        /// A height-only resize rewraps nothing, so it must not mark anything either: a mark left
+        /// behind was found again by the next width change and miscounted, which panicked the
+        /// session server.
+        #[test]
+        fn a_height_change_leaves_no_anchor_marks() {
+            let mut screen = image_after_a_long_line(8, 20);
+            screen.resize(10, 20);
+            screen.resize(10, 40);
+            screen.resize(12, 40);
+            screen.resize(12, 20);
+
+            let grid = screen.term.grid();
+            for line in grid.topmost_line().0..=grid.bottommost_line().0 {
+                for column in 0..grid.columns() {
+                    assert!(
+                        grid[Line(line)][Column(column)]
+                            .zerowidth()
+                            .is_none_or(<[char]>::is_empty),
+                        "a mark survived at {line},{column}"
+                    );
+                }
+            }
+            let row = row_of(&mut screen, "ab");
+            assert_eq!(image_cells(&mut screen), vec![(row, 2)]);
+        }
+
+        /// Text pushed out of scrollback by the rewrap takes its image with it.
+        #[test]
+        fn a_rewrap_that_evicts_the_anchor_drops_its_placement() {
+            let mut screen = screen(2, 40, 0);
+            screen.process_bytes(&place(20, 40, "i=1,C=1"));
+            screen.process_bytes("x".repeat(35).as_bytes());
+            screen.process_bytes(b"\r\nab");
+            assert_eq!(image_cells(&mut screen), vec![(0, 0)]);
+
+            // The long line needs two rows at this width, and with no scrollback the row holding
+            // the anchor has nowhere to go.
+            screen.resize(2, 20);
+            assert!(image_cells(&mut screen).is_empty());
         }
 
         /// Resizing a pane must not cost it every picture in it. In a tiling multiplexer a width

@@ -1536,12 +1536,32 @@ impl TerminalGraphics {
         self.composition = Arc::default();
     }
 
-    /// Drop every placement while keeping the images themselves.
-    ///
-    /// For a reflow: a column change rewraps history, so the absolute line a placement was
-    /// anchored to no longer names the text it was drawn against, and no shift can correct it.
-    pub(super) fn clear_placements(&mut self) {
-        self.placements.clear();
+    /// The top-left cell of every placement, as an absolute line and a column, in placement
+    /// order. A reflow tracks these through the rewrap; see [`Self::relocate_placements`].
+    pub(super) fn placement_anchors(&self) -> Vec<(usize, u16, bool)> {
+        self.placements
+            .iter()
+            .map(|placement| (placement.line, placement.col, placement.alt_screen))
+            .collect()
+    }
+
+    /// Move each placement to where its anchor cell went in a rewrap, by placement order, and
+    /// drop the ones whose anchor did not survive it.
+    pub(super) fn relocate_placements(&mut self, anchors: &[Option<(usize, u16)>]) {
+        if self.placements.is_empty() {
+            return;
+        }
+        let mut index = 0;
+        self.placements.retain_mut(|placement| {
+            let anchor = anchors.get(index).copied().flatten();
+            index += 1;
+            let Some((line, col)) = anchor else {
+                return false;
+            };
+            placement.line = line;
+            placement.col = col;
+            true
+        });
         self.clear_composed_tiles();
     }
 
