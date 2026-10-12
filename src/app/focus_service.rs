@@ -303,6 +303,7 @@ pub(crate) fn overlay_step(
         return true;
     };
     refs.set_focus(tree, target);
+    release_closing_saves(tree, refs.focus_stack);
     true
 }
 
@@ -449,10 +450,15 @@ pub(crate) fn classify_focus_request(tree: &NodeTree, refs: &mut FocusRefs<'_>) 
 /// Forget the focus saved by overlays still playing their exit animation.
 ///
 /// Such an overlay is live until the animation ends, and only then is its save restored. Focus that
-/// was moved on purpose in between, by the app (a keyed request, `blur`, `focus_next`,
-/// `focus_prev`) or by the user (a click, Tab), is where focus belongs now: restoring the save
-/// afterwards would undo it, as with a picker that closes onto the item it picked. Call this after
-/// every such change; automatic restoration never does.
+/// was moved on purpose in between is where focus belongs now: restoring the save afterwards would
+/// undo it, as with a picker that closes onto the item it picked.
+///
+/// This is the line between the two kinds of focus change. Every *deliberate* change calls it once
+/// focus has moved: app requests (keyed, `blur`, `focus_next`, `focus_prev`), framework commands,
+/// user input (a click, Tab inside or outside an overlay), and direct or scripted focus
+/// (`TestBackend::set_focused`/`focus_key`/`blur`, automation `focus_node`). *Automatic* changes
+/// never do: overlay capture, restoring a save, and falling back to a default target. A new focus
+/// entry point must pick a side.
 pub(crate) fn release_closing_saves(tree: &NodeTree, focus_stack: &mut Vec<FocusStackEntry>) {
     while focus_stack.last().is_some_and(|entry| {
         overlay_is_live(tree, entry.overlay) && !overlay_captures_focus(tree, entry.overlay)

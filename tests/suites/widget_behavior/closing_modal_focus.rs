@@ -201,3 +201,27 @@ fn a_click_during_the_exit_animation_outlasts_it() {
     finish(&mut backend);
     assert_eq!(backend.focused_key(), Some(&Key::from("after")));
 }
+
+#[test]
+fn direct_focus_during_the_exit_animation_outlasts_it() {
+    let mut backend = closing();
+
+    assert!(backend.focus_key(&Key::from("after")));
+    assert_eq!(backend.focused_key(), Some(&Key::from("after")));
+
+    finish(&mut backend);
+    assert_eq!(backend.focused_key(), Some(&Key::from("after")));
+}
+
+#[test]
+fn a_direct_blur_during_the_exit_animation_outlasts_it() {
+    let mut backend = closing();
+
+    backend.blur();
+    assert_eq!(backend.focused(), None);
+
+    // Not `finish`: a render under `FocusPolicy::Auto` puts focus back on the first focusable
+    // target, which is the saved `before` either way. Only the restore itself is under test.
+    backend.advance(Duration::from_millis(250));
+    assert_eq!(backend.focused(), None);
+}

@@ -429,6 +429,7 @@ where
     /// Manually set which node has focus.
     pub fn set_focused(&mut self, id: NodeId) {
         self.set_focused_silent(id);
+        focus_service::release_closing_saves(&self.core.tree, &mut self.focus_stack);
         self.notify_focus_change();
     }
 
@@ -447,6 +448,7 @@ where
         self.focused_tag = None;
         self.unclassified_focus_request = None;
         self.deferred_outside_focus = None;
+        focus_service::release_closing_saves(&self.core.tree, &mut self.focus_stack);
         self.notify_focus_change();
     }
 
