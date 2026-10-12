@@ -885,6 +885,7 @@ where
             return false;
         }
         self.set_focused_silent(target);
+        focus_service::release_closing_saves(&self.core.tree, &mut self.focus_stack);
         true
     }
 
@@ -901,6 +902,7 @@ where
             &mut self.focused_key,
             &mut self.focused_tag,
         );
+        focus_service::release_closing_saves(&self.core.tree, &mut self.focus_stack);
         self.notify_focus_change();
     }
 
@@ -917,6 +919,7 @@ where
             &mut self.focused_key,
             &mut self.focused_tag,
         );
+        focus_service::release_closing_saves(&self.core.tree, &mut self.focus_stack);
         self.notify_focus_change();
     }
 
@@ -1790,6 +1793,7 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
                 self.key_dispatch_config.focus_policy,
                 FocusDirection::Next,
             ) {
+                focus_service::release_closing_saves(&self.core.tree, self.focus_stack);
                 return FrameworkDispatch::Handled;
             }
             return FrameworkDispatch::None;
@@ -1820,6 +1824,7 @@ impl<C: Component> DispatchOps for TestBackendDispatchOps<'_, C> {
                 self.key_dispatch_config.focus_policy,
                 FocusDirection::Prev,
             ) {
+                focus_service::release_closing_saves(&self.core.tree, self.focus_stack);
                 return FrameworkDispatch::Handled;
             }
             return FrameworkDispatch::None;

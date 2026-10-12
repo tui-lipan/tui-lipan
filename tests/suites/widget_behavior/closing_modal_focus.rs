@@ -1,9 +1,10 @@
-//! A modal playing its exit animation has already let go of focus. A focus request made in the
-//! update that closed it must not be undone when the animation ends and the focus the modal saved
-//! on opening is restored.
+//! A modal playing its exit animation has already let go of focus. Focus moved on purpose before
+//! the animation ends, by the app or by the user, must not be undone when it ends and the focus the
+//! modal saved on opening is restored.
 
 use std::time::Duration;
 
+use tui_lipan::core::event::{MouseButton, MouseEvent, MouseKind};
 use tui_lipan::prelude::*;
 use tui_lipan::{TestBackend, VisibilityAnimation};
 
@@ -17,6 +18,9 @@ enum Msg {
     Open,
     Close,
     CloseAndFocusAfter,
+    Blur,
+    FocusNext,
+    FocusPrev,
 }
 
 struct Host;
@@ -38,6 +42,9 @@ impl Component for Host {
                 ctx.state.open = false;
                 ctx.request_focus("after");
             }
+            Msg::Blur => ctx.blur(),
+            Msg::FocusNext => ctx.focus_next(),
+            Msg::FocusPrev => ctx.focus_prev(),
         }
         Update::full()
     }
@@ -88,6 +95,21 @@ fn opened() -> TestBackend<Host> {
     backend
 }
 
+/// The modal from [`opened`], closed and still playing its exit animation.
+fn closing() -> TestBackend<Host> {
+    let mut backend = opened();
+    backend.dispatch(Msg::Close).expect("close");
+    backend.render();
+    assert_eq!(backend.focused_key(), Some(&Key::from("before")));
+    backend
+}
+
+/// Let the exit animation finish, which is when the modal's saved focus would be restored.
+fn finish(backend: &mut TestBackend<Host>) {
+    backend.advance(Duration::from_millis(250));
+    backend.render();
+}
+
 #[test]
 fn a_focus_request_made_while_closing_outlasts_the_exit_animation() {
     let mut backend = opened();
@@ -98,8 +120,7 @@ fn a_focus_request_made_while_closing_outlasts_the_exit_animation() {
     backend.render();
     assert_eq!(backend.focused_key(), Some(&Key::from("after")));
 
-    backend.advance(Duration::from_millis(250));
-    backend.render();
+    finish(&mut backend);
     assert_eq!(
         backend.focused_key(),
         Some(&Key::from("after")),
@@ -109,13 +130,74 @@ fn a_focus_request_made_while_closing_outlasts_the_exit_animation() {
 
 #[test]
 fn closing_without_a_request_still_returns_to_the_saved_focus() {
-    let mut backend = opened();
+    let mut backend = closing();
 
-    backend.dispatch(Msg::Close).expect("close");
-    backend.render();
+    finish(&mut backend);
     assert_eq!(backend.focused_key(), Some(&Key::from("before")));
+}
 
-    backend.advance(Duration::from_millis(250));
+#[test]
+fn traversal_requested_during_the_exit_animation_outlasts_it() {
+    for msg in [Msg::FocusNext, Msg::FocusPrev] {
+        let mut backend = closing();
+
+        backend.dispatch(msg).expect("traverse");
+        backend.render();
+        assert_eq!(backend.focused_key(), Some(&Key::from("after")));
+
+        finish(&mut backend);
+        assert_eq!(backend.focused_key(), Some(&Key::from("after")));
+    }
+}
+
+#[test]
+fn a_blur_requested_during_the_exit_animation_outlasts_it() {
+    let mut backend = closing();
+
+    backend.dispatch(Msg::Blur).expect("blur");
     backend.render();
-    assert_eq!(backend.focused_key(), Some(&Key::from("before")));
+    assert_eq!(backend.focused(), None);
+
+    finish(&mut backend);
+    assert_eq!(backend.focused(), None);
+    assert_eq!(backend.focused_key(), None);
+}
+
+#[test]
+fn tab_pressed_during_the_exit_animation_outlasts_it() {
+    let mut backend = closing();
+
+    backend
+        .send_key(KeyEvent {
+            code: KeyCode::Tab,
+            mods: KeyMods::NONE,
+        })
+        .expect("tab");
+    backend.render();
+    assert_eq!(backend.focused_key(), Some(&Key::from("after")));
+
+    finish(&mut backend);
+    assert_eq!(backend.focused_key(), Some(&Key::from("after")));
+}
+
+#[test]
+fn a_click_during_the_exit_animation_outlasts_it() {
+    let mut backend = closing();
+    let after = backend
+        .rect_of_key(&Key::from("after"))
+        .expect("after laid out");
+
+    backend
+        .send_mouse(MouseEvent {
+            x: u16::try_from(after.x).expect("on screen"),
+            y: u16::try_from(after.y).expect("on screen"),
+            kind: MouseKind::Down(MouseButton::Left),
+            mods: KeyMods::NONE,
+        })
+        .expect("click");
+    backend.render();
+    assert_eq!(backend.focused_key(), Some(&Key::from("after")));
+
+    finish(&mut backend);
+    assert_eq!(backend.focused_key(), Some(&Key::from("after")));
 }

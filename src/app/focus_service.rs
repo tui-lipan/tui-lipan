@@ -326,15 +326,18 @@ pub(crate) fn apply_focus_request(
             *refs.focused_tag = None;
             *refs.unclassified_focus_request = None;
             *refs.deferred_outside_focus = None;
+            release_closing_saves(tree, refs.focus_stack);
         }
         FocusRequest::Next => {
             if !overlay_step(tree, refs, FocusDirection::Next) {
                 focus::focus_next(tree, refs.focused, refs.focused_key, refs.focused_tag);
+                release_closing_saves(tree, refs.focus_stack);
             }
         }
         FocusRequest::Prev => {
             if !overlay_step(tree, refs, FocusDirection::Prev) {
                 focus::focus_prev(tree, refs.focused, refs.focused_key, refs.focused_tag);
+                release_closing_saves(tree, refs.focus_stack);
             }
         }
     }
@@ -436,7 +439,7 @@ pub(crate) fn classify_focus_request(tree: &NodeTree, refs: &mut FocusRefs<'_>) 
         Some(overlay) => classify_unclassified_request(tree, refs, overlay.id),
         None => {
             if refs.unclassified_focus_request.is_some() {
-                drop_released_saves(tree, refs);
+                release_closing_saves(tree, refs.focus_stack);
             }
             restore_unclassified_request(tree, refs)
         }
@@ -445,14 +448,16 @@ pub(crate) fn classify_focus_request(tree: &NodeTree, refs: &mut FocusRefs<'_>) 
 
 /// Forget the focus saved by overlays still playing their exit animation.
 ///
-/// Such an overlay is live until the animation ends, and only then is its save restored. A focus
-/// request made in between is where the app wants focus now: restoring the save afterwards would
-/// undo it, as with a picker that closes onto the item it picked.
-fn drop_released_saves(tree: &NodeTree, refs: &mut FocusRefs<'_>) {
-    while refs.focus_stack.last().is_some_and(|entry| {
+/// Such an overlay is live until the animation ends, and only then is its save restored. Focus that
+/// was moved on purpose in between, by the app (a keyed request, `blur`, `focus_next`,
+/// `focus_prev`) or by the user (a click, Tab), is where focus belongs now: restoring the save
+/// afterwards would undo it, as with a picker that closes onto the item it picked. Call this after
+/// every such change; automatic restoration never does.
+pub(crate) fn release_closing_saves(tree: &NodeTree, focus_stack: &mut Vec<FocusStackEntry>) {
+    while focus_stack.last().is_some_and(|entry| {
         overlay_is_live(tree, entry.overlay) && !overlay_captures_focus(tree, entry.overlay)
     }) {
-        refs.focus_stack.pop();
+        focus_stack.pop();
     }
 }
 

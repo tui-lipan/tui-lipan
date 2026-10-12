@@ -571,6 +571,7 @@ impl<C: Component> DispatchOps for RunnerDispatchOps<'_, '_, C> {
                 self.focus_policy,
                 focus::FocusDirection::Next,
             ) {
+                focus_service::release_closing_saves(&self.core.tree, self.focus_stack);
                 return FrameworkDispatch::Handled;
             }
             return FrameworkDispatch::None;
@@ -601,6 +602,7 @@ impl<C: Component> DispatchOps for RunnerDispatchOps<'_, '_, C> {
                 self.focus_policy,
                 focus::FocusDirection::Prev,
             ) {
+                focus_service::release_closing_saves(&self.core.tree, self.focus_stack);
                 return FrameworkDispatch::Handled;
             }
             return FrameworkDispatch::None;
