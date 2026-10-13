@@ -363,6 +363,8 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
 
         if old_props.primary_truncate_description_first
             != ctx.props.primary_truncate_description_first
+            || old_props.primary_description_gap != ctx.props.primary_description_gap
+            || old_props.primary_min_label_width != ctx.props.primary_min_label_width
         {
             return Update::layout();
         }
@@ -434,6 +436,8 @@ impl<T: Clone + PartialEq + 'static> Component for SearchPaletteComponent<T> {
                     primary_truncate_description_first: ctx
                         .props
                         .primary_truncate_description_first,
+                    primary_description_gap: ctx.props.primary_description_gap,
+                    primary_min_label_width: ctx.props.primary_min_label_width,
                     line_width: effective_search_line_width(ctx),
                     highlight: ctx.props.match_style,
                 },

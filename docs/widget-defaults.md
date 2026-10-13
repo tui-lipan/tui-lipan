@@ -1192,6 +1192,8 @@ Source: `src/widgets/search_palette/mod.rs:803` (`SearchPalette`).
 | `description_selection` | `true` |
 | `description_overflow` | `DescriptionOverflow::Truncate` |
 | `primary_truncate_description_first` | `true` |
+| `primary_description_gap` | `0` |
+| `primary_min_label_width` | `None` |
 | `match_style` | `Style::default()` |
 | `show_scores` | `false` |
 | `score_gradient` | `None` |

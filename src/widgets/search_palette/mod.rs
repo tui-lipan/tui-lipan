@@ -610,6 +610,10 @@ pub(crate) struct SearchPaletteProps<T> {
     description_overflow: DescriptionOverflow,
     /// Prefer truncating the primary description before the primary label.
     primary_truncate_description_first: bool,
+    /// Blank columns kept between a primary label and its right-aligned description.
+    primary_description_gap: u16,
+    /// The share of a primary row a label keeps when its description wins the row.
+    primary_min_label_width: Option<Length>,
     match_style: Style,
     show_scores: bool,
     score_gradient: Option<ColorGradient>,
@@ -709,6 +713,8 @@ impl<T: PartialEq> PartialEq for SearchPaletteProps<T> {
             && self.description_selection == other.description_selection
             && self.description_overflow == other.description_overflow
             && self.primary_truncate_description_first == other.primary_truncate_description_first
+            && self.primary_description_gap == other.primary_description_gap
+            && self.primary_min_label_width == other.primary_min_label_width
             && self.preserve_groups == other.preserve_groups
             && self.preserve_item_order == other.preserve_item_order
             && self.navigation_wrap == other.navigation_wrap
@@ -903,6 +909,8 @@ impl<T: Clone + PartialEq> Default for SearchPalette<T> {
                 description_selection: true,
                 description_overflow: DescriptionOverflow::Truncate,
                 primary_truncate_description_first: true,
+                primary_description_gap: 0,
+                primary_min_label_width: None,
                 match_style: Style::default(),
                 show_scores: false,
                 score_gradient: None,
@@ -1683,6 +1691,34 @@ impl<T: Clone + PartialEq> SearchPalette<T> {
     /// visible while a long label is shortened.
     pub fn primary_truncate_description_first(mut self, truncate: bool) -> Self {
         self.props.primary_truncate_description_first = truncate;
+        self
+    }
+
+    /// Keep at least `gap` blank columns between a row's label and its right-aligned description.
+    ///
+    /// Applies to rows the palette builds for [`DescriptionPlacement::Right`], as
+    /// [`ListItem::primary_description_gap`] does for a single row: the gap replaces the single
+    /// space the palette otherwise puts in front of the description, and a description that would
+    /// be cut down to a bare `…` is hidden together with its gap. Defaults to `0`.
+    ///
+    /// [`ListItem::primary_description_gap`]: crate::widgets::ListItem::primary_description_gap
+    pub fn primary_description_gap(mut self, gap: u16) -> Self {
+        self.props.primary_description_gap = gap;
+        self
+    }
+
+    /// Keep at least this much of a row's label when its right-aligned description wins the row.
+    ///
+    /// Only matters with [`primary_truncate_description_first(false)`]: the description is cut
+    /// first until the label has this much, as [`ListItem::primary_min_label_width`] does for a
+    /// single row. `Length::Percent` is a share of the width the row's label, gap, and description
+    /// share. Rows from a custom [`render_item`] set their own.
+    ///
+    /// [`primary_truncate_description_first(false)`]: Self::primary_truncate_description_first
+    /// [`ListItem::primary_min_label_width`]: crate::widgets::ListItem::primary_min_label_width
+    /// [`render_item`]: Self::render_item
+    pub fn primary_min_label_width(mut self, width: Length) -> Self {
+        self.props.primary_min_label_width = Some(width);
         self
     }
 
