@@ -1221,8 +1221,8 @@ fn an_unchanged_image_pane_survives_an_unrelated_terminal_update() {
     let update = String::from_utf8_lossy(&output[initial..]);
     assert!(update.contains('X'));
     assert!(
-        update.contains("a=p,") || update.contains('\u{10EEEE}'),
-        "the unchanged image must be placed again: {update:?}"
+        !update.contains("\x1b_G"),
+        "unchanged native graphics must emit no commands: {update:?}"
     );
     assert_eq!(plan, Err(DamageRejection::HasImages));
 }
@@ -1426,4 +1426,24 @@ fn terminal_inside_declarative_portal_emits_native_placements() {
             .any(|command| { !command.split("\x1b\\").next().unwrap().contains("c=") }),
         "eligible portal terminal must emit native placements: {output:?}"
     );
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn parser_queries_do_not_write_a_terminal_paint_frame() {
+    let mut harness = build(PaneCfg::new(), b"stable");
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+    let cursor = StdCell::new(None);
+    harness.runner.with_render_context(&cursor, |ctx| {
+        terminal.draw(|f| render(f, ctx)).unwrap();
+    });
+    let initial = terminal.backend().test_output().len();
+    let mutation = harness.screen.borrow_mut().process_bytes(b"\x1b[c");
+    assert!(mutation.responses);
+    assert!(!mutation.is_visual());
+    harness
+        .runner
+        .render_terminal_paint_only(&mut terminal)
+        .unwrap();
+    assert_eq!(terminal.backend().test_output().len(), initial);
 }

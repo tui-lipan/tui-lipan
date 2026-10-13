@@ -1,8 +1,15 @@
 #[cfg(feature = "terminal-images")]
 mod native_patches;
 #[cfg(feature = "terminal-images")]
+mod native_scene;
+#[cfg(feature = "terminal-images")]
 pub(crate) use native_patches::{
     NativeImageLease, native_layer_scope, render_native_terminal_images, take_retired_native_ids,
+};
+#[cfg(feature = "terminal-images")]
+pub(crate) use native_scene::{
+    HostGraphicsScene, SceneTransition, native_source_unavailable,
+    owner_scope as native_scene_owner_scope, take_desired,
 };
 
 #[cfg(feature = "terminal-images")]
@@ -1358,11 +1365,19 @@ impl Drop for KittyUpload {
     }
 }
 
+#[cfg(feature = "terminal-images")]
+pub(crate) fn begin_partial_native_scene() {
+    if !capturing_images() {
+        native_scene::begin(false);
+    }
+}
+
 /// Keep this frame's uploads alive through cache eviction, but release discarded paints on the
 /// next frame. Captures must not clear uploads staged by an outer live paint.
 #[cfg(feature = "terminal-images")]
 pub(crate) fn begin_kitty_frame() {
     if !capturing_images() {
+        native_scene::begin(true);
         PENDING_KITTY_UPLOADS.with(|pending| pending.borrow_mut().clear());
         PENDING_KITTY_PLACEMENTS.with(|pending| pending.borrow_mut().clear());
         if let Some(encoder) = ENCODER.get()
@@ -1849,7 +1864,7 @@ struct ImageRenderCache {
 }
 
 impl ImageRenderCache {
-    #[cfg(feature = "terminal-images")]
+    #[cfg(all(test, feature = "terminal-images"))]
     fn remove_unattempted_native_images(&mut self) {
         for index in (0..self.entries.len()).rev() {
             let EncodedProtocol::CompressedKitty(image) = &*self.entries[index].protocol else {

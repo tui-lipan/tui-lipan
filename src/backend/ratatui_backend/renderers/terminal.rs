@@ -866,6 +866,9 @@ pub(crate) fn render_terminal_node(
     rrect: ratatui::layout::Rect,
     clip_bounds: Option<Rect>,
 ) {
+    #[cfg(feature = "terminal-images")]
+    let _native_scene_scope =
+        crate::backend::ratatui_backend::renderers::image::native_scene_owner_scope(node_id);
     let is_focused = Some(node_id) == state.ctx.focused;
     let is_hovered = Some(node_id) == state.ctx.hovered;
 

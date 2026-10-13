@@ -298,3 +298,21 @@ triage criteria and wiring checklist in [Widget authoring](widget-authoring.md).
 
 This is a fast-moving prototype. Prefer improving the architecture over preserving
 obsolete internal shapes.
+
+### Persistent native terminal graphics
+
+The retained terminal graphics store remains the source for replay, composition, recording, and
+capture. Native Kitty rendering stages a desired scene identified by terminal node, logical image
+incarnation, logical placement, and compacted region. Uncovered scanline intervals merge vertically
+when their host and source pixels are contiguous. More than 512 regions selects composition.
+
+`HostBackend` owns the committed sources and placements. Sources retain client-local image IDs
+across revision changes. Placements retain `p=` IDs and only emit commands for changed geometry or
+source revisions. Source replacement conservatively refreshes placements under their existing IDs.
+Frame staging is transient; no committed scene lives in a thread-local cache.
+
+The backend prepares a scene transition before drawing cells and promotes it after a successful
+flush without discarded output. Failed or discarded output retains the transition for recovery,
+including upload handoffs and retired resource ownership. A recovery frame re-establishes sources
+and placements omitted by partial repaint. Composition removes obsolete native placements before
+composed cells draw. Fresh backend lifetimes allocate and upload their own complete scene.

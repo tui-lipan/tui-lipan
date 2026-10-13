@@ -523,6 +523,8 @@ pub(crate) fn render_regions(
 ) {
     #[cfg(feature = "terminal-images")]
     crate::backend::ratatui_backend::renderers::image::begin_kitty_frame();
+    #[cfg(feature = "terminal-images")]
+    crate::backend::ratatui_backend::renderers::image::begin_partial_native_scene();
     let tree = ctx.tree;
     let content = f.area();
     let focus_chain = build_focus_chain(tree, ctx.focused);

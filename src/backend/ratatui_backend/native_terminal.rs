@@ -257,6 +257,10 @@ pub(crate) struct HostBackend<W: io::Write> {
     #[cfg(feature = "terminal-images")]
     placement_deletes: Vec<String>,
     #[cfg(feature = "terminal-images")]
+    graphics_scene: super::renderers::image::HostGraphicsScene,
+    #[cfg(feature = "terminal-images")]
+    pending_scene: Option<(super::renderers::image::SceneTransition, usize, bool)>,
+    #[cfg(feature = "terminal-images")]
     retired_native_ids: Vec<u32>,
     #[cfg(feature = "terminal-images")]
     placement_retirement: Option<(usize, usize)>,
@@ -275,6 +279,10 @@ impl<W: io::Write> HostBackend<W> {
             uploads: Vec::new(),
             #[cfg(feature = "terminal-images")]
             placement_deletes: Vec::new(),
+            #[cfg(feature = "terminal-images")]
+            graphics_scene: Default::default(),
+            #[cfg(feature = "terminal-images")]
+            pending_scene: None,
             #[cfg(feature = "terminal-images")]
             retired_native_ids: Vec::new(),
             #[cfg(feature = "terminal-images")]
@@ -296,6 +304,19 @@ impl<W: io::Write> HostBackend<W> {
         for (upload, epoch) in self.uploads.drain(..) {
             if result.is_ok() && epoch == self.dropped.load(Ordering::Relaxed) {
                 upload.handed_over();
+            }
+        }
+        #[cfg(feature = "terminal-images")]
+        if let Some((transition, epoch, ready)) = self.pending_scene.as_mut() {
+            if result.is_ok() && *ready && *epoch == self.dropped.load(Ordering::Relaxed) {
+                for upload in &transition.uploads {
+                    upload.handed_over();
+                }
+                self.graphics_scene = transition.next.clone();
+                self.graphics_scene.commit_retirements();
+                self.pending_scene = None;
+            } else {
+                *ready = false;
             }
         }
         result
@@ -349,6 +370,22 @@ impl<W: io::Write> Backend for HostBackend<W> {
             use super::renderers::image::{kitty_draw_pending, prepare_kitty_cells};
             let epoch = self.dropped.load(Ordering::Relaxed);
             self.placement_retirement = None;
+            if let Some((_, _, ready)) = self.pending_scene.as_mut() {
+                *ready = false;
+            }
+            if let Some(desired) = super::renderers::image::take_desired() {
+                let reserved = self
+                    .pending_scene
+                    .as_ref()
+                    .map(|(transition, _, _)| &transition.next);
+                let transition = self.graphics_scene.prepare(desired, reserved)?;
+                self.pending_scene = Some((transition, epoch, false));
+                if let Some((transition, _, _)) = &self.pending_scene {
+                    for command in &transition.commands {
+                        self.backend.write_all(command.as_bytes())?;
+                    }
+                }
+            }
             self.retired_native_ids
                 .extend(super::renderers::image::take_retired_native_ids());
             for id in &self.retired_native_ids {
@@ -359,7 +396,11 @@ impl<W: io::Write> Backend for HostBackend<W> {
             }
             self.placement_retirement = Some((self.placement_deletes.len(), epoch));
             if !kitty_draw_pending() {
-                return self.backend.draw(content);
+                self.backend.draw(content)?;
+                if let Some((_, _, ready)) = self.pending_scene.as_mut() {
+                    *ready = true;
+                }
+                return Ok(());
             }
             let prepared = prepare_kitty_cells(content)?;
             self.placement_deletes.extend(prepared.placement_deletes);
@@ -373,6 +414,9 @@ impl<W: io::Write> Backend for HostBackend<W> {
             // has not discarded any part of this frame during terminal release.
             self.uploads
                 .extend(prepared.uploads.into_iter().map(|upload| (upload, epoch)));
+            if let Some((_, _, ready)) = self.pending_scene.as_mut() {
+                *ready = true;
+            }
             Ok(())
         }
         #[cfg(not(feature = "terminal-images"))]

@@ -592,3 +592,29 @@ warm unchanged renders last. The warm path is already expected to be cheap.
 - Are histories, outputs, caches, and pending work bounded?
 - Is blocking work command-driven, cancellable, and coalesced?
 - Was the change measured in a release build with representative data?
+
+## Native terminal graphics
+
+Natural-size Kitty sources use a backend-owned retained host scene. Source revisions reuse the
+same host image ID. Unchanged placements emit no commands on an unrelated full-tree paint;
+geometry or source changes refresh only the affected persistent placement IDs. Visible scanline
+intervals merge into rectangles. An unobstructed pane-sized image needs one native region. More
+than 512 regions selects the existing composed renderer.
+
+Terminal input classification comes from completed parser operations through `TerminalMutation`.
+A query or incomplete upload does not request visual work. Live screen handles register weak
+runner wakeups instead of imposing a frame-rate poll while quiet. A handle outliving its runner
+returns to the compatibility polling path.
+
+The native scene foundation still uses the ordinary terminal repaint path for graphics changes.
+It does not yet provide graphics-only cell-tree bypass, presentation acknowledgements, transport
+coalescing, or producer pacing.
+
+Foundation validation used `terminal_patch_layers` with native and composed modes in isolated
+Ghostty windows at 980×720, scale 1, JetBrainsMono NF. Image-only, text-overlay, and block-overlay
+captures each matched exactly in a 330×215 region at offset 0,20, with zero differing pixels out of
+70,950. A separate instrumented debug run confirmed native commands reached the host. Three
+unchanged `n` actions emitted zero additional image uploads or placements; the 192 TTY bytes were
+ordinary frame/chrome output. This is correctness and traffic evidence for this fixture, not a
+high-rate FPS, CPU, memory, or browser benchmark. The command counter was injected only into the
+owned fixture executable and excluded Ghostty.

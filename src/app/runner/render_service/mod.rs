@@ -874,6 +874,9 @@ impl<C: Component> AppRunner<C> {
         }
 
         let refresh = self.core.tree.refresh_live_terminals_detailed();
+        if !refresh.changed {
+            return Ok(());
+        }
         self.emit_terminal_focus_change();
         let frame_area = terminal.get_frame().area();
         if let Some(plan) = self.prepare_terminal_damage_plan(&refresh, frame_area) {
@@ -1087,10 +1090,18 @@ impl<C: Component> AppRunner<C> {
                 {
                     // The whole tree paints: every slot with a reader on screen is read now.
                     self.core.ctx.env().animations.begin_paint();
-                    let completed = terminal.draw(|f| {
-                        render(f, ctx);
-                    })?;
-                    replace_buffer_snapshot(&mut last_snapshot, completed.buffer);
+                    match terminal.draw(|f| render(f, ctx)) {
+                        Ok(completed) => replace_buffer_snapshot(&mut last_snapshot, completed.buffer),
+                        #[cfg(feature = "terminal-images")]
+                        Err(error) if crate::backend::ratatui_backend::renderers::image::native_source_unavailable(&error) => {
+                            // Preparation failed before any native commands were written. Retry
+                            // the retained scene through composition for this whole frame.
+                            let _native_scope = crate::backend::ratatui_backend::renderers::image::native_layer_scope(false);
+                            let completed = terminal.draw(|f| render(f, ctx))?;
+                            replace_buffer_snapshot(&mut last_snapshot, completed.buffer);
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
                 }
                 #[cfg(feature = "terminal")]
                 if let Some(frame) = last_snapshot.as_ref() {

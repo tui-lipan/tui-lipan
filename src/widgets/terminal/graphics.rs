@@ -300,6 +300,7 @@ impl TerminalImage {
         ))
     }
 
+    #[cfg(test)]
     pub(crate) fn native_lease(
         &self,
     ) -> Arc<crate::backend::ratatui_backend::renderers::image::NativeImageLease> {
