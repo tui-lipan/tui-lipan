@@ -360,3 +360,6 @@ pub use terminal::{
     DamagedRow, GraphicsDamage, PresentedTerminal, TerminalDamage, TerminalMutation,
     TerminalPresentationSubscription,
 };
+
+#[cfg(feature = "terminal-images")]
+pub use terminal::{GraphicsDependency, TerminalOutputClass, TerminalOutputTransaction};

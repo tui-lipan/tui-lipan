@@ -268,7 +268,7 @@ impl HostGraphicsScene {
         let EncodedProtocol::CompressedKitty(image) = &*source.protocol else {
             return Err(std::io::Error::other("invalid native image protocol"));
         };
-        if let Some(sequence) = image.upload.attempt_sequence()? {
+        if let Some(sequence) = image.upload.attempt_native_sequence()? {
             commands.push(sequence);
             uploads.push(Arc::clone(&image.upload));
         }
@@ -581,6 +581,8 @@ mod tests {
         draw(&mut host).unwrap();
         let first = output.take();
         assert_eq!(first.matches("a=p").count(), 1);
+        assert!(first.contains("a=t,"));
+        assert!(!first.contains("U=1"));
         stage_frame(&mut screen);
         draw(&mut host).unwrap();
         assert!(!output.take().contains("\x1b_G"));

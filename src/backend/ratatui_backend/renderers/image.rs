@@ -1269,6 +1269,14 @@ thread_local! {
 
 #[cfg(feature = "terminal-images")]
 impl KittyUpload {
+    fn attempt_native_sequence(&self) -> std::io::Result<Option<String>> {
+        // Native scenes own ordinary placements. Upload only source data; the scene
+        // reconciler refreshes its persistent placements after a source replacement.
+        Ok(self
+            .attempt_sequence()?
+            .map(|sequence| sequence.replacen(",a=T,U=1,", ",a=t,", 1)))
+    }
+
     fn attempt_sequence(&self) -> std::io::Result<Option<String>> {
         let sequence = self
             .transmit

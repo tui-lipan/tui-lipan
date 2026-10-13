@@ -1332,11 +1332,12 @@ pub(crate) fn terminal_mouse_forward_plan(
     let NodeKind::Terminal(term) = &node.kind else {
         return None;
     };
-    if term.mouse_mode.mode == MouseMode::None {
+    let mouse_mode = term.input_mouse_mode();
+    if mouse_mode.mode == MouseMode::None {
         return None;
     }
 
-    let should_forward = match term.mouse_mode.mode {
+    let should_forward = match mouse_mode.mode {
         MouseMode::X10 => matches!(mouse.kind, MouseKind::Down(_)),
         MouseMode::Normal => matches!(
             mouse.kind,
@@ -1352,7 +1353,7 @@ pub(crate) fn terminal_mouse_forward_plan(
     if !should_forward {
         return None;
     }
-    if matches!(mouse.kind, MouseKind::Moved) && term.mouse_mode.mode != MouseMode::AnyEvent {
+    if matches!(mouse.kind, MouseKind::Moved) && mouse_mode.mode != MouseMode::AnyEvent {
         return None;
     }
 
@@ -1365,7 +1366,7 @@ pub(crate) fn terminal_mouse_forward_plan(
     }
 
     let callback = term.on_mouse_forward.clone()?;
-    let encoding = term.mouse_mode.encoding;
+    let encoding = mouse_mode.encoding;
     let geometry = crate::widgets::MouseReportGeometry {
         content_origin: (content_rect.x.max(0) as u16, content_rect.y.max(0) as u16),
         sub_cell,

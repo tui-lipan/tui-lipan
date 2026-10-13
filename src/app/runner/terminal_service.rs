@@ -201,7 +201,7 @@ impl<C: Component> AppRunner<C> {
         }
         match self.core.tree.node(id).kind {
             NodeKind::Terminal(ref node)
-                if node.mouse_mode.focus_events_enabled && node.on_input.is_some() =>
+                if node.input_mouse_mode().focus_events_enabled && node.on_input.is_some() =>
             {
                 Some(TerminalFocusRecipient {
                     node_id: id,
@@ -226,7 +226,7 @@ impl<C: Component> AppRunner<C> {
         // A replacement screen has a different input recipient. Never send the old child's
         // focus-out through the new child's callback. Callbacks themselves are recreated by
         // view(), so the live screen is the stable identity across ordinary reconciliations.
-        if node.screen != recipient.screen || !node.mouse_mode.focus_events_enabled {
+        if node.screen != recipient.screen || !node.input_mouse_mode().focus_events_enabled {
             return;
         }
         let Some(cb) = node.on_input.as_ref() else {

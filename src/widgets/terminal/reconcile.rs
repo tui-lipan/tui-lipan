@@ -196,6 +196,7 @@ pub(crate) fn reconcile_terminal(
         decorations: terminal.decorations.clone(),
         live_sequence: live.as_ref().map(|s| s.sequence),
         live_cell_generation: live.as_ref().map_or(0, |s| s.cell_generation),
+        live_graphics_generation: live.as_ref().map_or(0, |s| s.graphics_generation),
         presentation: live.as_ref().and_then(|s| s.presentation),
         show_cursor_requested: terminal.show_cursor,
         paste_shortcut_behavior: terminal.paste_shortcut_behavior,

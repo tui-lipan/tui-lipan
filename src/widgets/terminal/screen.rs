@@ -560,6 +560,8 @@ pub struct TerminalScreen {
     graphics_generation: u64,
     grid_mutated: bool,
     mutation_waker: Option<std::rc::Weak<dyn Fn()>>,
+    #[cfg(feature = "terminal-images")]
+    output_transactions: Option<Vec<super::output::TerminalOutputTransaction>>,
     /// Independent from paint damage: a snapshot reader must not consume the renderer's damage.
     snapshot_damage: DamageAccumulator,
     sequence: u64,
@@ -636,6 +638,16 @@ impl MutationBaseline {
 pub struct TerminalScreenHandle(Rc<RefCell<TerminalScreen>>);
 
 impl TerminalScreenHandle {
+    /// Current input modes, read directly without constructing a render snapshot.
+    pub fn key_modes(&self) -> TerminalKeyModes {
+        self.0.borrow().key_modes()
+    }
+
+    /// Current mouse protocol, independent of presentation cadence.
+    pub fn mouse_mode(&self) -> MouseModeState {
+        self.0.borrow().mouse_mode()
+    }
+
     pub(crate) fn set_mutation_waker(&self, wake: Rc<dyn Fn()>) {
         self.0.borrow_mut().mutation_waker = Some(Rc::downgrade(&wake));
     }
@@ -1249,6 +1261,8 @@ impl TerminalScreen {
             graphics_generation: 0,
             grid_mutated: false,
             mutation_waker: None,
+            #[cfg(feature = "terminal-images")]
+            output_transactions: None,
             snapshot_damage: DamageAccumulator::default(),
             processor: VteProcessor::new(),
             term,
@@ -1367,7 +1381,9 @@ impl TerminalScreen {
         let cells = self.collect_damage();
         // Alacritty unconditionally damages the cursor on damage(). Require a completed
         // grid operation or a cursor/mode change before treating it as visual damage.
-        if self.grid_mutated || mutation.cursor_changed || before.modes != *self.term.mode() {
+        let visual_mode =
+            before.modes != *self.term.mode() && matches!(cells, TerminalDamage::Full);
+        if self.grid_mutated || mutation.cursor_changed || visual_mode {
             mutation.cells = cells;
             self.record_damage(&mutation.cells);
         }
@@ -1375,10 +1391,7 @@ impl TerminalScreen {
         {
             mutation.graphics = self.graphics.take_damage();
         }
-        if mutation.cells != TerminalDamage::None
-            || mutation.cursor_changed
-            || mutation.modes_changed
-        {
+        if mutation.cells != TerminalDamage::None || mutation.cursor_changed {
             self.cell_generation = self.cell_generation.wrapping_add(1);
         }
         if mutation.graphics != super::damage::GraphicsDamage::None {
@@ -1409,6 +1422,66 @@ impl TerminalScreen {
         self.cell_generation = self.cell_generation.wrapping_add(1);
         self.mutation.cells.merge(TerminalDamage::Full);
         self.notify_mutation();
+    }
+
+    /// Record lossless output transactions using the existing graphics protocol parser.
+    /// Configure this before feeding producer output. Recording is disabled by default, so
+    /// ordinary terminal views pay no additional byte-buffering cost.
+    #[cfg(feature = "terminal-images")]
+    pub fn set_output_transaction_recording(&mut self, enabled: bool) {
+        self.output_transactions = enabled.then(Vec::new);
+        self.graphics_scanner.set_record_output(enabled);
+    }
+
+    /// Take completed transactions in exact producer order. A split APC remains pending until
+    /// complete; APCs exceeding the additional 1 MiB buffering bound stream as ordered fragments.
+    #[cfg(feature = "terminal-images")]
+    pub fn take_output_transactions(&mut self) -> Vec<super::output::TerminalOutputTransaction> {
+        self.output_transactions
+            .as_mut()
+            .map_or_else(Vec::new, std::mem::take)
+    }
+
+    /// Whether output contains an unfinished escape or chunked image transmission. A producer
+    /// pacer can use this to grant continuation reads when no completed frame awaits presentation.
+    #[cfg(feature = "terminal-images")]
+    pub fn output_transaction_pending(&self) -> bool {
+        self.graphics_scanner.output_pending() || self.graphics.has_pending_transmission()
+    }
+
+    /// Make pending original bytes ordered before an external resize, reset or exit boundary.
+    /// Subsequent continuation bytes remain ordered; the parser itself is not reset.
+    #[cfg(feature = "terminal-images")]
+    pub fn flush_output_transaction_boundary(&mut self) {
+        let bytes = self.graphics_scanner.flush_pending_wire();
+        self.record_owned_output(bytes, super::output::TerminalOutputClass::Ordered);
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn record_output(&mut self, bytes: &[u8], class: super::output::TerminalOutputClass) {
+        if self.output_transactions.is_some() && !bytes.is_empty() {
+            self.record_owned_output(bytes.to_vec(), class);
+        }
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn record_owned_output(&mut self, bytes: Vec<u8>, class: super::output::TerminalOutputClass) {
+        use super::output::{TerminalOutputClass, TerminalOutputTransaction};
+        let Some(transactions) = self.output_transactions.as_mut() else {
+            return;
+        };
+        if bytes.is_empty() {
+            return;
+        }
+        if class == TerminalOutputClass::Ordered
+            && let Some(previous) = transactions.last_mut()
+            && previous.class == TerminalOutputClass::Ordered
+            && previous.bytes.len().saturating_add(bytes.len()) <= 1024 * 1024
+        {
+            previous.bytes.extend_from_slice(&bytes);
+        } else {
+            transactions.push(TerminalOutputTransaction { bytes, class });
+        }
     }
 
     /// Stable identity of this retained screen, independent of mounted widgets or host IDs.
@@ -1587,6 +1660,7 @@ impl TerminalScreen {
     #[cfg(feature = "terminal-images")]
     fn feed_grid(&mut self, bytes: &[u8]) -> usize {
         if self.graphics_scanner.is_plain(bytes) {
+            self.record_output(bytes, super::output::TerminalOutputClass::Ordered);
             let evicted = self.advance_vte(bytes);
             self.settle_graphics(evicted);
             return evicted;
@@ -1596,10 +1670,22 @@ impl TerminalScreen {
         let mut unsettled = 0;
         for segment in self.graphics_scanner.scan(bytes) {
             match segment {
-                GraphicsSegment::Text(range) => unsettled += self.advance_vte(&bytes[range]),
-                GraphicsSegment::HeldEscape => unsettled += self.advance_vte(&[0x1b]),
+                GraphicsSegment::Text(range) => {
+                    self.record_output(
+                        &bytes[range.clone()],
+                        super::output::TerminalOutputClass::Ordered,
+                    );
+                    unsettled += self.advance_vte(&bytes[range]);
+                }
+                GraphicsSegment::HeldEscape => {
+                    self.record_output(&[0x1b], super::output::TerminalOutputClass::Ordered);
+                    unsettled += self.advance_vte(&[0x1b]);
+                }
+                GraphicsSegment::Wire(bytes) => {
+                    self.record_owned_output(bytes, super::output::TerminalOutputClass::Ordered)
+                }
                 GraphicsSegment::Command(command) => {
-                    let (before, after) = self.apply_graphics(*command, unsettled);
+                    let (before, after) = self.apply_graphics_with_output(*command, unsettled);
                     evicted += before;
                     unsettled = after;
                 }
@@ -1633,6 +1719,50 @@ impl TerminalScreen {
             (ledger.evicted(), ledger.reset(), ledger.left_alt_screen());
         self.apply_ledger_events(reset, left_alt_screen);
         evicted
+    }
+
+    #[cfg(feature = "terminal-images")]
+    fn apply_graphics_with_output(
+        &mut self,
+        mut command: GraphicsCommand,
+        unsettled: usize,
+    ) -> (usize, usize) {
+        use super::output::{GraphicsDependency, TerminalOutputClass};
+        let Some(wire) = command.take_wire() else {
+            return self.apply_graphics(command, unsettled);
+        };
+        let source_id = command.transmitted_id();
+        let previous = source_id.and_then(|id| self.graphics.replacement_observation(id));
+        let candidate = command.independent_candidate()
+            && !self.graphics.has_pending_transmission()
+            && !self.processor.sync_timeout().pending_timeout()
+            && self.processor.sync_bytes_count() == 0;
+        let result = self.apply_graphics(command, unsettled);
+        let current = source_id.and_then(|id| self.graphics.replacement_observation(id));
+        let class = match current {
+            Some(current)
+                if previous
+                    .as_ref()
+                    .is_none_or(|old| old.revision != current.revision) =>
+            {
+                let independent = candidate
+                    && previous
+                        .as_ref()
+                        .is_some_and(|old| current.independently_replaces(old));
+                TerminalOutputClass::Graphics {
+                    source: current.source,
+                    revision: current.revision,
+                    dependency: if independent {
+                        GraphicsDependency::Independent
+                    } else {
+                        GraphicsDependency::DependsOnPrevious
+                    },
+                }
+            }
+            _ => TerminalOutputClass::Ordered,
+        };
+        self.record_owned_output(wire, class);
+        result
     }
 
     /// Apply what the ledger saw happen to the grids, as opposed to lines it counted.
@@ -2401,6 +2531,8 @@ impl TerminalScreen {
                         )
                         .into();
                 }
+                self.cache.mouse_mode = self.mouse_mode;
+                self.cache.key_modes = self.key_modes();
                 self.cache.presentation = self.presentation();
                 self.cache.sequence = self.sequence;
                 self.cache.graphics_generation = self.graphics_generation;

@@ -1082,3 +1082,27 @@ written host frame. `screen.stable_terminal_id()` identifies the screen across m
 Tokens do not trigger a frame. Failed writes and discarded frames do not report tokens, and
 software captures and recording renders do not count as host presentation. A handler that only
 forwards acknowledgements should return `Update::none()`.
+
+### Lossless semantic output transactions
+
+Session transports can call `screen.set_output_transaction_recording(true)` before feeding output,
+then drain `screen.take_output_transactions()` after parsing. Recording is optional and disabled
+by default. Each `TerminalOutputTransaction` contains the exact original bytes and a
+`TerminalOutputClass` established by the same parser that changes the retained scene.
+
+`Ordered` segments must retain their order and bytes. `Graphics` segments include the stable source
+key, its revision, and `GraphicsDependency`. Only `Independent` transactions can supersede earlier
+pending transactions for the same source without an intervening ordered barrier. Current eligibility
+requires a complete, accepted replacement of a nonzero image ID with unchanged placements, quiet
+responses, reusable media, and no cursor or grid effects. Partial patches, chunked uploads, queries,
+unknown controls, consuming media and id-less creations remain dependent or ordered.
+
+A graphics escape spanning several parser calls is emitted only when complete. Additional recording
+buffers are bounded to 1 MiB per command; larger commands stream as ordered fragments. Before an
+external resize, reset or exit boundary, call `flush_output_transaction_boundary()` and drain the
+transactions. This forwards unfinished bytes as ordered without resetting the parser; continuation
+bytes remain ordered. Concatenating transactions reproduces the original byte stream exactly.
+
+Mode changes without visual effects update live input handling without painting cells. Live screens
+supply current keyboard, paste, mouse and focus modes directly rather than waiting for an app view
+rebuild. An unchanged native scene writes no synchronized-output wrapper and reports no presentation.

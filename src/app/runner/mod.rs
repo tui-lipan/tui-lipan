@@ -612,6 +612,8 @@ pub struct AppRunner<C: Component> {
     pub(crate) dnd_snapshot_cells:
         std::cell::RefCell<Option<(u16, u16, Vec<ratatui::buffer::Cell>)>>,
     /// Copy of the last presented terminal buffer for scroll fast paths.
+    frame_rendered: bool,
+    host_frame_presented: bool,
     pub(crate) last_frame_snapshot: Option<ratatui::buffer::Buffer>,
     #[cfg(feature = "terminal-images")]
     graphics_plan_epoch: Option<graphics_plan::GraphicsPresentationEpochs>,
@@ -913,6 +915,8 @@ impl<C: Component> AppRunner<C> {
             highlight: None,
             last_bounds: crate::style::Rect::default(),
             dnd_snapshot_cells: std::cell::RefCell::new(None),
+            frame_rendered: false,
+            host_frame_presented: false,
             last_frame_snapshot: None,
             #[cfg(feature = "terminal-images")]
             graphics_plan_epoch: None,
@@ -3115,6 +3119,8 @@ impl<C: Component> AppRunner<C> {
                     continue;
                 }
 
+                self.frame_rendered = false;
+                self.host_frame_presented = false;
                 match frame_level {
                     DirtyLevel::Full => {
                         if force_host_redraw {
@@ -3139,8 +3145,10 @@ impl<C: Component> AppRunner<C> {
                     DirtyLevel::None => {}
                 }
 
-                if !matches!(frame_level, DirtyLevel::None) {
+                if self.host_frame_presented {
                     frame_clock.presented(Instant::now());
+                }
+                if self.frame_rendered {
                     snapshot_answered = self.apply_pending_ui_snapshot_request()?;
                     snapshot_answered |= self.deliver_painted_frame();
                     #[cfg(feature = "terminal")]

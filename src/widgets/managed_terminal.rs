@@ -610,10 +610,7 @@ impl ManagedTerminal {
     }
 
     fn mutation_update(mutation: &super::terminal::TerminalMutation) -> Update {
-        if mutation.cells != super::terminal::TerminalDamage::None
-            || mutation.cursor_changed
-            || mutation.modes_changed
-        {
+        if mutation.cells != super::terminal::TerminalDamage::None || mutation.cursor_changed {
             Update::terminal_paint()
         } else if mutation.graphics != super::terminal::GraphicsDamage::None {
             Update::terminal_graphics()

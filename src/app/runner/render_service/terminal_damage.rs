@@ -252,10 +252,10 @@ where
             .take()
             .expect("the plan proved a retained frame of this geometry");
 
-        let _ = crossterm::execute!(
+        crossterm::execute!(
             terminal.backend_mut(),
             crossterm::style::Print("\x1b[?2026h")
-        );
+        )?;
         let mut painted: Vec<u16> = Vec::with_capacity(plan.rows.len());
         let result: crate::Result<()> = self.with_render_context(&cursor_position, |ctx| {
             for &row in &plan.rows {
@@ -269,14 +269,15 @@ where
             place_caret(terminal, cursor_position.get())?;
             Ok(())
         });
-        let _ = crossterm::execute!(
+        crossterm::execute!(
             terminal.backend_mut(),
             crossterm::style::Print("\x1b[?2026l")
-        );
+        )?;
 
         self.last_frame_snapshot = Some(snapshot);
         self.host_patched_rows.extend(painted);
         result?;
+        self.frame_rendered = true;
 
         self.terminal.update_cursor(
             terminal.backend_mut(),
@@ -285,7 +286,8 @@ where
             &self.widgets.text_area_vim_state,
         )?;
         terminal.backend_mut().flush()?;
-        if terminal.backend().output_epoch() == output_epoch {
+        self.host_frame_presented = terminal.backend().output_epoch() == output_epoch;
+        if self.host_frame_presented {
             self.core
                 .ctx
                 .env()

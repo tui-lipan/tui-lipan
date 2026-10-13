@@ -249,6 +249,14 @@ const CURSOR_REPLY_TIMEOUT: Duration = Duration::from_secs(2);
 /// without discarded frame output; ordinary placements are deleted on the following frame.
 ///
 /// [`host_input`]: super::host_input
+#[cfg(feature = "terminal-images")]
+pub(crate) enum GraphicsPresentation {
+    Unavailable,
+    Unchanged,
+    Written,
+    Discarded,
+}
+
 pub(crate) struct HostBackend<W: io::Write> {
     backend: CrosstermBackend<W>,
     #[cfg(test)]
@@ -320,15 +328,18 @@ impl<W: io::Write> HostBackend<W> {
                 &'a [crate::widgets::TerminalImagePlacement],
             ),
         >,
-    ) -> io::Result<bool> {
+    ) -> io::Result<GraphicsPresentation> {
         let Some(desired) = self.graphics_scene.graphics_update(updates) else {
-            return Ok(false);
+            return Ok(GraphicsPresentation::Unavailable);
         };
         let reserved = self
             .pending_scene
             .as_ref()
             .map(|(transition, _, _)| &transition.next);
         let transition = self.graphics_scene.prepare(desired, reserved)?;
+        if transition.commands.is_empty() {
+            return Ok(GraphicsPresentation::Unchanged);
+        }
         let epoch = self.dropped.load(Ordering::Relaxed);
         self.pending_scene = Some((transition, epoch, false));
         self.backend.write_all(b"\x1b[?2026h\x1b7")?;
@@ -342,10 +353,13 @@ impl<W: io::Write> HostBackend<W> {
             *ready = true;
         }
         self.flush_frame()?;
-        Ok(epoch == self.dropped.load(Ordering::Relaxed))
+        Ok(if epoch == self.dropped.load(Ordering::Relaxed) {
+            GraphicsPresentation::Written
+        } else {
+            GraphicsPresentation::Discarded
+        })
     }
 
-    #[cfg(feature = "terminal")]
     pub(crate) fn output_epoch(&self) -> usize {
         self.dropped.load(Ordering::Relaxed)
     }

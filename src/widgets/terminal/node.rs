@@ -58,6 +58,7 @@ pub(crate) struct TerminalNode {
     /// screen unmoved does nothing.
     pub live_sequence: Option<u64>,
     pub live_cell_generation: u64,
+    pub live_graphics_generation: u64,
     pub presentation: Option<super::presentation::PresentedTerminal>,
     /// Cursor visibility the app asked for, ANDed with what the live screen reports. A pane that is
     /// exited or wearing hint labels hides its caret no matter what the child program wants.
@@ -107,6 +108,18 @@ pub(crate) struct TerminalLinkHover {
 }
 
 impl TerminalNode {
+    pub(crate) fn input_key_modes(&self) -> TerminalKeyModes {
+        self.screen
+            .as_ref()
+            .map_or(self.key_modes, TerminalScreenHandle::key_modes)
+    }
+
+    pub(crate) fn input_mouse_mode(&self) -> MouseModeState {
+        self.screen
+            .as_ref()
+            .map_or(self.mouse_mode, TerminalScreenHandle::mouse_mode)
+    }
+
     /// Pull the live screen's current snapshot into this node, if it has moved since the last pull.
     ///
     /// Returns whether anything changed, so a caller can tell a repaint is warranted. Terminal
@@ -119,7 +132,7 @@ impl TerminalNode {
     /// here and only here, so a later consumer - the snapshot rebuild, an incremental repaint -
     /// takes it from the returned value rather than asking the screen again and starving whoever
     /// asks second.
-    pub(crate) fn refresh_from_live_screen(&mut self) -> Option<(TerminalDamage, bool)> {
+    pub(crate) fn refresh_from_live_screen(&mut self) -> Option<(TerminalDamage, bool, bool)> {
         let screen = self.screen.clone()?;
         let snapshot = screen.snapshot();
         let snapshot = if self.decorations.is_empty() {
@@ -131,8 +144,11 @@ impl TerminalNode {
         if self.live_sequence == Some(snapshot.sequence) {
             return None;
         }
-        let graphics_only =
-            self.live_cell_generation == snapshot.cell_generation && self.decorations.is_empty();
+        let cells_changed = self.live_cell_generation != snapshot.cell_generation;
+        let graphics_changed = self.live_graphics_generation != snapshot.graphics_generation;
+        let visual_changed = cells_changed || graphics_changed;
+        let graphics_only = !cells_changed && graphics_changed && self.decorations.is_empty();
+        self.live_graphics_generation = snapshot.graphics_generation;
         self.live_cell_generation = snapshot.cell_generation;
         self.live_sequence = Some(snapshot.sequence);
         self.apply_snapshot(&snapshot);
@@ -145,7 +161,7 @@ impl TerminalNode {
             let _ = screen.take_damage();
             TerminalDamage::Full
         };
-        Some((damage, graphics_only))
+        Some((damage, graphics_only, visual_changed))
     }
 
     /// Fill the snapshot-derived fields, keeping the scroll rules `reconcile_terminal` establishes:

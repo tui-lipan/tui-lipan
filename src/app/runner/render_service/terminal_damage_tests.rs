@@ -1555,12 +1555,14 @@ fn presentation_tokens_follow_successful_host_frames_and_ignore_failed_updates()
             .process_bytes(b"\x1b_Ga=T,f=32,s=1,v=1,i=919,C=1,q=2;/////w==\x1b\\");
         harness.screen.borrow_mut().set_presentation_token(2);
         let refresh = harness.runner.core.tree.refresh_live_terminals_detailed();
+        harness.runner.host_frame_presented = false;
         terminal.backend_mut().test_fail_next_flush(discard);
         let result = harness
             .runner
             .try_present_terminal_graphics(&mut terminal, &refresh);
         if discard {
-            assert!(!result.unwrap());
+            assert!(result.unwrap());
+            assert!(!harness.runner.host_frame_presented);
         } else {
             assert!(result.is_err());
         }
@@ -1579,4 +1581,41 @@ fn presentation_tokens_follow_successful_host_frames_and_ignore_failed_updates()
         assert_eq!(reports.borrow()[1][0].token, 2);
         assert_eq!(reports.borrow()[1][0].stable_terminal_id, id);
     }
+}
+
+#[cfg(feature = "terminal-images")]
+#[test]
+fn metadata_modes_and_unchanged_graphics_do_not_write_or_present_frames() {
+    let _host = crate::backend::ratatui_backend::image_support::test_kitty_host((10, 20), true);
+    let mut harness = build(PaneCfg::new(), b"stable\x1b[?25l");
+    harness
+        .screen
+        .borrow_mut()
+        .set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+    let mut terminal = crate::backend::ratatui_backend::create_test_terminal(COLS, ROWS).unwrap();
+    harness.runner.render_paint_only(&mut terminal).unwrap();
+    let start = terminal.backend().test_output().len();
+    for bytes in [b"\x1b[?2004h".as_slice(), b"\x1b[?1003h", b"\x1b[?1h"] {
+        let mutation = harness.screen.borrow_mut().process_bytes(bytes);
+        assert!(mutation.modes_changed);
+        assert!(!mutation.is_visual(), "{mutation:?}");
+        harness.runner.frame_rendered = false;
+        harness.runner.host_frame_presented = false;
+        harness
+            .runner
+            .render_terminal_paint_only(&mut terminal)
+            .unwrap();
+        assert!(!harness.runner.frame_rendered);
+        assert!(!harness.runner.host_frame_presented);
+        assert_eq!(terminal.backend().test_output().len(), start);
+    }
+    let refresh = harness.runner.core.tree.refresh_live_terminals_detailed();
+    assert!(
+        harness
+            .runner
+            .try_present_terminal_graphics(&mut terminal, &refresh)
+            .unwrap()
+    );
+    assert!(!harness.runner.host_frame_presented);
+    assert_eq!(terminal.backend().test_output().len(), start);
 }

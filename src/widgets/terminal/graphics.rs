@@ -430,6 +430,8 @@ pub(super) enum GraphicsSegment {
     HeldEscape,
     /// A complete, well-formed graphics command. Boxed to keep the enum small.
     Command(Box<GraphicsCommand>),
+    /// Lossless ordered APC bytes, emitted only when output transaction recording is enabled.
+    Wire(Vec<u8>),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -459,6 +461,10 @@ pub(super) struct GraphicsScanner {
     overflowed: bool,
     decode_payload: bool,
     decode_continuation_payload: bool,
+    record_output: bool,
+    wire: Vec<u8>,
+    wire_ordered: bool,
+    held_escape_forwarded: bool,
 }
 
 impl Default for GraphicsScanner {
@@ -469,11 +475,56 @@ impl Default for GraphicsScanner {
             overflowed: false,
             decode_payload: true,
             decode_continuation_payload: false,
+            record_output: false,
+            wire: Vec::new(),
+            wire_ordered: false,
+            held_escape_forwarded: false,
         }
     }
 }
 
 impl GraphicsScanner {
+    pub(super) fn set_record_output(&mut self, enabled: bool) {
+        self.record_output = enabled;
+        self.wire.clear();
+        self.wire_ordered = self.state != ScanState::Ground;
+    }
+
+    pub(super) fn output_pending(&self) -> bool {
+        self.state != ScanState::Ground
+    }
+
+    /// Force pending bytes ordered before an external resize/reset/exit barrier. Parsing remains
+    /// in flight, so later continuation bytes cannot become an independent replacement.
+    pub(super) fn flush_pending_wire(&mut self) -> Vec<u8> {
+        self.wire_ordered = true;
+        if self.record_output && self.state == ScanState::Escape && !self.held_escape_forwarded {
+            self.held_escape_forwarded = true;
+            vec![0x1b]
+        } else {
+            std::mem::take(&mut self.wire)
+        }
+    }
+
+    // Bound additional transaction buffering. Large APCs remain exact ordered fragments while
+    // the existing command parser continues with its own established payload limit.
+    fn record_wire(&mut self, byte: u8, out: &mut Vec<GraphicsSegment>) {
+        if !self.record_output {
+            return;
+        }
+        self.wire.push(byte);
+        if self.wire.len() >= 1024 * 1024 {
+            self.wire_ordered = true;
+            out.push(GraphicsSegment::Wire(std::mem::take(&mut self.wire)));
+        }
+    }
+
+    fn finish_ordered_wire(&mut self, out: &mut Vec<GraphicsSegment>) {
+        if !self.wire.is_empty() {
+            out.push(GraphicsSegment::Wire(std::mem::take(&mut self.wire)));
+        }
+    }
+
     pub(super) fn set_decode_payload(&mut self, enabled: bool) {
         self.decode_payload = enabled;
         self.reset();
@@ -522,44 +573,41 @@ impl GraphicsScanner {
                         self.state = ScanState::Apc;
                         self.apc.clear();
                         self.overflowed = false;
+                        self.wire_ordered = self.held_escape_forwarded;
+                        if self.record_output {
+                            self.wire = if self.held_escape_forwarded {
+                                b"_".to_vec()
+                            } else {
+                                b"\x1b_".to_vec()
+                            };
+                        }
+                        self.held_escape_forwarded = false;
                         idx += 1;
                         text_start = idx;
                     } else {
                         self.state = ScanState::Ground;
-                        if text_start == idx {
+                        if text_start == idx && !self.held_escape_forwarded {
                             // The ESC was the last byte of an earlier chunk.
                             out.push(GraphicsSegment::HeldEscape);
                         }
+                        self.held_escape_forwarded = false;
                         // Re-read this byte in `Ground`, so `ESC ESC` starts a fresh sequence.
                     }
                 }
                 ScanState::Apc => {
-                    match byte {
-                        0x1b => self.state = ScanState::ApcEscape,
-                        // Some emitters end a string with BEL. Protocol payloads are base64 and
-                        // never contain one, so accepting it costs nothing.
-                        0x07 => {
-                            self.finish_apc(&mut out);
-                            self.state = ScanState::Ground;
-                        }
-                        // CAN / SUB abort a string in flight.
-                        0x18 | 0x1a => {
-                            self.apc.clear();
-                            self.overflowed = false;
-                            self.state = ScanState::Ground;
-                        }
-                        _ => self.push_apc(byte),
-                    }
+                    self.scan_apc_byte(byte, &mut out);
                     idx += 1;
                     text_start = idx;
                 }
                 ScanState::ApcEscape => {
                     if byte == b'\\' {
+                        self.record_wire(byte, &mut out);
                         self.finish_apc(&mut out);
                         self.state = ScanState::Ground;
                         idx += 1;
                         text_start = idx;
                     } else {
+                        self.finish_ordered_wire(&mut out);
                         // Unterminated: the VT parser would discard this body too, so drop it and
                         // re-read the byte as the start of whatever follows.
                         self.apc.clear();
@@ -578,6 +626,27 @@ impl GraphicsScanner {
         out
     }
 
+    fn scan_apc_byte(&mut self, byte: u8, out: &mut Vec<GraphicsSegment>) {
+        self.record_wire(byte, out);
+        match byte {
+            0x1b => self.state = ScanState::ApcEscape,
+            // Some emitters end a string with BEL. Protocol payloads are base64 and
+            // never contain one, so accepting it costs nothing.
+            0x07 => {
+                self.finish_apc(out);
+                self.state = ScanState::Ground;
+            }
+            // CAN / SUB abort a string in flight.
+            0x18 | 0x1a => {
+                self.finish_ordered_wire(out);
+                self.apc.clear();
+                self.overflowed = false;
+                self.state = ScanState::Ground;
+            }
+            _ => self.push_apc(byte),
+        }
+    }
+
     fn push_apc(&mut self, byte: u8) {
         if self.overflowed {
             return;
@@ -594,13 +663,15 @@ impl GraphicsScanner {
         let body = std::mem::take(&mut self.apc);
         let overflowed = std::mem::take(&mut self.overflowed);
         if overflowed {
+            self.finish_ordered_wire(out);
             return;
         }
         // Any other `APC` application command; the VT parser ignores those as well.
         let Some(rest) = body.strip_prefix(b"G") else {
+            self.finish_ordered_wire(out);
             return;
         };
-        if let Some(command) = GraphicsCommand::parse(
+        if let Some(mut command) = GraphicsCommand::parse(
             rest,
             self.decode_payload || self.decode_continuation_payload,
         ) {
@@ -609,7 +680,14 @@ impl GraphicsScanner {
                     || self.decode_continuation_payload
                     || command.format == 100
                     || matches!(command.action, GraphicsAction::Query));
+            if self.record_output && !self.wire_ordered {
+                command.wire = Some(std::mem::take(&mut self.wire));
+            } else {
+                self.finish_ordered_wire(out);
+            }
             out.push(GraphicsSegment::Command(Box::new(command)));
+        } else {
+            self.finish_ordered_wire(out);
         }
     }
 
@@ -619,6 +697,9 @@ impl GraphicsScanner {
         self.apc.clear();
         self.overflowed = false;
         self.decode_continuation_payload = false;
+        self.wire.clear();
+        self.wire_ordered = false;
+        self.held_escape_forwarded = false;
     }
 }
 
@@ -702,6 +783,8 @@ pub(super) struct GraphicsCommand {
     /// The payload is not base64. The keys still parsed, so the command can be answered with an
     /// error instead of vanishing, but it must not be acted on.
     malformed: bool,
+    wire: Option<Vec<u8>>,
+    coalescing_safe: bool,
 }
 
 impl Default for GraphicsCommand {
@@ -735,6 +818,8 @@ impl Default for GraphicsCommand {
             payload: Vec::new(),
             payload_len: 0,
             malformed: false,
+            wire: None,
+            coalescing_safe: true,
         }
     }
 }
@@ -747,11 +832,21 @@ impl GraphicsCommand {
         };
 
         let mut command = Self::default();
+        let mut seen = 0u128;
         for pair in control.split(|byte| *byte == b',') {
             let mut halves = pair.splitn(2, |byte| *byte == b'=');
             let ([key], Some(value)) = (halves.next()?, halves.next()) else {
+                command.coalescing_safe = false;
                 continue;
             };
+            let valid = Self::safe_pair(*key, value);
+            if valid {
+                let bit = 1u128 << *key;
+                command.coalescing_safe &= seen & bit == 0;
+                seen |= bit;
+            } else {
+                command.coalescing_safe = false;
+            }
             command.apply_key(*key, value);
         }
 
@@ -779,6 +874,45 @@ impl GraphicsCommand {
             }
         }
         Some(command)
+    }
+
+    fn safe_pair(key: u8, value: &[u8]) -> bool {
+        match key {
+            b'a' => matches!(value, b"t" | b"T"),
+            b't' => matches!(value, b"d" | b"f"),
+            b'o' => value == b"z",
+            b'z' => std::str::from_utf8(value).is_ok_and(|value| value.parse::<i32>().is_ok()),
+            b'f' => matches!(value, b"24" | b"32" | b"100"),
+            b'm' | b'C' => matches!(value, b"0" | b"1"),
+            b'q' => matches!(value, b"0" | b"1" | b"2"),
+            b'O' => std::str::from_utf8(value).is_ok_and(|value| value.parse::<u64>().is_ok()),
+            b'S' => std::str::from_utf8(value).is_ok_and(|value| value.parse::<usize>().is_ok()),
+            b's' | b'v' | b'i' | b'p' | b'X' | b'Y' | b'c' | b'r' => {
+                std::str::from_utf8(value).is_ok_and(|value| value.parse::<u32>().is_ok())
+            }
+            _ => false,
+        }
+    }
+
+    pub(super) fn transmitted_id(&self) -> Option<u32> {
+        (self.action.transmits() && self.id != 0).then_some(self.id)
+    }
+
+    pub(super) fn independent_candidate(&self) -> bool {
+        self.coalescing_safe
+            && !self.malformed
+            && !self.more
+            && self.id != 0
+            && self.number == 0
+            && self.quiet == 2
+            && !self.virtual_placement
+            && self.action.transmits()
+            && (self.action == GraphicsAction::Transmit || self.no_cursor_move)
+            && matches!(self.medium, GraphicsMedium::Direct | GraphicsMedium::File)
+    }
+
+    pub(super) fn take_wire(&mut self) -> Option<Vec<u8>> {
+        self.wire.take()
     }
 
     fn apply_key(&mut self, key: u8, value: &[u8]) {
@@ -1487,6 +1621,22 @@ impl PendingTransmit {
 }
 
 /// Decoded images and their placements for one [`TerminalScreen`](super::TerminalScreen).
+pub(super) struct ReplacementObservation {
+    pub(super) source: ImageSourceKey,
+    pub(super) revision: ImageSourceRevision,
+    placements: Vec<Placement>,
+    virtual_cells: Option<(u32, u32)>,
+}
+
+impl ReplacementObservation {
+    pub(super) fn independently_replaces(&self, previous: &Self) -> bool {
+        self.source == previous.source
+            && self.revision != previous.revision
+            && self.placements == previous.placements
+            && self.virtual_cells == previous.virtual_cells
+    }
+}
+
 pub(super) struct TerminalGraphics {
     stream_namespace: u64,
     damage: super::damage::GraphicsDamage,
@@ -1548,6 +1698,25 @@ impl Default for TerminalGraphics {
 }
 
 impl TerminalGraphics {
+    pub(super) fn replacement_observation(&self, id: u32) -> Option<ReplacementObservation> {
+        let image = self.images.get(&id)?;
+        Some(ReplacementObservation {
+            source: image.image.source_key(),
+            revision: image.image.source_revision(),
+            placements: self
+                .placements
+                .iter()
+                .filter(|placement| placement.image_id == id)
+                .cloned()
+                .collect(),
+            virtual_cells: image.virtual_cells,
+        })
+    }
+
+    pub(super) fn has_pending_transmission(&self) -> bool {
+        self.pending.is_some() || self.discarding_run
+    }
+
     pub(super) fn take_damage(&mut self) -> super::damage::GraphicsDamage {
         std::mem::take(&mut self.damage)
     }
@@ -3374,6 +3543,7 @@ mod tests {
                 GraphicsSegment::Text(range) => text.extend_from_slice(&bytes[range]),
                 GraphicsSegment::HeldEscape => text.push(0x1b),
                 GraphicsSegment::Command(command) => commands.push(*command),
+                GraphicsSegment::Wire(_) => unreachable!("wire recording disabled"),
             }
         }
         (text, commands)

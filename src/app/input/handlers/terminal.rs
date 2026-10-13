@@ -220,7 +220,7 @@ pub(crate) fn preflight_key(
         match clipboard.read_terminal_paste() {
             Ok(ClipboardPasteContent::Text(text)) => {
                 let text = truncate_paste(&text, clipboard_config.paste_max_bytes);
-                let bytes = encode_paste(&text, node.key_modes);
+                let bytes = encode_paste(&text, node.input_key_modes());
                 on_input.emit(crate::widgets::TerminalInputEvent {
                     kind: TerminalInputKind::Paste,
                     key: Some(key),
@@ -273,7 +273,7 @@ pub(crate) fn preflight_key(
             match clipboard.read_clipboard_text() {
                 Ok(text) => {
                     let text = truncate_paste(&text, clipboard_config.paste_max_bytes);
-                    let bytes = encode_paste(&text, node.key_modes);
+                    let bytes = encode_paste(&text, node.input_key_modes());
                     on_input.emit(crate::widgets::TerminalInputEvent {
                         kind: TerminalInputKind::Paste,
                         key: Some(key),
@@ -372,7 +372,7 @@ pub(crate) fn handle_paste(tree: &mut NodeTree, id: NodeId, text: &str) -> bool 
         return false;
     };
 
-    let bytes = encode_paste(text, node.key_modes);
+    let bytes = encode_paste(text, node.input_key_modes());
     on_input.emit(crate::widgets::TerminalInputEvent {
         kind: TerminalInputKind::Paste,
         key: None,

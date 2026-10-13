@@ -295,12 +295,14 @@ impl TerminalGraphicsPlan {
             return None;
         }
         let geometry = scene_geometry(placements, self.content, self.cell)?;
+        let mut total_regions = 0;
         placements
             .iter()
             .zip(geometry)
             .map(|(p, geometry)| {
                 let regions = native_regions(geometry, self.clip, &self.holes);
-                if regions.len() > MAX_NATIVE_REGIONS
+                total_regions += regions.len();
+                if total_regions > MAX_NATIVE_REGIONS
                     || (!regions.is_empty()
                         && p.image.file_pixels().is_none()
                         && p.image.pixels().is_none())
@@ -1162,6 +1164,35 @@ mod rectangle_tests {
             cell: (10, 20),
             z: 1,
         }
+    }
+
+    #[test]
+    fn region_bound_applies_to_the_complete_terminal_scene() {
+        let _host = image_support::test_kitty_host((10, 20), true);
+        let mut source = crate::widgets::TerminalScreen::new(1, 1024, 0);
+        source.set_cell_size(crate::widgets::TerminalCellSize::new(10, 20));
+        source.process_bytes(b"\x1b_Ga=T,i=1,C=1,f=24,s=1,v=1,q=2;YWJj\x1b\\");
+        let base = source.render_snapshot().images[0].clone();
+        let placements: Vec<_> = (0..=MAX_NATIVE_REGIONS)
+            .map(|col| {
+                let mut placement = base.clone();
+                placement.col = col as i32;
+                placement
+            })
+            .collect();
+        let plan = TerminalGraphicsPlan {
+            content: Rect {
+                x: 0,
+                y: 0,
+                w: 1024,
+                h: 1,
+            },
+            clip: ratatui::layout::Rect::new(0, 0, 1024, 1),
+            holes: Vec::new(),
+            cell: (10, 20),
+        };
+        assert!(plan.regions(&placements[..MAX_NATIVE_REGIONS]).is_some());
+        assert!(plan.regions(&placements).is_none());
     }
 
     #[test]

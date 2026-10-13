@@ -13,6 +13,10 @@ mod layout;
 mod mod_private;
 mod node;
 mod osc;
+#[cfg(feature = "terminal-images")]
+mod output;
+#[cfg(feature = "terminal-images")]
+pub use output::{GraphicsDependency, TerminalOutputClass, TerminalOutputTransaction};
 mod program_status;
 pub use program_status::{
     ProgramStatusEvent, ProgramStatusRecord, ProgramStatusSnapshot, ProgramStatusState,
@@ -579,9 +583,13 @@ impl From<Terminal> for Element {
         let on_input = terminal.on_input.clone();
         let fallback_on_key = terminal.on_key.clone();
         let key_modes = terminal.key_modes;
+        let live_screen = terminal.screen.clone();
         terminal.on_key = if on_input.is_some() || fallback_on_key.is_some() {
             Some(KeyHandler::new(move |key| {
                 let mut handled = false;
+                let key_modes = live_screen
+                    .as_ref()
+                    .map_or(key_modes, TerminalScreenHandle::key_modes);
 
                 if let Some(on_input) = on_input.as_ref()
                     && let Some(bytes) = key_event_to_bytes(key, key_modes)

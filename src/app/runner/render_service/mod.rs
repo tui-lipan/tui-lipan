@@ -890,16 +890,28 @@ impl<C: Component> AppRunner<C> {
                     _ => None,
                 });
         match terminal.backend_mut().present_graphics(updates) {
-            Ok(presented) => {
-                if presented {
-                    let reports = self.presented_graphics_tokens(terminal, &refresh.graphics_only);
-                    self.core
-                        .ctx
-                        .env()
-                        .terminal_presentation_observers
-                        .deliver(reports);
+            Ok(presentation) => {
+                use crate::backend::ratatui_backend::GraphicsPresentation;
+                match presentation {
+                    GraphicsPresentation::Unavailable => Ok(false),
+                    GraphicsPresentation::Unchanged => Ok(true),
+                    GraphicsPresentation::Discarded => {
+                        self.frame_rendered = true;
+                        Ok(true)
+                    }
+                    GraphicsPresentation::Written => {
+                        self.frame_rendered = true;
+                        self.host_frame_presented = true;
+                        let reports =
+                            self.presented_graphics_tokens(terminal, &refresh.graphics_only);
+                        self.core
+                            .ctx
+                            .env()
+                            .terminal_presentation_observers
+                            .deliver(reports);
+                        Ok(true)
+                    }
                 }
-                Ok(presented)
             }
             Err(error)
                 if crate::backend::ratatui_backend::renderers::image::native_source_unavailable(
@@ -951,14 +963,14 @@ impl<C: Component> AppRunner<C> {
         }
 
         let refresh = self.core.tree.refresh_live_terminals_detailed();
-        if !refresh.changed {
+        self.emit_terminal_focus_change();
+        if !refresh.visual_changed {
             return Ok(());
         }
         #[cfg(feature = "terminal-images")]
         if self.try_present_terminal_graphics(terminal, &refresh)? {
             return Ok(());
         }
-        self.emit_terminal_focus_change();
         let frame_area = terminal.get_frame().area();
         if let Some(plan) = self.prepare_terminal_damage_plan(&refresh, frame_area) {
             self.draw_terminal_damage(terminal, &plan)?;
@@ -1126,7 +1138,6 @@ impl<C: Component> AppRunner<C> {
         }
         #[cfg(feature = "terminal")]
         let presentations = crate::widgets::presentation::PresentationScope::begin();
-        #[cfg(feature = "terminal")]
         let output_epoch = terminal.backend().output_epoch();
         execute!(terminal.backend_mut(), Print("\x1b[?2026h"))?;
         #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
@@ -1206,6 +1217,7 @@ impl<C: Component> AppRunner<C> {
         self.last_frame_snapshot = last_snapshot;
         self.scroll_diff_snapshot = diff_snapshot;
         draw_result?;
+        self.frame_rendered = true;
 
         #[cfg(any(feature = "devtools", feature = "profiling-tracing"))]
         let draw_duration = draw_start.elapsed();
@@ -1233,6 +1245,7 @@ impl<C: Component> AppRunner<C> {
             &self.widgets.text_area_vim_state,
         )?;
         std::io::Write::flush(terminal.backend_mut())?;
+        self.host_frame_presented = terminal.backend().output_epoch() == output_epoch;
         #[cfg(feature = "terminal")]
         if terminal.backend().output_epoch() == output_epoch {
             self.core

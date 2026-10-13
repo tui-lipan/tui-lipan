@@ -508,3 +508,6 @@ pub use widgets::{
     DamagedRow, GraphicsDamage, PresentedTerminal, TerminalDamage, TerminalMutation,
     TerminalPresentationSubscription,
 };
+
+#[cfg(feature = "terminal-images")]
+pub use crate::widgets::{GraphicsDependency, TerminalOutputClass, TerminalOutputTransaction};

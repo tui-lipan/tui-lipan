@@ -347,6 +347,8 @@ impl Default for NodeTree {
 pub(crate) struct LiveTerminalRefresh {
     /// Whether any live terminal took output since the last refresh.
     pub changed: bool,
+    /// Whether cells, cursor, graphics or live labels need host presentation.
+    pub visual_changed: bool,
     /// Nodes whose snapshot changed without any cell, cursor or mode mutation.
     pub graphics_only: Vec<NodeId>,
     /// The rows each terminal that moved reported.
@@ -481,6 +483,14 @@ impl NodeTree {
 
     /// Returns true if any terminal node requests any-event mouse forwarding.
     pub fn has_terminal_any_event(&self) -> bool {
+        #[cfg(feature = "terminal")]
+        if self.live_terminal_ids.iter().any(|id| {
+            matches!(&self.arena.get(*id).kind, NodeKind::Terminal(terminal)
+                if terminal.input_mouse_mode().mode == MouseMode::AnyEvent
+                    && terminal.on_mouse_forward.is_some())
+        }) {
+            return true;
+        }
         self.has_terminal_any_event
     }
 
@@ -532,6 +542,7 @@ impl NodeTree {
         let text_damage = self.refresh_live_texts();
         let mut refresh = LiveTerminalRefresh {
             changed: !text_damage.is_empty(),
+            visual_changed: !text_damage.is_empty(),
             text_damage,
             ..Default::default()
         };
@@ -541,10 +552,14 @@ impl NodeTree {
                 continue;
             }
             if let NodeKind::Terminal(terminal) = &mut self.node_mut(id).kind
-                && let Some((damage, graphics_only)) = terminal.refresh_from_live_screen()
+                && let Some((damage, graphics_only, visual_changed)) =
+                    terminal.refresh_from_live_screen()
             {
                 refresh.changed = true;
-                refresh.damage.push((id, damage));
+                if visual_changed {
+                    refresh.visual_changed = true;
+                    refresh.damage.push((id, damage));
+                }
                 if graphics_only {
                     refresh.graphics_only.push(id);
                 }
