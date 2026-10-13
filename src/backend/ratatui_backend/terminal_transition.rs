@@ -91,7 +91,10 @@ pub(crate) fn enter_plan(
     mouse_enabled: bool,
     keyboard_enhancement: bool,
 ) -> TerminalTransitionPlan {
-    let mut ops = vec![TerminalOp::EnableRawMode];
+    // Pixel reporting is turned off whatever the host was left in - by a teardown that failed, or an
+    // app this one runs inside - because every run starts out reading reports as cells. Only the
+    // input worker turns it on, at a point its decoder can see.
+    let mut ops = vec![TerminalOp::EnableRawMode, TerminalOp::DisablePixelMouse];
     if policy.uses_alternate_screen {
         ops.push(TerminalOp::EnterAlternateScreen);
     }
@@ -465,6 +468,7 @@ mod tests {
             executor.ops,
             vec![
                 TerminalOp::EnableRawMode,
+                TerminalOp::DisablePixelMouse,
                 TerminalOp::EnterAlternateScreen,
                 TerminalOp::EnableMouseCapture,
                 TerminalOp::EnableBracketedPaste,

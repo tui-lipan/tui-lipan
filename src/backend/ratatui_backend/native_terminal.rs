@@ -711,6 +711,8 @@ impl TerminalGuard {
             .unwrap_or_default();
         #[cfg(not(feature = "terminal-images"))]
         let probe_bytes: &[u8] = &[];
+        #[cfg(unix)]
+        crate::app::input::pixel_mouse::start_run();
         let capabilities =
             query_host_capabilities_with(probe_bytes, require_utf8).unwrap_or_default();
         // Refused here, before raw mode or the alternate screen, so the error lands on a terminal
@@ -735,7 +737,6 @@ impl TerminalGuard {
         // for one would put every click in the wrong cell.
         #[cfg(unix)]
         {
-            crate::app::input::pixel_mouse::start_run();
             crate::app::input::pixel_mouse::note_host_support(capabilities.pixel_mouse);
             if let Ok(size) = crossterm::terminal::window_size() {
                 crate::app::input::pixel_mouse::note_window_size(

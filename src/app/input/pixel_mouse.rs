@@ -164,13 +164,19 @@ pub(crate) fn should_request() -> bool {
     is_active() && WANTED.load(Ordering::Acquire)
 }
 
-/// Start a run from a known state: the host reporting cells, and nothing on screen wanting pixels.
+/// Forget everything a previous run learned, before this run probes its host.
 ///
-/// Both are process-wide while a run is not, and a second run in the same process would otherwise
-/// begin from whatever the first left behind.
+/// All of it is process-wide while a run is not. A second run in the same process may face another
+/// host, one that does not support the mode or whose cell size cannot be read, and must not divide
+/// its reports by the first host's cells. The host is put back to reporting cells by the enter
+/// plan, which is what [`reports_pixels`] then says.
 pub(crate) fn start_run() {
+    SUPPORTED.store(false, Ordering::Release);
+    CELL.store(0, Ordering::Release);
     REPORTS_PIXELS.store(false, Ordering::Release);
     WANTED.store(false, Ordering::Release);
+    #[cfg(feature = "image")]
+    crate::backend::ratatui_backend::image_support::forget_queried_cell_size();
 }
 
 /// Record that the host has been asked for the mode, or told to drop it.

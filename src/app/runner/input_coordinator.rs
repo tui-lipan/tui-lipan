@@ -44,9 +44,11 @@ const HOST_COLOR_QUERY_TIMEOUT: Duration = Duration::from_millis(200);
 /// How often the worker asks the host for its size. The answer only backs up resize reports that
 /// never arrived, and asking after every read would cost a system call per pointer report.
 const SIZE_CHECK_INTERVAL: Duration = Duration::from_millis(100);
-/// How long a switch of the pointer encoding waits for the host to confirm it before the decoder
-/// switches anyway. Only a host that ignores the mode query waits this long.
+/// How long a switch of the pointer encoding waits for the host to confirm it before asking again.
+/// Only an answer that went missing waits this long.
 const PIXEL_SWITCH_TIMEOUT: Duration = Duration::from_millis(500);
+/// Asks the host which way it reports the pointer, for [`PixelSwitch`] to find the answer.
+const PIXEL_MODE_QUERY: &[u8] = b"\x1b[?1016$p";
 
 pub(super) struct TerminaInputCoordinator {
     events: mpsc::Receiver<RunnerEvent>,
@@ -278,7 +280,7 @@ fn run_worker(
     let mut settle_at = None;
     let mut size = WindowSizeWatch::new(&terminal);
     loop {
-        input.pixel.expire(Instant::now());
+        input.pixel.recheck(Instant::now(), &mut io::stdout());
         match process_worker_commands(
             &mut terminal,
             &commands,
@@ -455,6 +457,13 @@ struct WorkerInput {
     pixel: PixelSwitch,
 }
 
+fn is_pointer_report(event: &RunnerEvent) -> bool {
+    matches!(
+        event,
+        RunnerEvent::Terminal(CrosstermEvent::Mouse(_)) | RunnerEvent::Pointer { .. }
+    )
+}
+
 fn is_plain_motion(event: &RunnerEvent) -> bool {
     let (RunnerEvent::Terminal(CrosstermEvent::Mouse(mouse))
     | RunnerEvent::Pointer {
@@ -501,6 +510,10 @@ impl WorkerInput {
                 continue;
             };
             resized |= matches!(event, RunnerEvent::Terminal(CrosstermEvent::Resize(..)));
+            // A report whose coordinates could mean either cells or pixels is not placed anywhere.
+            if self.pixel.unsure && is_pointer_report(&event) {
+                continue;
+            }
             if !self.send(event, events) {
                 return false;
             }
@@ -528,12 +541,17 @@ impl WorkerInput {
             return;
         }
         let switch: &[u8] = if wanted {
-            b"\x1b[?1016h\x1b[?1016$p"
+            b"\x1b[?1016h"
         } else {
-            b"\x1b[?1016l\x1b[?1016$p"
+            b"\x1b[?1016l"
         };
         // A host that never heard the escape keeps sending what it sent, and is read that way.
-        if out.write_all(switch).and_then(|()| out.flush()).is_ok() {
+        if out
+            .write_all(switch)
+            .and_then(|()| out.write_all(PIXEL_MODE_QUERY))
+            .and_then(|()| out.flush())
+            .is_ok()
+        {
             self.pixel.request(wanted);
         }
     }
@@ -572,12 +590,17 @@ impl WorkerInput {
 /// reading them the new way would put a click on the wrong cell. So the decoder does not change when
 /// the escape is written. A query of the mode follows every switch, and the host answers only after
 /// acting on it: reports before the answer are read the old way, reports after it the new way.
+///
+/// Time never stands in for that answer. One that went missing leaves no point in the input where
+/// the coordinates change, so pointer reports are dropped until the host answers a fresh query.
 #[derive(Default)]
 struct PixelSwitch {
-    /// Encodings asked for and not yet confirmed, oldest first. `true` is pixels.
+    /// Answers awaited, oldest first, each with the encoding asked for by then. `true` is pixels.
     pending: VecDeque<bool>,
-    /// When to stop waiting for the oldest confirmation and take the newest switch as done.
+    /// When to stop waiting for the oldest answer and ask again.
     deadline: Option<Instant>,
+    /// An answer is overdue, so the reports arriving could be in either encoding.
+    unsure: bool,
     reply: ModeReplyScanner,
 }
 
@@ -603,21 +626,28 @@ impl PixelSwitch {
             return;
         }
         // The host's word decides rather than the request, so one that refused the mode stays read
-        // as cells. 1 and 3 are set and permanently set.
+        // as cells. 1 and 3 are set and permanently set. It also says what every report after it
+        // carries, which ends any doubt an overdue answer raised.
         pixel_mouse::note_mode_enabled(matches!(setting, 1 | 3));
+        self.unsure = false;
         self.deadline = (!self.pending.is_empty()).then(|| Instant::now() + PIXEL_SWITCH_TIMEOUT);
     }
 
-    /// Give up on a host that does not answer the query, and read reports as last asked for.
-    fn expire(&mut self, now: Instant) {
+    /// An overdue answer may have been lost, so ask again; until some answer arrives, pointer
+    /// reports could be in either encoding.
+    fn recheck(&mut self, now: Instant, out: &mut impl Write) {
         if self.deadline.is_none_or(|deadline| now < deadline) {
             return;
         }
-        if let Some(&pixels) = self.pending.back() {
-            pixel_mouse::note_mode_enabled(pixels);
+        self.unsure = true;
+        self.deadline = Some(now + PIXEL_SWITCH_TIMEOUT);
+        if out
+            .write_all(PIXEL_MODE_QUERY)
+            .and_then(|()| out.flush())
+            .is_ok()
+        {
+            self.pending.push_back(self.requested());
         }
-        self.pending.clear();
-        self.deadline = None;
     }
 }
 
@@ -1692,6 +1722,145 @@ mod tests {
         assert_eq!(scanner.find(b"\x1b[?1016;\x1b[?1016;4$y"), Some((19, 4)));
     }
 
+    /// Read what a pty child writes until `wanted` appears in it.
+    #[cfg(all(target_os = "linux", feature = "terminal"))]
+    fn read_child_until(terminal: &mut File, output: &mut Vec<u8>, wanted: &[u8]) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !output.windows(wanted.len()).any(|bytes| bytes == wanted) {
+            assert!(
+                Instant::now() < deadline,
+                "the child never wrote {wanted:?}"
+            );
+            let mut poll = libc::pollfd {
+                fd: terminal.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: one valid descriptor, bounded wait.
+            if unsafe { libc::poll(&mut poll, 1, 50) } > 0 {
+                let mut buffer = [0; 4096];
+                let count = terminal.read(&mut buffer).expect("read the child");
+                output.extend_from_slice(&buffer[..count]);
+            }
+        }
+    }
+
+    /// A run cannot know what the host was left in, by a teardown that failed or an app this one
+    /// runs inside, nor inherit what an earlier run in the process learned. So entering turns pixel
+    /// reporting off at the host and forgets the rest, and the first click is read as cells.
+    #[test]
+    #[cfg(all(target_os = "linux", feature = "terminal"))]
+    fn entering_puts_the_host_back_to_reporting_cells() {
+        use std::sync::atomic::AtomicBool;
+
+        use crate::app::context::SurfaceMode;
+        use crate::backend::ratatui_backend::TerminalGuard;
+        use crate::backend::ratatui_backend::host_input::pty_test::{child_report, run_on_pty};
+        use crate::backend::ratatui_backend::terminal_handoff::input_handoff_slot;
+
+        let name = "entering_puts_the_host_back_to_reporting_cells";
+        if let Some(report) = child_report() {
+            // What an earlier run that had pixels on, wanted, would leave behind.
+            pixel_mouse::note_host_support(true);
+            pixel_mouse::note_window_size(80, 24, Some(800), Some(480));
+            pixel_mouse::note_mode_enabled(true);
+            pixel_mouse::note_wanted(true);
+            let (_terminal, guard) = TerminalGuard::enter(
+                SurfaceMode::Fullscreen,
+                true,
+                false,
+                &AtomicBool::new(false),
+            )
+            .expect("enter");
+            let coordinator = TerminaInputCoordinator::start(input_handoff_slot()).expect("start");
+            report.line("ready", 1);
+            let started = Instant::now();
+            while started.elapsed() < Duration::from_secs(10) {
+                let read = match coordinator
+                    .receiver()
+                    .recv_timeout(Duration::from_millis(100))
+                {
+                    Ok(RunnerEvent::Terminal(CrosstermEvent::Mouse(mouse))) => {
+                        format!("cells {},{}", mouse.column, mouse.row)
+                    }
+                    Ok(RunnerEvent::Pointer {
+                        event: CrosstermEvent::Mouse(mouse),
+                        ..
+                    }) => format!("pixels {},{}", mouse.column, mouse.row),
+                    _ => continue,
+                };
+                report.line("report", read);
+                break;
+            }
+            drop(coordinator);
+            drop(guard);
+            report.line("done", 1);
+            return;
+        }
+
+        let module = module_path!();
+        let module = module.split_once("::").map_or(module, |(_, rest)| rest);
+        let report = run_on_pty(&format!("{module}::{name}"), |master| {
+            let mut terminal = File::from(master);
+            let mut output = Vec::new();
+            // Nothing wants pixels yet, so the only `1016l` before a click is the enter plan's.
+            read_child_until(&mut terminal, &mut output, b"\x1b[?1016l");
+            // Startup can still swallow the first input to arrive, so the click is repeated until
+            // the child has read one. Every repeat is the same cell click.
+            for _ in 0..20 {
+                terminal.write_all(b"\x1b[<0;11;6M").unwrap();
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            terminal
+        });
+        assert_eq!(
+            report.get("done").map(String::as_str),
+            Some("1"),
+            "{report:?}"
+        );
+        assert_eq!(
+            report.get("report").map(String::as_str),
+            Some("cells 10,5"),
+            "{report:?}"
+        );
+    }
+
+    /// A missing answer is never made up for by waiting: the switch asks again, and pointer
+    /// reports stop being placed until an answer says what they carry.
+    #[test]
+    fn an_overdue_answer_is_asked_again_and_reports_wait_for_it() {
+        let mut switch = PixelSwitch::default();
+        switch.request(true);
+        let deadline = switch.deadline.expect("a switch waits for its answer");
+
+        let mut written = Vec::new();
+        switch.recheck(deadline - Duration::from_millis(1), &mut written);
+        assert!(written.is_empty() && !switch.unsure, "not overdue yet");
+
+        switch.recheck(deadline, &mut written);
+        assert_eq!(written, PIXEL_MODE_QUERY, "asked again");
+        assert!(switch.unsure);
+        assert_eq!(Vec::from(switch.pending.clone()), [true, true]);
+        assert!(switch.deadline.is_some_and(|next| next > deadline));
+
+        let (events, receiver) = mpsc::channel();
+        let mut input = WorkerInput {
+            pixel: switch,
+            ..WorkerInput::default()
+        };
+        assert!(input.push(b"\x1b[<0;11;6M\x1b[<0;11;6ma", &events));
+        let received: Vec<_> = receiver.try_iter().collect();
+        assert!(
+            !received.iter().any(is_pointer_report),
+            "a click whose cell is unknown is not delivered: {received:?}"
+        );
+        std::assert_matches!(
+            received.as_slice(),
+            [RunnerEvent::Terminal(CrosstermEvent::Key(_))],
+            "keys still are"
+        );
+    }
+
     /// The host keeps sending its old coordinates until it reads a switch of mode 1016, and a
     /// report already on its way still carries them. Played here by a real pty: the "host" sends
     /// one report the old way after the switch was written, then its answer, then one the new way.
@@ -1748,24 +1917,7 @@ mod tests {
             let mut terminal = File::from(master);
             let mut output = Vec::new();
             let mut wait_for = |terminal: &mut File, wanted: &[u8]| {
-                let deadline = Instant::now() + Duration::from_secs(10);
-                while !output.windows(wanted.len()).any(|bytes| bytes == wanted) {
-                    assert!(
-                        Instant::now() < deadline,
-                        "the child never wrote {wanted:?}"
-                    );
-                    let mut poll = libc::pollfd {
-                        fd: terminal.as_raw_fd(),
-                        events: libc::POLLIN,
-                        revents: 0,
-                    };
-                    // SAFETY: one valid descriptor, bounded wait.
-                    if unsafe { libc::poll(&mut poll, 1, 50) } > 0 {
-                        let mut buffer = [0; 4096];
-                        let count = terminal.read(&mut buffer).expect("read the child");
-                        output.extend_from_slice(&buffer[..count]);
-                    }
-                }
+                read_child_until(terminal, &mut output, wanted);
             };
             // Cell (10, 5) is `11;6` on the wire; pixel (105, 45) is `106;46`, cell (10, 2).
             wait_for(&mut terminal, b"\x1b[?1016h\x1b[?1016$p");
